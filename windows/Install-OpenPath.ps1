@@ -185,6 +185,7 @@ Copy-OpenPathInstallerRuntime `
     -FirefoxExtensionInstallUrl $FirefoxExtensionInstallUrl
 
 Import-Module "$OpenPathRoot\lib\Common.psm1" -Force
+Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force
 Import-Module "$OpenPathRoot\lib\Firewall.psm1" -Force
 Import-Module "$OpenPathRoot\lib\AppControl.psm1" -Force
 
@@ -284,18 +285,26 @@ if ($classroomModeRequested) {
 }
 
 $nativeHostRegistered = $false
+$nativeHostRequestSetup = $null
 try {
     $nativeHostConfig = Get-OpenPathConfig
+    $nativeHostRequestSetup = Get-OpenPathRequestSetupState -Config $nativeHostConfig
     $nativeHostRegistered = Register-OpenPathFirefoxNativeHost -Config $nativeHostConfig -ClearWhitelist
-    if ($classroomModeRequested -and -not $nativeHostRegistered) {
-        Write-Host '  ADVERTENCIA: Registro del host nativo de Firefox incompleto tras enrollment' -ForegroundColor Yellow
+    if ($classroomModeRequested -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup.Ready)) {
+        $requestSetupMessage = if ($nativeHostRequestSetup -and $nativeHostRequestSetup.DiagnosticMessage) {
+            [string]$nativeHostRequestSetup.DiagnosticMessage
+        }
+        else {
+            'OpenPath request setup is incomplete.'
+        }
+        Write-Host "  ADVERTENCIA: Registro del host nativo de Firefox incompleto tras enrollment. $requestSetupMessage" -ForegroundColor Yellow
     }
 }
 catch {
     Write-Host "  ADVERTENCIA: No se pudo registrar el host nativo de Firefox tras enrollment: $_" -ForegroundColor Yellow
 }
 
-if ($classroomModeRequested -and $Unattended -and -not $nativeHostRegistered) {
+if ($classroomModeRequested -and $Unattended -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup -or -not $nativeHostRequestSetup.Ready)) {
     Write-Host 'ERROR: Firefox native host registration incomplete; domain requests will not be configured.' -ForegroundColor Red
     exit 1
 }

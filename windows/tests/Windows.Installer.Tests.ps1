@@ -249,8 +249,11 @@ Describe "Installer" {
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
+                'Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force',
                 '$nativeHostConfig = Get-OpenPathConfig',
+                '$nativeHostRequestSetup = Get-OpenPathRequestSetupState -Config $nativeHostConfig',
                 '$nativeHostRegistered = Register-OpenPathFirefoxNativeHost -Config $nativeHostConfig -ClearWhitelist',
+                '$nativeHostRequestSetup.DiagnosticMessage',
                 'No se pudo registrar el host nativo de Firefox tras enrollment'
             )
         }
@@ -262,7 +265,7 @@ Describe "Installer" {
             Assert-ContentContainsAll -Content $content -Needles @(
                 'if ($classroomModeRequested -and $Unattended -and $machineRegistered -ne ''REGISTERED'')',
                 'ERROR: Classroom enrollment did not complete; domain requests will not be configured.',
-                'if ($classroomModeRequested -and $Unattended -and -not $nativeHostRegistered)',
+                'if ($classroomModeRequested -and $Unattended -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup -or -not $nativeHostRequestSetup.Ready))',
                 'ERROR: Firefox native host registration incomplete; domain requests will not be configured.',
                 'exit 1'
             )

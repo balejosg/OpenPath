@@ -1,3 +1,30 @@
+function Import-NativeHostRequestSetupStateModule {
+    if (Get-Command -Name 'Get-OpenPathRequestSetupState' -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    $candidatePaths = @()
+    if (Get-Variable -Name NativeRoot -Scope Script -ErrorAction SilentlyContinue) {
+        $candidatePaths += (Join-Path $script:NativeRoot 'RequestSetup.State.psm1')
+    }
+    if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+        $candidatePaths += (Join-Path $script:OpenPathRoot 'lib\RequestSetup.State.psm1')
+    }
+    if ($PSScriptRoot) {
+        $candidatePaths += (Join-Path $PSScriptRoot 'RequestSetup.State.psm1')
+        $candidatePaths += (Join-Path (Split-Path $PSScriptRoot -Parent) 'RequestSetup.State.psm1')
+    }
+
+    foreach ($candidatePath in ($candidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
+        if (Test-Path $candidatePath -ErrorAction SilentlyContinue) {
+            Import-Module $candidatePath -Force -ErrorAction Stop
+            return
+        }
+    }
+}
+
+Import-NativeHostRequestSetupStateModule
+
 function Get-NativeHostValidDomains {
     param(
         [AllowNull()]
@@ -250,6 +277,13 @@ function Get-NativeHostApiUrl {
         [PSCustomObject]$State
     )
 
+    if (Get-Command -Name 'Get-OpenPathRequestSetupState' -ErrorAction SilentlyContinue) {
+        $requestSetupState = Get-OpenPathRequestSetupState -Config $State
+        if ($requestSetupState.RequestApiUrl) {
+            return [string]$requestSetupState.RequestApiUrl
+        }
+    }
+
     if ($State.PSObject.Properties['requestApiUrl'] -and $State.requestApiUrl) {
         return ([string]$State.requestApiUrl).TrimEnd('/')
     }
@@ -258,6 +292,20 @@ function Get-NativeHostApiUrl {
     }
 
     return ''
+}
+
+function Get-NativeHostMachineToken {
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$State
+    )
+
+    $whitelistUrl = if ($State.PSObject.Properties['whitelistUrl']) { [string]$State.whitelistUrl } else { '' }
+    if (Get-Command -Name 'Get-OpenPathRequestSetupMachineToken' -ErrorAction SilentlyContinue) {
+        return [string](Get-OpenPathRequestSetupMachineToken -WhitelistUrl $whitelistUrl)
+    }
+
+    return [string](Get-MachineTokenFromWhitelistUrl -WhitelistUrl $whitelistUrl)
 }
 
 function Get-NativeHostBlockedPathResponse {
@@ -399,8 +447,7 @@ function Invoke-NativeHostMessageAction {
         }
 
         'get-machine-token' {
-            $whitelistUrl = if ($State.PSObject.Properties['whitelistUrl']) { [string]$State.whitelistUrl } else { '' }
-            $token = Get-MachineTokenFromWhitelistUrl -WhitelistUrl $whitelistUrl
+            $token = Get-NativeHostMachineToken -State $State
             if (-not $token) {
                 return @{
                     success = $false
@@ -419,7 +466,7 @@ function Invoke-NativeHostMessageAction {
         'get-config' {
             $apiUrl = Get-NativeHostApiUrl -State $State
             $whitelistUrl = if ($State.PSObject.Properties['whitelistUrl']) { [string]$State.whitelistUrl } else { '' }
-            $machineToken = Get-MachineTokenFromWhitelistUrl -WhitelistUrl $whitelistUrl
+            $machineToken = Get-NativeHostMachineToken -State $State
 
             if (-not $apiUrl) {
                 return @{

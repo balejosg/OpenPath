@@ -3,6 +3,7 @@
 $script:OpenPathRoot = "C:\OpenPath"
 Import-Module "$PSScriptRoot\Common.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot\RequestSetup.State.psm1" -Force -ErrorAction Stop
 
 function Get-OpenPathFirefoxNativeHostName {
     return 'whitelist_native_host'
@@ -43,7 +44,7 @@ function Get-OpenPathFirefoxNativeHostRegistryPaths {
     )
 }
 
-function Test-OpenPathFirefoxNativeHostRequestSetupComplete {
+function Get-OpenPathFirefoxNativeHostRequestSetupState {
     param(
         [AllowNull()]
         [object]$Config = $null
@@ -54,23 +55,21 @@ function Test-OpenPathFirefoxNativeHostRequestSetupComplete {
             $Config = Get-OpenPathConfig
         }
         catch {
-            return $false
+            $Config = [PSCustomObject]@{}
         }
     }
 
-    $apiUrl = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'apiUrl'
-    $whitelistUrl = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'whitelistUrl'
-    $classroom = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'classroom'
-    $classroomId = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'classroomId'
+    return (Get-OpenPathRequestSetupState -Config $Config)
+}
 
-    if ($apiUrl -notmatch '^https?://\S+$') {
-        return $false
-    }
-    if ($whitelistUrl -notmatch '/w/[^/]+/whitelist\.txt($|[?#].*)') {
-        return $false
-    }
+function Test-OpenPathFirefoxNativeHostRequestSetupComplete {
+    param(
+        [AllowNull()]
+        [object]$Config = $null
+    )
 
-    return [bool]($classroom -or $classroomId)
+    $requestSetupState = Get-OpenPathFirefoxNativeHostRequestSetupState -Config $Config
+    return [bool]$requestSetupState.Ready
 }
 
 function Sync-OpenPathFirefoxNativeHostArtifacts {
@@ -86,6 +85,7 @@ function Sync-OpenPathFirefoxNativeHostArtifacts {
     $artifactNames = @(
         'OpenPath-NativeHost.ps1',
         'OpenPath-NativeHost.cmd',
+        'RequestSetup.State.psm1',
         'NativeHost.State.ps1',
         'NativeHost.Protocol.ps1',
         'NativeHost.Actions.ps1'
@@ -93,6 +93,7 @@ function Sync-OpenPathFirefoxNativeHostArtifacts {
     $sourceParent = if ($SourceRoot) { Split-Path $SourceRoot -Parent } else { '' }
     $candidateRoots = @($SourceRoot)
     if (-not [string]::IsNullOrWhiteSpace($sourceParent)) {
+        $candidateRoots += (Join-Path $sourceParent 'lib')
         $candidateRoots += (Join-Path $sourceParent 'lib\internal')
     }
     $candidateRoots += $nativeRoot
@@ -152,8 +153,15 @@ function Sync-OpenPathFirefoxNativeHostState {
         }
     }
 
-    if (-not (Test-OpenPathFirefoxNativeHostRequestSetupComplete -Config $Config)) {
-        Write-OpenPathLog 'Firefox native host request setup is incomplete; skipping native host state sync' -Level WARN
+    $requestSetupState = Get-OpenPathFirefoxNativeHostRequestSetupState -Config $Config
+    if (-not $requestSetupState.Ready) {
+        $diagnosticMessage = if ($requestSetupState.DiagnosticMessage) {
+            [string]$requestSetupState.DiagnosticMessage
+        }
+        else {
+            'OpenPath request setup is incomplete.'
+        }
+        Write-OpenPathLog "Firefox native host request setup is incomplete; skipping native host state sync. $diagnosticMessage" -Level WARN
         Remove-Item (Get-OpenPathFirefoxNativeStatePath) -Force -ErrorAction SilentlyContinue
         Remove-Item (Get-OpenPathFirefoxNativeWhitelistMirrorPath) -Force -ErrorAction SilentlyContinue
         return $false
@@ -170,72 +178,12 @@ function Sync-OpenPathFirefoxNativeHostState {
         [string]$env:COMPUTERNAME
     }
 
-    $whitelistUrl = if (
-        $Config -and
-        $Config.PSObject.Properties['whitelistUrl'] -and
-        $Config.whitelistUrl
-    ) {
-        [string]$Config.whitelistUrl
-    }
-    else {
-        ''
-    }
-
-    $version = if (
-        $Config -and
-        $Config.PSObject.Properties['version'] -and
-        $Config.version
-    ) {
-        [string]$Config.version
-    }
-    else {
-        ''
-    }
-
-    $apiUrl = if (
-        $Config -and
-        $Config.PSObject.Properties['apiUrl'] -and
-        $Config.apiUrl
-    ) {
-        ([string]$Config.apiUrl).TrimEnd('/')
-    }
-    else {
-        ''
-    }
-
-    $classroom = if (
-        $Config -and
-        $Config.PSObject.Properties['classroom'] -and
-        $Config.classroom
-    ) {
-        [string]$Config.classroom
-    }
-    else {
-        ''
-    }
-
-    $classroomId = if (
-        $Config -and
-        $Config.PSObject.Properties['classroomId'] -and
-        $Config.classroomId
-    ) {
-        [string]$Config.classroomId
-    }
-    else {
-        ''
-    }
-
     $statePath = Get-OpenPathFirefoxNativeStatePath
-    $stateJson = [ordered]@{
-        machineName = $machineName
-        whitelistUrl = $whitelistUrl
-        apiUrl = $apiUrl
-        requestApiUrl = $apiUrl
-        classroom = $classroom
-        classroomId = $classroomId
-        version = $version
-        syncedAt = (Get-Date -Format 'o')
-    } | ConvertTo-Json -Depth 8
+    $nativeState = New-OpenPathRequestSetupNativeHostState `
+        -Config $Config `
+        -MachineName $machineName `
+        -SyncedAt (Get-Date -Format 'o')
+    $stateJson = $nativeState | ConvertTo-Json -Depth 8
     Write-OpenPathUtf8NoBomFile -Path $statePath -Value $stateJson
 
     $whitelistMirrorPath = Get-OpenPathFirefoxNativeWhitelistMirrorPath
@@ -262,8 +210,15 @@ function Register-OpenPathFirefoxNativeHost {
         New-Item -ItemType Directory -Path $nativeRoot -Force | Out-Null
     }
 
-    if (-not (Test-OpenPathFirefoxNativeHostRequestSetupComplete -Config $Config)) {
-        Write-OpenPathLog 'Firefox native host request setup is incomplete; skipping native host registration' -Level WARN
+    $requestSetupState = Get-OpenPathFirefoxNativeHostRequestSetupState -Config $Config
+    if (-not $requestSetupState.Ready) {
+        $diagnosticMessage = if ($requestSetupState.DiagnosticMessage) {
+            [string]$requestSetupState.DiagnosticMessage
+        }
+        else {
+            'OpenPath request setup is incomplete.'
+        }
+        Write-OpenPathLog "Firefox native host request setup is incomplete; skipping native host registration. $diagnosticMessage" -Level WARN
         Unregister-OpenPathFirefoxNativeHost | Out-Null
         return $false
     }

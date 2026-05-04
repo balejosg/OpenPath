@@ -10,6 +10,103 @@ Describe "Browser Module - Native Host" {
         Import-Module $browserModulePath -Force -Global -ErrorAction Stop
     }
 
+    Context "Request setup state projection" {
+        BeforeAll {
+            $requestSetupModulePath = Join-Path $PSScriptRoot ".." "lib" "RequestSetup.State.psm1"
+            Import-Module $requestSetupModulePath -Force -Global -ErrorAction Stop
+        }
+
+        It "Projects complete request setup from config as ready" {
+            $config = [PSCustomObject]@{
+                apiUrl = "https://school.example/"
+                whitelistUrl = "https://school.example/w/machine-token-123/whitelist.txt"
+                classroomId = "classroom-123"
+                machineName = "lab-pc-01"
+                version = "test-version"
+            }
+
+            $state = Get-OpenPathRequestSetupState -Config $config
+
+            $state.Status | Should -Be "ready"
+            $state.Ready | Should -BeTrue
+            $state.RequestApiUrl | Should -Be "https://school.example"
+            $state.MachineToken | Should -Be "machine-token-123"
+            $state.ClassroomId | Should -Be "classroom-123"
+        }
+
+        It "Projects missing request fields as incomplete without changing public semantics" {
+            $cases = @(
+                @{
+                    Name = "missing api"
+                    Config = [PSCustomObject]@{
+                        whitelistUrl = "https://school.example/w/machine-token-123/whitelist.txt"
+                        classroomId = "classroom-123"
+                    }
+                    Field = "apiUrl"
+                },
+                @{
+                    Name = "invalid whitelist"
+                    Config = [PSCustomObject]@{
+                        apiUrl = "https://school.example"
+                        whitelistUrl = "https://school.example/not-tokenized.txt"
+                        classroomId = "classroom-123"
+                    }
+                    Field = "whitelistUrl"
+                },
+                @{
+                    Name = "missing classroom"
+                    Config = [PSCustomObject]@{
+                        apiUrl = "https://school.example"
+                        whitelistUrl = "https://school.example/w/machine-token-123/whitelist.txt"
+                    }
+                    Field = "classroom"
+                }
+            )
+
+            foreach ($case in $cases) {
+                $state = Get-OpenPathRequestSetupState -Config $case.Config
+
+                $state.Status | Should -Be "incomplete" -Because $case.Name
+                $state.Ready | Should -BeFalse -Because $case.Name
+                @($state.MissingFields) | Should -Contain $case.Field -Because $case.Name
+            }
+        }
+
+        It "Projects configs without request setup intent as not requested" {
+            $state = Get-OpenPathRequestSetupState -Config ([PSCustomObject]@{
+                    version = "test-version"
+                })
+
+            $state.Status | Should -Be "not_requested"
+            $state.Ready | Should -BeFalse
+            $state.DiagnosticMessage | Should -Be "OpenPath request setup was not requested."
+        }
+
+        It "Builds normalized Firefox native host state JSON payloads" {
+            $config = [PSCustomObject]@{
+                apiUrl = "https://school.example/"
+                whitelistUrl = "https://school.example/w/machine-token-123/whitelist.txt"
+                classroom = "group-a"
+                classroomId = "classroom-123"
+                version = "test-version"
+            }
+
+            $nativeState = New-OpenPathRequestSetupNativeHostState `
+                -Config $config `
+                -MachineName "lab-pc-01" `
+                -SyncedAt "2026-05-04T00:00:00.0000000Z"
+
+            $nativeState.machineName | Should -Be "lab-pc-01"
+            $nativeState.apiUrl | Should -Be "https://school.example"
+            $nativeState.requestApiUrl | Should -Be "https://school.example"
+            $nativeState.whitelistUrl | Should -Be "https://school.example/w/machine-token-123/whitelist.txt"
+            $nativeState.classroom | Should -Be "group-a"
+            $nativeState.classroomId | Should -Be "classroom-123"
+            $nativeState.version | Should -Be "test-version"
+            $nativeState.syncedAt | Should -Be "2026-05-04T00:00:00.0000000Z"
+        }
+    }
+
     Context "Native host registration" {
         It "Serves request config from the staged native directory without reading locked agent internals" {
             $repoWindowsRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -21,6 +118,7 @@ Describe "Browser Module - Native Host" {
                 $nativeFiles = @(
                     "OpenPath-NativeHost.ps1",
                     "OpenPath-NativeHost.cmd",
+                    "RequestSetup.State.psm1",
                     "NativeHost.State.ps1",
                     "NativeHost.Protocol.ps1",
                     "NativeHost.Actions.ps1"
@@ -30,6 +128,9 @@ Describe "Browser Module - Native Host" {
                     $sourcePath = Join-Path $repoWindowsRoot "scripts\$nativeFile"
                     if (-not (Test-Path $sourcePath)) {
                         $sourcePath = Join-Path $repoWindowsRoot "lib\internal\$nativeFile"
+                    }
+                    if (-not (Test-Path $sourcePath)) {
+                        $sourcePath = Join-Path $repoWindowsRoot "lib\$nativeFile"
                     }
 
                     Copy-Item $sourcePath -Destination (Join-Path $nativeRoot $nativeFile) -Force
@@ -158,26 +259,25 @@ Describe "Browser Module - Native Host" {
             $nativeHostContent = Get-Content $nativeHostModulePath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostContent -Needles @(
+                'Import-Module "$PSScriptRoot\RequestSetup.State.psm1"',
+                'function Get-OpenPathFirefoxNativeHostRequestSetupState',
                 'function Test-OpenPathFirefoxNativeHostRequestSetupComplete',
-                'Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName ''apiUrl''',
-                'Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName ''whitelistUrl''',
-                'Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName ''classroom''',
-                'Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName ''classroomId''',
-                "/w/[^/]+/whitelist\.txt($|[?#].*)",
+                'Get-OpenPathFirefoxNativeHostRequestSetupState -Config $Config',
+                'Get-OpenPathRequestSetupState -Config $Config',
+                '$requestSetupState.DiagnosticMessage',
                 'Unregister-OpenPathFirefoxNativeHost | Out-Null',
-                'Test-OpenPathFirefoxNativeHostRequestSetupComplete -Config $Config'
+                'skipping native host registration'
             )
         }
 
         It "Stores classroom identity in native host state for request diagnostics" {
-            $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
-            $nativeHostContent = Get-Content $nativeHostModulePath -Raw
+            $requestSetupModulePath = Join-Path $PSScriptRoot ".." "lib" "RequestSetup.State.psm1"
+            $requestSetupContent = Get-Content $requestSetupModulePath -Raw
 
-            Assert-ContentContainsAll -Content $nativeHostContent -Needles @(
-                '$classroom = if (',
-                '$classroomId = if (',
-                'classroom = $classroom',
-                'classroomId = $classroomId'
+            Assert-ContentContainsAll -Content $requestSetupContent -Needles @(
+                'New-OpenPathRequestSetupNativeHostState',
+                'classroom = [string]$state.Classroom',
+                'classroomId = [string]$state.ClassroomId'
             )
         }
 
@@ -220,15 +320,26 @@ Describe "Browser Module - Native Host" {
                 'function Sync-OpenPathFirefoxNativeHostArtifacts',
                 "OpenPath-NativeHost.ps1",
                 "OpenPath-NativeHost.cmd",
+                "RequestSetup.State.psm1",
                 "NativeHost.State.ps1",
                 "NativeHost.Protocol.ps1",
                 "NativeHost.Actions.ps1",
+                '(Join-Path $sourceParent ''lib'')',
                 '(Join-Path $sourceParent ''lib\internal'')'
             )
 
             Assert-ContentContainsAll -Content $browserContent -Needles @(
                 'function Sync-OpenPathFirefoxNativeHostArtifacts',
                 'Browser.FirefoxNativeHost\Sync-OpenPathFirefoxNativeHostArtifacts -SourceRoot $SourceRoot'
+            )
+
+            $nativeActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeActionsContent = Get-Content $nativeActionsPath -Raw
+            Assert-ContentContainsAll -Content $nativeActionsContent -Needles @(
+                'Import-NativeHostRequestSetupStateModule',
+                'RequestSetup.State.psm1',
+                'Get-OpenPathRequestSetupState -Config $State',
+                'Get-OpenPathRequestSetupMachineToken -WhitelistUrl $whitelistUrl'
             )
         }
 
