@@ -152,18 +152,19 @@ jobs:
           windows_student_policy=false
           windows_student_policy_sse_group=full
           release_infra_only=false
+          firefox_runtime_pattern='firefox-extension/(manifest\.json|package\.json|tsconfig(\.build)?\.json|src/|blocked/|popup/|icons/)'
 
-          if [ -n "$changed_files" ] && echo "$changed_files" | grep -Eq '^(.github/workflows/(installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\.mjs|tests/repo-config/)'; then
+          if [ -n "$changed_files" ] && echo "$changed_files" | grep -Eq '^(.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\.mjs|tests/repo-config/)'; then
             non_release_infra_files="$(
               echo "$changed_files" |
-                grep -Ev '^(.github/workflows/(installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\.mjs|tests/repo-config/)' || true
+                grep -Ev '^(.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\.mjs|tests/repo-config/)' || true
             )"
             if [ -z "$non_release_infra_files" ]; then
               release_infra_only=true
             fi
           fi
 
-          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq '^(linux/|runtime/|firefox-extension/|tests/e2e/(Dockerfile|Dockerfile\.bats-runner|agent-integration\.bats|ci/run-linux-e2e\.sh|docker-compose\.e2e\.yml|docker-e2e-runner\.sh|linux-e2e-tests\.sh|pre-install-validation\.sh|validation/)|package\.json$|package-lock\.json$|scripts/require-release-quality-gate\.mjs$|\.github/actions/(setup-node|build-workspaces)/|\.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml$)'; then
+          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq "^(linux/|runtime/|$firefox_runtime_pattern|tests/e2e/(Dockerfile|Dockerfile\.bats-runner|agent-integration\.bats|ci/run-linux-e2e\.sh|docker-compose\.e2e\.yml|docker-e2e-runner\.sh|linux-e2e-tests\.sh|pre-install-validation\.sh|validation/)|package\.json$|package-lock\.json$|scripts/require-release-quality-gate\.mjs$|\.github/actions/(setup-node|build-workspaces)/|\.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml$)"; then
             linux_e2e=true
           fi
 
@@ -171,11 +172,11 @@ jobs:
             windows_e2e=true
           fi
 
-          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq '^(api/|shared/|linux/|runtime/|firefox-extension/|tests/e2e/(Dockerfile\.student|ci/run-linux-student-flow\.sh|student-flow/|validation/)|tests/selenium/|docker-compose\.test\.yml$|package\.json$|package-lock\.json$|scripts/require-release-quality-gate\.mjs$|\.github/actions/setup-node/|\.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml$)'; then
+          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq "^(api/|shared/|linux/|runtime/|$firefox_runtime_pattern|tests/e2e/(Dockerfile\.student|ci/run-linux-student-flow\.sh|student-flow/|validation/)|tests/selenium/|docker-compose\.test\.yml$|package\.json$|package-lock\.json$|scripts/require-release-quality-gate\.mjs$|\.github/actions/setup-node/|\.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml$)"; then
             linux_student_policy=true
           fi
 
-          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq '^(api/|shared/|windows/|runtime/|firefox-extension/|tests/e2e/(ci/run-windows-student-flow\.ps1|student-flow/|validation/)|tests/selenium/|package\.json$|package-lock\.json$|scripts/require-release-quality-gate\.mjs$|\.github/actions/setup-node/|\.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml$)'; then
+          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq "^(api/|shared/|windows/|runtime/|$firefox_runtime_pattern|tests/e2e/(ci/run-windows-student-flow\.ps1|student-flow/|validation/)|tests/selenium/|package\.json$|package-lock\.json$|scripts/require-release-quality-gate\.mjs$|\.github/actions/setup-node/|\.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml$)"; then
             windows_student_policy=true
             windows_student_policy_sse_group="$(printf '%s\n' "$changed_files" | node scripts/select-windows-student-policy-sse-group.mjs --from-stdin)"
           fi

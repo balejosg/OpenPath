@@ -1101,9 +1101,27 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
   );
   assert.ok(
     e2eWorkflow.includes(
-      '^(.github/workflows/(installer-contracts|prerelease-deb|release-extension|release-scripts)\\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\\.mjs|tests/repo-config/)'
+      '^(.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\\.mjs|tests/repo-config/)'
     ),
-    'release-infrastructure-only classification should stay limited to release workflows, release gate helpers, route selector, and repo-config contracts'
+    'release-infrastructure-only classification should stay limited to E2E/release workflows, release gate helpers, route selector, and repo-config contracts'
+  );
+  assert.ok(
+    e2eWorkflow.includes(
+      "firefox_runtime_pattern='firefox-extension/(manifest\\.json|package\\.json|tsconfig(\\.build)?\\.json|src/|blocked/|popup/|icons/)'"
+    ),
+    'Firefox path routing should identify only runtime extension files'
+  );
+  assert.ok(
+    e2eWorkflow.includes('|$firefox_runtime_pattern|'),
+    'E2E lane routing should use the shared Firefox runtime path pattern'
+  );
+  assert.ok(
+    !e2eWorkflow.includes('|firefox-extension/|'),
+    'E2E lane routing should not treat every Firefox extension file as runtime behavior'
+  );
+  assert.ok(
+    !e2eWorkflow.includes('firefox-extension/sign-firefox-release.mjs'),
+    'Firefox signing tooling should not trigger expensive E2E platform lanes'
   );
   assert.ok(
     e2eWorkflow.includes('[ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq'),
@@ -1220,20 +1238,20 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
   );
 });
 
-test('Firefox extension changes exercise platform readiness gates before release evidence', () => {
+test('Firefox runtime extension changes exercise platform readiness gates before release evidence', () => {
   const e2eWorkflow = readText('.github/workflows/e2e-tests.yml');
   const linuxStudentPolicyBlock = extractWorkflowJobBlock(e2eWorkflow, 'linux-student-policy');
   const windowsStudentPolicyBlock = extractWorkflowJobBlock(e2eWorkflow, 'windows-student-policy');
 
   assert.match(
     e2eWorkflow,
-    /linux_student_policy=[\s\S]*firefox-extension\//,
-    'Firefox extension changes should trigger Linux student-policy so native-host readiness is validated on Linux'
+    /linux_student_policy=[\s\S]*\$firefox_runtime_pattern/,
+    'Firefox runtime extension changes should trigger Linux student-policy so native-host readiness is validated on Linux'
   );
   assert.match(
     e2eWorkflow,
-    /windows_student_policy=[\s\S]*firefox-extension\//,
-    'Firefox extension changes should trigger Windows student-policy so browser readiness is validated on Windows'
+    /windows_student_policy=[\s\S]*\$firefox_runtime_pattern/,
+    'Firefox runtime extension changes should trigger Windows student-policy so browser readiness is validated on Windows'
   );
   assert.ok(
     linuxStudentPolicyBlock.includes('run-linux-student-flow.sh'),
