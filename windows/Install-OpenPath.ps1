@@ -210,6 +210,7 @@ Write-InstallerVerbose "  DNS upstream: $primaryDNS"
 Import-Module "$OpenPathRoot\lib\DNS.psm1" -Force
 Import-Module "$OpenPathRoot\lib\Browser.psm1" -Force
 Import-Module "$OpenPathRoot\lib\Services.psm1" -Force
+$deferLocalDnsUntilRemoteBootstrap = $classroomModeRequested -or [bool]$WhitelistUrl
 
 try {
     Register-OpenPathFirefoxNativeHost -Config $config -ClearWhitelist | Out-Null
@@ -247,8 +248,13 @@ else {
 Set-AcrylicConfiguration
 
 Show-InstallerProgress -Step 5 -Total 7 -Status 'Configurando DNS local'
-Set-LocalDNS
-Write-InstallerVerbose '  DNS configurado a 127.0.0.1'
+if ($deferLocalDnsUntilRemoteBootstrap) {
+    Write-InstallerVerbose '  DNS local se activara tras descargar y aplicar la primera whitelist'
+}
+else {
+    Set-LocalDNS
+    Write-InstallerVerbose '  DNS configurado a 127.0.0.1'
+}
 
 Show-InstallerProgress -Step 6 -Total 7 -Status 'Registrando tareas programadas'
 Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1

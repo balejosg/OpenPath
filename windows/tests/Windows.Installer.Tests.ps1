@@ -259,6 +259,22 @@ Describe "Installer" {
             $content | Should -Match 'try \{\s+Import-Module "\$OpenPathRoot\\lib\\RequestSetup\.State\.psm1" -Force\s+\$nativeHostConfig = Get-OpenPathConfig'
         }
 
+        It "Defers local DNS activation until remote bootstrap can write Acrylic hosts" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '$deferLocalDnsUntilRemoteBootstrap = $classroomModeRequested -or [bool]$WhitelistUrl',
+                'DNS local se activara tras descargar y aplicar la primera whitelist',
+                'Set-LocalDNS',
+                'Invoke-OpenPathInstallerFirstUpdate'
+            )
+
+            $content | Should -Match '(?s)if \(\$deferLocalDnsUntilRemoteBootstrap\).*?else \{\s+Set-LocalDNS'
+            $content | Should -Match '(?s)Invoke-OpenPathInstallerFirstUpdate'
+            $content | Should -Not -Match '(?s)Set-LocalDNS\s+Write-InstallerVerbose ''  DNS configurado a 127\.0\.0\.1''\s+Show-InstallerProgress -Step 6'
+        }
+
         It "Fails unattended classroom installs when enrollment or native host registration is incomplete" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw
