@@ -190,6 +190,14 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
     'cache-aware Firefox release action should expose an approval timeout input'
   );
   assert.ok(
+    prepareAction.includes('total-timeout-seconds:'),
+    'cache-aware Firefox release action should expose a total signing timeout input'
+  );
+  assert.ok(
+    prepareAction.includes('process-timeout-buffer-seconds:'),
+    'cache-aware Firefox release action should expose a web-ext process timeout buffer input'
+  );
+  assert.ok(
     prepareAction.includes('sign-on-cache-miss:') && prepareAction.includes("default: 'true'"),
     'cache-aware Firefox release action should default to signing on cache miss for stable release safety'
   );
@@ -209,8 +217,16 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
     'cache-aware Firefox release action should have an explicit non-blocking cache-miss path and a strict guard'
   );
   assert.ok(
-    prepareAction.includes("default: '7200'"),
-    'cache-aware Firefox release action should keep the long approval timeout as the stable default'
+    prepareAction.includes("default: '1800'"),
+    'cache-aware Firefox release action should bound total AMO signing time to 30 minutes by default'
+  );
+  assert.ok(
+    prepareAction.includes("default: '1200'"),
+    'cache-aware Firefox release action should leave 10 minutes of the 30-minute budget for AMO recovery'
+  );
+  assert.ok(
+    prepareAction.includes("default: '120'"),
+    'cache-aware Firefox release action should keep a bounded web-ext parent-process buffer'
   );
   assert.ok(
     prepareAction.includes("default: '2700'"),
@@ -229,8 +245,8 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
     'prerelease publishing should summarize whether signed Firefox assets were cached or skipped'
   );
   assert.ok(
-    !buildDebWorkflow.includes('approval-timeout-seconds: 1800'),
-    'stable Debian publishing should keep the long default AMO approval timeout'
+    !buildDebWorkflow.includes('approval-timeout-seconds: 0'),
+    'stable Debian publishing should not disable the web-ext approval timeout'
   );
   assert.ok(
     prepareAction.includes(
@@ -251,6 +267,18 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
       'WEB_EXT_SIGN_APPROVAL_TIMEOUT_SECONDS: ${{ inputs.approval-timeout-seconds }}'
     ),
     'cache-aware Firefox release action should wire the approval timeout input into signing'
+  );
+  assert.ok(
+    prepareAction.includes(
+      'WEB_EXT_SIGN_TOTAL_TIMEOUT_SECONDS: ${{ inputs.total-timeout-seconds }}'
+    ),
+    'cache-aware Firefox release action should wire the total timeout input into signing'
+  );
+  assert.ok(
+    prepareAction.includes(
+      'WEB_EXT_SIGN_PROCESS_TIMEOUT_BUFFER_SECONDS: ${{ inputs.process-timeout-buffer-seconds }}'
+    ),
+    'cache-aware Firefox release action should wire the process timeout buffer input into signing'
   );
 
   const firefoxPackageJson = JSON.parse(

@@ -14,7 +14,15 @@ inputs:
   approval-timeout-seconds:
     description: Maximum time web-ext should wait for AMO approval.
     required: false
-    default: '7200'
+    default: '1200'
+  total-timeout-seconds:
+    description: Maximum total wall-clock time for AMO signing and signed XPI recovery.
+    required: false
+    default: '1800'
+  process-timeout-buffer-seconds:
+    description: Extra parent-process timeout buffer beyond web-ext approval timeout.
+    required: false
+    default: '120'
   max-throttle-wait-seconds:
     description: Maximum AMO throttle delay that should be retried.
     required: false
@@ -86,6 +94,8 @@ runs:
         WEB_EXT_SIGN_RETRY_BUFFER_SECONDS: ${{ inputs.retry-buffer-seconds }}
         WEB_EXT_SIGN_MAX_THROTTLE_WAIT_SECONDS: ${{ inputs.max-throttle-wait-seconds }}
         WEB_EXT_SIGN_APPROVAL_TIMEOUT_SECONDS: ${{ inputs.approval-timeout-seconds }}
+        WEB_EXT_SIGN_TOTAL_TIMEOUT_SECONDS: ${{ inputs.total-timeout-seconds }}
+        WEB_EXT_SIGN_PROCESS_TIMEOUT_BUFFER_SECONDS: ${{ inputs.process-timeout-buffer-seconds }}
       run: |
         npm run sign:firefox-release --workspace=@openpath/firefox-extension -- --version "${{ inputs.amo-version }}"
 
