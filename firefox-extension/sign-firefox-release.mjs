@@ -174,7 +174,7 @@ export function isAmoApprovalTimeout(output) {
 }
 
 export function isAmoVersionAlreadyExists(output) {
-  return /Version already exists/i.test(output);
+  return /Version(?:\s+[\dA-Za-z._-]+)?\s+already exists/i.test(output);
 }
 
 function normalizeAmoBaseUrl(amoBaseUrl = defaultAmoBaseUrl) {

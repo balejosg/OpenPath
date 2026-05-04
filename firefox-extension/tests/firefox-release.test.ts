@@ -68,6 +68,7 @@ interface SignFirefoxReleaseModule {
   }) => string;
   computeFirefoxReleasePayloadHash: (options: { sourceDir?: string }) => string;
   findSignedXpiArtifact: (artifactsDir: string) => string;
+  isAmoVersionAlreadyExists: (output: string) => boolean;
   parseAmoVersionEditUrl: (output: string) => {
     addonId: string;
     versionId: string;
@@ -143,6 +144,7 @@ const {
   createAmoJwt,
   computeFirefoxReleasePayloadHash,
   findSignedXpiArtifact,
+  isAmoVersionAlreadyExists,
   parseAmoVersionEditUrl,
   parseWebExtThrottleDelaySeconds,
   prepareSigningSourceDir,
@@ -672,6 +674,19 @@ void describe('Firefox release signing helpers', () => {
     });
 
     assert.equal(result.status, 1);
+  });
+
+  void test('isAmoVersionAlreadyExists detects AMO conflict payloads with the version embedded', () => {
+    assert.equal(
+      isAmoVersionAlreadyExists(`WebExtError: Submission failed (2): Conflict
+{
+  "version": [
+    "Version 2.0.0.777908115 already exists."
+  ]
+}
+`),
+      true
+    );
   });
 
   void test('runWebExtSignWithRetry fails explicitly when the parent process timeout fires', () => {
