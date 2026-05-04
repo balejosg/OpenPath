@@ -249,13 +249,14 @@ Describe "Installer" {
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                'Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force',
                 '$nativeHostConfig = Get-OpenPathConfig',
                 '$nativeHostRequestSetup = Get-OpenPathRequestSetupState -Config $nativeHostConfig',
                 '$nativeHostRegistered = Register-OpenPathFirefoxNativeHost -Config $nativeHostConfig -ClearWhitelist',
                 '$nativeHostRequestSetup.DiagnosticMessage',
                 'No se pudo registrar el host nativo de Firefox tras enrollment'
             )
+
+            $content | Should -Match 'try \{\s+Import-Module "\$OpenPathRoot\\lib\\RequestSetup\.State\.psm1" -Force\s+\$nativeHostConfig = Get-OpenPathConfig'
         }
 
         It "Fails unattended classroom installs when enrollment or native host registration is incomplete" {

@@ -287,6 +287,7 @@ if ($classroomModeRequested) {
 $nativeHostRegistered = $false
 $nativeHostRequestSetup = $null
 try {
+    Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force
     $nativeHostConfig = Get-OpenPathConfig
     $nativeHostRequestSetup = Get-OpenPathRequestSetupState -Config $nativeHostConfig
     $nativeHostRegistered = Register-OpenPathFirefoxNativeHost -Config $nativeHostConfig -ClearWhitelist
