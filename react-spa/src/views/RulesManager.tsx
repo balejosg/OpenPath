@@ -35,6 +35,7 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
     },
     onError: toastError,
   });
+  const { collection } = viewModel;
 
   return (
     <div
@@ -77,16 +78,16 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
 
       <RulesManagerToolbar
         readOnly={readOnly}
-        search={viewModel.manager.search}
-        countsAll={viewModel.manager.counts.all}
+        search={collection.search}
+        countsAll={collection.counts.all}
         newValue={viewModel.newValue}
         adding={viewModel.adding}
-        loading={viewModel.manager.loading}
+        loading={collection.loading}
         inputError={viewModel.inputError}
         validationError={viewModel.validationError}
-        rulesCount={viewModel.manager.rules.length}
+        rulesCount={collection.rules.length}
         detectedType={viewModel.detectedType}
-        onSearchChange={viewModel.manager.setSearch}
+        onSearchChange={collection.setSearch}
         onInputChange={viewModel.handleInputChange}
         onAddRule={() => {
           void viewModel.handleAddRule(readOnly);
@@ -98,53 +99,53 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
           }
         }}
         onOpenImport={viewModel.openImportModal}
-        onExport={(format) => exportRules(viewModel.manager.rules, format, `${groupName}-rules`)}
+        onExport={(format) => exportRules(collection.rules, format, `${groupName}-rules`)}
       />
 
       <RulesManagerTableSection
         tabs={viewModel.tabs}
-        filter={viewModel.manager.filter}
-        error={viewModel.manager.error}
+        filter={collection.filter}
+        error={collection.error}
         viewMode={viewModel.viewMode}
-        rules={viewModel.manager.rules}
-        domainGroups={viewModel.groupedHook.domainGroups}
-        loading={viewModel.manager.loading}
+        rules={collection.rules}
+        domainGroups={collection.domainGroups}
+        loading={collection.loading}
         readOnly={readOnly}
-        selectedIds={viewModel.manager.selectedIds}
-        isAllSelected={viewModel.manager.isAllSelected}
-        hasSelection={viewModel.manager.hasSelection}
+        selectedIds={collection.selection.selectedIds}
+        isAllSelected={collection.selection.isAllSelected}
+        hasSelection={collection.selection.hasSelection}
         emptyMessage={viewModel.emptyMessage}
-        onFilterChange={viewModel.manager.setFilter}
+        onFilterChange={collection.setFilter}
         onRetry={() => {
-          void viewModel.manager.refetch();
+          void collection.refetch();
         }}
         onDelete={(rule) => {
-          void viewModel.manager.deleteRule(rule);
+          void collection.actions.deleteRule(rule);
         }}
-        onSave={viewModel.manager.updateRule}
-        onToggleSelection={viewModel.manager.toggleSelection}
-        onToggleSelectAll={viewModel.manager.toggleSelectAll}
+        onSave={collection.actions.updateRule}
+        onToggleSelection={collection.selection.toggleSelection}
+        onToggleSelectAll={collection.selection.toggleSelectAll}
       />
 
       <RulesManagerPagination
         viewMode={viewModel.viewMode}
-        loading={viewModel.manager.loading}
-        error={viewModel.manager.error}
-        page={viewModel.manager.page}
-        totalPages={viewModel.manager.totalPages}
-        total={viewModel.manager.total}
-        totalGroups={viewModel.groupedHook.totalGroups}
-        visibleGroups={viewModel.groupedHook.domainGroups.length}
-        onPageChange={viewModel.manager.setPage}
+        loading={collection.loading}
+        error={collection.error}
+        page={collection.page}
+        totalPages={collection.totalPages}
+        total={collection.totalRules}
+        totalGroups={collection.totalGroups}
+        visibleGroups={collection.domainGroups.length}
+        onPageChange={collection.setPage}
       />
 
       <ToastContainer />
 
       {!readOnly && (
         <BulkActionBar
-          selectedCount={viewModel.manager.selectedIds.size}
+          selectedCount={collection.selection.selectedIds.size}
           onDelete={() => void viewModel.handleBulkDelete()}
-          onClear={viewModel.manager.clearSelection}
+          onClear={collection.selection.clearSelection}
           isDeleting={viewModel.bulkDeleting}
         />
       )}
@@ -153,7 +154,7 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
         <BulkImportModal
           isOpen={viewModel.showImportModal}
           onClose={viewModel.closeImportModal}
-          onImport={viewModel.manager.bulkCreateRules}
+          onImport={collection.actions.bulkCreateRules}
           initialText={viewModel.importInitialText}
         />
       )}

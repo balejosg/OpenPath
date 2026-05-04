@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 import { AlertCircle } from 'lucide-react';
-import type { DomainGroup } from '../../hooks/useGroupedRulesManager';
-import type { FilterType } from '../../hooks/useRulesManager';
+import type { DomainGroup, ManagedRulesFilterType } from '../../hooks/useManagedRulesCollection';
 import type { Rule } from '../../lib/rules';
 import { HierarchicalRulesTable } from '../HierarchicalRulesTable';
 import { RulesTable } from '../RulesTable';
@@ -9,8 +8,8 @@ import { Tabs } from '../ui/Tabs';
 import type { ViewMode } from '../../hooks/useRulesManagerViewModel';
 
 interface RulesManagerTableSectionProps {
-  tabs: { id: FilterType; label: string; count: number; icon?: ReactNode }[];
-  filter: FilterType;
+  tabs: { id: ManagedRulesFilterType; label: string; count: number; icon?: ReactNode }[];
+  filter: ManagedRulesFilterType;
   error: string | null;
   viewMode: ViewMode;
   rules: Rule[];
@@ -21,7 +20,7 @@ interface RulesManagerTableSectionProps {
   isAllSelected: boolean;
   hasSelection: boolean;
   emptyMessage: string;
-  onFilterChange: (filter: FilterType) => void;
+  onFilterChange: (filter: ManagedRulesFilterType) => void;
   onRetry: () => void;
   onDelete: (rule: Rule) => void;
   onSave: (id: string, data: { value?: string; comment?: string | null }) => Promise<boolean>;
@@ -51,7 +50,11 @@ export function RulesManagerTableSection({
 }: RulesManagerTableSectionProps) {
   return (
     <>
-      <Tabs tabs={tabs} activeTab={filter} onChange={(id) => onFilterChange(id as FilterType)} />
+      <Tabs
+        tabs={tabs}
+        activeTab={filter}
+        onChange={(id) => onFilterChange(id as ManagedRulesFilterType)}
+      />
 
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-center">

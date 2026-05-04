@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { useRulesManagerViewModel } from '../useRulesManagerViewModel';
 
@@ -19,7 +19,7 @@ vi.mock('../useRulesManager', () => ({
     setFilter: vi.fn(),
     search: '',
     setSearch: vi.fn(),
-    counts: { all: 0, allowed: 0, blocked: 0 },
+    counts: { all: 0, allowed: 0, automatic: 0, blocked: 0 },
     selectedIds: new Set<string>(),
     toggleSelection: vi.fn(),
     toggleSelectAll: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock('../useGroupedRulesManager', () => ({
     setFilter: vi.fn(),
     search: '',
     setSearch: vi.fn(),
-    counts: { all: 0, allowed: 0, blocked: 0 },
+    counts: { all: 0, allowed: 0, automatic: 0, blocked: 0 },
     selectedIds: new Set<string>(),
     toggleSelection: vi.fn(),
     toggleSelectAll: vi.fn(),
@@ -92,7 +92,9 @@ describe('useRulesManagerViewModel', () => {
     });
 
     expect(addRule).toHaveBeenCalledWith('example.com');
-    expect(groupedRefetch).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(groupedRefetch).toHaveBeenCalled();
+    });
     expect(result.current.viewMode).toBe('hierarchical');
   });
 });

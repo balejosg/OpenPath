@@ -3,10 +3,13 @@ import type { DragEvent } from 'react';
 import { Ban, Check } from 'lucide-react';
 import { detectRuleType, validateRuleValue } from '../lib/ruleDetection';
 import { readMultipleFiles } from '../lib/fileReader';
-import { useGroupedRulesManager } from './useGroupedRulesManager';
-import { useRulesManager, type FilterType } from './useRulesManager';
+import {
+  useManagedRulesCollection,
+  type ManagedRulesCollectionMode,
+  type ManagedRulesFilterType,
+} from './useManagedRulesCollection';
 
-export type ViewMode = 'flat' | 'hierarchical';
+export type ViewMode = ManagedRulesCollectionMode;
 
 interface UseRulesManagerViewModelOptions {
   groupId: string;
@@ -29,49 +32,15 @@ export function useRulesManagerViewModel({
   const [importInitialText, setImportInitialText] = useState('');
   const dragCounter = useRef(0);
 
-  const flatHook = useRulesManager({
+  const collection = useManagedRulesCollection({
     groupId,
+    mode: viewMode,
     onToast,
   });
-
-  const groupedHook = useGroupedRulesManager({
-    groupId,
-    onToast,
-  });
-
-  const manager =
-    viewMode === 'hierarchical'
-      ? {
-          rules: groupedHook.domainGroups.flatMap((group) => group.rules),
-          total: groupedHook.totalRules,
-          loading: groupedHook.loading,
-          error: groupedHook.error,
-          page: groupedHook.page,
-          setPage: groupedHook.setPage,
-          totalPages: groupedHook.totalPages,
-          filter: groupedHook.filter,
-          setFilter: groupedHook.setFilter,
-          search: groupedHook.search,
-          setSearch: groupedHook.setSearch,
-          counts: groupedHook.counts,
-          selectedIds: groupedHook.selectedIds,
-          toggleSelection: groupedHook.toggleSelection,
-          toggleSelectAll: groupedHook.toggleSelectAll,
-          clearSelection: groupedHook.clearSelection,
-          isAllSelected: groupedHook.isAllSelected,
-          hasSelection: groupedHook.hasSelection,
-          addRule: groupedHook.addRule,
-          deleteRule: groupedHook.deleteRule,
-          bulkDeleteRules: groupedHook.bulkDeleteRules,
-          bulkCreateRules: groupedHook.bulkCreateRules,
-          updateRule: groupedHook.updateRule,
-          refetch: groupedHook.refetch,
-        }
-      : flatHook;
 
   const whitelistDomains = useMemo(() => {
-    return manager.rules.filter((rule) => rule.type === 'whitelist').map((rule) => rule.value);
-  }, [manager.rules]);
+    return collection.rules.filter((rule) => rule.type === 'whitelist').map((rule) => rule.value);
+  }, [collection.rules]);
 
   const detectedType = useMemo(() => {
     if (!newValue.trim()) return null;
@@ -99,7 +68,7 @@ export function useRulesManagerViewModel({
     setAdding(true);
     setInputError('');
 
-    const succeeded = await manager.addRule(newValue);
+    const succeeded = await collection.actions.addRule(newValue);
     if (succeeded) {
       setNewValue('');
     }
@@ -114,7 +83,7 @@ export function useRulesManagerViewModel({
 
   const handleBulkDelete = async () => {
     setBulkDeleting(true);
-    await manager.bulkDeleteRules();
+    await collection.actions.bulkDeleteRules();
     setBulkDeleting(false);
   };
 
@@ -179,45 +148,43 @@ export function useRulesManagerViewModel({
   const handleViewModeChange = (nextViewMode: ViewMode) => {
     if (viewMode === nextViewMode) return;
     setViewMode(nextViewMode);
-    void (nextViewMode === 'flat' ? flatHook.refetch() : groupedHook.refetch());
   };
 
-  const emptyMessage = manager.search
+  const emptyMessage = collection.search
     ? 'No se encontraron resultados para tu búsqueda'
-    : manager.filter === 'allowed'
+    : collection.filter === 'allowed'
       ? 'No hay dominios permitidos'
-      : manager.filter === 'automatic'
+      : collection.filter === 'automatic'
         ? 'No hay aprobaciones automáticas'
-        : manager.filter === 'blocked'
+        : collection.filter === 'blocked'
           ? 'No hay dominios bloqueados'
           : 'No hay reglas configuradas. Añade una para empezar.';
 
   const tabs = [
-    { id: 'all' as FilterType, label: 'Todos', count: manager.counts.all },
+    { id: 'all' as ManagedRulesFilterType, label: 'Todos', count: collection.counts.all },
     {
-      id: 'allowed' as FilterType,
+      id: 'allowed' as ManagedRulesFilterType,
       label: 'Permitidas',
-      count: manager.counts.allowed,
+      count: collection.counts.allowed,
       icon: createElement(Check, { size: 14 }),
     },
     {
-      id: 'automatic' as FilterType,
+      id: 'automatic' as ManagedRulesFilterType,
       label: 'Automáticas',
-      count: manager.counts.automatic,
+      count: collection.counts.automatic,
       icon: createElement(Check, { size: 14 }),
     },
     {
-      id: 'blocked' as FilterType,
+      id: 'blocked' as ManagedRulesFilterType,
       label: 'Bloqueadas',
-      count: manager.counts.blocked,
+      count: collection.counts.blocked,
       icon: createElement(Ban, { size: 14 }),
     },
   ];
 
   return {
     viewMode,
-    manager,
-    groupedHook,
+    collection,
     newValue,
     inputError,
     adding,
@@ -240,9 +207,9 @@ export function useRulesManagerViewModel({
     handleViewModeChange,
     openImportModal: () => setShowImportModal(true),
     closeImportModal: handleImportModalClose,
-    setSearch: manager.setSearch,
-    setFilter: manager.setFilter,
-    setPage: manager.setPage,
+    setSearch: collection.setSearch,
+    setFilter: collection.setFilter,
+    setPage: collection.setPage,
     setShowImportModal,
   };
 }
