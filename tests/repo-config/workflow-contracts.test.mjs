@@ -268,7 +268,7 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
     'Firefox AMO signing should not let npx install or float web-ext at runtime'
   );
   assert.ok(
-    signingScript.includes('timeout: processTimeoutMs'),
+    signingScript.includes('timeout: attemptTimeoutMs'),
     'Firefox AMO signing should enforce a parent process timeout around web-ext'
   );
 });

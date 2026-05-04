@@ -79,6 +79,23 @@ interface SignFirefoxReleaseModule {
     effectiveVersion: string;
     cleanup: () => void;
   };
+  resolveAmoRecoveryTiming: (options: {
+    env?: NodeJS.ProcessEnv;
+    deadlineMs?: number;
+    nowMs?: number;
+  }) => {
+    timeoutMs: number;
+    pollIntervalMs: number;
+    remainingTotalMs?: number;
+  };
+  resolveWebExtSignTiming: (options: { env?: NodeJS.ProcessEnv; nowMs?: number }) => {
+    totalTimeoutMs?: number;
+    approvalTimeoutMs: number;
+    requestTimeoutMs: number;
+    processTimeoutBufferMs: number;
+    processTimeoutMs?: number;
+    deadlineMs?: number;
+  };
   runWebExtSignWithRetry: (options: {
     args: string[];
     cwd: string;
@@ -89,9 +106,11 @@ interface SignFirefoxReleaseModule {
       options: { cwd: string; encoding: 'utf8'; timeout?: number }
     ) => SpawnSyncReturns<string>;
     sleepSyncImpl?: (milliseconds: number) => void;
+    nowImpl?: () => number;
     stdout?: { write: (chunk: string) => unknown };
     stderr?: { write: (chunk: string) => unknown };
     processTimeoutMs?: number;
+    deadlineMs?: number;
   }) => SpawnSyncReturns<string> | { status: number };
   waitForAmoSignedXpi: (options: {
     apiKey: string;
@@ -127,6 +146,8 @@ const {
   parseAmoVersionEditUrl,
   parseWebExtThrottleDelaySeconds,
   prepareSigningSourceDir,
+  resolveAmoRecoveryTiming,
+  resolveWebExtSignTiming,
   runWebExtSignWithRetry,
   waitForAmoSignedXpi,
 } = (await import('../sign-firefox-release.mjs')) as SignFirefoxReleaseModule;
@@ -342,6 +363,52 @@ void describe('Firefox release signing helpers', () => {
     assert.ok(
       args.includes('--approval-timeout=0'),
       'approval-timeout=0 must reach web-ext so OpenPath can poll AMO explicitly'
+    );
+  });
+
+  void test('resolveWebExtSignTiming keeps release signing under a finite process timeout', () => {
+    const timing = resolveWebExtSignTiming({
+      nowMs: 1_000,
+      env: {
+        WEB_EXT_SIGN_TOTAL_TIMEOUT_SECONDS: '1800',
+        WEB_EXT_SIGN_APPROVAL_TIMEOUT_SECONDS: '1200',
+        WEB_EXT_SIGN_PROCESS_TIMEOUT_BUFFER_SECONDS: '120',
+      },
+    });
+
+    assert.equal(timing.totalTimeoutMs, 1_800_000);
+    assert.equal(timing.approvalTimeoutMs, 1_200_000);
+    assert.equal(timing.processTimeoutBufferMs, 120_000);
+    assert.equal(timing.processTimeoutMs, 1_320_000);
+    assert.equal(timing.deadlineMs, 1_801_000);
+  });
+
+  void test('resolveAmoRecoveryTiming limits recovery to the remaining total signing budget', () => {
+    const timing = resolveAmoRecoveryTiming({
+      nowMs: 1_500_000,
+      deadlineMs: 1_800_000,
+      env: {
+        WEB_EXT_SIGN_RECOVERY_TIMEOUT_SECONDS: '1800',
+        WEB_EXT_SIGN_RECOVERY_POLL_SECONDS: '30',
+      },
+    });
+
+    assert.equal(timing.timeoutMs, 300_000);
+    assert.equal(timing.remainingTotalMs, 300_000);
+    assert.equal(timing.pollIntervalMs, 30_000);
+  });
+
+  void test('resolveAmoRecoveryTiming fails clearly when the total signing deadline is exhausted', () => {
+    assert.throws(
+      () =>
+        resolveAmoRecoveryTiming({
+          nowMs: 1_800_001,
+          deadlineMs: 1_800_000,
+          env: {
+            WEB_EXT_SIGN_RECOVERY_TIMEOUT_SECONDS: '1800',
+          },
+        }),
+      /AMO signing exhausted total timeout before signed XPI recovery could start/
     );
   });
 
@@ -640,6 +707,37 @@ void describe('Firefox release signing helpers', () => {
 
     assert.equal(result.status, 124);
     assert.match(stderrChunks.join(''), /parent process timeout of 1920000ms/);
+  });
+
+  void test('runWebExtSignWithRetry clamps web-ext to the remaining total signing budget', () => {
+    const attempts: (number | undefined)[] = [];
+    const spawnSyncImpl = (
+      _command: string,
+      _args: string[],
+      options: { cwd: string; encoding: 'utf8'; timeout?: number }
+    ): SpawnSyncReturns<string> => {
+      attempts.push(options.timeout);
+      return {
+        status: 0,
+        signal: null,
+        output: [],
+        pid: 123,
+        stdout: '',
+        stderr: '',
+      };
+    };
+
+    const result = runWebExtSignWithRetry({
+      args: ['--yes', '--no-install', 'web-ext', 'sign'],
+      cwd: extensionRoot,
+      spawnSyncImpl,
+      nowImpl: () => 1_700_000,
+      processTimeoutMs: 1_320_000,
+      deadlineMs: 1_800_000,
+    });
+
+    assert.equal(result.status, 0);
+    assert.deepEqual(attempts, [100_000]);
   });
 
   void test('prepareSigningSourceDir can override the manifest version in a temporary copy', () => {

@@ -70,6 +70,82 @@ function parseNonNegativeInteger(value, fallback) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+function formatTimeoutMs(timeoutMs) {
+  return timeoutMs === undefined ? 'disabled' : String(timeoutMs);
+}
+
+export function resolveWebExtSignTiming(options = {}) {
+  const { env = process.env, nowMs = Date.now() } = options;
+  const totalTimeoutSeconds = parseNonNegativeInteger(env.WEB_EXT_SIGN_TOTAL_TIMEOUT_SECONDS, 0);
+  const totalTimeoutMs = totalTimeoutSeconds > 0 ? totalTimeoutSeconds * 1000 : undefined;
+  const approvalTimeoutMs =
+    parseNonNegativeInteger(
+      env.WEB_EXT_SIGN_APPROVAL_TIMEOUT_SECONDS,
+      defaultWebExtSignApprovalTimeoutSeconds
+    ) * 1000;
+  const requestTimeoutMs =
+    parseNonNegativeInteger(
+      env.WEB_EXT_SIGN_REQUEST_TIMEOUT_SECONDS,
+      defaultWebExtSignRequestTimeoutSeconds
+    ) * 1000;
+  const processTimeoutBufferMs =
+    parseNonNegativeInteger(
+      env.WEB_EXT_SIGN_PROCESS_TIMEOUT_BUFFER_SECONDS,
+      defaultWebExtSignProcessTimeoutBufferSeconds
+    ) * 1000;
+  const processTimeoutMs =
+    approvalTimeoutMs > 0 ? approvalTimeoutMs + processTimeoutBufferMs : totalTimeoutMs;
+  const deadlineMs = totalTimeoutMs === undefined ? undefined : nowMs + totalTimeoutMs;
+
+  return {
+    totalTimeoutMs,
+    approvalTimeoutMs,
+    requestTimeoutMs,
+    processTimeoutBufferMs,
+    processTimeoutMs,
+    deadlineMs,
+  };
+}
+
+export function resolveAmoRecoveryTiming(options = {}) {
+  const { env = process.env, deadlineMs, nowMs = Date.now() } = options;
+  const configuredTimeoutMs =
+    parseNonNegativeInteger(
+      env.WEB_EXT_SIGN_RECOVERY_TIMEOUT_SECONDS,
+      defaultWebExtSignRecoveryTimeoutSeconds
+    ) * 1000;
+  const pollIntervalMs =
+    parseNonNegativeInteger(
+      env.WEB_EXT_SIGN_RECOVERY_POLL_SECONDS,
+      defaultWebExtSignRecoveryPollSeconds
+    ) * 1000;
+
+  if (configuredTimeoutMs === 0) {
+    fail('AMO signed XPI recovery is disabled by WEB_EXT_SIGN_RECOVERY_TIMEOUT_SECONDS=0');
+  }
+
+  if (deadlineMs === undefined) {
+    return {
+      timeoutMs: configuredTimeoutMs,
+      pollIntervalMs,
+      remainingTotalMs: undefined,
+    };
+  }
+
+  const remainingTotalMs = deadlineMs - nowMs;
+  if (remainingTotalMs <= 0) {
+    fail(
+      `AMO signing exhausted total timeout before signed XPI recovery could start deadlineMs=${deadlineMs} nowMs=${nowMs}`
+    );
+  }
+
+  return {
+    timeoutMs: Math.min(configuredTimeoutMs, remainingTotalMs),
+    pollIntervalMs,
+    remainingTotalMs,
+  };
+}
+
 export function parseWebExtThrottleDelaySeconds(output) {
   const match = /Expected available in\s+(\d+)\s+seconds?/i.exec(output);
   return match ? Number.parseInt(match[1], 10) : null;
@@ -305,9 +381,11 @@ export function runWebExtSignWithRetry(options) {
     env = process.env,
     spawnSyncImpl = spawnSync,
     sleepSyncImpl = sleepSync,
+    nowImpl = Date.now,
     stdout = process.stdout,
     stderr = process.stderr,
     processTimeoutMs,
+    deadlineMs,
   } = options;
   const maxRetries = parseNonNegativeInteger(
     env.WEB_EXT_SIGN_MAX_RETRIES,
@@ -323,10 +401,23 @@ export function runWebExtSignWithRetry(options) {
   );
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const remainingTotalMs = deadlineMs === undefined ? undefined : deadlineMs - nowImpl();
+    if (remainingTotalMs !== undefined && remainingTotalMs <= 0) {
+      stderr.write(
+        `[sign:firefox-release] AMO signing exhausted the total timeout before web-ext sign could finish deadlineMs=${deadlineMs}\n`
+      );
+      return {
+        status: 124,
+      };
+    }
+    const attemptTimeoutMs =
+      remainingTotalMs === undefined || processTimeoutMs === undefined
+        ? processTimeoutMs
+        : Math.min(processTimeoutMs, remainingTotalMs);
     const result = spawnSyncImpl('npx', args, {
       cwd,
       encoding: 'utf8',
-      timeout: processTimeoutMs,
+      timeout: attemptTimeoutMs,
     });
     const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
 
@@ -360,10 +451,20 @@ export function runWebExtSignWithRetry(options) {
     }
 
     const waitSeconds = throttleDelaySeconds + retryBufferSeconds;
+    const waitMs = waitSeconds * 1000;
+    const postAttemptRemainingMs = deadlineMs === undefined ? undefined : deadlineMs - nowImpl();
+    if (postAttemptRemainingMs !== undefined && waitMs >= postAttemptRemainingMs) {
+      stderr.write(
+        `[sign:firefox-release] AMO signing exhausted total timeout before retry wait could complete waitMs=${waitMs} remainingMs=${postAttemptRemainingMs}\n`
+      );
+      return {
+        status: 124,
+      };
+    }
     console.warn(
       `[sign:firefox-release] AMO signing request was throttled; retrying in ${waitSeconds} seconds`
     );
-    sleepSyncImpl(waitSeconds * 1000);
+    sleepSyncImpl(waitMs);
   }
 
   return { status: 1 };
@@ -593,6 +694,8 @@ async function recoverSignedXpiFromAmo(options) {
     effectiveVersion,
     artifactsDir,
     env,
+    deadlineMs,
+    nowImpl = Date.now,
     stdout = process.stdout,
   } = options;
   const editUrl = parseAmoVersionEditUrl(output);
@@ -602,20 +705,19 @@ async function recoverSignedXpiFromAmo(options) {
     return null;
   }
 
-  const recoveryTimeoutMs =
-    parseNonNegativeInteger(
-      env.WEB_EXT_SIGN_RECOVERY_TIMEOUT_SECONDS,
-      defaultWebExtSignRecoveryTimeoutSeconds
-    ) * 1000;
-  const recoveryPollMs =
-    parseNonNegativeInteger(
-      env.WEB_EXT_SIGN_RECOVERY_POLL_SECONDS,
-      defaultWebExtSignRecoveryPollSeconds
-    ) * 1000;
-
-  if (recoveryTimeoutMs === 0) {
-    fail('AMO signed XPI recovery is disabled by WEB_EXT_SIGN_RECOVERY_TIMEOUT_SECONDS=0');
-  }
+  const {
+    timeoutMs: recoveryTimeoutMs,
+    pollIntervalMs: recoveryPollMs,
+    remainingTotalMs,
+  } = resolveAmoRecoveryTiming({ env, deadlineMs, nowMs: nowImpl() });
+  stdout.write(
+    [
+      '[sign:firefox-release] AMO signed XPI recovery budget',
+      `timeoutMs=${recoveryTimeoutMs}`,
+      `remainingTotalMs=${formatTimeoutMs(remainingTotalMs)}`,
+      `pollIntervalMs=${recoveryPollMs}`,
+    ].join(' ') + '\n'
+  );
 
   if (editUrl) {
     stdout.write(`[sign:firefox-release] Resuming AMO approval from ${editUrl.editUrl}\n`);
@@ -656,23 +758,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
     const payloadHash = computeFirefoxReleasePayloadHash({ sourceDir: extensionRoot });
 
     try {
-      const approvalTimeoutMs =
-        parseNonNegativeInteger(
-          process.env.WEB_EXT_SIGN_APPROVAL_TIMEOUT_SECONDS,
-          defaultWebExtSignApprovalTimeoutSeconds
-        ) * 1000;
-      const requestTimeoutMs =
-        parseNonNegativeInteger(
-          process.env.WEB_EXT_SIGN_REQUEST_TIMEOUT_SECONDS,
-          defaultWebExtSignRequestTimeoutSeconds
-        ) * 1000;
-      const processTimeoutBufferMs =
-        parseNonNegativeInteger(
-          process.env.WEB_EXT_SIGN_PROCESS_TIMEOUT_BUFFER_SECONDS,
-          defaultWebExtSignProcessTimeoutBufferSeconds
-        ) * 1000;
-      const processTimeoutMs =
-        approvalTimeoutMs > 0 ? approvalTimeoutMs + processTimeoutBufferMs : undefined;
+      const {
+        totalTimeoutMs,
+        approvalTimeoutMs,
+        requestTimeoutMs,
+        processTimeoutBufferMs,
+        processTimeoutMs,
+        deadlineMs,
+      } = resolveWebExtSignTiming({ env: process.env });
 
       console.log(
         [
@@ -681,8 +774,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
           `sourceDir=${signingSource.sourceDir}`,
           `artifactsDir=${artifactsDir}`,
           `webExt=${readDeclaredWebExtVersion()}`,
+          `totalTimeoutMs=${formatTimeoutMs(totalTimeoutMs)}`,
           `approvalTimeoutMs=${approvalTimeoutMs}`,
           `requestTimeoutMs=${requestTimeoutMs}`,
+          `processTimeoutBufferMs=${processTimeoutBufferMs}`,
           `processTimeoutMs=${processTimeoutMs ?? 'disabled'}`,
         ].join(' ')
       );
@@ -703,6 +798,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
         args,
         cwd: extensionRoot,
         processTimeoutMs,
+        deadlineMs,
         stdout: createCaptureStream(process.stdout, webExtOutput),
         stderr: createCaptureStream(process.stderr, webExtOutput),
       });
@@ -721,6 +817,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
               effectiveVersion: signingSource.effectiveVersion,
               artifactsDir,
               env: process.env,
+              deadlineMs,
             })) || '';
 
           if (!signedXpiPath) {
@@ -737,6 +834,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
             effectiveVersion: signingSource.effectiveVersion,
             artifactsDir,
             env: process.env,
+            deadlineMs,
           })) || '';
 
         if (!signedXpiPath) {
