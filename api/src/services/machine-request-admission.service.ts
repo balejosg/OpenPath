@@ -7,12 +7,12 @@ import { normalizeHostInput } from '../lib/machine-proof.js';
 import { parseWhitelistDomain } from '../lib/public-request-input.js';
 import { resolveMachineTokenHostnameAccess } from '../lib/server-request-auth.js';
 import type { AuthenticatedMachine } from '../lib/server-request-auth.js';
-import type { CreateRuleResult, Rule, RuleType } from '../lib/groups-storage.js';
+import type { CreateRuleResult, Rule, RuleSource, RuleType } from '../lib/groups-storage.js';
 import DomainEventsService from './domain-events.service.js';
 import { createRequest } from './request-command.service.js';
 import type { RequestCreationInput } from './request-command.service.js';
 import type { RequestResult, RequestServiceError } from './request-service-shared.js';
-import type { DomainEventCollector } from './domain-events/types.js';
+import { createAutomaticWhitelistRule } from './whitelist-rule-command.service.js';
 import type { EffectivePolicyContext } from '../lib/classroom-storage.js';
 
 export type PublicRequestServiceError = RequestServiceError;
@@ -98,8 +98,8 @@ export interface MachineRequestAdmissionDeps {
     groupId: string,
     type: RuleType,
     value: string,
-    comment: string,
-    source: 'manual' | 'auto_extension',
+    comment?: string | null,
+    source?: RuleSource,
     tx?: DbExecutor
   ) => Promise<CreateRuleResult>;
   getRulesByGroup: (groupId: string, type?: RuleType) => Promise<Rule[]>;
@@ -395,52 +395,33 @@ export async function decideAutoMachineRequest(
     );
   }
 
-  const reasonText = input.reason ?? '';
-  const diagnosticText = input.diagnosticContext
-    ? ` - diagnostic (${input.diagnosticContext})`
-    : '';
-  const sourceComment = input.originPage
-    ? `Auto-approved via Firefox extension (${input.originPage.slice(0, 300)})${reasonText ? ` - ${reasonText}` : ''}${diagnosticText}`
-    : `Auto-approved via Firefox extension${reasonText ? ` - ${reasonText}` : ''}${diagnosticText}`;
-
   try {
-    const created: CreateRuleResult = await deps.withDbTransactionEvents(
-      deps.withTransaction,
-      async (tx: DbExecutor, events: DomainEventCollector) => {
-        const result = await deps.createRule(
-          context.data.groupId,
-          'whitelist',
-          context.data.domain,
-          sourceComment,
-          'auto_extension',
-          tx
-        );
-
-        if (result.success) {
-          events.publishWhitelistChanged(context.data.groupId);
-        }
-
-        return result;
+    const created = await createAutomaticWhitelistRule(
+      {
+        diagnosticContext: input.diagnosticContext,
+        domain: context.data.domain,
+        groupId: context.data.groupId,
+        originPage: input.originPage,
+        reason: input.reason,
+      },
+      {
+        createRule: deps.createRule,
+        publishWhitelistChanged:
+          DomainEventsService.publishWhitelistChanged.bind(DomainEventsService),
+        withDbTransactionEvents: deps.withDbTransactionEvents,
+        withTransaction: deps.withTransaction,
       }
     );
 
-    if (!created.success && created.error !== 'Rule already exists') {
-      return {
-        ok: false,
-        error: { code: 'BAD_REQUEST', message: created.error ?? 'Could not create rule' },
-      };
-    }
-
-    const duplicate = created.error === 'Rule already exists';
     return {
       ok: true,
       data: {
         autoApproved: true,
         domain: context.data.domain,
-        duplicate,
+        duplicate: created.duplicate,
         groupId: context.data.groupId,
         source: 'auto_extension',
-        status: duplicate ? 'duplicate' : 'approved',
+        status: created.status,
       },
     };
   } catch (error) {

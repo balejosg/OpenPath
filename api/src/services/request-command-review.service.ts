@@ -1,8 +1,6 @@
 import * as auth from '../lib/auth.js';
 import * as groupsStorage from '../lib/groups-storage.js';
-import { withTransaction } from '../db/index.js';
 
-import DomainEventsService from './domain-events.service.js';
 import type { RequestResult } from './request-service-shared.js';
 import {
   canApproveResolvedTarget,
@@ -12,6 +10,7 @@ import {
   updateStoredRequestStatus,
   type StoredDomainRequest,
 } from './request-command-shared.js';
+import { approveWhitelistRequest } from './whitelist-rule-command.service.js';
 import type { JWTPayload } from '../lib/auth.js';
 
 export async function approveRequest(
@@ -63,50 +62,12 @@ export async function approveRequest(
   }
 
   try {
-    const approval = await DomainEventsService.withDbTransactionEvents<{
-      createdRule: boolean;
-      updated: StoredDomainRequest | null;
-    }>(withTransaction, async (tx, events) => {
-      const ruleResult = await groupsStorage.createRule(
-        resolvedTarget.id,
-        'whitelist',
-        request.domain,
-        null,
-        'manual',
-        tx
-      );
-
-      if (!ruleResult.success && ruleResult.error !== 'Rule already exists') {
-        throw new Error(ruleResult.error ?? 'Failed to add domain to whitelist');
-      }
-
-      const updated = await updateStoredRequestStatus(
-        request.id,
-        'approved',
-        user.name,
-        `Added to ${resolvedTarget.name}`,
-        {
-          executor: tx,
-          expectedStatus: 'pending',
-        }
-      );
-
-      if (ruleResult.success) {
-        events.publishWhitelistChanged(resolvedTarget.id);
-      }
-
-      return {
-        updated,
-        createdRule: ruleResult.success,
-      };
+    const approval = await approveWhitelistRequest({
+      domain: request.domain,
+      requestId: request.id,
+      resolvedBy: user.name,
+      targetGroup: resolvedTarget,
     });
-
-    if (!approval.updated) {
-      return {
-        ok: false,
-        error: { code: 'BAD_REQUEST', message: 'Request is no longer pending' },
-      };
-    }
 
     return { ok: true, data: approval.updated };
   } catch (error) {

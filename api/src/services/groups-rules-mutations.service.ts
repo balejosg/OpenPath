@@ -14,6 +14,12 @@ import {
   ensureGroupExists,
   type GroupsRulesDependencies,
 } from './groups-rules-shared.js';
+import {
+  bulkDeleteWhitelistRules,
+  createManualWhitelistRule,
+  deleteWhitelistRule,
+  revokeAutomaticWhitelistRule,
+} from './whitelist-rule-command.service.js';
 
 export async function createRule(
   input: CreateRuleInput,
@@ -37,28 +43,19 @@ export async function createRule(
     return group;
   }
 
-  const dispatcher = DomainEventsService.createDispatcher({
-    publishWhitelistChanged: deps.publishWhitelistChanged,
-  });
-  const result = await DomainEventsService.withDbTransactionEvents<
-    Awaited<ReturnType<GroupsRulesDependencies['createRule']>>
-  >(
-    deps.withTransaction,
-    async (tx, events) => {
-      const created = await deps.createRule(
-        input.groupId,
-        input.type,
-        cleanedValue,
-        input.comment ?? null,
-        'manual',
-        tx
-      );
-      if (created.success && created.id) {
-        events.publishWhitelistChanged(input.groupId);
-      }
-      return created;
+  const result = await createManualWhitelistRule(
+    {
+      comment: input.comment,
+      groupId: input.groupId,
+      type: input.type,
+      value: cleanedValue,
     },
-    dispatcher
+    {
+      createRule: deps.createRule,
+      publishWhitelistChanged: deps.publishWhitelistChanged,
+      withDbTransactionEvents: DomainEventsService.withDbTransactionEvents,
+      withTransaction: deps.withTransaction,
+    }
   );
 
   if (!result.success) {
@@ -92,19 +89,14 @@ export async function deleteRule(
     ruleGroupId = rule?.groupId;
   }
 
-  const dispatcher = DomainEventsService.createDispatcher({
-    publishWhitelistChanged: deps.publishWhitelistChanged,
-  });
-  const deleted = await DomainEventsService.withDbTransactionEvents<boolean>(
-    deps.withTransaction,
-    async (tx, events) => {
-      const wasDeleted = await deps.deleteRule(id, tx);
-      if (wasDeleted && ruleGroupId) {
-        events.publishWhitelistChanged(ruleGroupId);
-      }
-      return wasDeleted;
-    },
-    dispatcher
+  const { deleted } = await deleteWhitelistRule(
+    { groupId: ruleGroupId, id },
+    {
+      deleteRule: deps.deleteRule,
+      publishWhitelistChanged: deps.publishWhitelistChanged,
+      withDbTransactionEvents: DomainEventsService.withDbTransactionEvents,
+      withTransaction: deps.withTransaction,
+    }
   );
 
   return { ok: true, data: { deleted } };
@@ -129,42 +121,16 @@ export async function revokeAutoApproval(
     };
   }
 
-  const comment = `Revoked automatic approval by ${input.resolvedBy}`;
-  const dispatcher = DomainEventsService.createDispatcher({
-    publishWhitelistChanged: deps.publishWhitelistChanged,
-  });
-
   try {
-    const result = await DomainEventsService.withDbTransactionEvents<{
-      blockedRuleId: string | null;
-      revoked: boolean;
-    }>(
-      deps.withTransaction,
-      async (tx, events) => {
-        const deleted = await deps.deleteRule(rule.id, tx);
-        const created = await deps.createRule(
-          rule.groupId,
-          'blocked_subdomain',
-          rule.value,
-          comment,
-          'manual',
-          tx
-        );
-
-        if (!created.success && created.error !== 'Rule already exists') {
-          throw new Error(created.error ?? 'Failed to create blocking rule');
-        }
-
-        if (deleted || created.success) {
-          events.publishWhitelistChanged(rule.groupId);
-        }
-
-        return {
-          blockedRuleId: created.id ?? null,
-          revoked: deleted,
-        };
-      },
-      dispatcher
+    const result = await revokeAutomaticWhitelistRule(
+      { resolvedBy: input.resolvedBy, rule },
+      {
+        createRule: deps.createRule,
+        deleteRule: deps.deleteRule,
+        publishWhitelistChanged: deps.publishWhitelistChanged,
+        withDbTransactionEvents: DomainEventsService.withDbTransactionEvents,
+        withTransaction: deps.withTransaction,
+      }
     );
 
     return { ok: true, data: result };
@@ -192,24 +158,14 @@ export async function bulkDeleteRules(
   }
 
   const rules = options?.rules ?? (await deps.getRulesByIds(ids));
-  const dispatcher = DomainEventsService.createDispatcher({
-    publishWhitelistChanged: deps.publishWhitelistChanged,
-  });
-  const deleted = await DomainEventsService.withDbTransactionEvents<number>(
-    deps.withTransaction,
-    async (tx, events) => {
-      const deletedCount = await deps.bulkDeleteRules(ids, tx);
-
-      if (deletedCount > 0) {
-        const affectedGroups = new Set(rules.map((rule) => rule.groupId));
-        for (const groupId of affectedGroups) {
-          events.publishWhitelistChanged(groupId);
-        }
-      }
-
-      return deletedCount;
-    },
-    dispatcher
+  const { deleted } = await bulkDeleteWhitelistRules(
+    { ids, rules },
+    {
+      bulkDeleteRules: deps.bulkDeleteRules,
+      publishWhitelistChanged: deps.publishWhitelistChanged,
+      withDbTransactionEvents: DomainEventsService.withDbTransactionEvents,
+      withTransaction: deps.withTransaction,
+    }
   );
 
   return { ok: true, data: { deleted, rules } };
