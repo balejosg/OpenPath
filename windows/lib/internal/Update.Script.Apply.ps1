@@ -171,7 +171,7 @@ function Handle-OpenPathWhitelistApply {
     Restore-OpenPathProtectedMode -Config $Config | Out-Null
 
     if ($Config.enableBrowserPolicies) {
-        Set-AllBrowserPolicy -BlockedPaths $Whitelist.BlockedPaths
+        Set-AllBrowserPolicy -BlockedPaths $Whitelist.BlockedPaths -Config $Config
     }
 
     Clear-StaleFailsafeState -StaleFailsafeStatePath $StaleFailsafeStatePath

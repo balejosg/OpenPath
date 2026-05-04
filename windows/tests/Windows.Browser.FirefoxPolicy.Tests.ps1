@@ -93,6 +93,39 @@ Describe "Browser Module - Firefox Policy" {
             $machinePolicy.($contract.extensionId).install_url | Should -Be $contract.configuredInstallUrl
         }
 
+        It "Uses caller-provided config without re-reading config.json" {
+            $script:capturedFirefoxPolicyJson = $null
+            $contract = Get-ContractFixtureJson -FileName 'browser-firefox-managed-extension.json'
+            $config = [PSCustomObject]@{
+                firefoxExtensionId = $contract.extensionId
+                firefoxExtensionInstallUrl = $contract.configuredInstallUrl
+            }
+
+            Mock Test-Path {
+                param([string]$Path)
+                if ($Path -like '*firefox.exe') { return $true }
+                return $false
+            } -ModuleName Browser.FirefoxPolicy
+            Mock New-Item { [PSCustomObject]@{ FullName = 'mock-path' } } -ModuleName Browser.FirefoxPolicy
+            Mock Get-OpenPathConfig {
+                throw 'config.json should not be read when Config is supplied'
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Write-OpenPathUtf8NoBomFile {
+                param([string]$Path, [string]$Value)
+                if ($Path -like '*policies.json') {
+                    $script:capturedFirefoxPolicyJson = $Value
+                }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock New-ItemProperty { } -ModuleName Browser.FirefoxPolicy
+            Mock Write-OpenPathLog { } -ModuleName Browser.FirefoxPolicy
+
+            $result = Sync-OpenPathFirefoxManagedExtensionPolicy -Config $config
+            $result | Should -BeTrue
+
+            $policy = $script:capturedFirefoxPolicyJson | ConvertFrom-Json
+            $policy.policies.ExtensionSettings.($contract.extensionId).install_url | Should -Be $contract.configuredInstallUrl
+        }
+
         It "Writes machine Firefox policy even when firefox.exe is not installed" {
             $script:capturedFirefoxPolicyJson = $null
             $script:capturedMachinePolicyValue = $null

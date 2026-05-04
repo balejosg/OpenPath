@@ -167,12 +167,19 @@ function Resolve-OpenPathFirefoxReleaseInstallSpec {
 }
 
 function Get-OpenPathFirefoxManagedExtensionPolicy {
-    $config = $null
-    try {
-        $config = Get-OpenPathConfig
-    }
-    catch {
-        # Allow policy generation to proceed without a persisted config.
+    param(
+        [AllowNull()]
+        [object]$Config = $null
+    )
+
+    $config = $Config
+    if (-not $PSBoundParameters.ContainsKey('Config')) {
+        try {
+            $config = Get-OpenPathConfig
+        }
+        catch {
+            # Allow policy generation to proceed without a persisted config.
+        }
     }
 
     $configuredPolicy = Get-OpenPathConfiguredFirefoxManagedExtensionPolicy -Config $config
@@ -313,7 +320,10 @@ function Remove-OpenPathFirefoxMachineExtensionPolicy {
 
 function Sync-OpenPathFirefoxManagedExtensionPolicy {
     [CmdletBinding(SupportsShouldProcess)]
-    param()
+    param(
+        [AllowNull()]
+        [object]$Config = $null
+    )
 
     if (-not $PSCmdlet.ShouldProcess("Firefox", "Configure managed extension policy")) {
         return $false
@@ -328,7 +338,12 @@ function Sync-OpenPathFirefoxManagedExtensionPolicy {
 
     $policiesSet = $false
     $unsignedExtensionManifest = "$(Get-OpenPathFirefoxExtensionRoot)\manifest.json"
-    $managedExtensionPolicy = Get-OpenPathFirefoxManagedExtensionPolicy
+    if ($PSBoundParameters.ContainsKey('Config')) {
+        $managedExtensionPolicy = Get-OpenPathFirefoxManagedExtensionPolicy -Config $Config
+    }
+    else {
+        $managedExtensionPolicy = Get-OpenPathFirefoxManagedExtensionPolicy
+    }
     $signedExtensionWarningWritten = $false
 
     if ($managedExtensionPolicy) {

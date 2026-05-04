@@ -490,6 +490,24 @@ Describe "Installer" {
             $content | Should -Not -Match '(?s)Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1.*Start-OpenPathTask -TaskType SSE.*Invoke-OpenPathInstallerEnrollment'
         }
     }
+
+    Context "Update browser policy config handoff" {
+        It "Passes the already loaded update config into browser policy application" {
+            $applyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
+            $browserPath = Join-Path $PSScriptRoot ".." "lib" "Browser.psm1"
+            $applyContent = Get-Content $applyPath -Raw
+            $browserContent = Get-Content $browserPath -Raw
+
+            Assert-ContentContainsAll -Content $applyContent -Needles @(
+                'Set-AllBrowserPolicy -BlockedPaths $Whitelist.BlockedPaths -Config $Config'
+            )
+            Assert-ContentContainsAll -Content $browserContent -Needles @(
+                'function Set-AllBrowserPolicy',
+                'Sync-OpenPathFirefoxManagedExtensionPolicy -Config $Config',
+                'Set-ChromePolicy -BlockedPaths $BlockedPaths -Config $Config'
+            )
+        }
+    }
 }
 
 Describe "Uninstaller" {

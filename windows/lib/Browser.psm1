@@ -15,12 +15,20 @@ function Get-OpenPathChromiumManagedMetadataPath {
 }
 
 function Get-OpenPathChromiumManagedPolicy {
+    param(
+        [AllowNull()]
+        [object]$Config = $null
+    )
+
     $metadataPath = Get-OpenPathChromiumManagedMetadataPath
     if (-not (Test-Path $metadataPath)) {
         return $null
     }
 
-    $config = Get-OpenPathConfig
+    $config = $Config
+    if (-not $PSBoundParameters.ContainsKey('Config')) {
+        $config = Get-OpenPathConfig
+    }
     if (-not $config -or -not $config.PSObject.Properties['apiUrl'] -or -not $config.apiUrl) {
         Write-OpenPathLog 'Chromium managed extension metadata found but apiUrl is not configured' -Level WARN
         return $null
@@ -108,9 +116,17 @@ function Get-OpenPathBrowserRequestReadiness {
 
 function Sync-OpenPathFirefoxManagedExtensionPolicy {
     [CmdletBinding(SupportsShouldProcess)]
-    param()
+    param(
+        [AllowNull()]
+        [object]$Config = $null
+    )
 
-    Browser.FirefoxPolicy\Sync-OpenPathFirefoxManagedExtensionPolicy
+    if ($PSBoundParameters.ContainsKey('Config')) {
+        Browser.FirefoxPolicy\Sync-OpenPathFirefoxManagedExtensionPolicy -Config $Config
+    }
+    else {
+        Browser.FirefoxPolicy\Sync-OpenPathFirefoxManagedExtensionPolicy
+    }
 }
 
 function Sync-OpenPathFirefoxNetworkAutoconfig {
@@ -123,7 +139,10 @@ function Sync-OpenPathFirefoxNetworkAutoconfig {
 function Set-ChromePolicy {
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [string[]]$BlockedPaths = @()
+        [string[]]$BlockedPaths = @(),
+
+        [AllowNull()]
+        [object]$Config = $null
     )
 
     if (-not $PSCmdlet.ShouldProcess("Chrome/Edge", "Configure browser policies via Registry")) {
@@ -131,7 +150,12 @@ function Set-ChromePolicy {
     }
 
     Write-OpenPathLog "Configuring Chrome/Edge policies..."
-    $managedExtensionPolicy = Get-OpenPathChromiumManagedPolicy
+    if ($PSBoundParameters.ContainsKey('Config')) {
+        $managedExtensionPolicy = Get-OpenPathChromiumManagedPolicy -Config $Config
+    }
+    else {
+        $managedExtensionPolicy = Get-OpenPathChromiumManagedPolicy
+    }
     $policySpec = Get-OpenPathBrowserPolicySpec
     $chromiumSpec = $policySpec.chromium
 
@@ -227,16 +251,29 @@ function Remove-BrowserPolicy {
 function Set-AllBrowserPolicy {
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [string[]]$BlockedPaths = @()
+        [string[]]$BlockedPaths = @(),
+
+        [AllowNull()]
+        [object]$Config = $null
     )
 
     if (-not $PSCmdlet.ShouldProcess("All browsers", "Configure browser policies")) {
         return
     }
 
-    Sync-OpenPathFirefoxManagedExtensionPolicy
+    if ($PSBoundParameters.ContainsKey('Config')) {
+        Sync-OpenPathFirefoxManagedExtensionPolicy -Config $Config
+    }
+    else {
+        Sync-OpenPathFirefoxManagedExtensionPolicy
+    }
     Sync-OpenPathFirefoxNetworkAutoconfig
-    Set-ChromePolicy -BlockedPaths $BlockedPaths
+    if ($PSBoundParameters.ContainsKey('Config')) {
+        Set-ChromePolicy -BlockedPaths $BlockedPaths -Config $Config
+    }
+    else {
+        Set-ChromePolicy -BlockedPaths $BlockedPaths
+    }
 }
 
 Export-ModuleMember -Function @(
