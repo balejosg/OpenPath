@@ -271,6 +271,13 @@ Describe "Installer" {
             )
         }
 
+        It "Exits successfully after writing the installer summary" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            $content | Should -Match 'Write-OpenPathInstallerSummary[\s\S]*exit 0'
+        }
+
         It "Skips first update when classroom registration fails" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $runtimeHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Runtime.ps1"

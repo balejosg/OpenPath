@@ -346,3 +346,5 @@ Write-OpenPathInstallerSummary `
     -WhitelistUrl $WhitelistUrl `
     -AgentVersion $agentVersion `
     -PrimaryDNS $primaryDNS
+
+exit 0
