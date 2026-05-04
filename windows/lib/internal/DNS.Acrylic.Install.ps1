@@ -126,6 +126,27 @@ function Invoke-AcrylicPortableDownload {
     }
 }
 
+function Test-AcrylicPortableArchive {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path $Path)) { return $false }
+
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
+        try {
+            return ($archive.Entries | Where-Object { $_.FullName -match 'AcrylicService\.exe$' } | Select-Object -First 1) -ne $null
+        }
+        finally {
+            $archive.Dispose()
+        }
+    }
+    catch {
+        Write-OpenPathLog "Downloaded Acrylic archive is invalid: $_" -Level WARN
+        return $false
+    }
+}
+
 function Install-AcrylicDNS {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -170,6 +191,9 @@ function Install-AcrylicDNS {
                     Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
                 }
                 Invoke-AcrylicPortableDownload -Url $candidateUrl -DestinationPath $zipPath
+                if (-not (Test-AcrylicPortableArchive -Path $zipPath)) {
+                    throw "Downloaded Acrylic archive from ${candidateUrl} was not a valid portable release"
+                }
                 $downloadError = $null
                 break
             }

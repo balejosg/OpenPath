@@ -37,6 +37,18 @@ Describe "DNS Module - Install Contracts" {
             )
         }
 
+        It "Validates SourceForge portable downloads before accepting them" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Install.ps1"
+            $content = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'function Test-AcrylicPortableArchive',
+                '[System.IO.Compression.ZipFile]::OpenRead($Path)',
+                'AcrylicService\.exe$',
+                'Downloaded Acrylic archive from ${candidateUrl} was not a valid portable release'
+            )
+        }
+
         It "Falls back to Chocolatey when the direct Acrylic download fails" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Install.ps1"
             $content = Get-Content $modulePath -Raw
