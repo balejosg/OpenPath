@@ -116,16 +116,17 @@ void describe('SSE Endpoint - real-time event propagation', { timeout: 30000 }, 
       'SSE Schedule Room'
     );
 
-    await scheduleStorage.createSchedule({
+    const boundaryNow = new Date(2026, 1, 23, 9, 0, 0);
+    const boundaryEnd = new Date(boundaryNow.getTime() + 60 * 60 * 1000);
+
+    await scheduleStorage.createOneOffSchedule({
       classroomId: scheduleMachine.classroomId,
       teacherId: 'legacy_admin',
       groupId: scheduleGroupId,
-      dayOfWeek: 1,
-      startTime: '09:00',
-      endTime: '10:00',
+      startAt: boundaryNow,
+      endAt: boundaryEnd,
     });
 
-    const boundaryNow = new Date(2026, 1, 23, 9, 0, 0);
     const client = createSseTestClient({
       url: `${getHarness().apiUrl}/api/machines/events`,
       headers: { Authorization: `Bearer ${scheduleMachine.token}` },
