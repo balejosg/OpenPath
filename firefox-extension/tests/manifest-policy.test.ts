@@ -54,6 +54,11 @@ void describe('Firefox extension manifest policy', () => {
         run_at: 'document_start',
         world: 'MAIN',
       },
+      {
+        matches: ['http://*/*', 'https://*/*'],
+        js: ['dist/google-search-game-guard-content.js'],
+        run_at: 'document_start',
+      },
     ]);
   });
 });

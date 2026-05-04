@@ -330,6 +330,23 @@ void test('background runtime exposes native diagnostics through runtime message
 
     harness.runtimeMessage(
       {
+        action: 'openpathGoogleSearchGameBlocked',
+        blockedAt: 98765,
+        pageHost: 'www.google.com',
+        pagePath: '/search?q=solitaire',
+        reason: 'google-search-game-widget',
+        signals: ['interactive-surface', 'play-control'],
+      },
+      { tab: { id: 5 } },
+      (response) => {
+        harness.responses.push(response);
+      }
+    );
+    await waitForAsyncRuntime();
+    assert.deepEqual(harness.responses.pop(), { success: true });
+
+    harness.runtimeMessage(
+      {
         action: 'getOpenPathDiagnostics',
         domains: [' Example.COM ', ''],
       },
@@ -349,6 +366,10 @@ void test('background runtime exposes native diagnostics through runtime message
       nativeCheck?: { results?: { domain?: string; resolves?: boolean }[] };
       pathRules?: { count?: number; success?: boolean };
       subdomainRules?: { count?: number; success?: boolean };
+      googleSearchGameGuard?: {
+        blockedCount?: number;
+        recentEvents?: unknown[];
+      };
       success?: boolean;
     };
     assert.equal(diagnostics.success, true);
@@ -369,6 +390,18 @@ void test('background runtime exposes native diagnostics through runtime message
     assert.equal(diagnostics.pathRules.count, 0);
     assert.equal(diagnostics.subdomainRules?.success, true);
     assert.equal(diagnostics.subdomainRules.count, 0);
+    assert.deepEqual(diagnostics.googleSearchGameGuard, {
+      blockedCount: 1,
+      recentEvents: [
+        {
+          blockedAt: 98765,
+          pageHost: 'www.google.com',
+          pagePath: '/search',
+          reason: 'google-search-game-widget',
+          signals: ['interactive-surface', 'play-control'],
+        },
+      ],
+    });
   } finally {
     harness.restoreGlobals();
   }

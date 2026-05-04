@@ -39,6 +39,7 @@ function createHandlerFixture(
       count: 1,
       rawRules: ['ads.example.org'],
     }),
+    recordGoogleSearchGameGuardEvent: () => undefined,
     getOpenPathDiagnostics: (domains) =>
       Promise.resolve({
         success: true,
@@ -262,6 +263,40 @@ await describe('background message handler', async () => {
         rawRules: ['ads.example.org'],
       },
     });
+  });
+
+  await test('records sanitized Google Search game guard events', async () => {
+    const recordedEvents: unknown[] = [];
+    const handler = createHandlerFixture({
+      recordGoogleSearchGameGuardEvent: (event) => {
+        recordedEvents.push(event);
+      },
+    });
+
+    const response = await handler(
+      {
+        action: 'openpathGoogleSearchGameBlocked',
+        blockedAt: 123456,
+        pageHost: 'www.google.com',
+        pagePath: '/search',
+        query: 'solitaire private text',
+        reason: 'google-search-game-widget',
+        signals: ['interactive-surface', 'play-control', 'game-text', 'x'.repeat(80)],
+        tabId: 1,
+      },
+      {}
+    );
+
+    assert.deepEqual(response, { success: true });
+    assert.deepEqual(recordedEvents, [
+      {
+        blockedAt: 123456,
+        pageHost: 'www.google.com',
+        pagePath: '/search',
+        reason: 'google-search-game-widget',
+        signals: ['interactive-surface', 'play-control', 'game-text', 'x'.repeat(64)],
+      },
+    ]);
   });
 
   await test('returns extension diagnostic failures as structured errors', async () => {

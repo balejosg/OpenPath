@@ -11,18 +11,32 @@ import type { SubmitBlockedDomainInput, SubmitBlockedDomainResult } from './requ
 
 interface BackgroundMessage {
   action?: string;
+  blockedAt?: number;
   domain?: string;
   domains?: string[];
   error?: string;
   hostname?: string;
   origin?: string;
+  pageHost?: string;
+  pagePath?: string;
   reason?: string;
+  signals?: unknown;
   tabId: number;
   type?: string;
   url?: string;
 }
 
 const RECENT_BLOCKED_DOMAIN_REQUEST_STATUS_TTL_MS = 120_000;
+const MAX_GOOGLE_SEARCH_GAME_GUARD_SIGNAL_LENGTH = 64;
+const MAX_GOOGLE_SEARCH_GAME_GUARD_SIGNAL_COUNT = 12;
+
+export interface GoogleSearchGameGuardEvent {
+  blockedAt: number;
+  pageHost: string;
+  pagePath: string;
+  reason: string;
+  signals: string[];
+}
 
 interface RecentBlockedDomainRequestStatus {
   request: SubmitBlockedDomainResult;
@@ -59,6 +73,7 @@ export interface BackgroundMessageHandlerDeps {
     success: true;
     version: string;
   };
+  recordGoogleSearchGameGuardEvent: (event: GoogleSearchGameGuardEvent) => void;
   getOpenPathDiagnostics: (domains: string[]) => Promise<unknown>;
   getSystemHostname: () => Promise<unknown>;
   isNativeHostAvailable: () => Promise<boolean>;
@@ -68,6 +83,48 @@ export interface BackgroundMessageHandlerDeps {
   ) => Promise<SubmitBlockedDomainResult>;
   triggerWhitelistUpdate: () => Promise<NativeResponse>;
   verifyDomains: (domains: string[]) => Promise<VerifyResponse>;
+}
+
+function sanitizeGoogleSearchGameGuardText(value: unknown, fallback: string, max: number): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) {
+    return fallback;
+  }
+  return raw.slice(0, max);
+}
+
+function sanitizeGoogleSearchGameGuardPath(value: unknown): string {
+  const raw = sanitizeGoogleSearchGameGuardText(value, '/', 120);
+  const path = raw.split(/[?#]/u, 1)[0] ?? '/';
+  return path.startsWith('/') ? path : '/';
+}
+
+function sanitizeGoogleSearchGameGuardSignals(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((signal): signal is string => typeof signal === 'string')
+    .map((signal) => signal.trim())
+    .filter((signal) => signal.length > 0)
+    .slice(0, MAX_GOOGLE_SEARCH_GAME_GUARD_SIGNAL_COUNT)
+    .map((signal) => signal.slice(0, MAX_GOOGLE_SEARCH_GAME_GUARD_SIGNAL_LENGTH));
+}
+
+export function buildGoogleSearchGameGuardEvent(
+  message: BackgroundMessage
+): GoogleSearchGameGuardEvent {
+  return {
+    blockedAt:
+      typeof message.blockedAt === 'number' && Number.isFinite(message.blockedAt)
+        ? message.blockedAt
+        : Date.now(),
+    pageHost: sanitizeGoogleSearchGameGuardText(message.pageHost, 'unknown', 120).toLowerCase(),
+    pagePath: sanitizeGoogleSearchGameGuardPath(message.pagePath),
+    reason: sanitizeGoogleSearchGameGuardText(message.reason, 'google-search-game-widget', 80),
+    signals: sanitizeGoogleSearchGameGuardSignals(message.signals),
+  };
 }
 
 export function buildSubmitBlockedDomainInput(
@@ -134,6 +191,10 @@ export function createBackgroundMessageHandler(
 
     switch (msg.action) {
       case 'openpathPageActivity':
+        return { success: true };
+
+      case 'openpathGoogleSearchGameBlocked':
+        deps.recordGoogleSearchGameGuardEvent(buildGoogleSearchGameGuardEvent(msg));
         return { success: true };
 
       case 'getBlockedDomains':
