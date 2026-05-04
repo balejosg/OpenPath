@@ -171,13 +171,19 @@ export async function bulkDeleteRules(
   return { ok: true, data: { deleted, rules } };
 }
 
-export async function updateRule(input: UpdateRuleInput): Promise<GroupsResult<Rule>> {
-  const group = await ensureGroupExists(input.groupId);
+export async function updateRule(
+  input: UpdateRuleInput,
+  deps: Pick<
+    GroupsRulesDependencies,
+    'getGroupById' | 'getRuleById' | 'publishWhitelistChanged' | 'updateRule' | 'withTransaction'
+  > = defaultRulesDependencies
+): Promise<GroupsResult<Rule>> {
+  const group = await ensureGroupExists(input.groupId, deps);
   if (!group.ok) {
     return group;
   }
 
-  const existingRule = await groupsStorage.getRuleById(input.id);
+  const existingRule = await deps.getRuleById(input.id);
   if (!existingRule) {
     return { ok: false, error: { code: 'NOT_FOUND', message: 'Rule not found' } };
   }
@@ -210,9 +216,9 @@ export async function updateRule(input: UpdateRuleInput): Promise<GroupsResult<R
   }
 
   const updated = await DomainEventsService.withDbTransactionEvents<Rule | null>(
-    defaultRulesDependencies.withTransaction,
+    deps.withTransaction,
     async (tx, events) => {
-      const result = await (defaultRulesDependencies.updateRule ?? groupsStorage.updateRule)(
+      const result = await (deps.updateRule ?? groupsStorage.updateRule)(
         {
           id: input.id,
           value: cleanedValue,
@@ -226,7 +232,10 @@ export async function updateRule(input: UpdateRuleInput): Promise<GroupsResult<R
       }
 
       return result;
-    }
+    },
+    DomainEventsService.createDispatcher({
+      publishWhitelistChanged: deps.publishWhitelistChanged,
+    })
   );
 
   if (!updated) {
@@ -240,9 +249,13 @@ export async function updateRule(input: UpdateRuleInput): Promise<GroupsResult<R
 }
 
 export async function bulkCreateRules(
-  input: BulkCreateRulesInput
+  input: BulkCreateRulesInput,
+  deps: Pick<
+    GroupsRulesDependencies,
+    'bulkCreateRules' | 'getGroupById' | 'publishWhitelistChanged' | 'withTransaction'
+  > = defaultRulesDependencies
 ): Promise<GroupsResult<{ count: number }>> {
-  const group = await ensureGroupExists(input.groupId);
+  const group = await ensureGroupExists(input.groupId, deps);
   if (!group.ok) {
     return group;
   }
@@ -251,11 +264,15 @@ export async function bulkCreateRules(
   const cleanedValues = input.values.map((value) => cleanRuleValue(value, preservePath));
 
   const count = await DomainEventsService.withDbTransactionEvents<number>(
-    defaultRulesDependencies.withTransaction,
+    deps.withTransaction,
     async (tx, events) => {
-      const createdCount = await (
-        defaultRulesDependencies.bulkCreateRules ?? groupsStorage.bulkCreateRules
-      )(input.groupId, input.type, cleanedValues, 'manual', tx);
+      const createdCount = await (deps.bulkCreateRules ?? groupsStorage.bulkCreateRules)(
+        input.groupId,
+        input.type,
+        cleanedValues,
+        'manual',
+        tx
+      );
 
       if (createdCount > 0) {
         events.publishWhitelistChanged(input.groupId);
