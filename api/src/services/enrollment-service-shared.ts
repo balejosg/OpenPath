@@ -105,19 +105,16 @@ foreach ($file in $manifest.files) {
 }
 
 Push-Location $WindowsRoot
-$installExitCode = 0
 try {
-    $global:LASTEXITCODE = 0
-    & (Join-Path $WindowsRoot 'Install-OpenPath.ps1') -ApiUrl $ApiUrl -ClassroomId $ClassroomId -EnrollmentToken $EnrollmentToken -Unattended
-    $installExitCode = [int]$LASTEXITCODE
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $WindowsRoot 'Install-OpenPath.ps1') -ApiUrl $ApiUrl -ClassroomId $ClassroomId -EnrollmentToken $EnrollmentToken -Unattended
+    $installExitCode = $LASTEXITCODE
+    if ($installExitCode -ne 0) {
+        throw "Install-OpenPath.ps1 exited with code $installExitCode"
+    }
 }
 finally {
     Pop-Location
     Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
-}
-
-if ($installExitCode -ne 0) {
-    exit $installExitCode
 }
 
 Write-Host ''
