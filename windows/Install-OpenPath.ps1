@@ -112,6 +112,28 @@ if (($FirefoxExtensionId -and -not $FirefoxExtensionInstallUrl) -or ($FirefoxExt
 $usesEnrollmentToken = [bool]$EnrollmentToken
 $usesRegistrationToken = [bool]$RegistrationToken
 
+function Get-OpenPathInstallerConfigValue {
+    param(
+        [AllowNull()]
+        [object]$Config,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PropertyName,
+
+        [AllowNull()]
+        [object]$DefaultValue = $null
+    )
+
+    if ($Config -is [hashtable] -and $Config.ContainsKey($PropertyName)) {
+        return $Config[$PropertyName]
+    }
+    if ($Config -and $Config.PSObject.Properties[$PropertyName]) {
+        return $Config.PSObject.Properties[$PropertyName].Value
+    }
+
+    return $DefaultValue
+}
+
 if ($VerbosePreference -eq 'Continue') {
     Write-Host '==========================================' -ForegroundColor Cyan
     Write-Host '  OpenPath DNS para Windows - Instalador' -ForegroundColor Cyan
@@ -213,10 +235,10 @@ if ($PSCmdlet.ShouldProcess('OpenPath runtime', 'Copy modules and scripts')) {
         -FirefoxExtensionInstallUrl $FirefoxExtensionInstallUrl
 }
 
-Import-Module "$OpenPathRoot\lib\Common.psm1" -Force
-Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force
-Import-Module "$OpenPathRoot\lib\Firewall.psm1" -Force
-Import-Module "$OpenPathRoot\lib\AppControl.psm1" -Force
+Import-Module "$OpenPathRoot\lib\Common.psm1" -Force -Global
+Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force -Global
+Import-Module "$OpenPathRoot\lib\Firewall.psm1" -Force -Global
+Import-Module "$OpenPathRoot\lib\AppControl.psm1" -Force -Global
 
 Show-InstallerProgress -Step 3 -Total 7 -Status 'Creando configuracion'
 $primaryDNS = Get-InstallerPrimaryDNS
@@ -240,9 +262,9 @@ if ($PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Write installer c
 }
 Write-InstallerVerbose "  DNS upstream: $primaryDNS"
 
-Import-Module "$OpenPathRoot\lib\DNS.psm1" -Force
-Import-Module "$OpenPathRoot\lib\Browser.psm1" -Force
-Import-Module "$OpenPathRoot\lib\Services.psm1" -Force
+Import-Module "$OpenPathRoot\lib\DNS.psm1" -Force -Global
+Import-Module "$OpenPathRoot\lib\Browser.psm1" -Force -Global
+Import-Module "$OpenPathRoot\lib\Services.psm1" -Force -Global
 $deferLocalDnsUntilRemoteBootstrap = $classroomModeRequested -or [bool]$WhitelistUrl
 
 try {
@@ -328,7 +350,7 @@ if ($classroomModeRequested) {
 $nativeHostRegistered = $false
 $nativeHostRequestSetup = $null
 try {
-    Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force
+    Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force -Global
     $nativeHostConfig = Get-OpenPathConfig
     $nativeHostRequestSetup = Get-OpenPathRequestSetupState -Config $nativeHostConfig
     if ($PSCmdlet.ShouldProcess('Firefox native messaging host', 'Register OpenPath native host after enrollment')) {
@@ -364,14 +386,8 @@ Start-OpenPathInstallerRealtimeUpdates `
     -MachineRegistered $machineRegistered | Out-Null
 
 try {
-    $enableNonAdminAppControl = $true
-    if ($config.PSObject.Properties['enableNonAdminAppControl']) {
-        $enableNonAdminAppControl = [bool]$config.enableNonAdminAppControl
-    }
-    $nonAdminAppControlMode = 'Enforced'
-    if ($config.PSObject.Properties['nonAdminAppControlMode'] -and $config.nonAdminAppControlMode) {
-        $nonAdminAppControlMode = [string]$config.nonAdminAppControlMode
-    }
+    $enableNonAdminAppControl = [bool](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'enableNonAdminAppControl' -DefaultValue $true)
+    $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
     if ($enableNonAdminAppControl) {
         Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -WhatIf:$WhatIfPreference | Out-Null
     }

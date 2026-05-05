@@ -324,7 +324,7 @@ Describe "Installer" {
                 'No se pudo registrar el host nativo de Firefox tras enrollment'
             )
 
-            $content | Should -Match 'try \{\s+Import-Module "\$OpenPathRoot\\lib\\RequestSetup\.State\.psm1" -Force\s+\$nativeHostConfig = Get-OpenPathConfig'
+            $content | Should -Match 'try \{\s+Import-Module "\$OpenPathRoot\\lib\\RequestSetup\.State\.psm1" -Force -Global\s+\$nativeHostConfig = Get-OpenPathConfig'
         }
 
         It "Defers local DNS activation until remote bootstrap can write Acrylic hosts" {
@@ -545,6 +545,49 @@ Describe "Installer" {
             )
             $content.Contains('Test-DNSResolution -Domain "google.com"') | Should -BeFalse
             $content.Contains('nslookup google.com 127.0.0.1') | Should -BeFalse
+        }
+
+        It "Does not fail the installer summary when the firewall helper is unavailable" {
+            $runtimeHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Runtime.ps1"
+
+            function Test-AcrylicInstalled { return $true }
+            function Test-DNSResolution { return $true }
+            function Get-ScheduledTask { return @() }
+            Remove-Item function:\Test-FirewallActive -ErrorAction SilentlyContinue
+
+            . $runtimeHelperPath
+
+            { Get-OpenPathInstallerChecks } | Should -Not -Throw
+            $checks = @(Get-OpenPathInstallerChecks)
+            ($checks | Where-Object { $_.Name -eq 'Firewall' }).Status | Should -Be 'WARN'
+        }
+
+        It "Imports runtime modules globally for dot-sourced installer helpers" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'Import-Module "$OpenPathRoot\lib\Common.psm1" -Force -Global',
+                'Import-Module "$OpenPathRoot\lib\Firewall.psm1" -Force -Global',
+                'Import-Module "$OpenPathRoot\lib\AppControl.psm1" -Force -Global',
+                'Import-Module "$OpenPathRoot\lib\DNS.psm1" -Force -Global',
+                'Import-Module "$OpenPathRoot\lib\Browser.psm1" -Force -Global',
+                'Import-Module "$OpenPathRoot\lib\Services.psm1" -Force -Global'
+            )
+        }
+
+        It "Reads installer config values from the hashtable returned by the config helper" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'function Get-OpenPathInstallerConfigValue',
+                '$Config -is [hashtable]',
+                '$Config.ContainsKey($PropertyName)',
+                '$enableNonAdminAppControl = [bool](Get-OpenPathInstallerConfigValue',
+                "-PropertyName 'enableNonAdminAppControl' -DefaultValue `$true",
+                "-PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced'"
+            )
         }
     }
 

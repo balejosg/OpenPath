@@ -81,28 +81,31 @@ function Initialize-OpenPathInstallerIntegrity {
 function Get-OpenPathInstallerChecks {
     $checks = @()
 
-    if (Test-AcrylicInstalled) {
+    if ((Get-Command -Name 'Test-AcrylicInstalled' -ErrorAction SilentlyContinue) -and (Test-AcrylicInstalled)) {
         $checks += @{ Name = 'Acrylic DNS'; Status = 'OK' }
     }
     else {
         $checks += @{ Name = 'Acrylic DNS'; Status = 'WARN' }
     }
 
-    if (Test-DNSResolution) {
+    if ((Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) -and (Test-DNSResolution)) {
         $checks += @{ Name = 'Resolucion DNS'; Status = 'OK' }
     }
     else {
         $checks += @{ Name = 'Resolucion DNS'; Status = 'FAIL' }
     }
 
-    if (Test-FirewallActive) {
+    if ((Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue) -and (Test-FirewallActive)) {
         $checks += @{ Name = 'Firewall'; Status = 'OK' }
     }
     else {
         $checks += @{ Name = 'Firewall'; Status = 'WARN' }
     }
 
-    $tasks = Get-ScheduledTask -TaskName 'OpenPath-*' -ErrorAction SilentlyContinue
+    $tasks = @()
+    if (Get-Command -Name 'Get-ScheduledTask' -ErrorAction SilentlyContinue) {
+        $tasks = @(Get-ScheduledTask -TaskName 'OpenPath-*' -ErrorAction SilentlyContinue)
+    }
     if ($tasks.Count -ge 2) {
         $checks += @{ Name = 'Tareas programadas'; Status = 'OK' }
     }
