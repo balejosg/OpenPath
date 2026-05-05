@@ -153,14 +153,65 @@ is_routable_dns_ip() {
     return 0
 }
 
+dns_discard_reason() {
+    local dns="$1"
+
+    if ! [[ "$dns" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+        printf '%s\n' "not an IPv4 address"
+        return 0
+    fi
+
+    printf '%s\n' "not routable for container DNS"
+}
+
+log_dns_decision() {
+    local status="$1"
+    local dns="$2"
+    local reason="${3:-}"
+
+    case "$status" in
+        Accepted)
+            echo "Accepted DNS server for E2E container: ${dns}" >&2
+            ;;
+        Discarded)
+            echo "Discarded DNS server for E2E container: ${dns} (${reason})" >&2
+            ;;
+    esac
+}
+
+log_resolv_conf_dns_candidates() {
+    local dns
+    local found_candidate=0
+
+    while IFS= read -r dns; do
+        dns="${dns%%#*}"
+        dns="$(printf '%s' "$dns" | awk '$1 == "nameserver" { print $2 }')"
+        [ -n "$dns" ] || continue
+        found_candidate=1
+        echo "DNS candidate from /etc/resolv.conf: ${dns}" >&2
+    done < /etc/resolv.conf
+
+    if [ "$found_candidate" -eq 0 ]; then
+        echo "DNS candidate from /etc/resolv.conf: none" >&2
+    fi
+}
+
 collect_docker_dns_args() {
     local raw_dns
     local dns
+    local reason
 
+    log_resolv_conf_dns_candidates
     if [ -n "${OPENPATH_E2E_DOCKER_DNS:-}" ]; then
+        echo "OPENPATH_E2E_DOCKER_DNS is set; using explicit E2E container DNS" >&2
         raw_dns="${OPENPATH_E2E_DOCKER_DNS//,/ }"
         for dns in $raw_dns; do
-            is_routable_dns_ip "$dns" || continue
+            if ! is_routable_dns_ip "$dns"; then
+                reason="$(dns_discard_reason "$dns")"
+                log_dns_decision "Discarded" "$dns" "$reason"
+                continue
+            fi
+            log_dns_decision "Accepted" "$dns"
             printf '%s\n%s\n' "--dns" "$dns"
         done
         return 0
@@ -170,7 +221,12 @@ collect_docker_dns_args() {
         dns="${dns%%#*}"
         dns="$(printf '%s' "$dns" | awk '$1 == "nameserver" { print $2 }')"
         [ -n "$dns" ] || continue
-        is_routable_dns_ip "$dns" || continue
+        if ! is_routable_dns_ip "$dns"; then
+            reason="$(dns_discard_reason "$dns")"
+            log_dns_decision "Discarded" "$dns" "$reason"
+            continue
+        fi
+        log_dns_decision "Accepted" "$dns"
         printf '%s\n%s\n' "--dns" "$dns"
     done < /etc/resolv.conf
 }
@@ -594,6 +650,11 @@ main() {
     if [ "${#docker_dns_args[@]}" -gt 0 ]; then
         echo "Using runner DNS for E2E container: ${docker_dns_args[*]}"
     else
+        if [ -n "${OPENPATH_E2E_DOCKER_DNS:-}" ]; then
+            echo "OPENPATH_E2E_DOCKER_DNS is set but no accepted servers were found; Docker default DNS will be used"
+        else
+            echo "OPENPATH_E2E_DOCKER_DNS is not set; Docker default DNS will be used"
+        fi
         echo "Using Docker default DNS for E2E container"
     fi
 

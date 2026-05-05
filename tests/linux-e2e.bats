@@ -504,6 +504,21 @@ EOF
     run grep -nF 'OPENPATH_E2E_DOCKER_DNS' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
     [ "$status" -eq 0 ]
 
+    run grep -nF 'DNS candidate from /etc/resolv.conf' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'Accepted DNS server for E2E container' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'Discarded DNS server for E2E container' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'OPENPATH_E2E_DOCKER_DNS is set; using explicit E2E container DNS' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'OPENPATH_E2E_DOCKER_DNS is not set; Docker default DNS will be used' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
+    [ "$status" -eq 0 ]
+
     run grep -nF '--dns 8.8.8.8' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
     [ "$status" -ne 0 ]
 }
