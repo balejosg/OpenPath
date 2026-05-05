@@ -66,12 +66,12 @@ function Add-ProbeResult {
         [hashtable]$Evidence = @{}
     )
 
-    $script:Results += [pscustomobject]@{
+    $script:Results += @{
             name      = $Name
             section   = $Section
             status    = $Status
             detail    = $Detail
-            evidence  = [pscustomobject]$Evidence
+            evidence  = $Evidence
             timestamp = (Get-Date).ToString('o')
         }
 }
@@ -148,7 +148,7 @@ function Test-ChromiumBrowserManaged {
     )
     $hasGoogleGameBlock = [bool]($missingGoogleBlocks.Count -eq 0)
 
-    return [pscustomobject]@{
+    return @{
         Managed             = [bool]($hasManagedExtension -and $dohMode -eq 'off' -and $hasGoogleGameBlock)
         HasManagedExtension = $hasManagedExtension
         DnsOverHttpsMode    = $dohMode
@@ -170,7 +170,7 @@ function Test-FirefoxManaged {
     $hasExtension = $policyText -match 'ExtensionSettings' -and $policyText -match 'install_url'
     $hasNativeHost = Test-Path $nativeHostPath
 
-    return [pscustomobject]@{
+    return @{
         Managed       = [bool]($hasExtension -and $hasNativeHost)
         PolicyPath    = $policyPath
         HasPolicy     = [bool](Test-Path $policyPath)
@@ -337,8 +337,8 @@ function Invoke-StudentProbes {
     }
 
     foreach ($browser in @(
-            [pscustomobject]@{ Name = 'Edge'; Path = $edgePath; Managed = if ($edgePath) { Test-ChromiumBrowserManaged -Browser Edge } else { $null }; Args = @('--new-window', $BlockedPathUrl) },
-            [pscustomobject]@{ Name = 'Chrome'; Path = $chromePath; Managed = if ($chromePath) { Test-ChromiumBrowserManaged -Browser Chrome } else { $null }; Args = @('--new-window', $BlockedPathUrl) }
+            @{ Name = 'Edge'; Path = $edgePath; Managed = if ($edgePath) { Test-ChromiumBrowserManaged -Browser Edge } else { $null }; Args = @('--new-window', $BlockedPathUrl) },
+            @{ Name = 'Chrome'; Path = $chromePath; Managed = if ($chromePath) { Test-ChromiumBrowserManaged -Browser Chrome } else { $null }; Args = @('--new-window', $BlockedPathUrl) }
         )) {
         $probeName = "$($browser.Name) only if managed and blocks known blocked path"
         if (-not $browser.Path) {
@@ -356,10 +356,10 @@ function Invoke-StudentProbes {
     }
 
     foreach ($candidate in @(
-            [pscustomobject]@{ Name = 'Brave cannot start'; Paths = @('%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe', '%PROGRAMFILES(X86)%\BraveSoftware\Brave-Browser\Application\brave.exe', '%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe') },
-            [pscustomobject]@{ Name = 'Opera cannot start'; Paths = @('%PROGRAMFILES%\Opera\opera.exe', '%PROGRAMFILES(X86)%\Opera\opera.exe', '%LOCALAPPDATA%\Programs\Opera\opera.exe') },
-            [pscustomobject]@{ Name = 'Vivaldi cannot start'; Paths = @('%PROGRAMFILES%\Vivaldi\Application\vivaldi.exe', '%PROGRAMFILES(X86)%\Vivaldi\Application\vivaldi.exe', '%LOCALAPPDATA%\Vivaldi\Application\vivaldi.exe') },
-            [pscustomobject]@{ Name = 'Tor cannot start'; Paths = @('%PROGRAMFILES%\Tor Browser\Browser\firefox.exe', '%PROGRAMFILES(X86)%\Tor Browser\Browser\firefox.exe', '%USERPROFILE%\Desktop\Tor Browser\Browser\firefox.exe', '%USERPROFILE%\Downloads\Tor Browser\Browser\firefox.exe') }
+            @{ Name = 'Brave cannot start'; Paths = @('%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe', '%PROGRAMFILES(X86)%\BraveSoftware\Brave-Browser\Application\brave.exe', '%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe') },
+            @{ Name = 'Opera cannot start'; Paths = @('%PROGRAMFILES%\Opera\opera.exe', '%PROGRAMFILES(X86)%\Opera\opera.exe', '%LOCALAPPDATA%\Programs\Opera\opera.exe') },
+            @{ Name = 'Vivaldi cannot start'; Paths = @('%PROGRAMFILES%\Vivaldi\Application\vivaldi.exe', '%PROGRAMFILES(X86)%\Vivaldi\Application\vivaldi.exe', '%LOCALAPPDATA%\Vivaldi\Application\vivaldi.exe') },
+            @{ Name = 'Tor cannot start'; Paths = @('%PROGRAMFILES%\Tor Browser\Browser\firefox.exe', '%PROGRAMFILES(X86)%\Tor Browser\Browser\firefox.exe', '%USERPROFILE%\Desktop\Tor Browser\Browser\firefox.exe', '%USERPROFILE%\Downloads\Tor Browser\Browser\firefox.exe') }
         )) {
         $path = Resolve-Executable $candidate.Paths
         if ($path) {
@@ -371,8 +371,8 @@ function Invoke-StudentProbes {
     }
 
     foreach ($portable in @(
-            [pscustomobject]@{ Name = 'Portable browser from Downloads cannot start'; Root = (Join-Path $env:USERPROFILE 'Downloads') },
-            [pscustomobject]@{ Name = 'Portable browser from Desktop cannot start'; Root = (Join-Path $env:USERPROFILE 'Desktop') }
+            @{ Name = 'Portable browser from Downloads cannot start'; Root = (Join-Path $env:USERPROFILE 'Downloads') },
+            @{ Name = 'Portable browser from Desktop cannot start'; Root = (Join-Path $env:USERPROFILE 'Desktop') }
         )) {
         $portableExe = Get-ChildItem -Path $portable.Root -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match 'firefox|chrome|chromium|brave|opera|vivaldi|tor' } |
@@ -466,7 +466,7 @@ function Write-Report {
         New-Item -ItemType Directory -Path $ArtifactsRoot -Force | Out-Null
     }
 
-    $report = [pscustomobject]@{
+    $report = @{
         scope             = $Scope
         executeProbes     = [bool]$ExecuteProbes
         prepareProbeFiles = [bool]$PrepareProbeFiles
@@ -492,7 +492,7 @@ function Write-Report {
         "googleSearchGameUrl=$GoogleSearchGameUrl"
         "blockedHost=$BlockedHost"
         ''
-        ($script:Results | Format-Table section, status, name, detail -AutoSize | Out-String)
+        ($script:Results | ForEach-Object { "$($_.section)`t$($_.status)`t$($_.name)`t$($_.detail)" } | Out-String)
     ) | Set-Content -Path $textPath -Encoding UTF8
 
     Write-Host "Windows browser enforcement report written to $jsonPath"
