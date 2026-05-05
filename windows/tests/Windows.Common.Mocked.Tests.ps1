@@ -2,6 +2,37 @@ Describe "Common Module - Mocked Tests" {
     BeforeAll {
         $modulePath = Join-Path $PSScriptRoot ".." "lib"
         Import-Module "$modulePath\Common.psm1" -Force
+        InModuleScope Common {
+            if (-not (Get-Command -Name 'Update-AcrylicHost' -ErrorAction SilentlyContinue)) {
+                function script:Update-AcrylicHost {
+                    return $true
+                }
+            }
+            if (-not (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue)) {
+                function script:Restart-AcrylicService {
+                    return $true
+                }
+            }
+            if (-not (Get-Command -Name 'Get-AcrylicPath' -ErrorAction SilentlyContinue)) {
+                function script:Get-AcrylicPath {
+                    return $null
+                }
+            }
+            if (-not (Get-Command -Name 'Set-OpenPathFirewall' -ErrorAction SilentlyContinue)) {
+                function script:Set-OpenPathFirewall {
+                    return $true
+                }
+            }
+            if (-not (Get-Command -Name 'Set-LocalDNS' -ErrorAction SilentlyContinue)) {
+                function script:Set-LocalDNS {
+                }
+            }
+            if (-not (Get-Command -Name 'Enable-OpenPathFirewall' -ErrorAction SilentlyContinue)) {
+                function script:Enable-OpenPathFirewall {
+                    return $true
+                }
+            }
+        }
     }
 
     Context "Get-OpenPathFromUrl parsing" {

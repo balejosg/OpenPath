@@ -4,6 +4,11 @@ $modulePath = Join-Path $PSScriptRoot ".." "lib"
 Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
 
 Describe "AppControl Module" {
+    BeforeAll {
+        $modulePath = Join-Path $PSScriptRoot ".." "lib"
+        Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
+    }
+
     Context "New-OpenPathNonAdminAppLockerPolicySpec" {
         It "Targets non-admin users with explicit approved browser and OpenPath paths plus user-writable deny paths" {
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
