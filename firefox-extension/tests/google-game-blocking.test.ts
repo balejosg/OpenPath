@@ -17,9 +17,9 @@ void describe('Firefox Google game blocking', () => {
       { extensionOrigin: 'moz-extension://unit-test/' }
     );
 
-    assert.equal(outcome?.reason, `${GOOGLE_GAME_POLICY_REASON}:snake`);
-    assert.match(outcome?.redirectUrl ?? '', /\/blocked\/blocked\.html/);
-    assert.equal(outcome?.cancel, undefined);
+    assert.equal(outcome.reason, `${GOOGLE_GAME_POLICY_REASON}:snake`);
+    assert.match(outcome.redirectUrl ?? '', /\/blocked\/blocked\.html/);
+    assert.equal(outcome.cancel, undefined);
   });
 
   void test('cancels Google doodle game frames and logo game assets', () => {
