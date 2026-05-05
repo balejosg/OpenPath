@@ -189,6 +189,7 @@ test('student policy scenario group defaults to full and accepts narrow groups',
     for (const group of [
       'request-lifecycle',
       'ajax-auto-allow',
+      'google-game-blocking',
       'path-blocking',
       'exemptions',
       'full',
@@ -242,6 +243,16 @@ test('student policy scenario groups select narrow Selenium suites without weake
   assert.deepStrictEqual(
     getStudentPolicyPhasePlan('sse', 'full', 'ajax-auto-allow').map(({ suite }) => suite),
     ['ajax-auto-allow']
+  );
+  assert.deepStrictEqual(
+    getStudentPolicyPhasePlan('sse', 'full', 'google-game-blocking').map(
+      ({ name, suite, useBrowser }) => ({
+        name,
+        suite,
+        useBrowser,
+      })
+    ),
+    [{ name: 'google-game-blocking', suite: 'google-game-blocking', useBrowser: true }]
   );
   assert.deepStrictEqual(
     getStudentPolicyPhasePlan('sse', 'full', 'path-blocking').map(({ suite }) => suite),

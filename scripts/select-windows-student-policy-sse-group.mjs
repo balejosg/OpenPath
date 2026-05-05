@@ -6,6 +6,7 @@ export const WINDOWS_STUDENT_POLICY_SSE_GROUPS = [
   'full',
   'request-lifecycle',
   'ajax-auto-allow',
+  'google-game-blocking',
   'path-blocking',
   'exemptions',
 ];
@@ -30,6 +31,12 @@ const GROUP_PATTERNS = {
     /^firefox-extension\/src\/lib\/background-listeners\.ts$/,
     /^firefox-extension\/src\/lib\/background-message-handler\.ts$/,
     /^firefox-extension\/src\/lib\/background-runtime\.ts$/,
+  ],
+  'google-game-blocking': [
+    /^firefox-extension\/src\/google-search-game-guard-content\.ts$/,
+    /^firefox-extension\/src\/lib\/google-game-blocking\.ts$/,
+    /^firefox-extension\/tests\/google-game-blocking\.test\.ts$/,
+    /^firefox-extension\/tests\/google-search-game-guard-content\.test\.ts$/,
   ],
   'path-blocking': [
     /^firefox-extension\/src\/lib\/path-blocking\.ts$/,

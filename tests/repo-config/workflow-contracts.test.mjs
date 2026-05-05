@@ -1125,7 +1125,7 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
   );
   assert.match(
     e2eWorkflow,
-    /workflow_dispatch:[\s\S]*student_policy_sse_group:\s*\n[\s\S]*default: auto[\s\S]*options:\s*\n\s+- auto\s*\n\s+- full\s*\n\s+- request-lifecycle\s*\n\s+- ajax-auto-allow\s*\n\s+- path-blocking\s*\n\s+- exemptions/,
+    /workflow_dispatch:[\s\S]*student_policy_sse_group:\s*\n[\s\S]*default: auto[\s\S]*options:\s*\n\s+- auto\s*\n\s+- full\s*\n\s+- request-lifecycle\s*\n\s+- ajax-auto-allow\s*\n\s+- google-game-blocking\s*\n\s+- path-blocking\s*\n\s+- exemptions/,
     'manual Windows student-policy diagnostics should expose an SSE scenario group selector defaulting to auto'
   );
   assert.ok(

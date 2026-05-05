@@ -34,6 +34,16 @@ function global:New-BrowserInventory {
     }
 }
 
+function global:New-ChromiumUrlBlocklist {
+    return @(
+        "*://www.google.*/search*",
+        "*://www.google.*/fbx?fbx=snake_arcade*",
+        "*://doodles.google/*",
+        "*://*.doodles.google/*",
+        "*://www.google.*/logos/*"
+    )
+}
+
 Describe "Browser Module - Request Readiness" {
     BeforeAll {
         $modulePath = Join-Path $PSScriptRoot ".." "lib"
@@ -57,10 +67,10 @@ Describe "Browser Module - Request Readiness" {
             -FirefoxMachinePolicyApplied $true `
             -EdgeManagedExtension $true `
             -EdgeDohMode "off" `
-            -EdgeUrlBlocklist @("*://www.google.*/search*") `
+            -EdgeUrlBlocklist (New-ChromiumUrlBlocklist) `
             -ChromeManagedExtension $true `
             -ChromeDohMode "off" `
-            -ChromeUrlBlocklist @("*://www.google.*/search*") `
+            -ChromeUrlBlocklist (New-ChromiumUrlBlocklist) `
             -AppControlActive $true `
             -BrowserInventory (New-BrowserInventory)
 
@@ -91,10 +101,10 @@ Describe "Browser Module - Request Readiness" {
             -FirefoxMachinePolicyApplied $true `
             -EdgeManagedExtension $false `
             -EdgeDohMode "off" `
-            -EdgeUrlBlocklist @("*://www.google.*/search*") `
+            -EdgeUrlBlocklist (New-ChromiumUrlBlocklist) `
             -ChromeManagedExtension $true `
             -ChromeDohMode "off" `
-            -ChromeUrlBlocklist @("*://www.google.*/search*") `
+            -ChromeUrlBlocklist (New-ChromiumUrlBlocklist) `
             -AppControlActive $true `
             -BrowserInventory (New-BrowserInventory)
 
@@ -112,7 +122,7 @@ Describe "Browser Module - Request Readiness" {
             -FirefoxMachinePolicyApplied $true `
             -EdgeManagedExtension $true `
             -EdgeDohMode "off" `
-            -EdgeUrlBlocklist @("*://www.google.*/search*") `
+            -EdgeUrlBlocklist (New-ChromiumUrlBlocklist) `
             -ChromeManagedExtension $false `
             -ChromeDohMode "missing" `
             -ChromeUrlBlocklist @() `
@@ -135,10 +145,10 @@ Describe "Browser Module - Request Readiness" {
             -FirefoxMachinePolicyApplied $true `
             -EdgeManagedExtension $true `
             -EdgeDohMode "off" `
-            -EdgeUrlBlocklist @("*://www.google.*/search*") `
+            -EdgeUrlBlocklist (New-ChromiumUrlBlocklist) `
             -ChromeManagedExtension $true `
             -ChromeDohMode "off" `
-            -ChromeUrlBlocklist @("*://www.google.*/search*") `
+            -ChromeUrlBlocklist (New-ChromiumUrlBlocklist) `
             -AppControlActive $true `
             -BrowserInventory (New-BrowserInventory -UnmanagedBrowsers @([PSCustomObject]@{ Name = "Brave" }))
 
@@ -156,10 +166,10 @@ Describe "Browser Module - Request Readiness" {
             -FirefoxMachinePolicyApplied $true `
             -EdgeManagedExtension $true `
             -EdgeDohMode "off" `
-            -EdgeUrlBlocklist @("*://www.google.*/search*") `
+            -EdgeUrlBlocklist (New-ChromiumUrlBlocklist) `
             -ChromeManagedExtension $true `
             -ChromeDohMode "off" `
-            -ChromeUrlBlocklist @("*://www.google.*/search*") `
+            -ChromeUrlBlocklist (New-ChromiumUrlBlocklist) `
             -AppControlActive $false `
             -BrowserInventory (New-BrowserInventory)
 

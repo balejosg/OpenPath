@@ -67,6 +67,7 @@ function createListenerHarness(
   autoAllowCalls: AutoAllowCall[];
   beforeRequestFilters: unknown[];
   confirmCalls: ConfirmBlockedScreenContext[];
+  googleGameEvents: unknown[];
   redirects: BlockedScreenContext[];
   runtimeMessage:
     | ((message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => unknown)
@@ -80,6 +81,7 @@ function createListenerHarness(
   const autoAllowCalls: AutoAllowCall[] = [];
   const beforeRequestFilters: unknown[] = [];
   const confirmCalls: ConfirmBlockedScreenContext[] = [];
+  const googleGameEvents: unknown[] = [];
   const redirects: BlockedScreenContext[] = [];
   let webRequestBefore: WebRequestBeforeListener | null = null;
   let webRequestError: WebRequestErrorListener | null = null;
@@ -169,6 +171,9 @@ function createListenerHarness(
       options.evaluateBlockedSubdomain ?? ((): ReturnType<EvaluateBlockedSubdomain> => null),
     handleRuntimeMessage:
       options.handleRuntimeMessage ?? ((): Promise<undefined> => Promise.resolve(undefined)),
+    recordGoogleSearchGameGuardEvent: (event: unknown) => {
+      googleGameEvents.push(event);
+    },
     redirectToBlockedScreen: (context: BlockedScreenContext) => {
       redirects.push(context);
       return Promise.resolve();
@@ -190,6 +195,7 @@ function createListenerHarness(
     autoAllowCalls,
     beforeRequestFilters,
     confirmCalls,
+    googleGameEvents,
     redirects,
     get webRequestBefore(): WebRequestBeforeListener | null {
       return webRequestBefore;
@@ -402,6 +408,27 @@ void describe('background listeners blocked-screen routing', () => {
 
     assert.equal(result, undefined);
     assert.deepEqual(harness.autoAllowCalls, []);
+  });
+
+  void test('blocks direct Google game requests before auto-allow processing', () => {
+    const harness = createListenerHarness();
+    assert.ok(harness.webRequestBefore);
+
+    const result = harness.webRequestBefore({
+      frameId: 0,
+      method: 'GET',
+      tabId: 3,
+      type: 'main_frame',
+      url: 'https://www.google.com/fbx?fbx=snake_arcade',
+    } as WebRequest.OnBeforeRequestDetailsType) as { redirectUrl?: string };
+
+    assert.match(result.redirectUrl ?? '', /\/blocked\/blocked\.html/);
+    assert.deepEqual(harness.autoAllowCalls, []);
+    assert.equal(harness.addedBlocks[0]?.error, 'GOOGLE_GAME_POLICY:snake');
+    assert.deepEqual(
+      (harness.googleGameEvents[0] as { reason?: string; signals?: string[] } | undefined)?.reason,
+      'GOOGLE_GAME_POLICY:snake'
+    );
   });
 
   void test('does not auto-allow requests cancelled by blocked subdomain policy', () => {

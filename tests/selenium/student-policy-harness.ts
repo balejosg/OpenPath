@@ -12,6 +12,7 @@ import {
   runAjaxAutoAllowScenarios,
   runExemptionAndScheduleScenarios,
   runFallbackPropagationProbe,
+  runGoogleGameBlockingScenarios,
   runPathBlockingScenarios,
   runRequestLifecycleScenarios,
   runStudentPolicyMatrix,
@@ -32,6 +33,7 @@ type StudentPolicySuite =
   | 'fallback-propagation'
   | 'request-lifecycle'
   | 'ajax-auto-allow'
+  | 'google-game-blocking'
   | 'path-blocking'
   | 'exemptions';
 
@@ -139,6 +141,11 @@ export async function runStudentPolicySuite(
 
           if (phase.suite === 'ajax-auto-allow') {
             await runAjaxAutoAllowScenarios(client, driver, mode);
+            return;
+          }
+
+          if (phase.suite === 'google-game-blocking') {
+            await runGoogleGameBlockingScenarios(client, driver, mode);
             return;
           }
 

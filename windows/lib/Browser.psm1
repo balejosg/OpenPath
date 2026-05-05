@@ -242,6 +242,13 @@ function Set-ChromePolicy {
             }
 
             Set-ItemProperty -Path $blocklistPath -Name $i -Value ([string]$chromiumSpec.googleSearchBlock)
+            $i++
+            foreach ($googleGameBlock in @($chromiumSpec.googleGameBlocks)) {
+                if ($googleGameBlock) {
+                    Set-ItemProperty -Path $blocklistPath -Name $i -Value ([string]$googleGameBlock)
+                    $i++
+                }
+            }
             Set-ItemProperty -Path $regPath -Name "DefaultSearchProviderEnabled" -Value ([int]$chromiumSpec.defaultSearchProviderEnabled) -Type DWord
             Set-ItemProperty -Path $regPath -Name "DefaultSearchProviderName" -Value ([string]$chromiumSpec.defaultSearchProviderName)
             Set-ItemProperty -Path $regPath -Name "DefaultSearchProviderSearchURL" -Value ([string]$chromiumSpec.defaultSearchProviderSearchURL)

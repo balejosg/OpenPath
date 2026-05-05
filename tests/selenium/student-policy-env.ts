@@ -209,6 +209,7 @@ export function getStudentPolicyScenarioGroup(): StudentPolicyScenarioGroup {
     group === 'full' ||
     group === 'request-lifecycle' ||
     group === 'ajax-auto-allow' ||
+    group === 'google-game-blocking' ||
     group === 'path-blocking' ||
     group === 'exemptions'
   ) {
@@ -216,7 +217,7 @@ export function getStudentPolicyScenarioGroup(): StudentPolicyScenarioGroup {
   }
 
   throw new Error(
-    `OPENPATH_STUDENT_SCENARIO_GROUP must be "full", "request-lifecycle", "ajax-auto-allow", "path-blocking", or "exemptions", received "${group}"`
+    `OPENPATH_STUDENT_SCENARIO_GROUP must be "full", "request-lifecycle", "ajax-auto-allow", "google-game-blocking", "path-blocking", or "exemptions", received "${group}"`
   );
 }
 

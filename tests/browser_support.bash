@@ -76,6 +76,9 @@ write_browser_policy_spec_fixture() {
   },
   "chromium": {
     "googleSearchBlock": "*://search.example.test/*",
+    "googleGameBlocks": [
+      "*://games.example.test/*"
+    ],
     "defaultSearchProviderEnabled": 1,
     "defaultSearchProviderName": "Startpage",
     "defaultSearchProviderSearchURL": "https://www.startpage.com/search?q={searchTerms}",

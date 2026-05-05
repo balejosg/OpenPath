@@ -302,6 +302,7 @@ export function createBackgroundRuntime(
       evaluateBlockedSubdomain: blockedSubdomainRulesController.evaluateRequest,
       confirmBlockedScreenNavigation,
       handleRuntimeMessage,
+      recordGoogleSearchGameGuardEvent,
       redirectToBlockedScreen,
     });
     await blockedPathRulesController.init();

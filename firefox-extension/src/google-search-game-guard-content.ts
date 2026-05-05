@@ -45,6 +45,7 @@ interface GoogleSearchGameGuardGlobal {
   const playTextPattern =
     /\b(play|start|new game|tap to play|jugar|juega|empezar|iniciar|comenzar|reanudar)\b/i;
   const gameResourcePattern = /(?:doodles\.google|google\.[^/]+\/logos\/|\/logos\/doodles?\/)/i;
+  const googleGamePolicyReason = 'GOOGLE_GAME_POLICY';
 
   function getLocationParts(): { host: string; path: string; search: string } {
     return {
@@ -280,7 +281,7 @@ interface GoogleSearchGameGuardGlobal {
     body.setAttribute(blockAttribute, blockedValue);
     body.textContent = '';
     body.appendChild(notice);
-    sendBlockedMessage('google-doodles-page', ['google-game-resource', 'game-text']);
+    sendBlockedMessage(`${googleGamePolicyReason}:doodles`, ['google-game-resource', 'game-text']);
   }
 
   function scanForGameWidgets(): void {
@@ -293,7 +294,7 @@ interface GoogleSearchGameGuardGlobal {
     for (const candidate of candidates) {
       const target = findBlockTarget(candidate);
       if (target) {
-        blockElement(target.element, target.signals, 'google-search-game-widget');
+        blockElement(target.element, target.signals, `${googleGamePolicyReason}:search-widget`);
       }
     }
   }

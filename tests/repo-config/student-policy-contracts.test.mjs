@@ -67,7 +67,7 @@ describe('repository verification contract', () => {
     );
     assert.match(
       windowsRunner,
-      /ValidateSet\('full', 'request-lifecycle', 'ajax-auto-allow', 'path-blocking', 'exemptions'\)/,
+      /ValidateSet\('full', 'request-lifecycle', 'ajax-auto-allow', 'google-game-blocking', 'path-blocking', 'exemptions'\)/,
       'Windows student-policy runner should reject unknown SSE scenario groups'
     );
     assert.match(
@@ -233,7 +233,7 @@ describe('repository verification contract', () => {
 
     assert.match(
       windowsRunner,
-      /\[ValidateSet\('full', 'request-lifecycle', 'ajax-auto-allow', 'path-blocking', 'exemptions'\)\]\[string\]\$ScenarioGroup = 'full'/,
+      /\[ValidateSet\('full', 'request-lifecycle', 'ajax-auto-allow', 'google-game-blocking', 'path-blocking', 'exemptions'\)\]\[string\]\$ScenarioGroup = 'full'/,
       'Windows student-policy runner should accept an optional ScenarioGroup parameter'
     );
     assert.match(
@@ -735,6 +735,79 @@ describe('repository verification contract', () => {
       windowsReadme,
       /reset runner[\s\S]*snapshot VM[\s\S]*rollback VM/s,
       'Windows README should document the reversible runner lab flow'
+    );
+  });
+
+  test('Google game blocking is a first-class Windows student-policy hard gate', () => {
+    const workflow = readText('.github/workflows/e2e-tests.yml');
+    const selector = readText('scripts/select-windows-student-policy-sse-group.mjs');
+    const seleniumEnv = readText('tests/selenium/student-policy-env.ts');
+    const seleniumHarness = readText('tests/selenium/student-policy-harness.ts');
+    const seleniumScenarios = readText('tests/selenium/student-policy-scenarios.ts');
+    const windowsRunner = readText('tests/e2e/ci/run-windows-student-flow.ps1');
+
+    assert.match(
+      workflow,
+      /student_policy_sse_group:[\s\S]*- google-game-blocking/,
+      'manual Windows student-policy diagnostics should expose google-game-blocking'
+    );
+    assert.match(
+      selector,
+      /WINDOWS_STUDENT_POLICY_SSE_GROUPS[\s\S]*'google-game-blocking'/,
+      'changed-path selector should know google-game-blocking'
+    );
+    assert.ok(
+      selector.includes("'google-game-blocking'") &&
+        selector.includes('google-search-game-guard-content\\.ts'),
+      'extension Google game guard changes should select the narrow Google game group'
+    );
+    assert.match(
+      seleniumEnv,
+      /group === 'google-game-blocking'/,
+      'Selenium environment validation should accept google-game-blocking'
+    );
+    assert.match(
+      seleniumHarness,
+      /runGoogleGameBlockingScenarios/,
+      'Selenium harness should route google-game-blocking to the hard-gate scenario'
+    );
+    assert.match(
+      seleniumScenarios,
+      /https:\/\/www\.google\.com\/fbx\?fbx=snake_arcade/,
+      'Selenium scenario should open the direct Google Snake URL'
+    );
+    assert.match(
+      seleniumScenarios,
+      /GOOGLE_GAME_POLICY:/,
+      'Selenium scenario should require OpenPath Google game diagnostics'
+    );
+    assert.match(
+      windowsRunner,
+      /Run Selenium student suite \(sse, \$windowsStudentSseGroup\)/,
+      'Windows student-policy should keep the selected group inside the hard Selenium gate'
+    );
+  });
+
+  test('Chromium managed policy includes direct Google game URL blocks', () => {
+    const chromiumContract = readJson('tests/contracts/browser-chromium-policy.json');
+    const windowsBrowserModule = readText('windows/lib/Browser.psm1');
+    const readinessModule = readText('windows/lib/Browser.RequestReadiness.psm1');
+
+    assert.deepEqual(chromiumContract.googleGameBlocks, [
+      '*://www.google.*/fbx?fbx=snake_arcade*',
+      '*://doodles.google/*',
+      '*://*.doodles.google/*',
+      '*://www.google.*/logos/*',
+    ]);
+    assert.match(
+      windowsBrowserModule,
+      /foreach \(\$googleGameBlock in @\(\$chromiumSpec\.googleGameBlocks\)\)/,
+      'Set-ChromePolicy should write every maintained Google game block pattern'
+    );
+    assert.match(
+      readinessModule,
+      /Get-OpenPathGoogleGameBlockPatterns/,
+      'Browser readiness should validate the maintained Google game block patterns'
     );
   });
 

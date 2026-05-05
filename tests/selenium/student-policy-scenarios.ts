@@ -76,6 +76,8 @@ interface PageResourceObserverState {
   patched?: Record<string, boolean>;
 }
 
+const GOOGLE_SNAKE_DIRECT_URL = 'https://www.google.com/fbx?fbx=snake_arcade';
+
 let activeScenarioTiming: {
   name: string;
   startedAt: string;
@@ -1106,6 +1108,85 @@ export async function runAjaxAutoAllowScenarios(
 
   await seedBaselineWhitelist(client, driver, mode, targets);
   await runAjaxAutoAllowScenarioSet(client, driver, mode, targets);
+}
+
+export async function runGoogleGameBlockingScenarios(
+  client: StudentPolicyServerClient,
+  driver: StudentPolicyDriver,
+  mode: PolicyMode
+): Promise<void> {
+  void client;
+  void mode;
+
+  logScenarioStep('SP-GG-001 Google Snake direct URL is blocked by OpenPath');
+
+  try {
+    await driver.getDriver().get(GOOGLE_SNAKE_DIRECT_URL);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      !message.includes('blockedByPolicy') &&
+      !message.includes('Reached error page') &&
+      !message.includes('Navigation timed out')
+    ) {
+      throw error;
+    }
+  }
+
+  await driver.waitForConvergence(
+    async () => {
+      const pageState = await driver.getDriver().executeScript<{
+        bodyText: string;
+        currentUrl: string;
+        hasPlayableSurface: boolean;
+      }>(`
+        return {
+          bodyText: (document.body?.innerText ?? '').replace(/\\s+/g, ' ').trim().slice(0, 1000),
+          currentUrl: window.location.href,
+          hasPlayableSurface: Boolean(document.querySelector([
+            'canvas',
+            'iframe[src*="/fbx"]',
+            'iframe[src*="/logos"]',
+            '[aria-label*="Play" i]',
+            '[aria-label*="Jugar" i]',
+            '[data-game]'
+          ].join(',')))
+        };
+      `);
+
+      assert.equal(
+        pageState.hasPlayableSurface,
+        false,
+        `Google Snake is still exposing a playable surface at ${pageState.currentUrl}`
+      );
+
+      const diagnostics = await driver.sendRuntimeMessage<{
+        googleSearchGameGuard?: {
+          blockedCount?: number;
+          recentEvents?: { reason?: string }[];
+        };
+        success?: boolean;
+      }>({
+        action: 'getOpenPathDiagnostics',
+        domains: ['www.google.com', 'doodles.google'],
+      });
+      const hasGoogleGameDiagnostic =
+        diagnostics.success === true &&
+        (diagnostics.googleSearchGameGuard?.recentEvents ?? []).some((event) =>
+          String(event.reason ?? '').startsWith('GOOGLE_GAME_POLICY:')
+        );
+      const hasBlockedScreen =
+        pageState.currentUrl.includes('/blocked/blocked.html') &&
+        pageState.currentUrl.includes('GOOGLE_GAME_POLICY');
+      const hasInlineNotice = pageState.bodyText.includes('Juego bloqueado por OpenPath');
+
+      assert.ok(
+        hasBlockedScreen || hasInlineNotice || hasGoogleGameDiagnostic,
+        `Expected OpenPath Google game block evidence, received ${JSON.stringify(pageState)}`
+      );
+    },
+    { timeoutMs: 15_000, pollMs: 500 }
+  );
 }
 
 export async function runExemptionAndScheduleScenarios(

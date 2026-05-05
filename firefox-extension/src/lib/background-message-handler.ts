@@ -122,7 +122,11 @@ export function buildGoogleSearchGameGuardEvent(
         : Date.now(),
     pageHost: sanitizeGoogleSearchGameGuardText(message.pageHost, 'unknown', 120).toLowerCase(),
     pagePath: sanitizeGoogleSearchGameGuardPath(message.pagePath),
-    reason: sanitizeGoogleSearchGameGuardText(message.reason, 'google-search-game-widget', 80),
+    reason: sanitizeGoogleSearchGameGuardText(
+      message.reason,
+      'GOOGLE_GAME_POLICY:search-widget',
+      80
+    ),
     signals: sanitizeGoogleSearchGameGuardSignals(message.signals),
   };
 }

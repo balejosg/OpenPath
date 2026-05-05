@@ -238,6 +238,25 @@ function Get-OpenPathGoogleSearchBlockPattern {
     return '*://www.google.*/search*'
 }
 
+function Get-OpenPathGoogleGameBlockPatterns {
+    try {
+        $policySpec = Get-OpenPathBrowserPolicySpec
+        if ($policySpec -and $policySpec.chromium -and $policySpec.chromium.googleGameBlocks) {
+            return @($policySpec.chromium.googleGameBlocks | Where-Object { $_ } | ForEach-Object { [string]$_ })
+        }
+    }
+    catch {
+        # Fall back to the maintained Chromium policy contract defaults.
+    }
+
+    return @(
+        '*://www.google.*/fbx?fbx=snake_arcade*',
+        '*://doodles.google/*',
+        '*://*.doodles.google/*',
+        '*://www.google.*/logos/*'
+    )
+}
+
 function Test-OpenPathChromiumUrlBlocklistReady {
     param(
         [AllowNull()]
@@ -245,9 +264,24 @@ function Test-OpenPathChromiumUrlBlocklistReady {
     )
 
     $googleSearchBlock = Get-OpenPathGoogleSearchBlockPattern
-    return [bool](@($UrlBlocklist | Where-Object {
-                ([string]$_).Equals($googleSearchBlock, [System.StringComparison]::OrdinalIgnoreCase)
+    $presentBlocks = @($UrlBlocklist | ForEach-Object { [string]$_ })
+    $hasGoogleSearchBlock = [bool](@($presentBlocks | Where-Object {
+                $_.Equals($googleSearchBlock, [System.StringComparison]::OrdinalIgnoreCase)
             }).Count -gt 0)
+    if (-not $hasGoogleSearchBlock) {
+        return $false
+    }
+
+    foreach ($googleGameBlock in @(Get-OpenPathGoogleGameBlockPatterns)) {
+        $hasGoogleGameBlock = [bool](@($presentBlocks | Where-Object {
+                    $_.Equals($googleGameBlock, [System.StringComparison]::OrdinalIgnoreCase)
+                }).Count -gt 0)
+        if (-not $hasGoogleGameBlock) {
+            return $false
+        }
+    }
+
+    return $true
 }
 
 function Test-OpenPathChromiumDohModeReady {
@@ -585,6 +619,7 @@ function Get-OpenPathBrowserRequestReadiness {
 
 Export-ModuleMember -Function @(
     'Get-OpenPathBrowserRequestReadiness',
+    'Get-OpenPathGoogleGameBlockPatterns',
     'Test-OpenPathBrowserRequestSetupReady',
     'Test-OpenPathFirefoxNativeHostRegistrationProof'
 )

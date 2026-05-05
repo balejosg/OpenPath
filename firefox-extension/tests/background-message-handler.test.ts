@@ -280,7 +280,7 @@ await describe('background message handler', async () => {
         pageHost: 'www.google.com',
         pagePath: '/search',
         query: 'solitaire private text',
-        reason: 'google-search-game-widget',
+        reason: 'GOOGLE_GAME_POLICY:search-widget',
         signals: ['interactive-surface', 'play-control', 'game-text', 'x'.repeat(80)],
         tabId: 1,
       },
@@ -293,7 +293,7 @@ await describe('background message handler', async () => {
         blockedAt: 123456,
         pageHost: 'www.google.com',
         pagePath: '/search',
-        reason: 'google-search-game-widget',
+        reason: 'GOOGLE_GAME_POLICY:search-widget',
         signals: ['interactive-surface', 'play-control', 'game-text', 'x'.repeat(64)],
       },
     ]);

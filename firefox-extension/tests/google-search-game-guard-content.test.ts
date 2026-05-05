@@ -224,7 +224,7 @@ void describe('Google Search game guard content script', () => {
         blockedAt: 'number',
         pageHost: 'www.google.com',
         pagePath: '/search',
-        reason: 'google-search-game-widget',
+        reason: 'GOOGLE_GAME_POLICY:search-widget',
         signals: ['interactive-surface', 'play-control', 'game-text'],
       }
     );
@@ -263,7 +263,7 @@ void describe('Google Search game guard content script', () => {
     assert.equal(root.children[0]?.getAttribute('data-openpath-google-game-guard'), 'blocked');
     assert.equal(
       (sentMessages[0] as { reason?: string } | undefined)?.reason,
-      'google-search-game-widget'
+      'GOOGLE_GAME_POLICY:search-widget'
     );
     assert.deepEqual((sentMessages[0] as { signals?: string[] } | undefined)?.signals, [
       'interactive-surface',

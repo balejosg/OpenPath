@@ -4,7 +4,7 @@ param(
     [switch]$PrepareProbeFiles,
     [string]$ArtifactsRoot = $(if ($env:OPENPATH_STUDENT_ARTIFACTS_DIR) { $env:OPENPATH_STUDENT_ARTIFACTS_DIR } else { Join-Path $PSScriptRoot '..\artifacts\windows-browser-enforcement' }),
     [string]$BlockedPathUrl = $(if ($env:OPENPATH_BROWSER_ENFORCEMENT_BLOCKED_PATH_URL) { $env:OPENPATH_BROWSER_ENFORCEMENT_BLOCKED_PATH_URL } else { 'https://blocked.127.0.0.1.sslip.io/game' }),
-    [string]$GoogleSearchGameUrl = $(if ($env:OPENPATH_BROWSER_ENFORCEMENT_GOOGLE_GAME_URL) { $env:OPENPATH_BROWSER_ENFORCEMENT_GOOGLE_GAME_URL } else { 'https://www.google.com/search?q=play+snake' }),
+    [string]$GoogleSearchGameUrl = $(if ($env:OPENPATH_BROWSER_ENFORCEMENT_GOOGLE_GAME_URL) { $env:OPENPATH_BROWSER_ENFORCEMENT_GOOGLE_GAME_URL } else { 'https://www.google.com/fbx?fbx=snake_arcade' }),
     [string]$BlockedHost = $(if ($env:OPENPATH_BROWSER_ENFORCEMENT_BLOCKED_HOST) { $env:OPENPATH_BROWSER_ENFORCEMENT_BLOCKED_HOST } else { 'blocked.127.0.0.1.sslip.io' }),
     [int]$ProbeTimeoutSeconds = 10
 )

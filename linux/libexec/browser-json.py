@@ -298,7 +298,25 @@ def cmd_mutate_firefox_policies(args: argparse.Namespace) -> int:
 def cmd_write_chromium_policy(args: argparse.Namespace) -> int:
     output_path = Path(args.output)
     blocked_paths = env_blocked_paths()
-    policy = {"URLBlocklist": [normalize_chromium_path(path) for path in blocked_paths]}
+    spec = load_browser_policy_spec()
+    chromium_spec = spec.get("chromium", {})
+    google_search_block = chromium_spec.get("googleSearchBlock", "*://www.google.*/search*")
+    google_game_blocks = chromium_spec.get(
+        "googleGameBlocks",
+        [
+            "*://www.google.*/fbx?fbx=snake_arcade*",
+            "*://doodles.google/*",
+            "*://*.doodles.google/*",
+            "*://www.google.*/logos/*",
+        ],
+    )
+    policy = {
+        "URLBlocklist": [
+            *[normalize_chromium_path(path) for path in blocked_paths],
+            str(google_search_block),
+            *[str(path) for path in google_game_blocks if str(path).strip()],
+        ]
+    }
     save_json_file(output_path, policy)
     return 0
 

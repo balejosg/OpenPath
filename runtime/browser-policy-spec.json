@@ -38,6 +38,12 @@
   },
   "chromium": {
     "googleSearchBlock": "*://www.google.*/search*",
+    "googleGameBlocks": [
+      "*://www.google.*/fbx?fbx=snake_arcade*",
+      "*://doodles.google/*",
+      "*://*.doodles.google/*",
+      "*://www.google.*/logos/*"
+    ],
     "defaultSearchProviderEnabled": 1,
     "defaultSearchProviderName": "DuckDuckGo",
     "defaultSearchProviderSearchURL": "https://duckduckgo.com/?q={searchTerms}",
