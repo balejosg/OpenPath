@@ -15,8 +15,17 @@ const DEFAULT_ARTIFACT_LOG_NAME = 'windows-runner-direct.log';
 const DEFAULT_RUNNER_ROOT_GLOB = 'C:\\actions-runner*';
 const SOURCE_MODES = new Set(['runner-checkout', 'local-overlay']);
 const DEFAULT_SOURCE_MODE = 'runner-checkout';
+const RUN_MODES = new Set(['pester', 'browser-boundary', 'all']);
+const DEFAULT_RUN_MODE = 'pester';
 const OVERLAY_ZIP_NAME = 'openpath-local-overlay.zip';
 const BROWSER_ENFORCEMENT_ARTIFACTS = [
+  'browser-boundary-summary.json',
+  'student\\windows-browser-enforcement-report.json',
+  'student\\windows-browser-enforcement-report.txt',
+  'admin\\windows-browser-enforcement-report.json',
+  'admin\\windows-browser-enforcement-report.txt',
+];
+const BROWSER_ENFORCEMENT_REPORT_ARTIFACTS = [
   'windows-browser-enforcement-report.json',
   'windows-browser-enforcement-report.txt',
 ];
@@ -37,6 +46,7 @@ Options:
   --results-path <path>       Result file path on the Windows runner relative to the repo root (default: ${DEFAULT_RESULTS_RELATIVE_PATH})
   --runner-repo-root <path>   Explicit OpenPath checkout root on the Windows runner (default: auto-detect under ${DEFAULT_RUNNER_ROOT_GLOB})
   --source-mode <mode>        Source to execute on Windows: runner-checkout or local-overlay (default: ${DEFAULT_SOURCE_MODE})
+  --mode <mode>               What to run: pester, browser-boundary, or all (default: ${DEFAULT_RUN_MODE})
   --overlay-host <ip>         Local host/IP the Windows VM can use to download the local overlay ZIP
   --browser-enforcement-report
                               Run tests/e2e/ci/windows-browser-enforcement.ps1 -Scope Report after Pester
@@ -56,6 +66,7 @@ function parseArgs(argv) {
     resultsPath: process.env.OPENPATH_WINDOWS_DIRECT_RESULTS_PATH ?? DEFAULT_RESULTS_RELATIVE_PATH,
     runnerRepoRoot: process.env.OPENPATH_WINDOWS_DIRECT_RUNNER_REPO_ROOT ?? '',
     sourceMode: process.env.OPENPATH_WINDOWS_DIRECT_SOURCE_MODE ?? DEFAULT_SOURCE_MODE,
+    mode: process.env.OPENPATH_WINDOWS_DIRECT_MODE ?? DEFAULT_RUN_MODE,
     overlayHost: process.env.OPENPATH_WINDOWS_DIRECT_OVERLAY_HOST ?? '',
     browserEnforcementReport:
       process.env.OPENPATH_WINDOWS_DIRECT_BROWSER_ENFORCEMENT_REPORT === '1',
@@ -85,6 +96,8 @@ function parseArgs(argv) {
       options.runnerRepoRoot = next();
     } else if (arg === '--source-mode') {
       options.sourceMode = next();
+    } else if (arg === '--mode') {
+      options.mode = next();
     } else if (arg === '--overlay-host') {
       options.overlayHost = next();
     } else if (arg === '--browser-enforcement-report') {
@@ -104,6 +117,11 @@ function parseArgs(argv) {
       `Invalid --source-mode ${JSON.stringify(options.sourceMode)}. Expected one of: ${[
         ...SOURCE_MODES,
       ].join(', ')}`
+    );
+  }
+  if (!RUN_MODES.has(options.mode)) {
+    throw new Error(
+      `Invalid --mode ${JSON.stringify(options.mode)}. Expected one of: ${[...RUN_MODES].join(', ')}`
     );
   }
 
@@ -186,6 +204,66 @@ function runGuestCommand(options, guestArgs, { capture = true } = {}) {
   return payload['out-data'] ?? '';
 }
 
+function sleepSync(milliseconds) {
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(signal, 0, 0, milliseconds);
+}
+
+function runGuestCommandAsync(options, guestArgs, { timeoutSeconds = 600, pollSeconds = 5 } = {}) {
+  const remoteCommand = renderCommand([
+    'qm',
+    'guest',
+    'exec',
+    options.vmid,
+    '--synchronous',
+    '0',
+    ...guestArgs,
+  ]);
+  const args = ['ssh', options.proxmoxHost, remoteCommand];
+
+  if (DRY_RUN) {
+    console.log(renderCommand(args));
+    console.log(
+      renderCommand([
+        'ssh',
+        options.proxmoxHost,
+        renderCommand(['qm', 'guest', 'exec-status', options.vmid, '<pid>']),
+      ])
+    );
+    return '';
+  }
+
+  const started = JSON.parse(runCommand(args, { capture: true }));
+  if (!started.pid) {
+    throw new Error(`Guest async command did not return a pid: ${JSON.stringify(started)}`);
+  }
+
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  while (Date.now() < deadline) {
+    const statusOutput = runProxmoxCommand(options, [
+      'qm',
+      'guest',
+      'exec-status',
+      options.vmid,
+      String(started.pid),
+    ]);
+    const status = JSON.parse(statusOutput);
+    if (status.exited === 1) {
+      if (status.exitcode !== 0) {
+        throw new Error(
+          `Guest command failed with exit code ${status.exitcode ?? 'unknown'}: ${
+            status['err-data'] ?? status['out-data'] ?? ''
+          }`
+        );
+      }
+      return status['out-data'] ?? '';
+    }
+    sleepSync(pollSeconds * 1000);
+  }
+
+  throw new Error(`Guest async command timed out after ${timeoutSeconds} seconds`);
+}
+
 function runGuestPowerShell(options, script, { timeoutSeconds = 600, label = 'PowerShell' } = {}) {
   try {
     return runGuestCommand(options, [
@@ -202,6 +280,82 @@ function runGuestPowerShell(options, script, { timeoutSeconds = 600, label = 'Po
   } catch (error) {
     throw new Error(`${label} failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+function runGuestPowerShellAsync(
+  options,
+  script,
+  { timeoutSeconds = 600, label = 'PowerShell' } = {}
+) {
+  try {
+    return runGuestCommandAsync(
+      options,
+      [
+        '--',
+        'powershell.exe',
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-EncodedCommand',
+        encodePowerShell(script),
+      ],
+      { timeoutSeconds }
+    );
+  } catch (error) {
+    throw new Error(`${label} failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function runGuestPowerShellDetached(options, script, { label = 'PowerShell' } = {}) {
+  try {
+    const remoteCommand = renderCommand([
+      'qm',
+      'guest',
+      'exec',
+      options.vmid,
+      '--synchronous',
+      '0',
+      '--',
+      'powershell.exe',
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-EncodedCommand',
+      encodePowerShell(script),
+    ]);
+    const args = ['ssh', options.proxmoxHost, remoteCommand];
+
+    if (DRY_RUN) {
+      console.log(renderCommand(args));
+      return 0;
+    }
+
+    const started = JSON.parse(runCommand(args, { capture: true }));
+    if (!started.pid) {
+      throw new Error(`Guest detached command did not return a pid: ${JSON.stringify(started)}`);
+    }
+    return started.pid;
+  } catch (error) {
+    throw new Error(`${label} failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function waitForGuestCompletionFile(options, completionPath, { timeoutSeconds = 600 } = {}) {
+  if (DRY_RUN) {
+    console.log(`# wait for Windows completion marker ${completionPath}`);
+    return { exitCode: 0 };
+  }
+
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  while (Date.now() < deadline) {
+    const content = readGuestFile(options, completionPath, 120000).trim();
+    if (content) {
+      return JSON.parse(content);
+    }
+    sleepSync(5000);
+  }
+
+  throw new Error(`Timed out waiting for Windows completion marker: ${completionPath}`);
 }
 
 function parseGuestNetworkInterfaces(output) {
@@ -640,6 +794,221 @@ if ($LASTEXITCODE -ne 0) {
   });
 }
 
+function runWindowsStudentPolicyFlowForBoundary(options, runnerRepoRoot) {
+  const flowScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-student-flow.ps1`;
+  const boundaryScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-browser-boundary-ci.ps1`;
+  const resetScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\reset-self-hosted-windows-runner.ps1`;
+  const artifactsRoot = `${runnerRepoRoot}\\tests\\e2e\\artifacts\\windows-student-policy`;
+  const boundaryArtifactsRoot = `${artifactsRoot}\\browser-boundary`;
+  const completionPath = `${artifactsRoot}\\direct-browser-boundary-completion.json`;
+  const script = `
+$ErrorActionPreference = 'Stop'
+$repoRoot = ${JSON.stringify(runnerRepoRoot)}
+$flowScriptPath = ${JSON.stringify(flowScriptPath)}
+$boundaryScriptPath = ${JSON.stringify(boundaryScriptPath)}
+$resetScriptPath = ${JSON.stringify(resetScriptPath)}
+$artifactsRoot = ${JSON.stringify(artifactsRoot)}
+$boundaryArtifactsRoot = ${JSON.stringify(boundaryArtifactsRoot)}
+$completionPath = ${JSON.stringify(completionPath)}
+
+if (-not (Test-Path -LiteralPath $flowScriptPath)) {
+  throw 'run-windows-student-flow.ps1 is missing on the Windows runner checkout.'
+}
+if (-not (Test-Path -LiteralPath $boundaryScriptPath)) {
+  throw 'run-windows-browser-boundary-ci.ps1 is missing on the Windows runner checkout.'
+}
+if (-not (Test-Path -LiteralPath $resetScriptPath)) {
+  throw 'reset-self-hosted-windows-runner.ps1 is missing on the Windows runner checkout.'
+}
+
+function Ensure-OpenPathDirectNode {
+  if (Get-Command npm.cmd -ErrorAction SilentlyContinue) {
+    return
+  }
+
+  $nodeRoot = Join-Path $env:TEMP 'openpath-direct-node-v24'
+  $npmPath = Join-Path $nodeRoot 'npm.cmd'
+  if (-not (Test-Path -LiteralPath $npmPath)) {
+    $ProgressPreference = 'SilentlyContinue'
+    $global:ProgressPreference = 'SilentlyContinue'
+    $index = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -UseBasicParsing -TimeoutSec 60
+    $release = @($index | Where-Object { $_.version -like 'v24.*' -and $_.files -contains 'win-x64-zip' } | Select-Object -First 1)[0]
+    if (-not $release -or -not $release.version) {
+      throw 'Unable to resolve a Node.js v24 win-x64 zip release for direct runner execution.'
+    }
+
+    $version = [string]$release.version
+    $zipPath = Join-Path $env:TEMP "openpath-direct-node-$version.zip"
+    $extractRoot = Join-Path $env:TEMP "openpath-direct-node-$version"
+    $url = "https://nodejs.org/dist/$version/node-$version-win-x64.zip"
+    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -TimeoutSec 180
+    Expand-Archive -LiteralPath $zipPath -DestinationPath $extractRoot -Force
+    Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+    $expanded = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
+    if (-not $expanded -or -not (Test-Path -LiteralPath (Join-Path $expanded.FullName 'npm.cmd'))) {
+      throw 'Downloaded Node.js archive did not contain npm.cmd.'
+    }
+    Remove-Item -LiteralPath $nodeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Move-Item -LiteralPath $expanded.FullName -Destination $nodeRoot -Force
+    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  $env:PATH = "$nodeRoot;$env:PATH"
+  if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+    throw 'npm.cmd is still unavailable after preparing temporary Node.js.'
+  }
+}
+
+function Ensure-OpenPathDirectDependencies {
+  param(
+    [Parameter(Mandatory = $true)][string]$RepoRoot
+  )
+
+  $tscPath = Join-Path $RepoRoot 'node_modules\\.bin\\tsc.cmd'
+  $tsxPath = Join-Path $RepoRoot 'node_modules\\tsx\\dist\\cli.mjs'
+  if ((Test-Path -LiteralPath $tscPath) -and (Test-Path -LiteralPath $tsxPath)) {
+    return
+  }
+
+  Set-Location $RepoRoot
+  & npm.cmd ci --prefer-offline --no-audit --fund=false | Out-Host
+  if ($LASTEXITCODE -ne 0) {
+    throw "npm ci failed with exit code $LASTEXITCODE"
+  }
+}
+
+function Invoke-OpenPathDirectChildPowerShell {
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    [string[]]$ExtraArguments = @(),
+    [Parameter(Mandatory = $true)][string]$LogName,
+    [int]$TimeoutSeconds = 1800
+  )
+
+  $outPath = Join-Path $artifactsRoot "$LogName.out.log"
+  $errPath = Join-Path $artifactsRoot "$LogName.err.log"
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $ExtraArguments
+  $startInfo = @{
+    FilePath = 'powershell.exe'
+    ArgumentList = $arguments
+    WorkingDirectory = $repoRoot
+    RedirectStandardOutput = $outPath
+    RedirectStandardError = $errPath
+    PassThru = $true
+  }
+  $process = Start-Process @startInfo
+
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "$LogName timed out after $TimeoutSeconds seconds"
+  }
+
+  $process.Refresh()
+  $exitCode = $process.ExitCode
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+  if ($exitCode -ne 0) {
+    $maxFailureLogChars = 12000
+    $stdout = if (Test-Path -LiteralPath $outPath) { Get-Content -LiteralPath $outPath -Raw } else { '' }
+    $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -LiteralPath $errPath -Raw } else { '' }
+    if ($stdout.Length -gt $maxFailureLogChars) {
+      $stdout = $stdout.Substring($stdout.Length - $maxFailureLogChars)
+    }
+    if ($stderr.Length -gt $maxFailureLogChars) {
+      $stderr = $stderr.Substring($stderr.Length - $maxFailureLogChars)
+    }
+    throw ($LogName + ' exited with code ' + $exitCode + [Environment]::NewLine + 'STDOUT:' + [Environment]::NewLine + $stdout + [Environment]::NewLine + 'STDERR:' + [Environment]::NewLine + $stderr)
+  }
+}
+
+$primaryFailure = $null
+$exitCode = 0
+$errorText = ''
+try {
+  New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
+  Remove-Item -LiteralPath $completionPath -Force -ErrorAction SilentlyContinue
+  $env:OPENPATH_STUDENT_ARTIFACTS_DIR = $artifactsRoot
+  $env:OPENPATH_WINDOWS_STUDENT_SSE_GROUP = 'google-game-blocking'
+  $env:OPENPATH_KEEP_CLIENT_FOR_BROWSER_BOUNDARY = '1'
+  Ensure-OpenPathDirectNode
+  Ensure-OpenPathDirectDependencies -RepoRoot $repoRoot
+  Set-Location $repoRoot
+  Invoke-OpenPathDirectChildPowerShell -ScriptPath $flowScriptPath -LogName 'direct-student-flow' -TimeoutSeconds 2400
+
+  New-Item -ItemType Directory -Path $boundaryArtifactsRoot -Force | Out-Null
+  Invoke-OpenPathDirectChildPowerShell -ScriptPath $boundaryScriptPath -ExtraArguments @('-ArtifactsRoot', $boundaryArtifactsRoot) -LogName 'direct-browser-boundary' -TimeoutSeconds 600
+}
+catch {
+  $primaryFailure = $_
+  $exitCode = 1
+  $errorText = [string]$_
+}
+finally {
+  try {
+    Invoke-OpenPathDirectChildPowerShell -ScriptPath $resetScriptPath -LogName 'direct-final-reset' -TimeoutSeconds 300
+  }
+  catch {
+    if ($null -eq $primaryFailure) {
+      throw
+    }
+    Write-Warning "reset-self-hosted-windows-runner.ps1 failed after primary failure: $_"
+  }
+  [pscustomobject]@{
+    exitCode = $exitCode
+    error = $errorText
+    artifactsRoot = $artifactsRoot
+    boundaryArtifactsRoot = $boundaryArtifactsRoot
+    timestamp = (Get-Date).ToString('o')
+  } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $completionPath -Encoding UTF8
+}
+
+if ($exitCode -ne 0) {
+  exit $exitCode
+}
+`;
+  runGuestPowerShellDetached(options, script, {
+    label: 'Run Windows student-policy flow and browser boundary CI',
+  });
+  const completion = waitForGuestCompletionFile(options, completionPath, {
+    timeoutSeconds: 3000,
+  });
+  if (completion.exitCode !== 0) {
+    throw new Error(
+      `Run Windows student-policy flow and browser boundary CI failed: ${
+        completion.error ?? 'unknown error'
+      }`
+    );
+  }
+}
+
+function runBrowserBoundaryCi(options, runnerRepoRoot) {
+  const boundaryScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-browser-boundary-ci.ps1`;
+  const artifactsRoot = `${runnerRepoRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\browser-boundary`;
+  const script = `
+$ErrorActionPreference = 'Stop'
+$repoRoot = ${JSON.stringify(runnerRepoRoot)}
+$boundaryScriptPath = ${JSON.stringify(boundaryScriptPath)}
+$artifactsRoot = ${JSON.stringify(artifactsRoot)}
+
+if (-not (Test-Path -LiteralPath $boundaryScriptPath)) {
+  throw 'run-windows-browser-boundary-ci.ps1 is missing on the Windows runner checkout.'
+}
+
+New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
+Set-Location $repoRoot
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $boundaryScriptPath -ArtifactsRoot $artifactsRoot
+if ($LASTEXITCODE -ne 0) {
+  throw "run-windows-browser-boundary-ci.ps1 exited with code $LASTEXITCODE"
+}
+`;
+  runGuestPowerShell(options, script, {
+    timeoutSeconds: 600,
+    label: 'Run Windows browser boundary CI',
+  });
+}
+
 function readGuestFile(options, sourcePath, maxChars = 500000) {
   const script = `
 $ErrorActionPreference = 'Stop'
@@ -677,6 +1046,18 @@ function collectArtifacts(options, artifactDir, runnerRoot) {
   }
 
   for (const artifactName of BROWSER_ENFORCEMENT_ARTIFACTS) {
+    const localArtifactName = artifactName.replace(/\\/g, '-');
+    const content = readGuestFile(
+      options,
+      `${runnerRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\browser-boundary\\${artifactName}`,
+      500000
+    );
+    if (content.trim()) {
+      writeFileSync(resolve(artifactDir, localArtifactName), content, 'utf8');
+    }
+  }
+
+  for (const artifactName of BROWSER_ENFORCEMENT_REPORT_ARTIFACTS) {
     const content = readGuestFile(
       options,
       `${runnerRoot}\\tests\\e2e\\artifacts\\windows-browser-enforcement\\${artifactName}`,
@@ -711,6 +1092,7 @@ async function main() {
     `proxmox_guest_agent=ssh ${options.proxmoxHost} qm guest exec ${options.vmid} -- powershell.exe`
   );
   console.log(`source_mode=${options.sourceMode}`);
+  console.log(`mode=${options.mode}`);
   console.log(`runner_repo_root=${options.runnerRepoRoot || '<auto-detect-on-runner>'}`);
   console.log(
     `browser_enforcement_report=${options.browserEnforcementReport ? 'enabled' : 'disabled'}`
@@ -764,8 +1146,14 @@ async function main() {
     ensureWindowsRunnerBaseline(options, runnerRepoRoot || options.runnerRepoRoot);
     console.log('step=reset-windows-runner');
     resetWindowsRunner(options, runnerRepoRoot || options.runnerRepoRoot);
-    console.log('step=run-direct-pester');
-    runDirectPester(options, runnerRepoRoot || options.runnerRepoRoot);
+    if (options.mode === 'pester' || options.mode === 'all') {
+      console.log('step=run-direct-pester');
+      runDirectPester(options, runnerRepoRoot || options.runnerRepoRoot);
+    }
+    if (options.mode === 'browser-boundary' || options.mode === 'all') {
+      console.log('step=run-windows-student-policy-flow-for-browser-boundary');
+      runWindowsStudentPolicyFlowForBoundary(options, runnerRepoRoot || options.runnerRepoRoot);
+    }
     if (options.browserEnforcementReport) {
       console.log('step=run-browser-enforcement-report');
       runBrowserEnforcementReport(options, runnerRepoRoot || options.runnerRepoRoot);

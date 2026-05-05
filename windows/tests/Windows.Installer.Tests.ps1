@@ -234,17 +234,21 @@ Describe "Installer" {
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 '[switch]$EnforceManagedBrowserBoundary',
+                '[string[]]$ApprovedStudentBrowsers = @(''Firefox'')',
                 "[ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]",
                 '[string]$BrowserCleanupMode = ''ReportOnly''',
                 '-EnforceManagedBrowserBoundary:$enforceManagedBrowserBoundary',
+                '-ApprovedStudentBrowsers $ApprovedStudentBrowsers',
                 '-BrowserCleanupMode $BrowserCleanupMode'
             )
 
             Assert-ContentContainsAll -Content $configHelper -Needles @(
                 '[bool]$EnforceManagedBrowserBoundary = $false',
+                '[string[]]$ApprovedStudentBrowsers = @(''Firefox'')',
                 "[ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]",
                 '[string]$BrowserCleanupMode = ''ReportOnly''',
                 'enforceManagedBrowserBoundary = $EnforceManagedBrowserBoundary',
+                'approvedStudentBrowsers = @($ApprovedStudentBrowsers)',
                 'browserCleanupMode = $BrowserCleanupMode'
             )
         }
@@ -263,6 +267,7 @@ Describe "Installer" {
                 -BrowserCleanupMode RemoveKnownInstallers
 
             $config.enforceManagedBrowserBoundary | Should -BeTrue
+            @($config.approvedStudentBrowsers) | Should -Be @('Firefox')
             $config.browserCleanupMode | Should -Be 'RemoveKnownInstallers'
         }
 

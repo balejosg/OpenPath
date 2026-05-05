@@ -656,6 +656,8 @@ describe('repository verification contract', () => {
   test('Windows browser enforcement phase keeps explicit opt-in probes and docs contract', () => {
     const windowsRunner = readText('tests/e2e/ci/run-windows-student-flow.ps1');
     const browserProbe = readText('tests/e2e/ci/windows-browser-enforcement.ps1');
+    const browserBoundaryCi = readText('tests/e2e/ci/run-windows-browser-boundary-ci.ps1');
+    const e2eWorkflow = readText('.github/workflows/e2e-tests.yml');
     const contractMatrix = readText('docs/testing/student-policy-contract-matrix.md');
     const windowsReadme = readText('windows/README.md');
 
@@ -674,9 +676,41 @@ describe('repository verification contract', () => {
       /if \(\$RunBrowserEnforcementProbes -or \$env:OPENPATH_WINDOWS_BROWSER_ENFORCEMENT_PROBES -eq '1'\) \{\s*Invoke-TimedStep -Name 'Run Windows browser enforcement probes'/,
       'Windows browser enforcement probes should not run unconditionally in the normal student-policy lane'
     );
+    assert.match(
+      windowsRunner,
+      /OPENPATH_KEEP_CLIENT_FOR_BROWSER_BOUNDARY/,
+      'Windows student-policy runner should be able to keep the installed client until browser-boundary CI runs'
+    );
+    assert.match(
+      windowsRunner,
+      /Install-OpenPath\.ps1'[\s\S]*-EnforceManagedBrowserBoundary[\s\S]*-Unattended/s,
+      'Windows student-policy flow should install with the managed browser AppLocker boundary enabled'
+    );
+    assert.match(
+      windowsRunner,
+      /\$process\.Refresh\(\)[\s\S]*if \(\$null -eq \$exitCode\) \{[\s\S]*\$exitCode = 0/s,
+      'Windows student-policy process helper should avoid Start-Process ExitCode gaps under LocalSystem'
+    );
+    assert.match(
+      windowsRunner,
+      /Quote-Argument -Value \$script:PostgresDataDir[\s\S]*Quote-Argument -Value \$script:PostgresLogPath[\s\S]*Quote-Argument -Value "-p \$\(\$script:PostgresPort\)"/s,
+      'Windows student-policy pg_ctl arguments should preserve grouped values for Start-Process'
+    );
+
+    assert.match(
+      e2eWorkflow,
+      /OPENPATH_KEEP_CLIENT_FOR_BROWSER_BOUNDARY: '1'[\s\S]*Run Windows browser boundary probes[\s\S]*run-windows-browser-boundary-ci\.ps1[\s\S]*Restore self-hosted Windows runner state/s,
+      'Windows student-policy CI should run browser-boundary probes after the student-policy flow and before runner restore'
+    );
+    assert.match(
+      e2eWorkflow,
+      /path: tests\/e2e\/artifacts\/windows-student-policy/,
+      'Windows student-policy artifacts should include browser-boundary diagnostics'
+    );
 
     for (const marker of [
       'Firefox managed path blocks known blocked path',
+      'Edge Google game URL cannot run as student',
       'Brave cannot start',
       'Opera cannot start',
       'Vivaldi cannot start',
@@ -704,6 +738,11 @@ describe('repository verification contract', () => {
       /\$probeName = "\$\(\$browser\.Name\) only if managed and blocks known blocked path"/,
       'Windows browser enforcement probe should cover Edge and Chrome managed blocked-path probes'
     );
+    assert.match(
+      browserProbe,
+      /MissingGoogleBlocks/,
+      'Chromium management detection should require every maintained Google game block pattern'
+    );
 
     assert.match(
       browserProbe,
@@ -714,6 +753,21 @@ describe('repository verification contract', () => {
       browserProbe,
       /\[switch\]\$PrepareProbeFiles/,
       'Windows browser enforcement probe should require an explicit flag before creating probe files'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /New-LocalUser[\s\S]*Invoke-StudentBoundaryTask[\s\S]*-Scope Admin/s,
+      'browser-boundary CI should run student probes through a temporary standard user and admin probes with the current token'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /-Scope'', ''Student''/,
+      'browser-boundary CI scheduled task should run the student probe scope'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /Edge Google game URL cannot run as student[\s\S]*browser-boundary-summary\.json/s,
+      'browser-boundary CI should require the Edge Google game URL student probe and summarize artifacts'
     );
     assert.match(
       browserProbe,

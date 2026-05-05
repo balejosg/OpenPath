@@ -5,10 +5,15 @@ $modulePath = Join-Path $PSScriptRoot ".." "lib"
 Import-Module "$modulePath\Browser.RequestReadiness.psm1" -Force -Global -ErrorAction Stop
 
 function global:New-ClassroomReadinessConfig {
+    param(
+        [string[]]$ApprovedStudentBrowsers = @('Firefox')
+    )
+
     return [PSCustomObject]@{
         apiUrl = "https://school.example"
         whitelistUrl = "https://school.example/w/machine-token-123/whitelist.txt"
         classroomId = "classroom-123"
+        approvedStudentBrowsers = @($ApprovedStudentBrowsers)
     }
 }
 
@@ -52,11 +57,7 @@ Describe "Browser Module - Request Readiness" {
 
     It "Reports complete Windows browser request readiness facts" {
         $result = Get-OpenPathBrowserRequestReadiness `
-            -Config ([PSCustomObject]@{
-                apiUrl = "https://school.example"
-                whitelistUrl = "https://school.example/w/machine-token-123/whitelist.txt"
-                classroomId = "classroom-123"
-            }) `
+            -Config (New-ClassroomReadinessConfig -ApprovedStudentBrowsers @('Firefox', 'Edge', 'Chrome')) `
             -ManagedExtensionPolicy ([PSCustomObject]@{
                 ExtensionId = "monitor-bloqueos@openpath"
                 InstallUrl = "https://school.example/api/extensions/firefox/openpath.xpi"
@@ -92,7 +93,7 @@ Describe "Browser Module - Request Readiness" {
         @($result.FailureReasons).Count | Should -Be 0
     }
 
-    It "Fails strict readiness when installed Edge is not managed" {
+    It "Treats installed Edge as healthy when it is not approved and AppLocker is active" {
         $result = Get-OpenPathBrowserRequestReadiness `
             -Config (New-ClassroomReadinessConfig) `
             -ManagedExtensionPolicy (New-FirefoxManagedPolicy) `
@@ -100,22 +101,49 @@ Describe "Browser Module - Request Readiness" {
             -NativeHostStatePresent $true `
             -FirefoxMachinePolicyApplied $true `
             -EdgeManagedExtension $false `
-            -EdgeDohMode "off" `
-            -EdgeUrlBlocklist (New-ChromiumUrlBlocklist) `
-            -ChromeManagedExtension $true `
-            -ChromeDohMode "off" `
-            -ChromeUrlBlocklist (New-ChromiumUrlBlocklist) `
+            -EdgeDohMode "automatic" `
+            -EdgeUrlBlocklist @() `
+            -ChromeManagedExtension $false `
+            -ChromeDohMode "automatic" `
+            -ChromeUrlBlocklist @() `
+            -AppControlActive $true `
+            -BrowserInventory (New-BrowserInventory)
+
+        $result.Ready | Should -BeTrue
+        $result.Facts.edge_approval | Should -Be "not_approved_blocked_by_app_control"
+        $result.Facts.edge_managed_extension | Should -Be "not_approved"
+        @($result.FailureReasons) | Should -Not -Contain "edge_managed_extension_missing"
+    }
+
+    It "Fails strict readiness when approved Edge is installed but not fully managed" {
+        $result = Get-OpenPathBrowserRequestReadiness `
+            -Config (New-ClassroomReadinessConfig -ApprovedStudentBrowsers @('Firefox', 'Edge')) `
+            -ManagedExtensionPolicy (New-FirefoxManagedPolicy) `
+            -NativeHostRegistered $true `
+            -NativeHostStatePresent $true `
+            -FirefoxMachinePolicyApplied $true `
+            -EdgeManagedExtension $false `
+            -EdgeDohMode "automatic" `
+            -EdgeUrlBlocklist @() `
+            -ChromeManagedExtension $false `
+            -ChromeDohMode "automatic" `
+            -ChromeUrlBlocklist @() `
             -AppControlActive $true `
             -BrowserInventory (New-BrowserInventory)
 
         $result.Ready | Should -BeFalse
+        $result.Facts.edge_approval | Should -Be "approved"
         $result.Facts.edge_managed_extension | Should -Be "missing"
+        $result.Facts.edge_doh_mode | Should -Be "missing"
+        $result.Facts.edge_url_blocklist | Should -Be "missing"
         @($result.FailureReasons) | Should -Contain "edge_managed_extension_missing"
+        @($result.FailureReasons) | Should -Contain "edge_doh_mode_missing"
+        @($result.FailureReasons) | Should -Contain "edge_url_blocklist_missing"
     }
 
     It "Keeps Chrome optional when Chrome is not installed" {
         $result = Get-OpenPathBrowserRequestReadiness `
-            -Config (New-ClassroomReadinessConfig) `
+            -Config (New-ClassroomReadinessConfig -ApprovedStudentBrowsers @('Firefox', 'Edge')) `
             -ManagedExtensionPolicy (New-FirefoxManagedPolicy) `
             -NativeHostRegistered $true `
             -NativeHostStatePresent $true `
@@ -138,7 +166,7 @@ Describe "Browser Module - Request Readiness" {
 
     It "Fails strict readiness when unmanaged browser findings remain" {
         $result = Get-OpenPathBrowserRequestReadiness `
-            -Config (New-ClassroomReadinessConfig) `
+            -Config (New-ClassroomReadinessConfig -ApprovedStudentBrowsers @('Firefox', 'Edge', 'Chrome')) `
             -ManagedExtensionPolicy (New-FirefoxManagedPolicy) `
             -NativeHostRegistered $true `
             -NativeHostStatePresent $true `
@@ -159,7 +187,7 @@ Describe "Browser Module - Request Readiness" {
 
     It "Fails strict readiness when app control is inactive" {
         $result = Get-OpenPathBrowserRequestReadiness `
-            -Config (New-ClassroomReadinessConfig) `
+            -Config (New-ClassroomReadinessConfig -ApprovedStudentBrowsers @('Firefox', 'Edge', 'Chrome')) `
             -ManagedExtensionPolicy (New-FirefoxManagedPolicy) `
             -NativeHostRegistered $true `
             -NativeHostStatePresent $true `
@@ -198,7 +226,8 @@ Describe "Browser Module - Request Readiness" {
             -BrowserInventory (New-BrowserInventory -UnmanagedBrowsers @([PSCustomObject]@{ Name = "Brave" }))
 
         $result.Ready | Should -BeTrue
-        $result.Facts.edge_managed_extension | Should -Be "missing"
+        $result.Facts.edge_approval | Should -Be "not_approved_app_control_missing"
+        $result.Facts.edge_managed_extension | Should -Be "not_approved"
         $result.Facts.unmanaged_browsers_detected | Should -Be "found"
         @($result.FailureReasons) | Should -Not -Contain "edge_managed_extension_missing"
         @($result.FailureReasons) | Should -Not -Contain "unmanaged_browsers_detected"

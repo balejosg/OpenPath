@@ -145,6 +145,21 @@ function Get-OpenPathBrowserEnforcementStatus {
     $unmanagedBrowsers = @($inventory.UnmanagedBrowsers) + @($inventory.PortableBrowserRisks)
     $approvedSummary = Join-OpenPathBrowserStatusSummary -Findings $approvedBrowsers
     $unmanagedSummary = Join-OpenPathBrowserStatusSummary -Findings $unmanagedBrowsers
+    $approvedStudentBrowsers = @(Get-OpenPathApprovedStudentBrowsers -Config $resolvedConfig)
+    $blockedByAppLockerBrowsers = @()
+    if (($appLocker -ne 'Inactive') -and -not (Test-OpenPathStudentBrowserApproved -ApprovedStudentBrowsers $approvedStudentBrowsers -Browser Edge)) {
+        $edgeFindings = @($approvedBrowsers | Where-Object { $_.Name -eq 'Microsoft Edge' })
+        if ($edgeFindings.Count -gt 0) {
+            $blockedByAppLockerBrowsers += $edgeFindings
+        }
+    }
+    if (($appLocker -ne 'Inactive') -and -not (Test-OpenPathStudentBrowserApproved -ApprovedStudentBrowsers $approvedStudentBrowsers -Browser Chrome)) {
+        $chromeFindings = @($approvedBrowsers | Where-Object { $_.Name -eq 'Google Chrome' })
+        if ($chromeFindings.Count -gt 0) {
+            $blockedByAppLockerBrowsers += $chromeFindings
+        }
+    }
+    $blockedByAppLockerSummary = Join-OpenPathBrowserStatusSummary -Findings $blockedByAppLockerBrowsers -EmptySummary 'None'
 
     $healthySignals = @(
         ($appLocker -ne 'Inactive'),
@@ -165,7 +180,9 @@ function Get-OpenPathBrowserEnforcementStatus {
 
     return [PSCustomObject]@{
         AppLocker = $appLocker
+        ApprovedStudentBrowsers = ($approvedStudentBrowsers -join ', ')
         ApprovedBrowsers = $approvedSummary
+        BlockedByAppLockerBrowsers = $blockedByAppLockerSummary
         UnmanagedBrowsers = $unmanagedSummary
         Firewall = $firewall
         BrowserCleanupMode = $browserCleanupMode

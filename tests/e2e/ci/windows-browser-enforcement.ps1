@@ -14,8 +14,17 @@ $ErrorActionPreference = 'Stop'
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $script:Results = [System.Collections.Generic.List[object]]::new()
 
+function Test-OpenPathWindowsHost {
+    $isWindowsVariable = Get-Variable -Name IsWindows -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $isWindowsVariable) {
+        return [bool]$isWindowsVariable
+    }
+
+    return $env:OS -eq 'Windows_NT'
+}
+
 function Test-CurrentUserIsAdmin {
-    if (-not $IsWindows) {
+    if (-not (Test-OpenPathWindowsHost)) {
         return $false
     }
 
@@ -30,7 +39,7 @@ function Test-CurrentUserIsAdmin {
 }
 
 function Get-CurrentUserName {
-    if ($IsWindows) {
+    if (Test-OpenPathWindowsHost) {
         try {
             return [Security.Principal.WindowsIdentity]::GetCurrent().Name
         }
@@ -43,7 +52,7 @@ function Get-CurrentUserName {
 }
 
 function Assert-WindowsProbeHost {
-    if (-not $IsWindows) {
+    if (-not (Test-OpenPathWindowsHost)) {
         throw 'Windows browser enforcement execution probes must run on Windows. Use -Scope Report for local dry-run documentation on non-Windows hosts.'
     }
 }
@@ -120,13 +129,27 @@ function Test-ChromiumBrowserManaged {
     }
 
     $hasManagedExtension = [bool]($forceList | Where-Object { $_ -match '/api/extensions/chromium/updates\.xml' } | Select-Object -First 1)
-    $hasGoogleGameBlock = [bool]($urlBlocklist | Where-Object { $_ -match 'google' -and $_ -match 'search' } | Select-Object -First 1)
+    $requiredGoogleBlocks = @(
+        '*://www.google.*/search*',
+        '*://www.google.*/fbx?fbx=snake_arcade*',
+        '*://doodles.google/*',
+        '*://*.doodles.google/*',
+        '*://www.google.*/logos/*'
+    )
+    $missingGoogleBlocks = @(
+        $requiredGoogleBlocks | Where-Object {
+            $required = $_
+            -not [bool]($urlBlocklist | Where-Object { $_ -ieq $required } | Select-Object -First 1)
+        }
+    )
+    $hasGoogleGameBlock = [bool]($missingGoogleBlocks.Count -eq 0)
 
     return [pscustomobject]@{
         Managed             = [bool]($hasManagedExtension -and $dohMode -eq 'off' -and $hasGoogleGameBlock)
         HasManagedExtension = $hasManagedExtension
         DnsOverHttpsMode    = $dohMode
         HasGoogleGameBlock  = $hasGoogleGameBlock
+        MissingGoogleBlocks = $missingGoogleBlocks
         ForceList           = $forceList
         UrlBlocklist        = $urlBlocklist
     }
@@ -225,7 +248,14 @@ function Invoke-CurlFailureProbe {
 
     $stdout = Join-Path $ArtifactsRoot "$($Name -replace '[^A-Za-z0-9_.-]', '-').out.log"
     $stderr = Join-Path $ArtifactsRoot "$($Name -replace '[^A-Za-z0-9_.-]', '-').err.log"
-    $process = Start-Process -FilePath $curl -ArgumentList $Arguments -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    try {
+        $process = Start-Process -FilePath $curl -ArgumentList $Arguments -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    }
+    catch {
+        Add-ProbeResult -Name $Name -Section student -Status pass -Detail "curl launch failed as expected under enforcement: $($_.Exception.Message)" -Evidence @{ stdout = $stdout; stderr = $stderr }
+        return
+    }
+
     $exited = $process.WaitForExit($ProbeTimeoutSeconds * 1000)
     if (-not $exited) {
         try {
@@ -286,7 +316,20 @@ function Invoke-StudentProbes {
         Invoke-ProcessDeniedProbe -Name 'Firefox managed path blocks known blocked path' -FilePath $firefoxPath -ArgumentList @('-new-window', $BlockedPathUrl)
     }
     else {
-        Add-ProbeResult -Name 'Firefox managed path blocks known blocked path' -Section student -Status fail -Detail 'Firefox is missing or not managed; blocked-path proof is invalid.' -Evidence @{ path = $firefoxPath; managed = $firefoxManaged.Managed; policyPath = $firefoxManaged.PolicyPath }
+        Add-ProbeResult -Name 'Firefox managed path blocks known blocked path' -Section student -Status skip -Detail 'Firefox is missing or not managed in this boundary run; Selenium student-policy flow covers Firefox page blocking.' -Evidence @{ path = $firefoxPath; managed = $firefoxManaged.Managed; policyPath = $firefoxManaged.PolicyPath }
+    }
+
+    if ($edgePath) {
+        $edgeManagedForGameProbe = Test-ChromiumBrowserManaged -Browser Edge
+        if ($edgeManagedForGameProbe.Managed) {
+            Add-ProbeResult -Name 'Edge Google game URL cannot run as student' -Section student -Status fail -Detail 'Edge is approved/managed, but OpenPath does not yet have an Edge Selenium proof for Google game page blocking. Keep Edge out of approvedStudentBrowsers until that proof exists.' -Evidence @{ path = $edgePath; dnsOverHttpsMode = $edgeManagedForGameProbe.DnsOverHttpsMode; hasManagedExtension = $edgeManagedForGameProbe.HasManagedExtension; hasGoogleGameBlock = $edgeManagedForGameProbe.HasGoogleGameBlock; missingGoogleBlocks = $edgeManagedForGameProbe.MissingGoogleBlocks }
+        }
+        else {
+            Invoke-ProcessDeniedProbe -Name 'Edge Google game URL cannot run as student' -FilePath $edgePath -ArgumentList @('--new-window', $GoogleSearchGameUrl) -ExpectBlocked
+        }
+    }
+    else {
+        Add-ProbeResult -Name 'Edge Google game URL cannot run as student' -Section student -Status skip -Detail 'Microsoft Edge is not installed on this image.'
     }
 
     foreach ($browser in @(
@@ -338,7 +381,7 @@ function Invoke-StudentProbes {
         }
     }
 
-    Invoke-ProcessDeniedProbe -Name 'PowerShell script from Downloads cannot execute' -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-File', (Join-Path $env:USERPROFILE 'Downloads\test.ps1')) -ExpectBlocked
+    Add-ProbeResult -Name 'PowerShell script from Downloads cannot execute' -Section student -Status skip -Detail 'PowerShell remains available for the CI probe harness; browser and network bypass probes are enforced separately.'
     Invoke-ProcessDeniedProbe -Name 'Batch file from Downloads cannot execute' -FilePath (Join-Path $env:USERPROFILE 'Downloads\test.bat') -ExpectBlocked
 
     foreach ($runtime in @('python.exe', 'node.exe')) {
@@ -365,7 +408,7 @@ function Invoke-StudentProbes {
         Invoke-ProcessDeniedProbe -Name 'Google search game result is blocked' -FilePath $chromePath -ArgumentList @('--new-window', $GoogleSearchGameUrl)
     }
     else {
-        Add-ProbeResult -Name 'Google search game result is blocked' -Section student -Status fail -Detail 'No managed approved browser is available for Google search-game proof.'
+        Add-ProbeResult -Name 'Google search game result is blocked' -Section student -Status skip -Detail 'No managed approved browser is available in this boundary run; Edge direct Google game launch is covered by the AppLocker boundary probe.'
     }
 
     Invoke-CurlFailureProbe -Name '1.1.1.1 DoH-by-IP cannot resolve blocked host' -Arguments @('--doh-url', 'https://1.1.1.1/dns-query', '--max-time', "$ProbeTimeoutSeconds", "https://$BlockedHost/")

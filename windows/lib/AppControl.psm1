@@ -21,26 +21,79 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         [string]$OpenPathRoot = $script:OpenPathRoot,
 
         [ValidateSet('AuditOnly', 'Enforced')]
-        [string]$Mode = 'Enforced'
+        [string]$Mode = 'Enforced',
+
+        [string[]]$ApprovedBrowsers = @('Firefox')
     )
 
     $openPathRuntimePath = "$($OpenPathRoot.TrimEnd('\'))\*"
+    $approvedBrowserSet = @{}
+    foreach ($browser in @($ApprovedBrowsers)) {
+        $normalized = ([string]$browser).Trim().ToLowerInvariant()
+        if (-not $normalized) {
+            continue
+        }
+        if ($normalized -in @('firefox', 'mozilla firefox')) {
+            $approvedBrowserSet.Firefox = $true
+        }
+        elseif ($normalized -in @('edge', 'microsoft edge')) {
+            $approvedBrowserSet.Edge = $true
+        }
+        elseif ($normalized -in @('chrome', 'google chrome')) {
+            $approvedBrowserSet.Chrome = $true
+        }
+    }
+
+    $firefoxPaths = @(
+        '%PROGRAMFILES%\Mozilla Firefox\firefox.exe',
+        '%PROGRAMFILES(X86)%\Mozilla Firefox\firefox.exe',
+        'C:\Program Files\Mozilla Firefox\firefox.exe',
+        'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
+    )
+    $edgePaths = @(
+        '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe',
+        '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe',
+        'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+        'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+    )
+    $chromePaths = @(
+        '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe',
+        '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe',
+        'C:\Program Files\Google\Chrome\Application\chrome.exe',
+        'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
+    )
+
+    $allowPaths = @(
+        '%WINDIR%\*',
+        $openPathRuntimePath
+    )
+    if ($approvedBrowserSet.Firefox) {
+        $allowPaths += $firefoxPaths
+    }
+    if ($approvedBrowserSet.Edge) {
+        $allowPaths += $edgePaths
+    }
+    if ($approvedBrowserSet.Chrome) {
+        $allowPaths += $chromePaths
+    }
+
+    $unapprovedBrowserDenyPaths = @()
+    if (-not $approvedBrowserSet.Edge) {
+        $unapprovedBrowserDenyPaths += $edgePaths
+    }
+    if (-not $approvedBrowserSet.Chrome) {
+        $unapprovedBrowserDenyPaths += $chromePaths
+    }
+
     return [PSCustomObject]@{
         Mode = $Mode
         EnforcementMode = if ($Mode -eq 'AuditOnly') { 'AuditOnly' } else { 'Enabled' }
         NonAdminSid = 'S-1-5-32-545'
         AdminSid = 'S-1-5-32-544'
         SystemSid = 'S-1-5-18'
-        AllowPaths = @(
-            '%WINDIR%\*',
-            $openPathRuntimePath,
-            '%PROGRAMFILES%\Mozilla Firefox\firefox.exe',
-            '%PROGRAMFILES(X86)%\Mozilla Firefox\firefox.exe',
-            '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe',
-            '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe',
-            '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe',
-            '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
-        )
+        ApprovedBrowsers = @($approvedBrowserSet.Keys | Sort-Object)
+        AllowPaths = @($allowPaths)
+        UnapprovedBrowserDenyPaths = @($unapprovedBrowserDenyPaths)
         BlockedWindowsTools = @(
             '%WINDIR%\System32\curl.exe',
             '%WINDIR%\SysWOW64\curl.exe',
@@ -119,7 +172,12 @@ function New-OpenPathAppLockerPolicyXml {
     $ruleCollections = @()
     foreach ($collectionType in @('Exe', 'Script')) {
         $rules = @()
-        foreach ($path in @($Spec.UserWritableDenyPaths)) {
+        $denyPaths = @($Spec.UserWritableDenyPaths)
+        if ($collectionType -eq 'Exe') {
+            $denyPaths += @($Spec.UnapprovedBrowserDenyPaths)
+        }
+
+        foreach ($path in $denyPaths) {
             $pathId = ($path -replace '[^0-9A-Za-z]+', '-').Trim('-')
             $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType users deny $pathId" -Sid $Spec.NonAdminSid -Action 'Deny' -Path $path
         }
@@ -170,7 +228,9 @@ function Set-OpenPathNonAdminAppControl {
         [string]$OpenPathRoot = $script:OpenPathRoot,
 
         [ValidateSet('AuditOnly', 'Enforced')]
-        [string]$Mode = 'Enforced'
+        [string]$Mode = 'Enforced',
+
+        [string[]]$ApprovedBrowsers = @('Firefox')
     )
 
     if (-not (Test-AdminPrivileges)) {
@@ -186,7 +246,9 @@ function Set-OpenPathNonAdminAppControl {
     }
 
     try {
-        $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode
+        Remove-OpenPathNonAdminAppControl -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+
+        $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers
         $policyXml = New-OpenPathAppLockerPolicyXml -Spec $spec
         $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-applocker-$([guid]::NewGuid()).xml"
         Set-Content -Path $policyPath -Value $policyXml -Encoding UTF8

@@ -3,6 +3,23 @@ $ErrorActionPreference = 'Continue'
 
 Write-Host 'Resetting persistent self-hosted Windows runner state...'
 
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.ProcessId -ne $PID -and
+        $_.Name -in @('node.exe', 'esbuild.exe', 'postgres.exe', 'pg_ctl.exe', 'npm.cmd', 'npm.exe', 'powershell.exe', 'pwsh.exe') -and
+        (
+            $_.CommandLine -like '*openpath-direct-overlay-*' -or
+            $_.CommandLine -like '*openpath-direct-node-v*' -or
+            $_.CommandLine -like '*run-windows-student-flow.ps1*' -or
+            $_.CommandLine -like '*run-windows-browser-boundary-ci.ps1*' -or
+            $_.CommandLine -like '*windows-browser-enforcement.ps1*' -or
+            $_.CommandLine -like '*openpath-postgres*'
+        )
+    } |
+    ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+
 $openPathTaskNames = @(
     'OpenPath-AgentUpdate',
     'OpenPath-SSE',
@@ -48,6 +65,43 @@ foreach ($path in $pathsToRemove) {
         Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+
+try {
+    if (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue) {
+        $policyXml = [xml](Get-AppLockerPolicy -Local -Xml)
+        $changed = $false
+        foreach ($collection in @($policyXml.AppLockerPolicy.RuleCollection)) {
+            foreach ($rule in @($collection.ChildNodes)) {
+                if ($rule.Name -like 'OpenPath non-admin app control*') {
+                    [void]$collection.RemoveChild($rule)
+                    $changed = $true
+                }
+            }
+        }
+
+        if ($changed -and (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+            $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-runner-reset-applocker-$([guid]::NewGuid()).xml"
+            $policyXml.Save($policyPath)
+            Set-AppLockerPolicy -XMLPolicy $policyPath
+            Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+catch {
+    Write-Warning "Unable to remove OpenPath AppLocker rules during runner reset: $_"
+}
+
+$currentRepoRoot = $null
+try {
+    $currentRepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Path
+}
+catch {
+    $currentRepoRoot = $null
+}
+
+Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'openpath-direct-overlay-*' -ErrorAction SilentlyContinue |
+    Where-Object { -not $currentRepoRoot -or $_.FullName -ne $currentRepoRoot } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
 $firefoxDistributionPaths = @(
     "${env:ProgramFiles}\Mozilla Firefox\distribution",

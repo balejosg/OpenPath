@@ -51,6 +51,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /artifact_dir=/);
     assert.match(result.stdout, /source_mode=runner-checkout/);
+    assert.match(result.stdout, /mode=pester/);
     assert.match(result.stdout, /runner_repo_root=<auto-detect-on-runner>/);
     assert.match(result.stdout, /ssh whitelist-proxmox qm guest exec 103 -- powershell\.exe/);
     assert.match(result.stdout, /direct OpenPath Windows runner diagnostic complete/);
@@ -200,6 +201,30 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(script, /windows-browser-enforcement-report\.txt/);
   });
 
+  test('browser-boundary mode plans the student flow and boundary CI script', () => {
+    const result = runDirectDiagnostic([
+      '--mode',
+      'browser-boundary',
+      '--source-mode',
+      'local-overlay',
+    ]);
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /source_mode=local-overlay/);
+    assert.match(result.stdout, /mode=browser-boundary/);
+    assert.match(script, /OPENPATH_WINDOWS_DIRECT_MODE/);
+    assert.match(script, /Ensure-OpenPathDirectNode/);
+    assert.match(script, /Ensure-OpenPathDirectDependencies/);
+    assert.match(script, /node_modules\\\\\.bin\\\\tsc\.cmd/);
+    assert.match(script, /npm\.cmd ci --prefer-offline --no-audit --fund=false/);
+    assert.match(script, /https:\/\/nodejs\.org\/dist\/index\.json/);
+    assert.match(script, /OPENPATH_WINDOWS_STUDENT_SSE_GROUP = 'google-game-blocking'/);
+    assert.match(script, /OPENPATH_KEEP_CLIENT_FOR_BROWSER_BOUNDARY = '1'/);
+    assert.match(script, /run-windows-browser-boundary-ci\.ps1/);
+    assert.match(script, /browser-boundary-summary\.json/);
+  });
+
   test(
     'workspace wrapper blocks GitHub integration lanes without explicit flag',
     { skip: !process.env.WHITELIST_WORKSPACE_ROOT },
@@ -210,4 +235,21 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       assert.match(result.stderr, /require --integration/);
     }
   );
+
+  test('workspace wrapper routes google-game-blocking to browser-boundary local overlay', () => {
+    const result = runWorkspaceWrapper([
+      'openpath',
+      'windows-direct',
+      '--suite',
+      'google-game-blocking',
+      '--artifact-dir',
+      '.opencode/tmp/windows-browser-boundary-direct',
+      '--dry-run',
+    ]);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /--mode browser-boundary/);
+    assert.match(result.stdout, /--source-mode local-overlay/);
+    assert.match(result.stdout, /--artifact-dir .*windows-browser-boundary-direct/);
+  });
 });

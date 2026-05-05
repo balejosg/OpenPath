@@ -41,6 +41,7 @@ param(
     [switch]$Unattended,
     [string]$HealthApiSecret = "",
     [switch]$EnforceManagedBrowserBoundary,
+    [string[]]$ApprovedStudentBrowsers = @('Firefox'),
     [ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]
     [string]$BrowserCleanupMode = 'ReportOnly',
     [string]$TimingOutputPath = ""
@@ -257,6 +258,7 @@ $config = New-OpenPathInstallerConfig `
     -ChromeExtensionStoreUrl $ChromeExtensionStoreUrl `
     -EdgeExtensionStoreUrl $EdgeExtensionStoreUrl `
     -EnforceManagedBrowserBoundary:$enforceManagedBrowserBoundary `
+    -ApprovedStudentBrowsers $ApprovedStudentBrowsers `
     -BrowserCleanupMode $BrowserCleanupMode
 if ($PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Write installer configuration')) {
     $config | ConvertTo-Json -Depth 10 | Set-Content "$OpenPathRoot\data\config.json" -Encoding UTF8
@@ -395,8 +397,9 @@ try {
     Start-OpenPathInstallTimedStep -Name 'app-control'
     $enableNonAdminAppControl = [bool](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'enableNonAdminAppControl' -DefaultValue $true)
     $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
+    $approvedStudentBrowsers = @($config.approvedStudentBrowsers)
     if ($enableNonAdminAppControl) {
-        Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -WhatIf:$WhatIfPreference | Out-Null
+        Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference | Out-Null
     }
     else {
         Write-InstallerVerbose '  Managed browser boundary disabled; AppLocker boundary not applied'

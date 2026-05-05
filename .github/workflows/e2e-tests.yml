@@ -325,8 +325,14 @@ jobs:
         shell: pwsh
         env:
           OPENPATH_WINDOWS_STUDENT_SSE_GROUP: ${{ needs.detect-relevant-changes.outputs.windows_student_policy_sse_group }}
+          OPENPATH_KEEP_CLIENT_FOR_BROWSER_BOUNDARY: '1'
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-student-flow.ps1
+
+      - name: Run Windows browser boundary probes
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-browser-boundary-ci.ps1
 
       - name: Restore self-hosted Windows runner state
         if: always()

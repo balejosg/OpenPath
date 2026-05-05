@@ -44,6 +44,8 @@ function New-OpenPathInstallerConfig {
 
         [bool]$EnforceManagedBrowserBoundary = $false,
 
+        [string[]]$ApprovedStudentBrowsers = @('Firefox'),
+
         [ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]
         [string]$BrowserCleanupMode = 'ReportOnly'
     )
@@ -65,6 +67,7 @@ function New-OpenPathInstallerConfig {
         enableNonAdminAppControl = $EnforceManagedBrowserBoundary
         nonAdminAppControlMode = 'Enforced'
         enforceManagedBrowserBoundary = $EnforceManagedBrowserBoundary
+        approvedStudentBrowsers = @($ApprovedStudentBrowsers)
         browserCleanupMode = $BrowserCleanupMode
         dohResolverIps = @(Get-DefaultDohResolverIps)
         vpnBlockRules = @(Get-DefaultVpnBlockRules)

@@ -10,17 +10,13 @@ Describe "AppControl Module" {
     }
 
     Context "New-OpenPathNonAdminAppLockerPolicySpec" {
-        It "Targets non-admin users with explicit approved browser and OpenPath paths plus user-writable deny paths" {
+        It "Defaults non-admin users to Firefox-only browser approval plus OpenPath paths and user-writable deny paths" {
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
             $expectedAllowPaths = @(
                 '%WINDIR%\*',
                 'C:\OpenPath\*',
                 '%PROGRAMFILES%\Mozilla Firefox\firefox.exe',
-                '%PROGRAMFILES(X86)%\Mozilla Firefox\firefox.exe',
-                '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe',
-                '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe',
-                '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe',
-                '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
+                '%PROGRAMFILES(X86)%\Mozilla Firefox\firefox.exe'
             )
             $expectedDenyPaths = @(
                 '%USERPROFILE%\Downloads\*',
@@ -38,6 +34,25 @@ Describe "AppControl Module" {
             foreach ($path in $expectedAllowPaths) {
                 @($spec.AllowPaths) | Should -Contain $path
             }
+            @($spec.ApprovedBrowsers) | Should -Contain 'Firefox'
+            @($spec.ApprovedBrowsers) | Should -Not -Contain 'Edge'
+            @($spec.ApprovedBrowsers) | Should -Not -Contain 'Chrome'
+            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+            @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
+            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
+            @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+            @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
             @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\*'
             @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES(X86)%\*'
             @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Internet Explorer\iexplore.exe'
@@ -47,6 +62,30 @@ Describe "AppControl Module" {
             foreach ($path in $expectedDenyPaths) {
                 @($spec.UserWritableDenyPaths) | Should -Contain $path
             }
+        }
+
+        It "Allows future explicit Edge approval without approving Chrome" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -ApprovedBrowsers @('Firefox', 'Edge')
+
+            @($spec.ApprovedBrowsers) | Should -Contain 'Firefox'
+            @($spec.ApprovedBrowsers) | Should -Contain 'Edge'
+            @($spec.ApprovedBrowsers) | Should -Not -Contain 'Chrome'
+            @($spec.AllowPaths) | Should -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.AllowPaths) | Should -Contain '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.AllowPaths) | Should -Contain 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+            @($spec.AllowPaths) | Should -Contain 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
+            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
+            @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+            @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Not -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Not -Contain '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Not -Contain 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Not -Contain 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
         }
 
         It "Supports AuditOnly mode without changing the target group" {

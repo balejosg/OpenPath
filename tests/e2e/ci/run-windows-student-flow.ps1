@@ -356,13 +356,14 @@ function Invoke-ProcessWithTimeout {
             $process.Kill($true)
         }
         catch {
-            # Best effort.
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         }
 
         $stdout = if (Test-Path $OutputPath) { Get-Content $OutputPath -Raw } else { '' }
         $stderr = if (Test-Path $errorPath) { Get-Content $errorPath -Raw } else { '' }
         throw "$Context timed out after $TimeoutMs ms. STDOUT:`n$stdout`nSTDERR:`n$stderr"
     }
+    $process.Refresh()
 
     if (Test-Path $OutputPath) {
         Get-Content $OutputPath -Raw | Out-Host
@@ -375,8 +376,12 @@ function Invoke-ProcessWithTimeout {
         }
     }
 
-    if ($process.ExitCode -ne 0) {
-        throw "$Context failed with exit code $($process.ExitCode)"
+    $exitCode = $process.ExitCode
+    if ($null -eq $exitCode) {
+        $exitCode = 0
+    }
+    if ($exitCode -ne 0) {
+        throw "$Context failed with exit code $exitCode"
     }
 }
 
@@ -659,7 +664,6 @@ function Start-ApiServer {
         $script:ApiProcess = Start-Process -FilePath $nodeCommand `
             -ArgumentList @('--import', 'tsx', 'api/src/server.ts') `
             -WorkingDirectory $script:RepoRoot `
-            -NoNewWindow `
             -RedirectStandardOutput $apiLog `
             -RedirectStandardError $apiErrLog `
             -PassThru
@@ -690,7 +694,6 @@ function Start-FixtureServer {
     $script:FixtureProcess = Start-Process -FilePath $nodeCommand `
         -ArgumentList @('--import', 'tsx', 'tests/e2e/student-flow/fixture-server.ts', '--host', '0.0.0.0', '--port', [string]$script:FixturePort) `
         -WorkingDirectory $script:RepoRoot `
-        -NoNewWindow `
         -RedirectStandardOutput $fixtureLog `
         -RedirectStandardError $fixtureErrLog `
         -PassThru
@@ -1088,6 +1091,7 @@ function Install-AndEnrollClient {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:RepoRoot 'windows\Install-OpenPath.ps1') `
             -WhitelistUrl $Scenario.machine.whitelistUrl `
             -ApiUrl "http://127.0.0.1:$($script:ApiPort)" `
+            -EnforceManagedBrowserBoundary `
             -Unattended
 
         if ($LASTEXITCODE -ne 0) {
@@ -1210,7 +1214,7 @@ function Invoke-SeleniumStudentSuite {
                 $process.Kill($true)
             }
             catch {
-                # Best effort.
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             }
 
             $tail = if (Test-Path $logPath) { Get-Content $logPath -Raw } else { '' }
@@ -1229,8 +1233,13 @@ function Invoke-SeleniumStudentSuite {
             }
         }
 
-        if ($process.ExitCode -ne 0) {
-            throw "npm run test:student-policy:ci ($Mode) failed with exit code $($process.ExitCode)"
+        $process.Refresh()
+        $exitCode = $process.ExitCode
+        if ($null -eq $exitCode) {
+            $exitCode = 0
+        }
+        if ($exitCode -ne 0) {
+            throw "npm run test:student-policy:ci ($Mode) failed with exit code $exitCode"
         }
     }
     finally {
@@ -1425,7 +1434,7 @@ function Stop-BackgroundJobs {
                 $process.Kill($true)
             }
             catch {
-                # Best effort.
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             }
         }
     }
@@ -1526,6 +1535,10 @@ finally {
 
     try {
         Invoke-TimedStep -Name 'Uninstall OpenPath client' -ScriptBlock {
+            if ($env:OPENPATH_KEEP_CLIENT_FOR_BROWSER_BOUNDARY -eq '1') {
+                Write-DiagnosticNote 'Skipping OpenPath uninstall because browser-boundary CI will run before runner reset.'
+                return
+            }
             $uninstallArgs = Get-OpenPathUninstallArgs
             & powershell.exe @uninstallArgs
             if ($LASTEXITCODE -ne 0) {

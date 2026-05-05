@@ -32,7 +32,9 @@ Describe "Browser Module - Enforcement status" {
             'Get-FirewallStatus',
             'browserCleanupMode',
             'AppLocker',
+            'ApprovedStudentBrowsers',
             'ApprovedBrowsers',
+            'BlockedByAppLockerBrowsers',
             'UnmanagedBrowsers',
             'Firewall',
             'Overall'

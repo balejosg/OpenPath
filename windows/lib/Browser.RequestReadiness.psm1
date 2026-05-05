@@ -309,6 +309,63 @@ function Test-OpenPathReadinessTruthy {
     return [bool]$Value
 }
 
+function Get-OpenPathApprovedStudentBrowsers {
+    param(
+        [AllowNull()]
+        [object]$Config
+    )
+
+    $configured = $null
+    if ($Config -and $Config.PSObject.Properties['approvedStudentBrowsers']) {
+        $configured = $Config.PSObject.Properties['approvedStudentBrowsers'].Value
+    }
+
+    if ($null -eq $configured) {
+        return @('Firefox')
+    }
+
+    $values = if ($configured -is [string]) {
+        @($configured -split ',')
+    }
+    else {
+        @($configured)
+    }
+
+    $approved = @(
+        $values |
+            ForEach-Object { ([string]$_).Trim() } |
+            Where-Object { $_ } |
+            ForEach-Object {
+                if ($_ -in @('Firefox', 'Mozilla Firefox')) { 'Firefox' }
+                elseif ($_ -in @('Edge', 'Microsoft Edge')) { 'Edge' }
+                elseif ($_ -in @('Chrome', 'Google Chrome')) { 'Chrome' }
+            } |
+            Where-Object { $_ } |
+            Sort-Object -Unique
+    )
+
+    if ($approved.Count -eq 0) {
+        return @('Firefox')
+    }
+
+    return @($approved)
+}
+
+function Test-OpenPathStudentBrowserApproved {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$ApprovedStudentBrowsers,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Firefox', 'Edge', 'Chrome')]
+        [string]$Browser
+    )
+
+    return [bool](@($ApprovedStudentBrowsers | Where-Object {
+                ([string]$_).Equals($Browser, [System.StringComparison]::OrdinalIgnoreCase)
+            }).Count -gt 0)
+}
+
 function Get-OpenPathReadinessBrowserInventory {
     try {
         return Get-OpenPathBrowserInventory
@@ -385,6 +442,12 @@ function Add-OpenPathChromiumReadinessFacts {
         [Parameter(Mandatory = $true)]
         [bool]$StrictMode,
 
+        [Parameter(Mandatory = $true)]
+        [bool]$Approved,
+
+        [Parameter(Mandatory = $true)]
+        [bool]$AppControlActive,
+
         [AllowNull()]
         [object]$ManagedExtension = $null,
 
@@ -397,9 +460,21 @@ function Add-OpenPathChromiumReadinessFacts {
 
     $factPrefix = $Browser.ToLowerInvariant()
     if (-not $Installed) {
+        $Facts["${factPrefix}_approval"] = 'not_installed'
         $Facts["${factPrefix}_managed_extension"] = 'not_installed'
         $Facts["${factPrefix}_doh_mode"] = 'not_installed'
         $Facts["${factPrefix}_url_blocklist"] = 'not_installed'
+        return
+    }
+
+    if (-not $Approved) {
+        $Facts["${factPrefix}_approval"] = if ($AppControlActive) { 'not_approved_blocked_by_app_control' } else { 'not_approved_app_control_missing' }
+        $Facts["${factPrefix}_managed_extension"] = 'not_approved'
+        $Facts["${factPrefix}_doh_mode"] = 'not_approved'
+        $Facts["${factPrefix}_url_blocklist"] = 'not_approved'
+        if ($StrictMode -and -not $AppControlActive) {
+            $FailureReasons.Add("${factPrefix}_not_approved_app_control_missing")
+        }
         return
     }
 
@@ -407,6 +482,7 @@ function Add-OpenPathChromiumReadinessFacts {
     $dohReady = Test-OpenPathChromiumDohModeReady -DohMode $DohMode
     $urlBlocklistReady = Test-OpenPathChromiumUrlBlocklistReady -UrlBlocklist $UrlBlocklist
 
+    $Facts["${factPrefix}_approval"] = 'approved'
     $Facts["${factPrefix}_managed_extension"] = if ($managedReady) { 'ready' } else { 'missing' }
     $Facts["${factPrefix}_doh_mode"] = if ($dohReady) { 'ready' } else { 'missing' }
     $Facts["${factPrefix}_url_blocklist"] = if ($urlBlocklistReady) { 'ready' } else { 'missing' }
@@ -530,6 +606,8 @@ function Get-OpenPathBrowserRequestReadiness {
     }
 
     $strictMode = Test-OpenPathManagedBrowserBoundaryStrictMode -Config $Config
+    $approvedStudentBrowsers = @(Get-OpenPathApprovedStudentBrowsers -Config $Config)
+    $appControlReady = Test-OpenPathReadinessTruthy -Value $AppControlActive
     $edgeInstalled = Test-OpenPathApprovedBrowserInstalled -BrowserInventory $BrowserInventory -BrowserName 'Microsoft Edge'
     $chromeInstalled = Test-OpenPathApprovedBrowserInstalled -BrowserInventory $BrowserInventory -BrowserName 'Google Chrome'
     $unmanagedBrowserFindingsPresent = Test-OpenPathUnmanagedBrowserFindingsPresent -BrowserInventory $BrowserInventory
@@ -575,6 +653,8 @@ function Get-OpenPathBrowserRequestReadiness {
         -Browser Edge `
         -Installed $edgeInstalled `
         -StrictMode $strictMode `
+        -Approved (Test-OpenPathStudentBrowserApproved -ApprovedStudentBrowsers $approvedStudentBrowsers -Browser Edge) `
+        -AppControlActive $appControlReady `
         -ManagedExtension $EdgeManagedExtension `
         -DohMode $EdgeDohMode `
         -UrlBlocklist $EdgeUrlBlocklist
@@ -585,11 +665,13 @@ function Get-OpenPathBrowserRequestReadiness {
         -Browser Chrome `
         -Installed $chromeInstalled `
         -StrictMode $strictMode `
+        -Approved (Test-OpenPathStudentBrowserApproved -ApprovedStudentBrowsers $approvedStudentBrowsers -Browser Chrome) `
+        -AppControlActive $appControlReady `
         -ManagedExtension $ChromeManagedExtension `
         -DohMode $ChromeDohMode `
         -UrlBlocklist $ChromeUrlBlocklist
 
-    if (Test-OpenPathReadinessTruthy -Value $AppControlActive) {
+    if ($appControlReady) {
         $facts.app_control_active = 'ready'
     }
     else {
@@ -619,7 +701,9 @@ function Get-OpenPathBrowserRequestReadiness {
 
 Export-ModuleMember -Function @(
     'Get-OpenPathBrowserRequestReadiness',
+    'Get-OpenPathApprovedStudentBrowsers',
     'Get-OpenPathGoogleGameBlockPatterns',
+    'Test-OpenPathStudentBrowserApproved',
     'Test-OpenPathBrowserRequestSetupReady',
     'Test-OpenPathFirefoxNativeHostRegistrationProof'
 )
