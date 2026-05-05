@@ -62,7 +62,7 @@ load 'test_helper'
     run grep -nF 'Import-Module (Join-Path $OpenPathRoot "lib\$moduleName.psm1") -Force -Global' "$PROJECT_DIR/windows/lib/ScriptBootstrap.psm1"
     [ "$status" -eq 0 ]
 
-    run grep -nF "Import-Module (Join-Path \$OpenPathRoot 'lib\Common.psm1') -Force -Global" "$PROJECT_DIR/windows/lib/ScriptBootstrap.psm1"
+    run grep -nF "Import-Module (Join-Path \$OpenPathRoot 'lib\Common.psm1') -Global" "$PROJECT_DIR/windows/lib/ScriptBootstrap.psm1"
     [ "$status" -eq 0 ]
 
     run grep -nF "'Update-AcrylicHost'" "$PROJECT_DIR/windows/lib/Update.Runtime.psm1"
