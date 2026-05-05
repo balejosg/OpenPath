@@ -1,3 +1,5 @@
+Import-Module (Join-Path $PSScriptRoot "TestHelpers.psm1") -Force
+
 Describe "Installer" {
     Context "ACL lockdown" {
         It "Sets restrictive file permissions during installation" {
