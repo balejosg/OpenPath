@@ -84,7 +84,11 @@ function Resolve-Executable {
             continue
         }
 
-        $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
+        $expanded = $candidate
+        $expanded = $expanded -replace '%PROGRAMFILES\(X86\)%', ${env:ProgramFiles(x86)}
+        $expanded = $expanded -replace '%PROGRAMFILES%', $env:ProgramFiles
+        $expanded = $expanded -replace '%LOCALAPPDATA%', $env:LOCALAPPDATA
+        $expanded = $expanded -replace '%USERPROFILE%', $env:USERPROFILE
         if (Test-Path $expanded -PathType Leaf) {
             return $expanded
         }
