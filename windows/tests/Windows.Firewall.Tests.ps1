@@ -39,9 +39,12 @@ Describe "Firewall Module" {
             @($resolvers).Count | Should -BeGreaterThan 0
             @($resolvers) | Should -Contain '8.8.8.8'
             @($resolvers) | Should -Contain '1.1.1.1'
+            @($resolvers) | Should -Contain '2001:4860:4860::8888'
+            @($resolvers) | Should -Contain '2606:4700:4700::1111'
+            @($resolvers) | Should -Contain '2620:fe::fe'
 
             foreach ($resolver in @($resolvers)) {
-                $resolver | Should -Match '^\d{1,3}(?:\.\d{1,3}){3}$'
+                { [void][System.Net.IPAddress]::Parse($resolver) } | Should -Not -Throw
             }
         }
 
@@ -77,6 +80,31 @@ Describe "Firewall Module" {
                 }).Count | Should -Be 1
         }
 
+        It "Creates equivalent DNS and DoH blocks for configured IPv6 resolver addresses" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    enableKnownDnsIpBlocking = $true
+                    enableDohIpBlocking = $true
+                    dohResolverIps = @('2001:4860:4860::8888', '2606:4700:4700::1111')
+                }
+            } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            foreach ($resolverIp in @('2001:4860:4860::8888', '2606:4700:4700::1111')) {
+                foreach ($protocol in @('TCP', 'UDP')) {
+                    (@(Get-CapturedFirewallRules) | Where-Object {
+                            $_.RemoteAddress -eq $resolverIp -and $_.RemotePort -eq '443' -and $_.Protocol -eq $protocol
+                        }).Count | Should -Be 1
+
+                    (@(Get-CapturedFirewallRules) | Where-Object {
+                            $_.RemoteAddress -eq $resolverIp -and $_.RemotePort -eq '53' -and $_.Protocol -eq $protocol
+                        }).Count | Should -Be 1
+                }
+            }
+        }
+
         It "Creates program-scoped resolver blocks for upstream DNS and skips invalid DoH resolver entries" {
             Mock Get-OpenPathConfig {
                 [PSCustomObject]@{
@@ -107,6 +135,47 @@ Describe "Firewall Module" {
             (@(Get-CapturedFirewallRules) | Where-Object {
                     $_.RemoteAddress -eq '6.6.6.6' -and $_.RemotePort -eq '443' -and $_.Protocol -eq 'UDP'
                 }).Count | Should -Be 1
+        }
+
+        It "Blocks the proven Cloudflare DoH bypass class while leaving Acrylic upstream DNS allowed" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    enableKnownDnsIpBlocking = $true
+                    enableDohIpBlocking = $true
+                    dohResolverIps = @('1.1.1.1', '1.0.0.1', '8.8.8.8')
+                }
+            } -ModuleName Firewall
+
+            Set-FirewallAcrylicServicePresent -Present $true
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            # Regression probe references only:
+            # curl.exe --doh-url https://1.1.1.1/dns-query https://blocked.example.com
+            # curl.exe --resolve "cloudflare-dns.com:443:1.1.1.1" https://cloudflare-dns.com/dns-query
+            foreach ($cloudflareResolver in @('1.1.1.1', '1.0.0.1')) {
+                foreach ($protocol in @('TCP', 'UDP')) {
+                    (@(Get-CapturedFirewallRules) | Where-Object {
+                            $_.RemoteAddress -eq $cloudflareResolver -and $_.RemotePort -eq '443' -and $_.Protocol -eq $protocol -and $_.Action -eq 'Block'
+                        }).Count | Should -Be 1
+
+                    (@(Get-CapturedFirewallRules) | Where-Object {
+                            $_.RemoteAddress -eq $cloudflareResolver -and $_.RemotePort -eq '53' -and $_.Protocol -eq $protocol -and $_.Action -eq 'Block'
+                        }).Count | Should -Be 1
+                }
+            }
+
+            (@(Get-CapturedFirewallRules) | Where-Object {
+                    $_.DisplayName -eq 'OpenPath-DNS-Allow-Upstream-UDP' -and $_.RemoteAddress -eq '8.8.8.8' -and $_.RemotePort -eq '53' -and $_.Program -like '*AcrylicService.exe'
+                }).Count | Should -Be 1
+
+            (@(Get-CapturedFirewallRules) | Where-Object {
+                    $_.DisplayName -eq 'OpenPath-DNS-Allow-Upstream-TCP' -and $_.RemoteAddress -eq '8.8.8.8' -and $_.RemotePort -eq '53' -and $_.Program -like '*AcrylicService.exe'
+                }).Count | Should -Be 1
+
+            (@(Get-CapturedFirewallRules) | Where-Object {
+                    $_.RemoteAddress -eq '8.8.8.8' -and $_.RemotePort -eq '53' -and $_.Action -eq 'Block' -and $_.Program -notlike '*AcrylicService.exe'
+                }).Count | Should -BeGreaterThan 0
         }
 
         It "Does not create DoH 443 rules when DoH IP blocking is disabled" {
@@ -146,6 +215,28 @@ Describe "Firewall Module" {
 
             (@(Get-CapturedFirewallRules) | Where-Object { $_.DisplayName -eq 'OpenPath-DNS-Block-DNS-UDP' }).Count | Should -Be 0
             (@(Get-CapturedFirewallRules) | Where-Object { $_.DisplayName -eq 'OpenPath-DNS-Block-DNS-TCP' }).Count | Should -Be 0
+        }
+
+        It "Keeps QUIC blocking resolver-specific without adding a global UDP 443 block by default" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    enableKnownDnsIpBlocking = $true
+                    enableDohIpBlocking = $true
+                    dohResolverIps = @('1.1.1.1', '8.8.8.8')
+                }
+            } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            $resolverUdp443Blocks = @(Get-CapturedFirewallRules) | Where-Object {
+                $_.RemotePort -eq '443' -and $_.Protocol -eq 'UDP' -and $_.Action -eq 'Block' -and $_.RemoteAddress
+            }
+            $resolverUdp443Blocks.Count | Should -BeGreaterThan 0
+
+            (@(Get-CapturedFirewallRules) | Where-Object {
+                    $_.RemotePort -eq '443' -and $_.Protocol -eq 'UDP' -and $_.Action -eq 'Block' -and -not $_.RemoteAddress
+                }).Count | Should -Be 0
         }
 
         It "Creates TCP and UDP allow rules for Acrylic upstream DNS" {

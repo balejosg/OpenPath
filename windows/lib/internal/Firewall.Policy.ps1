@@ -1,3 +1,17 @@
+function Test-OpenPathFirewallIpAddress {
+    param(
+        [AllowNull()]
+        [string]$Address
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Address)) {
+        return $false
+    }
+
+    $parsedAddress = $null
+    return [System.Net.IPAddress]::TryParse($Address.Trim(), [ref]$parsedAddress)
+}
+
 function Set-OpenPathFirewall {
     <#
     .SYNOPSIS
@@ -124,7 +138,7 @@ function Set-OpenPathFirewall {
             )
 
             foreach ($target in $allowTargets) {
-                if (-not $target.Address -or $target.Address -notmatch '^\d{1,3}(?:\.\d{1,3}){3}$') { continue }
+                if (-not (Test-OpenPathFirewallIpAddress -Address $target.Address)) { continue }
 
                 foreach ($protocol in @('UDP', 'TCP')) {
                     New-NetFirewallRule -DisplayName "$script:RulePrefix-Allow-$($target.Name)-$protocol" `
@@ -138,7 +152,7 @@ function Set-OpenPathFirewall {
         if ($enableKnownDnsIpBlocking) {
             $dns53RuleCount = 0
             foreach ($resolverIp in ($dohResolvers | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ } | Sort-Object -Unique)) {
-                if ($resolverIp -notmatch '^\d{1,3}(?:\.\d{1,3}){3}$') {
+                if (-not (Test-OpenPathFirewallIpAddress -Address $resolverIp)) {
                     Write-OpenPathLog "Skipping invalid DNS resolver IP: $resolverIp" -Level WARN
                     continue
                 }
@@ -180,7 +194,7 @@ function Set-OpenPathFirewall {
         if ($enableDohIpBlocking) {
             $dohRuleCount = 0
             foreach ($resolverIp in ($dohResolvers | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ } | Sort-Object -Unique)) {
-                if ($resolverIp -notmatch '^\d{1,3}(?:\.\d{1,3}){3}$') {
+                if (-not (Test-OpenPathFirewallIpAddress -Address $resolverIp)) {
                     Write-OpenPathLog "Skipping invalid DoH resolver IP: $resolverIp" -Level WARN
                     continue
                 }
