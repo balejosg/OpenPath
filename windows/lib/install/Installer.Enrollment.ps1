@@ -9,17 +9,17 @@ function Resolve-OpenPathInstallerEnrollmentContext {
     )
 
     if ($RegistrationToken -and $EnrollmentToken) {
-        Write-Host "ERROR: -RegistrationToken and -EnrollmentToken cannot be used together" -ForegroundColor Red
+        Write-InstallerError "ERROR: -RegistrationToken and -EnrollmentToken cannot be used together"
         exit 1
     }
 
     if ($ClassroomId -and -not $EnrollmentToken) {
-        Write-Host "ERROR: -ClassroomId requires -EnrollmentToken" -ForegroundColor Red
+        Write-InstallerError "ERROR: -ClassroomId requires -EnrollmentToken"
         exit 1
     }
 
     if ((($Classroom -or $ClassroomId -or $RegistrationToken -or $EnrollmentToken) -and -not $ApiBaseUrl)) {
-        Write-Host "ERROR: -ApiUrl is required for classroom enrollment parameters" -ForegroundColor Red
+        Write-InstallerError "ERROR: -ApiUrl is required for classroom enrollment parameters"
         exit 1
     }
 
@@ -43,7 +43,7 @@ function Resolve-OpenPathInstallerEnrollmentContext {
 
         if (-not $EnrollmentToken -and -not $RegistrationToken) {
             if ($Unattended) {
-                Write-Host "ERROR: Classroom mode requires -EnrollmentToken or -RegistrationToken in unattended mode" -ForegroundColor Red
+                Write-InstallerError "ERROR: Classroom mode requires -EnrollmentToken or -RegistrationToken in unattended mode"
                 exit 1
             }
 
@@ -56,32 +56,32 @@ function Resolve-OpenPathInstallerEnrollmentContext {
         }
 
         if ($RegistrationToken -and -not $Classroom) {
-            Write-Host "ERROR: -Classroom is required when using -RegistrationToken" -ForegroundColor Red
+            Write-InstallerError "ERROR: -Classroom is required when using -RegistrationToken"
             exit 1
         }
 
         if ($RegistrationToken) {
-            Write-Host "Validating registration token..." -ForegroundColor Yellow
+            Write-InstallerNotice "Validating registration token..." -ForegroundColor Yellow
             try {
                 $validateBody = @{ token = $RegistrationToken } | ConvertTo-Json
                 $validateResponse = Invoke-RestMethod -Uri "$ApiBaseUrl/api/setup/validate-token" `
                     -Method Post -Body $validateBody -ContentType "application/json" -ErrorAction Stop
 
                 if (-not $validateResponse.valid) {
-                    Write-Host "ERROR: Invalid registration token" -ForegroundColor Red
+                    Write-InstallerError "ERROR: Invalid registration token"
                     exit 1
                 }
-                Write-Host "  Registration token validated" -ForegroundColor Green
+                Write-InstallerNotice "  Registration token validated" -ForegroundColor Green
             }
             catch {
-                Write-Host "ERROR: Failed to validate registration token: $_" -ForegroundColor Red
+                Write-InstallerError "ERROR: Failed to validate registration token: $_"
                 exit 1
             }
         }
     }
 
     if ($RegistrationToken -and $EnrollmentToken) {
-        Write-Host "ERROR: Enrollment token and registration token cannot be combined" -ForegroundColor Red
+        Write-InstallerError "ERROR: Enrollment token and registration token cannot be combined"
         exit 1
     }
 
@@ -125,7 +125,7 @@ function Invoke-OpenPathInstallerEnrollment {
     if (-not (Test-Path $enrollScript)) {
         $result.MachineRegistered = 'FAILED'
         $result.EnrollmentError = "Enrollment script not found: $enrollScript"
-        Write-Host "  Enrollment script not found: $enrollScript" -ForegroundColor Yellow
+        Write-InstallerWarning "  Enrollment script not found: $enrollScript"
         return [PSCustomObject]$result
     }
 
@@ -166,13 +166,13 @@ function Invoke-OpenPathInstallerEnrollment {
         else {
             $result.MachineRegistered = 'FAILED'
             $result.EnrollmentError = 'Machine registration returned an incomplete result'
-            Write-Host "  Failed to register machine" -ForegroundColor Yellow
+            Write-InstallerWarning "  Failed to register machine"
         }
     }
     catch {
         $result.MachineRegistered = 'FAILED'
         $result.EnrollmentError = [string]$_
-        Write-Host "  Error registering machine: $_" -ForegroundColor Yellow
+        Write-InstallerWarning "  Error registering machine: $_"
     }
 
     return [PSCustomObject]$result

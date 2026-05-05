@@ -40,7 +40,7 @@ function Initialize-OpenPathInstallDirectories {
         Write-InstallerVerbose "  Permisos aplicados (solo SYSTEM y Administradores)"
     }
     catch {
-        Write-Host "  ADVERTENCIA: No se pudieron restringir permisos: $_" -ForegroundColor Yellow
+        Write-InstallerWarning "  ADVERTENCIA: No se pudieron restringir permisos: $_"
     }
 
     $browserExtensionAclPath = "$OpenPathRoot\browser-extension"
@@ -54,7 +54,7 @@ function Initialize-OpenPathInstallDirectories {
             Write-InstallerVerbose "  Read access granted for browser extension artifacts"
         }
         catch {
-            Write-Host "  ADVERTENCIA: No se pudo habilitar lectura para browser-extension: $_" -ForegroundColor Yellow
+            Write-InstallerWarning "  ADVERTENCIA: No se pudo habilitar lectura para browser-extension: $_"
         }
     }
 }
@@ -139,11 +139,11 @@ function Copy-OpenPathInstallerRuntime {
             Write-InstallerVerbose "  Firefox development extension assets staged in $OpenPathRoot\browser-extension\firefox"
         }
         else {
-            Write-Host "  ADVERTENCIA: Firefox development extension source incomplete ($($missingItems -join ', '))" -ForegroundColor Yellow
+            Write-InstallerWarning "  ADVERTENCIA: Firefox development extension source incomplete ($($missingItems -join ', '))"
         }
     }
     else {
-        Write-Host "  ADVERTENCIA: Firefox development extension source not found; local unsigned bundle staging skipped" -ForegroundColor Yellow
+        Write-InstallerWarning "  ADVERTENCIA: Firefox development extension source not found; local unsigned bundle staging skipped"
     }
 
     $firefoxNativeHostTarget = "$OpenPathRoot\browser-extension\firefox\native"
@@ -184,7 +184,7 @@ function Copy-OpenPathInstallerRuntime {
         Write-InstallerVerbose "  Firefox native host assets staged in $OpenPathRoot\browser-extension\firefox\native"
     }
     else {
-        Write-Host "  ADVERTENCIA: Firefox native host artifacts missing ($($missingNativeHostArtifacts -join ', '))" -ForegroundColor Yellow
+        Write-InstallerWarning "  ADVERTENCIA: Firefox native host artifacts missing ($($missingNativeHostArtifacts -join ', '))"
     }
 
     $firefoxReleaseCandidates = @(
@@ -211,8 +211,8 @@ function Copy-OpenPathInstallerRuntime {
         Write-InstallerVerbose "  Signed Firefox Release artifacts staged in $OpenPathRoot\browser-extension\firefox-release"
     }
     elseif (-not ($FirefoxExtensionId -and $FirefoxExtensionInstallUrl)) {
-        Write-Host "  ADVERTENCIA: Firefox Release extension auto-install requires a signed XPI distribution (AMO, HTTPS URL, or staged signed artifact)." -ForegroundColor Yellow
-        Write-Host "  Firefox browser policies will not be written until a signed extension distribution is configured." -ForegroundColor Yellow
+        Write-InstallerWarning "  ADVERTENCIA: Firefox Release extension auto-install requires a signed XPI distribution (AMO, HTTPS URL, or staged signed artifact)."
+        Write-InstallerWarning "  Firefox browser policies will not be written until a signed extension distribution is configured."
     }
 
     $chromiumManagedCandidates = @(
@@ -232,7 +232,7 @@ function Copy-OpenPathInstallerRuntime {
         Write-InstallerVerbose "  Chromium managed rollout metadata staged in $OpenPathRoot\browser-extension\chromium-managed"
     }
     else {
-        Write-Host "  ADVERTENCIA: Chromium managed rollout metadata not found in browser-extension\chromium-managed or firefox-extension\build\chromium-managed; Edge/Chrome managed extension install skipped" -ForegroundColor Yellow
+        Write-InstallerWarning "  ADVERTENCIA: Chromium managed rollout metadata not found in browser-extension\chromium-managed or firefox-extension\build\chromium-managed; Edge/Chrome managed extension install skipped"
     }
 
     if (-not $chromiumManagedSource) {
@@ -240,10 +240,10 @@ function Copy-OpenPathInstallerRuntime {
             -ChromeStoreUrl $ChromeExtensionStoreUrl `
             -EdgeStoreUrl $EdgeExtensionStoreUrl `
             -Unattended:$Unattended)) {
-            Write-Host "  ADVERTENCIA: No Chromium store URLs configured; non-managed Chrome/Edge installs require user-initiated store install." -ForegroundColor Yellow
+            Write-InstallerWarning "  ADVERTENCIA: No Chromium store URLs configured; non-managed Chrome/Edge installs require user-initiated store install."
         }
     }
 
-    Write-Host "  Chrome/Edge force-install is not available on unmanaged Windows; use store guidance, Firefox auto-install, or a managed CRX/update-manifest rollout." -ForegroundColor Yellow
+    Write-InstallerWarning "  Chrome/Edge force-install is not available on unmanaged Windows; use store guidance, Firefox auto-install, or a managed CRX/update-manifest rollout."
     Write-InstallerVerbose "  Modulos copiados"
 }

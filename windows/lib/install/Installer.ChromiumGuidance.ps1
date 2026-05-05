@@ -74,17 +74,17 @@ function Install-OpenPathChromiumUnmanagedGuidance {
                     Write-InstallerVerbose "  Opened $($browserTarget.Name) store page for OpenPath extension"
                 }
                 catch {
-                    Write-Host "  ADVERTENCIA: No se pudo abrir $($browserTarget.Name) automaticamente: $_" -ForegroundColor Yellow
+                    Write-InstallerWarning "  ADVERTENCIA: No se pudo abrir $($browserTarget.Name) automaticamente: $_"
                 }
             }
             else {
-                Write-Host "  ADVERTENCIA: $($browserTarget.Name) no se detecto localmente; abre manualmente $shortcutPath" -ForegroundColor Yellow
+                Write-InstallerWarning "  ADVERTENCIA: $($browserTarget.Name) no se detecto localmente; abre manualmente $shortcutPath"
             }
         }
     }
 
     if ($Unattended) {
-        Write-Host "  Chromium store guidance staged for unattended install" -ForegroundColor Yellow
+        Write-InstallerWarning "  Chromium store guidance staged for unattended install"
     }
 
     return $true

@@ -500,6 +500,37 @@ Describe "Installer" {
             $content.Contains('Write-InstallerVerbose ""') | Should -BeFalse
         }
 
+        It "Keeps redirected progress silent and centralizes installer output levels" {
+            $progressHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Progress.ps1"
+            $progressHelper = Get-Content $progressHelperPath -Raw
+
+            Assert-ContentContainsAll -Content $progressHelper -Needles @(
+                'function Write-InstallerError',
+                'function Write-InstallerWarning',
+                'function Write-InstallerNotice',
+                "if (`$VerbosePreference -ne 'Continue') { return }",
+                'Write-Progress -Activity ''Installing OpenPath'''
+            )
+
+            $progressHelper.Contains('Write-Host "Progress ${Step}/${Total}: $Status"') | Should -BeFalse
+        }
+
+        It "Routes non-fatal installer messages through warning or verbose-only helpers" {
+            $installHelperPaths = @(
+                (Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"),
+                (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.ChromiumGuidance.ps1"),
+                (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Enrollment.ps1"),
+                (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Runtime.ps1"),
+                (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1")
+            )
+
+            foreach ($helperPath in $installHelperPaths) {
+                $content = Get-Content $helperPath -Raw
+                $content | Should -Not -Match 'Write-Host\s+[''"][^''"]*ADVERTENCIA:'
+                $content | Should -Not -Match "Write-Warning\s+"
+            }
+        }
+
         It "Supports WhatIf and distinguishes browser cleanup from enforcement" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw
