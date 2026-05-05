@@ -8,6 +8,7 @@ Import-Module "$PSScriptRoot\Browser.FirefoxPolicy.psm1" -Force -ErrorAction Sto
 Import-Module "$PSScriptRoot\Browser.FirefoxConfig.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxNativeHost.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.RequestReadiness.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Diagnostics.psm1" -Force -ErrorAction Stop
 
 function Get-OpenPathChromiumManagedMetadataPath {
@@ -112,6 +113,46 @@ function Get-OpenPathBrowserRequestReadiness {
     )
 
     Browser.RequestReadiness\Get-OpenPathBrowserRequestReadiness -Config $Config
+}
+
+function Get-OpenPathBrowserInventory {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('ReportOnly', 'RemoveKnownInstallers')]
+        [string]$Mode = 'ReportOnly',
+
+        [AllowNull()]
+        [object[]]$UninstallEntries = $null,
+
+        [AllowNull()]
+        [object[]]$FileCandidates = $null
+    )
+
+    $arguments = @{
+        Mode = $Mode
+    }
+    if ($PSBoundParameters.ContainsKey('UninstallEntries')) {
+        $arguments.UninstallEntries = $UninstallEntries
+    }
+    if ($PSBoundParameters.ContainsKey('FileCandidates')) {
+        $arguments.FileCandidates = $FileCandidates
+    }
+
+    Browser.Inventory\Get-OpenPathBrowserInventory @arguments
+}
+
+function Get-OpenPathBrowserInventoryUninstallEntries {
+    [CmdletBinding()]
+    param()
+
+    Browser.Inventory\Get-OpenPathBrowserInventoryUninstallEntries
+}
+
+function Get-OpenPathBrowserInventoryFileCandidates {
+    [CmdletBinding()]
+    param()
+
+    Browser.Inventory\Get-OpenPathBrowserInventoryFileCandidates
 }
 
 function Sync-OpenPathFirefoxManagedExtensionPolicy {
@@ -279,6 +320,9 @@ function Set-AllBrowserPolicy {
 Export-ModuleMember -Function @(
     'Get-OpenPathBrowserDoctorReport',
     'Get-OpenPathBrowserRequestReadiness',
+    'Get-OpenPathBrowserInventory',
+    'Get-OpenPathBrowserInventoryUninstallEntries',
+    'Get-OpenPathBrowserInventoryFileCandidates',
     'Register-OpenPathFirefoxNativeHost',
     'Sync-OpenPathFirefoxNativeHostArtifacts',
     'Sync-OpenPathFirefoxNativeHostState',

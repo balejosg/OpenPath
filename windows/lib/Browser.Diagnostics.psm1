@@ -5,6 +5,7 @@ Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxPolicy.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxNativeHost.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.RequestReadiness.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction Stop
 
 function Get-OpenPathBrowserDoctorScheduledTaskDiagnostic {
     param(
@@ -111,6 +112,42 @@ catch {
 }
 
 function Get-OpenPathBrowserDoctorReport {
+    $browserInventory = Get-OpenPathBrowserInventory
+    $approvedBrowserSummary = if (@($browserInventory.ApprovedBrowsers).Count -gt 0) {
+        @($browserInventory.ApprovedBrowsers | ForEach-Object { $_.Name } | Select-Object -Unique) -join ', '
+    }
+    else {
+        '(none)'
+    }
+    $unmanagedBrowserSummary = if (@($browserInventory.UnmanagedBrowsers).Count -gt 0) {
+        @($browserInventory.UnmanagedBrowsers | ForEach-Object {
+                if ($_.Path) { "$($_.Name) ($($_.Path))" }
+                elseif ($_.DisplayName) { "$($_.Name) ($($_.DisplayName))" }
+                else { $_.Name }
+            }) -join '; '
+    }
+    else {
+        '(none)'
+    }
+    $portableBrowserRiskSummary = if (@($browserInventory.PortableBrowserRisks).Count -gt 0) {
+        @($browserInventory.PortableBrowserRisks | ForEach-Object {
+                if ($_.Path) { $_.Path } else { $_.Name }
+            }) -join '; '
+    }
+    else {
+        '(none)'
+    }
+    $webRenderingSurfaceSummary = if (@($browserInventory.WebRenderingSurfaces).Count -gt 0) {
+        @($browserInventory.WebRenderingSurfaces | ForEach-Object {
+                if ($_.DisplayName) { $_.DisplayName }
+                elseif ($_.Path) { "$($_.Name) ($($_.Path))" }
+                else { $_.Name }
+            }) -join '; '
+    }
+    else {
+        '(none)'
+    }
+
     $metadataPath = Get-OpenPathFirefoxReleaseMetadataPath
     $xpiPath = Get-OpenPathFirefoxReleaseXpiPath
     $nativeHostManifestPath = Get-OpenPathFirefoxNativeHostManifestPath
@@ -449,6 +486,10 @@ function Get-OpenPathBrowserDoctorReport {
         "Browser request readiness: $($browserRequestReadiness.Ready)"
         "Browser request readiness facts: $browserRequestReadinessFacts"
         "Browser request readiness failures: $browserRequestReadinessFailures"
+        "Approved managed browsers: $approvedBrowserSummary"
+        "Unmanaged browsers detected: $unmanagedBrowserSummary"
+        "Portable browser risk: $portableBrowserRiskSummary"
+        "Web rendering surfaces: $webRenderingSurfaceSummary"
         "Resolved install_url: $resolvedInstallUrl"
         "Machine Firefox policy: $machineFirefoxPolicy"
         "Machine Firefox policy install_url: $machineFirefoxPolicyInstallUrl"

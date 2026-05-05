@@ -89,5 +89,19 @@ Describe "Browser Module - Diagnostics" {
 
             $content.Contains('Get-ScheduledTask -TaskName $nativeHostUpdateTaskName') | Should -BeFalse
         }
+
+        It "Imports browser inventory and reports unmanaged browser risk" {
+            $browserDiagnosticsPath = Join-Path $PSScriptRoot ".." "lib" "Browser.Diagnostics.psm1"
+            $content = Get-Content $browserDiagnosticsPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'Browser.Inventory.psm1',
+                'Get-OpenPathBrowserInventory',
+                'Approved managed browsers:',
+                'Unmanaged browsers detected:',
+                'Portable browser risk:',
+                'Web rendering surfaces:'
+            )
+        }
     }
 }
