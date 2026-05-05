@@ -497,6 +497,17 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+@test "linux e2e container uses runner DNS instead of hard-coded public DNS" {
+    run grep -nF 'collect_docker_dns_args' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'OPENPATH_E2E_DOCKER_DNS' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF '--dns 8.8.8.8' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
+    [ "$status" -ne 0 ]
+}
+
 @test "linux runtime includes unattended agent update wrapper and systemd wiring" {
     run grep -nF 'source "$INSTALLER_SOURCE_DIR/lib/install-core-steps.sh"' "$PROJECT_DIR/linux/install.sh"
     [ "$status" -eq 0 ]

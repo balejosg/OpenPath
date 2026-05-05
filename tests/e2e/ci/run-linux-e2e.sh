@@ -140,6 +140,41 @@ wait_for_oneshot_service() {
     return 1
 }
 
+is_routable_dns_ip() {
+    local dns="$1"
+
+    [[ "$dns" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+    case "$dns" in
+        0.*|127.*|169.254.*|224.*|225.*|226.*|227.*|228.*|229.*|23[0-9].*|24[0-9].*|25[0-5].*)
+            return 1
+            ;;
+    esac
+
+    return 0
+}
+
+collect_docker_dns_args() {
+    local raw_dns
+    local dns
+
+    if [ -n "${OPENPATH_E2E_DOCKER_DNS:-}" ]; then
+        raw_dns="${OPENPATH_E2E_DOCKER_DNS//,/ }"
+        for dns in $raw_dns; do
+            is_routable_dns_ip "$dns" || continue
+            printf '%s\n%s\n' "--dns" "$dns"
+        done
+        return 0
+    fi
+
+    while IFS= read -r dns; do
+        dns="${dns%%#*}"
+        dns="$(printf '%s' "$dns" | awk '$1 == "nameserver" { print $2 }')"
+        [ -n "$dns" ] || continue
+        is_routable_dns_ip "$dns" || continue
+        printf '%s\n%s\n' "--dns" "$dns"
+    done < /etc/resolv.conf
+}
+
 run_whitelist_update_test() {
     echo ""
     echo "Testing whitelist update mechanism (openpath-update.sh)..."
@@ -555,11 +590,18 @@ main() {
 
     docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
+    mapfile -t docker_dns_args < <(collect_docker_dns_args)
+    if [ "${#docker_dns_args[@]}" -gt 0 ]; then
+        echo "Using runner DNS for E2E container: ${docker_dns_args[*]}"
+    else
+        echo "Using Docker default DNS for E2E container"
+    fi
+
     docker run -d --name "$CONTAINER_NAME" \
         --privileged \
         --cgroupns=host \
         -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-        --dns 8.8.8.8 \
+        "${docker_dns_args[@]}" \
         -e CI=true \
         -e OPENPATH_INSTALLER_CONTRACT_MODE="$INSTALLER_ONLY" \
         "$IMAGE_TAG"
