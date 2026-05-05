@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 const extensionRoot = path.resolve(import.meta.dirname, '..');
 
 interface FirefoxManifest {
+  name?: string;
+  description?: string;
   content_security_policy?: {
     extension_pages?: string;
   };
@@ -25,6 +27,18 @@ async function readManifest(): Promise<FirefoxManifest> {
 }
 
 void describe('Firefox extension manifest policy', () => {
+  void test('keeps store-facing metadata concise and OpenPath-specific', async () => {
+    const manifest = await readManifest();
+    const description = manifest.description ?? '';
+
+    assert.match(manifest.name ?? '', /Monitor de Bloqueos/);
+    assert.match(description, /OpenPath/);
+    assert.ok(
+      description.length <= 132,
+      `manifest description should stay short for browser and store UIs, got ${String(description.length)} characters`
+    );
+  });
+
   void test('does not upgrade configured HTTP request API endpoints to HTTPS', async () => {
     const manifest = await readManifest();
     const extensionPolicy = manifest.content_security_policy?.extension_pages ?? '';

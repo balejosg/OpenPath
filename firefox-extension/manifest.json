@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Monitor de Bloqueos de Red",
   "version": "2.0.0",
-  "description": "Detecta dominios bloqueados por whitelists DNS y firewalls. Facilita la identificación de recursos que impiden el correcto funcionamiento de páginas web.",
+  "description": "Shows OpenPath network blocks, helps request access, and checks local allowlist state without analytics or telemetry.",
   "author": "OpenPath System",
   "homepage_url": "https://github.com/balejosg/openpath",
   "developer": {
