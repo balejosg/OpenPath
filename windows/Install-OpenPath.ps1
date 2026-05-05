@@ -42,7 +42,8 @@ param(
     [string]$HealthApiSecret = "",
     [switch]$EnforceManagedBrowserBoundary,
     [ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]
-    [string]$BrowserCleanupMode = 'ReportOnly'
+    [string]$BrowserCleanupMode = 'ReportOnly',
+    [string]$TimingOutputPath = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -105,7 +106,7 @@ if (-not $EdgeExtensionStoreUrl -and $env:OPENPATH_EDGE_EXTENSION_STORE_URL) {
 }
 
 if (($FirefoxExtensionId -and -not $FirefoxExtensionInstallUrl) -or ($FirefoxExtensionInstallUrl -and -not $FirefoxExtensionId)) {
-    Write-Host 'ERROR: -FirefoxExtensionId and -FirefoxExtensionInstallUrl must be provided together' -ForegroundColor Red
+    Write-InstallerError 'ERROR: -FirefoxExtensionId and -FirefoxExtensionInstallUrl must be provided together'
     exit 1
 }
 
@@ -179,7 +180,7 @@ else {
     Write-InstallerNotice 'Installing OpenPath DNS for Windows...'
 }
 
-Write-Host 'Browser cleanup is hygiene. Application allowlist is the enforcement boundary.'
+Write-InstallerNotice 'Browser cleanup is hygiene. Application allowlist is the enforcement boundary.'
 
 if ($WhatIfPreference) {
     $PSCmdlet.ShouldProcess('OpenPath install root', 'Create install directories') | Out-Null
@@ -204,8 +205,8 @@ else {
         Show-InstallerProgress -Step 0 -Total 7 -Status 'Ejecutando validacion previa'
         $validationOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $validationScript 2>&1
         if ($LASTEXITCODE -ne 0) {
-            $validationOutput | ForEach-Object { Write-Host $_ }
-            Write-Host 'ERROR: Pre-install validation failed' -ForegroundColor Red
+            $validationOutput | ForEach-Object { Write-InstallerError "$_" }
+            Write-InstallerError 'ERROR: Pre-install validation failed'
             exit 1
         }
         if ($VerbosePreference -eq 'Continue') {
@@ -214,7 +215,7 @@ else {
         Write-InstallerVerbose '[Preflight] Validacion completada'
     }
     else {
-        Write-Warning '[Preflight] Omitido: paquete sin script de validacion previa'
+        Write-InstallerWarning '[Preflight] Omitido: paquete sin script de validacion previa'
     }
 }
 
@@ -267,16 +268,8 @@ Import-Module "$OpenPathRoot\lib\Browser.psm1" -Force -Global
 Import-Module "$OpenPathRoot\lib\Services.psm1" -Force -Global
 $deferLocalDnsUntilRemoteBootstrap = $classroomModeRequested -or [bool]$WhitelistUrl
 
-try {
-    if ($PSCmdlet.ShouldProcess('Firefox native messaging host', 'Register OpenPath native host')) {
-        Register-OpenPathFirefoxNativeHost -Config $config -ClearWhitelist | Out-Null
-    }
-}
-catch {
-    Write-Host "  ADVERTENCIA: No se pudo registrar el host nativo de Firefox: $_" -ForegroundColor Yellow
-}
-
 Show-InstallerProgress -Step 4 -Total 7 -Status 'Instalando Acrylic DNS Proxy'
+Start-OpenPathInstallTimedStep -Name 'acrylic'
 if (-not $SkipAcrylic) {
     if (Test-AcrylicInstalled) {
         Write-InstallerVerbose '  Acrylic ya instalado'
@@ -284,7 +277,7 @@ if (-not $SkipAcrylic) {
             Write-InstallerVerbose '  Servicio Acrylic listo'
         }
         else {
-            Write-Host '  ADVERTENCIA: No se pudo registrar o iniciar el servicio Acrylic automaticamente' -ForegroundColor Yellow
+            Write-InstallerWarning '  ADVERTENCIA: No se pudo registrar o iniciar el servicio Acrylic automaticamente'
         }
     }
     else {
@@ -293,18 +286,22 @@ if (-not $SkipAcrylic) {
             Write-InstallerVerbose '  Acrylic instalado'
         }
         else {
-            Write-Host '  ADVERTENCIA: No se pudo instalar Acrylic automaticamente' -ForegroundColor Yellow
-            Write-Host '  Descarga manual: https://mayakron.altervista.org/support/acrylic/Home.htm' -ForegroundColor Yellow
+            Write-InstallerWarning '  ADVERTENCIA: No se pudo instalar Acrylic automaticamente'
+            Write-InstallerWarning '  Descarga manual: https://mayakron.altervista.org/support/acrylic/Home.htm'
         }
     }
 }
 else {
-    Write-Host '  Instalacion de Acrylic omitida' -ForegroundColor Yellow
+    Write-InstallerWarning '  Instalacion de Acrylic omitida'
 }
+Complete-OpenPathInstallTimedStep -Name 'acrylic'
 
+Start-OpenPathInstallTimedStep -Name 'acrylic-configuration'
 Set-AcrylicConfiguration -WhatIf:$WhatIfPreference
+Complete-OpenPathInstallTimedStep -Name 'acrylic-configuration'
 
 Show-InstallerProgress -Step 5 -Total 7 -Status 'Configurando DNS local'
+Start-OpenPathInstallTimedStep -Name 'local-dns'
 if ($deferLocalDnsUntilRemoteBootstrap) {
     Write-InstallerVerbose '  DNS local se activara tras descargar y aplicar la primera whitelist'
 }
@@ -312,14 +309,18 @@ else {
     Set-LocalDNS -WhatIf:$WhatIfPreference
     Write-InstallerVerbose '  DNS configurado a 127.0.0.1'
 }
+Complete-OpenPathInstallTimedStep -Name 'local-dns'
 
 Show-InstallerProgress -Step 6 -Total 7 -Status 'Registrando tareas programadas'
+Start-OpenPathInstallTimedStep -Name 'scheduled-tasks'
 Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1 -WhatIf:$WhatIfPreference
 Write-InstallerVerbose '  Tareas registradas'
+Complete-OpenPathInstallTimedStep -Name 'scheduled-tasks'
 
 $machineRegistered = 'NOT_REQUESTED'
 $enrollmentError = ''
 if ($classroomModeRequested) {
+    Start-OpenPathInstallTimedStep -Name 'enrollment'
     $enrollmentResult = Invoke-OpenPathInstallerEnrollment `
         -OpenPathRoot $OpenPathRoot `
         -ApiBaseUrl $apiBaseUrl `
@@ -337,11 +338,12 @@ if ($classroomModeRequested) {
     if ($enrollmentResult.WhitelistUrl) {
         $WhitelistUrl = [string]$enrollmentResult.WhitelistUrl
     }
+    Complete-OpenPathInstallTimedStep -Name 'enrollment' -Status $machineRegistered
 
     if ($classroomModeRequested -and $Unattended -and $machineRegistered -ne 'REGISTERED') {
-        Write-Host 'ERROR: Classroom enrollment did not complete; domain requests will not be configured.' -ForegroundColor Red
+        Write-InstallerError 'ERROR: Classroom enrollment did not complete; domain requests will not be configured.'
         if ($enrollmentError) {
-            Write-Host "  $enrollmentError" -ForegroundColor Red
+            Write-InstallerError "  $enrollmentError"
         }
         exit 1
     }
@@ -363,29 +365,34 @@ try {
         else {
             'OpenPath request setup is incomplete.'
         }
-        Write-Host "  ADVERTENCIA: Registro del host nativo de Firefox incompleto tras enrollment. $requestSetupMessage" -ForegroundColor Yellow
+        Write-InstallerWarning "  ADVERTENCIA: Registro del host nativo de Firefox incompleto tras enrollment. $requestSetupMessage"
     }
 }
 catch {
-    Write-Host "  ADVERTENCIA: No se pudo registrar el host nativo de Firefox tras enrollment: $_" -ForegroundColor Yellow
+    Write-InstallerWarning "  ADVERTENCIA: No se pudo registrar el host nativo de Firefox tras enrollment: $_"
 }
 
 if ($classroomModeRequested -and $Unattended -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup -or -not $nativeHostRequestSetup.Ready)) {
-    Write-Host 'ERROR: Firefox native host registration incomplete; domain requests will not be configured.' -ForegroundColor Red
+    Write-InstallerError 'ERROR: Firefox native host registration incomplete; domain requests will not be configured.'
     exit 1
 }
 
 Show-InstallerProgress -Step 7 -Total 7 -Status 'Ejecutando primera actualizacion'
+Start-OpenPathInstallTimedStep -Name 'first-update'
 Invoke-OpenPathInstallerFirstUpdate `
     -OpenPathRoot $OpenPathRoot `
     -ClassroomModeRequested:$classroomModeRequested `
     -MachineRegistered $machineRegistered
+Complete-OpenPathInstallTimedStep -Name 'first-update'
 
+Start-OpenPathInstallTimedStep -Name 'realtime-updates'
 Start-OpenPathInstallerRealtimeUpdates `
     -ClassroomModeRequested:$classroomModeRequested `
     -MachineRegistered $machineRegistered | Out-Null
+Complete-OpenPathInstallTimedStep -Name 'realtime-updates'
 
 try {
+    Start-OpenPathInstallTimedStep -Name 'app-control'
     $enableNonAdminAppControl = [bool](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'enableNonAdminAppControl' -DefaultValue $true)
     $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
     if ($enableNonAdminAppControl) {
@@ -394,31 +401,36 @@ try {
     else {
         Write-InstallerVerbose '  Managed browser boundary disabled; AppLocker boundary not applied'
     }
+    Complete-OpenPathInstallTimedStep -Name 'app-control'
 }
 catch {
-    Write-Host "  ADVERTENCIA: No se pudo configurar AppLocker para usuarios no administradores: $_" -ForegroundColor Yellow
+    Complete-OpenPathInstallTimedStep -Name 'app-control' -Status 'warning' -ErrorMessage ([string]$_)
+    Write-InstallerWarning "  ADVERTENCIA: No se pudo configurar AppLocker para usuarios no administradores: $_"
 }
 
 if ($BrowserCleanupMode -eq 'Disabled') {
     Write-InstallerVerbose '  Browser cleanup reporting disabled'
 }
 elseif ($PSCmdlet.ShouldProcess('Browser cleanup inventory', "Report unmanaged browsers with $BrowserCleanupMode mode")) {
-    try {
-        $browserInventoryMode = if ($BrowserCleanupMode -eq 'RemoveKnownInstallers') { 'RemoveKnownInstallers' } else { 'ReportOnly' }
-        $browserInventory = Get-OpenPathBrowserInventory -Mode $browserInventoryMode
-        $unmanagedCount = @($browserInventory.UnmanagedBrowsers).Count + @($browserInventory.PortableBrowserRisks).Count
-        $removalCandidateCount = @($browserInventory.RemovalCandidates).Count
-        Write-InstallerVerbose "  Browser cleanup report: $unmanagedCount unmanaged finding(s), $removalCandidateCount removable known installer candidate(s)"
-        if ($BrowserCleanupMode -eq 'RemoveKnownInstallers' -and $removalCandidateCount -gt 0) {
-            Write-Host '  ADVERTENCIA: RemoveKnownInstallers reports candidates only; automatic browser uninstall is not enabled in this release.' -ForegroundColor Yellow
+    Invoke-OpenPathInstallTimedStep -Name 'browser-inventory' -ScriptBlock {
+        try {
+            $browserInventoryMode = if ($BrowserCleanupMode -eq 'RemoveKnownInstallers') { 'RemoveKnownInstallers' } else { 'ReportOnly' }
+            $browserInventory = Get-OpenPathBrowserInventory -Mode $browserInventoryMode
+            $unmanagedCount = @($browserInventory.UnmanagedBrowsers).Count + @($browserInventory.PortableBrowserRisks).Count
+            $removalCandidateCount = @($browserInventory.RemovalCandidates).Count
+            Write-InstallerVerbose "  Browser cleanup report: $unmanagedCount unmanaged finding(s), $removalCandidateCount removable known installer candidate(s)"
+            if ($BrowserCleanupMode -eq 'RemoveKnownInstallers' -and $removalCandidateCount -gt 0) {
+                Write-InstallerWarning '  ADVERTENCIA: RemoveKnownInstallers reports candidates only; automatic browser uninstall is not enabled in this release.'
+            }
         }
-    }
-    catch {
-        Write-Host "  ADVERTENCIA: No se pudo generar el reporte de navegadores: $_" -ForegroundColor Yellow
+        catch {
+            Write-InstallerWarning "  ADVERTENCIA: No se pudo generar el reporte de navegadores: $_"
+        }
     }
 }
 
 Initialize-OpenPathInstallerIntegrity
+Save-OpenPathInstallTiming -Path $TimingOutputPath
 
 Write-OpenPathInstallerSummary `
     -ClassroomModeRequested:$classroomModeRequested `

@@ -7,6 +7,7 @@ import {
   buildLinuxAgentPackageManifest,
   buildLinuxAgentPackageManifestFromApt,
   downloadLinuxAgentPackageFromApt,
+  buildWindowsBootstrapBundle,
   buildWindowsAgentFileManifest,
   readServerVersion,
   resolveLinuxAgentPackagePath,
@@ -28,7 +29,15 @@ interface ManifestFileDescriptor {
   size: number;
 }
 
+interface ManifestBundleDescriptor {
+  fileCount: number;
+  path: string;
+  sha256: string;
+  size: number;
+}
+
 export interface WindowsBootstrapManifestOutput {
+  bundle: ManifestBundleDescriptor;
   classroomId: string;
   files: ManifestFileDescriptor[];
   generatedAt: string;
@@ -54,6 +63,10 @@ export interface LinuxAgentManifestOutput {
 }
 
 export interface TextFileOutput {
+  body: Buffer;
+}
+
+export interface BinaryFileOutput {
   body: Buffer;
 }
 
@@ -86,14 +99,38 @@ export function getWindowsBootstrapManifest(
       error: { code: 'UNAVAILABLE', message: 'Windows bootstrap package unavailable' },
     };
   }
+  const bundle = buildWindowsBootstrapBundle();
 
   return {
     ok: true,
     data: {
+      bundle: {
+        path: '/api/agent/windows/bootstrap/bundle.zip',
+        fileCount: bundle.fileCount,
+        sha256: bundle.sha256,
+        size: bundle.size,
+      },
       classroomId,
       version: readServerVersion(),
       generatedAt: new Date().toISOString(),
       files: toManifestFiles(files),
+    },
+  };
+}
+
+export function getWindowsBootstrapBundle(): MachineAgentDeliveryResult<BinaryFileOutput> {
+  const bundle = buildWindowsBootstrapBundle();
+  if (bundle.fileCount === 0) {
+    return {
+      ok: false,
+      error: { code: 'UNAVAILABLE', message: 'Windows bootstrap package unavailable' },
+    };
+  }
+
+  return {
+    ok: true,
+    data: {
+      body: bundle.body,
     },
   };
 }
@@ -259,6 +296,7 @@ export default {
   getLinuxAgentPackage,
   getWindowsAgentFile,
   getWindowsAgentManifest,
+  getWindowsBootstrapBundle,
   getWindowsBootstrapFile,
   getWindowsBootstrapManifest,
 };

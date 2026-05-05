@@ -10,6 +10,7 @@ import {
   getLinuxAgentPackage,
   getWindowsAgentFile,
   getWindowsAgentManifest,
+  getWindowsBootstrapBundle,
   getWindowsBootstrapFile,
   getWindowsBootstrapManifest,
 } from '../../services/machine-agent-delivery.service.js';
@@ -49,8 +50,33 @@ export function registerMachineDeliveryRoutes(app: Express, deps: MachineRouteDe
           classroomId: result.data.classroomId,
           version: result.data.version,
           generatedAt: result.data.generatedAt,
+          bundle: result.data.bundle,
           files: result.data.files,
         });
+      }
+    )
+  );
+
+  app.get(
+    '/api/agent/windows/bootstrap/bundle.zip',
+    createRouteHandler(
+      'Error serving Windows bootstrap bundle',
+      sendJsonInternalError,
+      async (req: Request, res: Response): Promise<void> => {
+        const enrollment = await authenticateEnrollmentToken(req, res);
+        if (!enrollment) {
+          return;
+        }
+
+        const result = getWindowsBootstrapBundle();
+        if (!result.ok) {
+          sendMachineServiceError(res, result.error);
+          return;
+        }
+
+        res.setHeader('Cache-Control', 'no-store, max-age=0');
+        res.setHeader('Pragma', 'no-cache');
+        res.type('application/zip').send(result.data.body);
       }
     )
   );

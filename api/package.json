@@ -44,7 +44,7 @@
     "test:machine-auth-scope": "NODE_ENV=test node --import tsx --test --test-concurrency=1 --test-force-exit tests/machine-auth-scope-enrollment.test.ts tests/machine-auth-scope-boundaries.test.ts tests/machine-auth-scope-operational.test.ts",
     "test:token-delivery": "NODE_ENV=test node --import tsx --test --test-concurrency=1 --test-force-exit tests/token-delivery-*.test.ts",
     "test:token-delivery:core": "NODE_ENV=test node --import tsx --test --test-force-exit tests/token-delivery-core.test.ts",
-    "test:token-delivery:windows": "NODE_ENV=test node --import tsx --test --test-force-exit tests/token-delivery-windows-agent.test.ts tests/token-delivery-windows-bootstrap.test.ts",
+    "test:token-delivery:windows": "NODE_ENV=test node --import tsx --test --test-concurrency=1 --test-force-exit tests/token-delivery-windows-agent.test.ts tests/token-delivery-windows-bootstrap.test.ts",
     "test:token-delivery:linux": "NODE_ENV=test node --import tsx --test --test-force-exit tests/token-delivery-linux-agent.test.ts",
     "test:token-delivery:extensions": "NODE_ENV=test node --import tsx --test --test-force-exit tests/token-delivery-extension-release.test.ts",
     "test:public-requests": "tsx scripts/run-node-test-suite.ts tests/lib/public-request-input.test.ts tests/api-submit-routes.test.ts tests/machine-request-admission.service.test.ts tests/routes/public-requests.test.ts",

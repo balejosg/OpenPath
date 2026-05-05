@@ -148,6 +148,132 @@ export function buildWindowsAgentFileManifest(options?: {
     .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 
+function buildCrc32Table(): Uint32Array {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < table.length; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+}
+
+const CRC32_TABLE = buildCrc32Table();
+
+function crc32(buffer: Buffer): number {
+  let value = 0xffffffff;
+  for (const byte of buffer) {
+    const tableValue = CRC32_TABLE[(value ^ byte) & 0xff];
+    if (tableValue === undefined) {
+      throw new Error('CRC32 table lookup failed');
+    }
+    value = tableValue ^ (value >>> 8);
+  }
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function uint16(value: number): Buffer {
+  const buffer = Buffer.alloc(2);
+  buffer.writeUInt16LE(value);
+  return buffer;
+}
+
+function uint32(value: number): Buffer {
+  const buffer = Buffer.alloc(4);
+  buffer.writeUInt32LE(value);
+  return buffer;
+}
+
+function buildStoredZip(entries: { relativePath: string; body: Buffer }[]): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+
+  for (const entry of entries) {
+    const name = Buffer.from(entry.relativePath, 'utf8');
+    const checksum = crc32(entry.body);
+    const localHeader = Buffer.concat([
+      uint32(0x04034b50),
+      uint16(20),
+      uint16(0),
+      uint16(0),
+      uint16(0),
+      uint16(0),
+      uint32(checksum),
+      uint32(entry.body.length),
+      uint32(entry.body.length),
+      uint16(name.length),
+      uint16(0),
+      name,
+    ]);
+
+    localParts.push(localHeader, entry.body);
+    centralParts.push(
+      Buffer.concat([
+        uint32(0x02014b50),
+        uint16(20),
+        uint16(20),
+        uint16(0),
+        uint16(0),
+        uint16(0),
+        uint16(0),
+        uint32(checksum),
+        uint32(entry.body.length),
+        uint32(entry.body.length),
+        uint16(name.length),
+        uint16(0),
+        uint16(0),
+        uint16(0),
+        uint16(0),
+        uint32(0),
+        uint32(offset),
+        name,
+      ])
+    );
+    offset += localHeader.length + entry.body.length;
+  }
+
+  const centralDirectory = Buffer.concat(centralParts);
+  return Buffer.concat([
+    ...localParts,
+    centralDirectory,
+    Buffer.concat([
+      uint32(0x06054b50),
+      uint16(0),
+      uint16(0),
+      uint16(entries.length),
+      uint16(entries.length),
+      uint32(centralDirectory.length),
+      uint32(offset),
+      uint16(0),
+    ]),
+  ]);
+}
+
+export function buildWindowsBootstrapBundle(): {
+  body: Buffer;
+  fileCount: number;
+  sha256: string;
+  size: number;
+} {
+  const files = buildWindowsAgentFileManifest({ includeBootstrapFiles: true });
+  const body = buildStoredZip(
+    files.map((file) => ({
+      relativePath: file.relativePath,
+      body: fs.readFileSync(file.absolutePath),
+    }))
+  );
+
+  return {
+    body,
+    fileCount: files.length,
+    sha256: createHash('sha256').update(body).digest('hex'),
+    size: body.length,
+  };
+}
+
 export function resolveWindowsAgentManifestFile(
   relativePath: string,
   options?: { includeBootstrapFiles?: boolean }

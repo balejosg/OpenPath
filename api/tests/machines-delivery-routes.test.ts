@@ -16,6 +16,7 @@ await describe('machine routes - agent delivery', async () => {
       ),
       [
         'GET /api/agent/windows/bootstrap/manifest',
+        'GET /api/agent/windows/bootstrap/bundle.zip',
         'GET /api/agent/windows/bootstrap/files/*path',
         'GET /api/agent/windows/manifest',
         'GET /api/agent/windows/files/*path',

@@ -61,6 +61,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 $TempRoot = Join-Path $env:TEMP ("openpath-bootstrap-" + [Guid]::NewGuid().ToString('N'))
 $WindowsRoot = Join-Path $TempRoot 'windows'
+$InstallTimingPath = 'C:\\OpenPath\\data\\logs\\install-timings.json'
 $null = New-Item -ItemType Directory -Path (Join-Path $WindowsRoot 'lib') -Force
 $null = New-Item -ItemType Directory -Path (Join-Path $WindowsRoot 'scripts') -Force
 
@@ -79,34 +80,61 @@ if ($manifest.version) {
     $env:OPENPATH_VERSION = [string]$manifest.version
 }
 
-foreach ($file in $manifest.files) {
-    $relativePath = [string]$file.path
-    if (-not $relativePath) {
-        continue
+$bundleApplied = $false
+if ($manifest.bundle) {
+    $bundlePath = Join-Path $TempRoot 'windows-bootstrap.zip'
+    $bundleUrl = [string]$manifest.bundle.path
+    if (-not $bundleUrl) {
+        $bundleUrl = '/api/agent/windows/bootstrap/bundle.zip'
+    }
+    if ($bundleUrl -notmatch '^https?://') {
+        $bundleUrl = "$ApiUrl$bundleUrl"
     }
 
-    $destinationPath = Join-Path $WindowsRoot $relativePath
-    $destinationDir = Split-Path $destinationPath -Parent
-    if (-not (Test-Path $destinationDir)) {
-        $null = New-Item -ItemType Directory -Path $destinationDir -Force
+    Invoke-WebRequest -Uri $bundleUrl -Headers $Headers -OutFile $bundlePath -UseBasicParsing
+
+    if ($manifest.bundle.sha256) {
+        $expectedBundleHash = ([string]$manifest.bundle.sha256).ToLowerInvariant()
+        $actualBundleHash = (Get-FileHash -Path $bundlePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualBundleHash -ne $expectedBundleHash) {
+            throw 'Checksum mismatch for Windows bootstrap bundle'
+        }
     }
 
-    $encodedPath = (($relativePath -split '/') | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
-    $fileUrl = "$ApiUrl/api/agent/windows/bootstrap/files/$encodedPath"
-    Invoke-WebRequest -Uri $fileUrl -Headers $Headers -OutFile $destinationPath -UseBasicParsing
+    Expand-Archive -LiteralPath $bundlePath -DestinationPath $WindowsRoot -Force
+    $bundleApplied = $true
+}
 
-    if ($file.sha256) {
-        $expectedHash = ([string]$file.sha256).ToLowerInvariant()
-        $actualHash = (Get-FileHash -Path $destinationPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($actualHash -ne $expectedHash) {
-            throw "Checksum mismatch for $relativePath"
+if (-not $bundleApplied) {
+    foreach ($file in $manifest.files) {
+        $relativePath = [string]$file.path
+        if (-not $relativePath) {
+            continue
+        }
+
+        $destinationPath = Join-Path $WindowsRoot $relativePath
+        $destinationDir = Split-Path $destinationPath -Parent
+        if (-not (Test-Path $destinationDir)) {
+            $null = New-Item -ItemType Directory -Path $destinationDir -Force
+        }
+
+        $encodedPath = (($relativePath -split '/') | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+        $fileUrl = "$ApiUrl/api/agent/windows/bootstrap/files/$encodedPath"
+        Invoke-WebRequest -Uri $fileUrl -Headers $Headers -OutFile $destinationPath -UseBasicParsing
+
+        if ($file.sha256) {
+            $expectedHash = ([string]$file.sha256).ToLowerInvariant()
+            $actualHash = (Get-FileHash -Path $destinationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actualHash -ne $expectedHash) {
+                throw "Checksum mismatch for $relativePath"
+            }
         }
     }
 }
 
 Push-Location $WindowsRoot
 try {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $WindowsRoot 'Install-OpenPath.ps1') -ApiUrl $ApiUrl -ClassroomId $ClassroomId -EnrollmentToken $EnrollmentToken -Unattended
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $WindowsRoot 'Install-OpenPath.ps1') -ApiUrl $ApiUrl -ClassroomId $ClassroomId -EnrollmentToken $EnrollmentToken -Unattended -TimingOutputPath $InstallTimingPath
     $installExitCode = $LASTEXITCODE
     if ($installExitCode -ne 0) {
         throw "Install-OpenPath.ps1 exited with code $installExitCode"

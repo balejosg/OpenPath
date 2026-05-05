@@ -380,6 +380,53 @@ load 'test_helper'
     [ "$status" -eq 0 ]
 }
 
+@test "windows enrollment bootstrap prefers one verified bundle download" {
+    run grep -nF 'bootstrap/bundle.zip' "$PROJECT_DIR/api/src/services/enrollment-service-shared.ts"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'Expand-Archive -LiteralPath $bundlePath -DestinationPath $WindowsRoot -Force' "$PROJECT_DIR/api/src/services/enrollment-service-shared.ts"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'Checksum mismatch for Windows bootstrap bundle' "$PROJECT_DIR/api/src/services/enrollment-service-shared.ts"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'foreach ($file in $manifest.files)' "$PROJECT_DIR/api/src/services/enrollment-service-shared.ts"
+    [ "$status" -eq 0 ]
+}
+
+@test "windows installer records optional phase timings" {
+    run grep -nF '[string]$TimingOutputPath = ""' "$PROJECT_DIR/windows/Install-OpenPath.ps1"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'Invoke-OpenPathInstallTimedStep -Name' "$PROJECT_DIR/windows/Install-OpenPath.ps1"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'Save-OpenPathInstallTiming -Path $TimingOutputPath' "$PROJECT_DIR/windows/Install-OpenPath.ps1"
+    [ "$status" -eq 0 ]
+}
+
+@test "windows installer defaults to progress bar and fatal errors only" {
+    run grep -nF 'function Write-InstallerError' "$PROJECT_DIR/windows/lib/install/Installer.Progress.ps1"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'function Write-InstallerWarning' "$PROJECT_DIR/windows/lib/install/Installer.Progress.ps1"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'function Write-InstallerNotice' "$PROJECT_DIR/windows/lib/install/Installer.Progress.ps1"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'Write-Host "Progress ${Step}/${Total}: $Status"' "$PROJECT_DIR/windows/lib/install/Installer.Progress.ps1"
+    [ "$status" -ne 0 ]
+}
+
+@test "windows installer avoids pre-enrollment native host registration in classroom mode" {
+    run grep -nF "Register-OpenPathFirefoxNativeHost -Config \$config -ClearWhitelist" "$PROJECT_DIR/windows/Install-OpenPath.ps1"
+    [ "$status" -ne 0 ]
+
+    run grep -nF "Register-OpenPathFirefoxNativeHost -Config \$nativeHostConfig -ClearWhitelist" "$PROJECT_DIR/windows/Install-OpenPath.ps1"
+    [ "$status" -eq 0 ]
+}
+
 @test "windows preflight treats missing active adapter enumeration as advisory" {
     run grep -nF '} -FailMessage "No active network adapter found" -Warning' "$PROJECT_DIR/windows/scripts/Pre-Install-Validation.ps1"
     [ "$status" -eq 0 ]
