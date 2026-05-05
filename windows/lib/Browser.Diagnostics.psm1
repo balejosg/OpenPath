@@ -1,6 +1,6 @@
 # OpenPath browser diagnostics for Windows
 
-Import-Module "$PSScriptRoot\Common.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxPolicy.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxNativeHost.psm1" -Force -ErrorAction Stop

@@ -1,7 +1,7 @@
 # OpenPath browser common helpers for Windows
 
 $script:OpenPathRoot = "C:\OpenPath"
-Import-Module "$PSScriptRoot\Common.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
 
 function Get-OpenPathBrowserPolicySpecPath {
     if ($env:OPENPATH_BROWSER_POLICY_SPEC -and (Test-Path $env:OPENPATH_BROWSER_POLICY_SPEC)) {

@@ -2,7 +2,7 @@
 # Applies AppLocker policy for non-admin users on managed endpoints.
 
 $script:OpenPathRoot = "C:\OpenPath"
-Import-Module "$PSScriptRoot\Common.psm1" -Force -ErrorAction SilentlyContinue
+Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction SilentlyContinue
 
 $script:OpenPathAppControlRulePrefix = 'OpenPath non-admin app control'
 

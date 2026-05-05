@@ -1,7 +1,7 @@
 # OpenPath DNS Module for Windows
 # Manages Acrylic DNS Proxy configuration and service
 $modulePath = Split-Path $PSScriptRoot -Parent
-Import-Module "$modulePath\lib\Common.psm1" -Force -ErrorAction SilentlyContinue
+Import-Module "$modulePath\lib\Common.psm1" -ErrorAction SilentlyContinue
 $script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
 
 . (Join-Path $script:InternalModulePath 'DNS.Acrylic.Install.ps1')

@@ -1,7 +1,7 @@
 # OpenPath Firefox network autoconfig for Windows
 
 $script:OpenPathRoot = "C:\OpenPath"
-Import-Module "$PSScriptRoot\Common.psm1" -Force -ErrorAction SilentlyContinue
+Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction SilentlyContinue
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 
 $script:OpenPathFirefoxConfigMarker = '// OpenPath managed Firefox network hardening'

@@ -3,7 +3,7 @@
 
 # Import common functions
 $modulePath = Split-Path $PSScriptRoot -Parent
-Import-Module "$modulePath\lib\Common.psm1" -Force -ErrorAction SilentlyContinue
+Import-Module "$modulePath\lib\Common.psm1" -ErrorAction SilentlyContinue
 
 $script:OpenPathRoot = "C:\OpenPath"
 $script:CaptivePortalStatePath = "$script:OpenPathRoot\data\captive-portal-active.json"

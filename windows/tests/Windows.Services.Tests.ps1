@@ -83,11 +83,33 @@ Describe "Script Bootstrap Module" {
                 '[string[]]$DependentModules = @()',
                 '[string[]]$RequiredCommands = @()',
                 '[string]$ScriptName = ''OpenPath script''',
+                '$orderedModules = @($DependentModules)',
                 'Import-Module (Join-Path $OpenPathRoot "lib\$moduleName.psm1") -Force -Global',
-                'Import-Module (Join-Path $OpenPathRoot ''lib\Common.psm1'') -Force -Global',
+                'Import-Module (Join-Path $OpenPathRoot ''lib\Common.psm1'') -Global',
                 'failed to import required commands',
                 'Export-ModuleMember -Function @('
             )
+        }
+
+        It "Keeps firewall commands available after browser-dependent module imports" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "ScriptBootstrap.psm1"
+            Import-Module $modulePath -Force
+
+            {
+                Initialize-OpenPathScriptSession `
+                    -OpenPathRoot (Join-Path $PSScriptRoot '..') `
+                    -DependentModules @('DNS', 'Firewall', 'Browser', 'CaptivePortal', 'AppControl') `
+                    -RequiredCommands @(
+                    'Get-OpenPathConfig',
+                    'Update-AcrylicHost',
+                    'Remove-OpenPathFirewall',
+                    'Test-FirewallActive',
+                    'Remove-BrowserPolicy',
+                    'Test-OpenPathCaptivePortalState',
+                    'Set-OpenPathNonAdminAppControl'
+                ) `
+                    -ScriptName 'test-bootstrap'
+            } | Should -Not -Throw
         }
     }
 }

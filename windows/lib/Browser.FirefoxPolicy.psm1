@@ -1,7 +1,7 @@
 # OpenPath Firefox managed extension policy helpers for Windows
 
 $script:OpenPathRoot = "C:\OpenPath"
-Import-Module "$PSScriptRoot\Common.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 
 function Get-OpenPathFirefoxExtensionRoot {
