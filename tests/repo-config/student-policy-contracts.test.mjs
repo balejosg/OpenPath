@@ -766,6 +766,11 @@ describe('repository verification contract', () => {
     );
     assert.match(
       browserBoundaryCi,
+      /student-exit-code\.txt[\s\S]*windows-browser-enforcement-report\.json[\s\S]*Invoke-ReportAssertNoFailures/s,
+      'browser-boundary CI should accept a validated student report as completion evidence when the scheduled-task exit marker is missing'
+    );
+    assert.match(
+      browserBoundaryCi,
       /Edge Google game URL cannot run as student[\s\S]*browser-boundary-summary\.json/s,
       'browser-boundary CI should require the Edge Google game URL student probe and summarize artifacts'
     );

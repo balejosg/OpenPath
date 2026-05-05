@@ -112,6 +112,7 @@ function Invoke-StudentBoundaryTask {
     $taskName = "OpenPathBrowserBoundary-$([guid]::NewGuid().ToString('N'))"
     $runnerPath = Join-Path $StudentArtifacts 'run-student-browser-boundary.ps1'
     $exitCodePath = Join-Path $StudentArtifacts 'student-exit-code.txt'
+    $reportPath = Join-Path $StudentArtifacts 'windows-browser-enforcement-report.json'
     $stdoutPath = Join-Path $StudentArtifacts 'student-task.out.log'
     $stderrPath = Join-Path $StudentArtifacts 'student-task.err.log'
 
@@ -154,10 +155,19 @@ function Invoke-StudentBoundaryTask {
                 }
                 return
             }
+            if (Test-Path -LiteralPath $reportPath) {
+                try {
+                    Invoke-ReportAssertNoFailures -ReportPath $reportPath -Scope 'Student' | Out-Null
+                    return
+                }
+                catch {
+                    throw
+                }
+            }
             Start-Sleep -Seconds 2
         }
 
-        throw "Timed out waiting for student browser-boundary task after $TimeoutSeconds seconds"
+        throw "Timed out waiting for student browser-boundary task after $TimeoutSeconds seconds; neither $exitCodePath nor $reportPath was produced"
     }
     finally {
         & schtasks.exe /Delete /TN $taskName /F *> $null
