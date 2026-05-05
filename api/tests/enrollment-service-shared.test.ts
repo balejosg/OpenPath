@@ -18,4 +18,8 @@ void test('enrollment-service-shared exposes role checks and windows script gene
 
   assert.match(script, /Install-OpenPath\.ps1/);
   assert.match(script, /classroom-1/);
+  assert.match(script, /\$ProgressPreference = 'SilentlyContinue'/);
+  assert.doesNotMatch(script, /OpenPath Enrollment \(Windows\)/);
+  assert.doesNotMatch(script, /Installation completed\. Current status:/);
+  assert.doesNotMatch(script, /OpenPath\.ps1' status/);
 });

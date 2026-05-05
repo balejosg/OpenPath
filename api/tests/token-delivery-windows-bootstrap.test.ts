@@ -46,6 +46,10 @@ void describe('Windows bootstrap delivery', { timeout: 30000 }, async () => {
       assert.match(body, /powershell\.exe.*Install-OpenPath\.ps1/s);
       assert.match(body, /\$installExitCode\s*=\s*\$LASTEXITCODE/);
       assert.match(body, /throw "Install-OpenPath\.ps1 exited with code \$installExitCode"/);
+      assert.match(body, /\$ProgressPreference = 'SilentlyContinue'/);
+      assert.doesNotMatch(body, /OpenPath Enrollment \(Windows\)/);
+      assert.doesNotMatch(body, /Installation completed\. Current status:/);
+      assert.doesNotMatch(body, /OpenPath\.ps1' status/);
     });
 
     await test('should reject Windows enrollment script with mismatched classroom', async () => {

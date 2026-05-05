@@ -47,6 +47,7 @@ export function buildWindowsEnrollmentScript(params: {
   const psEnrollmentToken = quotePowerShellSingle(params.enrollmentToken);
 
   return `$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $ApiUrl = ${psApiUrl}
@@ -64,12 +65,6 @@ $WindowsRoot = Join-Path $TempRoot 'windows'
 $InstallTimingPath = 'C:\\OpenPath\\data\\logs\\install-timings.json'
 $null = New-Item -ItemType Directory -Path (Join-Path $WindowsRoot 'lib') -Force
 $null = New-Item -ItemType Directory -Path (Join-Path $WindowsRoot 'scripts') -Force
-
-Write-Host ''
-Write-Host '==============================================='
-Write-Host ' OpenPath Enrollment (Windows)'
-Write-Host '==============================================='
-Write-Host ''
 
 $manifest = Invoke-RestMethod -Uri "$ApiUrl/api/agent/windows/bootstrap/manifest" -Headers $Headers -Method Get
 if (-not $manifest.success -or -not $manifest.files) {
@@ -144,9 +139,5 @@ finally {
     Pop-Location
     Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
-
-Write-Host ''
-Write-Host 'Installation completed. Current status:'
-& 'C:\\OpenPath\\OpenPath.ps1' status
 `;
 }
