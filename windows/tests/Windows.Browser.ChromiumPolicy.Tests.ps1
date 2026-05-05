@@ -11,7 +11,7 @@ Describe "Browser Module - Chromium Policy" {
     }
 
     Context "Set-ChromePolicy" {
-        It "Does not throw with empty blocked paths" -Skip:(-not (Test-IsAdmin)) {
+        It "Does not throw with empty blocked paths" -Skip:((-not $IsWindows) -or -not (Test-IsAdmin)) {
             { Set-ChromePolicy -BlockedPaths @() } | Should -Not -Throw
         }
 
@@ -22,7 +22,7 @@ Describe "Browser Module - Chromium Policy" {
             $contract.dnsOverHttpsMode | Should -Be 'off'
         }
 
-        It "Sets DnsOverHttpsMode to off for managed browsers" {
+        It "Sets DnsOverHttpsMode to off for managed browsers" -Skip:(-not $IsWindows) {
             $script:capturedRegistryWrites = @()
 
             Mock Test-Path { $false } -ModuleName Browser
@@ -48,7 +48,7 @@ Describe "Browser Module - Chromium Policy" {
             $dohModeWrites.Count | Should -BeGreaterThan 0
         }
 
-        It "Writes ExtensionInstallForcelist when managed metadata is available" {
+        It "Writes ExtensionInstallForcelist when managed metadata is available" -Skip:(-not $IsWindows) {
             $script:capturedRegistryWrites = @()
 
             Mock Test-Path {
@@ -87,6 +87,33 @@ Describe "Browser Module - Chromium Policy" {
                     $_.Value -eq 'abcdefghijklmnopabcdefghijklmnop;https://school.example/api/extensions/chromium/updates.xml'
                 })
             $forceInstallWrites.Count | Should -BeGreaterThan 0
+        }
+
+        It "Writes the Google search URL blocklist entry for managed browsers" {
+            $script:capturedRegistryWrites = @()
+
+            Mock Test-Path { $false } -ModuleName Browser
+            Mock New-Item { [PSCustomObject]@{ FullName = 'mock-reg-path' } } -ModuleName Browser
+            Mock Remove-Item { } -ModuleName Browser
+            Mock Set-ItemProperty {
+                param([string]$Path, [object]$Name, [object]$Value, [string]$Type)
+                $script:capturedRegistryWrites += [PSCustomObject]@{
+                    Path = $Path
+                    Name = [string]$Name
+                    Value = [string]$Value
+                    Type = $Type
+                }
+            } -ModuleName Browser
+            Mock Write-OpenPathLog { } -ModuleName Browser
+
+            $result = Set-ChromePolicy -BlockedPaths @()
+            $result | Should -BeTrue
+
+            $googleBlockWrites = @($script:capturedRegistryWrites | Where-Object {
+                    $_.Path -like '*URLBlocklist' -and
+                    $_.Value -eq '*://www.google.*/search*'
+                })
+            $googleBlockWrites.Count | Should -Be 2
         }
     }
 }
