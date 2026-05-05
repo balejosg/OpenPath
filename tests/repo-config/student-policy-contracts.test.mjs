@@ -653,6 +653,91 @@ describe('repository verification contract', () => {
     );
   });
 
+  test('Windows browser enforcement phase keeps explicit opt-in probes and docs contract', () => {
+    const windowsRunner = readText('tests/e2e/ci/run-windows-student-flow.ps1');
+    const browserProbe = readText('tests/e2e/ci/windows-browser-enforcement.ps1');
+    const contractMatrix = readText('docs/testing/student-policy-contract-matrix.md');
+    const windowsReadme = readText('windows/README.md');
+
+    assert.match(
+      windowsRunner,
+      /param\([\s\S]*\[switch\]\$RunBrowserEnforcementProbes/s,
+      'Windows student-policy runner should expose browser enforcement probes as an explicit opt-in switch'
+    );
+    assert.match(
+      windowsRunner,
+      /OPENPATH_WINDOWS_BROWSER_ENFORCEMENT_PROBES/,
+      'Windows student-policy runner should also allow an explicit environment opt-in for browser enforcement probes'
+    );
+    assert.match(
+      windowsRunner,
+      /if \(\$RunBrowserEnforcementProbes -or \$env:OPENPATH_WINDOWS_BROWSER_ENFORCEMENT_PROBES -eq '1'\) \{\s*Invoke-TimedStep -Name 'Run Windows browser enforcement probes'/,
+      'Windows browser enforcement probes should not run unconditionally in the normal student-policy lane'
+    );
+
+    for (const marker of [
+      'Firefox managed path blocks known blocked path',
+      'Brave cannot start',
+      'Opera cannot start',
+      'Vivaldi cannot start',
+      'Tor cannot start',
+      'Portable browser from Downloads cannot start',
+      'Portable browser from Desktop cannot start',
+      'PowerShell script from Downloads cannot execute',
+      'Batch file from Downloads cannot execute',
+      'copied into user-writable path cannot execute if present',
+      'Google search game result is blocked',
+      '1.1.1.1 DoH-by-IP cannot resolve blocked host',
+      'curl --resolve Cloudflare bypass command fails',
+      'Admin can run management tools',
+      'Admin can inspect policies',
+      'Admin can recover OpenPath',
+      'AppLocker admin allow-all remains intact',
+    ]) {
+      assert.ok(
+        browserProbe.includes(marker),
+        `Windows browser enforcement probe should cover: ${marker}`
+      );
+    }
+    assert.match(
+      browserProbe,
+      /\$probeName = "\$\(\$browser\.Name\) only if managed and blocks known blocked path"/,
+      'Windows browser enforcement probe should cover Edge and Chrome managed blocked-path probes'
+    );
+
+    assert.match(
+      browserProbe,
+      /\[switch\]\$ExecuteProbes/,
+      'Windows browser enforcement probe should require an explicit execution flag before launching processes or network commands'
+    );
+    assert.match(
+      browserProbe,
+      /\[switch\]\$PrepareProbeFiles/,
+      'Windows browser enforcement probe should require an explicit flag before creating probe files'
+    );
+    assert.match(
+      browserProbe,
+      /Phase 1, Phase 3, and Phase 4 are committed/,
+      'Windows browser enforcement report should preserve the prerequisite warning'
+    );
+
+    assert.match(
+      contractMatrix,
+      /Windows browser-boundary[\s\S]*target-platform symptom cleared/,
+      'Student policy contract matrix should include the Windows browser-boundary evidence rung'
+    );
+    assert.match(
+      windowsReadme,
+      /Phase 1[\s\S]*Phase 3[\s\S]*Phase 4[\s\S]*Do not claim the Windows browser-boundary target-platform\s+symptom cleared/s,
+      'Windows README should document prerequisites and forbid partial target-platform cleared claims'
+    );
+    assert.match(
+      windowsReadme,
+      /reset runner[\s\S]*snapshot VM[\s\S]*rollback VM/s,
+      'Windows README should document the reversible runner lab flow'
+    );
+  });
+
   test('Linux student policy runner emits per-phase timing evidence', () => {
     const linuxRunner = readText('tests/e2e/ci/run-linux-student-flow.sh');
 

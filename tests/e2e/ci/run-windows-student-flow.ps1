@@ -1,3 +1,7 @@
+param(
+    [switch]$RunBrowserEnforcementProbes
+)
+
 $ErrorActionPreference = 'Stop'
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
@@ -1462,6 +1466,23 @@ function Invoke-DebugDump {
     }
 }
 
+function Invoke-WindowsBrowserEnforcementProbes {
+    $probeScript = Join-Path $script:RepoRoot 'tests\e2e\ci\windows-browser-enforcement.ps1'
+    if (-not (Test-Path $probeScript)) {
+        throw "Windows browser enforcement probe script not found: $probeScript"
+    }
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $probeScript `
+        -Scope Student `
+        -ExecuteProbes `
+        -PrepareProbeFiles `
+        -ArtifactsRoot $script:ArtifactsRoot
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "windows-browser-enforcement.ps1 failed with exit code $LASTEXITCODE"
+    }
+}
+
 try {
     Ensure-ArtifactsDirectory
     Invoke-TimedStep -Name 'Build workspaces' -ScriptBlock { Build-RequiredWorkspaces }
@@ -1483,6 +1504,9 @@ try {
         Resolve-WindowsStudentSseGroup -ScenarioGroup $env:OPENPATH_WINDOWS_STUDENT_SSE_GROUP
     }
     Invoke-TimedStep -Name "Run Selenium student suite (sse, $windowsStudentSseGroup)" -ScriptBlock { Invoke-SeleniumStudentSuite -ScenarioPath $scenarioPath -ExtensionArchivePath $extensionArchivePath -Mode 'sse' -CoverageProfile 'full' -ScenarioGroup $windowsStudentSseGroup }
+    if ($RunBrowserEnforcementProbes -or $env:OPENPATH_WINDOWS_BROWSER_ENFORCEMENT_PROBES -eq '1') {
+        Invoke-TimedStep -Name 'Run Windows browser enforcement probes' -ScriptBlock { Invoke-WindowsBrowserEnforcementProbes }
+    }
     $scenario = Invoke-TimedStep -Name 'Bootstrap scenario (fallback)' -ScriptBlock { Invoke-BackendHarnessBootstrap -ScenarioName 'Windows Student Policy Fallback' }
     Invoke-TimedStep -Name 'Install and enroll client (fallback)' -ScriptBlock { Install-AndEnrollClient -Scenario $scenario -InstallClient $false }
     Invoke-TimedStep -Name 'Run Selenium student suite (fallback, fallback-propagation)' -ScriptBlock { Invoke-SeleniumStudentSuite -ScenarioPath $scenarioPath -ExtensionArchivePath $extensionArchivePath -Mode 'fallback' -CoverageProfile 'fallback-propagation' }
