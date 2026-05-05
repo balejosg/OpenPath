@@ -53,6 +53,11 @@ describe('repository verification contract', () => {
         forbidden: ['actions/checkout@v4', 'softprops/action-gh-release@v2'],
       },
       {
+        relativePath: '.github/workflows/firefox-release-assets.yml',
+        required: ['actions/checkout@v6', 'actions/upload-artifact@v7'],
+        forbidden: ['actions/checkout@v4', 'actions/upload-artifact@v4'],
+      },
+      {
         relativePath: '.github/actions/setup-node/action.yml',
         required: ['actions/setup-node@v6'],
         forbidden: ['actions/setup-node@v4'],
@@ -115,6 +120,7 @@ test('prerelease deb publish keys off the CI Success summary job instead of the 
 test('Firefox release signing workflows are resilient to AMO throttling and reruns', () => {
   const buildDebWorkflow = readText('.github/workflows/build-deb.yml');
   const prereleaseWorkflow = readText('.github/workflows/prerelease-deb.yml');
+  const firefoxAssetsWorkflow = readText('.github/workflows/firefox-release-assets.yml');
   const prepareAction = readText('.github/actions/prepare-firefox-release-artifacts/action.yml');
 
   assert.ok(
@@ -243,6 +249,38 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
   assert.ok(
     prereleaseWorkflow.includes('steps.firefox-release.outputs.artifact-source'),
     'prerelease publishing should summarize whether signed Firefox assets were cached or skipped'
+  );
+  assert.ok(
+    firefoxAssetsWorkflow.includes("workflows: ['CI']") &&
+      firefoxAssetsWorkflow.includes('workflow_dispatch:'),
+    'Firefox release assets should be seeded after main CI and allow manual reseeding'
+  );
+  assert.ok(
+    firefoxAssetsWorkflow.includes('select(.name == "CI Success")') &&
+      firefoxAssetsWorkflow.includes("ci_success_conclusion == 'success'"),
+    'Firefox release asset seeding should wait for the canonical CI Success job'
+  );
+  assert.ok(
+    firefoxAssetsWorkflow.includes('uses: ./.github/actions/prepare-firefox-release-artifacts'),
+    'Firefox release asset seeding should reuse the cache-aware signing action'
+  );
+  assert.ok(
+    firefoxAssetsWorkflow.includes('2.0.${{ github.run_number }}.${{ github.run_attempt }}'),
+    'Firefox release asset seeding should use rerun-safe AMO versions'
+  );
+  assert.ok(
+    firefoxAssetsWorkflow.includes('firefox-extension/payload-hash.txt') &&
+      firefoxAssetsWorkflow.includes('firefox-extension/dist/**') &&
+      firefoxAssetsWorkflow.includes('firefox-extension/build/firefox-release/**') &&
+      firefoxAssetsWorkflow.includes(
+        'openpath-firefox-release-assets-${{ steps.firefox-release.outputs.payload-hash }}'
+      ),
+    'Firefox release asset seeding should publish reusable payload-hash artifacts with dist and signed release files'
+  );
+  assert.ok(
+    !firefoxAssetsWorkflow.includes('--fallback-repo') &&
+      !firefoxAssetsWorkflow.includes('source_repo'),
+    'OpenPath Firefox release asset seeding must stay generic and avoid downstream wrapper fallback logic'
   );
   assert.ok(
     !buildDebWorkflow.includes('approval-timeout-seconds: 0'),

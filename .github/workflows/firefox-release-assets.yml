@@ -1,0 +1,114 @@
+name: Firefox Release Assets
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to seed Firefox release assets for.
+        required: false
+        default: main
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: firefox-release-assets-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.event.inputs.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve-source:
+    name: Resolve Firefox release asset source
+    runs-on: ubuntu-latest
+    outputs:
+      ci_success_conclusion: ${{ steps.source.outputs.ci_success_conclusion }}
+      ref: ${{ steps.source.outputs.ref }}
+
+    steps:
+      - name: Resolve source ref
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "ci_success_conclusion=success" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ github.event.inputs.ref }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ci_success_conclusion="$(
+            gh api repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/jobs \
+              --paginate \
+              --jq '.jobs[] | select(.name == "CI Success") | .conclusion' \
+              | tail -n 1
+          )"
+
+          if [ -z "$ci_success_conclusion" ]; then
+            echo "::error title=Missing CI Success summary job::Expected the triggering CI workflow to publish a CI Success summary job."
+            exit 1
+          fi
+
+          echo "ci_success_conclusion=$ci_success_conclusion" >> "$GITHUB_OUTPUT"
+          echo "ref=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+
+  seed-firefox-release-assets:
+    name: Seed Firefox Release Assets
+    runs-on: ubuntu-latest
+    needs: resolve-source
+    if: ${{ needs.resolve-source.outputs.ci_success_conclusion == 'success' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve-source.outputs.ref }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: ./.github/actions/setup-node
+
+      - name: Build Firefox extension dist
+        uses: ./.github/actions/build-workspaces
+        with:
+          build-shared: 'false'
+          build-api: 'false'
+          build-extension: 'true'
+
+      - name: Prepare Firefox Release Artifacts
+        id: firefox-release
+        uses: ./.github/actions/prepare-firefox-release-artifacts
+        with:
+          amo-version: 2.0.${{ github.run_number }}.${{ github.run_attempt }}
+          web-ext-api-key: ${{ secrets.WEB_EXT_API_KEY }}
+          web-ext-api-secret: ${{ secrets.WEB_EXT_API_SECRET }}
+
+      - name: Record Firefox release payload hash
+        run: printf '%s\n' "${{ steps.firefox-release.outputs.payload-hash }}" > firefox-extension/payload-hash.txt
+
+      - name: Verify Firefox release asset bundle
+        run: |
+          set -euo pipefail
+          test -f firefox-extension/dist/background.js
+          test -f firefox-extension/build/firefox-release/metadata.json
+          test -f firefox-extension/build/firefox-release/openpath-firefox-extension.xpi
+          test -f firefox-extension/payload-hash.txt
+          node firefox-extension/verify-firefox-release-artifacts.mjs \
+            --release-dir firefox-extension/build/firefox-release \
+            --payload-hash "${{ steps.firefox-release.outputs.payload-hash }}"
+
+      - name: Upload reusable Firefox release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: openpath-firefox-release-assets-${{ steps.firefox-release.outputs.payload-hash }}
+          path: |
+            firefox-extension/dist/**
+            firefox-extension/build/firefox-release/**
+            firefox-extension/payload-hash.txt
+          if-no-files-found: error
