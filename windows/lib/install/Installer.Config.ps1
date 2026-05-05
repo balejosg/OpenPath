@@ -40,7 +40,12 @@ function New-OpenPathInstallerConfig {
         [string]$FirefoxExtensionId = '',
         [string]$FirefoxExtensionInstallUrl = '',
         [string]$ChromeExtensionStoreUrl = '',
-        [string]$EdgeExtensionStoreUrl = ''
+        [string]$EdgeExtensionStoreUrl = '',
+
+        [bool]$EnforceManagedBrowserBoundary = $false,
+
+        [ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]
+        [string]$BrowserCleanupMode = 'ReportOnly'
     )
 
     $config = @{
@@ -57,8 +62,10 @@ function New-OpenPathInstallerConfig {
         enableIntegrityChecks = $true
         enableKnownDnsIpBlocking = $true
         enableDohIpBlocking = $true
-        enableNonAdminAppControl = $true
+        enableNonAdminAppControl = $EnforceManagedBrowserBoundary
         nonAdminAppControlMode = 'Enforced'
+        enforceManagedBrowserBoundary = $EnforceManagedBrowserBoundary
+        browserCleanupMode = $BrowserCleanupMode
         dohResolverIps = @(Get-DefaultDohResolverIps)
         vpnBlockRules = @(Get-DefaultVpnBlockRules)
         torBlockPorts = @(Get-DefaultTorBlockPorts)

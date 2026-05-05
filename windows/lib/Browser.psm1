@@ -10,6 +10,7 @@ Import-Module "$PSScriptRoot\Browser.FirefoxNativeHost.psm1" -Force -ErrorAction
 Import-Module "$PSScriptRoot\Browser.RequestReadiness.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Diagnostics.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot\Browser.EnforcementStatus.psm1" -Force -ErrorAction Stop
 
 function Get-OpenPathChromiumManagedMetadataPath {
     return "$script:OpenPathRoot\browser-extension\chromium-managed\metadata.json"
@@ -153,6 +154,21 @@ function Get-OpenPathBrowserInventoryFileCandidates {
     param()
 
     Browser.Inventory\Get-OpenPathBrowserInventoryFileCandidates
+}
+
+function Get-OpenPathBrowserEnforcementStatus {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$Config = $null
+    )
+
+    if ($PSBoundParameters.ContainsKey('Config')) {
+        Browser.EnforcementStatus\Get-OpenPathBrowserEnforcementStatus -Config $Config
+    }
+    else {
+        Browser.EnforcementStatus\Get-OpenPathBrowserEnforcementStatus
+    }
 }
 
 function Sync-OpenPathFirefoxManagedExtensionPolicy {
@@ -323,6 +339,7 @@ Export-ModuleMember -Function @(
     'Get-OpenPathBrowserInventory',
     'Get-OpenPathBrowserInventoryUninstallEntries',
     'Get-OpenPathBrowserInventoryFileCandidates',
+    'Get-OpenPathBrowserEnforcementStatus',
     'Register-OpenPathFirefoxNativeHost',
     'Sync-OpenPathFirefoxNativeHostArtifacts',
     'Sync-OpenPathFirefoxNativeHostState',

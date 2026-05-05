@@ -223,6 +223,72 @@ Describe "Installer" {
                 '$config.edgeExtensionStoreUrl = $EdgeExtensionStoreUrl'
             )
         }
+
+        It "Supports managed browser boundary and cleanup installer options" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $configHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Config.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $configHelper = Get-Content $configHelperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '[switch]$EnforceManagedBrowserBoundary',
+                "[ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]",
+                '[string]$BrowserCleanupMode = ''ReportOnly''',
+                '-EnforceManagedBrowserBoundary:$enforceManagedBrowserBoundary',
+                '-BrowserCleanupMode $BrowserCleanupMode'
+            )
+
+            Assert-ContentContainsAll -Content $configHelper -Needles @(
+                '[bool]$EnforceManagedBrowserBoundary = $false',
+                "[ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]",
+                '[string]$BrowserCleanupMode = ''ReportOnly''',
+                'enforceManagedBrowserBoundary = $EnforceManagedBrowserBoundary',
+                'browserCleanupMode = $BrowserCleanupMode'
+            )
+        }
+
+        It "Persists managed browser boundary and cleanup mode in installer config" {
+            $firewallCatalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Catalog.ps1"
+            $configHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Config.ps1"
+            . $firewallCatalogPath
+            . $configHelperPath
+
+            $config = New-OpenPathInstallerConfig `
+                -WhitelistUrl '' `
+                -AgentVersion 'test-version' `
+                -PrimaryDNS '8.8.8.8' `
+                -EnforceManagedBrowserBoundary:$true `
+                -BrowserCleanupMode RemoveKnownInstallers
+
+            $config.enforceManagedBrowserBoundary | Should -BeTrue
+            $config.browserCleanupMode | Should -Be 'RemoveKnownInstallers'
+        }
+
+        It "Defaults browser cleanup to report-only in installer config" {
+            $firewallCatalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Catalog.ps1"
+            $configHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Config.ps1"
+            . $firewallCatalogPath
+            . $configHelperPath
+
+            $config = New-OpenPathInstallerConfig `
+                -WhitelistUrl '' `
+                -AgentVersion 'test-version' `
+                -PrimaryDNS '8.8.8.8'
+
+            $config.browserCleanupMode | Should -Be 'ReportOnly'
+            $config.enforceManagedBrowserBoundary | Should -BeFalse
+        }
+
+        It "Defaults classroom unattended installs to managed browser boundary enforcement" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '$enforceManagedBrowserBoundary = [bool]$EnforceManagedBrowserBoundary',
+                'if ($classroomModeRequested -and $Unattended -and -not $PSBoundParameters.ContainsKey(''EnforceManagedBrowserBoundary''))',
+                '$enforceManagedBrowserBoundary = $true'
+            )
+        }
     }
 
     Context "Enrollment before first update" {
@@ -406,7 +472,7 @@ Describe "Installer" {
             $progressHelper = Get-Content $progressHelperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                '[CmdletBinding()]',
+                '[CmdletBinding(SupportsShouldProcess)]',
                 'Show-InstallerProgress -Step 1 -Total 7 -Status ''Creando estructura de directorios''',
                 'Installer.Progress.ps1',
                 "Installer.ChromiumGuidance.ps1"
@@ -430,6 +496,19 @@ Describe "Installer" {
             $content = Get-Content $scriptPath -Raw
 
             $content.Contains('Write-InstallerVerbose ""') | Should -BeFalse
+        }
+
+        It "Supports WhatIf and distinguishes browser cleanup from enforcement" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '[CmdletBinding(SupportsShouldProcess)]',
+                'Browser cleanup is hygiene. Application allowlist is the enforcement boundary.',
+                '$PSCmdlet.ShouldProcess(''OpenPath install root'', ''Create install directories'')',
+                '-WhatIf:$WhatIfPreference',
+                '$WhatIfPreference'
+            )
         }
     }
 

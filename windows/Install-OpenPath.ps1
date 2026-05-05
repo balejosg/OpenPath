@@ -23,7 +23,7 @@
     Installs the OpenPath DNS system for Windows
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$WhitelistUrl = "",
     [switch]$SkipAcrylic,
@@ -39,7 +39,10 @@ param(
     [string]$ChromeExtensionStoreUrl = "",
     [string]$EdgeExtensionStoreUrl = "",
     [switch]$Unattended,
-    [string]$HealthApiSecret = ""
+    [string]$HealthApiSecret = "",
+    [switch]$EnforceManagedBrowserBoundary,
+    [ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]
+    [string]$BrowserCleanupMode = 'ReportOnly'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,6 +83,10 @@ $enrollmentContext = Resolve-OpenPathInstallerEnrollmentContext `
 $classroomModeRequested = [bool]$enrollmentContext.ClassroomModeRequested
 $RegistrationToken = [string]$enrollmentContext.RegistrationToken
 $EnrollmentToken = [string]$enrollmentContext.EnrollmentToken
+$enforceManagedBrowserBoundary = [bool]$EnforceManagedBrowserBoundary
+if ($classroomModeRequested -and $Unattended -and -not $PSBoundParameters.ContainsKey('EnforceManagedBrowserBoundary')) {
+    $enforceManagedBrowserBoundary = $true
+}
 
 if (-not $HealthApiSecret -and $env:OPENPATH_HEALTH_API_SECRET) {
     $HealthApiSecret = $env:OPENPATH_HEALTH_API_SECRET
@@ -142,10 +149,28 @@ if ($VerbosePreference -eq 'Continue') {
     if (-not $classroomModeRequested -and ($ChromeExtensionStoreUrl -or $EdgeExtensionStoreUrl)) {
         Write-Host 'Chromium store guidance: configured for unmanaged installs'
     }
+    Write-Host "Managed browser boundary: $enforceManagedBrowserBoundary"
+    Write-Host "Browser cleanup mode: $BrowserCleanupMode"
     Write-Host ''
 }
 else {
     Write-InstallerNotice 'Installing OpenPath DNS for Windows...'
+}
+
+Write-Host 'Browser cleanup is hygiene. Application allowlist is the enforcement boundary.'
+
+if ($WhatIfPreference) {
+    $PSCmdlet.ShouldProcess('OpenPath install root', 'Create install directories') | Out-Null
+    $PSCmdlet.ShouldProcess('OpenPath runtime', 'Copy modules and scripts') | Out-Null
+    $PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Write installer configuration') | Out-Null
+    if ($BrowserCleanupMode -ne 'Disabled') {
+        $PSCmdlet.ShouldProcess('Browser cleanup inventory', "Report unmanaged browsers with $BrowserCleanupMode mode") | Out-Null
+    }
+    $PSCmdlet.ShouldProcess('All browsers', 'Configure browser policies') | Out-Null
+    if ($enforceManagedBrowserBoundary) {
+        $PSCmdlet.ShouldProcess('Windows AppLocker', 'Configure OpenPath non-admin app control in Enforced mode') | Out-Null
+    }
+    exit 0
 }
 
 if ($SkipPreflight) {
@@ -172,17 +197,21 @@ else {
 }
 
 Show-InstallerProgress -Step 1 -Total 7 -Status 'Creando estructura de directorios'
-Initialize-OpenPathInstallDirectories -OpenPathRoot $OpenPathRoot
+if ($PSCmdlet.ShouldProcess('OpenPath install root', 'Create install directories')) {
+    Initialize-OpenPathInstallDirectories -OpenPathRoot $OpenPathRoot
+}
 
 Show-InstallerProgress -Step 2 -Total 7 -Status 'Copiando modulos y scripts'
-Copy-OpenPathInstallerRuntime `
-    -OpenPathRoot $OpenPathRoot `
-    -ScriptDir $scriptDir `
-    -Unattended:$Unattended `
-    -ChromeExtensionStoreUrl $ChromeExtensionStoreUrl `
-    -EdgeExtensionStoreUrl $EdgeExtensionStoreUrl `
-    -FirefoxExtensionId $FirefoxExtensionId `
-    -FirefoxExtensionInstallUrl $FirefoxExtensionInstallUrl
+if ($PSCmdlet.ShouldProcess('OpenPath runtime', 'Copy modules and scripts')) {
+    Copy-OpenPathInstallerRuntime `
+        -OpenPathRoot $OpenPathRoot `
+        -ScriptDir $scriptDir `
+        -Unattended:$Unattended `
+        -ChromeExtensionStoreUrl $ChromeExtensionStoreUrl `
+        -EdgeExtensionStoreUrl $EdgeExtensionStoreUrl `
+        -FirefoxExtensionId $FirefoxExtensionId `
+        -FirefoxExtensionInstallUrl $FirefoxExtensionInstallUrl
+}
 
 Import-Module "$OpenPathRoot\lib\Common.psm1" -Force
 Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force
@@ -203,8 +232,12 @@ $config = New-OpenPathInstallerConfig `
     -FirefoxExtensionId $FirefoxExtensionId `
     -FirefoxExtensionInstallUrl $FirefoxExtensionInstallUrl `
     -ChromeExtensionStoreUrl $ChromeExtensionStoreUrl `
-    -EdgeExtensionStoreUrl $EdgeExtensionStoreUrl
-$config | ConvertTo-Json -Depth 10 | Set-Content "$OpenPathRoot\data\config.json" -Encoding UTF8
+    -EdgeExtensionStoreUrl $EdgeExtensionStoreUrl `
+    -EnforceManagedBrowserBoundary:$enforceManagedBrowserBoundary `
+    -BrowserCleanupMode $BrowserCleanupMode
+if ($PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Write installer configuration')) {
+    $config | ConvertTo-Json -Depth 10 | Set-Content "$OpenPathRoot\data\config.json" -Encoding UTF8
+}
 Write-InstallerVerbose "  DNS upstream: $primaryDNS"
 
 Import-Module "$OpenPathRoot\lib\DNS.psm1" -Force
@@ -213,7 +246,9 @@ Import-Module "$OpenPathRoot\lib\Services.psm1" -Force
 $deferLocalDnsUntilRemoteBootstrap = $classroomModeRequested -or [bool]$WhitelistUrl
 
 try {
-    Register-OpenPathFirefoxNativeHost -Config $config -ClearWhitelist | Out-Null
+    if ($PSCmdlet.ShouldProcess('Firefox native messaging host', 'Register OpenPath native host')) {
+        Register-OpenPathFirefoxNativeHost -Config $config -ClearWhitelist | Out-Null
+    }
 }
 catch {
     Write-Host "  ADVERTENCIA: No se pudo registrar el host nativo de Firefox: $_" -ForegroundColor Yellow
@@ -223,7 +258,7 @@ Show-InstallerProgress -Step 4 -Total 7 -Status 'Instalando Acrylic DNS Proxy'
 if (-not $SkipAcrylic) {
     if (Test-AcrylicInstalled) {
         Write-InstallerVerbose '  Acrylic ya instalado'
-        if (Ensure-AcrylicService -Start) {
+        if ((-not $WhatIfPreference) -and (Ensure-AcrylicService -Start)) {
             Write-InstallerVerbose '  Servicio Acrylic listo'
         }
         else {
@@ -231,7 +266,7 @@ if (-not $SkipAcrylic) {
         }
     }
     else {
-        $installed = Install-AcrylicDNS
+        $installed = Install-AcrylicDNS -WhatIf:$WhatIfPreference
         if ($installed) {
             Write-InstallerVerbose '  Acrylic instalado'
         }
@@ -245,19 +280,19 @@ else {
     Write-Host '  Instalacion de Acrylic omitida' -ForegroundColor Yellow
 }
 
-Set-AcrylicConfiguration
+Set-AcrylicConfiguration -WhatIf:$WhatIfPreference
 
 Show-InstallerProgress -Step 5 -Total 7 -Status 'Configurando DNS local'
 if ($deferLocalDnsUntilRemoteBootstrap) {
     Write-InstallerVerbose '  DNS local se activara tras descargar y aplicar la primera whitelist'
 }
 else {
-    Set-LocalDNS
+    Set-LocalDNS -WhatIf:$WhatIfPreference
     Write-InstallerVerbose '  DNS configurado a 127.0.0.1'
 }
 
 Show-InstallerProgress -Step 6 -Total 7 -Status 'Registrando tareas programadas'
-Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1
+Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1 -WhatIf:$WhatIfPreference
 Write-InstallerVerbose '  Tareas registradas'
 
 $machineRegistered = 'NOT_REQUESTED'
@@ -296,7 +331,9 @@ try {
     Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force
     $nativeHostConfig = Get-OpenPathConfig
     $nativeHostRequestSetup = Get-OpenPathRequestSetupState -Config $nativeHostConfig
-    $nativeHostRegistered = Register-OpenPathFirefoxNativeHost -Config $nativeHostConfig -ClearWhitelist
+    if ($PSCmdlet.ShouldProcess('Firefox native messaging host', 'Register OpenPath native host after enrollment')) {
+        $nativeHostRegistered = Register-OpenPathFirefoxNativeHost -Config $nativeHostConfig -ClearWhitelist
+    }
     if ($classroomModeRequested -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup.Ready)) {
         $requestSetupMessage = if ($nativeHostRequestSetup -and $nativeHostRequestSetup.DiagnosticMessage) {
             [string]$nativeHostRequestSetup.DiagnosticMessage
@@ -336,11 +373,33 @@ try {
         $nonAdminAppControlMode = [string]$config.nonAdminAppControlMode
     }
     if ($enableNonAdminAppControl) {
-        Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode | Out-Null
+        Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -WhatIf:$WhatIfPreference | Out-Null
+    }
+    else {
+        Write-InstallerVerbose '  Managed browser boundary disabled; AppLocker boundary not applied'
     }
 }
 catch {
     Write-Host "  ADVERTENCIA: No se pudo configurar AppLocker para usuarios no administradores: $_" -ForegroundColor Yellow
+}
+
+if ($BrowserCleanupMode -eq 'Disabled') {
+    Write-InstallerVerbose '  Browser cleanup reporting disabled'
+}
+elseif ($PSCmdlet.ShouldProcess('Browser cleanup inventory', "Report unmanaged browsers with $BrowserCleanupMode mode")) {
+    try {
+        $browserInventoryMode = if ($BrowserCleanupMode -eq 'RemoveKnownInstallers') { 'RemoveKnownInstallers' } else { 'ReportOnly' }
+        $browserInventory = Get-OpenPathBrowserInventory -Mode $browserInventoryMode
+        $unmanagedCount = @($browserInventory.UnmanagedBrowsers).Count + @($browserInventory.PortableBrowserRisks).Count
+        $removalCandidateCount = @($browserInventory.RemovalCandidates).Count
+        Write-InstallerVerbose "  Browser cleanup report: $unmanagedCount unmanaged finding(s), $removalCandidateCount removable known installer candidate(s)"
+        if ($BrowserCleanupMode -eq 'RemoveKnownInstallers' -and $removalCandidateCount -gt 0) {
+            Write-Host '  ADVERTENCIA: RemoveKnownInstallers reports candidates only; automatic browser uninstall is not enabled in this release.' -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host "  ADVERTENCIA: No se pudo generar el reporte de navegadores: $_" -ForegroundColor Yellow
+    }
 }
 
 Initialize-OpenPathInstallerIntegrity
