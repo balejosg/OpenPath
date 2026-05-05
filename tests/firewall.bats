@@ -249,11 +249,11 @@ EOF
 
 # ============== Shared contract fixture tests ==============
 
-@test "default DoH resolver catalog matches shared contract fixture" {
+@test "default Linux DoH resolver catalog matches shared IPv4 contract fixture" {
     source "$PROJECT_DIR/linux/lib/common.sh"
 
     local expected actual
-    expected=$(load_contract_fixture_lines "doh-resolvers.txt" | sort)
+    expected=$(load_contract_fixture_lines "doh-resolvers.txt" | awk 'index($0, ":") == 0' | sort)
     actual=$(csv_to_lines "$DOH_RESOLVERS" | sort)
 
     [ "$actual" = "$expected" ]
