@@ -24,7 +24,7 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         [string]$Mode = 'Enforced'
     )
 
-    $nativeHostPath = "$($OpenPathRoot.TrimEnd('\'))\browser-extension\firefox\native\*"
+    $openPathRuntimePath = "$($OpenPathRoot.TrimEnd('\'))\*"
     return [PSCustomObject]@{
         Mode = $Mode
         EnforcementMode = if ($Mode -eq 'AuditOnly') { 'AuditOnly' } else { 'Enabled' }
@@ -33,9 +33,13 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         SystemSid = 'S-1-5-18'
         AllowPaths = @(
             '%WINDIR%\*',
-            '%PROGRAMFILES%\*',
-            '%PROGRAMFILES(X86)%\*',
-            $nativeHostPath
+            $openPathRuntimePath,
+            '%PROGRAMFILES%\Mozilla Firefox\firefox.exe',
+            '%PROGRAMFILES(X86)%\Mozilla Firefox\firefox.exe',
+            '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe',
+            '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe',
+            '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe',
+            '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
         )
         BlockedWindowsTools = @(
             '%WINDIR%\System32\curl.exe',
@@ -55,7 +59,9 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         )
         UserWritableDenyPaths = @(
             '%USERPROFILE%\Downloads\*',
+            '%USERPROFILE%\Desktop\*',
             '%USERPROFILE%\AppData\Local\*',
+            '%APPDATA%\*',
             '%LOCALAPPDATA%\Temp\*',
             '%TEMP%\*'
         )
@@ -113,6 +119,11 @@ function New-OpenPathAppLockerPolicyXml {
     $ruleCollections = @()
     foreach ($collectionType in @('Exe', 'Script')) {
         $rules = @()
+        foreach ($path in @($Spec.UserWritableDenyPaths)) {
+            $pathId = ($path -replace '[^0-9A-Za-z]+', '-').Trim('-')
+            $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType users deny $pathId" -Sid $Spec.NonAdminSid -Action 'Deny' -Path $path
+        }
+
         $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType administrators allow all" -Sid $Spec.AdminSid -Action 'Allow' -Path '*'
         $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType system allow all" -Sid $Spec.SystemSid -Action 'Allow' -Path '*'
 
