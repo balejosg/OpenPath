@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-$script:Results = [System.Collections.Generic.List[object]]::new()
+$script:Results = @()
 
 function Test-OpenPathWindowsHost {
     $isWindowsVariable = Get-Variable -Name IsWindows -ValueOnly -ErrorAction SilentlyContinue
@@ -66,14 +66,14 @@ function Add-ProbeResult {
         [hashtable]$Evidence = @{}
     )
 
-    $script:Results.Add([pscustomobject]@{
+    $script:Results += [pscustomobject]@{
             name      = $Name
             section   = $Section
             status    = $Status
             detail    = $Detail
             evidence  = [pscustomobject]$Evidence
             timestamp = (Get-Date).ToString('o')
-        }) | Out-Null
+        }
 }
 
 function Resolve-Executable {
