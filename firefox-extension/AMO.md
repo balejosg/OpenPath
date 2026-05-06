@@ -86,7 +86,7 @@ runtime, use this manifest disclosure:
 
 ```json
 "data_collection_permissions": {
-  "required": ["browsingActivity", "websiteContent"]
+  "required": ["browsingActivity", "websiteActivity", "websiteContent"]
 }
 ```
 

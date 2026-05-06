@@ -38,12 +38,18 @@ class FakeClassList {
 class FakeElement {
   classList = new FakeClassList();
   className = '';
-  innerHTML = '';
+  ownerDocument = {
+    createElement: (): FakeElement => new FakeElement(),
+  };
   textContent = '';
   children: FakeElement[] = [];
 
   appendChild(child: FakeElement): void {
     this.children.push(child);
+  }
+
+  replaceChildren(...children: FakeElement[]): void {
+    this.children = children;
   }
 }
 
@@ -116,7 +122,11 @@ await describe('popup feedback helpers', async () => {
 
     assert.equal(btnVerify.disabled, true);
     assert.equal(btnVerify.textContent, '⌛ Verificando...');
-    assert.match(verifyListEl.innerHTML, /Consultando host nativo/);
+    assert.equal((verifyListEl as unknown as FakeElement).children[0]?.className, 'loading');
+    assert.equal(
+      (verifyListEl as unknown as FakeElement).children[0]?.textContent,
+      'Consultando host nativo...'
+    );
     assert.equal((verifyResultsEl.classList as unknown as FakeClassList).contains('hidden'), false);
 
     renderPopupVerifyResults({
@@ -132,10 +142,25 @@ await describe('popup feedback helpers', async () => {
     });
 
     assert.equal((verifyListEl as unknown as FakeElement).children.length, 1);
-    assert.match(
-      (verifyListEl as unknown as FakeElement).children[0]?.innerHTML ?? '',
-      /PERMITIDO/
-    );
+    const resultItem = (verifyListEl as unknown as FakeElement).children[0];
+    assert.ok(resultItem);
+    const domainEl = resultItem.children[0];
+    const metaEl = resultItem.children[1];
+    assert.ok(domainEl);
+    assert.ok(metaEl);
+    const ipInfoEl = metaEl.children[0];
+    const statusEl = metaEl.children[1];
+    assert.ok(ipInfoEl);
+    assert.ok(statusEl);
+
+    assert.equal(resultItem.className, 'verify-item');
+    assert.equal(domainEl.className, 'verify-domain');
+    assert.equal(domainEl.textContent, 'allowed.example.com');
+    assert.equal(metaEl.className, 'verify-meta');
+    assert.equal(ipInfoEl.className, 'ip-info');
+    assert.equal(ipInfoEl.textContent, '127.0.0.1');
+    assert.match(statusEl.className, /verify-status/);
+    assert.equal(statusEl.textContent, 'PERMITIDO');
 
     hidePopupVerifyResults({
       verifyListEl,
@@ -143,12 +168,16 @@ await describe('popup feedback helpers', async () => {
     });
 
     assert.equal((verifyResultsEl.classList as unknown as FakeClassList).contains('hidden'), true);
-    assert.equal(verifyListEl.innerHTML, '');
+    assert.equal((verifyListEl as unknown as FakeElement).children.length, 0);
 
     showPopupVerifyError(verifyListEl, 'fallo');
-    assert.match(verifyListEl.innerHTML, /Error: fallo/);
+    assert.equal((verifyListEl as unknown as FakeElement).children[0]?.className, 'error-text');
+    assert.equal((verifyListEl as unknown as FakeElement).children[0]?.textContent, 'Error: fallo');
     showPopupVerifyCommunicationError(verifyListEl);
-    assert.match(verifyListEl.innerHTML, /Error al comunicar con el host nativo/);
+    assert.equal(
+      (verifyListEl as unknown as FakeElement).children[0]?.textContent,
+      'Error al comunicar con el host nativo'
+    );
 
     resetPopupVerifyButton(btnVerify);
     assert.equal(btnVerify.disabled, false);

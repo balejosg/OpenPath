@@ -6,6 +6,18 @@ import assert from 'node:assert/strict';
 const extensionRoot = path.resolve(import.meta.dirname, '..');
 
 interface FirefoxManifest {
+  browser_specific_settings?: {
+    gecko?: {
+      data_collection_permissions?: {
+        required?: string[];
+      };
+      id?: string;
+      strict_min_version?: string;
+    };
+    gecko_android?: {
+      strict_min_version?: string;
+    };
+  };
   name?: string;
   description?: string;
   content_security_policy?: {
@@ -51,6 +63,23 @@ void describe('Firefox extension manifest policy', () => {
     const manifest = await readManifest();
 
     assert.deepEqual(manifest.host_permissions, ['<all_urls>']);
+  });
+
+  void test('declares Firefox data collection consent and compatible runtimes', async () => {
+    const manifest = await readManifest();
+
+    assert.deepEqual(manifest.browser_specific_settings, {
+      gecko: {
+        id: 'monitor-bloqueos@openpath',
+        strict_min_version: '140.0',
+        data_collection_permissions: {
+          required: ['browsingActivity', 'websiteActivity', 'websiteContent'],
+        },
+      },
+      gecko_android: {
+        strict_min_version: '142.0',
+      },
+    });
   });
 
   void test('wakes the background runtime at document start on normal web pages', async () => {

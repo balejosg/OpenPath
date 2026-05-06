@@ -2,12 +2,11 @@ import { buildRequestDomainOptions, shouldEnableSubmitRequest } from './popup-re
 import { shouldEnableRequestAction, type BlockedDomainsData } from './popup-state.js';
 import { buildBlockedDomainListItems } from './popup-view-models.js';
 
-function escapeHtmlAttribute(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+function createElementFor<K extends keyof HTMLElementTagNameMap>(
+  parent: HTMLElement,
+  tagName: K
+): HTMLElementTagNameMap[K] {
+  return parent.ownerDocument.createElement(tagName);
 }
 
 export function hidePopupRequestSection(requestSectionEl: HTMLElement): void {
@@ -70,7 +69,7 @@ export function renderPopupDomainsList(input: {
   const createListItem =
     input.createListItem ?? ((): HTMLLIElement => document.createElement('li'));
 
-  input.domainsListEl.innerHTML = '';
+  input.domainsListEl.replaceChildren();
   buildBlockedDomainListItems({
     blockedDomainsData: input.blockedDomainsData,
     currentTabId: input.currentTabId,
@@ -78,21 +77,39 @@ export function renderPopupDomainsList(input: {
   }).forEach((viewModel) => {
     const item = createListItem();
     item.className = 'domain-item';
-    const hostname = escapeHtmlAttribute(viewModel.hostname);
-    const statusLabel = escapeHtmlAttribute(viewModel.statusLabel);
-    const statusTitle = escapeHtmlAttribute(viewModel.statusTitle);
-    const retryButton = viewModel.retryHostname
-      ? `<button class="retry-update-btn" data-hostname="${escapeHtmlAttribute(viewModel.retryHostname)}" title="Reintentar actualización local">Reintentar</button>`
-      : '';
 
-    item.innerHTML = `
-            <span class="domain-name" title="${hostname}">${hostname}</span>
-            <span class="domain-meta">
-                <span class="domain-count" title="Intentos de conexión">${viewModel.attempts.toString()}</span>
-                <span class="domain-status ${viewModel.statusClassName}" title="${statusTitle}">${statusLabel}</span>
-                ${retryButton}
-            </span>
-        `;
+    const domainName = createElementFor(item, 'span');
+    domainName.className = 'domain-name';
+    domainName.title = viewModel.hostname;
+    domainName.textContent = viewModel.hostname;
+
+    const domainMeta = createElementFor(item, 'span');
+    domainMeta.className = 'domain-meta';
+
+    const domainCount = createElementFor(item, 'span');
+    domainCount.className = 'domain-count';
+    domainCount.title = 'Intentos de conexión';
+    domainCount.textContent = viewModel.attempts.toString();
+
+    const domainStatus = createElementFor(item, 'span');
+    domainStatus.className = `domain-status ${viewModel.statusClassName}`;
+    domainStatus.title = viewModel.statusTitle;
+    domainStatus.textContent = viewModel.statusLabel;
+
+    domainMeta.appendChild(domainCount);
+    domainMeta.appendChild(domainStatus);
+
+    if (viewModel.retryHostname) {
+      const retryButton = createElementFor(item, 'button');
+      retryButton.className = 'retry-update-btn';
+      retryButton.dataset.hostname = viewModel.retryHostname;
+      retryButton.title = 'Reintentar actualización local';
+      retryButton.textContent = 'Reintentar';
+      domainMeta.appendChild(retryButton);
+    }
+
+    item.appendChild(domainName);
+    item.appendChild(domainMeta);
     input.domainsListEl.appendChild(item);
   });
 }
@@ -102,18 +119,24 @@ export function populatePopupRequestDomainSelect(input: {
   createOption?: () => HTMLOptionElement;
   requestDomainSelectEl: HTMLSelectElement;
 }): void {
-  input.requestDomainSelectEl.innerHTML = '<option value="">Seleccionar dominio...</option>';
-
   const createOption =
     input.createOption ?? ((): HTMLOptionElement => document.createElement('option'));
 
-  buildRequestDomainOptions(input.blockedDomainsData).forEach(({ hostname, origin }) => {
-    const option = createOption();
-    option.value = hostname;
-    option.textContent = hostname;
-    option.dataset.origin = origin;
-    input.requestDomainSelectEl.appendChild(option);
-  });
+  const defaultOption = createOption();
+  defaultOption.value = '';
+  defaultOption.textContent = 'Seleccionar dominio...';
+
+  const options = buildRequestDomainOptions(input.blockedDomainsData).map(
+    ({ hostname, origin }) => {
+      const option = createOption();
+      option.value = hostname;
+      option.textContent = hostname;
+      option.dataset.origin = origin;
+      return option;
+    }
+  );
+
+  input.requestDomainSelectEl.replaceChildren(defaultOption, ...options);
 }
 
 export function syncPopupSubmitButtonState(input: {

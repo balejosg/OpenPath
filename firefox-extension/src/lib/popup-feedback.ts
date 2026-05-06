@@ -5,6 +5,13 @@ import {
 } from './popup-native-actions.js';
 import { buildRequestStatusPresentation } from './popup-view-models.js';
 
+function createElementFor<K extends keyof HTMLElementTagNameMap>(
+  parent: HTMLElement,
+  tagName: K
+): HTMLElementTagNameMap[K] {
+  return parent.ownerDocument.createElement(tagName);
+}
+
 export function showPopupToast(input: {
   duration?: number;
   message: string;
@@ -44,16 +51,25 @@ export function showPopupVerifyLoading(input: {
 }): void {
   input.btnVerify.disabled = true;
   input.btnVerify.textContent = '⌛ Verificando...';
-  input.verifyListEl.innerHTML = '<div class="loading">Consultando host nativo...</div>';
+  const loadingEl = createElementFor(input.verifyListEl, 'div');
+  loadingEl.className = 'loading';
+  loadingEl.textContent = 'Consultando host nativo...';
+  input.verifyListEl.replaceChildren(loadingEl);
   input.verifyResultsEl.classList.remove('hidden');
 }
 
 export function showPopupVerifyError(verifyListEl: HTMLElement, message: string): void {
-  verifyListEl.innerHTML = `<div class="error-text">Error: ${message}</div>`;
+  const errorEl = createElementFor(verifyListEl, 'div');
+  errorEl.className = 'error-text';
+  errorEl.textContent = `Error: ${message}`;
+  verifyListEl.replaceChildren(errorEl);
 }
 
 export function showPopupVerifyCommunicationError(verifyListEl: HTMLElement): void {
-  verifyListEl.innerHTML = '<div class="error-text">Error al comunicar con el host nativo</div>';
+  const errorEl = createElementFor(verifyListEl, 'div');
+  errorEl.className = 'error-text';
+  errorEl.textContent = 'Error al comunicar con el host nativo';
+  verifyListEl.replaceChildren(errorEl);
 }
 
 export function resetPopupVerifyButton(btnVerify: HTMLButtonElement): void {
@@ -67,11 +83,13 @@ export function renderPopupVerifyResults(input: {
   verifyListEl: HTMLElement;
 }): void {
   if (input.results.length === 0) {
-    input.verifyListEl.innerHTML = '<div>No hay resultados</div>';
+    const emptyEl = createElementFor(input.verifyListEl, 'div');
+    emptyEl.textContent = 'No hay resultados';
+    input.verifyListEl.replaceChildren(emptyEl);
     return;
   }
 
-  input.verifyListEl.innerHTML = '';
+  input.verifyListEl.replaceChildren();
   const createListItem =
     input.createListItem ?? ((): HTMLLIElement => document.createElement('li'));
 
@@ -79,15 +97,27 @@ export function renderPopupVerifyResults(input: {
     const item = createListItem();
     item.className = 'verify-item';
 
-    const ipInfo = result.resolvedIp ? `<span class="ip-info">${result.resolvedIp}</span>` : '';
+    const domainEl = createElementFor(item, 'span');
+    domainEl.className = 'verify-domain';
+    domainEl.textContent = result.domain;
 
-    item.innerHTML = `
-            <span class="verify-domain">${result.domain}</span>
-            <div class="verify-meta">
-                ${ipInfo}
-                <span class="verify-status ${result.statusClass}">${result.statusText}</span>
-            </div>
-        `;
+    const metaEl = createElementFor(item, 'div');
+    metaEl.className = 'verify-meta';
+
+    if (result.resolvedIp) {
+      const ipInfo = createElementFor(item, 'span');
+      ipInfo.className = 'ip-info';
+      ipInfo.textContent = result.resolvedIp;
+      metaEl.appendChild(ipInfo);
+    }
+
+    const statusEl = createElementFor(item, 'span');
+    statusEl.className = `verify-status ${result.statusClass}`;
+    statusEl.textContent = result.statusText;
+    metaEl.appendChild(statusEl);
+
+    item.appendChild(domainEl);
+    item.appendChild(metaEl);
     input.verifyListEl.appendChild(item);
   });
 }
@@ -97,7 +127,7 @@ export function hidePopupVerifyResults(input: {
   verifyResultsEl: HTMLElement;
 }): void {
   input.verifyResultsEl.classList.add('hidden');
-  input.verifyListEl.innerHTML = '';
+  input.verifyListEl.replaceChildren();
 }
 
 export function showPopupRequestStatus(input: {

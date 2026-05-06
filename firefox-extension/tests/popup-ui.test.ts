@@ -31,13 +31,20 @@ class FakeElement {
   className = '';
   dataset: { origin?: string } = {};
   disabled = false;
-  innerHTML = '';
+  ownerDocument = {
+    createElement: (): FakeElement => new FakeElement(),
+  };
   textContent = '';
+  title = '';
   value = '';
   children: FakeElement[] = [];
 
   appendChild(child: FakeElement): void {
     this.children.push(child);
+  }
+
+  replaceChildren(...children: FakeElement[]): void {
+    this.children = children;
   }
 }
 
@@ -115,11 +122,26 @@ await describe('popup ui helpers', async () => {
     assert.equal(countEl.textContent, '1');
     assert.equal(btnCopy.disabled, false);
     assert.equal(btnVerify.disabled, true);
+    const domainItem = (domainsListEl as unknown as FakeElement).children[0];
     assert.equal((domainsListEl as unknown as FakeElement).children.length, 1);
-    assert.match(
-      (domainsListEl as unknown as FakeElement).children[0]?.innerHTML ?? '',
-      /cdn\.example\.com/
-    );
+    assert.ok(domainItem);
+    const domainNameEl = domainItem.children[0];
+    const domainMetaEl = domainItem.children[1];
+    assert.ok(domainNameEl);
+    assert.ok(domainMetaEl);
+    const domainCountEl = domainMetaEl.children[0];
+    const domainStatusEl = domainMetaEl.children[1];
+    assert.ok(domainCountEl);
+    assert.ok(domainStatusEl);
+
+    assert.equal(domainItem.className, 'domain-item');
+    assert.equal(domainNameEl.className, 'domain-name');
+    assert.equal(domainNameEl.textContent, 'cdn.example.com');
+    assert.equal(domainNameEl.title, 'cdn.example.com');
+    assert.equal(domainMetaEl.className, 'domain-meta');
+    assert.equal(domainCountEl.className, 'domain-count');
+    assert.equal(domainCountEl.textContent, '1');
+    assert.match(domainStatusEl.className, /domain-status/);
   });
 
   await test('populates request options and toggles the request section', () => {
@@ -140,10 +162,13 @@ await describe('popup ui helpers', async () => {
       requestDomainSelectEl,
     });
 
-    assert.match(requestDomainSelectEl.innerHTML, /Seleccionar dominio/);
-    assert.equal((requestDomainSelectEl as unknown as FakeElement).children.length, 1);
+    assert.equal((requestDomainSelectEl as unknown as FakeElement).children.length, 2);
     assert.equal(
-      (requestDomainSelectEl as unknown as FakeElement).children[0]?.dataset.origin,
+      (requestDomainSelectEl as unknown as FakeElement).children[0]?.textContent,
+      'Seleccionar dominio...'
+    );
+    assert.equal(
+      (requestDomainSelectEl as unknown as FakeElement).children[1]?.dataset.origin,
       'portal.school'
     );
 
