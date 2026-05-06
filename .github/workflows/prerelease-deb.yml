@@ -145,4 +145,5 @@ jobs:
       version: ${{ needs.build-prerelease.outputs.version }}
       summary-title: Prerelease Deb Published
       install-command: curl -fsSL https://raw.githubusercontent.com/balejosg/openpath/gh-pages/apt/apt-bootstrap.sh | sudo bash -s -- --unstable
+      validate-published-metadata: true
     secrets: inherit

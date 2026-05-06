@@ -405,6 +405,23 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+@test "prerelease deb publish workflow waits for externally visible raw GitHub metadata" {
+    run grep -n 'validate-published-metadata: true' "$PROJECT_DIR/.github/workflows/prerelease-deb.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -n 'Wait for raw GitHub APT metadata publication' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -n 'https://raw.githubusercontent.com/balejosg/openpath/gh-pages/promotion-contracts/${OPENPATH_SHA}.json' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -n 'https://raw.githubusercontent.com/balejosg/openpath/gh-pages/apt/dists/$SUITE/main/binary-amd64/Packages' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -n 'openpath-dnsmasq=${{ steps.deb_version.outputs.package_version }}-1' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
+    [ "$status" -eq 0 ]
+}
+
 @test "deb publish workflow serializes apt repository updates across suites" {
     run grep -n 'group: openpath-apt-publish' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
     [ "$status" -eq 0 ]

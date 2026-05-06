@@ -345,6 +345,76 @@ jobs:
           git -C gh-pages commit -m "chore(apt): sync Pages source ($SUITE ${{ inputs.version }})"
           git -C gh-pages push origin HEAD:gh-pages
 
+      - name: Wait for raw GitHub APT metadata publication
+        if: inputs.validate-published-metadata
+        run: |
+          OPENPATH_SHA="$(git rev-parse HEAD)"
+          package_version="${{ steps.deb_version.outputs.package_version }}"
+          deb_version="${package_version}-1"
+          expected_package_entry="openpath-dnsmasq=${{ steps.deb_version.outputs.package_version }}-1"
+          contract_url="https://raw.githubusercontent.com/balejosg/openpath/gh-pages/promotion-contracts/${OPENPATH_SHA}.json"
+          packages_url="https://raw.githubusercontent.com/balejosg/openpath/gh-pages/apt/dists/$SUITE/main/binary-amd64/Packages"
+          deadline=$((SECONDS + 600))
+
+          validate_contract() {
+            local contract_file="$1"
+            CONTRACT_FILE="$contract_file" EXPECTED_PACKAGE_VERSION="$package_version" node <<'NODE'
+          const fs = require('node:fs');
+
+          const contract = JSON.parse(fs.readFileSync(process.env.CONTRACT_FILE, 'utf8'));
+          if (contract.packageVersion !== process.env.EXPECTED_PACKAGE_VERSION) {
+            throw new Error(
+              `Expected packageVersion ${process.env.EXPECTED_PACKAGE_VERSION}, got ${contract.packageVersion}`
+            );
+          }
+          NODE
+          }
+
+          validate_packages() {
+            local packages_file="$1"
+            awk -F': ' '
+              $1 == "Package" { package = $2 }
+              $1 == "Version" { version = $2 }
+              /^$/ {
+                if (package != "" && version != "") print package "=" version
+                package = ""
+                version = ""
+              }
+              END {
+                if (package != "" && version != "") print package "=" version
+              }
+            ' "$packages_file" | grep -Fx "$expected_package_entry"
+          }
+
+          attempt=0
+          last_error="raw GitHub metadata was not checked"
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            attempt=$((attempt + 1))
+            contract_file="$(mktemp)"
+            packages_file="$(mktemp)"
+
+            if ! curl -fsSL "$contract_url" -o "$contract_file"; then
+              last_error="promotion contract is not externally visible at $contract_url"
+            elif ! validate_contract "$contract_file"; then
+              last_error="promotion contract at $contract_url does not advertise packageVersion $package_version"
+            elif ! curl -fsSL "$packages_url" -o "$packages_file"; then
+              last_error="Packages index is not externally visible at $packages_url"
+            elif ! validate_packages "$packages_file" >/dev/null; then
+              last_error="Packages index at $packages_url does not advertise openpath-dnsmasq=$deb_version"
+            else
+              echo "raw GitHub APT metadata is externally visible after $attempt attempt(s)."
+              rm -f "$contract_file" "$packages_file"
+              exit 0
+            fi
+
+            rm -f "$contract_file" "$packages_file"
+            echo "Waiting for raw GitHub APT metadata publication: $last_error"
+            sleep 10
+          done
+
+          echo "::error title=Raw GitHub APT metadata not published::$last_error"
+          exit 1
+
       - name: Summary
         run: |
           echo "## 📦 ${{ inputs.summary-title }}" >> $GITHUB_STEP_SUMMARY
