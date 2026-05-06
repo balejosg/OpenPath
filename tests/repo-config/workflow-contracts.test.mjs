@@ -137,8 +137,8 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
     ['prerelease-deb.yml', prereleaseWorkflow],
   ]) {
     assert.ok(
-      workflow.includes('2.0.${{ github.run_number }}.${{ github.run_attempt }}'),
-      `${name} should include github.run_attempt in the AMO version so reruns avoid Version already exists`
+      !workflow.includes('amo-version: 2.0.${{ github.run_number }}.${{ github.run_attempt }}'),
+      `${name} should let the Firefox release action derive stable AMO versions from the payload hash`
     );
     assert.ok(
       !workflow.includes('2.0.${{ github.run_number }}"'),
@@ -174,6 +174,16 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
   assert.ok(
     prepareAction.includes('firefox-release-payload-hash.mjs'),
     'cache-aware Firefox release action should key reuse by the release payload hash'
+  );
+  assert.ok(
+    prepareAction.indexOf('firefox-release-payload-hash.mjs') <
+      prepareAction.indexOf('firefox-release-amo-version.mjs'),
+    'cache-aware Firefox release action should derive the AMO version after computing the payload hash'
+  );
+  assert.ok(
+    prepareAction.includes('required: false') &&
+      prepareAction.includes('firefox-release-amo-version.mjs'),
+    'cache-aware Firefox release action should make amo-version an optional override and derive it otherwise'
   );
   assert.ok(
     prepareAction.includes('actions/cache/restore@v4'),
@@ -265,8 +275,10 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
     'Firefox release asset seeding should reuse the cache-aware signing action'
   );
   assert.ok(
-    firefoxAssetsWorkflow.includes('2.0.${{ github.run_number }}.${{ github.run_attempt }}'),
-    'Firefox release asset seeding should use rerun-safe AMO versions'
+    !firefoxAssetsWorkflow.includes(
+      'amo-version: 2.0.${{ github.run_number }}.${{ github.run_attempt }}'
+    ),
+    'Firefox release asset seeding should use payload-stable AMO versions instead of creating a new version per run'
   );
   assert.ok(
     firefoxAssetsWorkflow.includes('firefox-extension/payload-hash.txt') &&

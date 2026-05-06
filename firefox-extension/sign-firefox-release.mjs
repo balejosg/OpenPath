@@ -576,6 +576,21 @@ export function computeFirefoxReleasePayloadHash(options = {}) {
   return hash.digest('hex');
 }
 
+export function deriveAmoVersionFromPayloadHash(payloadHash) {
+  const normalizedHash = String(payloadHash ?? '')
+    .trim()
+    .toLowerCase();
+
+  if (!/^[a-f0-9]{64}$/.test(normalizedHash)) {
+    fail('Firefox Release payload hash must be a 64-character SHA-256 hex string');
+  }
+
+  const majorComponent = Number(BigInt(`0x${normalizedHash.slice(0, 8)}`));
+  const patchComponent = Number(BigInt(`0x${normalizedHash.slice(8, 16)}`));
+
+  return `2.0.${majorComponent}.${patchComponent}`;
+}
+
 function prepareFirefoxReleaseSourceDir(sourceDir) {
   const resolvedSourceDir = path.resolve(sourceDir);
   const tempSourceDir = fs.mkdtempSync(path.join(tmpdir(), 'openpath-firefox-sign-'));

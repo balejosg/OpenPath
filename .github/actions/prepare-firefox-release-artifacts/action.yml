@@ -3,8 +3,9 @@ description: Restore or create AMO-signed Firefox Release artifacts for Debian p
 
 inputs:
   amo-version:
-    description: AMO extension version to use when signing is required.
-    required: true
+    description: Optional AMO extension version override to use when signing is required. Defaults to a stable version derived from the Firefox Release payload hash.
+    required: false
+    default: ''
   web-ext-api-key:
     description: AMO web-ext API key.
     required: true
@@ -54,6 +55,9 @@ outputs:
   artifact-source:
     description: 'Source of the Firefox Release artifacts: cache, signed, or skipped.'
     value: ${{ steps.status.outputs.artifact-source }}
+  amo-version:
+    description: AMO extension version used when signing is required.
+    value: ${{ steps.amo-version.outputs.version }}
   signed-artifacts-present:
     description: Whether verified signed Firefox Release artifacts are present.
     value: ${{ steps.status.outputs.signed-artifacts-present }}
@@ -68,6 +72,21 @@ runs:
         hash="$(node firefox-extension/firefox-release-payload-hash.mjs)"
         echo "hash=$hash" >> "$GITHUB_OUTPUT"
         echo "Firefox Release payload hash: $hash"
+
+    - name: Resolve Firefox Release AMO version
+      id: amo-version
+      shell: bash
+      env:
+        AMO_VERSION_OVERRIDE: ${{ inputs.amo-version }}
+      run: |
+        if [ -n "$AMO_VERSION_OVERRIDE" ]; then
+          version="$AMO_VERSION_OVERRIDE"
+        else
+          version="$(node firefox-extension/firefox-release-amo-version.mjs --payload-hash "${{ steps.payload.outputs.hash }}")"
+        fi
+
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "Firefox Release AMO version: $version"
 
     - name: Restore signed Firefox Release artifacts
       id: cache
@@ -97,7 +116,7 @@ runs:
         WEB_EXT_SIGN_TOTAL_TIMEOUT_SECONDS: ${{ inputs.total-timeout-seconds }}
         WEB_EXT_SIGN_PROCESS_TIMEOUT_BUFFER_SECONDS: ${{ inputs.process-timeout-buffer-seconds }}
       run: |
-        npm run sign:firefox-release --workspace=@openpath/firefox-extension -- --version "${{ inputs.amo-version }}"
+        npm run sign:firefox-release --workspace=@openpath/firefox-extension -- --version "${{ steps.amo-version.outputs.version }}"
 
     - name: Verify signed Firefox Release artifacts
       if: ${{ steps.cache.outputs.cache-hit != 'true' && inputs.sign-on-cache-miss == 'true' }}

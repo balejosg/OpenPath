@@ -82,7 +82,6 @@ jobs:
         id: firefox-release
         uses: ./.github/actions/prepare-firefox-release-artifacts
         with:
-          amo-version: 2.0.${{ github.run_number }}.${{ github.run_attempt }}
           web-ext-api-key: ${{ secrets.WEB_EXT_API_KEY }}
           web-ext-api-secret: ${{ secrets.WEB_EXT_API_SECRET }}
           sign-on-cache-miss: 'false'

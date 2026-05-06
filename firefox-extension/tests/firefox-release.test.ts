@@ -67,6 +67,7 @@ interface SignFirefoxReleaseModule {
     jti?: string;
   }) => string;
   computeFirefoxReleasePayloadHash: (options: { sourceDir?: string }) => string;
+  deriveAmoVersionFromPayloadHash: (payloadHash: string) => string;
   findSignedXpiArtifact: (artifactsDir: string) => string;
   isAmoVersionAlreadyExists: (output: string) => boolean;
   parseAmoVersionEditUrl: (output: string) => {
@@ -143,6 +144,7 @@ const {
   buildWebExtSignArgs,
   createAmoJwt,
   computeFirefoxReleasePayloadHash,
+  deriveAmoVersionFromPayloadHash,
   findSignedXpiArtifact,
   isAmoVersionAlreadyExists,
   parseAmoVersionEditUrl,
@@ -457,10 +459,66 @@ void describe('Firefox release signing helpers', () => {
     assert.equal(
       buildAmoVersionDetailUrl({
         addonId: 'monitor-bloqueos@openpath',
-        version: '2.0.0.777766400',
+        version: '2.0.305419896.2596069104',
       }).href,
-      'https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/versions/v2.0.0.777766400/'
+      'https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/versions/v2.0.305419896.2596069104/'
     );
+  });
+
+  void test('deriveAmoVersionFromPayloadHash creates deterministic numeric AMO versions', () => {
+    const payloadHash = `123456789abcdef0${'f'.repeat(48)}`;
+    const version = deriveAmoVersionFromPayloadHash(payloadHash);
+
+    assert.equal(version, deriveAmoVersionFromPayloadHash(payloadHash));
+    assert.equal(version, '2.0.305419896.2596069104');
+    assert.match(version, /^2\.0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+    assert.ok(
+      version.split('.').every((component) => component === '0' || !component.startsWith('0'))
+    );
+  });
+
+  void test('deriveAmoVersionFromPayloadHash changes only when the Firefox runtime payload changes', () => {
+    const workingDir = createTempDir('openpath-firefox-amo-version-');
+    const sourceDir = path.join(workingDir, 'extension');
+
+    mkdirSync(path.join(sourceDir, 'dist'), { recursive: true });
+    mkdirSync(path.join(sourceDir, 'popup'), { recursive: true });
+    mkdirSync(path.join(sourceDir, 'blocked'), { recursive: true });
+    mkdirSync(path.join(sourceDir, 'icons'), { recursive: true });
+    mkdirSync(path.join(sourceDir, 'native'), { recursive: true });
+
+    writeFileSync(
+      path.join(sourceDir, 'manifest.json'),
+      `${JSON.stringify({
+        version: '3.2.1',
+        browser_specific_settings: { gecko: { id: 'monitor-bloqueos@openpath' } },
+      })}\n`
+    );
+    writeFileSync(path.join(sourceDir, 'dist', 'background.js'), 'console.log("runtime");\n');
+    writeFileSync(path.join(sourceDir, 'popup', 'popup.html'), '<html></html>\n');
+    writeFileSync(path.join(sourceDir, 'blocked', 'blocked.html'), '<html>blocked</html>\n');
+    writeFileSync(path.join(sourceDir, 'icons', 'icon-48.png'), 'icon\n');
+    writeFileSync(path.join(sourceDir, 'native', 'openpath-native-host.py'), 'native only\n');
+
+    const originalVersion = deriveAmoVersionFromPayloadHash(
+      computeFirefoxReleasePayloadHash({ sourceDir })
+    );
+
+    writeFileSync(path.join(sourceDir, 'native', 'openpath-native-host.py'), 'native changed\n');
+    assert.equal(
+      deriveAmoVersionFromPayloadHash(computeFirefoxReleasePayloadHash({ sourceDir })),
+      originalVersion
+    );
+
+    writeFileSync(path.join(sourceDir, 'dist', 'background.js'), 'console.log("changed");\n');
+    assert.notEqual(
+      deriveAmoVersionFromPayloadHash(computeFirefoxReleasePayloadHash({ sourceDir })),
+      originalVersion
+    );
+  });
+
+  void test('deriveAmoVersionFromPayloadHash rejects malformed payload hashes', () => {
+    assert.throws(() => deriveAmoVersionFromPayloadHash('abc'), /64-character SHA-256/);
   });
 
   void test('createAmoJwt builds an AMO-compatible HMAC token', () => {

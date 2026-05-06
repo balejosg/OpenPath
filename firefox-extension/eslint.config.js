@@ -45,6 +45,7 @@ export default tseslint.config(
       'build-chromium-managed.mjs',
       'build-firefox-release.mjs',
       'eslint.config.js',
+      'firefox-release-amo-version.mjs',
       'firefox-release-payload-hash.mjs',
       'sign-firefox-release.mjs',
       'verify-firefox-release-artifacts.mjs',
