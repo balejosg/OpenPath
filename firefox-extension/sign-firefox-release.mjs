@@ -21,6 +21,7 @@ const defaultWebExtSignProcessTimeoutBufferSeconds = 120;
 const defaultWebExtSignRecoveryTimeoutSeconds = 7200;
 const defaultWebExtSignRecoveryPollSeconds = 60;
 const defaultAmoBaseUrl = 'https://addons.mozilla.org/api/v5/';
+const amoVersionComponentModulo = 1_000_000_000n;
 
 function fail(message) {
   throw new Error(message);
@@ -585,8 +586,12 @@ export function deriveAmoVersionFromPayloadHash(payloadHash) {
     fail('Firefox Release payload hash must be a 64-character SHA-256 hex string');
   }
 
-  const majorComponent = Number(BigInt(`0x${normalizedHash.slice(0, 8)}`));
-  const patchComponent = Number(BigInt(`0x${normalizedHash.slice(8, 16)}`));
+  const majorComponent = Number(
+    BigInt(`0x${normalizedHash.slice(0, 8)}`) % amoVersionComponentModulo
+  );
+  const patchComponent = Number(
+    BigInt(`0x${normalizedHash.slice(8, 16)}`) % amoVersionComponentModulo
+  );
 
   return `2.0.${majorComponent}.${patchComponent}`;
 }

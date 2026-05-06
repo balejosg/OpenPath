@@ -459,9 +459,9 @@ void describe('Firefox release signing helpers', () => {
     assert.equal(
       buildAmoVersionDetailUrl({
         addonId: 'monitor-bloqueos@openpath',
-        version: '2.0.305419896.2596069104',
+        version: '2.0.305419896.596069104',
       }).href,
-      'https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/versions/v2.0.305419896.2596069104/'
+      'https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/versions/v2.0.305419896.596069104/'
     );
   });
 
@@ -470,11 +470,22 @@ void describe('Firefox release signing helpers', () => {
     const version = deriveAmoVersionFromPayloadHash(payloadHash);
 
     assert.equal(version, deriveAmoVersionFromPayloadHash(payloadHash));
-    assert.equal(version, '2.0.305419896.2596069104');
+    assert.equal(version, '2.0.305419896.596069104');
     assert.match(version, /^2\.0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
     assert.ok(
       version.split('.').every((component) => component === '0' || !component.startsWith('0'))
     );
+  });
+
+  void test('deriveAmoVersionFromPayloadHash keeps every AMO version component within 9 digits', () => {
+    const payloadHash = 'c9bd04160f6b58b431dac833d42dfa76a5d7893271f82964bef1146943d72769';
+    const version = deriveAmoVersionFromPayloadHash(payloadHash);
+
+    assert.equal(version, '2.0.384607766.258693300');
+    for (const component of version.split('.')) {
+      assert.ok(component.length <= 9, `component ${component} exceeds AMO's 9 digit limit`);
+      assert.ok(component === '0' || !component.startsWith('0'));
+    }
   });
 
   void test('deriveAmoVersionFromPayloadHash changes only when the Firefox runtime payload changes', () => {
