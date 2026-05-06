@@ -3,6 +3,8 @@ export interface BuildWebExtSignArgsOptions {
   apiSecret: string;
   artifactsDir: string;
   sourceDir?: string;
+  uploadSourceCode?: string;
+  amoMetadata?: string;
 }
 
 export function buildWebExtSignArgs(options: BuildWebExtSignArgsOptions): string[];

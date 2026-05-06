@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: `firefox-extension/`
-> Last verified: 2026-05-05
+> Last verified: 2026-05-06
 > Source of truth: `firefox-extension/PRIVACY.md`
 
 ## Overview
@@ -14,7 +14,8 @@ The OpenPath extension is designed to operate locally in the browser. It is used
 - no analytics or telemetry are sent to third-party services
 - routine blocked-resource state is kept in browser-local runtime state
 - unblock requests send the blocked domain, request reason, and request metadata only to the configured OpenPath service
-- page-resource auto-allow candidates send the blocked host, originating page, and request type only to the configured OpenPath service
+- page-resource auto-allow candidates send the target host/URL, originating page, resource type, and policy reason only to the configured OpenPath service
+- Google Search/Doodles game enforcement is limited to supported Google domains and does not send game-page data outside the configured OpenPath service
 - clipboard access is used only when the user copies a blocked-domain list
 - optional `nativeMessaging` communicates only with the local OpenPath native host on the same machine
 
@@ -32,6 +33,13 @@ browser data.
 | `tabs`               | Scope badge and popup data to the active tab                           |
 | `clipboardWrite`     | Copy blocked-domain lists only after a user action                     |
 | `nativeMessaging`    | Communicate with the local OpenPath native host when it is installed   |
+| `storage`            | Keep managed config and local runtime state in browser storage         |
 | `<all_urls>`         | Observe managed-page resources regardless of origin or embedded domain |
+
+The Firefox manifest declares Mozilla data-collection permissions for
+`browsingActivity`, `websiteActivity`, and `websiteContent` because unblock
+requests and page-resource auto-allow candidates can transmit managed-page
+activity/content details to the configured OpenPath service. This disclosure
+does not mean the extension sends third-party analytics or telemetry.
 
 Questions or changes to this policy should stay aligned with the source in this repository and the current extension manifest.

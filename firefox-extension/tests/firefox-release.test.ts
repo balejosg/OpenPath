@@ -59,6 +59,8 @@ interface SignFirefoxReleaseModule {
     sourceDir?: string;
     approvalTimeoutMs?: number;
     requestTimeoutMs?: number;
+    uploadSourceCode?: string;
+    amoMetadata?: string;
   }) => string[];
   createAmoJwt: (options: {
     apiKey: string;
@@ -137,8 +139,83 @@ interface VerifyFirefoxReleaseArtifactsModule {
   }) => FirefoxReleaseMetadata;
 }
 
+interface BuildFirefoxSourceSubmissionModule {
+  buildFirefoxSourceSubmission: (options?: {
+    rootDir?: string;
+    outputPath?: string;
+    entries?: string[];
+  }) => {
+    outputPath: string;
+    entries: string[];
+  };
+}
+
+interface UploadFirefoxAmoSourceModule {
+  parseAmoThrottleDelaySeconds: (body: unknown) => number | null;
+  uploadFirefoxAmoSource: (options: {
+    apiKey: string;
+    apiSecret: string;
+    addonId?: string;
+    versionId?: string;
+    version?: string;
+    sourceArchive?: string;
+    metadataPath?: string;
+    amoBaseUrl?: string;
+    fetchImpl?: typeof fetch;
+    sourceOnly?: boolean;
+    metadataOnly?: boolean;
+    verify?: boolean;
+    waitForThrottle?: boolean;
+    maxThrottleWaitSeconds?: number;
+    retryBufferSeconds?: number;
+    maxRetries?: number;
+    sleepImpl?: (milliseconds: number) => Promise<void>;
+    stdout?: { write: (chunk: string) => unknown };
+  }) => Promise<unknown>;
+}
+
+interface VerifyFirefoxAmoVersionModule {
+  verifyFirefoxAmoVersion: (options: {
+    apiKey: string;
+    apiSecret: string;
+    addonId?: string;
+    versionId?: string;
+    version?: string;
+    amoBaseUrl?: string;
+    requireSource?: boolean;
+    requireApprovalNotes?: boolean;
+    fetchImpl?: typeof fetch;
+  }) => Promise<{
+    versionId: number | string;
+    version: string;
+    channel: string;
+    fileStatus: string;
+    sourcePresent: boolean;
+    approvalNotesPresent: boolean;
+  }>;
+}
+
+interface SyncFirefoxAmoPolicyModule {
+  syncFirefoxAmoPolicy: (options: {
+    apiKey: string;
+    apiSecret: string;
+    addonId?: string;
+    privacyPath?: string;
+    amoBaseUrl?: string;
+    fetchImpl?: typeof fetch;
+  }) => Promise<{ privacyPolicyPresent: boolean }>;
+}
+
 const { prepareFirefoxReleaseArtifacts } =
   (await import('../build-firefox-release.mjs')) as PrepareFirefoxReleaseArtifactsModule;
+const { buildFirefoxSourceSubmission } =
+  (await import('../build-firefox-source-submission.mjs')) as BuildFirefoxSourceSubmissionModule;
+const { parseAmoThrottleDelaySeconds, uploadFirefoxAmoSource } =
+  (await import('../upload-firefox-amo-source.mjs')) as UploadFirefoxAmoSourceModule;
+const { verifyFirefoxAmoVersion } =
+  (await import('../verify-firefox-amo-version.mjs')) as VerifyFirefoxAmoVersionModule;
+const { syncFirefoxAmoPolicy } =
+  (await import('../sync-firefox-amo-policy.mjs')) as SyncFirefoxAmoPolicyModule;
 const {
   buildAmoVersionDetailUrl,
   buildWebExtSignArgs,
@@ -164,6 +241,16 @@ function createTempDir(prefix: string): string {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   tempDirectories.push(dir);
   return dir;
+}
+
+function requestInputToUrl(input: RequestInfo | URL): string {
+  if (input instanceof Request) {
+    return input.url;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
+  return input;
 }
 
 afterEach(() => {
@@ -370,6 +457,67 @@ void describe('Firefox release signing helpers', () => {
     );
   });
 
+  void test('buildWebExtSignArgs uploads AMO source and reviewer metadata when provided', () => {
+    const args = buildWebExtSignArgs({
+      apiKey: 'user:123:456',
+      apiSecret: 'top-secret',
+      artifactsDir: 'build/firefox-release/raw-signed',
+      sourceDir: extensionRoot,
+      uploadSourceCode: 'build/firefox-source-submission/openpath-firefox-source.zip',
+      amoMetadata: 'amo-review-metadata.json',
+    });
+
+    assert.ok(
+      args.includes(
+        '--upload-source-code=build/firefox-source-submission/openpath-firefox-source.zip'
+      )
+    );
+    assert.ok(args.includes('--amo-metadata=amo-review-metadata.json'));
+  });
+
+  void test('buildFirefoxSourceSubmission includes human-readable source and excludes generated output', () => {
+    const workingDir = createTempDir('openpath-firefox-source-submission-');
+    const outputPath = path.join(workingDir, 'openpath-firefox-source.zip');
+
+    const result = buildFirefoxSourceSubmission({ outputPath });
+
+    assert.equal(result.outputPath, outputPath);
+    assert.ok(existsSync(outputPath));
+    assert.equal(readFileSync(outputPath).subarray(0, 2).toString('utf8'), 'PK');
+
+    for (const expected of [
+      'package.json',
+      'package-lock.json',
+      'tsconfig.base.json',
+      'firefox-extension/manifest.json',
+      'firefox-extension/package.json',
+      'firefox-extension/tsconfig.json',
+      'firefox-extension/tsconfig.build.json',
+      'firefox-extension/SOURCE_REVIEW_NOTES.md',
+      'firefox-extension/AMO.md',
+      'firefox-extension/PRIVACY.md',
+      'firefox-extension/native/openpath-native-host.py',
+      'firefox-extension/native/whitelist_native_host.json',
+      'firefox-extension/src/background.ts',
+      'firefox-extension/tests/manifest-policy.test.ts',
+      'firefox-extension/popup/popup.html',
+      'firefox-extension/blocked/blocked.html',
+      'firefox-extension/icons/icon-48.png',
+    ]) {
+      assert.ok(result.entries.includes(expected), `source package should include ${expected}`);
+    }
+
+    for (const entry of result.entries) {
+      assert.ok(!entry.includes('/dist/'), `source package should exclude dist files: ${entry}`);
+      assert.ok(!entry.includes('/build/'), `source package should exclude build files: ${entry}`);
+      assert.ok(
+        !entry.includes('/node_modules/'),
+        `source package should exclude node_modules files: ${entry}`
+      );
+      assert.ok(!entry.endsWith('.tsbuildinfo'), `source package should exclude ${entry}`);
+    }
+  });
+
   void test('resolveWebExtSignTiming keeps release signing under a finite process timeout', () => {
     const timing = resolveWebExtSignTiming({
       nowMs: 1_000,
@@ -438,6 +586,355 @@ void describe('Firefox release signing helpers', () => {
       631
     );
     assert.equal(parseWebExtThrottleDelaySeconds('WebExtError: unrelated failure'), null);
+  });
+
+  void test('verifyFirefoxAmoVersion accepts a reviewed source and approval notes response', async () => {
+    const requests: string[] = [];
+
+    const result = await verifyFirefoxAmoVersion({
+      apiKey: 'user:123:456',
+      apiSecret: 'secret',
+      addonId: 'monitor-bloqueos@openpath',
+      version: '2.0.1',
+      requireSource: true,
+      requireApprovalNotes: true,
+      fetchImpl: (input) => {
+        requests.push(requestInputToUrl(input));
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: 6249209,
+              version: '2.0.1',
+              channel: 'unlisted',
+              source: 'https://addons.mozilla.org/files/source.zip',
+              approval_notes: 'Reviewer notes',
+              file: { status: 'unreviewed' },
+            }),
+            { status: 200 }
+          )
+        );
+      },
+    });
+
+    assert.equal(
+      requests[0],
+      'https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/versions/v2.0.1/'
+    );
+    assert.deepEqual(result, {
+      versionId: 6249209,
+      version: '2.0.1',
+      channel: 'unlisted',
+      fileStatus: 'unreviewed',
+      sourcePresent: true,
+      approvalNotesPresent: true,
+    });
+  });
+
+  void test('verifyFirefoxAmoVersion fails when required source is missing', async () => {
+    await assert.rejects(
+      verifyFirefoxAmoVersion({
+        apiKey: 'user:123:456',
+        apiSecret: 'secret',
+        addonId: 'monitor-bloqueos@openpath',
+        versionId: '6249209',
+        requireSource: true,
+        fetchImpl: () =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({
+                id: 6249209,
+                version: '2.0.1',
+                channel: 'unlisted',
+                source: null,
+                approval_notes: 'Reviewer notes',
+                file: { status: 'unreviewed' },
+              }),
+              { status: 200 }
+            )
+          ),
+      }),
+      /AMO version 6249209 is missing source/
+    );
+  });
+
+  void test('verifyFirefoxAmoVersion fails when required approval notes are missing', async () => {
+    await assert.rejects(
+      verifyFirefoxAmoVersion({
+        apiKey: 'user:123:456',
+        apiSecret: 'secret',
+        addonId: 'monitor-bloqueos@openpath',
+        versionId: '6249209',
+        requireApprovalNotes: true,
+        fetchImpl: () =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({
+                id: 6249209,
+                version: '2.0.1',
+                channel: 'unlisted',
+                source: 'https://addons.mozilla.org/files/source.zip',
+                approval_notes: ' ',
+                file: { status: 'unreviewed' },
+              }),
+              { status: 200 }
+            )
+          ),
+      }),
+      /AMO version 6249209 is missing approval_notes/
+    );
+  });
+
+  void test('uploadFirefoxAmoSource requires an explicit AMO version target', async () => {
+    await assert.rejects(
+      uploadFirefoxAmoSource({
+        apiKey: 'user:123:456',
+        apiSecret: 'secret',
+        sourceOnly: true,
+        verify: false,
+      }),
+      /AMO version id or version is required/
+    );
+  });
+
+  void test('uploadFirefoxAmoSource rejects mutually exclusive upload modes', async () => {
+    await assert.rejects(
+      uploadFirefoxAmoSource({
+        apiKey: 'user:123:456',
+        apiSecret: 'secret',
+        versionId: '6249209',
+        sourceOnly: true,
+        metadataOnly: true,
+        verify: false,
+      }),
+      /--source-only and --metadata-only cannot be used together/
+    );
+  });
+
+  void test('uploadFirefoxAmoSource waits for metadata throttles only when enabled', async () => {
+    const workingDir = createTempDir('openpath-firefox-upload-source-');
+    const metadataPath = path.join(workingDir, 'amo-review-metadata.json');
+    const waits: number[] = [];
+    let attempts = 0;
+
+    writeFileSync(
+      metadataPath,
+      `${JSON.stringify({ version: { approval_notes: 'Reviewer notes' } })}\n`
+    );
+
+    await uploadFirefoxAmoSource({
+      apiKey: 'user:123:456',
+      apiSecret: 'secret',
+      versionId: '6249209',
+      metadataPath,
+      metadataOnly: true,
+      verify: false,
+      waitForThrottle: true,
+      maxThrottleWaitSeconds: 700,
+      retryBufferSeconds: 3,
+      maxRetries: 1,
+      sleepImpl: (milliseconds) => {
+        waits.push(milliseconds);
+        return Promise.resolve();
+      },
+      fetchImpl: () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                detail: 'Request was throttled. Expected available in 631 seconds.',
+              }),
+              { status: 429, statusText: 'Too Many Requests' }
+            )
+          );
+        }
+
+        return Promise.resolve(new Response(JSON.stringify({ id: 6249209 }), { status: 200 }));
+      },
+    });
+
+    assert.equal(attempts, 2);
+    assert.deepEqual(waits, [634_000]);
+  });
+
+  void test('uploadFirefoxAmoSource defaults wait-for-throttle metadata retries to three', async () => {
+    const workingDir = createTempDir('openpath-firefox-upload-source-');
+    const metadataPath = path.join(workingDir, 'amo-review-metadata.json');
+    const waits: number[] = [];
+    let attempts = 0;
+
+    writeFileSync(
+      metadataPath,
+      `${JSON.stringify({ version: { approval_notes: 'Reviewer notes' } })}\n`
+    );
+
+    await uploadFirefoxAmoSource({
+      apiKey: 'user:123:456',
+      apiSecret: 'secret',
+      versionId: '6249209',
+      metadataPath,
+      metadataOnly: true,
+      verify: false,
+      waitForThrottle: true,
+      maxThrottleWaitSeconds: 700,
+      retryBufferSeconds: 3,
+      sleepImpl: (milliseconds) => {
+        waits.push(milliseconds);
+        return Promise.resolve();
+      },
+      fetchImpl: () => {
+        attempts += 1;
+        if (attempts <= 3) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                detail: 'Request was throttled. Expected available in 631 seconds.',
+              }),
+              { status: 429, statusText: 'Too Many Requests' }
+            )
+          );
+        }
+
+        return Promise.resolve(new Response(JSON.stringify({ id: 6249209 }), { status: 200 }));
+      },
+    });
+
+    assert.equal(attempts, 4);
+    assert.deepEqual(waits, [634_000, 634_000, 634_000]);
+  });
+
+  void test('uploadFirefoxAmoSource preserves explicit zero metadata retries', async () => {
+    const workingDir = createTempDir('openpath-firefox-upload-source-');
+    const metadataPath = path.join(workingDir, 'amo-review-metadata.json');
+    let attempts = 0;
+
+    writeFileSync(
+      metadataPath,
+      `${JSON.stringify({ version: { approval_notes: 'Reviewer notes' } })}\n`
+    );
+
+    await assert.rejects(
+      uploadFirefoxAmoSource({
+        apiKey: 'user:123:456',
+        apiSecret: 'secret',
+        versionId: '6249209',
+        metadataPath,
+        metadataOnly: true,
+        verify: false,
+        waitForThrottle: true,
+        maxThrottleWaitSeconds: 700,
+        maxRetries: 0,
+        fetchImpl: () => {
+          attempts += 1;
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                detail: 'Request was throttled. Expected available in 631 seconds.',
+              }),
+              { status: 429, statusText: 'Too Many Requests' }
+            )
+          );
+        },
+      }),
+      /--metadata-only --verify --wait-for-throttle --max-throttle-wait-seconds 10800 --max-retries 3/
+    );
+
+    assert.equal(attempts, 1);
+  });
+
+  void test('uploadFirefoxAmoSource surfaces a metadata-only retry command for long throttles', async () => {
+    const workingDir = createTempDir('openpath-firefox-upload-source-');
+    const metadataPath = path.join(workingDir, 'amo-review-metadata.json');
+
+    writeFileSync(
+      metadataPath,
+      `${JSON.stringify({ version: { approval_notes: 'Reviewer notes' } })}\n`
+    );
+
+    await assert.rejects(
+      uploadFirefoxAmoSource({
+        apiKey: 'user:123:456',
+        apiSecret: 'secret',
+        versionId: '6249209',
+        metadataPath,
+        metadataOnly: true,
+        verify: false,
+        waitForThrottle: false,
+        fetchImpl: () =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({
+                detail: 'Request was throttled. Expected available in 7200 seconds.',
+              }),
+              { status: 429, statusText: 'Too Many Requests' }
+            )
+          ),
+      }),
+      /Retry without re-uploading source: npm run upload:firefox-amo-source --workspace=@openpath\/firefox-extension -- --version-id 6249209 --metadata-only --verify --wait-for-throttle --max-throttle-wait-seconds 10800 --max-retries 3/
+    );
+  });
+
+  void test('parseAmoThrottleDelaySeconds reads throttled AMO API bodies', () => {
+    assert.equal(
+      parseAmoThrottleDelaySeconds({
+        detail: 'Request was throttled. Expected available in 631 seconds.',
+      }),
+      631
+    );
+    assert.equal(parseAmoThrottleDelaySeconds({ detail: 'unrelated' }), null);
+  });
+
+  void test('syncFirefoxAmoPolicy patches privacy policy and verifies readback', async () => {
+    const workingDir = createTempDir('openpath-firefox-policy-');
+    const privacyPath = path.join(workingDir, 'PRIVACY.md');
+    const requests: { url: string; method: string; body?: string }[] = [];
+
+    writeFileSync(privacyPath, '# Privacy\n\nOpenPath policy.\n');
+
+    const result = await syncFirefoxAmoPolicy({
+      apiKey: 'user:123:456',
+      apiSecret: 'secret',
+      addonId: 'monitor-bloqueos@openpath',
+      privacyPath,
+      fetchImpl: (input, init) => {
+        const url = requestInputToUrl(input);
+        const request: { url: string; method: string; body?: string } = {
+          url,
+          method: init?.method ?? 'GET',
+        };
+        if (typeof init?.body === 'string') {
+          request.body = init.body;
+        }
+        requests.push(request);
+
+        if (init?.method === 'PATCH') {
+          return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+        }
+
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              privacy_policy: {
+                'en-US': '# Privacy\n\nOpenPath policy.\n',
+              },
+            }),
+            { status: 200 }
+          )
+        );
+      },
+    });
+
+    assert.equal(result.privacyPolicyPresent, true);
+    assert.deepEqual(
+      requests.map((request) => `${request.method} ${request.url}`),
+      [
+        'PATCH https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/eula_policy/',
+        'GET https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/eula_policy/',
+      ]
+    );
+    assert.deepEqual(JSON.parse(requests[0]?.body ?? '{}'), {
+      privacy_policy: { 'en-US': '# Privacy\n\nOpenPath policy.\n' },
+    });
   });
 
   void test('parseAmoVersionEditUrl extracts the AMO add-on and version ids', () => {
@@ -716,6 +1213,48 @@ void describe('Firefox release signing helpers', () => {
     assert.equal(result.status, 0);
     assert.equal(attempts, 2);
     assert.deepEqual(waits, [1_532_000]);
+  });
+
+  void test('runWebExtSignWithRetry explains over-budget AMO throttles with version context', () => {
+    const workingDir = createTempDir('openpath-firefox-throttle-context-');
+    const sourceDir = path.join(workingDir, 'extension');
+    const stderrChunks: string[] = [];
+
+    mkdirSync(sourceDir, { recursive: true });
+    writeFileSync(
+      path.join(sourceDir, 'manifest.json'),
+      `${JSON.stringify({ version: '2.0.1' })}\n`
+    );
+
+    const result = runWebExtSignWithRetry({
+      args: ['--yes', '--no-install', 'web-ext', 'sign', `--source-dir=${sourceDir}`],
+      cwd: extensionRoot,
+      env: {
+        WEB_EXT_SIGN_MAX_RETRIES: '1',
+        WEB_EXT_SIGN_RETRY_BUFFER_SECONDS: '30',
+        WEB_EXT_SIGN_MAX_THROTTLE_WAIT_SECONDS: '900',
+      },
+      spawnSyncImpl: (): SpawnSyncReturns<string> => ({
+        status: 1,
+        signal: null,
+        output: [],
+        pid: 123,
+        stdout: '',
+        stderr:
+          'WebExtError: Submission failed (2): Unknown Error\n' +
+          '{ "detail": "Request was throttled. Expected available in 1502 seconds." }\n',
+      }),
+      sleepSyncImpl: () => {
+        throw new Error('over-budget throttle should not sleep');
+      },
+      stderr: { write: (chunk) => stderrChunks.push(chunk) },
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(
+      stderrChunks.join(''),
+      /AMO signing request was throttled for 1502 seconds \(25\.0 minutes\).*version=2\.0\.1/s
+    );
   });
 
   void test('runWebExtSignWithRetry leaves Version already exists recoverable by rerun versioning', () => {

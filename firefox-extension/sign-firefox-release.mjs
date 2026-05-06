@@ -35,6 +35,8 @@ export function buildWebExtSignArgs(options) {
     sourceDir = extensionRoot,
     approvalTimeoutMs,
     requestTimeoutMs,
+    uploadSourceCode,
+    amoMetadata,
   } = options;
 
   if (!apiKey) {
@@ -61,6 +63,12 @@ export function buildWebExtSignArgs(options) {
   }
   if (Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0) {
     args.push(`--timeout=${requestTimeoutMs}`);
+  }
+  if (uploadSourceCode) {
+    args.push(`--upload-source-code=${uploadSourceCode}`);
+  }
+  if (amoMetadata) {
+    args.push(`--amo-metadata=${amoMetadata}`);
   }
 
   return args;
@@ -375,6 +383,23 @@ function sleepSync(milliseconds) {
   Atomics.wait(waitArray, 0, 0, milliseconds);
 }
 
+function readVersionFromSignArgs(args) {
+  const sourceDirArg = args.find((arg) => arg.startsWith('--source-dir='));
+  const sourceDir = sourceDirArg ? sourceDirArg.slice('--source-dir='.length) : '';
+  if (!sourceDir) {
+    return 'unknown';
+  }
+
+  try {
+    const manifest = readManifest(path.join(sourceDir, 'manifest.json'));
+    return typeof manifest.version === 'string' && manifest.version.trim()
+      ? manifest.version.trim()
+      : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 export function runWebExtSignWithRetry(options) {
   const {
     args,
@@ -448,6 +473,18 @@ export function runWebExtSignWithRetry(options) {
     const canWait = throttleDelaySeconds !== null && throttleDelaySeconds <= maxThrottleWaitSeconds;
 
     if (!retriesRemaining || !canWait) {
+      if (throttleDelaySeconds !== null) {
+        stderr.write(
+          [
+            '[sign:firefox-release] AMO signing request was throttled',
+            `for ${throttleDelaySeconds} seconds`,
+            `(${(throttleDelaySeconds / 60).toFixed(1)} minutes)`,
+            `version=${readVersionFromSignArgs(args)}`,
+            `maxThrottleWaitSeconds=${maxThrottleWaitSeconds}`,
+            `retriesRemaining=${retriesRemaining}`,
+          ].join(' ') + '\n'
+        );
+      }
       return result;
     }
 
@@ -654,6 +691,11 @@ function parseCliArgs(argv) {
     installUrl: '',
     artifactsDir: defaultArtifactsDir,
     version: '',
+    uploadSourceCode:
+      process.env.WEB_EXT_SIGN_SOURCE_CODE_ARCHIVE?.trim() ||
+      process.env.WEB_EXT_SIGN_SOURCE_CODE?.trim() ||
+      '',
+    amoMetadata: process.env.WEB_EXT_AMO_METADATA?.trim() || '',
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -673,15 +715,29 @@ function parseCliArgs(argv) {
         parsed.version = next;
         index += 1;
         break;
+      case '--upload-source-code':
+        parsed.uploadSourceCode = next;
+        index += 1;
+        break;
+      case '--amo-metadata':
+        parsed.amoMetadata = next;
+        index += 1;
+        break;
       case '--help':
       case '-h':
         console.log(`Usage:
-  WEB_EXT_API_KEY=... WEB_EXT_API_SECRET=... node sign-firefox-release.mjs [--install-url https://...] [--version 2.0.0.123]
+  WEB_EXT_API_KEY=... WEB_EXT_API_SECRET=... node sign-firefox-release.mjs [--install-url https://...] [--version 2.0.0.123] [--upload-source-code openpath-firefox-source.zip] [--amo-metadata amo-review-metadata.json]
 
 Options:
-  --install-url   Optional managed install URL to store in metadata.json
-  --artifacts-dir Override the temporary web-ext artifacts directory
-  --version       Override manifest version for the signed release bundle
+  --install-url         Optional managed install URL to store in metadata.json
+  --artifacts-dir       Override the temporary web-ext artifacts directory
+  --version             Override manifest version for the signed release bundle
+  --upload-source-code  Source archive to attach to the AMO submission
+  --amo-metadata        AMO metadata JSON, including version.approval_notes
+
+Environment:
+  WEB_EXT_SIGN_SOURCE_CODE_ARCHIVE  Default source archive for --upload-source-code
+  WEB_EXT_AMO_METADATA              Default metadata path for --amo-metadata
 `);
         process.exit(0);
         break;
@@ -770,7 +826,9 @@ async function recoverSignedXpiFromAmo(options) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
   try {
-    const { installUrl, artifactsDir, version } = parseCliArgs(process.argv.slice(2));
+    const { installUrl, artifactsDir, version, uploadSourceCode, amoMetadata } = parseCliArgs(
+      process.argv.slice(2)
+    );
     const signingSource = prepareSigningSourceDir({
       sourceDir: extensionRoot,
       version,
@@ -799,6 +857,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
           `requestTimeoutMs=${requestTimeoutMs}`,
           `processTimeoutBufferMs=${processTimeoutBufferMs}`,
           `processTimeoutMs=${processTimeoutMs ?? 'disabled'}`,
+          `uploadSourceCode=${uploadSourceCode ? path.resolve(uploadSourceCode) : 'disabled'}`,
+          `amoMetadata=${amoMetadata ? path.resolve(amoMetadata) : 'disabled'}`,
         ].join(' ')
       );
 
@@ -811,6 +871,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
         sourceDir: signingSource.sourceDir,
         approvalTimeoutMs,
         requestTimeoutMs,
+        uploadSourceCode,
+        amoMetadata,
       });
       const webExtOutput = [];
 

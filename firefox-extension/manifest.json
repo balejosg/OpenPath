@@ -51,7 +51,12 @@
       "world": "MAIN"
     },
     {
-      "matches": ["http://*/*", "https://*/*"],
+      "matches": [
+        "https://www.google.com/*",
+        "https://www.google.es/*",
+        "https://doodles.google/*",
+        "https://*.doodles.google/*"
+      ],
       "js": ["dist/google-search-game-guard-content.js"],
       "run_at": "document_start"
     }

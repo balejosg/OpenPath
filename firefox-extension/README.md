@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: `firefox-extension/`
-> Last verified: 2026-04-13
+> Last verified: 2026-05-06
 > Source of truth: `firefox-extension/README.md`
 
 This package contains the OpenPath browser-extension assets used to detect blocked resources and support managed browser rollout workflows.
@@ -36,7 +36,10 @@ Managed Firefox Release artifacts:
 
 ```bash
 npm run build:firefox-release --workspace=@openpath/firefox-extension -- --signed-xpi /path/to/signed.xpi
+npm run build:firefox-source --workspace=@openpath/firefox-extension
+npm run verify:amo-submission --workspace=@openpath/firefox-extension
 npm run sign:firefox-release --workspace=@openpath/firefox-extension
+npm run verify:firefox-amo-version --workspace=@openpath/firefox-extension -- --version-id <amo-version-id> --require-source --require-approval-notes
 ```
 
 Managed Chromium artifacts:

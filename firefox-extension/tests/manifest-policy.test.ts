@@ -29,6 +29,7 @@ interface FirefoxManifest {
     run_at?: string;
     world?: string;
   }[];
+  permissions?: string[];
   host_permissions?: string[];
 }
 
@@ -36,6 +37,18 @@ async function readManifest(): Promise<FirefoxManifest> {
   return JSON.parse(
     await readFile(path.join(extensionRoot, 'manifest.json'), 'utf8')
   ) as FirefoxManifest;
+}
+
+function findContentScript(
+  manifest: FirefoxManifest,
+  scriptPath: string
+): NonNullable<FirefoxManifest['content_scripts']>[number] {
+  const contentScript = (manifest.content_scripts ?? []).find((script) =>
+    script.js?.includes(scriptPath)
+  );
+
+  assert.ok(contentScript, `manifest should include ${scriptPath}`);
+  return contentScript;
 }
 
 void describe('Firefox extension manifest policy', () => {
@@ -65,6 +78,24 @@ void describe('Firefox extension manifest policy', () => {
     assert.deepEqual(manifest.host_permissions, ['<all_urls>']);
   });
 
+  void test('keeps manifest permissions documented in AMO and privacy notes', async () => {
+    const manifest = await readManifest();
+    const privacy = await readFile(path.join(extensionRoot, 'PRIVACY.md'), 'utf8');
+    const amo = await readFile(path.join(extensionRoot, 'AMO.md'), 'utf8');
+    const documentedPermissions = [
+      ...(manifest.permissions ?? []),
+      ...(manifest.host_permissions ?? []),
+    ];
+
+    for (const permission of documentedPermissions) {
+      const escapedPermission = permission.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const documentedPermission = new RegExp(`\`${escapedPermission}\``);
+
+      assert.match(privacy, documentedPermission, `PRIVACY.md should document ${permission}`);
+      assert.match(amo, documentedPermission, `AMO.md should document ${permission}`);
+    }
+  });
+
   void test('declares Firefox data collection consent and compatible runtimes', async () => {
     const manifest = await readManifest();
 
@@ -85,23 +116,31 @@ void describe('Firefox extension manifest policy', () => {
   void test('wakes the background runtime at document start on normal web pages', async () => {
     const manifest = await readManifest();
 
-    assert.deepEqual(manifest.content_scripts, [
-      {
-        matches: ['http://*/*', 'https://*/*'],
-        js: ['dist/page-activity-content.js'],
-        run_at: 'document_start',
-      },
-      {
-        matches: ['http://*/*', 'https://*/*'],
-        js: ['dist/page-resource-observer-main.js'],
-        run_at: 'document_start',
-        world: 'MAIN',
-      },
-      {
-        matches: ['http://*/*', 'https://*/*'],
-        js: ['dist/google-search-game-guard-content.js'],
-        run_at: 'document_start',
-      },
-    ]);
+    const pageActivity = findContentScript(manifest, 'dist/page-activity-content.js');
+    const pageResourceObserver = findContentScript(manifest, 'dist/page-resource-observer-main.js');
+
+    assert.deepEqual(pageActivity.matches, ['http://*/*', 'https://*/*']);
+    assert.equal(pageActivity.run_at, 'document_start');
+    assert.deepEqual(pageResourceObserver.matches, ['http://*/*', 'https://*/*']);
+    assert.equal(pageResourceObserver.run_at, 'document_start');
+    assert.equal(pageResourceObserver.world, 'MAIN');
+  });
+
+  void test('limits Google games content script to supported Google surfaces', async () => {
+    const manifest = await readManifest();
+    const googleGames = findContentScript(manifest, 'dist/google-search-game-guard-content.js');
+
+    assert.deepEqual(googleGames, {
+      matches: [
+        'https://www.google.com/*',
+        'https://www.google.es/*',
+        'https://doodles.google/*',
+        'https://*.doodles.google/*',
+      ],
+      js: ['dist/google-search-game-guard-content.js'],
+      run_at: 'document_start',
+    });
+    assert.ok(!googleGames.matches.includes('http://*/*'));
+    assert.ok(!googleGames.matches.includes('https://*/*'));
   });
 });

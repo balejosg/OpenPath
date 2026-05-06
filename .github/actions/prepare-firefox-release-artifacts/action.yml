@@ -109,6 +109,8 @@ runs:
       env:
         WEB_EXT_API_KEY: ${{ inputs.web-ext-api-key }}
         WEB_EXT_API_SECRET: ${{ inputs.web-ext-api-secret }}
+        WEB_EXT_SIGN_SOURCE_CODE_ARCHIVE: ${{ github.workspace }}/firefox-extension/build/firefox-source-submission/openpath-firefox-source.zip
+        WEB_EXT_AMO_METADATA: ${{ github.workspace }}/firefox-extension/amo-review-metadata.json
         WEB_EXT_SIGN_MAX_RETRIES: ${{ inputs.max-retries }}
         WEB_EXT_SIGN_RETRY_BUFFER_SECONDS: ${{ inputs.retry-buffer-seconds }}
         WEB_EXT_SIGN_MAX_THROTTLE_WAIT_SECONDS: ${{ inputs.max-throttle-wait-seconds }}
@@ -116,6 +118,8 @@ runs:
         WEB_EXT_SIGN_TOTAL_TIMEOUT_SECONDS: ${{ inputs.total-timeout-seconds }}
         WEB_EXT_SIGN_PROCESS_TIMEOUT_BUFFER_SECONDS: ${{ inputs.process-timeout-buffer-seconds }}
       run: |
+        npm run build:firefox-source --workspace=@openpath/firefox-extension
+        npm run verify:amo-submission --workspace=@openpath/firefox-extension
         npm run sign:firefox-release --workspace=@openpath/firefox-extension -- --version "${{ steps.amo-version.outputs.version }}"
 
     - name: Verify signed Firefox Release artifacts

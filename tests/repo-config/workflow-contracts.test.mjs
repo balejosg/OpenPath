@@ -202,6 +202,13 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
     'cache-aware Firefox release action should still sign through AMO when the cache misses'
   );
   assert.ok(
+    prepareAction.includes('npm run build:firefox-source') &&
+      prepareAction.includes('npm run verify:amo-submission') &&
+      prepareAction.includes('WEB_EXT_SIGN_SOURCE_CODE_ARCHIVE') &&
+      prepareAction.includes('WEB_EXT_AMO_METADATA'),
+    'cache-aware Firefox release action should attach source and reviewer metadata to AMO submissions'
+  );
+  assert.ok(
     prepareAction.includes('approval-timeout-seconds:'),
     'cache-aware Firefox release action should expose an approval timeout input'
   );
