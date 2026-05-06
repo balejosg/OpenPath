@@ -3,7 +3,7 @@ import { describe, test } from 'node:test';
 import type { DbExecutor } from '../src/db/index.js';
 import type { Rule } from '../src/lib/groups-storage.js';
 import type { AuthenticatedMachine } from '../src/lib/server-request-auth.js';
-import type { DomainEventCollector } from '../src/services/domain-events/types.js';
+import DomainEventsService from '../src/services/domain-events.service.js';
 import type { MachineRequestAdmissionDeps } from '../src/services/machine-request-admission.service.js';
 
 process.env.NODE_ENV = 'test';
@@ -57,6 +57,9 @@ function createDeps(overrides: Partial<MachineRequestAdmissionDeps> = {}): TestD
     getRulesByGroup: () => Promise.resolve([]),
     isDomainBlocked: () => Promise.resolve({ blocked: false, matchedRule: null }),
     logger: { warn: (): void => undefined },
+    publishWhitelistChanged: (groupId) => {
+      events.push(groupId);
+    },
     resolveEffectiveMachinePolicyContext: () =>
       Promise.resolve({
         classroomId: 'classroom-1',
@@ -71,17 +74,7 @@ function createDeps(overrides: Partial<MachineRequestAdmissionDeps> = {}): TestD
         machine: testMachine,
         requestedHostname: 'lab-host-01',
       }) as ReturnType<MachineRequestAdmissionDeps['resolveMachineTokenHostnameAccess']>,
-    withDbTransactionEvents: (_runner, operation) => {
-      const collector: DomainEventCollector = {
-        publish: () => undefined,
-        publishAllWhitelistsChanged: () => undefined,
-        publishClassroomChanged: () => undefined,
-        publishWhitelistChanged: (groupId) => {
-          events.push(groupId);
-        },
-      };
-      return operation('tx-1' as unknown as DbExecutor, collector);
-    },
+    createTransactionalWriter: DomainEventsService.createTransactionalWriter,
     withTransaction: (operation) => operation('tx-1' as unknown as DbExecutor),
     ...overrides,
   };

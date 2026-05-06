@@ -175,29 +175,28 @@ export async function cloneGroup(
   const name = await findAvailableGroupName(baseName, deps);
 
   try {
-    const dispatcher = DomainEventsService.createDispatcher({
-      publishWhitelistChanged: deps.publishWhitelistChanged,
-    });
-    const id = await DomainEventsService.withDbTransactionEvents<string>(
-      deps.withTransaction,
-      async (tx, events) => {
-        const createdGroupId = await deps.createGroup(
-          name,
-          input.displayName,
-          {
-            visibility: 'private',
-            ownerUserId: input.ownerUserId,
-          },
-          tx
-        );
-
-        await deps.copyRulesToGroup({ fromGroupId: source.id, toGroupId: createdGroupId }, tx);
-        await deps.touchGroupUpdatedAt(createdGroupId, tx);
-        events.publishWhitelistChanged(createdGroupId);
-        return createdGroupId;
+    const writer = DomainEventsService.createTransactionalWriter({
+      publishers: {
+        publishWhitelistChanged: deps.publishWhitelistChanged,
       },
-      dispatcher
-    );
+      transactionRunner: deps.withTransaction,
+    });
+    const id = await writer.write<string>(async (tx, events) => {
+      const createdGroupId = await deps.createGroup(
+        name,
+        input.displayName,
+        {
+          visibility: 'private',
+          ownerUserId: input.ownerUserId,
+        },
+        tx
+      );
+
+      await deps.copyRulesToGroup({ fromGroupId: source.id, toGroupId: createdGroupId }, tx);
+      await deps.touchGroupUpdatedAt(createdGroupId, tx);
+      events.publishWhitelistChanged(createdGroupId);
+      return createdGroupId;
+    });
 
     return { ok: true, data: { id, name } };
   } catch (error) {

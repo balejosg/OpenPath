@@ -3,7 +3,7 @@ import { describe, test } from 'node:test';
 
 import type { DbExecutor } from '../src/db/index.js';
 import type { CreateRuleResult, Rule, RuleType } from '../src/lib/groups-storage.js';
-import type { DomainEventCollector } from '../src/services/domain-events/types.js';
+import DomainEventsService from '../src/services/domain-events.service.js';
 import {
   approveWhitelistRequest,
   bulkDeleteWhitelistRules,
@@ -82,6 +82,7 @@ function createDeps(
       calls.push('delete:bulk');
       return Promise.resolve(0);
     },
+    createTransactionalWriter: DomainEventsService.createTransactionalWriter,
     createRule: (groupId, type, value, comment, source, executor) => {
       calls.push(`create:${String(source)}:${type}`);
       createdRules.push({ groupId, type, value, comment, source, tx: executor });
@@ -104,23 +105,6 @@ function createDeps(
           resolutionNote: note ?? '',
         })
       );
-    },
-    withDbTransactionEvents: async (runner, operation, dispatcher) => {
-      const queuedGroups: string[] = [];
-      const collector: DomainEventCollector = {
-        publish: () => undefined,
-        publishAllWhitelistsChanged: () => undefined,
-        publishClassroomChanged: () => undefined,
-        publishWhitelistChanged: (groupId) => {
-          queuedGroups.push(groupId);
-        },
-      };
-      const result = await runner((executor) => operation(executor, collector));
-      assert.ok(dispatcher);
-      for (const groupId of queuedGroups) {
-        dispatcher.publish({ type: 'whitelist.changed', groupId });
-      }
-      return result;
     },
     withTransaction: async (operation) => {
       calls.push('begin');

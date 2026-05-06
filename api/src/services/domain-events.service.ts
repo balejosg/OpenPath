@@ -1,6 +1,7 @@
 import { runScheduleBoundaryTickOnce } from '../lib/rule-events.js';
 import { createCollector } from './domain-events/collector.js';
 import { createDispatcher } from './domain-events/dispatcher.js';
+import { createTransactionalWriter } from './domain-events/transactional-writer.js';
 import type {
   DbDomainTransactionRunner,
   DomainEventCollector,
@@ -13,10 +14,15 @@ export type {
   DomainEventDispatcher,
   DomainEventPublishers,
 } from './domain-events/types.js';
+export type {
+  TransactionalDomainEventWriter,
+  TransactionalDomainEventWriterOptions,
+} from './domain-events/transactional-writer.js';
 
 const defaultDispatcher = createDispatcher();
 
 export { createDispatcher };
+export { createTransactionalWriter };
 
 export function publishWhitelistChanged(groupId: string): void {
   defaultDispatcher.publish({ type: 'whitelist.changed', groupId });
@@ -72,6 +78,7 @@ export async function tickScheduleBoundaryEvents(now: Date): Promise<void> {
 
 export default {
   createDispatcher,
+  createTransactionalWriter,
   publishWhitelistChanged,
   publishAllWhitelistsChanged,
   publishClassroomChanged,

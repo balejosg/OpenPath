@@ -105,6 +105,7 @@ export interface MachineRequestAdmissionDeps {
   getRulesByGroup: (groupId: string, type?: RuleType) => Promise<Rule[]>;
   isDomainBlocked: typeof groupsStorage.isDomainBlocked;
   logger: Pick<typeof logger, 'warn'>;
+  publishWhitelistChanged: (groupId: string) => void;
   resolveEffectiveMachinePolicyContext: (
     hostname: string
   ) => Promise<EffectivePolicyContext | null>;
@@ -112,7 +113,7 @@ export interface MachineRequestAdmissionDeps {
     machineToken: string;
     hostname: string;
   }) => Promise<MachineHostnameAccess>;
-  withDbTransactionEvents: typeof DomainEventsService.withDbTransactionEvents;
+  createTransactionalWriter: typeof DomainEventsService.createTransactionalWriter;
   withTransaction: typeof withTransaction;
 }
 
@@ -123,9 +124,10 @@ const defaultDeps: MachineRequestAdmissionDeps = {
   getRulesByGroup: groupsStorage.getRulesByGroup,
   isDomainBlocked: groupsStorage.isDomainBlocked,
   logger,
+  publishWhitelistChanged: DomainEventsService.publishWhitelistChanged.bind(DomainEventsService),
   resolveEffectiveMachinePolicyContext: classroomStorage.resolveEffectiveMachinePolicyContext,
   resolveMachineTokenHostnameAccess,
-  withDbTransactionEvents: DomainEventsService.withDbTransactionEvents,
+  createTransactionalWriter: DomainEventsService.createTransactionalWriter,
   withTransaction,
 };
 
@@ -406,9 +408,8 @@ export async function decideAutoMachineRequest(
       },
       {
         createRule: deps.createRule,
-        publishWhitelistChanged:
-          DomainEventsService.publishWhitelistChanged.bind(DomainEventsService),
-        withDbTransactionEvents: deps.withDbTransactionEvents,
+        createTransactionalWriter: deps.createTransactionalWriter,
+        publishWhitelistChanged: deps.publishWhitelistChanged,
         withTransaction: deps.withTransaction,
       }
     );

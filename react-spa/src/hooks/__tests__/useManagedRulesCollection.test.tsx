@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { useManagedRulesCollection } from '../useManagedRulesCollection';
 
@@ -31,6 +31,10 @@ const mocks = vi.hoisted(() => {
     groupedAddRule: vi.fn().mockResolvedValue(true),
     flatRefetch: vi.fn().mockResolvedValue(undefined),
     groupedRefetch: vi.fn().mockResolvedValue(undefined),
+    flatSetFilter: vi.fn(),
+    groupedSetFilter: vi.fn(),
+    flatSetSearch: vi.fn(),
+    groupedSetSearch: vi.fn(),
   };
 });
 
@@ -45,9 +49,9 @@ vi.mock('../useRulesManager', () => ({
     totalPages: 3,
     hasMore: true,
     filter: 'allowed',
-    setFilter: vi.fn(),
+    setFilter: mocks.flatSetFilter,
     search: 'flat',
-    setSearch: vi.fn(),
+    setSearch: mocks.flatSetSearch,
     counts: { all: 4, allowed: 2, automatic: 1, blocked: 2 },
     selectedIds: mocks.flatSelectedIds,
     toggleSelection: vi.fn(),
@@ -82,9 +86,9 @@ vi.mock('../useGroupedRulesManager', () => ({
     totalPages: 1,
     hasMore: false,
     filter: 'blocked',
-    setFilter: vi.fn(),
+    setFilter: mocks.groupedSetFilter,
     search: 'grouped',
-    setSearch: vi.fn(),
+    setSearch: mocks.groupedSetSearch,
     counts: { all: 7, allowed: 3, automatic: 2, blocked: 4 },
     selectedIds: mocks.groupedSelectedIds,
     toggleSelection: vi.fn(),
@@ -117,7 +121,7 @@ describe('useManagedRulesCollection', () => {
     const { result } = renderHook(() =>
       useManagedRulesCollection({
         ...options,
-        mode: 'flat',
+        initialMode: 'flat',
       })
     );
 
@@ -127,6 +131,11 @@ describe('useManagedRulesCollection', () => {
     expect(result.current.totalRules).toBe(1);
     expect(result.current.totalGroups).toBe(0);
     expect(result.current.counts.automatic).toBe(1);
+    expect(result.current.filters.active).toBe('allowed');
+    expect(result.current.filters.setActive).toBe(mocks.flatSetFilter);
+    expect(result.current.filters.search).toBe('flat');
+    expect(result.current.filters.setSearch).toBe(mocks.flatSetSearch);
+    expect(result.current.filters.counts.automatic).toBe(1);
     expect(result.current.page).toBe(2);
     expect(result.current.selection.selectedIds).toBe(mocks.flatSelectedIds);
     expect(result.current.actions.addRule).toBe(mocks.flatAddRule);
@@ -137,7 +146,7 @@ describe('useManagedRulesCollection', () => {
     const { result } = renderHook(() =>
       useManagedRulesCollection({
         ...options,
-        mode: 'hierarchical',
+        initialMode: 'hierarchical',
       })
     );
 
@@ -153,30 +162,53 @@ describe('useManagedRulesCollection', () => {
     expect(result.current.totalRules).toBe(7);
     expect(result.current.totalGroups).toBe(1);
     expect(result.current.counts.blocked).toBe(4);
+    expect(result.current.filters.active).toBe('blocked');
+    expect(result.current.filters.setActive).toBe(mocks.groupedSetFilter);
+    expect(result.current.filters.search).toBe('grouped');
+    expect(result.current.filters.setSearch).toBe(mocks.groupedSetSearch);
+    expect(result.current.filters.counts.blocked).toBe(4);
     expect(result.current.selection.selectedIds).toBe(mocks.groupedSelectedIds);
     expect(result.current.actions.addRule).toBe(mocks.groupedAddRule);
     expect(result.current.refetch).toBe(mocks.groupedRefetch);
   });
 
-  it('refetches the newly active adapter when the mode changes', async () => {
-    const initialProps: { mode: 'flat' | 'hierarchical' } = { mode: 'flat' };
-    const { rerender } = renderHook(
-      ({ mode }: { mode: 'flat' | 'hierarchical' }) =>
-        useManagedRulesCollection({
-          ...options,
-          mode,
-        }),
-      { initialProps }
+  it('owns view-mode transitions and refetches the newly active adapter', async () => {
+    const { result } = renderHook(() =>
+      useManagedRulesCollection({
+        ...options,
+        initialMode: 'flat',
+      })
     );
 
     expect(mocks.flatRefetch).not.toHaveBeenCalled();
     expect(mocks.groupedRefetch).not.toHaveBeenCalled();
+    expect(result.current.viewMode.current).toBe('flat');
 
-    rerender({ mode: 'hierarchical' });
+    act(() => {
+      result.current.viewMode.change('hierarchical');
+    });
 
     await waitFor(() => {
       expect(mocks.groupedRefetch).toHaveBeenCalledTimes(1);
     });
     expect(mocks.flatRefetch).not.toHaveBeenCalled();
+    expect(result.current.mode).toBe('hierarchical');
+    expect(result.current.viewMode.current).toBe('hierarchical');
+  });
+
+  it('does not refetch when the requested view mode is already active', () => {
+    const { result } = renderHook(() =>
+      useManagedRulesCollection({
+        ...options,
+        initialMode: 'flat',
+      })
+    );
+
+    act(() => {
+      result.current.viewMode.change('flat');
+    });
+
+    expect(mocks.flatRefetch).not.toHaveBeenCalled();
+    expect(mocks.groupedRefetch).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Rule, RuleType } from '../lib/rules';
 import type { DomainGroup } from '../lib/rule-groups';
 import {
@@ -13,7 +13,7 @@ export type { DomainGroup };
 
 interface UseManagedRulesCollectionOptions {
   groupId: string;
-  mode: ManagedRulesCollectionMode;
+  initialMode?: ManagedRulesCollectionMode;
   onToast: (message: string, type: 'success' | 'error', undoAction?: () => void) => void;
 }
 
@@ -22,6 +22,14 @@ export interface ManagedRulesCounts {
   allowed: number;
   automatic: number;
   blocked: number;
+}
+
+export interface ManagedRulesFilters {
+  active: ManagedRulesFilterType;
+  setActive: (filter: ManagedRulesFilterType) => void;
+  search: string;
+  setSearch: (search: string) => void;
+  counts: ManagedRulesCounts;
 }
 
 export interface ManagedRulesSelection {
@@ -46,13 +54,20 @@ export interface ManagedRulesActions {
   updateRule: (id: string, data: { value?: string; comment?: string | null }) => Promise<boolean>;
 }
 
+export interface ManagedRulesViewMode {
+  current: ManagedRulesCollectionMode;
+  change: (mode: ManagedRulesCollectionMode) => void;
+}
+
 export interface ManagedRulesCollection {
   mode: ManagedRulesCollectionMode;
+  viewMode: ManagedRulesViewMode;
   rules: Rule[];
   domainGroups: DomainGroup[];
   totalRules: number;
   totalGroups: number;
   counts: ManagedRulesCounts;
+  filters: ManagedRulesFilters;
   loading: boolean;
   error: string | null;
   filter: ManagedRulesFilterType;
@@ -72,14 +87,35 @@ const noopGroupSelection = () => {
   /* Flat mode has no groups to select. */
 };
 
-function adaptFlatRulesManager(manager: UseRulesManagerReturn): ManagedRulesCollection {
+function buildFilters(manager: {
+  filter: ManagedRulesFilterType;
+  setFilter: (filter: ManagedRulesFilterType) => void;
+  search: string;
+  setSearch: (search: string) => void;
+  counts: ManagedRulesCounts;
+}): ManagedRulesFilters {
+  return {
+    active: manager.filter,
+    setActive: manager.setFilter,
+    search: manager.search,
+    setSearch: manager.setSearch,
+    counts: manager.counts,
+  };
+}
+
+function adaptFlatRulesManager(
+  manager: UseRulesManagerReturn,
+  viewMode: ManagedRulesViewMode
+): ManagedRulesCollection {
   return {
     mode: 'flat',
+    viewMode,
     rules: manager.rules,
     domainGroups: [],
     totalRules: manager.total,
     totalGroups: 0,
     counts: manager.counts,
+    filters: buildFilters(manager),
     loading: manager.loading,
     error: manager.error,
     filter: manager.filter,
@@ -111,14 +147,19 @@ function adaptFlatRulesManager(manager: UseRulesManagerReturn): ManagedRulesColl
   };
 }
 
-function adaptGroupedRulesManager(manager: UseGroupedRulesManagerReturn): ManagedRulesCollection {
+function adaptGroupedRulesManager(
+  manager: UseGroupedRulesManagerReturn,
+  viewMode: ManagedRulesViewMode
+): ManagedRulesCollection {
   return {
     mode: 'hierarchical',
+    viewMode,
     rules: manager.domainGroups.flatMap((group) => group.rules),
     domainGroups: manager.domainGroups,
     totalRules: manager.totalRules,
     totalGroups: manager.totalGroups,
     counts: manager.counts,
+    filters: buildFilters(manager),
     loading: manager.loading,
     error: manager.error,
     filter: manager.filter,
@@ -152,13 +193,24 @@ function adaptGroupedRulesManager(manager: UseGroupedRulesManagerReturn): Manage
 
 export function useManagedRulesCollection({
   groupId,
-  mode,
+  initialMode = 'flat',
   onToast,
 }: UseManagedRulesCollectionOptions): ManagedRulesCollection {
+  const [mode, setMode] = useState<ManagedRulesCollectionMode>(initialMode);
   const flatManager = useRulesManager({ groupId, onToast });
   const groupedManager = useGroupedRulesManager({ groupId, onToast });
   const previousModeRef = useRef(mode);
   const activeRefetch = mode === 'hierarchical' ? groupedManager.refetch : flatManager.refetch;
+  const changeViewMode = useCallback((nextMode: ManagedRulesCollectionMode) => {
+    setMode((currentMode) => (currentMode === nextMode ? currentMode : nextMode));
+  }, []);
+  const viewMode = useMemo<ManagedRulesViewMode>(
+    () => ({
+      current: mode,
+      change: changeViewMode,
+    }),
+    [changeViewMode, mode]
+  );
 
   useEffect(() => {
     if (previousModeRef.current === mode) return;
@@ -168,6 +220,6 @@ export function useManagedRulesCollection({
   }, [activeRefetch, mode]);
 
   return mode === 'hierarchical'
-    ? adaptGroupedRulesManager(groupedManager)
-    : adaptFlatRulesManager(flatManager);
+    ? adaptGroupedRulesManager(groupedManager, viewMode)
+    : adaptFlatRulesManager(flatManager, viewMode);
 }

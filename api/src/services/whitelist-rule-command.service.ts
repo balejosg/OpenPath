@@ -8,11 +8,11 @@ import type { DomainEventCollector } from './domain-events/types.js';
 
 export interface WhitelistRuleCommandDependencies {
   bulkDeleteRules: typeof groupsStorage.bulkDeleteRules;
+  createTransactionalWriter: typeof DomainEventsService.createTransactionalWriter;
   createRule: typeof groupsStorage.createRule;
   deleteRule: typeof groupsStorage.deleteRule;
   publishWhitelistChanged: (groupId: string) => void;
   updateRequestStatus: typeof updateStoredRequestStatus;
-  withDbTransactionEvents: typeof DomainEventsService.withDbTransactionEvents;
   withTransaction: typeof withTransaction;
 }
 
@@ -68,49 +68,49 @@ export interface BulkDeleteWhitelistRulesInput {
 
 type TransactionDeps = Pick<
   WhitelistRuleCommandDependencies,
-  'publishWhitelistChanged' | 'withDbTransactionEvents' | 'withTransaction'
+  'createTransactionalWriter' | 'publishWhitelistChanged' | 'withTransaction'
 >;
 
 type CreateRuleDeps = Pick<
   WhitelistRuleCommandDependencies,
-  'createRule' | 'publishWhitelistChanged' | 'withDbTransactionEvents' | 'withTransaction'
+  'createRule' | 'createTransactionalWriter' | 'publishWhitelistChanged' | 'withTransaction'
 >;
 
 type DeleteRuleDeps = Pick<
   WhitelistRuleCommandDependencies,
-  'deleteRule' | 'publishWhitelistChanged' | 'withDbTransactionEvents' | 'withTransaction'
+  'createTransactionalWriter' | 'deleteRule' | 'publishWhitelistChanged' | 'withTransaction'
 >;
 
 type BulkDeleteRuleDeps = Pick<
   WhitelistRuleCommandDependencies,
-  'bulkDeleteRules' | 'publishWhitelistChanged' | 'withDbTransactionEvents' | 'withTransaction'
+  'bulkDeleteRules' | 'createTransactionalWriter' | 'publishWhitelistChanged' | 'withTransaction'
 >;
 
 type RequestApprovalDeps = Pick<
   WhitelistRuleCommandDependencies,
   | 'createRule'
+  | 'createTransactionalWriter'
   | 'publishWhitelistChanged'
   | 'updateRequestStatus'
-  | 'withDbTransactionEvents'
   | 'withTransaction'
 >;
 
 type RevokeAutoApprovalDeps = Pick<
   WhitelistRuleCommandDependencies,
   | 'createRule'
+  | 'createTransactionalWriter'
   | 'deleteRule'
   | 'publishWhitelistChanged'
-  | 'withDbTransactionEvents'
   | 'withTransaction'
 >;
 
 export const defaultWhitelistRuleCommandDependencies: WhitelistRuleCommandDependencies = {
   bulkDeleteRules: groupsStorage.bulkDeleteRules,
+  createTransactionalWriter: DomainEventsService.createTransactionalWriter,
   createRule: groupsStorage.createRule,
   deleteRule: groupsStorage.deleteRule,
   publishWhitelistChanged: DomainEventsService.publishWhitelistChanged.bind(DomainEventsService),
   updateRequestStatus: updateStoredRequestStatus,
-  withDbTransactionEvents: DomainEventsService.withDbTransactionEvents,
   withTransaction,
 };
 
@@ -133,11 +133,14 @@ async function withWhitelistEvents<TResult>(
   deps: TransactionDeps,
   operation: (tx: DbExecutor, events: DomainEventCollector) => Promise<TResult>
 ): Promise<TResult> {
-  const dispatcher = DomainEventsService.createDispatcher({
-    publishWhitelistChanged: deps.publishWhitelistChanged,
+  const writer = deps.createTransactionalWriter<DbExecutor>({
+    publishers: {
+      publishWhitelistChanged: deps.publishWhitelistChanged,
+    },
+    transactionRunner: deps.withTransaction,
   });
 
-  return deps.withDbTransactionEvents(deps.withTransaction, operation, dispatcher);
+  return writer.write(operation);
 }
 
 export async function createManualWhitelistRule(

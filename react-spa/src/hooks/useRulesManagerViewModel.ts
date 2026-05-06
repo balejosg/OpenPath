@@ -22,7 +22,6 @@ export function useRulesManagerViewModel({
   onToast,
   onError,
 }: UseRulesManagerViewModelOptions) {
-  const [viewMode, setViewMode] = useState<ViewMode>('flat');
   const [newValue, setNewValue] = useState('');
   const [inputError, setInputError] = useState('');
   const [adding, setAdding] = useState(false);
@@ -34,9 +33,9 @@ export function useRulesManagerViewModel({
 
   const collection = useManagedRulesCollection({
     groupId,
-    mode: viewMode,
     onToast,
   });
+  const viewMode = collection.viewMode.current;
 
   const whitelistDomains = useMemo(() => {
     return collection.rules.filter((rule) => rule.type === 'whitelist').map((rule) => rule.value);
@@ -146,38 +145,37 @@ export function useRulesManagerViewModel({
   }, []);
 
   const handleViewModeChange = (nextViewMode: ViewMode) => {
-    if (viewMode === nextViewMode) return;
-    setViewMode(nextViewMode);
+    collection.viewMode.change(nextViewMode);
   };
 
-  const emptyMessage = collection.search
+  const emptyMessage = collection.filters.search
     ? 'No se encontraron resultados para tu búsqueda'
-    : collection.filter === 'allowed'
+    : collection.filters.active === 'allowed'
       ? 'No hay dominios permitidos'
-      : collection.filter === 'automatic'
+      : collection.filters.active === 'automatic'
         ? 'No hay aprobaciones automáticas'
-        : collection.filter === 'blocked'
+        : collection.filters.active === 'blocked'
           ? 'No hay dominios bloqueados'
           : 'No hay reglas configuradas. Añade una para empezar.';
 
   const tabs = [
-    { id: 'all' as ManagedRulesFilterType, label: 'Todos', count: collection.counts.all },
+    { id: 'all' as ManagedRulesFilterType, label: 'Todos', count: collection.filters.counts.all },
     {
       id: 'allowed' as ManagedRulesFilterType,
       label: 'Permitidas',
-      count: collection.counts.allowed,
+      count: collection.filters.counts.allowed,
       icon: createElement(Check, { size: 14 }),
     },
     {
       id: 'automatic' as ManagedRulesFilterType,
       label: 'Automáticas',
-      count: collection.counts.automatic,
+      count: collection.filters.counts.automatic,
       icon: createElement(Check, { size: 14 }),
     },
     {
       id: 'blocked' as ManagedRulesFilterType,
       label: 'Bloqueadas',
-      count: collection.counts.blocked,
+      count: collection.filters.counts.blocked,
       icon: createElement(Ban, { size: 14 }),
     },
   ];
@@ -207,8 +205,8 @@ export function useRulesManagerViewModel({
     handleViewModeChange,
     openImportModal: () => setShowImportModal(true),
     closeImportModal: handleImportModalClose,
-    setSearch: collection.setSearch,
-    setFilter: collection.setFilter,
+    setSearch: collection.filters.setSearch,
+    setFilter: collection.filters.setActive,
     setPage: collection.setPage,
     setShowImportModal,
   };

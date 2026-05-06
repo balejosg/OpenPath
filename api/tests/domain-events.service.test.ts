@@ -11,6 +11,7 @@ void test('domain-events service exposes event dispatch functions', () => {
   assert.equal(typeof DomainEventsService.tickScheduleBoundaryEvents, 'function');
   assert.equal(typeof DomainEventsService.withQueuedEvents, 'function');
   assert.equal(typeof DomainEventsService.withTransactionEvents, 'function');
+  assert.equal(typeof DomainEventsService.createTransactionalWriter, 'function');
 });
 
 void test('withTransactionEvents publishes queued events after success', async () => {
@@ -120,4 +121,32 @@ void test('withTransactionEvents does not publish queued events after failure', 
   );
 
   assert.deepEqual(published, []);
+});
+
+void test('publishClassroomChanged accepts immediate and timestamped changes', () => {
+  assert.doesNotThrow(() => {
+    DomainEventsService.publishClassroomChanged('room-1');
+    DomainEventsService.publishClassroomChanged('room-1', new Date('2026-05-06T12:00:00.000Z'));
+  });
+});
+
+void test('withDbTransactionEvents publishes queued events after database commit', async () => {
+  const published: string[] = [];
+  const dispatcher = DomainEventsService.createDispatcher({
+    publishWhitelistChanged: (groupId) => {
+      published.push(groupId);
+    },
+  });
+
+  const result = await DomainEventsService.withDbTransactionEvents(
+    (operation) => operation({} as never),
+    (_tx, events) => {
+      events.publishWhitelistChanged('group-a');
+      return Promise.resolve('ok');
+    },
+    dispatcher
+  );
+
+  assert.equal(result, 'ok');
+  assert.deepEqual(published, ['group-a']);
 });
