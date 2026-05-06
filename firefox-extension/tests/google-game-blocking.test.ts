@@ -17,6 +17,7 @@ void describe('Firefox Google game blocking', () => {
       { extensionOrigin: 'moz-extension://unit-test/' }
     );
 
+    assert.ok(outcome);
     assert.equal(outcome.reason, `${GOOGLE_GAME_POLICY_REASON}:snake`);
     assert.match(outcome.redirectUrl ?? '', /\/blocked\/blocked\.html/);
     assert.equal(outcome.cancel, undefined);
