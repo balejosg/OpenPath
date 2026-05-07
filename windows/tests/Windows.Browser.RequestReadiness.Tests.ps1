@@ -296,19 +296,33 @@ Describe "Browser Module - Request Readiness" {
     }
 
     It "Uses request setup state for readiness instead of parsing raw config fields" {
-        $requestReadinessPath = Join-Path $PSScriptRoot ".." "lib" "Browser.RequestReadiness.psm1"
-        $content = Get-Content $requestReadinessPath -Raw
+        $config = [PSCustomObject]@{
+            apiUrl = "not a url"
+            whitelistUrl = "not a whitelist token url"
+            classroomId = "classroom-123"
+            approvedStudentBrowsers = @("Firefox")
+        }
 
-        Assert-ContentContainsAll -Content $content -Needles @(
-            'RequestSetup.State.psm1',
-            'Get-OpenPathRequestSetupState -Config $Config',
-            '$requestSetupState.Ready',
-            '$requestSetupState.ClassroomConfigured'
-        )
+        Mock Get-OpenPathRequestSetupState {
+            [PSCustomObject]@{
+                Ready = $true
+                ClassroomConfigured = $true
+                WhitelistUrl = "https://school.example/w/machine-token-123/whitelist.txt"
+            }
+        } -ModuleName Browser.RequestReadiness
 
-        $content | Should -Not -Match 'Get-OpenPathConfigTrimmedValue -Config \$Config -PropertyName ''apiUrl'''
-        $content | Should -Not -Match 'Get-OpenPathConfigTrimmedValue -Config \$Config -PropertyName ''whitelistUrl'''
-        $content | Should -Not -Match 'whitelistUrl -notmatch'
+        $result = Get-OpenPathBrowserRequestReadiness `
+            -Config $config `
+            -ManagedExtensionPolicy (New-FirefoxManagedPolicy) `
+            -NativeHostRegistered $true `
+            -NativeHostStatePresent $true `
+            -FirefoxMachinePolicyApplied $true `
+            -AppControlActive $true `
+            -BrowserInventory (New-BrowserInventory -ApprovedBrowsers @("Mozilla Firefox"))
+
+        $result.Ready | Should -BeTrue
+        $result.Facts.request_setup | Should -Be "ready"
+        Should -Invoke Get-OpenPathRequestSetupState -ModuleName Browser.RequestReadiness -Times 2 -Exactly
     }
 
     It "Fails readiness when Firefox machine policy is missing" {

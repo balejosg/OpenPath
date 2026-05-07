@@ -4,6 +4,7 @@ Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxPolicy.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxNativeHost.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot\RequestSetup.State.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.RequestReadiness.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction Stop
 
@@ -111,7 +112,7 @@ catch {
     }
 }
 
-function Get-OpenPathBrowserDoctorReport {
+function Get-OpenPathBrowserDoctorEvidence {
     $browserInventory = Get-OpenPathBrowserInventory
     $approvedBrowserSummary = if (@($browserInventory.ApprovedBrowsers).Count -gt 0) {
         @($browserInventory.ApprovedBrowsers | ForEach-Object { $_.Name } | Select-Object -Unique) -join ', '
@@ -422,62 +423,146 @@ function Get-OpenPathBrowserDoctorReport {
         }
     }
 
+    return [PSCustomObject]@{
+        BrowserInventory = [PSCustomObject]@{
+            ApprovedBrowserSummary = $approvedBrowserSummary
+            UnmanagedBrowserSummary = $unmanagedBrowserSummary
+            PortableBrowserRiskSummary = $portableBrowserRiskSummary
+            WebRenderingSurfaceSummary = $webRenderingSurfaceSummary
+            Raw = $browserInventory
+        }
+        Firefox = [PSCustomObject]@{
+            MetadataPath = $metadataPath
+            MetadataPresent = $metadataPresent
+            MetadataParseResult = $metadataParseResult
+            ExtensionId = $extensionId
+            ExtensionVersion = $extensionVersion
+            MetadataSha256 = $metadataSha256
+            XpiPath = $xpiPath
+            XpiPresent = $xpiPresent
+            XpiBytes = $xpiBytes
+            XpiSha256 = $xpiSha256
+            XpiAclSummary = $aclSummary
+            ResolvedInstallUrl = $resolvedInstallUrl
+        }
+        NativeHost = [PSCustomObject]@{
+            ManifestPath = $nativeHostManifestPath
+            ManifestParse = $nativeHostManifestParse
+            ManifestName = $nativeHostManifestName
+            AllowedExtensions = $nativeHostAllowedExtensions
+            RegistryPath = $nativeHostRegistryPath
+            RegistrySummary = $nativeHostRegistrySummary
+            WrapperPath = $nativeHostWrapperPath
+            WrapperPresent = $nativeHostWrapperPresent
+            ScriptPath = $nativeHostScriptPath
+            ScriptPresent = $nativeHostScriptPresent
+            StateHelperReadable = $nativeHostStateHelperReadable
+            ProtocolHelperReadable = $nativeHostProtocolHelperReadable
+            ActionsHelperReadable = $nativeHostActionsHelperReadable
+            StatePath = $nativeHostStatePath
+            StateReadable = $nativeHostStateReadable
+            WhitelistReadable = $nativeHostWhitelistReadable
+            RequestSetup = [PSCustomObject]@{
+                ApiUrlConfigured = $nativeHostRequestApiConfigured
+                WhitelistTokenConfigured = $nativeHostWhitelistTokenConfigured
+                Ready = $nativeHostRequestSetupComplete
+                State = $nativeHostRequestSetupState
+            }
+            UpdateTaskName = $nativeHostUpdateTaskName
+            UpdateTaskCheck = $nativeHostUpdateTaskCheck
+            UpdateTaskPresent = $nativeHostUpdateTaskPresent
+            UpdateTaskUserAccess = $nativeHostUpdateTaskUserAccess
+        }
+        BrowserRequestReadiness = [PSCustomObject]@{
+            Ready = [bool]$browserRequestReadiness.Ready
+            Facts = $browserRequestReadiness.Facts
+            FactSummary = $browserRequestReadinessFacts
+            FailureReasons = @($browserRequestReadiness.FailureReasons)
+            FailureSummary = $browserRequestReadinessFailures
+            Raw = $browserRequestReadiness
+        }
+        MachineFirefoxPolicy = [PSCustomObject]@{
+            Status = $machineFirefoxPolicy
+            InstallUrl = $machineFirefoxPolicyInstallUrl
+        }
+        Policy = [PSCustomObject]@{
+            Path = $policyPath
+            Present = (Test-Path $policyPath)
+            Encoding = $policyEncoding
+            JsonParse = $policyParseResult
+            InstallMode = $policyInstallMode
+            InstallUrl = $policyInstallUrl
+        }
+    }
+}
+
+function ConvertTo-OpenPathBrowserDoctorReport {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Evidence
+    )
+
     return @(
         'OpenPath Browser Doctor'
-        "Firefox metadata path: $metadataPath"
-        "Firefox metadata present: $metadataPresent"
-        "Firefox metadata parse: $metadataParseResult"
-        "Firefox extension id: $extensionId"
-        "Firefox extension version: $extensionVersion"
-        "Firefox metadata sha256: $metadataSha256"
-        "Firefox XPI path: $xpiPath"
-        "Firefox XPI present: $xpiPresent"
-        "Firefox XPI bytes: $xpiBytes"
-        "Firefox XPI sha256: $xpiSha256"
-        "Firefox XPI ACL summary: $aclSummary"
-        "Native host manifest path: $nativeHostManifestPath"
-        "Native host manifest parse: $nativeHostManifestParse"
-        "Native host manifest name: $nativeHostManifestName"
-        "Native host allowed extensions: $nativeHostAllowedExtensions"
-        "Native host registry path: $nativeHostRegistryPath"
-        "Native host registry summary: $nativeHostRegistrySummary"
-        "Native host wrapper path: $nativeHostWrapperPath"
-        "Native host wrapper present: $nativeHostWrapperPresent"
-        "Native host script path: $nativeHostScriptPath"
-        "Native host script present: $nativeHostScriptPresent"
-        "Native host state helper readable: $nativeHostStateHelperReadable"
-        "Native host protocol helper readable: $nativeHostProtocolHelperReadable"
-        "Native host actions helper readable: $nativeHostActionsHelperReadable"
-        "Native host state path: $nativeHostStatePath"
-        "Native host state readable: $nativeHostStateReadable"
-        "Native host whitelist readable: $nativeHostWhitelistReadable"
-        "Native host request API configured: $nativeHostRequestApiConfigured"
-        "Native host whitelist token configured: $nativeHostWhitelistTokenConfigured"
-        "Native host request setup complete: $nativeHostRequestSetupComplete"
-        "Native host update task: $nativeHostUpdateTaskName"
-        "Native host update task check: $nativeHostUpdateTaskCheck"
-        "Native host update task present: $nativeHostUpdateTaskPresent"
-        "Native host update task user access: $nativeHostUpdateTaskUserAccess"
-        "Browser request readiness: $($browserRequestReadiness.Ready)"
-        "Browser request readiness facts: $browserRequestReadinessFacts"
-        "Browser request readiness failures: $browserRequestReadinessFailures"
-        "Approved managed browsers: $approvedBrowserSummary"
-        "Unmanaged browsers detected: $unmanagedBrowserSummary"
-        "Portable browser risk: $portableBrowserRiskSummary"
-        "Web rendering surfaces: $webRenderingSurfaceSummary"
-        "Resolved install_url: $resolvedInstallUrl"
-        "Machine Firefox policy: $machineFirefoxPolicy"
-        "Machine Firefox policy install_url: $machineFirefoxPolicyInstallUrl"
-        "Policy file path: $policyPath"
-        "Policy file present: $(Test-Path $policyPath)"
-        "Policy encoding: $policyEncoding"
-        "Policy JSON parse: $policyParseResult"
-        "Policy install mode: $policyInstallMode"
-        "Policy install_url: $policyInstallUrl"
+        "Firefox metadata path: $($Evidence.Firefox.MetadataPath)"
+        "Firefox metadata present: $($Evidence.Firefox.MetadataPresent)"
+        "Firefox metadata parse: $($Evidence.Firefox.MetadataParseResult)"
+        "Firefox extension id: $($Evidence.Firefox.ExtensionId)"
+        "Firefox extension version: $($Evidence.Firefox.ExtensionVersion)"
+        "Firefox metadata sha256: $($Evidence.Firefox.MetadataSha256)"
+        "Firefox XPI path: $($Evidence.Firefox.XpiPath)"
+        "Firefox XPI present: $($Evidence.Firefox.XpiPresent)"
+        "Firefox XPI bytes: $($Evidence.Firefox.XpiBytes)"
+        "Firefox XPI sha256: $($Evidence.Firefox.XpiSha256)"
+        "Firefox XPI ACL summary: $($Evidence.Firefox.XpiAclSummary)"
+        "Native host manifest path: $($Evidence.NativeHost.ManifestPath)"
+        "Native host manifest parse: $($Evidence.NativeHost.ManifestParse)"
+        "Native host manifest name: $($Evidence.NativeHost.ManifestName)"
+        "Native host allowed extensions: $($Evidence.NativeHost.AllowedExtensions)"
+        "Native host registry path: $($Evidence.NativeHost.RegistryPath)"
+        "Native host registry summary: $($Evidence.NativeHost.RegistrySummary)"
+        "Native host wrapper path: $($Evidence.NativeHost.WrapperPath)"
+        "Native host wrapper present: $($Evidence.NativeHost.WrapperPresent)"
+        "Native host script path: $($Evidence.NativeHost.ScriptPath)"
+        "Native host script present: $($Evidence.NativeHost.ScriptPresent)"
+        "Native host state helper readable: $($Evidence.NativeHost.StateHelperReadable)"
+        "Native host protocol helper readable: $($Evidence.NativeHost.ProtocolHelperReadable)"
+        "Native host actions helper readable: $($Evidence.NativeHost.ActionsHelperReadable)"
+        "Native host state path: $($Evidence.NativeHost.StatePath)"
+        "Native host state readable: $($Evidence.NativeHost.StateReadable)"
+        "Native host whitelist readable: $($Evidence.NativeHost.WhitelistReadable)"
+        "Native host request API configured: $($Evidence.NativeHost.RequestSetup.ApiUrlConfigured)"
+        "Native host whitelist token configured: $($Evidence.NativeHost.RequestSetup.WhitelistTokenConfigured)"
+        "Native host request setup complete: $($Evidence.NativeHost.RequestSetup.Ready)"
+        "Native host update task: $($Evidence.NativeHost.UpdateTaskName)"
+        "Native host update task check: $($Evidence.NativeHost.UpdateTaskCheck)"
+        "Native host update task present: $($Evidence.NativeHost.UpdateTaskPresent)"
+        "Native host update task user access: $($Evidence.NativeHost.UpdateTaskUserAccess)"
+        "Browser request readiness: $($Evidence.BrowserRequestReadiness.Ready)"
+        "Browser request readiness facts: $($Evidence.BrowserRequestReadiness.FactSummary)"
+        "Browser request readiness failures: $($Evidence.BrowserRequestReadiness.FailureSummary)"
+        "Approved managed browsers: $($Evidence.BrowserInventory.ApprovedBrowserSummary)"
+        "Unmanaged browsers detected: $($Evidence.BrowserInventory.UnmanagedBrowserSummary)"
+        "Portable browser risk: $($Evidence.BrowserInventory.PortableBrowserRiskSummary)"
+        "Web rendering surfaces: $($Evidence.BrowserInventory.WebRenderingSurfaceSummary)"
+        "Resolved install_url: $($Evidence.Firefox.ResolvedInstallUrl)"
+        "Machine Firefox policy: $($Evidence.MachineFirefoxPolicy.Status)"
+        "Machine Firefox policy install_url: $($Evidence.MachineFirefoxPolicy.InstallUrl)"
+        "Policy file path: $($Evidence.Policy.Path)"
+        "Policy file present: $($Evidence.Policy.Present)"
+        "Policy encoding: $($Evidence.Policy.Encoding)"
+        "Policy JSON parse: $($Evidence.Policy.JsonParse)"
+        "Policy install mode: $($Evidence.Policy.InstallMode)"
+        "Policy install_url: $($Evidence.Policy.InstallUrl)"
     ) -join [Environment]::NewLine
 }
 
+function Get-OpenPathBrowserDoctorReport {
+    return ConvertTo-OpenPathBrowserDoctorReport -Evidence (Get-OpenPathBrowserDoctorEvidence)
+}
+
 Export-ModuleMember -Function @(
+    'Get-OpenPathBrowserDoctorEvidence',
     'Get-OpenPathBrowserDoctorReport',
     'Get-OpenPathBrowserDoctorScheduledTaskDiagnostic'
 )
