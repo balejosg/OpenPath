@@ -12,6 +12,11 @@ on:
         required: false
         default: main
         type: string
+      amo-version:
+        description: Optional AMO version override for manual recovery when a payload-stable version is stuck.
+        required: false
+        default: ''
+        type: string
 
 permissions:
   actions: read
@@ -28,6 +33,7 @@ jobs:
     outputs:
       ci_success_conclusion: ${{ steps.source.outputs.ci_success_conclusion }}
       ref: ${{ steps.source.outputs.ref }}
+      amo_version: ${{ steps.source.outputs.amo_version }}
 
     steps:
       - name: Resolve source ref
@@ -40,6 +46,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "ci_success_conclusion=success" >> "$GITHUB_OUTPUT"
             echo "ref=${{ github.event.inputs.ref }}" >> "$GITHUB_OUTPUT"
+            echo "amo_version=${{ github.event.inputs.amo-version }}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -57,6 +64,7 @@ jobs:
 
           echo "ci_success_conclusion=$ci_success_conclusion" >> "$GITHUB_OUTPUT"
           echo "ref=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          echo "amo_version=" >> "$GITHUB_OUTPUT"
 
   seed-firefox-release-assets:
     name: Seed Firefox Release Assets
@@ -85,6 +93,7 @@ jobs:
         id: firefox-release
         uses: ./.github/actions/prepare-firefox-release-artifacts
         with:
+          amo-version: ${{ needs.resolve-source.outputs.amo_version }}
           web-ext-api-key: ${{ secrets.WEB_EXT_API_KEY }}
           web-ext-api-secret: ${{ secrets.WEB_EXT_API_SECRET }}
 

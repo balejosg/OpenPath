@@ -282,6 +282,12 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
     'Firefox release asset seeding should reuse the cache-aware signing action'
   );
   assert.ok(
+    firefoxAssetsWorkflow.includes('amo-version:') &&
+      firefoxAssetsWorkflow.includes('needs.resolve-source.outputs.amo_version') &&
+      firefoxAssetsWorkflow.includes('github.event.inputs.amo-version'),
+    'Firefox release asset seeding should allow manual AMO version override for stuck AMO recoveries'
+  );
+  assert.ok(
     !firefoxAssetsWorkflow.includes(
       'amo-version: 2.0.${{ github.run_number }}.${{ github.run_attempt }}'
     ),
