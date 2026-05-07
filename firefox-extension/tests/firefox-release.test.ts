@@ -102,6 +102,7 @@ interface SignFirefoxReleaseModule {
     processTimeoutMs?: number;
     deadlineMs?: number;
   };
+  resolveAmoSigningFailureState: (status: number | null | undefined) => string;
   runWebExtSignWithRetry: (options: {
     args: string[];
     cwd: string;
@@ -270,6 +271,7 @@ const {
   prepareSigningSourceDir,
   resolveAmoRecoveryTiming,
   resolveWebExtSignTiming,
+  resolveAmoSigningFailureState,
   runWebExtSignWithRetry,
   waitForAmoSignedXpi,
   writeAmoSigningStateArtifact,
@@ -1421,6 +1423,12 @@ void describe('Firefox release signing helpers', () => {
       lastPollAt: '2026-05-07T05:00:01.000Z',
     });
     assert.deepEqual(JSON.parse(readFileSync(artifactPath, 'utf8')), artifact);
+  });
+
+  void test('resolveAmoSigningFailureState distinguishes timeouts from hard failures', () => {
+    assert.equal(resolveAmoSigningFailureState(124), 'timeout');
+    assert.equal(resolveAmoSigningFailureState(1), 'hard-failure');
+    assert.equal(resolveAmoSigningFailureState(null), 'hard-failure');
   });
 
   void test('runWebExtSignWithRetry waits and retries AMO throttling responses', () => {

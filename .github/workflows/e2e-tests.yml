@@ -77,6 +77,7 @@ jobs:
       linux_student_policy: ${{ steps.filter.outputs.linux_student_policy }}
       windows_student_policy: ${{ steps.filter.outputs.windows_student_policy }}
       windows_student_policy_sse_group: ${{ steps.filter.outputs.windows_student_policy_sse_group }}
+      windows_student_policy_sse_reason: ${{ steps.filter.outputs.windows_student_policy_sse_reason }}
 
     steps:
       - name: Checkout code
@@ -100,6 +101,7 @@ jobs:
             linux_student_policy=false
             windows_student_policy=false
             windows_student_policy_sse_group="$(node scripts/select-windows-student-policy-sse-group.mjs --override "$manual_sse_group")"
+            windows_student_policy_sse_reason="$(node scripts/select-windows-student-policy-sse-group.mjs --override "$manual_sse_group" --reason)"
 
             if { [ "$manual_platform" = "all" ] || [ "$manual_platform" = "linux" ]; } &&
                { [ "$manual_suite" = "all" ] || [ "$manual_suite" = "e2e" ]; }; then
@@ -124,6 +126,15 @@ jobs:
             echo "linux_student_policy=$linux_student_policy" >> "$GITHUB_OUTPUT"
             echo "windows_student_policy=$windows_student_policy" >> "$GITHUB_OUTPUT"
             echo "windows_student_policy_sse_group=$windows_student_policy_sse_group" >> "$GITHUB_OUTPUT"
+            echo "windows_student_policy_sse_reason=$windows_student_policy_sse_reason" >> "$GITHUB_OUTPUT"
+            {
+              echo "### E2E Route Selection"
+              echo ""
+              echo "- Release infrastructure only: false"
+              echo "- Windows Student Policy selected: $windows_student_policy"
+              echo "- Windows Student Policy SSE group: $windows_student_policy_sse_group"
+              echo "- Windows Student Policy SSE routing reason: $windows_student_policy_sse_reason"
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -152,6 +163,7 @@ jobs:
           linux_student_policy=false
           windows_student_policy=false
           windows_student_policy_sse_group=full
+          windows_student_policy_sse_reason="Windows Student Policy not selected; target-platform lane not required for this diff."
           release_infra_only=false
           firefox_runtime_pattern='firefox-extension/(manifest\.json|package\.json|tsconfig(\.build)?\.json|src/|blocked/|popup/|icons/)'
 
@@ -162,6 +174,7 @@ jobs:
             )"
             if [ -z "$non_release_infra_files" ]; then
               release_infra_only=true
+              windows_student_policy_sse_reason="Release-infrastructure-only diff: target-platform lanes skipped by contract."
             fi
           fi
 
@@ -180,6 +193,7 @@ jobs:
           if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq "^(api/|shared/|windows/|runtime/|$firefox_runtime_pattern|tests/e2e/(ci/run-windows-student-flow\.ps1|student-flow/|validation/)|tests/selenium/|package\.json$|package-lock\.json$|scripts/require-release-quality-gate\.mjs$|\.github/actions/setup-node/|\.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml$)"; then
             windows_student_policy=true
             windows_student_policy_sse_group="$(printf '%s\n' "$changed_files" | node scripts/select-windows-student-policy-sse-group.mjs --from-stdin)"
+            windows_student_policy_sse_reason="$(printf '%s\n' "$changed_files" | node scripts/select-windows-student-policy-sse-group.mjs --from-stdin --reason)"
           fi
 
           echo "release_infra_only=$release_infra_only" >> "$GITHUB_OUTPUT"
@@ -188,6 +202,21 @@ jobs:
           echo "linux_student_policy=$linux_student_policy" >> "$GITHUB_OUTPUT"
           echo "windows_student_policy=$windows_student_policy" >> "$GITHUB_OUTPUT"
           echo "windows_student_policy_sse_group=$windows_student_policy_sse_group" >> "$GITHUB_OUTPUT"
+          echo "windows_student_policy_sse_reason=$windows_student_policy_sse_reason" >> "$GITHUB_OUTPUT"
+          {
+            echo "### E2E Route Selection"
+            echo ""
+            echo "- Release infrastructure only: $release_infra_only"
+            if [ "$release_infra_only" = "true" ]; then
+              echo "- Release-infrastructure-only diff: target-platform lanes skipped by contract."
+            fi
+            echo "- Linux E2E selected: $linux_e2e"
+            echo "- Windows E2E selected: $windows_e2e"
+            echo "- Linux Student Policy selected: $linux_student_policy"
+            echo "- Windows Student Policy selected: $windows_student_policy"
+            echo "- Windows Student Policy SSE group: $windows_student_policy_sse_group"
+            echo "- Windows Student Policy SSE routing reason: $windows_student_policy_sse_reason"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ============================================
   # Linux E2E Tests (Docker-based for full DNS control)
@@ -325,8 +354,17 @@ jobs:
         shell: pwsh
         env:
           OPENPATH_WINDOWS_STUDENT_SSE_GROUP: ${{ needs.detect-relevant-changes.outputs.windows_student_policy_sse_group }}
+          OPENPATH_WINDOWS_STUDENT_SSE_REASON: ${{ needs.detect-relevant-changes.outputs.windows_student_policy_sse_reason }}
           OPENPATH_KEEP_CLIENT_FOR_BROWSER_BOUNDARY: '1'
         run: |
+          @"
+          ### Windows Student Policy Route
+
+          - Windows Student Policy SSE group: $env:OPENPATH_WINDOWS_STUDENT_SSE_GROUP
+          - Windows Student Policy SSE routing reason: $env:OPENPATH_WINDOWS_STUDENT_SSE_REASON
+          - Runner: $env:RUNNER_NAME ($env:RUNNER_OS/$env:RUNNER_ARCH)
+          - Timing artifact: tests/e2e/artifacts/windows-student-policy/windows-student-policy-timings.json
+          "@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-student-flow.ps1
 
       - name: Run Windows browser boundary probes
@@ -371,6 +409,13 @@ jobs:
         run: |
           echo "📊 E2E Test Summary"
           echo "===================="
+          echo "Release infrastructure only: ${{ needs.detect-relevant-changes.outputs.release_infra_only }}"
+          if [[ "${{ needs.detect-relevant-changes.outputs.release_infra_only }}" == "true" ]]; then
+            echo "Release-infrastructure-only diff: target-platform lanes skipped by contract."
+          fi
+          echo "Windows Student Policy SSE group: ${{ needs.detect-relevant-changes.outputs.windows_student_policy_sse_group }}"
+          echo "Windows Student Policy SSE routing reason: ${{ needs.detect-relevant-changes.outputs.windows_student_policy_sse_reason }}"
+          echo ""
 
           if [[ "${{ needs.detect-relevant-changes.result }}" != "success" ]]; then
             echo "❌ Detect Relevant Changes: ${{ needs.detect-relevant-changes.result }}"

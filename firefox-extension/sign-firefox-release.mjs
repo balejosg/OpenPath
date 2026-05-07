@@ -217,6 +217,10 @@ export function isAmoVersionAlreadyExists(output) {
   return /Version(?:\s+[\dA-Za-z._-]+)?\s+already exists/i.test(output);
 }
 
+export function resolveAmoSigningFailureState(status) {
+  return status === 124 ? 'timeout' : 'hard-failure';
+}
+
 function normalizeAmoBaseUrl(amoBaseUrl = defaultAmoBaseUrl) {
   const baseUrl = new URL(amoBaseUrl);
   if (!baseUrl.pathname.endsWith('/')) {
@@ -998,13 +1002,16 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
         signingStateAddonId = recovery?.addonId || signingStateAddonId;
 
         if (!signedXpiPath) {
+          const failureState = resolveAmoSigningFailureState(result.status);
           writeAmoSigningStateArtifact({
             artifactsDir,
-            state: 'submission-failed',
+            state: failureState,
             addonId: signingStateAddonId,
             version: signingSource.effectiveVersion,
             fileStatus: 'unknown',
-            message: `web-ext sign failed with status ${String(result.status ?? 'unknown')}`,
+            message: `web-ext sign ${failureState} with status ${String(
+              result.status ?? 'unknown'
+            )}`,
           });
           fail(`web-ext sign failed with status ${String(result.status ?? 'unknown')}`);
         }

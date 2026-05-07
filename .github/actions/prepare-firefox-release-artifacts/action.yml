@@ -53,11 +53,17 @@ outputs:
     description: Whether signed Firefox Release artifacts were restored from cache.
     value: ${{ steps.cache.outputs.cache-hit }}
   artifact-source:
-    description: 'Source of the Firefox Release artifacts: cache, signed, or skipped.'
+    description: 'Source of the Firefox Release artifacts: cache, signed, skipped, manual-review-required, timeout, or hard-failure.'
     value: ${{ steps.status.outputs.artifact-source }}
+  release-state:
+    description: 'Actionable Firefox Release state: cache-hit, fresh-signing, skipped, manual-review-required, timeout, or hard-failure.'
+    value: ${{ steps.status.outputs.release-state }}
   amo-version:
     description: AMO extension version used when signing is required.
     value: ${{ steps.amo-version.outputs.version }}
+  amo-file-status:
+    description: Last AMO file.status observed by signing recovery, when available.
+    value: ${{ steps.status.outputs.amo-file-status }}
   signed-artifacts-present:
     description: Whether verified signed Firefox Release artifacts are present.
     value: ${{ steps.status.outputs.signed-artifacts-present }}
@@ -90,7 +96,7 @@ runs:
 
     - name: Restore signed Firefox Release artifacts
       id: cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: firefox-extension/build/firefox-release
         key: openpath-firefox-release-${{ steps.payload.outputs.hash }}
@@ -104,7 +110,9 @@ runs:
           --payload-hash "${{ steps.payload.outputs.hash }}"
 
     - name: Sign Firefox Release Extension
+      id: sign-firefox-release
       if: ${{ steps.cache.outputs.cache-hit != 'true' && inputs.sign-on-cache-miss == 'true' }}
+      continue-on-error: true
       shell: bash
       env:
         WEB_EXT_API_KEY: ${{ inputs.web-ext-api-key }}
@@ -123,7 +131,7 @@ runs:
         npm run sign:firefox-release --workspace=@openpath/firefox-extension -- --version "${{ steps.amo-version.outputs.version }}"
 
     - name: Verify signed Firefox Release artifacts
-      if: ${{ steps.cache.outputs.cache-hit != 'true' && inputs.sign-on-cache-miss == 'true' }}
+      if: ${{ steps.cache.outputs.cache-hit != 'true' && inputs.sign-on-cache-miss == 'true' && steps.sign-firefox-release.outcome == 'success' }}
       shell: bash
       run: |
         node firefox-extension/verify-firefox-release-artifacts.mjs \
@@ -131,9 +139,9 @@ runs:
           --payload-hash "${{ steps.payload.outputs.hash }}"
 
     - name: Save signed Firefox Release artifacts
-      if: ${{ steps.cache.outputs.cache-hit != 'true' && inputs.sign-on-cache-miss == 'true' }}
+      if: ${{ steps.cache.outputs.cache-hit != 'true' && inputs.sign-on-cache-miss == 'true' && steps.sign-firefox-release.outcome == 'success' }}
       continue-on-error: true
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       with:
         path: firefox-extension/build/firefox-release
         key: openpath-firefox-release-${{ steps.payload.outputs.hash }}
@@ -146,29 +154,79 @@ runs:
 
     - name: Report Firefox Release artifact status
       id: status
+      if: ${{ always() }}
       shell: bash
       run: |
         release_dir="firefox-extension/build/firefox-release"
+        signing_state_file="firefox-extension/build/firefox-release-signing/amo-signing-state.json"
+        sign_outcome="${{ steps.sign-firefox-release.outcome }}"
+        signing_state=""
+        amo_file_status=""
+        state_message=""
+
+        if [ -f "$signing_state_file" ]; then
+          signing_state="$(node -e "const fs = require('fs'); const data = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(String(data.state || ''));" "$signing_state_file")"
+          amo_file_status="$(node -e "const fs = require('fs'); const data = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(String(data.fileStatus || ''));" "$signing_state_file")"
+          state_message="$(node -e "const fs = require('fs'); const data = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(String(data.message || ''));" "$signing_state_file")"
+        fi
 
         if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
           artifact_source="cache"
+          release_state="cache-hit"
           signed_artifacts_present="true"
         elif [ -f "$release_dir/metadata.json" ] && [ -f "$release_dir/openpath-firefox-extension.xpi" ]; then
           artifact_source="signed"
+          release_state="fresh-signing"
           signed_artifacts_present="true"
+        elif [ "$signing_state" = "manual-review-required" ]; then
+          artifact_source="manual-review-required"
+          release_state="manual-review-required"
+          signed_artifacts_present="false"
+        elif [ "$signing_state" = "timeout" ]; then
+          artifact_source="timeout"
+          release_state="timeout"
+          signed_artifacts_present="false"
+        elif [ "$signing_state" = "hard-failure" ] || [ "$sign_outcome" = "failure" ]; then
+          artifact_source="hard-failure"
+          release_state="hard-failure"
+          signed_artifacts_present="false"
         else
           artifact_source="skipped"
+          release_state="skipped"
           signed_artifacts_present="false"
         fi
 
         echo "artifact-source=$artifact_source" >> "$GITHUB_OUTPUT"
+        echo "release-state=$release_state" >> "$GITHUB_OUTPUT"
+        echo "amo-file-status=$amo_file_status" >> "$GITHUB_OUTPUT"
         echo "signed-artifacts-present=$signed_artifacts_present" >> "$GITHUB_OUTPUT"
         echo "Firefox Release artifact source: $artifact_source"
+        echo "Firefox Release state: $release_state"
+        echo "Firefox Release signing step outcome: $sign_outcome"
+        if [ -n "$amo_file_status" ]; then
+          echo "AMO fileStatus=$amo_file_status"
+        fi
+        if [ -n "$state_message" ]; then
+          echo "AMO signing state message: $state_message"
+        fi
         echo "Signed Firefox Release artifacts present: $signed_artifacts_present"
 
-    - name: Require signed Firefox Release artifacts
-      if: ${{ inputs.require-signed-artifacts == 'true' && steps.status.outputs.signed-artifacts-present != 'true' }}
+    - name: Require actionable Firefox Release state
+      if: ${{ always() && ((inputs.sign-on-cache-miss == 'true' && steps.sign-firefox-release.outcome == 'failure') || (inputs.require-signed-artifacts == 'true' && steps.status.outputs.signed-artifacts-present != 'true')) }}
       shell: bash
       run: |
-        echo "::error title=Missing signed Firefox Release artifacts::Signed Firefox Release artifacts are required but were not restored or created."
+        case "${{ steps.status.outputs.release-state }}" in
+          manual-review-required)
+            echo "::error title=Manual AMO review required::AMO accepted the Firefox Release submission, but fileStatus=unreviewed did not produce signed artifacts before the recovery timeout. Review the AMO version manually or rerun with an explicit amo-version after review."
+            ;;
+          timeout)
+            echo "::error title=AMO signing timeout::Firefox Release AMO signing timed out before signed artifacts were available."
+            ;;
+          hard-failure)
+            echo "::error title=AMO signing hard failure::Firefox Release AMO signing failed before signed artifacts were available."
+            ;;
+          *)
+            echo "::error title=Missing signed Firefox Release artifacts::Signed Firefox Release artifacts are required but were not restored or created."
+            ;;
+        esac
         exit 1

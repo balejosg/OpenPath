@@ -222,6 +222,9 @@ publishes `windows_student_policy_sse_group`, resolved by
 that value through `OPENPATH_WINDOWS_STUDENT_SSE_GROUP` and still defaults to
 `full` for mixed, broad, unknown, runner, workflow, lockfile, shared, runtime, or
 Windows-client changes.
+The selector also publishes `windows_student_policy_sse_reason` so workflow
+summaries record whether the lane used a narrow single-family SSE group, full
+target-platform coverage, or a cheap release-infrastructure-only route.
 
 Release-infrastructure-only diffs now stay on the `E2E Summary` evidence path
 without consuming destructive target-platform runners. The `Detect Relevant

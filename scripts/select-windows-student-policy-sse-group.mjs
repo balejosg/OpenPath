@@ -85,28 +85,71 @@ export function validateWindowsStudentPolicySseGroup(value) {
 }
 
 export function selectWindowsStudentPolicySseGroup(files, options = {}) {
+  return selectWindowsStudentPolicySseGroupWithReason(files, options).group;
+}
+
+export function selectWindowsStudentPolicySseGroupWithReason(files, options = {}) {
   const override = validateWindowsStudentPolicySseGroup(options.override ?? 'auto');
-  if (override !== 'auto') return override;
+  if (override !== 'auto') {
+    return {
+      group: override,
+      reason: `manual override selected '${override}'`,
+    };
+  }
 
   const normalizedFiles = files.map(normalizeFile).filter(Boolean);
-  if (normalizedFiles.length === 0) return 'full';
+  if (normalizedFiles.length === 0) {
+    return {
+      group: 'full',
+      reason: 'no changed files detected; using full SSE coverage',
+    };
+  }
 
   const matchedGroups = new Set();
 
   for (const file of normalizedFiles) {
     if (FORCE_FULL_PATTERNS.some((pattern) => pattern.test(file))) {
-      return 'full';
+      return {
+        group: 'full',
+        reason: `${file} requires full SSE coverage`,
+      };
     }
 
     const fileGroups = Object.entries(GROUP_PATTERNS)
       .filter(([, patterns]) => patterns.some((pattern) => pattern.test(file)))
       .map(([group]) => group);
 
-    if (fileGroups.length !== 1) return 'full';
+    if (fileGroups.length === 0) {
+      return {
+        group: 'full',
+        reason: `${file} does not match one narrow SSE group; using full SSE coverage`,
+      };
+    }
+    if (fileGroups.length > 1) {
+      return {
+        group: 'full',
+        reason: `${file} matches multiple narrow SSE groups: ${fileGroups.join(
+          ', '
+        )}; using full SSE coverage`,
+      };
+    }
     matchedGroups.add(fileGroups[0]);
   }
 
-  return matchedGroups.size === 1 ? Array.from(matchedGroups)[0] : 'full';
+  if (matchedGroups.size === 1) {
+    const group = Array.from(matchedGroups)[0];
+    return {
+      group,
+      reason: `matched narrow SSE group '${group}' for all changed files`,
+    };
+  }
+
+  return {
+    group: 'full',
+    reason: `multiple narrow SSE groups matched: ${Array.from(matchedGroups).join(
+      ', '
+    )}; using full SSE coverage`,
+  };
 }
 
 function normalizeFile(file) {
@@ -118,12 +161,17 @@ function parseArgs(argv) {
     files: [],
     fromStdin: false,
     override: 'auto',
+    reason: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--from-stdin') {
       args.fromStdin = true;
+      continue;
+    }
+    if (arg === '--reason') {
+      args.reason = true;
       continue;
     }
     if (arg === '--override') {
@@ -152,10 +200,10 @@ function splitFiles(value) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const stdinFiles = args.fromStdin ? splitFiles(readFileSync(0, 'utf8')) : [];
-  const group = selectWindowsStudentPolicySseGroup([...args.files, ...stdinFiles], {
+  const selection = selectWindowsStudentPolicySseGroupWithReason([...args.files, ...stdinFiles], {
     override: args.override,
   });
-  process.stdout.write(`${group}\n`);
+  process.stdout.write(`${args.reason ? selection.reason : selection.group}\n`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

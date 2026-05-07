@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, test } from 'node:test';
 import { projectRoot, readJson, readPackageJson, readText } from './support.mjs';
+import { selectWindowsStudentPolicySseGroupWithReason } from '../../scripts/select-windows-student-policy-sse-group.mjs';
 
 describe('repository verification contract', () => {
   test('selenium CI scripts use cross-platform environment setup', () => {
@@ -79,6 +80,38 @@ describe('repository verification contract', () => {
       windowsRunner,
       /Run Selenium student suite \(sse, \$windowsStudentSseGroup\)/,
       'Windows student-policy timings should include the selected SSE group'
+    );
+  });
+
+  test('Windows student-policy SSE selector explains narrow and full routing decisions', () => {
+    const narrow = selectWindowsStudentPolicySseGroupWithReason([
+      'firefox-extension/src/lib/background-listeners.ts',
+      'firefox-extension/src/lib/background-runtime.ts',
+    ]);
+    assert.equal(narrow.group, 'ajax-auto-allow');
+    assert.match(
+      narrow.reason,
+      /matched narrow SSE group 'ajax-auto-allow'/,
+      'narrow SSE routing should explain the selected group'
+    );
+
+    const forcedFull = selectWindowsStudentPolicySseGroupWithReason(['windows/install.ps1']);
+    assert.equal(forcedFull.group, 'full');
+    assert.match(
+      forcedFull.reason,
+      /windows\/install\.ps1.*requires full SSE coverage/,
+      'Windows runtime changes should explain why full target-platform coverage is required'
+    );
+
+    const mixedFull = selectWindowsStudentPolicySseGroupWithReason([
+      'firefox-extension/src/lib/path-blocking.ts',
+      'api/src/services/request-command-requests.service.ts',
+    ]);
+    assert.equal(mixedFull.group, 'full');
+    assert.match(
+      mixedFull.reason,
+      /multiple narrow SSE groups matched: path-blocking, request-lifecycle/,
+      'mixed narrow families should explain why they fall back to full coverage'
     );
   });
 

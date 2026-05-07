@@ -220,12 +220,17 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
     'cache-aware Firefox release action should make amo-version an optional override and derive it otherwise'
   );
   assert.ok(
-    prepareAction.includes('actions/cache/restore@v4'),
-    'cache-aware Firefox release action should restore previously signed release artifacts'
+    prepareAction.includes('actions/cache/restore@v5'),
+    'cache-aware Firefox release action should restore previously signed release artifacts with the current cache restore major'
   );
   assert.ok(
-    prepareAction.includes('actions/cache/save@v4'),
-    'cache-aware Firefox release action should save newly signed release artifacts'
+    prepareAction.includes('actions/cache/save@v5'),
+    'cache-aware Firefox release action should save newly signed release artifacts with the current cache save major'
+  );
+  assert.ok(
+    !prepareAction.includes('actions/cache/restore@v4') &&
+      !prepareAction.includes('actions/cache/save@v4'),
+    'cache-aware Firefox release action should not use the previous cache action major'
   );
   assert.ok(
     prepareAction.includes('verify-firefox-release-artifacts.mjs'),
@@ -265,8 +270,33 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
   );
   assert.ok(
     prepareAction.includes('artifact-source:') &&
-      prepareAction.includes('signed-artifacts-present:'),
+      prepareAction.includes('signed-artifacts-present:') &&
+      prepareAction.includes('release-state:'),
     'cache-aware Firefox release action should report whether artifacts came from cache, signing, or were skipped'
+  );
+  assert.ok(
+    prepareAction.includes('id: sign-firefox-release') &&
+      prepareAction.includes('continue-on-error: true') &&
+      prepareAction.includes('steps.sign-firefox-release.outcome'),
+    'cache-aware Firefox release action should inspect failed AMO signing before applying the release gate'
+  );
+  for (const state of [
+    'cache-hit',
+    'fresh-signing',
+    'manual-review-required',
+    'timeout',
+    'hard-failure',
+  ]) {
+    assert.ok(
+      prepareAction.includes(state),
+      `cache-aware Firefox release action should surface ${state} as an explicit release state`
+    );
+  }
+  assert.ok(
+    prepareAction.includes('amo-signing-state.json') &&
+      prepareAction.includes('fileStatus=unreviewed') &&
+      prepareAction.includes('Manual AMO review required'),
+    'cache-aware Firefox release action should turn repeated AMO unreviewed status into a manual-review-required action error'
   );
   assert.ok(
     prepareAction.includes('Skipping AMO signing') &&
@@ -1313,8 +1343,31 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
     'e2e-tests.yml should expose the selected Windows student-policy SSE group'
   );
   assert.ok(
+    e2eWorkflow.includes(
+      'windows_student_policy_sse_reason: ${{ steps.filter.outputs.windows_student_policy_sse_reason }}'
+    ),
+    'e2e-tests.yml should expose the Windows student-policy SSE routing reason'
+  );
+  assert.ok(
     e2eWorkflow.includes('scripts/select-windows-student-policy-sse-group.mjs'),
     'changed-path detection should use the maintained Windows student-policy SSE selector'
+  );
+  assert.ok(
+    e2eWorkflow.includes('scripts/select-windows-student-policy-sse-group.mjs') &&
+      e2eWorkflow.includes('--reason'),
+    'changed-path detection should ask the maintained selector for a routing reason'
+  );
+  assert.ok(
+    e2eWorkflow.includes('Windows Student Policy SSE group:') &&
+      e2eWorkflow.includes('Windows Student Policy SSE routing reason:'),
+    'E2E summaries should show selected Windows student-policy SSE group and routing reason'
+  );
+  assert.ok(
+    e2eWorkflow.includes('Release infrastructure only:') &&
+      e2eWorkflow.includes(
+        'Release-infrastructure-only diff: target-platform lanes skipped by contract.'
+      ),
+    'E2E summaries should make the release-infrastructure-only cheap path explicit'
   );
   assert.ok(
     windowsStudentPolicyBlock.includes(
