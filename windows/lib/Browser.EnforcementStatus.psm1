@@ -1,5 +1,6 @@
 # OpenPath Browser Enforcement Status Module for Windows
 
+Import-Module "$PSScriptRoot\Browser.EnforcementDecision.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.RequestReadiness.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\AppControl.psm1" -Force -ErrorAction SilentlyContinue
@@ -161,22 +162,11 @@ function Get-OpenPathBrowserEnforcementStatus {
     }
     $blockedByAppLockerSummary = Join-OpenPathBrowserStatusSummary -Findings $blockedByAppLockerBrowsers -EmptySummary 'None'
 
-    $healthySignals = @(
-        ($appLocker -ne 'Inactive'),
-        [bool]$inventory.Ready,
-        [bool]$readiness.Ready,
-        [bool]$firewall.Active
-    )
-    $healthyCount = @($healthySignals | Where-Object { $_ }).Count
-    $overall = if ($healthyCount -eq $healthySignals.Count) {
-        'Healthy'
-    }
-    elseif ($healthyCount -gt 0) {
-        'Partial'
-    }
-    else {
-        'Unhealthy'
-    }
+    $overall = Browser.EnforcementDecision\Get-OpenPathBrowserEnforcementOverallDecision `
+        -AppLocker $appLocker `
+        -InventoryReady ([bool]$inventory.Ready) `
+        -RequestReadinessReady ([bool]$readiness.Ready) `
+        -FirewallActive ([bool]$firewall.Active)
 
     return [PSCustomObject]@{
         AppLocker = $appLocker

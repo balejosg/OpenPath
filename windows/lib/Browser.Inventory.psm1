@@ -1,5 +1,7 @@
 # OpenPath browser inventory for Windows
 
+Import-Module "$PSScriptRoot\Browser.EnforcementDecision.psm1" -Force -ErrorAction Stop
+
 function Get-OpenPathBrowserInventoryUninstallEntries {
     [CmdletBinding()]
     param(
@@ -378,12 +380,14 @@ function Get-OpenPathBrowserInventory {
     $portableBrowserRisks = @($portableRisks.Values | Sort-Object Name, Path)
     $webSurfaces = @($webRenderingSurfaces.Values | Sort-Object Name, Path, DisplayName)
     $removable = @($removalCandidates.Values | Sort-Object Name, DisplayName, Path)
-    $ready = [bool]($unmanagedBrowsers.Count -eq 0 -and $portableBrowserRisks.Count -eq 0)
+    $decision = Browser.EnforcementDecision\Get-OpenPathBrowserInventoryDecision `
+        -UnmanagedBrowsers $unmanagedBrowsers `
+        -PortableBrowserRisks $portableBrowserRisks
 
     return [PSCustomObject]@{
         Mode = $Mode
-        Ready = $ready
-        ExitCode = if ($ready) { 0 } else { 1 }
+        Ready = [bool]$decision.Ready
+        ExitCode = [int]$decision.ExitCode
         ApprovedBrowsers = $approvedBrowsers
         UnmanagedBrowsers = $unmanagedBrowsers
         PortableBrowserRisks = $portableBrowserRisks
