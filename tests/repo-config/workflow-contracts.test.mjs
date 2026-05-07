@@ -88,6 +88,40 @@ describe('repository verification contract', () => {
   });
 });
 
+test('verify trailers workflow exempts dependency and release bots while enforcing human pushes', () => {
+  const workflow = readText('.github/workflows/verify-trailers.yml');
+
+  for (const required of [
+    'pull_request:',
+    'push:',
+    'branches: [main]',
+    'EVENT_NAME: ${{ github.event_name }}',
+    'ACTOR: ${{ github.actor }}',
+    'BEFORE_SHA: ${{ github.event.before }}',
+    'AFTER_SHA: ${{ github.sha }}',
+    'dependabot[bot]',
+    'github-actions[bot]',
+    'is_exempt_actor',
+    'is_exempt_commit_author',
+    'no-commits',
+    'bot-exempt',
+    'human-required',
+    'Verified-by: pre-commit',
+    'Commit $c missing verification marker',
+  ]) {
+    assert.ok(workflow.includes(required), `verify-trailers.yml should include ${required}`);
+  }
+
+  assert.ok(
+    workflow.includes('git rev-list --no-merges "$BEFORE_SHA..$AFTER_SHA"'),
+    'verify-trailers.yml should validate push ranges on main'
+  );
+  assert.ok(
+    workflow.includes('git rev-list --no-merges "$base_ref"..HEAD'),
+    'verify-trailers.yml should validate pull request ranges against the base branch'
+  );
+});
+
 test('prerelease deb publish keys off the CI Success summary job instead of the workflow conclusion', () => {
   const prereleaseWorkflow = readText('.github/workflows/prerelease-deb.yml');
 

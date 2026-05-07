@@ -3,6 +3,8 @@ name: Verify Local Gates Marker
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 jobs:
   verify-trailers:
@@ -15,19 +17,83 @@ jobs:
 
       - name: Verify commit verification marker
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ACTOR: ${{ github.actor }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
-          base_ref="origin/${{ github.base_ref }}"
-          git fetch origin "${{ github.base_ref }}"
-          commits=$(git rev-list --no-merges "$base_ref"..HEAD)
+          is_exempt_actor() {
+            case "$1" in
+              # Dependabot PRs are authored outside the local pre-commit hook.
+              "dependabot[bot]") return 0 ;;
+              # Release automation may create tags or repository updates without local hooks.
+              "github-actions[bot]") return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          is_exempt_commit_author() {
+            local author_name="$1"
+            local author_email="$2"
+
+            case "$author_name <$author_email>" in
+              # GitHub Actions release automation commits.
+              "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>") return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          case "$EVENT_NAME" in
+            pull_request)
+              base_ref="origin/$BASE_REF"
+              git fetch origin "$BASE_REF"
+              commits=$(git rev-list --no-merges "$base_ref"..HEAD)
+              ;;
+            push)
+              if [ -z "$BEFORE_SHA" ] || [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+                commits=$(git rev-list --no-merges "$AFTER_SHA")
+              else
+                commits=$(git rev-list --no-merges "$BEFORE_SHA..$AFTER_SHA")
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported event for trailer verification: $EVENT_NAME"
+              exit 1
+              ;;
+          esac
 
           if [ -z "$commits" ]; then
-            echo "No commits to check"
+            echo "no-commits"
             exit 0
           fi
 
+          if is_exempt_actor "$ACTOR"; then
+            echo "bot-exempt"
+            exit 0
+          fi
+
+          human_commits=()
           for c in $commits; do
+            author_name=$(git log -1 --format=%an "$c")
+            author_email=$(git log -1 --format=%ae "$c")
+            if is_exempt_commit_author "$author_name" "$author_email"; then
+              continue
+            fi
+
+            human_commits+=("$c")
+          done
+
+          if [ "${#human_commits[@]}" -eq 0 ]; then
+            echo "bot-exempt"
+            exit 0
+          fi
+
+          echo "human-required"
+          for c in "${human_commits[@]}"; do
             if ! git log -1 --format=%B "$c" | grep -q '^Verified-by: pre-commit$'; then
               echo "::error::Commit $c missing verification marker (Verified-by: pre-commit)"
               exit 1

@@ -22,6 +22,7 @@ const defaultWebExtSignRecoveryTimeoutSeconds = 7200;
 const defaultWebExtSignRecoveryPollSeconds = 60;
 const defaultAmoBaseUrl = 'https://addons.mozilla.org/api/v5/';
 const amoVersionComponentModulo = 1_000_000_000n;
+const amoSigningStateArtifactName = 'amo-signing-state.json';
 
 function fail(message) {
   throw new Error(message);
@@ -81,6 +82,36 @@ function parseNonNegativeInteger(value, fallback) {
 
 function formatTimeoutMs(timeoutMs) {
   return timeoutMs === undefined ? 'disabled' : String(timeoutMs);
+}
+
+export function writeAmoSigningStateArtifact(options) {
+  const {
+    artifactsDir,
+    state,
+    addonId = '',
+    version = '',
+    versionId = '',
+    fileStatus = '',
+    lastPollAt = new Date().toISOString(),
+    message = '',
+  } = options;
+  fs.mkdirSync(artifactsDir, { recursive: true });
+  const artifactPath = path.join(artifactsDir, amoSigningStateArtifactName);
+  const artifact = {
+    state,
+    addonId,
+    version,
+    versionId,
+    fileStatus,
+    lastPollAt,
+  };
+
+  if (message) {
+    artifact.message = message;
+  }
+
+  fs.writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
+  return { artifactPath, artifact };
 }
 
 export function resolveWebExtSignTiming(options = {}) {
@@ -310,6 +341,10 @@ export async function waitForAmoSignedXpi(options) {
   const versionUrl = buildAmoVersionDetailUrl({ amoBaseUrl, addonId, versionId, version });
   const deadline = nowImpl() + timeoutMs;
   let attempt = 0;
+  let lastFileStatus = 'missing';
+  let lastPollAt = '';
+  let resolvedVersion = version;
+  let resolvedVersionId = versionId;
 
   while (true) {
     attempt += 1;
@@ -321,6 +356,10 @@ export async function waitForAmoSignedXpi(options) {
     });
     const fileStatus = detail?.file?.status ?? 'missing';
     const fileUrl = detail?.file?.url ?? '';
+    lastFileStatus = fileStatus;
+    lastPollAt = new Date(nowImpl()).toISOString();
+    resolvedVersion = String(detail?.version ?? resolvedVersion ?? '');
+    resolvedVersionId = String(detail?.id ?? resolvedVersionId ?? '');
 
     stdout.write(
       [
@@ -350,10 +389,33 @@ export async function waitForAmoSignedXpi(options) {
 
     const remainingMs = deadline - nowImpl();
     if (remainingMs <= 0) {
+      if (lastFileStatus === 'unreviewed') {
+        const message = `manual-review-required: AMO accepted version but fileStatus=unreviewed until recovery timeout addonId=${addonId} version=${
+          resolvedVersionId || resolvedVersion || versionId || version
+        }`;
+        const { artifactPath } = writeAmoSigningStateArtifact({
+          artifactsDir,
+          state: 'manual-review-required',
+          addonId,
+          version: resolvedVersion,
+          versionId: resolvedVersionId,
+          fileStatus: lastFileStatus,
+          lastPollAt,
+          message,
+        });
+        stdout.write(
+          `[sign:firefox-release] ${message} artifact=${path.relative(
+            extensionRoot,
+            artifactPath
+          )}\n`
+        );
+        fail(message);
+      }
+
       fail(
         `Timed out waiting for AMO signed XPI addonId=${addonId} version=${
           versionId || version
-        } lastStatus=${fileStatus}`
+        } lastStatus=${lastFileStatus}`
       );
     }
 
@@ -797,15 +859,20 @@ async function recoverSignedXpiFromAmo(options) {
 
   if (editUrl) {
     stdout.write(`[sign:firefox-release] Resuming AMO approval from ${editUrl.editUrl}\n`);
-    return waitForAmoSignedXpi({
-      apiKey,
-      apiSecret,
+    return {
+      signedXpiPath: await waitForAmoSignedXpi({
+        apiKey,
+        apiSecret,
+        addonId: editUrl.addonId,
+        versionId: editUrl.versionId,
+        artifactsDir,
+        timeoutMs: recoveryTimeoutMs,
+        pollIntervalMs: recoveryPollMs,
+      }),
+      state: 'signed',
       addonId: editUrl.addonId,
       versionId: editUrl.versionId,
-      artifactsDir,
-      timeoutMs: recoveryTimeoutMs,
-      pollIntervalMs: recoveryPollMs,
-    });
+    };
   }
 
   const addonId = readFirefoxExtensionId(signingSourceDir);
@@ -813,15 +880,20 @@ async function recoverSignedXpiFromAmo(options) {
     `[sign:firefox-release] AMO version already exists; polling addonId=${addonId} version=${effectiveVersion}\n`
   );
 
-  return waitForAmoSignedXpi({
-    apiKey,
-    apiSecret,
+  return {
+    signedXpiPath: await waitForAmoSignedXpi({
+      apiKey,
+      apiSecret,
+      addonId,
+      version: effectiveVersion,
+      artifactsDir,
+      timeoutMs: recoveryTimeoutMs,
+      pollIntervalMs: recoveryPollMs,
+    }),
+    state: 'recovered-existing-version',
     addonId,
     version: effectiveVersion,
-    artifactsDir,
-    timeoutMs: recoveryTimeoutMs,
-    pollIntervalMs: recoveryPollMs,
-  });
+  };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
@@ -886,29 +958,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
       });
 
       let signedXpiPath = '';
+      let signingState = 'signed';
+      let signingStateAddonId = readFirefoxExtensionId(signingSource.sourceDir);
       if (result.status === 0) {
         try {
           signedXpiPath = findSignedXpiArtifact(artifactsDir);
         } catch (error) {
-          signedXpiPath =
-            (await recoverSignedXpiFromAmo({
-              output: webExtOutput.join(''),
-              apiKey,
-              apiSecret,
-              signingSourceDir: signingSource.sourceDir,
-              effectiveVersion: signingSource.effectiveVersion,
-              artifactsDir,
-              env: process.env,
-              deadlineMs,
-            })) || '';
-
-          if (!signedXpiPath) {
-            throw error;
-          }
-        }
-      } else {
-        signedXpiPath =
-          (await recoverSignedXpiFromAmo({
+          const recovery = await recoverSignedXpiFromAmo({
             output: webExtOutput.join(''),
             apiKey,
             apiSecret,
@@ -917,12 +973,56 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
             artifactsDir,
             env: process.env,
             deadlineMs,
-          })) || '';
+          });
+          signedXpiPath = recovery?.signedXpiPath || '';
+          signingState = recovery?.state || signingState;
+          signingStateAddonId = recovery?.addonId || signingStateAddonId;
+
+          if (!signedXpiPath) {
+            throw error;
+          }
+        }
+      } else {
+        const recovery = await recoverSignedXpiFromAmo({
+          output: webExtOutput.join(''),
+          apiKey,
+          apiSecret,
+          signingSourceDir: signingSource.sourceDir,
+          effectiveVersion: signingSource.effectiveVersion,
+          artifactsDir,
+          env: process.env,
+          deadlineMs,
+        });
+        signedXpiPath = recovery?.signedXpiPath || '';
+        signingState = recovery?.state || signingState;
+        signingStateAddonId = recovery?.addonId || signingStateAddonId;
 
         if (!signedXpiPath) {
+          writeAmoSigningStateArtifact({
+            artifactsDir,
+            state: 'submission-failed',
+            addonId: signingStateAddonId,
+            version: signingSource.effectiveVersion,
+            fileStatus: 'unknown',
+            message: `web-ext sign failed with status ${String(result.status ?? 'unknown')}`,
+          });
           fail(`web-ext sign failed with status ${String(result.status ?? 'unknown')}`);
         }
       }
+
+      const { artifactPath } = writeAmoSigningStateArtifact({
+        artifactsDir,
+        state: signingState,
+        addonId: signingStateAddonId,
+        version: signingSource.effectiveVersion,
+        fileStatus: 'signed',
+      });
+      console.log(
+        `[sign:firefox-release] AMO signing state state=${signingState} artifact=${path.relative(
+          extensionRoot,
+          artifactPath
+        )}`
+      );
 
       const prepared = prepareFirefoxReleaseArtifacts({
         extensionRoot,

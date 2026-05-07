@@ -132,6 +132,27 @@ interface SignFirefoxReleaseModule {
     nowImpl?: () => number;
     stdout?: { write: (chunk: string) => unknown };
   }) => Promise<string>;
+  writeAmoSigningStateArtifact: (options: {
+    artifactsDir: string;
+    state: string;
+    addonId?: string;
+    version?: string;
+    versionId?: string;
+    fileStatus?: string;
+    lastPollAt?: string;
+    message?: string;
+  }) => {
+    artifactPath: string;
+    artifact: {
+      state: string;
+      addonId: string;
+      version: string;
+      versionId: string;
+      fileStatus: string;
+      lastPollAt: string;
+      message?: string;
+    };
+  };
 }
 
 interface VerifyFirefoxReleaseArtifactsModule {
@@ -251,6 +272,7 @@ const {
   resolveWebExtSignTiming,
   runWebExtSignWithRetry,
   waitForAmoSignedXpi,
+  writeAmoSigningStateArtifact,
 } = (await import('../sign-firefox-release.mjs')) as SignFirefoxReleaseModule;
 const { verifyFirefoxReleaseArtifacts } =
   (await import('../verify-firefox-release-artifacts.mjs')) as VerifyFirefoxReleaseArtifactsModule;
@@ -1322,6 +1344,83 @@ void describe('Firefox release signing helpers', () => {
       'https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/versions/v2.0.81977786.682142437/',
       'https://addons.mozilla.org/firefox/downloads/file/6250981/signed.xpi',
     ]);
+  });
+
+  void test('waitForAmoSignedXpi reports manual-review-required when unreviewed outlives recovery', async () => {
+    const artifactsDir = createTempDir('openpath-firefox-amo-manual-review-');
+    const stdoutChunks: string[] = [];
+    const nowValues = [
+      Date.parse('2026-05-07T05:00:00Z'),
+      Date.parse('2026-05-07T05:00:01Z'),
+      Date.parse('2026-05-07T05:00:02Z'),
+    ];
+
+    await assert.rejects(
+      waitForAmoSignedXpi({
+        apiKey: 'user:123:456',
+        apiSecret: 'secret',
+        addonId: 'monitor-bloqueos@openpath',
+        version: '2.0.81977786.682142437',
+        artifactsDir,
+        timeoutMs: 1_000,
+        pollIntervalMs: 1,
+        nowImpl: () => nowValues.shift() ?? Date.parse('2026-05-07T05:00:02Z'),
+        sleepImpl: () => Promise.resolve(),
+        stdout: { write: (chunk) => stdoutChunks.push(chunk) },
+        fetchImpl: () =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({
+                id: 6250981,
+                version: '2.0.81977786.682142437',
+                file: { status: 'unreviewed' },
+              }),
+              { status: 200 }
+            )
+          ),
+      }),
+      /manual-review-required: AMO accepted version but fileStatus=unreviewed/
+    );
+
+    const artifact = JSON.parse(
+      readFileSync(path.join(artifactsDir, 'amo-signing-state.json'), 'utf8')
+    ) as Record<string, unknown>;
+    assert.deepEqual(artifact, {
+      state: 'manual-review-required',
+      addonId: 'monitor-bloqueos@openpath',
+      version: '2.0.81977786.682142437',
+      versionId: '6250981',
+      fileStatus: 'unreviewed',
+      lastPollAt: '2026-05-07T05:00:01.000Z',
+      message:
+        'manual-review-required: AMO accepted version but fileStatus=unreviewed until recovery timeout addonId=monitor-bloqueos@openpath version=6250981',
+    });
+    assert.match(stdoutChunks.join(''), /manual-review-required/);
+    assert.match(stdoutChunks.join(''), /artifact=.*amo-signing-state\.json/);
+  });
+
+  void test('writeAmoSigningStateArtifact records machine-readable terminal states', () => {
+    const artifactsDir = createTempDir('openpath-firefox-amo-state-');
+
+    const { artifactPath, artifact } = writeAmoSigningStateArtifact({
+      artifactsDir,
+      state: 'recovered-existing-version',
+      addonId: 'monitor-bloqueos@openpath',
+      version: '2.0.81977786.682142437',
+      fileStatus: 'signed',
+      lastPollAt: '2026-05-07T05:00:01.000Z',
+    });
+
+    assert.equal(artifactPath, path.join(artifactsDir, 'amo-signing-state.json'));
+    assert.deepEqual(artifact, {
+      state: 'recovered-existing-version',
+      addonId: 'monitor-bloqueos@openpath',
+      version: '2.0.81977786.682142437',
+      versionId: '',
+      fileStatus: 'signed',
+      lastPollAt: '2026-05-07T05:00:01.000Z',
+    });
+    assert.deepEqual(JSON.parse(readFileSync(artifactPath, 'utf8')), artifact);
   });
 
   void test('runWebExtSignWithRetry waits and retries AMO throttling responses', () => {
