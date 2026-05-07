@@ -32,6 +32,9 @@ Describe "Browser Module - Native Host" {
             $state.RequestApiUrl | Should -Be "https://school.example"
             $state.MachineToken | Should -Be "machine-token-123"
             $state.ClassroomId | Should -Be "classroom-123"
+            $state.ApiUrlConfigured | Should -BeTrue
+            $state.WhitelistTokenConfigured | Should -BeTrue
+            $state.ClassroomConfigured | Should -BeTrue
         }
 
         It "Projects missing request fields as incomplete without changing public semantics" {
@@ -79,6 +82,9 @@ Describe "Browser Module - Native Host" {
 
             $state.Status | Should -Be "not_requested"
             $state.Ready | Should -BeFalse
+            $state.ApiUrlConfigured | Should -BeFalse
+            $state.WhitelistTokenConfigured | Should -BeFalse
+            $state.ClassroomConfigured | Should -BeFalse
             $state.DiagnosticMessage | Should -Be "OpenPath request setup was not requested."
         }
 
@@ -339,7 +345,8 @@ Describe "Browser Module - Native Host" {
                 'Import-NativeHostRequestSetupStateModule',
                 'RequestSetup.State.psm1',
                 'Get-OpenPathRequestSetupState -Config $State',
-                'Get-OpenPathRequestSetupMachineToken -WhitelistUrl $whitelistUrl'
+                'RequestSetup.State.psm1 is required for native host request setup interpretation.',
+                '$requestSetupState.MachineToken'
             )
         }
 

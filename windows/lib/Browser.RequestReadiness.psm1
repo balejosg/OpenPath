@@ -2,6 +2,7 @@
 
 Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot\RequestSetup.State.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxPolicy.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxNativeHost.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction Stop
@@ -13,27 +14,8 @@ function Test-OpenPathBrowserRequestSetupReady {
         [object]$Config = $null
     )
 
-    if (Get-Command -Name 'Test-OpenPathFirefoxNativeHostRequestSetupComplete' -ErrorAction SilentlyContinue) {
-        return [bool](Test-OpenPathFirefoxNativeHostRequestSetupComplete -Config $Config)
-    }
-
-    if (-not $Config) {
-        return $false
-    }
-
-    $apiUrl = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'apiUrl'
-    $whitelistUrl = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'whitelistUrl'
-    $classroom = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'classroom'
-    $classroomId = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'classroomId'
-
-    if ($apiUrl -notmatch '^https?://\S+$') {
-        return $false
-    }
-    if ($whitelistUrl -notmatch '/w/[^/]+/whitelist\.txt($|[?#].*)') {
-        return $false
-    }
-
-    return [bool]($classroom -or $classroomId)
+    $requestSetupState = Get-OpenPathRequestSetupState -Config $Config
+    return [bool]$requestSetupState.Ready
 }
 
 function Test-OpenPathFirefoxNativeHostRegistrationProof {
@@ -114,11 +96,12 @@ function Test-OpenPathManagedBrowserBoundaryStrictMode {
             -DefaultValue $true
     }
 
-    $classroom = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'classroom'
-    $classroomId = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'classroomId'
-    $whitelistUrl = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'whitelistUrl'
+    $requestSetupState = Get-OpenPathRequestSetupState -Config $Config
 
-    return [bool]($classroom -or $classroomId -or $whitelistUrl)
+    return [bool](
+        $requestSetupState.ClassroomConfigured -or
+        $requestSetupState.WhitelistUrl
+    )
 }
 
 function Get-OpenPathChromiumPolicyRegistryPath {

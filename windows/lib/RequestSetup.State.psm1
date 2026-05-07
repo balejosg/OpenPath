@@ -103,11 +103,14 @@ function Get-OpenPathRequestSetupState {
                 RequestSetupRequested = $false
                 ApiUrl = ''
                 RequestApiUrl = ''
+                ApiUrlConfigured = $false
                 WhitelistUrl = ''
+                WhitelistTokenConfigured = $false
                 MachineToken = ''
                 TokenState = 'not_requested'
                 Classroom = ''
                 ClassroomId = ''
+                ClassroomConfigured = $false
                 MachineName = $machineName
                 Version = $version
                 MissingFields = @()
@@ -115,13 +118,17 @@ function Get-OpenPathRequestSetupState {
             })
     }
 
-    if ($apiUrl -notmatch '^https?://\S+$') {
+    $apiUrlConfigured = [bool]($apiUrl -match '^https?://\S+$')
+    $whitelistTokenConfigured = [bool]($whitelistUrl -match '/w/[^/]+/whitelist\.txt($|[?#].*)')
+    $classroomConfigured = [bool]($classroom -or $classroomId)
+
+    if (-not $apiUrlConfigured) {
         $missingFields += 'apiUrl'
     }
-    if ($whitelistUrl -notmatch '/w/[^/]+/whitelist\.txt($|[?#].*)') {
+    if (-not $whitelistTokenConfigured) {
         $missingFields += 'whitelistUrl'
     }
-    if (-not ($classroom -or $classroomId)) {
+    if (-not $classroomConfigured) {
         $missingFields += 'classroom'
     }
 
@@ -134,11 +141,14 @@ function Get-OpenPathRequestSetupState {
             RequestSetupRequested = $true
             ApiUrl = $apiUrl
             RequestApiUrl = $apiUrl
+            ApiUrlConfigured = $apiUrlConfigured
             WhitelistUrl = $whitelistUrl
+            WhitelistTokenConfigured = $whitelistTokenConfigured
             MachineToken = $machineToken
             TokenState = $tokenState
             Classroom = $classroom
             ClassroomId = $classroomId
+            ClassroomConfigured = $classroomConfigured
             MachineName = $machineName
             Version = $version
             MissingFields = @($missingFields)

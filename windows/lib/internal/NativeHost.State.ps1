@@ -51,22 +51,6 @@ function Get-WhitelistSections {
     return [PSCustomObject]$result
 }
 
-function Get-MachineTokenFromWhitelistUrl {
-    param(
-        [string]$WhitelistUrl
-    )
-
-    if (-not $WhitelistUrl) {
-        return $null
-    }
-
-    if ($WhitelistUrl -match '/w/([^/]+)/') {
-        return [string]$Matches[1]
-    }
-
-    return $null
-}
-
 function Resolve-DomainIp {
     param(
         [string]$Domain

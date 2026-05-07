@@ -65,6 +65,17 @@ Describe "Browser Module - Diagnostics" {
                 'Browser request readiness failures:',
                 'firefox_machine_policy='
             )
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'Get-OpenPathRequestSetupState -Config $nativeHostState',
+                '$nativeHostRequestSetupState.ApiUrlConfigured',
+                '$nativeHostRequestSetupState.WhitelistTokenConfigured',
+                '$nativeHostRequestSetupState.Ready',
+                '-Config $nativeHostRequestSetupState'
+            )
+
+            $content | Should -Not -Match 'nativeHostWhitelistUrl -match'
+            $content | Should -Not -Match 'nativeHostApiUrl -match'
         }
 
         It "Exports Firefox native host helpers used by browser diagnostics" {

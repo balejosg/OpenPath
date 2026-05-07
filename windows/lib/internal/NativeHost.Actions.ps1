@@ -21,6 +21,8 @@ function Import-NativeHostRequestSetupStateModule {
             return
         }
     }
+
+    throw 'RequestSetup.State.psm1 is required for native host request setup interpretation.'
 }
 
 Import-NativeHostRequestSetupStateModule
@@ -277,21 +279,8 @@ function Get-NativeHostApiUrl {
         [PSCustomObject]$State
     )
 
-    if (Get-Command -Name 'Get-OpenPathRequestSetupState' -ErrorAction SilentlyContinue) {
-        $requestSetupState = Get-OpenPathRequestSetupState -Config $State
-        if ($requestSetupState.RequestApiUrl) {
-            return [string]$requestSetupState.RequestApiUrl
-        }
-    }
-
-    if ($State.PSObject.Properties['requestApiUrl'] -and $State.requestApiUrl) {
-        return ([string]$State.requestApiUrl).TrimEnd('/')
-    }
-    if ($State.PSObject.Properties['apiUrl'] -and $State.apiUrl) {
-        return ([string]$State.apiUrl).TrimEnd('/')
-    }
-
-    return ''
+    $requestSetupState = Get-OpenPathRequestSetupState -Config $State
+    return [string]$requestSetupState.RequestApiUrl
 }
 
 function Get-NativeHostMachineToken {
@@ -300,12 +289,8 @@ function Get-NativeHostMachineToken {
         [PSCustomObject]$State
     )
 
-    $whitelistUrl = if ($State.PSObject.Properties['whitelistUrl']) { [string]$State.whitelistUrl } else { '' }
-    if (Get-Command -Name 'Get-OpenPathRequestSetupMachineToken' -ErrorAction SilentlyContinue) {
-        return [string](Get-OpenPathRequestSetupMachineToken -WhitelistUrl $whitelistUrl)
-    }
-
-    return [string](Get-MachineTokenFromWhitelistUrl -WhitelistUrl $whitelistUrl)
+    $requestSetupState = Get-OpenPathRequestSetupState -Config $State
+    return [string]$requestSetupState.MachineToken
 }
 
 function Get-NativeHostBlockedPathResponse {
@@ -464,9 +449,8 @@ function Invoke-NativeHostMessageAction {
         }
 
         'get-config' {
-            $apiUrl = Get-NativeHostApiUrl -State $State
-            $whitelistUrl = if ($State.PSObject.Properties['whitelistUrl']) { [string]$State.whitelistUrl } else { '' }
-            $machineToken = Get-NativeHostMachineToken -State $State
+            $requestSetupState = Get-OpenPathRequestSetupState -Config $State
+            $apiUrl = [string]$requestSetupState.RequestApiUrl
 
             if (-not $apiUrl) {
                 return @{
@@ -483,8 +467,8 @@ function Invoke-NativeHostMessageAction {
                 requestApiUrl = $apiUrl
                 fallbackApiUrls = @()
                 hostname = (Get-NativeHostMachineName -State $State)
-                machineToken = if ($machineToken) { $machineToken } else { '' }
-                whitelistUrl = $whitelistUrl
+                machineToken = [string]$requestSetupState.MachineToken
+                whitelistUrl = [string]$requestSetupState.WhitelistUrl
             }
         }
 

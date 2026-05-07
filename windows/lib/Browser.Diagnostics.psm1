@@ -175,6 +175,7 @@ function Get-OpenPathBrowserDoctorReport {
     $nativeHostRequestApiConfigured = $false
     $nativeHostWhitelistTokenConfigured = $false
     $nativeHostRequestSetupComplete = $false
+    $nativeHostRequestSetupState = $null
     $nativeHostUpdateTaskPresent = $false
     $nativeHostUpdateTaskUserAccess = 'missing'
     $nativeHostUpdateTaskCheck = 'missing'
@@ -317,36 +318,10 @@ function Get-OpenPathBrowserDoctorReport {
             $nativeHostState = Get-Content $nativeHostStatePath -Raw -ErrorAction Stop | ConvertFrom-Json
             $nativeHostStateReadable = $true
 
-            $nativeHostApiUrl = ''
-            if ($nativeHostState.PSObject.Properties['requestApiUrl'] -and $nativeHostState.requestApiUrl) {
-                $nativeHostApiUrl = [string]$nativeHostState.requestApiUrl
-            }
-            elseif ($nativeHostState.PSObject.Properties['apiUrl'] -and $nativeHostState.apiUrl) {
-                $nativeHostApiUrl = [string]$nativeHostState.apiUrl
-            }
-
-            $nativeHostWhitelistUrl = if ($nativeHostState.PSObject.Properties['whitelistUrl'] -and $nativeHostState.whitelistUrl) {
-                [string]$nativeHostState.whitelistUrl
-            }
-            else {
-                ''
-            }
-
-            $nativeHostRequestApiConfigured = [bool]($nativeHostApiUrl -match '^https?://\S+$')
-            $nativeHostWhitelistTokenConfigured = [bool]($nativeHostWhitelistUrl -match '/w/[^/]+/whitelist\.txt($|[?#].*)')
-
-            $requestSetupState = [PSCustomObject]@{
-                apiUrl = $nativeHostApiUrl
-                whitelistUrl = $nativeHostWhitelistUrl
-            }
-            if ($nativeHostState.PSObject.Properties['classroom'] -and $nativeHostState.classroom) {
-                $requestSetupState | Add-Member -MemberType NoteProperty -Name 'classroom' -Value ([string]$nativeHostState.classroom) -Force
-            }
-            if ($nativeHostState.PSObject.Properties['classroomId'] -and $nativeHostState.classroomId) {
-                $requestSetupState | Add-Member -MemberType NoteProperty -Name 'classroomId' -Value ([string]$nativeHostState.classroomId) -Force
-            }
-
-            $nativeHostRequestSetupComplete = [bool](Test-OpenPathFirefoxNativeHostRequestSetupComplete -Config $requestSetupState)
+            $nativeHostRequestSetupState = Get-OpenPathRequestSetupState -Config $nativeHostState
+            $nativeHostRequestApiConfigured = [bool]$nativeHostRequestSetupState.ApiUrlConfigured
+            $nativeHostWhitelistTokenConfigured = [bool]$nativeHostRequestSetupState.WhitelistTokenConfigured
+            $nativeHostRequestSetupComplete = [bool]$nativeHostRequestSetupState.Ready
         }
     }
     catch {
@@ -401,7 +376,7 @@ function Get-OpenPathBrowserDoctorReport {
         (@($nativeHostRegistryStates | Where-Object { $_ -like '*=present' }).Count -gt 0)
     )
     $browserRequestReadiness = Get-OpenPathBrowserRequestReadiness `
-        -Config $requestSetupState `
+        -Config $nativeHostRequestSetupState `
         -ManagedExtensionPolicy $managedExtensionPolicy `
         -NativeHostRegistered $nativeHostRegistered `
         -NativeHostStatePresent $nativeHostStateReadable `

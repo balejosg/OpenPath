@@ -295,6 +295,22 @@ Describe "Browser Module - Request Readiness" {
         @($result.FailureReasons) | Should -Contain "request_setup_incomplete"
     }
 
+    It "Uses request setup state for readiness instead of parsing raw config fields" {
+        $requestReadinessPath = Join-Path $PSScriptRoot ".." "lib" "Browser.RequestReadiness.psm1"
+        $content = Get-Content $requestReadinessPath -Raw
+
+        Assert-ContentContainsAll -Content $content -Needles @(
+            'RequestSetup.State.psm1',
+            'Get-OpenPathRequestSetupState -Config $Config',
+            '$requestSetupState.Ready',
+            '$requestSetupState.ClassroomConfigured'
+        )
+
+        $content | Should -Not -Match 'Get-OpenPathConfigTrimmedValue -Config \$Config -PropertyName ''apiUrl'''
+        $content | Should -Not -Match 'Get-OpenPathConfigTrimmedValue -Config \$Config -PropertyName ''whitelistUrl'''
+        $content | Should -Not -Match 'whitelistUrl -notmatch'
+    }
+
     It "Fails readiness when Firefox machine policy is missing" {
         $result = Get-OpenPathBrowserRequestReadiness `
             -Config ([PSCustomObject]@{
