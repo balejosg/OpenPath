@@ -12,6 +12,7 @@ export interface VerifyFirefoxAmoVersionOptions extends BuildFirefoxAmoVersionUr
   apiSecret: string;
   requireSource?: boolean;
   requireApprovalNotes?: boolean;
+  requireReleaseNotes?: boolean;
   fetchImpl?: typeof fetch;
 }
 
@@ -22,6 +23,7 @@ export interface FirefoxAmoVersionSummary {
   fileStatus: string;
   sourcePresent: boolean;
   approvalNotesPresent: boolean;
+  releaseNotesPresent: boolean;
 }
 
 export function verifyFirefoxAmoVersion(

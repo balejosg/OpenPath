@@ -1,6 +1,8 @@
 export interface FirefoxReleaseMetadata {
   extensionId: string;
   version: string;
+  signatureSource: 'amo';
+  signatureState: 'signed';
   installUrl?: string;
   payloadHash: string;
 }

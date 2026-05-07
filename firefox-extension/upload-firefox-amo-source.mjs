@@ -63,15 +63,38 @@ function buildAuthHeaders(options) {
   };
 }
 
-function readApprovalNotes(metadataPath) {
+function normalizeLocalizedStringMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry) => typeof entry[1] === 'string' && entry[1].trim().length > 0)
+      .map(([locale, text]) => [locale, text.trim()])
+  );
+}
+
+function readVersionMetadataPayload(metadataPath) {
   if (!metadataPath || !fs.existsSync(metadataPath)) {
-    return '';
+    return {};
   }
 
   const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-  return typeof metadata.version?.approval_notes === 'string'
-    ? metadata.version.approval_notes.trim()
-    : '';
+  const payload = {};
+  if (typeof metadata.version?.approval_notes === 'string') {
+    const approvalNotes = metadata.version.approval_notes.trim();
+    if (approvalNotes.length > 0) {
+      payload.approval_notes = approvalNotes;
+    }
+  }
+
+  const releaseNotes = normalizeLocalizedStringMap(metadata.version?.release_notes);
+  if (Object.keys(releaseNotes).length > 0) {
+    payload.release_notes = releaseNotes;
+  }
+
+  return payload;
 }
 
 async function readResponseBody(response) {
@@ -278,14 +301,14 @@ export async function uploadFirefoxAmoSource(options) {
     }
   }
 
-  const approvalNotes = readApprovalNotes(metadataPath);
+  const versionMetadataPayload = readVersionMetadataPayload(metadataPath);
   const metadataBody =
-    approvalNotes && !sourceOnly
+    Object.keys(versionMetadataPayload).length > 0 && !sourceOnly
       ? await patchAmoVersionJson({
           url,
           apiKey,
           apiSecret,
-          payload: { approval_notes: approvalNotes },
+          payload: versionMetadataPayload,
           fetchImpl,
           waitForThrottle,
           maxThrottleWaitSeconds,
@@ -407,7 +430,8 @@ Options:
   --version-id    AMO numeric version id
   --version       AMO version string; the API lookup uses v<version>
   --source        Source archive to upload
-  --metadata      Optional metadata JSON; version.approval_notes is PATCHed when present
+  --metadata      Optional metadata JSON; version.approval_notes and
+                 version.release_notes are PATCHed when present
   --amo-base-url  AMO API base URL
   --source-only   Upload source without PATCHing approval_notes
   --metadata-only PATCH approval_notes without re-uploading source

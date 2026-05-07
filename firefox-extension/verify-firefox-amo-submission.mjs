@@ -40,7 +40,24 @@ function validateAmoMetadata(metadataPath) {
     fail(`AMO metadata must include version.approval_notes: ${metadataPath}`);
   }
 
-  return approvalNotes.trim();
+  const releaseNotes = metadata.version?.release_notes;
+  if (!releaseNotes || typeof releaseNotes !== 'object' || Array.isArray(releaseNotes)) {
+    fail(`AMO metadata must include version.release_notes: ${metadataPath}`);
+  }
+
+  const normalizedReleaseNotes = Object.fromEntries(
+    Object.entries(releaseNotes)
+      .filter((entry) => typeof entry[1] === 'string' && entry[1].trim().length > 0)
+      .map(([locale, text]) => [locale, text.trim()])
+  );
+  if (Object.keys(normalizedReleaseNotes).length === 0) {
+    fail(`AMO metadata must include version.release_notes: ${metadataPath}`);
+  }
+
+  return {
+    approvalNotes: approvalNotes.trim(),
+    releaseNotes: normalizedReleaseNotes,
+  };
 }
 
 export function verifyFirefoxAmoSubmission(options = {}) {
@@ -69,13 +86,14 @@ export function verifyFirefoxAmoSubmission(options = {}) {
     fail(`AMO source archive must be a non-empty file: ${sourceArchive}`);
   }
 
-  const approvalNotes = validateAmoMetadata(metadataPath);
+  const { approvalNotes, releaseNotes } = validateAmoMetadata(metadataPath);
 
   return {
     required: true,
     sourceArchive,
     metadataPath,
     approvalNotes,
+    releaseNotes,
   };
 }
 
@@ -108,7 +126,7 @@ function parseCliArgs(argv) {
 
 Options:
   --source    Source archive that will be uploaded to AMO
-  --metadata  web-ext AMO metadata JSON containing version.approval_notes
+  --metadata  web-ext AMO metadata JSON containing version.approval_notes and version.release_notes
 `);
         process.exit(0);
         break;

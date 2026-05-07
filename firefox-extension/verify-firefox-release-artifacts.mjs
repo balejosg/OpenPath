@@ -51,8 +51,18 @@ export function verifyFirefoxReleaseArtifacts(options) {
   const metadata = readJsonFile(metadataPath);
   const extensionId = requireNonEmptyString(metadata.extensionId, 'extensionId');
   const version = requireNonEmptyString(metadata.version, 'version');
+  const signatureSource = requireNonEmptyString(metadata.signatureSource, 'signatureSource');
+  const signatureState = requireNonEmptyString(metadata.signatureState, 'signatureState');
   const metadataPayloadHash = requireNonEmptyString(metadata.payloadHash, 'payloadHash');
   const expectedPayloadHash = requireNonEmptyString(payloadHash, 'expected payloadHash');
+
+  if (signatureSource !== 'amo') {
+    fail(`Firefox Release signatureSource must be amo, found ${signatureSource}`);
+  }
+
+  if (signatureState !== 'signed') {
+    fail(`Firefox Release signatureState must be signed, found ${signatureState}`);
+  }
 
   if (metadataPayloadHash !== expectedPayloadHash) {
     fail(
@@ -64,6 +74,8 @@ export function verifyFirefoxReleaseArtifacts(options) {
     ...metadata,
     extensionId,
     version,
+    signatureSource,
+    signatureState,
     payloadHash: metadataPayloadHash,
   };
 }

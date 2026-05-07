@@ -80,6 +80,14 @@ function hasValue(value) {
   return value !== null && value !== undefined;
 }
 
+function hasLocalizedValue(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+
+  return Object.values(value).some((entry) => typeof entry === 'string' && entry.trim().length > 0);
+}
+
 function summarizeVersion(detail) {
   return {
     versionId: detail.id ?? '',
@@ -88,6 +96,7 @@ function summarizeVersion(detail) {
     fileStatus: typeof detail.file?.status === 'string' ? detail.file.status : '',
     sourcePresent: hasValue(detail.source),
     approvalNotesPresent: hasValue(detail.approval_notes),
+    releaseNotesPresent: hasLocalizedValue(detail.release_notes),
   };
 }
 
@@ -101,6 +110,7 @@ export async function verifyFirefoxAmoVersion(options) {
     amoBaseUrl = defaultAmoBaseUrl,
     requireSource = false,
     requireApprovalNotes = false,
+    requireReleaseNotes = false,
     fetchImpl = fetch,
   } = options;
 
@@ -133,6 +143,9 @@ export async function verifyFirefoxAmoVersion(options) {
   if (requireApprovalNotes && !summary.approvalNotesPresent) {
     fail(`AMO version ${target} is missing approval_notes`);
   }
+  if (requireReleaseNotes && !summary.releaseNotesPresent) {
+    fail(`AMO version ${target} is missing release_notes`);
+  }
 
   return summary;
 }
@@ -145,6 +158,7 @@ function parseCliArgs(argv) {
     amoBaseUrl: process.env.AMO_BASE_URL || defaultAmoBaseUrl,
     requireSource: false,
     requireApprovalNotes: false,
+    requireReleaseNotes: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -174,6 +188,9 @@ function parseCliArgs(argv) {
       case '--require-approval-notes':
         parsed.requireApprovalNotes = true;
         break;
+      case '--require-release-notes':
+        parsed.requireReleaseNotes = true;
+        break;
       case '--help':
       case '-h':
         console.log(`Usage:
@@ -186,6 +203,7 @@ Options:
   --amo-base-url             AMO API base URL
   --require-source           Fail unless AMO reports source is present
   --require-approval-notes   Fail unless AMO reports approval_notes is present
+  --require-release-notes    Fail unless AMO reports localized release_notes is present
 `);
         process.exit(0);
         break;
@@ -214,6 +232,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
         `fileStatus=${result.fileStatus}`,
         `sourcePresent=${result.sourcePresent}`,
         `approvalNotesPresent=${result.approvalNotesPresent}`,
+        `releaseNotesPresent=${result.releaseNotesPresent}`,
       ].join(' ')
     );
   } catch (error) {

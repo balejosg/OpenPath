@@ -21,6 +21,8 @@ const extensionRoot = path.resolve(import.meta.dirname, '..');
 interface FirefoxReleaseMetadata {
   extensionId: string;
   version: string;
+  signatureSource: 'amo';
+  signatureState: 'signed';
   installUrl?: string;
   payloadHash?: string;
 }
@@ -184,6 +186,7 @@ interface VerifyFirefoxAmoVersionModule {
     amoBaseUrl?: string;
     requireSource?: boolean;
     requireApprovalNotes?: boolean;
+    requireReleaseNotes?: boolean;
     fetchImpl?: typeof fetch;
   }) => Promise<{
     versionId: number | string;
@@ -192,6 +195,7 @@ interface VerifyFirefoxAmoVersionModule {
     fileStatus: string;
     sourcePresent: boolean;
     approvalNotesPresent: boolean;
+    releaseNotesPresent: boolean;
   }>;
 }
 
@@ -206,6 +210,20 @@ interface SyncFirefoxAmoPolicyModule {
   }) => Promise<{ privacyPolicyPresent: boolean }>;
 }
 
+interface VerifyFirefoxAmoSubmissionModule {
+  verifyFirefoxAmoSubmission: (options?: {
+    manifestPath?: string;
+    sourceArchive?: string;
+    metadataPath?: string;
+  }) => {
+    required: boolean;
+    sourceArchive: string;
+    metadataPath: string;
+    approvalNotes?: string;
+    releaseNotes?: Record<string, string>;
+  };
+}
+
 const { prepareFirefoxReleaseArtifacts } =
   (await import('../build-firefox-release.mjs')) as PrepareFirefoxReleaseArtifactsModule;
 const { buildFirefoxSourceSubmission } =
@@ -216,6 +234,8 @@ const { verifyFirefoxAmoVersion } =
   (await import('../verify-firefox-amo-version.mjs')) as VerifyFirefoxAmoVersionModule;
 const { syncFirefoxAmoPolicy } =
   (await import('../sync-firefox-amo-policy.mjs')) as SyncFirefoxAmoPolicyModule;
+const { verifyFirefoxAmoSubmission } =
+  (await import('../verify-firefox-amo-submission.mjs')) as VerifyFirefoxAmoSubmissionModule;
 const {
   buildAmoVersionDetailUrl,
   buildWebExtSignArgs,
@@ -334,6 +354,8 @@ void describe('Firefox release signing helpers', () => {
       'https://downloads.example/openpath-firefox-extension.xpi'
     );
     assert.equal(result.metadata.payloadHash, 'a'.repeat(64));
+    assert.equal(result.metadata.signatureSource, 'amo');
+    assert.equal(result.metadata.signatureState, 'signed');
     assert.equal(result.outputXpiPath, path.join(outputDir, 'openpath-firefox-extension.xpi'));
     assert.equal(result.metadataPath, path.join(outputDir, 'metadata.json'));
   });
@@ -351,6 +373,8 @@ void describe('Firefox release signing helpers', () => {
           extensionId: 'monitor-bloqueos@openpath',
           version: '2.0.0.123.1',
           payloadHash: 'b'.repeat(64),
+          signatureSource: 'amo',
+          signatureState: 'signed',
         },
         null,
         2
@@ -365,6 +389,33 @@ void describe('Firefox release signing helpers', () => {
     assert.equal(metadata.extensionId, 'monitor-bloqueos@openpath');
     assert.equal(metadata.version, '2.0.0.123.1');
     assert.equal(metadata.payloadHash, 'b'.repeat(64));
+    assert.equal(metadata.signatureSource, 'amo');
+    assert.equal(metadata.signatureState, 'signed');
+  });
+
+  void test('verifyFirefoxReleaseArtifacts rejects release metadata without AMO signature evidence', () => {
+    const workingDir = createTempDir('openpath-firefox-release-verify-');
+    const releaseDir = path.join(workingDir, 'firefox-release');
+
+    mkdirSync(releaseDir, { recursive: true });
+    writeFileSync(path.join(releaseDir, 'openpath-firefox-extension.xpi'), 'signed');
+    writeFileSync(
+      path.join(releaseDir, 'metadata.json'),
+      `${JSON.stringify({
+        extensionId: 'monitor-bloqueos@openpath',
+        version: '2.0.0.123.1',
+        payloadHash: 'b'.repeat(64),
+      })}\n`
+    );
+
+    assert.throws(
+      () =>
+        verifyFirefoxReleaseArtifacts({
+          releaseDir,
+          payloadHash: 'b'.repeat(64),
+        }),
+      /signatureSource/
+    );
   });
 
   void test('verifyFirefoxReleaseArtifacts rejects a mismatched payload hash', () => {
@@ -378,6 +429,8 @@ void describe('Firefox release signing helpers', () => {
       `${JSON.stringify({
         extensionId: 'monitor-bloqueos@openpath',
         version: '2.0.0.123.1',
+        signatureSource: 'amo',
+        signatureState: 'signed',
         payloadHash: 'c'.repeat(64),
       })}\n`
     );
@@ -608,6 +661,7 @@ void describe('Firefox release signing helpers', () => {
               channel: 'unlisted',
               source: 'https://addons.mozilla.org/files/source.zip',
               approval_notes: 'Reviewer notes',
+              release_notes: { 'en-US': 'Version notes' },
               file: { status: 'unreviewed' },
             }),
             { status: 200 }
@@ -627,6 +681,7 @@ void describe('Firefox release signing helpers', () => {
       fileStatus: 'unreviewed',
       sourcePresent: true,
       approvalNotesPresent: true,
+      releaseNotesPresent: true,
     });
   });
 
@@ -684,6 +739,34 @@ void describe('Firefox release signing helpers', () => {
     );
   });
 
+  void test('verifyFirefoxAmoVersion fails when required release notes are missing', async () => {
+    await assert.rejects(
+      verifyFirefoxAmoVersion({
+        apiKey: 'user:123:456',
+        apiSecret: 'secret',
+        addonId: 'monitor-bloqueos@openpath',
+        versionId: '6249209',
+        requireReleaseNotes: true,
+        fetchImpl: () =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({
+                id: 6249209,
+                version: '2.0.1',
+                channel: 'unlisted',
+                source: 'https://addons.mozilla.org/files/source.zip',
+                approval_notes: 'Reviewer notes',
+                release_notes: { 'en-US': ' ' },
+                file: { status: 'unreviewed' },
+              }),
+              { status: 200 }
+            )
+          ),
+      }),
+      /AMO version 6249209 is missing release_notes/
+    );
+  });
+
   void test('uploadFirefoxAmoSource requires an explicit AMO version target', async () => {
     await assert.rejects(
       uploadFirefoxAmoSource({
@@ -707,6 +790,91 @@ void describe('Firefox release signing helpers', () => {
         verify: false,
       }),
       /--source-only and --metadata-only cannot be used together/
+    );
+  });
+
+  void test('uploadFirefoxAmoSource patches reviewer and version notes together', async () => {
+    const workingDir = createTempDir('openpath-firefox-upload-source-');
+    const metadataPath = path.join(workingDir, 'amo-review-metadata.json');
+    const requestBodies: unknown[] = [];
+
+    writeFileSync(
+      metadataPath,
+      `${JSON.stringify({
+        version: {
+          approval_notes: 'Readable reviewer notes',
+          release_notes: { 'en-US': 'Readable version notes' },
+        },
+      })}\n`
+    );
+
+    await uploadFirefoxAmoSource({
+      apiKey: 'user:123:456',
+      apiSecret: 'secret',
+      versionId: '6249209',
+      metadataPath,
+      metadataOnly: true,
+      verify: false,
+      fetchImpl: (_input, init) => {
+        const body = init?.body;
+        if (typeof body !== 'string') {
+          throw new TypeError('Expected JSON metadata request body');
+        }
+        requestBodies.push(JSON.parse(body));
+        return Promise.resolve(new Response(JSON.stringify({ id: 6249209 }), { status: 200 }));
+      },
+    });
+
+    assert.deepEqual(requestBodies, [
+      {
+        approval_notes: 'Readable reviewer notes',
+        release_notes: { 'en-US': 'Readable version notes' },
+      },
+    ]);
+  });
+
+  void test('verifyFirefoxAmoSubmission requires localized version notes', () => {
+    const workingDir = createTempDir('openpath-firefox-amo-submission-');
+    const manifestPath = path.join(workingDir, 'manifest.json');
+    const sourceArchive = path.join(workingDir, 'source.zip');
+    const metadataPath = path.join(workingDir, 'amo-review-metadata.json');
+
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({
+        browser_specific_settings: {
+          gecko: {
+            data_collection_permissions: {
+              required: ['browsingActivity'],
+            },
+          },
+        },
+      })}\n`
+    );
+    writeFileSync(sourceArchive, 'zip');
+    writeFileSync(
+      metadataPath,
+      `${JSON.stringify({
+        version: {
+          approval_notes: 'Readable reviewer notes',
+          release_notes: { 'en-US': 'Readable version notes' },
+        },
+      })}\n`
+    );
+
+    assert.deepEqual(
+      verifyFirefoxAmoSubmission({ manifestPath, sourceArchive, metadataPath }).releaseNotes,
+      { 'en-US': 'Readable version notes' }
+    );
+
+    writeFileSync(
+      metadataPath,
+      `${JSON.stringify({ version: { approval_notes: 'Readable reviewer notes' } })}\n`
+    );
+
+    assert.throws(
+      () => verifyFirefoxAmoSubmission({ manifestPath, sourceArchive, metadataPath }),
+      /AMO metadata must include version.release_notes/
     );
   });
 

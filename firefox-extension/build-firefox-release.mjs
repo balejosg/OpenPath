@@ -9,6 +9,8 @@ const extensionRoot = path.dirname(__filename);
 const defaultManifestPath = path.join(extensionRoot, 'manifest.json');
 const defaultOutputDir = path.join(extensionRoot, 'build', 'firefox-release');
 const defaultOutputXpiName = 'openpath-firefox-extension.xpi';
+const releaseSignatureSource = 'amo';
+const releaseSignatureState = 'signed';
 
 function fail(message) {
   throw new Error(message);
@@ -72,6 +74,8 @@ export function prepareFirefoxReleaseArtifacts(options) {
   const metadata = {
     extensionId: effectiveExtensionId,
     version: effectiveVersion,
+    signatureSource: releaseSignatureSource,
+    signatureState: releaseSignatureState,
     ...(installUrl ? { installUrl } : {}),
     ...(payloadHash ? { payloadHash } : {}),
   };
