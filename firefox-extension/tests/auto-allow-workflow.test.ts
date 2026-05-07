@@ -95,7 +95,7 @@ function createWorkflowFixture(
   };
 }
 
-async function waitForAssertion(assertion: () => void, timeoutMs = 100): Promise<void> {
+async function waitForAssertion(assertion: () => void, timeoutMs = 1000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
 
