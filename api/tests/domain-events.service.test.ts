@@ -12,6 +12,7 @@ void test('domain-events service exposes event dispatch functions', () => {
   assert.equal(typeof DomainEventsService.withQueuedEvents, 'function');
   assert.equal(typeof DomainEventsService.withTransactionEvents, 'function');
   assert.equal(typeof DomainEventsService.createTransactionalWriter, 'function');
+  assert.equal(typeof DomainEventsService.writeTransactionalCommand, 'function');
 });
 
 void test('withTransactionEvents publishes queued events after success', async () => {
@@ -35,6 +36,38 @@ void test('withTransactionEvents publishes queued events after success', async (
 
   assert.equal(result, 'ok');
   assert.deepEqual(published, ['group-a', 'group-b']);
+});
+
+void test('writeTransactionalCommand publishes queued events after database commit', async () => {
+  const tx = { id: 'tx-1' };
+  const commits: string[] = [];
+  const published: string[] = [];
+  const seenTxIds: string[] = [];
+
+  const result = await DomainEventsService.writeTransactionalCommand<typeof tx, string>(
+    {
+      publishers: {
+        publishWhitelistChanged: (groupId) => {
+          published.push(`${groupId}:commits-${String(commits.length)}`);
+        },
+      },
+      transactionRunner: async (operation) => {
+        const operationResult = await operation(tx);
+        commits.push('committed');
+        return operationResult;
+      },
+    },
+    (transaction, events) => {
+      seenTxIds.push(transaction.id);
+      events.publishWhitelistChanged('group-a');
+      return Promise.resolve('ok');
+    }
+  );
+
+  assert.equal(result, 'ok');
+  assert.deepEqual(seenTxIds, ['tx-1']);
+  assert.deepEqual(commits, ['committed']);
+  assert.deepEqual(published, ['group-a:commits-1']);
 });
 
 void test('withTransactionEvents deduplicates repeated events after commit', async () => {

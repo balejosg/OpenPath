@@ -52,8 +52,8 @@ export async function createRule(
     },
     {
       createRule: deps.createRule,
-      createTransactionalWriter: DomainEventsService.createTransactionalWriter,
       publishWhitelistChanged: deps.publishWhitelistChanged,
+      writeTransactionalCommand: DomainEventsService.writeTransactionalCommand,
       withTransaction: deps.withTransaction,
     }
   );
@@ -93,8 +93,8 @@ export async function deleteRule(
     { groupId: ruleGroupId, id },
     {
       deleteRule: deps.deleteRule,
-      createTransactionalWriter: DomainEventsService.createTransactionalWriter,
       publishWhitelistChanged: deps.publishWhitelistChanged,
+      writeTransactionalCommand: DomainEventsService.writeTransactionalCommand,
       withTransaction: deps.withTransaction,
     }
   );
@@ -126,9 +126,9 @@ export async function revokeAutoApproval(
       { resolvedBy: input.resolvedBy, rule },
       {
         createRule: deps.createRule,
-        createTransactionalWriter: DomainEventsService.createTransactionalWriter,
         deleteRule: deps.deleteRule,
         publishWhitelistChanged: deps.publishWhitelistChanged,
+        writeTransactionalCommand: DomainEventsService.writeTransactionalCommand,
         withTransaction: deps.withTransaction,
       }
     );
@@ -162,8 +162,8 @@ export async function bulkDeleteRules(
     { ids, rules },
     {
       bulkDeleteRules: deps.bulkDeleteRules,
-      createTransactionalWriter: DomainEventsService.createTransactionalWriter,
       publishWhitelistChanged: deps.publishWhitelistChanged,
+      writeTransactionalCommand: DomainEventsService.writeTransactionalCommand,
       withTransaction: deps.withTransaction,
     }
   );
@@ -215,28 +215,30 @@ export async function updateRule(
     }
   }
 
-  const writer = DomainEventsService.createTransactionalWriter({
-    publishers: {
-      publishWhitelistChanged: deps.publishWhitelistChanged,
-    },
-    transactionRunner: deps.withTransaction,
-  });
-  const updated = await writer.write<Rule | null>(async (tx, events) => {
-    const result = await (deps.updateRule ?? groupsStorage.updateRule)(
-      {
-        id: input.id,
-        value: cleanedValue,
-        comment: input.comment,
+  const updated = await DomainEventsService.writeTransactionalCommand(
+    {
+      publishers: {
+        publishWhitelistChanged: deps.publishWhitelistChanged,
       },
-      tx
-    );
+      transactionRunner: deps.withTransaction,
+    },
+    async (tx, events) => {
+      const result = await (deps.updateRule ?? groupsStorage.updateRule)(
+        {
+          id: input.id,
+          value: cleanedValue,
+          comment: input.comment,
+        },
+        tx
+      );
 
-    if (result && didChangeExport) {
-      events.publishWhitelistChanged(input.groupId);
+      if (result && didChangeExport) {
+        events.publishWhitelistChanged(input.groupId);
+      }
+
+      return result;
     }
-
-    return result;
-  });
+  );
 
   if (!updated) {
     return {
@@ -263,27 +265,29 @@ export async function bulkCreateRules(
   const preservePath = input.type === 'blocked_path';
   const cleanedValues = input.values.map((value) => cleanRuleValue(value, preservePath));
 
-  const writer = DomainEventsService.createTransactionalWriter({
-    publishers: {
-      publishWhitelistChanged: deps.publishWhitelistChanged,
+  const count = await DomainEventsService.writeTransactionalCommand(
+    {
+      publishers: {
+        publishWhitelistChanged: deps.publishWhitelistChanged,
+      },
+      transactionRunner: deps.withTransaction,
     },
-    transactionRunner: deps.withTransaction,
-  });
-  const count = await writer.write<number>(async (tx, events) => {
-    const createdCount = await (deps.bulkCreateRules ?? groupsStorage.bulkCreateRules)(
-      input.groupId,
-      input.type,
-      cleanedValues,
-      'manual',
-      tx
-    );
+    async (tx, events) => {
+      const createdCount = await (deps.bulkCreateRules ?? groupsStorage.bulkCreateRules)(
+        input.groupId,
+        input.type,
+        cleanedValues,
+        'manual',
+        tx
+      );
 
-    if (createdCount > 0) {
-      events.publishWhitelistChanged(input.groupId);
+      if (createdCount > 0) {
+        events.publishWhitelistChanged(input.groupId);
+      }
+
+      return createdCount;
     }
-
-    return createdCount;
-  });
+  );
 
   return { ok: true, data: { count } };
 }
