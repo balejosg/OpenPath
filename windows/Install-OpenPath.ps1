@@ -387,6 +387,38 @@ Invoke-OpenPathInstallerFirstUpdate `
     -MachineRegistered $machineRegistered
 Complete-OpenPathInstallTimedStep -Name 'first-update'
 
+try {
+    Start-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
+    $firefoxReadyConfig = Get-OpenPathConfig
+    if ($classroomModeRequested -and $Unattended) {
+        $firefoxReady = Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig -RequireRuntimeRegistration
+        if (-not $firefoxReady.Ready) {
+            Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$firefoxReady.FailureCode)
+            Write-InstallerError 'ERROR: Firefox managed extension is not active after installation.'
+            Write-InstallerError "  Failure: $($firefoxReady.FailureCode)"
+            Write-InstallerError "  $($firefoxReady.Message)"
+            exit 1
+        }
+    }
+    elseif ($classroomModeRequested) {
+        $firefoxReady = Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig
+        if (-not $firefoxReady.Ready) {
+            Write-InstallerWarning "  ADVERTENCIA: Firefox managed extension readiness incomplete: $($firefoxReady.Message)"
+        }
+    }
+    Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
+}
+catch {
+    Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$_)
+    if ($classroomModeRequested -and $Unattended) {
+        Write-InstallerError 'ERROR: Firefox managed extension is not active after installation.'
+        Write-InstallerError "  $_"
+        exit 1
+    }
+
+    Write-InstallerWarning "  ADVERTENCIA: No se pudo validar Firefox managed extension readiness: $_"
+}
+
 Start-OpenPathInstallTimedStep -Name 'realtime-updates'
 Start-OpenPathInstallerRealtimeUpdates `
     -ClassroomModeRequested:$classroomModeRequested `

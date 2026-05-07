@@ -186,6 +186,26 @@ function Sync-OpenPathFirefoxManagedExtensionPolicy {
     }
 }
 
+function Test-OpenPathFirefoxManagedExtensionReady {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$Config = $null,
+
+        [switch]$RequireRuntimeRegistration
+    )
+
+    if ($PSBoundParameters.ContainsKey('Config')) {
+        Browser.FirefoxPolicy\Test-OpenPathFirefoxManagedExtensionReady `
+            -Config $Config `
+            -RequireRuntimeRegistration:$RequireRuntimeRegistration
+    }
+    else {
+        Browser.FirefoxPolicy\Test-OpenPathFirefoxManagedExtensionReady `
+            -RequireRuntimeRegistration:$RequireRuntimeRegistration
+    }
+}
+
 function Sync-OpenPathFirefoxNetworkAutoconfig {
     [CmdletBinding(SupportsShouldProcess)]
     param()
@@ -352,6 +372,7 @@ Export-ModuleMember -Function @(
     'Sync-OpenPathFirefoxNativeHostState',
     'Unregister-OpenPathFirefoxNativeHost',
     'Sync-OpenPathFirefoxManagedExtensionPolicy',
+    'Test-OpenPathFirefoxManagedExtensionReady',
     'Sync-OpenPathFirefoxNetworkAutoconfig',
     'Set-ChromePolicy',
     'Remove-BrowserPolicy',

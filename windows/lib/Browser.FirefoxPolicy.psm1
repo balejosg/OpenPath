@@ -275,6 +275,273 @@ function Test-OpenPathFirefoxMachineExtensionPolicy {
     return ($installMode -eq 'force_installed' -and $installUrl -eq [string]$ManagedExtensionPolicy.InstallUrl)
 }
 
+function New-OpenPathFirefoxManagedExtensionReadyResult {
+    param(
+        [bool]$Ready,
+
+        [string]$FailureCode = '',
+
+        [string]$Message = '',
+
+        [string]$PolicyPath = '',
+
+        [bool]$ExtensionInstalled = $false,
+
+        [bool]$ExtensionActive = $false,
+
+        [string]$InstallUrl = '',
+
+        [string]$ExtensionId = '',
+
+        [string]$FirefoxPath = '',
+
+        [string]$ProfilePath = ''
+    )
+
+    return [PSCustomObject]@{
+        Ready = $Ready
+        FailureCode = $FailureCode
+        Message = $Message
+        PolicyPath = $PolicyPath
+        ExtensionInstalled = $ExtensionInstalled
+        ExtensionActive = $ExtensionActive
+        InstallUrl = $InstallUrl
+        ExtensionId = $ExtensionId
+        FirefoxPath = $FirefoxPath
+        ProfilePath = $ProfilePath
+    }
+}
+
+function Resolve-OpenPathFirefoxReleaseExecutable {
+    $candidates = @(
+        "$env:ProgramFiles\Mozilla Firefox\firefox.exe",
+        "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path $candidate)) {
+            return [string]$candidate
+        }
+    }
+
+    return ''
+}
+
+function Get-OpenPathFirefoxProfileExtensionEvidence {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProfilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExtensionId
+    )
+
+    $registryPath = Join-Path $ProfilePath 'extensions.json'
+    $profileExtensionPath = Join-Path (Join-Path $ProfilePath 'extensions') "$ExtensionId.xpi"
+    $registryAddon = $null
+
+    if (Test-Path $registryPath) {
+        try {
+            $registry = Get-Content $registryPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            $registryAddon = @($registry.addons | Where-Object { $_.id -eq $ExtensionId } | Select-Object -First 1)[0]
+        }
+        catch {
+            $registryAddon = $null
+        }
+    }
+
+    $registryAddonPresent = $null -ne $registryAddon
+    $profileExtensionPresent = Test-Path $profileExtensionPath
+    $registryAddonActive = $false
+    if ($registryAddonPresent) {
+        $activeValue = if ($registryAddon.PSObject.Properties['active']) { $registryAddon.active } else { $true }
+        $userDisabled = if ($registryAddon.PSObject.Properties['userDisabled']) { [bool]$registryAddon.userDisabled } else { $false }
+        $registryAddonActive = ([bool]$activeValue) -and (-not $userDisabled)
+    }
+
+    return [PSCustomObject]@{
+        RegistryPath = $registryPath
+        ProfileExtensionPath = $profileExtensionPath
+        RegistryAddonPresent = $registryAddonPresent
+        ProfileExtensionPresent = $profileExtensionPresent
+        ExtensionInstalled = [bool]($registryAddonPresent -or $profileExtensionPresent)
+        ExtensionActive = [bool]($registryAddonActive -or ($profileExtensionPresent -and -not $registryAddonPresent))
+    }
+}
+
+function Invoke-OpenPathFirefoxManagedExtensionRuntimeProbe {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FirefoxPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExtensionId,
+
+        [int]$TimeoutSeconds = 30
+    )
+
+    $profileDir = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-firefox-managed-extension-$([Guid]::NewGuid().ToString('N'))"
+    $process = $null
+    $evidence = $null
+
+    try {
+        New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+        $process = Start-Process `
+            -FilePath $FirefoxPath `
+            -ArgumentList @('-headless', '-no-remote', '-profile', $profileDir, 'about:blank') `
+            -PassThru
+
+        $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
+        do {
+            $evidence = Get-OpenPathFirefoxProfileExtensionEvidence -ProfilePath $profileDir -ExtensionId $ExtensionId
+            if ($evidence.ExtensionInstalled) {
+                break
+            }
+
+            Start-Sleep -Seconds 2
+        } while ((Get-Date) -lt $deadline)
+
+        if (-not $evidence) {
+            $evidence = Get-OpenPathFirefoxProfileExtensionEvidence -ProfilePath $profileDir -ExtensionId $ExtensionId
+        }
+
+        return [PSCustomObject]@{
+            ExtensionInstalled = [bool]$evidence.ExtensionInstalled
+            ExtensionActive = [bool]$evidence.ExtensionActive
+            Message = if ($evidence.ExtensionInstalled) {
+                'Firefox registered the managed extension in the runtime profile.'
+            }
+            else {
+                "Firefox did not register $ExtensionId in extensions.json or profile XPI path."
+            }
+            ProfilePath = $profileDir
+            RegistryPath = $evidence.RegistryPath
+            ProfileExtensionPath = $evidence.ProfileExtensionPath
+        }
+    }
+    catch {
+        return [PSCustomObject]@{
+            ExtensionInstalled = $false
+            ExtensionActive = $false
+            Message = "Firefox runtime registration probe failed: $($_.Exception.Message)"
+            ProfilePath = $profileDir
+            RegistryPath = Join-Path $profileDir 'extensions.json'
+            ProfileExtensionPath = Join-Path (Join-Path $profileDir 'extensions') "$ExtensionId.xpi"
+        }
+    }
+    finally {
+        if ($process -and -not $process.HasExited) {
+            try {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            catch {
+            }
+        }
+
+        Remove-Item -LiteralPath $profileDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-OpenPathFirefoxManagedExtensionReady {
+    param(
+        [AllowNull()]
+        [object]$Config = $null,
+
+        [switch]$RequireRuntimeRegistration
+    )
+
+    $policyPath = Get-OpenPathFirefoxMachinePolicyRegistryPath
+    if ($PSBoundParameters.ContainsKey('Config')) {
+        $managedExtensionPolicy = Get-OpenPathFirefoxManagedExtensionPolicy -Config $Config
+    }
+    else {
+        $managedExtensionPolicy = Get-OpenPathFirefoxManagedExtensionPolicy
+    }
+
+    if (-not $managedExtensionPolicy -or -not $managedExtensionPolicy.ExtensionId -or -not $managedExtensionPolicy.InstallUrl) {
+        return New-OpenPathFirefoxManagedExtensionReadyResult `
+            -Ready $false `
+            -FailureCode 'firefox-managed-policy-missing' `
+            -Message 'Firefox managed extension policy is missing; signed extension id and install_url are required.' `
+            -PolicyPath $policyPath
+    }
+
+    $extensionId = [string]$managedExtensionPolicy.ExtensionId
+    $installUrl = [string]$managedExtensionPolicy.InstallUrl
+    $firefoxPath = Resolve-OpenPathFirefoxReleaseExecutable
+
+    if (-not (Test-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $managedExtensionPolicy)) {
+        return New-OpenPathFirefoxManagedExtensionReadyResult `
+            -Ready $false `
+            -FailureCode 'firefox-machine-policy-missing' `
+            -Message "Firefox machine ExtensionSettings does not contain $extensionId with installation_mode=force_installed and install_url=$installUrl." `
+            -PolicyPath $policyPath `
+            -InstallUrl $installUrl `
+            -ExtensionId $extensionId `
+            -FirefoxPath $firefoxPath
+    }
+
+    if (-not $firefoxPath) {
+        return New-OpenPathFirefoxManagedExtensionReadyResult `
+            -Ready $false `
+            -FailureCode 'firefox-release-missing' `
+            -Message 'Firefox Release is not installed. Classroom unattended installs require Mozilla Firefox Release before the managed extension can be verified.' `
+            -PolicyPath $policyPath `
+            -InstallUrl $installUrl `
+            -ExtensionId $extensionId
+    }
+
+    if (-not $RequireRuntimeRegistration) {
+        return New-OpenPathFirefoxManagedExtensionReadyResult `
+            -Ready $true `
+            -Message 'Firefox managed extension policy is ready.' `
+            -PolicyPath $policyPath `
+            -InstallUrl $installUrl `
+            -ExtensionId $extensionId `
+            -FirefoxPath $firefoxPath
+    }
+
+    $runtimeProbe = Invoke-OpenPathFirefoxManagedExtensionRuntimeProbe -FirefoxPath $firefoxPath -ExtensionId $extensionId
+    if (-not $runtimeProbe.ExtensionInstalled) {
+        return New-OpenPathFirefoxManagedExtensionReadyResult `
+            -Ready $false `
+            -FailureCode 'firefox-extension-runtime-missing' `
+            -Message ([string]$runtimeProbe.Message) `
+            -PolicyPath $policyPath `
+            -ExtensionInstalled $false `
+            -ExtensionActive $false `
+            -InstallUrl $installUrl `
+            -ExtensionId $extensionId `
+            -FirefoxPath $firefoxPath `
+            -ProfilePath ([string]$runtimeProbe.ProfilePath)
+    }
+
+    if (-not $runtimeProbe.ExtensionActive) {
+        return New-OpenPathFirefoxManagedExtensionReadyResult `
+            -Ready $false `
+            -FailureCode 'firefox-extension-runtime-inactive' `
+            -Message "Firefox registered $extensionId but did not activate it." `
+            -PolicyPath $policyPath `
+            -ExtensionInstalled $true `
+            -ExtensionActive $false `
+            -InstallUrl $installUrl `
+            -ExtensionId $extensionId `
+            -FirefoxPath $firefoxPath `
+            -ProfilePath ([string]$runtimeProbe.ProfilePath)
+    }
+
+    return New-OpenPathFirefoxManagedExtensionReadyResult `
+        -Ready $true `
+        -Message ([string]$runtimeProbe.Message) `
+        -PolicyPath $policyPath `
+        -ExtensionInstalled $true `
+        -ExtensionActive $true `
+        -InstallUrl $installUrl `
+        -ExtensionId $extensionId `
+        -FirefoxPath $firefoxPath `
+        -ProfilePath ([string]$runtimeProbe.ProfilePath)
+}
+
 function Remove-OpenPathFirefoxMachineExtensionPolicy {
     [CmdletBinding()]
     param(
@@ -421,6 +688,7 @@ Export-ModuleMember -Function @(
     'Get-OpenPathFirefoxMachineExtensionSettings',
     'Set-OpenPathFirefoxMachineExtensionPolicy',
     'Test-OpenPathFirefoxMachineExtensionPolicy',
+    'Test-OpenPathFirefoxManagedExtensionReady',
     'Remove-OpenPathFirefoxMachineExtensionPolicy',
     'Sync-OpenPathFirefoxManagedExtensionPolicy'
 )

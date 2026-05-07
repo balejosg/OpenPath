@@ -467,4 +467,119 @@ Describe "Browser Module - Firefox Policy" {
             $policy.policies.PSObject.Properties.Name | Should -Not -Contain 'OverrideFirstRunPage'
         }
     }
+
+    Context "Test-OpenPathFirefoxManagedExtensionReady" {
+        It "Fails when Firefox Release is missing" {
+            $contract = Get-ContractFixtureJson -FileName 'browser-firefox-managed-extension.json'
+
+            Mock Resolve-OpenPathFirefoxReleaseExecutable { '' } -ModuleName Browser.FirefoxPolicy
+            Mock Get-OpenPathFirefoxManagedExtensionPolicy {
+                [PSCustomObject]@{
+                    ExtensionId = $contract.extensionId
+                    InstallUrl = $contract.managedApiInstallUrl
+                    Source = 'managed-api'
+                }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Test-OpenPathFirefoxMachineExtensionPolicy { $true } -ModuleName Browser.FirefoxPolicy
+
+            $result = Test-OpenPathFirefoxManagedExtensionReady `
+                -Config ([PSCustomObject]@{ apiUrl = 'https://school.example' }) `
+                -RequireRuntimeRegistration
+
+            $result.Ready | Should -BeFalse
+            $result.FailureCode | Should -Be 'firefox-release-missing'
+            $result.ExtensionInstalled | Should -BeFalse
+            $result.ExtensionActive | Should -BeFalse
+            $result.InstallUrl | Should -Be $contract.managedApiInstallUrl
+            $result.PolicyPath | Should -Be 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
+        }
+
+        It "Fails when the force-installed machine policy is missing" {
+            $contract = Get-ContractFixtureJson -FileName 'browser-firefox-managed-extension.json'
+
+            Mock Resolve-OpenPathFirefoxReleaseExecutable { 'C:\Program Files\Mozilla Firefox\firefox.exe' } -ModuleName Browser.FirefoxPolicy
+            Mock Get-OpenPathFirefoxManagedExtensionPolicy {
+                [PSCustomObject]@{
+                    ExtensionId = $contract.extensionId
+                    InstallUrl = $contract.managedApiInstallUrl
+                    Source = 'managed-api'
+                }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Test-OpenPathFirefoxMachineExtensionPolicy { $false } -ModuleName Browser.FirefoxPolicy
+
+            $result = Test-OpenPathFirefoxManagedExtensionReady `
+                -Config ([PSCustomObject]@{ apiUrl = 'https://school.example' }) `
+                -RequireRuntimeRegistration
+
+            $result.Ready | Should -BeFalse
+            $result.FailureCode | Should -Be 'firefox-machine-policy-missing'
+            $result.Message | Should -Match 'force_installed'
+            $result.ExtensionInstalled | Should -BeFalse
+            $result.ExtensionActive | Should -BeFalse
+        }
+
+        It "Fails when Firefox starts but does not register the managed extension" {
+            $contract = Get-ContractFixtureJson -FileName 'browser-firefox-managed-extension.json'
+
+            Mock Resolve-OpenPathFirefoxReleaseExecutable { 'C:\Program Files\Mozilla Firefox\firefox.exe' } -ModuleName Browser.FirefoxPolicy
+            Mock Get-OpenPathFirefoxManagedExtensionPolicy {
+                [PSCustomObject]@{
+                    ExtensionId = $contract.extensionId
+                    InstallUrl = $contract.managedApiInstallUrl
+                    Source = 'managed-api'
+                }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Test-OpenPathFirefoxMachineExtensionPolicy { $true } -ModuleName Browser.FirefoxPolicy
+            Mock Invoke-OpenPathFirefoxManagedExtensionRuntimeProbe {
+                [PSCustomObject]@{
+                    ExtensionInstalled = $false
+                    ExtensionActive = $false
+                    Message = 'extensions.json did not contain monitor-bloqueos@openpath'
+                    ProfilePath = 'C:\Temp\openpath-firefox-profile'
+                }
+            } -ModuleName Browser.FirefoxPolicy
+
+            $result = Test-OpenPathFirefoxManagedExtensionReady `
+                -Config ([PSCustomObject]@{ apiUrl = 'https://school.example' }) `
+                -RequireRuntimeRegistration
+
+            $result.Ready | Should -BeFalse
+            $result.FailureCode | Should -Be 'firefox-extension-runtime-missing'
+            $result.ExtensionInstalled | Should -BeFalse
+            $result.ExtensionActive | Should -BeFalse
+            $result.Message | Should -Match 'extensions.json'
+        }
+
+        It "Passes when policy and active runtime registration exist" {
+            $contract = Get-ContractFixtureJson -FileName 'browser-firefox-managed-extension.json'
+
+            Mock Resolve-OpenPathFirefoxReleaseExecutable { 'C:\Program Files\Mozilla Firefox\firefox.exe' } -ModuleName Browser.FirefoxPolicy
+            Mock Get-OpenPathFirefoxManagedExtensionPolicy {
+                [PSCustomObject]@{
+                    ExtensionId = $contract.extensionId
+                    InstallUrl = $contract.managedApiInstallUrl
+                    Source = 'managed-api'
+                }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Test-OpenPathFirefoxMachineExtensionPolicy { $true } -ModuleName Browser.FirefoxPolicy
+            Mock Invoke-OpenPathFirefoxManagedExtensionRuntimeProbe {
+                [PSCustomObject]@{
+                    ExtensionInstalled = $true
+                    ExtensionActive = $true
+                    Message = 'Firefox registered active managed extension.'
+                    ProfilePath = 'C:\Temp\openpath-firefox-profile'
+                }
+            } -ModuleName Browser.FirefoxPolicy
+
+            $result = Test-OpenPathFirefoxManagedExtensionReady `
+                -Config ([PSCustomObject]@{ apiUrl = 'https://school.example' }) `
+                -RequireRuntimeRegistration
+
+            $result.Ready | Should -BeTrue
+            $result.FailureCode | Should -Be ''
+            $result.ExtensionInstalled | Should -BeTrue
+            $result.ExtensionActive | Should -BeTrue
+            $result.InstallUrl | Should -Be $contract.managedApiInstallUrl
+        }
+    }
 }
