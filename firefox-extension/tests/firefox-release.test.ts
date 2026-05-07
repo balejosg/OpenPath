@@ -1278,6 +1278,52 @@ void describe('Firefox release signing helpers', () => {
     assert.match(stdoutChunks.join(''), /AMO version status addonId=b0694d0ac22b478c88f7/);
   });
 
+  void test('waitForAmoSignedXpi downloads unlisted files once AMO exposes a URL', async () => {
+    const artifactsDir = createTempDir('openpath-firefox-amo-unlisted-download-');
+    const requests: string[] = [];
+    const responses = [
+      new Response(
+        JSON.stringify({
+          file: {
+            status: 'unreviewed',
+            url: 'https://addons.mozilla.org/firefox/downloads/file/6250981/signed.xpi',
+          },
+        }),
+        { status: 200 }
+      ),
+      new Response('signed-unlisted-xpi', { status: 200 }),
+    ];
+
+    const signedXpiPath = await waitForAmoSignedXpi({
+      apiKey: 'user:123:456',
+      apiSecret: 'secret',
+      addonId: 'monitor-bloqueos@openpath',
+      version: '2.0.81977786.682142437',
+      artifactsDir,
+      timeoutMs: 10_000,
+      pollIntervalMs: 1,
+      nowImpl: () => Date.parse('2026-05-07T05:00:00Z'),
+      sleepImpl: () => Promise.resolve(),
+      stdout: { write: () => undefined },
+      fetchImpl: (input) => {
+        const requestUrl =
+          input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+        requests.push(requestUrl);
+        const response = responses.shift();
+        if (!response) {
+          throw new Error(`unexpected request ${requestUrl}`);
+        }
+        return Promise.resolve(response);
+      },
+    });
+
+    assert.equal(readFileSync(signedXpiPath, 'utf8'), 'signed-unlisted-xpi');
+    assert.deepEqual(requests, [
+      'https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/versions/v2.0.81977786.682142437/',
+      'https://addons.mozilla.org/firefox/downloads/file/6250981/signed.xpi',
+    ]);
+  });
+
   void test('runWebExtSignWithRetry waits and retries AMO throttling responses', () => {
     const attempts: string[] = [];
     const waits: number[] = [];

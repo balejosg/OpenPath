@@ -332,7 +332,7 @@ export async function waitForAmoSignedXpi(options) {
       ].join(' ') + '\n'
     );
 
-    if (fileStatus === 'public' && fileUrl) {
+    if (fileUrl && (fileStatus === 'public' || fileStatus === 'unreviewed')) {
       const signedXpiPath = await downloadAmoSignedXpi({
         fileUrl,
         apiKey,
