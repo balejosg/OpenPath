@@ -361,14 +361,14 @@ Describe "Installer" {
             )
         }
 
-        It "Fails unattended classroom installs when Firefox managed extension runtime is not active" {
+        It "Fails unattended classroom installs when Firefox managed extension policy is not ready" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $browserModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.psm1"
             $content = Get-Content $scriptPath -Raw
             $browserModule = Get-Content $browserModulePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                'Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig -RequireRuntimeRegistration',
+                'Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig',
                 'ERROR: Firefox managed extension is not active after installation.',
                 '$firefoxReady.FailureCode',
                 '$firefoxReady.Message',

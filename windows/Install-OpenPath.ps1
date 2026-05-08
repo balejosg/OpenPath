@@ -391,7 +391,7 @@ try {
     Start-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
     $firefoxReadyConfig = Get-OpenPathConfig
     if ($classroomModeRequested -and $Unattended) {
-        $firefoxReady = Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig -RequireRuntimeRegistration
+        $firefoxReady = Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig
         if (-not $firefoxReady.Ready) {
             Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$firefoxReady.FailureCode)
             Write-InstallerError 'ERROR: Firefox managed extension is not active after installation.'
