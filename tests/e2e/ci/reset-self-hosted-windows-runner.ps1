@@ -13,6 +13,8 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             $_.CommandLine -like '*run-windows-student-flow.ps1*' -or
             $_.CommandLine -like '*run-windows-browser-boundary-ci.ps1*' -or
             $_.CommandLine -like '*windows-browser-enforcement.ps1*' -or
+            $_.CommandLine -like '*C:\OpenPath\scripts\Update-OpenPath.ps1*' -or
+            $_.CommandLine -like '*C:\OpenPath\scripts\Start-SSEListener.ps1*' -or
             $_.CommandLine -like '*openpath-postgres*'
         )
     } |
