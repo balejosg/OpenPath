@@ -40,11 +40,15 @@ export function hasEnrollmentRole(roles: readonly unknown[]): boolean {
 export function buildWindowsEnrollmentScript(params: {
   classroomId: string;
   enrollmentToken: string;
+  firefoxExtensionInstallUrl?: string;
   publicUrl: string;
 }): string {
   const psApiUrl = quotePowerShellSingle(params.publicUrl);
   const psClassroomId = quotePowerShellSingle(params.classroomId);
   const psEnrollmentToken = quotePowerShellSingle(params.enrollmentToken);
+  const psFirefoxExtensionInstallUrl = quotePowerShellSingle(
+    params.firefoxExtensionInstallUrl?.trim() ?? ''
+  );
 
   return `$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -53,6 +57,7 @@ $ProgressPreference = 'SilentlyContinue'
 $ApiUrl = ${psApiUrl}
 $ClassroomId = ${psClassroomId}
 $EnrollmentToken = ${psEnrollmentToken}
+$FirefoxExtensionInstallUrl = ${psFirefoxExtensionInstallUrl}
 $Headers = @{ Authorization = "Bearer $EnrollmentToken" }
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -129,7 +134,32 @@ if (-not $bundleApplied) {
 
 Push-Location $WindowsRoot
 try {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $WindowsRoot 'Install-OpenPath.ps1') -ApiUrl $ApiUrl -ClassroomId $ClassroomId -EnrollmentToken $EnrollmentToken -Unattended -TimingOutputPath $InstallTimingPath
+    $InstallArgs = @(
+        '-ApiUrl', $ApiUrl,
+        '-ClassroomId', $ClassroomId,
+        '-EnrollmentToken', $EnrollmentToken,
+        '-Unattended',
+        '-TimingOutputPath', $InstallTimingPath
+    )
+
+    if ($FirefoxExtensionInstallUrl) {
+        $metadataPath = Join-Path $WindowsRoot 'browser-extension/firefox-release/metadata.json'
+        if (-not (Test-Path $metadataPath)) {
+            throw 'Firefox release metadata unavailable for explicit install_url'
+        }
+
+        $FirefoxExtensionId = [string]((Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json).extensionId)
+        if (-not $FirefoxExtensionId) {
+            throw 'Firefox release metadata does not include extensionId'
+        }
+
+        $InstallArgs += @(
+            '-FirefoxExtensionId', $FirefoxExtensionId,
+            '-FirefoxExtensionInstallUrl', $FirefoxExtensionInstallUrl
+        )
+    }
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $WindowsRoot 'Install-OpenPath.ps1') @InstallArgs
     $installExitCode = $LASTEXITCODE
     if ($installExitCode -ne 0) {
         throw "Install-OpenPath.ps1 exited with code $installExitCode"

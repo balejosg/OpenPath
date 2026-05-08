@@ -80,6 +80,8 @@ export async function buildWindowsEnrollmentBootstrap(input: {
     return context;
   }
 
+  const firefoxExtensionInstallUrl = process.env.OPENPATH_FIREFOX_EXTENSION_INSTALL_URL?.trim();
+
   return {
     ok: true,
     data: {
@@ -87,6 +89,7 @@ export async function buildWindowsEnrollmentBootstrap(input: {
         publicUrl: input.publicUrl,
         classroomId: context.data.classroom.id,
         enrollmentToken: context.data.enrollmentToken,
+        ...(firefoxExtensionInstallUrl ? { firefoxExtensionInstallUrl } : {}),
       }),
     },
   };

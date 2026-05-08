@@ -13,11 +13,19 @@ void test('enrollment-service-shared exposes role checks and windows script gene
   const script = buildWindowsEnrollmentScript({
     classroomId: 'classroom-1',
     enrollmentToken: 'token-1',
+    firefoxExtensionInstallUrl: 'https://downloads.example/openpath.xpi',
     publicUrl: 'https://example.test',
   });
 
   assert.match(script, /Install-OpenPath\.ps1/);
   assert.match(script, /classroom-1/);
+  assert.match(
+    script,
+    /\$FirefoxExtensionInstallUrl = 'https:\/\/downloads\.example\/openpath\.xpi'/
+  );
+  assert.match(script, /-FirefoxExtensionInstallUrl/);
+  assert.match(script, /-FirefoxExtensionId/);
+  assert.match(script, /metadata\.json/);
   assert.match(script, /\$ProgressPreference = 'SilentlyContinue'/);
   assert.doesNotMatch(script, /OpenPath Enrollment \(Windows\)/);
   assert.doesNotMatch(script, /Installation completed\. Current status:/);
