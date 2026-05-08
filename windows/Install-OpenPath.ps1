@@ -386,6 +386,9 @@ Invoke-OpenPathInstallerFirstUpdate `
     -ClassroomModeRequested:$classroomModeRequested `
     -MachineRegistered $machineRegistered
 Complete-OpenPathInstallTimedStep -Name 'first-update'
+Restore-OpenPathInstallerConfigIfMissing `
+    -OpenPathRoot $OpenPathRoot `
+    -Config $config
 
 try {
     Start-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'

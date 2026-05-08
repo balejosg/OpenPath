@@ -128,6 +128,7 @@ void describe('Windows bootstrap delivery', { timeout: 30000 }, async () => {
       assert.equal(bundleBytes.subarray(0, 2).toString('utf8'), 'PK');
       const bundleText = bundleBytes.toString('latin1');
       assert.match(bundleText, /Install-OpenPath\.ps1/);
+      assert.match(bundleText, /runtime\/browser-policy-spec\.json/);
       assert.match(bundleText, /scripts\/Enroll-Machine\.ps1/);
     });
 

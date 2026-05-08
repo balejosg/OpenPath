@@ -87,12 +87,17 @@ function Copy-OpenPathInstallerRuntime {
         (Join-Path $ScriptDir 'runtime\browser-policy-spec.json'),
         [System.IO.Path]::GetFullPath((Join-Path $ScriptDir '..\runtime\browser-policy-spec.json'))
     )
+    $browserPolicySpecInstalled = $false
 
     foreach ($browserPolicySpecSource in $browserPolicySpecCandidates) {
         if (Test-Path $browserPolicySpecSource) {
             Copy-Item $browserPolicySpecSource -Destination "$OpenPathRoot\lib\browser-policy-spec.json" -Force
+            $browserPolicySpecInstalled = $true
             break
         }
+    }
+    if (-not $browserPolicySpecInstalled) {
+        throw "Browser policy spec not found in installer runtime ($($browserPolicySpecCandidates -join ', '))"
     }
 
     Get-ChildItem "$ScriptDir\scripts\*.ps1" -ErrorAction SilentlyContinue |

@@ -379,6 +379,19 @@ Describe "Installer" {
             $browserModule | Should -Match 'function Test-OpenPathFirefoxManagedExtensionReady'
         }
 
+        It "Restores installer config after first-update rollback before Firefox readiness" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'Restore-OpenPathInstallerConfigIfMissing',
+                '-Config $config',
+                '$firefoxReadyConfig = Get-OpenPathConfig'
+            )
+
+            $content | Should -Match '(?s)Invoke-OpenPathInstallerFirstUpdate.*Restore-OpenPathInstallerConfigIfMissing.*\$firefoxReadyConfig = Get-OpenPathConfig'
+        }
+
         It "Exits successfully after writing the installer summary" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw
@@ -401,6 +414,19 @@ Describe "Installer" {
                 'Registro no completado; se omite primera actualizacion',
                 '$ClassroomModeRequested -and $MachineRegistered -ne ''REGISTERED'''
             )
+        }
+
+        It "Fails closed when browser policy spec is missing from installer runtime" {
+            $stagingHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $stagingHelper = Get-Content $stagingHelperPath -Raw
+
+            Assert-ContentContainsAll -Content $stagingHelper -Needles @(
+                '$browserPolicySpecInstalled = $false',
+                '$browserPolicySpecInstalled = $true',
+                'Browser policy spec not found in installer runtime'
+            )
+
+            $stagingHelper | Should -Match '(?s)foreach \(\$browserPolicySpecSource in \$browserPolicySpecCandidates\).*?\$browserPolicySpecInstalled = \$true.*?if \(-not \$browserPolicySpecInstalled\).*?throw'
         }
 
         It "Allows optional summary fields to be empty" {

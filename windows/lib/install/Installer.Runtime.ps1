@@ -29,6 +29,29 @@ function Invoke-OpenPathInstallerFirstUpdate {
     }
 }
 
+function Restore-OpenPathInstallerConfigIfMissing {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OpenPathRoot,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Config
+    )
+
+    $configPath = Join-Path $OpenPathRoot 'data\config.json'
+    if (Test-Path $configPath) {
+        return
+    }
+
+    $configDir = Split-Path $configPath -Parent
+    if (-not (Test-Path $configDir)) {
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+    }
+
+    $Config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+    Write-InstallerWarning '  ADVERTENCIA: Configuracion restaurada tras primera actualizacion fallida'
+}
+
 function Start-OpenPathInstallerRealtimeUpdates {
     param(
         [Parameter(Mandatory = $true)]
