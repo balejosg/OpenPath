@@ -68,7 +68,7 @@ describe('repository verification contract', () => {
     );
     assert.match(
       windowsRunner,
-      /ValidateSet\('full', 'request-lifecycle', 'ajax-auto-allow', 'path-blocking', 'exemptions'\)/,
+      /ValidateSet\('full', 'request-lifecycle', 'path-blocking', 'exemptions'\)/,
       'Windows student-policy runner should reject unknown SSE scenario groups'
     );
     assert.match(
@@ -85,13 +85,13 @@ describe('repository verification contract', () => {
 
   test('Windows student-policy SSE selector explains narrow and full routing decisions', () => {
     const narrow = selectWindowsStudentPolicySseGroupWithReason([
-      'firefox-extension/src/lib/background-listeners.ts',
-      'firefox-extension/src/lib/background-runtime.ts',
+      'firefox-extension/src/lib/path-blocking.ts',
+      'firefox-extension/src/lib/background-path-rules.ts',
     ]);
-    assert.equal(narrow.group, 'ajax-auto-allow');
+    assert.equal(narrow.group, 'path-blocking');
     assert.match(
       narrow.reason,
-      /matched narrow SSE group 'ajax-auto-allow'/,
+      /matched narrow SSE group 'path-blocking'/,
       'narrow SSE routing should explain the selected group'
     );
 
@@ -219,7 +219,7 @@ describe('repository verification contract', () => {
     );
   });
 
-  test('Linux student policy runner publishes Firefox release artifacts before starting the API', () => {
+  test('Linux student policy runner uses signed release artifacts only when available', () => {
     const linuxRunner = readText('tests/e2e/ci/run-linux-student-flow.sh');
 
     assert.match(
@@ -227,10 +227,10 @@ describe('repository verification contract', () => {
       /build-xpi\.sh/,
       'Linux student-policy runner should use firefox-extension/build-xpi.sh to create the E2E XPI'
     );
-    assert.match(
+    assert.doesNotMatch(
       linuxRunner,
       /build:firefox-release/,
-      'Linux student-policy runner should prepare API-served Firefox release artifacts for browser setup'
+      'Linux student-policy runner should not send unsigned E2E XPIs through the signed release artifact builder'
     );
     assert.match(
       linuxRunner,
@@ -266,7 +266,7 @@ describe('repository verification contract', () => {
 
     assert.match(
       windowsRunner,
-      /\[ValidateSet\('full', 'request-lifecycle', 'ajax-auto-allow', 'path-blocking', 'exemptions'\)\]\[string\]\$ScenarioGroup = 'full'/,
+      /\[ValidateSet\('full', 'request-lifecycle', 'path-blocking', 'exemptions'\)\]\[string\]\$ScenarioGroup = 'full'/,
       'Windows student-policy runner should accept an optional ScenarioGroup parameter'
     );
     assert.match(

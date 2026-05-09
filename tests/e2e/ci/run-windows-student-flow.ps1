@@ -32,7 +32,7 @@ $script:Timings = @()
 
 function Resolve-WindowsStudentSseGroup {
     param(
-        [ValidateSet('full', 'request-lifecycle', 'ajax-auto-allow', 'path-blocking', 'exemptions')][string]$ScenarioGroup = 'full'
+        [ValidateSet('full', 'request-lifecycle', 'path-blocking', 'exemptions')][string]$ScenarioGroup = 'full'
     )
 
     return $ScenarioGroup
@@ -1160,7 +1160,7 @@ function Invoke-SeleniumStudentSuite {
         [Parameter(Mandatory = $true)][string]$ExtensionArchivePath,
         [Parameter(Mandatory = $true)][string]$Mode,
         [Parameter(Mandatory = $true)][ValidateSet('full', 'fallback-propagation')][string]$CoverageProfile,
-        [ValidateSet('full', 'request-lifecycle', 'ajax-auto-allow', 'path-blocking', 'exemptions')][string]$ScenarioGroup = 'full'
+        [ValidateSet('full', 'request-lifecycle', 'path-blocking', 'exemptions')][string]$ScenarioGroup = 'full'
     )
 
     Push-Location (Join-Path $script:RepoRoot 'tests\selenium')

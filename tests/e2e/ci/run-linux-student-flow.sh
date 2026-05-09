@@ -507,14 +507,6 @@ prepare_firefox_release_artifacts() {
     xpi_sha256="$(sha256sum "$built_xpi_path" | awk '{print $1}')"
     printf '%s  %s\n' "$xpi_sha256" "$built_xpi_path" >"$FIREFOX_XPI_HASH_PATH"
     echo "Firefox XPI hash sha256=$xpi_sha256 path=$built_xpi_path"
-
-    npm run build:firefox-release --workspace=@openpath/firefox-extension -- \
-        --signed-xpi "$built_xpi_path" \
-        --install-url "http://host.docker.internal:$API_PORT/api/extensions/firefox/openpath.xpi" \
-        --payload-hash "$payload_hash"
-
-    require_file "$release_root/metadata.json"
-    require_file "$release_root/openpath-firefox-extension.xpi"
 }
 
 resolve_student_host_suffix() {

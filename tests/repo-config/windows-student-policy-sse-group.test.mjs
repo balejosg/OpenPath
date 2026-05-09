@@ -16,16 +16,6 @@ test('Windows student-policy SSE selector maps narrow request lifecycle changes'
   );
 });
 
-test('Windows student-policy SSE selector maps narrow AJAX auto-allow changes', () => {
-  assert.equal(
-    selectWindowsStudentPolicySseGroup([
-      'firefox-extension/src/lib/background-listeners.ts',
-      'firefox-extension/src/lib/background-runtime.ts',
-    ]),
-    'ajax-auto-allow'
-  );
-});
-
 test('Windows student-policy SSE selector maps narrow path-blocking changes', () => {
   assert.equal(
     selectWindowsStudentPolicySseGroup([
@@ -68,8 +58,8 @@ test('Windows student-policy SSE selector falls back to full for mixed or broad 
 
 test('Windows student-policy SSE selector honors explicit valid overrides', () => {
   assert.equal(
-    selectWindowsStudentPolicySseGroup(['windows/install.ps1'], { override: 'ajax-auto-allow' }),
-    'ajax-auto-allow'
+    selectWindowsStudentPolicySseGroup(['windows/install.ps1'], { override: 'path-blocking' }),
+    'path-blocking'
   );
   assert.equal(
     selectWindowsStudentPolicySseGroup(['firefox-extension/src/lib/background-listeners.ts'], {

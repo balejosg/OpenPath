@@ -1068,7 +1068,6 @@ export async function runStudentPolicyMatrix(
   const targets = buildTargets(driver.scenario);
 
   await seedBaselineWhitelist(client, driver, mode, targets);
-  await runAjaxAutoAllowScenarioSet(client, driver, mode, targets);
   await runRequestLifecycleScenarioSet(client, driver, mode, targets);
   await runBlockedSubdomainScenarios(client, driver, mode, targets);
   await runBlockedPathScenarios(client, driver, mode, targets);

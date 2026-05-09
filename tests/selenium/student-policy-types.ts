@@ -109,7 +109,6 @@ export type StudentPolicyCoverageProfile = 'full' | 'fallback-propagation';
 export type StudentPolicyScenarioGroup =
   | 'full'
   | 'request-lifecycle'
-  | 'ajax-auto-allow'
   | 'path-blocking'
   | 'exemptions';
 

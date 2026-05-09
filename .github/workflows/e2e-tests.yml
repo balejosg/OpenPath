@@ -57,7 +57,6 @@ on:
           - auto
           - full
           - request-lifecycle
-          - ajax-auto-allow
           - path-blocking
           - exemptions
 

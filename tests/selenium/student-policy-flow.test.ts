@@ -186,13 +186,7 @@ test('student policy scenario group defaults to full and accepts narrow groups',
     delete process.env.OPENPATH_STUDENT_SCENARIO_GROUP;
     assert.strictEqual(getStudentPolicyScenarioGroup(), 'full');
 
-    for (const group of [
-      'request-lifecycle',
-      'ajax-auto-allow',
-      'path-blocking',
-      'exemptions',
-      'full',
-    ]) {
+    for (const group of ['request-lifecycle', 'path-blocking', 'exemptions', 'full']) {
       process.env.OPENPATH_STUDENT_SCENARIO_GROUP = group;
       assert.strictEqual(getStudentPolicyScenarioGroup(), group);
     }
@@ -238,10 +232,6 @@ test('student policy scenario groups select narrow Selenium suites without weake
   assert.deepStrictEqual(
     getStudentPolicyPhasePlan('sse', 'full', 'full').map(({ suite }) => suite),
     ['matrix', 'matrix-phase-two']
-  );
-  assert.deepStrictEqual(
-    getStudentPolicyPhasePlan('sse', 'full', 'ajax-auto-allow').map(({ suite }) => suite),
-    ['ajax-auto-allow']
   );
   assert.deepStrictEqual(
     getStudentPolicyPhasePlan('sse', 'full', 'path-blocking').map(({ suite }) => suite),

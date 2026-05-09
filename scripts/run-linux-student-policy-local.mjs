@@ -2,13 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 
-const allowedSuites = new Set([
-  'full',
-  'request-lifecycle',
-  'ajax-auto-allow',
-  'path-blocking',
-  'exemptions',
-]);
+const allowedSuites = new Set(['full', 'request-lifecycle', 'path-blocking', 'exemptions']);
 
 const defaultArtifactDir = 'tests/e2e/artifacts/linux-student-policy-local';
 const defaultApiPort = 3101 + (process.pid % 1000);
@@ -19,7 +13,7 @@ function usage() {
     'Usage: node scripts/run-linux-student-policy-local.mjs [options]',
     '',
     'Options:',
-    '  --suite <full|request-lifecycle|ajax-auto-allow|path-blocking|exemptions>',
+    '  --suite <full|request-lifecycle|path-blocking|exemptions>',
     '  --artifact-dir <path>',
     '  --api-port <port>',
     '  --fixture-port <port>',

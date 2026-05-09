@@ -8,7 +8,7 @@ import { projectRoot } from './support.mjs';
 test('Linux student-policy local wrapper dry-run plans the CI-equivalent npm command', () => {
   const output = execFileSync(
     process.execPath,
-    ['scripts/run-linux-student-policy-local.mjs', '--suite', 'ajax-auto-allow'],
+    ['scripts/run-linux-student-policy-local.mjs', '--suite', 'path-blocking'],
     {
       cwd: projectRoot,
       encoding: 'utf8',
@@ -25,7 +25,7 @@ test('Linux student-policy local wrapper dry-run plans the CI-equivalent npm com
   );
   assert.match(output, /OPENPATH_STUDENT_API_PORT=\d+/);
   assert.match(output, /OPENPATH_STUDENT_FIXTURE_PORT=\d+/);
-  assert.match(output, /OPENPATH_STUDENT_SCENARIO_GROUP=ajax-auto-allow/);
+  assert.match(output, /OPENPATH_STUDENT_SCENARIO_GROUP=path-blocking/);
   assert.match(output, /npm run test:student-policy:linux/);
   assert.doesNotMatch(output, /docker (compose|run|build)/);
 });

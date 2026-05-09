@@ -5,7 +5,6 @@ import process from 'node:process';
 export const WINDOWS_STUDENT_POLICY_SSE_GROUPS = [
   'full',
   'request-lifecycle',
-  'ajax-auto-allow',
   'path-blocking',
   'exemptions',
 ];
@@ -23,13 +22,6 @@ const GROUP_PATTERNS = {
     /^firefox-extension\/src\/lib\/popup-controller/,
     /^firefox-extension\/src\/lib\/request-api\.ts$/,
     /^firefox-extension\/src\/popup\.ts$/,
-  ],
-  'ajax-auto-allow': [
-    /^api\/src\/services\/machine-request-admission\.service\.ts$/,
-    /^firefox-extension\/src\/background\.ts$/,
-    /^firefox-extension\/src\/lib\/background-listeners\.ts$/,
-    /^firefox-extension\/src\/lib\/background-message-handler\.ts$/,
-    /^firefox-extension\/src\/lib\/background-runtime\.ts$/,
   ],
   'path-blocking': [
     /^firefox-extension\/src\/lib\/path-blocking\.ts$/,

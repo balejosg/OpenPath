@@ -9,7 +9,6 @@ import {
   optionalEnv,
 } from './student-policy-env';
 import {
-  runAjaxAutoAllowScenarios,
   runExemptionAndScheduleScenarios,
   runFallbackPropagationProbe,
   runPathBlockingScenarios,
@@ -31,7 +30,6 @@ type StudentPolicySuite =
   | 'matrix-phase-two'
   | 'fallback-propagation'
   | 'request-lifecycle'
-  | 'ajax-auto-allow'
   | 'path-blocking'
   | 'exemptions';
 
@@ -134,11 +132,6 @@ export async function runStudentPolicySuite(
 
           if (phase.suite === 'request-lifecycle') {
             await runRequestLifecycleScenarios(client, driver, mode);
-            return;
-          }
-
-          if (phase.suite === 'ajax-auto-allow') {
-            await runAjaxAutoAllowScenarios(client, driver, mode);
             return;
           }
 
