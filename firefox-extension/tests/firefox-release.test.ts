@@ -1808,6 +1808,45 @@ void describe('Firefox release signing helpers', () => {
     }
   });
 
+  void test('prepareSigningSourceDir rejects removed approval-max runtime filenames before signing', () => {
+    for (const forbiddenFilename of [
+      'auto-allow-workflow.js',
+      'page-resource-auto-allow-intake.js',
+      'google-game-blocking.js',
+    ]) {
+      const workingDir = createTempDir('openpath-firefox-signing-source-guard-');
+      const sourceDir = path.join(workingDir, 'extension');
+
+      mkdirSync(path.join(sourceDir, 'dist'), { recursive: true });
+      mkdirSync(path.join(sourceDir, 'popup'), { recursive: true });
+      mkdirSync(path.join(sourceDir, 'blocked'), { recursive: true });
+      mkdirSync(path.join(sourceDir, 'icons'), { recursive: true });
+
+      writeFileSync(
+        path.join(sourceDir, 'manifest.json'),
+        `${JSON.stringify({
+          version: '3.2.1',
+          browser_specific_settings: { gecko: { id: 'monitor-bloqueos@openpath' } },
+        })}\n`
+      );
+      writeFileSync(path.join(sourceDir, 'dist', 'background.js'), 'console.log("runtime");\n');
+      writeFileSync(
+        path.join(sourceDir, 'dist', forbiddenFilename),
+        'console.log("removed surface");\n'
+      );
+      writeFileSync(path.join(sourceDir, 'popup', 'popup.html'), '<html></html>\n');
+      writeFileSync(path.join(sourceDir, 'blocked', 'blocked.html'), '<html>blocked</html>\n');
+      writeFileSync(path.join(sourceDir, 'icons', 'icon-48.png'), 'icon\n');
+
+      assert.throws(
+        () => prepareSigningSourceDir({ sourceDir }),
+        new RegExp(
+          `Firefox AMO runtime payload contains removed approval-max filename.*${forbiddenFilename}`
+        )
+      );
+    }
+  });
+
   void test('computeFirefoxReleasePayloadHash ignores non-runtime extension files', () => {
     const workingDir = createTempDir('openpath-firefox-payload-hash-');
     const sourceDir = path.join(workingDir, 'extension');

@@ -68,7 +68,7 @@ describe('repository verification contract', () => {
     );
     assert.match(
       windowsRunner,
-      /ValidateSet\('full', 'request-lifecycle', 'ajax-auto-allow', 'google-game-blocking', 'path-blocking', 'exemptions'\)/,
+      /ValidateSet\('full', 'request-lifecycle', 'ajax-auto-allow', 'path-blocking', 'exemptions'\)/,
       'Windows student-policy runner should reject unknown SSE scenario groups'
     );
     assert.match(
@@ -266,7 +266,7 @@ describe('repository verification contract', () => {
 
     assert.match(
       windowsRunner,
-      /\[ValidateSet\('full', 'request-lifecycle', 'ajax-auto-allow', 'google-game-blocking', 'path-blocking', 'exemptions'\)\]\[string\]\$ScenarioGroup = 'full'/,
+      /\[ValidateSet\('full', 'request-lifecycle', 'ajax-auto-allow', 'path-blocking', 'exemptions'\)\]\[string\]\$ScenarioGroup = 'full'/,
       'Windows student-policy runner should accept an optional ScenarioGroup parameter'
     );
     assert.match(
@@ -830,7 +830,7 @@ describe('repository verification contract', () => {
     );
   });
 
-  test('Google game blocking is a first-class Windows student-policy hard gate', () => {
+  test('Firefox approval-max removes the Google game student-policy SSE gate', () => {
     const workflow = readText('.github/workflows/e2e-tests.yml');
     const selector = readText('scripts/select-windows-student-policy-sse-group.mjs');
     const seleniumEnv = readText('tests/selenium/student-policy-env.ts');
@@ -838,40 +838,40 @@ describe('repository verification contract', () => {
     const seleniumScenarios = readText('tests/selenium/student-policy-scenarios.ts');
     const windowsRunner = readText('tests/e2e/ci/run-windows-student-flow.ps1');
 
-    assert.match(
+    assert.doesNotMatch(
       workflow,
       /student_policy_sse_group:[\s\S]*- google-game-blocking/,
-      'manual Windows student-policy diagnostics should expose google-game-blocking'
+      'manual Windows student-policy diagnostics should not expose the removed Firefox Google-game suite'
     );
-    assert.match(
+    assert.doesNotMatch(
       selector,
       /WINDOWS_STUDENT_POLICY_SSE_GROUPS[\s\S]*'google-game-blocking'/,
-      'changed-path selector should know google-game-blocking'
+      'changed-path selector should not route to the removed Firefox Google-game suite'
     );
-    assert.ok(
-      selector.includes("'google-game-blocking'") &&
-        selector.includes('google-search-game-guard-content\\.ts'),
-      'extension Google game guard changes should select the narrow Google game group'
+    assert.doesNotMatch(
+      selector,
+      /google-(?:search-)?game/,
+      'extension Google-game guard files should not be mapped to a narrow SSE group'
     );
-    assert.match(
+    assert.doesNotMatch(
       seleniumEnv,
       /group === 'google-game-blocking'/,
-      'Selenium environment validation should accept google-game-blocking'
+      'Selenium environment validation should reject the removed Google-game group'
     );
-    assert.match(
+    assert.doesNotMatch(
       seleniumHarness,
       /runGoogleGameBlockingScenarios/,
-      'Selenium harness should route google-game-blocking to the hard-gate scenario'
+      'Selenium harness should not route the removed Google-game scenario'
     );
-    assert.match(
+    assert.doesNotMatch(
       seleniumScenarios,
       /https:\/\/www\.google\.com\/fbx\?fbx=snake_arcade/,
-      'Selenium scenario should open the direct Google Snake URL'
+      'Selenium scenario should not open the removed Google Snake probe'
     );
-    assert.match(
+    assert.doesNotMatch(
       seleniumScenarios,
       /GOOGLE_GAME_POLICY:/,
-      'Selenium scenario should require OpenPath Google game diagnostics'
+      'Selenium scenario should not require removed Firefox Google-game diagnostics'
     );
     assert.match(
       windowsRunner,

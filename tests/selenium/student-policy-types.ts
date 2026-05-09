@@ -110,7 +110,6 @@ export type StudentPolicyScenarioGroup =
   | 'full'
   | 'request-lifecycle'
   | 'ajax-auto-allow'
-  | 'google-game-blocking'
   | 'path-blocking'
   | 'exemptions';
 

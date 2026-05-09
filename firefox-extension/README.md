@@ -2,11 +2,11 @@
 
 > Status: maintained
 > Applies to: `firefox-extension/`
-> Last verified: 2026-05-06
+> Last verified: 2026-05-09
 > Source of truth: `firefox-extension/README.md`
 
 This package contains the OpenPath browser-extension assets used to detect blocked resources and support managed browser rollout workflows.
-Firefox blocked-path, blocked-subdomain, and Google game enforcement lives in this extension runtime. The Linux and Windows clients still own DNS/firewall enforcement, while Firefox path/subdomain decisions are loaded from the native host and applied through `webRequest`/`webNavigation`.
+Firefox blocked-path and blocked-subdomain enforcement lives in this extension runtime. The Linux and Windows clients still own DNS/firewall enforcement, while Firefox path/subdomain decisions are loaded from the native host and applied through `webRequest`/`webNavigation`.
 
 ## Current Extension Shape
 
@@ -14,7 +14,7 @@ Firefox blocked-path, blocked-subdomain, and Google game enforcement lives in th
 - Firefox extension ID: `monitor-bloqueos@openpath`
 - Core permissions include `webRequest`, `webRequestBlocking`, `webNavigation`, `tabs`, `clipboardWrite`, `storage`, and optional `nativeMessaging`
 - Host permissions currently target `<all_urls>`
-- Firefox Core does not register page activity content scripts, MAIN-world page-resource observers, Google visual DOM guards, or automatic AJAX/page-resource upload.
+- Firefox Core does not include Google games enforcement/guard, Android support, page activity content scripts, MAIN-world page-resource observers, automatic AJAX/page-resource candidate upload, or live/automatic AMO upload.
 
 ## Local Development
 

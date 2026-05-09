@@ -2,7 +2,7 @@
 
 Status: spike result, not a production migration plan.
 
-Applies to: Firefox extension path, subdomain, native-host refreshed, and Google game request policy.
+Applies to: Firefox extension path, subdomain, and native-host refreshed request policy.
 
 ## Summary
 
@@ -14,8 +14,8 @@ documents a plausible Declarative Net Request rule shape for the current
 - dynamic rule replacement from native-host state;
 - one blocked path rule;
 - one blocked subdomain rule;
-- priority ordering where blocked path wins over blocked subdomain, and both
-  win over Google game policy after auto-allow removal.
+- priority ordering where blocked path wins over blocked subdomain after
+  auto-allow removal.
 
 This is only partial equivalence. It is not enough to migrate production
 behavior yet.
@@ -29,17 +29,15 @@ than as a direct runtime callback:
   sub-frame/XMLHttpRequest block rule.
 - `BLOCKED_SUBDOMAIN_POLICY:<rule>` expands to a main-frame redirect rule and a
   broader subresource block rule.
-- Google game policy stays as a lower-priority rule.
 - Native-host refresh is represented as a replace-all
   `updateDynamicRules({ removeRuleIds, addRules })` style update.
 
 Priorities in the prototype preserve the current listener order:
 
-| Policy             | Priority |
-| ------------------ | -------: |
-| Blocked path       |      300 |
-| Blocked subdomain  |      200 |
-| Google game policy |      100 |
+| Policy            | Priority |
+| ----------------- | -------: |
+| Blocked path      |      300 |
+| Blocked subdomain |      200 |
 
 The prototype deliberately contains no DNR `allow` action. That matches the
 post-auto-allow Core direction: page-resource and AJAX observation should not
@@ -63,9 +61,9 @@ type handling.
 Blocked subdomain: feasible for one exact/nested subdomain family using a DNR
 domain-anchored URL filter.
 
-Priority versus Google policy: feasible at the rule-priority level. The
-prototype keeps blocked path and blocked subdomain policy ahead of Google game
-policy and does not introduce any auto-allow rules.
+Priority between managed policies: feasible at the rule-priority level. The
+prototype keeps blocked path ahead of blocked subdomain policy and does not
+introduce any auto-allow rules.
 
 ## Gaps Before Production Migration
 

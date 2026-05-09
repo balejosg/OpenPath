@@ -177,10 +177,10 @@ firefox-extension/src/lib/background-runtime.ts|firefox-extension/tests/backgrou
 firefox-extension/src/lib/background-listeners.ts|firefox-extension/tests/background-core-utils.test.ts,firefox-extension/tests/background-message-handler.test.ts
 firefox-extension/src/lib/background-path-rules.ts|firefox-extension/tests/background-message-contracts.test.ts,firefox-extension/tests/background-path-blocking-flow.test.ts
 firefox-extension/src/popup.ts|firefox-extension/tests/popup-background-contract.test.ts,firefox-extension/tests/popup-runtime.test.ts
-firefox-extension/src/lib/popup-controller.ts|firefox-extension/tests/popup-auto-allow-ux.test.ts,firefox-extension/tests/popup-background-contract.test.ts,firefox-extension/tests/popup-submit-contract.test.ts
-firefox-extension/src/lib/popup-controller-state.ts|firefox-extension/tests/popup-auto-allow-ux.test.ts,firefox-extension/tests/popup-background-contract.test.ts,firefox-extension/tests/popup-submit-contract.test.ts
-firefox-extension/src/lib/popup-domain-controller.ts|firefox-extension/tests/popup-auto-allow-ux.test.ts,firefox-extension/tests/popup-background-contract.test.ts,firefox-extension/tests/popup-runtime.test.ts
-firefox-extension/src/lib/popup-request-controller.ts|firefox-extension/tests/popup-auto-allow-ux.test.ts,firefox-extension/tests/popup-background-contract.test.ts,firefox-extension/tests/popup-request-actions.test.ts,firefox-extension/tests/popup-submit-contract.test.ts
+firefox-extension/src/lib/popup-controller.ts|firefox-extension/tests/popup-background-contract.test.ts,firefox-extension/tests/popup-runtime.test.ts,firefox-extension/tests/popup-submit-contract.test.ts
+firefox-extension/src/lib/popup-controller-state.ts|firefox-extension/tests/popup-background-contract.test.ts,firefox-extension/tests/popup-state.test.ts,firefox-extension/tests/popup-submit-contract.test.ts
+firefox-extension/src/lib/popup-domain-controller.ts|firefox-extension/tests/popup-background-contract.test.ts,firefox-extension/tests/popup-runtime.test.ts,firefox-extension/tests/popup-state.test.ts
+firefox-extension/src/lib/popup-request-controller.ts|firefox-extension/tests/popup-background-contract.test.ts,firefox-extension/tests/popup-request-actions.test.ts,firefox-extension/tests/popup-submit-contract.test.ts
 firefox-extension/src/lib/config-storage-shared.ts|firefox-extension/tests/config-storage.test.ts,firefox-extension/tests/request-api.test.ts
 firefox-extension/src/lib/config-storage-native.ts|firefox-extension/tests/config-storage.test.ts
 firefox-extension/src/lib/config-storage-legacy.ts|firefox-extension/tests/config-storage.test.ts

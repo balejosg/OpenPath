@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: `firefox-extension/`
-> Last verified: 2026-05-06
+> Last verified: 2026-05-09
 > Source of truth: `firefox-extension/PRIVACY.md`
 
 ## Overview
@@ -15,7 +15,7 @@ The OpenPath extension is designed to operate locally in the browser. It is used
 - routine blocked-resource state is kept in browser-local runtime state
 - unblock requests send the blocked domain, request reason, and request metadata only to the configured OpenPath service
 - blocked-page and popup access requests send user-initiated request details only to the configured OpenPath service
-- Google Search/Doodles game enforcement runs in the background request path and does not send game-page data outside the configured OpenPath service
+- Firefox Core does not include Google games enforcement/guard, Android support, content scripts, MAIN-world observers, automatic AJAX/page-resource candidate upload, or live/automatic AMO upload
 - clipboard access is used only when the user copies a blocked-domain list
 - optional `nativeMessaging` communicates only with the local OpenPath native host on the same machine
 
@@ -27,7 +27,7 @@ browser data.
 
 | Permission           | Purpose                                                               |
 | -------------------- | --------------------------------------------------------------------- |
-| `webRequest`         | Observe network failures and apply managed path/subdomain/game rules  |
+| `webRequest`         | Observe network failures and apply managed path/subdomain rules       |
 | `webRequestBlocking` | Redirect or cancel blocked navigation/resource requests when required |
 | `webNavigation`      | Reset per-tab blocked-resource state when navigation changes          |
 | `tabs`               | Scope badge and popup data to the active tab                          |
@@ -41,7 +41,8 @@ The Firefox manifest declares Mozilla data-collection permission for
 blocked domain and related navigation/request context to the configured
 OpenPath service. Firefox Core does not register page activity content scripts,
 MAIN-world page-resource observers, Google visual DOM guards, or automatic
-AJAX/page-resource candidate upload. This disclosure does not mean the
-extension sends third-party analytics or telemetry.
+AJAX/page-resource candidate upload. It also does not provide Android support
+or live/automatic AMO upload. This disclosure does not mean the extension sends
+third-party analytics or telemetry.
 
 Questions or changes to this policy should stay aligned with the source in this repository and the current extension manifest.

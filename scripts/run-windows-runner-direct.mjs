@@ -930,7 +930,7 @@ try {
   New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
   Remove-Item -LiteralPath $completionPath -Force -ErrorAction SilentlyContinue
   $env:OPENPATH_STUDENT_ARTIFACTS_DIR = $artifactsRoot
-  $env:OPENPATH_WINDOWS_STUDENT_SSE_GROUP = 'google-game-blocking'
+  $env:OPENPATH_WINDOWS_STUDENT_SSE_GROUP = 'path-blocking'
   $env:OPENPATH_KEEP_CLIENT_FOR_BROWSER_BOUNDARY = '1'
   Ensure-OpenPathDirectNode
   Ensure-OpenPathDirectDependencies -RepoRoot $repoRoot

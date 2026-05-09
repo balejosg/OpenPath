@@ -1,9 +1,6 @@
 import type { Browser } from 'webextension-polyfill';
 import { registerBackgroundListeners } from './background-listeners.js';
-import {
-  createBackgroundMessageHandler,
-  type GoogleSearchGameGuardEvent,
-} from './background-message-handler.js';
+import { createBackgroundMessageHandler } from './background-message-handler.js';
 import { createBackgroundPathRulesController } from './background-path-rules.js';
 import { createBackgroundSubdomainRulesController } from './background-subdomain-rules.js';
 import { logger, getErrorMessage } from './logger.js';
@@ -40,7 +37,6 @@ interface ConfirmBlockedScreenContext extends BlockedScreenContext {
 
 const NATIVE_HOST_NAME = 'whitelist_native_host';
 const BLOCKED_DNS_SENTINELS = new Set(['0.0.0.0', '::', '192.0.2.1', '100::']);
-const MAX_GOOGLE_SEARCH_GAME_GUARD_EVENTS = 20;
 interface BackgroundRuntimeOptions {
   hostName?: string;
 }
@@ -70,8 +66,6 @@ export function createBackgroundRuntime(
   options: BackgroundRuntimeOptions = {}
 ): BackgroundRuntime {
   const inFlightAutoRequests = new Map<string, Promise<void>>();
-  let googleSearchGameGuardBlockedCount = 0;
-  const googleSearchGameGuardEvents: GoogleSearchGameGuardEvent[] = [];
   const blockedMonitorState = createBlockedMonitorState(
     {
       setBadgeText: (options) => browser.action.setBadgeText(options),
@@ -184,19 +178,7 @@ export function createBackgroundRuntime(
       nativeBlockedSubdomains,
       pathRules: blockedPathRulesController.getDebugState(),
       subdomainRules: blockedSubdomainRulesController.getDebugState(),
-      googleSearchGameGuard: {
-        blockedCount: googleSearchGameGuardBlockedCount,
-        recentEvents: googleSearchGameGuardEvents.slice(),
-      },
     };
-  }
-
-  function recordGoogleSearchGameGuardEvent(event: GoogleSearchGameGuardEvent): void {
-    googleSearchGameGuardBlockedCount += 1;
-    googleSearchGameGuardEvents.push(event);
-    while (googleSearchGameGuardEvents.length > MAX_GOOGLE_SEARCH_GAME_GUARD_EVENTS) {
-      googleSearchGameGuardEvents.shift();
-    }
   }
 
   async function submitBlockedDomainRequest(
@@ -276,7 +258,6 @@ export function createBackgroundRuntime(
     getOpenPathDiagnostics,
     getPathRulesDebug: blockedPathRulesController.getDebugState,
     getSubdomainRulesDebug: blockedSubdomainRulesController.getDebugState,
-    recordGoogleSearchGameGuardEvent,
     getSystemHostname: () => nativeMessagingClient.sendMessage({ action: 'get-hostname' }),
     isNativeHostAvailable,
     retryLocalUpdate,
@@ -308,7 +289,6 @@ export function createBackgroundRuntime(
       evaluateBlockedSubdomain: blockedSubdomainRulesController.evaluateRequest,
       confirmBlockedScreenNavigation,
       handleRuntimeMessage,
-      recordGoogleSearchGameGuardEvent,
       redirectToBlockedScreen,
     });
     await blockedPathRulesController.init();

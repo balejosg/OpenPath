@@ -14,9 +14,7 @@ interface FirefoxManifest {
       id?: string;
       strict_min_version?: string;
     };
-    gecko_android?: {
-      strict_min_version?: string;
-    };
+    gecko_android?: unknown;
   };
   name?: string;
   description?: string;
@@ -41,13 +39,6 @@ async function readManifest(): Promise<FirefoxManifest> {
   return JSON.parse(
     await readFile(path.join(extensionRoot, 'manifest.json'), 'utf8')
   ) as FirefoxManifest;
-}
-
-function findContentScriptByJs(
-  manifest: FirefoxManifest,
-  scriptPath: string
-): NonNullable<FirefoxManifest['content_scripts']>[number] | undefined {
-  return (manifest.content_scripts ?? []).find((script) => script.js?.includes(scriptPath));
 }
 
 void describe('Firefox extension manifest policy', () => {
@@ -95,9 +86,24 @@ void describe('Firefox extension manifest policy', () => {
     }
   });
 
-  void test('declares Firefox data collection consent and compatible runtimes', async () => {
+  void test('keeps classic Firefox permissions required by the desktop extension', async () => {
     const manifest = await readManifest();
 
+    assert.deepEqual(manifest.permissions, [
+      'webRequest',
+      'webRequestBlocking',
+      'webNavigation',
+      'tabs',
+      'clipboardWrite',
+      'nativeMessaging',
+      'storage',
+    ]);
+  });
+
+  void test('declares Firefox desktop data collection consent and runtime', async () => {
+    const manifest = await readManifest();
+
+    assert.equal(manifest.browser_specific_settings?.gecko_android, undefined);
     assert.deepEqual(manifest.browser_specific_settings, {
       gecko: {
         id: 'monitor-bloqueos@openpath',
@@ -106,21 +112,13 @@ void describe('Firefox extension manifest policy', () => {
           required: ['browsingActivity'],
         },
       },
-      gecko_android: {
-        strict_min_version: '142.0',
-      },
     });
   });
 
-  void test('does not declare automatic page-resource observers in Firefox Core', async () => {
+  void test('does not declare content scripts in the desktop-only Firefox manifest', async () => {
     const manifest = await readManifest();
 
-    assert.equal(findContentScriptByJs(manifest, 'dist/page-activity-content.js'), undefined);
-    assert.equal(findContentScriptByJs(manifest, 'dist/page-resource-observer-main.js'), undefined);
-    assert.equal(
-      findContentScriptByJs(manifest, 'dist/google-search-game-guard-content.js'),
-      undefined
-    );
+    assert.equal(manifest.content_scripts, undefined);
   });
 
   void test('keeps popup action in Firefox Core', async () => {

@@ -37,14 +37,12 @@ interface DynamicRuleUpdate {
 const PRIORITY = {
   blockedPath: 300,
   blockedSubdomain: 200,
-  googleGame: 100,
 } as const;
 
 const BLOCKED_PATH_REDIRECT_RULE_ID = 10_000;
 const BLOCKED_PATH_BLOCK_RULE_ID = 11_000;
 const BLOCKED_SUBDOMAIN_REDIRECT_RULE_ID = 20_000;
 const BLOCKED_SUBDOMAIN_BLOCK_RULE_ID = 21_000;
-const GOOGLE_GAME_RULE_ID = 30_000;
 
 const BLOCKED_SCREEN_EXTENSION_PATH = '/blocked/blocked.html';
 const BLOCKABLE_SUBRESOURCE_TYPES: DnrResourceType[] = [
@@ -148,23 +146,6 @@ function buildBlockedSubdomainDnrRules(rawRule: string, offset = 0): DnrRule[] {
   ];
 }
 
-function buildGoogleGameDnrRule(): DnrRule {
-  return {
-    id: GOOGLE_GAME_RULE_ID,
-    priority: PRIORITY.googleGame,
-    action: {
-      type: 'redirect',
-      redirect: {
-        extensionPath: buildStaticBlockedScreenPath('GOOGLE_GAME_POLICY:snake', 'google-games'),
-      },
-    },
-    condition: {
-      regexFilter: '^https?://([^/?#]+\\.)?google\\.[^/?#]+/fbx\\?fbx=snake_arcade(?:&.*)?$',
-      resourceTypes: ['main_frame'],
-    },
-  };
-}
-
 function buildNativeHostDynamicRuleUpdate(input: {
   previousRuleIds: number[];
   blockedPaths: string[];
@@ -177,7 +158,6 @@ function buildNativeHostDynamicRuleUpdate(input: {
       ...input.blockedSubdomains.flatMap((rule, index) =>
         buildBlockedSubdomainDnrRules(rule, index)
       ),
-      buildGoogleGameDnrRule(),
     ],
   };
 }
@@ -211,10 +191,10 @@ void describe('Firefox DNR equivalence spike', () => {
     });
 
     assert.deepEqual(update.removeRuleIds, [10_000, 11_000, 20_000]);
-    assert.equal(update.addRules.length, 5);
+    assert.equal(update.addRules.length, 4);
     assert.deepEqual(
       update.addRules.map((rule) => rule.id),
-      [10_000, 11_000, 20_000, 21_000, 30_000]
+      [10_000, 11_000, 20_000, 21_000]
     );
   });
 
@@ -245,15 +225,15 @@ void describe('Firefox DNR equivalence spike', () => {
     assert.deepEqual(blockRule.condition.resourceTypes, BLOCKABLE_SUBRESOURCE_TYPES);
   });
 
-  void test('keeps path and subdomain policy ahead of Google policy without auto-allow rules', () => {
+  void test('keeps path and subdomain policies ordered without auto-allow rules', () => {
     const update = buildNativeHostDynamicRuleUpdate({
       previousRuleIds: [],
-      blockedPaths: ['www.google.com/fbx'],
-      blockedSubdomains: ['doodles.google'],
+      blockedPaths: ['example.com/private'],
+      blockedSubdomains: ['media.example.test'],
     });
     const actions = new Set(update.addRules.map((rule) => rule.action.type));
 
-    const priorities = [PRIORITY.blockedPath, PRIORITY.blockedSubdomain, PRIORITY.googleGame];
+    const priorities = [PRIORITY.blockedPath, PRIORITY.blockedSubdomain];
     assert.deepEqual(
       [...priorities].sort((a, b) => b - a),
       priorities

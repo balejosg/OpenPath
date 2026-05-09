@@ -24,6 +24,11 @@ const defaultWebExtSignRecoveryPollSeconds = 60;
 const defaultAmoBaseUrl = 'https://addons.mozilla.org/api/v5/';
 const amoVersionComponentModulo = 1_000_000_000n;
 const amoSigningStateArtifactName = 'amo-signing-state.json';
+const removedApprovalMaxRuntimeFilenameTokens = [
+  'auto-allow',
+  'page-resource-auto-allow',
+  'google-game',
+];
 
 function fail(message) {
   throw new Error(message);
@@ -722,6 +727,23 @@ function prepareFirefoxReleaseSourceDir(sourceDir) {
   return tempSourceDir;
 }
 
+function assertNoRemovedApprovalMaxRuntimeFilenames(sourceDir) {
+  const forbiddenFile = listFirefoxReleasePayloadFiles(sourceDir).find((relativePath) => {
+    const filename = path.basename(relativePath).toLowerCase();
+    return removedApprovalMaxRuntimeFilenameTokens.some((token) => filename.includes(token));
+  });
+
+  if (forbiddenFile) {
+    fail(
+      [
+        'Firefox AMO runtime payload contains removed approval-max filename',
+        `file=${forbiddenFile}`,
+        `forbiddenTokens=${removedApprovalMaxRuntimeFilenameTokens.join(',')}`,
+      ].join(' ')
+    );
+  }
+}
+
 export function prepareSigningSourceDir(options) {
   const { sourceDir = extensionRoot, version = '' } = options;
   const resolvedSourceDir = path.resolve(sourceDir);
@@ -739,11 +761,17 @@ export function prepareSigningSourceDir(options) {
   const effectiveVersion = version.trim() || baseVersion;
   const tempSourceDir = prepareFirefoxReleaseSourceDir(resolvedSourceDir);
 
-  manifest.version = effectiveVersion;
-  fs.writeFileSync(
-    path.join(tempSourceDir, 'manifest.json'),
-    `${JSON.stringify(manifest, null, 2)}\n`
-  );
+  try {
+    manifest.version = effectiveVersion;
+    fs.writeFileSync(
+      path.join(tempSourceDir, 'manifest.json'),
+      `${JSON.stringify(manifest, null, 2)}\n`
+    );
+    assertNoRemovedApprovalMaxRuntimeFilenames(tempSourceDir);
+  } catch (error) {
+    fs.rmSync(tempSourceDir, { recursive: true, force: true });
+    throw error;
+  }
 
   return {
     sourceDir: tempSourceDir,

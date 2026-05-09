@@ -219,7 +219,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(script, /node_modules\\\\\.bin\\\\tsc\.cmd/);
     assert.match(script, /npm\.cmd ci --prefer-offline --no-audit --fund=false/);
     assert.match(script, /https:\/\/nodejs\.org\/dist\/index\.json/);
-    assert.match(script, /OPENPATH_WINDOWS_STUDENT_SSE_GROUP = 'google-game-blocking'/);
+    assert.match(script, /OPENPATH_WINDOWS_STUDENT_SSE_GROUP = 'path-blocking'/);
     assert.match(script, /OPENPATH_KEEP_CLIENT_FOR_BROWSER_BOUNDARY = '1'/);
     assert.match(script, /run-windows-browser-boundary-ci\.ps1/);
     assert.match(script, /browser-boundary-summary\.json/);
@@ -236,7 +236,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     }
   );
 
-  test('workspace wrapper routes google-game-blocking to browser-boundary local overlay', () => {
+  test('workspace wrapper rejects the removed google-game-blocking direct suite', () => {
     const result = runWorkspaceWrapper([
       'openpath',
       'windows-direct',
@@ -247,9 +247,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       '--dry-run',
     ]);
 
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /--mode browser-boundary/);
-    assert.match(result.stdout, /--source-mode local-overlay/);
-    assert.match(result.stdout, /--artifact-dir .*windows-browser-boundary-direct/);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Unsupported suite/);
   });
 });

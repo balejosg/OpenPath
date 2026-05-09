@@ -8,12 +8,6 @@ import {
   type BlockedScreenContext,
   type ConfirmBlockedScreenContext,
 } from './blocked-screen-navigation-controller.js';
-import {
-  evaluateGoogleGameBlocking,
-  isGoogleGamePolicyOutcome,
-  toGoogleGameGuardEvent,
-} from './google-game-blocking.js';
-import type { GoogleSearchGameGuardEvent } from './background-message-handler.js';
 
 interface BackgroundListenersOptions {
   addBlockedDomain: (
@@ -33,7 +27,6 @@ interface BackgroundListenersOptions {
   ) => { cancel?: boolean; redirectUrl?: string; reason?: string } | null;
   confirmBlockedScreenNavigation?: (context: ConfirmBlockedScreenContext) => Promise<boolean>;
   handleRuntimeMessage: (message: unknown, sender: Runtime.MessageSender) => Promise<unknown>;
-  recordGoogleSearchGameGuardEvent?: (event: GoogleSearchGameGuardEvent) => void;
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
 }
 
@@ -76,30 +69,18 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
   options.browser.webRequest.onBeforeRequest.addListener(
     (details: WebRequest.OnBeforeRequestDetailsType) => {
       const result =
-        options.evaluateBlockedPath(details) ??
-        options.evaluateBlockedSubdomain(details) ??
-        evaluateGoogleGameBlocking(details, {
-          extensionOrigin: options.browser.runtime.getURL('/'),
-        });
+        options.evaluateBlockedPath(details) ?? options.evaluateBlockedSubdomain(details);
       if (!result) {
         return;
       }
 
       const hostname = extractHostname(details.url) ?? 'dominio desconocido';
-      if (isGoogleGamePolicyOutcome(result)) {
-        const event = toGoogleGameGuardEvent(details);
-        if (event) {
-          options.recordGoogleSearchGameGuardEvent?.(event);
-        }
-      }
 
       if (details.tabId >= 0) {
         const fallbackReason =
           result.reason?.startsWith(BLOCKED_SUBDOMAIN_REASON) === true
             ? `${BLOCKED_SUBDOMAIN_REASON}:unknown`
-            : isGoogleGamePolicyOutcome(result)
-              ? 'GOOGLE_GAME_POLICY:unknown'
-              : `${ROUTE_BLOCK_REASON}:unknown`;
+            : `${ROUTE_BLOCK_REASON}:unknown`;
         const reason = result.reason ?? fallbackReason;
         options.addBlockedDomain(
           details.tabId,
