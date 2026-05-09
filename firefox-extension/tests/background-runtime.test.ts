@@ -19,12 +19,6 @@ function waitForAsyncRuntime(): Promise<void> {
   });
 }
 
-function waitForAutoAllowBatch(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 150);
-  });
-}
-
 function createRuntimeHarness(): {
   browser: Browser;
   fetchBodies: unknown[];
@@ -263,7 +257,7 @@ void test('native policy confirmation treats null resolvedIp as unresolved', () 
   );
 });
 
-void test('background runtime passes auto-allowed hostnames to native whitelist updates', async () => {
+void test('background runtime keeps manual local update retry through native whitelist updates', async () => {
   const harness = createRuntimeHarness();
   try {
     const runtime = createBackgroundRuntime(harness.browser);
@@ -272,10 +266,8 @@ void test('background runtime passes auto-allowed hostnames to native whitelist 
 
     harness.runtimeMessage(
       {
-        action: 'openpathPageResourceCandidate',
-        kind: 'fetch',
-        pageUrl: 'http://portal.example/app',
-        resourceUrl: 'http://api.portal-cdn.example/data.json',
+        action: 'retryLocalUpdate',
+        hostname: 'api.portal-cdn.example',
         tabId: 5,
       },
       { tab: { id: 5, url: 'http://portal.example/fallback' } },
@@ -283,30 +275,10 @@ void test('background runtime passes auto-allowed hostnames to native whitelist 
         harness.responses.push(response);
       }
     );
-    await waitForAutoAllowBatch();
+    await waitForAsyncRuntime();
 
     assert.deepEqual(harness.responses, [{ success: true }]);
-    assert.equal(harness.fetchBodies.length, 1);
-    const fetchBody = harness.fetchBodies[0] as {
-      diagnostic_context: { correlation_id?: string };
-    };
-    assert.deepEqual(fetchBody, {
-      domain: 'api.portal-cdn.example',
-      hostname: 'lab-pc-01',
-      origin_page: 'http://portal.example/app',
-      reason: 'auto-allow page-resource (xmlhttprequest)',
-      target_url: 'http://api.portal-cdn.example/data.json',
-      diagnostic_context: {
-        correlation_id: fetchBody.diagnostic_context.correlation_id,
-        request_type: 'xmlhttprequest',
-        target_hostname: 'api.portal-cdn.example',
-      },
-      token: 'machine-token',
-    });
-    assert.match(
-      fetchBody.diagnostic_context.correlation_id ?? '',
-      /^auto-5-api-portal-cdn-example-xmlhttprequest-/
-    );
+    assert.equal(harness.fetchBodies.length, 0);
     assert.ok(
       harness.nativeMessages.some(
         (message) =>

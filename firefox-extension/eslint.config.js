@@ -54,6 +54,7 @@ export default tseslint.config(
       'verify-firefox-amo-version.mjs',
       'verify-firefox-amo-submission.mjs',
       'verify-firefox-release-artifacts.mjs',
+      'xpi-signature-evidence.mjs',
     ],
   }
 );

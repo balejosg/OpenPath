@@ -33,14 +33,6 @@ type WebNavigationErrorListener = (details: {
   url: string;
 }) => void;
 
-interface AutoAllowCall {
-  tabId: number;
-  hostname: string;
-  origin: string | null;
-  requestType: WebRequest.ResourceType;
-  targetUrl: string;
-}
-
 function waitForAsyncListeners(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0);
@@ -54,17 +46,10 @@ function createListenerHarness(
     evaluateBlockedPath?: EvaluateBlockedPath;
     evaluateBlockedSubdomain?: EvaluateBlockedSubdomain;
     handleRuntimeMessage?: (message: unknown, sender: unknown) => unknown;
-    autoAllowBlockedDomain?: (
-      tabId: number,
-      hostname: string,
-      origin: string | null,
-      requestType: WebRequest.ResourceType,
-      targetUrl: string
-    ) => Promise<void>;
   } = {}
 ): {
   addedBlocks: BlockedScreenContext[];
-  autoAllowCalls: AutoAllowCall[];
+  autoAllowCalls: unknown[];
   beforeRequestFilters: unknown[];
   confirmCalls: ConfirmBlockedScreenContext[];
   googleGameEvents: unknown[];
@@ -78,7 +63,7 @@ function createListenerHarness(
   webRequestError: WebRequestErrorListener | null;
 } {
   const addedBlocks: BlockedScreenContext[] = [];
-  const autoAllowCalls: AutoAllowCall[] = [];
+  const autoAllowCalls: unknown[] = [];
   const beforeRequestFilters: unknown[] = [];
   const confirmCalls: ConfirmBlockedScreenContext[] = [];
   const googleGameEvents: unknown[] = [];
@@ -150,18 +135,6 @@ function createListenerHarness(
         origin: origin ?? null,
       });
     },
-    autoAllowBlockedDomain:
-      options.autoAllowBlockedDomain ??
-      ((
-        tabId: number,
-        hostname: string,
-        origin: string | null,
-        requestType: WebRequest.ResourceType,
-        targetUrl: string
-      ): Promise<void> => {
-        autoAllowCalls.push({ tabId, hostname, origin, requestType, targetUrl });
-        return Promise.resolve();
-      }),
     browser,
     clearTabRuntimeState: () => undefined,
     disposeTab: () => undefined,
@@ -238,7 +211,7 @@ void describe('background listeners blocked-screen routing', () => {
     assert.deepEqual(responses, [{ success: true, id: 'request-1' }]);
   });
 
-  void test('auto-allows page resource candidates reported by the content script', async () => {
+  void test('does not auto-allow page resource candidates reported by content scripts', async () => {
     const harness = createListenerHarness();
     assert.ok(harness.runtimeMessage);
 
@@ -259,19 +232,11 @@ void describe('background listeners blocked-screen routing', () => {
 
     assert.equal(keepAlive, true);
     await waitForAsyncListeners();
-    assert.deepEqual(responses, [{ success: true }]);
-    assert.deepEqual(harness.autoAllowCalls, [
-      {
-        tabId: 9,
-        hostname: 'api.allowed-cdn.example',
-        origin: 'http://allowed.example/app',
-        requestType: 'xmlhttprequest',
-        targetUrl: 'http://api.allowed-cdn.example/data.json',
-      },
-    ]);
+    assert.deepEqual(responses, [undefined]);
+    assert.deepEqual(harness.autoAllowCalls, []);
   });
 
-  void test('maps page subresource candidate kinds to auto-allow request types', async () => {
+  void test('ignores page subresource candidate kinds in Firefox Core', async () => {
     const harness = createListenerHarness();
     assert.ok(harness.runtimeMessage);
 
@@ -299,23 +264,10 @@ void describe('background listeners blocked-screen routing', () => {
     }
 
     await waitForAsyncListeners();
-    assert.deepEqual(
-      harness.autoAllowCalls.map((call) => ({
-        hostname: call.hostname,
-        requestType: call.requestType,
-      })),
-      [
-        { hostname: 'image.example', requestType: 'image' },
-        { hostname: 'script.example', requestType: 'script' },
-        { hostname: 'style.example', requestType: 'stylesheet' },
-        { hostname: 'fonts.example', requestType: 'font' },
-        { hostname: 'xhr.example', requestType: 'xmlhttprequest' },
-        { hostname: 'other.example', requestType: 'other' },
-      ]
-    );
+    assert.deepEqual(harness.autoAllowCalls, []);
   });
 
-  void test('rejects malformed page resource candidates without delegating', async () => {
+  void test('does not process malformed page resource candidates in Firefox Core', async () => {
     const harness = createListenerHarness();
     assert.ok(harness.runtimeMessage);
 
@@ -333,7 +285,7 @@ void describe('background listeners blocked-screen routing', () => {
     );
 
     await waitForAsyncListeners();
-    assert.deepEqual(responses, [{ success: false, error: 'resourceUrl is required' }]);
+    assert.deepEqual(responses, [undefined]);
     assert.deepEqual(harness.autoAllowCalls, []);
   });
 
@@ -348,16 +300,9 @@ void describe('background listeners blocked-screen routing', () => {
     ]);
   });
 
-  void test('waits for ajax auto-allow before releasing eligible page resources', async () => {
-    let releaseAutoAllow: (() => void) | undefined;
+  void test('does not wait for ajax auto-allow before releasing eligible page resources', async () => {
     const harness = createListenerHarness({
       currentTabUrl: 'https://allowed.example/app',
-      autoAllowBlockedDomain: (tabId, hostname, origin, requestType, targetUrl) => {
-        harness.autoAllowCalls.push({ tabId, hostname, origin, requestType, targetUrl });
-        return new Promise<void>((resolve) => {
-          releaseAutoAllow = resolve;
-        });
-      },
     });
     assert.ok(harness.webRequestBefore);
 
@@ -368,35 +313,14 @@ void describe('background listeners blocked-screen routing', () => {
       originUrl: 'https://allowed.example/app',
     } as WebRequest.OnBeforeRequestDetailsType);
 
-    assert.ok(result instanceof Promise);
-    let completed = false;
-    void result.then(() => {
-      completed = true;
-    });
+    assert.equal(result, undefined);
     await waitForAsyncListeners();
-    assert.equal(completed, false);
-    assert.deepEqual(harness.autoAllowCalls, [
-      {
-        tabId: 3,
-        hostname: 'cdn.example',
-        origin: 'https://allowed.example/app',
-        requestType: 'xmlhttprequest',
-        targetUrl: 'https://cdn.example/data.json',
-      },
-    ]);
-
-    releaseAutoAllow?.();
-    await result;
-    assert.equal(completed, true);
+    assert.deepEqual(harness.autoAllowCalls, []);
   });
 
   void test('does not block main-frame navigations while probing auto-allow candidates', () => {
     const harness = createListenerHarness({
       currentTabUrl: 'https://allowed.example/app',
-      autoAllowBlockedDomain: (tabId, hostname, origin, requestType, targetUrl) => {
-        harness.autoAllowCalls.push({ tabId, hostname, origin, requestType, targetUrl });
-        return Promise.resolve();
-      },
     });
     assert.ok(harness.webRequestBefore);
 
@@ -750,7 +674,7 @@ void describe('background listeners blocked-screen routing', () => {
     assert.equal(harness.addedBlocks.length, 1);
   });
 
-  void test('auto-allows ajax errors from an allowed origin without redirecting', async () => {
+  void test('does not auto-allow ajax errors from an allowed origin', async () => {
     const harness = createListenerHarness({
       confirmBlockedScreenNavigation: () => Promise.resolve(true),
     });
@@ -768,18 +692,10 @@ void describe('background listeners blocked-screen routing', () => {
 
     assert.deepEqual(harness.confirmCalls, []);
     assert.deepEqual(harness.redirects, []);
-    assert.deepEqual(harness.autoAllowCalls, [
-      {
-        tabId: 13,
-        hostname: 'api.blocked.example',
-        origin: 'https://allowed.example/app',
-        requestType: 'xmlhttprequest',
-        targetUrl: 'https://api.blocked.example/data.json',
-      },
-    ]);
+    assert.deepEqual(harness.autoAllowCalls, []);
   });
 
-  void test('starts auto-allow from page subresource requests before network timeout', async () => {
+  void test('does not start auto-allow from page subresource requests before network timeout', async () => {
     const resourceTypes: WebRequest.ResourceType[] = ['script', 'image', 'stylesheet', 'font'];
 
     for (const requestType of resourceTypes) {
@@ -797,23 +713,14 @@ void describe('background listeners blocked-screen routing', () => {
 
       await waitForAsyncListeners();
 
-      assert.ok(result instanceof Promise);
-      await result;
+      assert.equal(result, undefined);
       assert.deepEqual(harness.confirmCalls, []);
       assert.deepEqual(harness.redirects, []);
-      assert.deepEqual(harness.autoAllowCalls, [
-        {
-          tabId: 35,
-          hostname: `${requestType}.blocked.example`,
-          origin: 'https://allowed.example/app',
-          requestType,
-          targetUrl: `https://${requestType}.blocked.example/resource`,
-        },
-      ]);
+      assert.deepEqual(harness.autoAllowCalls, []);
     }
   });
 
-  void test('uses top-level tab URL as origin for stylesheet-initiated font subresources', async () => {
+  void test('does not auto-allow stylesheet-initiated font subresources', async () => {
     const harness = createListenerHarness({
       confirmBlockedScreenNavigation: () => Promise.resolve(true),
       currentTabUrl: 'https://www.reddit.com/r/openpath',
@@ -829,22 +736,13 @@ void describe('background listeners blocked-screen routing', () => {
 
     await waitForAsyncListeners();
 
-    assert.ok(result instanceof Promise);
-    await result;
+    assert.equal(result, undefined);
     assert.deepEqual(harness.confirmCalls, []);
     assert.deepEqual(harness.redirects, []);
-    assert.deepEqual(harness.autoAllowCalls, [
-      {
-        tabId: 41,
-        hostname: 'fonts.gstatic.com',
-        origin: 'https://www.reddit.com/r/openpath',
-        requestType: 'font',
-        targetUrl: 'https://fonts.gstatic.com/s/inter/v12/font.woff2',
-      },
-    ]);
+    assert.deepEqual(harness.autoAllowCalls, []);
   });
 
-  void test('starts auto-allow when Firefox omits a usable tab id for a page subresource', async () => {
+  void test('does not start auto-allow when Firefox omits a usable tab id for a page subresource', async () => {
     const harness = createListenerHarness({
       confirmBlockedScreenNavigation: () => Promise.resolve(true),
     });
@@ -859,22 +757,13 @@ void describe('background listeners blocked-screen routing', () => {
 
     await waitForAsyncListeners();
 
-    assert.ok(result instanceof Promise);
-    await result;
+    assert.equal(result, undefined);
     assert.deepEqual(harness.confirmCalls, []);
     assert.deepEqual(harness.redirects, []);
-    assert.deepEqual(harness.autoAllowCalls, [
-      {
-        tabId: -1,
-        hostname: 'cdn.blocked.example',
-        origin: 'https://allowed.example/app',
-        requestType: 'script',
-        targetUrl: 'https://cdn.blocked.example/asset.js',
-      },
-    ]);
+    assert.deepEqual(harness.autoAllowCalls, []);
   });
 
-  void test('treats missing Firefox request type with page context as a generic page resource', async () => {
+  void test('does not auto-allow missing Firefox request types with page context', async () => {
     const harness = createListenerHarness({
       confirmBlockedScreenNavigation: () => Promise.resolve(true),
     });
@@ -888,19 +777,10 @@ void describe('background listeners blocked-screen routing', () => {
 
     await waitForAsyncListeners();
 
-    assert.ok(result instanceof Promise);
-    await result;
+    assert.equal(result, undefined);
     assert.deepEqual(harness.confirmCalls, []);
     assert.deepEqual(harness.redirects, []);
-    assert.deepEqual(harness.autoAllowCalls, [
-      {
-        tabId: 37,
-        hostname: 'api.blocked.example',
-        origin: 'https://allowed.example/app',
-        requestType: 'other',
-        targetUrl: 'https://api.blocked.example/data.json',
-      },
-    ]);
+    assert.deepEqual(harness.autoAllowCalls, []);
   });
 
   void test('does not auto-allow requests cancelled by blocked path policy', async () => {
@@ -922,7 +802,7 @@ void describe('background listeners blocked-screen routing', () => {
     assert.deepEqual(harness.autoAllowCalls, []);
   });
 
-  void test('auto-allows blocked page subresources from an allowed origin without redirecting', async () => {
+  void test('does not auto-allow blocked page subresources from an allowed origin', async () => {
     const resourceTypes: WebRequest.ResourceType[] = [
       'script',
       'image',
@@ -956,15 +836,7 @@ void describe('background listeners blocked-screen routing', () => {
 
       assert.deepEqual(harness.confirmCalls, []);
       assert.deepEqual(harness.redirects, []);
-      assert.deepEqual(harness.autoAllowCalls, [
-        {
-          tabId: 31,
-          hostname: `${requestType}.blocked.example`,
-          origin: 'https://allowed.example/app',
-          requestType,
-          targetUrl: `https://${requestType}.blocked.example/resource`,
-        },
-      ]);
+      assert.deepEqual(harness.autoAllowCalls, []);
     }
   });
 
@@ -987,7 +859,7 @@ void describe('background listeners blocked-screen routing', () => {
     assert.deepEqual(harness.autoAllowCalls, []);
   });
 
-  void test('uses the current tab URL as ajax origin when Firefox omits request origins', async () => {
+  void test('does not auto-allow ajax errors when Firefox omits request origins', async () => {
     const harness = createListenerHarness({
       confirmBlockedScreenNavigation: () => Promise.resolve(true),
       currentTabUrl: 'https://allowed.example/app',
@@ -1005,18 +877,10 @@ void describe('background listeners blocked-screen routing', () => {
 
     assert.deepEqual(harness.confirmCalls, []);
     assert.deepEqual(harness.redirects, []);
-    assert.deepEqual(harness.autoAllowCalls, [
-      {
-        tabId: 13,
-        hostname: 'api.blocked.example',
-        origin: 'https://allowed.example/app',
-        requestType: 'fetch',
-        targetUrl: 'https://api.blocked.example/data.json',
-      },
-    ]);
+    assert.deepEqual(harness.autoAllowCalls, []);
   });
 
-  void test('uses the current reddit tab URL for preview image requests when Firefox omits request context', async () => {
+  void test('does not auto-allow preview image requests when Firefox omits request context', async () => {
     const harness = createListenerHarness({
       confirmBlockedScreenNavigation: () => Promise.resolve(true),
       currentTabUrl: 'https://www.reddit.com/r/openpath/comments/demo',
@@ -1030,19 +894,9 @@ void describe('background listeners blocked-screen routing', () => {
 
     await waitForAsyncListeners();
 
-    assert.ok(result instanceof Promise);
-    await result;
+    assert.equal(result, undefined);
     assert.deepEqual(harness.confirmCalls, []);
     assert.deepEqual(harness.redirects, []);
-    assert.deepEqual(harness.autoAllowCalls, [
-      {
-        tabId: 52,
-        hostname: 'preview.redd.it',
-        origin: 'https://www.reddit.com/r/openpath/comments/demo',
-        requestType: 'other',
-        targetUrl:
-          'https://preview.redd.it/my-paprika-had-no-seeds-v0-0q7k5y7403yg1.jpeg?width=1080&crop=smart',
-      },
-    ]);
+    assert.deepEqual(harness.autoAllowCalls, []);
   });
 });

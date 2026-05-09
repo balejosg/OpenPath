@@ -31,6 +31,10 @@ interface FirefoxManifest {
   }[];
   permissions?: string[];
   host_permissions?: string[];
+  action?: {
+    default_popup?: string;
+    default_title?: string;
+  };
 }
 
 async function readManifest(): Promise<FirefoxManifest> {
@@ -39,16 +43,11 @@ async function readManifest(): Promise<FirefoxManifest> {
   ) as FirefoxManifest;
 }
 
-function findContentScript(
+function findContentScriptByJs(
   manifest: FirefoxManifest,
   scriptPath: string
-): NonNullable<FirefoxManifest['content_scripts']>[number] {
-  const contentScript = (manifest.content_scripts ?? []).find((script) =>
-    script.js?.includes(scriptPath)
-  );
-
-  assert.ok(contentScript, `manifest should include ${scriptPath}`);
-  return contentScript;
+): NonNullable<FirefoxManifest['content_scripts']>[number] | undefined {
+  return (manifest.content_scripts ?? []).find((script) => script.js?.includes(scriptPath));
 }
 
 void describe('Firefox extension manifest policy', () => {
@@ -104,7 +103,7 @@ void describe('Firefox extension manifest policy', () => {
         id: 'monitor-bloqueos@openpath',
         strict_min_version: '140.0',
         data_collection_permissions: {
-          required: ['browsingActivity', 'websiteActivity', 'websiteContent'],
+          required: ['browsingActivity'],
         },
       },
       gecko_android: {
@@ -113,34 +112,23 @@ void describe('Firefox extension manifest policy', () => {
     });
   });
 
-  void test('wakes the background runtime at document start on normal web pages', async () => {
+  void test('does not declare automatic page-resource observers in Firefox Core', async () => {
     const manifest = await readManifest();
 
-    const pageActivity = findContentScript(manifest, 'dist/page-activity-content.js');
-    const pageResourceObserver = findContentScript(manifest, 'dist/page-resource-observer-main.js');
-
-    assert.deepEqual(pageActivity.matches, ['http://*/*', 'https://*/*']);
-    assert.equal(pageActivity.run_at, 'document_start');
-    assert.deepEqual(pageResourceObserver.matches, ['http://*/*', 'https://*/*']);
-    assert.equal(pageResourceObserver.run_at, 'document_start');
-    assert.equal(pageResourceObserver.world, 'MAIN');
+    assert.equal(findContentScriptByJs(manifest, 'dist/page-activity-content.js'), undefined);
+    assert.equal(findContentScriptByJs(manifest, 'dist/page-resource-observer-main.js'), undefined);
+    assert.equal(
+      findContentScriptByJs(manifest, 'dist/google-search-game-guard-content.js'),
+      undefined
+    );
   });
 
-  void test('limits Google games content script to supported Google surfaces', async () => {
+  void test('keeps popup action in Firefox Core', async () => {
     const manifest = await readManifest();
-    const googleGames = findContentScript(manifest, 'dist/google-search-game-guard-content.js');
+    const action = manifest.action;
+    assert.ok(action);
 
-    assert.deepEqual(googleGames, {
-      matches: [
-        'https://www.google.com/*',
-        'https://www.google.es/*',
-        'https://doodles.google/*',
-        'https://*.doodles.google/*',
-      ],
-      js: ['dist/google-search-game-guard-content.js'],
-      run_at: 'document_start',
-    });
-    assert.ok(!googleGames.matches.includes('http://*/*'));
-    assert.ok(!googleGames.matches.includes('https://*/*'));
+    assert.equal(action.default_popup, 'popup/popup.html');
+    assert.equal(action.default_title, 'Monitor de Bloqueos');
   });
 });

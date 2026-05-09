@@ -7,6 +7,7 @@ import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { prepareFirefoxReleaseArtifacts } from './build-firefox-release.mjs';
+import { assertFirefoxAmoSignedXpi } from './xpi-signature-evidence.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const extensionRoot = path.dirname(__filename);
@@ -314,6 +315,7 @@ async function downloadAmoSignedXpi(options) {
   }
 
   fs.writeFileSync(outputPath, Buffer.from(await response.arrayBuffer()));
+  assertFirefoxAmoSignedXpi(outputPath);
   return outputPath;
 }
 

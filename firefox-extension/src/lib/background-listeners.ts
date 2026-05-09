@@ -3,16 +3,11 @@ import { getErrorMessage, logger } from './logger.js';
 import { shouldClearBlockedMonitorStateOnNavigate } from './blocked-screen-contract.js';
 import { BLOCKED_SCREEN_PATH, ROUTE_BLOCK_REASON, extractHostname } from './path-blocking.js';
 import { BLOCKED_SUBDOMAIN_REASON } from './subdomain-blocking.js';
-import { isPageResourceCandidateMessage } from './auto-allow-observation.js';
 import {
   createBlockedScreenNavigationController,
   type BlockedScreenContext,
   type ConfirmBlockedScreenContext,
 } from './blocked-screen-navigation-controller.js';
-import {
-  createPageResourceAutoAllowGate,
-  type PageResourceAutoAllowGate,
-} from './page-resource-auto-allow-gate.js';
 import {
   evaluateGoogleGameBlocking,
   isGoogleGamePolicyOutcome,
@@ -27,13 +22,6 @@ interface BackgroundListenersOptions {
     error: string,
     origin?: string | null
   ) => void;
-  autoAllowBlockedDomain: (
-    tabId: number,
-    hostname: string,
-    origin: string | null,
-    requestType: WebRequest.ResourceType,
-    targetUrl: string
-  ) => Promise<void>;
   browser: Browser;
   clearTabRuntimeState: (tabId: number) => void;
   disposeTab: (tabId: number) => void;
@@ -50,18 +38,14 @@ interface BackgroundListenersOptions {
 }
 
 function createRuntimeMessageResponder(
-  options: Pick<BackgroundListenersOptions, 'handleRuntimeMessage'> & {
-    pageResourceGate: PageResourceAutoAllowGate;
-  }
+  options: Pick<BackgroundListenersOptions, 'handleRuntimeMessage'>
 ): (
   message: unknown,
   sender: Runtime.MessageSender,
   sendResponse: (response: unknown) => void
 ) => true {
   return (message, sender, sendResponse) => {
-    const responsePromise = isPageResourceCandidateMessage(message)
-      ? options.pageResourceGate.handlePageResourceCandidateMessage(message, sender)
-      : options.handleRuntimeMessage(message, sender);
+    const responsePromise = options.handleRuntimeMessage(message, sender);
 
     void Promise.resolve(responsePromise).then(
       (response) => {
@@ -89,19 +73,6 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
     },
     redirectToBlockedScreen: options.redirectToBlockedScreen,
   });
-  const pageResourceGate = createPageResourceAutoAllowGate({
-    autoAllowBlockedDomain: options.autoAllowBlockedDomain,
-    getTabUrl: async (tabId) => {
-      const tab = await options.browser.tabs.get(tabId);
-      return tab.url;
-    },
-    onBackgroundAutoAllowError: (error) => {
-      logger.error('[Monitor] Fallo auto-allow de recurso de pagina', {
-        error: getErrorMessage(error),
-      });
-    },
-  });
-
   options.browser.webRequest.onBeforeRequest.addListener(
     (details: WebRequest.OnBeforeRequestDetailsType) => {
       const result =
@@ -111,10 +82,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
           extensionOrigin: options.browser.runtime.getURL('/'),
         });
       if (!result) {
-        if (!pageResourceGate.isBlockingAutoAllowResource(details)) {
-          return;
-        }
-        return pageResourceGate.waitForAutoAllowBeforeRequest(details);
+        return;
       }
 
       const hostname = extractHostname(details.url) ?? 'dominio desconocido';
@@ -164,8 +132,6 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
           requestType: details.type,
         });
       }
-
-      pageResourceGate.triggerAutoAllowForEligibleRequestInBackground(details);
     },
     { urls: ['<all_urls>'] }
   );
@@ -220,7 +186,6 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
   options.browser.runtime.onMessage.addListener(
     createRuntimeMessageResponder({
       handleRuntimeMessage: options.handleRuntimeMessage,
-      pageResourceGate,
     })
   );
 }

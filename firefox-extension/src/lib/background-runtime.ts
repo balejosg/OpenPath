@@ -1,5 +1,4 @@
 import type { Browser } from 'webextension-polyfill';
-import { createAutoAllowWorkflow } from './auto-allow-workflow.js';
 import { registerBackgroundListeners } from './background-listeners.js';
 import {
   createBackgroundMessageHandler,
@@ -217,29 +216,37 @@ export function createBackgroundRuntime(
     });
   }
 
-  const { autoAllowBlockedDomain, retryLocalUpdate } = createAutoAllowWorkflow({
-    getErrorMessage,
-    getRequestApiEndpoints: (config) =>
-      getRequestApiEndpoints({
-        ...config,
-        debugMode: false,
-        sharedSecret: '',
-      }),
-    getStoredDomainStatus: (tabId, hostname) => domainStatuses[tabId]?.get(hostname),
-    inFlightAutoRequests,
-    loadRequestConfig,
-    refreshBlockedPathRules: async () => {
-      const [pathRefresh, subdomainRefresh] = await Promise.all([
-        blockedPathRulesController.refresh(true),
-        blockedSubdomainRulesController.refresh(true),
-      ]);
-      return pathRefresh && subdomainRefresh;
-    },
-    requestLocalWhitelistUpdate: (hostnames) =>
-      nativeMessagingClient.requestLocalWhitelistUpdate(hostnames),
-    sendNativeMessage: (message) => nativeMessagingClient.sendMessage(message),
-    setDomainStatus,
-  });
+  async function retryLocalUpdate(tabId: number, hostname: string): Promise<{ success: boolean }> {
+    const currentStatus = domainStatuses[tabId]?.get(hostname);
+    const requestTypePatch = currentStatus?.requestType
+      ? { requestType: currentStatus.requestType }
+      : {};
+
+    setDomainStatus(tabId, hostname, {
+      state: 'pending',
+      updatedAt: Date.now(),
+      message: 'Reintentando actualizacion local',
+      ...requestTypePatch,
+    });
+
+    const nativeUpdate = await nativeMessagingClient
+      .requestLocalWhitelistUpdate([hostname])
+      .catch(() => false);
+    const [pathRefresh, subdomainRefresh] = await Promise.all([
+      blockedPathRulesController.refresh(true).catch(() => false),
+      blockedSubdomainRulesController.refresh(true).catch(() => false),
+    ]);
+    const success = nativeUpdate && pathRefresh && subdomainRefresh;
+
+    setDomainStatus(tabId, hostname, {
+      state: success ? 'autoApproved' : 'localUpdateError',
+      updatedAt: Date.now(),
+      message: success ? 'Actualizacion local completada' : 'Sigue fallando la actualizacion local',
+      ...requestTypePatch,
+    });
+
+    return { success };
+  }
   const forceBlockedPathRulesRefresh = blockedPathRulesController.forceRefresh;
   const forceBlockedSubdomainRulesRefresh = blockedSubdomainRulesController.forceRefresh;
 
@@ -294,7 +301,6 @@ export function createBackgroundRuntime(
       addBlockedDomain: (tabId, hostname, error, origin) => {
         addBlockedDomain(tabId, hostname, error, origin ?? undefined);
       },
-      autoAllowBlockedDomain,
       browser,
       clearTabRuntimeState,
       disposeTab,

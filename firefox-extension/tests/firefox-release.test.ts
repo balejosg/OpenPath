@@ -297,6 +297,33 @@ function requestInputToUrl(input: RequestInfo | URL): string {
   return input;
 }
 
+function writeSignedXpiFixture(xpiPath: string): void {
+  const fixtureDir = createTempDir('openpath-signed-xpi-fixture-');
+  mkdirSync(path.join(fixtureDir, 'META-INF'), { recursive: true });
+  writeFileSync(path.join(fixtureDir, 'manifest.json'), '{"manifest_version":3}\n');
+  writeFileSync(path.join(fixtureDir, 'META-INF', 'manifest.mf'), 'Manifest-Version: 1.0\n');
+  writeFileSync(path.join(fixtureDir, 'META-INF', 'mozilla.rsa'), 'fake-signature\n');
+  execFileSync('zip', ['-qr', xpiPath, '.'], { cwd: fixtureDir });
+}
+
+function writeUnsignedXpiFixture(xpiPath: string): void {
+  const fixtureDir = createTempDir('openpath-unsigned-xpi-fixture-');
+  writeFileSync(path.join(fixtureDir, 'manifest.json'), '{"manifest_version":3}\n');
+  execFileSync('zip', ['-qr', xpiPath, '.'], { cwd: fixtureDir });
+}
+
+function signedXpiFixtureBuffer(): Buffer {
+  const fixturePath = path.join(createTempDir('openpath-signed-xpi-buffer-'), 'signed.xpi');
+  writeSignedXpiFixture(fixturePath);
+  return readFileSync(fixturePath);
+}
+
+function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
+  const arrayBuffer = new ArrayBuffer(buffer.byteLength);
+  new Uint8Array(arrayBuffer).set(buffer);
+  return arrayBuffer;
+}
+
 afterEach(() => {
   while (tempDirectories.length > 0) {
     const dir = tempDirectories.pop();
@@ -361,7 +388,7 @@ void describe('Firefox release signing helpers', () => {
     const signedXpiPath = path.join(workingDir, 'signed-input.xpi');
     const outputDir = path.join(workingDir, 'firefox-release');
 
-    writeFileSync(signedXpiPath, 'signed-xpi-payload');
+    writeSignedXpiFixture(signedXpiPath);
 
     const result = prepareFirefoxReleaseArtifacts({
       extensionRoot,
@@ -389,7 +416,7 @@ void describe('Firefox release signing helpers', () => {
     const releaseDir = path.join(workingDir, 'firefox-release');
 
     mkdirSync(releaseDir, { recursive: true });
-    writeFileSync(path.join(releaseDir, 'openpath-firefox-extension.xpi'), 'signed');
+    writeSignedXpiFixture(path.join(releaseDir, 'openpath-firefox-extension.xpi'));
     writeFileSync(
       path.join(releaseDir, 'metadata.json'),
       `${JSON.stringify(
@@ -422,7 +449,7 @@ void describe('Firefox release signing helpers', () => {
     const releaseDir = path.join(workingDir, 'firefox-release');
 
     mkdirSync(releaseDir, { recursive: true });
-    writeFileSync(path.join(releaseDir, 'openpath-firefox-extension.xpi'), 'signed');
+    writeSignedXpiFixture(path.join(releaseDir, 'openpath-firefox-extension.xpi'));
     writeFileSync(
       path.join(releaseDir, 'metadata.json'),
       `${JSON.stringify({
@@ -447,7 +474,7 @@ void describe('Firefox release signing helpers', () => {
     const releaseDir = path.join(workingDir, 'firefox-release');
 
     mkdirSync(releaseDir, { recursive: true });
-    writeFileSync(path.join(releaseDir, 'openpath-firefox-extension.xpi'), 'signed');
+    writeSignedXpiFixture(path.join(releaseDir, 'openpath-firefox-extension.xpi'));
     writeFileSync(
       path.join(releaseDir, 'metadata.json'),
       `${JSON.stringify({
@@ -490,6 +517,33 @@ void describe('Firefox release signing helpers', () => {
           payloadHash: 'e'.repeat(64),
         }),
       /openpath-firefox-extension\.xpi not found/
+    );
+  });
+
+  void test('verifyFirefoxReleaseArtifacts rejects unsigned XPI payloads labelled as signed', () => {
+    const workingDir = createTempDir('openpath-firefox-release-verify-');
+    const releaseDir = path.join(workingDir, 'firefox-release');
+
+    mkdirSync(releaseDir, { recursive: true });
+    writeUnsignedXpiFixture(path.join(releaseDir, 'openpath-firefox-extension.xpi'));
+    writeFileSync(
+      path.join(releaseDir, 'metadata.json'),
+      `${JSON.stringify({
+        extensionId: 'monitor-bloqueos@openpath',
+        version: '2.0.0.123.1',
+        signatureSource: 'amo',
+        signatureState: 'signed',
+        payloadHash: 'f'.repeat(64),
+      })}\n`
+    );
+
+    assert.throws(
+      () =>
+        verifyFirefoxReleaseArtifacts({
+          releaseDir,
+          payloadHash: 'f'.repeat(64),
+        }),
+      /AMO signature files/
     );
   });
 
@@ -1267,7 +1321,7 @@ void describe('Firefox release signing helpers', () => {
         }),
         { status: 200 }
       ),
-      new Response('signed-xpi', { status: 200 }),
+      new Response(bufferToArrayBuffer(signedXpiFixtureBuffer()), { status: 200 }),
     ];
 
     const signedXpiPath = await waitForAmoSignedXpi({
@@ -1293,7 +1347,7 @@ void describe('Firefox release signing helpers', () => {
       },
     });
 
-    assert.equal(readFileSync(signedXpiPath, 'utf8'), 'signed-xpi');
+    assert.equal(readFileSync(signedXpiPath).subarray(0, 2).toString('utf8'), 'PK');
     assert.deepEqual(requests, [
       'https://addons.mozilla.org/api/v5/addons/addon/b0694d0ac22b478c88f7/versions/6244849/',
       'https://addons.mozilla.org/api/v5/addons/addon/b0694d0ac22b478c88f7/versions/6244849/',
@@ -1302,7 +1356,7 @@ void describe('Firefox release signing helpers', () => {
     assert.match(stdoutChunks.join(''), /AMO version status addonId=b0694d0ac22b478c88f7/);
   });
 
-  void test('waitForAmoSignedXpi downloads unlisted files once AMO exposes a URL', async () => {
+  void test('waitForAmoSignedXpi rejects unlisted downloads until AMO exposes signed bits', async () => {
     const artifactsDir = createTempDir('openpath-firefox-amo-unlisted-download-');
     const requests: string[] = [];
     const responses = [
@@ -1315,33 +1369,35 @@ void describe('Firefox release signing helpers', () => {
         }),
         { status: 200 }
       ),
-      new Response('signed-unlisted-xpi', { status: 200 }),
+      new Response('unsigned-unlisted-xpi', { status: 200 }),
     ];
 
-    const signedXpiPath = await waitForAmoSignedXpi({
-      apiKey: 'user:123:456',
-      apiSecret: 'secret',
-      addonId: 'monitor-bloqueos@openpath',
-      version: '2.0.81977786.682142437',
-      artifactsDir,
-      timeoutMs: 10_000,
-      pollIntervalMs: 1,
-      nowImpl: () => Date.parse('2026-05-07T05:00:00Z'),
-      sleepImpl: () => Promise.resolve(),
-      stdout: { write: () => undefined },
-      fetchImpl: (input) => {
-        const requestUrl =
-          input instanceof Request ? input.url : input instanceof URL ? input.href : input;
-        requests.push(requestUrl);
-        const response = responses.shift();
-        if (!response) {
-          throw new Error(`unexpected request ${requestUrl}`);
-        }
-        return Promise.resolve(response);
-      },
-    });
+    await assert.rejects(
+      waitForAmoSignedXpi({
+        apiKey: 'user:123:456',
+        apiSecret: 'secret',
+        addonId: 'monitor-bloqueos@openpath',
+        version: '2.0.81977786.682142437',
+        artifactsDir,
+        timeoutMs: 10_000,
+        pollIntervalMs: 1,
+        nowImpl: () => Date.parse('2026-05-07T05:00:00Z'),
+        sleepImpl: () => Promise.resolve(),
+        stdout: { write: () => undefined },
+        fetchImpl: (input) => {
+          const requestUrl =
+            input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+          requests.push(requestUrl);
+          const response = responses.shift();
+          if (!response) {
+            throw new Error(`unexpected request ${requestUrl}`);
+          }
+          return Promise.resolve(response);
+        },
+      }),
+      /AMO signature files/
+    );
 
-    assert.equal(readFileSync(signedXpiPath, 'utf8'), 'signed-unlisted-xpi');
     assert.deepEqual(requests, [
       'https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/versions/v2.0.81977786.682142437/',
       'https://addons.mozilla.org/firefox/downloads/file/6250981/signed.xpi',

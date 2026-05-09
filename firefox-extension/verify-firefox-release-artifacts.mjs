@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { assertFirefoxAmoSignedXpi } from './xpi-signature-evidence.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const extensionRoot = path.dirname(__filename);
 const defaultReleaseDir = path.join(extensionRoot, 'build', 'firefox-release');
@@ -47,6 +49,7 @@ export function verifyFirefoxReleaseArtifacts(options) {
   if (!xpiStat.isFile() || xpiStat.size <= 0) {
     fail(`Firefox Release ${releaseXpiName} must be a non-empty file: ${xpiPath}`);
   }
+  assertFirefoxAmoSignedXpi(xpiPath);
 
   const metadata = readJsonFile(metadataPath);
   const extensionId = requireNonEmptyString(metadata.extensionId, 'extensionId');

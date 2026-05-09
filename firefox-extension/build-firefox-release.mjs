@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { assertFirefoxAmoSignedXpi } from './xpi-signature-evidence.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const extensionRoot = path.dirname(__filename);
 const defaultManifestPath = path.join(extensionRoot, 'manifest.json');
@@ -58,6 +60,7 @@ export function prepareFirefoxReleaseArtifacts(options) {
   if (!fs.existsSync(resolvedSignedXpiPath)) {
     fail(`Signed Firefox XPI not found: ${resolvedSignedXpiPath}`);
   }
+  assertFirefoxAmoSignedXpi(resolvedSignedXpiPath);
 
   const manifest = readManifest(manifestPath);
   const effectiveExtensionId = extensionId || resolveExtensionId(manifest);

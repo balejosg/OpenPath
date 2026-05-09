@@ -14,7 +14,7 @@
       "id": "monitor-bloqueos@openpath",
       "strict_min_version": "140.0",
       "data_collection_permissions": {
-        "required": ["browsingActivity", "websiteActivity", "websiteContent"]
+        "required": ["browsingActivity"]
       }
     },
     "gecko_android": {
@@ -38,29 +38,6 @@
     "scripts": ["dist/background.js"],
     "type": "module"
   },
-  "content_scripts": [
-    {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["dist/page-activity-content.js"],
-      "run_at": "document_start"
-    },
-    {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["dist/page-resource-observer-main.js"],
-      "run_at": "document_start",
-      "world": "MAIN"
-    },
-    {
-      "matches": [
-        "https://www.google.com/*",
-        "https://www.google.es/*",
-        "https://doodles.google/*",
-        "https://*.doodles.google/*"
-      ],
-      "js": ["dist/google-search-game-guard-content.js"],
-      "run_at": "document_start"
-    }
-  ],
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {

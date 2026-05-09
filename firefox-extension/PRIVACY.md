@@ -14,8 +14,8 @@ The OpenPath extension is designed to operate locally in the browser. It is used
 - no analytics or telemetry are sent to third-party services
 - routine blocked-resource state is kept in browser-local runtime state
 - unblock requests send the blocked domain, request reason, and request metadata only to the configured OpenPath service
-- page-resource auto-allow candidates send the target host/URL, originating page, resource type, and policy reason only to the configured OpenPath service
-- Google Search/Doodles game enforcement is limited to supported Google domains and does not send game-page data outside the configured OpenPath service
+- blocked-page and popup access requests send user-initiated request details only to the configured OpenPath service
+- Google Search/Doodles game enforcement runs in the background request path and does not send game-page data outside the configured OpenPath service
 - clipboard access is used only when the user copies a blocked-domain list
 - optional `nativeMessaging` communicates only with the local OpenPath native host on the same machine
 
@@ -25,21 +25,23 @@ browser data.
 
 ## Current Permissions
 
-| Permission           | Purpose                                                                |
-| -------------------- | ---------------------------------------------------------------------- |
-| `webRequest`         | Observe network failures and blocked resources visible to Firefox      |
-| `webRequestBlocking` | Redirect or cancel blocked navigation/resource requests when required  |
-| `webNavigation`      | Reset per-tab blocked-resource state when navigation changes           |
-| `tabs`               | Scope badge and popup data to the active tab                           |
-| `clipboardWrite`     | Copy blocked-domain lists only after a user action                     |
-| `nativeMessaging`    | Communicate with the local OpenPath native host when it is installed   |
-| `storage`            | Keep managed config and local runtime state in browser storage         |
-| `<all_urls>`         | Observe managed-page resources regardless of origin or embedded domain |
+| Permission           | Purpose                                                               |
+| -------------------- | --------------------------------------------------------------------- |
+| `webRequest`         | Observe network failures and apply managed path/subdomain/game rules  |
+| `webRequestBlocking` | Redirect or cancel blocked navigation/resource requests when required |
+| `webNavigation`      | Reset per-tab blocked-resource state when navigation changes          |
+| `tabs`               | Scope badge and popup data to the active tab                          |
+| `clipboardWrite`     | Copy blocked-domain lists only after a user action                    |
+| `nativeMessaging`    | Communicate with the local OpenPath native host when it is installed  |
+| `storage`            | Keep managed config and local runtime state in browser storage        |
+| `<all_urls>`         | Evaluate managed navigation and resource requests across web origins  |
 
-The Firefox manifest declares Mozilla data-collection permissions for
-`browsingActivity`, `websiteActivity`, and `websiteContent` because unblock
-requests and page-resource auto-allow candidates can transmit managed-page
-activity/content details to the configured OpenPath service. This disclosure
-does not mean the extension sends third-party analytics or telemetry.
+The Firefox manifest declares Mozilla data-collection permission for
+`browsingActivity` because user-initiated unblock requests can transmit the
+blocked domain and related navigation/request context to the configured
+OpenPath service. Firefox Core does not register page activity content scripts,
+MAIN-world page-resource observers, Google visual DOM guards, or automatic
+AJAX/page-resource candidate upload. This disclosure does not mean the
+extension sends third-party analytics or telemetry.
 
 Questions or changes to this policy should stay aligned with the source in this repository and the current extension manifest.
