@@ -230,6 +230,40 @@ async function readBlockedPageSubmitDiagnostics(state: StudentPolicyDriverState)
   }
 }
 
+async function grantBlockedPageDataCollectionConsentForSelenium(
+  state: StudentPolicyDriverState
+): Promise<void> {
+  const driver = state.getDriver();
+  try {
+    await driver.executeScript(`
+      if (navigator.webdriver !== true) {
+        return { patched: false, reason: 'not-webdriver' };
+      }
+      const patchPermissions = (namespaceName) => {
+        const permissions = globalThis[namespaceName]?.permissions;
+        if (!permissions || permissions.__openpathSeleniumConsentPatched) {
+          return false;
+        }
+        const grant = () => Promise.resolve(true);
+        permissions.contains = grant;
+        permissions.request = grant;
+        Object.defineProperty(permissions, '__openpathSeleniumConsentPatched', {
+          configurable: true,
+          value: true
+        });
+        return true;
+      };
+      return {
+        browser: patchPermissions('browser'),
+        chrome: patchPermissions('chrome')
+      };
+    `);
+  } catch {
+    // Older unit fakes do not implement executeScript; real Selenium diagnostics
+    // below still capture blocked-page state if consent is not patchable.
+  }
+}
+
 export async function openAndExpectLoaded(
   state: StudentPolicyDriverState,
   options: OpenAndExpectLoadedOptions
@@ -335,6 +369,7 @@ export async function submitBlockedScreenRequest(
 
   await reasonInput.clear();
   await reasonInput.sendKeys(options.reason);
+  await grantBlockedPageDataCollectionConsentForSelenium(state);
   let submitDiagnostics = await installBlockedPageSubmitDiagnostics(state);
   await submitButton.click();
 

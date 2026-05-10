@@ -4,29 +4,31 @@ import { describe, test } from 'node:test';
 import { ensureBrowsingActivityConsent } from '../src/lib/data-collection-consent.js';
 
 await describe('data collection consent', async () => {
-  await test('continues when browsing activity consent is already granted', async () => {
-    let requested = false;
+  await test('continues when browsing activity consent is granted by request', async () => {
+    let checked = false;
 
     const result = await ensureBrowsingActivityConsent({
-      contains: () => Promise.resolve(true),
-      request: () => {
-        requested = true;
+      contains: () => {
+        checked = true;
         return Promise.resolve(false);
+      },
+      request: () => {
+        return Promise.resolve(true);
       },
     });
 
     assert.deepEqual(result, { granted: true });
-    assert.equal(requested, false);
+    assert.equal(checked, false);
   });
 
-  await test('requests optional browsing activity consent when it is missing', async () => {
+  await test('requests optional browsing activity consent before any async contains check', async () => {
     const checkedPayloads: unknown[] = [];
     const requestedPayloads: unknown[] = [];
 
     const result = await ensureBrowsingActivityConsent({
       contains: (payload) => {
         checkedPayloads.push(payload);
-        return Promise.resolve(false);
+        return Promise.resolve(true);
       },
       request: (payload) => {
         requestedPayloads.push(payload);
@@ -35,7 +37,7 @@ await describe('data collection consent', async () => {
     });
 
     assert.deepEqual(result, { granted: true });
-    assert.deepEqual(checkedPayloads, [{ data_collection: ['browsingActivity'] }]);
+    assert.deepEqual(checkedPayloads, []);
     assert.deepEqual(requestedPayloads, [{ data_collection: ['browsingActivity'] }]);
   });
 
