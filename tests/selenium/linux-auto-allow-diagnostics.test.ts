@@ -13,10 +13,9 @@ test('Linux auto-allow diagnostics expose the required ordered phases', () => {
     'origin-page-load',
     'page-observer',
     'page-resource-candidates',
-    'remote-rule-creation',
-    'local-whitelist-apply',
-    'dns-policy-apply',
-    'probe-traffic',
+    'no-automatic-rule-creation',
+    'explicit-whitelist-apply',
+    'explicit-probe-traffic',
     'artifact-written',
   ]);
 });
@@ -26,18 +25,18 @@ test('Linux auto-allow classifier reports the first failed phase as the boundary
     { id: 'firefox-extension-ready', status: 'passed' },
     { id: 'origin-page-load', status: 'passed' },
     {
-      id: 'local-whitelist-apply',
+      id: 'explicit-whitelist-apply',
       status: 'failed',
       message: 'local whitelist missing api.example.test',
     },
-    { id: 'dns-policy-apply', status: 'failed', message: 'dns did not converge' },
+    { id: 'explicit-probe-traffic', status: 'failed', message: 'dns did not converge' },
   ]);
 
   assert.deepEqual(boundary, {
-    id: 'local-whitelist-apply',
+    id: 'explicit-whitelist-apply',
     message: 'local whitelist missing api.example.test',
     recommendedNextAction:
-      'Inspect /var/lib/openpath/whitelist.txt and openpath-update.service before changing browser behavior.',
+      'Inspect explicit group rules, /var/lib/openpath/whitelist.txt, and openpath-update.service before changing browser behavior.',
   });
 });
 
@@ -57,10 +56,9 @@ test('Linux auto-allow artifact preserves probes and diagnostics without changin
       { id: 'origin-page-load', status: 'passed' },
       { id: 'page-observer', status: 'passed' },
       { id: 'page-resource-candidates', status: 'passed' },
-      { id: 'remote-rule-creation', status: 'passed' },
-      { id: 'local-whitelist-apply', status: 'passed' },
-      { id: 'dns-policy-apply', status: 'passed' },
-      { id: 'probe-traffic', status: 'passed' },
+      { id: 'no-automatic-rule-creation', status: 'passed' },
+      { id: 'explicit-whitelist-apply', status: 'passed' },
+      { id: 'explicit-probe-traffic', status: 'passed' },
       { id: 'artifact-written', status: 'passed' },
     ],
     diagnostics: {

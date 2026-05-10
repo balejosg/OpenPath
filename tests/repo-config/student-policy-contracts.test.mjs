@@ -998,7 +998,7 @@ describe('repository verification contract', () => {
     );
   });
 
-  test('Linux student policy SP-006 writes an auto-allow boundary artifact', () => {
+  test('Linux student policy SP-006 writes a no-auto-allow observation boundary artifact', () => {
     const scenarios = readText('tests/selenium/student-policy-scenarios.ts');
     const helper = readText('tests/selenium/linux-auto-allow-diagnostics.ts');
 
@@ -1009,8 +1009,13 @@ describe('repository verification contract', () => {
     );
     assert.match(
       helper,
-      /firefox-extension-ready[\s\S]*origin-page-load[\s\S]*page-observer[\s\S]*page-resource-candidates[\s\S]*remote-rule-creation[\s\S]*local-whitelist-apply[\s\S]*dns-policy-apply[\s\S]*probe-traffic[\s\S]*artifact-written/,
-      'Linux auto-allow helper should expose the required phase contract'
+      /firefox-extension-ready[\s\S]*origin-page-load[\s\S]*page-observer[\s\S]*page-resource-candidates[\s\S]*no-automatic-rule-creation[\s\S]*explicit-whitelist-apply[\s\S]*explicit-probe-traffic[\s\S]*artifact-written/,
+      'Linux auto-allow helper should expose the no-auto-allow observation phase contract'
+    );
+    assert.doesNotMatch(
+      helper,
+      /remote-rule-creation|local-whitelist-apply/,
+      'SP-006 diagnostics must not require automatic rule creation as the success contract'
     );
     assert.match(
       helper,
@@ -1029,13 +1034,18 @@ describe('repository verification contract', () => {
     );
     assert.match(
       scenarios,
-      /fetchMachineWhitelist\(\)/,
-      'SP-006 diagnostics should capture the remote machine whitelist'
+      /no-automatic-rule-creation[\s\S]*fetchMachineWhitelist\(\)/,
+      'SP-006 diagnostics should prove observed dependencies are not automatically published remotely'
     );
     assert.match(
       scenarios,
-      /readWhitelistFile\(\)/,
-      'SP-006 diagnostics should capture the local Linux whitelist file'
+      /no-automatic-rule-creation[\s\S]*assertWhitelistMissing/,
+      'SP-006 diagnostics should prove observed dependencies are not automatically applied locally'
+    );
+    assert.match(
+      scenarios,
+      /explicit-whitelist-apply[\s\S]*ensureWhitelistRule/,
+      'SP-006 should validate explicit allowlist application after observation'
     );
     assert.match(
       scenarios,

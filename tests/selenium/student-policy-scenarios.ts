@@ -318,6 +318,12 @@ async function waitForPageResourceObserver(
   return lastState;
 }
 
+async function waitForObservationWindow(timeoutMs: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, timeoutMs);
+  });
+}
+
 async function seedBaselineWhitelist(
   client: StudentPolicyServerClient,
   driver: StudentPolicyDriver,
@@ -482,6 +488,7 @@ async function runAjaxAutoAllowScenarioSet(
       );
     }
   };
+  const restrictedGroupId = driver.scenario.groups.restricted.id;
 
   const dependencyProbes: Array<{
     id: string;
@@ -537,7 +544,7 @@ async function runAjaxAutoAllowScenarioSet(
 
   try {
     for (const probe of dependencyProbes) {
-      logScenarioStep(`SP-006 ${probe.id} dependency auto-allow from whitelisted origin`);
+      logScenarioStep(`SP-006 ${probe.id} dependency observation without automatic rule creation`);
 
       const linuxProbe: LinuxAutoAllowProbe | null =
         probe.diagnosticId === undefined
@@ -569,11 +576,11 @@ async function runAjaxAutoAllowScenarioSet(
         );
       });
 
-      const firstResult = await runLinuxDiagnosticPhase('probe-traffic', async () => {
+      const firstResult = await runLinuxDiagnosticPhase('explicit-probe-traffic', async () => {
         const result = await probe.run();
         assert.ok(
           result === 'blocked' || result === 'ok',
-          `${probe.id} dependency probe should complete before auto-allow convergence`
+          `${probe.id} dependency probe should complete before explicit allowlist convergence`
         );
         return result;
       });
@@ -603,34 +610,31 @@ async function runAjaxAutoAllowScenarioSet(
         );
       });
 
-      await runLinuxDiagnosticPhase('remote-rule-creation', async () => {
-        await driver.waitForConvergence(
+      await runLinuxDiagnosticPhase('no-automatic-rule-creation', async () => {
+        await waitForObservationWindow(2_000);
+        assert.doesNotMatch(
+          await client.fetchMachineWhitelist(),
+          new RegExp(`(^|\\n)${escapeRegExp(probe.host)}($|\\n)`),
+          `${probe.id} dependency should not be automatically published to remote whitelist`
+        );
+        await driver.assertWhitelistMissing(probe.host);
+      });
+
+      await runLinuxDiagnosticPhase('explicit-whitelist-apply', async () => {
+        await client.ensureWhitelistRule(
+          restrictedGroupId,
+          probe.host,
+          'SP-006 explicit dependency allowlist'
+        );
+        await settlePolicyChange(
+          driver,
+          mode,
           async () => {
             assert.match(
               await client.fetchMachineWhitelist(),
               new RegExp(`(^|\\n)${escapeRegExp(probe.host)}($|\\n)`)
             );
-          },
-          { timeoutMs: 45_000, pollMs: 1_000 }
-        );
-      });
-
-      await runLinuxDiagnosticPhase('local-whitelist-apply', async () => {
-        await settlePolicyChange(
-          driver,
-          mode,
-          async () => {
             await driver.assertWhitelistContains(probe.host);
-          },
-          { timeoutMs: 45_000 }
-        );
-      });
-
-      await runLinuxDiagnosticPhase('dns-policy-apply', async () => {
-        await settlePolicyChange(
-          driver,
-          mode,
-          async () => {
             await driver.assertDnsAllowed(probe.host);
           },
           { timeoutMs: 45_000 }
@@ -642,8 +646,8 @@ async function runAjaxAutoAllowScenarioSet(
         title: 'OpenPath Site Fixture',
         selector: '#page-status',
       });
-      let secondResult: 'ok' | 'blocked' = 'blocked';
-      await runLinuxDiagnosticPhase('probe-traffic', async () => {
+      let explicitResult: 'ok' | 'blocked' = 'blocked';
+      await runLinuxDiagnosticPhase('explicit-probe-traffic', async () => {
         await driver.waitForConvergence(
           async () => {
             await driver.openAndExpectLoaded({
@@ -651,26 +655,26 @@ async function runAjaxAutoAllowScenarioSet(
               title: 'OpenPath Site Fixture',
               selector: '#page-status',
             });
-            secondResult = await probe.run();
+            explicitResult = await probe.run();
             assert.strictEqual(
-              secondResult,
+              explicitResult,
               'ok',
-              `${probe.id} dependency should load after auto-allow`
+              `${probe.id} dependency should load after explicit allowlist`
             );
           },
           { timeoutMs: 45_000, pollMs: 2_000 }
         );
-        return secondResult;
+        return explicitResult;
       });
       if (linuxProbe !== null) {
-        linuxProbe.secondResult = secondResult;
+        linuxProbe.explicitResult = explicitResult;
       }
     }
     await writeLinuxArtifact(true);
   } catch (error) {
     if (!linuxAutoAllowPhases.some((phase) => phase.status === 'failed')) {
       recordLinuxAutoAllowPhase({
-        id: 'probe-traffic',
+        id: 'explicit-probe-traffic',
         status: 'failed',
         message: error instanceof Error ? error.message : String(error),
       });

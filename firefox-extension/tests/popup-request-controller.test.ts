@@ -65,12 +65,12 @@ await describe('popup request controller', async () => {
     const previousDocument = (globalRecord as { document?: unknown }).document;
     globalRecord.browser = {
       permissions: {
-        contains: async () => false,
-        request: async () => true,
+        contains: (): Promise<boolean> => Promise.resolve(false),
+        request: (): Promise<boolean> => Promise.resolve(true),
       },
     };
     (globalRecord as { document?: unknown }).document = {
-      createElement: () => new FakeElement(),
+      createElement: (): FakeElement => new FakeElement(),
     };
 
     try {
@@ -105,8 +105,9 @@ await describe('popup request controller', async () => {
         btnVerify,
         buildSubmitMessage: (payload) => ({ action: 'submitBlockedDomain', ...payload }),
         isRequestConfigured: () => true,
-        loadDomainStatuses: async () => {
+        loadDomainStatuses: (): Promise<void> => {
           loadDomainStatusesCalls += 1;
+          return Promise.resolve();
         },
         renderDomainsList: () => {
           renderDomainsListCalls += 1;
@@ -115,15 +116,15 @@ await describe('popup request controller', async () => {
         requestReasonEl,
         requestSectionEl,
         requestStatusEl,
-        sendMessage: async (message) => {
+        sendMessage: (message): Promise<{ success: boolean; results?: unknown[]; id?: string }> => {
           messages.push(message);
           if ((message as { action?: string }).action === 'checkWithNative') {
-            return {
+            return Promise.resolve({
               success: true,
               results: [{ domain: 'cdn.example.com', inWhitelist: false }],
-            };
+            });
           }
-          return { success: true, id: 'req-1' };
+          return Promise.resolve({ success: true, id: 'req-1' });
         },
         showToast: (message) => {
           toasts.push(message);

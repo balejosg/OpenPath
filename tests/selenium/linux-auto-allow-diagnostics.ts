@@ -15,10 +15,9 @@ export const LINUX_AUTO_ALLOW_DIAGNOSTIC_PHASES = [
   'origin-page-load',
   'page-observer',
   'page-resource-candidates',
-  'remote-rule-creation',
-  'local-whitelist-apply',
-  'dns-policy-apply',
-  'probe-traffic',
+  'no-automatic-rule-creation',
+  'explicit-whitelist-apply',
+  'explicit-probe-traffic',
   'artifact-written',
 ] as const;
 
@@ -43,7 +42,7 @@ export interface LinuxAutoAllowProbe {
     patched?: Record<string, boolean>;
   };
   firstResult?: 'ok' | 'blocked';
-  secondResult?: 'ok' | 'blocked';
+  explicitResult?: 'ok' | 'blocked';
 }
 
 export interface LinuxAutoAllowBoundary {
@@ -85,18 +84,17 @@ const NEXT_ACTION_BY_PHASE: Record<LinuxAutoAllowPhaseId | 'unknown' | 'success'
     'Inspect extension content-script injection and the page observer registration path.',
   'page-resource-candidates':
     'Inspect extension page-resource detection, candidate matching, and browser console evidence.',
-  'remote-rule-creation':
-    'Inspect auto-allow API responses and remote whitelist publication before changing endpoint behavior.',
-  'local-whitelist-apply':
-    'Inspect /var/lib/openpath/whitelist.txt and openpath-update.service before changing browser behavior.',
-  'dns-policy-apply':
-    'Inspect dnsmasq state, /etc/resolv.conf, and local dig evidence before changing extension behavior.',
-  'probe-traffic':
-    'Inspect Firefox probe traffic, content-script events, and native-host visibility before changing policy publication.',
+  'no-automatic-rule-creation':
+    'Inspect Firefox page-resource observation and ensure no automatic rule publication path was reintroduced.',
+  'explicit-whitelist-apply':
+    'Inspect explicit group rules, /var/lib/openpath/whitelist.txt, and openpath-update.service before changing browser behavior.',
+  'explicit-probe-traffic':
+    'Inspect Firefox probe traffic, dnsmasq state, and explicit native-host policy visibility before changing policy publication.',
   'artifact-written':
     'Inspect artifact directory permissions and runner artifact upload configuration.',
   unknown: 'Inspect the collected diagnostics to identify the first missing evidence boundary.',
-  success: 'No diagnostic boundary remained after Linux auto-allow convergence.',
+  success:
+    'No diagnostic boundary remained after Linux page-resource observation and explicit allowlist convergence.',
 };
 
 export function classifyLinuxAutoAllowBoundary(
@@ -107,7 +105,8 @@ export function classifyLinuxAutoAllowBoundary(
   if (!failedPhase) {
     return {
       id: 'success',
-      message: 'Linux AJAX/subresource auto-allow completed successfully.',
+      message:
+        'Linux AJAX/subresource observation completed without automatic rule creation and explicit allowlist probes succeeded.',
       recommendedNextAction: NEXT_ACTION_BY_PHASE.success,
     };
   }
