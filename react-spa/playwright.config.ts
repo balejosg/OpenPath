@@ -5,7 +5,7 @@ import { defineConfig, devices } from '@playwright/test';
  * Playwright configuration optimized for local development speed.
  *
  * Key optimizations:
- * - fullyParallel: true - run all tests in parallel
+ * - fullyParallel: true - allow safe cross-file parallelism
  * - reuseExistingServer: opt-in - only reuse API when explicitly requested
  * - Only Chromium (no Firefox/WebKit) for speed
  * - Shorter timeouts locally
@@ -63,8 +63,8 @@ export default defineConfig({
   /* Retry on CI only - fail fast locally */
   retries: isCI ? 2 : 0,
 
-  /* Use all CPU cores locally, limit in CI */
-  workers: isCI ? 2 : undefined,
+  /* Keep E2E startup stable against the shared local API server. */
+  workers: 2,
 
   /* Reporter: minimal locally for speed, html in CI */
   reporter: isCI ? [['html'], ['junit', { outputFile: 'e2e/test-results/results.xml' }]] : 'list',

@@ -103,6 +103,10 @@ describe('repository verification contract', () => {
       'playwright.config.ts should only reuse an existing API server when PLAYWRIGHT_REUSE_SERVER=1'
     );
     assert.ok(
+      playwrightConfig.includes('workers: 2'),
+      'playwright.config.ts should limit workers for stable shared-server E2E startup'
+    );
+    assert.ok(
       e2eStartupScript.includes('npm run build --workspace=@openpath/shared'),
       'start-api-e2e.sh should build @openpath/shared before starting the E2E API server'
     );
