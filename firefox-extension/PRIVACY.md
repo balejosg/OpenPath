@@ -16,7 +16,8 @@ The OpenPath extension is designed to operate locally in the browser. It is used
 - unblock requests send the blocked domain, request reason, and request metadata only to the configured OpenPath service after Firefox data-collection consent is granted
 - blocked-page and popup access requests send user-initiated request details only to the configured OpenPath service after Firefox data-collection consent is granted
 - Google game blocking is enforced locally through `webRequest` for known Snake, doodle-game, and interactive logo-game surfaces
-- Firefox Core does not include Android support, content scripts, MAIN-world observers, automatic AJAX/page-resource candidate upload, or live/automatic AMO upload
+- Firefox Core includes an isolated-world page activity relay and a MAIN-world page-resource observer for local OpenPath policy visibility
+- Firefox Core does not include Android support, Google visual DOM guards, automatic AJAX/page-resource allowlisting, or live/automatic AMO upload
 - clipboard access is used only when the user copies a blocked-domain list
 - `nativeMessaging` communicates only with the local OpenPath native host on the same machine
 
@@ -40,10 +41,12 @@ browser data.
 The Firefox manifest declares no required Mozilla data collection and makes
 `browsingActivity` optional. User-initiated unblock requests ask for that
 permission before transmitting the blocked domain and related navigation/request
-context to the configured OpenPath service. Firefox Core does not register page
-activity content scripts, MAIN-world page-resource observers, Google visual DOM
-guards, or automatic AJAX/page-resource candidate upload. It also does not
-provide Android support or live/automatic AMO upload. Google game blocking is a
-local browser policy and does not send third-party analytics or telemetry.
+context to the configured OpenPath service. Firefox Core registers page activity
+content scripts and a MAIN-world page-resource observer for local OpenPath
+policy visibility, but those observers do not upload browsing data
+automatically and do not make automatic allowlist changes. Firefox Core does not
+register Google visual DOM guards, automatic AJAX/page-resource allowlisting,
+Android support, or live/automatic AMO upload. Google game blocking is a local
+browser policy and does not send third-party analytics or telemetry.
 
 Questions or changes to this policy should stay aligned with the source in this repository and the current extension manifest.

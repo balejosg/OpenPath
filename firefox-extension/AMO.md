@@ -57,9 +57,11 @@ What it does not do:
   OpenPath deployments
 - it does not replace the OpenPath Linux or Windows endpoint agent, DNS rules,
   firewall rules, or administrator policy
-- Firefox Core does not include Android support, content scripts, MAIN-world
-  observers, automatic AJAX/page-resource candidate upload, or live/automatic
-  AMO upload
+- Firefox Core includes an isolated-world page activity relay and a MAIN-world
+  page-resource observer for local OpenPath policy visibility, without
+  automatic allowlist changes or automatic browsing-data upload
+- Firefox Core does not include Android support, Google visual DOM guards,
+  automatic AJAX/page-resource allowlisting, or live/automatic AMO upload
 - it does not send analytics, telemetry, or browsing-history data to third-party
   services
 

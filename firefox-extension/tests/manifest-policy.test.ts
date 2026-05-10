@@ -121,10 +121,22 @@ void describe('Firefox extension manifest policy', () => {
     });
   });
 
-  void test('does not declare content scripts in the desktop-only Firefox manifest', async () => {
+  void test('declares only the reviewed page observer content scripts', async () => {
     const manifest = await readManifest();
 
-    assert.equal(manifest.content_scripts, undefined);
+    assert.deepEqual(manifest.content_scripts, [
+      {
+        matches: ['http://*/*', 'https://*/*'],
+        js: ['dist/page-activity-content.js'],
+        run_at: 'document_start',
+      },
+      {
+        matches: ['http://*/*', 'https://*/*'],
+        js: ['dist/page-resource-observer-main.js'],
+        run_at: 'document_start',
+        world: 'MAIN',
+      },
+    ]);
   });
 
   void test('keeps popup action in Firefox Core', async () => {
