@@ -3,6 +3,10 @@ import {
   buildGetRecentBlockedDomainRequestStatusMessage,
   buildSubmitBlockedDomainRequestMessage,
 } from './lib/blocked-screen-contract.js';
+import {
+  ensureBrowsingActivityConsent,
+  type DataCollectionPermissionsApi,
+} from './lib/data-collection-consent.js';
 
 interface BlockedPageRuntime {
   sendMessage(message: unknown): Promise<unknown>;
@@ -11,6 +15,10 @@ interface BlockedPageRuntime {
 interface CallbackRuntime {
   lastError?: { message?: string } | null;
   sendMessage(message: unknown, callback: (response: unknown) => void): void;
+}
+
+interface BrowserPermissionsGlobal {
+  permissions?: Partial<DataCollectionPermissionsApi>;
 }
 
 type RequestStatusType = 'success' | 'error' | 'pending';
@@ -158,6 +166,21 @@ function getBrowserRuntime(): BlockedPageRuntime | null {
   return null;
 }
 
+function getDataCollectionPermissionsApi(): DataCollectionPermissionsApi | null {
+  const globalWithPermissions = globalThis as {
+    browser?: BrowserPermissionsGlobal;
+  };
+  const permissions = globalWithPermissions.browser?.permissions;
+  if (typeof permissions?.contains === 'function' && typeof permissions.request === 'function') {
+    return {
+      contains: permissions.contains.bind(permissions),
+      request: permissions.request.bind(permissions),
+    };
+  }
+
+  return null;
+}
+
 async function copyText(text: string): Promise<boolean> {
   if (!text) {
     return false;
@@ -266,6 +289,13 @@ export function main(): void {
       setRequestStatus('Enviando solicitud...', 'pending');
 
       try {
+        const consent = await ensureBrowsingActivityConsent(getDataCollectionPermissionsApi());
+        if (!consent.granted) {
+          clearRecentRequestStatus(context.blockedDomain);
+          setRequestStatus(consent.error, 'error');
+          return;
+        }
+
         const response = (await submitUnblockRequest({
           domain: context.blockedDomain,
           reason,

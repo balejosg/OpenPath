@@ -189,7 +189,7 @@ EOF
 {
   "policies": {
     "ExtensionSettings": {
-      "monitor-bloqueos@openpath": {
+      "openpath-block-monitor@openpath": {
         "installation_mode": "force_installed"
       }
     }
@@ -312,7 +312,7 @@ EOF
   "description": "OpenPath Native Messaging Host",
   "path": "/usr/local/bin/openpath-native-host",
   "type": "stdio",
-  "allowed_extensions": ["monitor-bloqueos@openpath"]
+  "allowed_extensions": ["openpath-block-monitor@openpath"]
 }
 EOF
     

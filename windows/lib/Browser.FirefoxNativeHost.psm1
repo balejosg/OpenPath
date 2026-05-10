@@ -232,7 +232,7 @@ function Register-OpenPathFirefoxNativeHost {
         description = 'OpenPath Windows Native Messaging Host'
         path = $wrapperPath
         type = 'stdio'
-        allowed_extensions = @('monitor-bloqueos@openpath')
+        allowed_extensions = @('openpath-block-monitor@openpath')
     } | ConvertTo-Json -Depth 8
     Write-OpenPathUtf8NoBomFile -Path $manifestPath -Value $manifestJson
 

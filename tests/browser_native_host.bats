@@ -41,7 +41,7 @@
   "description": "OpenPath System Native Messaging Host",
   "path": "/usr/local/bin/openpath-native-host.py",
   "type": "stdio",
-  "allowed_extensions": ["monitor-bloqueos@openpath"]
+  "allowed_extensions": ["openpath-block-monitor@openpath"]
 }
 EOF
 
@@ -61,7 +61,7 @@ EOF
 }
 
 @test "remove_firefox_extension removes extension directory" {
-    local ext_dir="$TEST_TMP_DIR/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/monitor-bloqueos@openpath"
+    local ext_dir="$TEST_TMP_DIR/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/openpath-block-monitor@openpath"
     mkdir -p "$ext_dir"
     touch "$ext_dir/manifest.json"
 

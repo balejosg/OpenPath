@@ -42,7 +42,7 @@
 @test "cleanup_browser_policies leaves Firefox managed extension policy untouched" {
     source "$PROJECT_DIR/linux/lib/browser.sh"
 
-    run add_extension_to_policies "monitor-bloqueos@openpath" "$TEST_TMP_DIR/extensions/monitor-bloqueos@openpath"
+    run add_extension_to_policies "openpath-block-monitor@openpath" "$TEST_TMP_DIR/extensions/openpath-block-monitor@openpath"
     [ "$status" -eq 0 ]
 
     BLOCKED_PATHS=("example.com/ads")
@@ -57,9 +57,9 @@ with open("$FIREFOX_POLICIES", "r", encoding="utf-8") as fh:
     policies = json.load(fh)
 
 extension_settings = policies["policies"].get("ExtensionSettings", {})
-assert "monitor-bloqueos@openpath" in extension_settings, extension_settings
+assert "openpath-block-monitor@openpath" in extension_settings, extension_settings
 assert "Extensions" in policies["policies"], policies["policies"]
-assert "monitor-bloqueos@openpath" in policies["policies"]["Extensions"].get("Locked", [])
+assert "openpath-block-monitor@openpath" in policies["policies"]["Extensions"].get("Locked", [])
 PYEOF
 }
 
@@ -122,11 +122,11 @@ PYEOF
 @test "add_extension_to_policies replaces stale install entries for the same extension" {
     source "$PROJECT_DIR/linux/lib/browser.sh"
 
-    run add_extension_to_policies "monitor-bloqueos@openpath" "$TEST_TMP_DIR/unpacked-extension"
+    run add_extension_to_policies "openpath-block-monitor@openpath" "$TEST_TMP_DIR/unpacked-extension"
     [ "$status" -eq 0 ]
 
     run add_extension_to_policies \
-        "monitor-bloqueos@openpath" \
+        "openpath-block-monitor@openpath" \
         "$TEST_TMP_DIR/openpath-firefox-extension.xpi" \
         "https://school.example/api/extensions/firefox/openpath.xpi"
     [ "$status" -eq 0 ]
@@ -141,7 +141,7 @@ install_entries = policies["policies"].get("Extensions", {}).get("Install", [])
 old_entry = "$TEST_TMP_DIR/unpacked-extension"
 assert old_entry not in install_entries, install_entries
 assert "https://school.example/api/extensions/firefox/openpath.xpi" not in install_entries
-assert policies["policies"]["ExtensionSettings"]["monitor-bloqueos@openpath"]["install_url"] == "https://school.example/api/extensions/firefox/openpath.xpi"
+assert policies["policies"]["ExtensionSettings"]["openpath-block-monitor@openpath"]["install_url"] == "https://school.example/api/extensions/firefox/openpath.xpi"
 PYEOF
 }
 
@@ -149,7 +149,7 @@ PYEOF
     source "$PROJECT_DIR/linux/lib/browser.sh"
 
     run add_extension_to_policies \
-        "monitor-bloqueos@openpath" \
+        "openpath-block-monitor@openpath" \
         "$TEST_TMP_DIR/openpath.xpi" \
         "https://downloads.example/openpath-managed.xpi"
     [ "$status" -eq 0 ]
@@ -164,9 +164,9 @@ with open("$FIREFOX_POLICIES", "r", encoding="utf-8") as fh:
     policies = json.load(fh)
 
 policy_root = policies["policies"]
-assert "monitor-bloqueos@openpath" not in policy_root.get("ExtensionSettings", {})
+assert "openpath-block-monitor@openpath" not in policy_root.get("ExtensionSettings", {})
 assert "https://downloads.example/openpath-managed.xpi" not in policy_root.get("Extensions", {}).get("Install", [])
-assert "monitor-bloqueos@openpath" not in policy_root.get("Extensions", {}).get("Locked", [])
+assert "openpath-block-monitor@openpath" not in policy_root.get("Extensions", {}).get("Locked", [])
 PYEOF
 }
 
@@ -208,7 +208,7 @@ PYEOF
 
     run browser_contract_fixture_value "browser-firefox-managed-extension.json" "extensionId"
     [ "$status" -eq 0 ]
-    [ "$output" = "monitor-bloqueos@openpath" ]
+    [ "$output" = "openpath-block-monitor@openpath" ]
 }
 
 @test "browser policy contracts define managed Firefox source precedence" {

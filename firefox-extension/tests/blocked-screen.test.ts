@@ -8,6 +8,8 @@ type MockRuntimeResponse =
   | Record<string, unknown>
   | ((message: unknown) => Record<string, unknown>);
 
+type MockDataCollectionConsent = 'granted' | 'denied' | 'missing';
+
 class MockElement {
   className = '';
   disabled = false;
@@ -60,10 +62,12 @@ function runBlockedScript(
   response: MockRuntimeResponse,
   search = '?domain=learning.example&error=NS_ERROR_UNKNOWN_HOST&origin=portal.example',
   runtimeApi: 'browser-promise' | 'chrome-callback' | 'browser-and-chrome' = 'browser-promise',
-  sessionStorageStore = new Map<string, string>()
+  sessionStorageStore = new Map<string, string>(),
+  dataCollectionConsent: MockDataCollectionConsent = 'granted'
 ): {
   elements: Map<string, MockElement>;
   messages: unknown[];
+  permissionRequests: unknown[];
   runtimeApis: string[];
 } {
   clearBlockedScreenGlobals();
@@ -81,9 +85,20 @@ function runBlockedScript(
   ];
   const elements = new Map(ids.map((id) => [id, new MockElement()]));
   const messages: unknown[] = [];
+  const permissionRequests: unknown[] = [];
   const runtimeApis: string[] = [];
   const resolveResponse = (message: unknown): unknown =>
     typeof response === 'function' ? response(message) : response;
+  const permissions =
+    dataCollectionConsent === 'missing'
+      ? undefined
+      : {
+          contains: (): Promise<boolean> => Promise.resolve(dataCollectionConsent === 'granted'),
+          request: (payload: unknown): Promise<boolean> => {
+            permissionRequests.push(payload);
+            return Promise.resolve(dataCollectionConsent === 'granted');
+          },
+        };
 
   const runtimeGlobals =
     runtimeApi === 'browser-and-chrome'
@@ -98,6 +113,7 @@ function runBlockedScript(
                   return Promise.resolve(resolveResponse(message));
                 },
               },
+              ...(permissions ? { permissions } : {}),
             },
           },
           chrome: {
@@ -115,6 +131,16 @@ function runBlockedScript(
         }
       : runtimeApi === 'chrome-callback'
         ? {
+            ...(permissions
+              ? {
+                  browser: {
+                    configurable: true,
+                    value: {
+                      permissions,
+                    },
+                  },
+                }
+              : {}),
             chrome: {
               configurable: true,
               value: {
@@ -143,6 +169,7 @@ function runBlockedScript(
                     return Promise.resolve(resolveResponse(message));
                   },
                 },
+                ...(permissions ? { permissions } : {}),
               },
             },
           };
@@ -186,7 +213,7 @@ function runBlockedScript(
 
   main();
 
-  return { elements, messages, runtimeApis };
+  return { elements, messages, permissionRequests, runtimeApis };
 }
 
 function clearBlockedScreenGlobals(): void {
@@ -243,6 +270,55 @@ void describe('blocked screen', () => {
       },
     ]);
     assert.match(elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+  });
+
+  void test('does not submit unblock requests when browsing activity consent is denied', async () => {
+    const { elements, messages, permissionRequests } = runBlockedScript(
+      {
+        success: true,
+        id: 'req_129',
+        status: 'pending',
+      },
+      '?domain=learning.example&error=NS_ERROR_UNKNOWN_HOST&origin=portal.example',
+      'browser-promise',
+      new Map<string, string>(),
+      'denied'
+    );
+
+    const reason = elements.get('request-reason');
+    assert.ok(reason);
+    reason.value = 'Lo necesito para una actividad de clase';
+
+    await elements.get('submit-unblock-request')?.trigger('click');
+    await flushBlockedScreenAsyncHandlers();
+
+    assert.deepStrictEqual(permissionRequests, [{ data_collection: ['browsingActivity'] }]);
+    assert.deepStrictEqual(messages, []);
+    assert.match(elements.get('request-status')?.textContent ?? '', /actividad de navegacion/);
+  });
+
+  void test('does not submit unblock requests when Firefox lacks data collection consent support', async () => {
+    const { elements, messages } = runBlockedScript(
+      {
+        success: true,
+        id: 'req_130',
+        status: 'pending',
+      },
+      '?domain=learning.example&error=NS_ERROR_UNKNOWN_HOST&origin=portal.example',
+      'browser-promise',
+      new Map<string, string>(),
+      'missing'
+    );
+
+    const reason = elements.get('request-reason');
+    assert.ok(reason);
+    reason.value = 'Lo necesito para una actividad de clase';
+
+    await elements.get('submit-unblock-request')?.trigger('click');
+    await flushBlockedScreenAsyncHandlers();
+
+    assert.deepStrictEqual(messages, []);
+    assert.match(elements.get('request-status')?.textContent ?? '', /no es compatible/);
   });
 
   void test('restores a recent submitted status after the blocked page reloads', async () => {

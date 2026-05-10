@@ -19,7 +19,7 @@ function global:New-ClassroomReadinessConfig {
 
 function global:New-FirefoxManagedPolicy {
     return [PSCustomObject]@{
-        ExtensionId = "monitor-bloqueos@openpath"
+        ExtensionId = "openpath-block-monitor@openpath"
         InstallUrl = "https://school.example/api/extensions/firefox/openpath.xpi"
         Source = "managed-api"
     }
@@ -59,7 +59,7 @@ Describe "Browser Module - Request Readiness" {
         $result = Get-OpenPathBrowserRequestReadiness `
             -Config (New-ClassroomReadinessConfig -ApprovedStudentBrowsers @('Firefox', 'Edge', 'Chrome')) `
             -ManagedExtensionPolicy ([PSCustomObject]@{
-                ExtensionId = "monitor-bloqueos@openpath"
+                ExtensionId = "openpath-block-monitor@openpath"
                 InstallUrl = "https://school.example/api/extensions/firefox/openpath.xpi"
                 Source = "managed-api"
             }) `
@@ -261,7 +261,7 @@ Describe "Browser Module - Request Readiness" {
                 classroomId = "classroom-123"
             }) `
             -ManagedExtensionPolicy ([PSCustomObject]@{
-                ExtensionId = "monitor-bloqueos@openpath"
+                ExtensionId = "openpath-block-monitor@openpath"
                 InstallUrl = "https://school.example/api/extensions/firefox/openpath.xpi"
                 Source = "managed-api"
             }) `
@@ -282,7 +282,7 @@ Describe "Browser Module - Request Readiness" {
                 classroomId = "classroom-123"
             }) `
             -ManagedExtensionPolicy ([PSCustomObject]@{
-                ExtensionId = "monitor-bloqueos@openpath"
+                ExtensionId = "openpath-block-monitor@openpath"
                 InstallUrl = "https://school.example/api/extensions/firefox/openpath.xpi"
                 Source = "managed-api"
             }) `
@@ -333,7 +333,7 @@ Describe "Browser Module - Request Readiness" {
                 classroomId = "classroom-123"
             }) `
             -ManagedExtensionPolicy ([PSCustomObject]@{
-                ExtensionId = "monitor-bloqueos@openpath"
+                ExtensionId = "openpath-block-monitor@openpath"
                 InstallUrl = "https://school.example/api/extensions/firefox/openpath.xpi"
                 Source = "managed-api"
             }) `

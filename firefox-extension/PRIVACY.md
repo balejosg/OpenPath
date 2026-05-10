@@ -13,11 +13,11 @@ The OpenPath extension is designed to operate locally in the browser. It is used
 
 - no analytics or telemetry are sent to third-party services
 - routine blocked-resource state is kept in browser-local runtime state
-- unblock requests send the blocked domain, request reason, and request metadata only to the configured OpenPath service
-- blocked-page and popup access requests send user-initiated request details only to the configured OpenPath service
+- unblock requests send the blocked domain, request reason, and request metadata only to the configured OpenPath service after Firefox data-collection consent is granted
+- blocked-page and popup access requests send user-initiated request details only to the configured OpenPath service after Firefox data-collection consent is granted
 - Firefox Core does not include Google games enforcement/guard, Android support, content scripts, MAIN-world observers, automatic AJAX/page-resource candidate upload, or live/automatic AMO upload
 - clipboard access is used only when the user copies a blocked-domain list
-- optional `nativeMessaging` communicates only with the local OpenPath native host on the same machine
+- `nativeMessaging` communicates only with the local OpenPath native host on the same machine
 
 The extension is intended for managed OpenPath deployments. It does not operate
 as a general-purpose consumer blocker and does not sell, share, or monetize
@@ -36,13 +36,13 @@ browser data.
 | `storage`            | Keep managed config and local runtime state in browser storage        |
 | `<all_urls>`         | Evaluate managed navigation and resource requests across web origins  |
 
-The Firefox manifest declares Mozilla data-collection permission for
-`browsingActivity` because user-initiated unblock requests can transmit the
-blocked domain and related navigation/request context to the configured
-OpenPath service. Firefox Core does not register page activity content scripts,
-MAIN-world page-resource observers, Google visual DOM guards, or automatic
-AJAX/page-resource candidate upload. It also does not provide Android support
-or live/automatic AMO upload. This disclosure does not mean the extension sends
-third-party analytics or telemetry.
+The Firefox manifest declares no required Mozilla data collection and makes
+`browsingActivity` optional. User-initiated unblock requests ask for that
+permission before transmitting the blocked domain and related navigation/request
+context to the configured OpenPath service. Firefox Core does not register page
+activity content scripts, MAIN-world page-resource observers, Google visual DOM
+guards, or automatic AJAX/page-resource candidate upload. It also does not
+provide Android support or live/automatic AMO upload. This disclosure does not
+mean the extension sends third-party analytics or telemetry.
 
 Questions or changes to this policy should stay aligned with the source in this repository and the current extension manifest.

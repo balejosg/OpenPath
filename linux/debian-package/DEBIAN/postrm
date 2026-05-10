@@ -84,7 +84,7 @@ EOF
         rm -f /etc/opt/chrome/policies/managed/url-whitelist.json 2>/dev/null || true
         
         # Remove Firefox extension
-        rm -rf /usr/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/monitor-bloqueos@openpath 2>/dev/null || true
+        rm -rf /usr/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/openpath-block-monitor@openpath 2>/dev/null || true
         rm -rf /usr/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/monitor-bloqueos@whitelist-system 2>/dev/null || true
         rm -f /usr/lib/mozilla/native-messaging-hosts/whitelist_native_host.json 2>/dev/null || true
         rm -f /etc/chromium/native-messaging-hosts/openpath_native_host.json 2>/dev/null || true

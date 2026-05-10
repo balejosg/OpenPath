@@ -11,11 +11,15 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "monitor-bloqueos@openpath",
+      "id": "openpath-block-monitor@openpath",
       "strict_min_version": "140.0",
       "data_collection_permissions": {
-        "required": ["browsingActivity"]
+        "required": ["none"],
+        "optional": ["browsingActivity"]
       }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
     }
   },
   "permissions": [

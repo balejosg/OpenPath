@@ -67,14 +67,14 @@ Describe "Browser Module - Diagnostics" {
             } -ModuleName Browser.Diagnostics
             Mock Get-OpenPathFirefoxManagedExtensionPolicy {
                 [PSCustomObject]@{
-                    ExtensionId = "monitor-bloqueos@openpath"
+                    ExtensionId = "openpath-block-monitor@openpath"
                     InstallUrl = "https://school.example/api/extensions/firefox/openpath.xpi"
                 }
             } -ModuleName Browser.Diagnostics
             Mock Test-OpenPathFirefoxMachineExtensionPolicy { $true } -ModuleName Browser.Diagnostics
             Mock Get-OpenPathFirefoxMachineExtensionSettings {
                 @{
-                    "monitor-bloqueos@openpath" = [PSCustomObject]@{
+                    "openpath-block-monitor@openpath" = [PSCustomObject]@{
                         install_url = "https://school.example/api/extensions/firefox/openpath.xpi"
                     }
                 }
@@ -134,7 +134,7 @@ Describe "Browser Module - Diagnostics" {
                         MetadataPath = "C:\OpenPath\browser-extension\firefox\metadata.json"
                         MetadataPresent = $true
                         MetadataParseResult = "ok"
-                        ExtensionId = "monitor-bloqueos@openpath"
+                        ExtensionId = "openpath-block-monitor@openpath"
                         ExtensionVersion = "1.2.3"
                         MetadataSha256 = "metadata-sha"
                         XpiPath = "C:\OpenPath\browser-extension\firefox\openpath.xpi"
@@ -148,7 +148,7 @@ Describe "Browser Module - Diagnostics" {
                         ManifestPath = "C:\OpenPath\native-host\manifest.json"
                         ManifestParse = "ok"
                         ManifestName = "openpath"
-                        AllowedExtensions = "monitor-bloqueos@openpath"
+                        AllowedExtensions = "openpath-block-monitor@openpath"
                         RegistryPath = "HKLM:\Software\Mozilla\NativeMessagingHosts\openpath"
                         RegistrySummary = "HKLM:\Software\Mozilla\NativeMessagingHosts\openpath=present"
                         WrapperPath = "C:\OpenPath\native-host\openpath.cmd"

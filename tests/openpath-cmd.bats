@@ -484,7 +484,7 @@ export FIREFOX_POLICIES="$state_dir/firefox-policies.json"
 export FIREFOX_EXTENSION_READY_FILE="$state_dir/firefox-extension-ready"
 export ETC_CONFIG_DIR="$etc_dir"
 cat > "$FIREFOX_POLICIES" <<'JSON'
-{"policies":{"ExtensionSettings":{"monitor-bloqueos@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
+{"policies":{"ExtensionSettings":{"openpath-block-monitor@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
 JSON
 
 GREEN=""
@@ -580,7 +580,7 @@ printf '{}' > "$FIREFOX_NATIVE_HOST_DIR/whitelist_native_host.json"
 printf '#!/bin/sh\n' > "$OPENPATH_NATIVE_HOST_INSTALL_DIR/openpath-native-host.py"
 chmod +x "$OPENPATH_NATIVE_HOST_INSTALL_DIR/openpath-native-host.py"
 cat > "$FIREFOX_POLICIES" <<'JSON'
-{"policies":{"ExtensionSettings":{"monitor-bloqueos@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
+{"policies":{"ExtensionSettings":{"openpath-block-monitor@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
 JSON
 
 GREEN=""
@@ -672,10 +672,10 @@ export FIREFOX_EXTENSION_READY_FILE="$state_dir/firefox-extension-ready"
 export ETC_CONFIG_DIR="$etc_dir"
 export OPENPATH_ALLOW_DEFERRED_FIREFOX_REGISTRATION=1
 cat > "$FIREFOX_POLICIES" <<'JSON'
-{"policies":{"ExtensionSettings":{"monitor-bloqueos@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
+{"policies":{"ExtensionSettings":{"openpath-block-monitor@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
 JSON
 cat > "$FIREFOX_EXTENSION_READY_FILE" <<'EOF_MARKER'
-extension_id=monitor-bloqueos@openpath
+extension_id=openpath-block-monitor@openpath
 target_count=1
 registered_count=0
 profile=student|/home/student|/home/student/.mozilla/firefox/openpath.default|disabled|extensions.json-disabled;active=false;userDisabled=true;signedState=-1;location=app-system-share

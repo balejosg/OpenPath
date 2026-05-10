@@ -3,5 +3,5 @@
   "description": "Native messaging host for Monitor de Bloqueos de Red extension",
   "path": "/usr/local/bin/openpath-native-host.py",
   "type": "stdio",
-  "allowed_extensions": ["monitor-bloqueos@openpath"]
+  "allowed_extensions": ["openpath-block-monitor@openpath"]
 }

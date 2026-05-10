@@ -17,7 +17,7 @@ function Get-OpenPathFirefoxReleaseXpiPath {
 }
 
 function Get-OpenPathDefaultFirefoxExtensionId {
-    return 'monitor-bloqueos@openpath'
+    return 'openpath-block-monitor@openpath'
 }
 
 function Get-OpenPathFirefoxMachinePolicyRegistryPath {

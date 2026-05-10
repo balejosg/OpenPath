@@ -222,7 +222,7 @@ test_firefox_esr_installed() {
 test_firefox_extension_installed() {
     test_section "9/9" "Firefox extension installation"
     
-    local ext_id="monitor-bloqueos@openpath"
+    local ext_id="openpath-block-monitor@openpath"
     local firefox_app_id="{ec8030f7-c20a-464f-9b0e-13a3a9e97384}"
     local ext_dir="/usr/share/mozilla/extensions/$firefox_app_id/$ext_id"
     local expect_firefox_extension="${OPENPATH_EXPECT_FIREFOX_EXTENSION:-0}"

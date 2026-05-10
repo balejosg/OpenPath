@@ -310,7 +310,7 @@ source "$project_dir/linux/lib/browser.sh"
 source "$project_dir/linux/lib/common.sh"
 
 add_extension_to_policies \
-  "monitor-bloqueos@openpath" \
+  "openpath-block-monitor@openpath" \
   "$state_dir/openpath.xpi" \
   "https://downloads.example/openpath-managed.xpi"
 
@@ -326,9 +326,9 @@ with open("$FIREFOX_POLICIES", "r", encoding="utf-8") as fh:
     policies = json.load(fh)
 
 policy_root = policies["policies"]
-assert "monitor-bloqueos@openpath" in policy_root.get("ExtensionSettings", {})
+assert "openpath-block-monitor@openpath" in policy_root.get("ExtensionSettings", {})
 assert "https://downloads.example/openpath-managed.xpi" not in policy_root.get("Extensions", {}).get("Install", [])
-assert "monitor-bloqueos@openpath" in policy_root.get("Extensions", {}).get("Locked", [])
+assert "openpath-block-monitor@openpath" in policy_root.get("Extensions", {}).get("Locked", [])
 assert "WebsiteFilter" not in policy_root
 assert "SearchEngines" not in policy_root
 assert "DNSOverHTTPS" not in policy_root

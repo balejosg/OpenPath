@@ -9,7 +9,7 @@ import { verifyFirefoxAmoVersion } from './verify-firefox-amo-version.mjs';
 const __filename = fileURLToPath(import.meta.url);
 const extensionRoot = path.dirname(__filename);
 const defaultAmoBaseUrl = 'https://addons.mozilla.org/api/v5/';
-const defaultAddonId = 'monitor-bloqueos@openpath';
+const defaultAddonId = 'openpath-block-monitor@openpath';
 const defaultSourceArchive = path.join(
   extensionRoot,
   'build',
@@ -426,7 +426,7 @@ function parseCliArgs(argv) {
   WEB_EXT_API_KEY=... WEB_EXT_API_SECRET=... node upload-firefox-amo-source.mjs (--version-id 6249209 | --version 2.0.1)
 
 Options:
-  --addon-id      AMO add-on GUID or slug (default: monitor-bloqueos@openpath)
+  --addon-id      AMO add-on GUID or slug (default: openpath-block-monitor@openpath)
   --version-id    AMO numeric version id
   --version       AMO version string; the API lookup uses v<version>
   --source        Source archive to upload

@@ -24,7 +24,7 @@ default_browser_setup_source() {
 
 FIREFOX_EXTENSION_SOURCE="${OPENPATH_BROWSER_SETUP_EXTENSION_SOURCE:-$(default_browser_setup_source "$INSTALL_DIR/firefox-extension" "/usr/share/openpath/firefox-extension")}"
 FIREFOX_RELEASE_SOURCE="${OPENPATH_BROWSER_SETUP_RELEASE_SOURCE:-$(default_browser_setup_source "$INSTALL_DIR/firefox-release" "/usr/share/openpath/firefox-release")}"
-FIREFOX_EXTENSION_ID="${OPENPATH_FIREFOX_EXTENSION_ID:-monitor-bloqueos@openpath}"
+FIREFOX_EXTENSION_ID="${OPENPATH_FIREFOX_EXTENSION_ID:-openpath-block-monitor@openpath}"
 export FIREFOX_EXTENSION_SOURCE FIREFOX_RELEASE_SOURCE FIREFOX_EXTENSION_ID
 FIREFOX_APP_ID="{ec8030f7-c20a-464f-9b0e-13a3a9e97384}"
 export FIREFOX_APP_ID

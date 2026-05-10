@@ -15,7 +15,7 @@ WebExtension for detecting blocked resources, showing operator-facing diagnostic
 ## Current Contract
 
 - manifest version: `3`
-- Firefox extension ID: `monitor-bloqueos@openpath`
+- Firefox extension ID: `openpath-block-monitor@openpath`
 - host permissions: `<all_urls>`
 - optional native host: `native/openpath-native-host.py`
 

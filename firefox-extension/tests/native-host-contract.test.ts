@@ -40,6 +40,6 @@ void describe('Firefox native host contract', () => {
       allowed_extensions?: string[];
     };
 
-    assert.deepEqual(manifest.allowed_extensions, ['monitor-bloqueos@openpath']);
+    assert.deepEqual(manifest.allowed_extensions, ['openpath-block-monitor@openpath']);
   });
 });

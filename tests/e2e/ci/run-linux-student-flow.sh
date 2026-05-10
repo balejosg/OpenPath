@@ -854,8 +854,8 @@ if [[ -s "$root_manifest" ]]; then
     elif ! [[ -x "$manifest_path" ]]; then
         readiness_errors+=("native host executable missing or not executable: $manifest_path")
     fi
-    if ! jq -e ".allowed_extensions | index(\"monitor-bloqueos@openpath\")" "$root_manifest" >/dev/null; then
-        readiness_errors+=("root Firefox native host manifest does not allow monitor-bloqueos@openpath")
+    if ! jq -e ".allowed_extensions | index(\"openpath-block-monitor@openpath\")" "$root_manifest" >/dev/null; then
+        readiness_errors+=("root Firefox native host manifest does not allow openpath-block-monitor@openpath")
     fi
 fi
 

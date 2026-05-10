@@ -9,7 +9,7 @@ import { waitForFirefoxExtensionUuid } from './firefox-extension-uuid';
 test('waitForFirefoxExtensionUuid tolerates delayed extension UUID registration', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpath-firefox-profile-'));
   const prefsPath = path.join(tempDir, 'prefs.js');
-  const extensionId = 'monitor-bloqueos@openpath';
+  const extensionId = 'openpath-block-monitor@openpath';
 
   fs.writeFileSync(
     prefsPath,
@@ -20,7 +20,7 @@ test('waitForFirefoxExtensionUuid tolerates delayed extension UUID registration'
   setTimeout(() => {
     fs.writeFileSync(
       prefsPath,
-      'user_pref("extensions.webextensions.uuids", "{\\"other@example.com\\":\\"other-uuid\\",\\"monitor-bloqueos@openpath\\":\\"expected-uuid\\"}");\n',
+      'user_pref("extensions.webextensions.uuids", "{\\"other@example.com\\":\\"other-uuid\\",\\"openpath-block-monitor@openpath\\":\\"expected-uuid\\"}");\n',
       'utf8'
     );
   }, 50);
@@ -38,18 +38,18 @@ test('waitForFirefoxExtensionUuid tolerates delayed extension UUID registration'
 test('waitForFirefoxExtensionUuid retries when prefs.js is temporarily malformed', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpath-firefox-profile-'));
   const prefsPath = path.join(tempDir, 'prefs.js');
-  const extensionId = 'monitor-bloqueos@openpath';
+  const extensionId = 'openpath-block-monitor@openpath';
 
   fs.writeFileSync(
     prefsPath,
-    'user_pref("extensions.webextensions.uuids", "{\\"monitor-bloqueos@openpath\\":");\n',
+    'user_pref("extensions.webextensions.uuids", "{\\"openpath-block-monitor@openpath\\":");\n',
     'utf8'
   );
 
   setTimeout(() => {
     fs.writeFileSync(
       prefsPath,
-      'user_pref("extensions.webextensions.uuids", "{\\"monitor-bloqueos@openpath\\":\\"recovered-uuid\\"}");\n',
+      'user_pref("extensions.webextensions.uuids", "{\\"openpath-block-monitor@openpath\\":\\"recovered-uuid\\"}");\n',
       'utf8'
     );
   }, 50);
@@ -67,12 +67,12 @@ test('waitForFirefoxExtensionUuid retries when prefs.js is temporarily malformed
 test('waitForFirefoxExtensionUuid retries until prefs.js is created', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpath-firefox-profile-'));
   const prefsPath = path.join(tempDir, 'prefs.js');
-  const extensionId = 'monitor-bloqueos@openpath';
+  const extensionId = 'openpath-block-monitor@openpath';
 
   setTimeout(() => {
     fs.writeFileSync(
       prefsPath,
-      'user_pref("extensions.webextensions.uuids", "{\\"monitor-bloqueos@openpath\\":\\"created-later-uuid\\"}");\n',
+      'user_pref("extensions.webextensions.uuids", "{\\"openpath-block-monitor@openpath\\":\\"created-later-uuid\\"}");\n',
       'utf8'
     );
   }, 50);
@@ -91,7 +91,7 @@ test('waitForFirefoxExtensionUuid reports profile diagnostics when UUID stays mi
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpath-firefox-profile-'));
   const prefsPath = path.join(tempDir, 'prefs.js');
   const extensionsJsonPath = path.join(tempDir, 'extensions.json');
-  const extensionId = 'monitor-bloqueos@openpath';
+  const extensionId = 'openpath-block-monitor@openpath';
 
   fs.writeFileSync(
     prefsPath,
@@ -111,9 +111,12 @@ test('waitForFirefoxExtensionUuid reports profile diagnostics when UUID stays mi
       }),
     (error: unknown) => {
       assert.ok(error instanceof Error);
-      assert.match(error.message, /Could not resolve extension UUID for monitor-bloqueos@openpath/);
+      assert.match(
+        error.message,
+        /Could not resolve extension UUID for openpath-block-monitor@openpath/
+      );
       assert.match(error.message, /prefs\.js=uuids:\[other@example\.com\]/);
-      assert.match(error.message, /extensions\.json=addons:\[monitor-bloqueos@openpath\]/);
+      assert.match(error.message, /extensions\.json=addons:\[openpath-block-monitor@openpath\]/);
       assert.match(error.message, /addonStartup\.json\.lz4=missing/);
       return true;
     }
@@ -123,7 +126,7 @@ test('waitForFirefoxExtensionUuid reports profile diagnostics when UUID stays mi
 test('waitForFirefoxExtensionUuid reports empty prefs.js distinctly when UUID prefs never appear', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpath-firefox-profile-'));
   const prefsPath = path.join(tempDir, 'prefs.js');
-  const extensionId = 'monitor-bloqueos@openpath';
+  const extensionId = 'openpath-block-monitor@openpath';
 
   fs.writeFileSync(prefsPath, '', 'utf8');
 
@@ -149,7 +152,7 @@ test('waitForFirefoxExtensionUuid preserves UUID failure when diagnostic files a
   const prefsPath = path.join(tempDir, 'prefs.js');
   const extensionsJsonPath = path.join(tempDir, 'extensions.json');
   const addonStartupPath = path.join(tempDir, 'addonStartup.json.lz4');
-  const extensionId = 'monitor-bloqueos@openpath';
+  const extensionId = 'openpath-block-monitor@openpath';
 
   fs.writeFileSync(
     prefsPath,
@@ -170,7 +173,10 @@ test('waitForFirefoxExtensionUuid preserves UUID failure when diagnostic files a
       }),
     (error: unknown) => {
       assert.ok(error instanceof Error);
-      assert.match(error.message, /Could not resolve extension UUID for monitor-bloqueos@openpath/);
+      assert.match(
+        error.message,
+        /Could not resolve extension UUID for openpath-block-monitor@openpath/
+      );
       assert.match(error.message, /extensions\.json=unreadable:EISDIR/);
       assert.match(error.message, /addonStartup\.json\.lz4=unreadable:EISDIR/);
       return true;

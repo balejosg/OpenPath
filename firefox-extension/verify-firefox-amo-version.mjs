@@ -6,7 +6,7 @@ import { createAmoJwt } from './sign-firefox-release.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const defaultAmoBaseUrl = 'https://addons.mozilla.org/api/v5/';
-const defaultAddonId = 'monitor-bloqueos@openpath';
+const defaultAddonId = 'openpath-block-monitor@openpath';
 
 function fail(message) {
   throw new Error(message);

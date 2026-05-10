@@ -120,7 +120,7 @@ has_openpath_managed_browser_integration() {
     local native_host=""
     local native_host_dir=""
 
-    if [ -f "$managed_policies" ] && grep -q "monitor-bloqueos@openpath" "$managed_policies" 2>/dev/null; then
+    if [ -f "$managed_policies" ] && grep -q "openpath-block-monitor@openpath" "$managed_policies" 2>/dev/null; then
         return 0
     fi
 

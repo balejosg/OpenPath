@@ -280,7 +280,7 @@ Describe "Browser Module - Firefox Policy" {
             Mock Get-Content {
                 param([string]$Path, [switch]$Raw)
                 if ($Path -like '*metadata.json') {
-                    return '{"extensionId":"monitor-bloqueos@openpath","version":"2.0.0"}'
+                    return '{"extensionId":"openpath-block-monitor@openpath","version":"2.0.0"}'
                 }
 
                 throw "Unexpected path: $Path"
@@ -534,7 +534,7 @@ Describe "Browser Module - Firefox Policy" {
                 [PSCustomObject]@{
                     ExtensionInstalled = $false
                     ExtensionActive = $false
-                    Message = 'extensions.json did not contain monitor-bloqueos@openpath'
+                    Message = 'extensions.json did not contain openpath-block-monitor@openpath'
                     ProfilePath = 'C:\Temp\openpath-firefox-profile'
                 }
             } -ModuleName Browser.FirefoxPolicy

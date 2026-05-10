@@ -4,7 +4,7 @@
 # browser-request-readiness.sh - Browser request readiness facts
 ################################################################################
 
-FIREFOX_EXTENSION_ID="${FIREFOX_EXTENSION_ID:-${FIREFOX_MANAGED_EXTENSION_ID:-monitor-bloqueos@openpath}}"
+FIREFOX_EXTENSION_ID="${FIREFOX_EXTENSION_ID:-${FIREFOX_MANAGED_EXTENSION_ID:-openpath-block-monitor@openpath}}"
 FIREFOX_APP_ID="${FIREFOX_APP_ID:-{ec8030f7-c20a-464f-9b0e-13a3a9e97384}}"
 FIREFOX_RELEASE_SOURCE="${FIREFOX_RELEASE_SOURCE:-$INSTALL_DIR/firefox-release}"
 

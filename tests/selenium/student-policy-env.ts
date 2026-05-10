@@ -12,7 +12,7 @@ import type {
 
 const exec = promisify(execCallback);
 
-export const FIREFOX_EXTENSION_ID = 'monitor-bloqueos@openpath';
+export const FIREFOX_EXTENSION_ID = 'openpath-block-monitor@openpath';
 export const DEFAULT_TIMEOUT_MS = 15_000;
 export const DEFAULT_BLOCKED_TIMEOUT_MS = 8_000;
 export const DEFAULT_POLL_MS = 250;

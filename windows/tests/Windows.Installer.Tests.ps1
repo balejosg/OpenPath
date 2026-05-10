@@ -82,7 +82,7 @@ Describe "Installer" {
             Assert-ContentContainsAll -Content $content -Needles @(
                 'Mozilla\NativeMessagingHosts\whitelist_native_host',
                 'WOW6432Node\Mozilla\NativeMessagingHosts\whitelist_native_host',
-                "allowed_extensions = @('monitor-bloqueos@openpath')",
+                "allowed_extensions = @('openpath-block-monitor@openpath')",
                 'name = Get-OpenPathFirefoxNativeHostName'
             )
         }

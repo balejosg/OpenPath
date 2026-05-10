@@ -1,6 +1,6 @@
 #!/bin/bash
 
-FIREFOX_MANAGED_EXTENSION_ID="${FIREFOX_MANAGED_EXTENSION_ID:-monitor-bloqueos@openpath}"
+FIREFOX_MANAGED_EXTENSION_ID="${FIREFOX_MANAGED_EXTENSION_ID:-openpath-block-monitor@openpath}"
 
 get_browser_json_helper() {
     if [ -n "${OPENPATH_BROWSER_JSON_HELPER:-}" ]; then

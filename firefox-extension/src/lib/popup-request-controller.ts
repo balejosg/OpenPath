@@ -13,6 +13,10 @@ import { verifyPopupDomains } from './popup-native-actions.js';
 import { retryPopupDomainLocalUpdate, submitPopupDomainRequest } from './popup-request-actions.js';
 import { syncPopupSubmitButtonState, togglePopupRequestSection } from './popup-ui.js';
 import type { PopupControllerState } from './popup-controller-state.js';
+import {
+  ensureBrowsingActivityConsent,
+  type DataCollectionPermissionsApi,
+} from './data-collection-consent.js';
 
 interface PopupRequestControllerOptions {
   blockedDomainsData: () => PopupControllerState['blockedDomainsData'];
@@ -36,6 +40,21 @@ interface PopupRequestControllerOptions {
   state: PopupControllerState;
   verifyListEl: HTMLElement;
   verifyResultsEl: HTMLElement;
+}
+
+function getPopupDataCollectionPermissionsApi(): DataCollectionPermissionsApi | null {
+  const browserWithPermissions = (globalThis as { browser?: unknown }).browser as
+    | { permissions?: Partial<DataCollectionPermissionsApi> }
+    | undefined;
+  const permissions = browserWithPermissions?.permissions;
+  if (typeof permissions?.contains === 'function' && typeof permissions.request === 'function') {
+    return {
+      contains: permissions.contains.bind(permissions),
+      request: permissions.request.bind(permissions),
+    };
+  }
+
+  return null;
 }
 
 interface PopupRequestController {
@@ -138,6 +157,8 @@ export function createPopupRequestController(
         domain,
         isNativeAvailable: options.state.isNativeAvailable,
         isRequestConfigured: options.isRequestConfigured(),
+        requestBrowsingActivityConsent: () =>
+          ensureBrowsingActivityConsent(getPopupDataCollectionPermissionsApi()),
         reason,
         sendMessage: options.sendMessage,
       });

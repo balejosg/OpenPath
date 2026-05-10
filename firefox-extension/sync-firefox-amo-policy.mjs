@@ -8,7 +8,7 @@ import { createAmoJwt } from './sign-firefox-release.mjs';
 const __filename = fileURLToPath(import.meta.url);
 const extensionRoot = path.dirname(__filename);
 const defaultAmoBaseUrl = 'https://addons.mozilla.org/api/v5/';
-const defaultAddonId = 'monitor-bloqueos@openpath';
+const defaultAddonId = 'openpath-block-monitor@openpath';
 const defaultPrivacyPath = path.join(extensionRoot, 'PRIVACY.md');
 
 function fail(message) {

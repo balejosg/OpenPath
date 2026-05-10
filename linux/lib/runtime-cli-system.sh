@@ -408,7 +408,7 @@ cmd_health() {
         local firefox_native_script="${OPENPATH_NATIVE_HOST_INSTALL_DIR:-/usr/local/lib/openpath}/${OPENPATH_NATIVE_HOST_SCRIPT_NAME:-openpath-native-host.py}"
 
         if [ -f "$firefox_ready_file" ] \
-            && grep -q "extension_id=monitor-bloqueos@openpath" "$firefox_ready_file" 2>/dev/null \
+            && grep -q "extension_id=openpath-block-monitor@openpath" "$firefox_ready_file" 2>/dev/null \
             && awk -F= '
                 $1 == "target_count" { target = $2 + 0 }
                 $1 == "registered_count" { registered = $2 + 0 }

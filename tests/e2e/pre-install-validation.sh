@@ -172,7 +172,7 @@ test_firefox_extension_structure() {
         fi
         
         # Check extension ID
-        if grep -q '"id":.*"monitor-bloqueos@openpath"' "$ext_dir/manifest.json"; then
+        if grep -q '"id":.*"openpath-block-monitor@openpath"' "$ext_dir/manifest.json"; then
             test_pass "Extension ID correctly set"
         else
             test_fail "Extension ID missing or incorrect"

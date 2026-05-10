@@ -309,27 +309,27 @@ case "\${OPENPATH_FAKE_FIREFOX_MODE:-success}" in
         snap_profile_root="\${HOME:-}/snap/firefox/common/.mozilla/firefox/openpath-test.default"
         mkdir -p "\$snap_profile_root"
         cat > "\$snap_profile_root/extensions.json" <<'JSON'
-{"addons":[{"id":"monitor-bloqueos@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
+{"addons":[{"id":"openpath-block-monitor@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
 JSON
         ;;
     delayed-registration)
         if [ "\$run_count" -ge 2 ]; then
             cat > "\$profile_root/extensions.json" <<'JSON'
-{"addons":[{"id":"monitor-bloqueos@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
+{"addons":[{"id":"openpath-block-monitor@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
 JSON
         fi
         ;;
     third-registration)
         if [ "\$run_count" -ge 3 ]; then
             cat > "\$profile_root/extensions.json" <<'JSON'
-{"addons":[{"id":"monitor-bloqueos@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
+{"addons":[{"id":"openpath-block-monitor@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
 JSON
         fi
         ;;
     requires-profile-registration)
         if [ "\$explicit_profile" -eq 1 ]; then
             cat > "\$profile_root/extensions.json" <<'JSON'
-{"addons":[{"id":"monitor-bloqueos@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
+{"addons":[{"id":"openpath-block-monitor@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
 JSON
         fi
         ;;
@@ -339,26 +339,26 @@ JSON
                 ;;
             *)
                 cat > "\$profile_root/extensions.json" <<'JSON'
-{"addons":[{"id":"monitor-bloqueos@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
+{"addons":[{"id":"openpath-block-monitor@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
 JSON
                 ;;
         esac
         ;;
     disabled-extension)
         cat > "\$profile_root/extensions.json" <<'JSON'
-{"addons":[{"id":"monitor-bloqueos@openpath","active":false,"userDisabled":true,"signedState":-1,"location":"app-system-share","rootURI":"moz-extension://openpath-test-uuid/"}]}
+{"addons":[{"id":"openpath-block-monitor@openpath","active":false,"userDisabled":true,"signedState":-1,"location":"app-system-share","rootURI":"moz-extension://openpath-test-uuid/"}]}
 JSON
         ;;
     install-profile-registration)
         if [ -n "\$selected_install_profile" ] && [ "\$profile_root" = "\$selected_install_profile" ]; then
             cat > "\$profile_root/extensions.json" <<'JSON'
-{"addons":[{"id":"monitor-bloqueos@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
+{"addons":[{"id":"openpath-block-monitor@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
 JSON
         fi
         ;;
     *)
         cat > "\$profile_root/extensions.json" <<'JSON'
-{"addons":[{"id":"monitor-bloqueos@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
+{"addons":[{"id":"openpath-block-monitor@openpath","rootURI":"moz-extension://openpath-test-uuid/"}]}
 JSON
         ;;
 esac
@@ -387,7 +387,7 @@ install_browser_integrations() {
         local native_script_dir="\${OPENPATH_NATIVE_HOST_INSTALL_DIR:-$TEST_TMP_DIR/local/lib/openpath}"
         mkdir -p "\$native_manifest_dir" "\$native_script_dir"
         cat > "\$native_manifest_dir/whitelist_native_host.json" <<'JSON'
-{"name":"whitelist_native_host","path":"/usr/local/lib/openpath/openpath-native-host.py","type":"stdio","allowed_extensions":["monitor-bloqueos@openpath"]}
+{"name":"whitelist_native_host","path":"/usr/local/lib/openpath/openpath-native-host.py","type":"stdio","allowed_extensions":["openpath-block-monitor@openpath"]}
 JSON
         echo '#!/usr/bin/env python3' > "\$native_script_dir/openpath-native-host.py"
         chmod +x "\$native_script_dir/openpath-native-host.py"
@@ -395,22 +395,22 @@ JSON
 
     if [ "$mode" = "success" ]; then
         local app_id="{ec8030f7-c20a-464f-9b0e-13a3a9e97384}"
-        local ext_dir="$ext_root/\$app_id/monitor-bloqueos@openpath"
+        local ext_dir="$ext_root/\$app_id/openpath-block-monitor@openpath"
         mkdir -p "\$ext_dir"
         touch "\$ext_dir/manifest.json"
         mkdir -p "\$(dirname "$policies_file")"
         cat > "$policies_file" <<'JSON'
-{"policies":{"ExtensionSettings":{"monitor-bloqueos@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
+{"policies":{"ExtensionSettings":{"openpath-block-monitor@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
 JSON
     elif [ "$mode" = "managed-api" ]; then
         mkdir -p "\$(dirname "$policies_file")"
         cat > "$policies_file" <<'JSON'
-{"policies":{"ExtensionSettings":{"monitor-bloqueos@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
+{"policies":{"ExtensionSettings":{"openpath-block-monitor@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
 JSON
     elif [ "$mode" = "policy-only" ]; then
         mkdir -p "\$(dirname "$policies_file")"
         cat > "$policies_file" <<'JSON'
-{"policies":{"ExtensionSettings":{"monitor-bloqueos@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
+{"policies":{"ExtensionSettings":{"openpath-block-monitor@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
 JSON
     fi
 
@@ -458,10 +458,10 @@ EOF
 
     mkdir -p "$profile_dir"
     cat > "$profile_dir/extensions.json" <<'JSON'
-{"addons":[{"id":"monitor-bloqueos@openpath","active":false,"userDisabled":true,"signedState":-1,"location":"app-system-share","rootURI":"moz-extension://openpath-test-uuid/"}]}
+{"addons":[{"id":"openpath-block-monitor@openpath","active":false,"userDisabled":true,"signedState":-1,"location":"app-system-share","rootURI":"moz-extension://openpath-test-uuid/"}]}
 JSON
 
-    run bash -c 'source "$1"; detect_firefox_extension_registration_in_profile "$2" "monitor-bloqueos@openpath"' \
+    run bash -c 'source "$1"; detect_firefox_extension_registration_in_profile "$2" "openpath-block-monitor@openpath"' \
         bash "$PROJECT_DIR/linux/lib/firefox-activation-plan.sh" "$profile_dir"
 
     [ "$status" -eq 1 ]
@@ -476,13 +476,13 @@ JSON
 
     mkdir -p "$profile_dir"
     cat > "$profile_dir/extensions.json" <<'JSON'
-{"addons":[{"id":"monitor-bloqueos@openpath","active":false,"userDisabled":true,"signedState":-1,"location":"app-system-share","rootURI":"moz-extension://openpath-test-uuid/"}]}
+{"addons":[{"id":"openpath-block-monitor@openpath","active":false,"userDisabled":true,"signedState":-1,"location":"app-system-share","rootURI":"moz-extension://openpath-test-uuid/"}]}
 JSON
     cat > "$profile_dir/prefs.js" <<'PREFS'
-user_pref("extensions.webextensions.uuids", "{\"monitor-bloqueos@openpath\":\"openpath-test-uuid\"}");
+user_pref("extensions.webextensions.uuids", "{\"openpath-block-monitor@openpath\":\"openpath-test-uuid\"}");
 PREFS
 
-    run bash -c 'source "$1"; detect_firefox_extension_registration_in_profile "$2" "monitor-bloqueos@openpath"' \
+    run bash -c 'source "$1"; detect_firefox_extension_registration_in_profile "$2" "openpath-block-monitor@openpath"' \
         bash "$PROJECT_DIR/linux/lib/firefox-activation-plan.sh" "$profile_dir"
 
     [ "$status" -eq 1 ]
@@ -497,10 +497,10 @@ PREFS
 
     mkdir -p "$profile_dir"
     cat > "$profile_dir/prefs.js" <<'PREFS'
-user_pref("extensions.webextensions.uuids", "{\"monitor-bloqueos@openpath\":\"openpath-test-uuid\"}");
+user_pref("extensions.webextensions.uuids", "{\"openpath-block-monitor@openpath\":\"openpath-test-uuid\"}");
 PREFS
 
-    run bash -c 'source "$1"; detect_firefox_extension_registration_in_profile "$2" "monitor-bloqueos@openpath"' \
+    run bash -c 'source "$1"; detect_firefox_extension_registration_in_profile "$2" "openpath-block-monitor@openpath"' \
         bash "$PROJECT_DIR/linux/lib/firefox-activation-plan.sh" "$profile_dir"
 
     [ "$status" -eq 1 ]
@@ -515,13 +515,13 @@ PREFS
     printf '%s' 'https://control.example/w/token123/whitelist.txt' > "$etc_dir/whitelist-url.conf"
     printf '%s' 'cls_123' > "$etc_dir/classroom-id.conf"
     cat > "$policies_file" <<'JSON'
-{"policies":{"ExtensionSettings":{"monitor-bloqueos@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
+{"policies":{"ExtensionSettings":{"openpath-block-monitor@openpath":{"installation_mode":"force_installed","install_url":"https://control.example/api/extensions/firefox/openpath.xpi"}}}}
 JSON
 
     export ETC_CONFIG_DIR="$etc_dir"
     export WHITELIST_URL_CONF="$etc_dir/whitelist-url.conf"
     export FIREFOX_POLICIES="$policies_file"
-    export FIREFOX_EXTENSION_ID="monitor-bloqueos@openpath"
+    export FIREFOX_EXTENSION_ID="openpath-block-monitor@openpath"
 
     read_single_line_file() {
         local file="$1"
@@ -560,20 +560,20 @@ JSON
     local etc_dir="$TEST_TMP_DIR/etc/openpath"
     local ext_root="$TEST_TMP_DIR/share/mozilla/extensions"
     local app_id="{ec8030f7-c20a-464f-9b0e-13a3a9e97384}"
-    mkdir -p "$(dirname "$policies_file")" "$etc_dir" "$ext_root/$app_id/monitor-bloqueos@openpath" "$TEST_TMP_DIR/usr/lib/firefox-esr"
+    mkdir -p "$(dirname "$policies_file")" "$etc_dir" "$ext_root/$app_id/openpath-block-monitor@openpath" "$TEST_TMP_DIR/usr/lib/firefox-esr"
     printf '%s' 'https://control.example' > "$etc_dir/api-url.conf"
     printf '%s' 'https://control.example/w/token123/whitelist.txt' > "$etc_dir/whitelist-url.conf"
     printf '%s' 'cls_123' > "$etc_dir/classroom-id.conf"
     touch "$TEST_TMP_DIR/usr/lib/firefox-esr/firefox"
-    touch "$ext_root/$app_id/monitor-bloqueos@openpath/manifest.json"
+    touch "$ext_root/$app_id/openpath-block-monitor@openpath/manifest.json"
     cat > "$policies_file" <<'JSON'
-{"policies":{"ExtensionSettings":{"monitor-bloqueos@openpath":{"installation_mode":"force_installed"}}}}
+{"policies":{"ExtensionSettings":{"openpath-block-monitor@openpath":{"installation_mode":"force_installed"}}}}
 JSON
 
     export ETC_CONFIG_DIR="$etc_dir"
     export WHITELIST_URL_CONF="$etc_dir/whitelist-url.conf"
     export FIREFOX_POLICIES="$policies_file"
-    export FIREFOX_EXTENSION_ID="monitor-bloqueos@openpath"
+    export FIREFOX_EXTENSION_ID="openpath-block-monitor@openpath"
 
     read_single_line_file() {
         local file="$1"
@@ -606,7 +606,7 @@ JSON
     local etc_dir="$TEST_TMP_DIR/etc/openpath"
     local ext_root="$TEST_TMP_DIR/share/mozilla/extensions"
     local app_id="{ec8030f7-c20a-464f-9b0e-13a3a9e97384}"
-    local ext_dir="$ext_root/$app_id/monitor-bloqueos@openpath"
+    local ext_dir="$ext_root/$app_id/openpath-block-monitor@openpath"
     mkdir -p "$(dirname "$policies_file")" "$etc_dir" "$ext_dir" "$TEST_TMP_DIR/usr/lib/firefox-esr"
     printf '%s' 'https://control.example' > "$etc_dir/api-url.conf"
     printf '%s' 'https://control.example/w/token123/whitelist.txt' > "$etc_dir/whitelist-url.conf"
@@ -614,13 +614,13 @@ JSON
     touch "$TEST_TMP_DIR/usr/lib/firefox-esr/firefox"
     touch "$ext_dir/manifest.json"
     cat > "$policies_file" <<JSON
-{"policies":{"ExtensionSettings":{"monitor-bloqueos@openpath":{"installation_mode":"force_installed"}},"Extensions":{"Install":["$ext_dir"],"Locked":["monitor-bloqueos@openpath"]}}}
+{"policies":{"ExtensionSettings":{"openpath-block-monitor@openpath":{"installation_mode":"force_installed"}},"Extensions":{"Install":["$ext_dir"],"Locked":["openpath-block-monitor@openpath"]}}}
 JSON
 
     export ETC_CONFIG_DIR="$etc_dir"
     export WHITELIST_URL_CONF="$etc_dir/whitelist-url.conf"
     export FIREFOX_POLICIES="$policies_file"
-    export FIREFOX_EXTENSION_ID="monitor-bloqueos@openpath"
+    export FIREFOX_EXTENSION_ID="openpath-block-monitor@openpath"
 
     read_single_line_file() {
         local file="$1"
@@ -1419,7 +1419,7 @@ EOF
     [ -f "$alice_home/.mozilla/firefox/first.default/extensions.json" ]
     [ -f "$alice_home/.mozilla/firefox/second.default/extensions.json" ]
     [ -f "$bob_home/snap/firefox/common/.mozilla/firefox/snap.default/extensions.json" ]
-    grep -F 'extension_id=monitor-bloqueos@openpath' "$ready_file"
+    grep -F 'extension_id=openpath-block-monitor@openpath' "$ready_file"
     grep -F 'target_count=3' "$ready_file"
     grep -F 'registered_count=3' "$ready_file"
 }

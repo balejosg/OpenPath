@@ -11,7 +11,7 @@ privacy-policy link, screenshots, or release metadata.
 
 ## Current Submission Facts
 
-- extension ID: `monitor-bloqueos@openpath`
+- extension ID: `openpath-block-monitor@openpath`
 - manifest: `v3`
 - current signing channel: `unlisted` through `sign-firefox-release.mjs`
 - default manifest name: `Monitor de Bloqueos de Red`
@@ -44,8 +44,9 @@ What it does:
 - detects DNS, firewall, path, and blocked-subdomain failures visible in Firefox
 - shows a clear OpenPath blocked-page screen for blocked main-frame navigation
 - lets users request access to a blocked domain when the OpenPath administrator
-  has enabled requests
-- optionally talks to the OpenPath native host on the same computer to check
+  has enabled requests and the user grants Firefox's browsing activity
+  data-collection permission for that request flow
+- talks to the OpenPath native host on the same computer to check
   local allowlist state and refresh path/subdomain enforcement data
 
 What it does not do:
@@ -67,7 +68,7 @@ Privacy and deployment notes:
   request metadata only to the configured OpenPath service
 - blocked-page and popup access requests send user-initiated request details
   only to the configured OpenPath service
-- optional native messaging is local to the same computer and talks only to the
+- native messaging is local to the same computer and talks only to the
   OpenPath native host installed by the managed client
 
 ### Data Collection Disclosure
@@ -82,13 +83,15 @@ raises compatibility to consent-aware Firefox runtimes:
 
 ```json
 "data_collection_permissions": {
-  "required": ["browsingActivity"]
+  "required": ["none"],
+  "optional": ["browsingActivity"]
 }
 ```
 
-Keep this disclosure in the manifest. Removing it would hide the fact that
-OpenPath can transmit user-initiated blocked-page requests to the configured
-OpenPath service.
+Keep this disclosure in the manifest. Moving `browsingActivity` to optional
+keeps routine extension operation available without collection consent, while
+blocked-page and popup access requests request consent before transmitting
+user-initiated request details to the configured OpenPath service.
 
 ### Suggested Tags
 
@@ -112,7 +115,7 @@ Use screenshots that show real OpenPath behavior, not generic browser chrome:
 - `webNavigation`: clears per-tab state when navigation changes
 - `tabs`: updates the tab badge and popup context
 - `clipboardWrite`: copies blocked-domain lists for operator workflows
-- `nativeMessaging`: optional local-only integration with the native host
+- `nativeMessaging`: local-only integration with the native host
 - `storage`: keeps managed config and local runtime state in browser storage
 
 AMO permission explanations should keep the same wording as the table in

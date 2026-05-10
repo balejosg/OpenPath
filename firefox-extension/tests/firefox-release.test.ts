@@ -398,7 +398,7 @@ void describe('Firefox release signing helpers', () => {
       payloadHash: 'a'.repeat(64),
     });
 
-    assert.equal(result.metadata.extensionId, 'monitor-bloqueos@openpath');
+    assert.equal(result.metadata.extensionId, 'openpath-block-monitor@openpath');
     assert.equal(result.metadata.version, '2.0.0');
     assert.equal(
       result.metadata.installUrl,
@@ -421,7 +421,7 @@ void describe('Firefox release signing helpers', () => {
       path.join(releaseDir, 'metadata.json'),
       `${JSON.stringify(
         {
-          extensionId: 'monitor-bloqueos@openpath',
+          extensionId: 'openpath-block-monitor@openpath',
           version: '2.0.0.123.1',
           payloadHash: 'b'.repeat(64),
           signatureSource: 'amo',
@@ -437,7 +437,7 @@ void describe('Firefox release signing helpers', () => {
       payloadHash: 'b'.repeat(64),
     });
 
-    assert.equal(metadata.extensionId, 'monitor-bloqueos@openpath');
+    assert.equal(metadata.extensionId, 'openpath-block-monitor@openpath');
     assert.equal(metadata.version, '2.0.0.123.1');
     assert.equal(metadata.payloadHash, 'b'.repeat(64));
     assert.equal(metadata.signatureSource, 'amo');
@@ -453,7 +453,7 @@ void describe('Firefox release signing helpers', () => {
     writeFileSync(
       path.join(releaseDir, 'metadata.json'),
       `${JSON.stringify({
-        extensionId: 'monitor-bloqueos@openpath',
+        extensionId: 'openpath-block-monitor@openpath',
         version: '2.0.0.123.1',
         payloadHash: 'b'.repeat(64),
       })}\n`
@@ -478,7 +478,7 @@ void describe('Firefox release signing helpers', () => {
     writeFileSync(
       path.join(releaseDir, 'metadata.json'),
       `${JSON.stringify({
-        extensionId: 'monitor-bloqueos@openpath',
+        extensionId: 'openpath-block-monitor@openpath',
         version: '2.0.0.123.1',
         signatureSource: 'amo',
         signatureState: 'signed',
@@ -504,7 +504,7 @@ void describe('Firefox release signing helpers', () => {
     writeFileSync(
       path.join(releaseDir, 'metadata.json'),
       `${JSON.stringify({
-        extensionId: 'monitor-bloqueos@openpath',
+        extensionId: 'openpath-block-monitor@openpath',
         version: '2.0.0.123.1',
         payloadHash: 'e'.repeat(64),
       })}\n`
@@ -529,7 +529,7 @@ void describe('Firefox release signing helpers', () => {
     writeFileSync(
       path.join(releaseDir, 'metadata.json'),
       `${JSON.stringify({
-        extensionId: 'monitor-bloqueos@openpath',
+        extensionId: 'openpath-block-monitor@openpath',
         version: '2.0.0.123.1',
         signatureSource: 'amo',
         signatureState: 'signed',
@@ -725,7 +725,7 @@ void describe('Firefox release signing helpers', () => {
     const result = await verifyFirefoxAmoVersion({
       apiKey: 'user:123:456',
       apiSecret: 'secret',
-      addonId: 'monitor-bloqueos@openpath',
+      addonId: 'openpath-block-monitor@openpath',
       version: '2.0.1',
       requireSource: true,
       requireApprovalNotes: true,
@@ -750,7 +750,7 @@ void describe('Firefox release signing helpers', () => {
 
     assert.equal(
       requests[0],
-      'https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/versions/v2.0.1/'
+      'https://addons.mozilla.org/api/v5/addons/addon/openpath-block-monitor%40openpath/versions/v2.0.1/'
     );
     assert.deepEqual(result, {
       versionId: 6249209,
@@ -768,7 +768,7 @@ void describe('Firefox release signing helpers', () => {
       verifyFirefoxAmoVersion({
         apiKey: 'user:123:456',
         apiSecret: 'secret',
-        addonId: 'monitor-bloqueos@openpath',
+        addonId: 'openpath-block-monitor@openpath',
         versionId: '6249209',
         requireSource: true,
         fetchImpl: () =>
@@ -795,7 +795,7 @@ void describe('Firefox release signing helpers', () => {
       verifyFirefoxAmoVersion({
         apiKey: 'user:123:456',
         apiSecret: 'secret',
-        addonId: 'monitor-bloqueos@openpath',
+        addonId: 'openpath-block-monitor@openpath',
         versionId: '6249209',
         requireApprovalNotes: true,
         fetchImpl: () =>
@@ -822,7 +822,7 @@ void describe('Firefox release signing helpers', () => {
       verifyFirefoxAmoVersion({
         apiKey: 'user:123:456',
         apiSecret: 'secret',
-        addonId: 'monitor-bloqueos@openpath',
+        addonId: 'openpath-block-monitor@openpath',
         versionId: '6249209',
         requireReleaseNotes: true,
         fetchImpl: () =>
@@ -923,7 +923,8 @@ void describe('Firefox release signing helpers', () => {
         browser_specific_settings: {
           gecko: {
             data_collection_permissions: {
-              required: ['browsingActivity'],
+              required: ['none'],
+              optional: ['browsingActivity'],
             },
           },
         },
@@ -1140,7 +1141,7 @@ void describe('Firefox release signing helpers', () => {
     const result = await syncFirefoxAmoPolicy({
       apiKey: 'user:123:456',
       apiSecret: 'secret',
-      addonId: 'monitor-bloqueos@openpath',
+      addonId: 'openpath-block-monitor@openpath',
       privacyPath,
       fetchImpl: (input, init) => {
         const url = requestInputToUrl(input);
@@ -1174,8 +1175,8 @@ void describe('Firefox release signing helpers', () => {
     assert.deepEqual(
       requests.map((request) => `${request.method} ${request.url}`),
       [
-        'PATCH https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/eula_policy/',
-        'GET https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/eula_policy/',
+        'PATCH https://addons.mozilla.org/api/v5/addons/addon/openpath-block-monitor%40openpath/eula_policy/',
+        'GET https://addons.mozilla.org/api/v5/addons/addon/openpath-block-monitor%40openpath/eula_policy/',
       ]
     );
     assert.deepEqual(JSON.parse(requests[0]?.body ?? '{}'), {
@@ -1201,10 +1202,10 @@ void describe('Firefox release signing helpers', () => {
   void test('buildAmoVersionDetailUrl uses v-prefixed version lookups for reruns', () => {
     assert.equal(
       buildAmoVersionDetailUrl({
-        addonId: 'monitor-bloqueos@openpath',
+        addonId: 'openpath-block-monitor@openpath',
         version: '2.0.305419896.596069104',
       }).href,
-      'https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/versions/v2.0.305419896.596069104/'
+      'https://addons.mozilla.org/api/v5/addons/addon/openpath-block-monitor%40openpath/versions/v2.0.305419896.596069104/'
     );
   });
 
@@ -1245,7 +1246,7 @@ void describe('Firefox release signing helpers', () => {
       path.join(sourceDir, 'manifest.json'),
       `${JSON.stringify({
         version: '3.2.1',
-        browser_specific_settings: { gecko: { id: 'monitor-bloqueos@openpath' } },
+        browser_specific_settings: { gecko: { id: 'openpath-block-monitor@openpath' } },
       })}\n`
     );
     writeFileSync(path.join(sourceDir, 'dist', 'background.js'), 'console.log("runtime");\n');
@@ -1376,7 +1377,7 @@ void describe('Firefox release signing helpers', () => {
       waitForAmoSignedXpi({
         apiKey: 'user:123:456',
         apiSecret: 'secret',
-        addonId: 'monitor-bloqueos@openpath',
+        addonId: 'openpath-block-monitor@openpath',
         version: '2.0.81977786.682142437',
         artifactsDir,
         timeoutMs: 10_000,
@@ -1399,7 +1400,7 @@ void describe('Firefox release signing helpers', () => {
     );
 
     assert.deepEqual(requests, [
-      'https://addons.mozilla.org/api/v5/addons/addon/monitor-bloqueos%40openpath/versions/v2.0.81977786.682142437/',
+      'https://addons.mozilla.org/api/v5/addons/addon/openpath-block-monitor%40openpath/versions/v2.0.81977786.682142437/',
       'https://addons.mozilla.org/firefox/downloads/file/6250981/signed.xpi',
     ]);
   });
@@ -1417,7 +1418,7 @@ void describe('Firefox release signing helpers', () => {
       waitForAmoSignedXpi({
         apiKey: 'user:123:456',
         apiSecret: 'secret',
-        addonId: 'monitor-bloqueos@openpath',
+        addonId: 'openpath-block-monitor@openpath',
         version: '2.0.81977786.682142437',
         artifactsDir,
         timeoutMs: 1_000,
@@ -1445,13 +1446,13 @@ void describe('Firefox release signing helpers', () => {
     ) as Record<string, unknown>;
     assert.deepEqual(artifact, {
       state: 'manual-review-required',
-      addonId: 'monitor-bloqueos@openpath',
+      addonId: 'openpath-block-monitor@openpath',
       version: '2.0.81977786.682142437',
       versionId: '6250981',
       fileStatus: 'unreviewed',
       lastPollAt: '2026-05-07T05:00:01.000Z',
       message:
-        'manual-review-required: AMO accepted version but fileStatus=unreviewed until recovery timeout addonId=monitor-bloqueos@openpath version=6250981',
+        'manual-review-required: AMO accepted version but fileStatus=unreviewed until recovery timeout addonId=openpath-block-monitor@openpath version=6250981',
     });
     assert.match(stdoutChunks.join(''), /manual-review-required/);
     assert.match(stdoutChunks.join(''), /artifact=.*amo-signing-state\.json/);
@@ -1463,7 +1464,7 @@ void describe('Firefox release signing helpers', () => {
     const { artifactPath, artifact } = writeAmoSigningStateArtifact({
       artifactsDir,
       state: 'recovered-existing-version',
-      addonId: 'monitor-bloqueos@openpath',
+      addonId: 'openpath-block-monitor@openpath',
       version: '2.0.81977786.682142437',
       fileStatus: 'signed',
       lastPollAt: '2026-05-07T05:00:01.000Z',
@@ -1472,7 +1473,7 @@ void describe('Firefox release signing helpers', () => {
     assert.equal(artifactPath, path.join(artifactsDir, 'amo-signing-state.json'));
     assert.deepEqual(artifact, {
       state: 'recovered-existing-version',
-      addonId: 'monitor-bloqueos@openpath',
+      addonId: 'openpath-block-monitor@openpath',
       version: '2.0.81977786.682142437',
       versionId: '',
       fileStatus: 'signed',
@@ -1779,7 +1780,7 @@ void describe('Firefox release signing helpers', () => {
       path.join(sourceDir, 'manifest.json'),
       `${JSON.stringify({
         version: '3.2.1',
-        browser_specific_settings: { gecko: { id: 'monitor-bloqueos@openpath' } },
+        browser_specific_settings: { gecko: { id: 'openpath-block-monitor@openpath' } },
       })}\n`
     );
     writeFileSync(path.join(sourceDir, 'dist', 'background.js'), 'console.log("runtime");\n');
@@ -1826,7 +1827,7 @@ void describe('Firefox release signing helpers', () => {
         path.join(sourceDir, 'manifest.json'),
         `${JSON.stringify({
           version: '3.2.1',
-          browser_specific_settings: { gecko: { id: 'monitor-bloqueos@openpath' } },
+          browser_specific_settings: { gecko: { id: 'openpath-block-monitor@openpath' } },
         })}\n`
       );
       writeFileSync(path.join(sourceDir, 'dist', 'background.js'), 'console.log("runtime");\n');
@@ -1861,7 +1862,7 @@ void describe('Firefox release signing helpers', () => {
       path.join(sourceDir, 'manifest.json'),
       `${JSON.stringify({
         version: '3.2.1',
-        browser_specific_settings: { gecko: { id: 'monitor-bloqueos@openpath' } },
+        browser_specific_settings: { gecko: { id: 'openpath-block-monitor@openpath' } },
       })}\n`
     );
     writeFileSync(path.join(sourceDir, 'dist', 'background.js'), 'console.log("runtime");\n');

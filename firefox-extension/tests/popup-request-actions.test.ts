@@ -52,6 +52,7 @@ await describe('popup request actions', async () => {
 
   await test('submits popup requests through the background message builder', async () => {
     let capturedMessage: unknown;
+    const consentPayloads: unknown[] = [];
 
     const result = await submitPopupDomainRequest({
       blockedDomainsData: {
@@ -65,6 +66,10 @@ await describe('popup request actions', async () => {
       domain: 'cdn.example.com',
       isNativeAvailable: true,
       isRequestConfigured: true,
+      requestBrowsingActivityConsent: (payload) => {
+        consentPayloads.push(payload);
+        return Promise.resolve({ granted: true });
+      },
       reason: 'needed for class',
       sendMessage: (message) => {
         capturedMessage = message;
@@ -72,6 +77,7 @@ await describe('popup request actions', async () => {
       },
     });
 
+    assert.deepEqual(consentPayloads, [{ data_collection: ['browsingActivity'] }]);
     assert.deepEqual(capturedMessage, {
       domain: 'cdn.example.com',
       error: 'NS_ERROR_UNKNOWN_HOST',
@@ -84,6 +90,38 @@ await describe('popup request actions', async () => {
       shouldResetForm: true,
       userMessage: '✅ Solicitud enviada para cdn.example.com. Queda pendiente de aprobación.',
     });
+  });
+
+  await test('does not contact the background script when browsing activity consent is denied', async () => {
+    let called = false;
+
+    const result = await submitPopupDomainRequest({
+      blockedDomainsData: {
+        'cdn.example.com': {
+          errors: ['NS_ERROR_UNKNOWN_HOST'],
+          origin: 'portal.school',
+          timestamp: 1,
+        },
+      },
+      buildSubmitMessage: (payload) => payload,
+      domain: 'cdn.example.com',
+      isNativeAvailable: true,
+      isRequestConfigured: true,
+      requestBrowsingActivityConsent: () =>
+        Promise.resolve({
+          granted: false,
+          error: 'Se necesita el permiso de actividad de navegacion para enviar la solicitud.',
+        }),
+      reason: 'needed for class',
+      sendMessage: () => {
+        called = true;
+        return Promise.resolve({});
+      },
+    });
+
+    assert.equal(called, false);
+    assert.equal(result.success, false);
+    assert.match(result.userMessage, /actividad de navegacion/);
   });
 
   await test('returns validation failures without contacting the background script', async () => {

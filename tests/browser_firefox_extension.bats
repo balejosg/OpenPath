@@ -122,7 +122,7 @@ PYEOF
     local release_dir="$TEST_TMP_DIR/firefox-release"
     mkdir -p "$release_dir"
     cat > "$release_dir/metadata.json" <<'EOF'
-{"extensionId":"monitor-bloqueos@openpath","version":"2.0.0"}
+{"extensionId":"openpath-block-monitor@openpath","version":"2.0.0"}
 EOF
     touch "$release_dir/openpath-firefox-extension.xpi"
 
@@ -138,7 +138,7 @@ EOF
     [ "$status" -eq 0 ]
 
     mapfile -t policy_args < "$TEST_TMP_DIR/policy-args"
-    [ "${policy_args[0]}" = "monitor-bloqueos@openpath" ]
+    [ "${policy_args[0]}" = "openpath-block-monitor@openpath" ]
     [ "${policy_args[1]}" = "$release_dir/openpath-firefox-extension.xpi" ]
     [[ "${policy_args[2]}" == file://* ]]
 }
@@ -205,7 +205,7 @@ EOF
     touch "$ext_dir/blocked/blocked.css"
     touch "$ext_dir/blocked/blocked.js"
 
-    local ext_install_dir="$FIREFOX_EXTENSIONS_ROOT/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/monitor-bloqueos@openpath"
+    local ext_install_dir="$FIREFOX_EXTENSIONS_ROOT/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/openpath-block-monitor@openpath"
 
     source "$PROJECT_DIR/linux/lib/browser.sh"
 
@@ -229,7 +229,7 @@ EOF
     local release_dir="$TEST_TMP_DIR/firefox-release"
     mkdir -p "$release_dir"
     cat > "$release_dir/metadata.json" <<'EOF'
-{"extensionId":"monitor-bloqueos@openpath","version":"2.0.0"}
+{"extensionId":"openpath-block-monitor@openpath","version":"2.0.0"}
 EOF
     touch "$release_dir/openpath-firefox-extension.xpi"
 
@@ -250,7 +250,7 @@ EOF
     [ ! -f "$TEST_TMP_DIR/autoconfig-called" ]
 
     mapfile -t policy_args < "$TEST_TMP_DIR/policy-args"
-    [ "${policy_args[0]}" = "monitor-bloqueos@openpath" ]
+    [ "${policy_args[0]}" = "openpath-block-monitor@openpath" ]
     [ "${policy_args[1]}" = "$release_dir/openpath-firefox-extension.xpi" ]
     [[ "${policy_args[2]}" == file://* ]]
 }
@@ -267,7 +267,7 @@ EOF
     export ETC_CONFIG_DIR="$TEST_TMP_DIR/etc/openpath"
     mkdir -p "$release_dir" "$ETC_CONFIG_DIR"
     cat > "$release_dir/metadata.json" <<'EOF'
-{"extensionId":"monitor-bloqueos@openpath","version":"2.0.0"}
+{"extensionId":"openpath-block-monitor@openpath","version":"2.0.0"}
 EOF
     touch "$release_dir/openpath-firefox-extension.xpi"
     printf '%s\n' 'https://school.example/' > "$ETC_CONFIG_DIR/api-url.conf"
@@ -288,7 +288,7 @@ EOF
     [ "$status" -eq 0 ]
 
     mapfile -t policy_args < "$TEST_TMP_DIR/policy-args"
-    [ "${policy_args[0]}" = "monitor-bloqueos@openpath" ]
+    [ "${policy_args[0]}" = "openpath-block-monitor@openpath" ]
     [ "${policy_args[1]}" = "https://school.example/api/extensions/firefox/openpath.xpi" ]
     [ "${policy_args[2]}" = "https://school.example/api/extensions/firefox/openpath.xpi" ]
 }
@@ -310,7 +310,7 @@ EOF
     [ "$status" -eq 0 ]
 
     mapfile -t policy_lines <<< "$output"
-    [ "${policy_lines[0]}" = "extension_id=monitor-bloqueos@openpath" ]
+    [ "${policy_lines[0]}" = "extension_id=openpath-block-monitor@openpath" ]
     [ "${policy_lines[1]}" = "install_entry=https://school.example/api/extensions/firefox/openpath.xpi" ]
     [ "${policy_lines[2]}" = "install_url=https://school.example/api/extensions/firefox/openpath.xpi" ]
     [ "${policy_lines[3]}" = "source=managed-api" ]
@@ -320,7 +320,7 @@ EOF
     local release_dir="$TEST_TMP_DIR/firefox-release"
     mkdir -p "$release_dir"
     cat > "$release_dir/metadata.json" <<'EOF'
-{"extensionId":"monitor-bloqueos@openpath","version":"2.0.0","installUrl":"https://school.example/api/extensions/firefox/openpath.xpi"}
+{"extensionId":"openpath-block-monitor@openpath","version":"2.0.0","installUrl":"https://school.example/api/extensions/firefox/openpath.xpi"}
 EOF
 
     source "$PROJECT_DIR/linux/lib/browser.sh"
@@ -363,7 +363,7 @@ EOF
     [ "$status" -eq 0 ]
     [ ! -f "$TEST_TMP_DIR/unpacked-source" ]
     mapfile -t policy_args < "$TEST_TMP_DIR/managed-policy-args"
-    [ "${policy_args[0]}" = "monitor-bloqueos@openpath" ]
+    [ "${policy_args[0]}" = "openpath-block-monitor@openpath" ]
     [ "${policy_args[1]}" = "https://school.example/api/extensions/firefox/openpath.xpi" ]
     [ "${policy_args[2]}" = "https://school.example/api/extensions/firefox/openpath.xpi" ]
 }

@@ -9,12 +9,15 @@ interface FirefoxManifest {
   browser_specific_settings?: {
     gecko?: {
       data_collection_permissions?: {
+        optional?: string[];
         required?: string[];
       };
       id?: string;
       strict_min_version?: string;
     };
-    gecko_android?: unknown;
+    gecko_android?: {
+      strict_min_version?: string;
+    };
   };
   name?: string;
   description?: string;
@@ -103,14 +106,17 @@ void describe('Firefox extension manifest policy', () => {
   void test('declares Firefox desktop data collection consent and runtime', async () => {
     const manifest = await readManifest();
 
-    assert.equal(manifest.browser_specific_settings?.gecko_android, undefined);
     assert.deepEqual(manifest.browser_specific_settings, {
       gecko: {
-        id: 'monitor-bloqueos@openpath',
+        id: 'openpath-block-monitor@openpath',
         strict_min_version: '140.0',
         data_collection_permissions: {
-          required: ['browsingActivity'],
+          required: ['none'],
+          optional: ['browsingActivity'],
         },
+      },
+      gecko_android: {
+        strict_min_version: '142.0',
       },
     });
   });

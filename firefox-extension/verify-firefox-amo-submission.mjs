@@ -24,9 +24,15 @@ function readJson(filePath) {
 
 function manifestRequiresReviewerPackage(manifestPath = path.join(extensionRoot, 'manifest.json')) {
   const manifest = readJson(manifestPath);
+  const dataCollectionPermissions =
+    manifest.browser_specific_settings?.gecko?.data_collection_permissions ?? {};
   const required =
     manifest.browser_specific_settings?.gecko?.data_collection_permissions?.required ?? [];
-  return Array.isArray(required) && required.length > 0;
+  const optional = dataCollectionPermissions.optional ?? [];
+  return (
+    (Array.isArray(required) && required.length > 0) ||
+    (Array.isArray(optional) && optional.length > 0)
+  );
 }
 
 function validateAmoMetadata(metadataPath) {

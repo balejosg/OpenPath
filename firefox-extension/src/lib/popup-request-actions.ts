@@ -1,4 +1,8 @@
 import type { BlockedDomainsData } from './popup-state.js';
+import {
+  BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION,
+  type DataCollectionConsentResult,
+} from './data-collection-consent.js';
 
 export interface SubmitRequestResult {
   success: boolean;
@@ -56,6 +60,9 @@ export async function submitPopupDomainRequest(input: {
   isNativeAvailable: boolean;
   isRequestConfigured: boolean;
   reason: string;
+  requestBrowsingActivityConsent?: (
+    payload: typeof BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION
+  ) => Promise<DataCollectionConsentResult>;
   sendMessage: (message: unknown) => Promise<unknown>;
 }): Promise<{
   errorMessage?: string;
@@ -86,6 +93,23 @@ export async function submitPopupDomainRequest(input: {
   }
 
   try {
+    const consent = input.requestBrowsingActivityConsent
+      ? await input.requestBrowsingActivityConsent(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)
+      : {
+          granted: false as const,
+          error:
+            'Esta version de Firefox no es compatible con el permiso de datos requerido para enviar solicitudes.',
+        };
+    if (!consent.granted) {
+      return {
+        success: false,
+        errorMessage: consent.error,
+        shouldReloadDomainStatuses: false,
+        shouldResetForm: false,
+        userMessage: `❌ ${consent.error}`,
+      };
+    }
+
     const payload = (await input.sendMessage(
       input.buildSubmitMessage({
         domain: input.domain,
