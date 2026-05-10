@@ -1813,7 +1813,6 @@ void describe('Firefox release signing helpers', () => {
     for (const forbiddenFilename of [
       'auto-allow-workflow.js',
       'page-resource-auto-allow-intake.js',
-      'google-game-blocking.js',
     ]) {
       const workingDir = createTempDir('openpath-firefox-signing-source-guard-');
       const sourceDir = path.join(workingDir, 'extension');

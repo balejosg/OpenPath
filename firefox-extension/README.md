@@ -15,7 +15,8 @@ Firefox blocked-path and blocked-subdomain enforcement lives in this extension r
 - Core permissions include `webRequest`, `webRequestBlocking`, `webNavigation`, `tabs`, `clipboardWrite`, `storage`, and `nativeMessaging`
 - Mozilla data collection declares `required: ["none"]` and optional `browsingActivity`; blocked-page and popup access requests ask for the optional consent before submitting request details
 - Host permissions currently target `<all_urls>`
-- Firefox Core does not include Google games enforcement/guard, Android support, page activity content scripts, MAIN-world page-resource observers, automatic AJAX/page-resource candidate upload, or live/automatic AMO upload.
+- Firefox Core includes local Google game blocking for known Snake, doodle-game, and interactive logo-game surfaces.
+- Firefox Core does not include Android support, page activity content scripts, MAIN-world page-resource observers, automatic AJAX/page-resource candidate upload, or live/automatic AMO upload.
 
 ## Local Development
 

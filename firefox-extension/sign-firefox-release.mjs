@@ -24,11 +24,7 @@ const defaultWebExtSignRecoveryPollSeconds = 60;
 const defaultAmoBaseUrl = 'https://addons.mozilla.org/api/v5/';
 const amoVersionComponentModulo = 1_000_000_000n;
 const amoSigningStateArtifactName = 'amo-signing-state.json';
-const removedApprovalMaxRuntimeFilenameTokens = [
-  'auto-allow',
-  'page-resource-auto-allow',
-  'google-game',
-];
+const removedApprovalMaxRuntimeFilenameTokens = ['auto-allow', 'page-resource-auto-allow'];
 
 function fail(message) {
   throw new Error(message);

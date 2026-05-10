@@ -46,6 +46,8 @@ What it does:
 - lets users request access to a blocked domain when the OpenPath administrator
   has enabled requests and the user grants Firefox's browsing activity
   data-collection permission for that request flow
+- blocks known Google game surfaces such as Google Snake, `doodles.google`
+  game frames, and interactive logo-game assets before they load
 - talks to the OpenPath native host on the same computer to check
   local allowlist state and refresh path/subdomain enforcement data
 
@@ -55,9 +57,9 @@ What it does not do:
   OpenPath deployments
 - it does not replace the OpenPath Linux or Windows endpoint agent, DNS rules,
   firewall rules, or administrator policy
-- Firefox Core does not include Google games enforcement/guard, Android support,
-  content scripts, MAIN-world observers, automatic AJAX/page-resource candidate
-  upload, or live/automatic AMO upload
+- Firefox Core does not include Android support, content scripts, MAIN-world
+  observers, automatic AJAX/page-resource candidate upload, or live/automatic
+  AMO upload
 - it does not send analytics, telemetry, or browsing-history data to third-party
   services
 
@@ -68,6 +70,8 @@ Privacy and deployment notes:
   request metadata only to the configured OpenPath service
 - blocked-page and popup access requests send user-initiated request details
   only to the configured OpenPath service
+- Google game blocking is local browser policy enforced through `webRequest`;
+  it does not transmit Google browsing activity to third parties
 - native messaging is local to the same computer and talks only to the
   OpenPath native host installed by the managed client
 

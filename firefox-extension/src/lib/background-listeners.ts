@@ -8,6 +8,7 @@ import {
   type BlockedScreenContext,
   type ConfirmBlockedScreenContext,
 } from './blocked-screen-navigation-controller.js';
+import { evaluateGoogleGameBlocking, isGoogleGamePolicyOutcome } from './google-game-blocking.js';
 
 interface BackgroundListenersOptions {
   addBlockedDomain: (
@@ -69,7 +70,11 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
   options.browser.webRequest.onBeforeRequest.addListener(
     (details: WebRequest.OnBeforeRequestDetailsType) => {
       const result =
-        options.evaluateBlockedPath(details) ?? options.evaluateBlockedSubdomain(details);
+        options.evaluateBlockedPath(details) ??
+        options.evaluateBlockedSubdomain(details) ??
+        evaluateGoogleGameBlocking(details, {
+          extensionOrigin: options.browser.runtime.getURL('/'),
+        });
       if (!result) {
         return;
       }
@@ -80,7 +85,9 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
         const fallbackReason =
           result.reason?.startsWith(BLOCKED_SUBDOMAIN_REASON) === true
             ? `${BLOCKED_SUBDOMAIN_REASON}:unknown`
-            : `${ROUTE_BLOCK_REASON}:unknown`;
+            : isGoogleGamePolicyOutcome(result)
+              ? 'GOOGLE_GAME_POLICY:unknown'
+              : `${ROUTE_BLOCK_REASON}:unknown`;
         const reason = result.reason ?? fallbackReason;
         options.addBlockedDomain(
           details.tabId,
