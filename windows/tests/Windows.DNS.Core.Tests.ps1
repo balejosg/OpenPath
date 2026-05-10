@@ -162,6 +162,7 @@ Describe "DNS Module" {
                 $content.Contains('FW example.com') | Should -BeTrue
                 $content.Contains('NX >ads.example.com') | Should -BeTrue
                 $content.Contains('FW >example.com') | Should -BeFalse
+                $regexRule | Should -Not -Match '\\\\\.'
                 $regexForwardRules.Count | Should -Be 1
                 'www.example.com' | Should -Match $regexPattern
                 'ads.example.com' | Should -Not -Match $regexPattern

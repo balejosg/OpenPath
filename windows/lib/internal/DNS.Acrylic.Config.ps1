@@ -67,7 +67,7 @@ function Get-AcrylicForwardRules {
 
     $escapedDomain = [regex]::Escape($normalizedDomain)
     $escapedBlockedPattern = ($blockedDescendants -join '|')
-    return @("FW $normalizedDomain", "FW /^(?!(?:.*\\.)?(?:$escapedBlockedPattern)$).*\\.$escapedDomain$")
+    return @("FW $normalizedDomain", "FW /^(?!(?:.*\.)?(?:$escapedBlockedPattern)$).*\.$escapedDomain$")
 }
 
 function Get-AcrylicEssentialDomainGroups {
