@@ -29,11 +29,11 @@ export async function ensureBrowsingActivityConsent(
   }
 
   try {
-    if (await permissionsApi.request(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
+    if (await permissionsApi.contains(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
       return { granted: true };
     }
 
-    if (await permissionsApi.contains(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
+    if (await permissionsApi.request(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
       return { granted: true };
     }
 
