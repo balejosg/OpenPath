@@ -18,6 +18,7 @@ const DEFAULT_SOURCE_MODE = 'runner-checkout';
 const RUN_MODES = new Set(['pester', 'browser-boundary', 'dns-discovery-spike', 'all']);
 const DEFAULT_RUN_MODE = 'pester';
 const OVERLAY_ZIP_NAME = 'openpath-local-overlay.zip';
+const DNS_DISCOVERY_SPIKE_GUEST_ARTIFACT_ROOT = 'C:\\Windows\\Temp\\openpath-dns-discovery-spike';
 const BROWSER_ENFORCEMENT_ARTIFACTS = [
   'browser-boundary-summary.json',
   'student\\windows-browser-enforcement-report.json',
@@ -998,7 +999,7 @@ if ($exitCode -ne 0) {
 
 function runWindowsDnsDiscoverySpike(options, runnerRepoRoot) {
   const spikeScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-dns-discovery-spike.ps1`;
-  const artifactsRoot = `${runnerRepoRoot}\\tests\\e2e\\artifacts\\windows-dns-discovery-spike`;
+  const artifactsRoot = DNS_DISCOVERY_SPIKE_GUEST_ARTIFACT_ROOT;
   const completionPath = `${artifactsRoot}\\direct-dns-discovery-spike-completion.json`;
   const timeoutSeconds = Number.parseInt(options.timeoutSeconds, 10);
   const script = `
@@ -1110,6 +1111,7 @@ $primaryFailure = $null
 $exitCode = 0
 $errorText = ''
 try {
+  Remove-Item -LiteralPath $artifactsRoot -Recurse -Force -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
   Remove-Item -LiteralPath $completionPath -Force -ErrorAction SilentlyContinue
   Ensure-OpenPathDirectNode
@@ -1241,7 +1243,7 @@ function collectArtifacts(options, artifactDir, runnerRoot) {
   for (const artifactName of DNS_DISCOVERY_SPIKE_ARTIFACTS) {
     const content = readGuestFile(
       options,
-      `${runnerRoot}\\tests\\e2e\\artifacts\\windows-dns-discovery-spike\\${artifactName}`,
+      `${DNS_DISCOVERY_SPIKE_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
       500000
     );
     if (content.trim()) {
