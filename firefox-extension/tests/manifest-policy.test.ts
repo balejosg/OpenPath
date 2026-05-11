@@ -121,7 +121,7 @@ void describe('Firefox extension manifest policy', () => {
     });
   });
 
-  void test('declares only the reviewed page observer content scripts', async () => {
+  void test('declares the reviewed page observer and Google visual guard content scripts', async () => {
     const manifest = await readManifest();
 
     assert.deepEqual(manifest.content_scripts, [
@@ -135,6 +135,16 @@ void describe('Firefox extension manifest policy', () => {
         js: ['dist/page-resource-observer-main.js'],
         run_at: 'document_start',
         world: 'MAIN',
+      },
+      {
+        matches: [
+          'https://www.google.com/*',
+          'https://www.google.es/*',
+          'https://doodles.google/*',
+          'https://*.doodles.google/*',
+        ],
+        js: ['dist/google-search-game-guard-content.js'],
+        run_at: 'document_start',
       },
     ]);
   });

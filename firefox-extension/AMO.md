@@ -60,8 +60,11 @@ What it does not do:
 - Firefox Core includes an isolated-world page activity relay and a MAIN-world
   page-resource observer for local OpenPath policy visibility, without
   automatic allowlist changes or automatic browsing-data upload
-- Firefox Core does not include Android support, Google visual DOM guards,
-  automatic AJAX/page-resource allowlisting, or live/automatic AMO upload
+- Firefox Core includes a Google Search/Doodles visual guard content script
+  that locally neutralizes detected playable game widgets without uploading
+  browsing data
+- Firefox Core does not include Android support, automatic AJAX/page-resource
+  allowlisting, or live/automatic AMO upload
 - it does not send analytics, telemetry, or browsing-history data to third-party
   services
 
@@ -73,7 +76,8 @@ Privacy and deployment notes:
 - blocked-page and popup access requests send user-initiated request details
   only to the configured OpenPath service
 - Google game blocking is local browser policy enforced through `webRequest`;
-  it does not transmit Google browsing activity to third parties
+  the Google visual guard is local DOM enforcement and does not transmit Google
+  browsing activity to third parties
 - native messaging is local to the same computer and talks only to the
   OpenPath native host installed by the managed client
 
