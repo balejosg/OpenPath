@@ -20,6 +20,7 @@ const RUN_MODES = new Set([
   'browser-boundary',
   'dns-discovery-spike',
   'dns-evidence-matrix',
+  'dns-evidence-matrix-v2',
   'dns-observability-controls',
   'all',
 ]);
@@ -27,6 +28,8 @@ const DEFAULT_RUN_MODE = 'pester';
 const OVERLAY_ZIP_NAME = 'openpath-local-overlay.zip';
 const DNS_DISCOVERY_SPIKE_GUEST_ARTIFACT_ROOT = 'C:\\Windows\\Temp\\openpath-dns-discovery-spike';
 const DNS_EVIDENCE_MATRIX_GUEST_ARTIFACT_ROOT = 'C:\\Windows\\Temp\\openpath-dns-evidence-matrix';
+const DNS_EVIDENCE_MATRIX_V2_GUEST_ARTIFACT_ROOT =
+  'C:\\Windows\\Temp\\openpath-dns-evidence-matrix-v2';
 const DNS_OBSERVABILITY_CONTROLS_GUEST_ARTIFACT_ROOT =
   'C:\\Windows\\Temp\\openpath-dns-observability-controls';
 const BROWSER_ENFORCEMENT_ARTIFACTS = [
@@ -83,6 +86,30 @@ const DNS_EVIDENCE_MATRIX_ARTIFACTS = [
     `pktmon-${phase}.pcapng`,
   ]),
 ];
+const DNS_EVIDENCE_MATRIX_V2_ARTIFACTS = [
+  'dns-evidence-matrix-v2-result.json',
+  'dns-evidence-matrix-v2-browser-artifact.json',
+  'dns-evidence-matrix-v2-state.json',
+  'dns-evidence-matrix-v2-hashes.json',
+  'acrylic-dns-evidence-matrix-v2.log',
+  'acrylic-dns-evidence-matrix-v2.sanitized.log',
+  'direct-dns-evidence-matrix-v2-completion.json',
+  'direct-dns-evidence-matrix-v2.out.log',
+  'direct-dns-evidence-matrix-v2.err.log',
+  'AcrylicConfiguration.ini.before-dns-evidence-matrix-v2',
+  'AcrylicConfiguration.ini.after-dns-evidence-matrix-v2',
+  'AcrylicHosts.txt.before-dns-evidence-matrix-v2',
+  'AcrylicHosts.txt.after-dns-evidence-matrix-v2',
+  'resolve-approved-origin.json',
+  'resolve-approved-origin.err.log',
+  'resolve-fw-control.json',
+  'resolve-fw-control.err.log',
+  'resolve-nx-control.json',
+  'resolve-nx-control.err.log',
+  ...['direct-dns-control', 'browser-nx', 'browser-fw', 'browser-warm-multi-anchor'].flatMap(
+    (phase) => [`dns-evidence-v2-${phase}-hitlog.log`, `pktmon-v2-${phase}.json`]
+  ),
+];
 const DNS_OBSERVABILITY_CONTROLS_ARTIFACTS = [
   'dns-observability-controls-result.json',
   'dns-observability-controls-hashes.json',
@@ -124,7 +151,7 @@ Options:
   --results-path <path>       Result file path on the Windows runner relative to the repo root (default: ${DEFAULT_RESULTS_RELATIVE_PATH})
   --runner-repo-root <path>   Explicit OpenPath checkout root on the Windows runner (default: auto-detect under ${DEFAULT_RUNNER_ROOT_GLOB})
   --source-mode <mode>        Source to execute on Windows: runner-checkout or local-overlay (default: ${DEFAULT_SOURCE_MODE})
-  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-observability-controls, or all (default: ${DEFAULT_RUN_MODE})
+  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, or all (default: ${DEFAULT_RUN_MODE})
   --overlay-host <ip>         Local host/IP the Windows VM can use to download the local overlay ZIP
   --browser-enforcement-report
                               Run tests/e2e/ci/windows-browser-enforcement.ps1 -Scope Report after Pester
@@ -1386,6 +1413,164 @@ if ($exitCode -ne 0) {
   }
 }
 
+function runWindowsDnsEvidenceMatrixV2(options, runnerRepoRoot) {
+  const matrixScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-dns-evidence-matrix-v2.ps1`;
+  const artifactsRoot = DNS_EVIDENCE_MATRIX_V2_GUEST_ARTIFACT_ROOT;
+  const completionPath = `${artifactsRoot}\\direct-dns-evidence-matrix-v2-completion.json`;
+  const timeoutSeconds = Number.parseInt(options.timeoutSeconds, 10);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$repoRoot = ${JSON.stringify(runnerRepoRoot)}
+$matrixScriptPath = ${JSON.stringify(matrixScriptPath)}
+$artifactsRoot = ${JSON.stringify(artifactsRoot)}
+$completionPath = ${JSON.stringify(completionPath)}
+
+if (-not (Test-Path -LiteralPath $matrixScriptPath)) {
+  throw 'run-windows-dns-evidence-matrix-v2.ps1 is missing on the Windows runner checkout.'
+}
+
+function Ensure-OpenPathDirectNode {
+  if (Get-Command npm.cmd -ErrorAction SilentlyContinue) {
+    return
+  }
+
+  $nodeRoot = Join-Path $env:TEMP 'openpath-direct-node-v24'
+  $npmPath = Join-Path $nodeRoot 'npm.cmd'
+  if (-not (Test-Path -LiteralPath $npmPath)) {
+    $ProgressPreference = 'SilentlyContinue'
+    $global:ProgressPreference = 'SilentlyContinue'
+    $index = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -UseBasicParsing -TimeoutSec 60
+    $release = @($index | Where-Object { $_.version -like 'v24.*' -and $_.files -contains 'win-x64-zip' } | Select-Object -First 1)[0]
+    if (-not $release -or -not $release.version) {
+      throw 'Unable to resolve a Node.js v24 win-x64 zip release for direct runner execution.'
+    }
+
+    $version = [string]$release.version
+    $zipPath = Join-Path $env:TEMP "openpath-direct-node-$version.zip"
+    $extractRoot = Join-Path $env:TEMP "openpath-direct-node-$version"
+    $url = "https://nodejs.org/dist/$version/node-$version-win-x64.zip"
+    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -TimeoutSec 180
+    Expand-Archive -LiteralPath $zipPath -DestinationPath $extractRoot -Force
+    Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+    $expanded = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
+    if (-not $expanded -or -not (Test-Path -LiteralPath (Join-Path $expanded.FullName 'npm.cmd'))) {
+      throw 'Downloaded Node.js archive did not contain npm.cmd.'
+    }
+    Remove-Item -LiteralPath $nodeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Move-Item -LiteralPath $expanded.FullName -Destination $nodeRoot -Force
+    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  $env:PATH = "$nodeRoot;$env:PATH"
+  if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+    throw 'npm.cmd is still unavailable after preparing temporary Node.js.'
+  }
+}
+
+function Ensure-OpenPathDirectDependencies {
+  param(
+    [Parameter(Mandatory = $true)][string]$RepoRoot
+  )
+
+  $tscPath = Join-Path $RepoRoot 'node_modules\\.bin\\tsc.cmd'
+  $tsxPath = Join-Path $RepoRoot 'node_modules\\tsx\\dist\\cli.mjs'
+  if ((Test-Path -LiteralPath $tscPath) -and (Test-Path -LiteralPath $tsxPath)) {
+    return
+  }
+
+  Set-Location $RepoRoot
+  & npm.cmd ci --prefer-offline --no-audit --fund=false | Out-Host
+  if ($LASTEXITCODE -ne 0) {
+    throw "npm ci failed with exit code $LASTEXITCODE"
+  }
+}
+
+function Invoke-OpenPathDirectChildPowerShell {
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    [string[]]$ExtraArguments = @(),
+    [Parameter(Mandatory = $true)][string]$LogName,
+    [int]$TimeoutSeconds = 1800
+  )
+
+  $outPath = Join-Path $artifactsRoot "$LogName.out.log"
+  $errPath = Join-Path $artifactsRoot "$LogName.err.log"
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $ExtraArguments
+  $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $repoRoot -RedirectStandardOutput $outPath -RedirectStandardError $errPath -PassThru
+
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "$LogName timed out after $TimeoutSeconds seconds"
+  }
+
+  $process.Refresh()
+  $exitCode = $process.ExitCode
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+  if ($exitCode -ne 0) {
+    $maxFailureLogChars = 12000
+    $stdout = if (Test-Path -LiteralPath $outPath) { Get-Content -LiteralPath $outPath -Raw } else { '' }
+    $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -LiteralPath $errPath -Raw } else { '' }
+    if ($stdout.Length -gt $maxFailureLogChars) {
+      $stdout = $stdout.Substring($stdout.Length - $maxFailureLogChars)
+    }
+    if ($stderr.Length -gt $maxFailureLogChars) {
+      $stderr = $stderr.Substring($stderr.Length - $maxFailureLogChars)
+    }
+    throw ($LogName + ' exited with code ' + $exitCode + [Environment]::NewLine + 'STDOUT:' + [Environment]::NewLine + $stdout + [Environment]::NewLine + 'STDERR:' + [Environment]::NewLine + $stderr)
+  }
+}
+
+$primaryFailure = $null
+$exitCode = 0
+$errorText = ''
+try {
+  Remove-Item -LiteralPath $artifactsRoot -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
+  Remove-Item -LiteralPath $completionPath -Force -ErrorAction SilentlyContinue
+  Ensure-OpenPathDirectNode
+  Ensure-OpenPathDirectDependencies -RepoRoot $repoRoot
+  Set-Location $repoRoot
+  Invoke-OpenPathDirectChildPowerShell -ScriptPath $matrixScriptPath -ExtraArguments @('-Mode', 'Run', '-ArtifactsRoot', $artifactsRoot) -LogName 'direct-dns-evidence-matrix-v2' -TimeoutSeconds ${timeoutSeconds}
+  $resultPath = Join-Path $artifactsRoot 'dns-evidence-matrix-v2-result.json'
+  if (-not (Test-Path -LiteralPath $resultPath)) {
+    throw "DNS evidence matrix v2 result was not written: $resultPath"
+  }
+}
+catch {
+  $primaryFailure = $_
+  $exitCode = 1
+  $errorText = [string]$_
+}
+finally {
+  [pscustomobject]@{
+    exitCode = $exitCode
+    error = $errorText
+    artifactsRoot = $artifactsRoot
+    resultPath = (Join-Path $artifactsRoot 'dns-evidence-matrix-v2-result.json')
+    timestamp = (Get-Date).ToString('o')
+  } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $completionPath -Encoding UTF8
+}
+
+if ($exitCode -ne 0) {
+  exit $exitCode
+}
+`;
+  runGuestPowerShellDetached(options, script, {
+    label: 'Run Windows DNS evidence matrix v2',
+  });
+  const completion = waitForGuestCompletionFile(options, completionPath, {
+    timeoutSeconds: timeoutSeconds + 900,
+  });
+  if (completion.exitCode !== 0) {
+    throw new Error(
+      `Run Windows DNS evidence matrix v2 failed: ${completion.error ?? 'unknown error'}`
+    );
+  }
+}
+
 function runWindowsDnsObservabilityControls(options, runnerRepoRoot) {
   const controlsScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-dns-observability-controls.ps1`;
   const artifactsRoot = DNS_OBSERVABILITY_CONTROLS_GUEST_ARTIFACT_ROOT;
@@ -1671,6 +1856,16 @@ function collectArtifacts(options, artifactDir, runnerRoot) {
     );
   }
 
+  for (const artifactName of DNS_EVIDENCE_MATRIX_V2_ARTIFACTS) {
+    collectGuestArtifact(
+      options,
+      artifactDir,
+      `${DNS_EVIDENCE_MATRIX_V2_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
+      artifactName.replace(/\\/g, '-'),
+      64 * 1024 * 1024
+    );
+  }
+
   for (const artifactName of DNS_OBSERVABILITY_CONTROLS_ARTIFACTS) {
     collectGuestArtifact(
       options,
@@ -1774,6 +1969,10 @@ async function main() {
     if (options.mode === 'dns-evidence-matrix' || options.mode === 'all') {
       console.log('step=run-windows-dns-evidence-matrix');
       runWindowsDnsEvidenceMatrix(options, runnerRepoRoot || options.runnerRepoRoot);
+    }
+    if (options.mode === 'dns-evidence-matrix-v2' || options.mode === 'all') {
+      console.log('step=run-windows-dns-evidence-matrix-v2');
+      runWindowsDnsEvidenceMatrixV2(options, runnerRepoRoot || options.runnerRepoRoot);
     }
     if (options.mode === 'dns-observability-controls' || options.mode === 'all') {
       console.log('step=run-windows-dns-observability-controls');

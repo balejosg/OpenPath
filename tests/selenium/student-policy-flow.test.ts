@@ -222,6 +222,24 @@ test('student policy coverage profile accepts the DNS evidence matrix without ch
   }
 });
 
+test('student policy coverage profile accepts the controlled DNS evidence matrix v2', () => {
+  const original = process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+
+  try {
+    delete process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+    assert.equal(getStudentPolicyCoverageProfile(), 'full');
+
+    process.env.OPENPATH_STUDENT_COVERAGE_PROFILE = 'dns-evidence-matrix-v2';
+    assert.equal(getStudentPolicyCoverageProfile(), 'dns-evidence-matrix-v2');
+  } finally {
+    if (original === undefined) {
+      delete process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+    } else {
+      process.env.OPENPATH_STUDENT_COVERAGE_PROFILE = original;
+    }
+  }
+});
+
 test('DNS discovery spike plans a browser-only phase outside the full matrix', () => {
   assert.deepEqual(
     getStudentPolicyPhasePlan('sse', 'dns-discovery-spike').map(({ name, suite, useBrowser }) => ({
@@ -241,6 +259,19 @@ test('DNS evidence matrix plans the full browser phase sequence outside the full
       useBrowser,
     })),
     [{ name: 'dns-evidence-matrix', suite: 'dns-evidence-matrix', useBrowser: true }]
+  );
+});
+
+test('DNS evidence matrix v2 plans a browser-only diagnostic phase outside the full matrix', () => {
+  assert.deepEqual(
+    getStudentPolicyPhasePlan('sse', 'dns-evidence-matrix-v2').map(
+      ({ name, suite, useBrowser }) => ({
+        name,
+        suite,
+        useBrowser,
+      })
+    ),
+    [{ name: 'dns-evidence-matrix-v2', suite: 'dns-evidence-matrix-v2', useBrowser: true }]
   );
 });
 

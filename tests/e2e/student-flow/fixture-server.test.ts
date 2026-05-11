@@ -72,6 +72,32 @@ await describe('student fixture server', async () => {
     assert.match(response.body, /cdn\.portal\.127\.0\.0\.1\.sslip\.io/);
   });
 
+  await test('serves the portal subdomain probe against the configured fixture suffix', async () => {
+    const previousSuffix = process.env.OPENPATH_STUDENT_HOST_SUFFIX;
+    let configuredServer: StartedStudentFixtureServer | undefined;
+    process.env.OPENPATH_STUDENT_HOST_SUFFIX = '192-168-56-103.sslip.io';
+
+    try {
+      configuredServer = await startStudentFixtureServer();
+      const response = await requestFixture({
+        server: configuredServer,
+        host: configuredServer.fixtures.portal,
+        path: '/ok',
+      });
+
+      assert.strictEqual(response.statusCode, 200);
+      assert.match(response.body, /cdn\.portal\.192-168-56-103\.sslip\.io/);
+      assert.doesNotMatch(response.body, /cdn\.portal\.127\.0\.0\.1\.sslip\.io/);
+    } finally {
+      await configuredServer?.close();
+      if (previousSuffix === undefined) {
+        delete process.env.OPENPATH_STUDENT_HOST_SUFFIX;
+      } else {
+        process.env.OPENPATH_STUDENT_HOST_SUFFIX = previousSuffix;
+      }
+    }
+  });
+
   await test('serves the CDN asset endpoint for subdomain probes', async () => {
     const response = await requestFixture({
       server: fixtureServer,

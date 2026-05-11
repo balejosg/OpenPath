@@ -305,6 +305,55 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     }
   });
 
+  test('dns-evidence-matrix-v2 mode runs the controlled DNS evidence harness', () => {
+    const result = runDirectDiagnostic([
+      '--mode',
+      'dns-evidence-matrix-v2',
+      '--source-mode',
+      'local-overlay',
+    ]);
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+    const matrixScript = readText('tests/e2e/ci/run-windows-dns-evidence-matrix-v2.ps1');
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /source_mode=local-overlay/);
+    assert.match(result.stdout, /mode=dns-evidence-matrix-v2/);
+    assert.match(result.stdout, /step=run-windows-dns-evidence-matrix-v2/);
+    assert.match(script, /run-windows-dns-evidence-matrix-v2\.ps1/);
+    assert.match(script, /openpath-dns-evidence-matrix-v2/);
+    assert.match(script, /dns-evidence-matrix-v2-result\.json/);
+    assert.match(script, /direct-dns-evidence-matrix-v2-completion\.json/);
+    assert.match(matrixScript, /AcrylicConfiguration\.ini/);
+    assert.match(matrixScript, /AcrylicHosts\.txt/);
+    assert.match(matrixScript, /HitLogFileWhat=XHCFRU/);
+    assert.match(matrixScript, /HitLogMaxPendingHits=1/);
+    assert.match(matrixScript, /HitLogFullDump=No/);
+    assert.match(matrixScript, /OPENPATH_STUDENT_HOST_SUFFIX/);
+    assert.match(matrixScript, /sslip\.io/);
+    assert.match(
+      matrixScript,
+      /Resolve-DnsName -Name '\$encodedHost' -Server 127\.0\.0\.1 -DnsOnly -Type A/
+    );
+    assert.match(matrixScript, /Add-FwDependencyRules/);
+    for (const phase of [
+      'direct-dns-control',
+      'browser-nx',
+      'browser-fw',
+      'browser-warm-multi-anchor',
+    ]) {
+      assert.match(matrixScript, new RegExp(phase));
+    }
+    for (const decision of [
+      'browserDnsObservable',
+      'browserForwardOnly',
+      'directOnly',
+      'ambiguousCorrelation',
+      'insufficientEvidence',
+    ]) {
+      assert.match(matrixScript, new RegExp(decision));
+    }
+  });
+
   test('dns-observability-controls mode runs the positive HitLog controls', () => {
     const result = runDirectDiagnostic([
       '--mode',

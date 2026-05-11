@@ -108,7 +108,8 @@ export type StudentPolicyCoverageProfile =
   | 'full'
   | 'fallback-propagation'
   | 'dns-discovery-spike'
-  | 'dns-evidence-matrix';
+  | 'dns-evidence-matrix'
+  | 'dns-evidence-matrix-v2';
 
 export type StudentPolicyScenarioGroup =
   | 'full'

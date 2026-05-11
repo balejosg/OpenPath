@@ -136,9 +136,15 @@ export type DnsEvidenceMatrixBrowserPhase =
   | 'browser-multi-anchor'
   | 'sinkhole-capture';
 
+export type DnsEvidenceMatrixV2BrowserPhase =
+  | 'browser-nx'
+  | 'browser-fw'
+  | 'browser-warm-multi-anchor';
+
 export type DnsEvidenceMatrixHookAction =
   | 'clear'
   | 'snapshot'
+  | 'apply-fw-rules'
   | 'enable-sinkhole'
   | 'disable-sinkhole';
 
@@ -165,7 +171,7 @@ export interface DnsEvidenceMatrixHookResult {
 }
 
 export interface DnsEvidenceMatrixArtifact {
-  profile: 'dns-evidence-matrix';
+  profile: 'dns-evidence-matrix' | 'dns-evidence-matrix-v2';
   success: boolean;
   origin: DnsEvidenceMatrixPlan['origin'];
   alternateOrigin: DnsEvidenceMatrixPlan['alternateOrigin'];
@@ -173,7 +179,12 @@ export interface DnsEvidenceMatrixArtifact {
   dependencyResults: Record<
     DnsDiscoveryDependencyType,
     DnsDiscoverySpikeDependency &
-      Record<DnsEvidenceMatrixBrowserPhase, DnsDiscoverySpikeProbeResult>
+      Partial<
+        Record<
+          DnsEvidenceMatrixBrowserPhase | DnsEvidenceMatrixV2BrowserPhase,
+          DnsDiscoverySpikeProbeResult
+        >
+      >
   >;
   hooks: DnsEvidenceMatrixHookResult[];
   writtenAt: string;
@@ -326,6 +337,11 @@ const DNS_EVIDENCE_MATRIX_ENABLE_SINKHOLE_ENV =
   'OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_ENABLE_SINKHOLE_COMMAND';
 const DNS_EVIDENCE_MATRIX_DISABLE_SINKHOLE_ENV =
   'OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_DISABLE_SINKHOLE_COMMAND';
+const DNS_EVIDENCE_MATRIX_V2_CLEAR_ENV = 'OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_V2_CLEAR_COMMAND';
+const DNS_EVIDENCE_MATRIX_V2_SNAPSHOT_ENV =
+  'OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_V2_SNAPSHOT_COMMAND';
+const DNS_EVIDENCE_MATRIX_V2_APPLY_FW_ENV =
+  'OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_V2_APPLY_FW_COMMAND';
 
 const notRunProbeResult = (): DnsDiscoverySpikeProbeResult => ({
   status: 'not-run',
@@ -409,13 +425,15 @@ export function buildDnsEvidenceMatrixArtifact(options: {
   hooks: DnsEvidenceMatrixHookResult[];
   phaseResults: Partial<
     Record<
-      DnsEvidenceMatrixBrowserPhase,
+      DnsEvidenceMatrixBrowserPhase | DnsEvidenceMatrixV2BrowserPhase,
       Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>
     >
   >;
+  profile?: 'dns-evidence-matrix' | 'dns-evidence-matrix-v2';
+  phases?: Array<DnsEvidenceMatrixBrowserPhase | DnsEvidenceMatrixV2BrowserPhase>;
   writtenAt?: string;
 }): DnsEvidenceMatrixArtifact {
-  const phases: DnsEvidenceMatrixBrowserPhase[] = [
+  const phases = options.phases ?? [
     'browser-cold-navigation',
     'browser-warm-ajax',
     'browser-multi-anchor',
@@ -437,7 +455,7 @@ export function buildDnsEvidenceMatrixArtifact(options: {
   ) as DnsEvidenceMatrixArtifact['dependencyResults'];
 
   return {
-    profile: 'dns-evidence-matrix',
+    profile: options.profile ?? 'dns-evidence-matrix',
     success: options.success,
     origin: options.plan.origin,
     alternateOrigin: options.plan.alternateOrigin,
@@ -1095,14 +1113,11 @@ async function writeDnsDiscoverySpikeArtifact(
 
 async function writeDnsEvidenceMatrixArtifact(
   diagnosticsDir: string,
-  artifact: DnsEvidenceMatrixArtifact
+  artifact: DnsEvidenceMatrixArtifact,
+  fileName = 'dns-evidence-matrix-browser-artifact.json'
 ): Promise<void> {
   mkdirSync(diagnosticsDir, { recursive: true });
-  writeFileSync(
-    join(diagnosticsDir, 'dns-evidence-matrix-browser-artifact.json'),
-    `${JSON.stringify(artifact, null, 2)}\n`,
-    'utf8'
-  );
+  writeFileSync(join(diagnosticsDir, fileName), `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
 }
 
 async function runDnsDiscoveryDependencyProbe(
@@ -1217,6 +1232,36 @@ async function runDnsEvidenceMatrixBrowserPhase(
   hooks.push(snapshot);
   if (snapshot.status === 'failed') {
     throw new Error(`DNS evidence matrix snapshot failed for ${phase}: ${snapshot.error}`);
+  }
+}
+
+async function runDnsEvidenceMatrixV2BrowserPhase(
+  phase: DnsEvidenceMatrixV2BrowserPhase,
+  hooks: DnsEvidenceMatrixHookResult[],
+  phaseResults: Partial<
+    Record<
+      DnsEvidenceMatrixV2BrowserPhase,
+      Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>
+    >
+  >,
+  runner: () => Promise<Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>>
+): Promise<void> {
+  const clear = await runDnsEvidenceMatrixHook(DNS_EVIDENCE_MATRIX_V2_CLEAR_ENV, phase, 'clear');
+  hooks.push(clear);
+  if (clear.status === 'failed') {
+    throw new Error(`DNS evidence matrix v2 clear failed for ${phase}: ${clear.error}`);
+  }
+
+  phaseResults[phase] = await runner();
+
+  const snapshot = await runDnsEvidenceMatrixHook(
+    DNS_EVIDENCE_MATRIX_V2_SNAPSHOT_ENV,
+    phase,
+    'snapshot'
+  );
+  hooks.push(snapshot);
+  if (snapshot.status === 'failed') {
+    throw new Error(`DNS evidence matrix v2 snapshot failed for ${phase}: ${snapshot.error}`);
   }
 }
 
@@ -1366,6 +1411,137 @@ export async function runDnsEvidenceMatrixScenario(
         throw new Error(`DNS evidence matrix sinkhole disable failed: ${disableSinkhole.error}`);
       }
     }
+
+    await writeArtifact(true);
+  } catch (error) {
+    await writeArtifact(false);
+    throw error;
+  }
+}
+
+export async function runDnsEvidenceMatrixV2Scenario(
+  client: StudentPolicyServerClient,
+  driver: StudentPolicyDriver,
+  mode: PolicyMode
+): Promise<void> {
+  if (mode !== 'sse') {
+    throw new Error('DNS evidence matrix v2 requires sse mode');
+  }
+
+  const plan = buildDnsEvidenceMatrixPlan(driver.scenario);
+  const restrictedGroupId = driver.scenario.groups.restricted.id;
+  const phaseResults: Partial<
+    Record<
+      DnsEvidenceMatrixV2BrowserPhase,
+      Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>
+    >
+  > = {};
+  const hooks: DnsEvidenceMatrixHookResult[] = [];
+  const phases: DnsEvidenceMatrixV2BrowserPhase[] = [
+    'browser-nx',
+    'browser-fw',
+    'browser-warm-multi-anchor',
+  ];
+
+  const writeArtifact = async (success: boolean): Promise<void> => {
+    await writeDnsEvidenceMatrixArtifact(
+      driver.diagnosticsDir,
+      buildDnsEvidenceMatrixArtifact({
+        plan,
+        success,
+        hooks,
+        phaseResults,
+        profile: 'dns-evidence-matrix-v2',
+        phases,
+      }),
+      'dns-evidence-matrix-v2-browser-artifact.json'
+    );
+  };
+
+  try {
+    logScenarioStep('SP-DNS-MATRIX-V2-001 prepare approved anchors without dependencies');
+    await client.setAutoApprove(false);
+    await client.ensureWhitelistRule(
+      restrictedGroupId,
+      plan.origin.host,
+      'DNS evidence matrix v2 approved origin'
+    );
+    await client.ensureWhitelistRule(
+      restrictedGroupId,
+      plan.alternateOrigin.host,
+      'DNS evidence matrix v2 alternate approved origin'
+    );
+    await driver.forceLocalUpdate();
+
+    const remoteWhitelist = await client.fetchMachineWhitelist();
+    for (const dependency of plan.dependencies) {
+      assert.doesNotMatch(
+        remoteWhitelist,
+        new RegExp(`(^|\\n)${escapeRegExp(dependency.host)}($|\\n)`),
+        `${dependency.host} must not be preseeded remotely`
+      );
+      await driver.assertWhitelistMissing(dependency.host);
+    }
+
+    await settlePolicyChange(driver, mode, async () => {
+      await driver.assertWhitelistContains(plan.origin.host);
+      await driver.assertWhitelistContains(plan.alternateOrigin.host);
+      await driver.assertDnsAllowed(plan.origin.host);
+      await driver.assertDnsAllowed(plan.alternateOrigin.host);
+    });
+
+    await writeArtifact(false);
+
+    logScenarioStep('SP-DNS-MATRIX-V2-002 browser NX dependency probes');
+    await driver.restart();
+    await driver.openAndExpectLoaded({
+      url: plan.origin.url,
+      title: 'OpenPath Site Fixture',
+      selector: '#page-status',
+    });
+    await runDnsEvidenceMatrixV2BrowserPhase('browser-nx', hooks, phaseResults, async () =>
+      runDnsDiscoveryProbePhase(driver, plan)
+    );
+    await writeArtifact(false);
+
+    logScenarioStep('SP-DNS-MATRIX-V2-003 browser FW dependency probes');
+    const applyFwRules = await runDnsEvidenceMatrixHook(
+      DNS_EVIDENCE_MATRIX_V2_APPLY_FW_ENV,
+      'browser-fw',
+      'apply-fw-rules'
+    );
+    hooks.push(applyFwRules);
+    if (applyFwRules.status === 'failed') {
+      throw new Error(`DNS evidence matrix v2 FW rules failed: ${applyFwRules.error}`);
+    }
+    await driver.restart();
+    await driver.openAndExpectLoaded({
+      url: plan.origin.url,
+      title: 'OpenPath Site Fixture',
+      selector: '#page-status',
+    });
+    await runDnsEvidenceMatrixV2BrowserPhase('browser-fw', hooks, phaseResults, async () =>
+      runDnsDiscoveryProbePhase(driver, plan)
+    );
+    await writeArtifact(false);
+
+    logScenarioStep('SP-DNS-MATRIX-V2-004 warm multi-anchor dependency probes');
+    await driver.openAndExpectLoaded({
+      url: plan.alternateOrigin.url,
+      title: 'OpenPath Portal Fixture',
+      selector: '#page-status',
+    });
+    await driver.openAndExpectLoaded({
+      url: plan.origin.url,
+      title: 'OpenPath Site Fixture',
+      selector: '#page-status',
+    });
+    await runDnsEvidenceMatrixV2BrowserPhase(
+      'browser-warm-multi-anchor',
+      hooks,
+      phaseResults,
+      async () => runDnsDiscoveryProbePhase(driver, plan)
+    );
 
     await writeArtifact(true);
   } catch (error) {

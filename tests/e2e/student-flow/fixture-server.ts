@@ -135,7 +135,7 @@ function notFound(res: ServerResponse): void {
   res.end('<!doctype html><title>Not Found</title><p>Not Found</p>');
 }
 
-function portalPageHtml(): string {
+function portalPageHtml(fixtures: StudentFixtureHosts): string {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -160,7 +160,7 @@ function portalPageHtml(): string {
 
         const buildAssetUrl = () => {
           const portSegment = window.location.port ? ':' + window.location.port : '';
-          return window.location.protocol + '//cdn.portal.127.0.0.1.sslip.io' + portSegment + '/asset.js?cache=' + Date.now();
+          return window.location.protocol + '//${fixtures.cdnPortal}' + portSegment + '/asset.js?cache=' + Date.now();
         };
 
         const runSubdomainProbe = () => {
@@ -341,10 +341,14 @@ function sendTransparentPixel(res: ServerResponse): void {
   );
 }
 
-function routePortalHost(pathname: string, res: ServerResponse): void {
+function routePortalHost(
+  pathname: string,
+  res: ServerResponse,
+  fixtures: StudentFixtureHosts
+): void {
   if (pathname === '/ok') {
     setHtmlHeaders(res);
-    res.end(portalPageHtml());
+    res.end(portalPageHtml(fixtures));
     return;
   }
 
@@ -460,7 +464,7 @@ export function createStudentFixtureRequestHandler(
       .pathname;
 
     if (host === fixtures.portal) {
-      routePortalHost(pathname, res);
+      routePortalHost(pathname, res, fixtures);
       return;
     }
 
