@@ -78,10 +78,18 @@ function Copy-OpenPathInstallerRuntime {
         [string]$FirefoxExtensionInstallUrl = ""
     )
 
-    Get-ChildItem "$ScriptDir\lib\*.psm1" -ErrorAction SilentlyContinue |
-        Copy-Item -Destination "$OpenPathRoot\lib\" -Force
-    Get-ChildItem "$ScriptDir\lib\internal\*.ps1" -ErrorAction SilentlyContinue |
-        Copy-Item -Destination "$OpenPathRoot\lib\internal\" -Force
+    $requiredScriptFiles = @(
+        'Enroll-Machine.ps1',
+        'Pre-Install-Validation.ps1',
+        'Start-SSEListener.ps1',
+        'Test-DNSHealth.ps1',
+        'Update-OpenPath.ps1'
+    )
+
+    Get-ChildItem "$ScriptDir\lib\*.psm1" -ErrorAction Stop |
+        Copy-Item -Destination "$OpenPathRoot\lib\" -Force -ErrorAction Stop
+    Get-ChildItem "$ScriptDir\lib\internal\*.ps1" -ErrorAction Stop |
+        Copy-Item -Destination "$OpenPathRoot\lib\internal\" -Force -ErrorAction Stop
 
     $browserPolicySpecCandidates = @(
         (Join-Path $ScriptDir 'runtime\browser-policy-spec.json'),
@@ -100,10 +108,24 @@ function Copy-OpenPathInstallerRuntime {
         throw "Browser policy spec not found in installer runtime ($($browserPolicySpecCandidates -join ', '))"
     }
 
-    Get-ChildItem "$ScriptDir\scripts\*.ps1" -ErrorAction SilentlyContinue |
-        Copy-Item -Destination "$OpenPathRoot\scripts\" -Force
+    foreach ($requiredScriptFile in $requiredScriptFiles) {
+        $requiredScriptSource = Join-Path (Join-Path $ScriptDir 'scripts') $requiredScriptFile
+        if (-not (Test-Path $requiredScriptSource)) {
+            throw "Required installer script missing from bootstrap package: $requiredScriptSource"
+        }
+    }
+
+    Get-ChildItem "$ScriptDir\scripts\*.ps1" -ErrorAction Stop |
+        Copy-Item -Destination "$OpenPathRoot\scripts\" -Force -ErrorAction Stop
     Get-ChildItem "$ScriptDir\scripts\*.cmd" -ErrorAction SilentlyContinue |
-        Copy-Item -Destination "$OpenPathRoot\scripts\" -Force
+        Copy-Item -Destination "$OpenPathRoot\scripts\" -Force -ErrorAction Stop
+
+    foreach ($requiredScriptFile in $requiredScriptFiles) {
+        $requiredScriptTarget = Join-Path (Join-Path $OpenPathRoot 'scripts') $requiredScriptFile
+        if (-not (Test-Path $requiredScriptTarget)) {
+            throw "Required installer script was not staged into OpenPath runtime: $requiredScriptTarget"
+        }
+    }
 
     $rootScripts = @('OpenPath.ps1', 'Rotate-Token.ps1')
     foreach ($rootScript in $rootScripts) {

@@ -181,6 +181,8 @@ function Handle-OpenPathWhitelistApply {
         Set-AllBrowserPolicy -BlockedPaths $Whitelist.BlockedPaths -Config $Config
     }
 
+    Restore-OpenPathProtectedMode -Config $Config -SkipAcrylicRestart | Out-Null
+
     Clear-StaleFailsafeState -StaleFailsafeStatePath $StaleFailsafeStatePath
 
     $runtimeHealth = Get-OpenPathRuntimeHealth

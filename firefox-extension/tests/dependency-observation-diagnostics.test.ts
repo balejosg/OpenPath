@@ -6,18 +6,18 @@ import {
   configureOpenPathDependencyObservationDiagnostics,
   getOpenPathDependencyObservationDiagnostics,
   recordOpenPathDependencyObservationEvent,
-} from '../src/lib/dependency-observation-diagnostics.ts';
+} from '../src/lib/dependency-observation-diagnostics';
 
-describe('dependency observation diagnostics', () => {
-  test('records host-only dependency observations with bounded retention', async () => {
+void describe('dependency observation diagnostics', () => {
+  void test('records host-only dependency observations with bounded retention', async () => {
     const verifiedHosts: string[] = [];
     configureOpenPathDependencyObservationDiagnostics({
       enabled: true,
       phase: 'runtime-overlay',
       maxEvents: 1,
-      verifyHost: async (hostname) => {
+      verifyHost: (hostname) => {
         verifiedHosts.push(hostname);
-        return { success: true, results: [{ hostname }] };
+        return Promise.resolve({ success: true, results: [{ hostname }] });
       },
     });
 
@@ -41,12 +41,14 @@ describe('dependency observation diagnostics', () => {
     assert.equal(diagnostics.enabled, true);
     assert.equal(diagnostics.phase, 'runtime-overlay');
     assert.equal(diagnostics.events.length, 1);
-    assert.equal(diagnostics.events[0]?.hostname, 'www.reddit.com');
-    assert.equal(diagnostics.events[0]?.nativeVerify?.success, true);
+    const [latestEvent] = diagnostics.events;
+    assert.ok(latestEvent);
+    assert.equal(latestEvent.hostname, 'www.reddit.com');
+    assert.equal(latestEvent.nativeVerify?.success, true);
     assert.deepEqual(verifiedHosts, ['www.redditstatic.com', 'www.reddit.com']);
   });
 
-  test('does not record observations while disabled', () => {
+  void test('does not record observations while disabled', () => {
     configureOpenPathDependencyObservationDiagnostics({ enabled: false });
     clearOpenPathDependencyObservationDiagnostics();
 

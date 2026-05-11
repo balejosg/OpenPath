@@ -70,6 +70,10 @@ Describe "Installer" {
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
+                '$requiredScriptFiles = @(',
+                'Enroll-Machine.ps1',
+                'Required installer script missing from bootstrap package',
+                'Required installer script was not staged into OpenPath runtime',
                 'Get-ChildItem "$ScriptDir\scripts\*.cmd" -ErrorAction SilentlyContinue',
                 'Copy-Item -Destination "$OpenPathRoot\scripts\" -Force'
             )

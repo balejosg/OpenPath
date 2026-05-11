@@ -514,4 +514,19 @@ Describe "DNS Module" {
             $script:removedAcrylicPaths | Should -Contain 'C:\Program Files (x86)\Acrylic DNS Proxy\AcrylicCache.dat'
         }
     }
+
+    Context "Protected mode restore" {
+        It "Reasserts local DNS after browser policy work during whitelist apply" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            $policyIndex = $content.IndexOf('Set-AllBrowserPolicy -BlockedPaths $Whitelist.BlockedPaths -Config $Config')
+            $restoreIndex = $content.IndexOf('Restore-OpenPathProtectedMode -Config $Config -SkipAcrylicRestart')
+            $healthIndex = $content.IndexOf('$runtimeHealth = Get-OpenPathRuntimeHealth', $restoreIndex)
+
+            $policyIndex | Should -BeGreaterThan -1
+            $restoreIndex | Should -BeGreaterThan $policyIndex
+            $healthIndex | Should -BeGreaterThan $restoreIndex
+        }
+    }
 }
