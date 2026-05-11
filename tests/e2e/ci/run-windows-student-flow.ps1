@@ -1159,7 +1159,7 @@ function Invoke-SeleniumStudentSuite {
         [Parameter(Mandatory = $true)][string]$ScenarioPath,
         [Parameter(Mandatory = $true)][string]$ExtensionArchivePath,
         [Parameter(Mandatory = $true)][string]$Mode,
-        [Parameter(Mandatory = $true)][ValidateSet('full', 'fallback-propagation', 'dns-discovery-spike')][string]$CoverageProfile,
+        [Parameter(Mandatory = $true)][ValidateSet('full', 'fallback-propagation', 'dns-discovery-spike', 'dns-evidence-matrix')][string]$CoverageProfile,
         [ValidateSet('full', 'request-lifecycle', 'path-blocking', 'exemptions')][string]$ScenarioGroup = 'full'
     )
 
@@ -1500,6 +1500,14 @@ function Resolve-DnsDiscoverySpikeScript {
     return (Join-Path $script:RepoRoot 'tests\e2e\ci\run-windows-dns-discovery-spike.ps1')
 }
 
+function Resolve-DnsEvidenceMatrixScript {
+    if (-not [string]::IsNullOrWhiteSpace($env:OPENPATH_WINDOWS_DNS_EVIDENCE_MATRIX_SCRIPT)) {
+        return [System.IO.Path]::GetFullPath($env:OPENPATH_WINDOWS_DNS_EVIDENCE_MATRIX_SCRIPT)
+    }
+
+    return (Join-Path $script:RepoRoot 'tests\e2e\ci\run-windows-dns-evidence-matrix.ps1')
+}
+
 function Set-DnsDiscoverySpikeSeleniumHooks {
     $spikeScript = Resolve-DnsDiscoverySpikeScript
     if (-not (Test-Path -LiteralPath $spikeScript)) {
@@ -1531,6 +1539,39 @@ function Invoke-DnsDiscoverySpikeHook {
     }
 }
 
+function Set-DnsEvidenceMatrixSeleniumHooks {
+    $matrixScript = Resolve-DnsEvidenceMatrixScript
+    if (-not (Test-Path -LiteralPath $matrixScript)) {
+        throw "DNS evidence matrix script not found: $matrixScript"
+    }
+
+    $env:OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_CLEAR_COMMAND = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$matrixScript`" -Mode ClearPhase -ArtifactsRoot `"$script:ArtifactsRoot`" -Phase {phase}"
+    $env:OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_SNAPSHOT_COMMAND = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$matrixScript`" -Mode SnapshotPhase -ArtifactsRoot `"$script:ArtifactsRoot`" -Phase {phase}"
+    $env:OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_ENABLE_SINKHOLE_COMMAND = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$matrixScript`" -Mode EnableSinkhole -ArtifactsRoot `"$script:ArtifactsRoot`" -Phase {phase}"
+    $env:OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_DISABLE_SINKHOLE_COMMAND = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$matrixScript`" -Mode DisableSinkhole -ArtifactsRoot `"$script:ArtifactsRoot`" -Phase {phase}"
+}
+
+function Invoke-DnsEvidenceMatrixHook {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('BeforeSelenium', 'AfterSelenium')]
+        [string]$Mode
+    )
+
+    $matrixScript = Resolve-DnsEvidenceMatrixScript
+    if (-not (Test-Path -LiteralPath $matrixScript)) {
+        throw "DNS evidence matrix script not found: $matrixScript"
+    }
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $matrixScript `
+        -Mode $Mode `
+        -ArtifactsRoot $script:ArtifactsRoot
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "run-windows-dns-evidence-matrix.ps1 $Mode failed with exit code $LASTEXITCODE"
+    }
+}
+
 try {
     Ensure-ArtifactsDirectory
     Invoke-TimedStep -Name 'Build workspaces' -ScriptBlock { Build-RequiredWorkspaces }
@@ -1557,14 +1598,21 @@ try {
     else {
         [string]$env:OPENPATH_WINDOWS_STUDENT_COVERAGE_PROFILE
     }
-    if ($windowsStudentSseCoverageProfile -notin @('full', 'dns-discovery-spike')) {
+    if ($windowsStudentSseCoverageProfile -notin @('full', 'dns-discovery-spike', 'dns-evidence-matrix')) {
         throw "Unsupported Windows student SSE coverage profile: $windowsStudentSseCoverageProfile"
     }
     $dnsDiscoverySpike = $windowsStudentSseCoverageProfile -eq 'dns-discovery-spike'
+    $dnsEvidenceMatrix = $windowsStudentSseCoverageProfile -eq 'dns-evidence-matrix'
     if ($dnsDiscoverySpike) {
         Invoke-TimedStep -Name 'Prepare DNS discovery spike HitLog' -ScriptBlock {
             Set-DnsDiscoverySpikeSeleniumHooks
             Invoke-DnsDiscoverySpikeHook -Mode BeforeSelenium
+        }
+    }
+    if ($dnsEvidenceMatrix) {
+        Invoke-TimedStep -Name 'Prepare DNS evidence matrix' -ScriptBlock {
+            Set-DnsEvidenceMatrixSeleniumHooks
+            Invoke-DnsEvidenceMatrixHook -Mode BeforeSelenium
         }
     }
     try {
@@ -1574,11 +1622,14 @@ try {
         if ($dnsDiscoverySpike) {
             Invoke-TimedStep -Name 'Finalize DNS discovery spike HitLog' -ScriptBlock { Invoke-DnsDiscoverySpikeHook -Mode AfterSelenium }
         }
+        if ($dnsEvidenceMatrix) {
+            Invoke-TimedStep -Name 'Finalize DNS evidence matrix' -ScriptBlock { Invoke-DnsEvidenceMatrixHook -Mode AfterSelenium }
+        }
     }
     if ($RunBrowserEnforcementProbes -or $env:OPENPATH_WINDOWS_BROWSER_ENFORCEMENT_PROBES -eq '1') {
         Invoke-TimedStep -Name 'Run Windows browser enforcement probes' -ScriptBlock { Invoke-WindowsBrowserEnforcementProbes }
     }
-    if (-not $dnsDiscoverySpike) {
+    if (-not $dnsDiscoverySpike -and -not $dnsEvidenceMatrix) {
         $scenario = Invoke-TimedStep -Name 'Bootstrap scenario (fallback)' -ScriptBlock { Invoke-BackendHarnessBootstrap -ScenarioName 'Windows Student Policy Fallback' }
         Invoke-TimedStep -Name 'Install and enroll client (fallback)' -ScriptBlock { Install-AndEnrollClient -Scenario $scenario -InstallClient $false }
         Invoke-TimedStep -Name 'Run Selenium student suite (fallback, fallback-propagation)' -ScriptBlock { Invoke-SeleniumStudentSuite -ScenarioPath $scenarioPath -ExtensionArchivePath $extensionArchivePath -Mode 'fallback' -CoverageProfile 'fallback-propagation' }

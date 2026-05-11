@@ -78,7 +78,7 @@ describe('repository verification contract', () => {
     );
     assert.match(
       windowsRunner,
-      /Run Selenium student suite \(sse, \$windowsStudentSseGroup\)/,
+      /Run Selenium student suite \(sse, \$windowsStudentSseCoverageProfile, \$windowsStudentSseGroup\)/,
       'Windows student-policy timings should include the selected SSE group'
     );
   });
@@ -639,7 +639,7 @@ describe('repository verification contract', () => {
     }
     assert.match(
       windowsRunner,
-      /Invoke-TimedStep -Name "Run Selenium student suite \(sse, \$windowsStudentSseGroup\)"/,
+      /Invoke-TimedStep -Name "Run Selenium student suite \(sse, \$windowsStudentSseCoverageProfile, \$windowsStudentSseGroup\)"/,
       'Windows student-policy runner should time the selected SSE group'
     );
   });
@@ -651,13 +651,13 @@ describe('repository verification contract', () => {
 
     assert.match(
       windowsRunner,
-      /param\([\s\S]*\[ValidateSet\('full', 'fallback-propagation'\)\]\[string\]\$CoverageProfile/s,
+      /param\([\s\S]*\[ValidateSet\('full', 'fallback-propagation', 'dns-discovery-spike', 'dns-evidence-matrix'\)\]\[string\]\$CoverageProfile/s,
       'Windows student-policy runner should pass an explicit Selenium coverage profile per mode'
     );
     assert.match(
       windowsRunner,
-      /Run Selenium student suite \(sse, \$windowsStudentSseGroup\)[\s\S]*Invoke-SeleniumStudentSuite[\s\S]*-Mode 'sse'[\s\S]*-CoverageProfile 'full'[\s\S]*-ScenarioGroup \$windowsStudentSseGroup/s,
-      'Windows student-policy runner should keep full coverage available while allowing a selected SSE scenario group'
+      /\$windowsStudentSseCoverageProfile = if \(\[string\]::IsNullOrWhiteSpace\(\$env:OPENPATH_WINDOWS_STUDENT_COVERAGE_PROFILE\)\) \{[\s\S]*'full'[\s\S]*\}[\s\S]*Run Selenium student suite \(sse, \$windowsStudentSseCoverageProfile, \$windowsStudentSseGroup\)[\s\S]*Invoke-SeleniumStudentSuite[\s\S]*-Mode 'sse'[\s\S]*-CoverageProfile \$windowsStudentSseCoverageProfile[\s\S]*-ScenarioGroup \$windowsStudentSseGroup/s,
+      'Windows student-policy runner should keep full coverage as default while allowing explicit diagnostic SSE profiles'
     );
     assert.match(
       windowsRunner,
@@ -875,7 +875,7 @@ describe('repository verification contract', () => {
     );
     assert.match(
       windowsRunner,
-      /Run Selenium student suite \(sse, \$windowsStudentSseGroup\)/,
+      /Run Selenium student suite \(sse, \$windowsStudentSseCoverageProfile, \$windowsStudentSseGroup\)/,
       'Windows student-policy should keep the selected group inside the hard Selenium gate'
     );
   });

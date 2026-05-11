@@ -104,7 +104,11 @@ export interface RunResult {
 
 export type PolicyMode = 'sse' | 'fallback';
 
-export type StudentPolicyCoverageProfile = 'full' | 'fallback-propagation' | 'dns-discovery-spike';
+export type StudentPolicyCoverageProfile =
+  | 'full'
+  | 'fallback-propagation'
+  | 'dns-discovery-spike'
+  | 'dns-evidence-matrix';
 
 export type StudentPolicyScenarioGroup =
   | 'full'

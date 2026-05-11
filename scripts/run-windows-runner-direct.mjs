@@ -15,10 +15,17 @@ const DEFAULT_ARTIFACT_LOG_NAME = 'windows-runner-direct.log';
 const DEFAULT_RUNNER_ROOT_GLOB = 'C:\\actions-runner*';
 const SOURCE_MODES = new Set(['runner-checkout', 'local-overlay']);
 const DEFAULT_SOURCE_MODE = 'runner-checkout';
-const RUN_MODES = new Set(['pester', 'browser-boundary', 'dns-discovery-spike', 'all']);
+const RUN_MODES = new Set([
+  'pester',
+  'browser-boundary',
+  'dns-discovery-spike',
+  'dns-evidence-matrix',
+  'all',
+]);
 const DEFAULT_RUN_MODE = 'pester';
 const OVERLAY_ZIP_NAME = 'openpath-local-overlay.zip';
 const DNS_DISCOVERY_SPIKE_GUEST_ARTIFACT_ROOT = 'C:\\Windows\\Temp\\openpath-dns-discovery-spike';
+const DNS_EVIDENCE_MATRIX_GUEST_ARTIFACT_ROOT = 'C:\\Windows\\Temp\\openpath-dns-evidence-matrix';
 const BROWSER_ENFORCEMENT_ARTIFACTS = [
   'browser-boundary-summary.json',
   'student\\windows-browser-enforcement-report.json',
@@ -43,6 +50,36 @@ const DNS_DISCOVERY_SPIKE_ARTIFACTS = [
   'direct-dns-discovery-spike.out.log',
   'direct-dns-discovery-spike.err.log',
 ];
+const DNS_EVIDENCE_MATRIX_ARTIFACTS = [
+  'dns-evidence-matrix-result.json',
+  'dns-evidence-matrix-browser-artifact.json',
+  'dns-evidence-matrix-state.json',
+  'dns-evidence-matrix-packet-events.json',
+  'dns-evidence-matrix-sinkhole-events.json',
+  'dns-evidence-matrix-hashes.json',
+  'acrylic-dns-evidence-matrix.log',
+  'acrylic-dns-evidence-matrix.sanitized.log',
+  'direct-dns-evidence-matrix-completion.json',
+  'direct-dns-evidence-matrix.out.log',
+  'direct-dns-evidence-matrix.err.log',
+  'AcrylicConfiguration.ini.before-dns-evidence-matrix',
+  'AcrylicConfiguration.ini.after-dns-evidence-matrix',
+  'AcrylicHosts.txt.before-dns-evidence-matrix',
+  'AcrylicHosts.txt.after-dns-evidence-matrix',
+  ...[
+    'direct-dns-calibration',
+    'direct-dns-cache-warm',
+    'browser-cold-navigation',
+    'browser-warm-ajax',
+    'browser-multi-anchor',
+    'sinkhole-capture',
+  ].flatMap((phase) => [
+    `dns-evidence-${phase}-hitlog.log`,
+    `pktmon-${phase}.etl`,
+    `pktmon-${phase}.txt`,
+    `pktmon-${phase}.pcapng`,
+  ]),
+];
 const DRY_RUN = process.env.OPENPATH_WINDOWS_DIRECT_DRY_RUN === '1';
 
 const currentFilePath = fileURLToPath(import.meta.url);
@@ -60,7 +97,7 @@ Options:
   --results-path <path>       Result file path on the Windows runner relative to the repo root (default: ${DEFAULT_RESULTS_RELATIVE_PATH})
   --runner-repo-root <path>   Explicit OpenPath checkout root on the Windows runner (default: auto-detect under ${DEFAULT_RUNNER_ROOT_GLOB})
   --source-mode <mode>        Source to execute on Windows: runner-checkout or local-overlay (default: ${DEFAULT_SOURCE_MODE})
-  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, or all (default: ${DEFAULT_RUN_MODE})
+  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, or all (default: ${DEFAULT_RUN_MODE})
   --overlay-host <ip>         Local host/IP the Windows VM can use to download the local overlay ZIP
   --browser-enforcement-report
                               Run tests/e2e/ci/windows-browser-enforcement.ps1 -Scope Report after Pester
@@ -361,15 +398,24 @@ function waitForGuestCompletionFile(options, completionPath, { timeoutSeconds = 
   }
 
   const deadline = Date.now() + timeoutSeconds * 1000;
+  let lastReadError = '';
   while (Date.now() < deadline) {
-    const content = readGuestFile(options, completionPath, 120000).trim();
-    if (content) {
-      return JSON.parse(content);
+    try {
+      const artifact = readGuestArtifact(options, completionPath, 120000);
+      if (artifact.exists) {
+        const content = artifact.content.toString('utf8').trim();
+        if (content) {
+          return JSON.parse(content);
+        }
+      }
+    } catch (error) {
+      lastReadError = error instanceof Error ? error.message : String(error);
     }
     sleepSync(5000);
   }
 
-  throw new Error(`Timed out waiting for Windows completion marker: ${completionPath}`);
+  const suffix = lastReadError ? ` Last read error: ${lastReadError}` : '';
+  throw new Error(`Timed out waiting for Windows completion marker: ${completionPath}.${suffix}`);
 }
 
 function parseGuestNetworkInterfaces(output) {
@@ -1155,6 +1201,164 @@ if ($exitCode -ne 0) {
   }
 }
 
+function runWindowsDnsEvidenceMatrix(options, runnerRepoRoot) {
+  const matrixScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-dns-evidence-matrix.ps1`;
+  const artifactsRoot = DNS_EVIDENCE_MATRIX_GUEST_ARTIFACT_ROOT;
+  const completionPath = `${artifactsRoot}\\direct-dns-evidence-matrix-completion.json`;
+  const timeoutSeconds = Number.parseInt(options.timeoutSeconds, 10);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$repoRoot = ${JSON.stringify(runnerRepoRoot)}
+$matrixScriptPath = ${JSON.stringify(matrixScriptPath)}
+$artifactsRoot = ${JSON.stringify(artifactsRoot)}
+$completionPath = ${JSON.stringify(completionPath)}
+
+if (-not (Test-Path -LiteralPath $matrixScriptPath)) {
+  throw 'run-windows-dns-evidence-matrix.ps1 is missing on the Windows runner checkout.'
+}
+
+function Ensure-OpenPathDirectNode {
+  if (Get-Command npm.cmd -ErrorAction SilentlyContinue) {
+    return
+  }
+
+  $nodeRoot = Join-Path $env:TEMP 'openpath-direct-node-v24'
+  $npmPath = Join-Path $nodeRoot 'npm.cmd'
+  if (-not (Test-Path -LiteralPath $npmPath)) {
+    $ProgressPreference = 'SilentlyContinue'
+    $global:ProgressPreference = 'SilentlyContinue'
+    $index = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -UseBasicParsing -TimeoutSec 60
+    $release = @($index | Where-Object { $_.version -like 'v24.*' -and $_.files -contains 'win-x64-zip' } | Select-Object -First 1)[0]
+    if (-not $release -or -not $release.version) {
+      throw 'Unable to resolve a Node.js v24 win-x64 zip release for direct runner execution.'
+    }
+
+    $version = [string]$release.version
+    $zipPath = Join-Path $env:TEMP "openpath-direct-node-$version.zip"
+    $extractRoot = Join-Path $env:TEMP "openpath-direct-node-$version"
+    $url = "https://nodejs.org/dist/$version/node-$version-win-x64.zip"
+    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -TimeoutSec 180
+    Expand-Archive -LiteralPath $zipPath -DestinationPath $extractRoot -Force
+    Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+    $expanded = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
+    if (-not $expanded -or -not (Test-Path -LiteralPath (Join-Path $expanded.FullName 'npm.cmd'))) {
+      throw 'Downloaded Node.js archive did not contain npm.cmd.'
+    }
+    Remove-Item -LiteralPath $nodeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Move-Item -LiteralPath $expanded.FullName -Destination $nodeRoot -Force
+    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  $env:PATH = "$nodeRoot;$env:PATH"
+  if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+    throw 'npm.cmd is still unavailable after preparing temporary Node.js.'
+  }
+}
+
+function Ensure-OpenPathDirectDependencies {
+  param(
+    [Parameter(Mandatory = $true)][string]$RepoRoot
+  )
+
+  $tscPath = Join-Path $RepoRoot 'node_modules\\.bin\\tsc.cmd'
+  $tsxPath = Join-Path $RepoRoot 'node_modules\\tsx\\dist\\cli.mjs'
+  if ((Test-Path -LiteralPath $tscPath) -and (Test-Path -LiteralPath $tsxPath)) {
+    return
+  }
+
+  Set-Location $RepoRoot
+  & npm.cmd ci --prefer-offline --no-audit --fund=false | Out-Host
+  if ($LASTEXITCODE -ne 0) {
+    throw "npm ci failed with exit code $LASTEXITCODE"
+  }
+}
+
+function Invoke-OpenPathDirectChildPowerShell {
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    [string[]]$ExtraArguments = @(),
+    [Parameter(Mandatory = $true)][string]$LogName,
+    [int]$TimeoutSeconds = 1800
+  )
+
+  $outPath = Join-Path $artifactsRoot "$LogName.out.log"
+  $errPath = Join-Path $artifactsRoot "$LogName.err.log"
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $ExtraArguments
+  $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $repoRoot -RedirectStandardOutput $outPath -RedirectStandardError $errPath -PassThru
+
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "$LogName timed out after $TimeoutSeconds seconds"
+  }
+
+  $process.Refresh()
+  $exitCode = $process.ExitCode
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+  if ($exitCode -ne 0) {
+    $maxFailureLogChars = 12000
+    $stdout = if (Test-Path -LiteralPath $outPath) { Get-Content -LiteralPath $outPath -Raw } else { '' }
+    $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -LiteralPath $errPath -Raw } else { '' }
+    if ($stdout.Length -gt $maxFailureLogChars) {
+      $stdout = $stdout.Substring($stdout.Length - $maxFailureLogChars)
+    }
+    if ($stderr.Length -gt $maxFailureLogChars) {
+      $stderr = $stderr.Substring($stderr.Length - $maxFailureLogChars)
+    }
+    throw ($LogName + ' exited with code ' + $exitCode + [Environment]::NewLine + 'STDOUT:' + [Environment]::NewLine + $stdout + [Environment]::NewLine + 'STDERR:' + [Environment]::NewLine + $stderr)
+  }
+}
+
+$primaryFailure = $null
+$exitCode = 0
+$errorText = ''
+try {
+  Remove-Item -LiteralPath $artifactsRoot -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
+  Remove-Item -LiteralPath $completionPath -Force -ErrorAction SilentlyContinue
+  Ensure-OpenPathDirectNode
+  Ensure-OpenPathDirectDependencies -RepoRoot $repoRoot
+  Set-Location $repoRoot
+  Invoke-OpenPathDirectChildPowerShell -ScriptPath $matrixScriptPath -ExtraArguments @('-Mode', 'Run', '-ArtifactsRoot', $artifactsRoot) -LogName 'direct-dns-evidence-matrix' -TimeoutSeconds ${timeoutSeconds}
+  $resultPath = Join-Path $artifactsRoot 'dns-evidence-matrix-result.json'
+  if (-not (Test-Path -LiteralPath $resultPath)) {
+    throw "DNS evidence matrix result was not written: $resultPath"
+  }
+}
+catch {
+  $primaryFailure = $_
+  $exitCode = 1
+  $errorText = [string]$_
+}
+finally {
+  [pscustomobject]@{
+    exitCode = $exitCode
+    error = $errorText
+    artifactsRoot = $artifactsRoot
+    resultPath = (Join-Path $artifactsRoot 'dns-evidence-matrix-result.json')
+    timestamp = (Get-Date).ToString('o')
+  } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $completionPath -Encoding UTF8
+}
+
+if ($exitCode -ne 0) {
+  exit $exitCode
+}
+`;
+  runGuestPowerShellDetached(options, script, {
+    label: 'Run Windows DNS evidence matrix',
+  });
+  const completion = waitForGuestCompletionFile(options, completionPath, {
+    timeoutSeconds: timeoutSeconds + 900,
+  });
+  if (completion.exitCode !== 0) {
+    throw new Error(
+      `Run Windows DNS evidence matrix failed: ${completion.error ?? 'unknown error'}`
+    );
+  }
+}
+
 function runBrowserBoundaryCi(options, runnerRepoRoot) {
   const boundaryScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-browser-boundary-ci.ps1`;
   const artifactsRoot = `${runnerRepoRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\browser-boundary`;
@@ -1197,6 +1401,86 @@ if ($content.Length -gt ${maxChars}) {
     timeoutSeconds: 120,
     label: `Read Windows artifact ${sourcePath}`,
   });
+}
+
+function readGuestArtifact(options, sourcePath, maxBytes = 64 * 1024 * 1024) {
+  const script = `
+$ErrorActionPreference = 'Stop'
+$path = ${JSON.stringify(sourcePath)}
+$maxBytes = ${maxBytes}
+if (-not (Test-Path -LiteralPath $path)) {
+  [pscustomobject]@{ exists = $false; contentBase64 = '' } | ConvertTo-Json -Compress
+  exit 0
+}
+$stream = [System.IO.File]::Open(
+  $path,
+  [System.IO.FileMode]::Open,
+  [System.IO.FileAccess]::Read,
+  [System.IO.FileShare]::ReadWrite
+)
+try {
+  $memory = [System.IO.MemoryStream]::new()
+  try {
+    $stream.CopyTo($memory)
+    $bytes = $memory.ToArray()
+  } finally {
+    $memory.Dispose()
+  }
+} finally {
+  $stream.Dispose()
+}
+if ($bytes.LongLength -gt $maxBytes) {
+  throw "Artifact $path exceeds $maxBytes bytes."
+}
+[pscustomobject]@{
+  exists = $true
+  contentBase64 = [System.Convert]::ToBase64String($bytes)
+} | ConvertTo-Json -Compress
+`;
+  const output = runGuestPowerShell(options, script, {
+    timeoutSeconds: 120,
+    label: `Read Windows artifact ${sourcePath}`,
+  }).trim();
+  if (!output) {
+    return { exists: false, content: Buffer.alloc(0) };
+  }
+
+  const textArtifactPattern = /\.(?:json|log|txt|ini)$/i;
+  let parsed;
+  try {
+    parsed = JSON.parse(output);
+  } catch (error) {
+    if (textArtifactPattern.test(sourcePath)) {
+      return { exists: true, content: Buffer.from(output, 'utf8') };
+    }
+    throw error;
+  }
+
+  if (!Object.hasOwn(parsed, 'exists') && textArtifactPattern.test(sourcePath)) {
+    return { exists: true, content: Buffer.from(output, 'utf8') };
+  }
+
+  return {
+    exists: Boolean(parsed.exists),
+    content: parsed.contentBase64
+      ? Buffer.from(String(parsed.contentBase64), 'base64')
+      : Buffer.alloc(0),
+  };
+}
+
+function collectGuestArtifact(options, artifactDir, sourcePath, localName, maxBytes) {
+  try {
+    const artifact = readGuestArtifact(options, sourcePath, maxBytes);
+    if (artifact.exists) {
+      writeFileSync(resolve(artifactDir, localName), artifact.content);
+    }
+  } catch (error) {
+    console.warn(
+      `warning: failed to collect Windows artifact ${sourcePath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
 }
 
 function collectArtifacts(options, artifactDir, runnerRoot) {
@@ -1249,6 +1533,16 @@ function collectArtifacts(options, artifactDir, runnerRoot) {
     if (content.trim()) {
       writeFileSync(resolve(artifactDir, artifactName), content, 'utf8');
     }
+  }
+
+  for (const artifactName of DNS_EVIDENCE_MATRIX_ARTIFACTS) {
+    collectGuestArtifact(
+      options,
+      artifactDir,
+      `${DNS_EVIDENCE_MATRIX_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
+      artifactName.replace(/\\/g, '-'),
+      64 * 1024 * 1024
+    );
   }
 }
 
@@ -1340,6 +1634,10 @@ async function main() {
     if (options.mode === 'dns-discovery-spike' || options.mode === 'all') {
       console.log('step=run-windows-dns-discovery-spike');
       runWindowsDnsDiscoverySpike(options, runnerRepoRoot || options.runnerRepoRoot);
+    }
+    if (options.mode === 'dns-evidence-matrix' || options.mode === 'all') {
+      console.log('step=run-windows-dns-evidence-matrix');
+      runWindowsDnsEvidenceMatrix(options, runnerRepoRoot || options.runnerRepoRoot);
     }
     if (options.browserEnforcementReport) {
       console.log('step=run-browser-enforcement-report');

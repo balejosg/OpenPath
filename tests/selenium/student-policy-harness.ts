@@ -11,6 +11,7 @@ import {
 import {
   runExemptionAndScheduleScenarios,
   runFallbackPropagationProbe,
+  runDnsEvidenceMatrixScenario,
   runDnsDiscoverySpikeScenario,
   runPathBlockingScenarios,
   runRequestLifecycleScenarios,
@@ -31,6 +32,7 @@ type StudentPolicySuite =
   | 'matrix-phase-two'
   | 'fallback-propagation'
   | 'dns-discovery-spike'
+  | 'dns-evidence-matrix'
   | 'request-lifecycle'
   | 'path-blocking'
   | 'exemptions';
@@ -60,6 +62,14 @@ export function getStudentPolicyPhasePlan(
     }
 
     return [{ name: 'dns-discovery-spike', suite: 'dns-discovery-spike', useBrowser: true }];
+  }
+
+  if (coverageProfile === 'dns-evidence-matrix') {
+    if (mode !== 'sse') {
+      throw new Error('The dns-evidence-matrix coverage profile requires sse mode');
+    }
+
+    return [{ name: 'dns-evidence-matrix', suite: 'dns-evidence-matrix', useBrowser: true }];
   }
 
   if (scenarioGroup !== 'full') {
@@ -142,6 +152,11 @@ export async function runStudentPolicySuite(
 
           if (phase.suite === 'dns-discovery-spike') {
             await runDnsDiscoverySpikeScenario(client, driver, mode);
+            return;
+          }
+
+          if (phase.suite === 'dns-evidence-matrix') {
+            await runDnsEvidenceMatrixScenario(client, driver, mode);
             return;
           }
 

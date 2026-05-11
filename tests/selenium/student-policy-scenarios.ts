@@ -130,6 +130,55 @@ export interface DnsDiscoverySpikeArtifact {
   writtenAt: string;
 }
 
+export type DnsEvidenceMatrixBrowserPhase =
+  | 'browser-cold-navigation'
+  | 'browser-warm-ajax'
+  | 'browser-multi-anchor'
+  | 'sinkhole-capture';
+
+export type DnsEvidenceMatrixHookAction =
+  | 'clear'
+  | 'snapshot'
+  | 'enable-sinkhole'
+  | 'disable-sinkhole';
+
+export interface DnsEvidenceMatrixPlan {
+  profile: 'dns-evidence-matrix';
+  origin: {
+    host: string;
+    url: string;
+  };
+  alternateOrigin: {
+    host: string;
+    url: string;
+  };
+  dependencies: DnsDiscoverySpikeDependency[];
+}
+
+export interface DnsEvidenceMatrixHookResult {
+  status: 'ok' | 'failed' | 'not-configured';
+  phase: string;
+  action: DnsEvidenceMatrixHookAction;
+  envName: string;
+  output?: string;
+  error?: string;
+}
+
+export interface DnsEvidenceMatrixArtifact {
+  profile: 'dns-evidence-matrix';
+  success: boolean;
+  origin: DnsEvidenceMatrixPlan['origin'];
+  alternateOrigin: DnsEvidenceMatrixPlan['alternateOrigin'];
+  dependencies: DnsDiscoverySpikeDependency[];
+  dependencyResults: Record<
+    DnsDiscoveryDependencyType,
+    DnsDiscoverySpikeDependency &
+      Record<DnsEvidenceMatrixBrowserPhase, DnsDiscoverySpikeProbeResult>
+  >;
+  hooks: DnsEvidenceMatrixHookResult[];
+  writtenAt: string;
+}
+
 let activeScenarioTiming: {
   name: string;
   startedAt: string;
@@ -233,8 +282,50 @@ export function buildDnsDiscoverySpikePlan(scenario: StudentScenario): DnsDiscov
   };
 }
 
+export function buildDnsEvidenceMatrixPlan(scenario: StudentScenario): DnsEvidenceMatrixPlan {
+  const dependency = (
+    type: DnsDiscoveryDependencyType,
+    hostnamePrefix: string,
+    scenarioLabel: string,
+    path: string
+  ): DnsDiscoverySpikeDependency => {
+    const host = `${hostnamePrefix}.${buildScenarioHost(scenario, scenarioLabel)}`;
+    return {
+      type,
+      host,
+      url: buildFixtureUrl(host, path),
+    };
+  };
+
+  return {
+    profile: 'dns-evidence-matrix',
+    origin: {
+      host: scenario.fixtures.site,
+      url: buildFixtureUrl(scenario.fixtures.site, '/ok'),
+    },
+    alternateOrigin: {
+      host: scenario.fixtures.portal,
+      url: buildFixtureUrl(scenario.fixtures.portal, '/ok'),
+    },
+    dependencies: [
+      dependency('fetch', 'api', 'dns-matrix-fetch', '/fetch/private.json'),
+      dependency('xhr', 'api', 'dns-matrix-xhr', '/xhr/private.json'),
+      dependency('script', 'cdn', 'dns-matrix-script', '/asset.js'),
+      dependency('image', 'image', 'dns-matrix-image', '/pixel.png'),
+      dependency('css', 'style', 'dns-matrix-css', '/style.css'),
+      dependency('font', 'font', 'dns-matrix-font', '/font.woff2'),
+    ],
+  };
+}
+
 const DNS_DISCOVERY_CLEAR_ENV = 'OPENPATH_STUDENT_DNS_DISCOVERY_HITLOG_CLEAR_COMMAND';
 const DNS_DISCOVERY_SNAPSHOT_ENV = 'OPENPATH_STUDENT_DNS_DISCOVERY_HITLOG_SNAPSHOT_COMMAND';
+const DNS_EVIDENCE_MATRIX_CLEAR_ENV = 'OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_CLEAR_COMMAND';
+const DNS_EVIDENCE_MATRIX_SNAPSHOT_ENV = 'OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_SNAPSHOT_COMMAND';
+const DNS_EVIDENCE_MATRIX_ENABLE_SINKHOLE_ENV =
+  'OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_ENABLE_SINKHOLE_COMMAND';
+const DNS_EVIDENCE_MATRIX_DISABLE_SINKHOLE_ENV =
+  'OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_DISABLE_SINKHOLE_COMMAND';
 
 const notRunProbeResult = (): DnsDiscoverySpikeProbeResult => ({
   status: 'not-run',
@@ -308,6 +399,51 @@ export function buildDnsDiscoverySpikeArtifact(options: {
     dependencyResults,
     hitLogClear: options.hitLogClear,
     ...(options.hitLogSnapshots !== undefined ? { hitLogSnapshots: options.hitLogSnapshots } : {}),
+    writtenAt: options.writtenAt ?? new Date().toISOString(),
+  };
+}
+
+export function buildDnsEvidenceMatrixArtifact(options: {
+  plan: DnsEvidenceMatrixPlan;
+  success: boolean;
+  hooks: DnsEvidenceMatrixHookResult[];
+  phaseResults: Partial<
+    Record<
+      DnsEvidenceMatrixBrowserPhase,
+      Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>
+    >
+  >;
+  writtenAt?: string;
+}): DnsEvidenceMatrixArtifact {
+  const phases: DnsEvidenceMatrixBrowserPhase[] = [
+    'browser-cold-navigation',
+    'browser-warm-ajax',
+    'browser-multi-anchor',
+    'sinkhole-capture',
+  ];
+  const dependencyResults = Object.fromEntries(
+    options.plan.dependencies.map((dependency) => [
+      dependency.type,
+      {
+        ...dependency,
+        ...Object.fromEntries(
+          phases.map((phase) => [
+            phase,
+            options.phaseResults[phase]?.[dependency.type] ?? notRunProbeResult(),
+          ])
+        ),
+      },
+    ])
+  ) as DnsEvidenceMatrixArtifact['dependencyResults'];
+
+  return {
+    profile: 'dns-evidence-matrix',
+    success: options.success,
+    origin: options.plan.origin,
+    alternateOrigin: options.plan.alternateOrigin,
+    dependencies: options.plan.dependencies,
+    dependencyResults,
+    hooks: options.hooks,
     writtenAt: options.writtenAt ?? new Date().toISOString(),
   };
 }
@@ -957,6 +1093,18 @@ async function writeDnsDiscoverySpikeArtifact(
   );
 }
 
+async function writeDnsEvidenceMatrixArtifact(
+  diagnosticsDir: string,
+  artifact: DnsEvidenceMatrixArtifact
+): Promise<void> {
+  mkdirSync(diagnosticsDir, { recursive: true });
+  writeFileSync(
+    join(diagnosticsDir, 'dns-evidence-matrix-browser-artifact.json'),
+    `${JSON.stringify(artifact, null, 2)}\n`,
+    'utf8'
+  );
+}
+
 async function runDnsDiscoveryDependencyProbe(
   driver: StudentPolicyDriver,
   dependency: DnsDiscoverySpikeDependency
@@ -994,7 +1142,7 @@ async function runDnsDiscoveryDependencyProbe(
 
 async function runDnsDiscoveryProbePhase(
   driver: StudentPolicyDriver,
-  plan: DnsDiscoverySpikePlan
+  plan: { dependencies: DnsDiscoverySpikeDependency[] }
 ): Promise<Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>> {
   const results: Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>> = {};
 
@@ -1003,6 +1151,227 @@ async function runDnsDiscoveryProbePhase(
   }
 
   return results;
+}
+
+async function runDnsEvidenceMatrixHook(
+  envName: string,
+  phase: string,
+  action: DnsEvidenceMatrixHookAction
+): Promise<DnsEvidenceMatrixHookResult> {
+  const commandTemplate = optionalEnv(envName);
+  if (!commandTemplate) {
+    return {
+      status: 'not-configured',
+      phase,
+      action,
+      envName,
+    };
+  }
+
+  try {
+    const output = await runPlatformCommand(formatDnsDiscoveryHookCommand(commandTemplate, phase));
+    return {
+      status: 'ok',
+      phase,
+      action,
+      envName,
+      ...(output ? { output } : {}),
+    };
+  } catch (error) {
+    return {
+      status: 'failed',
+      phase,
+      action,
+      envName,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function runDnsEvidenceMatrixBrowserPhase(
+  driver: StudentPolicyDriver,
+  plan: DnsEvidenceMatrixPlan,
+  phase: DnsEvidenceMatrixBrowserPhase,
+  hooks: DnsEvidenceMatrixHookResult[],
+  phaseResults: Partial<
+    Record<
+      DnsEvidenceMatrixBrowserPhase,
+      Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>
+    >
+  >,
+  runner: () => Promise<Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>>
+): Promise<void> {
+  const clear = await runDnsEvidenceMatrixHook(DNS_EVIDENCE_MATRIX_CLEAR_ENV, phase, 'clear');
+  hooks.push(clear);
+  if (clear.status === 'failed') {
+    throw new Error(`DNS evidence matrix clear failed for ${phase}: ${clear.error}`);
+  }
+
+  phaseResults[phase] = await runner();
+
+  const snapshot = await runDnsEvidenceMatrixHook(
+    DNS_EVIDENCE_MATRIX_SNAPSHOT_ENV,
+    phase,
+    'snapshot'
+  );
+  hooks.push(snapshot);
+  if (snapshot.status === 'failed') {
+    throw new Error(`DNS evidence matrix snapshot failed for ${phase}: ${snapshot.error}`);
+  }
+}
+
+export async function runDnsEvidenceMatrixScenario(
+  client: StudentPolicyServerClient,
+  driver: StudentPolicyDriver,
+  mode: PolicyMode
+): Promise<void> {
+  if (mode !== 'sse') {
+    throw new Error('DNS evidence matrix requires sse mode');
+  }
+
+  const plan = buildDnsEvidenceMatrixPlan(driver.scenario);
+  const restrictedGroupId = driver.scenario.groups.restricted.id;
+  const phaseResults: Partial<
+    Record<
+      DnsEvidenceMatrixBrowserPhase,
+      Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>
+    >
+  > = {};
+  const hooks: DnsEvidenceMatrixHookResult[] = [];
+
+  const writeArtifact = async (success: boolean): Promise<void> => {
+    await writeDnsEvidenceMatrixArtifact(
+      driver.diagnosticsDir,
+      buildDnsEvidenceMatrixArtifact({
+        plan,
+        success,
+        hooks,
+        phaseResults,
+      })
+    );
+  };
+
+  try {
+    logScenarioStep('SP-DNS-MATRIX-001 prepare approved origin without dependency preseed');
+    await client.setAutoApprove(false);
+    await client.ensureWhitelistRule(
+      restrictedGroupId,
+      plan.origin.host,
+      'DNS evidence matrix approved origin'
+    );
+    await client.ensureWhitelistRule(
+      restrictedGroupId,
+      plan.alternateOrigin.host,
+      'DNS evidence matrix alternate approved origin'
+    );
+    await driver.forceLocalUpdate();
+
+    const remoteWhitelist = await client.fetchMachineWhitelist();
+    for (const dependency of plan.dependencies) {
+      assert.doesNotMatch(
+        remoteWhitelist,
+        new RegExp(`(^|\\n)${escapeRegExp(dependency.host)}($|\\n)`),
+        `${dependency.host} must not be preseeded remotely`
+      );
+      await driver.assertWhitelistMissing(dependency.host);
+    }
+
+    await settlePolicyChange(driver, mode, async () => {
+      await driver.assertWhitelistContains(plan.origin.host);
+      await driver.assertWhitelistContains(plan.alternateOrigin.host);
+      await driver.assertDnsAllowed(plan.origin.host);
+      await driver.assertDnsAllowed(plan.alternateOrigin.host);
+    });
+
+    logScenarioStep('SP-DNS-MATRIX-002 cold navigation dependency probes');
+    await runDnsEvidenceMatrixBrowserPhase(
+      driver,
+      plan,
+      'browser-cold-navigation',
+      hooks,
+      phaseResults,
+      async () => {
+        await driver.restart();
+        await driver.openAndExpectLoaded({
+          url: plan.origin.url,
+          title: 'OpenPath Site Fixture',
+          selector: '#page-status',
+        });
+        return runDnsDiscoveryProbePhase(driver, plan);
+      }
+    );
+
+    logScenarioStep('SP-DNS-MATRIX-003 warm AJAX dependency probes');
+    await driver.openAndExpectLoaded({
+      url: plan.origin.url,
+      title: 'OpenPath Site Fixture',
+      selector: '#page-status',
+    });
+    await runDnsEvidenceMatrixBrowserPhase(
+      driver,
+      plan,
+      'browser-warm-ajax',
+      hooks,
+      phaseResults,
+      async () => runDnsDiscoveryProbePhase(driver, plan)
+    );
+
+    logScenarioStep('SP-DNS-MATRIX-004 multi-anchor dependency probes');
+    await driver.openAndExpectLoaded({
+      url: plan.alternateOrigin.url,
+      title: 'OpenPath Portal Fixture',
+      selector: '#page-status',
+    });
+    await driver.openAndExpectLoaded({
+      url: plan.origin.url,
+      title: 'OpenPath Site Fixture',
+      selector: '#page-status',
+    });
+    await runDnsEvidenceMatrixBrowserPhase(
+      driver,
+      plan,
+      'browser-multi-anchor',
+      hooks,
+      phaseResults,
+      async () => runDnsDiscoveryProbePhase(driver, plan)
+    );
+
+    logScenarioStep('SP-DNS-MATRIX-005 sinkhole diagnostic dependency probes');
+    const enableSinkhole = await runDnsEvidenceMatrixHook(
+      DNS_EVIDENCE_MATRIX_ENABLE_SINKHOLE_ENV,
+      'sinkhole-capture',
+      'enable-sinkhole'
+    );
+    hooks.push(enableSinkhole);
+    if (enableSinkhole.status === 'failed') {
+      throw new Error(`DNS evidence matrix sinkhole enable failed: ${enableSinkhole.error}`);
+    }
+    try {
+      await runDnsEvidenceMatrixBrowserPhase(
+        driver,
+        plan,
+        'sinkhole-capture',
+        hooks,
+        phaseResults,
+        async () => runDnsDiscoveryProbePhase(driver, plan)
+      );
+    } finally {
+      const disableSinkhole = await runDnsEvidenceMatrixHook(
+        DNS_EVIDENCE_MATRIX_DISABLE_SINKHOLE_ENV,
+        'sinkhole-capture',
+        'disable-sinkhole'
+      );
+      hooks.push(disableSinkhole);
+      if (disableSinkhole.status === 'failed') {
+        throw new Error(`DNS evidence matrix sinkhole disable failed: ${disableSinkhole.error}`);
+      }
+    }
+
+    await writeArtifact(true);
+  } catch (error) {
+    await writeArtifact(false);
+    throw error;
+  }
 }
 
 export async function runDnsDiscoverySpikeScenario(

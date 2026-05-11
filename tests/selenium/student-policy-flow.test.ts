@@ -18,6 +18,8 @@ import { getBlockedPathRulesDebug } from './student-policy-driver-runtime';
 import { getStudentPolicyPhasePlan } from './student-policy-harness';
 import {
   buildBaselineWhitelistHosts,
+  buildDnsEvidenceMatrixArtifact,
+  buildDnsEvidenceMatrixPlan,
   buildDnsDiscoverySpikeArtifact,
   buildDnsDiscoverySpikePlan,
 } from './student-policy-scenarios';
@@ -202,6 +204,24 @@ test('student policy coverage profile accepts the DNS discovery spike without ch
   }
 });
 
+test('student policy coverage profile accepts the DNS evidence matrix without changing the default', () => {
+  const original = process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+
+  try {
+    delete process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+    assert.equal(getStudentPolicyCoverageProfile(), 'full');
+
+    process.env.OPENPATH_STUDENT_COVERAGE_PROFILE = 'dns-evidence-matrix';
+    assert.equal(getStudentPolicyCoverageProfile(), 'dns-evidence-matrix');
+  } finally {
+    if (original === undefined) {
+      delete process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+    } else {
+      process.env.OPENPATH_STUDENT_COVERAGE_PROFILE = original;
+    }
+  }
+});
+
 test('DNS discovery spike plans a browser-only phase outside the full matrix', () => {
   assert.deepEqual(
     getStudentPolicyPhasePlan('sse', 'dns-discovery-spike').map(({ name, suite, useBrowser }) => ({
@@ -210,6 +230,17 @@ test('DNS discovery spike plans a browser-only phase outside the full matrix', (
       useBrowser,
     })),
     [{ name: 'dns-discovery-spike', suite: 'dns-discovery-spike', useBrowser: true }]
+  );
+});
+
+test('DNS evidence matrix plans the full browser phase sequence outside the full matrix', () => {
+  assert.deepEqual(
+    getStudentPolicyPhasePlan('sse', 'dns-evidence-matrix').map(({ name, suite, useBrowser }) => ({
+      name,
+      suite,
+      useBrowser,
+    })),
+    [{ name: 'dns-evidence-matrix', suite: 'dns-evidence-matrix', useBrowser: true }]
   );
 });
 
@@ -232,6 +263,41 @@ test('DNS discovery spike uses site origin and unpreseeded typed dependency host
       ['image', 'image.dns-discovery-image-assroom1'],
       ['css', 'style.dns-discovery-css-assroom1'],
       ['font', 'font.dns-discovery-font-assroom1'],
+    ]
+  );
+
+  const preseededHosts = new Set([
+    scenario.fixtures.portal,
+    scenario.fixtures.cdnPortal,
+    scenario.fixtures.site,
+    scenario.fixtures.apiSite,
+  ]);
+  for (const dependency of plan.dependencies) {
+    assert.equal(preseededHosts.has(dependency.host), false, `${dependency.host} is preseeded`);
+  }
+});
+
+test('DNS evidence matrix uses approved anchors and unpreseeded typed dependency hosts', () => {
+  const scenario = createScenario();
+  const plan = buildDnsEvidenceMatrixPlan(scenario);
+
+  assert.equal(plan.origin.host, 'site.127.0.0.1.sslip.io');
+  assert.equal(plan.alternateOrigin.host, 'portal.127.0.0.1.sslip.io');
+  assert.equal(new URL(plan.origin.url).hostname, plan.origin.host);
+  assert.equal(new URL(plan.alternateOrigin.url).hostname, plan.alternateOrigin.host);
+
+  assert.deepEqual(
+    plan.dependencies.map(({ type, host }) => [
+      type,
+      host.replace(/\.127\.0\.0\.1\.sslip\.io$/, ''),
+    ]),
+    [
+      ['fetch', 'api.dns-matrix-fetch-assroom1'],
+      ['xhr', 'api.dns-matrix-xhr-assroom1'],
+      ['script', 'cdn.dns-matrix-script-assroom1'],
+      ['image', 'image.dns-matrix-image-assroom1'],
+      ['css', 'style.dns-matrix-css-assroom1'],
+      ['font', 'font.dns-matrix-font-assroom1'],
     ]
   );
 
@@ -276,6 +342,47 @@ test('DNS discovery spike browser artifact records cold and warm results by depe
   assert.equal(artifact.dependencyResults.fetch.warm.status, 'ok');
   assert.equal(artifact.dependencyResults.css.host.startsWith('style.'), true);
   assert.equal(artifact.hitLogClear.status, 'not-configured');
+});
+
+test('DNS evidence matrix browser artifact records every browser phase by dependency type', () => {
+  const scenario = createScenario();
+  const plan = buildDnsEvidenceMatrixPlan(scenario);
+  const artifact = buildDnsEvidenceMatrixArtifact({
+    plan,
+    success: true,
+    hooks: [
+      {
+        status: 'ok',
+        phase: 'browser-warm-ajax',
+        action: 'clear',
+        envName: 'OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_CLEAR_COMMAND',
+      },
+    ],
+    phaseResults: {
+      'browser-cold-navigation': {
+        fetch: { status: 'blocked', durationMs: 12 },
+      },
+      'browser-warm-ajax': {
+        fetch: { status: 'blocked', durationMs: 8 },
+      },
+      'browser-multi-anchor': {
+        fetch: { status: 'blocked', durationMs: 9 },
+      },
+      'sinkhole-capture': {
+        fetch: { status: 'ok', durationMs: 6 },
+      },
+    },
+    writtenAt: '2026-05-11T00:00:00.000Z',
+  });
+
+  assert.equal(artifact.profile, 'dns-evidence-matrix');
+  assert.equal(artifact.origin.host, 'site.127.0.0.1.sslip.io');
+  assert.equal(artifact.alternateOrigin.host, 'portal.127.0.0.1.sslip.io');
+  assert.equal(artifact.success, true);
+  assert.equal(artifact.dependencyResults.fetch.host, plan.dependencies[0]?.host);
+  assert.equal(artifact.dependencyResults.fetch['browser-cold-navigation'].status, 'blocked');
+  assert.equal(artifact.dependencyResults.fetch['sinkhole-capture'].status, 'ok');
+  assert.equal(artifact.hooks[0]?.status, 'ok');
 });
 
 test('student policy scenario group defaults to full and accepts narrow groups', () => {

@@ -255,6 +255,56 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(spikeScript, /insufficientEvidence/);
   });
 
+  test('dns-evidence-matrix mode runs the matrix harness and collects DNS artifacts', () => {
+    const result = runDirectDiagnostic([
+      '--mode',
+      'dns-evidence-matrix',
+      '--source-mode',
+      'local-overlay',
+    ]);
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+    const matrixScript = readText('tests/e2e/ci/run-windows-dns-evidence-matrix.ps1');
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /source_mode=local-overlay/);
+    assert.match(result.stdout, /mode=dns-evidence-matrix/);
+    assert.match(result.stdout, /step=run-windows-dns-evidence-matrix/);
+    assert.match(script, /run-windows-dns-evidence-matrix\.ps1/);
+    assert.match(script, /openpath-dns-evidence-matrix/);
+    assert.match(script, /dns-evidence-matrix-result\.json/);
+    assert.match(script, /dns-evidence-matrix-browser-artifact\.json/);
+    assert.match(script, /pktmon/);
+    assert.match(script, /dns-evidence-matrix-packet-events\.json/);
+    assert.match(matrixScript, /AcrylicConfiguration\.ini/);
+    assert.match(matrixScript, /AcrylicHosts\.txt/);
+    assert.match(matrixScript, /HitLogFileWhat=XHCFRU/);
+    assert.match(matrixScript, /HitLogMaxPendingHits=1/);
+    assert.match(matrixScript, /HitLogFullDump=No/);
+    assert.match(matrixScript, /pktmon filter add OpenPathDnsEvidenceMatrix -p 53/);
+    assert.match(matrixScript, /pktmon start --capture --pkt-size 0 --file-name/);
+    assert.match(matrixScript, /pktmon etl2txt/);
+    assert.match(matrixScript, /pktmon etl2pcap/);
+    for (const phase of [
+      'direct-dns-calibration',
+      'direct-dns-cache-warm',
+      'browser-cold-navigation',
+      'browser-warm-ajax',
+      'browser-multi-anchor',
+      'sinkhole-capture',
+    ]) {
+      assert.match(matrixScript, new RegExp(phase));
+    }
+    for (const decision of [
+      'dnsOnlyViable',
+      'fallbackRequired',
+      'hitLogUnusable',
+      'sinkholeDiagnosticOnly',
+      'insufficientEvidence',
+    ]) {
+      assert.match(matrixScript, new RegExp(decision));
+    }
+  });
+
   test(
     'workspace wrapper blocks GitHub integration lanes without explicit flag',
     { skip: !process.env.WHITELIST_WORKSPACE_ROOT },
