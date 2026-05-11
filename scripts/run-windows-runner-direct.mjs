@@ -20,12 +20,15 @@ const RUN_MODES = new Set([
   'browser-boundary',
   'dns-discovery-spike',
   'dns-evidence-matrix',
+  'dns-observability-controls',
   'all',
 ]);
 const DEFAULT_RUN_MODE = 'pester';
 const OVERLAY_ZIP_NAME = 'openpath-local-overlay.zip';
 const DNS_DISCOVERY_SPIKE_GUEST_ARTIFACT_ROOT = 'C:\\Windows\\Temp\\openpath-dns-discovery-spike';
 const DNS_EVIDENCE_MATRIX_GUEST_ARTIFACT_ROOT = 'C:\\Windows\\Temp\\openpath-dns-evidence-matrix';
+const DNS_OBSERVABILITY_CONTROLS_GUEST_ARTIFACT_ROOT =
+  'C:\\Windows\\Temp\\openpath-dns-observability-controls';
 const BROWSER_ENFORCEMENT_ARTIFACTS = [
   'browser-boundary-summary.json',
   'student\\windows-browser-enforcement-report.json',
@@ -80,6 +83,30 @@ const DNS_EVIDENCE_MATRIX_ARTIFACTS = [
     `pktmon-${phase}.pcapng`,
   ]),
 ];
+const DNS_OBSERVABILITY_CONTROLS_ARTIFACTS = [
+  'dns-observability-controls-result.json',
+  'dns-observability-controls-hashes.json',
+  'acrylic-dns-observability-controls.log',
+  'acrylic-dns-observability-controls.sanitized.log',
+  'direct-dns-observability-controls-completion.json',
+  'direct-dns-observability-controls.out.log',
+  'direct-dns-observability-controls.err.log',
+  'AcrylicConfiguration.ini.before-dns-observability-controls',
+  'AcrylicConfiguration.ini.after-dns-observability-controls',
+  'AcrylicHosts.txt.before-dns-observability-controls',
+  'AcrylicHosts.txt.after-dns-observability-controls',
+  'dns-observability-before-restart-hitlog.log',
+  'dns-observability-after-restart-hitlog.log',
+  'dns-observability-before-controls-hitlog.log',
+  'dns-observability-after-controls-hitlog.log',
+  'pktmon-forward-control.etl',
+  'pktmon-forward-control.txt',
+  'pktmon-forward-control.pcapng',
+  'resolve-forward-control.json',
+  'resolve-forward-control.err.log',
+  'resolve-nx-control.json',
+  'resolve-nx-control.err.log',
+];
 const DRY_RUN = process.env.OPENPATH_WINDOWS_DIRECT_DRY_RUN === '1';
 
 const currentFilePath = fileURLToPath(import.meta.url);
@@ -97,7 +124,7 @@ Options:
   --results-path <path>       Result file path on the Windows runner relative to the repo root (default: ${DEFAULT_RESULTS_RELATIVE_PATH})
   --runner-repo-root <path>   Explicit OpenPath checkout root on the Windows runner (default: auto-detect under ${DEFAULT_RUNNER_ROOT_GLOB})
   --source-mode <mode>        Source to execute on Windows: runner-checkout or local-overlay (default: ${DEFAULT_SOURCE_MODE})
-  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, or all (default: ${DEFAULT_RUN_MODE})
+  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-observability-controls, or all (default: ${DEFAULT_RUN_MODE})
   --overlay-host <ip>         Local host/IP the Windows VM can use to download the local overlay ZIP
   --browser-enforcement-report
                               Run tests/e2e/ci/windows-browser-enforcement.ps1 -Scope Report after Pester
@@ -1359,6 +1386,105 @@ if ($exitCode -ne 0) {
   }
 }
 
+function runWindowsDnsObservabilityControls(options, runnerRepoRoot) {
+  const controlsScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-dns-observability-controls.ps1`;
+  const artifactsRoot = DNS_OBSERVABILITY_CONTROLS_GUEST_ARTIFACT_ROOT;
+  const completionPath = `${artifactsRoot}\\direct-dns-observability-controls-completion.json`;
+  const timeoutSeconds = Number.parseInt(options.timeoutSeconds, 10);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$repoRoot = ${JSON.stringify(runnerRepoRoot)}
+$controlsScriptPath = ${JSON.stringify(controlsScriptPath)}
+$artifactsRoot = ${JSON.stringify(artifactsRoot)}
+$completionPath = ${JSON.stringify(completionPath)}
+
+if (-not (Test-Path -LiteralPath $controlsScriptPath)) {
+  throw 'run-windows-dns-observability-controls.ps1 is missing on the Windows runner checkout.'
+}
+
+function Invoke-OpenPathDirectChildPowerShell {
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    [string[]]$ExtraArguments = @(),
+    [Parameter(Mandatory = $true)][string]$LogName,
+    [int]$TimeoutSeconds = 1800
+  )
+
+  $outPath = Join-Path $artifactsRoot "$LogName.out.log"
+  $errPath = Join-Path $artifactsRoot "$LogName.err.log"
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $ExtraArguments
+  $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $repoRoot -RedirectStandardOutput $outPath -RedirectStandardError $errPath -PassThru
+
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "$LogName timed out after $TimeoutSeconds seconds"
+  }
+
+  $process.Refresh()
+  $exitCode = $process.ExitCode
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+  if ($exitCode -ne 0) {
+    $maxFailureLogChars = 12000
+    $stdout = if (Test-Path -LiteralPath $outPath) { Get-Content -LiteralPath $outPath -Raw } else { '' }
+    $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -LiteralPath $errPath -Raw } else { '' }
+    if ($stdout.Length -gt $maxFailureLogChars) {
+      $stdout = $stdout.Substring($stdout.Length - $maxFailureLogChars)
+    }
+    if ($stderr.Length -gt $maxFailureLogChars) {
+      $stderr = $stderr.Substring($stderr.Length - $maxFailureLogChars)
+    }
+    throw ($LogName + ' exited with code ' + $exitCode + [Environment]::NewLine + 'STDOUT:' + [Environment]::NewLine + $stdout + [Environment]::NewLine + 'STDERR:' + [Environment]::NewLine + $stderr)
+  }
+}
+
+$primaryFailure = $null
+$exitCode = 0
+$errorText = ''
+try {
+  Remove-Item -LiteralPath $artifactsRoot -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
+  Remove-Item -LiteralPath $completionPath -Force -ErrorAction SilentlyContinue
+  Set-Location $repoRoot
+  Invoke-OpenPathDirectChildPowerShell -ScriptPath $controlsScriptPath -ExtraArguments @('-Mode', 'Run', '-ArtifactsRoot', $artifactsRoot) -LogName 'direct-dns-observability-controls' -TimeoutSeconds ${timeoutSeconds}
+  $resultPath = Join-Path $artifactsRoot 'dns-observability-controls-result.json'
+  if (-not (Test-Path -LiteralPath $resultPath)) {
+    throw "DNS observability controls result was not written: $resultPath"
+  }
+}
+catch {
+  $primaryFailure = $_
+  $exitCode = 1
+  $errorText = [string]$_
+}
+finally {
+  [pscustomobject]@{
+    exitCode = $exitCode
+    error = $errorText
+    artifactsRoot = $artifactsRoot
+    resultPath = (Join-Path $artifactsRoot 'dns-observability-controls-result.json')
+    timestamp = (Get-Date).ToString('o')
+  } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $completionPath -Encoding UTF8
+}
+
+if ($exitCode -ne 0) {
+  exit $exitCode
+}
+`;
+  runGuestPowerShellDetached(options, script, {
+    label: 'Run Windows DNS observability controls',
+  });
+  const completion = waitForGuestCompletionFile(options, completionPath, {
+    timeoutSeconds: timeoutSeconds + 900,
+  });
+  if (completion.exitCode !== 0) {
+    throw new Error(
+      `Run Windows DNS observability controls failed: ${completion.error ?? 'unknown error'}`
+    );
+  }
+}
+
 function runBrowserBoundaryCi(options, runnerRepoRoot) {
   const boundaryScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-browser-boundary-ci.ps1`;
   const artifactsRoot = `${runnerRepoRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\browser-boundary`;
@@ -1544,6 +1670,16 @@ function collectArtifacts(options, artifactDir, runnerRoot) {
       64 * 1024 * 1024
     );
   }
+
+  for (const artifactName of DNS_OBSERVABILITY_CONTROLS_ARTIFACTS) {
+    collectGuestArtifact(
+      options,
+      artifactDir,
+      `${DNS_OBSERVABILITY_CONTROLS_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
+      artifactName.replace(/\\/g, '-'),
+      64 * 1024 * 1024
+    );
+  }
 }
 
 async function main() {
@@ -1638,6 +1774,10 @@ async function main() {
     if (options.mode === 'dns-evidence-matrix' || options.mode === 'all') {
       console.log('step=run-windows-dns-evidence-matrix');
       runWindowsDnsEvidenceMatrix(options, runnerRepoRoot || options.runnerRepoRoot);
+    }
+    if (options.mode === 'dns-observability-controls' || options.mode === 'all') {
+      console.log('step=run-windows-dns-observability-controls');
+      runWindowsDnsObservabilityControls(options, runnerRepoRoot || options.runnerRepoRoot);
     }
     if (options.browserEnforcementReport) {
       console.log('step=run-browser-enforcement-report');

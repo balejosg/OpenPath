@@ -31,8 +31,79 @@ Supporting repository evidence:
 - `OpenPath/windows/lib/internal/DNS.Diagnostics.ps1` exposes `Test-DNSSinkhole`, which checks that a domain does not resolve via local Acrylic.
 - `OpenPath/windows/tests/Windows.DNS.Core.Tests.ps1` protects the generated `NX *` ordering in the Acrylic hosts content.
 
-## Decision
+## Previous Decision
 
 - no DNS-local learning; use recipes/manual approval only
 
 Sinkhole evidence is acceptable as a narrow confirmation probe for a known candidate hostname, but it does not discover AJAX subresource hostnames by itself. Acrylic HitLog remains disabled by default, and this spike did not prove the HitLog field layout or concurrent PowerShell read behavior. Do not enable full DNS logging by default. If a later implementation needs local DNS evidence, add a separate explicit diagnostic command or experiment flag that writes to a private bounded HitLog path and records only the minimal fields needed for the diagnostic.
+
+This decision is superseded by the positive HitLog control below. The privacy
+and bounded-diagnostic cautions still apply.
+
+## Follow-Up Control
+
+The later `dns-evidence-matrix` output should not be used as a product decision
+signal by itself. Its `insufficientEvidence` result was formally conservative,
+but the design lacked a positive control proving that Acrylic HitLog records any
+known local query under the runner conditions.
+
+Before repeating browser or DNS-only learning experiments, run the narrower
+direct-runner mode:
+
+```bash
+npm run diagnostics:windows:direct -- \
+  --source-mode local-overlay \
+  --mode dns-observability-controls \
+  --timeout-seconds 600 \
+  --artifact-dir .opencode/tmp/openpath-dns-observability-controls/manual
+```
+
+The expected decision artifact is
+`dns-observability-controls-result.json`. Interpret it as follows:
+
+- `hitLogUnusable`: stop investing in Acrylic HitLog for local learning; move
+  to recipes/manual approval or plan ETW separately.
+- `hitLogForwardOnly`: do not use HitLog for blocked-dependency learning; at
+  most keep it as a forwarded-domain diagnostic.
+- `hitLogUsable`: plan a second experiment with controlled forwarded domains.
+- `insufficientEvidence`: fix the harness before drawing product conclusions.
+
+## Observability Control Result
+
+On 2026-05-11, the direct-runner `dns-observability-controls` mode was added
+and run against the Windows runner:
+
+```bash
+npm run diagnostics:windows:direct -- \
+  --source-mode local-overlay \
+  --mode dns-observability-controls \
+  --timeout-seconds 600 \
+  --artifact-dir .opencode/tmp/openpath-dns-observability-controls/manual-3
+```
+
+Result artifact:
+`.opencode/tmp/openpath-dns-observability-controls/manual-3/dns-observability-controls-result.json`.
+
+Measured result:
+
+- `decision`: `hitLogUsable`
+- `configRestored`: `true`
+- `hostsRestored`: `true`
+- `hitLogReadableWhileRunning`: `true`
+- `pktmonAvailable`: `true`
+- `forwardControl.host`: `raw.githubusercontent.com`
+- `forwardControl.hitLogMatchCount`: `2`
+- `nxControl.host`: `openpath-hitlog-nx-ed1dd7a402c74842b9d968bdb6e8bd9e.invalid`
+- `nxControl.hitLogMatchCount`: `1`
+- `hitLogLineCount`: `3`
+
+Runner caveat: the endpoint had Acrylic files present but no registered Acrylic
+service. The harness registered `AcrylicDNSProxySvc` temporarily for the
+diagnostic, then removed it. A post-run service check returned no Acrylic
+service.
+
+Conclusion: Acrylic HitLog is usable as a directly observable diagnostic source
+under controlled runner conditions. The next experiment should be a v2 DNS
+matrix with controlled `FW` domains, not another run of the old
+`127.0.0.1.sslip.io` matrix. Do not enable product DNS learning from this alone;
+this result only proves the observability primitive.

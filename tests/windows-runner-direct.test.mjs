@@ -305,6 +305,47 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     }
   });
 
+  test('dns-observability-controls mode runs the positive HitLog controls', () => {
+    const result = runDirectDiagnostic([
+      '--mode',
+      'dns-observability-controls',
+      '--source-mode',
+      'local-overlay',
+    ]);
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+    const controlsScript = readText('tests/e2e/ci/run-windows-dns-observability-controls.ps1');
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /source_mode=local-overlay/);
+    assert.match(result.stdout, /mode=dns-observability-controls/);
+    assert.match(result.stdout, /step=run-windows-dns-observability-controls/);
+    assert.match(script, /run-windows-dns-observability-controls\.ps1/);
+    assert.match(script, /openpath-dns-observability-controls/);
+    assert.match(script, /dns-observability-controls-result\.json/);
+    assert.match(script, /direct-dns-observability-controls-completion\.json/);
+    assert.match(controlsScript, /AcrylicConfiguration\.ini/);
+    assert.match(controlsScript, /AcrylicHosts\.txt/);
+    assert.match(controlsScript, /HitLogFileWhat=XHCFRU/);
+    assert.match(controlsScript, /HitLogMaxPendingHits=1/);
+    assert.match(controlsScript, /HitLogFullDump=No/);
+    assert.match(controlsScript, /raw\.githubusercontent\.com/);
+    assert.match(controlsScript, /openpath-hitlog-nx-/);
+    assert.match(
+      controlsScript,
+      /Resolve-DnsName -Name '\$encodedHost' -Server 127\.0\.0\.1 -DnsOnly -Type A/
+    );
+    assert.match(controlsScript, /pktmon filter add OpenPathDnsObservabilityForward -p 53/);
+    assert.match(controlsScript, /purpose = 'forward-upstream-control-only'/);
+    for (const decision of [
+      'hitLogUsable',
+      'hitLogForwardOnly',
+      'hitLogUnusable',
+      'insufficientEvidence',
+    ]) {
+      assert.match(controlsScript, new RegExp(decision));
+    }
+  });
+
   test(
     'workspace wrapper blocks GitHub integration lanes without explicit flag',
     { skip: !process.env.WHITELIST_WORKSPACE_ROOT },
