@@ -22,6 +22,8 @@ import {
   buildDnsEvidenceMatrixPlan,
   buildDnsDiscoverySpikeArtifact,
   buildDnsDiscoverySpikePlan,
+  buildBrowserDependencyObservabilitySpikeArtifact,
+  buildBrowserDependencyObservabilitySpikePlan,
 } from './student-policy-scenarios';
 
 function createScenario(): StudentScenario {
@@ -240,6 +242,24 @@ test('student policy coverage profile accepts the controlled DNS evidence matrix
   }
 });
 
+test('student policy coverage profile accepts the browser dependency observability spike', () => {
+  const original = process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+
+  try {
+    delete process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+    assert.equal(getStudentPolicyCoverageProfile(), 'full');
+
+    process.env.OPENPATH_STUDENT_COVERAGE_PROFILE = 'browser-dependency-observability-spike';
+    assert.equal(getStudentPolicyCoverageProfile(), 'browser-dependency-observability-spike');
+  } finally {
+    if (original === undefined) {
+      delete process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+    } else {
+      process.env.OPENPATH_STUDENT_COVERAGE_PROFILE = original;
+    }
+  }
+});
+
 test('DNS discovery spike plans a browser-only phase outside the full matrix', () => {
   assert.deepEqual(
     getStudentPolicyPhasePlan('sse', 'dns-discovery-spike').map(({ name, suite, useBrowser }) => ({
@@ -272,6 +292,25 @@ test('DNS evidence matrix v2 plans a browser-only diagnostic phase outside the f
       })
     ),
     [{ name: 'dns-evidence-matrix-v2', suite: 'dns-evidence-matrix-v2', useBrowser: true }]
+  );
+});
+
+test('browser dependency observability spike plans a browser-only diagnostic phase', () => {
+  assert.deepEqual(
+    getStudentPolicyPhasePlan('sse', 'browser-dependency-observability-spike').map(
+      ({ name, suite, useBrowser }) => ({
+        name,
+        suite,
+        useBrowser,
+      })
+    ),
+    [
+      {
+        name: 'browser-dependency-observability-spike',
+        suite: 'browser-dependency-observability-spike',
+        useBrowser: true,
+      },
+    ]
   );
 });
 
@@ -341,6 +380,75 @@ test('DNS evidence matrix uses approved anchors and unpreseeded typed dependency
   for (const dependency of plan.dependencies) {
     assert.equal(preseededHosts.has(dependency.host), false, `${dependency.host} is preseeded`);
   }
+});
+
+test('browser dependency observability spike uses approved anchors and unpreseeded dependencies', () => {
+  const scenario = createScenario();
+  const plan = buildBrowserDependencyObservabilitySpikePlan(scenario);
+
+  assert.equal(plan.origin.host, 'site.127.0.0.1.sslip.io');
+  assert.equal(plan.alternateOrigin.host, 'portal.127.0.0.1.sslip.io');
+  assert.deepEqual(
+    plan.dependencies.map(({ type, host }) => [
+      type,
+      host.replace(/\.127\.0\.0\.1\.sslip\.io$/, ''),
+    ]),
+    [
+      ['fetch', 'api.browser-dependency-fetch-assroom1'],
+      ['xhr', 'api.browser-dependency-xhr-assroom1'],
+      ['script', 'cdn.browser-dependency-script-assroom1'],
+      ['image', 'image.browser-dependency-image-assroom1'],
+      ['css', 'style.browser-dependency-css-assroom1'],
+      ['font', 'font.browser-dependency-font-assroom1'],
+    ]
+  );
+});
+
+test('browser dependency observability spike artifact records decision evidence', () => {
+  const scenario = createScenario();
+  const plan = buildBrowserDependencyObservabilitySpikePlan(scenario);
+  const artifact = buildBrowserDependencyObservabilitySpikeArtifact({
+    plan,
+    success: true,
+    phases: [
+      {
+        name: 'dependency-observation-blocked',
+        runtimeEvents: [
+          {
+            phase: 'dependency-observation-blocked',
+            source: 'openpathPageResourceCandidate',
+            hostname: plan.dependencies[0]?.host,
+          },
+        ],
+        nativeChecks: [{ host: plan.dependencies[0]?.host, inWhitelist: false }],
+        outcomes: { fetch: { status: 'blocked', durationMs: 12 } },
+      },
+      {
+        name: 'dependency-observation-allowed',
+        runtimeEvents: [
+          {
+            phase: 'dependency-observation-allowed',
+            source: 'webRequest.onBeforeRequest',
+            hostname: plan.dependencies[0]?.host,
+          },
+        ],
+        nativeChecks: [{ host: plan.dependencies[0]?.host, inWhitelist: true }],
+        outcomes: { fetch: { status: 'ok', durationMs: 8 } },
+      },
+    ],
+    remoteRulesBefore: 'site.127.0.0.1.sslip.io\n',
+    remoteRulesAfterExplicitApply: `${plan.dependencies[0]?.host}\n`,
+    explicitRulesApplied: plan.dependencies.map((dependency) => dependency.host),
+    decision: 'runtimeRouteViable',
+    writtenAt: '2026-05-11T00:00:00.000Z',
+  });
+
+  assert.equal(artifact.profile, 'browser-dependency-observability-spike');
+  assert.equal(artifact.resultPath, 'browser-dependency-observability-spike-result.json');
+  assert.equal(artifact.decision, 'runtimeRouteViable');
+  assert.equal(artifact.phases[0]?.name, 'dependency-observation-blocked');
+  assert.equal(artifact.noAutomaticRuleCreation, true);
+  assert.equal(artifact.explicitRulesApplied.length, plan.dependencies.length);
 });
 
 test('DNS discovery spike browser artifact records cold and warm results by dependency type', () => {

@@ -9,6 +9,7 @@ import {
   type ConfirmBlockedScreenContext,
 } from './blocked-screen-navigation-controller.js';
 import { evaluateGoogleGameBlocking, isGoogleGamePolicyOutcome } from './google-game-blocking.js';
+import type { OpenPathDependencyObservationEventInput } from './dependency-observation-diagnostics.js';
 
 interface BackgroundListenersOptions {
   addBlockedDomain: (
@@ -28,6 +29,7 @@ interface BackgroundListenersOptions {
   ) => { cancel?: boolean; redirectUrl?: string; reason?: string } | null;
   confirmBlockedScreenNavigation?: (context: ConfirmBlockedScreenContext) => Promise<boolean>;
   handleRuntimeMessage: (message: unknown, sender: Runtime.MessageSender) => Promise<unknown>;
+  recordDependencyObservationEvent?: (event: OpenPathDependencyObservationEventInput) => void;
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
 }
 
@@ -69,6 +71,17 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
   });
   options.browser.webRequest.onBeforeRequest.addListener(
     (details: WebRequest.OnBeforeRequestDetailsType) => {
+      options.recordDependencyObservationEvent?.({
+        source: 'webRequest.onBeforeRequest',
+        tabId: details.tabId,
+        frameId: details.frameId,
+        requestId: details.requestId,
+        type: details.type,
+        pageUrl: details.documentUrl ?? details.originUrl,
+        documentUrl: details.documentUrl,
+        originUrl: details.originUrl,
+        resourceUrl: details.url,
+      });
       const result =
         options.evaluateBlockedPath(details) ??
         options.evaluateBlockedSubdomain(details) ??
@@ -109,6 +122,17 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
 
   options.browser.webRequest.onErrorOccurred.addListener(
     (details: WebRequest.OnErrorOccurredDetailsType) => {
+      options.recordDependencyObservationEvent?.({
+        source: 'webRequest.onErrorOccurred',
+        tabId: details.tabId,
+        frameId: details.frameId,
+        requestId: details.requestId,
+        type: details.type,
+        pageUrl: details.documentUrl ?? details.originUrl,
+        documentUrl: details.documentUrl,
+        originUrl: details.originUrl,
+        resourceUrl: details.url,
+      });
       const hostname = extractHostname(details.url);
       if (!hostname) {
         return;
@@ -126,6 +150,13 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
 
   options.browser.webNavigation.onBeforeNavigate.addListener(
     (details: WebNavigation.OnBeforeNavigateDetailsType) => {
+      options.recordDependencyObservationEvent?.({
+        source: 'webNavigation.onBeforeNavigate',
+        tabId: details.tabId,
+        frameId: details.frameId,
+        pageUrl: details.url,
+        resourceUrl: details.url,
+      });
       blockedScreenNavigation.handleNativePolicyNavigationPreflight({
         frameId: details.frameId,
         tabId: details.tabId,
@@ -146,6 +177,13 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
 
   options.browser.webNavigation.onErrorOccurred.addListener(
     (details: WebNavigation.OnErrorOccurredDetailsType) => {
+      options.recordDependencyObservationEvent?.({
+        source: 'webNavigation.onErrorOccurred',
+        tabId: details.tabId,
+        frameId: details.frameId,
+        pageUrl: details.url,
+        resourceUrl: details.url,
+      });
       const maybeError = (details as { error?: unknown }).error;
       if (typeof maybeError !== 'string' || maybeError.length === 0) {
         return;

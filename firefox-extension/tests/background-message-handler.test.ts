@@ -68,6 +68,28 @@ function createHandlerFixture(
           rawRules: ['ads.example.org'],
         },
       }),
+    configureOpenPathDependencyObservationDiagnostics: (options) => ({
+      enabled: options.enabled,
+      phase: options.phase ?? 'default',
+      maxEvents: options.maxEvents ?? 250,
+      events: [],
+      configuredAt: '2026-05-11T00:00:00.000Z',
+    }),
+    getOpenPathDependencyObservationDiagnostics: () => ({
+      enabled: false,
+      phase: 'default',
+      maxEvents: 250,
+      events: [],
+      configuredAt: '2026-05-11T00:00:00.000Z',
+    }),
+    clearOpenPathDependencyObservationDiagnostics: () => ({
+      enabled: false,
+      phase: 'default',
+      maxEvents: 250,
+      events: [],
+      configuredAt: '2026-05-11T00:00:00.000Z',
+    }),
+    recordOpenPathDependencyObservationEvent: () => undefined,
     getSystemHostname: () => Promise.resolve({ success: true, hostname: 'lab-pc-01' }),
     isNativeHostAvailable: () => Promise.resolve(true),
     retryLocalUpdate: () => Promise.resolve({ success: true }),
@@ -285,11 +307,15 @@ await describe('background message handler', async () => {
   });
 
   await test('accepts page activity wake-up messages without native side effects', async () => {
+    const recorded: unknown[] = [];
     const handler = createHandlerFixture({
       getMachineToken: () => Promise.reject(new Error('should not be called')),
       getOpenPathDiagnostics: () => Promise.reject(new Error('should not be called')),
       getSystemHostname: () => Promise.reject(new Error('should not be called')),
       isNativeHostAvailable: () => Promise.reject(new Error('should not be called')),
+      recordOpenPathDependencyObservationEvent: (event) => {
+        recorded.push(event);
+      },
       triggerWhitelistUpdate: () => Promise.reject(new Error('should not be called')),
     });
 
@@ -303,6 +329,105 @@ await describe('background message handler', async () => {
     );
 
     assert.deepEqual(response, { success: true });
+    assert.deepEqual(recorded, [
+      {
+        source: 'openpathPageActivity',
+        tabId: 1,
+        frameId: undefined,
+        pageUrl: 'https://allowed.example/app',
+      },
+    ]);
+  });
+
+  await test('configures and reads dependency observation diagnostics through runtime messages', async () => {
+    const handler = createHandlerFixture({
+      configureOpenPathDependencyObservationDiagnostics: (options) => ({
+        enabled: options.enabled,
+        phase: options.phase ?? 'default',
+        maxEvents: options.maxEvents ?? 250,
+        events: [],
+        configuredAt: '2026-05-11T00:00:00.000Z',
+      }),
+      getOpenPathDependencyObservationDiagnostics: () => ({
+        enabled: true,
+        phase: 'dependency-observation-blocked',
+        maxEvents: 500,
+        events: [
+          {
+            phase: 'dependency-observation-blocked',
+            timestamp: '2026-05-11T00:00:01.000Z',
+            source: 'webRequest.onBeforeRequest',
+            hostname: 'api.example.test',
+          },
+        ],
+        configuredAt: '2026-05-11T00:00:00.000Z',
+      }),
+      clearOpenPathDependencyObservationDiagnostics: () => ({
+        enabled: true,
+        phase: 'dependency-observation-blocked',
+        maxEvents: 500,
+        events: [],
+        configuredAt: '2026-05-11T00:00:00.000Z',
+      }),
+    });
+
+    assert.deepEqual(
+      await handler(
+        {
+          action: 'configureOpenPathDependencyObservationDiagnostics',
+          enabled: true,
+          phase: 'dependency-observation-blocked',
+          maxEvents: 500,
+          tabId: 1,
+        },
+        {}
+      ),
+      {
+        success: true,
+        diagnostics: {
+          enabled: true,
+          phase: 'dependency-observation-blocked',
+          maxEvents: 500,
+          events: [],
+          configuredAt: '2026-05-11T00:00:00.000Z',
+        },
+      }
+    );
+
+    assert.deepEqual(
+      await handler({ action: 'getOpenPathDependencyObservationDiagnostics', tabId: 1 }, {}),
+      {
+        success: true,
+        diagnostics: {
+          enabled: true,
+          phase: 'dependency-observation-blocked',
+          maxEvents: 500,
+          events: [
+            {
+              phase: 'dependency-observation-blocked',
+              timestamp: '2026-05-11T00:00:01.000Z',
+              source: 'webRequest.onBeforeRequest',
+              hostname: 'api.example.test',
+            },
+          ],
+          configuredAt: '2026-05-11T00:00:00.000Z',
+        },
+      }
+    );
+
+    assert.deepEqual(
+      await handler({ action: 'clearOpenPathDependencyObservationDiagnostics', tabId: 1 }, {}),
+      {
+        success: true,
+        diagnostics: {
+          enabled: true,
+          phase: 'dependency-observation-blocked',
+          maxEvents: 500,
+          events: [],
+          configuredAt: '2026-05-11T00:00:00.000Z',
+        },
+      }
+    );
   });
 
   await test('verifies domains through both message aliases and reports failures', async () => {

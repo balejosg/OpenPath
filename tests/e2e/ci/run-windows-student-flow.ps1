@@ -1165,7 +1165,7 @@ function Invoke-SeleniumStudentSuite {
         [Parameter(Mandatory = $true)][string]$ScenarioPath,
         [Parameter(Mandatory = $true)][string]$ExtensionArchivePath,
         [Parameter(Mandatory = $true)][string]$Mode,
-        [Parameter(Mandatory = $true)][ValidateSet('full', 'fallback-propagation', 'dns-discovery-spike', 'dns-evidence-matrix', 'dns-evidence-matrix-v2')][string]$CoverageProfile,
+        [Parameter(Mandatory = $true)][ValidateSet('full', 'fallback-propagation', 'dns-discovery-spike', 'dns-evidence-matrix', 'dns-evidence-matrix-v2', 'browser-dependency-observability-spike')][string]$CoverageProfile,
         [ValidateSet('full', 'request-lifecycle', 'path-blocking', 'exemptions')][string]$ScenarioGroup = 'full'
     )
 
@@ -1644,7 +1644,7 @@ try {
     else {
         [string]$env:OPENPATH_WINDOWS_STUDENT_COVERAGE_PROFILE
     }
-    if ($windowsStudentSseCoverageProfile -notin @('full', 'dns-discovery-spike', 'dns-evidence-matrix', 'dns-evidence-matrix-v2')) {
+    if ($windowsStudentSseCoverageProfile -notin @('full', 'dns-discovery-spike', 'dns-evidence-matrix', 'dns-evidence-matrix-v2', 'browser-dependency-observability-spike')) {
         throw "Unsupported Windows student SSE coverage profile: $windowsStudentSseCoverageProfile"
     }
     $dnsDiscoverySpike = $windowsStudentSseCoverageProfile -eq 'dns-discovery-spike'

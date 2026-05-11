@@ -12,6 +12,7 @@ import {
   buildFixtureUrl,
   buildScenarioHost,
   escapeRegExp,
+  getStudentHostSuffix,
   optionalEnv,
   readWhitelistFile,
   runPlatformCommand,
@@ -190,6 +191,43 @@ export interface DnsEvidenceMatrixArtifact {
   writtenAt: string;
 }
 
+export type BrowserDependencyObservabilityDecision =
+  | 'runtimeRouteViable'
+  | 'observerOnlyViable'
+  | 'nativeOnlyViable'
+  | 'ambiguousCorrelation'
+  | 'insufficientEvidence';
+
+export interface BrowserDependencyObservabilitySpikePlan {
+  profile: 'browser-dependency-observability-spike';
+  origin: DnsEvidenceMatrixPlan['origin'];
+  alternateOrigin: DnsEvidenceMatrixPlan['alternateOrigin'];
+  dependencies: DnsDiscoverySpikeDependency[];
+}
+
+export interface BrowserDependencyObservabilityPhase {
+  name: string;
+  runtimeEvents: unknown[];
+  nativeChecks: unknown[];
+  outcomes: Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>;
+}
+
+export interface BrowserDependencyObservabilitySpikeArtifact {
+  profile: 'browser-dependency-observability-spike';
+  resultPath: 'browser-dependency-observability-spike-result.json';
+  success: boolean;
+  origin: BrowserDependencyObservabilitySpikePlan['origin'];
+  alternateOrigin: BrowserDependencyObservabilitySpikePlan['alternateOrigin'];
+  dependencies: DnsDiscoverySpikeDependency[];
+  phases: BrowserDependencyObservabilityPhase[];
+  remoteRulesBefore: string;
+  remoteRulesAfterExplicitApply: string;
+  explicitRulesApplied: string[];
+  noAutomaticRuleCreation: boolean;
+  decision: BrowserDependencyObservabilityDecision;
+  writtenAt: string;
+}
+
 let activeScenarioTiming: {
   name: string;
   startedAt: string;
@@ -329,6 +367,44 @@ export function buildDnsEvidenceMatrixPlan(scenario: StudentScenario): DnsEviden
   };
 }
 
+export function buildBrowserDependencyObservabilitySpikePlan(
+  scenario: StudentScenario
+): BrowserDependencyObservabilitySpikePlan {
+  const dependency = (
+    type: DnsDiscoveryDependencyType,
+    hostnamePrefix: string,
+    scenarioLabel: string,
+    path: string
+  ): DnsDiscoverySpikeDependency => {
+    const host = `${hostnamePrefix}.${buildScenarioHost(scenario, scenarioLabel)}`;
+    return {
+      type,
+      host,
+      url: buildFixtureUrl(host, path),
+    };
+  };
+
+  return {
+    profile: 'browser-dependency-observability-spike',
+    origin: {
+      host: scenario.fixtures.site,
+      url: buildFixtureUrl(scenario.fixtures.site, '/ok'),
+    },
+    alternateOrigin: {
+      host: scenario.fixtures.portal,
+      url: buildFixtureUrl(scenario.fixtures.portal, '/ok'),
+    },
+    dependencies: [
+      dependency('fetch', 'api', 'browser-dependency-fetch', '/fetch/private.json'),
+      dependency('xhr', 'api', 'browser-dependency-xhr', '/xhr/private.json'),
+      dependency('script', 'cdn', 'browser-dependency-script', '/asset.js'),
+      dependency('image', 'image', 'browser-dependency-image', '/pixel.png'),
+      dependency('css', 'style', 'browser-dependency-css', '/style.css'),
+      dependency('font', 'font', 'browser-dependency-font', '/font.woff2'),
+    ],
+  };
+}
+
 const DNS_DISCOVERY_CLEAR_ENV = 'OPENPATH_STUDENT_DNS_DISCOVERY_HITLOG_CLEAR_COMMAND';
 const DNS_DISCOVERY_SNAPSHOT_ENV = 'OPENPATH_STUDENT_DNS_DISCOVERY_HITLOG_SNAPSHOT_COMMAND';
 const DNS_EVIDENCE_MATRIX_CLEAR_ENV = 'OPENPATH_STUDENT_DNS_EVIDENCE_MATRIX_CLEAR_COMMAND';
@@ -462,6 +538,34 @@ export function buildDnsEvidenceMatrixArtifact(options: {
     dependencies: options.plan.dependencies,
     dependencyResults,
     hooks: options.hooks,
+    writtenAt: options.writtenAt ?? new Date().toISOString(),
+  };
+}
+
+export function buildBrowserDependencyObservabilitySpikeArtifact(options: {
+  plan: BrowserDependencyObservabilitySpikePlan;
+  success: boolean;
+  phases: BrowserDependencyObservabilityPhase[];
+  remoteRulesBefore: string;
+  remoteRulesAfterExplicitApply: string;
+  explicitRulesApplied: string[];
+  noAutomaticRuleCreation?: boolean;
+  decision: BrowserDependencyObservabilityDecision;
+  writtenAt?: string;
+}): BrowserDependencyObservabilitySpikeArtifact {
+  return {
+    profile: 'browser-dependency-observability-spike',
+    resultPath: 'browser-dependency-observability-spike-result.json',
+    success: options.success,
+    origin: options.plan.origin,
+    alternateOrigin: options.plan.alternateOrigin,
+    dependencies: options.plan.dependencies,
+    phases: options.phases,
+    remoteRulesBefore: options.remoteRulesBefore,
+    remoteRulesAfterExplicitApply: options.remoteRulesAfterExplicitApply,
+    explicitRulesApplied: options.explicitRulesApplied,
+    noAutomaticRuleCreation: options.noAutomaticRuleCreation ?? true,
+    decision: options.decision,
     writtenAt: options.writtenAt ?? new Date().toISOString(),
   };
 }
@@ -1120,6 +1224,18 @@ async function writeDnsEvidenceMatrixArtifact(
   writeFileSync(join(diagnosticsDir, fileName), `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
 }
 
+async function writeBrowserDependencyObservabilitySpikeArtifact(
+  diagnosticsDir: string,
+  artifact: BrowserDependencyObservabilitySpikeArtifact
+): Promise<void> {
+  mkdirSync(diagnosticsDir, { recursive: true });
+  writeFileSync(
+    join(diagnosticsDir, 'browser-dependency-observability-spike-result.json'),
+    `${JSON.stringify(artifact, null, 2)}\n`,
+    'utf8'
+  );
+}
+
 async function runDnsDiscoveryDependencyProbe(
   driver: StudentPolicyDriver,
   dependency: DnsDiscoverySpikeDependency
@@ -1166,6 +1282,207 @@ async function runDnsDiscoveryProbePhase(
   }
 
   return results;
+}
+
+type DependencyDiagnosticsEvent = {
+  source?: string;
+  hostname?: string;
+  pageUrl?: string;
+  documentUrl?: string;
+  originUrl?: string;
+  resourceUrl?: string;
+  nativeVerify?: unknown;
+};
+
+type DependencyDiagnosticsResponse = {
+  success?: boolean;
+  diagnostics?: {
+    enabled?: boolean;
+    phase?: string;
+    events?: DependencyDiagnosticsEvent[];
+  };
+};
+
+type NativeCheckResponse = {
+  success?: boolean;
+  results?: Array<{
+    domain?: string;
+    inWhitelist?: boolean;
+    resolves?: boolean;
+    error?: string;
+  }>;
+  error?: string;
+};
+
+async function configureDependencyDiagnostics(
+  driver: StudentPolicyDriver,
+  phase: string
+): Promise<void> {
+  await driver.sendRuntimeMessage<DependencyDiagnosticsResponse>({
+    action: 'configureOpenPathDependencyObservationDiagnostics',
+    enabled: true,
+    phase,
+    maxEvents: 2_000,
+    tabId: 0,
+  });
+  await driver.sendRuntimeMessage<DependencyDiagnosticsResponse>({
+    action: 'clearOpenPathDependencyObservationDiagnostics',
+    tabId: 0,
+  });
+}
+
+async function readDependencyDiagnostics(
+  driver: StudentPolicyDriver
+): Promise<DependencyDiagnosticsEvent[]> {
+  await waitForObservationWindow(500);
+  const response = await driver.sendRuntimeMessage<DependencyDiagnosticsResponse>({
+    action: 'getOpenPathDependencyObservationDiagnostics',
+    tabId: 0,
+  });
+  return response.diagnostics?.events ?? [];
+}
+
+async function verifyDependencyHosts(
+  driver: StudentPolicyDriver,
+  plan: BrowserDependencyObservabilitySpikePlan
+): Promise<NativeCheckResponse> {
+  return driver.sendRuntimeMessage<NativeCheckResponse>({
+    action: 'verifyDomains',
+    domains: plan.dependencies.map((dependency) => dependency.host),
+    tabId: 0,
+  });
+}
+
+function eventMentionsHost(event: DependencyDiagnosticsEvent, host: string): boolean {
+  return event.hostname === host || event.resourceUrl?.includes(host) === true;
+}
+
+function eventIsCorrelatedToOrigin(event: DependencyDiagnosticsEvent, originHost: string): boolean {
+  return (
+    event.pageUrl?.includes(originHost) === true ||
+    event.documentUrl?.includes(originHost) === true ||
+    event.originUrl?.includes(originHost) === true
+  );
+}
+
+function allDependenciesObserved(
+  events: DependencyDiagnosticsEvent[],
+  plan: BrowserDependencyObservabilitySpikePlan,
+  sourceMatcher: (source: string | undefined) => boolean
+): boolean {
+  return plan.dependencies.every((dependency) =>
+    events.some(
+      (event) =>
+        eventMentionsHost(event, dependency.host) &&
+        sourceMatcher(event.source) &&
+        eventIsCorrelatedToOrigin(event, plan.origin.host)
+    )
+  );
+}
+
+function hasAmbiguousDependencyCorrelation(
+  events: DependencyDiagnosticsEvent[],
+  plan: BrowserDependencyObservabilitySpikePlan
+): boolean {
+  return plan.dependencies.some((dependency) => {
+    const dependencyEvents = events.filter((event) => eventMentionsHost(event, dependency.host));
+    const originSeen = dependencyEvents.some((event) =>
+      eventIsCorrelatedToOrigin(event, plan.origin.host)
+    );
+    const alternateSeen = dependencyEvents.some((event) =>
+      eventIsCorrelatedToOrigin(event, plan.alternateOrigin.host)
+    );
+    return originSeen && alternateSeen;
+  });
+}
+
+function nativeChecksMatch(
+  check: NativeCheckResponse,
+  plan: BrowserDependencyObservabilitySpikePlan,
+  predicate: (result: NonNullable<NativeCheckResponse['results']>[number]) => boolean
+): boolean {
+  const results = check.results ?? [];
+  return plan.dependencies.every((dependency) => {
+    const result = results.find((candidate) => candidate.domain === dependency.host);
+    return result !== undefined && predicate(result);
+  });
+}
+
+function selectBrowserDependencyObservabilityDecision(input: {
+  plan: BrowserDependencyObservabilitySpikePlan;
+  phases: BrowserDependencyObservabilityPhase[];
+  noAutomaticRuleCreation: boolean;
+  nativeBefore: NativeCheckResponse;
+  nativeAfter: NativeCheckResponse;
+  preflightOk: boolean;
+}): BrowserDependencyObservabilityDecision {
+  if (!input.preflightOk || !input.noAutomaticRuleCreation) {
+    return 'insufficientEvidence';
+  }
+
+  const blockedPhase = input.phases.find(
+    (phase) => phase.name === 'dependency-observation-blocked'
+  );
+  const allowedPhase = input.phases.find(
+    (phase) => phase.name === 'dependency-observation-allowed'
+  );
+  const multiAnchorPhase = input.phases.find((phase) => phase.name === 'multi-anchor-correlation');
+  if (!blockedPhase || !allowedPhase || !multiAnchorPhase) {
+    return 'insufficientEvidence';
+  }
+
+  const nativeBlocked = nativeChecksMatch(
+    input.nativeBefore,
+    input.plan,
+    (result) => result.inWhitelist !== true
+  );
+  const nativeAllowed = nativeChecksMatch(
+    input.nativeAfter,
+    input.plan,
+    (result) => result.inWhitelist === true
+  );
+  if (!nativeBlocked || !nativeAllowed) {
+    return 'insufficientEvidence';
+  }
+
+  const combinedEvents = [
+    ...blockedPhase.runtimeEvents,
+    ...allowedPhase.runtimeEvents,
+    ...multiAnchorPhase.runtimeEvents,
+  ] as DependencyDiagnosticsEvent[];
+  if (hasAmbiguousDependencyCorrelation(combinedEvents, input.plan)) {
+    return 'ambiguousCorrelation';
+  }
+
+  const runtimeBlocked = allDependenciesObserved(
+    blockedPhase.runtimeEvents as DependencyDiagnosticsEvent[],
+    input.plan,
+    (source) => source === 'webRequest.onBeforeRequest' || source === 'webRequest.onErrorOccurred'
+  );
+  const runtimeAllowed = allDependenciesObserved(
+    allowedPhase.runtimeEvents as DependencyDiagnosticsEvent[],
+    input.plan,
+    (source) => source === 'webRequest.onBeforeRequest' || source === 'webRequest.onErrorOccurred'
+  );
+  if (runtimeBlocked && runtimeAllowed) {
+    return 'runtimeRouteViable';
+  }
+
+  const observerBlocked = allDependenciesObserved(
+    blockedPhase.runtimeEvents as DependencyDiagnosticsEvent[],
+    input.plan,
+    (source) => source === 'openpathPageResourceCandidate'
+  );
+  const observerAllowed = allDependenciesObserved(
+    allowedPhase.runtimeEvents as DependencyDiagnosticsEvent[],
+    input.plan,
+    (source) => source === 'openpathPageResourceCandidate'
+  );
+  if (observerBlocked && observerAllowed) {
+    return 'observerOnlyViable';
+  }
+
+  return 'nativeOnlyViable';
 }
 
 async function runDnsEvidenceMatrixHook(
@@ -1262,6 +1579,266 @@ async function runDnsEvidenceMatrixV2BrowserPhase(
   hooks.push(snapshot);
   if (snapshot.status === 'failed') {
     throw new Error(`DNS evidence matrix v2 snapshot failed for ${phase}: ${snapshot.error}`);
+  }
+}
+
+async function runBrowserDependencySpikePhase(
+  driver: StudentPolicyDriver,
+  plan: BrowserDependencyObservabilitySpikePlan,
+  phaseName: string,
+  runner: () => Promise<Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>>
+): Promise<BrowserDependencyObservabilityPhase> {
+  await configureDependencyDiagnostics(driver, phaseName);
+  const outcomes = await runner();
+  const runtimeEvents = await readDependencyDiagnostics(driver);
+  const nativeChecks = [await verifyDependencyHosts(driver, plan)];
+
+  return {
+    name: phaseName,
+    runtimeEvents,
+    nativeChecks,
+    outcomes,
+  };
+}
+
+export async function runBrowserDependencyObservabilitySpikeScenario(
+  client: StudentPolicyServerClient,
+  driver: StudentPolicyDriver,
+  mode: PolicyMode
+): Promise<void> {
+  if (mode !== 'sse') {
+    throw new Error('Browser dependency observability spike requires sse mode');
+  }
+
+  const plan = buildBrowserDependencyObservabilitySpikePlan(driver.scenario);
+  const restrictedGroupId = driver.scenario.groups.restricted.id;
+  const phases: BrowserDependencyObservabilityPhase[] = [];
+  const explicitRulesApplied: string[] = [];
+  let remoteRulesBefore = '';
+  let remoteRulesAfterExplicitApply = '';
+  let noAutomaticRuleCreation = false;
+  let preflightOk = false;
+  let nativeBefore: NativeCheckResponse = { success: false, results: [] };
+  let nativeAfter: NativeCheckResponse = { success: false, results: [] };
+
+  const writeArtifact = async (
+    success: boolean,
+    decision: BrowserDependencyObservabilityDecision
+  ): Promise<void> => {
+    await writeBrowserDependencyObservabilitySpikeArtifact(
+      driver.diagnosticsDir,
+      buildBrowserDependencyObservabilitySpikeArtifact({
+        plan,
+        success,
+        phases,
+        remoteRulesBefore,
+        remoteRulesAfterExplicitApply,
+        explicitRulesApplied,
+        noAutomaticRuleCreation,
+        decision,
+      })
+    );
+  };
+
+  try {
+    logScenarioStep('SP-BROWSER-DEPENDENCY-001 preflight');
+    await client.setAutoApprove(false);
+    await client.ensureWhitelistRule(
+      restrictedGroupId,
+      plan.origin.host,
+      'Browser dependency spike approved origin'
+    );
+    await client.ensureWhitelistRule(
+      restrictedGroupId,
+      plan.alternateOrigin.host,
+      'Browser dependency spike alternate approved origin'
+    );
+    await driver.forceLocalUpdate();
+    await settlePolicyChange(driver, mode, async () => {
+      await driver.assertWhitelistContains(plan.origin.host);
+      await driver.assertWhitelistContains(plan.alternateOrigin.host);
+      await driver.assertDnsAllowed(plan.origin.host);
+      await driver.assertDnsAllowed(plan.alternateOrigin.host);
+    });
+
+    remoteRulesBefore = await client.fetchMachineWhitelist();
+    for (const dependency of plan.dependencies) {
+      assert.doesNotMatch(
+        remoteRulesBefore,
+        new RegExp(`(^|\\n)${escapeRegExp(dependency.host)}($|\\n)`),
+        `${dependency.host} must not be present before explicit apply`
+      );
+      await driver.assertWhitelistMissing(dependency.host);
+    }
+
+    const nativeAvailable = await driver.sendRuntimeMessage<{
+      success?: boolean;
+      available?: boolean;
+    }>({
+      action: 'isNativeAvailable',
+      tabId: 0,
+    });
+    const suffix = getStudentHostSuffix();
+    preflightOk =
+      nativeAvailable.available === true &&
+      !suffix.startsWith('127.') &&
+      !suffix.includes('localhost');
+    phases.push({
+      name: 'preflight',
+      runtimeEvents: [],
+      nativeChecks: [nativeAvailable, { fixtureHostSuffix: suffix }],
+      outcomes: {},
+    });
+
+    logScenarioStep('SP-BROWSER-DEPENDENCY-002 diagnostics enabled');
+    await configureDependencyDiagnostics(driver, 'diagnostics-enabled');
+    phases.push({
+      name: 'diagnostics-enabled',
+      runtimeEvents: await readDependencyDiagnostics(driver),
+      nativeChecks: [],
+      outcomes: {},
+    });
+
+    logScenarioStep('SP-BROWSER-DEPENDENCY-003 origin page load');
+    phases.push(
+      await runBrowserDependencySpikePhase(driver, plan, 'origin-page-load', async () => {
+        await driver.openAndExpectLoaded({
+          url: plan.origin.url,
+          title: 'OpenPath Site Fixture',
+          selector: '#page-status',
+        });
+        return {};
+      })
+    );
+
+    logScenarioStep('SP-BROWSER-DEPENDENCY-004 blocked dependency observation');
+    phases.push(
+      await runBrowserDependencySpikePhase(
+        driver,
+        plan,
+        'dependency-observation-blocked',
+        async () => {
+          await driver.openAndExpectLoaded({
+            url: plan.origin.url,
+            title: 'OpenPath Site Fixture',
+            selector: '#page-status',
+          });
+          return runDnsDiscoveryProbePhase(driver, plan);
+        }
+      )
+    );
+    nativeBefore = await verifyDependencyHosts(driver, plan);
+
+    logScenarioStep('SP-BROWSER-DEPENDENCY-005 no automatic rule creation');
+    const remoteAfterBlockedObservation = await client.fetchMachineWhitelist();
+    noAutomaticRuleCreation = plan.dependencies.every(
+      (dependency) =>
+        !new RegExp(`(^|\\n)${escapeRegExp(dependency.host)}($|\\n)`).test(
+          remoteAfterBlockedObservation
+        )
+    );
+    for (const dependency of plan.dependencies) {
+      await driver.assertWhitelistMissing(dependency.host);
+    }
+    phases.push({
+      name: 'no-automatic-rule-creation',
+      runtimeEvents: [],
+      nativeChecks: [nativeBefore],
+      outcomes: {},
+    });
+
+    logScenarioStep('SP-BROWSER-DEPENDENCY-006 explicit whitelist apply');
+    for (const dependency of plan.dependencies) {
+      await client.ensureWhitelistRule(
+        restrictedGroupId,
+        dependency.host,
+        'Browser dependency spike explicit dependency allowlist'
+      );
+      explicitRulesApplied.push(dependency.host);
+    }
+    await driver.forceLocalUpdate();
+    await driver.sendRuntimeMessage({
+      action: 'triggerWhitelistUpdate',
+      tabId: 0,
+    });
+    await settlePolicyChange(
+      driver,
+      mode,
+      async () => {
+        for (const dependency of plan.dependencies) {
+          await driver.assertWhitelistContains(dependency.host);
+          await driver.assertDnsAllowed(dependency.host);
+        }
+      },
+      { timeoutMs: 45_000 }
+    );
+    remoteRulesAfterExplicitApply = await client.fetchMachineWhitelist();
+    nativeAfter = await verifyDependencyHosts(driver, plan);
+    phases.push({
+      name: 'explicit-whitelist-apply',
+      runtimeEvents: [],
+      nativeChecks: [nativeAfter],
+      outcomes: {},
+    });
+
+    logScenarioStep('SP-BROWSER-DEPENDENCY-007 allowed dependency observation');
+    phases.push(
+      await runBrowserDependencySpikePhase(
+        driver,
+        plan,
+        'dependency-observation-allowed',
+        async () => {
+          await driver.openAndExpectLoaded({
+            url: plan.origin.url,
+            title: 'OpenPath Site Fixture',
+            selector: '#page-status',
+          });
+          return runDnsDiscoveryProbePhase(driver, plan);
+        }
+      )
+    );
+
+    logScenarioStep('SP-BROWSER-DEPENDENCY-008 multi-anchor correlation');
+    const multiDependency = plan.dependencies[0];
+    phases.push(
+      await runBrowserDependencySpikePhase(driver, plan, 'multi-anchor-correlation', async () => {
+        await driver.openAndExpectLoaded({
+          url: plan.alternateOrigin.url,
+          title: 'OpenPath Portal Fixture',
+          selector: '#page-status',
+        });
+        await driver.openAndExpectLoaded({
+          url: plan.origin.url,
+          title: 'OpenPath Site Fixture',
+          selector: '#page-status',
+        });
+        if (multiDependency === undefined) {
+          return {};
+        }
+        return {
+          [multiDependency.type]: await runDnsDiscoveryDependencyProbe(driver, multiDependency),
+        };
+      })
+    );
+
+    const decision = selectBrowserDependencyObservabilityDecision({
+      plan,
+      phases,
+      noAutomaticRuleCreation,
+      nativeBefore,
+      nativeAfter,
+      preflightOk,
+    });
+    await writeArtifact(true, decision);
+  } catch (error) {
+    phases.push({
+      name: 'artifact-written',
+      runtimeEvents: [],
+      nativeChecks: [{ error: error instanceof Error ? error.message : String(error) }],
+      outcomes: {},
+    });
+    await writeArtifact(false, 'insufficientEvidence');
+    throw error;
   }
 }
 

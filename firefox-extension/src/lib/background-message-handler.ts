@@ -8,6 +8,10 @@ import {
 } from './blocked-screen-contract.js';
 import type { NativeResponse, VerifyResponse } from './native-messaging-client.js';
 import type { SubmitBlockedDomainInput, SubmitBlockedDomainResult } from './request-api.js';
+import type {
+  OpenPathDependencyObservationDiagnostics,
+  OpenPathDependencyObservationEventInput,
+} from './dependency-observation-diagnostics.js';
 
 interface BackgroundMessage {
   action?: string;
@@ -15,10 +19,17 @@ interface BackgroundMessage {
   domain?: string;
   domains?: string[];
   error?: string;
+  enabled?: boolean;
+  frameId?: number;
   hostname?: string;
+  kind?: string;
+  maxEvents?: number;
   origin?: string;
+  pageUrl?: string;
+  phase?: string;
   reason?: string;
-  tabId: number;
+  resourceUrl?: string;
+  tabId?: number;
   type?: string;
   url?: string;
 }
@@ -61,6 +72,16 @@ export interface BackgroundMessageHandlerDeps {
     version: string;
   };
   getOpenPathDiagnostics: (domains: string[]) => Promise<unknown>;
+  configureOpenPathDependencyObservationDiagnostics: (options: {
+    enabled: boolean;
+    phase?: string;
+    maxEvents?: number;
+  }) => OpenPathDependencyObservationDiagnostics;
+  getOpenPathDependencyObservationDiagnostics: () => OpenPathDependencyObservationDiagnostics;
+  clearOpenPathDependencyObservationDiagnostics: () => OpenPathDependencyObservationDiagnostics;
+  recordOpenPathDependencyObservationEvent: (
+    event: OpenPathDependencyObservationEventInput
+  ) => void;
   getSystemHostname: () => Promise<unknown>;
   isNativeHostAvailable: () => Promise<boolean>;
   retryLocalUpdate: (tabId: number, hostname: string) => Promise<{ success: boolean }>;
@@ -130,21 +151,61 @@ export function createBackgroundMessageHandler(
     return cached.request;
   }
 
-  return async (message: unknown, _sender: Runtime.MessageSender): Promise<unknown> => {
+  return async (message: unknown, sender: Runtime.MessageSender): Promise<unknown> => {
     const msg = message as BackgroundMessage;
+    const tabId = typeof msg.tabId === 'number' ? msg.tabId : 0;
 
     switch (msg.action) {
       case 'openpathPageActivity':
+        deps.recordOpenPathDependencyObservationEvent({
+          source: 'openpathPageActivity',
+          tabId: msg.tabId ?? sender.tab?.id,
+          frameId: msg.frameId ?? sender.frameId,
+          pageUrl: msg.url,
+        });
         return { success: true };
+
+      case 'openpathPageResourceCandidate':
+        deps.recordOpenPathDependencyObservationEvent({
+          source: 'openpathPageResourceCandidate',
+          tabId: msg.tabId ?? sender.tab?.id,
+          frameId: msg.frameId ?? sender.frameId,
+          kind: msg.kind,
+          pageUrl: msg.pageUrl,
+          resourceUrl: msg.resourceUrl,
+        });
+        return { success: true };
+
+      case 'configureOpenPathDependencyObservationDiagnostics':
+        return {
+          success: true,
+          diagnostics: deps.configureOpenPathDependencyObservationDiagnostics({
+            enabled: msg.enabled === true,
+            ...(msg.phase !== undefined ? { phase: msg.phase } : {}),
+            ...(typeof msg.maxEvents === 'number' ? { maxEvents: msg.maxEvents } : {}),
+          }),
+        };
+
+      case 'getOpenPathDependencyObservationDiagnostics':
+        return {
+          success: true,
+          diagnostics: deps.getOpenPathDependencyObservationDiagnostics(),
+        };
+
+      case 'clearOpenPathDependencyObservationDiagnostics':
+        return {
+          success: true,
+          diagnostics: deps.clearOpenPathDependencyObservationDiagnostics(),
+        };
 
       case 'getBlockedDomains':
         return {
-          domains: deps.getBlockedDomainsForTab(msg.tabId),
+          domains: deps.getBlockedDomainsForTab(tabId),
         };
 
       case 'getDomainStatuses':
         return {
-          statuses: deps.getDomainStatusesForTab(msg.tabId),
+          statuses: deps.getDomainStatusesForTab(tabId),
         };
 
       case 'getBlockedPathRulesDebug':
@@ -202,7 +263,7 @@ export function createBackgroundMessageHandler(
         };
 
       case 'clearBlockedDomains':
-        deps.clearBlockedDomains(msg.tabId);
+        deps.clearBlockedDomains(tabId);
         return { success: true };
 
       case 'checkWithNative':
@@ -281,7 +342,7 @@ export function createBackgroundMessageHandler(
         if (!msg.hostname) {
           return { success: false, error: 'hostname is required' };
         }
-        return deps.retryLocalUpdate(msg.tabId, msg.hostname);
+        return deps.retryLocalUpdate(tabId, msg.hostname);
 
       default:
         return { error: 'Unknown action' };

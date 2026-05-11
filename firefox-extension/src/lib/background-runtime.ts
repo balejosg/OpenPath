@@ -23,6 +23,12 @@ import {
   type NativeBlockedPathsResponse,
 } from './path-blocking.js';
 import type { NativeBlockedSubdomainsResponse } from './subdomain-blocking.js';
+import {
+  clearOpenPathDependencyObservationDiagnostics,
+  configureOpenPathDependencyObservationDiagnostics,
+  getOpenPathDependencyObservationDiagnostics,
+  recordOpenPathDependencyObservationEvent,
+} from './dependency-observation-diagnostics.js';
 
 interface BlockedScreenContext {
   tabId: number;
@@ -256,6 +262,14 @@ export function createBackgroundRuntime(
         action: 'get-blocked-subdomains',
       })) as NativeBlockedSubdomainsResponse,
     getOpenPathDiagnostics,
+    configureOpenPathDependencyObservationDiagnostics: (config) =>
+      configureOpenPathDependencyObservationDiagnostics({
+        ...config,
+        verifyHost: async (hostname) => checkDomainsWithNative([hostname]),
+      }),
+    getOpenPathDependencyObservationDiagnostics,
+    clearOpenPathDependencyObservationDiagnostics,
+    recordOpenPathDependencyObservationEvent,
     getPathRulesDebug: blockedPathRulesController.getDebugState,
     getSubdomainRulesDebug: blockedSubdomainRulesController.getDebugState,
     getSystemHostname: () => nativeMessagingClient.sendMessage({ action: 'get-hostname' }),
@@ -289,6 +303,7 @@ export function createBackgroundRuntime(
       evaluateBlockedSubdomain: blockedSubdomainRulesController.evaluateRequest,
       confirmBlockedScreenNavigation,
       handleRuntimeMessage,
+      recordDependencyObservationEvent: recordOpenPathDependencyObservationEvent,
       redirectToBlockedScreen,
     });
     await blockedPathRulesController.init();

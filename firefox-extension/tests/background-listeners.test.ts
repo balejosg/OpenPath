@@ -46,6 +46,9 @@ function createListenerHarness(
     evaluateBlockedPath?: EvaluateBlockedPath;
     evaluateBlockedSubdomain?: EvaluateBlockedSubdomain;
     handleRuntimeMessage?: (message: unknown, sender: unknown) => unknown;
+    recordDependencyObservationEvent?: Parameters<
+      typeof registerBackgroundListeners
+    >[0]['recordDependencyObservationEvent'];
   } = {}
 ): {
   addedBlocks: BlockedScreenContext[];
@@ -142,6 +145,9 @@ function createListenerHarness(
       options.evaluateBlockedSubdomain ?? ((): ReturnType<EvaluateBlockedSubdomain> => null),
     handleRuntimeMessage:
       options.handleRuntimeMessage ?? ((): Promise<undefined> => Promise.resolve(undefined)),
+    ...(options.recordDependencyObservationEvent
+      ? { recordDependencyObservationEvent: options.recordDependencyObservationEvent }
+      : {}),
     redirectToBlockedScreen: (context: BlockedScreenContext) => {
       redirects.push(context);
       return Promise.resolve();
@@ -290,6 +296,89 @@ void describe('background listeners blocked-screen routing', () => {
     assert.deepEqual(harness.beforeRequestFilters, [
       {
         urls: ['<all_urls>'],
+      },
+    ]);
+  });
+
+  void test('records browser dependency request and navigation observations when diagnostics are injected', () => {
+    const recorded: unknown[] = [];
+    const harness = createListenerHarness({
+      recordDependencyObservationEvent: (event) => {
+        recorded.push(event);
+      },
+    });
+
+    assert.ok(harness.webRequestBefore);
+    assert.ok(harness.webRequestError);
+    assert.ok(harness.webNavigationBefore);
+    assert.ok(harness.webNavigationError);
+
+    harness.webRequestBefore({
+      requestId: 'req-1',
+      tabId: 4,
+      frameId: 0,
+      type: 'script',
+      url: 'https://cdn.example.test/app.js',
+      documentUrl: 'https://origin.example.test/app',
+      originUrl: 'https://origin.example.test',
+    } as WebRequest.OnBeforeRequestDetailsType);
+    harness.webRequestError({
+      requestId: 'req-2',
+      tabId: 4,
+      frameId: 0,
+      type: 'xmlhttprequest',
+      url: 'https://api.example.test/data.json',
+      documentUrl: 'https://origin.example.test/app',
+      originUrl: 'https://origin.example.test',
+    } as WebRequest.OnErrorOccurredDetailsType);
+    harness.webNavigationBefore({
+      tabId: 4,
+      frameId: 0,
+      url: 'https://origin.example.test/app',
+    });
+    harness.webNavigationError({
+      tabId: 4,
+      frameId: 0,
+      url: 'https://blocked.example.test/',
+      error: 'NS_ERROR_UNKNOWN_HOST',
+    });
+
+    assert.deepEqual(recorded, [
+      {
+        source: 'webRequest.onBeforeRequest',
+        tabId: 4,
+        frameId: 0,
+        requestId: 'req-1',
+        type: 'script',
+        pageUrl: 'https://origin.example.test/app',
+        documentUrl: 'https://origin.example.test/app',
+        originUrl: 'https://origin.example.test',
+        resourceUrl: 'https://cdn.example.test/app.js',
+      },
+      {
+        source: 'webRequest.onErrorOccurred',
+        tabId: 4,
+        frameId: 0,
+        requestId: 'req-2',
+        type: 'xmlhttprequest',
+        pageUrl: 'https://origin.example.test/app',
+        documentUrl: 'https://origin.example.test/app',
+        originUrl: 'https://origin.example.test',
+        resourceUrl: 'https://api.example.test/data.json',
+      },
+      {
+        source: 'webNavigation.onBeforeNavigate',
+        tabId: 4,
+        frameId: 0,
+        pageUrl: 'https://origin.example.test/app',
+        resourceUrl: 'https://origin.example.test/app',
+      },
+      {
+        source: 'webNavigation.onErrorOccurred',
+        tabId: 4,
+        frameId: 0,
+        pageUrl: 'https://blocked.example.test/',
+        resourceUrl: 'https://blocked.example.test/',
       },
     ]);
   });

@@ -395,6 +395,43 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     }
   });
 
+  test('browser-dependency-observability-spike mode runs the browser/native spike without Acrylic HitLog', () => {
+    const result = runDirectDiagnostic([
+      '--mode',
+      'browser-dependency-observability-spike',
+      '--source-mode',
+      'local-overlay',
+    ]);
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+    const spikeScript = readText(
+      'tests/e2e/ci/run-windows-browser-dependency-observability-spike.ps1'
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /source_mode=local-overlay/);
+    assert.match(result.stdout, /mode=browser-dependency-observability-spike/);
+    assert.match(result.stdout, /step=run-windows-browser-dependency-observability-spike/);
+    assert.match(script, /run-windows-browser-dependency-observability-spike\.ps1/);
+    assert.match(script, /openpath-browser-dependency-observability-spike/);
+    assert.match(script, /browser-dependency-observability-spike-result\.json/);
+    assert.match(script, /direct-browser-dependency-observability-spike-completion\.json/);
+    assert.doesNotMatch(spikeScript, /HitLog/i);
+    assert.doesNotMatch(spikeScript, /AcrylicConfiguration\.ini/);
+    assert.match(
+      spikeScript,
+      /OPENPATH_WINDOWS_STUDENT_COVERAGE_PROFILE = 'browser-dependency-observability-spike'/
+    );
+    for (const decision of [
+      'runtimeRouteViable',
+      'observerOnlyViable',
+      'nativeOnlyViable',
+      'ambiguousCorrelation',
+      'insufficientEvidence',
+    ]) {
+      assert.match(spikeScript, new RegExp(decision));
+    }
+  });
+
   test(
     'workspace wrapper blocks GitHub integration lanes without explicit flag',
     { skip: !process.env.WHITELIST_WORKSPACE_ROOT },
