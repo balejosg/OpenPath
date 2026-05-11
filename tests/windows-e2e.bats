@@ -27,6 +27,23 @@ load 'test_helper'
     [ "$status" -ne 0 ]
 }
 
+@test "windows e2e workflow serializes destructive runner access" {
+    run grep -nF "Acquire shared Windows runner lock" "$PROJECT_DIR/.github/workflows/e2e-tests.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "Release shared Windows runner lock" "$PROJECT_DIR/.github/workflows/e2e-tests.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "tests/e2e/ci/acquire-shared-windows-runner-lock.ps1" "$PROJECT_DIR/.github/workflows/e2e-tests.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "tests/e2e/ci/release-shared-windows-runner-lock.ps1" "$PROJECT_DIR/.github/workflows/e2e-tests.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "C:\\ProgramData\\OpenPathRunnerLocks\\destructive-openpath-windows" "$PROJECT_DIR/tests/e2e/ci/acquire-shared-windows-runner-lock.ps1"
+    [ "$status" -eq 0 ]
+}
+
 @test "windows installer entrypoints stay ASCII-safe" {
     run grep -nP "[^\\x00-\\x7F]" "$PROJECT_DIR/windows/Install-OpenPath.ps1"
     [ "$status" -ne 0 ]

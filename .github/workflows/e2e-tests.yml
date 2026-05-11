@@ -267,6 +267,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Acquire shared Windows runner lock
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/acquire-shared-windows-runner-lock.ps1
+
       - name: Prepare self-hosted Windows runner state
         shell: pwsh
         run: |
@@ -282,6 +287,12 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/reset-self-hosted-windows-runner.ps1
+
+      - name: Release shared Windows runner lock
+        if: always()
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/release-shared-windows-runner-lock.ps1
 
   # ============================================
   # Linux Student Policy Tests
@@ -336,6 +347,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Acquire shared Windows runner lock
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/acquire-shared-windows-runner-lock.ps1
+
       - name: Prepare self-hosted Windows runner state
         shell: pwsh
         run: |
@@ -375,6 +391,12 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/reset-self-hosted-windows-runner.ps1
+
+      - name: Release shared Windows runner lock
+        if: always()
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/release-shared-windows-runner-lock.ps1
 
       - name: Upload Windows student-policy diagnostics
         if: always()
