@@ -1,5 +1,6 @@
 param(
-    [switch]$RunBrowserEnforcementProbes
+    [switch]$RunBrowserEnforcementProbes,
+    [ValidateSet('full', 'fallback-propagation', 'dns-discovery-spike', 'dns-evidence-matrix', 'dns-evidence-matrix-v2', 'browser-dependency-observability-spike')][string]$CoverageProfile = 'full'
 )
 
 $ErrorActionPreference = 'Stop'

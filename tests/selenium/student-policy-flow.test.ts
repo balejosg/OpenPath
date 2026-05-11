@@ -416,7 +416,7 @@ test('browser dependency observability spike artifact records decision evidence'
         runtimeEvents: [
           {
             phase: 'dependency-observation-blocked',
-            source: 'openpathPageResourceCandidate',
+            source: 'webRequest.onBeforeRequest',
             hostname: plan.dependencies[0]?.host,
           },
         ],

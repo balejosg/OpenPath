@@ -334,7 +334,6 @@ await describe('background message handler', async () => {
         source: 'openpathPageActivity',
         tabId: 1,
         frameId: undefined,
-        pageUrl: 'https://allowed.example/app',
       },
     ]);
   });

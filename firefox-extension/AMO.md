@@ -49,7 +49,8 @@ What it does:
 - blocks known Google game surfaces such as Google Snake, `doodles.google`
   game frames, and interactive logo-game assets before they load
 - talks to the OpenPath native host on the same computer to check
-  local allowlist state and refresh path/subdomain enforcement data
+  local allowlist state, refresh path/subdomain enforcement data, and on Windows
+  maintain exact-host runtime dependency overlays for already-approved anchors
 
 What it does not do:
 
@@ -57,14 +58,16 @@ What it does not do:
   OpenPath deployments
 - it does not replace the OpenPath Linux or Windows endpoint agent, DNS rules,
   firewall rules, or administrator policy
-- Firefox Core includes an isolated-world page activity relay and a MAIN-world
-  page-resource observer for local OpenPath policy visibility, without
-  automatic allowlist changes or automatic browsing-data upload
+- Firefox Core includes an isolated-world page activity relay only. It does not
+  inject a MAIN-world page-resource observer and does not relay AJAX/subresource
+  URLs from content scripts.
 - Firefox Core includes a Google Search/Doodles visual guard content script
   that locally neutralizes detected playable game widgets without uploading
   browsing data
-- Firefox Core does not include Android support, automatic AJAX/page-resource
-  allowlisting, or live/automatic AMO upload
+- Firefox Core does not include Android support, remote automatic AJAX/page-resource
+  allowlisting, or live/automatic AMO upload. Windows runtime dependency handling
+  sends only `{ anchorHost, dependencyHost, requestType }` to the local native host
+  and never to the OpenPath service.
 - it does not send analytics, telemetry, or browsing-history data to third-party
   services
 
@@ -79,7 +82,8 @@ Privacy and deployment notes:
   the Google visual guard is local DOM enforcement and does not transmit Google
   browsing activity to third parties
 - native messaging is local to the same computer and talks only to the
-  OpenPath native host installed by the managed client
+  OpenPath native host installed by the managed client. Windows dependency overlay
+  messages contain only exact hostnames and a Firefox request type.
 
 ### Data Collection Disclosure
 

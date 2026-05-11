@@ -1287,10 +1287,8 @@ async function runDnsDiscoveryProbePhase(
 type DependencyDiagnosticsEvent = {
   source?: string;
   hostname?: string;
-  pageUrl?: string;
-  documentUrl?: string;
-  originUrl?: string;
-  resourceUrl?: string;
+  anchorHost?: string;
+  dependencyHost?: string;
   nativeVerify?: unknown;
 };
 
@@ -1354,15 +1352,11 @@ async function verifyDependencyHosts(
 }
 
 function eventMentionsHost(event: DependencyDiagnosticsEvent, host: string): boolean {
-  return event.hostname === host || event.resourceUrl?.includes(host) === true;
+  return event.hostname === host || event.dependencyHost === host;
 }
 
 function eventIsCorrelatedToOrigin(event: DependencyDiagnosticsEvent, originHost: string): boolean {
-  return (
-    event.pageUrl?.includes(originHost) === true ||
-    event.documentUrl?.includes(originHost) === true ||
-    event.originUrl?.includes(originHost) === true
-  );
+  return event.anchorHost === originHost;
 }
 
 function allDependenciesObserved(
@@ -1466,20 +1460,6 @@ function selectBrowserDependencyObservabilityDecision(input: {
   );
   if (runtimeBlocked && runtimeAllowed) {
     return 'runtimeRouteViable';
-  }
-
-  const observerBlocked = allDependenciesObserved(
-    blockedPhase.runtimeEvents as DependencyDiagnosticsEvent[],
-    input.plan,
-    (source) => source === 'openpathPageResourceCandidate'
-  );
-  const observerAllowed = allDependenciesObserved(
-    allowedPhase.runtimeEvents as DependencyDiagnosticsEvent[],
-    input.plan,
-    (source) => source === 'openpathPageResourceCandidate'
-  );
-  if (observerBlocked && observerAllowed) {
-    return 'observerOnlyViable';
   }
 
   return 'nativeOnlyViable';

@@ -35,6 +35,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Send-OpenPathHealthReport',
         'Sync-OpenPathFirefoxNativeHostState',
         'Update-AcrylicHost',
+        'Clear-OpenPathRuntimeDependencyOverlay',
         'Restore-OriginalDNS',
         'Remove-OpenPathFirewall',
         'Remove-BrowserPolicy',

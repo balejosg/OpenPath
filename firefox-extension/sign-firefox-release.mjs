@@ -24,7 +24,16 @@ const defaultWebExtSignRecoveryPollSeconds = 60;
 const defaultAmoBaseUrl = 'https://addons.mozilla.org/api/v5/';
 const amoVersionComponentModulo = 1_000_000_000n;
 const amoSigningStateArtifactName = 'amo-signing-state.json';
-const removedApprovalMaxRuntimeFilenameTokens = ['auto-allow', 'page-resource-auto-allow'];
+const removedApprovalMaxRuntimeFilenameTokens = [
+  'auto-allow',
+  'page-resource-auto-allow',
+  'page-resource-observer-main',
+];
+const removedRuntimeContentTokens = [
+  'openpathPageResourceCandidate',
+  'resourceUrl',
+  '/api/requests/auto',
+];
 
 function fail(message) {
   throw new Error(message);
@@ -740,6 +749,32 @@ function assertNoRemovedApprovalMaxRuntimeFilenames(sourceDir) {
   }
 }
 
+function assertNoRemovedRuntimeContent(sourceDir) {
+  const forbiddenFile = listFirefoxReleasePayloadFiles(sourceDir).find((relativePath) => {
+    if (!relativePath.startsWith('dist/') && relativePath !== 'manifest.json') {
+      return false;
+    }
+
+    const absolutePath = path.join(sourceDir, relativePath);
+    if (!fs.statSync(absolutePath).isFile()) {
+      return false;
+    }
+
+    const content = fs.readFileSync(absolutePath, 'utf8');
+    return removedRuntimeContentTokens.some((token) => content.includes(token));
+  });
+
+  if (forbiddenFile) {
+    fail(
+      [
+        'Firefox AMO runtime payload contains removed resource-observer content',
+        `file=${forbiddenFile}`,
+        `forbiddenTokens=${removedRuntimeContentTokens.join(',')}`,
+      ].join(' ')
+    );
+  }
+}
+
 export function prepareSigningSourceDir(options) {
   const { sourceDir = extensionRoot, version = '' } = options;
   const resolvedSourceDir = path.resolve(sourceDir);
@@ -764,6 +799,7 @@ export function prepareSigningSourceDir(options) {
       `${JSON.stringify(manifest, null, 2)}\n`
     );
     assertNoRemovedApprovalMaxRuntimeFilenames(tempSourceDir);
+    assertNoRemovedRuntimeContent(tempSourceDir);
   } catch (error) {
     fs.rmSync(tempSourceDir, { recursive: true, force: true });
     throw error;

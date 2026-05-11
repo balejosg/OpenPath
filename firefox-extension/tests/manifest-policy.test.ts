@@ -121,7 +121,7 @@ void describe('Firefox extension manifest policy', () => {
     });
   });
 
-  void test('declares the reviewed page observer and Google visual guard content scripts', async () => {
+  void test('declares the page activity relay and Google visual guard content scripts', async () => {
     const manifest = await readManifest();
 
     assert.deepEqual(manifest.content_scripts, [
@@ -129,12 +129,6 @@ void describe('Firefox extension manifest policy', () => {
         matches: ['http://*/*', 'https://*/*'],
         js: ['dist/page-activity-content.js'],
         run_at: 'document_start',
-      },
-      {
-        matches: ['http://*/*', 'https://*/*'],
-        js: ['dist/page-resource-observer-main.js'],
-        run_at: 'document_start',
-        world: 'MAIN',
       },
       {
         matches: [

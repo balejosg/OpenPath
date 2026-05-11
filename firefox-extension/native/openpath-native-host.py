@@ -716,6 +716,13 @@ def handle_message(message):
     elif action == "get-blocked-subdomains":
         return get_blocked_subdomains()
 
+    elif action == "allow-local-runtime-dependency":
+        return {
+            "success": False,
+            "action": "allow-local-runtime-dependency",
+            "error": "unsupported",
+        }
+
     else:
         return {"success": False, "error": f"Unknown action: {action}"}
 

@@ -18,6 +18,11 @@ interface BackgroundListenersOptions {
     error: string,
     origin?: string | null
   ) => void;
+  allowLocalRuntimeDependency?: (input: {
+    anchorHost: string;
+    dependencyHost: string;
+    requestType: string;
+  }) => Promise<unknown>;
   browser: Browser;
   clearTabRuntimeState: (tabId: number) => void;
   disposeTab: (tabId: number) => void;
@@ -29,8 +34,64 @@ interface BackgroundListenersOptions {
   ) => { cancel?: boolean; redirectUrl?: string; reason?: string } | null;
   confirmBlockedScreenNavigation?: (context: ConfirmBlockedScreenContext) => Promise<boolean>;
   handleRuntimeMessage: (message: unknown, sender: Runtime.MessageSender) => Promise<unknown>;
+  localRuntimeDependencyTimeoutMs?: number;
   recordDependencyObservationEvent?: (event: OpenPathDependencyObservationEventInput) => void;
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
+}
+
+const DEFAULT_LOCAL_RUNTIME_DEPENDENCY_TIMEOUT_MS = 750;
+
+function extractRequestHostname(url: string | undefined): string | null {
+  if (!url) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function isDependencyRequestType(type: unknown): type is string {
+  return typeof type === 'string' && type.length > 0 && type !== 'main_frame';
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  if (timeoutMs <= 0) {
+    return promise.catch(() => fallback);
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(fallback);
+    }, timeoutMs);
+
+    void promise.then(
+      (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(fallback);
+      }
+    );
+  });
 }
 
 function createRuntimeMessageResponder(
@@ -57,6 +118,9 @@ function createRuntimeMessageResponder(
 }
 
 export function registerBackgroundListeners(options: BackgroundListenersOptions): void {
+  const tabAnchorHosts = new Map<number, string>();
+  const dependencyTimeoutMs =
+    options.localRuntimeDependencyTimeoutMs ?? DEFAULT_LOCAL_RUNTIME_DEPENDENCY_TIMEOUT_MS;
   const blockedScreenNavigation = createBlockedScreenNavigationController({
     addBlockedDomain: options.addBlockedDomain,
     ...(options.confirmBlockedScreenNavigation
@@ -71,16 +135,18 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
   });
   options.browser.webRequest.onBeforeRequest.addListener(
     (details: WebRequest.OnBeforeRequestDetailsType) => {
+      const dependencyHost = extractRequestHostname(details.url);
+      const anchorHost =
+        (details.tabId >= 0 ? (tabAnchorHosts.get(details.tabId) ?? null) : null) ??
+        extractRequestHostname(details.documentUrl);
       options.recordDependencyObservationEvent?.({
         source: 'webRequest.onBeforeRequest',
         tabId: details.tabId,
         frameId: details.frameId,
         requestId: details.requestId,
         type: details.type,
-        pageUrl: details.documentUrl ?? details.originUrl,
-        documentUrl: details.documentUrl,
-        originUrl: details.originUrl,
-        resourceUrl: details.url,
+        ...(anchorHost ? { anchorHost } : {}),
+        ...(dependencyHost ? { dependencyHost } : {}),
       });
       const result =
         options.evaluateBlockedPath(details) ??
@@ -89,7 +155,35 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
           extensionOrigin: options.browser.runtime.getURL('/'),
         });
       if (!result) {
-        return;
+        if (details.type === 'main_frame' && details.tabId >= 0 && dependencyHost) {
+          tabAnchorHosts.set(details.tabId, dependencyHost);
+          return;
+        }
+
+        if (
+          !options.allowLocalRuntimeDependency ||
+          !isDependencyRequestType(details.type) ||
+          details.tabId < 0 ||
+          !anchorHost ||
+          !dependencyHost ||
+          anchorHost === dependencyHost
+        ) {
+          return;
+        }
+
+        return withTimeout(
+          options.allowLocalRuntimeDependency({
+            anchorHost,
+            dependencyHost,
+            requestType: details.type,
+          }),
+          dependencyTimeoutMs,
+          {}
+        ).then(() => ({}));
+      }
+
+      if (details.type === 'main_frame' && details.tabId >= 0 && dependencyHost) {
+        tabAnchorHosts.set(details.tabId, dependencyHost);
       }
 
       const hostname = extractHostname(details.url) ?? 'dominio desconocido';
@@ -128,10 +222,18 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
         frameId: details.frameId,
         requestId: details.requestId,
         type: details.type,
-        pageUrl: details.documentUrl ?? details.originUrl,
-        documentUrl: details.documentUrl,
-        originUrl: details.originUrl,
-        resourceUrl: details.url,
+        ...(((details.tabId >= 0 ? tabAnchorHosts.get(details.tabId) : undefined) ??
+        extractRequestHostname(details.documentUrl))
+          ? {
+              anchorHost:
+                (details.tabId >= 0 ? tabAnchorHosts.get(details.tabId) : undefined) ??
+                extractRequestHostname(details.documentUrl) ??
+                undefined,
+            }
+          : {}),
+        ...(extractRequestHostname(details.url)
+          ? { dependencyHost: extractRequestHostname(details.url) ?? undefined }
+          : {}),
       });
       const hostname = extractHostname(details.url);
       if (!hostname) {
@@ -150,12 +252,15 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
 
   options.browser.webNavigation.onBeforeNavigate.addListener(
     (details: WebNavigation.OnBeforeNavigateDetailsType) => {
+      const navigationHost = extractRequestHostname(details.url);
+      if (details.frameId === 0 && navigationHost) {
+        tabAnchorHosts.set(details.tabId, navigationHost);
+      }
       options.recordDependencyObservationEvent?.({
         source: 'webNavigation.onBeforeNavigate',
         tabId: details.tabId,
         frameId: details.frameId,
-        pageUrl: details.url,
-        resourceUrl: details.url,
+        ...(navigationHost ? { anchorHost: navigationHost } : {}),
       });
       blockedScreenNavigation.handleNativePolicyNavigationPreflight({
         frameId: details.frameId,
@@ -177,12 +282,12 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
 
   options.browser.webNavigation.onErrorOccurred.addListener(
     (details: WebNavigation.OnErrorOccurredDetailsType) => {
+      const navigationHost = extractRequestHostname(details.url);
       options.recordDependencyObservationEvent?.({
         source: 'webNavigation.onErrorOccurred',
         tabId: details.tabId,
         frameId: details.frameId,
-        pageUrl: details.url,
-        resourceUrl: details.url,
+        ...(navigationHost ? { anchorHost: navigationHost } : {}),
       });
       const maybeError = (details as { error?: unknown }).error;
       if (typeof maybeError !== 'string' || maybeError.length === 0) {
@@ -205,6 +310,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
 
   options.browser.tabs.onRemoved.addListener((tabId: number) => {
     blockedScreenNavigation.disposeTab(tabId);
+    tabAnchorHosts.delete(tabId);
     options.disposeTab(tabId);
     logger.debug(`[Monitor] Tab ${tabId.toString()} cerrada, datos eliminados`);
   });

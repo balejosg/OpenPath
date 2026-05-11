@@ -77,6 +77,9 @@ function Handle-OpenPathNotModified {
 
     $localWhitelistSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
     if ($localWhitelistSections.IsDisabled) {
+        if (Get-Command -Name 'Clear-OpenPathRuntimeDependencyOverlay' -ErrorAction SilentlyContinue) {
+            Clear-OpenPathRuntimeDependencyOverlay | Out-Null
+        }
         Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist
         Write-OpenPathLog "Whitelist not modified and local fail-open marker remains active"
 
@@ -97,6 +100,7 @@ function Handle-OpenPathNotModified {
     }
 
     Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
+    Update-AcrylicHost -WhitelistedDomains $localWhitelistSections.Whitelist -BlockedSubdomains $localWhitelistSections.BlockedSubdomains
     Write-OpenPathLog "Whitelist not modified (ETag) - skipping apply"
 
     try {
@@ -129,6 +133,9 @@ function Handle-OpenPathDisabledWhitelist {
     Write-OpenPathLog "DEACTIVATION FLAG detected - entering fail-open mode" -Level WARN
 
     "# DESACTIVADO" | Set-Content $WhitelistPath -Encoding UTF8
+    if (Get-Command -Name 'Clear-OpenPathRuntimeDependencyOverlay' -ErrorAction SilentlyContinue) {
+        Clear-OpenPathRuntimeDependencyOverlay | Out-Null
+    }
     Restore-OriginalDNS
     Remove-OpenPathFirewall
     Remove-BrowserPolicy

@@ -1813,6 +1813,7 @@ void describe('Firefox release signing helpers', () => {
     for (const forbiddenFilename of [
       'auto-allow-workflow.js',
       'page-resource-auto-allow-intake.js',
+      'page-resource-observer-main.js',
     ]) {
       const workingDir = createTempDir('openpath-firefox-signing-source-guard-');
       const sourceDir = path.join(workingDir, 'extension');
@@ -1843,6 +1844,42 @@ void describe('Firefox release signing helpers', () => {
         new RegExp(
           `Firefox AMO runtime payload contains removed approval-max filename.*${forbiddenFilename}`
         )
+      );
+    }
+  });
+
+  void test('prepareSigningSourceDir rejects removed resource observer runtime content before signing', () => {
+    for (const forbiddenContent of [
+      'openpathPageResourceCandidate',
+      'resourceUrl',
+      '/api/requests/auto',
+    ]) {
+      const workingDir = createTempDir('openpath-firefox-signing-content-guard-');
+      const sourceDir = path.join(workingDir, 'extension');
+
+      mkdirSync(path.join(sourceDir, 'dist'), { recursive: true });
+      mkdirSync(path.join(sourceDir, 'popup'), { recursive: true });
+      mkdirSync(path.join(sourceDir, 'blocked'), { recursive: true });
+      mkdirSync(path.join(sourceDir, 'icons'), { recursive: true });
+
+      writeFileSync(
+        path.join(sourceDir, 'manifest.json'),
+        `${JSON.stringify({
+          version: '3.2.1',
+          browser_specific_settings: { gecko: { id: 'openpath-block-monitor@openpath' } },
+        })}\n`
+      );
+      writeFileSync(
+        path.join(sourceDir, 'dist', 'background.js'),
+        `console.log(${JSON.stringify(forbiddenContent)});\n`
+      );
+      writeFileSync(path.join(sourceDir, 'popup', 'popup.html'), '<html></html>\n');
+      writeFileSync(path.join(sourceDir, 'blocked', 'blocked.html'), '<html>blocked</html>\n');
+      writeFileSync(path.join(sourceDir, 'icons', 'icon-48.png'), 'icon\n');
+
+      assert.throws(
+        () => prepareSigningSourceDir({ sourceDir }),
+        /Firefox AMO runtime payload contains removed resource-observer content/
       );
     }
   });

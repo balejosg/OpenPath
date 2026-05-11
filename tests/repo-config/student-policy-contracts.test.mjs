@@ -651,7 +651,7 @@ describe('repository verification contract', () => {
 
     assert.match(
       windowsRunner,
-      /param\([\s\S]*\[ValidateSet\('full', 'fallback-propagation', 'dns-discovery-spike', 'dns-evidence-matrix', 'dns-evidence-matrix-v2'\)\]\[string\]\$CoverageProfile/s,
+      /param\([\s\S]*\[ValidateSet\('full', 'fallback-propagation', 'dns-discovery-spike', 'dns-evidence-matrix', 'dns-evidence-matrix-v2', 'browser-dependency-observability-spike'\)\]\[string\]\$CoverageProfile/s,
       'Windows student-policy runner should pass an explicit Selenium coverage profile per mode'
     );
     assert.match(

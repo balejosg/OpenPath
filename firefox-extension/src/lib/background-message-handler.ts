@@ -25,10 +25,8 @@ interface BackgroundMessage {
   kind?: string;
   maxEvents?: number;
   origin?: string;
-  pageUrl?: string;
   phase?: string;
   reason?: string;
-  resourceUrl?: string;
   tabId?: number;
   type?: string;
   url?: string;
@@ -161,18 +159,6 @@ export function createBackgroundMessageHandler(
           source: 'openpathPageActivity',
           tabId: msg.tabId ?? sender.tab?.id,
           frameId: msg.frameId ?? sender.frameId,
-          pageUrl: msg.url,
-        });
-        return { success: true };
-
-      case 'openpathPageResourceCandidate':
-        deps.recordOpenPathDependencyObservationEvent({
-          source: 'openpathPageResourceCandidate',
-          tabId: msg.tabId ?? sender.tab?.id,
-          frameId: msg.frameId ?? sender.frameId,
-          kind: msg.kind,
-          pageUrl: msg.pageUrl,
-          resourceUrl: msg.resourceUrl,
         });
         return { success: true };
 

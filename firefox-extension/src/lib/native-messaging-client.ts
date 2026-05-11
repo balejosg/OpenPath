@@ -50,6 +50,11 @@ export interface VerifyResponse {
 }
 
 export interface NativeMessagingClient {
+  allowLocalRuntimeDependency: (input: {
+    anchorHost: string;
+    dependencyHost: string;
+    requestType: string;
+  }) => Promise<NativeResponse>;
   checkDomains: (domains: string[]) => Promise<VerifyResponse>;
   connect: () => Promise<boolean>;
   isAvailable: () => Promise<boolean>;
@@ -178,7 +183,22 @@ export function createNativeMessagingClient(options: {
     }
   }
 
+  async function allowLocalRuntimeDependency(input: {
+    anchorHost: string;
+    dependencyHost: string;
+    requestType: string;
+  }): Promise<NativeResponse> {
+    const response = (await sendMessage({
+      action: 'allow-local-runtime-dependency',
+      anchorHost: input.anchorHost,
+      dependencyHost: input.dependencyHost,
+      requestType: input.requestType,
+    })) as NativeResponse;
+    return response;
+  }
+
   return {
+    allowLocalRuntimeDependency,
     checkDomains,
     connect,
     isAvailable,

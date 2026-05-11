@@ -1,6 +1,5 @@
 export type OpenPathDependencyObservationSource =
   | 'openpathPageActivity'
-  | 'openpathPageResourceCandidate'
   | 'webRequest.onBeforeRequest'
   | 'webRequest.onErrorOccurred'
   | 'webNavigation.onBeforeNavigate'
@@ -19,10 +18,8 @@ export interface OpenPathDependencyObservationEventInput {
   requestId?: string | undefined;
   type?: string | undefined;
   kind?: string | undefined;
-  pageUrl?: string | undefined;
-  documentUrl?: string | undefined;
-  originUrl?: string | undefined;
-  resourceUrl?: string | undefined;
+  anchorHost?: string | undefined;
+  dependencyHost?: string | undefined;
   hostname?: string | undefined;
 }
 
@@ -66,25 +63,11 @@ function normalizeText(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function extractHostnameFromUrl(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
-  }
-
-  try {
-    return new URL(url).hostname.toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveHostname(input: OpenPathDependencyObservationEventInput): string | undefined {
   return (
     normalizeText(input.hostname)?.toLowerCase() ??
-    extractHostnameFromUrl(input.resourceUrl) ??
-    extractHostnameFromUrl(input.pageUrl) ??
-    extractHostnameFromUrl(input.documentUrl) ??
-    extractHostnameFromUrl(input.originUrl)
+    normalizeText(input.dependencyHost)?.toLowerCase() ??
+    normalizeText(input.anchorHost)?.toLowerCase()
   );
 }
 

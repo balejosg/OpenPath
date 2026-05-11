@@ -17,8 +17,9 @@ The OpenPath extension is designed to operate locally in the browser. It is used
 - blocked-page and popup access requests send user-initiated request details only to the configured OpenPath service after Firefox data-collection consent is granted
 - Google game blocking is enforced locally through `webRequest` for known Snake, doodle-game, and interactive logo-game surfaces
 - the Google visual guard locally neutralizes detected playable Google Search/Doodles game widgets without uploading browsing data
-- Firefox Core includes an isolated-world page activity relay and a MAIN-world page-resource observer for local OpenPath policy visibility
-- Firefox Core does not include Android support, automatic AJAX/page-resource allowlisting, or live/automatic AMO upload
+- Firefox Core includes an isolated-world page activity relay only; it does not use content scripts to observe AJAX/subresource URLs
+- Windows Firefox runtime dependencies are reduced to `{ anchorHost, dependencyHost, requestType }` and sent only to the local native host for exact-host Acrylic overlay validation
+- Firefox Core does not include Android support, remote automatic AJAX/page-resource allowlisting, or live/automatic AMO upload
 - clipboard access is used only when the user copies a blocked-domain list
 - `nativeMessaging` communicates only with the local OpenPath native host on the same machine
 
@@ -42,14 +43,16 @@ browser data.
 The Firefox manifest declares no required Mozilla data collection and makes
 `browsingActivity` optional. User-initiated unblock requests ask for that
 permission before transmitting the blocked domain and related navigation/request
-context to the configured OpenPath service. Firefox Core registers page activity
-content scripts and a MAIN-world page-resource observer for local OpenPath
-policy visibility, but those observers do not upload browsing data
-automatically and do not make automatic allowlist changes. Firefox Core
+context to the configured OpenPath service. Firefox Core registers a page activity
+content script but no MAIN-world page-resource observer. Automatic runtime dependency
+handling is local to Windows: the background script sends only the top-level anchor host,
+dependency host, and Firefox request type to the native host, and the native host writes
+only a local Acrylic exact-host overlay. Those dependency hosts are not uploaded or
+synchronized with the OpenPath service. Firefox Core
 registers a Google Search/Doodles visual guard that locally neutralizes detected
 playable game widgets without sending Google browsing activity to OpenPath or
 third parties. Firefox Core does not register automatic AJAX/page-resource
-allowlisting, Android support, or live/automatic AMO upload. Google game
+remote allowlisting, Android support, or live/automatic AMO upload. Google game
 blocking is a local browser policy and does not send third-party analytics or
 telemetry.
 

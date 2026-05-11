@@ -443,6 +443,22 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     }
   );
 
+  test('workspace wrapper forwards artifact-dir after the npm script separator', () => {
+    const result = runWorkspaceWrapper([
+      'openpath',
+      'windows-direct',
+      '--artifact-dir',
+      '.opencode/tmp/windows-direct-review',
+      '--dry-run',
+    ]);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /npm run diagnostics:windows:direct -- --artifact-dir .*\.opencode\/tmp\/windows-direct-review/
+    );
+  });
+
   test('workspace wrapper rejects the removed google-game-blocking direct suite', () => {
     const result = runWorkspaceWrapper([
       'openpath',

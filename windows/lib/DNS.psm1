@@ -16,6 +16,8 @@ Export-ModuleMember -Function @(
     'Ensure-AcrylicService',
     'Update-AcrylicHost',
     'Set-AcrylicConfiguration',
+    'Clear-OpenPathRuntimeDependencyOverlay',
+    'Get-OpenPathRuntimeDependencyDomains',
     'Set-LocalDNS',
     'Restore-OriginalDNS',
     'Restart-AcrylicService',

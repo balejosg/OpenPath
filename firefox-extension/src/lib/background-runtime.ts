@@ -297,6 +297,8 @@ export function createBackgroundRuntime(
         addBlockedDomain(tabId, hostname, error, origin ?? undefined);
       },
       browser,
+      allowLocalRuntimeDependency: (input) =>
+        nativeMessagingClient.allowLocalRuntimeDependency(input),
       clearTabRuntimeState,
       disposeTab,
       evaluateBlockedPath: blockedPathRulesController.evaluateRequest,

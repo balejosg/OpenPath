@@ -34,8 +34,8 @@ function Invoke-OpenPathUpdateRollback {
         try {
             Copy-Item $BackupPath $WhitelistPath -Force
             Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
-            $backupContent = Get-ValidWhitelistDomainsFromFile -Path $WhitelistPath
-            Update-AcrylicHost -WhitelistedDomains $backupContent -BlockedSubdomains @() -ErrorAction SilentlyContinue
+            $backupSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
+            Update-AcrylicHost -WhitelistedDomains $backupSections.Whitelist -BlockedSubdomains $backupSections.BlockedSubdomains -ErrorAction SilentlyContinue
             Restore-OpenPathProtectedMode -Config $Config -ErrorAction SilentlyContinue | Out-Null
             $rollbackSucceeded = $true
             $rollbackMethod = 'backup'

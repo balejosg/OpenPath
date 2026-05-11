@@ -101,6 +101,33 @@ void test('native host confirms local DNS blocks when OpenPath CLI is unavailabl
   ]);
 });
 
+void test('linux native host reports local runtime dependency overlay as unsupported', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-unsupported-'));
+
+  const response = runNativeHostOnce(
+    {
+      ...process.env,
+      XDG_DATA_HOME: runtimeDir,
+    },
+    {
+      action: 'allow-local-runtime-dependency',
+      anchorHost: 'allowed.example',
+      dependencyHost: 'cdn.example',
+      requestType: 'script',
+    }
+  ) as {
+    action?: string;
+    error?: string;
+    success?: boolean;
+  };
+
+  assert.deepEqual(response, {
+    success: false,
+    action: 'allow-local-runtime-dependency',
+    error: 'unsupported',
+  });
+});
+
 void test('native host treats CLI sinkhole responses as blocked', () => {
   const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-'));
   const whitelistPath = join(runtimeDir, 'whitelist.txt');

@@ -46,6 +46,11 @@ function createListenerHarness(
     evaluateBlockedPath?: EvaluateBlockedPath;
     evaluateBlockedSubdomain?: EvaluateBlockedSubdomain;
     handleRuntimeMessage?: (message: unknown, sender: unknown) => unknown;
+    allowLocalRuntimeDependency?: (input: {
+      anchorHost: string;
+      dependencyHost: string;
+      requestType: string;
+    }) => Promise<unknown>;
     recordDependencyObservationEvent?: Parameters<
       typeof registerBackgroundListeners
     >[0]['recordDependencyObservationEvent'];
@@ -53,6 +58,7 @@ function createListenerHarness(
 ): {
   addedBlocks: BlockedScreenContext[];
   autoAllowCalls: unknown[];
+  localRuntimeDependencyCalls: unknown[];
   beforeRequestFilters: unknown[];
   confirmCalls: ConfirmBlockedScreenContext[];
   redirects: BlockedScreenContext[];
@@ -66,6 +72,7 @@ function createListenerHarness(
 } {
   const addedBlocks: BlockedScreenContext[] = [];
   const autoAllowCalls: unknown[] = [];
+  const localRuntimeDependencyCalls: unknown[] = [];
   const beforeRequestFilters: unknown[] = [];
   const confirmCalls: ConfirmBlockedScreenContext[] = [];
   const redirects: BlockedScreenContext[] = [];
@@ -143,6 +150,12 @@ function createListenerHarness(
       options.evaluateBlockedPath ?? ((): ReturnType<EvaluateBlockedPath> => null),
     evaluateBlockedSubdomain:
       options.evaluateBlockedSubdomain ?? ((): ReturnType<EvaluateBlockedSubdomain> => null),
+    allowLocalRuntimeDependency: async (input) => {
+      localRuntimeDependencyCalls.push(input);
+      return options.allowLocalRuntimeDependency
+        ? await options.allowLocalRuntimeDependency(input)
+        : { success: true };
+    },
     handleRuntimeMessage:
       options.handleRuntimeMessage ?? ((): Promise<undefined> => Promise.resolve(undefined)),
     ...(options.recordDependencyObservationEvent
@@ -167,6 +180,7 @@ function createListenerHarness(
   return {
     addedBlocks,
     autoAllowCalls,
+    localRuntimeDependencyCalls,
     beforeRequestFilters,
     confirmCalls,
     redirects,
@@ -350,10 +364,8 @@ void describe('background listeners blocked-screen routing', () => {
         frameId: 0,
         requestId: 'req-1',
         type: 'script',
-        pageUrl: 'https://origin.example.test/app',
-        documentUrl: 'https://origin.example.test/app',
-        originUrl: 'https://origin.example.test',
-        resourceUrl: 'https://cdn.example.test/app.js',
+        anchorHost: 'origin.example.test',
+        dependencyHost: 'cdn.example.test',
       },
       {
         source: 'webRequest.onErrorOccurred',
@@ -361,24 +373,20 @@ void describe('background listeners blocked-screen routing', () => {
         frameId: 0,
         requestId: 'req-2',
         type: 'xmlhttprequest',
-        pageUrl: 'https://origin.example.test/app',
-        documentUrl: 'https://origin.example.test/app',
-        originUrl: 'https://origin.example.test',
-        resourceUrl: 'https://api.example.test/data.json',
+        anchorHost: 'origin.example.test',
+        dependencyHost: 'api.example.test',
       },
       {
         source: 'webNavigation.onBeforeNavigate',
         tabId: 4,
         frameId: 0,
-        pageUrl: 'https://origin.example.test/app',
-        resourceUrl: 'https://origin.example.test/app',
+        anchorHost: 'origin.example.test',
       },
       {
         source: 'webNavigation.onErrorOccurred',
         tabId: 4,
         frameId: 0,
-        pageUrl: 'https://blocked.example.test/',
-        resourceUrl: 'https://blocked.example.test/',
+        anchorHost: 'blocked.example.test',
       },
     ]);
   });
@@ -399,6 +407,42 @@ void describe('background listeners blocked-screen routing', () => {
     assert.equal(result, undefined);
     await waitForAsyncListeners();
     assert.deepEqual(harness.autoAllowCalls, []);
+  });
+
+  void test('allows eligible page resources through the local native dependency overlay only', async () => {
+    const nativePayloads: unknown[] = [];
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: (input) => {
+        nativePayloads.push(input);
+        return Promise.resolve({ success: true });
+      },
+    });
+    assert.ok(harness.webNavigationBefore);
+    assert.ok(harness.webRequestBefore);
+
+    harness.webNavigationBefore({
+      frameId: 0,
+      tabId: 44,
+      url: 'https://allowed.example/lesson?token=secret',
+    });
+
+    const result = harness.webRequestBefore({
+      documentUrl: 'https://allowed.example/lesson?token=secret',
+      originUrl: 'https://allowed.example',
+      tabId: 44,
+      type: 'script',
+      url: 'https://cdn.example.net/assets/app.js?user=student',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.ok(result instanceof Promise);
+    assert.deepEqual(await result, {});
+    assert.deepEqual(nativePayloads, [
+      {
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example.net',
+        requestType: 'script',
+      },
+    ]);
   });
 
   void test('does not block main-frame navigations while probing auto-allow candidates', () => {

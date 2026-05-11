@@ -170,6 +170,75 @@ Describe "DNS Module" {
             }
         }
 
+        It "Renders runtime dependency overlay entries as exact hosts before the default block" {
+            InModuleScope DNS {
+                $definition = New-AcrylicHostsDefinition `
+                    -WhitelistedDomains @('allowed.example') `
+                    -BlockedSubdomains @('blocked.cdn.example') `
+                    -RuntimeDependencyDomains @('cdn.example', 'blocked.cdn.example') `
+                    -DnsSettings ([PSCustomObject]@{
+                        PrimaryDNS = '1.1.1.1'
+                        SecondaryDNS = '1.0.0.1'
+                        MaxDomains = 10
+                    })
+
+                $content = ConvertTo-AcrylicHostsContent -Definition $definition
+
+                $content | Should -Match '# LOCAL RUNTIME DEPENDENCIES \(1\)'
+                $content | Should -Match '(?m)^FW cdn\.example$'
+                $content | Should -Not -Match 'FW >cdn\.example'
+                $content | Should -Not -Match '(?m)^FW blocked\.cdn\.example$'
+
+                $overlayRuleIndex = $content.IndexOf('FW cdn.example')
+                $defaultBlockRuleIndex = $content.IndexOf('NX *')
+                $overlayRuleIndex | Should -BeGreaterThan -1
+                $defaultBlockRuleIndex | Should -BeGreaterThan $overlayRuleIndex
+                $definition.DomainAffinityMask | Should -Match 'cdn\.example'
+            }
+        }
+
+        It "Keeps runtime dependency overlays for anchors covered by a whitelisted parent domain" {
+            $previousOverlayPath = $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
+            $overlayPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-runtime-overlay-" + [Guid]::NewGuid().ToString("N") + ".json")
+
+            try {
+                $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH = $overlayPath
+                @{
+                    version = 1
+                    updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+                    entries = @(
+                        @{
+                            dependencyHost = 'www.redditstatic.com'
+                            anchorHost = 'www.reddit.com'
+                            requestTypes = @('script')
+                            firstSeen = (Get-Date).ToUniversalTime().ToString('o')
+                            lastSeen = (Get-Date).ToUniversalTime().ToString('o')
+                            expiresAt = (Get-Date).ToUniversalTime().AddDays(1).ToString('o')
+                            source = 'firefox-webrequest-local'
+                        }
+                    )
+                } | ConvertTo-Json -Depth 8 | Set-Content $overlayPath -Encoding UTF8 -Force
+
+                InModuleScope DNS {
+                    $domains = Get-OpenPathRuntimeDependencyDomains `
+                        -WhitelistedDomains @('reddit.com') `
+                        -BlockedSubdomains @() `
+                        -Prune
+
+                    $domains | Should -Contain 'www.redditstatic.com'
+                }
+            }
+            finally {
+                if ($null -eq $previousOverlayPath) {
+                    Remove-Item Env:\OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH -ErrorAction SilentlyContinue
+                }
+                else {
+                    $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH = $previousOverlayPath
+                }
+                Remove-Item $overlayPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Resolves sslip.io fixture domains locally without relying on upstream DNS" {
             InModuleScope DNS {
                 $definition = New-AcrylicHostsDefinition `

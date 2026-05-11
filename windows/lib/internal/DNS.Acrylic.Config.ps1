@@ -102,6 +102,235 @@ function Get-AcrylicAffinityMaskEntries {
     return $entries.ToArray()
 }
 
+function Get-AcrylicExactAffinityMaskEntries {
+    [CmdletBinding()]
+    param([string[]]$Domains = @())
+
+    $entries = [System.Collections.Generic.List[string]]::new()
+    $seenEntries = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($domain in @($Domains)) {
+        $normalizedDomain = ([string]$domain).Trim().TrimEnd('.')
+        if ($normalizedDomain.StartsWith('*.')) { $normalizedDomain = $normalizedDomain.Substring(2) }
+        if (-not $normalizedDomain) { continue }
+        if ($seenEntries.Add($normalizedDomain)) { [void]$entries.Add($normalizedDomain) }
+    }
+
+    return $entries.ToArray()
+}
+
+function Get-AcrylicExactForwardRule {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Domain)
+
+    $normalizedDomain = $Domain.Trim()
+    if (-not $normalizedDomain) { return $null }
+    $sslipIpv4Address = Resolve-SslipIpv4Address -Domain $normalizedDomain
+    if ($sslipIpv4Address) {
+        return "$sslipIpv4Address $normalizedDomain"
+    }
+
+    return "FW $normalizedDomain"
+}
+
+function Get-OpenPathRuntimeDependencyOverlayPath {
+    [CmdletBinding()]
+    param()
+
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH) {
+        return $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
+    }
+
+    $root = if ($script:OpenPathRoot) { $script:OpenPathRoot } else { 'C:\OpenPath' }
+    if ($root -eq 'C:\OpenPath' -and -not (Test-Path 'C:\' -ErrorAction SilentlyContinue)) {
+        return 'C:\OpenPath\data\runtime-dependency-overlay.json'
+    }
+
+    return (Join-Path $root 'data\runtime-dependency-overlay.json')
+}
+
+function Invoke-OpenPathPolicyStateLocked {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Action,
+        [string]$MutexName = 'Global\OpenPathPolicyStateLock',
+        [int]$TimeoutMilliseconds = 15000
+    )
+
+    $mutex = $null
+    $lockAcquired = $false
+    try {
+        $mutex = [System.Threading.Mutex]::new($false, $MutexName)
+        try {
+            $lockAcquired = $mutex.WaitOne($TimeoutMilliseconds)
+        }
+        catch [System.Threading.AbandonedMutexException] {
+            $lockAcquired = $true
+        }
+
+        if (-not $lockAcquired) {
+            throw "Timed out waiting for $MutexName"
+        }
+
+        return (& $Action)
+    }
+    finally {
+        if ($lockAcquired -and $mutex) {
+            try { $mutex.ReleaseMutex() }
+            catch [System.ApplicationException] { }
+        }
+        if ($mutex) { $mutex.Dispose() }
+    }
+}
+
+function Test-OpenPathBlockedSubdomainMatch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Domain,
+        [string[]]$BlockedSubdomains = @()
+    )
+
+    foreach ($blockedSubdomain in @($BlockedSubdomains)) {
+        $blocked = ([string]$blockedSubdomain).Trim().Trim('.')
+        if (-not $blocked) { continue }
+        if ($Domain.Equals($blocked, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+        if ($Domain.EndsWith(".$blocked", [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+
+    return $false
+}
+
+function Test-OpenPathWhitelistCoversHost {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Host,
+        [System.Collections.Generic.HashSet[string]]$WhitelistSet
+    )
+
+    if (-not $Host -or -not $WhitelistSet) { return $false }
+    if ($WhitelistSet.Contains($Host)) { return $true }
+
+    foreach ($whitelistedDomain in $WhitelistSet) {
+        if (-not $whitelistedDomain) { continue }
+        if ($Host.EndsWith(".$whitelistedDomain", [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Read-OpenPathRuntimeDependencyOverlay {
+    [CmdletBinding()]
+    param([string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath))
+
+    if (-not (Test-Path $Path -ErrorAction SilentlyContinue)) {
+        return @()
+    }
+
+    try {
+        $raw = Get-Content $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+        $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+        return @($parsed.entries)
+    }
+    catch {
+        Write-OpenPathLog "Failed to read runtime dependency overlay: $_" -Level WARN
+        return @()
+    }
+}
+
+function Write-OpenPathRuntimeDependencyOverlay {
+    [CmdletBinding()]
+    param(
+        [object[]]$Entries = @(),
+        [string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath)
+    )
+
+    $directory = Split-Path $Path -Parent
+    if ($directory -and -not (Test-Path $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    @{
+        version = 1
+        updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+        entries = @($Entries)
+    } | ConvertTo-Json -Depth 8 | Set-Content $Path -Encoding UTF8 -Force
+}
+
+function Clear-OpenPathRuntimeDependencyOverlay {
+    [CmdletBinding()]
+    param([string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath))
+
+    if (Test-Path $Path -ErrorAction SilentlyContinue) {
+        Remove-Item $Path -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-OpenPathRuntimeDependencyDomains {
+    [CmdletBinding()]
+    param(
+        [string[]]$WhitelistedDomains = @(),
+        [string[]]$BlockedSubdomains = @(),
+        [switch]$Prune
+    )
+
+    $whitelistSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($domain in @($WhitelistedDomains)) {
+        $normalized = ([string]$domain).Trim().Trim('.')
+        if ($normalized) { [void]$whitelistSet.Add($normalized) }
+    }
+
+    $protectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($domain in @(Get-OpenPathProtectedDomains)) {
+        $normalized = ([string]$domain).Trim().Trim('.')
+        if ($normalized) { [void]$protectedSet.Add($normalized) }
+    }
+
+    $now = Get-Date
+    $entries = @(Read-OpenPathRuntimeDependencyOverlay)
+    $keptEntries = @()
+    $domains = [System.Collections.Generic.List[string]]::new()
+    $seenDomains = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($entry in $entries) {
+        $dependencyHost = if ($entry.PSObject.Properties['dependencyHost']) { ([string]$entry.dependencyHost).Trim().Trim('.').ToLowerInvariant() } else { '' }
+        $anchorHost = if ($entry.PSObject.Properties['anchorHost']) { ([string]$entry.anchorHost).Trim().Trim('.').ToLowerInvariant() } else { '' }
+        $expiresAt = if ($entry.PSObject.Properties['expiresAt']) { [string]$entry.expiresAt } else { '' }
+
+        $isExpired = $false
+        if ($expiresAt) {
+            try { $isExpired = ([DateTimeOffset]::Parse($expiresAt).UtcDateTime -le $now.ToUniversalTime()) }
+            catch { $isExpired = $true }
+        }
+
+        if (
+            -not $dependencyHost -or
+            -not $anchorHost -or
+            $isExpired -or
+            -not (Test-OpenPathWhitelistCoversHost -Host $anchorHost -WhitelistSet $whitelistSet) -or
+            $protectedSet.Contains($dependencyHost) -or
+            (Test-OpenPathBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains $BlockedSubdomains) -or
+            -not (Test-OpenPathDomainFormat -Domain $dependencyHost)
+        ) {
+            continue
+        }
+
+        $keptEntries += $entry
+        if ($seenDomains.Add($dependencyHost)) {
+            [void]$domains.Add($dependencyHost)
+        }
+    }
+
+    if ($Prune -and ($keptEntries.Count -ne $entries.Count)) {
+        Write-OpenPathRuntimeDependencyOverlay -Entries $keptEntries
+    }
+
+    return $domains.ToArray()
+}
+
 function New-AcrylicHostsSection {
     [CmdletBinding()]
     param(
@@ -122,6 +351,7 @@ function New-AcrylicHostsDefinition {
     param(
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$WhitelistedDomains,
         [string[]]$BlockedSubdomains = @(),
+        [string[]]$RuntimeDependencyDomains = @(),
         [pscustomobject]$DnsSettings = (Get-OpenPathDnsSettings)
     )
 
@@ -146,6 +376,14 @@ function New-AcrylicHostsDefinition {
 
     $blockedLines = @(foreach ($subdomain in $BlockedSubdomains) { $normalizedSubdomain = ([string]$subdomain).Trim(); if ($normalizedSubdomain) { "NX >$normalizedSubdomain" } })
     $whitelistLines = @(foreach ($domain in $effectiveWhitelistedDomains) { @(Get-AcrylicForwardRules -Domain $domain -BlockedSubdomains $BlockedSubdomains) })
+    $runtimeDependencyLines = @(
+        foreach ($domain in @($RuntimeDependencyDomains)) {
+            $normalizedDependency = ([string]$domain).Trim().Trim('.')
+            if (-not $normalizedDependency) { continue }
+            if (Test-OpenPathBlockedSubdomainMatch -Domain $normalizedDependency -BlockedSubdomains $BlockedSubdomains) { continue }
+            Get-AcrylicExactForwardRule -Domain $normalizedDependency
+        }
+    )
 
     $sections = @(
         (New-AcrylicHostsSection -Title 'ESSENTIAL DOMAINS (always allowed)' -Description 'Required for system operation' -Lines $essentialLines)
@@ -154,9 +392,15 @@ function New-AcrylicHostsDefinition {
         $sections += New-AcrylicHostsSection -Title "BLOCKED SUBDOMAINS ($($blockedLines.Count))" -Lines $blockedLines
     }
     $sections += New-AcrylicHostsSection -Title "WHITELISTED DOMAINS ($($effectiveWhitelistedDomains.Count))" -Lines @($whitelistLines)
+    if ($runtimeDependencyLines.Count -gt 0) {
+        $sections += New-AcrylicHostsSection -Title "LOCAL RUNTIME DEPENDENCIES ($($runtimeDependencyLines.Count))" -Lines @($runtimeDependencyLines)
+    }
     $sections += New-AcrylicHostsSection -Title 'DEFAULT BLOCK (NXDOMAIN for everything else)' -Description 'This MUST come last after FW rules.' -Lines @('NX *')
 
-    $affinityMaskEntries = Get-AcrylicAffinityMaskEntries -Domains @($essentialDomains + $effectiveWhitelistedDomains)
+    $affinityMaskEntries = @(
+        Get-AcrylicAffinityMaskEntries -Domains @($essentialDomains + $effectiveWhitelistedDomains)
+        Get-AcrylicExactAffinityMaskEntries -Domains @($RuntimeDependencyDomains)
+    ) | Select-Object -Unique
 
     return [PSCustomObject]@{
         UpstreamDNS = $DnsSettings.PrimaryDNS
@@ -165,6 +409,7 @@ function New-AcrylicHostsDefinition {
         OriginalWhitelistedDomainCount = $originalWhitelistedDomainCount
         EffectiveWhitelistedDomains = $effectiveWhitelistedDomains
         EssentialDomains = @($essentialDomains)
+        RuntimeDependencyDomains = @($RuntimeDependencyDomains)
         AffinityMaskEntries = @($affinityMaskEntries)
         DomainAffinityMask = ($affinityMaskEntries -join ';')
         BlockedSubdomains = @($BlockedSubdomains)
@@ -212,23 +457,26 @@ function Update-AcrylicHost {
     }
     if (-not $PSCmdlet.ShouldProcess("AcrylicHosts.txt", "Update whitelist configuration")) { return $false }
 
-    $hostsPath = "$acrylicPath\AcrylicHosts.txt"
-    $dnsSettings = Get-OpenPathDnsSettings
-    $definition = New-AcrylicHostsDefinition -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains -DnsSettings $dnsSettings
-    if ($definition.WasTruncated) {
-        Write-OpenPathLog "Truncating whitelist from $($definition.OriginalWhitelistedDomainCount) to $($dnsSettings.MaxDomains) domains" -Level WARN
-    }
-    Write-OpenPathLog "Generating AcrylicHosts.txt with $(@($definition.EffectiveWhitelistedDomains).Count) domains..."
-    $content = ConvertTo-AcrylicHostsContent -Definition $definition
-    $content | Set-Content $hostsPath -Encoding ASCII -Force
+    return [bool](Invoke-OpenPathPolicyStateLocked -Action {
+        $hostsPath = "$acrylicPath\AcrylicHosts.txt"
+        $dnsSettings = Get-OpenPathDnsSettings
+        $runtimeDependencyDomains = Get-OpenPathRuntimeDependencyDomains -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains -Prune
+        $definition = New-AcrylicHostsDefinition -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains -RuntimeDependencyDomains $runtimeDependencyDomains -DnsSettings $dnsSettings
+        if ($definition.WasTruncated) {
+            Write-OpenPathLog "Truncating whitelist from $($definition.OriginalWhitelistedDomainCount) to $($dnsSettings.MaxDomains) domains" -Level WARN
+        }
+        Write-OpenPathLog "Generating AcrylicHosts.txt with $(@($definition.EffectiveWhitelistedDomains).Count) domains..."
+        $content = ConvertTo-AcrylicHostsContent -Definition $definition
+        $content | Set-Content $hostsPath -Encoding ASCII -Force
 
-    $configurationUpdated = Set-AcrylicConfiguration -WhitelistedDomains $definition.EffectiveWhitelistedDomains
-    if (-not $configurationUpdated) {
-        Write-OpenPathLog "Failed to update AcrylicConfiguration.ini" -Level ERROR
-        return $false
-    }
-    Write-OpenPathLog "AcrylicHosts.txt updated"
-    return $true
+        $configurationUpdated = Set-AcrylicConfiguration -WhitelistedDomains $definition.EffectiveWhitelistedDomains -RuntimeDependencyDomains $definition.RuntimeDependencyDomains
+        if (-not $configurationUpdated) {
+            Write-OpenPathLog "Failed to update AcrylicConfiguration.ini" -Level ERROR
+            return $false
+        }
+        Write-OpenPathLog "AcrylicHosts.txt updated"
+        return $true
+    })
 }
 
 function Set-AcrylicGlobalSetting {
@@ -283,7 +531,10 @@ function Set-AcrylicAllowedAddress {
 
 function Set-AcrylicConfiguration {
     [CmdletBinding(SupportsShouldProcess)]
-    param([AllowEmptyCollection()][string[]]$WhitelistedDomains = @())
+    param(
+        [AllowEmptyCollection()][string[]]$WhitelistedDomains = @(),
+        [AllowEmptyCollection()][string[]]$RuntimeDependencyDomains = @()
+    )
 
     $acrylicPath = Get-AcrylicPath
     if (-not $acrylicPath) { return $false }
@@ -298,7 +549,10 @@ function Set-AcrylicConfiguration {
             @($group.Domains)
         }
     ) + @($WhitelistedDomains)
-    $affinityMaskEntries = Get-AcrylicAffinityMaskEntries -Domains $allowedForwardDomains
+    $affinityMaskEntries = @(
+        Get-AcrylicAffinityMaskEntries -Domains $allowedForwardDomains
+        Get-AcrylicExactAffinityMaskEntries -Domains $RuntimeDependencyDomains
+    ) | Select-Object -Unique
     $domainAffinityMask = ($affinityMaskEntries -join ';')
 
     $iniContent = if (Test-Path $configPath) { Get-Content $configPath -Raw } else { "" }

@@ -17,8 +17,9 @@ Firefox blocked-path and blocked-subdomain enforcement lives in this extension r
 - Host permissions currently target `<all_urls>`
 - Firefox Core includes local Google game blocking for known Snake, doodle-game, and interactive logo-game surfaces.
 - Firefox Core includes a Google Search/Doodles visual guard content script that locally neutralizes detected playable game widgets.
-- Firefox Core includes an isolated-world page activity relay and a MAIN-world page-resource observer for local OpenPath policy visibility, without automatic allowlist changes or automatic browsing-data upload.
-- Firefox Core does not include Android support, automatic AJAX/page-resource allowlisting, or live/automatic AMO upload.
+- Firefox Core includes an isolated-world page activity relay only; it does not inject a MAIN-world resource observer or relay AJAX/subresource URLs from content scripts.
+- On Windows, Firefox may send `{ anchorHost, dependencyHost, requestType }` from `webRequest` to the local native host so the Windows client can maintain an exact-host Acrylic runtime-dependency overlay. Those dependency hosts are never sent to the OpenPath service.
+- Firefox Core does not include Android support, remote automatic AJAX/page-resource allowlisting, or live/automatic AMO upload.
 
 ## Local Development
 
@@ -62,4 +63,4 @@ These flows prepare the artifacts consumed by the Windows rollout paths and the 
 ## Optional Native Host
 
 Native host files live under [`native/`](native/) and support optional local verification workflows. Installers and compatibility details are documented in [`AMO.md`](AMO.md) and [`PRIVACY.md`](PRIVACY.md).
-The native host exposes `get-blocked-paths` and `get-blocked-subdomains` from the local whitelist file so the background runtime can refresh enforcement rules without relying on Firefox `WebsiteFilter`, search-engine, or DoH policies.
+The native host exposes `get-blocked-paths` and `get-blocked-subdomains` from the local whitelist file so the background runtime can refresh enforcement rules without relying on Firefox `WebsiteFilter`, search-engine, or DoH policies. On Windows it also accepts `allow-local-runtime-dependency` for exact-host Acrylic overlay entries after local whitelist validation; Linux returns `unsupported` for that action in this phase.

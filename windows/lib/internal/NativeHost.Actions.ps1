@@ -40,6 +40,343 @@ function Get-NativeHostValidDomains {
         Select-Object -First $script:MaxDomains
 }
 
+function Get-NativeHostRuntimeDependencyOverlayPath {
+    return (Join-Path $script:OpenPathRoot 'data\runtime-dependency-overlay.json')
+}
+
+function Get-NativeHostRuntimeDependencySettings {
+    $ttlDays = 7
+    $capacity = 300
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_TTL_DAYS) {
+        try { $ttlDays = [Math]::Max(1, [int]$env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_TTL_DAYS) } catch { $ttlDays = 7 }
+    }
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_CAPACITY) {
+        try { $capacity = [Math]::Max(1, [int]$env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_CAPACITY) } catch { $capacity = 300 }
+    }
+
+    return [PSCustomObject]@{
+        TtlDays = $ttlDays
+        Capacity = $capacity
+    }
+}
+
+function Normalize-NativeHostRuntimeDependencyHost {
+    param([AllowNull()][object]$Value)
+
+    if (-not ($Value -is [string])) { return '' }
+    $normalized = ([string]$Value).Trim().Trim('.').ToLowerInvariant()
+    if (-not $normalized) { return '' }
+    if ($normalized.EndsWith('.local', [System.StringComparison]::OrdinalIgnoreCase)) { return '' }
+    if ($normalized.Length -lt 4 -or $normalized.Length -gt 253) { return '' }
+    if ($normalized -notmatch '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$') { return '' }
+    return $normalized
+}
+
+function Test-NativeHostBlockedSubdomainMatch {
+    param(
+        [Parameter(Mandatory = $true)][string]$Domain,
+        [string[]]$BlockedSubdomains = @()
+    )
+
+    foreach ($blockedSubdomain in @($BlockedSubdomains)) {
+        $blocked = Normalize-NativeHostRuntimeDependencyHost -Value $blockedSubdomain
+        if (-not $blocked) { continue }
+        if ($Domain.Equals($blocked, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+        if ($Domain.EndsWith(".$blocked", [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+
+    return $false
+}
+
+function Test-NativeHostWhitelistCoversHost {
+    param(
+        [Parameter(Mandatory = $true)][string]$Host,
+        [System.Collections.Generic.HashSet[string]]$WhitelistSet
+    )
+
+    if (-not $Host -or -not $WhitelistSet) { return $false }
+    if ($WhitelistSet.Contains($Host)) { return $true }
+
+    foreach ($whitelistedDomain in $WhitelistSet) {
+        if (-not $whitelistedDomain) { continue }
+        if ($Host.EndsWith(".$whitelistedDomain", [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-NativeHostProtectedRuntimeDependencyHosts {
+    param([Parameter(Mandatory = $true)][PSCustomObject]$State)
+
+    $hosts = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($host in @(
+            'raw.githubusercontent.com',
+            'github.com',
+            'githubusercontent.com',
+            'api.github.com',
+            'release-assets.githubusercontent.com',
+            'objects.githubusercontent.com',
+            'sourceforge.net',
+            'downloads.sourceforge.net',
+            'detectportal.firefox.com',
+            'connectivity-check.ubuntu.com',
+            'captive.apple.com',
+            'www.msftconnecttest.com',
+            'msftconnecttest.com',
+            'clients3.google.com',
+            'windowsupdate.microsoft.com',
+            'update.microsoft.com',
+            'time.windows.com',
+            'time.google.com'
+        )) {
+        $normalized = Normalize-NativeHostRuntimeDependencyHost -Value $host
+        if ($normalized) { [void]$hosts.Add($normalized) }
+    }
+
+    foreach ($propertyName in @('apiUrl', 'requestApiUrl', 'whitelistUrl')) {
+        if (-not $State.PSObject.Properties[$propertyName]) { continue }
+        try {
+            $uri = [System.Uri]([string]$State.$propertyName)
+            $normalized = Normalize-NativeHostRuntimeDependencyHost -Value $uri.Host
+            if ($normalized) { [void]$hosts.Add($normalized) }
+        }
+        catch { }
+    }
+
+    return $hosts
+}
+
+function Test-NativeHostSensitiveRuntimeDependencyField {
+    param([Parameter(Mandatory = $true)][object]$Message)
+
+    $blockedFields = @(
+        'url',
+        'resourceUrl',
+        'target_url',
+        'targetUrl',
+        'originUrl',
+        'documentUrl',
+        'pageUrl',
+        'headers',
+        'body',
+        'path',
+        'query',
+        'dom',
+        'title',
+        'resources'
+    )
+
+    foreach ($field in $blockedFields) {
+        if ($Message.PSObject.Properties[$field]) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Read-NativeHostRuntimeDependencyOverlay {
+    $path = Get-NativeHostRuntimeDependencyOverlayPath
+    if (-not (Test-Path $path -ErrorAction SilentlyContinue)) {
+        return @()
+    }
+
+    try {
+        $raw = Get-Content $path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+        $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+        return @($parsed.entries)
+    }
+    catch {
+        Write-NativeHostLog "Failed to read runtime dependency overlay: $_"
+        return @()
+    }
+}
+
+function Write-NativeHostRuntimeDependencyOverlay {
+    param([object[]]$Entries = @())
+
+    $path = Get-NativeHostRuntimeDependencyOverlayPath
+    $directory = Split-Path $path -Parent
+    if ($directory -and -not (Test-Path $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    $payload = @{
+        version = 1
+        updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+        entries = @($Entries)
+    } | ConvertTo-Json -Depth 8
+
+    $tempPath = "$path.tmp"
+    $payload | Set-Content $tempPath -Encoding UTF8 -Force
+    Move-Item $tempPath $path -Force
+}
+
+function Invoke-NativeHostMutex {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][scriptblock]$Action,
+        [int]$TimeoutMilliseconds = 15000
+    )
+
+    $mutex = $null
+    $lockAcquired = $false
+    try {
+        $mutex = [System.Threading.Mutex]::new($false, $Name)
+        try { $lockAcquired = $mutex.WaitOne($TimeoutMilliseconds) }
+        catch [System.Threading.AbandonedMutexException] { $lockAcquired = $true }
+        if (-not $lockAcquired) {
+            throw "Timed out waiting for $Name"
+        }
+        return (& $Action)
+    }
+    finally {
+        if ($lockAcquired -and $mutex) {
+            try { $mutex.ReleaseMutex() } catch [System.ApplicationException] { }
+        }
+        if ($mutex) { $mutex.Dispose() }
+    }
+}
+
+function Import-NativeHostDnsModule {
+    $dnsModulePath = Join-Path $script:OpenPathRoot 'lib\DNS.psm1'
+    if (Test-Path $dnsModulePath -ErrorAction SilentlyContinue) {
+        Import-Module $dnsModulePath -Force -ErrorAction Stop
+    }
+}
+
+function Invoke-NativeHostLocalRuntimeDependencyAction {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Message,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$State,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Sections
+    )
+
+    if (Test-NativeHostSensitiveRuntimeDependencyField -Message $Message) {
+        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Sensitive fields are not accepted' }
+    }
+
+    $anchorHost = Normalize-NativeHostRuntimeDependencyHost -Value $Message.anchorHost
+    $dependencyHost = Normalize-NativeHostRuntimeDependencyHost -Value $Message.dependencyHost
+    $requestType = if ($Message.requestType -is [string]) { ([string]$Message.requestType).Trim().ToLowerInvariant() } else { '' }
+
+    if (-not $anchorHost -or -not $dependencyHost -or -not $requestType) {
+        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Invalid runtime dependency payload' }
+    }
+    if ($requestType -eq 'main_frame') {
+        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'main_frame dependencies are not supported' }
+    }
+    if ($anchorHost -eq $dependencyHost) {
+        return @{ success = $true; action = 'allow-local-runtime-dependency'; skipped = $true; reason = 'same-host' }
+    }
+
+    $whitelistSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($domain in @($Sections.Whitelist)) {
+        $normalized = Normalize-NativeHostRuntimeDependencyHost -Value $domain
+        if ($normalized) { [void]$whitelistSet.Add($normalized) }
+    }
+    if (-not (Test-NativeHostWhitelistCoversHost -Host $anchorHost -WhitelistSet $whitelistSet)) {
+        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Anchor host is not locally approved' }
+    }
+
+    $protectedHosts = Get-NativeHostProtectedRuntimeDependencyHosts -State $State
+    if ($protectedHosts.Contains($anchorHost) -or $protectedHosts.Contains($dependencyHost)) {
+        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Protected hosts are not eligible for runtime dependencies' }
+    }
+    if (Test-NativeHostBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains @($Sections.BlockedSubdomains)) {
+        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Dependency host is explicitly blocked' }
+    }
+
+    $settings = Get-NativeHostRuntimeDependencySettings
+
+    return Invoke-NativeHostMutex -Name 'Global\OpenPathUpdateLock' -Action {
+        Invoke-NativeHostMutex -Name 'Global\OpenPathPolicyStateLock' -Action {
+            $now = (Get-Date).ToUniversalTime()
+            $expiresAt = $now.AddDays($settings.TtlDays)
+            $entries = @(Read-NativeHostRuntimeDependencyOverlay)
+            $keptEntries = @()
+            $updated = $false
+
+            foreach ($entry in $entries) {
+                $entryDependency = if ($entry.PSObject.Properties['dependencyHost']) { Normalize-NativeHostRuntimeDependencyHost -Value $entry.dependencyHost } else { '' }
+                $entryAnchor = if ($entry.PSObject.Properties['anchorHost']) { Normalize-NativeHostRuntimeDependencyHost -Value $entry.anchorHost } else { '' }
+                $entryExpiresAt = if ($entry.PSObject.Properties['expiresAt']) { [string]$entry.expiresAt } else { '' }
+                $isExpired = $false
+                if ($entryExpiresAt) {
+                    try { $isExpired = ([DateTimeOffset]::Parse($entryExpiresAt).UtcDateTime -le $now) }
+                    catch { $isExpired = $true }
+                }
+
+                if (
+                    -not $entryDependency -or
+                    -not $entryAnchor -or
+                    $isExpired -or
+                    -not (Test-NativeHostWhitelistCoversHost -Host $entryAnchor -WhitelistSet $whitelistSet) -or
+                    $protectedHosts.Contains($entryDependency) -or
+                    (Test-NativeHostBlockedSubdomainMatch -Domain $entryDependency -BlockedSubdomains @($Sections.BlockedSubdomains))
+                ) {
+                    continue
+                }
+
+                if ($entryDependency -eq $dependencyHost -and $entryAnchor -eq $anchorHost) {
+                    $requestTypes = @($entry.requestTypes)
+                    if ($requestTypes -notcontains $requestType) {
+                        $requestTypes += $requestType
+                    }
+                    $entry.lastSeen = $now.ToString('o')
+                    $entry.expiresAt = $expiresAt.ToString('o')
+                    $entry.requestTypes = @($requestTypes | Sort-Object -Unique)
+                    $updated = $true
+                }
+
+                $keptEntries += $entry
+            }
+
+            if (-not $updated) {
+                $keptEntries += [PSCustomObject]@{
+                    dependencyHost = $dependencyHost
+                    anchorHost = $anchorHost
+                    requestTypes = @($requestType)
+                    firstSeen = $now.ToString('o')
+                    lastSeen = $now.ToString('o')
+                    expiresAt = $expiresAt.ToString('o')
+                    source = 'firefox-webrequest-local'
+                }
+            }
+
+            $keptEntries = @(
+                $keptEntries |
+                    Sort-Object @{ Expression = { if ($_.PSObject.Properties['lastSeen']) { [string]$_.lastSeen } else { '' } }; Descending = $true } |
+                    Select-Object -First $settings.Capacity
+            )
+
+            Write-NativeHostRuntimeDependencyOverlay -Entries $keptEntries
+            Import-NativeHostDnsModule
+            if (Get-Command -Name 'Update-AcrylicHost' -ErrorAction SilentlyContinue) {
+                Update-AcrylicHost -WhitelistedDomains @($Sections.Whitelist) -BlockedSubdomains @($Sections.BlockedSubdomains) | Out-Null
+            }
+
+            return @{
+                success = $true
+                action = 'allow-local-runtime-dependency'
+                anchorHost = $anchorHost
+                dependencyHost = $dependencyHost
+                requestType = $requestType
+                expiresAt = $expiresAt.ToString('o')
+                source = 'firefox-webrequest-local'
+            }
+        }
+    }
+}
+
 function Test-NativeWhitelistContainsDomains {
     param(
         [string[]]$Domains = @()
@@ -487,6 +824,10 @@ function Invoke-NativeHostMessageAction {
         'update-whitelist' {
             $domains = Get-NativeHostValidDomains -Domains @($Message.domains)
             return (Invoke-UpdateTask -Domains $domains)
+        }
+
+        'allow-local-runtime-dependency' {
+            return (Invoke-NativeHostLocalRuntimeDependencyAction -Message $Message -State $State -Sections $sections)
         }
 
         default {

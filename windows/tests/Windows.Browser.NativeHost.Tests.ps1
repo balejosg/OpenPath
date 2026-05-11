@@ -427,6 +427,30 @@ Describe "Browser Module - Native Host" {
             )
         }
 
+        It "Supports local runtime dependency overlay action without full URL fields" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+
+            Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
+                'allow-local-runtime-dependency',
+                'function Invoke-NativeHostLocalRuntimeDependencyAction',
+                'anchorHost',
+                'dependencyHost',
+                'requestType',
+                'runtime-dependency-overlay.json',
+                'function Test-NativeHostWhitelistCoversHost',
+                'source = ''firefox-webrequest-local''',
+                'Global\OpenPathUpdateLock',
+                'Global\OpenPathPolicyStateLock',
+                'Sensitive fields are not accepted',
+                'Update-AcrylicHost -WhitelistedDomains'
+            )
+
+            $nativeHostActionsContent | Should -Match 'Test-NativeHostWhitelistCoversHost -Host \$anchorHost'
+            $nativeHostActionsContent | Should -Match 'Test-NativeHostWhitelistCoversHost -Host \$entryAnchor'
+            $nativeHostActionsContent | Should -Not -Match '/api/requests/auto'
+        }
+
         It "Logs native action evidence without depending on downstream wrappers" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
