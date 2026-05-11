@@ -16,6 +16,15 @@ export interface StudentFixtureUrls {
   siteIframePrivate: string;
   siteXhrPrivate: string;
   siteFetchPrivate: string;
+  dnsDiscoverySpike: {
+    origin: string;
+    fetch: string;
+    xhr: string;
+    script: string;
+    image: string;
+    css: string;
+    font: string;
+  };
 }
 
 export interface StartedStudentFixtureServer {
@@ -60,6 +69,7 @@ export function buildStudentFixtureUrls(
   fixtures = getStudentFixtureHosts()
 ): StudentFixtureUrls {
   const withPort = (hostname: string, path: string) => `http://${hostname}:${String(port)}${path}`;
+  const suffix = getStudentHostSuffix();
 
   return {
     portalOk: withPort(fixtures.portal, '/ok'),
@@ -69,6 +79,15 @@ export function buildStudentFixtureUrls(
     siteIframePrivate: withPort(fixtures.site, '/iframe/private'),
     siteXhrPrivate: withPort(fixtures.site, '/xhr/private.json'),
     siteFetchPrivate: withPort(fixtures.site, '/fetch/private.json'),
+    dnsDiscoverySpike: {
+      origin: withPort(fixtures.site, '/ok'),
+      fetch: withPort(`api.dns-discovery-fetch.${suffix}`, '/fetch/private.json'),
+      xhr: withPort(`api.dns-discovery-xhr.${suffix}`, '/xhr/private.json'),
+      script: withPort(`cdn.dns-discovery-script.${suffix}`, '/asset.js'),
+      image: withPort(`image.dns-discovery-image.${suffix}`, '/pixel.png'),
+      css: withPort(`style.dns-discovery-css.${suffix}`, '/style.css'),
+      font: withPort(`font.dns-discovery-font.${suffix}`, '/font.woff2'),
+    },
   };
 }
 

@@ -12,7 +12,9 @@ import {
   buildFixtureUrl,
   buildScenarioHost,
   escapeRegExp,
+  optionalEnv,
   readWhitelistFile,
+  runPlatformCommand,
 } from './student-policy-env';
 import { StudentPolicyServerClient } from './student-policy-client';
 import { StudentPolicyDriver } from './student-policy-driver';
@@ -74,6 +76,58 @@ interface PageResourceObserverState {
   lastNotification?: { kind?: string; url?: string } | null;
   notifications?: Record<string, number>;
   patched?: Record<string, boolean>;
+}
+
+export type DnsDiscoveryDependencyType = 'fetch' | 'xhr' | 'script' | 'image' | 'css' | 'font';
+
+export interface DnsDiscoverySpikeDependency {
+  type: DnsDiscoveryDependencyType;
+  host: string;
+  url: string;
+}
+
+export interface DnsDiscoverySpikePlan {
+  profile: 'dns-discovery-spike';
+  origin: {
+    host: string;
+    url: string;
+  };
+  dependencies: DnsDiscoverySpikeDependency[];
+}
+
+export interface DnsDiscoverySpikeProbeResult {
+  status: 'ok' | 'blocked' | 'error' | 'not-run';
+  durationMs: number;
+  error?: string;
+}
+
+export interface DnsDiscoverySpikeArtifact {
+  profile: 'dns-discovery-spike';
+  success: boolean;
+  origin: DnsDiscoverySpikePlan['origin'];
+  dependencies: DnsDiscoverySpikeDependency[];
+  dependencyResults: Record<
+    DnsDiscoveryDependencyType,
+    DnsDiscoverySpikeDependency & {
+      cold: DnsDiscoverySpikeProbeResult;
+      warm: DnsDiscoverySpikeProbeResult;
+    }
+  >;
+  hitLogClear: {
+    status: 'ok' | 'failed' | 'not-configured';
+    phase: string;
+    envName: string;
+    output?: string;
+    error?: string;
+  };
+  hitLogSnapshots?: Array<{
+    status: 'ok' | 'failed' | 'not-configured';
+    phase: string;
+    envName: string;
+    output?: string;
+    error?: string;
+  }>;
+  writtenAt: string;
 }
 
 let activeScenarioTiming: {
@@ -144,6 +198,117 @@ function buildTargets(scenario: StudentScenario): StudentPolicyTargets {
       ajaxBlockedSubdomain: ajaxBlockedSubdomainHost,
       ajaxBlockedPath: ajaxBlockedPathHost,
     },
+  };
+}
+
+export function buildDnsDiscoverySpikePlan(scenario: StudentScenario): DnsDiscoverySpikePlan {
+  const dependency = (
+    type: DnsDiscoveryDependencyType,
+    hostnamePrefix: string,
+    scenarioLabel: string,
+    path: string
+  ): DnsDiscoverySpikeDependency => {
+    const host = `${hostnamePrefix}.${buildScenarioHost(scenario, scenarioLabel)}`;
+    return {
+      type,
+      host,
+      url: buildFixtureUrl(host, path),
+    };
+  };
+
+  return {
+    profile: 'dns-discovery-spike',
+    origin: {
+      host: scenario.fixtures.site,
+      url: buildFixtureUrl(scenario.fixtures.site, '/ok'),
+    },
+    dependencies: [
+      dependency('fetch', 'api', 'dns-discovery-fetch', '/fetch/private.json'),
+      dependency('xhr', 'api', 'dns-discovery-xhr', '/xhr/private.json'),
+      dependency('script', 'cdn', 'dns-discovery-script', '/asset.js'),
+      dependency('image', 'image', 'dns-discovery-image', '/pixel.png'),
+      dependency('css', 'style', 'dns-discovery-css', '/style.css'),
+      dependency('font', 'font', 'dns-discovery-font', '/font.woff2'),
+    ],
+  };
+}
+
+const DNS_DISCOVERY_CLEAR_ENV = 'OPENPATH_STUDENT_DNS_DISCOVERY_HITLOG_CLEAR_COMMAND';
+const DNS_DISCOVERY_SNAPSHOT_ENV = 'OPENPATH_STUDENT_DNS_DISCOVERY_HITLOG_SNAPSHOT_COMMAND';
+
+const notRunProbeResult = (): DnsDiscoverySpikeProbeResult => ({
+  status: 'not-run',
+  durationMs: 0,
+});
+
+function formatDnsDiscoveryHookCommand(commandTemplate: string, phase: string): string {
+  return commandTemplate.includes('{phase}')
+    ? commandTemplate.replaceAll('{phase}', phase)
+    : `${commandTemplate} ${phase}`;
+}
+
+async function runDnsDiscoveryHook(
+  envName: string,
+  phase: string
+): Promise<DnsDiscoverySpikeArtifact['hitLogClear']> {
+  const commandTemplate = optionalEnv(envName);
+  if (!commandTemplate) {
+    return {
+      status: 'not-configured',
+      phase,
+      envName,
+    };
+  }
+
+  try {
+    const output = await runPlatformCommand(formatDnsDiscoveryHookCommand(commandTemplate, phase));
+    return {
+      status: 'ok',
+      phase,
+      envName,
+      ...(output ? { output } : {}),
+    };
+  } catch (error) {
+    return {
+      status: 'failed',
+      phase,
+      envName,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function buildDnsDiscoverySpikeArtifact(options: {
+  plan: DnsDiscoverySpikePlan;
+  success: boolean;
+  hitLogClear: DnsDiscoverySpikeArtifact['hitLogClear'];
+  hitLogSnapshots?: DnsDiscoverySpikeArtifact['hitLogSnapshots'];
+  phaseResults: {
+    cold?: Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>;
+    warm?: Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>;
+  };
+  writtenAt?: string;
+}): DnsDiscoverySpikeArtifact {
+  const dependencyResults = Object.fromEntries(
+    options.plan.dependencies.map((dependency) => [
+      dependency.type,
+      {
+        ...dependency,
+        cold: options.phaseResults.cold?.[dependency.type] ?? notRunProbeResult(),
+        warm: options.phaseResults.warm?.[dependency.type] ?? notRunProbeResult(),
+      },
+    ])
+  ) as DnsDiscoverySpikeArtifact['dependencyResults'];
+
+  return {
+    profile: 'dns-discovery-spike',
+    success: options.success,
+    origin: options.plan.origin,
+    dependencies: options.plan.dependencies,
+    dependencyResults,
+    hitLogClear: options.hitLogClear,
+    ...(options.hitLogSnapshots !== undefined ? { hitLogSnapshots: options.hitLogSnapshots } : {}),
+    writtenAt: options.writtenAt ?? new Date().toISOString(),
   };
 }
 
@@ -777,6 +942,175 @@ async function runAjaxAutoAllowScenarioSet(
         `blocked-path cleanup refresh error: ${error instanceof Error ? error.message : String(error)}`
       );
     }
+  }
+}
+
+async function writeDnsDiscoverySpikeArtifact(
+  diagnosticsDir: string,
+  artifact: DnsDiscoverySpikeArtifact
+): Promise<void> {
+  mkdirSync(diagnosticsDir, { recursive: true });
+  writeFileSync(
+    join(diagnosticsDir, 'dns-discovery-spike-browser-artifact.json'),
+    `${JSON.stringify(artifact, null, 2)}\n`,
+    'utf8'
+  );
+}
+
+async function runDnsDiscoveryDependencyProbe(
+  driver: StudentPolicyDriver,
+  dependency: DnsDiscoverySpikeDependency
+): Promise<DnsDiscoverySpikeProbeResult> {
+  const startedAt = performance.now();
+
+  try {
+    let status: 'ok' | 'blocked';
+    if (dependency.type === 'fetch') {
+      status = await driver.runCrossOriginFetchProbe(dependency.url);
+    } else if (dependency.type === 'xhr') {
+      status = await driver.runCrossOriginXhrProbe(dependency.url);
+    } else if (dependency.type === 'script') {
+      status = await driver.runCrossOriginElementProbe(dependency.url, 'script');
+    } else if (dependency.type === 'image') {
+      status = await driver.runCrossOriginElementProbe(dependency.url, 'image');
+    } else if (dependency.type === 'css') {
+      status = await driver.runCrossOriginElementProbe(dependency.url, 'stylesheet');
+    } else {
+      status = await driver.runCrossOriginElementProbe(dependency.url, 'font');
+    }
+
+    return {
+      status,
+      durationMs: Math.round(performance.now() - startedAt),
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      durationMs: Math.round(performance.now() - startedAt),
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function runDnsDiscoveryProbePhase(
+  driver: StudentPolicyDriver,
+  plan: DnsDiscoverySpikePlan
+): Promise<Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>> {
+  const results: Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>> = {};
+
+  for (const dependency of plan.dependencies) {
+    results[dependency.type] = await runDnsDiscoveryDependencyProbe(driver, dependency);
+  }
+
+  return results;
+}
+
+export async function runDnsDiscoverySpikeScenario(
+  client: StudentPolicyServerClient,
+  driver: StudentPolicyDriver,
+  mode: PolicyMode
+): Promise<void> {
+  if (mode !== 'sse') {
+    throw new Error('DNS discovery spike requires sse mode');
+  }
+
+  const plan = buildDnsDiscoverySpikePlan(driver.scenario);
+  const restrictedGroupId = driver.scenario.groups.restricted.id;
+  const phaseResults: {
+    cold?: Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>;
+    warm?: Partial<Record<DnsDiscoveryDependencyType, DnsDiscoverySpikeProbeResult>>;
+  } = {};
+  const hitLogSnapshots: NonNullable<DnsDiscoverySpikeArtifact['hitLogSnapshots']> = [];
+  let lastHitLogClear: DnsDiscoverySpikeArtifact['hitLogClear'] = {
+    status: 'not-configured',
+    phase: 'not-run',
+    envName: DNS_DISCOVERY_CLEAR_ENV,
+  };
+
+  const writeArtifact = async (success: boolean): Promise<void> => {
+    await writeDnsDiscoverySpikeArtifact(
+      driver.diagnosticsDir,
+      buildDnsDiscoverySpikeArtifact({
+        plan,
+        success,
+        hitLogClear: lastHitLogClear,
+        hitLogSnapshots,
+        phaseResults,
+      })
+    );
+  };
+
+  try {
+    logScenarioStep('SP-DNS-001 prepare approved origin without dependency preseed');
+    await client.setAutoApprove(false);
+    await client.ensureWhitelistRule(
+      restrictedGroupId,
+      plan.origin.host,
+      'DNS discovery spike approved origin'
+    );
+    await driver.forceLocalUpdate();
+
+    const remoteWhitelist = await client.fetchMachineWhitelist();
+    for (const dependency of plan.dependencies) {
+      assert.doesNotMatch(
+        remoteWhitelist,
+        new RegExp(`(^|\\n)${escapeRegExp(dependency.host)}($|\\n)`),
+        `${dependency.host} must not be preseeded remotely`
+      );
+      await driver.assertWhitelistMissing(dependency.host);
+    }
+
+    await settlePolicyChange(driver, mode, async () => {
+      await driver.assertWhitelistContains(plan.origin.host);
+      await driver.assertDnsAllowed(plan.origin.host);
+      await driver.openAndExpectLoaded({
+        url: plan.origin.url,
+        title: 'OpenPath Site Fixture',
+        selector: '#page-status',
+      });
+    });
+
+    logScenarioStep('SP-DNS-002 cold origin DNS dependency probes');
+    lastHitLogClear = await runDnsDiscoveryHook(DNS_DISCOVERY_CLEAR_ENV, 'cold-origin');
+    if (lastHitLogClear.status === 'failed') {
+      throw new Error(`DNS discovery HitLog clear failed: ${lastHitLogClear.error}`);
+    }
+    await driver.openAndExpectLoaded({
+      url: plan.origin.url,
+      title: 'OpenPath Site Fixture',
+      selector: '#page-status',
+    });
+    phaseResults.cold = await runDnsDiscoveryProbePhase(driver, plan);
+    const coldSnapshot = await runDnsDiscoveryHook(DNS_DISCOVERY_SNAPSHOT_ENV, 'cold-origin');
+    hitLogSnapshots.push(coldSnapshot);
+    if (coldSnapshot.status === 'failed') {
+      throw new Error(`DNS discovery cold HitLog snapshot failed: ${coldSnapshot.error}`);
+    }
+
+    logScenarioStep('SP-DNS-003 warm approved origin DNS dependency probes');
+    await driver.openAndExpectLoaded({
+      url: plan.origin.url,
+      title: 'OpenPath Site Fixture',
+      selector: '#page-status',
+    });
+    lastHitLogClear = await runDnsDiscoveryHook(DNS_DISCOVERY_CLEAR_ENV, 'warm-approved-origin');
+    if (lastHitLogClear.status === 'failed') {
+      throw new Error(`DNS discovery HitLog clear failed: ${lastHitLogClear.error}`);
+    }
+    phaseResults.warm = await runDnsDiscoveryProbePhase(driver, plan);
+    const warmSnapshot = await runDnsDiscoveryHook(
+      DNS_DISCOVERY_SNAPSHOT_ENV,
+      'warm-approved-origin'
+    );
+    hitLogSnapshots.push(warmSnapshot);
+    if (warmSnapshot.status === 'failed') {
+      throw new Error(`DNS discovery warm HitLog snapshot failed: ${warmSnapshot.error}`);
+    }
+
+    await writeArtifact(true);
+  } catch (error) {
+    await writeArtifact(false);
+    throw error;
   }
 }
 

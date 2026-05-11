@@ -225,6 +225,36 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(script, /browser-boundary-summary\.json/);
   });
 
+  test('dns-discovery-spike mode runs the local-overlay spike and collects artifacts', () => {
+    const result = runDirectDiagnostic([
+      '--mode',
+      'dns-discovery-spike',
+      '--source-mode',
+      'local-overlay',
+    ]);
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+    const spikeScript = readText('tests/e2e/ci/run-windows-dns-discovery-spike.ps1');
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /source_mode=local-overlay/);
+    assert.match(result.stdout, /mode=dns-discovery-spike/);
+    assert.match(result.stdout, /step=run-windows-dns-discovery-spike/);
+    assert.match(script, /run-windows-dns-discovery-spike\.ps1/);
+    assert.match(script, /windows-dns-discovery-spike/);
+    assert.match(script, /dns-discovery-spike-result\.json/);
+    assert.match(script, /acrylic-dns-discovery-spike\.log/);
+    assert.match(spikeScript, /AcrylicConfiguration\.ini/);
+    assert.match(spikeScript, /C:\\OpenPath\\data\\logs\\acrylic-dns-discovery-spike\.log/);
+    assert.match(spikeScript, /HitLogFileWhat=XHCFRU/);
+    assert.match(spikeScript, /HitLogMaxPendingHits=512/);
+    assert.match(spikeScript, /FileShare\]::ReadWrite/);
+    assert.match(spikeScript, /cold-origin/);
+    assert.match(spikeScript, /warm-approved-origin/);
+    assert.match(spikeScript, /dnsOnlyViable/);
+    assert.match(spikeScript, /fallbackRequired/);
+    assert.match(spikeScript, /insufficientEvidence/);
+  });
+
   test(
     'workspace wrapper blocks GitHub integration lanes without explicit flag',
     { skip: !process.env.WHITELIST_WORKSPACE_ROOT },

@@ -15,7 +15,7 @@ const DEFAULT_ARTIFACT_LOG_NAME = 'windows-runner-direct.log';
 const DEFAULT_RUNNER_ROOT_GLOB = 'C:\\actions-runner*';
 const SOURCE_MODES = new Set(['runner-checkout', 'local-overlay']);
 const DEFAULT_SOURCE_MODE = 'runner-checkout';
-const RUN_MODES = new Set(['pester', 'browser-boundary', 'all']);
+const RUN_MODES = new Set(['pester', 'browser-boundary', 'dns-discovery-spike', 'all']);
 const DEFAULT_RUN_MODE = 'pester';
 const OVERLAY_ZIP_NAME = 'openpath-local-overlay.zip';
 const BROWSER_ENFORCEMENT_ARTIFACTS = [
@@ -28,6 +28,19 @@ const BROWSER_ENFORCEMENT_ARTIFACTS = [
 const BROWSER_ENFORCEMENT_REPORT_ARTIFACTS = [
   'windows-browser-enforcement-report.json',
   'windows-browser-enforcement-report.txt',
+];
+const DNS_DISCOVERY_SPIKE_ARTIFACTS = [
+  'dns-discovery-spike-result.json',
+  'dns-discovery-spike-browser-artifact.json',
+  'dns-discovery-spike-state.json',
+  'dns-discovery-cold-origin-hitlog.log',
+  'dns-discovery-warm-approved-origin-hitlog.log',
+  'acrylic-dns-discovery-spike.log',
+  'acrylic-dns-discovery-spike.sanitized.log',
+  'acrylic-dns-discovery-spike.hashes.json',
+  'direct-dns-discovery-spike-completion.json',
+  'direct-dns-discovery-spike.out.log',
+  'direct-dns-discovery-spike.err.log',
 ];
 const DRY_RUN = process.env.OPENPATH_WINDOWS_DIRECT_DRY_RUN === '1';
 
@@ -46,7 +59,7 @@ Options:
   --results-path <path>       Result file path on the Windows runner relative to the repo root (default: ${DEFAULT_RESULTS_RELATIVE_PATH})
   --runner-repo-root <path>   Explicit OpenPath checkout root on the Windows runner (default: auto-detect under ${DEFAULT_RUNNER_ROOT_GLOB})
   --source-mode <mode>        Source to execute on Windows: runner-checkout or local-overlay (default: ${DEFAULT_SOURCE_MODE})
-  --mode <mode>               What to run: pester, browser-boundary, or all (default: ${DEFAULT_RUN_MODE})
+  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, or all (default: ${DEFAULT_RUN_MODE})
   --overlay-host <ip>         Local host/IP the Windows VM can use to download the local overlay ZIP
   --browser-enforcement-report
                               Run tests/e2e/ci/windows-browser-enforcement.ps1 -Scope Report after Pester
@@ -983,6 +996,159 @@ if ($exitCode -ne 0) {
   }
 }
 
+function runWindowsDnsDiscoverySpike(options, runnerRepoRoot) {
+  const spikeScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-dns-discovery-spike.ps1`;
+  const artifactsRoot = `${runnerRepoRoot}\\tests\\e2e\\artifacts\\windows-dns-discovery-spike`;
+  const completionPath = `${artifactsRoot}\\direct-dns-discovery-spike-completion.json`;
+  const timeoutSeconds = Number.parseInt(options.timeoutSeconds, 10);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$repoRoot = ${JSON.stringify(runnerRepoRoot)}
+$spikeScriptPath = ${JSON.stringify(spikeScriptPath)}
+$artifactsRoot = ${JSON.stringify(artifactsRoot)}
+$completionPath = ${JSON.stringify(completionPath)}
+
+if (-not (Test-Path -LiteralPath $spikeScriptPath)) {
+  throw 'run-windows-dns-discovery-spike.ps1 is missing on the Windows runner checkout.'
+}
+
+function Ensure-OpenPathDirectNode {
+  if (Get-Command npm.cmd -ErrorAction SilentlyContinue) {
+    return
+  }
+
+  $nodeRoot = Join-Path $env:TEMP 'openpath-direct-node-v24'
+  $npmPath = Join-Path $nodeRoot 'npm.cmd'
+  if (-not (Test-Path -LiteralPath $npmPath)) {
+    $ProgressPreference = 'SilentlyContinue'
+    $global:ProgressPreference = 'SilentlyContinue'
+    $index = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -UseBasicParsing -TimeoutSec 60
+    $release = @($index | Where-Object { $_.version -like 'v24.*' -and $_.files -contains 'win-x64-zip' } | Select-Object -First 1)[0]
+    if (-not $release -or -not $release.version) {
+      throw 'Unable to resolve a Node.js v24 win-x64 zip release for direct runner execution.'
+    }
+
+    $version = [string]$release.version
+    $zipPath = Join-Path $env:TEMP "openpath-direct-node-$version.zip"
+    $extractRoot = Join-Path $env:TEMP "openpath-direct-node-$version"
+    $url = "https://nodejs.org/dist/$version/node-$version-win-x64.zip"
+    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -TimeoutSec 180
+    Expand-Archive -LiteralPath $zipPath -DestinationPath $extractRoot -Force
+    Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+    $expanded = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
+    if (-not $expanded -or -not (Test-Path -LiteralPath (Join-Path $expanded.FullName 'npm.cmd'))) {
+      throw 'Downloaded Node.js archive did not contain npm.cmd.'
+    }
+    Remove-Item -LiteralPath $nodeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Move-Item -LiteralPath $expanded.FullName -Destination $nodeRoot -Force
+    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  $env:PATH = "$nodeRoot;$env:PATH"
+  if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+    throw 'npm.cmd is still unavailable after preparing temporary Node.js.'
+  }
+}
+
+function Ensure-OpenPathDirectDependencies {
+  param(
+    [Parameter(Mandatory = $true)][string]$RepoRoot
+  )
+
+  $tscPath = Join-Path $RepoRoot 'node_modules\\.bin\\tsc.cmd'
+  $tsxPath = Join-Path $RepoRoot 'node_modules\\tsx\\dist\\cli.mjs'
+  if ((Test-Path -LiteralPath $tscPath) -and (Test-Path -LiteralPath $tsxPath)) {
+    return
+  }
+
+  Set-Location $RepoRoot
+  & npm.cmd ci --prefer-offline --no-audit --fund=false | Out-Host
+  if ($LASTEXITCODE -ne 0) {
+    throw "npm ci failed with exit code $LASTEXITCODE"
+  }
+}
+
+function Invoke-OpenPathDirectChildPowerShell {
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    [string[]]$ExtraArguments = @(),
+    [Parameter(Mandatory = $true)][string]$LogName,
+    [int]$TimeoutSeconds = 1800
+  )
+
+  $outPath = Join-Path $artifactsRoot "$LogName.out.log"
+  $errPath = Join-Path $artifactsRoot "$LogName.err.log"
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $ExtraArguments
+  $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $repoRoot -RedirectStandardOutput $outPath -RedirectStandardError $errPath -PassThru
+
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "$LogName timed out after $TimeoutSeconds seconds"
+  }
+
+  $process.Refresh()
+  $exitCode = $process.ExitCode
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+  if ($exitCode -ne 0) {
+    $maxFailureLogChars = 12000
+    $stdout = if (Test-Path -LiteralPath $outPath) { Get-Content -LiteralPath $outPath -Raw } else { '' }
+    $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -LiteralPath $errPath -Raw } else { '' }
+    if ($stdout.Length -gt $maxFailureLogChars) {
+      $stdout = $stdout.Substring($stdout.Length - $maxFailureLogChars)
+    }
+    if ($stderr.Length -gt $maxFailureLogChars) {
+      $stderr = $stderr.Substring($stderr.Length - $maxFailureLogChars)
+    }
+    throw ($LogName + ' exited with code ' + $exitCode + [Environment]::NewLine + 'STDOUT:' + [Environment]::NewLine + $stdout + [Environment]::NewLine + 'STDERR:' + [Environment]::NewLine + $stderr)
+  }
+}
+
+$primaryFailure = $null
+$exitCode = 0
+$errorText = ''
+try {
+  New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
+  Remove-Item -LiteralPath $completionPath -Force -ErrorAction SilentlyContinue
+  Ensure-OpenPathDirectNode
+  Ensure-OpenPathDirectDependencies -RepoRoot $repoRoot
+  Set-Location $repoRoot
+  Invoke-OpenPathDirectChildPowerShell -ScriptPath $spikeScriptPath -ExtraArguments @('-Mode', 'Run', '-ArtifactsRoot', $artifactsRoot) -LogName 'direct-dns-discovery-spike' -TimeoutSeconds ${timeoutSeconds}
+}
+catch {
+  $primaryFailure = $_
+  $exitCode = 1
+  $errorText = [string]$_
+}
+finally {
+  [pscustomobject]@{
+    exitCode = $exitCode
+    error = $errorText
+    artifactsRoot = $artifactsRoot
+    resultPath = (Join-Path $artifactsRoot 'dns-discovery-spike-result.json')
+    timestamp = (Get-Date).ToString('o')
+  } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $completionPath -Encoding UTF8
+}
+
+if ($exitCode -ne 0) {
+  exit $exitCode
+}
+`;
+  runGuestPowerShellDetached(options, script, {
+    label: 'Run Windows DNS discovery spike',
+  });
+  const completion = waitForGuestCompletionFile(options, completionPath, {
+    timeoutSeconds: timeoutSeconds + 900,
+  });
+  if (completion.exitCode !== 0) {
+    throw new Error(
+      `Run Windows DNS discovery spike failed: ${completion.error ?? 'unknown error'}`
+    );
+  }
+}
+
 function runBrowserBoundaryCi(options, runnerRepoRoot) {
   const boundaryScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-browser-boundary-ci.ps1`;
   const artifactsRoot = `${runnerRepoRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\browser-boundary`;
@@ -1061,6 +1227,17 @@ function collectArtifacts(options, artifactDir, runnerRoot) {
     const content = readGuestFile(
       options,
       `${runnerRoot}\\tests\\e2e\\artifacts\\windows-browser-enforcement\\${artifactName}`,
+      500000
+    );
+    if (content.trim()) {
+      writeFileSync(resolve(artifactDir, artifactName), content, 'utf8');
+    }
+  }
+
+  for (const artifactName of DNS_DISCOVERY_SPIKE_ARTIFACTS) {
+    const content = readGuestFile(
+      options,
+      `${runnerRoot}\\tests\\e2e\\artifacts\\windows-dns-discovery-spike\\${artifactName}`,
       500000
     );
     if (content.trim()) {
@@ -1153,6 +1330,10 @@ async function main() {
     if (options.mode === 'browser-boundary' || options.mode === 'all') {
       console.log('step=run-windows-student-policy-flow-for-browser-boundary');
       runWindowsStudentPolicyFlowForBoundary(options, runnerRepoRoot || options.runnerRepoRoot);
+    }
+    if (options.mode === 'dns-discovery-spike' || options.mode === 'all') {
+      console.log('step=run-windows-dns-discovery-spike');
+      runWindowsDnsDiscoverySpike(options, runnerRepoRoot || options.runnerRepoRoot);
     }
     if (options.browserEnforcementReport) {
       console.log('step=run-browser-enforcement-report');

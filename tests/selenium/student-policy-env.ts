@@ -190,12 +190,16 @@ export function getStudentPolicyCoverageProfile(): StudentPolicyCoverageProfile 
     return 'full';
   }
 
-  if (profile === 'full' || profile === 'fallback-propagation') {
+  if (
+    profile === 'full' ||
+    profile === 'fallback-propagation' ||
+    profile === 'dns-discovery-spike'
+  ) {
     return profile;
   }
 
   throw new Error(
-    `OPENPATH_STUDENT_COVERAGE_PROFILE must be "full" or "fallback-propagation", received "${profile}"`
+    `OPENPATH_STUDENT_COVERAGE_PROFILE must be "full", "fallback-propagation", or "dns-discovery-spike", received "${profile}"`
   );
 }
 

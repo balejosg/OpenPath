@@ -13,9 +13,14 @@ import {
   type StudentScenario,
 } from './student-policy-flow.e2e';
 import { openAndExpectBlocked, submitBlockedScreenRequest } from './student-policy-driver-browser';
+import { getStudentPolicyCoverageProfile } from './student-policy-env';
 import { getBlockedPathRulesDebug } from './student-policy-driver-runtime';
 import { getStudentPolicyPhasePlan } from './student-policy-harness';
-import { buildBaselineWhitelistHosts } from './student-policy-scenarios';
+import {
+  buildBaselineWhitelistHosts,
+  buildDnsDiscoverySpikeArtifact,
+  buildDnsDiscoverySpikePlan,
+} from './student-policy-scenarios';
 
 function createScenario(): StudentScenario {
   return {
@@ -177,6 +182,100 @@ test('student policy coverage plan keeps full SSE coverage and narrows fallback 
     ),
     [{ name: 'fallback-propagation', suite: 'fallback-propagation', useBrowser: true }]
   );
+});
+
+test('student policy coverage profile accepts the DNS discovery spike without changing the default', () => {
+  const original = process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+
+  try {
+    delete process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+    assert.equal(getStudentPolicyCoverageProfile(), 'full');
+
+    process.env.OPENPATH_STUDENT_COVERAGE_PROFILE = 'dns-discovery-spike';
+    assert.equal(getStudentPolicyCoverageProfile(), 'dns-discovery-spike');
+  } finally {
+    if (original === undefined) {
+      delete process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+    } else {
+      process.env.OPENPATH_STUDENT_COVERAGE_PROFILE = original;
+    }
+  }
+});
+
+test('DNS discovery spike plans a browser-only phase outside the full matrix', () => {
+  assert.deepEqual(
+    getStudentPolicyPhasePlan('sse', 'dns-discovery-spike').map(({ name, suite, useBrowser }) => ({
+      name,
+      suite,
+      useBrowser,
+    })),
+    [{ name: 'dns-discovery-spike', suite: 'dns-discovery-spike', useBrowser: true }]
+  );
+});
+
+test('DNS discovery spike uses site origin and unpreseeded typed dependency hosts', () => {
+  const scenario = createScenario();
+  const plan = buildDnsDiscoverySpikePlan(scenario);
+
+  assert.equal(plan.origin.host, 'site.127.0.0.1.sslip.io');
+  assert.equal(new URL(plan.origin.url).hostname, plan.origin.host);
+
+  assert.deepEqual(
+    plan.dependencies.map(({ type, host }) => [
+      type,
+      host.replace(/\.127\.0\.0\.1\.sslip\.io$/, ''),
+    ]),
+    [
+      ['fetch', 'api.dns-discovery-fetch-assroom1'],
+      ['xhr', 'api.dns-discovery-xhr-assroom1'],
+      ['script', 'cdn.dns-discovery-script-assroom1'],
+      ['image', 'image.dns-discovery-image-assroom1'],
+      ['css', 'style.dns-discovery-css-assroom1'],
+      ['font', 'font.dns-discovery-font-assroom1'],
+    ]
+  );
+
+  const preseededHosts = new Set([
+    scenario.fixtures.portal,
+    scenario.fixtures.cdnPortal,
+    scenario.fixtures.site,
+    scenario.fixtures.apiSite,
+  ]);
+  for (const dependency of plan.dependencies) {
+    assert.equal(preseededHosts.has(dependency.host), false, `${dependency.host} is preseeded`);
+  }
+});
+
+test('DNS discovery spike browser artifact records cold and warm results by dependency type', () => {
+  const scenario = createScenario();
+  const plan = buildDnsDiscoverySpikePlan(scenario);
+  const artifact = buildDnsDiscoverySpikeArtifact({
+    plan,
+    success: true,
+    hitLogClear: {
+      status: 'not-configured',
+      phase: 'warm',
+      envName: 'OPENPATH_STUDENT_DNS_DISCOVERY_HITLOG_CLEAR_COMMAND',
+    },
+    phaseResults: {
+      cold: {
+        fetch: { status: 'blocked', durationMs: 12 },
+      },
+      warm: {
+        fetch: { status: 'ok', durationMs: 8 },
+      },
+    },
+    writtenAt: '2026-05-11T00:00:00.000Z',
+  });
+
+  assert.equal(artifact.profile, 'dns-discovery-spike');
+  assert.equal(artifact.origin.host, 'site.127.0.0.1.sslip.io');
+  assert.equal(artifact.success, true);
+  assert.equal(artifact.dependencyResults.fetch.host, plan.dependencies[0]?.host);
+  assert.equal(artifact.dependencyResults.fetch.cold.status, 'blocked');
+  assert.equal(artifact.dependencyResults.fetch.warm.status, 'ok');
+  assert.equal(artifact.dependencyResults.css.host.startsWith('style.'), true);
+  assert.equal(artifact.hitLogClear.status, 'not-configured');
 });
 
 test('student policy scenario group defaults to full and accepts narrow groups', () => {

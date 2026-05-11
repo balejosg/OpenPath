@@ -1159,7 +1159,7 @@ function Invoke-SeleniumStudentSuite {
         [Parameter(Mandatory = $true)][string]$ScenarioPath,
         [Parameter(Mandatory = $true)][string]$ExtensionArchivePath,
         [Parameter(Mandatory = $true)][string]$Mode,
-        [Parameter(Mandatory = $true)][ValidateSet('full', 'fallback-propagation')][string]$CoverageProfile,
+        [Parameter(Mandatory = $true)][ValidateSet('full', 'fallback-propagation', 'dns-discovery-spike')][string]$CoverageProfile,
         [ValidateSet('full', 'request-lifecycle', 'path-blocking', 'exemptions')][string]$ScenarioGroup = 'full'
     )
 
@@ -1492,6 +1492,45 @@ function Invoke-WindowsBrowserEnforcementProbes {
     }
 }
 
+function Resolve-DnsDiscoverySpikeScript {
+    if (-not [string]::IsNullOrWhiteSpace($env:OPENPATH_WINDOWS_DNS_DISCOVERY_SPIKE_SCRIPT)) {
+        return [System.IO.Path]::GetFullPath($env:OPENPATH_WINDOWS_DNS_DISCOVERY_SPIKE_SCRIPT)
+    }
+
+    return (Join-Path $script:RepoRoot 'tests\e2e\ci\run-windows-dns-discovery-spike.ps1')
+}
+
+function Set-DnsDiscoverySpikeSeleniumHooks {
+    $spikeScript = Resolve-DnsDiscoverySpikeScript
+    if (-not (Test-Path -LiteralPath $spikeScript)) {
+        throw "DNS discovery spike script not found: $spikeScript"
+    }
+
+    $env:OPENPATH_STUDENT_DNS_DISCOVERY_HITLOG_CLEAR_COMMAND = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$spikeScript`" -Mode ClearHitLog -ArtifactsRoot `"$script:ArtifactsRoot`" -Phase {phase}"
+    $env:OPENPATH_STUDENT_DNS_DISCOVERY_HITLOG_SNAPSHOT_COMMAND = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$spikeScript`" -Mode SnapshotHitLog -ArtifactsRoot `"$script:ArtifactsRoot`" -Phase {phase}"
+}
+
+function Invoke-DnsDiscoverySpikeHook {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('BeforeSelenium', 'AfterSelenium')]
+        [string]$Mode
+    )
+
+    $spikeScript = Resolve-DnsDiscoverySpikeScript
+    if (-not (Test-Path -LiteralPath $spikeScript)) {
+        throw "DNS discovery spike script not found: $spikeScript"
+    }
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $spikeScript `
+        -Mode $Mode `
+        -ArtifactsRoot $script:ArtifactsRoot
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "run-windows-dns-discovery-spike.ps1 $Mode failed with exit code $LASTEXITCODE"
+    }
+}
+
 try {
     Ensure-ArtifactsDirectory
     Invoke-TimedStep -Name 'Build workspaces' -ScriptBlock { Build-RequiredWorkspaces }
@@ -1512,13 +1551,38 @@ try {
     else {
         Resolve-WindowsStudentSseGroup -ScenarioGroup $env:OPENPATH_WINDOWS_STUDENT_SSE_GROUP
     }
-    Invoke-TimedStep -Name "Run Selenium student suite (sse, $windowsStudentSseGroup)" -ScriptBlock { Invoke-SeleniumStudentSuite -ScenarioPath $scenarioPath -ExtensionArchivePath $extensionArchivePath -Mode 'sse' -CoverageProfile 'full' -ScenarioGroup $windowsStudentSseGroup }
+    $windowsStudentSseCoverageProfile = if ([string]::IsNullOrWhiteSpace($env:OPENPATH_WINDOWS_STUDENT_COVERAGE_PROFILE)) {
+        'full'
+    }
+    else {
+        [string]$env:OPENPATH_WINDOWS_STUDENT_COVERAGE_PROFILE
+    }
+    if ($windowsStudentSseCoverageProfile -notin @('full', 'dns-discovery-spike')) {
+        throw "Unsupported Windows student SSE coverage profile: $windowsStudentSseCoverageProfile"
+    }
+    $dnsDiscoverySpike = $windowsStudentSseCoverageProfile -eq 'dns-discovery-spike'
+    if ($dnsDiscoverySpike) {
+        Invoke-TimedStep -Name 'Prepare DNS discovery spike HitLog' -ScriptBlock {
+            Set-DnsDiscoverySpikeSeleniumHooks
+            Invoke-DnsDiscoverySpikeHook -Mode BeforeSelenium
+        }
+    }
+    try {
+        Invoke-TimedStep -Name "Run Selenium student suite (sse, $windowsStudentSseCoverageProfile, $windowsStudentSseGroup)" -ScriptBlock { Invoke-SeleniumStudentSuite -ScenarioPath $scenarioPath -ExtensionArchivePath $extensionArchivePath -Mode 'sse' -CoverageProfile $windowsStudentSseCoverageProfile -ScenarioGroup $windowsStudentSseGroup }
+    }
+    finally {
+        if ($dnsDiscoverySpike) {
+            Invoke-TimedStep -Name 'Finalize DNS discovery spike HitLog' -ScriptBlock { Invoke-DnsDiscoverySpikeHook -Mode AfterSelenium }
+        }
+    }
     if ($RunBrowserEnforcementProbes -or $env:OPENPATH_WINDOWS_BROWSER_ENFORCEMENT_PROBES -eq '1') {
         Invoke-TimedStep -Name 'Run Windows browser enforcement probes' -ScriptBlock { Invoke-WindowsBrowserEnforcementProbes }
     }
-    $scenario = Invoke-TimedStep -Name 'Bootstrap scenario (fallback)' -ScriptBlock { Invoke-BackendHarnessBootstrap -ScenarioName 'Windows Student Policy Fallback' }
-    Invoke-TimedStep -Name 'Install and enroll client (fallback)' -ScriptBlock { Install-AndEnrollClient -Scenario $scenario -InstallClient $false }
-    Invoke-TimedStep -Name 'Run Selenium student suite (fallback, fallback-propagation)' -ScriptBlock { Invoke-SeleniumStudentSuite -ScenarioPath $scenarioPath -ExtensionArchivePath $extensionArchivePath -Mode 'fallback' -CoverageProfile 'fallback-propagation' }
+    if (-not $dnsDiscoverySpike) {
+        $scenario = Invoke-TimedStep -Name 'Bootstrap scenario (fallback)' -ScriptBlock { Invoke-BackendHarnessBootstrap -ScenarioName 'Windows Student Policy Fallback' }
+        Invoke-TimedStep -Name 'Install and enroll client (fallback)' -ScriptBlock { Install-AndEnrollClient -Scenario $scenario -InstallClient $false }
+        Invoke-TimedStep -Name 'Run Selenium student suite (fallback, fallback-propagation)' -ScriptBlock { Invoke-SeleniumStudentSuite -ScenarioPath $scenarioPath -ExtensionArchivePath $extensionArchivePath -Mode 'fallback' -CoverageProfile 'fallback-propagation' }
+    }
     Invoke-TimedStep -Name 'Collect Windows diagnostics' -ScriptBlock { Write-WindowsDiagnostics }
     $script:RunSucceeded = $true
 }

@@ -167,6 +167,27 @@ await describe('student fixture server', async () => {
     assert.match(fontResponse.headers['content-type'] ?? '', /font\/woff2/);
   });
 
+  await test('exposes DNS discovery spike URLs with approved site origin and typed dependencies', () => {
+    const urls = fixtureServer.urls.dnsDiscoverySpike;
+
+    assert.strictEqual(new URL(urls.origin).hostname, fixtureServer.fixtures.site);
+
+    const expectedHosts = {
+      fetch: 'api.dns-discovery-fetch.127.0.0.1.sslip.io',
+      xhr: 'api.dns-discovery-xhr.127.0.0.1.sslip.io',
+      script: 'cdn.dns-discovery-script.127.0.0.1.sslip.io',
+      image: 'image.dns-discovery-image.127.0.0.1.sslip.io',
+      css: 'style.dns-discovery-css.127.0.0.1.sslip.io',
+      font: 'font.dns-discovery-font.127.0.0.1.sslip.io',
+    };
+
+    for (const [type, host] of Object.entries(expectedHosts)) {
+      assert.strictEqual(new URL(urls[type as keyof typeof expectedHosts]).hostname, host);
+      assert.notStrictEqual(host, fixtureServer.fixtures.site);
+      assert.notStrictEqual(host, fixtureServer.fixtures.apiSite);
+    }
+  });
+
   await test('returns host-specific 404s for unknown routes or hosts', async () => {
     const unknownRoute = await requestFixture({
       server: fixtureServer,
