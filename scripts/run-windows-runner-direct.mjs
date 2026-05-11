@@ -1116,6 +1116,10 @@ try {
   Ensure-OpenPathDirectDependencies -RepoRoot $repoRoot
   Set-Location $repoRoot
   Invoke-OpenPathDirectChildPowerShell -ScriptPath $spikeScriptPath -ExtraArguments @('-Mode', 'Run', '-ArtifactsRoot', $artifactsRoot) -LogName 'direct-dns-discovery-spike' -TimeoutSeconds ${timeoutSeconds}
+  $resultPath = Join-Path $artifactsRoot 'dns-discovery-spike-result.json'
+  if (-not (Test-Path -LiteralPath $resultPath)) {
+    throw "DNS discovery spike result was not written: $resultPath"
+  }
 }
 catch {
   $primaryFailure = $_

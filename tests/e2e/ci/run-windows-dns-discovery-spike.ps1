@@ -446,6 +446,9 @@ function Invoke-SpikeRun {
         if ($LASTEXITCODE -ne 0) {
             throw "run-windows-student-flow.ps1 exited with code $LASTEXITCODE"
         }
+        if (-not (Test-Path -LiteralPath $script:ResultPath)) {
+            throw "DNS discovery spike result was not written: $script:ResultPath"
+        }
     }
     finally {
         if ($null -eq $previousCoverage) {
