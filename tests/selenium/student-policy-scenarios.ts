@@ -243,7 +243,7 @@ const notRunProbeResult = (): DnsDiscoverySpikeProbeResult => ({
 
 function formatDnsDiscoveryHookCommand(commandTemplate: string, phase: string): string {
   return commandTemplate.includes('{phase}')
-    ? commandTemplate.replaceAll('{phase}', phase)
+    ? commandTemplate.split('{phase}').join(phase)
     : `${commandTemplate} ${phase}`;
 }
 
