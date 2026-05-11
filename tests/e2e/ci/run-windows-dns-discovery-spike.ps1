@@ -95,7 +95,7 @@ function Clear-HitLogFile {
 
 function Set-IniValue {
     param(
-        [Parameter(Mandatory = $true)][string[]]$Lines,
+        [AllowEmptyString()][string[]]$Lines,
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][string]$Value
     )
@@ -471,38 +471,44 @@ function Invoke-SpikeRun {
     }
 }
 
-switch ($Mode) {
-    'Run' {
-        Invoke-SpikeRun
-    }
-    'BeforeSelenium' {
-        Initialize-SpikeHitLog
-    }
-    'ClearHitLog' {
-        if ([string]::IsNullOrWhiteSpace($Phase)) {
-            throw 'ClearHitLog requires -Phase.'
+try {
+    switch ($Mode) {
+        'Run' {
+            Invoke-SpikeRun
         }
-        Ensure-ArtifactRoot
-        Clear-HitLogFile
-        [pscustomobject]@{
-            phase = $Phase
-            hitLogPath = $script:HitLogPath
-            clearedAt = (Get-Date).ToString('o')
-        } | ConvertTo-Json -Compress
-    }
-    'SnapshotHitLog' {
-        if ([string]::IsNullOrWhiteSpace($Phase)) {
-            throw 'SnapshotHitLog requires -Phase.'
+        'BeforeSelenium' {
+            Initialize-SpikeHitLog
         }
-        $snapshotPath = Copy-HitLogSnapshot -SnapshotPhase $Phase
-        [pscustomobject]@{
-            phase = $Phase
-            path = $snapshotPath
-            sha256 = Get-FileSha256 -Path $snapshotPath
-            capturedAt = (Get-Date).ToString('o')
-        } | ConvertTo-Json -Compress
+        'ClearHitLog' {
+            if ([string]::IsNullOrWhiteSpace($Phase)) {
+                throw 'ClearHitLog requires -Phase.'
+            }
+            Ensure-ArtifactRoot
+            Clear-HitLogFile
+            [pscustomobject]@{
+                phase = $Phase
+                hitLogPath = $script:HitLogPath
+                clearedAt = (Get-Date).ToString('o')
+            } | ConvertTo-Json -Compress
+        }
+        'SnapshotHitLog' {
+            if ([string]::IsNullOrWhiteSpace($Phase)) {
+                throw 'SnapshotHitLog requires -Phase.'
+            }
+            $snapshotPath = Copy-HitLogSnapshot -SnapshotPhase $Phase
+            [pscustomobject]@{
+                phase = $Phase
+                path = $snapshotPath
+                sha256 = Get-FileSha256 -Path $snapshotPath
+                capturedAt = (Get-Date).ToString('o')
+            } | ConvertTo-Json -Compress
+        }
+        'AfterSelenium' {
+            Complete-Spike
+        }
     }
-    'AfterSelenium' {
-        Complete-Spike
-    }
+}
+catch {
+    Write-Error $_
+    exit 1
 }
