@@ -49,18 +49,37 @@ export interface VerifyResponse {
   error?: string;
 }
 
+interface LocalRuntimeDependencyInput {
+  anchorHost: string;
+  dependencyHost: string;
+  requestType: string;
+}
+
+interface LocalRuntimeDependencyBatchResponse extends NativeResponse {
+  action?: 'allow-local-runtime-dependency-batch';
+  results?: NativeResponse[];
+  error?: string;
+}
+
+interface PendingLocalRuntimeDependency {
+  input: LocalRuntimeDependencyInput;
+  key: string;
+  resolve: (response: NativeResponse) => void;
+  reject: (error: unknown) => void;
+}
+
 export interface NativeMessagingClient {
-  allowLocalRuntimeDependency: (input: {
-    anchorHost: string;
-    dependencyHost: string;
-    requestType: string;
-  }) => Promise<NativeResponse>;
+  allowLocalRuntimeDependency: (input: LocalRuntimeDependencyInput) => Promise<NativeResponse>;
   checkDomains: (domains: string[]) => Promise<VerifyResponse>;
   connect: () => Promise<boolean>;
   isAvailable: () => Promise<boolean>;
   requestLocalWhitelistUpdate: (domains?: string[]) => Promise<boolean>;
   sendMessage: (message: unknown) => Promise<unknown>;
 }
+
+const LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS = 150;
+const LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES = 20;
+const LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS = 30 * 60 * 1000;
 
 export function createNativeMessagingClient(options: {
   browserApi?: Browser;
@@ -70,6 +89,10 @@ export function createNativeMessagingClient(options: {
   const browserApi = options.browserApi ?? browser;
   const logger = options.logger ?? defaultLogger;
   let nativePort: Runtime.Port | null = null;
+  const runtimeDependencyCache = new Map<string, number>();
+  const pendingRuntimeDependencies: PendingLocalRuntimeDependency[] = [];
+  const pendingRuntimeDependencyByKey = new Map<string, Promise<NativeResponse>>();
+  let runtimeDependencyBatchTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function connect(): Promise<boolean> {
     return new Promise((resolve) => {
@@ -183,18 +206,183 @@ export function createNativeMessagingClient(options: {
     }
   }
 
-  async function allowLocalRuntimeDependency(input: {
-    anchorHost: string;
-    dependencyHost: string;
-    requestType: string;
-  }): Promise<NativeResponse> {
+  function createRuntimeDependencyCacheKey(
+    input: Pick<LocalRuntimeDependencyInput, 'anchorHost' | 'dependencyHost'>
+  ): string {
+    return `${input.anchorHost.toLowerCase()}|${input.dependencyHost.toLowerCase()}`;
+  }
+
+  function createRuntimeDependencyPendingKey(input: LocalRuntimeDependencyInput): string {
+    return `${createRuntimeDependencyCacheKey(input)}|${input.requestType.toLowerCase()}`;
+  }
+
+  function getCachedRuntimeDependency(input: LocalRuntimeDependencyInput): NativeResponse | null {
+    const cacheKey = createRuntimeDependencyCacheKey(input);
+    const expiresAt = runtimeDependencyCache.get(cacheKey);
+    if (expiresAt === undefined) {
+      return null;
+    }
+    if (expiresAt <= Date.now()) {
+      runtimeDependencyCache.delete(cacheKey);
+      return null;
+    }
+
+    return {
+      success: true,
+      action: 'allow-local-runtime-dependency',
+      anchorHost: input.anchorHost,
+      dependencyHost: input.dependencyHost,
+      cached: true,
+    };
+  }
+
+  function cacheRuntimeDependencySuccess(
+    input: LocalRuntimeDependencyInput,
+    response: NativeResponse
+  ): void {
+    if (!response.success) {
+      return;
+    }
+    runtimeDependencyCache.set(
+      createRuntimeDependencyCacheKey(input),
+      Date.now() + LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS
+    );
+  }
+
+  async function sendSingleLocalRuntimeDependency(
+    input: LocalRuntimeDependencyInput
+  ): Promise<NativeResponse> {
     const response = (await sendMessage({
       action: 'allow-local-runtime-dependency',
       anchorHost: input.anchorHost,
       dependencyHost: input.dependencyHost,
       requestType: input.requestType,
     })) as NativeResponse;
+    cacheRuntimeDependencySuccess(input, response);
     return response;
+  }
+
+  function isBatchUnsupported(response: LocalRuntimeDependencyBatchResponse): boolean {
+    const error = typeof response.error === 'string' ? response.error.toLowerCase() : '';
+    return (
+      !response.success &&
+      (error.includes('unknown action') || error.includes('unsupported')) &&
+      !Array.isArray(response.results)
+    );
+  }
+
+  function findBatchResult(
+    response: LocalRuntimeDependencyBatchResponse,
+    input: LocalRuntimeDependencyInput,
+    index: number
+  ): NativeResponse {
+    const results = Array.isArray(response.results) ? response.results : [];
+    const exactResult = results.find((candidate) => {
+      const result = candidate as {
+        anchorHost?: unknown;
+        dependencyHost?: unknown;
+        requestType?: unknown;
+      };
+      return (
+        result.anchorHost === input.anchorHost &&
+        result.dependencyHost === input.dependencyHost &&
+        result.requestType === input.requestType
+      );
+    });
+
+    return exactResult ?? results[index] ?? response;
+  }
+
+  function scheduleRuntimeDependencyFlush(): void {
+    if (runtimeDependencyBatchTimer !== null) {
+      return;
+    }
+
+    runtimeDependencyBatchTimer = setTimeout(() => {
+      runtimeDependencyBatchTimer = null;
+      void flushRuntimeDependencyBatch();
+    }, LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS);
+  }
+
+  async function flushRuntimeDependencyBatch(): Promise<void> {
+    const batch = pendingRuntimeDependencies.splice(0, LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES);
+    for (const request of batch) {
+      pendingRuntimeDependencyByKey.delete(request.key);
+    }
+
+    if (pendingRuntimeDependencies.length > 0) {
+      scheduleRuntimeDependencyFlush();
+    }
+    if (batch.length === 0) {
+      return;
+    }
+
+    try {
+      const batchResponse = (await sendMessage({
+        action: 'allow-local-runtime-dependency-batch',
+        entries: batch.map((request) => request.input),
+      })) as LocalRuntimeDependencyBatchResponse;
+
+      if (isBatchUnsupported(batchResponse)) {
+        await Promise.all(
+          batch.map(async (request) => {
+            try {
+              request.resolve(await sendSingleLocalRuntimeDependency(request.input));
+            } catch (error) {
+              request.reject(error);
+            }
+          })
+        );
+        return;
+      }
+
+      batch.forEach((request, index) => {
+        const response = findBatchResult(batchResponse, request.input, index);
+        cacheRuntimeDependencySuccess(request.input, response);
+        request.resolve(response);
+      });
+    } catch (error) {
+      batch.forEach((request) => {
+        request.reject(error);
+      });
+    }
+  }
+
+  async function allowLocalRuntimeDependency(
+    input: LocalRuntimeDependencyInput
+  ): Promise<NativeResponse> {
+    const cachedResponse = getCachedRuntimeDependency(input);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
+    const pendingKey = createRuntimeDependencyPendingKey(input);
+    const existingRequest = pendingRuntimeDependencyByKey.get(pendingKey);
+    if (existingRequest) {
+      return existingRequest;
+    }
+
+    const pendingRequest = new Promise<NativeResponse>((resolve, reject) => {
+      pendingRuntimeDependencies.push({
+        input,
+        key: pendingKey,
+        resolve,
+        reject,
+      });
+    });
+    pendingRuntimeDependencyByKey.set(pendingKey, pendingRequest);
+
+    if (pendingRuntimeDependencies.length >= LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES) {
+      if (runtimeDependencyBatchTimer !== null) {
+        clearTimeout(runtimeDependencyBatchTimer);
+        runtimeDependencyBatchTimer = null;
+      }
+      void flushRuntimeDependencyBatch();
+    } else {
+      scheduleRuntimeDependencyFlush();
+    }
+
+    return pendingRequest;
   }
 
   return {

@@ -484,6 +484,54 @@ void describe('background listeners blocked-screen routing', () => {
     ]);
   });
 
+  void test('keeps simultaneous Windows runtime dependency requests blocking until native calls resolve', async () => {
+    const nativePayloads: unknown[] = [];
+    let resolveNativeCalls!: () => void;
+    const nativeCallsReleased = new Promise<void>((resolve) => {
+      resolveNativeCalls = resolve;
+    });
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: async (input) => {
+        nativePayloads.push(input);
+        await nativeCallsReleased;
+        return { success: true };
+      },
+    });
+    assert.ok(harness.webRequestBefore);
+
+    const scriptResult = harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/r/openpath',
+      tabId: 44,
+      type: 'script',
+      url: 'https://www.redditstatic.com/app.js',
+    } as WebRequest.OnBeforeRequestDetailsType);
+    const imageResult = harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/r/openpath',
+      tabId: 44,
+      type: 'image',
+      url: 'https://emoji.redditmedia.com/icon.png',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.ok(scriptResult instanceof Promise);
+    assert.ok(imageResult instanceof Promise);
+    await waitForAsyncListeners();
+    assert.deepEqual(nativePayloads, [
+      {
+        anchorHost: 'www.reddit.com',
+        dependencyHost: 'www.redditstatic.com',
+        requestType: 'script',
+      },
+      {
+        anchorHost: 'www.reddit.com',
+        dependencyHost: 'emoji.redditmedia.com',
+        requestType: 'image',
+      },
+    ]);
+    resolveNativeCalls();
+    assert.deepEqual(await scriptResult, {});
+    assert.deepEqual(await imageResult, {});
+  });
+
   void test('derives local dependency overlay anchor host from originUrl when tab and document context are absent', async () => {
     const nativePayloads: unknown[] = [];
     const harness = createListenerHarness({

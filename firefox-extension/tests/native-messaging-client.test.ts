@@ -19,6 +19,31 @@ function createBrowserStub(sendResult: unknown): Browser {
   } as unknown as Browser;
 }
 
+function createRecordingBrowserStub(handler: (message: unknown) => unknown): {
+  browser: Browser;
+  messages: unknown[];
+} {
+  const messages: unknown[] = [];
+  return {
+    browser: {
+      runtime: {
+        connectNative: () =>
+          ({
+            onDisconnect: {
+              addListener: () => undefined,
+            },
+          }) as never,
+        lastError: undefined,
+        sendNativeMessage: (_hostName: string, message: unknown) => {
+          messages.push(message);
+          return Promise.resolve(handler(message) as never);
+        },
+      },
+    } as unknown as Browser,
+    messages,
+  };
+}
+
 await describe('native messaging client', async () => {
   await test('maps native check responses to popup-friendly fields', async () => {
     const client = createNativeMessagingClient({
@@ -58,5 +83,207 @@ await describe('native messaging client', async () => {
     });
 
     assert.equal(await client.isAvailable(), true);
+  });
+
+  await test('batches simultaneous local runtime dependency requests', async () => {
+    const { browser, messages } = createRecordingBrowserStub((message) => {
+      assert.deepEqual(message, {
+        action: 'allow-local-runtime-dependency-batch',
+        entries: [
+          {
+            anchorHost: 'www.reddit.com',
+            dependencyHost: 'www.redditstatic.com',
+            requestType: 'script',
+          },
+          {
+            anchorHost: 'www.reddit.com',
+            dependencyHost: 'emoji.redditmedia.com',
+            requestType: 'image',
+          },
+        ],
+      });
+      return {
+        success: true,
+        action: 'allow-local-runtime-dependency-batch',
+        results: [
+          {
+            success: true,
+            action: 'allow-local-runtime-dependency',
+            anchorHost: 'www.reddit.com',
+            dependencyHost: 'www.redditstatic.com',
+            requestType: 'script',
+          },
+          {
+            success: true,
+            action: 'allow-local-runtime-dependency',
+            anchorHost: 'www.reddit.com',
+            dependencyHost: 'emoji.redditmedia.com',
+            requestType: 'image',
+          },
+        ],
+      };
+    });
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+    });
+
+    const [scriptResult, imageResult] = await Promise.all([
+      client.allowLocalRuntimeDependency({
+        anchorHost: 'www.reddit.com',
+        dependencyHost: 'www.redditstatic.com',
+        requestType: 'script',
+      }),
+      client.allowLocalRuntimeDependency({
+        anchorHost: 'www.reddit.com',
+        dependencyHost: 'emoji.redditmedia.com',
+        requestType: 'image',
+      }),
+    ]);
+
+    assert.equal(messages.length, 1);
+    assert.equal(scriptResult.success, true);
+    assert.equal(imageResult.success, true);
+  });
+
+  await test('uses confirmed local runtime dependency cache without IPC', async () => {
+    const { browser, messages } = createRecordingBrowserStub(() => ({
+      success: true,
+      action: 'allow-local-runtime-dependency-batch',
+      results: [
+        {
+          success: true,
+          action: 'allow-local-runtime-dependency',
+          anchorHost: 'allowed.example',
+          dependencyHost: 'cdn.example',
+          requestType: 'script',
+        },
+      ],
+    }));
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+    });
+
+    assert.equal(
+      (
+        await client.allowLocalRuntimeDependency({
+          anchorHost: 'allowed.example',
+          dependencyHost: 'cdn.example',
+          requestType: 'script',
+        })
+      ).success,
+      true
+    );
+    assert.deepEqual(
+      await client.allowLocalRuntimeDependency({
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'xmlhttprequest',
+      }),
+      {
+        success: true,
+        action: 'allow-local-runtime-dependency',
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        cached: true,
+      }
+    );
+    assert.equal(messages.length, 1);
+  });
+
+  await test('falls back to single local runtime dependency action when batch is unknown', async () => {
+    const { browser, messages } = createRecordingBrowserStub((message) => {
+      const action =
+        typeof message === 'object' && message !== null && 'action' in message
+          ? (message as { action?: unknown }).action
+          : undefined;
+      if (action === 'allow-local-runtime-dependency-batch') {
+        return {
+          success: false,
+          error: 'Unknown action: allow-local-runtime-dependency-batch',
+        };
+      }
+      return {
+        success: true,
+        action: 'allow-local-runtime-dependency',
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'script',
+      };
+    });
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+    });
+
+    const result = await client.allowLocalRuntimeDependency({
+      anchorHost: 'allowed.example',
+      dependencyHost: 'cdn.example',
+      requestType: 'script',
+    });
+
+    assert.equal(result.success, true);
+    assert.deepEqual(messages, [
+      {
+        action: 'allow-local-runtime-dependency-batch',
+        entries: [
+          {
+            anchorHost: 'allowed.example',
+            dependencyHost: 'cdn.example',
+            requestType: 'script',
+          },
+        ],
+      },
+      {
+        action: 'allow-local-runtime-dependency',
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'script',
+      },
+    ]);
+  });
+
+  await test('does not cache failed local runtime dependency responses', async () => {
+    const { browser, messages } = createRecordingBrowserStub(() => ({
+      success: true,
+      action: 'allow-local-runtime-dependency-batch',
+      results: [
+        {
+          success: false,
+          action: 'allow-local-runtime-dependency',
+          anchorHost: 'allowed.example',
+          dependencyHost: 'cdn.example',
+          requestType: 'script',
+          error: 'OpenPath update task did not write expected domains',
+        },
+      ],
+    }));
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+    });
+
+    assert.equal(
+      (
+        await client.allowLocalRuntimeDependency({
+          anchorHost: 'allowed.example',
+          dependencyHost: 'cdn.example',
+          requestType: 'script',
+        })
+      ).success,
+      false
+    );
+    assert.equal(
+      (
+        await client.allowLocalRuntimeDependency({
+          anchorHost: 'allowed.example',
+          dependencyHost: 'cdn.example',
+          requestType: 'script',
+        })
+      ).success,
+      false
+    );
+    assert.equal(messages.length, 2);
   });
 });
