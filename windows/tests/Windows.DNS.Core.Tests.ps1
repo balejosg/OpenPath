@@ -259,6 +259,14 @@ Describe "DNS Module" {
                     requestType = 'xmlhttprequest'
                     source = 'firefox-webrequest-local'
                 } | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $queuePath "request.json") -Encoding UTF8 -Force
+                @{
+                    version = 1
+                    queuedAt = (Get-Date).ToUniversalTime().ToString('o')
+                    anchorHost = 'www.reddit.com'
+                    dependencyHost = 'emoji.redditmedia.com'
+                    requestType = 'image'
+                    source = 'firefox-webrequest-local'
+                } | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $queuePath "request-image.json") -Encoding UTF8 -Force
 
                 InModuleScope DNS {
                     $queueResult = Invoke-OpenPathRuntimeDependencyQueue `
@@ -266,6 +274,7 @@ Describe "DNS Module" {
                         -BlockedSubdomains @()
 
                     $queueResult.Changed | Should -BeTrue
+                    $queueResult.Processed | Should -Be 2
 
                     $domains = Get-OpenPathRuntimeDependencyDomains `
                         -WhitelistedDomains @('reddit.com') `
@@ -273,6 +282,7 @@ Describe "DNS Module" {
                         -Prune
 
                     $domains | Should -Contain 'www.redditstatic.com'
+                    $domains | Should -Contain 'emoji.redditmedia.com'
 
                     $definition = New-AcrylicHostsDefinition `
                         -WhitelistedDomains @('reddit.com') `
@@ -286,7 +296,9 @@ Describe "DNS Module" {
                     $content = ConvertTo-AcrylicHostsContent -Definition $definition
 
                     $content | Should -Match '(?m)^FW www\.redditstatic\.com$'
+                    $content | Should -Match '(?m)^FW emoji\.redditmedia\.com$'
                     $content | Should -Not -Match '(?m)^FW >www\.redditstatic\.com$'
+                    $content | Should -Not -Match '(?m)^FW >emoji\.redditmedia\.com$'
                     $dependencyRuleIndex = $content.IndexOf('FW www.redditstatic.com')
                     $defaultBlockRuleIndex = $content.IndexOf('NX *')
                     $dependencyRuleIndex | Should -BeGreaterThan -1

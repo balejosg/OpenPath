@@ -437,7 +437,9 @@ Describe "Browser Module - Native Host" {
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
                 'allow-local-runtime-dependency',
+                'allow-local-runtime-dependency-batch',
                 'function Invoke-NativeHostLocalRuntimeDependencyAction',
+                'function Invoke-NativeHostLocalRuntimeDependencyBatchAction',
                 'function Get-NativeHostRuntimeDependencyQueuePath',
                 'function Find-NativeHostRuntimeDependencyQueueRequest',
                 'function Write-NativeHostRuntimeDependencyQueueRequest',
@@ -448,7 +450,9 @@ Describe "Browser Module - Native Host" {
                 'source = ''firefox-webrequest-local''',
                 'Sensitive fields are not accepted',
                 'reason = ''dependency-already-whitelisted''',
-                'reason = ''runtime-dependency-overlay-present'''
+                'reason = ''runtime-dependency-overlay-present''',
+                '-RuntimeDependencyDomains $queuedDependencyHosts',
+                '-TimeoutSeconds 14'
             )
             Assert-ContentContainsAll -Content $installerStagingContent -Needles @(
                 '$OpenPathRoot\data\runtime-dependency-queue',

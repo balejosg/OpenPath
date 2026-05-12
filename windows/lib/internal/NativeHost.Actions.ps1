@@ -332,7 +332,7 @@ function Import-NativeHostDnsModule {
     }
 }
 
-function Invoke-NativeHostLocalRuntimeDependencyAction {
+function Resolve-NativeHostLocalRuntimeDependencyCandidate {
     param(
         [Parameter(Mandatory = $true)]
         [object]$Message,
@@ -345,7 +345,10 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
     )
 
     if (Test-NativeHostSensitiveRuntimeDependencyField -Message $Message) {
-        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Sensitive fields are not accepted' }
+        return @{
+            Valid = $false
+            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Sensitive fields are not accepted' }
+        }
     }
 
     $anchorHost = Normalize-NativeHostRuntimeDependencyHost -Value $Message.anchorHost
@@ -353,13 +356,22 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
     $requestType = if ($Message.requestType -is [string]) { ([string]$Message.requestType).Trim().ToLowerInvariant() } else { '' }
 
     if (-not $anchorHost -or -not $dependencyHost -or -not $requestType) {
-        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Invalid runtime dependency payload' }
+        return @{
+            Valid = $false
+            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Invalid runtime dependency payload' }
+        }
     }
     if ($requestType -eq 'main_frame') {
-        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'main_frame dependencies are not supported' }
+        return @{
+            Valid = $false
+            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'main_frame dependencies are not supported' }
+        }
     }
     if ($anchorHost -eq $dependencyHost) {
-        return @{ success = $true; action = 'allow-local-runtime-dependency'; skipped = $true; reason = 'same-host' }
+        return @{
+            Valid = $false
+            Result = @{ success = $true; action = 'allow-local-runtime-dependency'; skipped = $true; reason = 'same-host' }
+        }
     }
 
     $whitelistSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -368,39 +380,79 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
         if ($normalized) { [void]$whitelistSet.Add($normalized) }
     }
     if (-not (Test-NativeHostWhitelistCoversHost -Hostname $anchorHost -WhitelistSet $whitelistSet)) {
-        return @{ success = $false; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Anchor host is not locally whitelisted' }
+        return @{
+            Valid = $false
+            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Anchor host is not locally whitelisted' }
+        }
     }
 
     $protectedHosts = Get-NativeHostProtectedRuntimeDependencyHosts -State $State
     if ($protectedHosts.Contains($anchorHost) -or $protectedHosts.Contains($dependencyHost)) {
-        return @{ success = $false; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Protected hosts are not accepted as runtime dependencies' }
+        return @{
+            Valid = $false
+            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Protected hosts are not accepted as runtime dependencies' }
+        }
     }
     if (Test-NativeHostBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains @($Sections.BlockedSubdomains)) {
-        return @{ success = $false; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Blocked hosts are not accepted as runtime dependencies' }
+        return @{
+            Valid = $false
+            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Blocked hosts are not accepted as runtime dependencies' }
+        }
     }
     if (Test-NativeHostWhitelistCoversHost -Hostname $dependencyHost -WhitelistSet $whitelistSet) {
-        return @{ success = $true; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; skipped = $true; reason = 'dependency-already-whitelisted' }
+        return @{
+            Valid = $false
+            Result = @{ success = $true; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; skipped = $true; reason = 'dependency-already-whitelisted' }
+        }
     }
     if (Test-NativeHostRuntimeDependencyOverlayContainsDomains -Domains @($dependencyHost)) {
-        return @{ success = $true; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; skipped = $true; reason = 'runtime-dependency-overlay-present' }
+        return @{
+            Valid = $false
+            Result = @{ success = $true; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; skipped = $true; reason = 'runtime-dependency-overlay-present' }
+        }
+    }
+
+    return @{
+        Valid = $true
+        AnchorHost = $anchorHost
+        DependencyHost = $dependencyHost
+        RequestType = $requestType
+    }
+}
+
+function Invoke-NativeHostLocalRuntimeDependencyAction {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Message,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$State,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Sections
+    )
+
+    $candidate = Resolve-NativeHostLocalRuntimeDependencyCandidate -Message $Message -State $State -Sections $Sections
+    if ($candidate.Valid -ne $true) {
+        return $candidate.Result
     }
 
     $requestPath = Write-NativeHostRuntimeDependencyQueueRequest `
-        -AnchorHost $anchorHost `
-        -DependencyHost $dependencyHost `
-        -RequestType $requestType
+        -AnchorHost $candidate.AnchorHost `
+        -DependencyHost $candidate.DependencyHost `
+        -RequestType $candidate.RequestType
 
     $updateResult = Invoke-UpdateTask `
-        -RuntimeDependencyDomains @($dependencyHost) `
+        -RuntimeDependencyDomains @($candidate.DependencyHost) `
         -RuntimeDependencyRequestPath $requestPath `
         -TimeoutSeconds 14
     if ($updateResult.success -ne $true) {
         return @{
             success = $false
             action = 'allow-local-runtime-dependency'
-            anchorHost = $anchorHost
-            dependencyHost = $dependencyHost
-            requestType = $requestType
+            anchorHost = $candidate.AnchorHost
+            dependencyHost = $candidate.DependencyHost
+            requestType = $candidate.RequestType
             queued = $true
             requestPath = $requestPath
             error = $updateResult.error
@@ -410,12 +462,85 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
     return @{
         success = $true
         action = 'allow-local-runtime-dependency'
-        anchorHost = $anchorHost
-        dependencyHost = $dependencyHost
-        requestType = $requestType
+        anchorHost = $candidate.AnchorHost
+        dependencyHost = $candidate.DependencyHost
+        requestType = $candidate.RequestType
         queued = $true
         requestPath = $requestPath
         source = 'firefox-webrequest-local'
+    }
+}
+
+function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Message,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$State,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Sections
+    )
+
+    $entries = @($Message.entries)
+    if ($entries.Count -eq 0) {
+        return @{ success = $false; action = 'allow-local-runtime-dependency-batch'; error = 'Invalid runtime dependency batch payload'; results = @() }
+    }
+
+    $results = @()
+    $queuedResults = @()
+    $queuedDependencyHosts = @()
+
+    foreach ($entry in @($entries | Select-Object -First 20)) {
+        $candidate = Resolve-NativeHostLocalRuntimeDependencyCandidate -Message $entry -State $State -Sections $Sections
+        if ($candidate.Valid -ne $true) {
+            $results += $candidate.Result
+            continue
+        }
+
+        $requestPath = Write-NativeHostRuntimeDependencyQueueRequest `
+            -AnchorHost $candidate.AnchorHost `
+            -DependencyHost $candidate.DependencyHost `
+            -RequestType $candidate.RequestType
+        $result = @{
+            success = $true
+            action = 'allow-local-runtime-dependency'
+            anchorHost = $candidate.AnchorHost
+            dependencyHost = $candidate.DependencyHost
+            requestType = $candidate.RequestType
+            queued = $true
+            requestPath = $requestPath
+            source = 'firefox-webrequest-local'
+        }
+        $results += $result
+        $queuedResults += $result
+        $queuedDependencyHosts += $candidate.DependencyHost
+    }
+
+    if ($entries.Count -gt 20) {
+        $results += @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Runtime dependency batch limit exceeded' }
+    }
+
+    if ($queuedDependencyHosts.Count -gt 0) {
+        $queuedDependencyHosts = @($queuedDependencyHosts | Sort-Object -Unique)
+        $updateResult = Invoke-UpdateTask `
+            -RuntimeDependencyDomains $queuedDependencyHosts `
+            -TimeoutSeconds 14
+        if ($updateResult.success -ne $true) {
+            foreach ($result in $queuedResults) {
+                $result.success = $false
+                $result.error = $updateResult.error
+            }
+        }
+    }
+
+    $failedResults = @($results | Where-Object { $_.success -ne $true })
+    return @{
+        success = ($failedResults.Count -eq 0)
+        action = 'allow-local-runtime-dependency-batch'
+        count = $results.Count
+        results = $results
     }
 }
 
@@ -881,6 +1006,10 @@ function Invoke-NativeHostMessageAction {
 
         'allow-local-runtime-dependency' {
             return (Invoke-NativeHostLocalRuntimeDependencyAction -Message $Message -State $State -Sections $sections)
+        }
+
+        'allow-local-runtime-dependency-batch' {
+            return (Invoke-NativeHostLocalRuntimeDependencyBatchAction -Message $Message -State $State -Sections $sections)
         }
 
         default {
