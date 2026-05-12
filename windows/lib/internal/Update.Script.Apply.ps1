@@ -44,7 +44,10 @@ function Handle-OpenPathDownloadFailure {
 
     Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
 
-    Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath | Out-Null
+    $runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath
+    if ($runtimeDependencyQueueChanged) {
+        Restore-OpenPathProtectedMode -Config $Config | Out-Null
+    }
 
     $cachedAgeHours = Get-OpenPathFileAgeHours -Path $WhitelistPath
     if ($EnableStaleFailsafe -and $StaleWhitelistMaxAgeHours -gt 0 -and $cachedAgeHours -ge $StaleWhitelistMaxAgeHours) {
@@ -102,7 +105,10 @@ function Handle-OpenPathNotModified {
     }
 
     Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
-    Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath | Out-Null
+    $runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath
+    if ($runtimeDependencyQueueChanged) {
+        Restore-OpenPathProtectedMode -Config $Config | Out-Null
+    }
     Write-OpenPathLog "Whitelist not modified (ETag) - skipping apply"
 
     try {

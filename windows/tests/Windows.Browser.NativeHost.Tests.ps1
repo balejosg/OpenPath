@@ -439,13 +439,16 @@ Describe "Browser Module - Native Host" {
                 'allow-local-runtime-dependency',
                 'function Invoke-NativeHostLocalRuntimeDependencyAction',
                 'function Get-NativeHostRuntimeDependencyQueuePath',
+                'function Find-NativeHostRuntimeDependencyQueueRequest',
                 'function Write-NativeHostRuntimeDependencyQueueRequest',
                 'anchorHost',
                 'dependencyHost',
                 'requestType',
                 'runtime-dependency-queue',
                 'source = ''firefox-webrequest-local''',
-                'Sensitive fields are not accepted'
+                'Sensitive fields are not accepted',
+                'reason = ''dependency-already-whitelisted''',
+                'reason = ''runtime-dependency-overlay-present'''
             )
             Assert-ContentContainsAll -Content $installerStagingContent -Needles @(
                 '$OpenPathRoot\data\runtime-dependency-queue',
