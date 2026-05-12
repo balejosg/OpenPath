@@ -22,6 +22,7 @@ const RUN_MODES = new Set([
   'dns-evidence-matrix',
   'dns-evidence-matrix-v2',
   'dns-observability-controls',
+  'acrylic-purgecache-spike',
   'browser-dependency-observability-spike',
   'all',
 ]);
@@ -33,6 +34,8 @@ const DNS_EVIDENCE_MATRIX_V2_GUEST_ARTIFACT_ROOT =
   'C:\\Windows\\Temp\\openpath-dns-evidence-matrix-v2';
 const DNS_OBSERVABILITY_CONTROLS_GUEST_ARTIFACT_ROOT =
   'C:\\Windows\\Temp\\openpath-dns-observability-controls';
+const ACRYLIC_PURGECACHE_SPIKE_GUEST_ARTIFACT_ROOT =
+  'C:\\Windows\\Temp\\openpath-acrylic-purgecache-spike';
 const BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_GUEST_ARTIFACT_ROOT =
   'C:\\Windows\\Temp\\openpath-browser-dependency-observability-spike';
 const BROWSER_ENFORCEMENT_ARTIFACTS = [
@@ -137,6 +140,17 @@ const DNS_OBSERVABILITY_CONTROLS_ARTIFACTS = [
   'resolve-nx-control.json',
   'resolve-nx-control.err.log',
 ];
+const ACRYLIC_PURGECACHE_SPIKE_ARTIFACTS = [
+  'acrylic-purgecache-spike-result.json',
+  'acrylic-purgecache-spike-hashes.json',
+  'acrylic-controller-purgecache.out.log',
+  'acrylic-controller-purgecache.err.log',
+  'direct-acrylic-purgecache-spike-completion.json',
+  'direct-acrylic-purgecache-spike.out.log',
+  'direct-acrylic-purgecache-spike.err.log',
+  'AcrylicHosts.txt.before-purgecache-spike',
+  'AcrylicHosts.txt.after-purgecache-spike',
+];
 const BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_ARTIFACTS = [
   'browser-dependency-observability-spike-result.json',
   'direct-browser-dependency-observability-spike-completion.json',
@@ -164,7 +178,7 @@ Options:
   --results-path <path>       Result file path on the Windows runner relative to the repo root (default: ${DEFAULT_RESULTS_RELATIVE_PATH})
   --runner-repo-root <path>   Explicit OpenPath checkout root on the Windows runner (default: auto-detect under ${DEFAULT_RUNNER_ROOT_GLOB})
   --source-mode <mode>        Source to execute on Windows: runner-checkout or local-overlay (default: ${DEFAULT_SOURCE_MODE})
-  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, browser-dependency-observability-spike, or all (default: ${DEFAULT_RUN_MODE})
+  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, browser-dependency-observability-spike, or all (default: ${DEFAULT_RUN_MODE})
   --overlay-host <ip>         Local host/IP the Windows VM can use to download the local overlay ZIP
   --browser-enforcement-report
                               Run tests/e2e/ci/windows-browser-enforcement.ps1 -Scope Report after Pester
@@ -1683,6 +1697,105 @@ if ($exitCode -ne 0) {
   }
 }
 
+function runWindowsAcrylicPurgeCacheSpike(options, runnerRepoRoot) {
+  const spikeScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-acrylic-purgecache-spike.ps1`;
+  const artifactsRoot = ACRYLIC_PURGECACHE_SPIKE_GUEST_ARTIFACT_ROOT;
+  const completionPath = `${artifactsRoot}\\direct-acrylic-purgecache-spike-completion.json`;
+  const timeoutSeconds = Number.parseInt(options.timeoutSeconds, 10);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$repoRoot = ${JSON.stringify(runnerRepoRoot)}
+$spikeScriptPath = ${JSON.stringify(spikeScriptPath)}
+$artifactsRoot = ${JSON.stringify(artifactsRoot)}
+$completionPath = ${JSON.stringify(completionPath)}
+
+if (-not (Test-Path -LiteralPath $spikeScriptPath)) {
+  throw 'run-windows-acrylic-purgecache-spike.ps1 is missing on the Windows runner checkout.'
+}
+
+function Invoke-OpenPathDirectChildPowerShell {
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    [string[]]$ExtraArguments = @(),
+    [Parameter(Mandatory = $true)][string]$LogName,
+    [int]$TimeoutSeconds = 1800
+  )
+
+  $outPath = Join-Path $artifactsRoot "$LogName.out.log"
+  $errPath = Join-Path $artifactsRoot "$LogName.err.log"
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $ExtraArguments
+  $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $repoRoot -RedirectStandardOutput $outPath -RedirectStandardError $errPath -PassThru
+
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "$LogName timed out after $TimeoutSeconds seconds"
+  }
+
+  $process.Refresh()
+  $exitCode = $process.ExitCode
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+  if ($exitCode -ne 0) {
+    $maxFailureLogChars = 12000
+    $stdout = if (Test-Path -LiteralPath $outPath) { Get-Content -LiteralPath $outPath -Raw } else { '' }
+    $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -LiteralPath $errPath -Raw } else { '' }
+    if ($stdout.Length -gt $maxFailureLogChars) {
+      $stdout = $stdout.Substring($stdout.Length - $maxFailureLogChars)
+    }
+    if ($stderr.Length -gt $maxFailureLogChars) {
+      $stderr = $stderr.Substring($stderr.Length - $maxFailureLogChars)
+    }
+    throw ($LogName + ' exited with code ' + $exitCode + [Environment]::NewLine + 'STDOUT:' + [Environment]::NewLine + $stdout + [Environment]::NewLine + 'STDERR:' + [Environment]::NewLine + $stderr)
+  }
+}
+
+$primaryFailure = $null
+$exitCode = 0
+$errorText = ''
+try {
+  Remove-Item -LiteralPath $artifactsRoot -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
+  Remove-Item -LiteralPath $completionPath -Force -ErrorAction SilentlyContinue
+  Set-Location $repoRoot
+  Invoke-OpenPathDirectChildPowerShell -ScriptPath $spikeScriptPath -ExtraArguments @('-Mode', 'Run', '-ArtifactsRoot', $artifactsRoot) -LogName 'direct-acrylic-purgecache-spike' -TimeoutSeconds ${timeoutSeconds}
+  $resultPath = Join-Path $artifactsRoot 'acrylic-purgecache-spike-result.json'
+  if (-not (Test-Path -LiteralPath $resultPath)) {
+    throw "Acrylic PurgeCache spike result was not written: $resultPath"
+  }
+}
+catch {
+  $primaryFailure = $_
+  $exitCode = 1
+  $errorText = [string]$_
+}
+finally {
+  [pscustomobject]@{
+    exitCode = $exitCode
+    error = $errorText
+    artifactsRoot = $artifactsRoot
+    resultPath = (Join-Path $artifactsRoot 'acrylic-purgecache-spike-result.json')
+    timestamp = (Get-Date).ToString('o')
+  } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $completionPath -Encoding UTF8
+}
+
+if ($exitCode -ne 0) {
+  exit $exitCode
+}
+`;
+  runGuestPowerShellDetached(options, script, {
+    label: 'Run Windows Acrylic PurgeCache spike',
+  });
+  const completion = waitForGuestCompletionFile(options, completionPath, {
+    timeoutSeconds: timeoutSeconds + 900,
+  });
+  if (completion.exitCode !== 0) {
+    throw new Error(
+      `Run Windows Acrylic PurgeCache spike failed: ${completion.error ?? 'unknown error'}`
+    );
+  }
+}
+
 function runWindowsBrowserDependencyObservabilitySpike(options, runnerRepoRoot) {
   const spikeScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-browser-dependency-observability-spike.ps1`;
   const artifactsRoot = BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_GUEST_ARTIFACT_ROOT;
@@ -2049,6 +2162,16 @@ function collectArtifacts(options, artifactDir, runnerRoot) {
     );
   }
 
+  for (const artifactName of ACRYLIC_PURGECACHE_SPIKE_ARTIFACTS) {
+    collectGuestArtifact(
+      options,
+      artifactDir,
+      `${ACRYLIC_PURGECACHE_SPIKE_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
+      artifactName.replace(/\\/g, '-'),
+      64 * 1024 * 1024
+    );
+  }
+
   for (const artifactName of BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_ARTIFACTS) {
     collectGuestArtifact(
       options,
@@ -2160,6 +2283,10 @@ async function main() {
     if (options.mode === 'dns-observability-controls' || options.mode === 'all') {
       console.log('step=run-windows-dns-observability-controls');
       runWindowsDnsObservabilityControls(options, runnerRepoRoot || options.runnerRepoRoot);
+    }
+    if (options.mode === 'acrylic-purgecache-spike' || options.mode === 'all') {
+      console.log('step=run-windows-acrylic-purgecache-spike');
+      runWindowsAcrylicPurgeCacheSpike(options, runnerRepoRoot || options.runnerRepoRoot);
     }
     if (options.mode === 'browser-dependency-observability-spike' || options.mode === 'all') {
       console.log('step=run-windows-browser-dependency-observability-spike');

@@ -432,6 +432,34 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     }
   });
 
+  test('acrylic-purgecache-spike mode runs only the runner diagnostic for host reload evidence', () => {
+    const result = runDirectDiagnostic([
+      '--mode',
+      'acrylic-purgecache-spike',
+      '--source-mode',
+      'local-overlay',
+    ]);
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+    const spikeScript = readText('tests/e2e/ci/run-windows-acrylic-purgecache-spike.ps1');
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /source_mode=local-overlay/);
+    assert.match(result.stdout, /mode=acrylic-purgecache-spike/);
+    assert.match(result.stdout, /step=run-windows-acrylic-purgecache-spike/);
+    assert.match(script, /run-windows-acrylic-purgecache-spike\.ps1/);
+    assert.match(script, /openpath-acrylic-purgecache-spike/);
+    assert.match(script, /acrylic-purgecache-spike-result\.json/);
+    assert.match(script, /direct-acrylic-purgecache-spike-completion\.json/);
+    assert.match(spikeScript, /AcrylicController\.exe/);
+    assert.match(spikeScript, /PurgeCache/);
+    assert.match(spikeScript, /AcrylicHosts\.txt/);
+    assert.match(spikeScript, /Resolve-DnsName -Name \$Hostname -Server 127\.0\.0\.1/);
+    assert.match(spikeScript, /officialAcrylicHostsContract/);
+    for (const decision of ['purgeCacheReloadsHosts', 'restartRequired', 'inconclusive']) {
+      assert.match(spikeScript, new RegExp(decision));
+    }
+  });
+
   test(
     'workspace wrapper blocks GitHub integration lanes without explicit flag',
     { skip: !process.env.WHITELIST_WORKSPACE_ROOT },
