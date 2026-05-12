@@ -269,6 +269,188 @@ function Clear-OpenPathRuntimeDependencyOverlay {
     }
 }
 
+function Get-OpenPathRuntimeDependencyQueuePath {
+    [CmdletBinding()]
+    param()
+
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH) {
+        return $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH
+    }
+
+    $root = if ($script:OpenPathRoot) { $script:OpenPathRoot } else { 'C:\OpenPath' }
+    return (Join-Path $root 'data\runtime-dependency-queue')
+}
+
+function Get-OpenPathRuntimeDependencyOverlaySettings {
+    [CmdletBinding()]
+    param()
+
+    $ttlDays = 7
+    $capacity = 300
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_TTL_DAYS) {
+        try { $ttlDays = [Math]::Max(1, [int]$env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_TTL_DAYS) } catch { $ttlDays = 7 }
+    }
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_CAPACITY) {
+        try { $capacity = [Math]::Max(1, [int]$env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_CAPACITY) } catch { $capacity = 300 }
+    }
+
+    return [PSCustomObject]@{
+        TtlDays = $ttlDays
+        Capacity = $capacity
+    }
+}
+
+function Normalize-OpenPathRuntimeDependencyHost {
+    [CmdletBinding()]
+    param([AllowNull()][object]$Value)
+
+    if (-not ($Value -is [string])) { return '' }
+    $normalized = ([string]$Value).Trim().Trim('.').ToLowerInvariant()
+    if (-not $normalized) { return '' }
+    if ($normalized.EndsWith('.local', [System.StringComparison]::OrdinalIgnoreCase)) { return '' }
+    if ($normalized.Length -lt 4 -or $normalized.Length -gt 253) { return '' }
+    if ($normalized -notmatch '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$') { return '' }
+    return $normalized
+}
+
+function Invoke-OpenPathRuntimeDependencyQueue {
+    [CmdletBinding()]
+    param(
+        [string[]]$WhitelistedDomains = @(),
+        [string[]]$BlockedSubdomains = @(),
+        [string]$QueuePath = (Get-OpenPathRuntimeDependencyQueuePath)
+    )
+
+    $result = [ordered]@{
+        Changed = $false
+        Processed = 0
+        Rejected = 0
+        QueuePath = $QueuePath
+    }
+
+    if (-not (Test-Path $QueuePath -ErrorAction SilentlyContinue)) {
+        return [PSCustomObject]$result
+    }
+
+    $whitelistSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($domain in @($WhitelistedDomains)) {
+        $normalized = Normalize-OpenPathRuntimeDependencyHost -Value $domain
+        if ($normalized) { [void]$whitelistSet.Add($normalized) }
+    }
+
+    $protectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($domain in @(Get-OpenPathProtectedDomains)) {
+        $normalized = Normalize-OpenPathRuntimeDependencyHost -Value $domain
+        if ($normalized) { [void]$protectedSet.Add($normalized) }
+    }
+
+    $settings = Get-OpenPathRuntimeDependencyOverlaySettings
+    $now = (Get-Date).ToUniversalTime()
+    $expiresAt = $now.AddDays($settings.TtlDays)
+    $entries = @(Read-OpenPathRuntimeDependencyOverlay)
+    $keptEntries = @()
+
+    foreach ($entry in $entries) {
+        $entryDependency = if ($entry.PSObject.Properties['dependencyHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $entry.dependencyHost } else { '' }
+        $entryAnchor = if ($entry.PSObject.Properties['anchorHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $entry.anchorHost } else { '' }
+        $entryExpiresAt = if ($entry.PSObject.Properties['expiresAt']) { [string]$entry.expiresAt } else { '' }
+        $isExpired = $false
+        if ($entryExpiresAt) {
+            try { $isExpired = ([DateTimeOffset]::Parse($entryExpiresAt).UtcDateTime -le $now) }
+            catch { $isExpired = $true }
+        }
+
+        if (
+            -not $entryDependency -or
+            -not $entryAnchor -or
+            $isExpired -or
+            -not (Test-OpenPathWhitelistCoversHost -Hostname $entryAnchor -WhitelistSet $whitelistSet) -or
+            $protectedSet.Contains($entryAnchor) -or
+            $protectedSet.Contains($entryDependency) -or
+            (Test-OpenPathBlockedSubdomainMatch -Domain $entryDependency -BlockedSubdomains $BlockedSubdomains)
+        ) {
+            continue
+        }
+
+        $keptEntries += $entry
+    }
+
+    $requests = @(Get-ChildItem -Path $QueuePath -Filter '*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc)
+    foreach ($requestFile in $requests) {
+        try {
+            $request = Get-Content $requestFile.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $anchorHost = Normalize-OpenPathRuntimeDependencyHost -Value $request.anchorHost
+            $dependencyHost = Normalize-OpenPathRuntimeDependencyHost -Value $request.dependencyHost
+            $requestType = if ($request.requestType -is [string]) { ([string]$request.requestType).Trim().ToLowerInvariant() } else { '' }
+
+            if (
+                -not $anchorHost -or
+                -not $dependencyHost -or
+                -not $requestType -or
+                $requestType -eq 'main_frame' -or
+                $anchorHost -eq $dependencyHost -or
+                -not (Test-OpenPathWhitelistCoversHost -Hostname $anchorHost -WhitelistSet $whitelistSet) -or
+                $protectedSet.Contains($anchorHost) -or
+                $protectedSet.Contains($dependencyHost) -or
+                (Test-OpenPathBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains $BlockedSubdomains)
+            ) {
+                $result['Rejected'] = [int]$result['Rejected'] + 1
+                continue
+            }
+
+            $updated = $false
+            foreach ($entry in $keptEntries) {
+                $entryDependency = if ($entry.PSObject.Properties['dependencyHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $entry.dependencyHost } else { '' }
+                $entryAnchor = if ($entry.PSObject.Properties['anchorHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $entry.anchorHost } else { '' }
+                if ($entryDependency -eq $dependencyHost -and $entryAnchor -eq $anchorHost) {
+                    $requestTypes = @($entry.requestTypes)
+                    if ($requestTypes -notcontains $requestType) {
+                        $requestTypes += $requestType
+                    }
+                    $entry.lastSeen = $now.ToString('o')
+                    $entry.expiresAt = $expiresAt.ToString('o')
+                    $entry.requestTypes = @($requestTypes | Sort-Object -Unique)
+                    $updated = $true
+                    break
+                }
+            }
+
+            if (-not $updated) {
+                $keptEntries += [PSCustomObject]@{
+                    dependencyHost = $dependencyHost
+                    anchorHost = $anchorHost
+                    requestTypes = @($requestType)
+                    firstSeen = $now.ToString('o')
+                    lastSeen = $now.ToString('o')
+                    expiresAt = $expiresAt.ToString('o')
+                    source = 'firefox-webrequest-local'
+                }
+            }
+
+            $result['Processed'] = [int]$result['Processed'] + 1
+            $result['Changed'] = $true
+        }
+        catch {
+            $result['Rejected'] = [int]$result['Rejected'] + 1
+            Write-OpenPathLog "Rejected runtime dependency queue request $($requestFile.Name): $_" -Level WARN
+        }
+        finally {
+            Remove-Item $requestFile.FullName -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($result['Changed']) {
+        $keptEntries = @(
+            $keptEntries |
+                Sort-Object @{ Expression = { if ($_.PSObject.Properties['lastSeen']) { [string]$_.lastSeen } else { '' } }; Descending = $true } |
+                Select-Object -First $settings.Capacity
+        )
+        Write-OpenPathRuntimeDependencyOverlay -Entries $keptEntries
+    }
+
+    return [PSCustomObject]$result
+}
+
 function Get-OpenPathRuntimeDependencyDomains {
     [CmdletBinding()]
     param(

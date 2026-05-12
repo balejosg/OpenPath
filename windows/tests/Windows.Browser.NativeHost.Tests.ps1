@@ -430,24 +430,38 @@ Describe "Browser Module - Native Host" {
         It "Supports local runtime dependency overlay action without full URL fields" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+            $installerStagingPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $installerStagingContent = Get-Content $installerStagingPath -Raw
+            $updateRuntimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $updateRuntimeContent = Get-Content $updateRuntimePath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
                 'allow-local-runtime-dependency',
                 'function Invoke-NativeHostLocalRuntimeDependencyAction',
+                'function Get-NativeHostRuntimeDependencyQueuePath',
+                'function Write-NativeHostRuntimeDependencyQueueRequest',
                 'anchorHost',
                 'dependencyHost',
                 'requestType',
-                'runtime-dependency-overlay.json',
-                'function Test-NativeHostWhitelistCoversHost',
+                'runtime-dependency-queue',
                 'source = ''firefox-webrequest-local''',
-                'Global\OpenPathUpdateLock',
-                'Global\OpenPathPolicyStateLock',
-                'Sensitive fields are not accepted',
-                'Update-AcrylicHost -WhitelistedDomains'
+                'Sensitive fields are not accepted'
+            )
+            Assert-ContentContainsAll -Content $installerStagingContent -Needles @(
+                '$OpenPathRoot\data\runtime-dependency-queue',
+                '"BUILTIN\Users", "Modify"',
+                'Set-Acl $runtimeDependencyQueuePath $runtimeDependencyQueueAcl',
+                "'RequestSetup.State.psm1'"
+            )
+            Assert-ContentContainsAll -Content $updateRuntimeContent -Needles @(
+                'Invoke-OpenPathRuntimeDependencyQueue',
+                'Update-AcrylicHost -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist',
+                'Runtime dependency queue processed'
             )
 
-            $nativeHostActionsContent | Should -Match 'Test-NativeHostWhitelistCoversHost -Hostname \$anchorHost'
-            $nativeHostActionsContent | Should -Match 'Test-NativeHostWhitelistCoversHost -Hostname \$entryAnchor'
+            $nativeHostActionsContent | Should -Not -Match 'Write-NativeHostRuntimeDependencyOverlay'
+            $nativeHostActionsContent | Should -Not -Match 'Read-NativeHostRuntimeDependencyOverlay'
+            $nativeHostActionsContent | Should -Not -Match 'Update-AcrylicHost -WhitelistedDomains'
             $nativeHostActionsContent | Should -Not -Match '\[string\]\$Host\b'
             $nativeHostActionsContent | Should -Not -Match 'foreach \(\$host in'
             $nativeHostActionsContent | Should -Not -Match '/api/requests/auto'

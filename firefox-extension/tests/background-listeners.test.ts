@@ -452,6 +452,38 @@ void describe('background listeners blocked-screen routing', () => {
     ]);
   });
 
+  void test('waits within the Windows runtime dependency budget before continuing requests', async () => {
+    const nativePayloads: unknown[] = [];
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: async (input) => {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        nativePayloads.push(input);
+        return { success: true, queued: true };
+      },
+    });
+    assert.ok(harness.webRequestBefore);
+
+    const startedAt = Date.now();
+    const result = harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/r/openpath',
+      originUrl: 'https://www.reddit.com',
+      tabId: 44,
+      type: 'xmlhttprequest',
+      url: 'https://www.redditstatic.com/data.json',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.ok(result instanceof Promise);
+    assert.deepEqual(await result, {});
+    assert.ok(Date.now() - startedAt >= 850);
+    assert.deepEqual(nativePayloads, [
+      {
+        anchorHost: 'www.reddit.com',
+        dependencyHost: 'www.redditstatic.com',
+        requestType: 'xmlhttprequest',
+      },
+    ]);
+  });
+
   void test('derives local dependency overlay anchor host from originUrl when tab and document context are absent', async () => {
     const nativePayloads: unknown[] = [];
     const harness = createListenerHarness({

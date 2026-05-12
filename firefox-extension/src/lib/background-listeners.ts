@@ -39,7 +39,7 @@ interface BackgroundListenersOptions {
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
 }
 
-const DEFAULT_LOCAL_RUNTIME_DEPENDENCY_TIMEOUT_MS = 750;
+const DEFAULT_LOCAL_RUNTIME_DEPENDENCY_TIMEOUT_MS = 15000;
 
 function extractRequestHostname(url: string | undefined): string | null {
   if (!url) {

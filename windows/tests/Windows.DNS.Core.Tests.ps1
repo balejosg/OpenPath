@@ -239,6 +239,77 @@ Describe "DNS Module" {
             }
         }
 
+        It "Processes queued reddit runtime dependencies into exact FW rules before the default block" {
+            $previousOverlayPath = $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
+            $previousQueuePath = $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-runtime-queue-" + [Guid]::NewGuid().ToString("N"))
+            $overlayPath = Join-Path $tempRoot "runtime-dependency-overlay.json"
+            $queuePath = Join-Path $tempRoot "runtime-dependency-queue"
+
+            try {
+                New-Item -ItemType Directory -Path $queuePath -Force | Out-Null
+                $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH = $overlayPath
+                $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH = $queuePath
+
+                @{
+                    version = 1
+                    queuedAt = (Get-Date).ToUniversalTime().ToString('o')
+                    anchorHost = 'www.reddit.com'
+                    dependencyHost = 'www.redditstatic.com'
+                    requestType = 'xmlhttprequest'
+                    source = 'firefox-webrequest-local'
+                } | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $queuePath "request.json") -Encoding UTF8 -Force
+
+                InModuleScope DNS {
+                    $queueResult = Invoke-OpenPathRuntimeDependencyQueue `
+                        -WhitelistedDomains @('reddit.com') `
+                        -BlockedSubdomains @()
+
+                    $queueResult.Changed | Should -BeTrue
+
+                    $domains = Get-OpenPathRuntimeDependencyDomains `
+                        -WhitelistedDomains @('reddit.com') `
+                        -BlockedSubdomains @() `
+                        -Prune
+
+                    $domains | Should -Contain 'www.redditstatic.com'
+
+                    $definition = New-AcrylicHostsDefinition `
+                        -WhitelistedDomains @('reddit.com') `
+                        -BlockedSubdomains @() `
+                        -RuntimeDependencyDomains $domains `
+                        -DnsSettings ([PSCustomObject]@{
+                            PrimaryDNS = '1.1.1.1'
+                            SecondaryDNS = '1.0.0.1'
+                            MaxDomains = 10
+                        })
+                    $content = ConvertTo-AcrylicHostsContent -Definition $definition
+
+                    $content | Should -Match '(?m)^FW www\.redditstatic\.com$'
+                    $content | Should -Not -Match '(?m)^FW >www\.redditstatic\.com$'
+                    $dependencyRuleIndex = $content.IndexOf('FW www.redditstatic.com')
+                    $defaultBlockRuleIndex = $content.IndexOf('NX *')
+                    $dependencyRuleIndex | Should -BeGreaterThan -1
+                    $defaultBlockRuleIndex | Should -BeGreaterThan $dependencyRuleIndex
+                }
+            }
+            finally {
+                if ($null -eq $previousOverlayPath) {
+                    Remove-Item Env:\OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH -ErrorAction SilentlyContinue
+                }
+                else {
+                    $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH = $previousOverlayPath
+                }
+                if ($null -eq $previousQueuePath) {
+                    Remove-Item Env:\OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH -ErrorAction SilentlyContinue
+                }
+                else {
+                    $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH = $previousQueuePath
+                }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Resolves sslip.io fixture domains locally without relying on upstream DNS" {
             InModuleScope DNS {
                 $definition = New-AcrylicHostsDefinition `

@@ -34,6 +34,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Save-OpenPathWhitelistCheckpoint',
         'Send-OpenPathHealthReport',
         'Sync-OpenPathFirefoxNativeHostState',
+        'Invoke-OpenPathRuntimeDependencyQueue',
         'Update-AcrylicHost',
         'Clear-OpenPathRuntimeDependencyOverlay',
         'Restore-OriginalDNS',
@@ -45,6 +46,30 @@ function Initialize-OpenPathUpdateRuntimeSession {
 
     $script:OpenPathUpdateRuntimeSessionInitialized = $true
     $script:OpenPathUpdateRuntimeRoot = $OpenPathRoot
+}
+
+function Invoke-OpenPathRuntimeDependencyQueueApply {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WhitelistPath
+    )
+
+    $runtimeDependencyQueueSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
+    if ($runtimeDependencyQueueSections.IsDisabled) {
+        return $false
+    }
+
+    $runtimeDependencyQueueResult = Invoke-OpenPathRuntimeDependencyQueue `
+        -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist `
+        -BlockedSubdomains $runtimeDependencyQueueSections.BlockedSubdomains
+
+    if ($runtimeDependencyQueueResult.Processed -gt 0 -or $runtimeDependencyQueueResult.Rejected -gt 0) {
+        Write-OpenPathLog "Runtime dependency queue processed: processed=$($runtimeDependencyQueueResult.Processed) rejected=$($runtimeDependencyQueueResult.Rejected)"
+    }
+
+    Update-AcrylicHost -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist -BlockedSubdomains $runtimeDependencyQueueSections.BlockedSubdomains
+    return [bool]$runtimeDependencyQueueResult.Changed
 }
 
 function Invoke-OpenPathUpdateCycle {
@@ -295,5 +320,6 @@ Export-ModuleMember -Function @(
     'Enter-StaleWhitelistFailsafe',
     'Restore-OpenPathCheckpoint',
     'Write-UpdateCatchLog',
+    'Invoke-OpenPathRuntimeDependencyQueueApply',
     'Sync-FirefoxNativeHostMirror'
 )

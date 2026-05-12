@@ -40,8 +40,12 @@ function Get-NativeHostValidDomains {
         Select-Object -First $script:MaxDomains
 }
 
-function Get-NativeHostRuntimeDependencyOverlayPath {
-    return (Join-Path $script:OpenPathRoot 'data\runtime-dependency-overlay.json')
+function Get-NativeHostRuntimeDependencyQueuePath {
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH) {
+        return $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH
+    }
+
+    return (Join-Path $script:OpenPathRoot 'data\runtime-dependency-queue')
 }
 
 function Get-NativeHostRuntimeDependencySettings {
@@ -177,42 +181,82 @@ function Test-NativeHostSensitiveRuntimeDependencyField {
     return $false
 }
 
-function Read-NativeHostRuntimeDependencyOverlay {
-    $path = Get-NativeHostRuntimeDependencyOverlayPath
+function Write-NativeHostRuntimeDependencyQueueRequest {
+    param(
+        [Parameter(Mandatory = $true)][string]$AnchorHost,
+        [Parameter(Mandatory = $true)][string]$DependencyHost,
+        [Parameter(Mandatory = $true)][string]$RequestType
+    )
+
+    $queuePath = Get-NativeHostRuntimeDependencyQueuePath
+    if (-not (Test-Path $queuePath -ErrorAction SilentlyContinue)) {
+        New-Item -ItemType Directory -Path $queuePath -Force | Out-Null
+    }
+
+    $requestId = [Guid]::NewGuid().ToString('N')
+    $requestPath = Join-Path $queuePath "$requestId.json"
+    @{
+        version = 1
+        queuedAt = (Get-Date).ToUniversalTime().ToString('o')
+        anchorHost = $AnchorHost
+        dependencyHost = $DependencyHost
+        requestType = $RequestType
+        source = 'firefox-webrequest-local'
+    } | ConvertTo-Json -Depth 6 | Set-Content $requestPath -Encoding UTF8 -Force
+
+    return $requestPath
+}
+
+function Test-NativeHostRuntimeDependencyOverlayContainsDomains {
+    param([string[]]$Domains = @())
+
+    if (@($Domains).Count -eq 0) {
+        return $true
+    }
+
+    $path = if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH) {
+        $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
+    }
+    else {
+        Join-Path $script:OpenPathRoot 'data\runtime-dependency-overlay.json'
+    }
     if (-not (Test-Path $path -ErrorAction SilentlyContinue)) {
-        return @()
+        return $false
     }
 
     try {
         $raw = Get-Content $path -Raw -ErrorAction Stop
-        if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
         $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
-        return @($parsed.entries)
+        $entryHosts = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($entry in @($parsed.entries)) {
+            if ($entry.PSObject.Properties['dependencyHost'] -and $entry.dependencyHost) {
+                [void]$entryHosts.Add(([string]$entry.dependencyHost).Trim().Trim('.').ToLowerInvariant())
+            }
+        }
+
+        foreach ($domain in @($Domains)) {
+            $normalized = Normalize-NativeHostRuntimeDependencyHost -Value $domain
+            if (-not $normalized -or -not $entryHosts.Contains($normalized)) {
+                return $false
+            }
+        }
+        return $true
     }
     catch {
-        Write-NativeHostLog "Failed to read runtime dependency overlay: $_"
-        return @()
+        Write-NativeHostLog "Failed to inspect runtime dependency overlay: $_"
+        return $false
     }
 }
 
-function Write-NativeHostRuntimeDependencyOverlay {
-    param([object[]]$Entries = @())
+function Test-NativeHostRuntimeDependencyQueueRequestProcessed {
+    param([AllowNull()][string]$RequestPath = '')
 
-    $path = Get-NativeHostRuntimeDependencyOverlayPath
-    $directory = Split-Path $path -Parent
-    if ($directory -and -not (Test-Path $directory)) {
-        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    if ([string]::IsNullOrWhiteSpace($RequestPath)) {
+        return $true
     }
 
-    $payload = @{
-        version = 1
-        updatedAt = (Get-Date).ToUniversalTime().ToString('o')
-        entries = @($Entries)
-    } | ConvertTo-Json -Depth 8
-
-    $tempPath = "$path.tmp"
-    $payload | Set-Content $tempPath -Encoding UTF8 -Force
-    Move-Item $tempPath $path -Force
+    return -not (Test-Path $RequestPath -ErrorAction SilentlyContinue)
 }
 
 function Invoke-NativeHostMutex {
@@ -278,102 +322,37 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
         return @{ success = $true; action = 'allow-local-runtime-dependency'; skipped = $true; reason = 'same-host' }
     }
 
-    $whitelistSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($domain in @($Sections.Whitelist)) {
-        $normalized = Normalize-NativeHostRuntimeDependencyHost -Value $domain
-        if ($normalized) { [void]$whitelistSet.Add($normalized) }
-    }
-    if (-not (Test-NativeHostWhitelistCoversHost -Hostname $anchorHost -WhitelistSet $whitelistSet)) {
-        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Anchor host is not locally approved' }
-    }
+    $requestPath = Write-NativeHostRuntimeDependencyQueueRequest `
+        -AnchorHost $anchorHost `
+        -DependencyHost $dependencyHost `
+        -RequestType $requestType
 
-    $protectedHosts = Get-NativeHostProtectedRuntimeDependencyHosts -State $State
-    if ($protectedHosts.Contains($anchorHost) -or $protectedHosts.Contains($dependencyHost)) {
-        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Protected hosts are not eligible for runtime dependencies' }
-    }
-    if (Test-NativeHostBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains @($Sections.BlockedSubdomains)) {
-        return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Dependency host is explicitly blocked' }
-    }
-
-    $settings = Get-NativeHostRuntimeDependencySettings
-
-    return Invoke-NativeHostMutex -Name 'Global\OpenPathUpdateLock' -Action {
-        Invoke-NativeHostMutex -Name 'Global\OpenPathPolicyStateLock' -Action {
-            $now = (Get-Date).ToUniversalTime()
-            $expiresAt = $now.AddDays($settings.TtlDays)
-            $entries = @(Read-NativeHostRuntimeDependencyOverlay)
-            $keptEntries = @()
-            $updated = $false
-
-            foreach ($entry in $entries) {
-                $entryDependency = if ($entry.PSObject.Properties['dependencyHost']) { Normalize-NativeHostRuntimeDependencyHost -Value $entry.dependencyHost } else { '' }
-                $entryAnchor = if ($entry.PSObject.Properties['anchorHost']) { Normalize-NativeHostRuntimeDependencyHost -Value $entry.anchorHost } else { '' }
-                $entryExpiresAt = if ($entry.PSObject.Properties['expiresAt']) { [string]$entry.expiresAt } else { '' }
-                $isExpired = $false
-                if ($entryExpiresAt) {
-                    try { $isExpired = ([DateTimeOffset]::Parse($entryExpiresAt).UtcDateTime -le $now) }
-                    catch { $isExpired = $true }
-                }
-
-                if (
-                    -not $entryDependency -or
-                    -not $entryAnchor -or
-                    $isExpired -or
-                    -not (Test-NativeHostWhitelistCoversHost -Hostname $entryAnchor -WhitelistSet $whitelistSet) -or
-                    $protectedHosts.Contains($entryDependency) -or
-                    (Test-NativeHostBlockedSubdomainMatch -Domain $entryDependency -BlockedSubdomains @($Sections.BlockedSubdomains))
-                ) {
-                    continue
-                }
-
-                if ($entryDependency -eq $dependencyHost -and $entryAnchor -eq $anchorHost) {
-                    $requestTypes = @($entry.requestTypes)
-                    if ($requestTypes -notcontains $requestType) {
-                        $requestTypes += $requestType
-                    }
-                    $entry.lastSeen = $now.ToString('o')
-                    $entry.expiresAt = $expiresAt.ToString('o')
-                    $entry.requestTypes = @($requestTypes | Sort-Object -Unique)
-                    $updated = $true
-                }
-
-                $keptEntries += $entry
-            }
-
-            if (-not $updated) {
-                $keptEntries += [PSCustomObject]@{
-                    dependencyHost = $dependencyHost
-                    anchorHost = $anchorHost
-                    requestTypes = @($requestType)
-                    firstSeen = $now.ToString('o')
-                    lastSeen = $now.ToString('o')
-                    expiresAt = $expiresAt.ToString('o')
-                    source = 'firefox-webrequest-local'
-                }
-            }
-
-            $keptEntries = @(
-                $keptEntries |
-                    Sort-Object @{ Expression = { if ($_.PSObject.Properties['lastSeen']) { [string]$_.lastSeen } else { '' } }; Descending = $true } |
-                    Select-Object -First $settings.Capacity
-            )
-
-            Write-NativeHostRuntimeDependencyOverlay -Entries $keptEntries
-            Import-NativeHostDnsModule
-            if (Get-Command -Name 'Update-AcrylicHost' -ErrorAction SilentlyContinue) {
-                Update-AcrylicHost -WhitelistedDomains @($Sections.Whitelist) -BlockedSubdomains @($Sections.BlockedSubdomains) | Out-Null
-            }
-
-            return @{
-                success = $true
-                action = 'allow-local-runtime-dependency'
-                anchorHost = $anchorHost
-                dependencyHost = $dependencyHost
-                requestType = $requestType
-                expiresAt = $expiresAt.ToString('o')
-                source = 'firefox-webrequest-local'
-            }
+    $updateResult = Invoke-UpdateTask `
+        -RuntimeDependencyDomains @($dependencyHost) `
+        -RuntimeDependencyRequestPath $requestPath `
+        -TimeoutSeconds 14
+    if ($updateResult.success -ne $true) {
+        return @{
+            success = $false
+            action = 'allow-local-runtime-dependency'
+            anchorHost = $anchorHost
+            dependencyHost = $dependencyHost
+            requestType = $requestType
+            queued = $true
+            requestPath = $requestPath
+            error = $updateResult.error
         }
+    }
+
+    return @{
+        success = $true
+        action = 'allow-local-runtime-dependency'
+        anchorHost = $anchorHost
+        dependencyHost = $dependencyHost
+        requestType = $requestType
+        queued = $true
+        requestPath = $requestPath
+        source = 'firefox-webrequest-local'
     }
 }
 
@@ -511,13 +490,16 @@ function Invoke-NativeHostSharedUpdateTrigger {
 function Invoke-UpdateTask {
     param(
         [string[]]$Domains = @(),
+        [string[]]$RuntimeDependencyDomains = @(),
+        [AllowNull()][string]$RuntimeDependencyRequestPath = '',
         [int]$TimeoutSeconds = 45
     )
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $result = $null
     try {
-        if (Test-NativeWhitelistContainsDomains -Domains $Domains) {
+        $hasRuntimeDependencyWait = @($RuntimeDependencyDomains).Count -gt 0
+        if ((-not $hasRuntimeDependencyWait) -and (Test-NativeWhitelistContainsDomains -Domains $Domains)) {
             $result = @{
                 success = $true
                 action = 'update-whitelist'
@@ -549,7 +531,15 @@ function Invoke-UpdateTask {
                     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
                     while ((Get-Date) -lt $deadline) {
                         Start-Sleep -Milliseconds 1000
-                        if (Test-NativeWhitelistContainsDomains -Domains $Domains) {
+                        $whitelistReady = Test-NativeWhitelistContainsDomains -Domains $Domains
+                        $runtimeDependencyReady = (
+                            (Test-NativeHostRuntimeDependencyQueueRequestProcessed -RequestPath $RuntimeDependencyRequestPath) -and
+                            (
+                                -not [string]::IsNullOrWhiteSpace($RuntimeDependencyRequestPath) -or
+                                (Test-NativeHostRuntimeDependencyOverlayContainsDomains -Domains $RuntimeDependencyDomains)
+                            )
+                        )
+                        if ($whitelistReady -and $runtimeDependencyReady) {
                             return @{
                                 success = $true
                                 action = 'update-whitelist'
@@ -562,7 +552,7 @@ function Invoke-UpdateTask {
                     return @{
                         success = $false
                         action = 'update-whitelist'
-                        error = "OpenPath update task did not write expected domains: $(@($Domains) -join ', ')"
+                        error = "OpenPath update task did not write expected domains: $(@($Domains + $RuntimeDependencyDomains) -join ', ')"
                         domains = @($Domains)
                     }
                 }

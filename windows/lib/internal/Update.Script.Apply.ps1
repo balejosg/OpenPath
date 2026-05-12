@@ -44,6 +44,8 @@ function Handle-OpenPathDownloadFailure {
 
     Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
 
+    Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath | Out-Null
+
     $cachedAgeHours = Get-OpenPathFileAgeHours -Path $WhitelistPath
     if ($EnableStaleFailsafe -and $StaleWhitelistMaxAgeHours -gt 0 -and $cachedAgeHours -ge $StaleWhitelistMaxAgeHours) {
         Enter-StaleWhitelistFailsafe -Config $Config -WhitelistAgeHours $cachedAgeHours -StaleFailsafeStatePath $StaleFailsafeStatePath
@@ -100,7 +102,7 @@ function Handle-OpenPathNotModified {
     }
 
     Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
-    Update-AcrylicHost -WhitelistedDomains $localWhitelistSections.Whitelist -BlockedSubdomains $localWhitelistSections.BlockedSubdomains
+    Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath | Out-Null
     Write-OpenPathLog "Whitelist not modified (ETag) - skipping apply"
 
     try {
@@ -174,7 +176,7 @@ function Handle-OpenPathWhitelistApply {
     $serializedWhitelist | Set-Content $WhitelistPath -Encoding UTF8
     Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
 
-    Update-AcrylicHost -WhitelistedDomains $Whitelist.Whitelist -BlockedSubdomains $Whitelist.BlockedSubdomains
+    Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath | Out-Null
     Restore-OpenPathProtectedMode -Config $Config | Out-Null
 
     if ($Config.enableBrowserPolicies) {

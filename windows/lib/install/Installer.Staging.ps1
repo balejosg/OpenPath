@@ -9,6 +9,7 @@ function Initialize-OpenPathInstallDirectories {
         "$OpenPathRoot\lib\internal",
         "$OpenPathRoot\scripts",
         "$OpenPathRoot\data\logs",
+        "$OpenPathRoot\data\runtime-dependency-queue",
         "$OpenPathRoot\browser-extension\firefox",
         "$OpenPathRoot\browser-extension\firefox-release",
         "$OpenPathRoot\browser-extension\chromium-managed",
@@ -55,6 +56,21 @@ function Initialize-OpenPathInstallDirectories {
         }
         catch {
             Write-InstallerWarning "  ADVERTENCIA: No se pudo habilitar lectura para browser-extension: $_"
+        }
+    }
+
+    $runtimeDependencyQueuePath = "$OpenPathRoot\data\runtime-dependency-queue"
+    if (Test-Path $runtimeDependencyQueuePath) {
+        try {
+            $runtimeDependencyQueueAcl = Get-Acl $runtimeDependencyQueuePath
+            $usersModifyRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                "BUILTIN\Users", "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")
+            $runtimeDependencyQueueAcl.AddAccessRule($usersModifyRule)
+            Set-Acl $runtimeDependencyQueuePath $runtimeDependencyQueueAcl
+            Write-InstallerVerbose "  Runtime dependency queue write access granted for browser users"
+        }
+        catch {
+            Write-InstallerWarning "  ADVERTENCIA: No se pudo habilitar escritura para runtime-dependency-queue: $_"
         }
     }
 }
@@ -179,6 +195,7 @@ function Copy-OpenPathInstallerRuntime {
     $nativeHostArtifacts = @(
         'OpenPath-NativeHost.ps1',
         'OpenPath-NativeHost.cmd',
+        'RequestSetup.State.psm1',
         'NativeHost.State.ps1',
         'NativeHost.Protocol.ps1',
         'NativeHost.Actions.ps1'
