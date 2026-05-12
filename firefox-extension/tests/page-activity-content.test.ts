@@ -9,6 +9,11 @@ async function readContentEntrypoint(): Promise<string> {
   return readFile(path.join(extensionRoot, 'src', 'page-activity-content.ts'), 'utf8');
 }
 
+async function importContentScript(caseId: string): Promise<void> {
+  // Query suffix forces the classic-script side effect to run for each isolated case.
+  await import(`../src/page-activity-content.ts?${caseId}`);
+}
+
 void describe('page activity content script', () => {
   void test('uses a classic-script entrypoint loadable from manifest content_scripts', async () => {
     const source = await readContentEntrypoint();
@@ -58,8 +63,7 @@ void describe('page activity content script', () => {
     });
 
     try {
-      // @ts-expect-error page-activity-content is intentionally a classic script for manifest loading.
-      await import('../src/page-activity-content.ts');
+      await importContentScript('wake-up');
 
       assert.deepEqual(sentMessages, [
         {
@@ -70,6 +74,197 @@ void describe('page activity content script', () => {
       Object.assign(testGlobal, {
         browser: originalBrowser,
         chrome: originalChrome,
+      });
+    }
+  });
+
+  void test('relays self-origin page resource candidates to the runtime bridge', async () => {
+    const testGlobal = globalThis as unknown as Record<string, unknown>;
+    const originalBrowser = testGlobal.browser;
+    const originalChrome = testGlobal.chrome;
+    const originalWindow = testGlobal.window;
+    const listeners: ((event: unknown) => void)[] = [];
+    const sentMessages: unknown[] = [];
+    const fakeWindow = {
+      addEventListener(type: string, listener: (event: unknown) => void): void {
+        if (type === 'message') {
+          listeners.push(listener);
+        }
+      },
+    };
+
+    Object.assign(testGlobal, {
+      window: fakeWindow,
+      browser: {
+        runtime: {
+          sendMessage(message: unknown): Promise<void> {
+            sentMessages.push(message);
+            return Promise.resolve();
+          },
+        },
+      },
+      chrome: undefined,
+    });
+
+    try {
+      await importContentScript('bridge-browser');
+
+      assert.equal(listeners.length, 1);
+      listeners[0]?.({
+        source: {},
+        data: {
+          source: 'openpath-page-resource-candidate',
+          kind: 'script',
+          pageUrl: 'https://allowed.example/',
+          url: 'https://ignored.example/app.js',
+        },
+      });
+      listeners[0]?.({
+        source: fakeWindow,
+        data: { source: 'other', url: 'https://ignored.example/app.js' },
+      });
+      listeners[0]?.({
+        source: fakeWindow,
+        data: {
+          source: 'openpath-page-resource-candidate',
+          kind: 'script',
+          pageUrl: 'https://allowed.example/',
+          url: 'https://dependency.example/app.js',
+        },
+      });
+
+      assert.deepEqual(sentMessages, [
+        { action: 'openpathPageActivity' },
+        {
+          action: 'openpathPageResourceCandidate',
+          kind: 'script',
+          pageUrl: 'https://allowed.example/',
+          resourceUrl: 'https://dependency.example/app.js',
+        },
+      ]);
+    } finally {
+      Object.assign(testGlobal, {
+        browser: originalBrowser,
+        chrome: originalChrome,
+        window: originalWindow,
+      });
+    }
+  });
+
+  void test('uses chrome runtime fallback and keeps candidate relay best effort', async () => {
+    const testGlobal = globalThis as unknown as Record<string, unknown>;
+    const originalBrowser = testGlobal.browser;
+    const originalChrome = testGlobal.chrome;
+    const originalWindow = testGlobal.window;
+    const listeners: ((event: unknown) => void)[] = [];
+    const sentMessages: unknown[] = [];
+    const fakeWindow = {
+      addEventListener(type: string, listener: (event: unknown) => void): void {
+        if (type === 'message') {
+          listeners.push(listener);
+        }
+      },
+    };
+
+    Object.assign(testGlobal, {
+      window: fakeWindow,
+      browser: undefined,
+      chrome: {
+        runtime: {
+          sendMessage(message: unknown): Promise<void> {
+            sentMessages.push(message);
+            return Promise.reject(new Error('native channel unavailable'));
+          },
+        },
+      },
+    });
+
+    try {
+      await importContentScript('bridge-chrome-reject');
+
+      assert.equal(listeners.length, 1);
+      assert.doesNotThrow(() => {
+        listeners[0]?.({
+          source: fakeWindow,
+          data: {
+            source: 'openpath-page-resource-candidate',
+            kind: 42,
+            pageUrl: 42,
+            url: 'https://dependency.example/style.css',
+          },
+        });
+      });
+      await Promise.resolve();
+
+      assert.deepEqual(sentMessages, [
+        { action: 'openpathPageActivity' },
+        {
+          action: 'openpathPageResourceCandidate',
+          kind: 'other',
+          pageUrl: undefined,
+          resourceUrl: 'https://dependency.example/style.css',
+        },
+      ]);
+    } finally {
+      Object.assign(testGlobal, {
+        browser: originalBrowser,
+        chrome: originalChrome,
+        window: originalWindow,
+      });
+    }
+  });
+
+  void test('ignores pages without a usable runtime and catches synchronous send failures', async () => {
+    const testGlobal = globalThis as unknown as Record<string, unknown>;
+    const originalBrowser = testGlobal.browser;
+    const originalChrome = testGlobal.chrome;
+    const originalWindow = testGlobal.window;
+    const listeners: ((event: unknown) => void)[] = [];
+    const fakeWindow = {
+      addEventListener(type: string, listener: (event: unknown) => void): void {
+        if (type === 'message') {
+          listeners.push(listener);
+        }
+      },
+    };
+
+    Object.assign(testGlobal, {
+      window: fakeWindow,
+      browser: { runtime: {} },
+      chrome: undefined,
+    });
+
+    try {
+      await importContentScript('no-runtime');
+      assert.equal(listeners.length, 0);
+
+      Object.assign(testGlobal, {
+        browser: {
+          runtime: {
+            sendMessage(): never {
+              throw new Error('sync failure');
+            },
+          },
+        },
+      });
+
+      await importContentScript('sync-failure');
+      assert.equal(listeners.length, 1);
+      assert.doesNotThrow(() => {
+        listeners[0]?.({
+          source: fakeWindow,
+          data: {
+            source: 'openpath-page-resource-candidate',
+            kind: 'fetch',
+            url: 'https://dependency.example/data.json',
+          },
+        });
+      });
+    } finally {
+      Object.assign(testGlobal, {
+        browser: originalBrowser,
+        chrome: originalChrome,
+        window: originalWindow,
       });
     }
   });
