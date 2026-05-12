@@ -204,16 +204,16 @@ function Test-OpenPathBlockedSubdomainMatch {
 function Test-OpenPathWhitelistCoversHost {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)][string]$Host,
+        [Parameter(Mandatory = $true)][string]$Hostname,
         [System.Collections.Generic.HashSet[string]]$WhitelistSet
     )
 
-    if (-not $Host -or -not $WhitelistSet) { return $false }
-    if ($WhitelistSet.Contains($Host)) { return $true }
+    if (-not $Hostname -or -not $WhitelistSet) { return $false }
+    if ($WhitelistSet.Contains($Hostname)) { return $true }
 
     foreach ($whitelistedDomain in $WhitelistSet) {
         if (-not $whitelistedDomain) { continue }
-        if ($Host.EndsWith(".$whitelistedDomain", [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($Hostname.EndsWith(".$whitelistedDomain", [System.StringComparison]::OrdinalIgnoreCase)) {
             return $true
         }
     }
@@ -310,7 +310,7 @@ function Get-OpenPathRuntimeDependencyDomains {
             -not $dependencyHost -or
             -not $anchorHost -or
             $isExpired -or
-            -not (Test-OpenPathWhitelistCoversHost -Host $anchorHost -WhitelistSet $whitelistSet) -or
+            -not (Test-OpenPathWhitelistCoversHost -Hostname $anchorHost -WhitelistSet $whitelistSet) -or
             $protectedSet.Contains($dependencyHost) -or
             (Test-OpenPathBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains $BlockedSubdomains) -or
             -not (Test-OpenPathDomainFormat -Domain $dependencyHost)

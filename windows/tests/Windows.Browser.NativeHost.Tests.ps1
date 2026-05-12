@@ -446,8 +446,10 @@ Describe "Browser Module - Native Host" {
                 'Update-AcrylicHost -WhitelistedDomains'
             )
 
-            $nativeHostActionsContent | Should -Match 'Test-NativeHostWhitelistCoversHost -Host \$anchorHost'
-            $nativeHostActionsContent | Should -Match 'Test-NativeHostWhitelistCoversHost -Host \$entryAnchor'
+            $nativeHostActionsContent | Should -Match 'Test-NativeHostWhitelistCoversHost -Hostname \$anchorHost'
+            $nativeHostActionsContent | Should -Match 'Test-NativeHostWhitelistCoversHost -Hostname \$entryAnchor'
+            $nativeHostActionsContent | Should -Not -Match '\[string\]\$Host\b'
+            $nativeHostActionsContent | Should -Not -Match 'foreach \(\$host in'
             $nativeHostActionsContent | Should -Not -Match '/api/requests/auto'
         }
 

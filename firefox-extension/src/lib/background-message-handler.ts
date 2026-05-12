@@ -25,8 +25,10 @@ interface BackgroundMessage {
   kind?: string;
   maxEvents?: number;
   origin?: string;
+  pageUrl?: string;
   phase?: string;
   reason?: string;
+  resourceUrl?: string;
   tabId?: number;
   type?: string;
   url?: string;
@@ -42,6 +44,17 @@ interface RecentBlockedDomainRequestStatus {
 function normalizeRecentBlockedDomainKey(domain: unknown): string | null {
   const normalized = typeof domain === 'string' ? domain.trim().toLowerCase() : '';
   return normalized.length > 0 ? normalized : null;
+}
+
+function extractMessageHostname(url: unknown): string | undefined {
+  if (typeof url !== 'string' || url.length === 0) {
+    return undefined;
+  }
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
 }
 
 export interface BackgroundMessageHandlerDeps {
@@ -159,6 +172,21 @@ export function createBackgroundMessageHandler(
           source: 'openpathPageActivity',
           tabId: msg.tabId ?? sender.tab?.id,
           frameId: msg.frameId ?? sender.frameId,
+        });
+        return { success: true };
+
+      case 'openpathPageResourceCandidate':
+        deps.recordOpenPathDependencyObservationEvent({
+          source: 'openpathPageResourceCandidate',
+          tabId: msg.tabId ?? sender.tab?.id,
+          frameId: msg.frameId ?? sender.frameId,
+          ...(typeof msg.kind === 'string' ? { kind: msg.kind } : {}),
+          ...(extractMessageHostname(msg.pageUrl)
+            ? { anchorHost: extractMessageHostname(msg.pageUrl) }
+            : {}),
+          ...(extractMessageHostname(msg.resourceUrl ?? msg.url)
+            ? { dependencyHost: extractMessageHostname(msg.resourceUrl ?? msg.url) }
+            : {}),
         });
         return { success: true };
 

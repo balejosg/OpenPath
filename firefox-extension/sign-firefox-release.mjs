@@ -24,16 +24,8 @@ const defaultWebExtSignRecoveryPollSeconds = 60;
 const defaultAmoBaseUrl = 'https://addons.mozilla.org/api/v5/';
 const amoVersionComponentModulo = 1_000_000_000n;
 const amoSigningStateArtifactName = 'amo-signing-state.json';
-const removedApprovalMaxRuntimeFilenameTokens = [
-  'auto-allow',
-  'page-resource-auto-allow',
-  'page-resource-observer-main',
-];
-const removedRuntimeContentTokens = [
-  'openpathPageResourceCandidate',
-  'resourceUrl',
-  '/api/requests/auto',
-];
+const removedApprovalMaxRuntimeFilenameTokens = ['auto-allow', 'page-resource-auto-allow'];
+const removedRuntimeContentTokens = ['/api/requests/auto'];
 
 function fail(message) {
   throw new Error(message);
@@ -767,7 +759,7 @@ function assertNoRemovedRuntimeContent(sourceDir) {
   if (forbiddenFile) {
     fail(
       [
-        'Firefox AMO runtime payload contains removed resource-observer content',
+        'Firefox AMO runtime payload contains removed remote auto-allow content',
         `file=${forbiddenFile}`,
         `forbiddenTokens=${removedRuntimeContentTokens.join(',')}`,
       ].join(' ')

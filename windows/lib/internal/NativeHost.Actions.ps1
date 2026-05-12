@@ -90,16 +90,16 @@ function Test-NativeHostBlockedSubdomainMatch {
 
 function Test-NativeHostWhitelistCoversHost {
     param(
-        [Parameter(Mandatory = $true)][string]$Host,
+        [Parameter(Mandatory = $true)][string]$Hostname,
         [System.Collections.Generic.HashSet[string]]$WhitelistSet
     )
 
-    if (-not $Host -or -not $WhitelistSet) { return $false }
-    if ($WhitelistSet.Contains($Host)) { return $true }
+    if (-not $Hostname -or -not $WhitelistSet) { return $false }
+    if ($WhitelistSet.Contains($Hostname)) { return $true }
 
     foreach ($whitelistedDomain in $WhitelistSet) {
         if (-not $whitelistedDomain) { continue }
-        if ($Host.EndsWith(".$whitelistedDomain", [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($Hostname.EndsWith(".$whitelistedDomain", [System.StringComparison]::OrdinalIgnoreCase)) {
             return $true
         }
     }
@@ -111,7 +111,7 @@ function Get-NativeHostProtectedRuntimeDependencyHosts {
     param([Parameter(Mandatory = $true)][PSCustomObject]$State)
 
     $hosts = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($host in @(
+    foreach ($protectedHost in @(
             'raw.githubusercontent.com',
             'github.com',
             'githubusercontent.com',
@@ -131,7 +131,7 @@ function Get-NativeHostProtectedRuntimeDependencyHosts {
             'time.windows.com',
             'time.google.com'
         )) {
-        $normalized = Normalize-NativeHostRuntimeDependencyHost -Value $host
+        $normalized = Normalize-NativeHostRuntimeDependencyHost -Value $protectedHost
         if ($normalized) { [void]$hosts.Add($normalized) }
     }
 
@@ -283,7 +283,7 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
         $normalized = Normalize-NativeHostRuntimeDependencyHost -Value $domain
         if ($normalized) { [void]$whitelistSet.Add($normalized) }
     }
-    if (-not (Test-NativeHostWhitelistCoversHost -Host $anchorHost -WhitelistSet $whitelistSet)) {
+    if (-not (Test-NativeHostWhitelistCoversHost -Hostname $anchorHost -WhitelistSet $whitelistSet)) {
         return @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Anchor host is not locally approved' }
     }
 
@@ -319,7 +319,7 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
                     -not $entryDependency -or
                     -not $entryAnchor -or
                     $isExpired -or
-                    -not (Test-NativeHostWhitelistCoversHost -Host $entryAnchor -WhitelistSet $whitelistSet) -or
+                    -not (Test-NativeHostWhitelistCoversHost -Hostname $entryAnchor -WhitelistSet $whitelistSet) -or
                     $protectedHosts.Contains($entryDependency) -or
                     (Test-NativeHostBlockedSubdomainMatch -Domain $entryDependency -BlockedSubdomains @($Sections.BlockedSubdomains))
                 ) {

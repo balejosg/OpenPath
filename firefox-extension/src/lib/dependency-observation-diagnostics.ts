@@ -1,5 +1,6 @@
 export type OpenPathDependencyObservationSource =
   | 'openpathPageActivity'
+  | 'openpathPageResourceCandidate'
   | 'webRequest.onBeforeRequest'
   | 'webRequest.onErrorOccurred'
   | 'webNavigation.onBeforeNavigate'

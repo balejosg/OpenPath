@@ -338,6 +338,43 @@ await describe('background message handler', async () => {
     ]);
   });
 
+  await test('records page resource candidates without native or remote side effects', async () => {
+    const recorded: unknown[] = [];
+    const handler = createHandlerFixture({
+      getMachineToken: () => Promise.reject(new Error('should not be called')),
+      getOpenPathDiagnostics: () => Promise.reject(new Error('should not be called')),
+      getSystemHostname: () => Promise.reject(new Error('should not be called')),
+      isNativeHostAvailable: () => Promise.reject(new Error('should not be called')),
+      recordOpenPathDependencyObservationEvent: (event) => {
+        recorded.push(event);
+      },
+      triggerWhitelistUpdate: () => Promise.reject(new Error('should not be called')),
+    });
+
+    const response = await handler(
+      {
+        action: 'openpathPageResourceCandidate',
+        kind: 'fetch',
+        pageUrl: 'https://allowed.example/lesson',
+        resourceUrl: 'https://cdn.example.test/data.json?token=secret',
+        tabId: 7,
+      },
+      { frameId: 0 }
+    );
+
+    assert.deepEqual(response, { success: true });
+    assert.deepEqual(recorded, [
+      {
+        source: 'openpathPageResourceCandidate',
+        tabId: 7,
+        frameId: 0,
+        kind: 'fetch',
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example.test',
+      },
+    ]);
+  });
+
   await test('configures and reads dependency observation diagnostics through runtime messages', async () => {
     const handler = createHandlerFixture({
       configureOpenPathDependencyObservationDiagnostics: (options) => ({

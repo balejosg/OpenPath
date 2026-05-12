@@ -391,7 +391,7 @@ void describe('background listeners blocked-screen routing', () => {
     ]);
   });
 
-  void test('does not wait for ajax auto-allow before releasing eligible page resources', async () => {
+  void test('reports eligible page resources to the local dependency overlay without remote auto-allow', async () => {
     const harness = createListenerHarness({
       currentTabUrl: 'https://allowed.example/app',
     });
@@ -404,9 +404,16 @@ void describe('background listeners blocked-screen routing', () => {
       originUrl: 'https://allowed.example/app',
     } as WebRequest.OnBeforeRequestDetailsType);
 
-    assert.equal(result, undefined);
-    await waitForAsyncListeners();
+    assert.ok(result instanceof Promise);
+    assert.deepEqual(await result, {});
     assert.deepEqual(harness.autoAllowCalls, []);
+    assert.deepEqual(harness.localRuntimeDependencyCalls, [
+      {
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'xmlhttprequest',
+      },
+    ]);
   });
 
   void test('allows eligible page resources through the local native dependency overlay only', async () => {
@@ -441,6 +448,34 @@ void describe('background listeners blocked-screen routing', () => {
         anchorHost: 'allowed.example',
         dependencyHost: 'cdn.example.net',
         requestType: 'script',
+      },
+    ]);
+  });
+
+  void test('derives local dependency overlay anchor host from originUrl when tab and document context are absent', async () => {
+    const nativePayloads: unknown[] = [];
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: (input) => {
+        nativePayloads.push(input);
+        return Promise.resolve({ success: true });
+      },
+    });
+    assert.ok(harness.webRequestBefore);
+
+    const result = harness.webRequestBefore({
+      originUrl: 'https://allowed.example/lesson',
+      tabId: 45,
+      type: 'xmlhttprequest',
+      url: 'https://api.not-yet-approved.example/data.json',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.ok(result instanceof Promise);
+    assert.deepEqual(await result, {});
+    assert.deepEqual(nativePayloads, [
+      {
+        anchorHost: 'allowed.example',
+        dependencyHost: 'api.not-yet-approved.example',
+        requestType: 'xmlhttprequest',
       },
     ]);
   });
@@ -801,7 +836,7 @@ void describe('background listeners blocked-screen routing', () => {
     assert.deepEqual(harness.autoAllowCalls, []);
   });
 
-  void test('does not start auto-allow from page subresource requests before network timeout', async () => {
+  void test('reports page subresource requests to the local overlay without blocked-screen redirects', async () => {
     const resourceTypes: WebRequest.ResourceType[] = ['script', 'image', 'stylesheet', 'font'];
 
     for (const requestType of resourceTypes) {
@@ -817,16 +852,22 @@ void describe('background listeners blocked-screen routing', () => {
         url: `https://${requestType}.blocked.example/resource`,
       } as WebRequest.OnBeforeRequestDetailsType);
 
-      await waitForAsyncListeners();
-
-      assert.equal(result, undefined);
+      assert.ok(result instanceof Promise);
+      assert.deepEqual(await result, {});
       assert.deepEqual(harness.confirmCalls, []);
       assert.deepEqual(harness.redirects, []);
       assert.deepEqual(harness.autoAllowCalls, []);
+      assert.deepEqual(harness.localRuntimeDependencyCalls, [
+        {
+          anchorHost: 'allowed.example',
+          dependencyHost: `${requestType}.blocked.example`,
+          requestType,
+        },
+      ]);
     }
   });
 
-  void test('does not auto-allow stylesheet-initiated font subresources', async () => {
+  void test('reports stylesheet-initiated font subresources to the local overlay only', async () => {
     const harness = createListenerHarness({
       confirmBlockedScreenNavigation: () => Promise.resolve(true),
       currentTabUrl: 'https://www.reddit.com/r/openpath',
@@ -840,12 +881,18 @@ void describe('background listeners blocked-screen routing', () => {
       url: 'https://fonts.gstatic.com/s/inter/v12/font.woff2',
     } as WebRequest.OnBeforeRequestDetailsType);
 
-    await waitForAsyncListeners();
-
-    assert.equal(result, undefined);
+    assert.ok(result instanceof Promise);
+    assert.deepEqual(await result, {});
     assert.deepEqual(harness.confirmCalls, []);
     assert.deepEqual(harness.redirects, []);
     assert.deepEqual(harness.autoAllowCalls, []);
+    assert.deepEqual(harness.localRuntimeDependencyCalls, [
+      {
+        anchorHost: 'fonts.googleapis.com',
+        dependencyHost: 'fonts.gstatic.com',
+        requestType: 'font',
+      },
+    ]);
   });
 
   void test('does not start auto-allow when Firefox omits a usable tab id for a page subresource', async () => {

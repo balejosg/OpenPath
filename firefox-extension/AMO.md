@@ -58,16 +58,18 @@ What it does not do:
   OpenPath deployments
 - it does not replace the OpenPath Linux or Windows endpoint agent, DNS rules,
   firewall rules, or administrator policy
-- Firefox Core includes an isolated-world page activity relay only. It does not
-  inject a MAIN-world page-resource observer and does not relay AJAX/subresource
-  URLs from content scripts.
+- Firefox Core includes an isolated-world page activity relay and a MAIN-world
+  page-resource observer. The observer emits local resource-candidate diagnostics
+  and the background runtime reduces eligible Windows dependency handling to
+  `{ anchorHost, dependencyHost, requestType }` before contacting the local native
+  host.
 - Firefox Core includes a Google Search/Doodles visual guard content script
   that locally neutralizes detected playable game widgets without uploading
   browsing data
 - Firefox Core does not include Android support, remote automatic AJAX/page-resource
   allowlisting, or live/automatic AMO upload. Windows runtime dependency handling
-  sends only `{ anchorHost, dependencyHost, requestType }` to the local native host
-  and never to the OpenPath service.
+  sends only the reduced local native-host payload above and never sends dependency
+  URLs to the OpenPath service.
 - it does not send analytics, telemetry, or browsing-history data to third-party
   services
 

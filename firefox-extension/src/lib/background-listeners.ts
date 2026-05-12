@@ -58,6 +58,17 @@ function isDependencyRequestType(type: unknown): type is string {
   return typeof type === 'string' && type.length > 0 && type !== 'main_frame';
 }
 
+function resolveAnchorHost(
+  details: Pick<WebRequest.OnBeforeRequestDetailsType, 'documentUrl' | 'originUrl' | 'tabId'>,
+  tabAnchorHosts: Map<number, string>
+): string | null {
+  return (
+    (details.tabId >= 0 ? (tabAnchorHosts.get(details.tabId) ?? null) : null) ??
+    extractRequestHostname(details.documentUrl) ??
+    extractRequestHostname(details.originUrl)
+  );
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
   if (timeoutMs <= 0) {
     return promise.catch(() => fallback);
@@ -136,9 +147,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
   options.browser.webRequest.onBeforeRequest.addListener(
     (details: WebRequest.OnBeforeRequestDetailsType) => {
       const dependencyHost = extractRequestHostname(details.url);
-      const anchorHost =
-        (details.tabId >= 0 ? (tabAnchorHosts.get(details.tabId) ?? null) : null) ??
-        extractRequestHostname(details.documentUrl);
+      const anchorHost = resolveAnchorHost(details, tabAnchorHosts);
       options.recordDependencyObservationEvent?.({
         source: 'webRequest.onBeforeRequest',
         tabId: details.tabId,
@@ -216,24 +225,16 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
 
   options.browser.webRequest.onErrorOccurred.addListener(
     (details: WebRequest.OnErrorOccurredDetailsType) => {
+      const anchorHost = resolveAnchorHost(details, tabAnchorHosts);
+      const dependencyHost = extractRequestHostname(details.url);
       options.recordDependencyObservationEvent?.({
         source: 'webRequest.onErrorOccurred',
         tabId: details.tabId,
         frameId: details.frameId,
         requestId: details.requestId,
         type: details.type,
-        ...(((details.tabId >= 0 ? tabAnchorHosts.get(details.tabId) : undefined) ??
-        extractRequestHostname(details.documentUrl))
-          ? {
-              anchorHost:
-                (details.tabId >= 0 ? tabAnchorHosts.get(details.tabId) : undefined) ??
-                extractRequestHostname(details.documentUrl) ??
-                undefined,
-            }
-          : {}),
-        ...(extractRequestHostname(details.url)
-          ? { dependencyHost: extractRequestHostname(details.url) ?? undefined }
-          : {}),
+        ...(anchorHost ? { anchorHost } : {}),
+        ...(dependencyHost ? { dependencyHost } : {}),
       });
       const hostname = extractHostname(details.url);
       if (!hostname) {

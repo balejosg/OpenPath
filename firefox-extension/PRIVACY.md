@@ -44,12 +44,12 @@ The Firefox manifest declares no required Mozilla data collection and makes
 `browsingActivity` optional. User-initiated unblock requests ask for that
 permission before transmitting the blocked domain and related navigation/request
 context to the configured OpenPath service. Firefox Core registers a page activity
-content script but no MAIN-world page-resource observer. Automatic runtime dependency
-handling is local to Windows: the background script sends only the top-level anchor host,
-dependency host, and Firefox request type to the native host, and the native host writes
-only a local Acrylic exact-host overlay. Those dependency hosts are not uploaded or
-synchronized with the OpenPath service. Firefox Core
-registers a Google Search/Doodles visual guard that locally neutralizes detected
+content script and a MAIN-world page-resource observer for local resource-candidate
+diagnostics. Automatic runtime dependency handling is local to Windows: the background
+script sends only the top-level anchor host, dependency host, and Firefox request type
+to the native host, and the native host writes only a local Acrylic exact-host overlay.
+Those dependency hosts are not uploaded or synchronized with the OpenPath service.
+Firefox Core registers a Google Search/Doodles visual guard that locally neutralizes detected
 playable game widgets without sending Google browsing activity to OpenPath or
 third parties. Firefox Core does not register automatic AJAX/page-resource
 remote allowlisting, Android support, or live/automatic AMO upload. Google game

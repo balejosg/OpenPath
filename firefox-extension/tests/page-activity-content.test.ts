@@ -20,22 +20,23 @@ void describe('page activity content script', () => {
     assert.match(source, /chrome\?\.runtime/);
   });
 
-  void test('reports page activity without observing page resources', async () => {
+  void test('reports page activity and relays page resource candidates without remote auto-allow', async () => {
     const source = await readContentEntrypoint();
 
     assert.match(source, /openpathPageActivity/);
-    assert.doesNotMatch(source, /openpathPageResourceCandidate/);
-    assert.doesNotMatch(source, /openpath-page-resource-candidate/);
-    assert.doesNotMatch(source, /resourceUrl/);
-    assert.doesNotMatch(source, /window\.addEventListener\('message'/);
+    assert.match(source, /openpathPageResourceCandidate/);
+    assert.match(source, /openpath-page-resource-candidate/);
+    assert.match(source, /resourceUrl/);
+    assert.match(source, /window\.addEventListener\('message'/);
+    assert.doesNotMatch(source, /\/api\/requests\/auto/);
   });
 
-  void test('does not install page resource observers or inline script injection', async () => {
+  void test('does not use inline script injection for the page resource observer', async () => {
     const source = await readContentEntrypoint();
 
-    assert.doesNotMatch(source, /MutationObserver/);
     assert.doesNotMatch(source, /script\.textContent/);
     assert.doesNotMatch(source, /appendChild\(script\)/);
+    assert.doesNotMatch(source, /fetch\(['"]\/api\/requests\/auto/);
   });
 
   void test('executes the manifest entrypoint and sends only page activity wake-up', async () => {

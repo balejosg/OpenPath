@@ -1813,7 +1813,6 @@ void describe('Firefox release signing helpers', () => {
     for (const forbiddenFilename of [
       'auto-allow-workflow.js',
       'page-resource-auto-allow-intake.js',
-      'page-resource-observer-main.js',
     ]) {
       const workingDir = createTempDir('openpath-firefox-signing-source-guard-');
       const sourceDir = path.join(workingDir, 'extension');
@@ -1848,12 +1847,8 @@ void describe('Firefox release signing helpers', () => {
     }
   });
 
-  void test('prepareSigningSourceDir rejects removed resource observer runtime content before signing', () => {
-    for (const forbiddenContent of [
-      'openpathPageResourceCandidate',
-      'resourceUrl',
-      '/api/requests/auto',
-    ]) {
+  void test('prepareSigningSourceDir rejects removed remote auto-allow runtime content before signing', () => {
+    for (const forbiddenContent of ['/api/requests/auto']) {
       const workingDir = createTempDir('openpath-firefox-signing-content-guard-');
       const sourceDir = path.join(workingDir, 'extension');
 
@@ -1879,7 +1874,7 @@ void describe('Firefox release signing helpers', () => {
 
       assert.throws(
         () => prepareSigningSourceDir({ sourceDir }),
-        /Firefox AMO runtime payload contains removed resource-observer content/
+        /Firefox AMO runtime payload contains removed remote auto-allow content/
       );
     }
   });

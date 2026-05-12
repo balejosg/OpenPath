@@ -131,6 +131,12 @@ void describe('Firefox extension manifest policy', () => {
         run_at: 'document_start',
       },
       {
+        matches: ['http://*/*', 'https://*/*'],
+        js: ['dist/page-resource-observer-main.js'],
+        run_at: 'document_start',
+        world: 'MAIN',
+      },
+      {
         matches: [
           'https://www.google.com/*',
           'https://www.google.es/*',
