@@ -99,6 +99,13 @@
       "when": 1776347279639,
       "tag": "0013_repair_schedules_one_off_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1778665200000,
+      "tag": "0014_machine_exemption_sources",
+      "breakpoints": true
     }
   ]
 }

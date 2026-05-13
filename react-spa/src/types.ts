@@ -53,7 +53,9 @@ export interface ClassroomExemption {
   machineId: string;
   machineHostname?: string;
   classroomId: string;
-  scheduleId: string;
+  scheduleId: string | null;
+  source: 'schedule' | 'operational';
+  reason: string | null;
   createdBy: string | null;
   createdAt: string | null;
   expiresAt: string;

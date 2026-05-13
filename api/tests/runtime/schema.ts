@@ -37,12 +37,24 @@ async function ensureMachineExemptionsSchema(): Promise<void> {
       '  "id" varchar(50) PRIMARY KEY NOT NULL,\n' +
       '  "machine_id" varchar(50) NOT NULL,\n' +
       '  "classroom_id" varchar(50) NOT NULL,\n' +
-      '  "schedule_id" uuid NOT NULL,\n' +
+      '  "schedule_id" uuid,\n' +
+      '  "source" varchar(20) DEFAULT \'schedule\' NOT NULL,\n' +
+      '  "reason" text,\n' +
       '  "created_by" varchar(50),\n' +
       '  "created_at" timestamp with time zone DEFAULT now(),\n' +
-      '  "expires_at" timestamp with time zone NOT NULL\n' +
+      '  "expires_at" timestamp with time zone NOT NULL,\n' +
+      '  CONSTRAINT "machine_exemptions_source_schedule_id_check" CHECK ("source" IN (\'schedule\', \'operational\') AND (("source" = \'schedule\' AND "schedule_id" IS NOT NULL) OR ("source" = \'operational\' AND "schedule_id" IS NULL)))\n' +
       ');',
-    'CREATE UNIQUE INDEX IF NOT EXISTS "machine_exemptions_machine_schedule_expires_key" ON "machine_exemptions" ("machine_id","schedule_id","expires_at");',
+    'ALTER TABLE "machine_exemptions" ALTER COLUMN "schedule_id" DROP NOT NULL;',
+    'ALTER TABLE "machine_exemptions" ADD COLUMN IF NOT EXISTS "source" varchar(20) DEFAULT \'schedule\' NOT NULL;',
+    'ALTER TABLE "machine_exemptions" ADD COLUMN IF NOT EXISTS "reason" text;',
+    'ALTER TABLE "machine_exemptions" DROP CONSTRAINT IF EXISTS "machine_exemptions_machine_schedule_expires_key";',
+    'DROP INDEX IF EXISTS "machine_exemptions_machine_schedule_expires_key";',
+    'DROP INDEX IF EXISTS "machine_exemptions_machine_operational_expires_key";',
+    'CREATE UNIQUE INDEX IF NOT EXISTS "machine_exemptions_machine_schedule_expires_key" ON "machine_exemptions" ("machine_id","schedule_id","expires_at") WHERE "source" = \'schedule\';',
+    'CREATE UNIQUE INDEX IF NOT EXISTS "machine_exemptions_machine_operational_expires_key" ON "machine_exemptions" ("machine_id","expires_at") WHERE "source" = \'operational\' AND "schedule_id" IS NULL;',
+    'ALTER TABLE "machine_exemptions" DROP CONSTRAINT IF EXISTS "machine_exemptions_source_schedule_id_check";',
+    'ALTER TABLE "machine_exemptions" ADD CONSTRAINT "machine_exemptions_source_schedule_id_check" CHECK ("source" IN (\'schedule\', \'operational\') AND (("source" = \'schedule\' AND "schedule_id" IS NOT NULL) OR ("source" = \'operational\' AND "schedule_id" IS NULL)));',
     'CREATE INDEX IF NOT EXISTS "machine_exemptions_classroom_expires_idx" ON "machine_exemptions" ("classroom_id","expires_at");',
     'CREATE INDEX IF NOT EXISTS "machine_exemptions_machine_expires_idx" ON "machine_exemptions" ("machine_id","expires_at");',
     'DO $$ BEGIN\n' +

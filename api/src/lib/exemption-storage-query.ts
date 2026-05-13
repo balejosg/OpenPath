@@ -1,4 +1,4 @@
-import { and, eq, gt } from 'drizzle-orm';
+import { and, desc, eq, gt } from 'drizzle-orm';
 import { db, machineExemptions, machines } from '../db/index.js';
 import { type ActiveMachineExemption } from './exemption-storage-shared.js';
 
@@ -33,6 +33,8 @@ export async function getActiveMachineExemptionsByClassroom(
       machineHostname: machines.hostname,
       classroomId: machineExemptions.classroomId,
       scheduleId: machineExemptions.scheduleId,
+      source: machineExemptions.source,
+      reason: machineExemptions.reason,
       createdBy: machineExemptions.createdBy,
       createdAt: machineExemptions.createdAt,
       expiresAt: machineExemptions.expiresAt,
@@ -41,7 +43,8 @@ export async function getActiveMachineExemptionsByClassroom(
     .innerJoin(machines, eq(machines.id, machineExemptions.machineId))
     .where(
       and(eq(machineExemptions.classroomId, classroomId), gt(machineExemptions.expiresAt, now))
-    );
+    )
+    .orderBy(desc(machineExemptions.source), machineExemptions.expiresAt);
 
   return rows.map((r) => ({
     id: r.id,
@@ -49,6 +52,8 @@ export async function getActiveMachineExemptionsByClassroom(
     machineHostname: r.machineHostname,
     classroomId: r.classroomId,
     scheduleId: r.scheduleId,
+    source: r.source === 'operational' ? 'operational' : 'schedule',
+    reason: r.reason ?? null,
     createdBy: r.createdBy ?? null,
     createdAt: r.createdAt ?? null,
     expiresAt: r.expiresAt,

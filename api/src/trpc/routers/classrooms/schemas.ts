@@ -29,6 +29,13 @@ export const createClassroomExemptionInputSchema = z.object({
   scheduleId: z.uuid(),
 });
 
+export const createOperationalClassroomExemptionInputSchema = z.object({
+  machineId: z.string().min(1),
+  classroomId: z.string().min(1),
+  durationHours: z.number().int().min(1).max(24),
+  reason: z.string().trim().min(3).max(500),
+});
+
 export const deleteExemptionInputSchema = z.object({
   id: z.string().min(1),
 });

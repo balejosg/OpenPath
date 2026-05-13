@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db, machineExemptions, machines, schedules } from '../db/index.js';
 import {
   buildExpiresAtForScheduleEnd,
+  type CreateOperationalMachineExemptionInput,
   type CreateMachineExemptionInput,
   MachineExemptionError,
   type MachineExemptionRow,
@@ -55,6 +56,8 @@ export async function createMachineExemption(
       machineId: input.machineId,
       classroomId: input.classroomId,
       scheduleId: input.scheduleId,
+      source: 'schedule',
+      reason: null,
       createdBy: input.createdBy,
       expiresAt: endAt,
     });
@@ -95,8 +98,56 @@ export async function createMachineExemption(
     machineId: input.machineId,
     classroomId: input.classroomId,
     scheduleId: input.scheduleId,
+    source: 'schedule',
+    reason: null,
     createdBy: input.createdBy,
     expiresAt: buildExpiresAtForScheduleEnd(now, schedule.endTime),
+  });
+}
+
+export async function createOperationalMachineExemption(
+  input: CreateOperationalMachineExemptionInput
+): Promise<MachineExemptionRow> {
+  const now = input.now ?? new Date();
+  const reason = input.reason.trim();
+
+  if (
+    !Number.isInteger(input.durationHours) ||
+    input.durationHours < 1 ||
+    input.durationHours > 24
+  ) {
+    throw new MachineExemptionError(
+      'BAD_REQUEST',
+      'Duration must be an integer from 1 to 24 hours'
+    );
+  }
+
+  if (reason.length < 3) {
+    throw new MachineExemptionError('BAD_REQUEST', 'Reason is required');
+  }
+
+  const machineRows = await db
+    .select({ id: machines.id, classroomId: machines.classroomId })
+    .from(machines)
+    .where(eq(machines.id, input.machineId))
+    .limit(1);
+  const machine = machineRows[0];
+  if (!machine) {
+    throw new MachineExemptionError('NOT_FOUND', 'Machine not found');
+  }
+
+  if (machine.classroomId !== input.classroomId) {
+    throw new MachineExemptionError('BAD_REQUEST', 'Machine does not belong to classroom');
+  }
+
+  return insertOrReuseExemption({
+    machineId: input.machineId,
+    classroomId: input.classroomId,
+    scheduleId: null,
+    source: 'operational',
+    reason,
+    createdBy: input.createdBy,
+    expiresAt: new Date(now.getTime() + input.durationHours * 60 * 60 * 1000),
   });
 }
 
@@ -113,9 +164,13 @@ export async function deleteMachineExemption(id: string): Promise<{ classroomId:
 
 export async function getMachineExemptionById(
   id: string
-): Promise<{ id: string; classroomId: string } | null> {
+): Promise<{ id: string; classroomId: string; source: string } | null> {
   const rows = await db
-    .select({ id: machineExemptions.id, classroomId: machineExemptions.classroomId })
+    .select({
+      id: machineExemptions.id,
+      classroomId: machineExemptions.classroomId,
+      source: machineExemptions.source,
+    })
     .from(machineExemptions)
     .where(eq(machineExemptions.id, id))
     .limit(1);
@@ -126,7 +181,9 @@ export async function getMachineExemptionById(
 interface InsertMachineExemptionInput {
   machineId: string;
   classroomId: string;
-  scheduleId: string;
+  scheduleId: string | null;
+  source: 'schedule' | 'operational';
+  reason: string | null;
   createdBy: string | null;
   expiresAt: Date;
 }
@@ -142,16 +199,12 @@ async function insertOrReuseExemption(
       machineId: input.machineId,
       classroomId: input.classroomId,
       scheduleId: input.scheduleId,
+      source: input.source,
+      reason: input.reason,
       createdBy: input.createdBy,
       expiresAt: input.expiresAt,
     })
-    .onConflictDoNothing({
-      target: [
-        machineExemptions.machineId,
-        machineExemptions.scheduleId,
-        machineExemptions.expiresAt,
-      ],
-    })
+    .onConflictDoNothing()
     .returning();
 
   const created = inserted[0];
@@ -165,7 +218,10 @@ async function insertOrReuseExemption(
     .where(
       and(
         eq(machineExemptions.machineId, input.machineId),
-        eq(machineExemptions.scheduleId, input.scheduleId),
+        input.scheduleId === null
+          ? sql`${machineExemptions.scheduleId} IS NULL`
+          : eq(machineExemptions.scheduleId, input.scheduleId),
+        eq(machineExemptions.source, input.source),
         eq(machineExemptions.expiresAt, input.expiresAt)
       )
     )

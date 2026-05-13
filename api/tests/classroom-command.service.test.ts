@@ -12,5 +12,6 @@ await describe('classroom command service exports', async () => {
     assert.equal(typeof service.registerMachine, 'function');
     assert.equal(typeof service.rotateMachineToken, 'function');
     assert.equal(typeof service.createExemptionForClassroom, 'function');
+    assert.equal(typeof service.createOperationalExemptionForClassroom, 'function');
   });
 });

@@ -43,6 +43,11 @@ interface ClassroomDetailPaneProps {
   onDefaultGroupChange: (next: string) => void | Promise<void>;
   onOpenEnrollModal: () => void | Promise<void>;
   onCreateExemption: (machineId: string) => void | Promise<void>;
+  onCreateOperationalExemption: (
+    machineId: string,
+    durationHours: number,
+    reason: string
+  ) => void | Promise<void>;
   onDeleteExemption: (machineId: string) => void | Promise<void>;
   onOpenScheduleCreate: (dayOfWeek?: number, startTime?: string) => void;
   onOpenScheduleEdit: (schedule: ScheduleWithPermissions) => void;
@@ -78,6 +83,7 @@ export default function ClassroomDetailPane({
   onDefaultGroupChange,
   onOpenEnrollModal,
   onCreateExemption,
+  onCreateOperationalExemption,
   onDeleteExemption,
   onOpenScheduleCreate,
   onOpenScheduleEdit,
@@ -137,6 +143,7 @@ export default function ClassroomDetailPane({
         enrollModalLoadingToken={enrollModalLoadingToken}
         onOpenEnrollModal={onOpenEnrollModal}
         onCreateExemption={onCreateExemption}
+        onCreateOperationalExemption={onCreateOperationalExemption}
         onDeleteExemption={onDeleteExemption}
       />
 

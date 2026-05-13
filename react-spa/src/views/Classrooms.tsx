@@ -108,6 +108,7 @@ const Classrooms: React.FC<ClassroomsProps> = ({
     exemptionMutating,
     exemptionsError,
     handleCreateExemption,
+    handleCreateOperationalExemption,
     handleDeleteExemption,
     loadingExemptions,
     sortedOneOffSchedules,
@@ -163,6 +164,7 @@ const Classrooms: React.FC<ClassroomsProps> = ({
           onDefaultGroupChange={handleDefaultGroupChange}
           onOpenEnrollModal={enrollModal.open}
           onCreateExemption={handleCreateExemption}
+          onCreateOperationalExemption={handleCreateOperationalExemption}
           onDeleteExemption={handleDeleteExemption}
           onOpenScheduleCreate={openScheduleCreate}
           onOpenScheduleEdit={openScheduleEdit}

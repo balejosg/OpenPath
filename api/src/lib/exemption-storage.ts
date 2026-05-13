@@ -9,6 +9,7 @@ export {
 
 export {
   createMachineExemption,
+  createOperationalMachineExemption,
   deleteMachineExemption,
   getMachineExemptionById,
 } from './exemption-storage-command.js';

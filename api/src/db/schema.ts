@@ -15,9 +15,12 @@ import {
   time,
   uuid,
   unique,
+  uniqueIndex,
   index,
+  check,
   boolean,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 // =============================================================================
 // Users Table
@@ -186,9 +189,9 @@ export const machineExemptions = pgTable(
     classroomId: varchar('classroom_id', { length: 50 })
       .notNull()
       .references(() => classrooms.id, { onDelete: 'cascade' }),
-    scheduleId: uuid('schedule_id')
-      .notNull()
-      .references(() => schedules.id, { onDelete: 'cascade' }),
+    scheduleId: uuid('schedule_id').references(() => schedules.id, { onDelete: 'cascade' }),
+    source: varchar('source', { length: 20 }).notNull().default('schedule'),
+    reason: text('reason'),
     createdBy: varchar('created_by', { length: 50 }).references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -196,16 +199,20 @@ export const machineExemptions = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   },
   (table) => [
-    unique('machine_exemptions_machine_schedule_expires_key').on(
-      table.machineId,
-      table.scheduleId,
-      table.expiresAt
-    ),
+    uniqueIndex('machine_exemptions_machine_schedule_expires_key')
+      .on(table.machineId, table.scheduleId, table.expiresAt)
+      .where(sql`${table.source} = 'schedule'`),
+    uniqueIndex('machine_exemptions_machine_operational_expires_key')
+      .on(table.machineId, table.expiresAt)
+      .where(sql`${table.source} = 'operational' AND ${table.scheduleId} IS NULL`),
     index('machine_exemptions_classroom_expires_idx').on(table.classroomId, table.expiresAt),
     index('machine_exemptions_machine_expires_idx').on(table.machineId, table.expiresAt),
+    check(
+      'machine_exemptions_source_schedule_id_check',
+      sql`${table.source} IN ('schedule', 'operational') AND ((${table.source} = 'schedule' AND ${table.scheduleId} IS NOT NULL) OR (${table.source} = 'operational' AND ${table.scheduleId} IS NULL))`
+    ),
   ]
 );
-
 // =============================================================================
 // Tokens Table (Refresh Token Blacklist)
 // =============================================================================

@@ -114,6 +114,8 @@ function buildProps(overrides: Partial<React.ComponentProps<typeof ClassroomDeta
           machineHostname: 'pc-01',
           classroomId: 'classroom-1',
           scheduleId: 'schedule-1',
+          source: 'schedule' as const,
+          reason: null,
           createdBy: 'teacher-1',
           createdAt: '2026-03-06T08:00:00.000Z',
           expiresAt: '2026-03-06T11:00:00.000Z',
@@ -130,6 +132,7 @@ function buildProps(overrides: Partial<React.ComponentProps<typeof ClassroomDeta
     onDefaultGroupChange: vi.fn(),
     onOpenEnrollModal: vi.fn(),
     onCreateExemption: vi.fn(),
+    onCreateOperationalExemption: vi.fn(),
     onDeleteExemption: vi.fn(),
     onOpenScheduleCreate: vi.fn(),
     onOpenScheduleEdit: vi.fn(),
@@ -172,19 +175,26 @@ describe('ClassroomDetailPane', () => {
         (_, node) => node?.textContent === 'Actualmente usando Grupo Default por defecto'
       )
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/Sin restricción/)[0]).toBeInTheDocument();
+    expect(screen.getAllByText(/sin restricción/)[0]).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /eliminar aula/i }));
     fireEvent.click(screen.getByRole('button', { name: /instalar equipos/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Restringir' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Liberar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Eximir' }));
+    fireEvent.change(screen.getByLabelText('Horas'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Motivo'), { target: { value: 'Mantenimiento' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Crear exención' }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Editar' })[0]);
     fireEvent.click(screen.getAllByRole('button', { name: 'Eliminar' })[0]);
 
     expect(props.onOpenDeleteDialog).toHaveBeenCalledTimes(1);
     expect(props.onOpenEnrollModal).toHaveBeenCalledTimes(1);
     expect(props.onDeleteExemption).toHaveBeenCalledWith('machine-1');
-    expect(props.onCreateExemption).toHaveBeenCalledWith('machine-2');
+    expect(props.onCreateOperationalExemption).toHaveBeenCalledWith(
+      'machine-2',
+      2,
+      'Mantenimiento'
+    );
     expect(props.onOpenOneOffScheduleEdit).toHaveBeenCalledWith(props.sortedOneOffSchedules[0]);
     expect(props.onRequestOneOffScheduleDelete).toHaveBeenCalledWith(
       props.sortedOneOffSchedules[0]

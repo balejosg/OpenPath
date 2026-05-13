@@ -4,6 +4,7 @@ import { schedules, machineExemptions } from '../db/index.js';
 export const UNRESTRICTED_GROUP_ID = '__unrestricted__';
 
 export type MachineExemptionErrorCode = 'NOT_FOUND' | 'BAD_REQUEST' | 'CONFLICT';
+export type MachineExemptionSource = 'schedule' | 'operational';
 
 export class MachineExemptionError extends Error {
   public readonly code: MachineExemptionErrorCode;
@@ -51,6 +52,15 @@ export interface CreateMachineExemptionInput {
   now?: Date | undefined;
 }
 
+export interface CreateOperationalMachineExemptionInput {
+  machineId: string;
+  classroomId: string;
+  durationHours: number;
+  reason: string;
+  createdBy: string | null;
+  now?: Date | undefined;
+}
+
 export type MachineExemptionRow = typeof machineExemptions.$inferSelect;
 
 export interface ActiveMachineExemption {
@@ -58,7 +68,9 @@ export interface ActiveMachineExemption {
   machineId: string;
   machineHostname: string;
   classroomId: string;
-  scheduleId: string;
+  scheduleId: string | null;
+  source: MachineExemptionSource;
+  reason: string | null;
   createdBy: string | null;
   createdAt: Date | null;
   expiresAt: Date;

@@ -127,13 +127,18 @@ CREATE TABLE IF NOT EXISTS "machine_exemptions" (
 	"id" varchar(50) PRIMARY KEY NOT NULL,
 	"machine_id" varchar(50) NOT NULL,
 	"classroom_id" varchar(50) NOT NULL,
-	"schedule_id" uuid NOT NULL,
+	"schedule_id" uuid,
+	"source" varchar(20) DEFAULT 'schedule' NOT NULL,
+	"reason" text,
 	"created_by" varchar(50),
 	"created_at" timestamp with time zone DEFAULT now(),
-	"expires_at" timestamp with time zone NOT NULL
+	"expires_at" timestamp with time zone NOT NULL,
+	CONSTRAINT "machine_exemptions_source_schedule_id_check" CHECK ("source" IN ('schedule', 'operational') AND (("source" = 'schedule' AND "schedule_id" IS NOT NULL) OR ("source" = 'operational' AND "schedule_id" IS NULL)))
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "machine_exemptions_machine_schedule_expires_key" ON "machine_exemptions" ("machine_id","schedule_id","expires_at");
+CREATE UNIQUE INDEX IF NOT EXISTS "machine_exemptions_machine_schedule_expires_key" ON "machine_exemptions" ("machine_id","schedule_id","expires_at") WHERE "source" = 'schedule';
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "machine_exemptions_machine_operational_expires_key" ON "machine_exemptions" ("machine_id","expires_at") WHERE "source" = 'operational' AND "schedule_id" IS NULL;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "machine_exemptions_classroom_expires_idx" ON "machine_exemptions" ("classroom_id","expires_at");
 --> statement-breakpoint

@@ -9,6 +9,7 @@ import { db } from '../../src/db/index.js';
 import {
   UNRESTRICTED_GROUP_ID,
   createMachineExemption,
+  createOperationalMachineExemption,
   getActiveMachineExemptionsByClassroom,
   isMachineExempt,
 } from '../../src/lib/exemption-storage.js';
@@ -42,16 +43,56 @@ await describe('exemption-storage', async () => {
           "id" varchar(50) PRIMARY KEY NOT NULL,
           "machine_id" varchar(50) NOT NULL,
           "classroom_id" varchar(50) NOT NULL,
-          "schedule_id" uuid NOT NULL,
+          "schedule_id" uuid,
+          "source" varchar(20) DEFAULT 'schedule' NOT NULL,
+          "reason" text,
           "created_by" varchar(50),
           "created_at" timestamp with time zone DEFAULT now(),
-          "expires_at" timestamp with time zone NOT NULL
+          "expires_at" timestamp with time zone NOT NULL,
+          CONSTRAINT "machine_exemptions_source_schedule_id_check" CHECK ("source" IN ('schedule', 'operational') AND (("source" = 'schedule' AND "schedule_id" IS NOT NULL) OR ("source" = 'operational' AND "schedule_id" IS NULL)))
         );`
       )
     );
     await db.execute(
+      sql.raw('ALTER TABLE "machine_exemptions" ALTER COLUMN "schedule_id" DROP NOT NULL;')
+    );
+    await db.execute(
       sql.raw(
-        'CREATE UNIQUE INDEX IF NOT EXISTS "machine_exemptions_machine_schedule_expires_key" ON "machine_exemptions" ("machine_id","schedule_id","expires_at");'
+        'ALTER TABLE "machine_exemptions" ADD COLUMN IF NOT EXISTS "source" varchar(20) DEFAULT \'schedule\' NOT NULL;'
+      )
+    );
+    await db.execute(
+      sql.raw('ALTER TABLE "machine_exemptions" ADD COLUMN IF NOT EXISTS "reason" text;')
+    );
+    await db.execute(
+      sql.raw(
+        'ALTER TABLE "machine_exemptions" DROP CONSTRAINT IF EXISTS "machine_exemptions_machine_schedule_expires_key";'
+      )
+    );
+    await db.execute(
+      sql.raw('DROP INDEX IF EXISTS "machine_exemptions_machine_schedule_expires_key";')
+    );
+    await db.execute(
+      sql.raw('DROP INDEX IF EXISTS "machine_exemptions_machine_operational_expires_key";')
+    );
+    await db.execute(
+      sql.raw(
+        'CREATE UNIQUE INDEX IF NOT EXISTS "machine_exemptions_machine_schedule_expires_key" ON "machine_exemptions" ("machine_id","schedule_id","expires_at") WHERE "source" = \'schedule\';'
+      )
+    );
+    await db.execute(
+      sql.raw(
+        'CREATE UNIQUE INDEX IF NOT EXISTS "machine_exemptions_machine_operational_expires_key" ON "machine_exemptions" ("machine_id","expires_at") WHERE "source" = \'operational\' AND "schedule_id" IS NULL;'
+      )
+    );
+    await db.execute(
+      sql.raw(
+        'ALTER TABLE "machine_exemptions" DROP CONSTRAINT IF EXISTS "machine_exemptions_source_schedule_id_check";'
+      )
+    );
+    await db.execute(
+      sql.raw(
+        'ALTER TABLE "machine_exemptions" ADD CONSTRAINT "machine_exemptions_source_schedule_id_check" CHECK ("source" IN (\'schedule\', \'operational\') AND (("source" = \'schedule\' AND "schedule_id" IS NOT NULL) OR ("source" = \'operational\' AND "schedule_id" IS NULL)));'
       )
     );
     await db.execute(
@@ -134,6 +175,8 @@ await describe('exemption-storage', async () => {
 
     const expectedExpiresAt = new Date(2026, 1, 23, 10, 0, 0, 0);
     assert.strictEqual(exemption.expiresAt.getTime(), expectedExpiresAt.getTime());
+    assert.strictEqual(exemption.source, 'schedule');
+    assert.strictEqual(exemption.reason, null);
 
     assert.strictEqual(await isMachineExempt(machine.id, classroom.id, now), true);
 
@@ -268,6 +311,79 @@ await describe('exemption-storage', async () => {
     });
 
     assert.strictEqual(a.id, b.id);
+  });
+
+  await test('creates operational exemption without schedule and validates duration and reason', async () => {
+    const classroom = await classroomStorage.createClassroom({
+      name: `exempt-operational-room-${TEST_RUN_ID}`,
+      displayName: 'Operational Room',
+      defaultGroupId: 'default-group',
+    });
+
+    const machine = await classroomStorage.registerMachine({
+      hostname: `pc-exempt-operational-${TEST_RUN_ID}`,
+      classroomId: classroom.id,
+    });
+
+    const now = new Date(2026, 1, 23, 9, 15, 0);
+    const exemption = await createOperationalMachineExemption({
+      machineId: machine.id,
+      classroomId: classroom.id,
+      durationHours: 2,
+      reason: 'Mantenimiento',
+      createdBy: 'legacy_admin',
+      now,
+    });
+
+    assert.strictEqual(exemption.source, 'operational');
+    assert.strictEqual(exemption.scheduleId, null);
+    assert.strictEqual(exemption.reason, 'Mantenimiento');
+    assert.strictEqual(exemption.expiresAt.getTime(), now.getTime() + 2 * 60 * 60 * 1000);
+    assert.strictEqual(await isMachineExempt(machine.id, classroom.id, now), true);
+
+    const duplicate = await createOperationalMachineExemption({
+      machineId: machine.id,
+      classroomId: classroom.id,
+      durationHours: 2,
+      reason: 'Mantenimiento',
+      createdBy: 'legacy_admin',
+      now,
+    });
+    assert.strictEqual(duplicate.id, exemption.id);
+
+    const activeExemptions = await getActiveMachineExemptionsByClassroom(classroom.id, now);
+    assert.strictEqual(
+      activeExemptions.filter((entry) => entry.source === 'operational').length,
+      1
+    );
+
+    for (const durationHours of [0, -1, 1.5, 25]) {
+      await assert.rejects(
+        () =>
+          createOperationalMachineExemption({
+            machineId: machine.id,
+            classroomId: classroom.id,
+            durationHours,
+            reason: 'Mantenimiento',
+            createdBy: 'legacy_admin',
+            now,
+          }),
+        /Duration must be an integer/
+      );
+    }
+
+    await assert.rejects(
+      () =>
+        createOperationalMachineExemption({
+          machineId: machine.id,
+          classroomId: classroom.id,
+          durationHours: 1,
+          reason: '  ',
+          createdBy: 'legacy_admin',
+          now,
+        }),
+      /Reason is required/
+    );
   });
 
   await test('deletes exemptions when schedule is deleted (cascade)', async () => {

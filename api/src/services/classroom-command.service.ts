@@ -5,6 +5,7 @@ import {
   updateClassroom,
 } from './classroom-classroom-command.service.js';
 import {
+  createOperationalExemptionForClassroom,
   createExemptionForClassroom,
   deleteExemptionForClassroom,
   listExemptionsForClassroom,
@@ -18,6 +19,7 @@ import {
 export {
   createClassroom,
   createExemptionForClassroom,
+  createOperationalExemptionForClassroom,
   deleteClassroom,
   deleteExemptionForClassroom,
   deleteMachine,
@@ -31,6 +33,7 @@ export {
 export const ClassroomCommandService = {
   createClassroom,
   createExemptionForClassroom,
+  createOperationalExemptionForClassroom,
   deleteClassroom,
   deleteExemptionForClassroom,
   deleteMachine,

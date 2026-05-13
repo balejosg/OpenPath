@@ -15,6 +15,7 @@ export type {
   ClassroomWithMachines,
   CreateClassroomInput,
   CreateMachineExemptionInput,
+  CreateOperationalMachineExemptionInput,
   CurrentGroupSource,
   MachineExemptionInfo,
   MachineInfo,
@@ -33,6 +34,7 @@ export { getClassroom, getStats, listClassrooms, listMachines } from './classroo
 export {
   createClassroom,
   createExemptionForClassroom,
+  createOperationalExemptionForClassroom,
   deleteClassroom,
   deleteExemptionForClassroom,
   deleteMachine,
@@ -51,6 +53,7 @@ import { getClassroom, getStats, listClassrooms, listMachines } from './classroo
 import {
   createClassroom,
   createExemptionForClassroom,
+  createOperationalExemptionForClassroom,
   deleteClassroom,
   deleteExemptionForClassroom,
   deleteMachine,
@@ -66,6 +69,7 @@ export default {
   updateClassroom,
   setClassroomActiveGroup,
   createExemptionForClassroom,
+  createOperationalExemptionForClassroom,
   deleteExemptionForClassroom,
   listExemptionsForClassroom,
   deleteClassroom,

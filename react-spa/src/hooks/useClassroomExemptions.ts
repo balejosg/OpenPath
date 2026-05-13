@@ -57,7 +57,12 @@ export function useClassroomExemptions({
 
   const exemptionByMachineId = useMemo(() => {
     const map = new Map<string, ClassroomExemption>();
-    exemptions.forEach((exemption) => map.set(exemption.machineId, exemption));
+    exemptions.forEach((exemption) => {
+      const existing = map.get(exemption.machineId);
+      if (!existing || (existing.source === 'schedule' && exemption.source === 'operational')) {
+        map.set(exemption.machineId, exemption);
+      }
+    });
     return map;
   }, [exemptions]);
 
@@ -116,6 +121,32 @@ export function useClassroomExemptions({
     [selectedClassroom, exemptionByMachineId, fetchExemptions, setMachineExemptionMutating]
   );
 
+  const handleCreateOperationalExemption = useCallback(
+    async (machineId: string, durationHours: number, reason: string) => {
+      if (!selectedClassroom) {
+        return;
+      }
+
+      setMachineExemptionMutating(machineId, true);
+      try {
+        setExemptionsError(null);
+        await trpc.classrooms.createOperationalExemption.mutate({
+          machineId,
+          classroomId: selectedClassroom.id,
+          durationHours,
+          reason,
+        });
+        await fetchExemptions(selectedClassroom.id);
+      } catch (err) {
+        reportError('Failed to create operational exemption:', err);
+        setExemptionsError('No se pudo crear la exencion');
+      } finally {
+        setMachineExemptionMutating(machineId, false);
+      }
+    },
+    [selectedClassroom, fetchExemptions, setMachineExemptionMutating]
+  );
+
   useScheduleBoundaryInvalidation({
     schedules: scheduleBoundarySources,
     enabled: !!selectedClassroom && !selectedClassroom.activeGroup,
@@ -132,6 +163,7 @@ export function useClassroomExemptions({
     exemptionMutating,
     exemptionsError,
     handleCreateExemption,
+    handleCreateOperationalExemption,
     handleDeleteExemption,
     loadingExemptions,
     setExemptionsError,

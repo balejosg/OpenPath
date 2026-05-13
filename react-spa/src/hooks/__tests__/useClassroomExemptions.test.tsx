@@ -9,11 +9,13 @@ import { useClassroomExemptions } from '../useClassroomExemptions';
 
 const {
   mockCreateExemption,
+  mockCreateOperationalExemption,
   mockDeleteExemption,
   mockListExemptions,
   mockUseScheduleBoundaryInvalidation,
 } = vi.hoisted(() => ({
   mockCreateExemption: vi.fn(),
+  mockCreateOperationalExemption: vi.fn(),
   mockDeleteExemption: vi.fn(),
   mockListExemptions: vi.fn(),
   mockUseScheduleBoundaryInvalidation: vi.fn(),
@@ -24,6 +26,9 @@ vi.mock('../../lib/trpc', () => ({
     classrooms: {
       listExemptions: { query: (input: unknown): unknown => mockListExemptions(input) },
       createExemption: { mutate: (input: unknown): unknown => mockCreateExemption(input) },
+      createOperationalExemption: {
+        mutate: (input: unknown): unknown => mockCreateOperationalExemption(input),
+      },
       deleteExemption: { mutate: (input: unknown): unknown => mockDeleteExemption(input) },
     },
   },
@@ -80,6 +85,7 @@ describe('useClassroomExemptions', () => {
     vi.clearAllMocks();
     mockListExemptions.mockResolvedValue({ exemptions: [] });
     mockCreateExemption.mockResolvedValue(undefined);
+    mockCreateOperationalExemption.mockResolvedValue(undefined);
     mockDeleteExemption.mockResolvedValue(undefined);
     mockUseScheduleBoundaryInvalidation.mockReturnValue(undefined);
   });
@@ -180,6 +186,32 @@ describe('useClassroomExemptions', () => {
     });
 
     expect(mockDeleteExemption).toHaveBeenCalledWith({ id: 'exemption-1' });
+  });
+
+  it('creates operational exemptions with admin duration and reason', async () => {
+    const { result } = renderHook(() =>
+      useClassroomExemptions({
+        selectedClassroom: classroom,
+        activeSchedule: weeklySchedule,
+        scheduleBoundarySources: [weeklySchedule],
+        refetchClassrooms: vi.fn(),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loadingExemptions).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.handleCreateOperationalExemption('machine-1', 4, 'Mantenimiento');
+    });
+
+    expect(mockCreateOperationalExemption).toHaveBeenCalledWith({
+      machineId: 'machine-1',
+      classroomId: 'classroom-1',
+      durationHours: 4,
+      reason: 'Mantenimiento',
+    });
   });
 
   it('reports an error when the initial exemptions fetch fails', async () => {

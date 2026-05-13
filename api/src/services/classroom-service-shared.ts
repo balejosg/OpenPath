@@ -84,12 +84,22 @@ export interface CreateMachineExemptionInput {
   createdBy: string;
 }
 
+export interface CreateOperationalMachineExemptionInput {
+  machineId: string;
+  classroomId: string;
+  durationHours: number;
+  reason: string;
+  createdBy: string;
+}
+
 export interface MachineExemptionInfo {
   id: string;
   machineId: string;
   machineHostname?: string;
   classroomId: string;
-  scheduleId: string;
+  scheduleId: string | null;
+  source: 'schedule' | 'operational';
+  reason: string | null;
   createdBy: string | null;
   createdAt: string | null;
   expiresAt: string;
@@ -193,7 +203,9 @@ export function toMachineExemptionInfo(entry: {
   machineId: string;
   machineHostname?: string;
   classroomId: string;
-  scheduleId: string;
+  scheduleId: string | null;
+  source?: string | null;
+  reason?: string | null;
   createdBy: string | null;
   createdAt: Date | null;
   expiresAt: Date;
@@ -203,6 +215,8 @@ export function toMachineExemptionInfo(entry: {
     machineId: entry.machineId,
     classroomId: entry.classroomId,
     scheduleId: entry.scheduleId,
+    source: entry.source === 'operational' ? 'operational' : 'schedule',
+    reason: entry.reason ?? null,
     createdBy: entry.createdBy,
     createdAt: entry.createdAt ? entry.createdAt.toISOString() : null,
     expiresAt: entry.expiresAt.toISOString(),

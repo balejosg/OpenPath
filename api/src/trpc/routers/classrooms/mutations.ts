@@ -12,6 +12,7 @@ import {
   classroomIdSchema,
   createClassroomExemptionInputSchema,
   createClassroomInputSchema,
+  createOperationalClassroomExemptionInputSchema,
   deleteExemptionInputSchema,
   deleteMachineInputSchema,
   registerMachineInputSchema,
@@ -93,6 +94,19 @@ export const classroomMutationProcedures = {
     .input(createClassroomExemptionInputSchema)
     .mutation(async ({ input, ctx }) => {
       const result = await ClassroomService.createExemptionForClassroom(ctx.user, {
+        ...input,
+        createdBy: ctx.user.sub,
+      });
+      if (!result.ok) {
+        throwClassroomServiceError(result.error);
+      }
+      return result.data;
+    }),
+
+  createOperationalExemption: adminProcedure
+    .input(createOperationalClassroomExemptionInputSchema)
+    .mutation(async ({ input, ctx }) => {
+      const result = await ClassroomService.createOperationalExemptionForClassroom(ctx.user, {
         ...input,
         createdBy: ctx.user.sub,
       });
