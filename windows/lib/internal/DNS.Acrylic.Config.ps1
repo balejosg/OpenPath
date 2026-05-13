@@ -74,12 +74,7 @@ function Get-AcrylicEssentialDomainGroups {
     [CmdletBinding()]
     param()
 
-    return @(
-        [PSCustomObject]@{ Comment = '# Control plane and bootstrap/download'; Domains = @(Get-OpenPathProtectedDomains) },
-        [PSCustomObject]@{ Comment = '# Captive portal detection'; Domains = @('detectportal.firefox.com', 'connectivity-check.ubuntu.com', 'captive.apple.com', 'www.msftconnecttest.com', 'msftconnecttest.com', 'clients3.google.com') },
-        [PSCustomObject]@{ Comment = '# Windows Update (optional, comment out if not needed)'; Domains = @('windowsupdate.microsoft.com', 'update.microsoft.com') },
-        [PSCustomObject]@{ Comment = '# NTP'; Domains = @('time.windows.com', 'time.google.com') }
-    )
+    return @(Get-OpenPathAlwaysAllowedDomainGroups)
 }
 
 function Get-AcrylicAffinityMaskEntries {
@@ -551,13 +546,20 @@ function New-AcrylicHostsDefinition {
 
     $essentialLines = @()
     $essentialDomains = @()
+    $seenEssentialDomains = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($group in @(Get-AcrylicEssentialDomainGroups)) {
+        $groupLines = @()
+        foreach ($domain in @($group.Domains)) {
+            $normalizedDomain = Normalize-OpenPathAlwaysAllowedDomain -Domain $domain
+            if (-not $normalizedDomain) { continue }
+            if (-not $seenEssentialDomains.Add($normalizedDomain)) { continue }
+            $essentialDomains += $normalizedDomain
+            $groupLines += @(Get-AcrylicForwardRules -Domain $normalizedDomain)
+        }
+        if ($groupLines.Count -eq 0) { continue }
         if ($essentialLines.Count -gt 0) { $essentialLines += '' }
         $essentialLines += $group.Comment
-        foreach ($domain in @($group.Domains)) {
-            $essentialDomains += $domain
-            $essentialLines += @(Get-AcrylicForwardRules -Domain $domain)
-        }
+        $essentialLines += $groupLines
     }
 
     $blockedLines = @(foreach ($subdomain in $BlockedSubdomains) { $normalizedSubdomain = ([string]$subdomain).Trim(); if ($normalizedSubdomain) { "NX >$normalizedSubdomain" } })
@@ -653,7 +655,7 @@ function Update-AcrylicHost {
         }
         Write-OpenPathLog "Generating AcrylicHosts.txt with $(@($definition.EffectiveWhitelistedDomains).Count) domains..."
         $content = ConvertTo-AcrylicHostsContent -Definition $definition
-        $content | Set-Content $hostsPath -Encoding ASCII -Force
+        Set-Content -Path $hostsPath -Value $content -Encoding ASCII -Force
 
         $configurationUpdated = Set-AcrylicConfiguration -WhitelistedDomains $definition.EffectiveWhitelistedDomains -RuntimeDependencyDomains $definition.RuntimeDependencyDomains
         if (-not $configurationUpdated) {
@@ -795,7 +797,7 @@ function Set-AcrylicConfiguration {
     $iniContent = Set-AcrylicAllowedAddress -Content $iniContent -Key 'IP1' -Value '127.*'
     $iniContent = Set-AcrylicAllowedAddress -Content $iniContent -Key 'IP2' -Value '::1'
 
-    $iniContent | Set-Content $configPath -Encoding ASCII -Force
+    Set-Content -Path $configPath -Value $iniContent -Encoding ASCII -Force
     Write-OpenPathLog "Acrylic configuration updated"
     return $true
 }

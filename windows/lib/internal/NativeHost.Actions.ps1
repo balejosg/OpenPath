@@ -111,6 +111,48 @@ function Test-NativeHostWhitelistCoversHost {
     return $false
 }
 
+function Get-NativeHostMicrosoftSystemRuntimeDependencyRoots {
+    return @(
+        'windowsupdate.com',
+        'windowsupdate.microsoft.com',
+        'update.microsoft.com',
+        'delivery.mp.microsoft.com',
+        'do.dsp.mp.microsoft.com',
+        'api.cdp.microsoft.com',
+        'definitionupdates.microsoft.com',
+        'download.microsoft.com',
+        'download.windowsupdate.com',
+        'go.microsoft.com',
+        'adl.windows.com',
+        'tsfe.trafficshaping.dsp.mp.microsoft.com',
+        'wdcp.microsoft.com',
+        'wdcpalt.microsoft.com',
+        'wd.microsoft.com',
+        'smartscreen-prod.microsoft.com',
+        'crl.microsoft.com',
+        'www.microsoft.com',
+        'msftconnecttest.com',
+        'www.msftconnecttest.com',
+        'wns.windows.com',
+        'displaycatalog.mp.microsoft.com',
+        'storequality.microsoft.com',
+        'dsx.mp.microsoft.com',
+        'edge.microsoft.com',
+        'config.edge.skype.com',
+        'iecvlist.microsoft.com',
+        'manage.microsoft.com',
+        'dm.microsoft.com',
+        'graph.microsoft.com',
+        'login.microsoft.com',
+        'login.live.com',
+        'login.microsoftonline.com',
+        'aadcdn.msauth.net',
+        'aadcdn.msftauth.net',
+        'azureedge.net',
+        'blob.core.windows.net'
+    )
+}
+
 function Get-NativeHostProtectedRuntimeDependencyHosts {
     param([Parameter(Mandatory = $true)][PSCustomObject]$State)
 
@@ -130,11 +172,9 @@ function Get-NativeHostProtectedRuntimeDependencyHosts {
             'www.msftconnecttest.com',
             'msftconnecttest.com',
             'clients3.google.com',
-            'windowsupdate.microsoft.com',
-            'update.microsoft.com',
             'time.windows.com',
             'time.google.com'
-        )) {
+        ) + @(Get-NativeHostMicrosoftSystemRuntimeDependencyRoots)) {
         $normalized = Normalize-NativeHostRuntimeDependencyHost -Value $protectedHost
         if ($normalized) { [void]$hosts.Add($normalized) }
     }
@@ -150,6 +190,25 @@ function Get-NativeHostProtectedRuntimeDependencyHosts {
     }
 
     return $hosts
+}
+
+function Test-NativeHostProtectedRuntimeDependencyHost {
+    param(
+        [Parameter(Mandatory = $true)][string]$Hostname,
+        [System.Collections.Generic.HashSet[string]]$ProtectedHosts
+    )
+
+    if (-not $Hostname -or -not $ProtectedHosts) { return $false }
+    if ($ProtectedHosts.Contains($Hostname)) { return $true }
+
+    foreach ($protectedHost in $ProtectedHosts) {
+        if (-not $protectedHost) { continue }
+        if ($Hostname.EndsWith(".$protectedHost", [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function Test-NativeHostSensitiveRuntimeDependencyField {
@@ -387,7 +446,10 @@ function Resolve-NativeHostLocalRuntimeDependencyCandidate {
     }
 
     $protectedHosts = Get-NativeHostProtectedRuntimeDependencyHosts -State $State
-    if ($protectedHosts.Contains($anchorHost) -or $protectedHosts.Contains($dependencyHost)) {
+    if (
+        (Test-NativeHostProtectedRuntimeDependencyHost -Hostname $anchorHost -ProtectedHosts $protectedHosts) -or
+        (Test-NativeHostProtectedRuntimeDependencyHost -Hostname $dependencyHost -ProtectedHosts $protectedHosts)
+    ) {
         return @{
             Valid = $false
             Result = @{ success = $false; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Protected hosts are not accepted as runtime dependencies' }

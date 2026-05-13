@@ -19,6 +19,31 @@ function Get-HostFromUrl {
     }
 }
 
+function Normalize-OpenPathAlwaysAllowedDomain {
+    <#
+    .SYNOPSIS
+        Normalizes static always-allowed domain entries to root host form
+    #>
+    param(
+        [AllowNull()][string]$Domain
+    )
+
+    if (-not $Domain) {
+        return $null
+    }
+
+    $normalizedDomain = $Domain.Trim().Trim('.').ToLowerInvariant()
+    if ($normalizedDomain.StartsWith('*.')) {
+        $normalizedDomain = $normalizedDomain.Substring(2)
+    }
+
+    if ($normalizedDomain -and (Test-OpenPathDomainFormat -Domain $normalizedDomain)) {
+        return $normalizedDomain
+    }
+
+    return $null
+}
+
 function Get-OpenPathProtectedDomains {
     <#
     .SYNOPSIS
@@ -62,6 +87,86 @@ function Get-OpenPathProtectedDomains {
     }
     catch {
         Write-Debug "Protected domains unavailable from config: $_"
+    }
+
+    return @($domains)
+}
+
+function Get-OpenPathMicrosoftSystemDomains {
+    <#
+    .SYNOPSIS
+        Returns Microsoft system, component update, identity, and CDN roots that must stay reachable
+    #>
+    return @(
+        '*.windowsupdate.com',
+        'windowsupdate.com',
+        'windowsupdate.microsoft.com',
+        'update.microsoft.com',
+        'delivery.mp.microsoft.com',
+        'do.dsp.mp.microsoft.com',
+        'api.cdp.microsoft.com',
+        'definitionupdates.microsoft.com',
+        'download.microsoft.com',
+        'download.windowsupdate.com',
+        'go.microsoft.com',
+        'adl.windows.com',
+        'tsfe.trafficshaping.dsp.mp.microsoft.com',
+        'wdcp.microsoft.com',
+        'wdcpalt.microsoft.com',
+        'wd.microsoft.com',
+        'smartscreen-prod.microsoft.com',
+        'crl.microsoft.com',
+        'www.microsoft.com',
+        'msftconnecttest.com',
+        'www.msftconnecttest.com',
+        'wns.windows.com',
+        'displaycatalog.mp.microsoft.com',
+        'storequality.microsoft.com',
+        'dsx.mp.microsoft.com',
+        'edge.microsoft.com',
+        'config.edge.skype.com',
+        'iecvlist.microsoft.com',
+        'manage.microsoft.com',
+        'dm.microsoft.com',
+        'graph.microsoft.com',
+        'login.microsoft.com',
+        'login.live.com',
+        'login.microsoftonline.com',
+        'aadcdn.msauth.net',
+        'aadcdn.msftauth.net',
+        'azureedge.net',
+        'blob.core.windows.net'
+    )
+}
+
+function Get-OpenPathAlwaysAllowedDomainGroups {
+    <#
+    .SYNOPSIS
+        Returns grouped Windows domains that are always rendered before the default DNS block
+    #>
+    return @(
+        [PSCustomObject]@{ Comment = '# Control plane and bootstrap/download'; Domains = @(Get-OpenPathProtectedDomains) },
+        [PSCustomObject]@{ Comment = '# Captive portal detection'; Domains = @('detectportal.firefox.com', 'connectivity-check.ubuntu.com', 'captive.apple.com', 'www.msftconnecttest.com', 'msftconnecttest.com', 'clients3.google.com') },
+        [PSCustomObject]@{ Comment = '# Microsoft system and component updates'; Domains = @(Get-OpenPathMicrosoftSystemDomains) },
+        [PSCustomObject]@{ Comment = '# NTP'; Domains = @('time.windows.com', 'time.google.com') }
+    )
+}
+
+function Get-OpenPathAlwaysAllowedDomains {
+    <#
+    .SYNOPSIS
+        Returns normalized, de-duplicated always-allowed domain roots
+    #>
+    $domains = [System.Collections.Generic.List[string]]::new()
+    $seenDomains = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($group in @(Get-OpenPathAlwaysAllowedDomainGroups)) {
+        foreach ($domain in @($group.Domains)) {
+            $normalizedDomain = Normalize-OpenPathAlwaysAllowedDomain -Domain $domain
+            if ($normalizedDomain -and $seenDomains.Add($normalizedDomain)) {
+                $domains.Add($normalizedDomain) | Out-Null
+            }
+        }
     }
 
     return @($domains)

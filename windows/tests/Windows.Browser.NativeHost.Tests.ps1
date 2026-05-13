@@ -484,6 +484,43 @@ Describe "Browser Module - Native Host" {
             $nativeHostActionsContent | Should -Not -Match '/api/requests/auto'
         }
 
+        It "Rejects Microsoft system and update hosts as runtime dependencies" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            . $nativeHostActionsPath
+
+            $state = [PSCustomObject]@{
+                apiUrl = "https://school.example"
+                whitelistUrl = "https://school.example/w/machine-token-123/whitelist.txt"
+                classroomId = "classroom-123"
+            }
+            $sections = [PSCustomObject]@{
+                Whitelist = @('school.example')
+                BlockedSubdomains = @()
+            }
+
+            foreach ($dependencyHost in @(
+                    'windowsupdate.com',
+                    'download.windowsupdate.com',
+                    'delivery.mp.microsoft.com',
+                    'login.microsoftonline.com',
+                    'assets.azureedge.net',
+                    'tenant.blob.core.windows.net'
+                )) {
+                $candidate = Resolve-NativeHostLocalRuntimeDependencyCandidate `
+                    -State $state `
+                    -Sections $sections `
+                    -Message ([PSCustomObject]@{
+                        anchorHost = 'school.example'
+                        dependencyHost = $dependencyHost
+                        requestType = 'script'
+                    })
+
+                $candidate.Valid | Should -BeFalse -Because "$dependencyHost must stay protected"
+                $candidate.Result.error | Should -Be 'Protected hosts are not accepted as runtime dependencies'
+            }
+        }
+
         It "Logs native action evidence without depending on downstream wrappers" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw

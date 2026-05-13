@@ -216,6 +216,30 @@ Describe "Common Module" {
             $domains | Should -Contain 'downloads.sourceforge.net'
         }
 
+        It "Builds normalized always-allowed domains from control-plane and Microsoft system roots" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl = 'https://control.example'
+                    whitelistUrl = 'https://downloads.example/w/token/whitelist.txt'
+                }
+            } -ModuleName Common
+
+            $domains = InModuleScope Common {
+                Get-OpenPathAlwaysAllowedDomains
+            }
+
+            $domains | Should -Contain 'control.example'
+            $domains | Should -Contain 'downloads.example'
+            $domains | Should -Contain 'windowsupdate.com'
+            $domains | Should -Contain 'delivery.mp.microsoft.com'
+            $domains | Should -Contain 'definitionupdates.microsoft.com'
+            $domains | Should -Contain 'login.microsoftonline.com'
+            $domains | Should -Contain 'azureedge.net'
+            $domains | Should -Contain 'blob.core.windows.net'
+            $domains | Should -Not -Contain '*.windowsupdate.com'
+            @($domains | Where-Object { $_ -eq 'msftconnecttest.com' }).Count | Should -Be 1
+        }
+
         It "Compares versions correctly" {
             (InModuleScope Common {
                 Compare-OpenPathVersion -CurrentVersion '4.1.0' -TargetVersion '4.2.0'

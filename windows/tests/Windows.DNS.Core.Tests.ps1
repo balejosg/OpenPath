@@ -1,3 +1,5 @@
+Import-Module (Join-Path $PSScriptRoot "TestHelpers.psm1") -Force
+
 Describe "DNS Module" {
     BeforeAll {
         function Assert-IsAsciiEncoding {
@@ -13,7 +15,7 @@ Describe "DNS Module" {
         }
 
         $modulePath = Join-Path $PSScriptRoot ".." "lib"
-        Import-Module "$modulePath\DNS.psm1" -Force -ErrorAction SilentlyContinue
+        Import-Module "$modulePath\DNS.psm1" -Force -Global -ErrorAction Stop
     }
 
     Context "Test-AcrylicInstalled" {
@@ -133,6 +135,38 @@ Describe "DNS Module" {
 
                 @($definition.EffectiveWhitelistedDomains).Count | Should -Be 2
                 $definition.WasTruncated | Should -BeFalse
+            }
+        }
+
+        It "Renders Microsoft system domains as essential FW rules before the default block" {
+            InModuleScope DNS {
+                $definition = New-AcrylicHostsDefinition `
+                    -WhitelistedDomains @('example.com') `
+                    -DnsSettings ([PSCustomObject]@{
+                        PrimaryDNS = '1.1.1.1'
+                        SecondaryDNS = '1.0.0.1'
+                        MaxDomains = 10
+                    })
+
+                $content = ConvertTo-AcrylicHostsContent -Definition $definition
+                $defaultBlockRuleIndex = $content.IndexOf('NX *')
+
+                foreach ($domain in @(
+                        'windowsupdate.com',
+                        'delivery.mp.microsoft.com',
+                        'definitionupdates.microsoft.com',
+                        'edge.microsoft.com',
+                        'login.microsoftonline.com',
+                        'azureedge.net',
+                        'blob.core.windows.net'
+                    )) {
+                    $content | Should -Match "(?m)^FW $([regex]::Escape($domain))$"
+                    $content | Should -Match "(?m)^FW >$([regex]::Escape($domain))$"
+                    $content.IndexOf("FW $domain") | Should -BeLessThan $defaultBlockRuleIndex
+                    $definition.DomainAffinityMask | Should -Match "$([regex]::Escape($domain));\*\.$([regex]::Escape($domain))"
+                }
+
+                $content | Should -Not -Match '\*\.windowsupdate\.com'
             }
         }
 
@@ -430,6 +464,11 @@ Describe "DNS Module" {
                 '[GlobalSection]',
                 'PrimaryServerDomainNameAffinityMask=raw.githubusercontent.com;*.raw.githubusercontent.com',
                 'SecondaryServerDomainNameAffinityMask=raw.githubusercontent.com;*.raw.githubusercontent.com',
+                'windowsupdate.com;*.windowsupdate.com',
+                'delivery.mp.microsoft.com;*.delivery.mp.microsoft.com',
+                'login.microsoftonline.com;*.login.microsoftonline.com',
+                'azureedge.net;*.azureedge.net',
+                'blob.core.windows.net;*.blob.core.windows.net',
                 'example.com;*.example.com',
                 'test.com;*.test.com',
                 'PrimaryServerPort=53',
@@ -545,7 +584,12 @@ Describe "DNS Module" {
 
         It "Always includes configured control-plane domains in the essential Acrylic allowlist" {
             InModuleScope DNS {
-                Mock Get-OpenPathProtectedDomains { @('control.example', 'downloads.example', 'raw.githubusercontent.com') }
+                Mock Get-AcrylicEssentialDomainGroups {
+                    @(
+                        [PSCustomObject]@{ Comment = '# Control plane and bootstrap/download'; Domains = @('control.example', 'downloads.example', 'raw.githubusercontent.com') },
+                        [PSCustomObject]@{ Comment = '# NTP'; Domains = @('time.windows.com') }
+                    )
+                }
 
                 $definition = New-AcrylicHostsDefinition `
                     -WhitelistedDomains @('safe.example') `
