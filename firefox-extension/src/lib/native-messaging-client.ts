@@ -80,6 +80,7 @@ export interface NativeMessagingClient {
 const LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS = 150;
 const LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES = 20;
 const LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS = 30 * 60 * 1000;
+const LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS = 5 * 1000;
 
 export function createNativeMessagingClient(options: {
   browserApi?: Browser;
@@ -90,6 +91,10 @@ export function createNativeMessagingClient(options: {
   const logger = options.logger ?? defaultLogger;
   let nativePort: Runtime.Port | null = null;
   const runtimeDependencyCache = new Map<string, number>();
+  const queuedRuntimeDependencyDedupeCache = new Map<
+    string,
+    { expiresAt: number; response: NativeResponse }
+  >();
   const pendingRuntimeDependencies: PendingLocalRuntimeDependency[] = [];
   const pendingRuntimeDependencyByKey = new Map<string, Promise<NativeResponse>>();
   let runtimeDependencyBatchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -236,11 +241,38 @@ export function createNativeMessagingClient(options: {
     };
   }
 
+  function getQueuedRuntimeDependencyDedupe(
+    input: LocalRuntimeDependencyInput
+  ): NativeResponse | null {
+    const pendingKey = createRuntimeDependencyPendingKey(input);
+    const cached = queuedRuntimeDependencyDedupeCache.get(pendingKey);
+    if (!cached) {
+      return null;
+    }
+    if (cached.expiresAt <= Date.now()) {
+      queuedRuntimeDependencyDedupeCache.delete(pendingKey);
+      return null;
+    }
+
+    return { ...cached.response, deduped: true };
+  }
+
+  function isQueuedRuntimeDependencyResponse(response: NativeResponse): boolean {
+    return response.runtimeDependencyState === 'queued';
+  }
+
   function cacheRuntimeDependencySuccess(
     input: LocalRuntimeDependencyInput,
     response: NativeResponse
   ): void {
     if (!response.success) {
+      return;
+    }
+    if (isQueuedRuntimeDependencyResponse(response)) {
+      queuedRuntimeDependencyDedupeCache.set(createRuntimeDependencyPendingKey(input), {
+        expiresAt: Date.now() + LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
+        response,
+      });
       return;
     }
     runtimeDependencyCache.set(
@@ -354,6 +386,10 @@ export function createNativeMessagingClient(options: {
     const cachedResponse = getCachedRuntimeDependency(input);
     if (cachedResponse) {
       return cachedResponse;
+    }
+    const queuedDedupeResponse = getQueuedRuntimeDependencyDedupe(input);
+    if (queuedDedupeResponse) {
+      return queuedDedupeResponse;
     }
 
     const pendingKey = createRuntimeDependencyPendingKey(input);

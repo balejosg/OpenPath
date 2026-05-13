@@ -286,4 +286,76 @@ await describe('native messaging client', async () => {
     );
     assert.equal(messages.length, 2);
   });
+
+  await test('dedupes queued local runtime dependency responses only briefly', async () => {
+    const originalNow = Date.now;
+    let now = 1_000_000;
+    Date.now = (): number => now;
+
+    try {
+      const { browser, messages } = createRecordingBrowserStub(() => ({
+        success: true,
+        action: 'allow-local-runtime-dependency-batch',
+        results: [
+          {
+            success: true,
+            action: 'allow-local-runtime-dependency',
+            anchorHost: 'allowed.example',
+            dependencyHost: 'cdn.example',
+            requestType: 'script',
+            queued: true,
+            runtimeDependencyState: 'queued',
+          },
+        ],
+      }));
+      const client = createNativeMessagingClient({
+        browserApi: browser,
+        hostName: 'whitelist_native_host',
+      });
+
+      assert.equal(
+        (
+          await client.allowLocalRuntimeDependency({
+            anchorHost: 'allowed.example',
+            dependencyHost: 'cdn.example',
+            requestType: 'script',
+          })
+        ).runtimeDependencyState,
+        'queued'
+      );
+      assert.deepEqual(
+        await client.allowLocalRuntimeDependency({
+          anchorHost: 'allowed.example',
+          dependencyHost: 'cdn.example',
+          requestType: 'script',
+        }),
+        {
+          success: true,
+          action: 'allow-local-runtime-dependency',
+          anchorHost: 'allowed.example',
+          dependencyHost: 'cdn.example',
+          requestType: 'script',
+          queued: true,
+          runtimeDependencyState: 'queued',
+          deduped: true,
+        }
+      );
+      assert.equal(messages.length, 1);
+
+      now += 6_000;
+      assert.equal(
+        (
+          await client.allowLocalRuntimeDependency({
+            anchorHost: 'allowed.example',
+            dependencyHost: 'cdn.example',
+            requestType: 'script',
+          })
+        ).runtimeDependencyState,
+        'queued'
+      );
+      assert.equal(messages.length, 2);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
 });

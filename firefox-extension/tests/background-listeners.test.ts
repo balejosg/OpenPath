@@ -39,6 +39,18 @@ function waitForAsyncListeners(): Promise<void> {
   });
 }
 
+function waitForMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function hasPromiseResolved(promise: Promise<unknown>): Promise<boolean> {
+  const pendingMarker = Symbol('pending');
+  const result = await Promise.race([promise, waitForAsyncListeners().then(() => pendingMarker)]);
+  return result !== pendingMarker;
+}
+
 function createListenerHarness(
   options: {
     confirmBlockedScreenNavigation?: (context: ConfirmBlockedScreenContext) => Promise<boolean>;
@@ -452,12 +464,18 @@ void describe('background listeners blocked-screen routing', () => {
     ]);
   });
 
-  void test('waits within the Windows runtime dependency budget before continuing requests', async () => {
+  void test('soft-times out xhr dependency requests while native work continues in background', async () => {
     const nativePayloads: unknown[] = [];
+    let resolveNativeCall!: () => void;
+    const nativeCallReleased = new Promise<void>((resolve) => {
+      resolveNativeCall = resolve;
+    });
+    let nativeCallFinished = false;
     const harness = createListenerHarness({
       allowLocalRuntimeDependency: async (input) => {
-        await new Promise((resolve) => setTimeout(resolve, 900));
         nativePayloads.push(input);
+        await nativeCallReleased;
+        nativeCallFinished = true;
         return { success: true, queued: true };
       },
     });
@@ -474,7 +492,16 @@ void describe('background listeners blocked-screen routing', () => {
 
     assert.ok(result instanceof Promise);
     assert.deepEqual(await result, {});
-    assert.ok(Date.now() - startedAt >= 850);
+    const elapsedMs = Date.now() - startedAt;
+    assert.ok(
+      elapsedMs >= 200,
+      `expected xhr soft wait to last at least 200ms, got ${String(elapsedMs)}`
+    );
+    assert.ok(
+      elapsedMs < 700,
+      `expected xhr soft wait below visible stall budget, got ${String(elapsedMs)}`
+    );
+    assert.equal(nativeCallFinished, false);
     assert.deepEqual(nativePayloads, [
       {
         anchorHost: 'www.reddit.com',
@@ -482,9 +509,13 @@ void describe('background listeners blocked-screen routing', () => {
         requestType: 'xmlhttprequest',
       },
     ]);
+
+    resolveNativeCall();
+    await waitForAsyncListeners();
+    assert.equal(nativeCallFinished, true);
   });
 
-  void test('keeps simultaneous Windows runtime dependency requests blocking until native calls resolve', async () => {
+  void test('uses shorter soft waits for images than render-blocking dependencies', async () => {
     const nativePayloads: unknown[] = [];
     let resolveNativeCalls!: () => void;
     const nativeCallsReleased = new Promise<void>((resolve) => {
@@ -527,9 +558,16 @@ void describe('background listeners blocked-screen routing', () => {
         requestType: 'image',
       },
     ]);
+
+    await waitForMs(650);
+    assert.equal(await hasPromiseResolved(imageResult), true);
+    assert.equal(await hasPromiseResolved(scriptResult), false);
+
+    await waitForMs(700);
+    assert.equal(await hasPromiseResolved(scriptResult), true);
+
     resolveNativeCalls();
-    assert.deepEqual(await scriptResult, {});
-    assert.deepEqual(await imageResult, {});
+    await waitForAsyncListeners();
   });
 
   void test('derives local dependency overlay anchor host from originUrl when tab and document context are absent', async () => {

@@ -39,7 +39,15 @@ interface BackgroundListenersOptions {
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
 }
 
-const DEFAULT_LOCAL_RUNTIME_DEPENDENCY_TIMEOUT_MS = 15000;
+const DEFAULT_LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_MS = 500;
+const LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_BY_TYPE_MS = new Map<string, number>([
+  ['fetch', 250],
+  ['xmlhttprequest', 250],
+  ['image', 500],
+  ['script', 1200],
+  ['stylesheet', 1200],
+  ['font', 1200],
+]);
 
 function extractRequestHostname(url: string | undefined): string | null {
   if (!url) {
@@ -105,6 +113,38 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Pr
   });
 }
 
+function resolveLocalRuntimeDependencySoftTimeoutMs(
+  requestType: string,
+  overrideTimeoutMs?: number
+): number {
+  if (overrideTimeoutMs !== undefined) {
+    return overrideTimeoutMs;
+  }
+  return (
+    LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_BY_TYPE_MS.get(requestType.toLowerCase()) ??
+    DEFAULT_LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_MS
+  );
+}
+
+function waitForLocalRuntimeDependencySoftTimeout(
+  promise: Promise<unknown>,
+  requestType: string,
+  overrideTimeoutMs?: number
+): Promise<Record<string, never>> {
+  void promise.catch((error: unknown) => {
+    logger.error('[Monitor] Error applying local runtime dependency', {
+      error: getErrorMessage(error),
+      requestType,
+    });
+  });
+
+  return withTimeout(
+    promise,
+    resolveLocalRuntimeDependencySoftTimeoutMs(requestType, overrideTimeoutMs),
+    {}
+  ).then(() => ({}));
+}
+
 function createRuntimeMessageResponder(
   options: Pick<BackgroundListenersOptions, 'handleRuntimeMessage'>
 ): (
@@ -130,8 +170,6 @@ function createRuntimeMessageResponder(
 
 export function registerBackgroundListeners(options: BackgroundListenersOptions): void {
   const tabAnchorHosts = new Map<number, string>();
-  const dependencyTimeoutMs =
-    options.localRuntimeDependencyTimeoutMs ?? DEFAULT_LOCAL_RUNTIME_DEPENDENCY_TIMEOUT_MS;
   const blockedScreenNavigation = createBlockedScreenNavigationController({
     addBlockedDomain: options.addBlockedDomain,
     ...(options.confirmBlockedScreenNavigation
@@ -180,15 +218,15 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
           return;
         }
 
-        return withTimeout(
+        return waitForLocalRuntimeDependencySoftTimeout(
           options.allowLocalRuntimeDependency({
             anchorHost,
             dependencyHost,
             requestType: details.type,
           }),
-          dependencyTimeoutMs,
-          {}
-        ).then(() => ({}));
+          details.type,
+          options.localRuntimeDependencyTimeoutMs
+        );
       }
 
       if (details.type === 'main_frame' && details.tabId >= 0 && dependencyHost) {
