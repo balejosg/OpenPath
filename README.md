@@ -41,6 +41,23 @@ OpenPath puts **the teacher in control** of internet access in their classroom, 
 - **Browser integration**: a Firefox extension shows teachers what is being blocked and lets students request access to sites they need.
 - **Admin dashboard**: a clean web interface where teachers manage their classrooms, approved domains, and schedules.
 
+## Current Limitations
+
+OpenPath is intentionally restrictive while the endpoint and browser-control
+surface is still maturing:
+
+- The full classroom browser workflow is currently centered on managed Firefox:
+  blocked-page visibility, blocked-path and blocked-subdomain enforcement, and
+  student unblock requests rely on the Firefox extension and native host.
+- Endpoint agents may block unmanaged or unapproved browsers to prevent students
+  from bypassing local DNS and firewall policy. On Windows this includes
+  denying common alternative browsers and portable browsers unless a managed
+  browser path is explicitly supported.
+- Managed Chromium artifacts exist in the repository, but they should not be
+  treated as equivalent full-browser support for every deployment. Use Firefox
+  as the supported browser path unless the target environment has explicitly
+  validated a managed Chromium or Edge flow.
+
 ## Privacy First, Not as a Feature, but as Architecture
 
 OpenPath was built from the ground up so that **student computers never share browsing data** with anyone. This is not a setting you can toggle; it is how the system works:
