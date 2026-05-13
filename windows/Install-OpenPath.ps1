@@ -52,7 +52,6 @@ $script:OpenPathInstallerQuietMode = $VerbosePreference -ne 'Continue'
 if ($script:OpenPathInstallerQuietMode) {
     $WarningPreference = 'SilentlyContinue'
     $InformationPreference = 'SilentlyContinue'
-    $ProgressPreference = 'SilentlyContinue'
     $env:OPENPATH_QUIET_INSTALL = '1'
 }
 $OpenPathRoot = 'C:\OpenPath'

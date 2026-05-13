@@ -580,12 +580,25 @@ Describe "Installer" {
                 '$script:OpenPathInstallerQuietMode = $VerbosePreference -ne ''Continue''',
                 '$WarningPreference = ''SilentlyContinue''',
                 '$InformationPreference = ''SilentlyContinue''',
-                '$ProgressPreference = ''SilentlyContinue''',
                 '$env:OPENPATH_QUIET_INSTALL = ''1'''
             )
+            $content | Should -Not -Match '\$ProgressPreference\s*=\s*''SilentlyContinue'''
 
             $content | Should -Match '(?s)if \(\$VerbosePreference -eq ''Continue''\).*?OpenPath DNS para Windows - Instalador'
             $content | Should -Not -Match 'else \{\s+Write-InstallerNotice ''Installing OpenPath DNS for Windows\.\.\.''\s+\}'
+        }
+
+        It "Keeps the PowerShell progress bar available in normal installer runs" {
+            $progressHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Progress.ps1"
+            $progressHelper = Get-Content $progressHelperPath -Raw
+            $showProgressFunction = [regex]::Match(
+                $progressHelper,
+                '(?s)function Show-InstallerProgress \{.*?\n\}'
+            ).Value
+
+            $showProgressFunction | Should -Match "Write-Progress -Activity 'Installing OpenPath'"
+            $showProgressFunction | Should -Not -Match "if \(\`$VerbosePreference -ne 'Continue'\)"
+            $showProgressFunction | Should -Not -Match "(?s)if \(\`$VerbosePreference -eq 'Continue'\) \{[^}]*return"
         }
 
         It "Keeps enrollment script host output quiet during normal installer enrollment" {

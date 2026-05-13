@@ -60,7 +60,6 @@ function Show-InstallerProgress {
     $percentComplete = [Math]::Min(100, [Math]::Max(0, [int](($Step / $Total) * 100)))
     if ($VerbosePreference -eq 'Continue') {
         Write-Verbose "[$Step/$Total] $Status"
-        return
     }
 
     if ([Console]::IsOutputRedirected) {
