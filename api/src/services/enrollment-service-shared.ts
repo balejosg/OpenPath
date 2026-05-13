@@ -78,6 +78,29 @@ if (-not $manifest.success -or -not $manifest.files) {
     throw 'Bootstrap manifest unavailable'
 }
 
+function Test-OpenPathBootstrapFilesPresent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root,
+
+        [Parameter(Mandatory = $true)]
+        [object[]]$ManifestFiles
+    )
+
+    foreach ($file in $ManifestFiles) {
+        $relativePath = [string]$file.path
+        if (-not $relativePath) {
+            continue
+        }
+
+        if (-not (Test-Path (Join-Path $Root $relativePath))) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 if ($manifest.version) {
     $env:OPENPATH_VERSION = [string]$manifest.version
 }
@@ -104,7 +127,7 @@ if ($manifest.bundle) {
     }
 
     Expand-Archive -LiteralPath $bundlePath -DestinationPath $WindowsRoot -Force
-    $bundleApplied = $true
+    $bundleApplied = Test-OpenPathBootstrapFilesPresent -Root $WindowsRoot -ManifestFiles @($manifest.files)
 }
 
 if (-not $bundleApplied) {

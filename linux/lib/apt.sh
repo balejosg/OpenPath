@@ -20,7 +20,7 @@ openpath_default_apt_mirrors() {
 OPENPATH_APT_MIRRORS="${OPENPATH_APT_MIRRORS:-$(openpath_default_apt_mirrors)}"
 OPENPATH_APT_RETRIES="${OPENPATH_APT_RETRIES:-2}"
 OPENPATH_APT_UPDATE_TIMEOUT_SECONDS="${OPENPATH_APT_UPDATE_TIMEOUT_SECONDS:-45}"
-OPENPATH_APT_INSTALL_TIMEOUT_SECONDS="${OPENPATH_APT_INSTALL_TIMEOUT_SECONDS:-180}"
+OPENPATH_APT_INSTALL_TIMEOUT_SECONDS="${OPENPATH_APT_INSTALL_TIMEOUT_SECONDS:-300}"
 OPENPATH_APT_CONNECT_TIMEOUT_SECONDS="${OPENPATH_APT_CONNECT_TIMEOUT_SECONDS:-10}"
 OPENPATH_APT_CONF_FILE="${OPENPATH_APT_CONF_FILE:-/etc/apt/apt.conf.d/80openpath-network-retries}"
 
@@ -136,6 +136,7 @@ apt_install_with_retry() {
     local package_group="$1"
     shift
 
+    local apt_output_file
     local attempt
     local max_attempts
 
@@ -147,9 +148,14 @@ apt_install_with_retry() {
     fi
 
     for attempt in $(seq 1 "$max_attempts"); do
-        if run_apt_command_with_timeout "$OPENPATH_APT_INSTALL_TIMEOUT_SECONDS" "$@" >/dev/null; then
+        apt_output_file="$(mktemp)"
+        if run_apt_command_with_timeout "$OPENPATH_APT_INSTALL_TIMEOUT_SECONDS" "$@" >"$apt_output_file" 2>&1; then
+            rm -f "$apt_output_file"
             return 0
         fi
+
+        [ -s "$apt_output_file" ] && cat "$apt_output_file"
+        rm -f "$apt_output_file"
 
         if [ "$attempt" -lt "$max_attempts" ]; then
             echo "  ! Installation of ${package_group} failed (attempt ${attempt}/${max_attempts}); refreshing indexes..."

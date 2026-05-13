@@ -29,6 +29,9 @@ void test('enrollment-service-shared exposes role checks and windows script gene
   assert.match(script, /\$ProgressPreference = 'SilentlyContinue'/);
   assert.match(script, /\$WarningPreference = 'SilentlyContinue'/);
   assert.match(script, /\$InformationPreference = 'SilentlyContinue'/);
+  assert.match(script, /Test-OpenPathBootstrapFilesPresent/);
+  assert.match(script, /\$bundleApplied = Test-OpenPathBootstrapFilesPresent/);
+  assert.match(script, /foreach \(\$file in \$manifest\.files\)/);
   assert.doesNotMatch(script, /OpenPath Enrollment \(Windows\)/);
   assert.doesNotMatch(script, /Installation completed\. Current status:/);
   assert.doesNotMatch(script, /OpenPath\.ps1' status/);

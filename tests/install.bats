@@ -757,6 +757,15 @@ EOF
     run grep -n 'timeout "\$timeout_seconds"' "$PROJECT_DIR/linux/lib/apt.sh"
     [ "$status" -eq 0 ]
 
+    run grep -n 'OPENPATH_APT_INSTALL_TIMEOUT_SECONDS:-300' "$PROJECT_DIR/linux/lib/apt.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -n 'apt_output_file="\$(mktemp)"' "$PROJECT_DIR/linux/lib/apt.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -n '\[ -s "\$apt_output_file" \] && cat "\$apt_output_file"' "$PROJECT_DIR/linux/lib/apt.sh"
+    [ "$status" -eq 0 ]
+
     run grep -n "apt_install_with_retry()" "$PROJECT_DIR/linux/lib/apt.sh"
     [ "$status" -eq 0 ]
 }
