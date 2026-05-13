@@ -214,6 +214,29 @@ describe('useClassroomExemptions', () => {
     });
   });
 
+  it('reports an accented error when operational exemption creation fails', async () => {
+    mockCreateOperationalExemption.mockRejectedValueOnce(new Error('boom'));
+
+    const { result } = renderHook(() =>
+      useClassroomExemptions({
+        selectedClassroom: classroom,
+        activeSchedule: weeklySchedule,
+        scheduleBoundarySources: [weeklySchedule],
+        refetchClassrooms: vi.fn(),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loadingExemptions).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.handleCreateOperationalExemption('machine-1', 4, 'Mantenimiento');
+    });
+
+    expect(result.current.exemptionsError).toBe('No se pudo crear la exención');
+  });
+
   it('reports an error when the initial exemptions fetch fails', async () => {
     mockListExemptions.mockRejectedValueOnce(new Error('boom'));
 

@@ -139,7 +139,7 @@ export function useClassroomExemptions({
         await fetchExemptions(selectedClassroom.id);
       } catch (err) {
         reportError('Failed to create operational exemption:', err);
-        setExemptionsError('No se pudo crear la exencion');
+        setExemptionsError('No se pudo crear la exención');
       } finally {
         setMachineExemptionMutating(machineId, false);
       }

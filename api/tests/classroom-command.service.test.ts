@@ -38,7 +38,13 @@ function activeOneOffWindow(reference = new Date()): { startAt: Date; endAt: Dat
   return { startAt, endAt };
 }
 
-async function createClassroomWithMachine(label: string, defaultGroupId?: string) {
+async function createClassroomWithMachine(
+  label: string,
+  defaultGroupId?: string
+): Promise<{
+  classroom: Awaited<ReturnType<typeof classroomStorage.createClassroom>>;
+  machine: Awaited<ReturnType<typeof classroomStorage.registerMachine>>;
+}> {
   const classroom = await classroomStorage.createClassroom({
     name: createFixtureId(`exemption-${label}`),
     displayName: `Exemption ${label}`,
@@ -53,7 +59,10 @@ async function createClassroomWithMachine(label: string, defaultGroupId?: string
   return { classroom, machine };
 }
 
-async function createActiveOneOffSchedule(classroomId: string, groupId: string) {
+async function createActiveOneOffSchedule(
+  classroomId: string,
+  groupId: string
+): Promise<Awaited<ReturnType<typeof scheduleStorage.createOneOffSchedule>>> {
   const { startAt, endAt } = activeOneOffWindow();
   return await scheduleStorage.createOneOffSchedule({
     classroomId,
