@@ -26,6 +26,28 @@ Describe "Services Module" {
             $content.Contains('self-update --silent') | Should -BeTrue
         }
 
+        It "Includes on-demand runtime dependency apply task" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Services.TaskBuilders.ps1"
+            $servicesPath = Join-Path $PSScriptRoot ".." "lib" "Services.psm1"
+            $installerPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $helperContent = Get-Content $helperPath -Raw
+            $servicesContent = Get-Content $servicesPath -Raw
+            $installerContent = Get-Content $installerPath -Raw
+
+            Assert-ContentContainsAll -Content $helperContent -Needles @(
+                'function New-OpenPathRuntimeDependencyApplyTaskDefinition',
+                'Apply-RuntimeDependencyQueue.ps1',
+                '-TaskName "$TaskPrefix-RuntimeDependencyApply"',
+                '-ExecutionTimeLimit (New-TimeSpan -Minutes 2)'
+            )
+            Assert-ContentContainsAll -Content $servicesContent -Needles @(
+                '$runtimeDependencyDefinition = New-OpenPathRuntimeDependencyApplyTaskDefinition',
+                'Grant-OpenPathTaskRunAccessToUsers -TaskName $runtimeDependencyDefinition.TaskName',
+                '"RuntimeDependencyApply"'
+            )
+            $installerContent.Contains("'Apply-RuntimeDependencyQueue.ps1'") | Should -BeTrue
+        }
+
         It "Avoids explicit max repetition duration for recurring tasks" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Services.TaskBuilders.ps1"
             $content = Get-Content $helperPath -Raw
@@ -68,6 +90,10 @@ Describe "Services Module" {
 
         It "Accepts AgentUpdate as a valid task type" -Skip:(-not (Test-FunctionExists 'Start-OpenPathTask')) {
             { Start-OpenPathTask -TaskType AgentUpdate -WhatIf } | Should -Not -Throw
+        }
+
+        It "Accepts RuntimeDependencyApply as a valid task type" -Skip:(-not (Test-FunctionExists 'Start-OpenPathTask')) {
+            { Start-OpenPathTask -TaskType RuntimeDependencyApply -WhatIf } | Should -Not -Throw
         }
     }
 }
@@ -213,6 +239,7 @@ Describe "Update Runtime" {
                 'function Initialize-OpenPathUpdateRuntimeSession',
                 '$script:OpenPathUpdateRuntimeSessionInitialized',
                 'function Invoke-OpenPathUpdateCycle',
+                'function Invoke-OpenPathRuntimeDependencyFastApply',
                 '[string]$OpenPathRoot = ''C:\OpenPath''',
                 '[string]$UpdateMutexName = ''Global\OpenPathUpdateLock''',
                 '$null = Backup-OpenPathWhitelistState',
@@ -220,7 +247,8 @@ Describe "Update Runtime" {
                 'Write-OpenPathLog "=== Starting openpath update ==="',
                 'return [int]$exitCode',
                 "'Initialize-OpenPathUpdateRuntimeSession'",
-                "'Invoke-OpenPathUpdateCycle'"
+                "'Invoke-OpenPathUpdateCycle'",
+                "'Invoke-OpenPathRuntimeDependencyFastApply'"
             )
         }
 

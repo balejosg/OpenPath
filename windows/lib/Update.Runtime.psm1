@@ -36,6 +36,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Sync-OpenPathFirefoxNativeHostState',
         'Invoke-OpenPathRuntimeDependencyQueue',
         'Update-AcrylicHost',
+        'Restart-AcrylicService',
         'Clear-OpenPathRuntimeDependencyOverlay',
         'Restore-OriginalDNS',
         'Remove-OpenPathFirewall',
@@ -52,24 +53,153 @@ function Invoke-OpenPathRuntimeDependencyQueueApply {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$WhitelistPath
+        [string]$WhitelistPath,
+
+        [switch]$PassThru
     )
+
+    $result = [ordered]@{
+        Changed = $false
+        Processed = 0
+        Rejected = 0
+        QueueProcessedMs = 0
+        OverlayWriteMs = 0
+        AcrylicHostUpdateMs = 0
+    }
 
     $runtimeDependencyQueueSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
     if ($runtimeDependencyQueueSections.IsDisabled) {
+        if ($PassThru) { return [PSCustomObject]$result }
         return $false
     }
 
+    $queueStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $runtimeDependencyQueueResult = Invoke-OpenPathRuntimeDependencyQueue `
         -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist `
         -BlockedSubdomains $runtimeDependencyQueueSections.BlockedSubdomains
+    $queueStopwatch.Stop()
+
+    $result['Changed'] = [bool]$runtimeDependencyQueueResult.Changed
+    $result['Processed'] = [int]$runtimeDependencyQueueResult.Processed
+    $result['Rejected'] = [int]$runtimeDependencyQueueResult.Rejected
+    $result['QueueProcessedMs'] = [int]$queueStopwatch.ElapsedMilliseconds
+    if ($runtimeDependencyQueueResult.PSObject.Properties['OverlayWriteMs']) {
+        $result['OverlayWriteMs'] = [int]$runtimeDependencyQueueResult.OverlayWriteMs
+    }
 
     if ($runtimeDependencyQueueResult.Processed -gt 0 -or $runtimeDependencyQueueResult.Rejected -gt 0) {
         Write-OpenPathLog "Runtime dependency queue processed: processed=$($runtimeDependencyQueueResult.Processed) rejected=$($runtimeDependencyQueueResult.Rejected)"
     }
 
+    $acrylicStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     Update-AcrylicHost -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist -BlockedSubdomains $runtimeDependencyQueueSections.BlockedSubdomains
+    $acrylicStopwatch.Stop()
+    $result['AcrylicHostUpdateMs'] = [int]$acrylicStopwatch.ElapsedMilliseconds
+
+    if ($PassThru) { return [PSCustomObject]$result }
     return [bool]$runtimeDependencyQueueResult.Changed
+}
+
+function Invoke-OpenPathRuntimeDependencyFastApply {
+    [CmdletBinding()]
+    param(
+        [string]$OpenPathRoot = 'C:\OpenPath',
+
+        [string]$UpdateMutexName = 'Global\OpenPathUpdateLock',
+
+        [int]$LockWaitTimeoutSeconds = 20
+    )
+
+    Initialize-OpenPathUpdateRuntimeSession -OpenPathRoot $OpenPathRoot
+
+    $mutex = $null
+    $lockAcquired = $false
+    $exitCode = 0
+    $whitelistPath = Join-Path $OpenPathRoot 'data\whitelist.txt'
+    $metrics = [ordered]@{
+        mode = 'runtime-dependency-fast-apply'
+        queueProcessedMs = 0
+        queueProcessed = 0
+        queueRejected = 0
+        overlayWriteMs = 0
+        acrylicHostUpdateMs = 0
+        acrylicReloadMs = 0
+        changed = $false
+    }
+
+    try {
+        $mutex = [System.Threading.Mutex]::new($false, $UpdateMutexName)
+        try {
+            $lockAcquired = $mutex.WaitOne(0)
+            if (-not $lockAcquired -and $LockWaitTimeoutSeconds -gt 0) {
+                $lockWaitTimeoutMs = [Math]::Max(0, $LockWaitTimeoutSeconds * 1000)
+                Write-OpenPathLog "Runtime dependency fast apply waiting up to $LockWaitTimeoutSeconds seconds for OpenPath update lock" -Level WARN
+                $lockAcquired = $mutex.WaitOne($lockWaitTimeoutMs)
+            }
+        }
+        catch [System.Threading.AbandonedMutexException] {
+            $lockAcquired = $true
+            Write-OpenPathLog "OpenPath update lock was abandoned by a previous process - continuing runtime dependency fast apply" -Level WARN
+        }
+
+        if (-not $lockAcquired) {
+            Write-OpenPathLog "Another OpenPath update is already running - skipping runtime dependency fast apply" -Level WARN
+            return 1
+        }
+
+        Write-OpenPathLog "=== Starting runtime dependency fast apply ==="
+        if (-not (Test-Path $whitelistPath -ErrorAction SilentlyContinue)) {
+            Write-OpenPathLog "Runtime dependency fast apply skipped because local whitelist is missing" -Level WARN
+            return 1
+        }
+
+        $config = Get-OpenPathConfig
+        Sync-FirefoxNativeHostMirror -Config $config -WhitelistPath $whitelistPath
+        $queueResult = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $whitelistPath -PassThru
+        $metrics['queueProcessedMs'] = [int]$queueResult.QueueProcessedMs
+        $metrics['queueProcessed'] = [int]$queueResult.Processed
+        $metrics['queueRejected'] = [int]$queueResult.Rejected
+        $metrics['overlayWriteMs'] = [int]$queueResult.OverlayWriteMs
+        $metrics['acrylicHostUpdateMs'] = [int]$queueResult.AcrylicHostUpdateMs
+        $metrics['changed'] = [bool]$queueResult.Changed
+
+        if ($queueResult.Changed) {
+            $reloadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            Restart-AcrylicService | Out-Null
+            $reloadStopwatch.Stop()
+            $metrics['acrylicReloadMs'] = [int]$reloadStopwatch.ElapsedMilliseconds
+        }
+
+        Write-OpenPathLog ("Runtime dependency fast apply metrics: processed={0} rejected={1} changed={2} queueProcessedMs={3} overlayWriteMs={4} acrylicHostUpdateMs={5} acrylicReloadMs={6}" -f `
+                $metrics['queueProcessed'], `
+                $metrics['queueRejected'], `
+                $metrics['changed'], `
+                $metrics['queueProcessedMs'], `
+                $metrics['overlayWriteMs'], `
+                $metrics['acrylicHostUpdateMs'], `
+                $metrics['acrylicReloadMs'])
+        Write-OpenPathLog "=== Runtime dependency fast apply completed ==="
+    }
+    catch {
+        Write-UpdateCatchLog "Runtime dependency fast apply failed: $_" -Level ERROR
+        $exitCode = 1
+    }
+    finally {
+        if ($lockAcquired -and $mutex) {
+            try {
+                $mutex.ReleaseMutex()
+            }
+            catch [System.ApplicationException] {
+                # Ignore if mutex ownership was not held at release time
+            }
+        }
+
+        if ($mutex) {
+            $mutex.Dispose()
+        }
+    }
+
+    return [int]$exitCode
 }
 
 function Invoke-OpenPathUpdateCycle {
@@ -321,5 +451,6 @@ Export-ModuleMember -Function @(
     'Restore-OpenPathCheckpoint',
     'Write-UpdateCatchLog',
     'Invoke-OpenPathRuntimeDependencyQueueApply',
+    'Invoke-OpenPathRuntimeDependencyFastApply',
     'Sync-FirefoxNativeHostMirror'
 )

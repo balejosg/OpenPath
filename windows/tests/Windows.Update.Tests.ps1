@@ -146,5 +146,36 @@ Describe "Update Script" {
             $applyContent | Should -Match '(?s)Handle-OpenPathNotModified.*?\$runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply.*?if \(\$runtimeDependencyQueueChanged\).*?Restore-OpenPathProtectedMode -Config \$Config'
             $applyContent | Should -Match '(?s)Handle-OpenPathDownloadFailure.*?\$runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply.*?if \(\$runtimeDependencyQueueChanged\).*?Restore-OpenPathProtectedMode -Config \$Config'
         }
+
+        It "Provides a queue-only runtime dependency fast apply without remote download" {
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Apply-RuntimeDependencyQueue.ps1"
+            $runtimeContent = Get-Content $runtimePath -Raw
+            $scriptContent = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $runtimeContent -Needles @(
+                'function Invoke-OpenPathRuntimeDependencyFastApply',
+                'Sync-FirefoxNativeHostMirror -Config $config -WhitelistPath $whitelistPath',
+                'Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $whitelistPath -PassThru',
+                'Restart-AcrylicService | Out-Null',
+                'Runtime dependency fast apply metrics',
+                'queueProcessedMs',
+                'overlayWriteMs',
+                'acrylicReloadMs'
+            )
+
+            $fastApplyStart = $runtimeContent.IndexOf('function Invoke-OpenPathRuntimeDependencyFastApply')
+            $updateCycleStart = $runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle')
+            $fastApplyBody = $runtimeContent.Substring($fastApplyStart, $updateCycleStart - $fastApplyStart)
+            $fastApplyBody | Should -Match '(?s)Test-Path \$whitelistPath.*?Invoke-OpenPathRuntimeDependencyQueueApply'
+            $fastApplyBody | Should -Not -Match 'Get-OpenPathWhitelistDownloadResult'
+
+            Assert-ContentContainsAll -Content $scriptContent -Needles @(
+                '#Requires -RunAsAdministrator',
+                'Import-Module "$OpenPathRoot\lib\Update.Runtime.psm1" -Force',
+                'Invoke-OpenPathRuntimeDependencyFastApply -OpenPathRoot $OpenPathRoot',
+                'exit $exitCode'
+            )
+        }
     }
 }

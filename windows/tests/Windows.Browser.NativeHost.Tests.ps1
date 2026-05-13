@@ -359,6 +359,7 @@ Describe "Browser Module - Native Host" {
                 'function Resolve-OpenPathNativeHostSupportPath',
                 '$stagedStateHelperPath = Join-Path $script:NativeRoot ''NativeHost.State.ps1''',
                 '$script:OpenPathRoot = Resolve-OpenPathNativeHostRoot',
+                '$script:RuntimeDependencyTaskName = ''OpenPath-RuntimeDependencyApply''',
                 '(Join-Path $script:NativeRoot $FileName)',
                 '(Join-Path $script:OpenPathRoot "lib\internal\$FileName")',
                 '. (Resolve-OpenPathNativeHostSupportPath -FileName ''NativeHost.State.ps1'')',
@@ -382,7 +383,8 @@ Describe "Browser Module - Native Host" {
                 'GetSecurityDescriptor(0xF)',
                 'SetSecurityDescriptor($updatedSecurityDescriptor, 0)',
                 "(A;;GRGX;;;BU)",
-                'Grant-OpenPathTaskRunAccessToUsers -TaskName $updateDefinition.TaskName'
+                'Grant-OpenPathTaskRunAccessToUsers -TaskName $updateDefinition.TaskName',
+                'Grant-OpenPathTaskRunAccessToUsers -TaskName $runtimeDependencyDefinition.TaskName'
             )
 
             Assert-ContentContainsAll -Content $taskHelperContent -Needles @(
@@ -400,6 +402,9 @@ Describe "Browser Module - Native Host" {
                 'function Test-NativeWhitelistContainsDomains',
                 'function Invoke-NativeHostSharedUpdateTrigger',
                 'Global\OpenPathNativeWhitelistUpdateTrigger',
+                '$script:RuntimeDependencyTaskName',
+                '$triggerState = @{',
+                '$triggerState[''Fallback''] = $true',
                 '$Message.domains',
                 'Invoke-UpdateTask -Domains $domains',
                 'Get-WhitelistSections',
@@ -452,7 +457,11 @@ Describe "Browser Module - Native Host" {
                 'reason = ''dependency-already-whitelisted''',
                 'reason = ''runtime-dependency-overlay-present''',
                 '-RuntimeDependencyDomains $queuedDependencyHosts',
-                '-TimeoutSeconds 14'
+                '-TimeoutSeconds 14',
+                'queueWriteMs',
+                'updateTriggerMs',
+                'runtimeDependencyFastPath',
+                'runtimeDependencyFallback'
             )
             Assert-ContentContainsAll -Content $installerStagingContent -Needles @(
                 '$OpenPathRoot\data\runtime-dependency-queue',
@@ -463,6 +472,7 @@ Describe "Browser Module - Native Host" {
             Assert-ContentContainsAll -Content $updateRuntimeContent -Needles @(
                 'Invoke-OpenPathRuntimeDependencyQueue',
                 'Update-AcrylicHost -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist',
+                'function Invoke-OpenPathRuntimeDependencyFastApply',
                 'Runtime dependency queue processed'
             )
 
@@ -485,6 +495,10 @@ Describe "Browser Module - Native Host" {
                 'action=$Action',
                 'elapsedMs=',
                 'domains=',
+                '[hashtable]$ExtraFields = @{}',
+                '$fields += "$key=$(Format-NativeHostActionLogValue -Value $value)"',
+                'updateTriggerMs',
+                'updateWaitMs',
                 "if (`$action -ne 'update-whitelist')",
                 "Write-NativeHostActionLog -Action `$action",
                 'Write-NativeHostActionLog -Action ''update-whitelist'''

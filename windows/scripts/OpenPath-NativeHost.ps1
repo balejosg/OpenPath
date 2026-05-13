@@ -53,6 +53,7 @@ $script:StatePath = Join-Path $script:NativeRoot 'native-state.json'
 $script:WhitelistPath = Join-Path $script:NativeRoot 'whitelist.txt'
 $script:LogPath = Join-Path $script:NativeRoot 'native-host.log'
 $script:UpdateTaskName = 'OpenPath-Update'
+$script:RuntimeDependencyTaskName = 'OpenPath-RuntimeDependencyApply'
 $script:MaxDomains = 50
 $script:MaxMessageBytes = 1MB
 

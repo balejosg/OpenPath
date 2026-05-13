@@ -79,6 +79,36 @@ function New-OpenPathUpdateTaskDefinition {
         -Settings $DefaultSettings
 }
 
+function New-OpenPathRuntimeDependencyApplyTaskDefinition {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OpenPathRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TaskPrefix,
+
+        [Parameter(Mandatory = $true)]
+        [object]$Principal
+    )
+
+    $runtimeDependencyAction = New-OpenPathTaskAction -Target "$OpenPathRoot\scripts\Apply-RuntimeDependencyQueue.ps1"
+    $runtimeDependencyTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(10)
+    $runtimeDependencySettings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -RestartCount 1 `
+        -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+
+    New-OpenPathTaskDefinition `
+        -TaskName "$TaskPrefix-RuntimeDependencyApply" `
+        -Action $runtimeDependencyAction `
+        -Trigger $runtimeDependencyTrigger `
+        -Principal $Principal `
+        -Settings $runtimeDependencySettings
+}
+
 function New-OpenPathWatchdogTaskDefinition {
     param(
         [Parameter(Mandatory = $true)]

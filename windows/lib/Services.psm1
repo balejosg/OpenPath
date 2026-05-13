@@ -78,6 +78,14 @@ function Register-OpenPathTask {
     Grant-OpenPathTaskRunAccessToUsers -TaskName $updateDefinition.TaskName | Out-Null
     Write-OpenPathLog "Registered: $($updateDefinition.TaskName) (every $UpdateIntervalMinutes min)"
 
+    $runtimeDependencyDefinition = New-OpenPathRuntimeDependencyApplyTaskDefinition `
+        -OpenPathRoot $openPathRoot `
+        -TaskPrefix $script:TaskPrefix `
+        -Principal $updatePrincipal
+    Register-OpenPathTaskDefinition -Definition $runtimeDependencyDefinition
+    Grant-OpenPathTaskRunAccessToUsers -TaskName $runtimeDependencyDefinition.TaskName | Out-Null
+    Write-OpenPathLog "Registered: $($runtimeDependencyDefinition.TaskName) (on demand runtime dependencies)"
+
     $watchdogDefinition = New-OpenPathWatchdogTaskDefinition `
         -OpenPathRoot $openPathRoot `
         -TaskPrefix $script:TaskPrefix `
@@ -170,7 +178,7 @@ function Start-OpenPathTask {
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [ValidateSet("Update", "Watchdog", "Startup", "SSE", "AgentUpdate")]
+        [ValidateSet("Update", "RuntimeDependencyApply", "Watchdog", "Startup", "SSE", "AgentUpdate")]
         [string]$TaskType = "Update"
     )
 

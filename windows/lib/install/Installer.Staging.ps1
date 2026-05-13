@@ -95,6 +95,7 @@ function Copy-OpenPathInstallerRuntime {
     )
 
     $requiredScriptFiles = @(
+        'Apply-RuntimeDependencyQueue.ps1',
         'Enroll-Machine.ps1',
         'Pre-Install-Validation.ps1',
         'Start-SSEListener.ps1',

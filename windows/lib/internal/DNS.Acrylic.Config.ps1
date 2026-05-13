@@ -325,6 +325,7 @@ function Invoke-OpenPathRuntimeDependencyQueue {
         Changed = $false
         Processed = 0
         Rejected = 0
+        OverlayWriteMs = 0
         QueuePath = $QueuePath
     }
 
@@ -445,7 +446,10 @@ function Invoke-OpenPathRuntimeDependencyQueue {
                 Sort-Object @{ Expression = { if ($_.PSObject.Properties['lastSeen']) { [string]$_.lastSeen } else { '' } }; Descending = $true } |
                 Select-Object -First $settings.Capacity
         )
+        $overlayStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         Write-OpenPathRuntimeDependencyOverlay -Entries $keptEntries
+        $overlayStopwatch.Stop()
+        $result['OverlayWriteMs'] = [int]$overlayStopwatch.ElapsedMilliseconds
     }
 
     return [PSCustomObject]$result

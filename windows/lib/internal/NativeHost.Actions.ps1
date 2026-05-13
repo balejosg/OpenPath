@@ -437,10 +437,12 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
         return $candidate.Result
     }
 
+    $queueWriteStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $requestPath = Write-NativeHostRuntimeDependencyQueueRequest `
         -AnchorHost $candidate.AnchorHost `
         -DependencyHost $candidate.DependencyHost `
         -RequestType $candidate.RequestType
+    $queueWriteStopwatch.Stop()
 
     $updateResult = Invoke-UpdateTask `
         -RuntimeDependencyDomains @($candidate.DependencyHost) `
@@ -455,6 +457,13 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
             requestType = $candidate.RequestType
             queued = $true
             requestPath = $requestPath
+            queueWriteMs = [int]$queueWriteStopwatch.ElapsedMilliseconds
+            updateTriggerMs = if ($updateResult.ContainsKey('updateTriggerMs')) { [int]$updateResult.updateTriggerMs } else { 0 }
+            updateWaitMs = if ($updateResult.ContainsKey('updateWaitMs')) { [int]$updateResult.updateWaitMs } else { 0 }
+            updateElapsedMs = if ($updateResult.ContainsKey('elapsedMs')) { [int]$updateResult.elapsedMs } else { 0 }
+            runtimeDependencyFastPath = if ($updateResult.ContainsKey('runtimeDependencyFastPath')) { [bool]$updateResult.runtimeDependencyFastPath } else { $false }
+            runtimeDependencyFallback = if ($updateResult.ContainsKey('runtimeDependencyFallback')) { [bool]$updateResult.runtimeDependencyFallback } else { $false }
+            updateTaskName = if ($updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
             error = $updateResult.error
         }
     }
@@ -467,6 +476,13 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
         requestType = $candidate.RequestType
         queued = $true
         requestPath = $requestPath
+        queueWriteMs = [int]$queueWriteStopwatch.ElapsedMilliseconds
+        updateTriggerMs = if ($updateResult.ContainsKey('updateTriggerMs')) { [int]$updateResult.updateTriggerMs } else { 0 }
+        updateWaitMs = if ($updateResult.ContainsKey('updateWaitMs')) { [int]$updateResult.updateWaitMs } else { 0 }
+        updateElapsedMs = if ($updateResult.ContainsKey('elapsedMs')) { [int]$updateResult.elapsedMs } else { 0 }
+        runtimeDependencyFastPath = if ($updateResult.ContainsKey('runtimeDependencyFastPath')) { [bool]$updateResult.runtimeDependencyFastPath } else { $false }
+        runtimeDependencyFallback = if ($updateResult.ContainsKey('runtimeDependencyFallback')) { [bool]$updateResult.runtimeDependencyFallback } else { $false }
+        updateTaskName = if ($updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
         source = 'firefox-webrequest-local'
     }
 }
@@ -491,6 +507,7 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
     $results = @()
     $queuedResults = @()
     $queuedDependencyHosts = @()
+    $updateResult = $null
 
     foreach ($entry in @($entries | Select-Object -First 20)) {
         $candidate = Resolve-NativeHostLocalRuntimeDependencyCandidate -Message $entry -State $State -Sections $Sections
@@ -499,10 +516,12 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
             continue
         }
 
+        $queueWriteStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $requestPath = Write-NativeHostRuntimeDependencyQueueRequest `
             -AnchorHost $candidate.AnchorHost `
             -DependencyHost $candidate.DependencyHost `
             -RequestType $candidate.RequestType
+        $queueWriteStopwatch.Stop()
         $result = @{
             success = $true
             action = 'allow-local-runtime-dependency'
@@ -511,6 +530,7 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
             requestType = $candidate.RequestType
             queued = $true
             requestPath = $requestPath
+            queueWriteMs = [int]$queueWriteStopwatch.ElapsedMilliseconds
             source = 'firefox-webrequest-local'
         }
         $results += $result
@@ -533,6 +553,14 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
                 $result.error = $updateResult.error
             }
         }
+        foreach ($result in $queuedResults) {
+            $result.updateTriggerMs = if ($updateResult.ContainsKey('updateTriggerMs')) { [int]$updateResult.updateTriggerMs } else { 0 }
+            $result.updateWaitMs = if ($updateResult.ContainsKey('updateWaitMs')) { [int]$updateResult.updateWaitMs } else { 0 }
+            $result.updateElapsedMs = if ($updateResult.ContainsKey('elapsedMs')) { [int]$updateResult.elapsedMs } else { 0 }
+            $result.runtimeDependencyFastPath = if ($updateResult.ContainsKey('runtimeDependencyFastPath')) { [bool]$updateResult.runtimeDependencyFastPath } else { $false }
+            $result.runtimeDependencyFallback = if ($updateResult.ContainsKey('runtimeDependencyFallback')) { [bool]$updateResult.runtimeDependencyFallback } else { $false }
+            $result.updateTaskName = if ($updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
+        }
     }
 
     $failedResults = @($results | Where-Object { $_.success -ne $true })
@@ -540,6 +568,14 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
         success = ($failedResults.Count -eq 0)
         action = 'allow-local-runtime-dependency-batch'
         count = $results.Count
+        queuedCount = $queuedResults.Count
+        queueWriteMs = [int](@($queuedResults | ForEach-Object { if ($_.ContainsKey('queueWriteMs')) { [int]$_.queueWriteMs } else { 0 } } | Measure-Object -Sum).Sum)
+        updateTriggerMs = if ($updateResult -and $updateResult.ContainsKey('updateTriggerMs')) { [int]$updateResult.updateTriggerMs } else { 0 }
+        updateWaitMs = if ($updateResult -and $updateResult.ContainsKey('updateWaitMs')) { [int]$updateResult.updateWaitMs } else { 0 }
+        updateElapsedMs = if ($updateResult -and $updateResult.ContainsKey('elapsedMs')) { [int]$updateResult.elapsedMs } else { 0 }
+        runtimeDependencyFastPath = if ($updateResult -and $updateResult.ContainsKey('runtimeDependencyFastPath')) { [bool]$updateResult.runtimeDependencyFastPath } else { $false }
+        runtimeDependencyFallback = if ($updateResult -and $updateResult.ContainsKey('runtimeDependencyFallback')) { [bool]$updateResult.runtimeDependencyFallback } else { $false }
+        updateTaskName = if ($updateResult -and $updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
         results = $results
     }
 }
@@ -597,7 +633,8 @@ function Write-NativeHostActionLog {
         [string]$Message = '',
         [AllowNull()]
         [string]$ErrorMessage = '',
-        [long]$ElapsedMs = 0
+        [long]$ElapsedMs = 0,
+        [hashtable]$ExtraFields = @{}
     )
 
     try {
@@ -617,6 +654,12 @@ function Write-NativeHostActionLog {
         }
         if ($ErrorMessage) {
             $fields += "error=$(Format-NativeHostActionLogValue -Value $ErrorMessage)"
+        }
+        foreach ($key in @($ExtraFields.Keys | Sort-Object)) {
+            if ($key -notmatch '^[A-Za-z][A-Za-z0-9]*$') { continue }
+            $value = $ExtraFields[$key]
+            if ($null -eq $value -or [string]::IsNullOrWhiteSpace([string]$value)) { continue }
+            $fields += "$key=$(Format-NativeHostActionLogValue -Value $value)"
         }
 
         Write-NativeHostLog ("Native host {0}" -f ($fields -join ' '))
@@ -696,15 +739,45 @@ function Invoke-UpdateTask {
             }
         }
         else {
+            $triggeredTaskName = if (
+                $hasRuntimeDependencyWait -and
+                (Get-Variable -Name RuntimeDependencyTaskName -Scope Script -ErrorAction SilentlyContinue) -and
+                -not [string]::IsNullOrWhiteSpace($script:RuntimeDependencyTaskName)
+            ) {
+                [string]$script:RuntimeDependencyTaskName
+            }
+            else {
+                [string]$script:UpdateTaskName
+            }
+            $triggerState = @{
+                TaskName = $triggeredTaskName
+                Fallback = $false
+                TriggerMs = 0
+            }
             $result = Invoke-NativeHostSharedUpdateTrigger `
                 -TriggerAction {
-                    $null = & schtasks.exe /Run /TN $script:UpdateTaskName 2>$null
-                    if ($LASTEXITCODE -ne 0) {
+                    $triggerStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                    $null = & schtasks.exe /Run /TN $triggerState['TaskName'] 2>$null
+                    $triggerExitCode = $LASTEXITCODE
+                    if ($triggerExitCode -ne 0 -and $hasRuntimeDependencyWait -and $triggerState['TaskName'] -ne $script:UpdateTaskName) {
+                        $triggerState['Fallback'] = $true
+                        $null = & schtasks.exe /Run /TN $script:UpdateTaskName 2>$null
+                        $triggerExitCode = $LASTEXITCODE
+                        $triggerState['TaskName'] = [string]$script:UpdateTaskName
+                    }
+                    $triggerStopwatch.Stop()
+                    $triggerState['TriggerMs'] = [int]$triggerStopwatch.ElapsedMilliseconds
+
+                    if ($triggerExitCode -ne 0) {
                         return @{
                             success = $false
                             action = 'update-whitelist'
-                            error = "schtasks exit code $LASTEXITCODE"
+                            error = "schtasks exit code $triggerExitCode"
                             domains = @($Domains)
+                            runtimeDependencyFastPath = $hasRuntimeDependencyWait
+                            runtimeDependencyFallback = [bool]$triggerState['Fallback']
+                            updateTaskName = [string]$triggerState['TaskName']
+                            updateTriggerMs = [int]$triggerState['TriggerMs']
                         }
                     }
 
@@ -713,9 +786,14 @@ function Invoke-UpdateTask {
                         action = 'update-whitelist'
                         message = 'OpenPath update task triggered'
                         domains = @($Domains)
+                        runtimeDependencyFastPath = $hasRuntimeDependencyWait
+                        runtimeDependencyFallback = [bool]$triggerState['Fallback']
+                        updateTaskName = [string]$triggerState['TaskName']
+                        updateTriggerMs = [int]$triggerState['TriggerMs']
                     }
                 } `
                 -WaitAction {
+                    $waitStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
                     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
                     while ((Get-Date) -lt $deadline) {
                         Start-Sleep -Milliseconds 1000
@@ -728,20 +806,32 @@ function Invoke-UpdateTask {
                             )
                         )
                         if ($whitelistReady -and $runtimeDependencyReady) {
+                            $waitStopwatch.Stop()
                             return @{
                                 success = $true
                                 action = 'update-whitelist'
                                 message = 'OpenPath update task wrote expected domains'
                                 domains = @($Domains)
+                                runtimeDependencyFastPath = $hasRuntimeDependencyWait
+                                runtimeDependencyFallback = [bool]$triggerState['Fallback']
+                                updateTaskName = [string]$triggerState['TaskName']
+                                updateTriggerMs = [int]$triggerState['TriggerMs']
+                                updateWaitMs = [int]$waitStopwatch.ElapsedMilliseconds
                             }
                         }
                     }
 
+                    $waitStopwatch.Stop()
                     return @{
                         success = $false
                         action = 'update-whitelist'
                         error = "OpenPath update task did not write expected domains: $(@($Domains + $RuntimeDependencyDomains) -join ', ')"
                         domains = @($Domains)
+                        runtimeDependencyFastPath = $hasRuntimeDependencyWait
+                        runtimeDependencyFallback = [bool]$triggerState['Fallback']
+                        updateTaskName = [string]$triggerState['TaskName']
+                        updateTriggerMs = [int]$triggerState['TriggerMs']
+                        updateWaitMs = [int]$waitStopwatch.ElapsedMilliseconds
                     }
                 }
         }
@@ -772,6 +862,7 @@ function Invoke-UpdateTask {
         -ErrorMessage $logError `
         -ElapsedMs $stopwatch.ElapsedMilliseconds
 
+    $result['elapsedMs'] = [int]$stopwatch.ElapsedMilliseconds
     return $result
 }
 
@@ -1064,13 +1155,37 @@ function Handle-Message {
         if ($action -eq 'check') {
             $domains = @(Get-NativeHostValidDomains -Domains @($Message.domains))
         }
+        elseif ($result -is [System.Collections.IDictionary] -and $result.ContainsKey('dependencyHost')) {
+            $domains = @(Get-NativeHostValidDomains -Domains @($result.dependencyHost))
+        }
+        elseif ($result -is [System.Collections.IDictionary] -and $result.ContainsKey('results')) {
+            $domains = @(Get-NativeHostValidDomains -Domains @($result.results | ForEach-Object { $_.dependencyHost }))
+        }
+
+        $extraFields = @{}
+        if ($result -is [System.Collections.IDictionary]) {
+            foreach ($key in @(
+                    'queueWriteMs',
+                    'updateTriggerMs',
+                    'updateWaitMs',
+                    'updateElapsedMs',
+                    'runtimeDependencyFastPath',
+                    'runtimeDependencyFallback',
+                    'updateTaskName'
+                )) {
+                if ($result.ContainsKey($key)) {
+                    $extraFields[$key] = $result[$key]
+                }
+            }
+        }
 
         Write-NativeHostActionLog -Action $action `
             -Domains $domains `
             -Success ($result.success -eq $true) `
             -Message $logMessage `
             -ErrorMessage $logError `
-            -ElapsedMs $stopwatch.ElapsedMilliseconds
+            -ElapsedMs $stopwatch.ElapsedMilliseconds `
+            -ExtraFields $extraFields
     }
 
     return $result
