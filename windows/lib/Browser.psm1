@@ -295,7 +295,9 @@ function Set-ChromePolicy {
 
 function Remove-BrowserPolicy {
     [CmdletBinding(SupportsShouldProcess)]
-    param()
+    param(
+        [switch]$PreserveFirefoxManagedExtension
+    )
 
     if (-not $PSCmdlet.ShouldProcess("All browsers", "Remove OpenPath browser policies")) {
         return
@@ -308,12 +310,24 @@ function Remove-BrowserPolicy {
         "${env:ProgramFiles(x86)}\Mozilla Firefox\distribution\policies.json"
     )
 
-    foreach ($path in $firefoxPaths) {
-        if (Test-Path $path) {
-            Remove-Item $path -Force -ErrorAction SilentlyContinue
+    if (-not $PreserveFirefoxManagedExtension) {
+        foreach ($path in $firefoxPaths) {
+            if (Test-Path $path) {
+                Remove-Item $path -Force -ErrorAction SilentlyContinue
+            }
         }
     }
-    Browser.FirefoxPolicy\Remove-OpenPathFirefoxMachineExtensionPolicy | Out-Null
+    if ($PreserveFirefoxManagedExtension) {
+        try {
+            Sync-OpenPathFirefoxManagedExtensionPolicy | Out-Null
+        }
+        catch {
+            Write-OpenPathLog "Failed to refresh preserved Firefox managed extension policy: $_" -Level WARN
+        }
+    }
+    else {
+        Browser.FirefoxPolicy\Remove-OpenPathFirefoxMachineExtensionPolicy | Out-Null
+    }
     Browser.FirefoxConfig\Remove-OpenPathFirefoxNetworkAutoconfig | Out-Null
 
     $regPaths = @(

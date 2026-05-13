@@ -83,6 +83,10 @@ function Write-OpenPathLog {
         }
     }
 
+    if ($env:OPENPATH_QUIET_INSTALL -eq '1' -and $Level -ne "ERROR") {
+        return
+    }
+
     switch ($Level) {
         "ERROR" { Write-Error $logEntry -ErrorAction Continue }
         "WARN" { Write-Warning $logEntry }

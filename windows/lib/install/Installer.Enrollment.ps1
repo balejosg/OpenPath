@@ -153,6 +153,9 @@ function Invoke-OpenPathInstallerEnrollment {
         if ($Unattended) {
             $enrollParams.Unattended = $true
         }
+        if ($VerbosePreference -ne 'Continue') {
+            $enrollParams.Quiet = $true
+        }
 
         $enrollResult = & $enrollScript @enrollParams
 

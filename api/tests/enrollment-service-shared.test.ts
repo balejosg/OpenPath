@@ -27,6 +27,8 @@ void test('enrollment-service-shared exposes role checks and windows script gene
   assert.match(script, /-FirefoxExtensionId/);
   assert.match(script, /metadata\.json/);
   assert.match(script, /\$ProgressPreference = 'SilentlyContinue'/);
+  assert.match(script, /\$WarningPreference = 'SilentlyContinue'/);
+  assert.match(script, /\$InformationPreference = 'SilentlyContinue'/);
   assert.doesNotMatch(script, /OpenPath Enrollment \(Windows\)/);
   assert.doesNotMatch(script, /Installation completed\. Current status:/);
   assert.doesNotMatch(script, /OpenPath\.ps1' status/);

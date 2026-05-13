@@ -60,11 +60,31 @@ param(
 
     [switch]$SkipTokenValidation,
 
-    [switch]$Unattended
+    [switch]$Unattended,
+
+    [switch]$Quiet
 )
 
 $ErrorActionPreference = 'Stop'
 $configPath = "$OpenPathRoot\data\config.json"
+
+function Write-EnrollmentNotice {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+
+        [string]$ForegroundColor = ''
+    )
+
+    if ($Quiet) { return }
+
+    if ($ForegroundColor) {
+        Microsoft.PowerShell.Utility\Write-Host $Message -ForegroundColor $ForegroundColor
+    }
+    else {
+        Microsoft.PowerShell.Utility\Write-Host $Message
+    }
+}
 
 # Initialize standalone script session via the shared bootstrap helper.
 Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force
@@ -122,7 +142,7 @@ if (-not $RegistrationToken -and -not $EnrollmentToken) {
 $apiBaseUrl = $ApiUrl.TrimEnd('/')
 
 if ($RegistrationToken -and -not $SkipTokenValidation) {
-    Write-Host "Validating registration token..." -ForegroundColor Yellow
+    Write-EnrollmentNotice "Validating registration token..." -ForegroundColor Yellow
 
     $validateBody = @{ token = $RegistrationToken } | ConvertTo-Json
     $validateResponse = Invoke-RestMethod -Uri "$apiBaseUrl/api/setup/validate-token" `
@@ -132,7 +152,7 @@ if ($RegistrationToken -and -not $SkipTokenValidation) {
         throw 'Invalid registration token'
     }
 
-    Write-Host "  Registration token validated" -ForegroundColor Green
+    Write-EnrollmentNotice "  Registration token validated" -ForegroundColor Green
 }
 
 $config = Get-OpenPathConfig
@@ -148,16 +168,16 @@ else {
     [string](Get-OpenPathMachineName)
 }
 
-Write-Host "Registering machine in classroom..." -ForegroundColor Yellow
-Write-Host "  Machine name: $machineName"
+Write-EnrollmentNotice "Registering machine in classroom..." -ForegroundColor Yellow
+Write-EnrollmentNotice "  Machine name: $machineName"
 if ($Classroom) {
-    Write-Host "  Classroom: $Classroom"
+    Write-EnrollmentNotice "  Classroom: $Classroom"
 }
 if ($ClassroomId) {
-    Write-Host "  Classroom ID: $ClassroomId"
+    Write-EnrollmentNotice "  Classroom ID: $ClassroomId"
 }
-Write-Host "  API URL: $apiBaseUrl"
-Write-Host "  Auth mode: $(if ($EnrollmentToken) { 'enrollment token' } else { 'registration token' })"
+Write-EnrollmentNotice "  API URL: $apiBaseUrl"
+Write-EnrollmentNotice "  Auth mode: $(if ($EnrollmentToken) { 'enrollment token' } else { 'registration token' })"
 
 $registerBody = New-OpenPathMachineRegistrationBody `
     -MachineName $machineName `
@@ -199,8 +219,8 @@ catch {
     throw "Failed to register Firefox native host after enrollment: $_"
 }
 
-Write-Host "  Machine registered successfully" -ForegroundColor Green
-Write-Host "  Tokenized whitelist URL saved" -ForegroundColor Green
+Write-EnrollmentNotice "  Machine registered successfully" -ForegroundColor Green
+Write-EnrollmentNotice "  Tokenized whitelist URL saved" -ForegroundColor Green
 
 [PSCustomObject]@{
     Success = $true

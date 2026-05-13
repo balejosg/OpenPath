@@ -572,6 +572,57 @@ Describe "Installer" {
             $progressHelper.Contains('Write-Host "Progress ${Step}/${Total}: $Status"') | Should -BeFalse
         }
 
+        It "Suppresses non-error installer output by default" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '$script:OpenPathInstallerQuietMode = $VerbosePreference -ne ''Continue''',
+                '$WarningPreference = ''SilentlyContinue''',
+                '$InformationPreference = ''SilentlyContinue''',
+                '$ProgressPreference = ''SilentlyContinue''',
+                '$env:OPENPATH_QUIET_INSTALL = ''1'''
+            )
+
+            $content | Should -Match '(?s)if \(\$VerbosePreference -eq ''Continue''\).*?OpenPath DNS para Windows - Instalador'
+            $content | Should -Not -Match 'else \{\s+Write-InstallerNotice ''Installing OpenPath DNS for Windows\.\.\.''\s+\}'
+        }
+
+        It "Keeps enrollment script host output quiet during normal installer enrollment" {
+            $enrollmentHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Enrollment.ps1"
+            $enrollScriptPath = Join-Path $PSScriptRoot ".." "scripts" "Enroll-Machine.ps1"
+            $enrollmentHelper = Get-Content $enrollmentHelperPath -Raw
+            $enrollScript = Get-Content $enrollScriptPath -Raw
+
+            Assert-ContentContainsAll -Content $enrollmentHelper -Needles @(
+                'if ($VerbosePreference -ne ''Continue'') {',
+                '$enrollParams.Quiet = $true'
+            )
+
+            Assert-ContentContainsAll -Content $enrollScript -Needles @(
+                '[switch]$Quiet',
+                'function Write-EnrollmentNotice',
+                'if ($Quiet) { return }'
+            )
+
+            $enrollScript | Should -Not -Match '(?m)^\s*Write-Host\s+'
+        }
+
+        It "Suppresses non-error module logs during quiet installer runs" {
+            $commonSystemPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.System.ps1"
+            $commonSystem = Get-Content $commonSystemPath -Raw
+
+            $commonSystem | Should -Match 'if \(\$env:OPENPATH_QUIET_INSTALL -eq ''1'' -and \$Level -ne "ERROR"\)'
+            $commonSystem | Should -Match 'return'
+        }
+
+        It "Downloads Acrylic without curl progress in quiet installer runs" {
+            $acrylicInstallPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Install.ps1"
+            $acrylicInstall = Get-Content $acrylicInstallPath -Raw
+
+            $acrylicInstall | Should -Match '& \$curl\.Source -fL -sS --retry 3 --retry-delay 2'
+        }
+
         It "Routes non-fatal installer messages through warning or verbose-only helpers" {
             $installHelperPaths = @(
                 (Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"),

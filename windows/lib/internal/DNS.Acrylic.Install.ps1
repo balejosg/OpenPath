@@ -107,7 +107,7 @@ function Invoke-AcrylicPortableDownload {
     $userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenPathInstaller'
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     if ($curl) {
-        & $curl.Source -fL --retry 3 --retry-delay 2 -A $userAgent -o $DestinationPath $Url
+        & $curl.Source -fL -sS --retry 3 --retry-delay 2 -A $userAgent -o $DestinationPath $Url
         if ($LASTEXITCODE -eq 0 -and (Test-Path $DestinationPath)) {
             return
         }

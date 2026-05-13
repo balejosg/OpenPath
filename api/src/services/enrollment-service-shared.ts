@@ -52,6 +52,8 @@ export function buildWindowsEnrollmentScript(params: {
 
   return `$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $ApiUrl = ${psApiUrl}

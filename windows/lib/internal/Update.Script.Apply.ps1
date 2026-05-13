@@ -146,7 +146,7 @@ function Handle-OpenPathDisabledWhitelist {
     }
     Restore-OriginalDNS
     Remove-OpenPathFirewall
-    Remove-BrowserPolicy
+    Remove-BrowserPolicy -PreserveFirefoxManagedExtension
     Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist
     Clear-StaleFailsafeState -StaleFailsafeStatePath $StaleFailsafeStatePath
 

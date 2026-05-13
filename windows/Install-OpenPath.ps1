@@ -48,6 +48,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$script:OpenPathInstallerQuietMode = $VerbosePreference -ne 'Continue'
+if ($script:OpenPathInstallerQuietMode) {
+    $WarningPreference = 'SilentlyContinue'
+    $InformationPreference = 'SilentlyContinue'
+    $ProgressPreference = 'SilentlyContinue'
+    $env:OPENPATH_QUIET_INSTALL = '1'
+}
 $OpenPathRoot = 'C:\OpenPath'
 $scriptDir = $PSScriptRoot
 $apiBaseUrl = if ($ApiUrl) { $ApiUrl.TrimEnd('/') } else { '' }
@@ -61,7 +68,7 @@ if (-not (Test-Path "$scriptDir\lib\*.psm1")) {
     }
     else {
         Write-Host "ERROR: Modules not found in $scriptDir\lib\" -ForegroundColor Red
-        Write-Host '  Ensure lib\*.psm1 files are in the same directory as the installer' -ForegroundColor Yellow
+        Write-Host 'ERROR: Ensure lib\*.psm1 files are in the same directory as the installer' -ForegroundColor Red
         exit 1
     }
 }
@@ -176,9 +183,6 @@ if ($VerbosePreference -eq 'Continue') {
     Write-Host "Managed browser boundary: $enforceManagedBrowserBoundary"
     Write-Host "Browser cleanup mode: $BrowserCleanupMode"
     Write-Host ''
-}
-else {
-    Write-InstallerNotice 'Installing OpenPath DNS for Windows...'
 }
 
 Write-InstallerNotice 'Browser cleanup is hygiene. Application allowlist is the enforcement boundary.'

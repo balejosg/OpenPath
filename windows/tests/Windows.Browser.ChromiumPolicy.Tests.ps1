@@ -116,4 +116,28 @@ Describe "Browser Module - Chromium Policy" {
             $googleBlockWrites.Count | Should -Be 2
         }
     }
+
+    Context "Remove-BrowserPolicy" {
+        It "Can remove enforcement policies while preserving the Firefox managed extension policy" {
+            $script:removedBrowserPolicyPaths = @()
+            Mock Test-Path {
+                param([string]$Path)
+                return ($Path -like '*Mozilla Firefox*distribution*policies.json')
+            } -ModuleName Browser
+            Mock Remove-Item {
+                param([string]$Path)
+                $script:removedBrowserPolicyPaths += $Path
+            } -ModuleName Browser
+            Mock Write-OpenPathLog { } -ModuleName Browser
+            Mock Sync-OpenPathFirefoxManagedExtensionPolicy { return $true } -ModuleName Browser
+            Mock Remove-OpenPathFirefoxMachineExtensionPolicy { throw 'Firefox managed extension policy should be preserved' } -ModuleName Browser.FirefoxPolicy
+            Mock Remove-OpenPathFirefoxNetworkAutoconfig { } -ModuleName Browser.FirefoxConfig
+
+            { Remove-BrowserPolicy -PreserveFirefoxManagedExtension } | Should -Not -Throw
+
+            Should -Invoke Remove-OpenPathFirefoxMachineExtensionPolicy -ModuleName Browser.FirefoxPolicy -Times 0 -Exactly
+            Should -Invoke Sync-OpenPathFirefoxManagedExtensionPolicy -ModuleName Browser -Times 1 -Exactly
+            @($script:removedBrowserPolicyPaths | Where-Object { $_ -like '*Mozilla Firefox*distribution*policies.json' }).Count | Should -Be 0
+        }
+    }
 }
