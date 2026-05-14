@@ -764,6 +764,13 @@ Describe "Installer" {
             $cleanupIndex | Should -BeLessThan $copyIndex
         }
 
+        It "Skips blank preflight validation lines before reporting installer errors" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            $content | Should -Match '\$validationOutput\s*\|\s*Where-Object\s*\{\s*-not\s*\[string\]::IsNullOrWhiteSpace\(\$_\)\s*\}\s*\|\s*ForEach-Object\s*\{\s*Write-InstallerError\s+"\$_"\s*\}'
+        }
+
         It "Defines reinstall cleanup as full OpenPath removal while preserving Acrylic and logs" {
             $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
             Test-Path $cleanupHelperPath | Should -BeTrue

@@ -227,7 +227,9 @@ else {
         Show-InstallerProgress -Step 0 -Total 7 -Status 'Ejecutando validacion previa'
         $validationOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $validationScript 2>&1
         if ($LASTEXITCODE -ne 0) {
-            $validationOutput | ForEach-Object { Write-InstallerError "$_" }
+            $validationOutput |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                ForEach-Object { Write-InstallerError "$_" }
             Write-InstallerError 'ERROR: Pre-install validation failed'
             exit 1
         }
