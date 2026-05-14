@@ -248,6 +248,7 @@ function Invoke-OpenPathInstaller {
         '-File', $installerPath,
         '-WhitelistUrl', $WhitelistUrl,
         '-ApiUrl', $ApiUrl,
+        '-SkipPreflight',
         '-Unattended'
     )
 

@@ -531,6 +531,16 @@ Describe "Installer" {
             )
             $content.Contains('tests\Pre-Install-Validation.ps1') | Should -BeFalse
         }
+
+        It "Uses SkipPreflight in Windows CI harnesses that install inside constrained runner environments" {
+            $windowsE2EPath = Join-Path $PSScriptRoot ".." ".." "tests" "e2e" "ci" "run-windows-e2e.ps1"
+            $windowsStudentPath = Join-Path $PSScriptRoot ".." ".." "tests" "e2e" "ci" "run-windows-student-flow.ps1"
+            $windowsE2EContent = Get-Content $windowsE2EPath -Raw
+            $windowsStudentContent = Get-Content $windowsStudentPath -Raw
+
+            $windowsE2EContent | Should -Match '(?s)Install-OpenPath\.ps1.*?-SkipPreflight.*?-Unattended'
+            $windowsStudentContent | Should -Match '(?s)Install-OpenPath\.ps1.*?-SkipPreflight.*?-Unattended'
+        }
     }
 
     Context "Quiet progress output" {

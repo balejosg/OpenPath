@@ -1099,6 +1099,7 @@ function Install-AndEnrollClient {
             -WhitelistUrl $Scenario.machine.whitelistUrl `
             -ApiUrl "http://127.0.0.1:$($script:ApiPort)" `
             -EnforceManagedBrowserBoundary `
+            -SkipPreflight `
             -Unattended
 
         if ($LASTEXITCODE -ne 0) {
