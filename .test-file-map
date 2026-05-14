@@ -55,6 +55,7 @@ api/src/lib/server-asset-roots.ts|api/tests/server-asset-artifacts.test.ts,api/t
 api/src/lib/server-asset-release.ts|api/tests/server-asset-artifacts.test.ts,api/tests/token-delivery-extension-release.test.ts,api/tests/server-assets.test.ts
 api/src/lib/server-asset-windows.ts|api/tests/server-asset-artifacts.test.ts,api/tests/machine-agent-delivery.service.test.ts,api/tests/token-delivery-windows-agent.test.ts,api/tests/token-delivery-windows-bootstrap.test.ts
 api/src/lib/server-asset-linux.ts|api/tests/server-asset-artifacts.test.ts,api/tests/machine-agent-delivery.service.test.ts,api/tests/token-delivery-linux-agent.test.ts
+windows/lib/install/Installer.Cleanup.ps1|windows/tests/Windows.Installer.Cleanup.Tests.ps1
 api/src/lib/request-storage-shared.ts|api/tests/request-service-shared.test.ts,api/tests/api-submit-routes.test.ts
 api/src/lib/request-storage-legacy.ts|api/tests/request-service-shared.test.ts,api/tests/api-submit-routes.test.ts,api/tests/group-fk-compat.test.ts
 api/src/lib/request-storage-query.ts|api/tests/request-query.service.test.ts,api/tests/api-requests-trpc.test.ts
