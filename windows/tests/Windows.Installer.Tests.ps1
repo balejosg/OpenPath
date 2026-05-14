@@ -79,6 +79,18 @@ Describe "Installer" {
             )
         }
 
+        It "Stages installer helpers so installed reinstall entrypoints remain runnable" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'New-Item -ItemType Directory -Path "$OpenPathRoot\lib\install" -Force',
+                'Get-ChildItem "$ScriptDir\lib\install\*.ps1" -ErrorAction Stop',
+                'Copy-Item -Destination "$OpenPathRoot\lib\install\" -Force',
+                'Installer.Cleanup.ps1'
+            )
+        }
+
         It "Registers Firefox native messaging host in both 64-bit and WOW6432Node registry views" {
             $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
             $content = Get-Content $nativeHostModulePath -Raw
@@ -728,6 +740,54 @@ Describe "Installer" {
             )
         }
 
+        It "Loads the installer cleanup helper before install steps can mutate an existing runtime" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                ". (Join-Path `$installerHelperRoot 'Installer.Cleanup.ps1')",
+                'Copy-OpenPathInstallerSourceForReinstall',
+                'Invoke-OpenPathInstallerExistingInstallCleanup',
+                '-KeepAcrylic',
+                '-KeepLogs'
+            )
+
+            $snapshotIndex = $content.IndexOf('Copy-OpenPathInstallerSourceForReinstall')
+            $cleanupIndex = $content.IndexOf('Invoke-OpenPathInstallerExistingInstallCleanup')
+            $directoryIndex = $content.IndexOf('Initialize-OpenPathInstallDirectories')
+            $copyIndex = $content.IndexOf('Copy-OpenPathInstallerRuntime')
+
+            $snapshotIndex | Should -BeGreaterThan -1
+            $cleanupIndex | Should -BeGreaterThan -1
+            $snapshotIndex | Should -BeLessThan $cleanupIndex
+            $cleanupIndex | Should -BeLessThan $directoryIndex
+            $cleanupIndex | Should -BeLessThan $copyIndex
+        }
+
+        It "Defines reinstall cleanup as full OpenPath removal while preserving Acrylic and logs" {
+            $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
+            Test-Path $cleanupHelperPath | Should -BeTrue
+            $cleanupHelper = Get-Content $cleanupHelperPath -Raw
+
+            Assert-ContentContainsAll -Content $cleanupHelper -Needles @(
+                'function Test-OpenPathExistingInstallation',
+                'function Copy-OpenPathInstallerSourceForReinstall',
+                'function Invoke-OpenPathInstallerExistingInstallCleanup',
+                '[switch]$KeepAcrylic',
+                '[switch]$KeepLogs',
+                'openpath-reinstall-source-',
+                'browser-policy-spec.json',
+                'Stop-OpenPathInstallerScheduledTasks',
+                'Remove-OpenPathInstallerAppLockerRules',
+                'Remove-OpenPathInstallerFirewallRules',
+                'Restore-OpenPathInstallerDnsSettings',
+                'Remove-OpenPathInstallerBrowserArtifacts',
+                'Remove-OpenPathInstallerInstallRoot -KeepLogs:$KeepLogs'
+            )
+            $cleanupHelper | Should -Not -Match '/UNINSTALL'
+            $cleanupHelper | Should -Not -Match 'Remove-Item.*Acrylic DNS Proxy'
+        }
+
         It "Reads installer config values from the hashtable returned by the config helper" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw
@@ -740,6 +800,13 @@ Describe "Installer" {
                 "-PropertyName 'enableNonAdminAppControl' -DefaultValue `$true",
                 "-PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced'"
             )
+        }
+
+        It "Removes stale OpenPath AppLocker rules when managed browser boundary is disabled" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            $content | Should -Match '(?s)if \(\$enableNonAdminAppControl\).*?Set-OpenPathNonAdminAppControl.*?else \{.*?Remove-OpenPathNonAdminAppControl -Confirm:\$false.*?Managed browser boundary disabled; AppLocker boundary not applied'
         }
     }
 

@@ -7,6 +7,7 @@ function Initialize-OpenPathInstallDirectories {
     $dirs = @(
         "$OpenPathRoot\lib",
         "$OpenPathRoot\lib\internal",
+        "$OpenPathRoot\lib\install",
         "$OpenPathRoot\scripts",
         "$OpenPathRoot\data\logs",
         "$OpenPathRoot\data\runtime-dependency-queue",
@@ -107,6 +108,12 @@ function Copy-OpenPathInstallerRuntime {
         Copy-Item -Destination "$OpenPathRoot\lib\" -Force -ErrorAction Stop
     Get-ChildItem "$ScriptDir\lib\internal\*.ps1" -ErrorAction Stop |
         Copy-Item -Destination "$OpenPathRoot\lib\internal\" -Force -ErrorAction Stop
+    New-Item -ItemType Directory -Path "$OpenPathRoot\lib\install" -Force | Out-Null
+    Get-ChildItem "$ScriptDir\lib\install\*.ps1" -ErrorAction Stop |
+        Copy-Item -Destination "$OpenPathRoot\lib\install\" -Force -ErrorAction Stop
+    if (-not (Test-Path (Join-Path $OpenPathRoot 'lib\install\Installer.Cleanup.ps1'))) {
+        throw "Required installer helper was not staged into OpenPath runtime: Installer.Cleanup.ps1"
+    }
 
     $browserPolicySpecCandidates = @(
         (Join-Path $ScriptDir 'runtime\browser-policy-spec.json'),

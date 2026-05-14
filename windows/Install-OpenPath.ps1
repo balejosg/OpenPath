@@ -76,6 +76,7 @@ if (-not (Test-Path "$scriptDir\lib\*.psm1")) {
 . (Join-Path $installerHelperRoot 'Installer.Config.ps1')
 . (Join-Path $installerHelperRoot 'Installer.Runtime.ps1')
 . (Join-Path $installerHelperRoot 'Installer.ChromiumGuidance.ps1')
+. (Join-Path $installerHelperRoot 'Installer.Cleanup.ps1')
 . (Join-Path $installerHelperRoot 'Installer.Dns.ps1')
 . (Join-Path $installerHelperRoot 'Installer.Staging.ps1')
 . (Join-Path $installerHelperRoot 'Installer.Enrollment.ps1')
@@ -190,6 +191,7 @@ if ($WhatIfPreference) {
     $PSCmdlet.ShouldProcess('OpenPath install root', 'Create install directories') | Out-Null
     $PSCmdlet.ShouldProcess('OpenPath runtime', 'Copy modules and scripts') | Out-Null
     $PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Write installer configuration') | Out-Null
+    $PSCmdlet.ShouldProcess('Existing OpenPath installation', 'Remove before reinstall while keeping Acrylic and logs') | Out-Null
     if ($BrowserCleanupMode -ne 'Disabled') {
         $PSCmdlet.ShouldProcess('Browser cleanup inventory', "Report unmanaged browsers with $BrowserCleanupMode mode") | Out-Null
     }
@@ -198,6 +200,22 @@ if ($WhatIfPreference) {
         $PSCmdlet.ShouldProcess('Windows AppLocker', 'Configure OpenPath non-admin app control in Enforced mode') | Out-Null
     }
     exit 0
+}
+
+try {
+    $scriptDir = Copy-OpenPathInstallerSourceForReinstall `
+        -ScriptDir $scriptDir `
+        -OpenPathRoot $OpenPathRoot
+    $installerHelperRoot = Join-Path $scriptDir 'lib\install'
+
+    Invoke-OpenPathInstallerExistingInstallCleanup `
+        -OpenPathRoot $OpenPathRoot `
+        -KeepAcrylic `
+        -KeepLogs | Out-Null
+}
+catch {
+    Write-InstallerError "ERROR: Existing OpenPath cleanup failed: $_"
+    exit 1
 }
 
 if ($SkipPreflight) {
@@ -434,6 +452,10 @@ try {
         Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference | Out-Null
     }
     else {
+        if (Test-OpenPathNonAdminAppControlActive) {
+            Remove-OpenPathNonAdminAppControl -Confirm:$false -WhatIf:$WhatIfPreference | Out-Null
+            Write-InstallerVerbose '  Stale OpenPath AppLocker rules removed'
+        }
         Write-InstallerVerbose '  Managed browser boundary disabled; AppLocker boundary not applied'
     }
     Complete-OpenPathInstallTimedStep -Name 'app-control'

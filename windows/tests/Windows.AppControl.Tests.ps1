@@ -15,6 +15,10 @@ Describe "AppControl Module" {
             $expectedAllowPaths = @(
                 '%WINDIR%\*',
                 'C:\OpenPath\*',
+                '%PROGRAMFILES%\WindowsApps\Microsoft.*\*',
+                '%PROGRAMFILES%\WindowsApps\MicrosoftWindows.*\*',
+                'C:\Program Files\WindowsApps\Microsoft.*\*',
+                'C:\Program Files\WindowsApps\MicrosoftWindows.*\*',
                 '%PROGRAMFILES%\Mozilla Firefox\firefox.exe',
                 '%PROGRAMFILES(X86)%\Mozilla Firefox\firefox.exe'
             )
@@ -62,6 +66,24 @@ Describe "AppControl Module" {
             foreach ($path in $expectedDenyPaths) {
                 @($spec.UserWritableDenyPaths) | Should -Contain $path
             }
+        }
+
+        It "Allows protected Microsoft WindowsApps launchers without allowing all Program Files" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+            [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+            $exeCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Exe' })[0]
+            $allowRules = @($exeCollection.FilePathRule | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Allow' -and
+                    $_.GetAttribute('UserOrGroupSid') -eq 'S-1-5-32-545'
+                })
+            $allowedPaths = @($allowRules | ForEach-Object { $_.Conditions.FilePathCondition.GetAttribute('Path') })
+
+            $allowedPaths | Should -Contain '%PROGRAMFILES%\WindowsApps\Microsoft.*\*'
+            $allowedPaths | Should -Contain '%PROGRAMFILES%\WindowsApps\MicrosoftWindows.*\*'
+            $allowedPaths | Should -Contain 'C:\Program Files\WindowsApps\Microsoft.*\*'
+            $allowedPaths | Should -Contain 'C:\Program Files\WindowsApps\MicrosoftWindows.*\*'
+            $allowedPaths | Should -Not -Contain '%PROGRAMFILES%\*'
+            $allowedPaths | Should -Not -Contain 'C:\Program Files\*'
         }
 
         It "Allows future explicit Edge approval without approving Chrome" {

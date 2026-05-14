@@ -62,11 +62,18 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         'C:\Program Files\Google\Chrome\Application\chrome.exe',
         'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
     )
+    $windowsAppsPaths = @(
+        '%PROGRAMFILES%\WindowsApps\Microsoft.*\*',
+        '%PROGRAMFILES%\WindowsApps\MicrosoftWindows.*\*',
+        'C:\Program Files\WindowsApps\Microsoft.*\*',
+        'C:\Program Files\WindowsApps\MicrosoftWindows.*\*'
+    )
 
     $allowPaths = @(
         '%WINDIR%\*',
         $openPathRuntimePath
     )
+    $allowPaths += $windowsAppsPaths
     if ($approvedBrowserSet.Firefox) {
         $allowPaths += $firefoxPaths
     }
