@@ -29,11 +29,11 @@ export async function ensureBrowsingActivityConsent(
   }
 
   try {
-    if (await permissionsApi.contains(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
+    if (await permissionsApi.request(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
       return { granted: true };
     }
 
-    if (await permissionsApi.request(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
+    if (await permissionsApi.contains(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
       return { granted: true };
     }
 
@@ -42,6 +42,14 @@ export async function ensureBrowsingActivityConsent(
       error: CONSENT_DENIED_MESSAGE,
     };
   } catch (error) {
+    try {
+      if (await permissionsApi.contains(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
+        return { granted: true };
+      }
+    } catch {
+      // Keep the original request failure detail below.
+    }
+
     const detail = error instanceof Error ? ` ${error.message}` : '';
     return {
       granted: false,
