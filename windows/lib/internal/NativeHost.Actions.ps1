@@ -49,6 +49,25 @@ if (-not (Get-Command -Name 'ConvertTo-OpenPathRedactedValue' -ErrorAction Silen
     throw 'Common.Redaction.ps1 is required for native host log redaction.'
 }
 
+$nativeHostTaskRunnerCandidatePaths = @()
+if ($PSScriptRoot) {
+    $nativeHostTaskRunnerCandidatePaths += (Join-Path $PSScriptRoot 'TaskRunner.ps1')
+}
+if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+    $nativeHostTaskRunnerCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\TaskRunner.ps1')
+}
+
+foreach ($nativeHostTaskRunnerCandidatePath in ($nativeHostTaskRunnerCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
+    if (Test-Path $nativeHostTaskRunnerCandidatePath -ErrorAction SilentlyContinue) {
+        . $nativeHostTaskRunnerCandidatePath
+        break
+    }
+}
+
+if (-not (Get-Command -Name 'Invoke-OpenPathScheduledTask' -ErrorAction SilentlyContinue)) {
+    throw 'TaskRunner.ps1 is required for native host scheduled task execution.'
+}
+
 $nativeHostRuntimeDependencyCandidatePaths = @()
 if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\RuntimeDependency.Policy.ps1')
@@ -352,6 +371,10 @@ function Import-NativeHostDnsModule {
     }
 }
 
+function Get-NativeHostTaskRunner {
+    return (New-OpenPathSchtasksRunner)
+}
+
 function Resolve-NativeHostLocalRuntimeDependencyCandidate {
     param(
         [Parameter(Mandatory = $true)]
@@ -643,8 +666,7 @@ function Invoke-NativeHostSharedUpdateTrigger {
             $triggerResult = & $TriggerAction
             if (
                 $triggerResult -is [System.Collections.IDictionary] -and
-                $triggerResult.ContainsKey('success') -and
-                $triggerResult.success -ne $true
+                $triggerResult.ContainsKey('success')
             ) {
                 return $triggerResult
             }
@@ -706,47 +728,57 @@ function Invoke-UpdateTask {
             }
             $result = Invoke-NativeHostSharedUpdateTrigger `
                 -TriggerAction {
-                    $triggerStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-                    $null = & schtasks.exe /Run /TN $triggerState['TaskName'] 2>$null
-                    $triggerExitCode = $LASTEXITCODE
-                    if ($triggerExitCode -ne 0 -and $hasRuntimeDependencyWait -and $triggerState['TaskName'] -ne $script:UpdateTaskName) {
-                        $triggerState['Fallback'] = $true
-                        $null = & schtasks.exe /Run /TN $script:UpdateTaskName 2>$null
-                        $triggerExitCode = $LASTEXITCODE
-                        $triggerState['TaskName'] = [string]$script:UpdateTaskName
-                    }
-                    $triggerStopwatch.Stop()
-                    $triggerState['TriggerMs'] = [int]$triggerStopwatch.ElapsedMilliseconds
+                    $taskResult = Invoke-OpenPathScheduledTask `
+                        -TaskName $triggerState['TaskName'] `
+                        -FallbackTaskName $script:UpdateTaskName `
+                        -ShouldFallback $hasRuntimeDependencyWait `
+                        -Runner (Get-NativeHostTaskRunner) `
+                        -TimeoutSeconds $TimeoutSeconds `
+                        -WaitCondition {
+                            $whitelistReady = Test-NativeWhitelistContainsDomains -Domains $Domains
+                            $runtimeDependencyReady = (
+                                (Test-NativeHostRuntimeDependencyQueueRequestProcessed -RequestPath $RuntimeDependencyRequestPath) -and
+                                (
+                                    -not [string]::IsNullOrWhiteSpace($RuntimeDependencyRequestPath) -or
+                                    (Test-NativeHostRuntimeDependencyOverlayContainsDomains -Domains $RuntimeDependencyDomains)
+                                )
+                            )
+                            return ($whitelistReady -and $runtimeDependencyReady)
+                        }
+                    $triggerState['Fallback'] = [bool]$taskResult.fallback
+                    $triggerState['TaskName'] = [string]$taskResult.taskName
+                    $triggerState['TriggerMs'] = [int]$taskResult.triggerMs
 
-                    if ($triggerExitCode -ne 0) {
+                    if ($taskResult.success -ne $true) {
                         return @{
                             success = $false
                             action = 'update-whitelist'
-                            error = "schtasks exit code $triggerExitCode"
+                            error = if ($taskResult.ContainsKey('timedOut') -and $taskResult.timedOut) { "OpenPath update task did not write expected domains: $(@($Domains + $RuntimeDependencyDomains) -join ', ')" } elseif ($taskResult.ContainsKey('error')) { [string]$taskResult.error } else { 'Scheduled task update failed' }
                             domains = @($Domains)
                             runtimeDependencyFastPath = $hasRuntimeDependencyWait
-                            runtimeDependencyFallback = [bool]$triggerState['Fallback']
-                            updateTaskName = [string]$triggerState['TaskName']
-                            updateTriggerMs = [int]$triggerState['TriggerMs']
+                            runtimeDependencyFallback = [bool]$taskResult.fallback
+                            updateTaskName = [string]$taskResult.taskName
+                            updateTriggerMs = [int]$taskResult.triggerMs
+                            updateWaitMs = [int]$taskResult.waitMs
                         }
                     }
 
-                    return @{
+                    $taskRunnerResult = @{
                         success = $true
                         action = 'update-whitelist'
-                        message = 'OpenPath update task triggered'
+                        message = 'OpenPath update task wrote expected domains'
                         domains = @($Domains)
                         runtimeDependencyFastPath = $hasRuntimeDependencyWait
-                        runtimeDependencyFallback = [bool]$triggerState['Fallback']
-                        updateTaskName = [string]$triggerState['TaskName']
-                        updateTriggerMs = [int]$triggerState['TriggerMs']
+                        runtimeDependencyFallback = [bool]$taskResult.fallback
+                        updateTaskName = [string]$taskResult.taskName
+                        updateTriggerMs = [int]$taskResult.triggerMs
+                        updateWaitMs = [int]$taskResult.waitMs
                     }
+                    return $taskRunnerResult
                 } `
                 -WaitAction {
-                    $waitStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-                    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-                    while ((Get-Date) -lt $deadline) {
-                        Start-Sleep -Milliseconds 1000
+                    $waitRunner = Get-NativeHostTaskRunner
+                    $waitResult = & $waitRunner.WaitFor $triggerState['TaskName'] {
                         $whitelistReady = Test-NativeWhitelistContainsDomains -Domains $Domains
                         $runtimeDependencyReady = (
                             (Test-NativeHostRuntimeDependencyQueueRequestProcessed -RequestPath $RuntimeDependencyRequestPath) -and
@@ -755,33 +787,33 @@ function Invoke-UpdateTask {
                                 (Test-NativeHostRuntimeDependencyOverlayContainsDomains -Domains $RuntimeDependencyDomains)
                             )
                         )
-                        if ($whitelistReady -and $runtimeDependencyReady) {
-                            $waitStopwatch.Stop()
-                            return @{
-                                success = $true
-                                action = 'update-whitelist'
-                                message = 'OpenPath update task wrote expected domains'
-                                domains = @($Domains)
-                                runtimeDependencyFastPath = $hasRuntimeDependencyWait
-                                runtimeDependencyFallback = [bool]$triggerState['Fallback']
-                                updateTaskName = [string]$triggerState['TaskName']
-                                updateTriggerMs = [int]$triggerState['TriggerMs']
-                                updateWaitMs = [int]$waitStopwatch.ElapsedMilliseconds
-                            }
+                        return ($whitelistReady -and $runtimeDependencyReady)
+                    } $TimeoutSeconds 1000
+
+                    if ($waitResult.success -ne $true) {
+                        return @{
+                            success = $false
+                            action = 'update-whitelist'
+                            error = "OpenPath update task did not write expected domains: $(@($Domains + $RuntimeDependencyDomains) -join ', ')"
+                            domains = @($Domains)
+                            runtimeDependencyFastPath = $hasRuntimeDependencyWait
+                            runtimeDependencyFallback = [bool]$triggerState['Fallback']
+                            updateTaskName = [string]$triggerState['TaskName']
+                            updateTriggerMs = [int]$triggerState['TriggerMs']
+                            updateWaitMs = if ($waitResult.ContainsKey('elapsedMs')) { [int]$waitResult.elapsedMs } else { 0 }
                         }
                     }
 
-                    $waitStopwatch.Stop()
                     return @{
-                        success = $false
+                        success = $true
                         action = 'update-whitelist'
-                        error = "OpenPath update task did not write expected domains: $(@($Domains + $RuntimeDependencyDomains) -join ', ')"
+                        message = 'OpenPath update task wrote expected domains'
                         domains = @($Domains)
                         runtimeDependencyFastPath = $hasRuntimeDependencyWait
                         runtimeDependencyFallback = [bool]$triggerState['Fallback']
                         updateTaskName = [string]$triggerState['TaskName']
                         updateTriggerMs = [int]$triggerState['TriggerMs']
-                        updateWaitMs = [int]$waitStopwatch.ElapsedMilliseconds
+                        updateWaitMs = if ($waitResult.ContainsKey('elapsedMs')) { [int]$waitResult.elapsedMs } else { 0 }
                     }
                 }
         }

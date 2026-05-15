@@ -129,6 +129,7 @@ Describe "Browser Module - Native Host" {
                     "RuntimeDependency.Policy.ps1",
                     "RuntimeDependency.Queue.ps1",
                     "RuntimeDependency.Overlay.ps1",
+                    "TaskRunner.ps1",
                     "NativeHost.State.ps1",
                     "NativeHost.Protocol.ps1",
                     "NativeHost.Actions.ps1"
@@ -335,6 +336,7 @@ Describe "Browser Module - Native Host" {
                 "RuntimeDependency.Policy.ps1",
                 "RuntimeDependency.Queue.ps1",
                 "RuntimeDependency.Overlay.ps1",
+                "TaskRunner.ps1",
                 "NativeHost.State.ps1",
                 "NativeHost.Protocol.ps1",
                 "NativeHost.Actions.ps1",
@@ -390,14 +392,16 @@ Describe "Browser Module - Native Host" {
                 'GetTask($TaskName)',
                 'GetSecurityDescriptor(0xF)',
                 'SetSecurityDescriptor($updatedSecurityDescriptor, 0)',
-                "(A;;GRGX;;;BU)",
+                'Get-OpenPathScheduledTaskCatalog',
+                '$script:UsersRunTaskAce = $script:ScheduledTaskCatalog.UsersRunTaskAce',
                 'Grant-OpenPathTaskRunAccessToUsers -TaskName $updateDefinition.TaskName',
                 'Grant-OpenPathTaskRunAccessToUsers -TaskName $runtimeDependencyDefinition.TaskName'
             )
 
             Assert-ContentContainsAll -Content $taskHelperContent -Needles @(
                 'function New-OpenPathUpdateTaskDefinition',
-                '-TaskName "$TaskPrefix-Update"'
+                'Get-OpenPathScheduledTaskSpec -TaskType Update',
+                '-TaskName $taskSpec.Name'
             )
         }
 
@@ -406,19 +410,45 @@ Describe "Browser Module - Native Host" {
             $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
+                'TaskRunner.ps1',
+                'Invoke-OpenPathScheduledTask',
+                '-Runner (Get-NativeHostTaskRunner)',
+                '-WaitCondition {',
                 'function Get-NativeHostValidDomains',
                 'function Test-NativeWhitelistContainsDomains',
                 'function Invoke-NativeHostSharedUpdateTrigger',
                 'Global\OpenPathNativeWhitelistUpdateTrigger',
                 '$script:RuntimeDependencyTaskName',
                 '$triggerState = @{',
-                '$triggerState[''Fallback''] = $true',
+                '$triggerState[''Fallback''] = [bool]$taskResult.fallback',
                 '$Message.domains',
                 'Invoke-UpdateTask -Domains $domains',
                 'Get-WhitelistSections',
-                'Start-Sleep -Milliseconds 1000',
+                '1000',
                 'OpenPath update task did not write expected domains'
             )
+        }
+
+        It "Delegates runtime dependency task trigger and wait behavior to TaskRunner" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+
+            Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
+                'function Get-NativeHostTaskRunner',
+                'Invoke-OpenPathScheduledTask `',
+                '-TaskName $triggerState[''TaskName'']',
+                '-FallbackTaskName $script:UpdateTaskName',
+                '-ShouldFallback $hasRuntimeDependencyWait',
+                '-TimeoutSeconds $TimeoutSeconds',
+                '-WaitCondition {',
+                'Test-NativeHostRuntimeDependencyQueueRequestProcessed -RequestPath $RuntimeDependencyRequestPath',
+                'runtimeDependencyFallback = [bool]$taskResult.fallback',
+                'updateTaskName = [string]$taskResult.taskName',
+                'updateTriggerMs = [int]$taskResult.triggerMs',
+                'updateWaitMs = [int]$taskResult.waitMs'
+            )
+
+            $nativeHostActionsContent | Should -Not -Match '&\s*schtasks\.exe\s*/Run'
         }
 
         It "Returns blocked subdomains from the native whitelist mirror" {

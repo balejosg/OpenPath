@@ -1,3 +1,7 @@
+if (-not (Get-Command -Name 'Get-OpenPathScheduledTaskCatalog' -ErrorAction SilentlyContinue)) {
+    . (Join-Path $PSScriptRoot 'ScheduledTaskCatalog.ps1')
+}
+
 function New-OpenPathTaskAction {
     param(
         [Parameter(Mandatory = $true)]
@@ -49,13 +53,28 @@ function Register-OpenPathTaskDefinition {
         -Force | Out-Null
 }
 
-function New-OpenPathUpdateTaskDefinition {
+function Join-OpenPathTaskScriptPath {
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
 
         [Parameter(Mandatory = $true)]
-        [string]$TaskPrefix,
+        [string]$RelativePath
+    )
+
+    if ($OpenPathRoot -match '^[A-Za-z]:\\') {
+        return ("{0}\{1}" -f $OpenPathRoot.TrimEnd('\'), $RelativePath.TrimStart('\'))
+    }
+
+    return (Join-Path $OpenPathRoot $RelativePath)
+}
+
+function New-OpenPathUpdateTaskDefinition {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OpenPathRoot,
+
+        [string]$TaskPrefix = '',
 
         [Parameter(Mandatory = $true)]
         [int]$UpdateIntervalMinutes,
@@ -67,12 +86,13 @@ function New-OpenPathUpdateTaskDefinition {
         [object]$DefaultSettings
     )
 
-    $updateAction = New-OpenPathTaskAction -Target "$OpenPathRoot\scripts\Update-OpenPath.ps1"
+    $taskSpec = Get-OpenPathScheduledTaskSpec -TaskType Update
+    $updateAction = New-OpenPathTaskAction -Target (Join-OpenPathTaskScriptPath -OpenPathRoot $OpenPathRoot -RelativePath $taskSpec.Script)
     $updateTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) `
         -RepetitionInterval (New-TimeSpan -Minutes $UpdateIntervalMinutes)
 
     New-OpenPathTaskDefinition `
-        -TaskName "$TaskPrefix-Update" `
+        -TaskName $taskSpec.Name `
         -Action $updateAction `
         -Trigger $updateTrigger `
         -Principal $Principal `
@@ -84,14 +104,14 @@ function New-OpenPathRuntimeDependencyApplyTaskDefinition {
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
 
-        [Parameter(Mandatory = $true)]
-        [string]$TaskPrefix,
+        [string]$TaskPrefix = '',
 
         [Parameter(Mandatory = $true)]
         [object]$Principal
     )
 
-    $runtimeDependencyAction = New-OpenPathTaskAction -Target "$OpenPathRoot\scripts\Apply-RuntimeDependencyQueue.ps1"
+    $taskSpec = Get-OpenPathScheduledTaskSpec -TaskType RuntimeDependencyApply
+    $runtimeDependencyAction = New-OpenPathTaskAction -Target (Join-OpenPathTaskScriptPath -OpenPathRoot $OpenPathRoot -RelativePath $taskSpec.Script)
     $runtimeDependencyTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(10)
     $runtimeDependencySettings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
@@ -102,7 +122,7 @@ function New-OpenPathRuntimeDependencyApplyTaskDefinition {
         -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
 
     New-OpenPathTaskDefinition `
-        -TaskName "$TaskPrefix-RuntimeDependencyApply" `
+        -TaskName $taskSpec.Name `
         -Action $runtimeDependencyAction `
         -Trigger $runtimeDependencyTrigger `
         -Principal $Principal `
@@ -114,8 +134,7 @@ function New-OpenPathWatchdogTaskDefinition {
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
 
-        [Parameter(Mandatory = $true)]
-        [string]$TaskPrefix,
+        [string]$TaskPrefix = '',
 
         [Parameter(Mandatory = $true)]
         [int]$WatchdogIntervalMinutes,
@@ -127,12 +146,13 @@ function New-OpenPathWatchdogTaskDefinition {
         [object]$DefaultSettings
     )
 
-    $watchdogAction = New-OpenPathTaskAction -Target "$OpenPathRoot\scripts\Test-DNSHealth.ps1"
+    $taskSpec = Get-OpenPathScheduledTaskSpec -TaskType Watchdog
+    $watchdogAction = New-OpenPathTaskAction -Target (Join-OpenPathTaskScriptPath -OpenPathRoot $OpenPathRoot -RelativePath $taskSpec.Script)
     $watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
         -RepetitionInterval (New-TimeSpan -Minutes $WatchdogIntervalMinutes)
 
     New-OpenPathTaskDefinition `
-        -TaskName "$TaskPrefix-Watchdog" `
+        -TaskName $taskSpec.Name `
         -Action $watchdogAction `
         -Trigger $watchdogTrigger `
         -Principal $Principal `
@@ -144,8 +164,7 @@ function New-OpenPathStartupTaskDefinition {
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
 
-        [Parameter(Mandatory = $true)]
-        [string]$TaskPrefix,
+        [string]$TaskPrefix = '',
 
         [Parameter(Mandatory = $true)]
         [object]$Principal,
@@ -154,11 +173,12 @@ function New-OpenPathStartupTaskDefinition {
         [object]$DefaultSettings
     )
 
+    $taskSpec = Get-OpenPathScheduledTaskSpec -TaskType Startup
     $startupTrigger = New-ScheduledTaskTrigger -AtStartup
 
     New-OpenPathTaskDefinition `
-        -TaskName "$TaskPrefix-Startup" `
-        -Action (New-OpenPathTaskAction -Target "$OpenPathRoot\scripts\Update-OpenPath.ps1") `
+        -TaskName $taskSpec.Name `
+        -Action (New-OpenPathTaskAction -Target (Join-OpenPathTaskScriptPath -OpenPathRoot $OpenPathRoot -RelativePath $taskSpec.Script)) `
         -Trigger $startupTrigger `
         -Principal $Principal `
         -Settings $DefaultSettings
@@ -169,13 +189,13 @@ function New-OpenPathSseTaskDefinition {
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
 
-        [Parameter(Mandatory = $true)]
-        [string]$TaskPrefix,
+        [string]$TaskPrefix = '',
 
         [Parameter(Mandatory = $true)]
         [object]$Principal
     )
 
+    $taskSpec = Get-OpenPathScheduledTaskSpec -TaskType SSE
     $sseTrigger = New-ScheduledTaskTrigger -AtStartup
     $sseSettings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
@@ -186,8 +206,8 @@ function New-OpenPathSseTaskDefinition {
         -ExecutionTimeLimit (New-TimeSpan -Days 0)
 
     New-OpenPathTaskDefinition `
-        -TaskName "$TaskPrefix-SSE" `
-        -Action (New-OpenPathTaskAction -Target "$OpenPathRoot\scripts\Start-SSEListener.ps1") `
+        -TaskName $taskSpec.Name `
+        -Action (New-OpenPathTaskAction -Target (Join-OpenPathTaskScriptPath -OpenPathRoot $OpenPathRoot -RelativePath $taskSpec.Script)) `
         -Trigger $sseTrigger `
         -Principal $Principal `
         -Settings $sseSettings
@@ -198,15 +218,15 @@ function New-OpenPathAgentUpdateTaskDefinition {
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
 
-        [Parameter(Mandatory = $true)]
-        [string]$TaskPrefix,
+        [string]$TaskPrefix = '',
 
         [Parameter(Mandatory = $true)]
         [object]$Principal
     )
 
+    $taskSpec = Get-OpenPathScheduledTaskSpec -TaskType AgentUpdate
     $agentUpdateAction = New-ScheduledTaskAction -Execute "PowerShell.exe" `
-        -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$OpenPathRoot\OpenPath.ps1`" self-update --silent"
+        -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-OpenPathTaskScriptPath -OpenPathRoot $OpenPathRoot -RelativePath $taskSpec.Script)`" $($taskSpec.Arguments)"
     $agentUpdateTrigger = New-ScheduledTaskTrigger -Daily -At 3am -RandomDelay (New-TimeSpan -Minutes 45)
     $agentUpdateSettings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
@@ -217,7 +237,7 @@ function New-OpenPathAgentUpdateTaskDefinition {
         -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 
     New-OpenPathTaskDefinition `
-        -TaskName "$TaskPrefix-AgentUpdate" `
+        -TaskName $taskSpec.Name `
         -Action $agentUpdateAction `
         -Trigger $agentUpdateTrigger `
         -Principal $Principal `

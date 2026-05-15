@@ -73,6 +73,7 @@ if (-not (Test-Path "$scriptDir\lib\*.psm1")) {
 }
 
 . (Join-Path $installerHelperRoot 'Installer.Progress.ps1')
+. (Join-Path $installerHelperRoot 'Installer.Plan.ps1')
 . (Join-Path $installerHelperRoot 'Installer.Config.ps1')
 . (Join-Path $installerHelperRoot 'Installer.Runtime.ps1')
 . (Join-Path $installerHelperRoot 'Installer.ChromiumGuidance.ps1')
@@ -120,6 +121,95 @@ if (($FirefoxExtensionId -and -not $FirefoxExtensionInstallUrl) -or ($FirefoxExt
 
 $usesEnrollmentToken = [bool]$EnrollmentToken
 $usesRegistrationToken = [bool]$RegistrationToken
+
+$installerParameters = @{
+    WhitelistUrl = $WhitelistUrl
+    SkipAcrylic = [bool]$SkipAcrylic
+    SkipPreflight = [bool]$SkipPreflight
+    Classroom = $Classroom
+    ApiUrl = $apiBaseUrl
+    RegistrationToken = $RegistrationToken
+    EnrollmentToken = $EnrollmentToken
+    ClassroomId = $ClassroomId
+    MachineName = $MachineName
+    FirefoxExtensionId = $FirefoxExtensionId
+    FirefoxExtensionInstallUrl = $FirefoxExtensionInstallUrl
+    ChromeExtensionStoreUrl = $ChromeExtensionStoreUrl
+    EdgeExtensionStoreUrl = $EdgeExtensionStoreUrl
+    Unattended = [bool]$Unattended
+    HealthApiSecret = $HealthApiSecret
+    EnforceManagedBrowserBoundary = $enforceManagedBrowserBoundary
+    ApprovedStudentBrowsers = @($ApprovedStudentBrowsers)
+    BrowserCleanupMode = $BrowserCleanupMode
+    TimingOutputPath = $TimingOutputPath
+}
+$installPlan = New-OpenPathInstallPlan -Parameters $installerParameters -OpenPathRoot $OpenPathRoot -ScriptDir $scriptDir
+$script:OpenPathInstallPhaseResults = @()
+
+function Get-OpenPathInstallPhaseFromPlan {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $phase = @($installPlan.Phases | Where-Object { $_.Name -eq $Name })[0]
+    if (-not $phase) {
+        throw "Installer phase not found: $Name"
+    }
+    return $phase
+}
+
+function Invoke-OpenPathPlannedPhase {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [scriptblock]$Action = $null
+    )
+
+    $phase = Get-OpenPathInstallPhaseFromPlan -Name $Name
+    if ($Action) {
+        $phase.Action = $Action
+    }
+    $result = Invoke-OpenPathInstallPhase -Phase $phase -Context $installPlan.Context
+    $script:OpenPathInstallPhaseResults += $result
+    return $result
+}
+
+function Invoke-OpenPathPlannedWarningPhase {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [scriptblock]$Action = $null
+    )
+
+    $result = Invoke-OpenPathPlannedPhase -Name $Name -Action $Action
+    if (-not $result.Success) {
+        $result.Status = 'warning'
+    }
+    return $result
+}
+
+function Assert-OpenPathInstallPhaseSucceeded {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Result
+    )
+
+    if ($Result.Success) {
+        return
+    }
+
+    Write-InstallerError "ERROR: Installer phase failed: $($Result.Name)"
+    if ($Result.Error -and $Result.Error.Message) {
+        Write-InstallerError "  $($Result.Error.Message)"
+    }
+    if ($Result.RecoveryHint) {
+        Write-InstallerError "  Recovery: $($Result.RecoveryHint)"
+    }
+    exit 1
+}
 
 function Get-OpenPathInstallerConfigValue {
     param(
@@ -202,7 +292,7 @@ if ($WhatIfPreference) {
     exit 0
 }
 
-try {
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'existing-install-cleanup' -Action {
     $scriptDir = Copy-OpenPathInstallerSourceForReinstall `
         -ScriptDir $scriptDir `
         -OpenPathRoot $OpenPathRoot
@@ -213,291 +303,344 @@ try {
         -KeepAcrylic `
         -KeepLogs | Out-Null
 }
-catch {
-    Write-InstallerError "ERROR: Existing OpenPath cleanup failed: $_"
+if (-not $phaseResult.Success) {
+    Write-InstallerError "ERROR: Existing OpenPath cleanup failed: $($phaseResult.Error.Message)"
     exit 1
 }
 
-if ($SkipPreflight) {
-    Write-InstallerVerbose '[Preflight] Omitido por -SkipPreflight'
-}
-else {
-    $validationScript = Join-Path $scriptDir 'scripts\Pre-Install-Validation.ps1'
-    if (Test-Path $validationScript) {
-        Show-InstallerProgress -Step 0 -Total 7 -Status 'Ejecutando validacion previa'
-        $validationOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $validationScript 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            $validationOutput |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-                ForEach-Object { Write-InstallerError "$_" }
-            Write-InstallerError 'ERROR: Pre-install validation failed'
-            exit 1
-        }
-        if ($VerbosePreference -eq 'Continue') {
-            $validationOutput | ForEach-Object { Write-Verbose "$_" }
-        }
-        Write-InstallerVerbose '[Preflight] Validacion completada'
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'preflight' -Action {
+    if ($SkipPreflight) {
+        Write-InstallerVerbose '[Preflight] Omitido por -SkipPreflight'
     }
     else {
-        Write-InstallerWarning '[Preflight] Omitido: paquete sin script de validacion previa'
+        $validationScript = Join-Path $scriptDir 'scripts\Pre-Install-Validation.ps1'
+        if (Test-Path $validationScript) {
+            $validationOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $validationScript 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                $validationOutput |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                    ForEach-Object { Write-InstallerError "$_" }
+                Write-InstallerError 'ERROR: Pre-install validation failed'
+                exit 1
+            }
+            if ($VerbosePreference -eq 'Continue') {
+                $validationOutput | ForEach-Object { Write-Verbose "$_" }
+            }
+            Write-InstallerVerbose '[Preflight] Validacion completada'
+        }
+        else {
+            Write-InstallerWarning '[Preflight] Omitido: paquete sin script de validacion previa'
+        }
     }
 }
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
-Show-InstallerProgress -Step 1 -Total 7 -Status 'Creando estructura de directorios'
-if ($PSCmdlet.ShouldProcess('OpenPath install root', 'Create install directories')) {
-    Initialize-OpenPathInstallDirectories -OpenPathRoot $OpenPathRoot
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'directories' -Action {
+    if ($PSCmdlet.ShouldProcess('OpenPath install root', 'Create install directories')) {
+        Initialize-OpenPathInstallDirectories -OpenPathRoot $OpenPathRoot
+    }
 }
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
-Show-InstallerProgress -Step 2 -Total 7 -Status 'Copiando modulos y scripts'
-if ($PSCmdlet.ShouldProcess('OpenPath runtime', 'Copy modules and scripts')) {
-    Copy-OpenPathInstallerRuntime `
-        -OpenPathRoot $OpenPathRoot `
-        -ScriptDir $scriptDir `
-        -Unattended:$Unattended `
-        -ChromeExtensionStoreUrl $ChromeExtensionStoreUrl `
-        -EdgeExtensionStoreUrl $EdgeExtensionStoreUrl `
-        -FirefoxExtensionId $FirefoxExtensionId `
-        -FirefoxExtensionInstallUrl $FirefoxExtensionInstallUrl
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'runtime' -Action {
+    if ($PSCmdlet.ShouldProcess('OpenPath runtime', 'Copy modules and scripts')) {
+        Copy-OpenPathInstallerRuntime `
+            -OpenPathRoot $OpenPathRoot `
+            -ScriptDir $scriptDir `
+            -Unattended:$Unattended `
+            -ChromeExtensionStoreUrl $ChromeExtensionStoreUrl `
+            -EdgeExtensionStoreUrl $EdgeExtensionStoreUrl `
+            -FirefoxExtensionId $FirefoxExtensionId `
+            -FirefoxExtensionInstallUrl $FirefoxExtensionInstallUrl
+    }
 }
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
 Import-Module "$OpenPathRoot\lib\Common.psm1" -Force -Global
 Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force -Global
 Import-Module "$OpenPathRoot\lib\Firewall.psm1" -Force -Global
 Import-Module "$OpenPathRoot\lib\AppControl.psm1" -Force -Global
 
-Show-InstallerProgress -Step 3 -Total 7 -Status 'Creando configuracion'
-$primaryDNS = Get-InstallerPrimaryDNS
-$agentVersion = Get-OpenPathInstallerAgentVersion -ScriptDir $scriptDir
-$config = New-OpenPathInstallerConfig `
-    -WhitelistUrl $WhitelistUrl `
-    -AgentVersion $agentVersion `
-    -PrimaryDNS $primaryDNS `
-    -ApiBaseUrl $apiBaseUrl `
-    -Classroom $Classroom `
-    -ClassroomId $ClassroomId `
-    -HealthApiSecret $HealthApiSecret `
-    -FirefoxExtensionId $FirefoxExtensionId `
-    -FirefoxExtensionInstallUrl $FirefoxExtensionInstallUrl `
-    -ChromeExtensionStoreUrl $ChromeExtensionStoreUrl `
-    -EdgeExtensionStoreUrl $EdgeExtensionStoreUrl `
-    -EnforceManagedBrowserBoundary:$enforceManagedBrowserBoundary `
-    -ApprovedStudentBrowsers $ApprovedStudentBrowsers `
-    -BrowserCleanupMode $BrowserCleanupMode
-if ($PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Write installer configuration')) {
-    $config | ConvertTo-Json -Depth 10 | Set-Content "$OpenPathRoot\data\config.json" -Encoding UTF8
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'configuration' -Action {
+    $primaryDNS = Get-InstallerPrimaryDNS
+    $agentVersion = Get-OpenPathInstallerAgentVersion -ScriptDir $scriptDir
+    $config = New-OpenPathInstallerConfig `
+        -WhitelistUrl $WhitelistUrl `
+        -AgentVersion $agentVersion `
+        -PrimaryDNS $primaryDNS `
+        -ApiBaseUrl $apiBaseUrl `
+        -Classroom $Classroom `
+        -ClassroomId $ClassroomId `
+        -HealthApiSecret $HealthApiSecret `
+        -FirefoxExtensionId $FirefoxExtensionId `
+        -FirefoxExtensionInstallUrl $FirefoxExtensionInstallUrl `
+        -ChromeExtensionStoreUrl $ChromeExtensionStoreUrl `
+        -EdgeExtensionStoreUrl $EdgeExtensionStoreUrl `
+        -EnforceManagedBrowserBoundary:$enforceManagedBrowserBoundary `
+        -ApprovedStudentBrowsers $ApprovedStudentBrowsers `
+        -BrowserCleanupMode $BrowserCleanupMode
+    if ($PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Write installer configuration')) {
+        $config | ConvertTo-Json -Depth 10 | Set-Content "$OpenPathRoot\data\config.json" -Encoding UTF8
+    }
+    Set-Variable -Name primaryDNS -Scope Script -Value $primaryDNS
+    Set-Variable -Name agentVersion -Scope Script -Value $agentVersion
+    Set-Variable -Name config -Scope Script -Value $config
+    Write-InstallerVerbose "  DNS upstream: $primaryDNS"
 }
-Write-InstallerVerbose "  DNS upstream: $primaryDNS"
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
 Import-Module "$OpenPathRoot\lib\DNS.psm1" -Force -Global
 Import-Module "$OpenPathRoot\lib\Browser.psm1" -Force -Global
 Import-Module "$OpenPathRoot\lib\Services.psm1" -Force -Global
 $deferLocalDnsUntilRemoteBootstrap = $classroomModeRequested -or [bool]$WhitelistUrl
 
-Show-InstallerProgress -Step 4 -Total 7 -Status 'Instalando Acrylic DNS Proxy'
-Start-OpenPathInstallTimedStep -Name 'acrylic'
-if (-not $SkipAcrylic) {
-    if (Test-AcrylicInstalled) {
-        Write-InstallerVerbose '  Acrylic ya instalado'
-        if ((-not $WhatIfPreference) -and (Ensure-AcrylicService -Start)) {
-            Write-InstallerVerbose '  Servicio Acrylic listo'
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'acrylic' -Action {
+    Start-OpenPathInstallTimedStep -Name 'acrylic'
+    if (-not $SkipAcrylic) {
+        if (Test-AcrylicInstalled) {
+            Write-InstallerVerbose '  Acrylic ya instalado'
+            if ((-not $WhatIfPreference) -and (Ensure-AcrylicService -Start)) {
+                Write-InstallerVerbose '  Servicio Acrylic listo'
+            }
+            else {
+                Write-InstallerWarning '  ADVERTENCIA: No se pudo registrar o iniciar el servicio Acrylic automaticamente'
+            }
         }
         else {
-            Write-InstallerWarning '  ADVERTENCIA: No se pudo registrar o iniciar el servicio Acrylic automaticamente'
+            $installed = Install-AcrylicDNS -WhatIf:$WhatIfPreference
+            if ($installed) {
+                Write-InstallerVerbose '  Acrylic instalado'
+            }
+            else {
+                Write-InstallerWarning '  ADVERTENCIA: No se pudo instalar Acrylic automaticamente'
+                Write-InstallerWarning '  Descarga manual: https://mayakron.altervista.org/support/acrylic/Home.htm'
+            }
         }
     }
     else {
-        $installed = Install-AcrylicDNS -WhatIf:$WhatIfPreference
-        if ($installed) {
-            Write-InstallerVerbose '  Acrylic instalado'
-        }
-        else {
-            Write-InstallerWarning '  ADVERTENCIA: No se pudo instalar Acrylic automaticamente'
-            Write-InstallerWarning '  Descarga manual: https://mayakron.altervista.org/support/acrylic/Home.htm'
-        }
+        Write-InstallerWarning '  Instalacion de Acrylic omitida'
     }
+    Complete-OpenPathInstallTimedStep -Name 'acrylic'
 }
-else {
-    Write-InstallerWarning '  Instalacion de Acrylic omitida'
-}
-Complete-OpenPathInstallTimedStep -Name 'acrylic'
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
-Start-OpenPathInstallTimedStep -Name 'acrylic-configuration'
-Set-AcrylicConfiguration -WhatIf:$WhatIfPreference
-Complete-OpenPathInstallTimedStep -Name 'acrylic-configuration'
-
-Show-InstallerProgress -Step 5 -Total 7 -Status 'Configurando DNS local'
-Start-OpenPathInstallTimedStep -Name 'local-dns'
-if ($deferLocalDnsUntilRemoteBootstrap) {
-    Write-InstallerVerbose '  DNS local se activara tras descargar y aplicar la primera whitelist'
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'acrylic-configuration' -Action {
+    Start-OpenPathInstallTimedStep -Name 'acrylic-configuration'
+    Set-AcrylicConfiguration -WhatIf:$WhatIfPreference
+    Complete-OpenPathInstallTimedStep -Name 'acrylic-configuration'
 }
-else {
-    Set-LocalDNS -WhatIf:$WhatIfPreference
-    Write-InstallerVerbose '  DNS configurado a 127.0.0.1'
-}
-Complete-OpenPathInstallTimedStep -Name 'local-dns'
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
-Show-InstallerProgress -Step 6 -Total 7 -Status 'Registrando tareas programadas'
-Start-OpenPathInstallTimedStep -Name 'scheduled-tasks'
-Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1 -WhatIf:$WhatIfPreference
-Write-InstallerVerbose '  Tareas registradas'
-Complete-OpenPathInstallTimedStep -Name 'scheduled-tasks'
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'local-dns' -Action {
+    Start-OpenPathInstallTimedStep -Name 'local-dns'
+    if ($deferLocalDnsUntilRemoteBootstrap) {
+        Write-InstallerVerbose '  DNS local se activara tras descargar y aplicar la primera whitelist'
+    }
+    else {
+        Set-LocalDNS -WhatIf:$WhatIfPreference
+        Write-InstallerVerbose '  DNS configurado a 127.0.0.1'
+    }
+    Complete-OpenPathInstallTimedStep -Name 'local-dns'
+}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'scheduled-tasks' -Action {
+    Start-OpenPathInstallTimedStep -Name 'scheduled-tasks'
+    Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1 -WhatIf:$WhatIfPreference
+    Write-InstallerVerbose '  Tareas registradas'
+    Complete-OpenPathInstallTimedStep -Name 'scheduled-tasks'
+}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
 $machineRegistered = 'NOT_REQUESTED'
 $enrollmentError = ''
 if ($classroomModeRequested) {
-    Start-OpenPathInstallTimedStep -Name 'enrollment'
-    $enrollmentResult = Invoke-OpenPathInstallerEnrollment `
-        -OpenPathRoot $OpenPathRoot `
-        -ApiBaseUrl $apiBaseUrl `
-        -Classroom $Classroom `
-        -ClassroomId $ClassroomId `
-        -EnrollmentToken $EnrollmentToken `
-        -RegistrationToken $RegistrationToken `
-        -MachineName $MachineName `
-        -Unattended:$Unattended
+    $phaseResult = Invoke-OpenPathPlannedPhase -Name 'enrollment' -Action {
+        Start-OpenPathInstallTimedStep -Name 'enrollment'
+        $enrollmentResult = Invoke-OpenPathInstallerEnrollment `
+            -OpenPathRoot $OpenPathRoot `
+            -ApiBaseUrl $apiBaseUrl `
+            -Classroom $Classroom `
+            -ClassroomId $ClassroomId `
+            -EnrollmentToken $EnrollmentToken `
+            -RegistrationToken $RegistrationToken `
+            -MachineName $MachineName `
+            -Unattended:$Unattended
 
-    $machineRegistered = [string]$enrollmentResult.MachineRegistered
-    if ($enrollmentResult.PSObject.Properties['EnrollmentError'] -and $enrollmentResult.EnrollmentError) {
-        $enrollmentError = [string]$enrollmentResult.EnrollmentError
-    }
-    if ($enrollmentResult.WhitelistUrl) {
-        $WhitelistUrl = [string]$enrollmentResult.WhitelistUrl
-    }
-    Complete-OpenPathInstallTimedStep -Name 'enrollment' -Status $machineRegistered
-
-    if ($classroomModeRequested -and $Unattended -and $machineRegistered -ne 'REGISTERED') {
-        Write-InstallerError 'ERROR: Classroom enrollment did not complete; domain requests will not be configured.'
-        if ($enrollmentError) {
-            Write-InstallerError "  $enrollmentError"
+        $machineRegistered = [string]$enrollmentResult.MachineRegistered
+        if ($enrollmentResult.PSObject.Properties['EnrollmentError'] -and $enrollmentResult.EnrollmentError) {
+            $enrollmentError = [string]$enrollmentResult.EnrollmentError
         }
-        exit 1
+        if ($enrollmentResult.WhitelistUrl) {
+            $WhitelistUrl = [string]$enrollmentResult.WhitelistUrl
+        }
+        Set-Variable -Name machineRegistered -Scope Script -Value $machineRegistered
+        Set-Variable -Name enrollmentError -Scope Script -Value $enrollmentError
+        Set-Variable -Name WhitelistUrl -Scope Script -Value $WhitelistUrl
+        Complete-OpenPathInstallTimedStep -Name 'enrollment' -Status $machineRegistered
+
+        if ($classroomModeRequested -and $Unattended -and $machineRegistered -ne 'REGISTERED') {
+            Write-InstallerError 'ERROR: Classroom enrollment did not complete; domain requests will not be configured.'
+            if ($enrollmentError) {
+                Write-InstallerError "  $enrollmentError"
+            }
+            exit 1
+        }
     }
+    Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 }
 
 $nativeHostRegistered = $false
 $nativeHostRequestSetup = $null
-try {
-    Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force -Global
-    $nativeHostConfig = Get-OpenPathConfig
-    $nativeHostRequestSetup = Get-OpenPathRequestSetupState -Config $nativeHostConfig
-    if ($PSCmdlet.ShouldProcess('Firefox native messaging host', 'Register OpenPath native host after enrollment')) {
-        $nativeHostRegistered = Register-OpenPathFirefoxNativeHost -Config $nativeHostConfig -ClearWhitelist
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'native-host' -Action {
+    try {
+        Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force -Global
+        $nativeHostConfig = Get-OpenPathConfig
+        $nativeHostRequestSetup = Get-OpenPathRequestSetupState -Config $nativeHostConfig
+        if ($PSCmdlet.ShouldProcess('Firefox native messaging host', 'Register OpenPath native host after enrollment')) {
+            $nativeHostRegistered = Register-OpenPathFirefoxNativeHost -Config $nativeHostConfig -ClearWhitelist
+        }
+        Set-Variable -Name nativeHostRegistered -Scope Script -Value $nativeHostRegistered
+        Set-Variable -Name nativeHostRequestSetup -Scope Script -Value $nativeHostRequestSetup
+        if ($classroomModeRequested -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup.Ready)) {
+            $requestSetupMessage = if ($nativeHostRequestSetup -and $nativeHostRequestSetup.DiagnosticMessage) {
+                [string]$nativeHostRequestSetup.DiagnosticMessage
+            }
+            else {
+                'OpenPath request setup is incomplete.'
+            }
+            Write-InstallerWarning "  ADVERTENCIA: Registro del host nativo de Firefox incompleto tras enrollment. $requestSetupMessage"
+        }
     }
-    if ($classroomModeRequested -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup.Ready)) {
-        $requestSetupMessage = if ($nativeHostRequestSetup -and $nativeHostRequestSetup.DiagnosticMessage) {
-            [string]$nativeHostRequestSetup.DiagnosticMessage
-        }
-        else {
-            'OpenPath request setup is incomplete.'
-        }
-        Write-InstallerWarning "  ADVERTENCIA: Registro del host nativo de Firefox incompleto tras enrollment. $requestSetupMessage"
+    catch {
+        Write-InstallerWarning "  ADVERTENCIA: No se pudo registrar el host nativo de Firefox tras enrollment: $_"
     }
 }
-catch {
-    Write-InstallerWarning "  ADVERTENCIA: No se pudo registrar el host nativo de Firefox tras enrollment: $_"
-}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
 if ($classroomModeRequested -and $Unattended -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup -or -not $nativeHostRequestSetup.Ready)) {
     Write-InstallerError 'ERROR: Firefox native host registration incomplete; domain requests will not be configured.'
     exit 1
 }
 
-Show-InstallerProgress -Step 7 -Total 7 -Status 'Ejecutando primera actualizacion'
-Start-OpenPathInstallTimedStep -Name 'first-update'
-Invoke-OpenPathInstallerFirstUpdate `
-    -OpenPathRoot $OpenPathRoot `
-    -ClassroomModeRequested:$classroomModeRequested `
-    -MachineRegistered $machineRegistered
-Complete-OpenPathInstallTimedStep -Name 'first-update'
-Restore-OpenPathInstallerConfigIfMissing `
-    -OpenPathRoot $OpenPathRoot `
-    -Config $config
-
-try {
-    Start-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
-    $firefoxReadyConfig = Get-OpenPathConfig
-    if ($classroomModeRequested) {
-        $firefoxReady = Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig -RequireRuntimeRegistration
-        if (-not $firefoxReady.Ready) {
-            Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$firefoxReady.FailureCode)
-            Write-InstallerError 'ERROR: Firefox managed extension is not active after installation.'
-            Write-InstallerError "  Failure: $($firefoxReady.FailureCode)"
-            Write-InstallerError "  $($firefoxReady.Message)"
-            exit 1
-        }
-    }
-    Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'first-update' -Action {
+    Start-OpenPathInstallTimedStep -Name 'first-update'
+    Invoke-OpenPathInstallerFirstUpdate `
+        -OpenPathRoot $OpenPathRoot `
+        -ClassroomModeRequested:$classroomModeRequested `
+        -MachineRegistered $machineRegistered
+    Complete-OpenPathInstallTimedStep -Name 'first-update'
+    Restore-OpenPathInstallerConfigIfMissing `
+        -OpenPathRoot $OpenPathRoot `
+        -Config $config
 }
-catch {
-    Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$_)
-    if ($classroomModeRequested) {
-        Write-InstallerError 'ERROR: Firefox managed extension is not active after installation.'
-        Write-InstallerError "  $_"
-        exit 1
-    }
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
-    Write-InstallerWarning "  ADVERTENCIA: No se pudo validar Firefox managed extension readiness: $_"
-}
-
-Start-OpenPathInstallTimedStep -Name 'realtime-updates'
-Start-OpenPathInstallerRealtimeUpdates `
-    -ClassroomModeRequested:$classroomModeRequested `
-    -MachineRegistered $machineRegistered | Out-Null
-Complete-OpenPathInstallTimedStep -Name 'realtime-updates'
-
-try {
-    Start-OpenPathInstallTimedStep -Name 'app-control'
-    $enableNonAdminAppControl = [bool](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'enableNonAdminAppControl' -DefaultValue $true)
-    $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
-    $approvedStudentBrowsers = @($config.approvedStudentBrowsers)
-    if ($enableNonAdminAppControl) {
-        Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference | Out-Null
-    }
-    else {
-        if (Test-OpenPathNonAdminAppControlActive) {
-            Remove-OpenPathNonAdminAppControl -Confirm:$false -WhatIf:$WhatIfPreference | Out-Null
-            Write-InstallerVerbose '  Stale OpenPath AppLocker rules removed'
-        }
-        Write-InstallerVerbose '  Managed browser boundary disabled; AppLocker boundary not applied'
-    }
-    Complete-OpenPathInstallTimedStep -Name 'app-control'
-}
-catch {
-    Complete-OpenPathInstallTimedStep -Name 'app-control' -Status 'warning' -ErrorMessage ([string]$_)
-    Write-InstallerWarning "  ADVERTENCIA: No se pudo configurar AppLocker para usuarios no administradores: $_"
-}
-
-if ($BrowserCleanupMode -eq 'Disabled') {
-    Write-InstallerVerbose '  Browser cleanup reporting disabled'
-}
-elseif ($PSCmdlet.ShouldProcess('Browser cleanup inventory', "Report unmanaged browsers with $BrowserCleanupMode mode")) {
-    Invoke-OpenPathInstallTimedStep -Name 'browser-inventory' -ScriptBlock {
-        try {
-            $browserInventoryMode = if ($BrowserCleanupMode -eq 'RemoveKnownInstallers') { 'RemoveKnownInstallers' } else { 'ReportOnly' }
-            $browserInventory = Get-OpenPathBrowserInventory -Mode $browserInventoryMode
-            $unmanagedCount = @($browserInventory.UnmanagedBrowsers).Count + @($browserInventory.PortableBrowserRisks).Count
-            $removalCandidateCount = @($browserInventory.RemovalCandidates).Count
-            Write-InstallerVerbose "  Browser cleanup report: $unmanagedCount unmanaged finding(s), $removalCandidateCount removable known installer candidate(s)"
-            if ($BrowserCleanupMode -eq 'RemoveKnownInstallers' -and $removalCandidateCount -gt 0) {
-                Write-InstallerWarning '  ADVERTENCIA: RemoveKnownInstallers reports candidates only; automatic browser uninstall is not enabled in this release.'
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-ready' -Action {
+    try {
+        Start-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
+        $firefoxReadyConfig = Get-OpenPathConfig
+        if ($classroomModeRequested) {
+            $firefoxReady = Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig -RequireRuntimeRegistration
+            if (-not $firefoxReady.Ready) {
+                Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$firefoxReady.FailureCode)
+                Write-InstallerError 'ERROR: Firefox managed extension is not active after installation.'
+                Write-InstallerError "  Failure: $($firefoxReady.FailureCode)"
+                Write-InstallerError "  $($firefoxReady.Message)"
+                exit 1
             }
         }
-        catch {
-            Write-InstallerWarning "  ADVERTENCIA: No se pudo generar el reporte de navegadores: $_"
+        Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
+    }
+    catch {
+        Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$_)
+        if ($classroomModeRequested) {
+            Write-InstallerError 'ERROR: Firefox managed extension is not active after installation.'
+            Write-InstallerError "  $_"
+            exit 1
+        }
+
+        Write-InstallerWarning "  ADVERTENCIA: No se pudo validar Firefox managed extension readiness: $_"
+    }
+}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'realtime-updates' -Action {
+    Start-OpenPathInstallTimedStep -Name 'realtime-updates'
+    Start-OpenPathInstallerRealtimeUpdates `
+        -ClassroomModeRequested:$classroomModeRequested `
+        -MachineRegistered $machineRegistered | Out-Null
+    Complete-OpenPathInstallTimedStep -Name 'realtime-updates'
+}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+
+$phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'app-control' -Action {
+    try {
+        Start-OpenPathInstallTimedStep -Name 'app-control'
+        $enableNonAdminAppControl = [bool](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'enableNonAdminAppControl' -DefaultValue $true)
+        $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
+        $approvedStudentBrowsers = @($config.approvedStudentBrowsers)
+        if ($enableNonAdminAppControl) {
+            Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference | Out-Null
+        }
+        else {
+            if (Test-OpenPathNonAdminAppControlActive) {
+                Remove-OpenPathNonAdminAppControl -Confirm:$false -WhatIf:$WhatIfPreference | Out-Null
+                Write-InstallerVerbose '  Stale OpenPath AppLocker rules removed'
+            }
+            Write-InstallerVerbose '  Managed browser boundary disabled; AppLocker boundary not applied'
+        }
+        Complete-OpenPathInstallTimedStep -Name 'app-control'
+    }
+    catch {
+        Complete-OpenPathInstallTimedStep -Name 'app-control' -Status 'warning' -ErrorMessage ([string]$_)
+        Write-InstallerWarning "  ADVERTENCIA: No se pudo configurar AppLocker para usuarios no administradores: $_"
+    }
+}
+
+$phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'browser-inventory' -Action {
+    if ($BrowserCleanupMode -eq 'Disabled') {
+        Write-InstallerVerbose '  Browser cleanup reporting disabled'
+    }
+    elseif ($PSCmdlet.ShouldProcess('Browser cleanup inventory', "Report unmanaged browsers with $BrowserCleanupMode mode")) {
+        Invoke-OpenPathInstallTimedStep -Name 'browser-inventory' -ScriptBlock {
+            try {
+                $browserInventoryMode = if ($BrowserCleanupMode -eq 'RemoveKnownInstallers') { 'RemoveKnownInstallers' } else { 'ReportOnly' }
+                $browserInventory = Get-OpenPathBrowserInventory -Mode $browserInventoryMode
+                $unmanagedCount = @($browserInventory.UnmanagedBrowsers).Count + @($browserInventory.PortableBrowserRisks).Count
+                $removalCandidateCount = @($browserInventory.RemovalCandidates).Count
+                Write-InstallerVerbose "  Browser cleanup report: $unmanagedCount unmanaged finding(s), $removalCandidateCount removable known installer candidate(s)"
+                if ($BrowserCleanupMode -eq 'RemoveKnownInstallers' -and $removalCandidateCount -gt 0) {
+                    Write-InstallerWarning '  ADVERTENCIA: RemoveKnownInstallers reports candidates only; automatic browser uninstall is not enabled in this release.'
+                }
+            }
+            catch {
+                Write-InstallerWarning "  ADVERTENCIA: No se pudo generar el reporte de navegadores: $_"
+            }
         }
     }
 }
 
-Initialize-OpenPathInstallerIntegrity
-Save-OpenPathInstallTiming -Path $TimingOutputPath
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'integrity' -Action {
+    Initialize-OpenPathInstallerIntegrity
+}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
-Write-OpenPathInstallerSummary `
-    -ClassroomModeRequested:$classroomModeRequested `
-    -Classroom $Classroom `
-    -ClassroomId $ClassroomId `
-    -MachineRegistered $machineRegistered `
-    -WhitelistUrl $WhitelistUrl `
-    -AgentVersion $agentVersion `
-    -PrimaryDNS $primaryDNS
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'timing' -Action {
+    Save-OpenPathInstallTiming -Path $TimingOutputPath
+}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'summary' -Action {
+    Write-OpenPathInstallerSummary `
+        -ClassroomModeRequested:$classroomModeRequested `
+        -Classroom $Classroom `
+        -ClassroomId $ClassroomId `
+        -MachineRegistered $machineRegistered `
+        -WhitelistUrl $WhitelistUrl `
+        -AgentVersion $agentVersion `
+        -PrimaryDNS $primaryDNS
+}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
 exit 0

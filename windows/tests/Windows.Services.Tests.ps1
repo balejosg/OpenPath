@@ -1,3 +1,5 @@
+Import-Module (Join-Path $PSScriptRoot "TestHelpers.psm1") -Force
+
 Describe "Services Module" {
     BeforeAll {
         $modulePath = Join-Path $PSScriptRoot ".." "lib"
@@ -13,31 +15,111 @@ Describe "Services Module" {
     }
 
     Context "Register-OpenPathTask" {
+        It "Defines scheduled task names and user run permissions in the catalog" {
+            $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "ScheduledTaskCatalog.ps1"
+            Test-Path $catalogPath | Should -BeTrue
+
+            . $catalogPath
+            $catalog = Get-OpenPathScheduledTaskCatalog
+
+            $catalog.Prefix | Should -Be "OpenPath"
+            $catalog.UsersRunTaskAce | Should -Be "(A;;GRGX;;;BU)"
+            $catalog.Tasks.Update.Name | Should -Be "OpenPath-Update"
+            $catalog.Tasks.RuntimeDependencyApply.Name | Should -Be "OpenPath-RuntimeDependencyApply"
+            $catalog.Tasks.RuntimeDependencyApply.Script | Should -Be "scripts\Apply-RuntimeDependencyQueue.ps1"
+            $catalog.Tasks.RuntimeDependencyApply.GrantUsersRunAccess | Should -BeTrue
+            $catalog.Tasks.SSE.Name | Should -Be "OpenPath-SSE"
+            @($catalog.ValidTaskTypes) | Should -Contain "RuntimeDependencyApply"
+        }
+
+        It "Builds scheduled task definitions from catalog specs without changing task names" {
+            $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "ScheduledTaskCatalog.ps1"
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Services.TaskBuilders.ps1"
+            . $catalogPath
+            . $helperPath
+
+            function New-ScheduledTaskAction {
+                param([string]$Execute, [string]$Argument)
+                [PSCustomObject]@{ Execute = $Execute; Argument = $Argument }
+            }
+            function New-ScheduledTaskTrigger {
+                param(
+                    [switch]$Once,
+                    [datetime]$At,
+                    [timespan]$RepetitionInterval,
+                    [switch]$AtStartup,
+                    [switch]$Daily,
+                    [timespan]$RandomDelay
+                )
+                [PSCustomObject]@{
+                    Once = [bool]$Once
+                    At = $At
+                    RepetitionInterval = $RepetitionInterval
+                    AtStartup = [bool]$AtStartup
+                    Daily = [bool]$Daily
+                    RandomDelay = $RandomDelay
+                }
+            }
+            function New-ScheduledTaskSettingsSet {
+                param(
+                    [switch]$AllowStartIfOnBatteries,
+                    [switch]$DontStopIfGoingOnBatteries,
+                    [switch]$StartWhenAvailable,
+                    [int]$RestartCount,
+                    [timespan]$RestartInterval,
+                    [timespan]$ExecutionTimeLimit
+                )
+                [PSCustomObject]@{
+                    RestartCount = $RestartCount
+                    RestartInterval = $RestartInterval
+                    ExecutionTimeLimit = $ExecutionTimeLimit
+                }
+            }
+
+            $definition = New-OpenPathRuntimeDependencyApplyTaskDefinition `
+                -OpenPathRoot "C:\OpenPath" `
+                -Principal ([PSCustomObject]@{ UserId = "SYSTEM" })
+
+            $definition.TaskName | Should -Be "OpenPath-RuntimeDependencyApply"
+            $definition.Action.Argument | Should -Match ([regex]::Escape('C:\OpenPath\scripts\Apply-RuntimeDependencyQueue.ps1'))
+            $definition.Settings.ExecutionTimeLimit.TotalMinutes | Should -Be 2
+        }
+
         It "Accepts custom interval parameters" -Skip:(-not ((Test-FunctionExists 'Register-OpenPathTask') -and (Test-IsAdmin))) {
             # Just verify the function signature works
             { Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 2 -WhatIf } | Should -Not -Throw
         }
 
         It "Includes daily silent agent update task" {
+            $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "ScheduledTaskCatalog.ps1"
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Services.TaskBuilders.ps1"
+            $catalogContent = Get-Content $catalogPath -Raw
             $content = Get-Content $helperPath -Raw
 
-            $content.Contains('$TaskPrefix-AgentUpdate') | Should -BeTrue
-            $content.Contains('self-update --silent') | Should -BeTrue
+            $catalogContent.Contains('$prefix-AgentUpdate') | Should -BeTrue
+            $catalogContent.Contains('self-update --silent') | Should -BeTrue
+            $content.Contains('Get-OpenPathScheduledTaskSpec -TaskType AgentUpdate') | Should -BeTrue
         }
 
         It "Includes on-demand runtime dependency apply task" {
+            $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "ScheduledTaskCatalog.ps1"
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Services.TaskBuilders.ps1"
             $servicesPath = Join-Path $PSScriptRoot ".." "lib" "Services.psm1"
             $installerPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $catalogContent = Get-Content $catalogPath -Raw
             $helperContent = Get-Content $helperPath -Raw
             $servicesContent = Get-Content $servicesPath -Raw
             $installerContent = Get-Content $installerPath -Raw
 
+            Assert-ContentContainsAll -Content $catalogContent -Needles @(
+                '$prefix-RuntimeDependencyApply',
+                'scripts\Apply-RuntimeDependencyQueue.ps1',
+                'GrantUsersRunAccess = $true'
+            )
             Assert-ContentContainsAll -Content $helperContent -Needles @(
                 'function New-OpenPathRuntimeDependencyApplyTaskDefinition',
-                'Apply-RuntimeDependencyQueue.ps1',
-                '-TaskName "$TaskPrefix-RuntimeDependencyApply"',
+                'Get-OpenPathScheduledTaskSpec -TaskType RuntimeDependencyApply',
+                '-TaskName $taskSpec.Name',
                 '-ExecutionTimeLimit (New-TimeSpan -Minutes 2)'
             )
             Assert-ContentContainsAll -Content $servicesContent -Needles @(
@@ -83,6 +165,47 @@ Describe "Services Module" {
     }
 
     Context "Start-OpenPathTask" {
+        It "uses the TaskRunner adapter for successful task starts" {
+            $runnerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "TaskRunner.ps1"
+            Test-Path $runnerPath | Should -BeTrue
+
+            . $runnerPath
+            $calls = @()
+            $runner = New-OpenPathFakeTaskRunner -RunResults @{
+                "OpenPath-Update" = @{ success = $true; exitCode = 0; elapsedMs = 3 }
+            } -OnRun {
+                param([string]$TaskName)
+                $script:calls += $TaskName
+            }
+
+            $result = Invoke-OpenPathScheduledTask -TaskName "OpenPath-Update" -Runner $runner
+
+            $result.success | Should -BeTrue
+            $result.taskName | Should -Be "OpenPath-Update"
+            $script:calls | Should -Contain "OpenPath-Update"
+        }
+
+        It "returns timeout evidence from the fake TaskRunner wait path" {
+            $runnerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "TaskRunner.ps1"
+            . $runnerPath
+            $runner = New-OpenPathFakeTaskRunner -RunResults @{
+                "OpenPath-RuntimeDependencyApply" = @{ success = $true; exitCode = 0; elapsedMs = 2 }
+            } -WaitResults @{
+                "OpenPath-RuntimeDependencyApply" = @{ success = $false; timedOut = $true; elapsedMs = 14000; error = "Timed out waiting for task condition" }
+            }
+
+            $result = Invoke-OpenPathScheduledTask `
+                -TaskName "OpenPath-RuntimeDependencyApply" `
+                -Runner $runner `
+                -TimeoutSeconds 14 `
+                -WaitCondition { $false }
+
+            $result.success | Should -BeFalse
+            $result.timedOut | Should -BeTrue
+            $result.error | Should -Be "Timed out waiting for task condition"
+            $result.waitMs | Should -Be 14000
+        }
+
         It "Accepts SSE as a valid task type" -Skip:(-not (Test-FunctionExists 'Start-OpenPathTask')) {
             # Verify the SSE task type is accepted in the ValidateSet
             { Start-OpenPathTask -TaskType SSE -WhatIf } | Should -Not -Throw

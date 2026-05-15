@@ -4,10 +4,13 @@
 # Import common functions
 $modulePath = Split-Path $PSScriptRoot -Parent
 Import-Module "$modulePath\lib\Common.psm1" -ErrorAction SilentlyContinue
+. (Join-Path $PSScriptRoot 'internal\ScheduledTaskCatalog.ps1')
+. (Join-Path $PSScriptRoot 'internal\TaskRunner.ps1')
 . (Join-Path $PSScriptRoot 'internal\Services.TaskBuilders.ps1')
 
-$script:TaskPrefix = "OpenPath"
-$script:UsersRunTaskAce = '(A;;GRGX;;;BU)'
+$script:ScheduledTaskCatalog = Get-OpenPathScheduledTaskCatalog
+$script:TaskPrefix = $script:ScheduledTaskCatalog.Prefix
+$script:UsersRunTaskAce = $script:ScheduledTaskCatalog.UsersRunTaskAce
 
 function Grant-OpenPathTaskRunAccessToUsers {
     param(
@@ -70,7 +73,6 @@ function Register-OpenPathTask {
 
     $updateDefinition = New-OpenPathUpdateTaskDefinition `
         -OpenPathRoot $openPathRoot `
-        -TaskPrefix $script:TaskPrefix `
         -UpdateIntervalMinutes $UpdateIntervalMinutes `
         -Principal $updatePrincipal `
         -DefaultSettings $updateSettings
@@ -80,7 +82,6 @@ function Register-OpenPathTask {
 
     $runtimeDependencyDefinition = New-OpenPathRuntimeDependencyApplyTaskDefinition `
         -OpenPathRoot $openPathRoot `
-        -TaskPrefix $script:TaskPrefix `
         -Principal $updatePrincipal
     Register-OpenPathTaskDefinition -Definition $runtimeDependencyDefinition
     Grant-OpenPathTaskRunAccessToUsers -TaskName $runtimeDependencyDefinition.TaskName | Out-Null
@@ -88,7 +89,6 @@ function Register-OpenPathTask {
 
     $watchdogDefinition = New-OpenPathWatchdogTaskDefinition `
         -OpenPathRoot $openPathRoot `
-        -TaskPrefix $script:TaskPrefix `
         -WatchdogIntervalMinutes $WatchdogIntervalMinutes `
         -Principal $updatePrincipal `
         -DefaultSettings $updateSettings
@@ -97,7 +97,6 @@ function Register-OpenPathTask {
 
     $startupDefinition = New-OpenPathStartupTaskDefinition `
         -OpenPathRoot $openPathRoot `
-        -TaskPrefix $script:TaskPrefix `
         -Principal $updatePrincipal `
         -DefaultSettings $updateSettings
     Register-OpenPathTaskDefinition -Definition $startupDefinition
@@ -105,14 +104,12 @@ function Register-OpenPathTask {
 
     $sseDefinition = New-OpenPathSseTaskDefinition `
         -OpenPathRoot $openPathRoot `
-        -TaskPrefix $script:TaskPrefix `
         -Principal $updatePrincipal
     Register-OpenPathTaskDefinition -Definition $sseDefinition
     Write-OpenPathLog "Registered: $($sseDefinition.TaskName) (persistent SSE listener)"
 
     $agentUpdateDefinition = New-OpenPathAgentUpdateTaskDefinition `
         -OpenPathRoot $openPathRoot `
-        -TaskPrefix $script:TaskPrefix `
         -Principal $updatePrincipal
     Register-OpenPathTaskDefinition -Definition $agentUpdateDefinition
     Write-OpenPathLog "Registered: $($agentUpdateDefinition.TaskName) (daily silent software update)"
@@ -182,14 +179,17 @@ function Start-OpenPathTask {
         [string]$TaskType = "Update"
     )
 
-    $taskName = "$script:TaskPrefix-$TaskType"
+    $taskName = (Get-OpenPathScheduledTaskSpec -TaskType $TaskType).Name
 
     if (-not $PSCmdlet.ShouldProcess($taskName, "Start scheduled task")) {
         return $false
     }
 
     try {
-        Start-ScheduledTask -TaskName $taskName
+        $taskResult = Invoke-OpenPathScheduledTask -TaskName $taskName
+        if ($taskResult.success -ne $true) {
+            throw $taskResult.error
+        }
         Write-OpenPathLog "Started task: $taskName"
         return $true
     }

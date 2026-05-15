@@ -1,6 +1,158 @@
 Import-Module (Join-Path $PSScriptRoot "TestHelpers.psm1") -Force
 
 Describe "Installer" {
+    Context "Phase pipeline" {
+        BeforeAll {
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Plan.ps1")
+        }
+
+        It "Builds the installer plan in execution order while preserving public parameter inputs" {
+            $inputParameters = @{
+                WhitelistUrl = 'https://allow.example.test'
+                SkipAcrylic = $true
+                SkipPreflight = $true
+                Classroom = 'math'
+                ApiUrl = 'https://api.example.test'
+                RegistrationToken = 'reg-secret'
+                EnrollmentToken = ''
+                ClassroomId = ''
+                MachineName = 'student-01'
+                FirefoxExtensionId = 'openpath@example'
+                FirefoxExtensionInstallUrl = 'https://addons.example/openpath.xpi'
+                ChromeExtensionStoreUrl = 'https://chrome.example/openpath'
+                EdgeExtensionStoreUrl = 'https://edge.example/openpath'
+                Unattended = $true
+                HealthApiSecret = 'health-secret'
+                EnforceManagedBrowserBoundary = $true
+                ApprovedStudentBrowsers = @('Firefox')
+                BrowserCleanupMode = 'ReportOnly'
+                TimingOutputPath = 'C:\OpenPath\timing.json'
+            }
+
+            $plan = New-OpenPathInstallPlan -Parameters $inputParameters -OpenPathRoot 'C:\OpenPath' -ScriptDir 'C:\pkg\windows'
+
+            $plan.Type | Should -Be 'OpenPathInstallPlan'
+            @($plan.Phases.Name) | Should -Be @(
+                'existing-install-cleanup',
+                'preflight',
+                'directories',
+                'runtime',
+                'configuration',
+                'acrylic',
+                'acrylic-configuration',
+                'local-dns',
+                'scheduled-tasks',
+                'enrollment',
+                'native-host',
+                'first-update',
+                'firefox-managed-extension-ready',
+                'realtime-updates',
+                'app-control',
+                'browser-inventory',
+                'integrity',
+                'timing',
+                'summary'
+            )
+            $plan.Context.OpenPathRoot | Should -Be 'C:\OpenPath'
+            $plan.Context.ScriptDir | Should -Be 'C:\pkg\windows'
+            $plan.Parameters.WhitelistUrl | Should -Be 'https://allow.example.test'
+            $plan.Parameters.BrowserCleanupMode | Should -Be 'ReportOnly'
+        }
+
+        It "Returns structured success and failure results for installer phases" {
+            $success = Invoke-OpenPathInstallPhase -Phase ([pscustomobject]@{
+                    Name = 'configuration'
+                    Step = 3
+                    TotalSteps = 7
+                    Status = 'Creando configuracion'
+                    Inputs = @{ WhitelistUrl = 'https://allow.example.test'; RegistrationToken = 'secret-token' }
+                    RecoveryHint = 'Check installer configuration inputs.'
+                    Action = { param($Context) $Context.Value = 42 }
+                }) -Context ([pscustomobject]@{ Value = 0 })
+
+            $success.Type | Should -Be 'OpenPathInstallResult'
+            $success.Name | Should -Be 'configuration'
+            $success.Success | Should -BeTrue
+            $success.Status | Should -Be 'success'
+            $success.DurationMs | Should -BeGreaterOrEqual 0
+            $success.Inputs.WhitelistUrl | Should -Be 'https://allow.example.test'
+            $success.Inputs.RegistrationToken | Should -Be '<redacted>'
+            $success.Error | Should -BeNullOrEmpty
+
+            $failure = Invoke-OpenPathInstallPhase -Phase ([pscustomobject]@{
+                    Name = 'enrollment'
+                    Step = 9
+                    TotalSteps = 7
+                    Status = 'Registrando equipo'
+                    Inputs = @{ EnrollmentToken = 'enroll-secret'; MachineName = 'student-01' }
+                    RecoveryHint = 'Re-run enrollment after checking API URL and token.'
+                    Action = { throw 'registration failed' }
+                }) -Context ([pscustomobject]@{})
+
+            $failure.Type | Should -Be 'OpenPathInstallResult'
+            $failure.Name | Should -Be 'enrollment'
+            $failure.Success | Should -BeFalse
+            $failure.Status | Should -Be 'failed'
+            $failure.Inputs.EnrollmentToken | Should -Be '<redacted>'
+            $failure.Inputs.MachineName | Should -Be 'student-01'
+            $failure.Error.Message | Should -BeLike '*registration failed*'
+            $failure.Error.Category | Should -Not -BeNullOrEmpty
+            $failure.RecoveryHint | Should -Be 'Re-run enrollment after checking API URL and token.'
+        }
+
+        It "Keeps Install-OpenPath public parameters compatible while using the phase pipeline helper" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '[string]$WhitelistUrl = ""',
+                '[switch]$SkipAcrylic',
+                '[switch]$SkipPreflight',
+                '[string]$Classroom = ""',
+                '[string]$ApiUrl = ""',
+                '[string]$RegistrationToken = ""',
+                '[string]$EnrollmentToken = ""',
+                '[string]$ClassroomId = ""',
+                '[string]$MachineName = ""',
+                '[string]$FirefoxExtensionId = ""',
+                '[string]$FirefoxExtensionInstallUrl = ""',
+                '[string]$ChromeExtensionStoreUrl = ""',
+                '[string]$EdgeExtensionStoreUrl = ""',
+                '[switch]$Unattended',
+                '[string]$HealthApiSecret = ""',
+                '[switch]$EnforceManagedBrowserBoundary',
+                '[string[]]$ApprovedStudentBrowsers = @(''Firefox'')',
+                '[string]$BrowserCleanupMode = ''ReportOnly''',
+                '[string]$TimingOutputPath = ""',
+                'Installer.Plan.ps1',
+                'New-OpenPathInstallPlan',
+                'Invoke-OpenPathInstallPhase'
+            )
+        }
+
+        It "Executes representative installer phases through structured phase results" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $phaseNames = @(
+                'configuration',
+                'acrylic',
+                'scheduled-tasks',
+                'enrollment',
+                'native-host',
+                'first-update',
+                'app-control',
+                'browser-inventory',
+                'integrity',
+                'timing',
+                'summary'
+            )
+
+            foreach ($phaseName in $phaseNames) {
+                $content | Should -Match "Invoke-OpenPathPlanned(?:Warning)?Phase -Name '$phaseName'"
+            }
+        }
+    }
+
     Context "ACL lockdown" {
         It "Sets restrictive file permissions during installation" {
             $scriptPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
@@ -57,6 +209,7 @@ Describe "Installer" {
                 '$firefoxNativeHostTarget = "$OpenPathRoot\browser-extension\firefox\native"',
                 'OpenPath-NativeHost.ps1',
                 'OpenPath-NativeHost.cmd',
+                'TaskRunner.ps1',
                 'NativeHost.State.ps1',
                 'NativeHost.Protocol.ps1',
                 'NativeHost.Actions.ps1',
@@ -554,8 +707,9 @@ Describe "Installer" {
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 '[CmdletBinding(SupportsShouldProcess)]',
-                'Show-InstallerProgress -Step 1 -Total 7 -Status ''Creando estructura de directorios''',
+                'Invoke-OpenPathPlannedPhase -Name ''directories''',
                 'Installer.Progress.ps1',
+                "Installer.Plan.ps1",
                 "Installer.ChromiumGuidance.ps1"
             )
 

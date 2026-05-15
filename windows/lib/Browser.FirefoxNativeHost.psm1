@@ -90,6 +90,7 @@ function Sync-OpenPathFirefoxNativeHostArtifacts {
         'RuntimeDependency.Policy.ps1',
         'RuntimeDependency.Queue.ps1',
         'RuntimeDependency.Overlay.ps1',
+        'TaskRunner.ps1',
         'NativeHost.State.ps1',
         'NativeHost.Protocol.ps1',
         'NativeHost.Actions.ps1'
@@ -261,6 +262,7 @@ function Unregister-OpenPathFirefoxNativeHost {
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'RuntimeDependency.Policy.ps1'),
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'RuntimeDependency.Queue.ps1'),
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'RuntimeDependency.Overlay.ps1'),
+        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'TaskRunner.ps1'),
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'NativeHost.State.ps1'),
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'NativeHost.Protocol.ps1'),
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'NativeHost.Actions.ps1'),

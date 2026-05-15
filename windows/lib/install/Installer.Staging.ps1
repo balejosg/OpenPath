@@ -208,6 +208,7 @@ function Copy-OpenPathInstallerRuntime {
         'RuntimeDependency.Policy.ps1',
         'RuntimeDependency.Queue.ps1',
         'RuntimeDependency.Overlay.ps1',
+        'TaskRunner.ps1',
         'NativeHost.State.ps1',
         'NativeHost.Protocol.ps1',
         'NativeHost.Actions.ps1'

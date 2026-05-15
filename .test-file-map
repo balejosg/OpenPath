@@ -286,6 +286,7 @@ windows/Rotate-Token.ps1|windows/tests/Windows.Tests.ps1
 windows/Uninstall-OpenPath.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/install/Installer.ChromiumGuidance.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Progress.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/install/Installer.Plan.ps1|windows/tests/Windows.Installer.Tests.ps1
 windows/lib/install/Installer.Config.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Dns.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Enrollment.ps1|windows/tests/Windows.Tests.ps1
@@ -303,6 +304,8 @@ windows/lib/internal/Common.Whitelist.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/RuntimeDependency.Policy.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/RuntimeDependency.Queue.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/RuntimeDependency.Overlay.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/ScheduledTaskCatalog.ps1|windows/tests/Windows.Services.Tests.ps1
+windows/lib/internal/TaskRunner.ps1|windows/tests/Windows.Services.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1
 windows/lib/internal/AcrylicHostsModel.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/AcrylicHostsRenderer.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/AcrylicConfigWriter.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
