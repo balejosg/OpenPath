@@ -1,4 +1,8 @@
 Describe "Update Script" {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
+    }
+
     Context "Concurrency guard" {
         It "Update runtime uses a global mutex lock" {
             $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
@@ -118,11 +122,46 @@ Describe "Update Script" {
                 'STALE_FAILSAFE'
             )
 
-            $helperContent | Should -Match 'Restore-OpenPathProtectedMode -Config \$Config'
+            $helperContent | Should -Match 'Invoke-OpenPathEndpointStateRepairPlan -Plan \$repairPlan -Config \$Config'
         }
     }
 
     Context "Protected mode recovery" {
+        It "Uses the shared endpoint reconciler for update/apply protected-mode decisions" {
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $applyHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
+            $stateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointPolicyState.ps1"
+            $reconcilerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1"
+            $runtimeContent = Get-Content $runtimePath -Raw
+            $applyContent = Get-Content $applyHelperPath -Raw
+            $stateContent = Get-Content $stateHelperPath -Raw
+            $reconcilerContent = Get-Content $reconcilerPath -Raw
+
+            Assert-ContentContainsAll -Content $runtimeContent -Needles @(
+                'EndpointPolicyState.ps1',
+                'EndpointStateReconciler.ps1'
+            )
+
+            Assert-ContentContainsAll -Content $stateContent -Needles @(
+                'function Get-OpenPathEndpointPolicyState',
+                'IsDisabled',
+                'ProtectedModeEligible'
+            )
+
+            Assert-ContentContainsAll -Content $reconcilerContent -Needles @(
+                'function New-OpenPathEndpointStateRepairPlan',
+                'function Invoke-OpenPathEndpointStateRepairPlan',
+                'RestoreProtectedMode',
+                'RemoveBrowserPolicy'
+            )
+
+            Assert-ContentContainsAll -Content $applyContent -Needles @(
+                'Get-OpenPathEndpointPolicyState',
+                'New-OpenPathEndpointStateRepairPlan',
+                'Invoke-OpenPathEndpointStateRepairPlan'
+            )
+        }
+
         It "Restores local DNS and firewall through the shared helper after applying a valid whitelist" {
             $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
             $applyHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
@@ -132,11 +171,10 @@ Describe "Update Script" {
             $rollbackContent = Get-Content $rollbackHelperPath -Raw
 
             $content | Should -Match '(?s)elseif \(\$downloadResult\.Whitelist\.IsDisabled\).*?Handle-OpenPathDisabledWhitelist'
-            $applyContent | Should -Match '(?s)Handle-OpenPathDisabledWhitelist.*?Restore-OriginalDNS'
+            $applyContent | Should -Match '(?s)Handle-OpenPathDisabledWhitelist.*?Invoke-OpenPathEndpointStateRepairPlan'
             $applyContent | Should -Match '(?s)Handle-OpenPathDisabledWhitelist.*?# DESACTIVADO.*?Set-Content \$WhitelistPath'
-            $applyContent | Should -Match '(?s)Handle-OpenPathDisabledWhitelist.*?Remove-BrowserPolicy -PreserveFirefoxManagedExtension'
             $applyContent | Should -Match '(?s)Handle-OpenPathNotModified.*?IsDisabled.*?FAIL_OPEN.*?remote_disable_marker_not_modified'
-            $applyContent | Should -Match '(?s)Handle-OpenPathWhitelistApply.*?Invoke-OpenPathRuntimeDependencyQueueApply.*?Restore-OpenPathProtectedMode -Config \$Config'
+            $applyContent | Should -Match '(?s)Handle-OpenPathWhitelistApply.*?Invoke-OpenPathRuntimeDependencyQueueApply.*?Invoke-OpenPathEndpointStateRepairPlan'
             $rollbackContent | Should -Match '(?s)Falling back to backup whitelist rollback.*?Restore-OpenPathProtectedMode -Config \$Config -ErrorAction SilentlyContinue'
         }
 
@@ -144,8 +182,8 @@ Describe "Update Script" {
             $applyHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
             $applyContent = Get-Content $applyHelperPath -Raw
 
-            $applyContent | Should -Match '(?s)Handle-OpenPathNotModified.*?\$runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply.*?if \(\$runtimeDependencyQueueChanged\).*?Restore-OpenPathProtectedMode -Config \$Config'
-            $applyContent | Should -Match '(?s)Handle-OpenPathDownloadFailure.*?\$runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply.*?if \(\$runtimeDependencyQueueChanged\).*?Restore-OpenPathProtectedMode -Config \$Config'
+            $applyContent | Should -Match '(?s)Handle-OpenPathNotModified.*?\$runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply.*?-QueueChanged \$runtimeDependencyQueueChanged.*?Invoke-OpenPathEndpointStateRepairPlan'
+            $applyContent | Should -Match '(?s)Handle-OpenPathDownloadFailure.*?\$runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply.*?-QueueChanged \$runtimeDependencyQueueChanged.*?Invoke-OpenPathEndpointStateRepairPlan'
         }
 
         It "Provides a queue-only runtime dependency fast apply without remote download" {

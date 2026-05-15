@@ -45,9 +45,13 @@ function Handle-OpenPathDownloadFailure {
     Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
 
     $runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath
-    if ($runtimeDependencyQueueChanged) {
-        Restore-OpenPathProtectedMode -Config $Config | Out-Null
-    }
+    $policyState = Get-OpenPathEndpointPolicyState `
+        -WhitelistSections (Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath)
+    $repairPlan = New-OpenPathEndpointStateRepairPlan `
+        -PolicyState $policyState `
+        -Mode 'CachedWhitelist' `
+        -QueueChanged $runtimeDependencyQueueChanged
+    Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
 
     $cachedAgeHours = Get-OpenPathFileAgeHours -Path $WhitelistPath
     if ($EnableStaleFailsafe -and $StaleWhitelistMaxAgeHours -gt 0 -and $cachedAgeHours -ge $StaleWhitelistMaxAgeHours) {
@@ -81,10 +85,10 @@ function Handle-OpenPathNotModified {
     )
 
     $localWhitelistSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
-    if ($localWhitelistSections.IsDisabled) {
-        if (Get-Command -Name 'Clear-OpenPathRuntimeDependencyOverlay' -ErrorAction SilentlyContinue) {
-            Clear-OpenPathRuntimeDependencyOverlay | Out-Null
-        }
+    $policyState = Get-OpenPathEndpointPolicyState -WhitelistSections $localWhitelistSections
+    if ($policyState.IsDisabled) {
+        $repairPlan = New-OpenPathEndpointStateRepairPlan -PolicyState $policyState -Mode 'FailOpenMarkerOnly'
+        Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
         Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist
         Write-OpenPathLog "Whitelist not modified and local fail-open marker remains active"
 
@@ -106,9 +110,11 @@ function Handle-OpenPathNotModified {
 
     Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
     $runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath
-    if ($runtimeDependencyQueueChanged) {
-        Restore-OpenPathProtectedMode -Config $Config | Out-Null
-    }
+    $repairPlan = New-OpenPathEndpointStateRepairPlan `
+        -PolicyState $policyState `
+        -Mode 'CachedWhitelist' `
+        -QueueChanged $runtimeDependencyQueueChanged
+    Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
     Write-OpenPathLog "Whitelist not modified (ETag) - skipping apply"
 
     try {
@@ -141,12 +147,10 @@ function Handle-OpenPathDisabledWhitelist {
     Write-OpenPathLog "DEACTIVATION FLAG detected - entering fail-open mode" -Level WARN
 
     "# DESACTIVADO" | Set-Content $WhitelistPath -Encoding UTF8
-    if (Get-Command -Name 'Clear-OpenPathRuntimeDependencyOverlay' -ErrorAction SilentlyContinue) {
-        Clear-OpenPathRuntimeDependencyOverlay | Out-Null
-    }
-    Restore-OriginalDNS
-    Remove-OpenPathFirewall
-    Remove-BrowserPolicy -PreserveFirefoxManagedExtension
+    $policyState = Get-OpenPathEndpointPolicyState `
+        -WhitelistSections ([PSCustomObject]@{ IsDisabled = $true })
+    $repairPlan = New-OpenPathEndpointStateRepairPlan -PolicyState $policyState -Mode 'FailOpen'
+    Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
     Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath -ClearWhitelist
     Clear-StaleFailsafeState -StaleFailsafeStatePath $StaleFailsafeStatePath
 
@@ -183,13 +187,16 @@ function Handle-OpenPathWhitelistApply {
     Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
 
     Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $WhitelistPath | Out-Null
-    Restore-OpenPathProtectedMode -Config $Config | Out-Null
-
-    if ($Config.enableBrowserPolicies) {
-        Set-AllBrowserPolicy -BlockedPaths $Whitelist.BlockedPaths -Config $Config
-    }
-
-    Restore-OpenPathProtectedMode -Config $Config -SkipAcrylicRestart | Out-Null
+    $policyState = Get-OpenPathEndpointPolicyState `
+        -WhitelistSections (Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath)
+    $repairPlan = New-OpenPathEndpointStateRepairPlan `
+        -PolicyState $policyState `
+        -Mode 'ApplyWhitelist' `
+        -EnableBrowserPolicies:([bool]$Config.enableBrowserPolicies)
+    Invoke-OpenPathEndpointStateRepairPlan `
+        -Plan $repairPlan `
+        -Config $Config `
+        -BlockedPaths $Whitelist.BlockedPaths | Out-Null
 
     Clear-StaleFailsafeState -StaleFailsafeStatePath $StaleFailsafeStatePath
 

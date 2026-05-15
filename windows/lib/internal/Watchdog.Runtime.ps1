@@ -36,6 +36,9 @@ function Restore-CheckpointFromWatchdog {
     }
 }
 
+. (Join-Path $PSScriptRoot 'EndpointPolicyState.ps1')
+. (Join-Path $PSScriptRoot 'EndpointStateReconciler.ps1')
+
 function Invoke-OpenPathWatchdogPrechecks {
     param(
         [AllowNull()]
@@ -83,12 +86,16 @@ function Invoke-OpenPathWatchdogChecks {
     $recoveryEligibleIssues = @()
     $localWhitelistPath = Join-Path $OpenPathRoot 'data\whitelist.txt'
     $localWhitelistSections = $null
-    $failOpenActive = $false
+    $policyState = Get-OpenPathEndpointPolicyState -PortalModeActive:$PortalModeActive
 
     try {
         $localWhitelistSections = Get-OpenPathWhitelistSectionsFromFile -Path $localWhitelistPath
-        $failOpenActive = [bool]$localWhitelistSections.IsDisabled
-        if ($failOpenActive) {
+        $staleFailsafeCurrentlyActive = Test-Path $StaleFailsafeStatePath
+        $policyState = Get-OpenPathEndpointPolicyState `
+            -WhitelistSections $localWhitelistSections `
+            -PortalModeActive:$PortalModeActive `
+            -StaleFailsafeActive:$staleFailsafeCurrentlyActive
+        if ($policyState.FailOpenActive) {
             Write-OpenPathLog "Watchdog: local fail-open whitelist marker active; skipping protected-mode DNS/firewall recovery" -Level WARN
         }
     }
@@ -96,15 +103,17 @@ function Invoke-OpenPathWatchdogChecks {
         Write-OpenPathLog "Watchdog: Error reading local whitelist state: $_" -Level WARN
     }
 
-    $shouldRunProtectedModeChecks = -not $PortalModeActive -and -not $failOpenActive
+    $shouldRunProtectedModeChecks = [bool]$policyState.ProtectedModeEligible
 
     try {
         $acrylicService = if ($shouldRunProtectedModeChecks) { Get-Service -DisplayName "*Acrylic*" -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
-        if ($shouldRunProtectedModeChecks -and (-not $acrylicService -or $acrylicService.Status -ne 'Running')) {
-            $issues += "Acrylic service not running"
-            $recoveryEligibleIssues += "Acrylic service not running"
-            Write-OpenPathLog "Watchdog: Acrylic service not running, attempting restart..." -Level WARN
-            Start-AcrylicService
+        $repairPlan = New-OpenPathWatchdogProtectedModeRepairPlan `
+            -PolicyState $policyState `
+            -AcrylicServiceRunning:(-not $shouldRunProtectedModeChecks -or ($acrylicService -and $acrylicService.Status -eq 'Running'))
+        if ($repairPlan.Actions.Count -gt 0) {
+            $issues += @($repairPlan.Issues)
+            $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
+            Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
         }
     }
     catch {
@@ -113,11 +122,12 @@ function Invoke-OpenPathWatchdogChecks {
 
     try {
         if ($shouldRunProtectedModeChecks -and -not (Test-DNSResolution)) {
-            $issues += "DNS resolution failed for allowed domain"
-            $recoveryEligibleIssues += "DNS resolution failed for allowed domain"
-            Write-OpenPathLog "Watchdog: DNS resolution failed, restarting Acrylic..." -Level WARN
-            Restart-AcrylicService
-            Start-Sleep -Seconds 3
+            $repairPlan = New-OpenPathWatchdogProtectedModeRepairPlan `
+                -PolicyState $policyState `
+                -DnsResolutionHealthy:$false
+            $issues += @($repairPlan.Issues)
+            $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
+            Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
         }
     }
     catch {
@@ -126,8 +136,11 @@ function Invoke-OpenPathWatchdogChecks {
 
     try {
         if ($shouldRunProtectedModeChecks -and -not (Test-DNSSinkhole -Domain "this-should-be-blocked-test-12345.com")) {
-            $issues += "DNS sinkhole not working"
-            $recoveryEligibleIssues += "DNS sinkhole not working"
+            $repairPlan = New-OpenPathWatchdogProtectedModeRepairPlan `
+                -PolicyState $policyState `
+                -DnsSinkholeHealthy:$false
+            $issues += @($repairPlan.Issues)
+            $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
             Write-OpenPathLog "Watchdog: Sinkhole not working properly" -Level WARN
         }
     }
@@ -137,14 +150,12 @@ function Invoke-OpenPathWatchdogChecks {
 
     try {
         if ($shouldRunProtectedModeChecks -and -not (Test-FirewallActive)) {
-            $issues += "Firewall rules not active"
-            $recoveryEligibleIssues += "Firewall rules not active"
-            Write-OpenPathLog "Watchdog: Firewall rules missing, reconfiguring..." -Level WARN
-            if (-not $Config) {
-                $Config = Get-OpenPathConfig
-            }
-            $acrylicPath = Get-AcrylicPath
-            Set-OpenPathFirewall -UpstreamDNS $Config.primaryDNS -AcrylicPath $acrylicPath
+            $repairPlan = New-OpenPathWatchdogProtectedModeRepairPlan `
+                -PolicyState $policyState `
+                -FirewallActive:$false
+            $issues += @($repairPlan.Issues)
+            $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
+            Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
         }
     }
     catch {
@@ -156,10 +167,12 @@ function Invoke-OpenPathWatchdogChecks {
             Where-Object { $_.ServerAddresses -contains "127.0.0.1" }
 
         if ($shouldRunProtectedModeChecks -and -not $dnsServers) {
-            $issues += "Local DNS not configured"
-            $recoveryEligibleIssues += "Local DNS not configured"
-            Write-OpenPathLog "Watchdog: Local DNS not configured, fixing..." -Level WARN
-            Set-LocalDNS
+            $repairPlan = New-OpenPathWatchdogProtectedModeRepairPlan `
+                -PolicyState $policyState `
+                -LocalDnsConfigured:$false
+            $issues += @($repairPlan.Issues)
+            $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
+            Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
         }
     }
     catch {
@@ -254,7 +267,7 @@ function Invoke-OpenPathWatchdogChecks {
         RecoveryEligibleIssues = @($recoveryEligibleIssues)
         StaleFailsafeActive = $staleFailsafeActive
         IntegrityTampered = $integrityTampered
-        FailOpenActive = $failOpenActive
+        FailOpenActive = [bool]$policyState.FailOpenActive
     }
 }
 

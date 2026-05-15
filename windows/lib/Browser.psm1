@@ -7,6 +7,7 @@ Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxPolicy.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxConfig.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxNativeHost.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot\Browser.ReadinessFacts.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.RequestReadiness.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Diagnostics.psm1" -Force -ErrorAction Stop
@@ -377,6 +378,9 @@ function Set-AllBrowserPolicy {
 Export-ModuleMember -Function @(
     'Get-OpenPathBrowserDoctorReport',
     'Get-OpenPathBrowserRequestReadiness',
+    'Get-OpenPathFirefoxReadinessFacts',
+    'Get-OpenPathChromiumReadinessFacts',
+    'Get-OpenPathAppControlReadinessFacts',
     'Get-OpenPathBrowserInventory',
     'Get-OpenPathBrowserInventoryUninstallEntries',
     'Get-OpenPathBrowserInventoryFileCandidates',

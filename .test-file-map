@@ -269,6 +269,8 @@ windows/lib/internal/Update.Script.Apply.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Update.Script.Rollback.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Watchdog.FailCount.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Watchdog.Runtime.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/EndpointPolicyState.ps1|windows/tests/Windows.Update.Tests.ps1,windows/tests/Windows.Watchdog.Tests.ps1
+windows/lib/internal/EndpointStateReconciler.ps1|windows/tests/Windows.Update.Tests.ps1,windows/tests/Windows.Watchdog.Tests.ps1
 windows/lib/internal/Services.TaskBuilders.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/RotateToken.Compat.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/Firewall.psm1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
@@ -284,6 +286,7 @@ windows/Install-OpenPath.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.b
 windows/OpenPath.ps1|windows/tests/Windows.Tests.ps1
 windows/Rotate-Token.ps1|windows/tests/Windows.Tests.ps1
 windows/Uninstall-OpenPath.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
+windows/lib/Browser.ReadinessFacts.psm1|windows/tests/Windows.Browser.RequestReadiness.Tests.ps1
 windows/lib/install/Installer.ChromiumGuidance.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Progress.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Plan.ps1|windows/tests/Windows.Installer.Tests.ps1

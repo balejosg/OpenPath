@@ -1,4 +1,8 @@
 Describe "Watchdog Script" {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
+    }
+
     Context "Module import resilience" {
         It "Uses the shared standalone bootstrap helper" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
@@ -114,6 +118,37 @@ Describe "Watchdog Script" {
     }
 
     Context "Watchdog health states" {
+        It "Uses the shared endpoint reconciler for protected DNS and firewall repair ordering" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $stateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointPolicyState.ps1"
+            $reconcilerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1"
+            $helperContent = Get-Content $helperPath -Raw
+            $stateContent = Get-Content $stateHelperPath -Raw
+            $reconcilerContent = Get-Content $reconcilerPath -Raw
+
+            Assert-ContentContainsAll -Content $helperContent -Needles @(
+                'EndpointPolicyState.ps1',
+                'EndpointStateReconciler.ps1',
+                'Get-OpenPathEndpointPolicyState',
+                'New-OpenPathWatchdogProtectedModeRepairPlan',
+                'Invoke-OpenPathEndpointStateRepairPlan'
+            )
+
+            Assert-ContentContainsAll -Content $stateContent -Needles @(
+                'function Get-OpenPathEndpointPolicyState',
+                'FailOpenActive',
+                'ProtectedModeEligible'
+            )
+
+            Assert-ContentContainsAll -Content $reconcilerContent -Needles @(
+                'function New-OpenPathWatchdogProtectedModeRepairPlan',
+                'StartAcrylicService',
+                'RestartAcrylicService',
+                'SetOpenPathFirewall',
+                'SetLocalDns'
+            )
+        }
+
         It "Reports FAIL_OPEN, STALE_FAILSAFE and CRITICAL states" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
@@ -143,10 +178,10 @@ Describe "Watchdog Script" {
             )
 
             Assert-ContentContainsAll -Content $helperContent -Needles @(
-                '$failOpenActive = [bool]$localWhitelistSections.IsDisabled',
-                '$shouldRunProtectedModeChecks = -not $PortalModeActive -and -not $failOpenActive',
+                '$policyState = Get-OpenPathEndpointPolicyState',
+                '$shouldRunProtectedModeChecks = [bool]$policyState.ProtectedModeEligible',
                 'Watchdog: local fail-open whitelist marker active; skipping protected-mode DNS/firewall recovery',
-                'FailOpenActive = $failOpenActive',
+                'FailOpenActive = [bool]$policyState.FailOpenActive',
                 '$status = ''FAIL_OPEN''',
                 'fail_open_active'
             )

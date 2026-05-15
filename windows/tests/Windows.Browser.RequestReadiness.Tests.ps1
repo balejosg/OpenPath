@@ -53,6 +53,60 @@ Describe "Browser Module - Request Readiness" {
     BeforeAll {
         $modulePath = Join-Path $PSScriptRoot ".." "lib"
         Import-Module (Join-Path $modulePath "Browser.RequestReadiness.psm1") -Force -Global -ErrorAction Stop
+        Import-Module (Join-Path $modulePath "Browser.ReadinessFacts.psm1") -Force -Global -ErrorAction Stop
+    }
+
+    Context "Readiness fact collectors" {
+        It "Collects Firefox readiness facts behind mocked probes" {
+            Mock Get-OpenPathFirefoxManagedExtensionPolicy { New-FirefoxManagedPolicy } -ModuleName Browser.ReadinessFacts
+            Mock Test-OpenPathFirefoxNativeHostRegistrationProof { $true } -ModuleName Browser.ReadinessFacts
+            Mock Get-OpenPathFirefoxNativeStatePath { "C:\OpenPath\native-host\state.json" } -ModuleName Browser.ReadinessFacts
+            Mock Test-Path { $true } -ModuleName Browser.ReadinessFacts -ParameterFilter { $Path -eq "C:\OpenPath\native-host\state.json" }
+            Mock Test-OpenPathFirefoxMachineExtensionPolicy { $true } -ModuleName Browser.ReadinessFacts
+
+            $facts = Get-OpenPathFirefoxReadinessFacts
+
+            $facts.ManagedExtensionReady | Should -BeTrue
+            $facts.MachinePolicyApplied | Should -BeTrue
+            $facts.NativeHostRegistered | Should -BeTrue
+            $facts.NativeHostStatePresent | Should -BeTrue
+            $facts.NativeHostReady | Should -BeTrue
+            Should -Invoke Get-OpenPathFirefoxManagedExtensionPolicy -ModuleName Browser.ReadinessFacts -Times 1 -Exactly
+            Should -Invoke Test-OpenPathFirefoxNativeHostRegistrationProof -ModuleName Browser.ReadinessFacts -Times 1 -Exactly
+            Should -Invoke Test-Path -ModuleName Browser.ReadinessFacts -Times 1 -Exactly
+            Should -Invoke Test-OpenPathFirefoxMachineExtensionPolicy -ModuleName Browser.ReadinessFacts -Times 1 -Exactly
+        }
+
+        It "Collects Chromium readiness facts from registry policy probes and inventory" {
+            Mock Test-OpenPathChromiumExtensionForcelistReady { $Browser -eq 'Edge' } -ModuleName Browser.ReadinessFacts
+            Mock Get-OpenPathChromiumDohMode { if ($Browser -eq 'Edge') { 'off' } else { 'automatic' } } -ModuleName Browser.ReadinessFacts
+            Mock Get-OpenPathChromiumUrlBlocklist { if ($Browser -eq 'Edge') { New-ChromiumUrlBlocklist } else { @() } } -ModuleName Browser.ReadinessFacts
+
+            $facts = Get-OpenPathChromiumReadinessFacts `
+                -ApprovedStudentBrowsers @('Firefox', 'Edge') `
+                -BrowserInventory (New-BrowserInventory -ApprovedBrowsers @('Mozilla Firefox', 'Microsoft Edge'))
+
+            $facts.Edge.Installed | Should -BeTrue
+            $facts.Edge.Approved | Should -BeTrue
+            $facts.Edge.ManagedExtensionReady | Should -BeTrue
+            $facts.Edge.DohModeReady | Should -BeTrue
+            $facts.Edge.UrlBlocklistReady | Should -BeTrue
+            $facts.Chrome.Installed | Should -BeFalse
+            $facts.Chrome.Approved | Should -BeFalse
+            $facts.Chrome.ManagedExtensionReady | Should -BeFalse
+            Should -Invoke Test-OpenPathChromiumExtensionForcelistReady -ModuleName Browser.ReadinessFacts -Times 2 -Exactly
+            Should -Invoke Get-OpenPathChromiumDohMode -ModuleName Browser.ReadinessFacts -Times 2 -Exactly
+            Should -Invoke Get-OpenPathChromiumUrlBlocklist -ModuleName Browser.ReadinessFacts -Times 2 -Exactly
+        }
+
+        It "Collects AppControl readiness facts through the AppControl probe" {
+            Mock Test-OpenPathNonAdminAppControlActive { $true } -ModuleName Browser.ReadinessFacts
+
+            $facts = Get-OpenPathAppControlReadinessFacts
+
+            $facts.Active | Should -BeTrue
+            Should -Invoke Test-OpenPathNonAdminAppControlActive -ModuleName Browser.ReadinessFacts -Times 1 -Exactly
+        }
     }
 
     It "Reports complete Windows browser request readiness facts" {

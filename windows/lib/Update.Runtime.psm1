@@ -45,6 +45,9 @@ function Initialize-OpenPathUpdateRuntimeSession {
     ) `
         -ScriptName 'Update-OpenPath.ps1' | Out-Null
 
+    . (Join-Path $OpenPathRoot 'lib\internal\EndpointPolicyState.ps1')
+    . (Join-Path $OpenPathRoot 'lib\internal\EndpointStateReconciler.ps1')
+
     $script:OpenPathUpdateRuntimeSessionInitialized = $true
     $script:OpenPathUpdateRuntimeRoot = $OpenPathRoot
 }
