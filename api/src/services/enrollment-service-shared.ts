@@ -163,6 +163,7 @@ try {
         '-ClassroomId', $ClassroomId,
         '-EnrollmentToken', $EnrollmentToken,
         '-Unattended',
+        '-SkipPreflight',
         '-TimingOutputPath', $InstallTimingPath
     )
 
