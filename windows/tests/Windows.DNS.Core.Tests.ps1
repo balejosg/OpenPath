@@ -86,6 +86,172 @@ Describe "DNS Module" {
             Mock Get-OpenPathProtectedDomains { @('raw.githubusercontent.com') } -ModuleName DNS
         }
 
+        It "Exposes runtime dependency policy, queue, and overlay as split internal modules" {
+            $internalPath = Join-Path $PSScriptRoot ".." "lib" "internal"
+            $policyPath = Join-Path $internalPath "RuntimeDependency.Policy.ps1"
+            $queuePath = Join-Path $internalPath "RuntimeDependency.Queue.ps1"
+            $overlayPath = Join-Path $internalPath "RuntimeDependency.Overlay.ps1"
+            $dnsModulePath = Join-Path $PSScriptRoot ".." "lib" "DNS.psm1"
+            $dnsModuleContent = Get-Content $dnsModulePath -Raw
+
+            Test-Path $policyPath | Should -BeTrue
+            Test-Path $queuePath | Should -BeTrue
+            Test-Path $overlayPath | Should -BeTrue
+            $dnsModuleContent | Should -Match "RuntimeDependency\.Policy\.ps1"
+            $dnsModuleContent | Should -Match "RuntimeDependency\.Queue\.ps1"
+            $dnsModuleContent | Should -Match "RuntimeDependency\.Overlay\.ps1"
+            ([regex]::Matches($dnsModuleContent, "RuntimeDependency\.Policy\.ps1")).Count | Should -Be 1
+            ([regex]::Matches($dnsModuleContent, "RuntimeDependency\.Queue\.ps1")).Count | Should -Be 1
+            ([regex]::Matches($dnsModuleContent, "RuntimeDependency\.Overlay\.ps1")).Count | Should -Be 1
+
+            $policyContent = Get-Content $policyPath -Raw
+            $policyContent | Should -Match 'function Test-OpenPathRuntimeDependencyCandidate'
+            $policyContent | Should -Match 'Sensitive fields are not accepted'
+            $policyContent | Should -Match 'Protected hosts are not accepted as runtime dependencies'
+            $policyContent | Should -Match 'Blocked hosts are not accepted as runtime dependencies'
+        }
+
+        It "Validates runtime dependency policy without accepting URLs, headers, bodies, or tokens" {
+            InModuleScope DNS {
+                $state = [PSCustomObject]@{
+                    apiUrl = 'https://api.openpath.example'
+                    whitelistUrl = 'https://api.openpath.example/w/token/whitelist.txt'
+                }
+                $valid = Test-OpenPathRuntimeDependencyCandidate `
+                    -Message ([PSCustomObject]@{
+                        anchorHost = 'www.reddit.com'
+                        dependencyHost = 'www.redditstatic.com'
+                        requestType = 'script'
+                    }) `
+                    -WhitelistedDomains @('reddit.com') `
+                    -BlockedSubdomains @() `
+                    -State $state
+                $valid.Valid | Should -BeTrue
+                $valid.AnchorHost | Should -Be 'www.reddit.com'
+                $valid.DependencyHost | Should -Be 'www.redditstatic.com'
+                $valid.RequestType | Should -Be 'script'
+
+                $sensitive = Test-OpenPathRuntimeDependencyCandidate `
+                    -Message ([PSCustomObject]@{
+                        anchorHost = 'www.reddit.com'
+                        dependencyHost = 'www.redditstatic.com'
+                        requestType = 'script'
+                        url = 'https://www.redditstatic.com/app.js?token=secret'
+                        headers = @{ Authorization = 'Bearer secret' }
+                        body = 'secret'
+                        token = 'secret'
+                    }) `
+                    -WhitelistedDomains @('reddit.com') `
+                    -BlockedSubdomains @() `
+                    -State $state
+                $sensitive.Valid | Should -BeFalse
+                $sensitive.Result.error | Should -Be 'Sensitive fields are not accepted'
+
+                $protected = Test-OpenPathRuntimeDependencyCandidate `
+                    -Message ([PSCustomObject]@{
+                        anchorHost = 'www.reddit.com'
+                        dependencyHost = 'download.windowsupdate.com'
+                        requestType = 'script'
+                    }) `
+                    -WhitelistedDomains @('reddit.com') `
+                    -BlockedSubdomains @() `
+                    -State $state
+                $protected.Valid | Should -BeFalse
+                $protected.Result.error | Should -Be 'Protected hosts are not accepted as runtime dependencies'
+
+                $blocked = Test-OpenPathRuntimeDependencyCandidate `
+                    -Message ([PSCustomObject]@{
+                        anchorHost = 'www.reddit.com'
+                        dependencyHost = 'ads.redditstatic.com'
+                        requestType = 'script'
+                    }) `
+                    -WhitelistedDomains @('reddit.com') `
+                    -BlockedSubdomains @('ads.redditstatic.com') `
+                    -State $state
+                $blocked.Valid | Should -BeFalse
+                $blocked.Result.error | Should -Be 'Blocked hosts are not accepted as runtime dependencies'
+            }
+        }
+
+        It "Writes runtime dependency queue requests with only sanitized host fields and batch-compatible shape" {
+            InModuleScope DNS {
+                $queuePath = Join-Path $TestDrive "runtime-dependency-queue"
+                $first = Write-OpenPathRuntimeDependencyQueueRequest `
+                    -AnchorHost 'WWW.Reddit.Com.' `
+                    -DependencyHost 'WWW.RedditStatic.Com.' `
+                    -RequestType 'Script' `
+                    -QueuePath $queuePath
+                $second = Write-OpenPathRuntimeDependencyQueueRequest `
+                    -AnchorHost 'www.reddit.com' `
+                    -DependencyHost 'www.redditstatic.com' `
+                    -RequestType 'script' `
+                    -QueuePath $queuePath
+
+                $second | Should -Be $first
+                $files = @(Get-ChildItem -Path $queuePath -Filter '*.json' -File)
+                $files.Count | Should -Be 1
+                $request = Get-Content $files[0].FullName -Raw | ConvertFrom-Json
+
+                $request.anchorHost | Should -Be 'www.reddit.com'
+                $request.dependencyHost | Should -Be 'www.redditstatic.com'
+                $request.requestType | Should -Be 'script'
+                $request.PSObject.Properties.Name | Should -Contain 'anchorHost'
+                $request.PSObject.Properties.Name | Should -Contain 'dependencyHost'
+                $request.PSObject.Properties.Name | Should -Contain 'requestType'
+                $request.PSObject.Properties.Name | Should -Not -Contain 'url'
+                $request.PSObject.Properties.Name | Should -Not -Contain 'headers'
+                $request.PSObject.Properties.Name | Should -Not -Contain 'body'
+                $request.PSObject.Properties.Name | Should -Not -Contain 'token'
+            }
+        }
+
+        It "Dedupe, prunes expired runtime dependency overlay entries, and enforces capacity" {
+            InModuleScope DNS {
+                $overlayPath = Join-Path $TestDrive "runtime-dependency-overlay.json"
+                $now = [DateTimeOffset]::UtcNow
+                $entries = @(
+                    [PSCustomObject]@{
+                        dependencyHost = 'old.example'
+                        anchorHost = 'www.reddit.com'
+                        requestTypes = @('image')
+                        firstSeen = $now.AddDays(-3).ToString('o')
+                        lastSeen = $now.AddDays(-3).ToString('o')
+                        expiresAt = $now.AddDays(-1).ToString('o')
+                        source = 'firefox-webrequest-local'
+                    },
+                    [PSCustomObject]@{
+                        dependencyHost = 'cdn-one.example'
+                        anchorHost = 'www.reddit.com'
+                        requestTypes = @('script')
+                        firstSeen = $now.AddMinutes(-10).ToString('o')
+                        lastSeen = $now.AddMinutes(-10).ToString('o')
+                        expiresAt = $now.AddDays(1).ToString('o')
+                        source = 'firefox-webrequest-local'
+                    }
+                )
+                Write-OpenPathRuntimeDependencyOverlay -Entries $entries -Path $overlayPath
+
+                $updated = Update-OpenPathRuntimeDependencyOverlay `
+                    -Entries (Read-OpenPathRuntimeDependencyOverlay -Path $overlayPath) `
+                    -Requests @(
+                        [PSCustomObject]@{ anchorHost = 'www.reddit.com'; dependencyHost = 'cdn-one.example'; requestType = 'image' },
+                        [PSCustomObject]@{ anchorHost = 'www.reddit.com'; dependencyHost = 'cdn-two.example'; requestType = 'script' },
+                        [PSCustomObject]@{ anchorHost = 'www.reddit.com'; dependencyHost = 'cdn-three.example'; requestType = 'script' }
+                    ) `
+                    -WhitelistedDomains @('reddit.com') `
+                    -BlockedSubdomains @() `
+                    -Capacity 2 `
+                    -TtlDays 7
+
+                $updated.Entries.Count | Should -Be 2
+                $updated.Entries.dependencyHost | Should -Not -Contain 'old.example'
+                $updated.Entries.dependencyHost | Should -Contain 'cdn-one.example'
+                $cdnOne = @($updated.Entries | Where-Object { $_.dependencyHost -eq 'cdn-one.example' })[0]
+                @($cdnOne.requestTypes) | Should -Contain 'script'
+                @($cdnOne.requestTypes) | Should -Contain 'image'
+            }
+        }
+
         It "Generates valid hosts content" -Skip:(-not ((Test-FunctionExists 'Test-AcrylicInstalled') -and (Test-FunctionExists 'Update-AcrylicHost') -and (Test-AcrylicInstalled))) {
             $result = Update-AcrylicHost -WhitelistedDomains @("example.com", "test.com") -BlockedSubdomains @()
             $result | Should -BeTrue
@@ -378,27 +544,50 @@ Describe "DNS Module" {
         It "Keeps Acrylic hosts modeling and rendering split into helpers" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "DNS.psm1"
             $configPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Config.ps1"
+            $modelPath = Join-Path $PSScriptRoot ".." "lib" "internal" "AcrylicHostsModel.ps1"
+            $rendererPath = Join-Path $PSScriptRoot ".." "lib" "internal" "AcrylicHostsRenderer.ps1"
             $moduleContent = Get-Content $modulePath -Raw
             $configContent = Get-Content $configPath -Raw
+            $modelContent = Get-Content $modelPath -Raw
+            $rendererContent = Get-Content $rendererPath -Raw
 
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                "AcrylicHostsModel.ps1",
+                "AcrylicHostsRenderer.ps1",
                 "DNS.Acrylic.Install.ps1",
                 "DNS.Acrylic.Config.ps1",
                 "DNS.Acrylic.Service.ps1",
                 "DNS.Diagnostics.ps1"
             )
 
-            Assert-ContentContainsAll -Content $configContent -Needles @(
-                'function Get-OpenPathDnsSettings',
+            Assert-ContentContainsAll -Content $modelContent -Needles @(
                 "'NX *'",
                 'function Get-AcrylicForwardRules',
-                'function New-AcrylicHostsDefinition',
-                'function ConvertTo-AcrylicHostsContent',
-                '$definition = New-AcrylicHostsDefinition',
-                '$content = ConvertTo-AcrylicHostsContent -Definition $definition',
-                '"FW $normalizedDomain"',
-                '"FW >$normalizedDomain"'
+                'function New-AcrylicHostsDefinition'
             )
+            Assert-ContentContainsAll -Content $rendererContent -Needles @(
+                'function ConvertTo-AcrylicHostsContent'
+            )
+            Assert-ContentContainsAll -Content $configContent -Needles @(
+                'function Get-OpenPathDnsSettings',
+                '$definition = New-AcrylicHostsDefinition',
+                '$content = ConvertTo-AcrylicHostsContent -Definition $definition'
+            )
+            foreach ($movedFunction in @(
+                    'Resolve-SslipIpv4Address',
+                    'Get-AcrylicForwardRules',
+                    'New-AcrylicHostsDefinition',
+                    'ConvertTo-AcrylicHostsContent',
+                    'Set-AcrylicGlobalSetting',
+                    'Set-AcrylicAllowedAddress',
+                    'Get-OpenPathRuntimeDependencyOverlayPath',
+                    'Read-OpenPathRuntimeDependencyOverlay',
+                    'Write-OpenPathRuntimeDependencyOverlay',
+                    'Invoke-OpenPathRuntimeDependencyQueue',
+                    'Normalize-OpenPathRuntimeDependencyHost'
+                )) {
+                $configContent | Should -Not -Match "function\s+$movedFunction\b"
+            }
 
             $configContent | Should -Not -Match '\$content = @"'
         }
@@ -442,17 +631,15 @@ Describe "DNS Module" {
                 }
             } -ModuleName DNS
             Mock Test-Path { $false } -ModuleName DNS -ParameterFilter { $Path -like '*AcrylicConfiguration.ini' }
-            Mock Set-Content {
+            Mock Write-AcrylicConfigFile {
                 param(
                     [string]$Path,
-                    [string]$Value,
-                    [string]$Encoding,
-                    [switch]$Force
+                    [string]$Content
                 )
 
                 if ($Path -like '*AcrylicConfiguration.ini') {
-                    $script:capturedAcrylicConfig = $Value
-                    $script:capturedAcrylicConfigEncoding = $Encoding
+                    $script:capturedAcrylicConfig = $Content
+                    $script:capturedAcrylicConfigEncoding = 'ASCII'
                 }
             } -ModuleName DNS
 
@@ -501,16 +688,14 @@ Describe "DNS Module" {
                 }
             } -ModuleName DNS
             Mock Test-Path { $false } -ModuleName DNS -ParameterFilter { $Path -like '*AcrylicConfiguration.ini' }
-            Mock Set-Content {
+            Mock Write-AcrylicConfigFile {
                 param(
                     [string]$Path,
-                    [string]$Value,
-                    [string]$Encoding,
-                    [switch]$Force
+                    [string]$Content
                 )
 
                 if ($Path -like '*AcrylicConfiguration.ini') {
-                    $script:capturedAcrylicConfig = $Value
+                    $script:capturedAcrylicConfig = $Content
                 }
             } -ModuleName DNS
 
@@ -548,21 +733,24 @@ Describe "DNS Module" {
                 }
             } -ModuleName DNS
             Mock Test-Path { $false } -ModuleName DNS
-            Mock Set-Content {
+            Mock Write-AcrylicConfigFile {
                 param(
                     [string]$Path,
-                    [string]$Value,
-                    [string]$Encoding,
-                    [switch]$Force
+                    [string]$Content
                 )
 
                 if ($Path -like '*AcrylicConfiguration.ini') {
-                    $script:capturedAcrylicConfig = $Value
+                    $script:capturedAcrylicConfig = $Content
                 }
-
+            } -ModuleName DNS
+            Mock Write-AcrylicHostsFile {
+                param(
+                    [string]$Path,
+                    [string]$Content
+                )
                 if ($Path -like '*AcrylicHosts.txt') {
-                    $script:capturedHostsContent = $Value
-                    $script:capturedHostsEncoding = $Encoding
+                    $script:capturedHostsContent = $Content
+                    $script:capturedHostsEncoding = 'ASCII'
                 }
             } -ModuleName DNS
 

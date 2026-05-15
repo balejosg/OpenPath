@@ -1,0 +1,247 @@
+function Get-OpenPathRuntimeDependencyOverlayPath {
+    [CmdletBinding()]
+    param()
+
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH) {
+        return $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
+    }
+
+    $root = if ($script:OpenPathRoot) { $script:OpenPathRoot } else { 'C:\OpenPath' }
+    if ($root -eq 'C:\OpenPath' -and -not (Test-Path 'C:\' -ErrorAction SilentlyContinue)) {
+        return 'C:\OpenPath\data\runtime-dependency-overlay.json'
+    }
+
+    return (Join-Path $root 'data\runtime-dependency-overlay.json')
+}
+
+function Get-OpenPathRuntimeDependencyOverlaySettings {
+    [CmdletBinding()]
+    param()
+
+    $ttlDays = 7
+    $capacity = 300
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_TTL_DAYS) {
+        try { $ttlDays = [Math]::Max(1, [int]$env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_TTL_DAYS) } catch { $ttlDays = 7 }
+    }
+    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_CAPACITY) {
+        try { $capacity = [Math]::Max(1, [int]$env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_CAPACITY) } catch { $capacity = 300 }
+    }
+
+    return [PSCustomObject]@{
+        TtlDays = $ttlDays
+        Capacity = $capacity
+    }
+}
+
+function Read-OpenPathRuntimeDependencyOverlay {
+    [CmdletBinding()]
+    param([string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath))
+
+    if (-not (Test-Path $Path -ErrorAction SilentlyContinue)) { return @() }
+
+    try {
+        $raw = Get-Content $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+        $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+        return @($parsed.entries)
+    }
+    catch {
+        Write-OpenPathLog "Failed to read runtime dependency overlay: $_" -Level WARN
+        return @()
+    }
+}
+
+function Write-OpenPathRuntimeDependencyOverlay {
+    [CmdletBinding()]
+    param(
+        [object[]]$Entries = @(),
+        [string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath)
+    )
+
+    $directory = Split-Path $Path -Parent
+    if ($directory -and -not (Test-Path $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    @{
+        version = 1
+        updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+        entries = @($Entries)
+    } | ConvertTo-Json -Depth 8 | Set-Content $Path -Encoding UTF8 -Force
+}
+
+function Clear-OpenPathRuntimeDependencyOverlay {
+    [CmdletBinding()]
+    param([string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath))
+
+    if (Test-Path $Path -ErrorAction SilentlyContinue) {
+        Remove-Item $Path -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Update-OpenPathRuntimeDependencyOverlay {
+    [CmdletBinding()]
+    param(
+        [object[]]$Entries = @(),
+        [object[]]$Requests = @(),
+        [string[]]$WhitelistedDomains = @(),
+        [string[]]$BlockedSubdomains = @(),
+        [int]$Capacity = 300,
+        [int]$TtlDays = 7
+    )
+
+    $whitelistSet = New-OpenPathRuntimeDependencyWhitelistSet -WhitelistedDomains $WhitelistedDomains
+    $protectedSet = Get-OpenPathRuntimeDependencyProtectedHosts
+    $now = (Get-Date).ToUniversalTime()
+    $expiresAt = $now.AddDays([Math]::Max(1, $TtlDays))
+    $keptEntries = @()
+
+    foreach ($entry in @($Entries)) {
+        $entryDependency = if ($entry.PSObject.Properties['dependencyHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $entry.dependencyHost } else { '' }
+        $entryAnchor = if ($entry.PSObject.Properties['anchorHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $entry.anchorHost } else { '' }
+        $entryExpiresAt = if ($entry.PSObject.Properties['expiresAt']) { [string]$entry.expiresAt } else { '' }
+        $isExpired = $false
+        if ($entryExpiresAt) {
+            try { $isExpired = ([DateTimeOffset]::Parse($entryExpiresAt).UtcDateTime -le $now) }
+            catch { $isExpired = $true }
+        }
+
+        if (
+            -not $entryDependency -or
+            -not $entryAnchor -or
+            $isExpired -or
+            -not (Test-OpenPathWhitelistCoversHost -Hostname $entryAnchor -WhitelistSet $whitelistSet) -or
+            (Test-OpenPathProtectedRuntimeDependencyHost -Hostname $entryAnchor -ProtectedHosts $protectedSet) -or
+            (Test-OpenPathProtectedRuntimeDependencyHost -Hostname $entryDependency -ProtectedHosts $protectedSet) -or
+            (Test-OpenPathBlockedSubdomainMatch -Domain $entryDependency -BlockedSubdomains $BlockedSubdomains)
+        ) {
+            continue
+        }
+
+        $keptEntries += $entry
+    }
+
+    $processed = 0
+    $rejected = 0
+    foreach ($request in @($Requests)) {
+        $candidate = Test-OpenPathRuntimeDependencyCandidate `
+            -Message $request `
+            -WhitelistedDomains $WhitelistedDomains `
+            -BlockedSubdomains $BlockedSubdomains `
+            -SkipOverlayCheck
+        if ($candidate.Valid -ne $true) {
+            $rejected += 1
+            continue
+        }
+
+        $updated = $false
+        foreach ($entry in $keptEntries) {
+            $entryDependency = if ($entry.PSObject.Properties['dependencyHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $entry.dependencyHost } else { '' }
+            $entryAnchor = if ($entry.PSObject.Properties['anchorHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $entry.anchorHost } else { '' }
+            if ($entryDependency -eq $candidate.DependencyHost -and $entryAnchor -eq $candidate.AnchorHost) {
+                $requestTypes = @($entry.requestTypes)
+                if ($requestTypes -notcontains $candidate.RequestType) { $requestTypes += $candidate.RequestType }
+                $entry.lastSeen = $now.ToString('o')
+                $entry.expiresAt = $expiresAt.ToString('o')
+                $entry.requestTypes = @($requestTypes | Sort-Object -Unique)
+                $updated = $true
+                break
+            }
+        }
+
+        if (-not $updated) {
+            $keptEntries += [PSCustomObject]@{
+                dependencyHost = $candidate.DependencyHost
+                anchorHost = $candidate.AnchorHost
+                requestTypes = @($candidate.RequestType)
+                firstSeen = $now.ToString('o')
+                lastSeen = $now.ToString('o')
+                expiresAt = $expiresAt.ToString('o')
+                source = 'firefox-webrequest-local'
+            }
+        }
+        $processed += 1
+    }
+
+    $boundedEntries = @(
+        $keptEntries |
+            Sort-Object @{ Expression = { if ($_.PSObject.Properties['lastSeen']) { [string]$_.lastSeen } else { '' } }; Descending = $true } |
+            Select-Object -First ([Math]::Max(1, $Capacity))
+    )
+
+    return [PSCustomObject]@{
+        Entries = $boundedEntries
+        Processed = $processed
+        Rejected = $rejected
+        Changed = ($processed -gt 0)
+    }
+}
+
+function Test-OpenPathRuntimeDependencyOverlayContainsDomains {
+    [CmdletBinding()]
+    param([string[]]$Domains = @())
+
+    if (@($Domains).Count -eq 0) { return $true }
+    $entries = @(Read-OpenPathRuntimeDependencyOverlay)
+    $entryHosts = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $entries) {
+        if ($entry.PSObject.Properties['dependencyHost']) {
+            $normalized = Normalize-OpenPathRuntimeDependencyHost -Value $entry.dependencyHost
+            if ($normalized) { [void]$entryHosts.Add($normalized) }
+        }
+    }
+    foreach ($domain in @($Domains)) {
+        $normalized = Normalize-OpenPathRuntimeDependencyHost -Value $domain
+        if (-not $normalized -or -not $entryHosts.Contains($normalized)) { return $false }
+    }
+    return $true
+}
+
+function Get-OpenPathRuntimeDependencyDomains {
+    [CmdletBinding()]
+    param(
+        [string[]]$WhitelistedDomains = @(),
+        [string[]]$BlockedSubdomains = @(),
+        [switch]$Prune
+    )
+
+    $whitelistSet = New-OpenPathRuntimeDependencyWhitelistSet -WhitelistedDomains $WhitelistedDomains
+    $protectedSet = Get-OpenPathRuntimeDependencyProtectedHosts
+    $now = Get-Date
+    $entries = @(Read-OpenPathRuntimeDependencyOverlay)
+    $keptEntries = @()
+    $domains = [System.Collections.Generic.List[string]]::new()
+    $seenDomains = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($entry in $entries) {
+        $dependencyHost = if ($entry.PSObject.Properties['dependencyHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $entry.dependencyHost } else { '' }
+        $anchorHost = if ($entry.PSObject.Properties['anchorHost']) { Normalize-OpenPathRuntimeDependencyHost -Value $entry.anchorHost } else { '' }
+        $expiresAt = if ($entry.PSObject.Properties['expiresAt']) { [string]$entry.expiresAt } else { '' }
+        $isExpired = $false
+        if ($expiresAt) {
+            try { $isExpired = ([DateTimeOffset]::Parse($expiresAt).UtcDateTime -le $now.ToUniversalTime()) }
+            catch { $isExpired = $true }
+        }
+
+        if (
+            -not $dependencyHost -or
+            -not $anchorHost -or
+            $isExpired -or
+            -not (Test-OpenPathWhitelistCoversHost -Hostname $anchorHost -WhitelistSet $whitelistSet) -or
+            (Test-OpenPathProtectedRuntimeDependencyHost -Hostname $dependencyHost -ProtectedHosts $protectedSet) -or
+            (Test-OpenPathBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains $BlockedSubdomains) -or
+            -not (Test-OpenPathDomainFormat -Domain $dependencyHost)
+        ) {
+            continue
+        }
+
+        $keptEntries += $entry
+        if ($seenDomains.Add($dependencyHost)) { [void]$domains.Add($dependencyHost) }
+    }
+
+    if ($Prune -and ($keptEntries.Count -ne $entries.Count)) {
+        Write-OpenPathRuntimeDependencyOverlay -Entries $keptEntries
+    }
+
+    return $domains.ToArray()
+}

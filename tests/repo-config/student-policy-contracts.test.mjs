@@ -1118,6 +1118,7 @@ describe('repository verification contract', () => {
   test('windows DNS renderer avoids wildcard FW rules that override blocked descendants', () => {
     const dnsModule = readText('windows/lib/DNS.psm1');
     const dnsConfigModule = readText('windows/lib/internal/DNS.Acrylic.Config.ps1');
+    const acrylicHostsModel = readText('windows/lib/internal/AcrylicHostsModel.ps1');
 
     assert.match(
       dnsModule,
@@ -1125,63 +1126,68 @@ describe('repository verification contract', () => {
       'windows/lib/DNS.psm1 should load the internal Acrylic DNS config module'
     );
     assert.match(
-      dnsConfigModule,
+      acrylicHostsModel,
       /function Get-AcrylicForwardRules/,
-      'windows/lib/internal/DNS.Acrylic.Config.ps1 should keep Acrylic wildcard forward generation in a dedicated helper'
+      'AcrylicHostsModel.ps1 should keep Acrylic wildcard forward generation in a dedicated helper'
     );
     assert.match(
-      dnsConfigModule,
+      acrylicHostsModel,
       /Get-AcrylicForwardRules -Domain \$domain -BlockedSubdomains \$BlockedSubdomains/,
       'New-AcrylicHostsDefinition should pass blocked subdomains into wildcard forward generation'
     );
     assert.match(
-      dnsConfigModule,
+      acrylicHostsModel,
       /\[string\[\]\]\$BlockedSubdomains = @\(\)/,
       'Get-AcrylicForwardRules should accept the blocked subdomain list'
     );
     assert.match(
-      dnsConfigModule,
+      acrylicHostsModel,
       /FW >\$normalizedDomain/,
       'Get-AcrylicForwardRules should still emit FW >domain when no blocked descendants exist'
     );
     assert.match(
-      dnsConfigModule,
+      acrylicHostsModel,
       /\$escapedBlockedPattern = \(\$blockedDescendants -join '\\|'\)/,
       'Get-AcrylicForwardRules should combine blocked descendants into a single negative-lookahead pattern'
     );
     assert.match(
-      dnsConfigModule,
+      acrylicHostsModel,
       /\$escapedDomain = \[regex\]::Escape\(\$normalizedDomain\)/,
       'Get-AcrylicForwardRules should escape the forwarded parent domain before building the regex rule'
     );
     assert.match(
-      dnsConfigModule,
+      acrylicHostsModel,
       /"FW \/\^\(\?!.*\$escapedBlockedPattern.*\$escapedDomain\$"/,
       'Get-AcrylicForwardRules should emit a regex-based FW rule that excludes blocked descendants when needed'
     );
     assert.ok(
-      !dnsConfigModule.includes(
+      !acrylicHostsModel.includes(
         '"FW /^(?!(?:.*\\.)?(?:$escapedBlockedPattern)$).*\\.$escapedDomain$/"'
       ),
       'Get-AcrylicForwardRules should not emit a trailing slash in Acrylic regex rules'
     );
     assert.match(
-      dnsConfigModule,
+      acrylicHostsModel,
       /if \(\$blockedDescendants\.Count -eq 0\) \{[\s\S]*?"FW >\$normalizedDomain"[\s\S]*?\}/,
       'Get-AcrylicForwardRules should keep the wildcard FW shortcut only for domains without blocked descendants'
+    );
+    assert.doesNotMatch(
+      dnsConfigModule,
+      /function Get-AcrylicForwardRules/,
+      'DNS.Acrylic.Config.ps1 should consume the split Acrylic hosts model instead of owning renderer internals'
     );
   });
 
   test('windows DNS renderer keeps essential domains on unconditional wildcard forwarding', () => {
-    const dnsConfigModule = readText('windows/lib/internal/DNS.Acrylic.Config.ps1');
+    const acrylicHostsModel = readText('windows/lib/internal/AcrylicHostsModel.ps1');
 
     assert.match(
-      dnsConfigModule,
+      acrylicHostsModel,
       /\$groupLines \+= @\(Get-AcrylicForwardRules -Domain \$normalizedDomain\)/,
       'Essential control-plane domains should keep unconditional wildcard FW rules'
     );
     assert.ok(
-      !dnsConfigModule.includes(
+      !acrylicHostsModel.includes(
         '$essentialLines += @(Get-AcrylicForwardRules -Domain $domain -BlockedSubdomains $BlockedSubdomains)'
       ),
       'Essential control-plane domains should not inherit classroom blocked-subdomain overrides'
@@ -1189,21 +1195,21 @@ describe('repository verification contract', () => {
   });
 
   test('windows DNS renderer uses documented default NXDOMAIN deny for unmatched fixture misses', () => {
-    const dnsConfigModule = readText('windows/lib/internal/DNS.Acrylic.Config.ps1');
+    const acrylicHostsModel = readText('windows/lib/internal/AcrylicHostsModel.ps1');
 
     assert.match(
-      dnsConfigModule,
+      acrylicHostsModel,
       /New-AcrylicHostsSection -Title 'DEFAULT BLOCK \(NXDOMAIN for everything else\)'[\s\S]*-Lines @\('NX \*'\)/,
       'Acrylic default deny should use the documented NX * catch-all so unmatched domains cannot forward upstream'
     );
     assert.ok(
-      !dnsConfigModule.includes(
+      !acrylicHostsModel.includes(
         "New-AcrylicHostsSection -Title 'DEFAULT BLOCK (sinkhole for everything else)'"
       ),
       'Acrylic default deny should not use a sinkhole fallback when Acrylic can return NXDOMAIN for unmatched domains'
     );
     assert.ok(
-      !dnsConfigModule.includes(
+      !acrylicHostsModel.includes(
         "New-AcrylicHostsSection -Title 'DEFAULT BLOCK (sinkhole for everything else)' -Description 'This MUST come last after FW rules.' -Lines @('0.0.0.0 *')"
       ),
       'Acrylic default deny should not rely on the bare * wildcard because CI observed it forwarding sslip fixture hosts upstream'
@@ -1296,6 +1302,7 @@ describe('repository verification contract', () => {
 
   test('windows Acrylic configuration seeds required resolver defaults for sparse portable installs', () => {
     const dnsConfigModule = readText('windows/lib/internal/DNS.Acrylic.Config.ps1');
+    const acrylicConfigWriter = readText('windows/lib/internal/AcrylicConfigWriter.ps1');
 
     for (const requiredSetting of [
       '"PrimaryServerPort" = "53"',
@@ -1316,7 +1323,7 @@ describe('repository verification contract', () => {
     }
 
     assert.ok(
-      dnsConfigModule.includes("$iniContent -notmatch '(?m)^\\[AllowedAddressesSection\\]\\s*$'"),
+      acrylicConfigWriter.includes("$Content -notmatch '(?m)^\\[AllowedAddressesSection\\]\\s*$'"),
       'Set-AcrylicConfiguration should preserve or create [AllowedAddressesSection] after the global settings block'
     );
     assert.ok(
@@ -1325,13 +1332,13 @@ describe('repository verification contract', () => {
       'Set-AcrylicConfiguration should explicitly allow local loopback requests in [AllowedAddressesSection]'
     );
     assert.match(
-      dnsConfigModule,
-      /Set-Content -Path \$hostsPath -Value \$content -Encoding ASCII -Force/,
+      acrylicConfigWriter,
+      /Set-Content -Path \$Path -Value \$Content -Encoding ASCII -Force/,
       'Update-AcrylicHost should write AcrylicHosts.txt without a UTF-8 BOM so Acrylic can parse it'
     );
     assert.match(
-      dnsConfigModule,
-      /Set-Content -Path \$configPath -Value \$iniContent -Encoding ASCII -Force/,
+      acrylicConfigWriter,
+      /Set-Content -Path \$Path -Value \$Content -Encoding ASCII -Force/,
       'Set-AcrylicConfiguration should write AcrylicConfiguration.ini without a UTF-8 BOM so Acrylic can parse [GlobalSection]'
     );
   });

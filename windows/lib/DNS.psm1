@@ -5,6 +5,12 @@ Import-Module "$modulePath\lib\Common.psm1" -ErrorAction SilentlyContinue
 $script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
 
 . (Join-Path $script:InternalModulePath 'DNS.Acrylic.Install.ps1')
+. (Join-Path $script:InternalModulePath 'RuntimeDependency.Policy.ps1')
+. (Join-Path $script:InternalModulePath 'RuntimeDependency.Queue.ps1')
+. (Join-Path $script:InternalModulePath 'RuntimeDependency.Overlay.ps1')
+. (Join-Path $script:InternalModulePath 'AcrylicHostsModel.ps1')
+. (Join-Path $script:InternalModulePath 'AcrylicHostsRenderer.ps1')
+. (Join-Path $script:InternalModulePath 'AcrylicConfigWriter.ps1')
 . (Join-Path $script:InternalModulePath 'DNS.Acrylic.Config.ps1')
 . (Join-Path $script:InternalModulePath 'DNS.Acrylic.Service.ps1')
 . (Join-Path $script:InternalModulePath 'DNS.Diagnostics.ps1')

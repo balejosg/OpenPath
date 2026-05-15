@@ -300,6 +300,12 @@ windows/lib/internal/Common.Network.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.System.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Update.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Whitelist.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/RuntimeDependency.Policy.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/RuntimeDependency.Queue.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/RuntimeDependency.Overlay.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/AcrylicHostsModel.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
+windows/lib/internal/AcrylicHostsRenderer.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
+windows/lib/internal/AcrylicConfigWriter.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/DNS.Acrylic.Config.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/DNS.Acrylic.Install.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/DNS.Acrylic.Service.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats

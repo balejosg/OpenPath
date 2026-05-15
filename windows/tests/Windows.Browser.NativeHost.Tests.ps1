@@ -126,6 +126,9 @@ Describe "Browser Module - Native Host" {
                     "OpenPath-NativeHost.cmd",
                     "RequestSetup.State.psm1",
                     "Common.Redaction.ps1",
+                    "RuntimeDependency.Policy.ps1",
+                    "RuntimeDependency.Queue.ps1",
+                    "RuntimeDependency.Overlay.ps1",
                     "NativeHost.State.ps1",
                     "NativeHost.Protocol.ps1",
                     "NativeHost.Actions.ps1"
@@ -328,6 +331,10 @@ Describe "Browser Module - Native Host" {
                 "OpenPath-NativeHost.ps1",
                 "OpenPath-NativeHost.cmd",
                 "RequestSetup.State.psm1",
+                "Common.Redaction.ps1",
+                "RuntimeDependency.Policy.ps1",
+                "RuntimeDependency.Queue.ps1",
+                "RuntimeDependency.Overlay.ps1",
                 "NativeHost.State.ps1",
                 "NativeHost.Protocol.ps1",
                 "NativeHost.Actions.ps1",
@@ -468,7 +475,10 @@ Describe "Browser Module - Native Host" {
                 '$OpenPathRoot\data\runtime-dependency-queue',
                 '"BUILTIN\Users", "Modify"',
                 'Set-Acl $runtimeDependencyQueuePath $runtimeDependencyQueueAcl',
-                "'RequestSetup.State.psm1'"
+                "'RequestSetup.State.psm1'",
+                "'RuntimeDependency.Policy.ps1'",
+                "'RuntimeDependency.Queue.ps1'",
+                "'RuntimeDependency.Overlay.ps1'"
             )
             Assert-ContentContainsAll -Content $updateRuntimeContent -Needles @(
                 'Invoke-OpenPathRuntimeDependencyQueue',
@@ -480,6 +490,7 @@ Describe "Browser Module - Native Host" {
             $nativeHostActionsContent | Should -Not -Match 'Write-NativeHostRuntimeDependencyOverlay'
             $nativeHostActionsContent | Should -Not -Match 'Read-NativeHostRuntimeDependencyOverlay'
             $nativeHostActionsContent | Should -Not -Match 'Update-AcrylicHost -WhitelistedDomains'
+            $nativeHostActionsContent | Should -Not -Match '(?s)function Find-NativeHostRuntimeDependencyQueueRequest.*?foreach \(\$requestFile'
             $nativeHostActionsContent | Should -Not -Match '\[string\]\$Host\b'
             $nativeHostActionsContent | Should -Not -Match 'foreach \(\$host in'
             $nativeHostActionsContent | Should -Not -Match '/api/requests/auto'
