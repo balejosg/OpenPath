@@ -10,6 +10,8 @@
 - Repo overview: [`README.md`](../README.md)
 - LLM agent workflow: [`AGENTS.md`](../AGENTS.md)
 - Contribution guide: [`CONTRIBUTING.md`](../CONTRIBUTING.md)
+- Code of conduct: [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md)
+- Project roadmap: [`ROADMAP.md`](../ROADMAP.md)
 - Security policy: [`SECURITY.md`](../SECURITY.md)
 - Licensing: [`LICENSING.md`](../LICENSING.md)
 

@@ -1,0 +1,42 @@
+name: Self-hosting or deployment evaluation
+description: Share blockers found while evaluating or operating OpenPath.
+title: 'eval: '
+labels: ['question']
+body:
+  - type: textarea
+    id: deployment-shape
+    attributes:
+      label: Deployment shape
+      description: Describe the target environment without secrets or private hostnames.
+      placeholder: |
+        Server OS:
+        Endpoint OS:
+        Browser path:
+        Lab size:
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Evaluation goal
+      description: What were you trying to prove or deploy?
+    validations:
+      required: true
+  - type: textarea
+    id: blocker
+    attributes:
+      label: Blocker or uncertainty
+      description: What stopped the evaluation or made the operational path unclear?
+    validations:
+      required: true
+  - type: textarea
+    id: docs
+    attributes:
+      label: Documentation used
+      description: Link the OpenPath docs you followed.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Paste sanitized logs, commands, or screenshots if available.
+      render: text

@@ -1,0 +1,37 @@
+name: Documentation improvement
+description: Report missing, stale, unclear, or hard-to-follow documentation.
+title: 'docs: '
+labels: ['documentation']
+body:
+  - type: textarea
+    id: page
+    attributes:
+      label: Which page or topic?
+      description: Link the page or name the doc section.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is unclear or missing?
+      description: Explain what you could not understand, verify, or complete.
+    validations:
+      required: true
+  - type: textarea
+    id: suggested-change
+    attributes:
+      label: Suggested improvement
+      description: A sentence, outline, screenshot, or proposed wording is enough.
+  - type: dropdown
+    id: reader
+    attributes:
+      label: Reader type
+      options:
+        - Teacher
+        - School IT
+        - Developer
+        - Security reviewer
+        - Self-hosting evaluator
+        - Unsure
+    validations:
+      required: true

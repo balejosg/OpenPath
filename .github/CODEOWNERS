@@ -1,37 +1,34 @@
-# Code Owners for whitelist project
-# These users will be automatically requested for review when PRs modify these files
+# Code owners for OpenPath.
+# These users are requested for review when pull requests modify matching paths.
 
 # Global owners (fallback for everything)
 * @balejosg
 
-# Core system libraries
-/lib/ @balejosg
-/scripts/ @balejosg
+# Core packages
+/api/ @balejosg
+/dashboard/ @balejosg
+/react-spa/ @balejosg
+/shared/ @balejosg
 
-# Installation scripts
-/install.sh @balejosg
-/uninstall.sh @balejosg
-/auto-reinstall*.sh @balejosg
-
-# Windows implementation
+# Endpoint agents
+/linux/ @balejosg
 /windows/ @balejosg
 
-# Firefox extension
+# Browser extension
 /firefox-extension/ @balejosg
 
-# Web applications
-/whitelist-web/ @balejosg
-/spa/ @balejosg
-/whitelist-request-api/ @balejosg
-/oauth-worker/ @balejosg
+# Tooling and test contracts
+/scripts/ @balejosg
+/tests/ @balejosg
 
 # CI/CD and workflows
 /.github/ @balejosg
 
-# Tests
-/tests/ @balejosg
-
 # Documentation
 /README.md @balejosg
-/CLAUDE.md @balejosg
-/design_docs/ @balejosg
+/CONTRIBUTING.md @balejosg
+/CODE_OF_CONDUCT.md @balejosg
+/ROADMAP.md @balejosg
+/SECURITY.md @balejosg
+/LICENSING.md @balejosg
+/docs/ @balejosg

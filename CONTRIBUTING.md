@@ -31,6 +31,30 @@ npm run dev --workspace=@openpath/react-spa
 npm run dev --workspace=@openpath/dashboard
 ```
 
+## First Contribution Paths
+
+If you are new to OpenPath, start with a small change that has a clear local
+verification path. Good first contributions usually fit one of these paths:
+
+- **Documentation-only:** clarify setup, self-hosting, evaluation, or classroom
+  workflow docs. Run `npm run verify:docs` and `npm run format:check`.
+- **Test-only:** add or improve focused tests for existing behavior. Use the
+  package-specific test command listed below.
+- **Frontend:** improve admin UI empty states, accessible labels, copy, or small
+  interaction details in `react-spa/`. Run
+  `npm test --workspace=@openpath/react-spa`.
+- **API or shared helpers:** improve validation, schemas, or documented helper
+  behavior in `api/` or `shared/`. Run the matching workspace test command.
+- **Firefox extension:** improve blocked-page wording, local UI behavior, or
+  tests. Run `npm test --workspace=@openpath/firefox-extension`.
+- **Teacher or school IT feedback:** use the issue templates to share classroom
+  workflows, domain needs, deployment blockers, or confusing wording. Code is
+  not required.
+
+Avoid starting with release workflows, signing, secrets, Windows DNS
+enforcement internals, or AMO packaging unless a maintainer has scoped a
+specific issue for that area.
+
 ## Conventions
 
 - Keep OpenPath agnostic of downstream wrappers, managed distributions, and tenant-specific overlays.
@@ -89,4 +113,4 @@ npm run format:check
 - Use `npm run security:secrets` and `npm run security:audit` when touching sensitive areas.
 - Report vulnerabilities via the process described in [`SECURITY.md`](SECURITY.md), not a public issue.
 - Check existing issues before creating new ones
-- Use discussions for general questions
+- Use GitHub issues for questions, classroom workflow feedback, and feature ideas until project Discussions are enabled.

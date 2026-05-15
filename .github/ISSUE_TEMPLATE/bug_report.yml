@@ -1,0 +1,66 @@
+name: Bug report
+description: Report behavior that is broken, confusing, or inconsistent with the docs.
+title: 'bug: '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve OpenPath. Please do not include secrets, student data, private hostnames, tokens, or screenshots that expose personal information.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the visible behavior and why it looks wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: Describe the behavior you expected instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - API or setup flow
+        - Admin web UI
+        - Linux endpoint agent
+        - Windows endpoint agent
+        - Firefox extension
+        - Documentation
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest sequence that shows the problem.
+      placeholder: |
+        1. Start...
+        2. Configure...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, browser, OpenPath version or commit, and deployment shape if relevant.
+      placeholder: |
+        OS:
+        Browser:
+        OpenPath version or commit:
+        Self-hosted / lab / other:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste relevant sanitized logs or attach screenshots with private data removed.
+      render: text

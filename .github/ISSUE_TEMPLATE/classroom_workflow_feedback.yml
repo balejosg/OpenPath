@@ -1,0 +1,45 @@
+name: Classroom workflow feedback
+description: Share real classroom needs, confusing wording, or policy workflows.
+title: 'feedback: '
+labels: ['question']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This template is for teachers, school staff, and anyone evaluating OpenPath in a real classroom. Code is not required.
+  - type: textarea
+    id: classroom-context
+    attributes:
+      label: Classroom context
+      description: Describe the subject, age range, device type, and lesson workflow at a high level.
+    validations:
+      required: true
+  - type: textarea
+    id: need
+    attributes:
+      label: What did you need OpenPath to do?
+      description: Describe the classroom moment, resource, or policy change you needed.
+    validations:
+      required: true
+  - type: textarea
+    id: friction
+    attributes:
+      label: What was hard, confusing, or missing?
+      description: Include wording that students or teachers did not understand if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: domains
+    attributes:
+      label: Domains or services involved
+      description: List domains only if you can share them publicly.
+      placeholder: |
+        example.edu
+        docs.example.org
+  - type: textarea
+    id: success
+    attributes:
+      label: What would a good solution look like?
+      description: Describe the simplest workflow that would have helped in class.
+    validations:
+      required: true

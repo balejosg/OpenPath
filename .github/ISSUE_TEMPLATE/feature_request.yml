@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest a capability that would make OpenPath more useful.
+title: 'feat: '
+labels: ['enhancement']
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or classroom need
+      description: Describe the real workflow or limitation this feature would address.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe what OpenPath should do from the user's point of view.
+    validations:
+      required: true
+  - type: dropdown
+    id: audience
+    attributes:
+      label: Primary audience
+      options:
+        - Teacher
+        - Student
+        - School IT
+        - Self-hosting operator
+        - Developer or integrator
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: If you already work around this, describe how.
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution interest
+      options:
+        - label: I can help test this in a classroom or lab.
+        - label: I can help write documentation.
+        - label: I can help implement or review code.

@@ -154,6 +154,7 @@ For endpoint agents, see the platform-specific guides:
 | Deployment topologies             | [`docs/evaluation/deployment-shapes.md`](docs/evaluation/deployment-shapes.md)                 |
 | Adoption and ownership boundaries | [`docs/evaluation/adoption-path.md`](docs/evaluation/adoption-path.md)                         |
 | Architecture decisions            | [`docs/ADR.md`](docs/ADR.md)                                                                   |
+| Project roadmap                   | [`ROADMAP.md`](ROADMAP.md)                                                                     |
 | Security hardening                | [`docs/SECURITY-HARDENING.md`](docs/SECURITY-HARDENING.md)                                     |
 | Full documentation map            | [`docs/INDEX.md`](docs/INDEX.md)                                                               |
 
@@ -164,7 +165,7 @@ Distractions in computer classrooms are a real, everyday problem for thousands o
 ### Ways to contribute
 
 - **Report bugs** - Found something broken? [Open an issue](https://github.com/balejosg/openpath/issues).
-- **Suggest features** - Have an idea that would help your classroom? Start a [discussion](https://github.com/balejosg/openpath/discussions).
+- **Suggest features** - Have an idea that would help your classroom? Open a feature request or classroom feedback issue.
 - **Submit code** - Pick up an open issue, fix a bug, or improve a feature. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the workflow.
 - **Improve docs** - Clearer documentation helps more schools adopt the project.
 - **Test in your school** - Real-world feedback from teachers and IT teams is invaluable.
@@ -174,6 +175,10 @@ Distractions in computer classrooms are a real, everyday problem for thousands o
 ### You don't need to be a developer
 
 If you work in education and you understand the distraction problem, your perspective matters. Design feedback, workflow suggestions, and "this doesn't make sense in a real classroom" reports are just as valuable as pull requests.
+
+Start with [`ROADMAP.md`](ROADMAP.md) to see where help is useful now, and use
+the GitHub issue templates to share classroom feedback, deployment blockers, or
+small contribution ideas.
 
 ### Developer quick reference
 
