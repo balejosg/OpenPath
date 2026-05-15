@@ -201,17 +201,36 @@ Describe "Installer" {
 
         It "Stages Windows native host assets beneath the user-readable Firefox native directory" {
             $scriptPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.ArtifactCatalog.ps1"
             $content = Get-Content $scriptPath -Raw
+
+            . $catalogPath
+            $artifactNames = @(Get-OpenPathNativeHostArtifactNames)
+            $artifactNames | Should -Contain 'OpenPath-NativeHost.ps1'
+            $artifactNames | Should -Contain 'OpenPath-NativeHost.cmd'
+            $artifactNames | Should -Contain 'NativeHost.Actions.ps1'
+
+            $scriptRoot = Join-Path $TestDrive 'package\scripts'
+            $libRoot = Join-Path $TestDrive 'package\lib'
+            $internalRoot = Join-Path $libRoot 'internal'
+            New-Item -ItemType Directory -Path $scriptRoot, $libRoot, $internalRoot -Force | Out-Null
+            New-Item -ItemType File -Path (Join-Path $scriptRoot 'OpenPath-NativeHost.ps1') -Force | Out-Null
+            New-Item -ItemType File -Path (Join-Path $internalRoot 'NativeHost.Actions.ps1') -Force | Out-Null
+
+            $candidateRoots = @(Get-OpenPathNativeHostArtifactCandidateRoots -SourceRoot $scriptRoot)
+            $resolution = Resolve-OpenPathNativeHostArtifactSources `
+                -ArtifactNames @('OpenPath-NativeHost.ps1', 'NativeHost.Actions.ps1', 'missing.ps1') `
+                -CandidateRoots $candidateRoots
+            $resolution.Sources['OpenPath-NativeHost.ps1'] | Should -Be $scriptRoot
+            $resolution.Sources['NativeHost.Actions.ps1'] | Should -Be $internalRoot
+            @($resolution.Missing) | Should -Contain 'missing.ps1'
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 '$firefoxNativeHostTarget = "$OpenPathRoot\browser-extension\firefox\native"',
-                'OpenPath-NativeHost.ps1',
-                'OpenPath-NativeHost.cmd',
-                'TaskRunner.ps1',
-                'NativeHost.State.ps1',
-                'NativeHost.Protocol.ps1',
-                'NativeHost.Actions.ps1',
-                '$nativeHostHelperRoot = Join-Path $ScriptDir ''lib\internal''',
+                'NativeHost.ArtifactCatalog.ps1',
+                'Get-OpenPathNativeHostArtifactNames',
+                'Get-OpenPathNativeHostArtifactCandidateRoots -SourceRoot $nativeHostSourceRoot',
+                'Resolve-OpenPathNativeHostArtifactSources -ArtifactNames $nativeHostArtifacts -CandidateRoots $nativeHostSourceRoots',
                 'Firefox native host assets staged in $OpenPathRoot\browser-extension\firefox\native'
             )
         }
@@ -285,9 +304,8 @@ Describe "Installer" {
             $content = Get-Content $nativeHostModulePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                '$sourceParent = if ($SourceRoot) { Split-Path $SourceRoot -Parent } else { '''' }',
-                '(Join-Path $sourceParent ''lib\internal'')',
-                '$artifactSources[$artifactName] = $artifactSource',
+                'Get-OpenPathNativeHostArtifactCandidateRoots -SourceRoot $SourceRoot -NativeRoot $nativeRoot',
+                'Resolve-OpenPathNativeHostArtifactSources -ArtifactNames $artifactNames -CandidateRoots $candidateRoots',
                 '[string]::Equals($sourcePath, $destinationPath, [System.StringComparison]::OrdinalIgnoreCase)'
             )
         }

@@ -35,6 +35,34 @@ function runWorkspaceWrapper(args) {
   });
 }
 
+function extractDryRunCommand(stdout) {
+  const commandLine = stdout.split(/\r?\n/).find((line) => line.startsWith('Command: '));
+
+  assert.ok(commandLine, `Expected dry-run Command line in output:\n${stdout}`);
+  return commandLine.slice('Command: '.length).trim().split(/\s+/);
+}
+
+function assertWindowsDirectCommand(result, expectedOptions = []) {
+  assert.equal(result.status, 0, result.stderr);
+
+  const tokens = extractDryRunCommand(result.stdout);
+  assert.deepEqual(tokens.slice(0, 5), [
+    'npm',
+    'run',
+    'diagnostics:windows:direct',
+    '--',
+    '--source-mode',
+  ]);
+
+  for (const expectedOption of expectedOptions) {
+    const optionIndex = tokens.indexOf(expectedOption.name);
+    assert.notEqual(optionIndex, -1, `Expected ${expectedOption.name} in ${tokens.join(' ')}`);
+    assert.equal(tokens[optionIndex + 1], expectedOption.value);
+  }
+
+  return tokens;
+}
+
 describe('direct OpenPath Windows runner diagnostic', () => {
   test('package.json exposes the direct Windows diagnostic entrypoint', () => {
     const packageJson = readPackageJson();
@@ -480,11 +508,31 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       '--dry-run',
     ]);
 
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(
-      result.stdout,
-      /npm run diagnostics:windows:direct -- --artifact-dir .*\.opencode\/tmp\/windows-direct-review/
-    );
+    const tokens = assertWindowsDirectCommand(result, [
+      { name: '--source-mode', value: 'runner-checkout' },
+    ]);
+    const artifactDirIndex = tokens.indexOf('--artifact-dir');
+    assert.notEqual(artifactDirIndex, -1, `Expected --artifact-dir in ${tokens.join(' ')}`);
+    assert.match(tokens[artifactDirIndex + 1], /\.opencode\/tmp\/windows-direct-review$/);
+    assert.ok(tokens.indexOf('--') < tokens.indexOf('--artifact-dir'));
+  });
+
+  test('workspace wrapper defaults windows-direct to the runner checkout source', () => {
+    const result = runWorkspaceWrapper(['openpath', 'windows-direct', '--dry-run']);
+
+    assertWindowsDirectCommand(result, [{ name: '--source-mode', value: 'runner-checkout' }]);
+  });
+
+  test('workspace wrapper forwards local-overlay source mode after the npm script separator', () => {
+    const result = runWorkspaceWrapper([
+      'openpath',
+      'windows-direct',
+      '--source-mode',
+      'local-overlay',
+      '--dry-run',
+    ]);
+
+    assertWindowsDirectCommand(result, [{ name: '--source-mode', value: 'local-overlay' }]);
   });
 
   test('workspace wrapper rejects the removed google-game-blocking direct suite', () => {

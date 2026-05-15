@@ -4,6 +4,12 @@ if (-not (Get-Command -Name 'Get-OpenPathCapabilityStoragePath' -ErrorAction Sil
         . $capabilityStoragePath
     }
 }
+if (-not (Get-Command -Name 'Get-OpenPathNativeHostArtifactNames' -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $nativeHostArtifactCatalogPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'internal\NativeHost.ArtifactCatalog.ps1'
+    if (Test-Path $nativeHostArtifactCatalogPath -ErrorAction SilentlyContinue) {
+        . $nativeHostArtifactCatalogPath
+    }
+}
 
 function Initialize-OpenPathInstallDirectories {
     param(
@@ -186,37 +192,11 @@ function Copy-OpenPathInstallerRuntime {
 
     $firefoxNativeHostTarget = "$OpenPathRoot\browser-extension\firefox\native"
     $nativeHostSourceRoot = Join-Path $ScriptDir 'scripts'
-    $nativeHostHelperRoot = Join-Path $ScriptDir 'lib\internal'
-    $nativeHostArtifacts = @(
-        'OpenPath-NativeHost.ps1',
-        'OpenPath-NativeHost.cmd',
-        'CapabilityStorage.ps1',
-        'RequestSetup.State.psm1',
-        'Common.Redaction.ps1',
-        'RuntimeDependency.Policy.ps1',
-        'RuntimeDependency.Queue.ps1',
-        'RuntimeDependency.Overlay.ps1',
-        'TaskRunner.ps1',
-        'NativeHost.State.ps1',
-        'NativeHost.Protocol.ps1',
-        'NativeHost.Actions.ps1'
-    )
-    $nativeHostSourceRoots = @($nativeHostSourceRoot, $nativeHostHelperRoot)
-    $nativeHostArtifactSources = @{}
-    $missingNativeHostArtifacts = @()
-
-    foreach ($nativeHostArtifact in $nativeHostArtifacts) {
-        $nativeHostArtifactSource = $nativeHostSourceRoots |
-            Where-Object { Test-Path (Join-Path $_ $nativeHostArtifact) } |
-            Select-Object -First 1
-
-        if ($nativeHostArtifactSource) {
-            $nativeHostArtifactSources[$nativeHostArtifact] = $nativeHostArtifactSource
-        }
-        else {
-            $missingNativeHostArtifacts += $nativeHostArtifact
-        }
-    }
+    $nativeHostArtifacts = @(Get-OpenPathNativeHostArtifactNames)
+    $nativeHostSourceRoots = @(Get-OpenPathNativeHostArtifactCandidateRoots -SourceRoot $nativeHostSourceRoot)
+    $nativeHostArtifactResolution = Resolve-OpenPathNativeHostArtifactSources -ArtifactNames $nativeHostArtifacts -CandidateRoots $nativeHostSourceRoots
+    $nativeHostArtifactSources = $nativeHostArtifactResolution.Sources
+    $missingNativeHostArtifacts = @($nativeHostArtifactResolution.Missing)
 
     if ($missingNativeHostArtifacts.Count -eq 0) {
         New-Item -ItemType Directory -Path $firefoxNativeHostTarget -Force | Out-Null

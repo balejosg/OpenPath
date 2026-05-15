@@ -121,20 +121,8 @@ Describe "Browser Module - Native Host" {
             New-Item -ItemType Directory -Path $nativeRoot -Force | Out-Null
 
             try {
-                $nativeFiles = @(
-                    "OpenPath-NativeHost.ps1",
-                    "OpenPath-NativeHost.cmd",
-                    "CapabilityStorage.ps1",
-                    "RequestSetup.State.psm1",
-                    "Common.Redaction.ps1",
-                    "RuntimeDependency.Policy.ps1",
-                    "RuntimeDependency.Queue.ps1",
-                    "RuntimeDependency.Overlay.ps1",
-                    "TaskRunner.ps1",
-                    "NativeHost.State.ps1",
-                    "NativeHost.Protocol.ps1",
-                    "NativeHost.Actions.ps1"
-                )
+                . (Join-Path $repoWindowsRoot "lib\internal\NativeHost.ArtifactCatalog.ps1")
+                $nativeFiles = @(Get-OpenPathNativeHostArtifactNames)
 
                 foreach ($nativeFile in $nativeFiles) {
                     $sourcePath = Join-Path $repoWindowsRoot "scripts\$nativeFile"
@@ -325,25 +313,44 @@ Describe "Browser Module - Native Host" {
         It "Re-stages native host artifacts before writing the Firefox manifest" {
             $browserModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.psm1"
             $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
+            $artifactCatalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.ArtifactCatalog.ps1"
             $browserContent = Get-Content $browserModulePath -Raw
             $nativeHostContent = Get-Content $nativeHostModulePath -Raw
 
+            . $artifactCatalogPath
+            $artifactNames = @(Get-OpenPathNativeHostArtifactNames)
+            $artifactNames | Should -Contain 'OpenPath-NativeHost.ps1'
+            $artifactNames | Should -Contain 'OpenPath-NativeHost.cmd'
+            $artifactNames | Should -Contain 'NativeHost.Actions.ps1'
+
+            $sourceRoot = Join-Path $TestDrive 'scripts'
+            $nativeRoot = Join-Path $TestDrive 'native'
+            $libRoot = Join-Path $TestDrive 'lib'
+            $internalRoot = Join-Path $libRoot 'internal'
+            New-Item -ItemType Directory -Path $sourceRoot, $nativeRoot, $libRoot, $internalRoot -Force | Out-Null
+
+            $candidateRoots = @(Get-OpenPathNativeHostArtifactCandidateRoots -SourceRoot $sourceRoot -NativeRoot $nativeRoot)
+            $candidateRoots | Should -Contain $sourceRoot
+            $candidateRoots | Should -Contain $libRoot
+            $candidateRoots | Should -Contain $internalRoot
+            $candidateRoots | Should -Contain $nativeRoot
+
+            New-Item -ItemType File -Path (Join-Path $sourceRoot 'OpenPath-NativeHost.ps1') -Force | Out-Null
+            New-Item -ItemType File -Path (Join-Path $internalRoot 'NativeHost.Actions.ps1') -Force | Out-Null
+            $resolution = Resolve-OpenPathNativeHostArtifactSources `
+                -ArtifactNames @('OpenPath-NativeHost.ps1', 'NativeHost.Actions.ps1', 'missing.ps1') `
+                -CandidateRoots $candidateRoots
+            $resolution.Sources['OpenPath-NativeHost.ps1'] | Should -Be $sourceRoot
+            $resolution.Sources['NativeHost.Actions.ps1'] | Should -Be $internalRoot
+            @($resolution.Missing) | Should -Contain 'missing.ps1'
+
             Assert-ContentContainsAll -Content $nativeHostContent -Needles @(
+                '. (Join-Path $PSScriptRoot ''internal\NativeHost.ArtifactCatalog.ps1'')',
                 'function Sync-OpenPathFirefoxNativeHostArtifacts',
-                "OpenPath-NativeHost.ps1",
-                "OpenPath-NativeHost.cmd",
-                "CapabilityStorage.ps1",
-                "RequestSetup.State.psm1",
-                "Common.Redaction.ps1",
-                "RuntimeDependency.Policy.ps1",
-                "RuntimeDependency.Queue.ps1",
-                "RuntimeDependency.Overlay.ps1",
-                "TaskRunner.ps1",
-                "NativeHost.State.ps1",
-                "NativeHost.Protocol.ps1",
-                "NativeHost.Actions.ps1",
-                '(Join-Path $sourceParent ''lib'')',
-                '(Join-Path $sourceParent ''lib\internal'')'
+                'Get-OpenPathNativeHostArtifactNames',
+                'Get-OpenPathNativeHostArtifactCandidateRoots -SourceRoot $SourceRoot -NativeRoot $nativeRoot',
+                'Resolve-OpenPathNativeHostArtifactSources -ArtifactNames $artifactNames -CandidateRoots $candidateRoots',
+                '[string]::Equals($sourcePath, $destinationPath, [System.StringComparison]::OrdinalIgnoreCase)'
             )
 
             Assert-ContentContainsAll -Content $browserContent -Needles @(
@@ -507,11 +514,9 @@ Describe "Browser Module - Native Host" {
             Assert-ContentContainsAll -Content $installerStagingContent -Needles @(
                 'Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue',
                 'Set-OpenPathCapabilityStorageAcl -Path $runtimeDependencyQueuePath -Profile RuntimeDependencyQueue',
-                "'CapabilityStorage.ps1'",
-                "'RequestSetup.State.psm1'",
-                "'RuntimeDependency.Policy.ps1'",
-                "'RuntimeDependency.Queue.ps1'",
-                "'RuntimeDependency.Overlay.ps1'"
+                'NativeHost.ArtifactCatalog.ps1',
+                'Get-OpenPathNativeHostArtifactNames',
+                'Resolve-OpenPathNativeHostArtifactSources'
             )
             Assert-ContentContainsAll -Content $updateRuntimeContent -Needles @(
                 'Invoke-OpenPathRuntimeDependencyQueue',

@@ -264,6 +264,7 @@ windows/lib/Update.Runtime.psm1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/NativeHost.State.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/NativeHost.Protocol.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/NativeHost.Actions.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/NativeHost.ArtifactCatalog.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1,windows/tests/Windows.Installer.Tests.ps1
 windows/lib/internal/Update.Script.Config.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Update.Script.Apply.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Update.Script.Rollback.ps1|windows/tests/Windows.Tests.ps1

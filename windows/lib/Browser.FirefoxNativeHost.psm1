@@ -4,6 +4,7 @@ $script:OpenPathRoot = "C:\OpenPath"
 Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\RequestSetup.State.psm1" -Force -ErrorAction Stop
+. (Join-Path $PSScriptRoot 'internal\NativeHost.ArtifactCatalog.ps1')
 
 function Get-OpenPathFirefoxNativeHostName {
     return 'whitelist_native_host'
@@ -80,43 +81,11 @@ function Sync-OpenPathFirefoxNativeHostArtifacts {
     $nativeRoot = Get-OpenPathFirefoxNativeHostRoot
     Ensure-OpenPathCapabilityStorageDirectory -Path $nativeRoot | Out-Null
 
-    $artifactNames = @(
-        'OpenPath-NativeHost.ps1',
-        'OpenPath-NativeHost.cmd',
-        'CapabilityStorage.ps1',
-        'RequestSetup.State.psm1',
-        'Common.Redaction.ps1',
-        'RuntimeDependency.Policy.ps1',
-        'RuntimeDependency.Queue.ps1',
-        'RuntimeDependency.Overlay.ps1',
-        'TaskRunner.ps1',
-        'NativeHost.State.ps1',
-        'NativeHost.Protocol.ps1',
-        'NativeHost.Actions.ps1'
-    )
-    $sourceParent = if ($SourceRoot) { Split-Path $SourceRoot -Parent } else { '' }
-    $candidateRoots = @($SourceRoot)
-    if (-not [string]::IsNullOrWhiteSpace($sourceParent)) {
-        $candidateRoots += (Join-Path $sourceParent 'lib')
-        $candidateRoots += (Join-Path $sourceParent 'lib\internal')
-    }
-    $candidateRoots += $nativeRoot
-    $candidateRoots = $candidateRoots | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-    $artifactSources = @{}
-    $missingArtifacts = @()
-
-    foreach ($artifactName in $artifactNames) {
-        $artifactSource = $candidateRoots |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path (Join-Path $_ $artifactName)) } |
-            Select-Object -First 1
-
-        if ($artifactSource) {
-            $artifactSources[$artifactName] = $artifactSource
-            continue
-        }
-
-        $missingArtifacts += $artifactName
-    }
+    $artifactNames = @(Get-OpenPathNativeHostArtifactNames)
+    $candidateRoots = @(Get-OpenPathNativeHostArtifactCandidateRoots -SourceRoot $SourceRoot -NativeRoot $nativeRoot)
+    $artifactResolution = Resolve-OpenPathNativeHostArtifactSources -ArtifactNames $artifactNames -CandidateRoots $candidateRoots
+    $artifactSources = $artifactResolution.Sources
+    $missingArtifacts = @($artifactResolution.Missing)
 
     if ($missingArtifacts.Count -gt 0) {
         throw "Firefox native host artifacts not found in ${SourceRoot}: $($missingArtifacts -join ', ')"
@@ -251,17 +220,7 @@ function Unregister-OpenPathFirefoxNativeHost {
 
     $paths = @(
         (Get-OpenPathFirefoxNativeHostManifestPath),
-        (Get-OpenPathFirefoxNativeHostScriptPath),
-        (Get-OpenPathFirefoxNativeHostWrapperPath),
-        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'CapabilityStorage.ps1'),
-        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'Common.Redaction.ps1'),
-        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'RuntimeDependency.Policy.ps1'),
-        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'RuntimeDependency.Queue.ps1'),
-        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'RuntimeDependency.Overlay.ps1'),
-        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'TaskRunner.ps1'),
-        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'NativeHost.State.ps1'),
-        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'NativeHost.Protocol.ps1'),
-        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'NativeHost.Actions.ps1'),
+        @((Get-OpenPathNativeHostArtifactNames) | ForEach-Object { Join-Path (Get-OpenPathFirefoxNativeHostRoot) $_ }),
         (Get-OpenPathFirefoxNativeStatePath),
         (Get-OpenPathFirefoxNativeWhitelistMirrorPath)
     )
