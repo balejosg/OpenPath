@@ -14,6 +14,7 @@ $script:DomainPattern = '^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a
 $script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
 
 . (Join-Path $script:InternalModulePath 'Common.System.ps1')
+. (Join-Path $script:InternalModulePath 'CapabilityStorage.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Redaction.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Config.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Domains.ps1')
@@ -26,6 +27,11 @@ $script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
 Export-ModuleMember -Function @(
     'Test-AdminPrivileges',
     'Write-OpenPathLog',
+    'Get-OpenPathCapabilityStorageRoot',
+    'Get-OpenPathCapabilityStoragePath',
+    'Set-OpenPathCapabilityStorageAcl',
+    'Test-OpenPathCapabilityStorageAcl',
+    'Ensure-OpenPathCapabilityStorageDirectory',
     'Get-OpenPathConfig',
     'Set-OpenPathConfig',
     'Set-OpenPathConfigValue',

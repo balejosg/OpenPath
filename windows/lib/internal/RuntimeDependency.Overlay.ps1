@@ -1,17 +1,15 @@
+if (-not (Get-Command -Name 'Get-OpenPathCapabilityStoragePath' -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $capabilityStoragePath = Join-Path $PSScriptRoot 'CapabilityStorage.ps1'
+    if (Test-Path $capabilityStoragePath -ErrorAction SilentlyContinue) {
+        . $capabilityStoragePath
+    }
+}
+
 function Get-OpenPathRuntimeDependencyOverlayPath {
     [CmdletBinding()]
     param()
 
-    if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH) {
-        return $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
-    }
-
-    $root = if ($script:OpenPathRoot) { $script:OpenPathRoot } else { 'C:\OpenPath' }
-    if ($root -eq 'C:\OpenPath' -and -not (Test-Path 'C:\' -ErrorAction SilentlyContinue)) {
-        return 'C:\OpenPath\data\runtime-dependency-overlay.json'
-    }
-
-    return (Join-Path $root 'data\runtime-dependency-overlay.json')
+    return (Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay)
 }
 
 function Get-OpenPathRuntimeDependencyOverlaySettings {
@@ -59,8 +57,8 @@ function Write-OpenPathRuntimeDependencyOverlay {
     )
 
     $directory = Split-Path $Path -Parent
-    if ($directory -and -not (Test-Path $directory)) {
-        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    if ($directory) {
+        Ensure-OpenPathCapabilityStorageDirectory -Path $directory | Out-Null
     }
 
     @{

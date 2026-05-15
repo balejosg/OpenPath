@@ -10,6 +10,73 @@ Describe "Common Module" {
         Import-Module (Join-Path $modulePath "Browser.FirefoxNativeHost.psm1") -Force -Global -ErrorAction Stop
     }
 
+    Context "Capability-sensitive storage" {
+        BeforeAll {
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CapabilityStorage.ps1")
+        }
+
+        It "Derives runtime dependency and native host storage paths from the OpenPath root" {
+            $root = Join-Path $TestDrive "OpenPath"
+
+            Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue -OpenPathRoot $root |
+                Should -Be (Join-Path $root "data\runtime-dependency-queue")
+            Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $root |
+                Should -Be (Join-Path $root "data\runtime-dependency-overlay.json")
+            Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostRoot -OpenPathRoot $root |
+                Should -Be (Join-Path $root "browser-extension\firefox\native")
+            Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostState -OpenPathRoot $root |
+                Should -Be (Join-Path $root "browser-extension\firefox\native\native-state.json")
+        }
+
+        It "Honors runtime dependency queue and overlay environment overrides" {
+            $previousQueue = $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH
+            $previousOverlay = $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
+            try {
+                $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH = Join-Path $TestDrive "queue-override"
+                $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH = Join-Path $TestDrive "overlay-override.json"
+
+                Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue -OpenPathRoot "C:\OpenPath" |
+                    Should -Be $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH
+                Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot "C:\OpenPath" |
+                    Should -Be $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
+                Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlayParent -OpenPathRoot "C:\OpenPath" |
+                    Should -Be (Split-Path $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH -Parent)
+            }
+            finally {
+                $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH = $previousQueue
+                $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH = $previousOverlay
+            }
+        }
+
+        It "Creates storage directories and applies requested ACL profiles through the central helper" {
+            $path = Join-Path $TestDrive "queue"
+
+            Mock Set-OpenPathCapabilityStorageAcl {}
+            Mock Test-OpenPathCapabilityStorageAcl { return $true }
+
+            Ensure-OpenPathCapabilityStorageDirectory -Path $path -AclProfile RuntimeDependencyQueue -ValidateAcl |
+                Should -Be $path
+
+            Test-Path $path | Should -BeTrue
+            Should -Invoke Set-OpenPathCapabilityStorageAcl -Times 1 -ParameterFilter {
+                $Path -eq $path -and $Profile -eq 'RuntimeDependencyQueue'
+            }
+            Should -Invoke Test-OpenPathCapabilityStorageAcl -Times 1 -ParameterFilter {
+                $Path -eq $path -and $Profile -eq 'RuntimeDependencyQueue'
+            }
+        }
+
+        It "Reports ACL validation failures as storage setup errors" {
+            $path = Join-Path $TestDrive "native"
+
+            Mock Set-OpenPathCapabilityStorageAcl {}
+            Mock Test-OpenPathCapabilityStorageAcl { return $false }
+
+            { Ensure-OpenPathCapabilityStorageDirectory -Path $path -AclProfile BrowserExtensionRead -ValidateAcl } |
+                Should -Throw "Capability storage ACL validation failed*"
+        }
+    }
+
     Context "Test-AdminPrivileges" {
         It "Returns a boolean value" {
             $result = InModuleScope Common {

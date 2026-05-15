@@ -10,7 +10,7 @@ function Get-OpenPathFirefoxNativeHostName {
 }
 
 function Get-OpenPathFirefoxNativeHostRoot {
-    return "$script:OpenPathRoot\browser-extension\firefox\native"
+    return (Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostRoot -OpenPathRoot $script:OpenPathRoot)
 }
 
 function Get-OpenPathFirefoxNativeHostManifestPath {
@@ -26,11 +26,11 @@ function Get-OpenPathFirefoxNativeHostWrapperPath {
 }
 
 function Get-OpenPathFirefoxNativeStatePath {
-    return "$(Get-OpenPathFirefoxNativeHostRoot)\native-state.json"
+    return (Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostState -OpenPathRoot $script:OpenPathRoot)
 }
 
 function Get-OpenPathFirefoxNativeWhitelistMirrorPath {
-    return "$(Get-OpenPathFirefoxNativeHostRoot)\whitelist.txt"
+    return (Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostWhitelistMirror -OpenPathRoot $script:OpenPathRoot)
 }
 
 function Get-OpenPathFirefoxNativeHostUpdateTaskName {
@@ -78,13 +78,12 @@ function Sync-OpenPathFirefoxNativeHostArtifacts {
     )
 
     $nativeRoot = Get-OpenPathFirefoxNativeHostRoot
-    if (-not (Test-Path $nativeRoot)) {
-        New-Item -ItemType Directory -Path $nativeRoot -Force | Out-Null
-    }
+    Ensure-OpenPathCapabilityStorageDirectory -Path $nativeRoot | Out-Null
 
     $artifactNames = @(
         'OpenPath-NativeHost.ps1',
         'OpenPath-NativeHost.cmd',
+        'CapabilityStorage.ps1',
         'RequestSetup.State.psm1',
         'Common.Redaction.ps1',
         'RuntimeDependency.Policy.ps1',
@@ -145,9 +144,7 @@ function Sync-OpenPathFirefoxNativeHostState {
     )
 
     $nativeRoot = Get-OpenPathFirefoxNativeHostRoot
-    if (-not (Test-Path $nativeRoot)) {
-        New-Item -ItemType Directory -Path $nativeRoot -Force | Out-Null
-    }
+    Ensure-OpenPathCapabilityStorageDirectory -Path $nativeRoot | Out-Null
 
     if (-not $Config) {
         try {
@@ -211,9 +208,7 @@ function Register-OpenPathFirefoxNativeHost {
     )
 
     $nativeRoot = Get-OpenPathFirefoxNativeHostRoot
-    if (-not (Test-Path $nativeRoot)) {
-        New-Item -ItemType Directory -Path $nativeRoot -Force | Out-Null
-    }
+    Ensure-OpenPathCapabilityStorageDirectory -Path $nativeRoot | Out-Null
 
     $requestSetupState = Get-OpenPathFirefoxNativeHostRequestSetupState -Config $Config
     if (-not $requestSetupState.Ready) {
@@ -258,6 +253,7 @@ function Unregister-OpenPathFirefoxNativeHost {
         (Get-OpenPathFirefoxNativeHostManifestPath),
         (Get-OpenPathFirefoxNativeHostScriptPath),
         (Get-OpenPathFirefoxNativeHostWrapperPath),
+        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'CapabilityStorage.ps1'),
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'Common.Redaction.ps1'),
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'RuntimeDependency.Policy.ps1'),
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'RuntimeDependency.Queue.ps1'),

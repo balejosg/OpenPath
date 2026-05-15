@@ -124,6 +124,7 @@ Describe "Browser Module - Native Host" {
                 $nativeFiles = @(
                     "OpenPath-NativeHost.ps1",
                     "OpenPath-NativeHost.cmd",
+                    "CapabilityStorage.ps1",
                     "RequestSetup.State.psm1",
                     "Common.Redaction.ps1",
                     "RuntimeDependency.Policy.ps1",
@@ -331,6 +332,7 @@ Describe "Browser Module - Native Host" {
                 'function Sync-OpenPathFirefoxNativeHostArtifacts',
                 "OpenPath-NativeHost.ps1",
                 "OpenPath-NativeHost.cmd",
+                "CapabilityStorage.ps1",
                 "RequestSetup.State.psm1",
                 "Common.Redaction.ps1",
                 "RuntimeDependency.Policy.ps1",
@@ -486,10 +488,11 @@ Describe "Browser Module - Native Host" {
                 'function Get-NativeHostRuntimeDependencyQueuePath',
                 'function Find-NativeHostRuntimeDependencyQueueRequest',
                 'function Write-NativeHostRuntimeDependencyQueueRequest',
+                'Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue',
+                'Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay',
                 'anchorHost',
                 'dependencyHost',
                 'requestType',
-                'runtime-dependency-queue',
                 'source = ''firefox-webrequest-local''',
                 'Sensitive fields are not accepted',
                 'reason = ''dependency-already-whitelisted''',
@@ -502,9 +505,9 @@ Describe "Browser Module - Native Host" {
                 'runtimeDependencyFallback'
             )
             Assert-ContentContainsAll -Content $installerStagingContent -Needles @(
-                '$OpenPathRoot\data\runtime-dependency-queue',
-                '"BUILTIN\Users", "Modify"',
-                'Set-Acl $runtimeDependencyQueuePath $runtimeDependencyQueueAcl',
+                'Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue',
+                'Set-OpenPathCapabilityStorageAcl -Path $runtimeDependencyQueuePath -Profile RuntimeDependencyQueue',
+                "'CapabilityStorage.ps1'",
                 "'RequestSetup.State.psm1'",
                 "'RuntimeDependency.Policy.ps1'",
                 "'RuntimeDependency.Queue.ps1'",
@@ -607,6 +610,7 @@ Describe "Browser Module - Native Host" {
             $script:MaxDomains = 50
             New-Item -ItemType Directory -Path $script:NativeRoot -Force | Out-Null
             Copy-Item (Join-Path $PSScriptRoot ".." "lib" "RequestSetup.State.psm1") -Destination (Join-Path $script:NativeRoot "RequestSetup.State.psm1") -Force
+            Copy-Item (Join-Path $PSScriptRoot ".." "lib" "internal" "CapabilityStorage.ps1") -Destination (Join-Path $script:NativeRoot "CapabilityStorage.ps1") -Force
             Copy-Item (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Redaction.ps1") -Destination (Join-Path $script:NativeRoot "Common.Redaction.ps1") -Force
 
             . $nativeHostActionsPath

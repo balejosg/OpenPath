@@ -304,6 +304,7 @@ windows/lib/internal/Common.Network.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.System.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Update.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Whitelist.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/CapabilityStorage.ps1|windows/tests/Windows.Common.Core.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1,windows/tests/Windows.Installer.Tests.ps1
 windows/lib/internal/RuntimeDependency.Policy.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/RuntimeDependency.Queue.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/RuntimeDependency.Overlay.ps1|windows/tests/Windows.Tests.ps1

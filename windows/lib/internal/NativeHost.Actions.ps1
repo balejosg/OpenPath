@@ -70,11 +70,13 @@ if (-not (Get-Command -Name 'Invoke-OpenPathScheduledTask' -ErrorAction Silently
 
 $nativeHostRuntimeDependencyCandidatePaths = @()
 if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+    $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\CapabilityStorage.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\RuntimeDependency.Policy.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\RuntimeDependency.Queue.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\RuntimeDependency.Overlay.ps1')
 }
 if ($PSScriptRoot) {
+    $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $PSScriptRoot 'CapabilityStorage.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $PSScriptRoot 'RuntimeDependency.Policy.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $PSScriptRoot 'RuntimeDependency.Queue.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $PSScriptRoot 'RuntimeDependency.Overlay.ps1')
@@ -109,11 +111,7 @@ function Get-NativeHostValidDomains {
 }
 
 function Get-NativeHostRuntimeDependencyQueuePath {
-    if ($env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH) {
-        return $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH
-    }
-
-    return (Join-Path $script:OpenPathRoot 'data\runtime-dependency-queue')
+    return (Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue -OpenPathRoot $script:OpenPathRoot)
 }
 
 function Get-NativeHostRuntimeDependencySettings {
@@ -293,12 +291,7 @@ function Test-NativeHostRuntimeDependencyOverlayContainsDomains {
         return $true
     }
 
-    $path = if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH) {
-        $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
-    }
-    else {
-        Join-Path $script:OpenPathRoot 'data\runtime-dependency-overlay.json'
-    }
+    $path = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $script:OpenPathRoot
     if (-not (Test-Path $path -ErrorAction SilentlyContinue)) {
         return $false
     }

@@ -1,13 +1,15 @@
+if (-not (Get-Command -Name 'Get-OpenPathCapabilityStoragePath' -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $capabilityStoragePath = Join-Path $PSScriptRoot 'CapabilityStorage.ps1'
+    if (Test-Path $capabilityStoragePath -ErrorAction SilentlyContinue) {
+        . $capabilityStoragePath
+    }
+}
+
 function Get-OpenPathRuntimeDependencyQueuePath {
     [CmdletBinding()]
     param()
 
-    if ($env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH) {
-        return $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH
-    }
-
-    $root = if ($script:OpenPathRoot) { $script:OpenPathRoot } else { 'C:\OpenPath' }
-    return (Join-Path $root 'data\runtime-dependency-queue')
+    return (Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue)
 }
 
 function Find-OpenPathRuntimeDependencyQueueRequest {
@@ -55,9 +57,7 @@ function Write-OpenPathRuntimeDependencyQueueRequest {
         throw 'Invalid runtime dependency queue request'
     }
 
-    if (-not (Test-Path $QueuePath -ErrorAction SilentlyContinue)) {
-        New-Item -ItemType Directory -Path $QueuePath -Force | Out-Null
-    }
+    Ensure-OpenPathCapabilityStorageDirectory -Path $QueuePath | Out-Null
 
     $existingRequestPath = Find-OpenPathRuntimeDependencyQueueRequest `
         -AnchorHost $normalizedAnchor `

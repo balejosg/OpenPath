@@ -159,9 +159,8 @@ Describe "Installer" {
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                'SetAccessRuleProtection',
-                'NT AUTHORITY\SYSTEM',
-                'BUILTIN\Administrators'
+                'Set-OpenPathCapabilityStorageAcl -Path $OpenPathRoot -Profile RestrictedRoot',
+                'CapabilityStorage.ps1'
             )
         }
 
@@ -171,8 +170,7 @@ Describe "Installer" {
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 '$browserExtensionAclPath = "$OpenPathRoot\browser-extension"',
-                'BUILTIN\Users',
-                '"ReadAndExecute"',
+                'Set-OpenPathCapabilityStorageAcl -Path $browserExtensionAclPath -Profile BrowserExtensionRead',
                 'Read access granted for browser extension artifacts'
             )
         }
@@ -1009,11 +1007,18 @@ Describe "Installer" {
         It "Passes the already loaded update config into browser policy application" {
             $applyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
             $browserPath = Join-Path $PSScriptRoot ".." "lib" "Browser.psm1"
+            $reconcilerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1"
             $applyContent = Get-Content $applyPath -Raw
             $browserContent = Get-Content $browserPath -Raw
+            $reconcilerContent = Get-Content $reconcilerPath -Raw
 
             Assert-ContentContainsAll -Content $applyContent -Needles @(
-                'Set-AllBrowserPolicy -BlockedPaths $Whitelist.BlockedPaths -Config $Config'
+                'Invoke-OpenPathEndpointStateRepairPlan `',
+                '-Config $Config `',
+                '-BlockedPaths $Whitelist.BlockedPaths'
+            )
+            Assert-ContentContainsAll -Content $reconcilerContent -Needles @(
+                'Set-AllBrowserPolicy -BlockedPaths $BlockedPaths -Config $Config'
             )
             Assert-ContentContainsAll -Content $browserContent -Needles @(
                 'function Set-AllBrowserPolicy',

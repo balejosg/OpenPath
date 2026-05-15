@@ -112,6 +112,7 @@ Describe "Watchdog Script" {
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 '$script:OpenPathRoot\lib\Update.Runtime.psm1',
+                '$script:OpenPathRoot\lib\internal\CapabilityStorage.ps1',
                 '$script:OpenPathRoot\lib\internal\NativeHost.Actions.ps1'
             )
         }

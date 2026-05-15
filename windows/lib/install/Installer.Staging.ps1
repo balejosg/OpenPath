@@ -1,3 +1,10 @@
+if (-not (Get-Command -Name 'Get-OpenPathCapabilityStoragePath' -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $capabilityStoragePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'internal\CapabilityStorage.ps1'
+    if (Test-Path $capabilityStoragePath -ErrorAction SilentlyContinue) {
+        . $capabilityStoragePath
+    }
+}
+
 function Initialize-OpenPathInstallDirectories {
     param(
         [Parameter(Mandatory = $true)]
@@ -26,19 +33,7 @@ function Initialize-OpenPathInstallDirectories {
 
     Write-InstallerVerbose "  Aplicando permisos restrictivos..."
     try {
-        $acl = Get-Acl $OpenPathRoot
-        $acl.SetAccessRuleProtection($true, $false)
-        $acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) } | Out-Null
-
-        $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            "NT AUTHORITY\SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
-        $acl.AddAccessRule($systemRule)
-
-        $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            "BUILTIN\Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
-        $acl.AddAccessRule($adminRule)
-
-        Set-Acl $OpenPathRoot $acl
+        Set-OpenPathCapabilityStorageAcl -Path $OpenPathRoot -Profile RestrictedRoot
         Write-InstallerVerbose "  Permisos aplicados (solo SYSTEM y Administradores)"
     }
     catch {
@@ -48,11 +43,7 @@ function Initialize-OpenPathInstallDirectories {
     $browserExtensionAclPath = "$OpenPathRoot\browser-extension"
     if (Test-Path $browserExtensionAclPath) {
         try {
-            $browserExtensionAcl = Get-Acl $browserExtensionAclPath
-            $usersReadRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-                "BUILTIN\Users", "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")
-            $browserExtensionAcl.AddAccessRule($usersReadRule)
-            Set-Acl $browserExtensionAclPath $browserExtensionAcl
+            Set-OpenPathCapabilityStorageAcl -Path $browserExtensionAclPath -Profile BrowserExtensionRead
             Write-InstallerVerbose "  Read access granted for browser extension artifacts"
         }
         catch {
@@ -60,14 +51,10 @@ function Initialize-OpenPathInstallDirectories {
         }
     }
 
-    $runtimeDependencyQueuePath = "$OpenPathRoot\data\runtime-dependency-queue"
+    $runtimeDependencyQueuePath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue -OpenPathRoot $OpenPathRoot
     if (Test-Path $runtimeDependencyQueuePath) {
         try {
-            $runtimeDependencyQueueAcl = Get-Acl $runtimeDependencyQueuePath
-            $usersModifyRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-                "BUILTIN\Users", "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")
-            $runtimeDependencyQueueAcl.AddAccessRule($usersModifyRule)
-            Set-Acl $runtimeDependencyQueuePath $runtimeDependencyQueueAcl
+            Set-OpenPathCapabilityStorageAcl -Path $runtimeDependencyQueuePath -Profile RuntimeDependencyQueue
             Write-InstallerVerbose "  Runtime dependency queue write access granted for browser users"
         }
         catch {
@@ -203,6 +190,7 @@ function Copy-OpenPathInstallerRuntime {
     $nativeHostArtifacts = @(
         'OpenPath-NativeHost.ps1',
         'OpenPath-NativeHost.cmd',
+        'CapabilityStorage.ps1',
         'RequestSetup.State.psm1',
         'Common.Redaction.ps1',
         'RuntimeDependency.Policy.ps1',

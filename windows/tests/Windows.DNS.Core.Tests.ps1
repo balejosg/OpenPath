@@ -833,15 +833,21 @@ Describe "DNS Module" {
     Context "Protected mode restore" {
         It "Reasserts local DNS after browser policy work during whitelist apply" {
             $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
+            $reconcilerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1"
             $content = Get-Content $scriptPath -Raw
 
-            $policyIndex = $content.IndexOf('Set-AllBrowserPolicy -BlockedPaths $Whitelist.BlockedPaths -Config $Config')
-            $restoreIndex = $content.IndexOf('Restore-OpenPathProtectedMode -Config $Config -SkipAcrylicRestart')
-            $healthIndex = $content.IndexOf('$runtimeHealth = Get-OpenPathRuntimeHealth', $restoreIndex)
+            . $reconcilerPath
+            $plan = New-OpenPathEndpointStateRepairPlan `
+                -PolicyState ([PSCustomObject]@{ ProtectedModeEligible = $true }) `
+                -Mode 'ApplyWhitelist' `
+                -EnableBrowserPolicies:$true
 
-            $policyIndex | Should -BeGreaterThan -1
-            $restoreIndex | Should -BeGreaterThan $policyIndex
-            $healthIndex | Should -BeGreaterThan $restoreIndex
+            $plan.Actions | Should -Be @(
+                'RestoreProtectedMode',
+                'SetAllBrowserPolicy',
+                'RestoreProtectedModeNoRestart'
+            )
+            $content | Should -Match '(?s)Handle-OpenPathWhitelistApply.*?-BlockedPaths \$Whitelist\.BlockedPaths.*?Get-OpenPathRuntimeHealth'
         }
     }
 }
