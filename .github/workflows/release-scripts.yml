@@ -2,7 +2,7 @@ name: Release Installation Scripts
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     paths:
       - 'VERSION'
       - 'package.json'

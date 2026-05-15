@@ -21,14 +21,18 @@ describe('repository verification contract', () => {
         relativePath: '.github/workflows/security.yml',
         required: [
           'actions/setup-node@v6',
+          'aquasecurity/trivy-action@v0.35.0',
           'github/codeql-action/init@v4',
           'github/codeql-action/analyze@v4',
           'github/codeql-action/upload-sarif@v4',
           "GITLEAKS_VERSION: '8.30.1'",
           'gitleaks dir . --redact --no-banner --no-color --verbose',
+          'npm audit --audit-level=high --json > audit-report.json || true',
+          'node scripts/check-npm-audit-critical.mjs audit-report.json',
         ],
         forbidden: [
           'actions/setup-node@v4',
+          'aquasecurity/trivy-action@master',
           'github/codeql-action/init@v3',
           'github/codeql-action/analyze@v3',
           'github/codeql-action/upload-sarif@v3',
@@ -86,6 +90,24 @@ describe('repository verification contract', () => {
       }
     }
   });
+});
+
+test('OpenPath workflows target main only', () => {
+  for (const relativePath of [
+    '.github/workflows/security.yml',
+    '.github/workflows/installer-contracts.yml',
+    '.github/workflows/e2e-tests.yml',
+    '.github/workflows/release-extension.yml',
+    '.github/workflows/release-scripts.yml',
+  ]) {
+    const workflow = readText(relativePath);
+
+    assert.ok(workflow.includes('branches: [main]'), `${relativePath} should target main`);
+    assert.ok(
+      !workflow.includes('branches: [main, master]'),
+      `${relativePath} should not target master`
+    );
+  }
 });
 
 test('verify trailers workflow exempts dependency and release bots while enforcing human pushes', () => {

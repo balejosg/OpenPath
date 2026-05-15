@@ -2,7 +2,7 @@ name: Release Firefox Extension
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     paths:
       - 'firefox-extension/**'
   workflow_dispatch:

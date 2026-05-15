@@ -2,7 +2,7 @@ name: E2E Tests
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     paths:
       - 'api/**'
       - 'shared/**'
@@ -27,7 +27,7 @@ on:
       - '.github/workflows/release-extension.yml'
       - '.github/workflows/release-scripts.yml'
   pull_request:
-    branches: [main, master]
+    branches: [main]
   workflow_dispatch:
     inputs:
       platform:
