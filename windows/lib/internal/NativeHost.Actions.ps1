@@ -27,6 +27,28 @@ function Import-NativeHostRequestSetupStateModule {
 
 Import-NativeHostRequestSetupStateModule
 
+$nativeHostRedactionCandidatePaths = @()
+if (Get-Variable -Name NativeRoot -Scope Script -ErrorAction SilentlyContinue) {
+    $nativeHostRedactionCandidatePaths += (Join-Path $script:NativeRoot 'Common.Redaction.ps1')
+}
+if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+    $nativeHostRedactionCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\Common.Redaction.ps1')
+}
+if ($PSScriptRoot) {
+    $nativeHostRedactionCandidatePaths += (Join-Path $PSScriptRoot 'Common.Redaction.ps1')
+}
+
+foreach ($nativeHostRedactionCandidatePath in ($nativeHostRedactionCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
+    if (Test-Path $nativeHostRedactionCandidatePath -ErrorAction SilentlyContinue) {
+        . $nativeHostRedactionCandidatePath
+        break
+    }
+}
+
+if (-not (Get-Command -Name 'ConvertTo-OpenPathRedactedValue' -ErrorAction SilentlyContinue)) {
+    throw 'Common.Redaction.ps1 is required for native host log redaction.'
+}
+
 function Get-NativeHostValidDomains {
     param(
         [AllowNull()]
@@ -675,8 +697,7 @@ function Format-NativeHostActionLogValue {
     )
 
     $text = ([string]$Value).Replace("`r", ' ').Replace("`n", ' ').Replace("`t", ' ')
-    $text = $text -replace '/w/[^/\s]+/whitelist\.txt', '/w/[redacted]/whitelist.txt'
-    $text = $text -replace '(?i)(token=)[^&\s]+', '$1[redacted]'
+    $text = ConvertTo-OpenPathRedactedValue -Value $text
     $text = $text -replace '\s+', ' '
     if ($text.Length -gt 240) {
         return $text.Substring(0, 240)

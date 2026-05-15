@@ -125,6 +125,7 @@ Describe "Browser Module - Native Host" {
                     "OpenPath-NativeHost.ps1",
                     "OpenPath-NativeHost.cmd",
                     "RequestSetup.State.psm1",
+                    "Common.Redaction.ps1",
                     "NativeHost.State.ps1",
                     "NativeHost.Protocol.ps1",
                     "NativeHost.Actions.ps1"
@@ -526,6 +527,7 @@ Describe "Browser Module - Native Host" {
             $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
+                'Common.Redaction.ps1',
                 'function Write-NativeHostActionLog',
                 'function Invoke-NativeHostMessageAction',
                 'Get-Command Write-NativeHostLog -ErrorAction SilentlyContinue',
@@ -543,6 +545,49 @@ Describe "Browser Module - Native Host" {
 
             $nativeHostActionsContent | Should -Not -Match ('Classroom' + 'Path')
             $nativeHostActionsContent | Should -Not -Match ('C' + 'P_')
+        }
+
+        It "Uses shared redaction for native host action log values" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            function Get-WhitelistSections {
+                return [PSCustomObject]@{
+                    Whitelist = @()
+                    BlockedSubdomains = @()
+                }
+            }
+            function global:Write-NativeHostLog {
+                param([string]$Message)
+                $global:CapturedNativeHostLog = $Message
+            }
+
+            $script:OpenPathRoot = Join-Path $TestDrive "OpenPath"
+            $script:NativeRoot = Join-Path $TestDrive "native"
+            $script:MaxDomains = 50
+            New-Item -ItemType Directory -Path $script:NativeRoot -Force | Out-Null
+            Copy-Item (Join-Path $PSScriptRoot ".." "lib" "RequestSetup.State.psm1") -Destination (Join-Path $script:NativeRoot "RequestSetup.State.psm1") -Force
+            Copy-Item (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Redaction.ps1") -Destination (Join-Path $script:NativeRoot "Common.Redaction.ps1") -Force
+
+            . $nativeHostActionsPath
+
+            Write-NativeHostActionLog `
+                -Action "get-config" `
+                -Success $true `
+                -ExtraFields @{
+                    whitelistUrl = "https://school.example/w/machine-token-123/whitelist.txt"
+                    apiUrl = "https://school.example"
+                    detail = "first`t line`nsecond line"
+                    longValue = ("x" * 260)
+                }
+
+            $global:CapturedNativeHostLog | Should -Match "whitelistUrl=https://school.example/w/\[redacted\]/whitelist.txt"
+            $global:CapturedNativeHostLog | Should -Match "apiUrl=https://school.example"
+            $global:CapturedNativeHostLog | Should -Match "detail=first line second line"
+            $global:CapturedNativeHostLog | Should -Not -Match ("x" * 241)
+            $global:CapturedNativeHostLog | Should -Not -Match "machine-token-123"
+
+            Remove-Item function:\Write-NativeHostLog -ErrorAction SilentlyContinue
+            Remove-Variable -Name CapturedNativeHostLog -Scope Global -ErrorAction SilentlyContinue
         }
 
         It "Writes native host logs with shared file access and retry tolerance" {

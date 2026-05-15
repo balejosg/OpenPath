@@ -292,7 +292,9 @@ windows/lib/install/Installer.Enrollment.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Runtime.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Staging.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Config.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/Common.Redaction.ps1|windows/tests/Windows.Config.Redaction.Tests.ps1
 windows/lib/internal/Common.Domains.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/OpenPathConfig.Model.ps1|windows/tests/Windows.Config.Redaction.Tests.ps1
 windows/lib/internal/Common.Integrity.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Network.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.System.ps1|windows/tests/Windows.Tests.ps1

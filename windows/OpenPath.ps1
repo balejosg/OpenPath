@@ -232,7 +232,8 @@ function Show-OpenPathStatus {
         }
         Write-Host "Classroom: $($config.classroom)"
         Write-Host "API URL: $($config.apiUrl)"
-        Write-Host "Whitelist URL: $($config.whitelistUrl)"
+        $redactedWhitelistUrl = ConvertTo-OpenPathRedactedValue -Value $config.whitelistUrl
+        Write-Host "Whitelist URL: $redactedWhitelistUrl"
     }
 
     if ($tasks.Count -gt 0) {
@@ -254,6 +255,7 @@ try {
     Import-Module "$openPathRoot\lib\Services.psm1" -Force
     Import-Module "$openPathRoot\lib\Browser.psm1" -Force -Global
     Import-Module "$openPathRoot\lib\Common.psm1" -Force -Global
+    . "$openPathRoot\lib\internal\Common.Redaction.ps1"
 
     $requiredCommonCommands = @(
         'Get-OpenPathConfig',

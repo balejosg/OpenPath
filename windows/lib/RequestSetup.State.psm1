@@ -1,5 +1,12 @@
 # OpenPath Windows request setup state helpers.
 
+if (-not (Get-Command -Name 'ConvertTo-OpenPathNormalizedConfig' -ErrorAction SilentlyContinue)) {
+    $modelPath = Join-Path $PSScriptRoot 'internal\OpenPathConfig.Model.ps1'
+    if (Test-Path $modelPath -ErrorAction SilentlyContinue) {
+        . $modelPath
+    }
+}
+
 function Get-OpenPathRequestSetupStringValue {
     param(
         [AllowNull()]
@@ -74,6 +81,10 @@ function Get-OpenPathRequestSetupState {
         [AllowNull()]
         [object]$Config = $null
     )
+
+    if (Get-Command -Name 'ConvertTo-OpenPathNormalizedConfig' -ErrorAction SilentlyContinue) {
+        $Config = ConvertTo-OpenPathNormalizedConfig -Config $Config
+    }
 
     $apiUrl = Get-OpenPathRequestSetupStringValue -Config $Config -PropertyNames @('requestApiUrl', 'apiUrl')
     if ($apiUrl) {

@@ -14,6 +14,7 @@ $script:DomainPattern = '^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a
 $script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
 
 . (Join-Path $script:InternalModulePath 'Common.System.ps1')
+. (Join-Path $script:InternalModulePath 'Common.Redaction.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Config.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Domains.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Http.ps1')
@@ -28,6 +29,11 @@ Export-ModuleMember -Function @(
     'Get-OpenPathConfig',
     'Set-OpenPathConfig',
     'Set-OpenPathConfigValue',
+    'Get-OpenPathConfigValue',
+    'ConvertTo-OpenPathNormalizedConfig',
+    'Test-OpenPathConfig',
+    'ConvertTo-OpenPathRedactedValue',
+    'ConvertTo-OpenPathRedactedObject',
     'Get-OpenPathFileAgeHours',
     'Get-HostFromUrl',
     'Normalize-OpenPathAlwaysAllowedDomain',

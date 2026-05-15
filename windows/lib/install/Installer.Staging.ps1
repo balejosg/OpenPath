@@ -204,6 +204,7 @@ function Copy-OpenPathInstallerRuntime {
         'OpenPath-NativeHost.ps1',
         'OpenPath-NativeHost.cmd',
         'RequestSetup.State.psm1',
+        'Common.Redaction.ps1',
         'NativeHost.State.ps1',
         'NativeHost.Protocol.ps1',
         'NativeHost.Actions.ps1'

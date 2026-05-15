@@ -51,6 +51,19 @@ Describe "Operational Command Script" {
         }
     }
 
+    Context "Status redaction" {
+        It "Redacts tokenized whitelist URLs in status output" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'Common.Redaction.ps1',
+                'ConvertTo-OpenPathRedactedValue -Value $config.whitelistUrl'
+            )
+            $content | Should -Not -Match 'Write-Host "Whitelist URL: \$\(\$config\.whitelistUrl\)"'
+        }
+    }
+
     Context "Rotate token sync" {
         It "Syncs the Firefox native host state after saving a rotated whitelist URL" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Rotate-Token.ps1"

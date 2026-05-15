@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot 'OpenPathConfig.Model.ps1')
+
 function Get-OpenPathConfig {
     <#
     .SYNOPSIS
@@ -136,32 +138,6 @@ function Set-OpenPathMachineName {
     }
 
     return $normalized
-}
-
-function Set-OpenPathConfigValue {
-    <#
-    .SYNOPSIS
-        Sets or adds a config property on the provided OpenPath config object.
-    #>
-    param(
-        [Parameter(Mandatory = $true)]
-        [PSCustomObject]$Config,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-
-        [Parameter(Mandatory = $true)]
-        [AllowNull()]
-        [AllowEmptyString()]
-        [object]$Value
-    )
-
-    if ($Config.PSObject.Properties[$Name]) {
-        $Config.$Name = $Value
-    }
-    else {
-        $Config | Add-Member -MemberType NoteProperty -Name $Name -Value $Value -Force
-    }
 }
 
 function New-OpenPathMachineRegistrationBody {

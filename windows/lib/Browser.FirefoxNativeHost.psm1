@@ -86,6 +86,7 @@ function Sync-OpenPathFirefoxNativeHostArtifacts {
         'OpenPath-NativeHost.ps1',
         'OpenPath-NativeHost.cmd',
         'RequestSetup.State.psm1',
+        'Common.Redaction.ps1',
         'NativeHost.State.ps1',
         'NativeHost.Protocol.ps1',
         'NativeHost.Actions.ps1'
@@ -253,6 +254,7 @@ function Unregister-OpenPathFirefoxNativeHost {
         (Get-OpenPathFirefoxNativeHostManifestPath),
         (Get-OpenPathFirefoxNativeHostScriptPath),
         (Get-OpenPathFirefoxNativeHostWrapperPath),
+        (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'Common.Redaction.ps1'),
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'NativeHost.State.ps1'),
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'NativeHost.Protocol.ps1'),
         (Join-Path (Get-OpenPathFirefoxNativeHostRoot) 'NativeHost.Actions.ps1'),
