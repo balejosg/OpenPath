@@ -30,6 +30,17 @@ export interface RequestApiRuntimeConfig {
   enableRequests: RequestConfig['enableRequests'];
 }
 
+function isPendingRequestConflict(
+  response: Response,
+  payload: SubmitBlockedDomainApiResponse
+): boolean {
+  return (
+    response.status === 409 &&
+    typeof payload.error === 'string' &&
+    /pending request exists for this domain/i.test(payload.error)
+  );
+}
+
 export async function fetchWithFallback(
   endpoints: string[],
   path: string,
@@ -146,6 +157,14 @@ export async function submitBlockedDomainRequest(
   const payload = (await response
     .json()
     .catch((): SubmitBlockedDomainApiResponse => ({}))) as SubmitBlockedDomainApiResponse;
+
+  if (isPendingRequestConflict(response, payload)) {
+    return {
+      success: true,
+      status: 'pending',
+      domain,
+    };
+  }
 
   if (!response.ok || payload.success !== true) {
     return {

@@ -75,6 +75,46 @@ await describe('request api helpers', async () => {
     });
   });
 
+  await test('submitBlockedDomainRequest treats existing pending requests as submitted', async () => {
+    const result = await submitBlockedDomainRequest(
+      {
+        domain: 'example.com',
+        reason: 'needed for class',
+      },
+      {
+        buildBlockedDomainSubmitBody: (input) => input,
+        fetchImpl: () =>
+          Promise.resolve(
+            new Response(JSON.stringify({ error: 'Pending request exists for this domain' }), {
+              status: 409,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          ),
+        getClientVersion: () => '1.2.3',
+        getRequestApiEndpoints: () => ['https://api.example'],
+        loadRequestConfig: () =>
+          Promise.resolve({
+            fallbackApiUrls: [],
+            enableRequests: true,
+            requestApiUrl: 'https://api.example',
+            requestTimeout: 1000,
+          }),
+        sendNativeMessage: (message) => {
+          if ((message as { action?: string }).action === 'get-hostname') {
+            return Promise.resolve({ success: true, hostname: 'lab-pc-01' });
+          }
+          return Promise.resolve({ success: true, token: 'machine-token' });
+        },
+      }
+    );
+
+    assert.deepEqual(result, {
+      success: true,
+      status: 'pending',
+      domain: 'example.com',
+    });
+  });
+
   await test('submitBlockedDomainRequest reports missing native request configuration clearly', async () => {
     const result = await submitBlockedDomainRequest(
       {
