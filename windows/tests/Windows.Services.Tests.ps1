@@ -151,7 +151,8 @@ Describe "Services Module" {
             $content = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                'Copy-Item -Path $download.StagedPath -Destination $download.DestinationPath -Force',
+                'Copy-Item -Path $download.StagedPath -Destination $tempDestinationPath -Force -ErrorAction Stop',
+                'Move-Item -Path $tempDestinationPath -Destination $download.DestinationPath -Force -ErrorAction Stop',
                 'Register-OpenPathFirefoxNativeHost -Config $config | Out-Null'
             )
         }
