@@ -91,6 +91,39 @@ Describe "Update Script" {
                 'Restore-OpenPathCheckpoint'
             )
         }
+
+        It "Allows backup rollback when config was never loaded" {
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Rollback.ps1"
+            $runtimeContent = Get-Content $runtimePath -Raw
+
+            $runtimeContent | Should -Match '\[AllowNull\(\)\]\s+\[PSCustomObject\]\$Config'
+            $runtimeContent | Should -Match '(?s)if \(\$Config\) \{\s+Sync-FirefoxNativeHostMirror -Config \$Config -WhitelistPath \$WhitelistPath\s+\}'
+            $runtimeContent | Should -Match '(?s)if \(\$Config\) \{\s+Restore-OpenPathProtectedMode -Config \$Config -ErrorAction SilentlyContinue \| Out-Null\s+\}'
+        }
+
+        It "Resolves the Windows root from helper while preserving C:\OpenPath as the default" {
+            $rootHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "WindowsRoot.ps1"
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $updateScriptPath = Join-Path $PSScriptRoot ".." "scripts" "Update-OpenPath.ps1"
+            $rootHelperContent = Get-Content $rootHelperPath -Raw
+            $runtimeContent = Get-Content $runtimePath -Raw
+            $updateScriptContent = Get-Content $updateScriptPath -Raw
+
+            Assert-ContentContainsAll -Content $rootHelperContent -Needles @(
+                'function Resolve-OpenPathWindowsRoot',
+                '$env:OPENPATH_WINDOWS_ROOT',
+                '$env:OPENPATH_ROOT',
+                'return ''C:\OpenPath'''
+            )
+            Assert-ContentContainsAll -Content $runtimeContent -Needles @(
+                "Resolve-OpenPathWindowsRoot",
+                '$OpenPathRoot = Resolve-OpenPathWindowsRoot -OpenPathRoot $OpenPathRoot'
+            )
+            Assert-ContentContainsAll -Content $updateScriptContent -Needles @(
+                'WindowsRoot.ps1',
+                '$OpenPathRoot = Resolve-OpenPathWindowsRoot'
+            )
+        }
     }
 
     Context "Health report" {

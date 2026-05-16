@@ -1,7 +1,10 @@
 # OpenPath App Control Module for Windows
 # Applies AppLocker policy for non-admin users on managed endpoints.
 
-$script:OpenPathRoot = "C:\OpenPath"
+if (Test-Path (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')) {
+    . (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')
+}
+$script:OpenPathRoot = if (Get-Command -Name Resolve-OpenPathWindowsRoot -ErrorAction SilentlyContinue) { Resolve-OpenPathWindowsRoot } else { "C:\OpenPath" }
 Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction SilentlyContinue
 
 $script:OpenPathAppControlRulePrefix = 'OpenPath non-admin app control'
@@ -155,6 +158,21 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         'C:\Program Files\Chromium\Application\chromium.exe',
         'C:\Program Files (x86)\Chromium\Application\chromium.exe',
         '%LOCALAPPDATA%\Chromium\Application\chromium.exe',
+        '%PROGRAMFILES%\Ungoogled Chromium\Application\chrome.exe',
+        '%PROGRAMFILES(X86)%\Ungoogled Chromium\Application\chrome.exe',
+        'C:\Program Files\Ungoogled Chromium\Application\chrome.exe',
+        'C:\Program Files (x86)\Ungoogled Chromium\Application\chrome.exe',
+        '%LOCALAPPDATA%\Ungoogled Chromium\Application\chrome.exe',
+        '%PROGRAMFILES%\Ungoogled Chromium\Application\chromium.exe',
+        '%PROGRAMFILES(X86)%\Ungoogled Chromium\Application\chromium.exe',
+        'C:\Program Files\Ungoogled Chromium\Application\chromium.exe',
+        'C:\Program Files (x86)\Ungoogled Chromium\Application\chromium.exe',
+        '%LOCALAPPDATA%\Ungoogled Chromium\Application\chromium.exe',
+        '%PROGRAMFILES%\Floorp\floorp.exe',
+        '%PROGRAMFILES(X86)%\Floorp\floorp.exe',
+        'C:\Program Files\Floorp\floorp.exe',
+        'C:\Program Files (x86)\Floorp\floorp.exe',
+        '%LOCALAPPDATA%\Floorp\floorp.exe',
         '%PROGRAMFILES%\Internet Explorer\iexplore.exe',
         '%PROGRAMFILES(X86)%\Internet Explorer\iexplore.exe',
         'C:\Program Files\Internet Explorer\iexplore.exe',
@@ -215,6 +233,10 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
             '%WINDIR%\SysWOW64\curl.exe',
             '%WINDIR%\System32\nslookup.exe',
             '%WINDIR%\SysWOW64\nslookup.exe',
+            '%WINDIR%\System32\ssh.exe',
+            '%WINDIR%\SysWOW64\ssh.exe',
+            '%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe',
+            '%PROGRAMFILES%\WindowsApps\Microsoft.DesktopAppInstaller_*\winget.exe',
             '%WINDIR%\System32\certutil.exe',
             '%WINDIR%\SysWOW64\certutil.exe',
             '%WINDIR%\System32\bitsadmin.exe',
@@ -402,13 +424,14 @@ function Set-OpenPathNonAdminAppControl {
     }
 
     try {
-        $backupDir = Split-Path $script:OpenPathAppLockerBackupPath -Parent
+        $appLockerBackupPath = Join-Path (Join-Path $OpenPathRoot 'data') 'applocker-backup.xml'
+        $backupDir = Split-Path $appLockerBackupPath -Parent
         if (-not (Test-Path $backupDir)) {
             New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
         }
 
         $currentPolicyText = Get-AppLockerPolicy -Local -Xml
-        Set-Content -Path $script:OpenPathAppLockerBackupPath -Value $currentPolicyText -Encoding UTF8
+        Set-Content -Path $appLockerBackupPath -Value $currentPolicyText -Encoding UTF8
 
         $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers
         $policyXml = New-OpenPathAppLockerPolicyXml -Spec $spec
@@ -427,7 +450,7 @@ function Set-OpenPathNonAdminAppControl {
         }
 
         if (-not (Test-OpenPathNonAdminAppControlActive)) {
-            Set-AppLockerPolicy -XMLPolicy $script:OpenPathAppLockerBackupPath
+            Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath
             Write-OpenPathLog 'AppLocker validation failed after OpenPath policy apply; restored previous policy backup' -Level WARN
             return $false
         }

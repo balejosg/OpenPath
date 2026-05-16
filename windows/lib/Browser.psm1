@@ -1,7 +1,8 @@
 # OpenPath Browser Policies Module for Windows
 # Manages Firefox and Chrome/Edge policies
 
-$script:OpenPathRoot = "C:\OpenPath"
+. (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')
+$script:OpenPathRoot = Resolve-OpenPathWindowsRoot
 Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.FirefoxPolicy.psm1" -Force -ErrorAction Stop

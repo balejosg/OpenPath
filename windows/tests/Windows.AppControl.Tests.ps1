@@ -55,6 +55,15 @@ Describe "AppControl Module" {
                 '%PROGRAMFILES%\Chromium\Application\chromium.exe',
                 '%PROGRAMFILES(X86)%\Chromium\Application\chromium.exe',
                 '%LOCALAPPDATA%\Chromium\Application\chromium.exe',
+                '%PROGRAMFILES%\Ungoogled Chromium\Application\chrome.exe',
+                '%PROGRAMFILES(X86)%\Ungoogled Chromium\Application\chrome.exe',
+                '%LOCALAPPDATA%\Ungoogled Chromium\Application\chrome.exe',
+                '%PROGRAMFILES%\Ungoogled Chromium\Application\chromium.exe',
+                '%PROGRAMFILES(X86)%\Ungoogled Chromium\Application\chromium.exe',
+                '%LOCALAPPDATA%\Ungoogled Chromium\Application\chromium.exe',
+                '%PROGRAMFILES%\Floorp\floorp.exe',
+                '%PROGRAMFILES(X86)%\Floorp\floorp.exe',
+                '%LOCALAPPDATA%\Floorp\floorp.exe',
                 '%PROGRAMFILES%\Internet Explorer\iexplore.exe',
                 '%PROGRAMFILES(X86)%\Internet Explorer\iexplore.exe',
                 'C:\Program Files\Internet Explorer\iexplore.exe',
@@ -95,9 +104,19 @@ Describe "AppControl Module" {
             }
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\curl.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\nslookup.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\ssh.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe'
+            @($spec.BlockedWindowsTools) | Should -Not -Contain '%WINDIR%\System32\powershell.exe'
             foreach ($path in $expectedDenyPaths) {
                 @($spec.UserWritableDenyPaths) | Should -Contain $path
             }
+        }
+
+        It "Uses the configured OpenPath root for runtime allow paths" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'D:\OpenPathLab'
+
+            @($spec.AllowPaths) | Should -Contain 'D:\OpenPathLab\*'
+            @($spec.AllowPaths) | Should -Not -Contain 'C:\OpenPath\*'
         }
 
         It "Allows protected Microsoft WindowsApps launchers and admin-managed Program Files without approving unmanaged browsers" {
@@ -316,9 +335,10 @@ Describe "AppControl Module" {
                 'Get-OpenPathAppLockerRuleName',
                 'Test-OpenPathAppLockerRuleManaged',
                 'if (@($sourceCollection.ChildNodes).Count -eq 0)',
-                'Set-Content -Path $script:OpenPathAppLockerBackupPath',
+                '$appLockerBackupPath = Join-Path (Join-Path $OpenPathRoot ''data'') ''applocker-backup.xml''',
+                'Set-Content -Path $appLockerBackupPath',
                 'Test-OpenPathNonAdminAppControlActive',
-                'Set-AppLockerPolicy -XMLPolicy $script:OpenPathAppLockerBackupPath'
+                'Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath'
             )
         }
     }

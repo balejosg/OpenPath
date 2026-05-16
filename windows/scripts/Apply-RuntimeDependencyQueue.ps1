@@ -11,7 +11,8 @@
 #>
 
 $ErrorActionPreference = "Stop"
-$OpenPathRoot = "C:\OpenPath"
+. (Join-Path $PSScriptRoot '..\lib\internal\WindowsRoot.ps1')
+$OpenPathRoot = Resolve-OpenPathWindowsRoot
 
 Import-Module "$OpenPathRoot\lib\Update.Runtime.psm1" -Force
 

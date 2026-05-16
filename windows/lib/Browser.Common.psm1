@@ -1,6 +1,7 @@
 # OpenPath browser common helpers for Windows
 
-$script:OpenPathRoot = "C:\OpenPath"
+. (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')
+$script:OpenPathRoot = Resolve-OpenPathWindowsRoot
 Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
 
 function Get-OpenPathBrowserPolicySpecPath {

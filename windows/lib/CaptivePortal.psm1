@@ -5,7 +5,8 @@
 $modulePath = Split-Path $PSScriptRoot -Parent
 Import-Module "$modulePath\lib\Common.psm1" -ErrorAction SilentlyContinue
 
-$script:OpenPathRoot = "C:\OpenPath"
+. (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')
+$script:OpenPathRoot = Resolve-OpenPathWindowsRoot
 $script:CaptivePortalStatePath = "$script:OpenPathRoot\data\captive-portal-active.json"
 $script:CaptivePortalObservationPath = "$script:OpenPathRoot\data\captive-portal-observation.json"
 

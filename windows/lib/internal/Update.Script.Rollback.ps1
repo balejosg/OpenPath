@@ -25,7 +25,9 @@ function Invoke-OpenPathUpdateRollback {
         $rollbackSucceeded = Restore-OpenPathCheckpoint -Config $Config -WhitelistPath $WhitelistPath -StaleFailsafeStatePath $StaleFailsafeStatePath
         if ($rollbackSucceeded) {
             $rollbackMethod = 'checkpoint'
-            Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
+            if ($Config) {
+                Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
+            }
         }
     }
 
@@ -33,10 +35,14 @@ function Invoke-OpenPathUpdateRollback {
         Write-UpdateCatchLog 'Falling back to backup whitelist rollback...' -Level WARN
         try {
             Copy-Item $BackupPath $WhitelistPath -Force
-            Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
+            if ($Config) {
+                Sync-FirefoxNativeHostMirror -Config $Config -WhitelistPath $WhitelistPath
+            }
             $backupSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
             Update-AcrylicHost -WhitelistedDomains $backupSections.Whitelist -BlockedSubdomains $backupSections.BlockedSubdomains -ErrorAction SilentlyContinue
-            Restore-OpenPathProtectedMode -Config $Config -ErrorAction SilentlyContinue | Out-Null
+            if ($Config) {
+                Restore-OpenPathProtectedMode -Config $Config -ErrorAction SilentlyContinue | Out-Null
+            }
             $rollbackSucceeded = $true
             $rollbackMethod = 'backup'
             Write-UpdateCatchLog 'Backup rollback completed successfully' -Level WARN

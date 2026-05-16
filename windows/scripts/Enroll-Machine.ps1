@@ -56,7 +56,7 @@ param(
 
     [string]$MachineName = "",
 
-    [string]$OpenPathRoot = "C:\OpenPath",
+    [string]$OpenPathRoot = "",
 
     [switch]$SkipTokenValidation,
 
@@ -66,6 +66,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '..\lib\internal\WindowsRoot.ps1')
+$OpenPathRoot = Resolve-OpenPathWindowsRoot -OpenPathRoot $OpenPathRoot
 $configPath = "$OpenPathRoot\data\config.json"
 
 function Write-EnrollmentNotice {

@@ -24,7 +24,8 @@
 #>
 
 $ErrorActionPreference = "Stop"
-$OpenPathRoot = "C:\OpenPath"
+. (Join-Path $PSScriptRoot '..\lib\internal\WindowsRoot.ps1')
+$OpenPathRoot = Resolve-OpenPathWindowsRoot
 . (Join-Path $OpenPathRoot 'lib\internal\Watchdog.FailCount.ps1')
 . (Join-Path $OpenPathRoot 'lib\internal\Watchdog.Runtime.ps1')
 

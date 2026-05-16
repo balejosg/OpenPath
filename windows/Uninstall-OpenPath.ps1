@@ -39,7 +39,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$OpenPathRoot = "C:\OpenPath"
+. (Join-Path $PSScriptRoot 'lib\internal\WindowsRoot.ps1')
+$OpenPathRoot = Resolve-OpenPathWindowsRoot
 
 function Convert-ToRegistryProviderPath {
     param(

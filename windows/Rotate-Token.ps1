@@ -38,7 +38,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$OpenPathRoot = "C:\OpenPath"
+. (Join-Path $PSScriptRoot 'lib\internal\WindowsRoot.ps1')
+$OpenPathRoot = Resolve-OpenPathWindowsRoot
 $ConfigPath = "$OpenPathRoot\data\config.json"
 $CommonModulePath = "$OpenPathRoot\lib\Common.psm1"
 $BrowserModulePath = "$OpenPathRoot\lib\Browser.psm1"

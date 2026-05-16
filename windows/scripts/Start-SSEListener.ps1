@@ -28,7 +28,8 @@
 #>
 
 $ErrorActionPreference = "Stop"
-$OpenPathRoot = "C:\OpenPath"
+. (Join-Path $PSScriptRoot '..\lib\internal\WindowsRoot.ps1')
+$OpenPathRoot = Resolve-OpenPathWindowsRoot
 
 # Initialize standalone script session via the shared bootstrap helper.
 Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force

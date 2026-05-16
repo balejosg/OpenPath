@@ -54,7 +54,6 @@ if ($script:OpenPathInstallerQuietMode) {
     $InformationPreference = 'SilentlyContinue'
     $env:OPENPATH_QUIET_INSTALL = '1'
 }
-$OpenPathRoot = 'C:\OpenPath'
 $scriptDir = $PSScriptRoot
 $apiBaseUrl = if ($ApiUrl) { $ApiUrl.TrimEnd('/') } else { '' }
 $installerHelperRoot = Join-Path $scriptDir 'lib\install'
@@ -71,6 +70,9 @@ if (-not (Test-Path "$scriptDir\lib\*.psm1")) {
         exit 1
     }
 }
+
+. (Join-Path $scriptDir 'lib\internal\WindowsRoot.ps1')
+$OpenPathRoot = Resolve-OpenPathWindowsRoot
 
 . (Join-Path $installerHelperRoot 'Installer.Progress.ps1')
 . (Join-Path $installerHelperRoot 'Installer.Plan.ps1')

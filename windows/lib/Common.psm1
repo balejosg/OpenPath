@@ -4,15 +4,15 @@
 param()
 
 # Configuration paths
-$script:OpenPathRoot = "C:\OpenPath"
+$script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
+. (Join-Path $script:InternalModulePath 'WindowsRoot.ps1')
+$script:OpenPathRoot = Resolve-OpenPathWindowsRoot
 $script:ConfigPath = "$script:OpenPathRoot\data\config.json"
 $script:LogPath = "$script:OpenPathRoot\data\logs\openpath.log"
 $script:IntegrityBaselinePath = "$script:OpenPathRoot\data\integrity-baseline.json"
 $script:IntegrityBackupPath = "$script:OpenPathRoot\data\integrity-backup"
 $script:CheckpointPath = "$script:OpenPathRoot\data\checkpoints"
 $script:DomainPattern = '^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$'
-$script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
-
 . (Join-Path $script:InternalModulePath 'Common.System.ps1')
 . (Join-Path $script:InternalModulePath 'CapabilityStorage.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Redaction.ps1')
@@ -27,6 +27,7 @@ $script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
 Export-ModuleMember -Function @(
     'Test-AdminPrivileges',
     'Write-OpenPathLog',
+    'Resolve-OpenPathWindowsRoot',
     'Get-OpenPathCapabilityStorageRoot',
     'Get-OpenPathCapabilityStoragePath',
     'Set-OpenPathCapabilityStorageAcl',

@@ -1,6 +1,7 @@
 # OpenPath Firefox network autoconfig for Windows
 
-$script:OpenPathRoot = "C:\OpenPath"
+. (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')
+$script:OpenPathRoot = Resolve-OpenPathWindowsRoot
 Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction SilentlyContinue
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 

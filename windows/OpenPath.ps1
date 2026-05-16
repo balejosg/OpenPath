@@ -35,7 +35,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Resolve-OpenPathRoot {
-    $installedRoot = 'C:\OpenPath'
+    . (Join-Path $PSScriptRoot 'lib\internal\WindowsRoot.ps1')
+    $installedRoot = Resolve-OpenPathWindowsRoot
     if (Test-Path "$installedRoot\lib\Common.psm1") {
         return $installedRoot
     }

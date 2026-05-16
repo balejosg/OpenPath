@@ -2,6 +2,7 @@
 
 $script:OpenPathUpdateRuntimeSessionInitialized = $false
 $script:OpenPathUpdateRuntimeRoot = ''
+. (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')
 
 function Import-OpenPathUpdateRuntimeHelper {
     [CmdletBinding()]
@@ -24,8 +25,10 @@ function Import-OpenPathUpdateRuntimeHelper {
 function Initialize-OpenPathUpdateRuntimeSession {
     [CmdletBinding()]
     param(
-        [string]$OpenPathRoot = 'C:\OpenPath'
+        [string]$OpenPathRoot = (Resolve-OpenPathWindowsRoot)
     )
+
+    $OpenPathRoot = Resolve-OpenPathWindowsRoot -OpenPathRoot $OpenPathRoot
 
     if (
         $script:OpenPathUpdateRuntimeSessionInitialized -and
@@ -140,13 +143,14 @@ function Invoke-OpenPathRuntimeDependencyQueueApply {
 function Invoke-OpenPathRuntimeDependencyFastApply {
     [CmdletBinding()]
     param(
-        [string]$OpenPathRoot = 'C:\OpenPath',
+        [string]$OpenPathRoot = (Resolve-OpenPathWindowsRoot),
 
         [string]$UpdateMutexName = 'Global\OpenPathUpdateLock',
 
         [int]$LockWaitTimeoutSeconds = 20
     )
 
+    $OpenPathRoot = Resolve-OpenPathWindowsRoot -OpenPathRoot $OpenPathRoot
     Initialize-OpenPathUpdateRuntimeSession -OpenPathRoot $OpenPathRoot
 
     $mutex = $null
@@ -242,13 +246,14 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
 function Invoke-OpenPathUpdateCycle {
     [CmdletBinding()]
     param(
-        [string]$OpenPathRoot = 'C:\OpenPath',
+        [string]$OpenPathRoot = (Resolve-OpenPathWindowsRoot),
 
         [string]$UpdateMutexName = 'Global\OpenPathUpdateLock',
 
         [int]$LockWaitTimeoutSeconds = 45
     )
 
+    $OpenPathRoot = Resolve-OpenPathWindowsRoot -OpenPathRoot $OpenPathRoot
     Initialize-OpenPathUpdateRuntimeSession -OpenPathRoot $OpenPathRoot
     . (Join-Path $OpenPathRoot 'lib\internal\Update.Script.Config.ps1')
     . (Join-Path $OpenPathRoot 'lib\internal\Update.Script.Apply.ps1')
@@ -368,7 +373,7 @@ function Clear-StaleFailsafeState {
 function Enter-StaleWhitelistFailsafe {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
+        [AllowNull()]
         [PSCustomObject]$Config,
 
         [Parameter(Mandatory = $true)]
@@ -425,6 +430,10 @@ function Restore-OpenPathCheckpoint {
             Write-OpenPathLog 'Checkpoint rollback failed for unknown reason' -Level WARN
         }
         return $false
+    }
+
+    if (-not $Config) {
+        return
     }
 
     try {
