@@ -53,6 +53,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Send-OpenPathHealthReport',
         'Sync-OpenPathFirefoxNativeHostState',
         'Invoke-OpenPathRuntimeDependencyQueue',
+        'Get-OpenPathCapabilityStoragePath',
         'Update-AcrylicHost',
         'Restart-AcrylicService',
         'Clear-OpenPathRuntimeDependencyOverlay',
@@ -63,6 +64,11 @@ function Initialize-OpenPathUpdateRuntimeSession {
     ) `
         -ScriptName 'Update-OpenPath.ps1' | Out-Null
 
+    Import-OpenPathUpdateRuntimeHelper `
+        -Path (Join-Path $OpenPathRoot 'lib\internal\CapabilityStorage.ps1') `
+        -FunctionNames @(
+        'Get-OpenPathCapabilityStoragePath'
+    )
     Import-OpenPathUpdateRuntimeHelper `
         -Path (Join-Path $OpenPathRoot 'lib\internal\EndpointPolicyState.ps1') `
         -FunctionNames @(

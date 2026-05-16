@@ -38,6 +38,8 @@ Describe "Update Script" {
                 '-OpenPathRoot $OpenPathRoot',
                 '-DependentModules @(''DNS'', ''Firewall'', ''Browser'')',
                 '-RequiredCommands @(',
+                'Get-OpenPathCapabilityStoragePath',
+                'CapabilityStorage.ps1',
                 '-ScriptName ''Update-OpenPath.ps1'''
             )
         }
