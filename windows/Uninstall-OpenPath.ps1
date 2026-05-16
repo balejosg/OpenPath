@@ -109,7 +109,7 @@ function Remove-OpenPathFallbackAppLockerRules {
     $removed = $false
     foreach ($collection in @($policyXml.AppLockerPolicy.RuleCollection)) {
         foreach ($rule in @($collection.ChildNodes)) {
-            if ($rule.Name -like 'OpenPath non-admin app control*') {
+            if ($rule.GetAttribute('Name') -like 'OpenPath non-admin app control*') {
                 [void]$collection.RemoveChild($rule)
                 $removed = $true
             }

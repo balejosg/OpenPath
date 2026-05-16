@@ -32,6 +32,25 @@ Describe "Installer cleanup helper" {
         $content | Should -Match 'Acrylic removal is intentionally not performed by reinstall cleanup'
     }
 
+    It "Matches AppLocker rules by Name attribute instead of XML element name" {
+        $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
+        $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+        $cleanupContent = Get-Content $cleanupHelperPath -Raw
+        $uninstallContent = Get-Content $uninstallPath -Raw
+
+        Assert-ContentContainsAll -Content $cleanupContent -Needles @(
+            '$_.GetAttribute(''Name'') -like ''OpenPath non-admin app control*''',
+            '$rule.GetAttribute(''Name'') -like ''OpenPath non-admin app control*'''
+        )
+        Assert-ContentContainsAll -Content $uninstallContent -Needles @(
+            '$rule.GetAttribute(''Name'') -like ''OpenPath non-admin app control*'''
+        )
+
+        $cleanupContent | Should -Not -Match '\\$rule\\.Name\\s+-like\\s+''OpenPath non-admin app control'
+        $cleanupContent | Should -Not -Match '\\$_\\.Name\\s+-like\\s+''OpenPath non-admin app control'
+        $uninstallContent | Should -Not -Match '\\$rule\\.Name\\s+-like\\s+''OpenPath non-admin app control'
+    }
+
     It "Makes standalone uninstall independent of installed OpenPath modules" {
         $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
         $content = Get-Content $uninstallPath -Raw
