@@ -100,7 +100,7 @@ export async function waitForConvergence(
 
 export async function assertHttpReachable(url: string): Promise<void> {
   const command = isWindows()
-    ? buildWindowsHttpProbeCommand(url)
+    ? buildWindowsHttpProbeCommand(url, { useFixtureIp: true })
     : `curl -fsS --connect-timeout 3 --max-time 5 ${shellEscape(url)} >/dev/null`;
 
   await runPlatformCommand(command);

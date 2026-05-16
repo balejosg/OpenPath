@@ -78,9 +78,20 @@ export function buildWindowsBlockedDnsCommand(hostname: string): string {
   return `powershell -NoLogo -Command "try { $result = Resolve-DnsName -Name '${hostname}' -Server 127.0.0.1 -DnsOnly -ErrorAction Stop; if ($result) { $result | ForEach-Object { $_.IPAddress } } } catch { if (($_.Exception.Message -like '*DNS name does not exist*') -or ($_.FullyQualifiedErrorId -like '*DNS_ERROR_RCODE_NAME_ERROR*')) { exit 0 } throw }"`;
 }
 
-export function buildWindowsHttpProbeCommand(url: string): string {
-  const escapedUrl = url.replace(/'/g, "''");
-  const script = `Invoke-WebRequest -Uri '${escapedUrl}' -UseBasicParsing -ErrorAction Stop | Out-Null`;
+export function buildWindowsHttpProbeCommand(
+  url: string,
+  options: { useFixtureIp?: boolean } = {}
+): string {
+  const probeUrl = new URL(url);
+  const fixtureIp = options.useFixtureIp ? getFixtureIpForHostname(probeUrl.hostname) : null;
+  const effectiveUrl =
+    fixtureIp === null
+      ? url
+      : `${probeUrl.protocol}//${fixtureIp}${probeUrl.port ? `:${probeUrl.port}` : ''}${probeUrl.pathname}${probeUrl.search}`;
+  const escapedUrl = effectiveUrl.replace(/'/g, "''");
+  const hostHeader =
+    fixtureIp === null ? '' : ` -Headers @{ Host = '${probeUrl.host.replace(/'/g, "''")}' }`;
+  const script = `Invoke-WebRequest -Uri '${escapedUrl}'${hostHeader} -UseBasicParsing -ErrorAction Stop | Out-Null`;
   const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
   return `powershell -NoLogo -EncodedCommand ${encodedScript}`;
 }

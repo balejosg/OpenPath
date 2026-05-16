@@ -163,6 +163,22 @@ test('buildWindowsHttpProbeCommand avoids exposing raw URLs to cmd quoting and e
   assert.match(decodedCommand, /\| Out-Null/);
 });
 
+test('buildWindowsHttpProbeCommand can direct-connect to sslip fixture IP while preserving Host', () => {
+  const command = buildWindowsHttpProbeCommand(
+    'http://exempted-domain.127.0.0.1.sslip.io:18082/ok',
+    { useFixtureIp: true }
+  );
+
+  const encodedCommand = command.replace(/^powershell -NoLogo -EncodedCommand /, '');
+  const decodedCommand = Buffer.from(encodedCommand, 'base64').toString('utf16le');
+
+  assert.match(decodedCommand, /Invoke-WebRequest -Uri 'http:\/\/127\.0\.0\.1:18082\/ok'/);
+  assert.match(
+    decodedCommand,
+    /-Headers @\{ Host = 'exempted-domain\.127\.0\.0\.1\.sslip\.io:18082' \}/
+  );
+});
+
 test('student policy coverage plan keeps full SSE coverage and narrows fallback to propagation proof', () => {
   assert.deepStrictEqual(
     getStudentPolicyPhasePlan('sse', 'full').map(({ name, suite, useBrowser }) => ({
