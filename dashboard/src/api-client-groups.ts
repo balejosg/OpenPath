@@ -1,7 +1,6 @@
 import { createTRPCWithAuth } from './trpc.js';
 import type {
   ApiClient,
-  DashboardTrpcClientContract,
   Group,
   GroupStats,
   Rule,
@@ -10,7 +9,7 @@ import type {
 } from './api-client-types.js';
 
 export function createApiClient(token: string): ApiClient {
-  const trpc = createTRPCWithAuth(token) as unknown as DashboardTrpcClientContract;
+  const trpc = createTRPCWithAuth(token);
 
   return {
     getAllGroups(): Promise<Group[]> {

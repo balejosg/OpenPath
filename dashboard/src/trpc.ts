@@ -8,7 +8,7 @@
  */
 
 import { createTRPCProxyClient, httpBatchLink, TRPCClientError } from '@trpc/client';
-import type { AnyRouter } from '@trpc/server';
+import type { AppRouter } from '@openpath/api';
 
 // =============================================================================
 // Configuration
@@ -20,7 +20,7 @@ const API_URL = process.env.API_URL ?? 'http://localhost:3000';
 // Client Factory
 // =============================================================================
 
-type DashboardRouter = AnyRouter;
+type DashboardRouter = AppRouter;
 type DashboardTRPCClient = ReturnType<typeof createTRPCProxyClient<DashboardRouter>>;
 
 /**

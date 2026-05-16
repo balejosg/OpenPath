@@ -1,13 +1,13 @@
 import { logger } from './lib/logger.js';
 import { createTRPCPublic, createTRPCWithAuth, getTRPCErrorMessage } from './trpc.js';
-import type { DashboardTrpcClientContract, LoginResult } from './api-client-types.js';
+import type { LoginResult } from './api-client-types.js';
 
 function usernameToEmail(username: string): string {
   return username.includes('@') ? username : `${username}@dashboard.local`;
 }
 
 export async function login(username: string, password: string): Promise<LoginResult> {
-  const trpc = createTRPCPublic() as unknown as DashboardTrpcClientContract;
+  const trpc = createTRPCPublic();
   const email = usernameToEmail(username);
 
   try {
@@ -33,7 +33,7 @@ export async function login(username: string, password: string): Promise<LoginRe
 }
 
 export async function refreshToken(refreshTokenValue: string): Promise<LoginResult> {
-  const trpc = createTRPCPublic() as unknown as DashboardTrpcClientContract;
+  const trpc = createTRPCPublic();
 
   try {
     const result = await trpc.auth.refresh.mutate({ refreshToken: refreshTokenValue });
@@ -53,7 +53,7 @@ export async function refreshToken(refreshTokenValue: string): Promise<LoginResu
 }
 
 export async function logout(accessToken: string, refreshTokenValue: string): Promise<boolean> {
-  const trpc = createTRPCWithAuth(accessToken) as unknown as DashboardTrpcClientContract;
+  const trpc = createTRPCWithAuth(accessToken);
 
   try {
     await trpc.auth.logout.mutate({ refreshToken: refreshTokenValue });
@@ -69,7 +69,7 @@ export async function changePassword(
   currentPassword: string,
   newPassword: string
 ): Promise<{ success: boolean; error?: string }> {
-  const trpc = createTRPCWithAuth(accessToken) as unknown as DashboardTrpcClientContract;
+  const trpc = createTRPCWithAuth(accessToken);
 
   try {
     await trpc.auth.changePassword.mutate({
