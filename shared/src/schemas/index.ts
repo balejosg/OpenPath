@@ -62,6 +62,10 @@ export const RoleInfo = z.object({
   groupIds: z.array(z.string()),
 });
 
+export const UserCapabilities = z.object({
+  teacherGroups: z.boolean(),
+});
+
 export const SafeUserWithRoles = SafeUser.extend({
   roles: z.array(RoleInfo),
 });
@@ -73,6 +77,7 @@ export const AuthUser = SafeUser.pick({
 }).extend({
   emailVerified: z.boolean(),
   roles: z.array(RoleInfo),
+  capabilities: UserCapabilities,
 });
 
 export const Role = z.object({
@@ -172,6 +177,7 @@ export type DomainRequest = z.infer<typeof DomainRequest>;
 export type User = z.infer<typeof User>;
 export type SafeUser = z.infer<typeof SafeUser>;
 export type RoleInfo = z.infer<typeof RoleInfo>;
+export type UserCapabilities = z.infer<typeof UserCapabilities>;
 export type SafeUserWithRoles = z.infer<typeof SafeUserWithRoles>;
 export type AuthUser = z.infer<typeof AuthUser>;
 export type Role = z.infer<typeof Role>;

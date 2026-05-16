@@ -21,6 +21,9 @@ export interface User {
     role: UserRole | LegacyUserRole;
     groupIds?: string[];
   }[];
+  capabilities?: {
+    teacherGroups?: boolean;
+  };
 }
 
 /**
@@ -67,19 +70,12 @@ export function isStudent(): boolean {
   return userHasRole(user?.roles, 'student');
 }
 
-const TEACHER_GROUPS_FEATURE_KEY = 'openpath_teacher_groups_enabled';
-
 /**
- * Feature flag: allow teachers to create/manage their own groups in the UI.
- * Disabled by default to preserve legacy deployments.
+ * Capability: allow teachers to create/manage their own groups in the UI.
+ * Derived by the API and cached with the authenticated user; older cached users default to false.
  */
 export function isTeacherGroupsFeatureEnabled(): boolean {
-  try {
-    if (typeof window === 'undefined') return false;
-    return window.localStorage.getItem(TEACHER_GROUPS_FEATURE_KEY) === '1';
-  } catch {
-    return false;
-  }
+  return getCurrentUser()?.capabilities?.teacherGroups === true;
 }
 
 /**

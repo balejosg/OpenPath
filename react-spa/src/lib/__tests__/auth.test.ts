@@ -164,12 +164,43 @@ describe('Auth functions', () => {
   });
 
   describe('isTeacherGroupsFeatureEnabled', () => {
-    it('should default to false when unset', () => {
+    it('should default older cached users without capabilities to false', () => {
+      const user: User = {
+        id: '1',
+        email: 'teacher@example.com',
+        name: 'Teacher',
+        roles: [{ role: 'teacher' }],
+      };
+      localStorage.setItem(USER_KEY, JSON.stringify(user));
       expect(isTeacherGroupsFeatureEnabled()).toBe(false);
     });
 
-    it('should return true when enabled via localStorage flag', () => {
+    it('should ignore the legacy localStorage flag as an authority', () => {
       localStorage.setItem('openpath_teacher_groups_enabled', '1');
+      localStorage.setItem(
+        USER_KEY,
+        JSON.stringify({
+          id: '1',
+          email: 'teacher@example.com',
+          name: 'Teacher',
+          roles: [{ role: 'teacher' }],
+          capabilities: { teacherGroups: false },
+        })
+      );
+      expect(isTeacherGroupsFeatureEnabled()).toBe(false);
+    });
+
+    it('should read teacher group capability from the cached authenticated user', () => {
+      localStorage.setItem(
+        USER_KEY,
+        JSON.stringify({
+          id: '1',
+          email: 'teacher@example.com',
+          name: 'Teacher',
+          roles: [{ role: 'teacher' }],
+          capabilities: { teacherGroups: true },
+        })
+      );
       expect(isTeacherGroupsFeatureEnabled()).toBe(true);
     });
   });

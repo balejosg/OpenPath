@@ -8,6 +8,9 @@ export interface CurrentUser {
   name: string;
   email: string;
   roles: string[];
+  capabilities: {
+    teacherGroups: boolean;
+  };
   initials: string;
   primaryRole: string;
 }
@@ -53,6 +56,9 @@ export function useCurrentUser(): UseCurrentUserResult {
         name: profile.name,
         email: profile.email,
         roles,
+        capabilities: {
+          teacherGroups: profile.capabilities?.teacherGroups === true,
+        },
         initials: initials || '??',
         primaryRole,
       });
