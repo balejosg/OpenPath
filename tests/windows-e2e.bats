@@ -107,22 +107,22 @@ load 'test_helper'
 }
 
 @test "windows installer stages native host artifacts for later re-registration" {
-    run grep -nF 'Get-ChildItem "$ScriptDir\scripts\*.cmd" -ErrorAction SilentlyContinue' "$PROJECT_DIR/windows/lib/install/Installer.Staging.ps1"
+    run grep -nF "NativeHost.ArtifactCatalog.ps1" "$PROJECT_DIR/windows/lib/install/Installer.Staging.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF 'Copy-Item -Destination "$OpenPathRoot\scripts\" -Force' "$PROJECT_DIR/windows/lib/install/Installer.Staging.ps1"
+    run grep -nF "Get-OpenPathNativeHostArtifactNames" "$PROJECT_DIR/windows/lib/install/Installer.Staging.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF "'NativeHost.State.ps1'" "$PROJECT_DIR/windows/lib/install/Installer.Staging.ps1"
+    run grep -nF "Resolve-OpenPathNativeHostArtifactSources" "$PROJECT_DIR/windows/lib/install/Installer.Staging.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF "'NativeHost.Protocol.ps1'" "$PROJECT_DIR/windows/lib/install/Installer.Staging.ps1"
+    run grep -nF "'NativeHost.State.ps1'" "$PROJECT_DIR/windows/lib/internal/NativeHost.ArtifactCatalog.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF "'NativeHost.Actions.ps1'" "$PROJECT_DIR/windows/lib/install/Installer.Staging.ps1"
+    run grep -nF "'NativeHost.Protocol.ps1'" "$PROJECT_DIR/windows/lib/internal/NativeHost.ArtifactCatalog.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF "(Join-Path \$sourceParent 'lib\internal')" "$PROJECT_DIR/windows/lib/Browser.FirefoxNativeHost.psm1"
+    run grep -nF "'NativeHost.Actions.ps1'" "$PROJECT_DIR/windows/lib/internal/NativeHost.ArtifactCatalog.ps1"
     [ "$status" -eq 0 ]
 }
 
@@ -187,16 +187,22 @@ load 'test_helper'
     run grep -nF 'DNS.Acrylic.Config.ps1' "$PROJECT_DIR/windows/lib/DNS.psm1"
     [ "$status" -eq 0 ]
 
+    run grep -nF 'AcrylicHostsModel.ps1' "$PROJECT_DIR/windows/lib/DNS.psm1"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'AcrylicHostsRenderer.ps1' "$PROJECT_DIR/windows/lib/DNS.psm1"
+    [ "$status" -eq 0 ]
+
     run grep -nF 'function Get-OpenPathDnsSettings' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF 'function Get-AcrylicForwardRules' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
+    run grep -nF 'function Get-AcrylicForwardRules' "$PROJECT_DIR/windows/lib/internal/AcrylicHostsModel.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF 'function New-AcrylicHostsDefinition' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
+    run grep -nF 'function New-AcrylicHostsDefinition' "$PROJECT_DIR/windows/lib/internal/AcrylicHostsModel.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF 'function ConvertTo-AcrylicHostsContent' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
+    run grep -nF 'function ConvertTo-AcrylicHostsContent' "$PROJECT_DIR/windows/lib/internal/AcrylicHostsRenderer.ps1"
     [ "$status" -eq 0 ]
 
     run grep -nF '$dnsSettings = Get-OpenPathDnsSettings' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
@@ -208,10 +214,10 @@ load 'test_helper'
     run grep -nF '$content = ConvertTo-AcrylicHostsContent -Definition $definition' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF '"FW $normalizedDomain"' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
+    run grep -nF '"FW $normalizedDomain"' "$PROJECT_DIR/windows/lib/internal/AcrylicHostsModel.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF '"FW >$normalizedDomain"' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
+    run grep -nF '"FW >$normalizedDomain"' "$PROJECT_DIR/windows/lib/internal/AcrylicHostsModel.ps1"
     [ "$status" -eq 0 ]
 
     run grep -nF '$settings.PrimaryDNS = [string]$config.primaryDNS' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
@@ -349,14 +355,17 @@ load 'test_helper'
     [ "$status" -eq 0 ]
 }
 
-@test "windows fail-open restores an explicit usable DNS resolver" {
-    run grep -nF "\$primaryDns = Get-PrimaryDNS" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
+@test "windows DNS restore uses original adapter snapshot with reset fallback" {
+    run grep -nF "return 'C:\OpenPath\data\original-dns.json'" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF "Set-DnsClientServerAddress -InterfaceIndex \$adapter.ifIndex -ServerAddresses \$primaryDns" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
+    run grep -nF "[string]\$_.InterfaceGuid -eq [string]\$entry.InterfaceGuid" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF 'Reset DNS for adapter: $($adapter.Name) to $primaryDns' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
+    run grep -nF "Set-DnsClientServerAddress -InterfaceIndex \$adapter.ifIndex -ServerAddresses \$servers" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "Set-DnsClientServerAddress -InterfaceIndex \$adapter.ifIndex -ResetServerAddresses" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
     [ "$status" -eq 0 ]
 }
 
