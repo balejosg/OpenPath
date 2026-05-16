@@ -16,6 +16,49 @@ function ConvertTo-OpenPathXmlAttribute {
     return [System.Security.SecurityElement]::Escape([string]$Value)
 }
 
+function Get-OpenPathAppLockerRuleName {
+    param(
+        [AllowNull()]
+        [object]$Rule
+    )
+
+    if (-not $Rule) {
+        return ''
+    }
+
+    if ($Rule -is [System.Xml.XmlElement]) {
+        if ($Rule.HasAttribute('Name')) {
+            return [string]$Rule.GetAttribute('Name')
+        }
+        return ''
+    }
+
+    if ($Rule.PSObject.Methods.Name -contains 'GetAttribute') {
+        try {
+            return [string]$Rule.GetAttribute('Name')
+        }
+        catch {
+            return ''
+        }
+    }
+
+    if ($Rule.PSObject.Properties['Name']) {
+        return [string]$Rule.Name
+    }
+
+    return ''
+}
+
+function Test-OpenPathAppLockerRuleManaged {
+    param(
+        [AllowNull()]
+        [object]$Rule
+    )
+
+    $ruleName = Get-OpenPathAppLockerRuleName -Rule $Rule
+    return ($ruleName -like "$script:OpenPathAppControlRulePrefix*")
+}
+
 function New-OpenPathNonAdminAppLockerPolicySpec {
     [CmdletBinding()]
     param(
@@ -244,7 +287,7 @@ function Merge-OpenPathAppLockerPolicyXml {
         }
 
         foreach ($rule in @($targetCollection.ChildNodes)) {
-            if ($rule.Name -like "$script:OpenPathAppControlRulePrefix*") {
+            if (Test-OpenPathAppLockerRuleManaged -Rule $rule) {
                 [void]$targetCollection.RemoveChild($rule)
             }
         }
@@ -346,7 +389,7 @@ function Test-OpenPathNonAdminAppControlActive {
     try {
         $policyXml = [xml](Get-AppLockerPolicy -Local -Xml)
         $rules = @($policyXml.AppLockerPolicy.RuleCollection.FilePathRule)
-        return [bool](@($rules | Where-Object { $_.Name -like "$script:OpenPathAppControlRulePrefix*" }).Count -gt 0)
+        return [bool](@($rules | Where-Object { Test-OpenPathAppLockerRuleManaged -Rule $_ }).Count -gt 0)
     }
     catch {
         return $false
@@ -368,7 +411,7 @@ function Remove-OpenPathNonAdminAppControl {
         $policyXml = [xml](Get-AppLockerPolicy -Local -Xml)
         foreach ($collection in @($policyXml.AppLockerPolicy.RuleCollection)) {
             foreach ($rule in @($collection.ChildNodes)) {
-                if ($rule.Name -like "$script:OpenPathAppControlRulePrefix*") {
+                if (Test-OpenPathAppLockerRuleManaged -Rule $rule) {
                     [void]$collection.RemoveChild($rule)
                 }
             }

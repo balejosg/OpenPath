@@ -217,7 +217,40 @@ Describe "AppControl Module" {
 
             $ruleNames | Should -Contain 'Vendor allow'
             $ruleNames | Should -Not -Contain 'OpenPath non-admin app control stale'
+            @($exeRules | Where-Object { $_.Conditions.FilePathCondition.GetAttribute('Path') -eq 'C:\OldOpenPath\*' }).Count | Should -Be 0
             @($ruleNames | Where-Object { $_ -like 'OpenPath non-admin app control*' }).Count | Should -BeGreaterThan 0
+        }
+
+        It "Classifies managed AppLocker rules using the rule Name attribute" {
+            [xml]$policy = @'
+<AppLockerPolicy Version="1">
+    <RuleCollection Type="Exe" EnforcementMode="Enabled">
+      <FilePathRule Id="11111111-1111-1111-1111-111111111111" Name="OpenPath non-admin app control stale" Description="Managed by OpenPath" UserOrGroupSid="S-1-5-32-545" Action="Allow">
+        <Conditions><FilePathCondition Path="C:\OldOpenPath\*" /></Conditions>
+      </FilePathRule>
+      <FilePathRule Id="22222222-2222-2222-2222-222222222222" Name="Vendor allow" Description="Existing rule" UserOrGroupSid="S-1-5-32-545" Action="Allow">
+        <Conditions><FilePathCondition Path="C:\Vendor\*" /></Conditions>
+      </FilePathRule>
+    </RuleCollection>
+</AppLockerPolicy>
+'@
+            $rules = @($policy.AppLockerPolicy.RuleCollection.ChildNodes)
+
+            InModuleScope AppControl -Parameters @{ ManagedRule = $rules[0]; VendorRule = $rules[1] } {
+                $ManagedRule.LocalName | Should -Be 'FilePathRule'
+                Get-OpenPathAppLockerRuleName -Rule $ManagedRule | Should -Be 'OpenPath non-admin app control stale'
+                Test-OpenPathAppLockerRuleManaged -Rule $ManagedRule | Should -BeTrue
+                Test-OpenPathAppLockerRuleManaged -Rule $VendorRule | Should -BeFalse
+            }
+        }
+
+        It "Uses AppLocker rule Name attributes for active detection and removal" {
+            $moduleContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "AppControl.psm1") -Raw
+
+            $moduleContent | Should -Match '(?s)function Test-OpenPathNonAdminAppControlActive.*?Where-Object \{ Test-OpenPathAppLockerRuleManaged -Rule \$_ \}'
+            $moduleContent | Should -Match '(?s)function Remove-OpenPathNonAdminAppControl.*?if \(Test-OpenPathAppLockerRuleManaged -Rule \$rule\)'
+            $moduleContent | Should -Not -Match '\$rule\.Name -like "\$script:OpenPathAppControlRulePrefix\*"'
+            $moduleContent | Should -Not -Match '\$_\.Name -like "\$script:OpenPathAppControlRulePrefix\*"'
         }
 
         It "Uses backup and validation when applying AppLocker policy" {
@@ -226,6 +259,8 @@ Describe "AppControl Module" {
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
                 'applocker-backup.xml',
                 'Merge-OpenPathAppLockerPolicyXml',
+                'Get-OpenPathAppLockerRuleName',
+                'Test-OpenPathAppLockerRuleManaged',
                 'if (@($sourceCollection.ChildNodes).Count -eq 0)',
                 'Set-Content -Path $script:OpenPathAppLockerBackupPath',
                 'Test-OpenPathNonAdminAppControlActive',
