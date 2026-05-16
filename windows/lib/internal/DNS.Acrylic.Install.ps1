@@ -147,6 +147,19 @@ function Test-AcrylicPortableArchive {
     }
 }
 
+function Assert-AcrylicDownloadHash {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedSha256,
+        [Parameter(Mandatory = $true)][string]$ArtifactName
+    )
+
+    $actualSha256 = (Get-FileHash -Path $Path -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+    if ($actualSha256 -ne $ExpectedSha256.ToLowerInvariant()) {
+        throw "$ArtifactName SHA256 mismatch. Expected $ExpectedSha256, got $actualSha256"
+    }
+}
+
 function Install-AcrylicDNS {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -164,6 +177,8 @@ function Install-AcrylicDNS {
 
     Write-OpenPathLog "Installing Acrylic DNS Proxy..."
     $installerVersion = "2.2.1"
+    $portableZipSha256 = '26a5601c813257c186cd69da617ee1fff254b84f3ecb542483af8f4a5cc520cd'
+    $executableInstallerSha256 = 'be60bde686766a889a8878c8b27446ea3584e425583070eeef85b0b31c60adbc'
     $installerUrl = "https://downloads.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic-Portable.zip"
     $installerFallbackUrl = "https://sourceforge.net/projects/acrylic/files/Acrylic/$installerVersion/Acrylic-Portable.zip/download"
     $installerMirrorUrl = "https://master.dl.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic-Portable.zip?viasf=1"
@@ -191,6 +206,7 @@ function Install-AcrylicDNS {
                     Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
                 }
                 Invoke-AcrylicPortableDownload -Url $candidateUrl -DestinationPath $zipPath
+                Assert-AcrylicDownloadHash -Path $zipPath -ExpectedSha256 $portableZipSha256 -ArtifactName 'Acrylic-Portable.zip'
                 if (-not (Test-AcrylicPortableArchive -Path $zipPath)) {
                     throw "Downloaded Acrylic archive from ${candidateUrl} was not a valid portable release"
                 }
@@ -212,6 +228,7 @@ function Install-AcrylicDNS {
                         Remove-Item $exePath -Force -ErrorAction SilentlyContinue
                     }
                     Invoke-AcrylicPortableDownload -Url $candidateUrl -DestinationPath $exePath
+                    Assert-AcrylicDownloadHash -Path $exePath -ExpectedSha256 $executableInstallerSha256 -ArtifactName 'Acrylic.exe'
                     & $exePath /S
                     $exeExitCode = $LASTEXITCODE
                     if ($exeExitCode -ne 0) {

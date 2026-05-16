@@ -31,4 +31,21 @@ Describe "Installer cleanup helper" {
         $content | Should -Not -Match 'Remove-Item.*Acrylic DNS Proxy'
         $content | Should -Match 'Acrylic removal is intentionally not performed by reinstall cleanup'
     }
+
+    It "Makes standalone uninstall independent of installed OpenPath modules" {
+        $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+        $content = Get-Content $uninstallPath -Raw
+
+        Assert-ContentContainsAll -Content $content -Needles @(
+            'function Remove-OpenPathFallbackAppLockerRules',
+            'function Restore-OpenPathOriginalDns',
+            'function Remove-OpenPathFirewallRules',
+            'ExtensionInstallForcelist',
+            '& "$acrylicPath\AcrylicService.exe" /UNINSTALL',
+            '& sc.exe delete AcrylicDNSProxySvc',
+            "Get-NetFirewallRule -Group 'OpenPath'",
+            "data\original-dns.json",
+            "data\firewall-rules.json"
+        )
+    }
 }

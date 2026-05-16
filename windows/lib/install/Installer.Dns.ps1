@@ -82,6 +82,7 @@ function Ensure-InstallerRemoteBootstrapDns {
     }
 
     $networkAdapters = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })
+    Save-OpenPathInstallerOriginalDnsSnapshot -OpenPathRoot 'C:\OpenPath' | Out-Null
     foreach ($adapter in $networkAdapters) {
         if ($PSCmdlet.ShouldProcess("network adapter $($adapter.ifIndex)", "Set bootstrap DNS server $PrimaryDNS")) {
             Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses @($PrimaryDNS) -ErrorAction SilentlyContinue
@@ -100,4 +101,38 @@ function Ensure-InstallerRemoteBootstrapDns {
     catch {
         throw "Unable to resolve $hostname before remote enrollment after setting DNS server $PrimaryDNS"
     }
+}
+
+function Get-OpenPathInstallerOriginalDnsSnapshotPath {
+    param([Parameter(Mandatory = $true)][string]$OpenPathRoot)
+    return "$($OpenPathRoot.TrimEnd('\'))\data\original-dns.json"
+}
+
+function Save-OpenPathInstallerOriginalDnsSnapshot {
+    param([Parameter(Mandatory = $true)][string]$OpenPathRoot)
+
+    $snapshotPath = Get-OpenPathInstallerOriginalDnsSnapshotPath -OpenPathRoot $OpenPathRoot
+    if (Test-Path $snapshotPath) { return $true }
+    if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) { return $false }
+    if (-not (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return $false }
+
+    $snapshot = @(
+        Get-NetAdapter -ErrorAction Stop | ForEach-Object {
+            $adapter = $_
+            $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+            [PSCustomObject]@{
+                InterfaceGuid = [string]$adapter.InterfaceGuid
+                InterfaceAlias = [string]$adapter.Name
+                InterfaceIndex = [int]$adapter.ifIndex
+                ServerAddresses = @($dns.ServerAddresses | ForEach-Object { [string]$_ })
+            }
+        }
+    )
+
+    $snapshotDirectory = Split-Path $snapshotPath -Parent
+    if (-not (Test-Path $snapshotDirectory)) {
+        New-Item -ItemType Directory -Path $snapshotDirectory -Force | Out-Null
+    }
+    $snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path $snapshotPath -Encoding UTF8
+    return $true
 }

@@ -23,6 +23,27 @@ Describe "Firewall Module" {
         }
     }
 
+    Context "Firewall cleanup manifest" {
+        It "Creates OpenPath grouped rules and removes by manifest, group, and DNS prefix" {
+            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Policy.ps1"
+            $statePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.State.ps1"
+            $policyContent = Get-Content $policyPath -Raw
+            $stateContent = Get-Content $statePath -Raw
+
+            Assert-ContentContainsAll -Content $policyContent -Needles @(
+                'New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Allow-Loopback-UDP"',
+                'New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DoT"'
+            )
+            Assert-ContentContainsAll -Content $stateContent -Needles @(
+                "return 'C:\OpenPath\data\firewall-rules.json'",
+                "Group = 'OpenPath'",
+                'Add-OpenPathFirewallManifestRule -Name $DisplayName',
+                "Get-NetFirewallRule -Group 'OpenPath'",
+                'Get-NetFirewallRule -DisplayName "$script:RulePrefix-*"'
+            )
+        }
+    }
+
     Context "DoH egress blocking" {
         It "Matches shared DoH resolver contract fixture" {
             $expectedResolvers = @(Get-ContractFixtureLines -FileName 'doh-resolvers.txt' | Sort-Object -Unique)

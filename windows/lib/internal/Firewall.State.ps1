@@ -1,3 +1,60 @@
+function Get-OpenPathFirewallManifestPath {
+    return 'C:\OpenPath\data\firewall-rules.json'
+}
+
+function Add-OpenPathFirewallManifestRule {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    try {
+        $path = Get-OpenPathFirewallManifestPath
+        $directory = Split-Path $path -Parent
+        if ($directory -match '^([A-Za-z]):[\\/]' -and -not (Get-PSDrive -Name $Matches[1] -ErrorAction SilentlyContinue)) {
+            return
+        }
+        if (-not (Test-Path $directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        $names = @()
+        if (Test-Path $path) {
+            $names = @(Get-Content $path -Raw | ConvertFrom-Json | ForEach-Object { [string]$_ })
+        }
+        $names = @($names + $Name | Where-Object { $_ } | Sort-Object -Unique)
+        $names | ConvertTo-Json -Depth 3 | Set-Content -Path $path -Encoding UTF8
+    }
+    catch {
+        Write-OpenPathLog "Failed to update firewall manifest: $_" -Level WARN
+    }
+}
+
+function New-OpenPathFirewallRule {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [string]$Direction,
+        [string]$Protocol,
+        [object]$RemoteAddress,
+        [object]$RemotePort,
+        [string]$Action,
+        [string]$Profile,
+        [string]$Description,
+        [string]$Program
+    )
+
+    $ruleParameters = @{
+        DisplayName = $DisplayName
+        Group = 'OpenPath'
+    }
+    foreach ($key in @('Direction', 'Protocol', 'RemoteAddress', 'RemotePort', 'Action', 'Profile', 'Description', 'Program')) {
+        if ($PSBoundParameters.ContainsKey($key) -and $null -ne $PSBoundParameters[$key] -and [string]$PSBoundParameters[$key] -ne '') {
+            $ruleParameters[$key] = $PSBoundParameters[$key]
+        }
+    }
+
+    $rule = New-NetFirewallRule @ruleParameters
+    Add-OpenPathFirewallManifestRule -Name $DisplayName
+    return $rule
+}
+
 function Remove-OpenPathFirewall {
     <#
     .SYNOPSIS
@@ -13,6 +70,20 @@ function Remove-OpenPathFirewall {
     Write-OpenPathLog 'Removing openpath firewall rules...'
 
     try {
+        $manifestPath = Get-OpenPathFirewallManifestPath
+        if (Test-Path $manifestPath) {
+            @(Get-Content $manifestPath -Raw | ConvertFrom-Json | ForEach-Object { [string]$_ }) |
+                Where-Object { $_ } |
+                ForEach-Object {
+                    Get-NetFirewallRule -DisplayName $_ -ErrorAction SilentlyContinue |
+                        Remove-NetFirewallRule -ErrorAction SilentlyContinue
+                }
+            Remove-Item $manifestPath -Force -ErrorAction SilentlyContinue
+        }
+
+        Get-NetFirewallRule -Group 'OpenPath' -ErrorAction SilentlyContinue |
+            Remove-NetFirewallRule -ErrorAction SilentlyContinue
+
         Get-NetFirewallRule -DisplayName "$script:RulePrefix-*" -ErrorAction SilentlyContinue |
             Remove-NetFirewallRule -ErrorAction SilentlyContinue
 

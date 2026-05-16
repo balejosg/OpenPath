@@ -19,6 +19,7 @@ function Set-LocalDNS {
     [CmdletBinding(SupportsShouldProcess)] param()
     if (-not $PSCmdlet.ShouldProcess("Network adapters", "Set DNS to 127.0.0.1")) { return }
     Write-OpenPathLog "Configuring local DNS..."
+    Save-OpenPathOriginalDnsSnapshot | Out-Null
     $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
     foreach ($adapter in $adapters) {
         try {
@@ -33,20 +34,87 @@ function Set-LocalDNS {
     Write-OpenPathLog "DNS cache flushed"
 }
 
+function Get-OpenPathOriginalDnsSnapshotPath {
+    return 'C:\OpenPath\data\original-dns.json'
+}
+
+function Save-OpenPathOriginalDnsSnapshot {
+    [CmdletBinding()]
+    param([string]$Path = (Get-OpenPathOriginalDnsSnapshotPath))
+
+    if (Test-Path $Path) { return $true }
+    if (-not (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return $false }
+    if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) { return $false }
+
+    try {
+        $snapshot = @(
+            Get-NetAdapter -ErrorAction Stop | ForEach-Object {
+                $adapter = $_
+                $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+                [PSCustomObject]@{
+                    InterfaceGuid = [string]$adapter.InterfaceGuid
+                    InterfaceAlias = [string]$adapter.Name
+                    InterfaceIndex = [int]$adapter.ifIndex
+                    ServerAddresses = @($dns.ServerAddresses | ForEach-Object { [string]$_ })
+                }
+            }
+        )
+
+        $directory = Split-Path $Path -Parent
+        if (-not (Test-Path $directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        $snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path $Path -Encoding UTF8
+        Write-OpenPathLog "Saved original DNS snapshot to $Path"
+        return $true
+    }
+    catch {
+        Write-OpenPathLog "Failed to save original DNS snapshot: $_" -Level WARN
+        return $false
+    }
+}
+
 function Restore-OriginalDNS {
     [CmdletBinding(SupportsShouldProcess)] param()
-    if (-not $PSCmdlet.ShouldProcess("Network adapters", "Restore DNS to an upstream resolver")) { return }
+    if (-not $PSCmdlet.ShouldProcess("Network adapters", "Restore original DNS settings")) { return }
     Write-OpenPathLog "Restoring original DNS settings..."
-    $primaryDns = Get-PrimaryDNS
-    $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
-    foreach ($adapter in $adapters) {
+
+    $snapshotPath = Get-OpenPathOriginalDnsSnapshotPath
+    if (Test-Path $snapshotPath) {
         try {
-            Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $primaryDns
-            Write-OpenPathLog "Reset DNS for adapter: $($adapter.Name) to $primaryDns"
+            $snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)
+            $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
+            foreach ($entry in $snapshot) {
+                $adapter = @($adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1)
+                if (-not $adapter -and $entry.InterfaceIndex -ne $null) {
+                    $adapter = @($adapters | Where-Object { $_.ifIndex -eq [int]$entry.InterfaceIndex } | Select-Object -First 1)
+                }
+                if (-not $adapter -and $entry.InterfaceAlias) {
+                    $adapter = @($adapters | Where-Object { $_.Name -eq [string]$entry.InterfaceAlias } | Select-Object -First 1)
+                }
+                if (-not $adapter) { continue }
+
+                $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object { $_ })
+                if ($servers.Count -gt 0) {
+                    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $servers -ErrorAction Stop
+                    Write-OpenPathLog "Restored DNS for adapter: $($adapter.Name)"
+                }
+                else {
+                    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction Stop
+                    Write-OpenPathLog "Reset DNS for adapter: $($adapter.Name)"
+                }
+            }
+            Clear-DnsClientCache
+            return
         }
         catch {
-            Write-OpenPathLog "Failed to reset DNS for $($adapter.Name): $_" -Level WARN
+            Write-OpenPathLog "Snapshot DNS restore failed: $_" -Level WARN
         }
+    }
+
+    $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
+    foreach ($adapter in $adapters) {
+        Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
     }
     Clear-DnsClientCache
 }

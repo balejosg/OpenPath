@@ -101,6 +101,87 @@ function Stop-OpenPathRootedProcess {
         }
 }
 
+function Remove-OpenPathFallbackAppLockerRules {
+    if (-not (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue)) { return }
+    if (-not (Get-Command -Name Set-AppLockerPolicy -ErrorAction SilentlyContinue)) { return }
+
+    $policyXml = [xml](Get-AppLockerPolicy -Local -Xml)
+    $removed = $false
+    foreach ($collection in @($policyXml.AppLockerPolicy.RuleCollection)) {
+        foreach ($rule in @($collection.ChildNodes)) {
+            if ($rule.Name -like 'OpenPath non-admin app control*') {
+                [void]$collection.RemoveChild($rule)
+                $removed = $true
+            }
+        }
+    }
+    if (-not $removed) { return }
+
+    $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-uninstall-applocker-$([guid]::NewGuid()).xml"
+    try {
+        $policyXml.Save($policyPath)
+        Set-AppLockerPolicy -XMLPolicy $policyPath -ErrorAction Stop
+    }
+    finally {
+        Remove-Item $policyPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Restore-OpenPathOriginalDns {
+    $snapshotPath = Join-Path $OpenPathRoot 'data\original-dns.json'
+    if ((Test-Path $snapshotPath) -and (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) {
+        try {
+            $snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)
+            $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
+            foreach ($entry in $snapshot) {
+                $adapter = @($adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1)
+                if (-not $adapter -and $entry.InterfaceIndex -ne $null) {
+                    $adapter = @($adapters | Where-Object { $_.ifIndex -eq [int]$entry.InterfaceIndex } | Select-Object -First 1)
+                }
+                if (-not $adapter -and $entry.InterfaceAlias) {
+                    $adapter = @($adapters | Where-Object { $_.Name -eq [string]$entry.InterfaceAlias } | Select-Object -First 1)
+                }
+                if (-not $adapter) { continue }
+
+                $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object { $_ })
+                if ($servers.Count -gt 0) {
+                    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $servers -ErrorAction SilentlyContinue
+                }
+                else {
+                    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+                }
+            }
+            Clear-DnsClientCache -ErrorAction SilentlyContinue
+            return
+        }
+        catch {
+            Write-Host "  Snapshot DNS restore failed: $_" -ForegroundColor Yellow
+        }
+    }
+
+    Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object {
+        Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+    }
+    Clear-DnsClientCache -ErrorAction SilentlyContinue
+}
+
+function Remove-OpenPathFirewallRules {
+    $manifestPath = Join-Path $OpenPathRoot 'data\firewall-rules.json'
+    if (Test-Path $manifestPath) {
+        @(Get-Content $manifestPath -Raw | ConvertFrom-Json | ForEach-Object { [string]$_ }) |
+            Where-Object { $_ } |
+            ForEach-Object {
+                Get-NetFirewallRule -DisplayName $_ -ErrorAction SilentlyContinue |
+                    Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            }
+    }
+
+    Get-NetFirewallRule -Group 'OpenPath' -ErrorAction SilentlyContinue |
+        Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    Get-NetFirewallRule -DisplayName "OpenPath-DNS-*" -ErrorAction SilentlyContinue |
+        Remove-NetFirewallRule -ErrorAction SilentlyContinue
+}
+
 function Remove-OpenPathInstallRoot {
     param(
         [switch]$KeepLogs
@@ -175,23 +256,22 @@ Write-Host "[1/6] Eliminando tareas programadas..." -ForegroundColor Yellow
 Stop-OpenPathScheduledTask
 Write-Host "  Tareas eliminadas" -ForegroundColor Green
 
-# Step 2: Remove firewall rules
-Write-Host "[2/6] Eliminando reglas de firewall..." -ForegroundColor Yellow
-Get-NetFirewallRule -DisplayName "OpenPath-DNS-*" -ErrorAction SilentlyContinue | 
-    Remove-NetFirewallRule -ErrorAction SilentlyContinue
+# Step 2: Restore DNS
+Write-Host "[2/6] Restaurando configuracion DNS..." -ForegroundColor Yellow
+Restore-OpenPathOriginalDns
+Write-Host "  DNS restaurado" -ForegroundColor Green
+
+# Step 3: Remove firewall rules
+Write-Host "[3/6] Eliminando reglas de firewall..." -ForegroundColor Yellow
+Remove-OpenPathFirewallRules
 Write-Host "  Reglas eliminadas" -ForegroundColor Green
 
 if (Get-Command -Name Remove-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue) {
     Remove-OpenPathNonAdminAppControl | Out-Null
 }
-
-# Step 3: Restore DNS
-Write-Host "[3/6] Restaurando configuracion DNS..." -ForegroundColor Yellow
-Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object {
-    Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+else {
+    Remove-OpenPathFallbackAppLockerRules
 }
-Clear-DnsClientCache
-Write-Host "  DNS restaurado" -ForegroundColor Green
 
 # Step 4: Remove browser policies
 Write-Host "[4/6] Eliminando politicas de navegadores..." -ForegroundColor Yellow
@@ -234,7 +314,9 @@ foreach ($artifactPath in $firefoxNativeHostArtifacts) {
 # Chrome/Edge registry
 $regPaths = @(
     "HKLM:\SOFTWARE\Policies\Google\Chrome\URLBlocklist",
-    "HKLM:\SOFTWARE\Policies\Microsoft\Edge\URLBlocklist"
+    "HKLM:\SOFTWARE\Policies\Microsoft\Edge\URLBlocklist",
+    "HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist",
+    "HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist"
 )
 foreach ($path in $regPaths) {
     if (Test-Path $path) {
@@ -254,6 +336,10 @@ if ($acrylicService) {
         $acrylicPath = "${env:ProgramFiles(x86)}\Acrylic DNS Proxy"
         if (Test-Path "$acrylicPath\AcrylicService.exe") {
             & "$acrylicPath\AcrylicService.exe" /UNINSTALL 2>$null
+        }
+        $remainingAcrylicService = Get-Service -Name 'AcrylicDNSProxySvc' -ErrorAction SilentlyContinue
+        if ($remainingAcrylicService) {
+            & sc.exe delete AcrylicDNSProxySvc 2>$null | Out-Null
         }
         Write-Host "  Acrylic detenido y desinstalado" -ForegroundColor Green
     }

@@ -49,6 +49,36 @@ Describe "DNS Module" {
         }
     }
 
+    Context "Original DNS snapshot" {
+        It "Snapshots adapter identity and IPv4 DNS before local DNS mutation" {
+            $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
+            $content = Get-Content $servicePath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'function Save-OpenPathOriginalDnsSnapshot',
+                "return 'C:\OpenPath\data\original-dns.json'",
+                'InterfaceGuid = [string]$adapter.InterfaceGuid',
+                'InterfaceAlias = [string]$adapter.Name',
+                'InterfaceIndex = [int]$adapter.ifIndex',
+                'ServerAddresses = @($dns.ServerAddresses | ForEach-Object { [string]$_ })',
+                'Save-OpenPathOriginalDnsSnapshot | Out-Null'
+            )
+        }
+
+        It "Restores DNS by InterfaceGuid with index and alias fallback and resets empty server lists" {
+            $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
+            $content = Get-Content $servicePath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '[string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid',
+                '$_.ifIndex -eq [int]$entry.InterfaceIndex',
+                '$_.Name -eq [string]$entry.InterfaceAlias',
+                'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $servers',
+                'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses'
+            )
+        }
+    }
+
     Context "Get-OpenPathDnsSettings" {
         It "Returns safe defaults when OpenPath config is unavailable" {
             Mock Get-OpenPathConfig { throw 'config unavailable' } -ModuleName DNS

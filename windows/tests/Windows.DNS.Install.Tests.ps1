@@ -49,6 +49,19 @@ Describe "DNS Module - Install Contracts" {
             )
         }
 
+        It "Pins Acrylic 2.2.1 downloads by SHA256 before extraction or execution" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Install.ps1"
+            $content = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'function Assert-AcrylicDownloadHash',
+                '$portableZipSha256 = ''26a5601c813257c186cd69da617ee1fff254b84f3ecb542483af8f4a5cc520cd''',
+                '$executableInstallerSha256 = ''be60bde686766a889a8878c8b27446ea3584e425583070eeef85b0b31c60adbc''',
+                'Assert-AcrylicDownloadHash -Path $zipPath -ExpectedSha256 $portableZipSha256 -ArtifactName ''Acrylic-Portable.zip''',
+                'Assert-AcrylicDownloadHash -Path $exePath -ExpectedSha256 $executableInstallerSha256 -ArtifactName ''Acrylic.exe'''
+            )
+        }
+
         It "Falls back to Chocolatey when the direct Acrylic download fails" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Install.ps1"
             $content = Get-Content $modulePath -Raw

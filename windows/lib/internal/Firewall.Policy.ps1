@@ -122,11 +122,11 @@ function Set-OpenPathFirewall {
         catch {
         }
 
-        New-NetFirewallRule -DisplayName "$script:RulePrefix-Allow-Loopback-UDP" `
+        New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Allow-Loopback-UDP" `
             -Direction Outbound -Protocol UDP -RemoteAddress 127.0.0.1 -RemotePort 53 `
             -Action Allow -Profile Any -Description 'Allow DNS to local Acrylic DNS Proxy' | Out-Null
 
-        New-NetFirewallRule -DisplayName "$script:RulePrefix-Allow-Loopback-TCP" `
+        New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Allow-Loopback-TCP" `
             -Direction Outbound -Protocol TCP -RemoteAddress 127.0.0.1 -RemotePort 53 `
             -Action Allow -Profile Any -Description 'Allow DNS to local Acrylic DNS Proxy (TCP)' | Out-Null
 
@@ -141,7 +141,7 @@ function Set-OpenPathFirewall {
                 if (-not (Test-OpenPathFirewallIpAddress -Address $target.Address)) { continue }
 
                 foreach ($protocol in @('UDP', 'TCP')) {
-                    New-NetFirewallRule -DisplayName "$script:RulePrefix-Allow-$($target.Name)-$protocol" `
+                    New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Allow-$($target.Name)-$protocol" `
                         -Direction Outbound -Protocol $protocol -RemoteAddress $target.Address -RemotePort 53 `
                         -Action Allow -Program $acrylicExe -Profile Any `
                         -Description "Allow Acrylic to reach $($target.Name.ToLowerInvariant()) DNS over $protocol" | Out-Null
@@ -162,7 +162,7 @@ function Set-OpenPathFirewall {
                     foreach ($clientProgram in @($resolverBypassClients)) {
                         foreach ($protocol in @('TCP', 'UDP')) {
                             $clientId = ([System.IO.Path]::GetFileNameWithoutExtension($clientProgram)) -replace '[^0-9A-Za-z]', '-'
-                            New-NetFirewallRule -DisplayName "$script:RulePrefix-Block-Known-DNS-$resolverId-$clientId-$protocol-53" `
+                            New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-Known-DNS-$resolverId-$clientId-$protocol-53" `
                                 -Direction Outbound -Protocol $protocol -RemoteAddress $resolverIp -RemotePort 53 `
                                 -Action Block -Program $clientProgram -Profile Any `
                                 -Description "Block direct DNS bypass from $clientProgram to resolver $resolverIp over $protocol/53" | Out-Null
@@ -172,7 +172,7 @@ function Set-OpenPathFirewall {
                 }
                 else {
                     foreach ($protocol in @('TCP', 'UDP')) {
-                        New-NetFirewallRule -DisplayName "$script:RulePrefix-Block-Known-DNS-$resolverId-$protocol-53" `
+                        New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-Known-DNS-$resolverId-$protocol-53" `
                             -Direction Outbound -Protocol $protocol -RemoteAddress $resolverIp -RemotePort 53 `
                             -Action Block -Profile Any `
                             -Description "Block direct DNS bypass to resolver $resolverIp over $protocol/53" | Out-Null
@@ -187,7 +187,7 @@ function Set-OpenPathFirewall {
             Write-OpenPathLog 'Known DNS IP blocking disabled by configuration' -Level WARN
         }
 
-        New-NetFirewallRule -DisplayName "$script:RulePrefix-Block-DoT" `
+        New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DoT" `
             -Direction Outbound -Protocol TCP -RemotePort 853 -Action Block -Profile Any `
             -Description 'Block DNS-over-TLS to prevent bypass' | Out-Null
 
@@ -204,11 +204,11 @@ function Set-OpenPathFirewall {
                 if ($resolverIp -in @($UpstreamDNS, $secondaryDns)) {
                     foreach ($clientProgram in @($resolverBypassClients)) {
                         $clientId = ([System.IO.Path]::GetFileNameWithoutExtension($clientProgram)) -replace '[^0-9A-Za-z]', '-'
-                        New-NetFirewallRule -DisplayName "$script:RulePrefix-Block-DoH-$resolverId-$clientId-TCP443" `
+                        New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DoH-$resolverId-$clientId-TCP443" `
                             -Direction Outbound -Protocol TCP -RemoteAddress $resolverIp -RemotePort 443 `
                             -Action Block -Program $clientProgram -Profile Any -Description "Block DoH resolver $resolverIp from $clientProgram over TCP/443" | Out-Null
 
-                        New-NetFirewallRule -DisplayName "$script:RulePrefix-Block-DoH-$resolverId-$clientId-UDP443" `
+                        New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DoH-$resolverId-$clientId-UDP443" `
                             -Direction Outbound -Protocol UDP -RemoteAddress $resolverIp -RemotePort 443 `
                             -Action Block -Program $clientProgram -Profile Any -Description "Block DoH resolver $resolverIp from $clientProgram over UDP/443" | Out-Null
 
@@ -216,11 +216,11 @@ function Set-OpenPathFirewall {
                     }
                 }
                 else {
-                    New-NetFirewallRule -DisplayName "$script:RulePrefix-Block-DoH-$resolverId-TCP443" `
+                    New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DoH-$resolverId-TCP443" `
                         -Direction Outbound -Protocol TCP -RemoteAddress $resolverIp -RemotePort 443 `
                         -Action Block -Profile Any -Description "Block DoH resolver $resolverIp over TCP/443" | Out-Null
 
-                    New-NetFirewallRule -DisplayName "$script:RulePrefix-Block-DoH-$resolverId-UDP443" `
+                    New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DoH-$resolverId-UDP443" `
                         -Direction Outbound -Protocol UDP -RemoteAddress $resolverIp -RemotePort 443 `
                         -Action Block -Profile Any -Description "Block DoH resolver $resolverIp over UDP/443" | Out-Null
 
@@ -249,13 +249,13 @@ function Set-OpenPathFirewall {
             }
             if (-not $vpnName) { $vpnName = "VPN-$vpnProtocol-$vpnPort" }
 
-            New-NetFirewallRule -DisplayName "$script:RulePrefix-Block-VPN-$vpnName" `
+            New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-VPN-$vpnName" `
                 -Direction Outbound -Protocol $vpnProtocol -RemotePort $vpnPort -Action Block `
                 -Profile Any -Description "Block $vpnName VPN traffic" | Out-Null
         }
 
         foreach ($port in @($torPorts)) {
-            New-NetFirewallRule -DisplayName "$script:RulePrefix-Block-Tor-$port" `
+            New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-Tor-$port" `
                 -Direction Outbound -Protocol TCP -RemotePort $port -Action Block -Profile Any `
                 -Description "Block Tor traffic on port $port" | Out-Null
         }

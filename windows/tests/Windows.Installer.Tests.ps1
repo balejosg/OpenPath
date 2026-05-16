@@ -151,6 +151,38 @@ Describe "Installer" {
                 $content | Should -Match "Invoke-OpenPathPlanned(?:Warning)?Phase -Name '$phaseName'"
             }
         }
+
+        It "Treats Acrylic service and configuration failures as fatal before local DNS" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'Acrylic is installed but the AcrylicDNSProxySvc service could not be registered or started',
+                'Acrylic installation failed or did not produce a running AcrylicDNSProxySvc service',
+                '$acrylicConfigurationApplied = Set-AcrylicConfiguration -WhatIf:$WhatIfPreference',
+                "throw 'Acrylic configuration failed'",
+                "Invoke-OpenPathPlannedPhase -Name 'acrylic-configuration'",
+                "Invoke-OpenPathPlannedPhase -Name 'local-dns'"
+            )
+            $content.IndexOf("Invoke-OpenPathPlannedPhase -Name 'acrylic-configuration'") | Should -BeLessThan $content.IndexOf("Invoke-OpenPathPlannedPhase -Name 'local-dns'")
+        }
+
+        It "Rolls back OpenPath-owned mutations through catchable installer failures" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '$script:OpenPathInstallerMutated = $false',
+                'function Invoke-OpenPathInstallRollback',
+                'Stop-OpenPathInstallerScheduledTasks',
+                'Restore-OpenPathInstallerDnsSettings',
+                'Remove-OpenPathInstallerFirewallRules',
+                'Remove-OpenPathInstallerAppLockerRules',
+                'trap {',
+                'throw "Installer phase failed: $($Result.Name)"'
+            )
+            $content | Should -Not -Match 'Assert-OpenPathInstallPhaseSucceeded[\s\S]*?exit 1'
+        }
     }
 
     Context "ACL lockdown" {

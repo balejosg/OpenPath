@@ -201,6 +201,20 @@ function Remove-OpenPathInstallerFirewallRules {
     if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) { return }
     if (-not (Get-Command -Name Remove-NetFirewallRule -ErrorAction SilentlyContinue)) { return }
 
+    $manifestPath = Join-Path 'C:\OpenPath' 'data\firewall-rules.json'
+    if (Test-Path $manifestPath) {
+        @(Get-Content $manifestPath -Raw | ConvertFrom-Json | ForEach-Object { [string]$_ }) |
+            Where-Object { $_ } |
+            ForEach-Object {
+                Get-NetFirewallRule -DisplayName $_ -ErrorAction SilentlyContinue |
+                    Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            }
+        Remove-Item $manifestPath -Force -ErrorAction SilentlyContinue
+    }
+
+    Get-NetFirewallRule -Group 'OpenPath' -ErrorAction SilentlyContinue |
+        Remove-NetFirewallRule -ErrorAction SilentlyContinue
+
     Get-NetFirewallRule -DisplayName 'OpenPath-DNS-*' -ErrorAction SilentlyContinue |
         Remove-NetFirewallRule -ErrorAction Stop
 }
@@ -209,8 +223,33 @@ function Restore-OpenPathInstallerDnsSettings {
     if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) { return }
     if (-not (Get-Command -Name Set-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return }
 
-    Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object {
-        Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses -ErrorAction Stop
+    $snapshotPath = Join-Path 'C:\OpenPath' 'data\original-dns.json'
+    if (Test-Path $snapshotPath) {
+        $snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)
+        $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
+        foreach ($entry in $snapshot) {
+            $adapter = @($adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1)
+            if (-not $adapter -and $entry.InterfaceIndex -ne $null) {
+                $adapter = @($adapters | Where-Object { $_.ifIndex -eq [int]$entry.InterfaceIndex } | Select-Object -First 1)
+            }
+            if (-not $adapter -and $entry.InterfaceAlias) {
+                $adapter = @($adapters | Where-Object { $_.Name -eq [string]$entry.InterfaceAlias } | Select-Object -First 1)
+            }
+            if (-not $adapter) { continue }
+
+            $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object { $_ })
+            if ($servers.Count -gt 0) {
+                Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $servers -ErrorAction Stop
+            }
+            else {
+                Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction Stop
+            }
+        }
+    }
+    else {
+        Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object {
+            Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses -ErrorAction Stop
+        }
     }
     if (Get-Command -Name Clear-DnsClientCache -ErrorAction SilentlyContinue) {
         Clear-DnsClientCache
@@ -315,9 +354,9 @@ function Invoke-OpenPathInstallerExistingInstallCleanup {
     Write-InstallerWarning '  Existing OpenPath installation detected; cleaning before reinstall'
 
     Stop-OpenPathInstallerScheduledTasks
-    Remove-OpenPathInstallerAppLockerRules
-    Remove-OpenPathInstallerFirewallRules
     Restore-OpenPathInstallerDnsSettings
+    Remove-OpenPathInstallerFirewallRules
+    Remove-OpenPathInstallerAppLockerRules
     Remove-OpenPathInstallerBrowserArtifacts
     Stop-OpenPathInstallerAcrylicService -KeepAcrylic:$KeepAcrylic
     Remove-OpenPathInstallerInstallRoot -KeepLogs:$KeepLogs -OpenPathRoot $OpenPathRoot

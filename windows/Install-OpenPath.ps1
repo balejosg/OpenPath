@@ -116,6 +116,26 @@ if (-not $EdgeExtensionStoreUrl -and $env:OPENPATH_EDGE_EXTENSION_STORE_URL) {
 
 if (($FirefoxExtensionId -and -not $FirefoxExtensionInstallUrl) -or ($FirefoxExtensionInstallUrl -and -not $FirefoxExtensionId)) {
     Write-InstallerError 'ERROR: -FirefoxExtensionId and -FirefoxExtensionInstallUrl must be provided together'
+    throw '-FirefoxExtensionId and -FirefoxExtensionInstallUrl must be provided together'
+}
+
+function Invoke-OpenPathInstallRollback {
+    if ($script:OpenPathInstallerRollingBack) { return }
+    $script:OpenPathInstallerRollingBack = $true
+
+    Write-InstallerWarning 'Installation failed after mutations; rolling back OpenPath-owned changes.'
+    try { Stop-OpenPathInstallerScheduledTasks } catch { Write-InstallerWarning "  Rollback task cleanup failed: $_" }
+    try { Restore-OpenPathInstallerDnsSettings } catch { Write-InstallerWarning "  Rollback DNS restore failed: $_" }
+    try { Remove-OpenPathInstallerFirewallRules } catch { Write-InstallerWarning "  Rollback firewall cleanup failed: $_" }
+    try { Remove-OpenPathInstallerAppLockerRules } catch { Write-InstallerWarning "  Rollback AppLocker cleanup failed: $_" }
+    Write-InstallerWarning 'Rollback completed; OpenPath logs were left in place for diagnosis.'
+}
+
+trap {
+    if ($script:OpenPathInstallerMutated) {
+        Invoke-OpenPathInstallRollback
+    }
+    Write-InstallerError "ERROR: $($_.Exception.Message)"
     exit 1
 }
 
@@ -145,6 +165,8 @@ $installerParameters = @{
 }
 $installPlan = New-OpenPathInstallPlan -Parameters $installerParameters -OpenPathRoot $OpenPathRoot -ScriptDir $scriptDir
 $script:OpenPathInstallPhaseResults = @()
+$script:OpenPathInstallerMutated = $false
+$script:OpenPathInstallerRollingBack = $false
 
 function Get-OpenPathInstallPhaseFromPlan {
     param(
@@ -208,7 +230,7 @@ function Assert-OpenPathInstallPhaseSucceeded {
     if ($Result.RecoveryHint) {
         Write-InstallerError "  Recovery: $($Result.RecoveryHint)"
     }
-    exit 1
+    throw "Installer phase failed: $($Result.Name)"
 }
 
 function Get-OpenPathInstallerConfigValue {
@@ -298,6 +320,9 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'existing-install-cleanup' -Act
         -OpenPathRoot $OpenPathRoot
     $installerHelperRoot = Join-Path $scriptDir 'lib\install'
 
+    if (Test-OpenPathExistingInstallation -OpenPathRoot $OpenPathRoot) {
+        $script:OpenPathInstallerMutated = $true
+    }
     Invoke-OpenPathInstallerExistingInstallCleanup `
         -OpenPathRoot $OpenPathRoot `
         -KeepAcrylic `
@@ -305,7 +330,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'existing-install-cleanup' -Act
 }
 if (-not $phaseResult.Success) {
     Write-InstallerError "ERROR: Existing OpenPath cleanup failed: $($phaseResult.Error.Message)"
-    exit 1
+    throw 'Existing OpenPath cleanup failed'
 }
 
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'preflight' -Action {
@@ -321,7 +346,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'preflight' -Action {
                     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
                     ForEach-Object { Write-InstallerError "$_" }
                 Write-InstallerError 'ERROR: Pre-install validation failed'
-                exit 1
+                throw 'Pre-install validation failed'
             }
             if ($VerbosePreference -eq 'Continue') {
                 $validationOutput | ForEach-Object { Write-Verbose "$_" }
@@ -338,6 +363,7 @@ Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'directories' -Action {
     if ($PSCmdlet.ShouldProcess('OpenPath install root', 'Create install directories')) {
         Initialize-OpenPathInstallDirectories -OpenPathRoot $OpenPathRoot
+        $script:OpenPathInstallerMutated = $true
     }
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
@@ -399,21 +425,20 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'acrylic' -Action {
     if (-not $SkipAcrylic) {
         if (Test-AcrylicInstalled) {
             Write-InstallerVerbose '  Acrylic ya instalado'
-            if ((-not $WhatIfPreference) -and (Ensure-AcrylicService -Start)) {
+            if ($WhatIfPreference -or (Ensure-AcrylicService -Start)) {
                 Write-InstallerVerbose '  Servicio Acrylic listo'
             }
             else {
-                Write-InstallerWarning '  ADVERTENCIA: No se pudo registrar o iniciar el servicio Acrylic automaticamente'
+                throw 'Acrylic is installed but the AcrylicDNSProxySvc service could not be registered or started'
             }
         }
         else {
             $installed = Install-AcrylicDNS -WhatIf:$WhatIfPreference
-            if ($installed) {
+            if ($installed -and ($WhatIfPreference -or ((Test-AcrylicInstalled) -and (Ensure-AcrylicService -Start)))) {
                 Write-InstallerVerbose '  Acrylic instalado'
             }
             else {
-                Write-InstallerWarning '  ADVERTENCIA: No se pudo instalar Acrylic automaticamente'
-                Write-InstallerWarning '  Descarga manual: https://mayakron.altervista.org/support/acrylic/Home.htm'
+                throw 'Acrylic installation failed or did not produce a running AcrylicDNSProxySvc service'
             }
         }
     }
@@ -426,7 +451,15 @@ Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'acrylic-configuration' -Action {
     Start-OpenPathInstallTimedStep -Name 'acrylic-configuration'
-    Set-AcrylicConfiguration -WhatIf:$WhatIfPreference
+    if ($SkipAcrylic) {
+        Write-InstallerWarning '  Configuracion de Acrylic omitida por -SkipAcrylic'
+    }
+    else {
+        $acrylicConfigurationApplied = Set-AcrylicConfiguration -WhatIf:$WhatIfPreference
+        if (-not ($WhatIfPreference -or $acrylicConfigurationApplied)) {
+            throw 'Acrylic configuration failed'
+        }
+    }
     Complete-OpenPathInstallTimedStep -Name 'acrylic-configuration'
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
@@ -478,7 +511,7 @@ if ($classroomModeRequested) {
             if ($enrollmentError) {
                 Write-InstallerError "  $enrollmentError"
             }
-            exit 1
+            throw 'Classroom enrollment did not complete'
         }
     }
     Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
@@ -514,7 +547,7 @@ Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
 if ($classroomModeRequested -and $Unattended -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup -or -not $nativeHostRequestSetup.Ready)) {
     Write-InstallerError 'ERROR: Firefox native host registration incomplete; domain requests will not be configured.'
-    exit 1
+    throw 'Firefox native host registration incomplete'
 }
 
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'first-update' -Action {
@@ -541,7 +574,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
                 Write-InstallerError 'ERROR: Firefox managed extension is not active after installation.'
                 Write-InstallerError "  Failure: $($firefoxReady.FailureCode)"
                 Write-InstallerError "  $($firefoxReady.Message)"
-                exit 1
+                throw "Firefox managed extension is not active after installation: $($firefoxReady.FailureCode)"
             }
         }
         Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
@@ -551,7 +584,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
         if ($classroomModeRequested) {
             Write-InstallerError 'ERROR: Firefox managed extension is not active after installation.'
             Write-InstallerError "  $_"
-            exit 1
+            throw 'Firefox managed extension readiness validation failed'
         }
 
         Write-InstallerWarning "  ADVERTENCIA: No se pudo validar Firefox managed extension readiness: $_"
