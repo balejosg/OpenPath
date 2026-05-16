@@ -704,6 +704,108 @@ test('submitBlockedScreenRequest fills the blocked page request form and waits f
   assert.match(statusText, /Solicitud enviada/);
 });
 
+test('submitBlockedScreenRequest retries once when Firefox swaps the blocked page document', async () => {
+  const events: string[] = [];
+  let waitAttempts = 0;
+  const elements = new Map([
+    [
+      '#request-reason',
+      {
+        async clear() {
+          events.push('clear');
+        },
+        async sendKeys(value: string) {
+          events.push(`reason:${value}`);
+        },
+      },
+    ],
+    [
+      '#submit-unblock-request',
+      {
+        async click() {
+          events.push('click');
+        },
+      },
+    ],
+    [
+      '#request-status',
+      {
+        async getText() {
+          return waitAttempts > 1
+            ? 'Solicitud enviada. Quedara pendiente hasta que la revisen.'
+            : '';
+        },
+      },
+    ],
+  ]);
+
+  const state = {
+    getDriver() {
+      return {
+        async findElement(locator: { value: string }) {
+          const element = elements.get(locator.value);
+          assert.ok(element, `Missing fake element for ${locator.value}`);
+          return element;
+        },
+        async getCurrentUrl() {
+          return 'moz-extension://extension-id/blocked/blocked.html?domain=blocked.test';
+        },
+        async getTitle() {
+          return 'Sitio bloqueado';
+        },
+        async executeScript(script: string, element?: unknown) {
+          if (element === elements.get('#request-status')) {
+            return waitAttempts > 1
+              ? 'Solicitud enviada. Quedara pendiente hasta que la revisen.'
+              : '';
+          }
+
+          if (script.includes('__openpathBlockedPageSubmitProbe')) {
+            return { installed: false };
+          }
+
+          if (script.includes('document.readyState')) {
+            return {
+              readyState: 'complete',
+              reasonValueLength: 0,
+              requestStatusTextContent: '',
+              submitDisabled: false,
+            };
+          }
+
+          return '';
+        },
+        async wait(condition: (driver: unknown) => Promise<boolean>, timeoutMs: number) {
+          waitAttempts += 1;
+          const result = await condition(this);
+          if (waitAttempts === 1) {
+            assert.equal(result, false);
+            throw new Error(`Wait timed out after ${timeoutMs.toString()}ms`);
+          }
+
+          assert.equal(result, true);
+          return result;
+        },
+      };
+    },
+  };
+
+  const statusText = await submitBlockedScreenRequest(state as never, {
+    reason: 'Necesario para una actividad de clase',
+    timeoutMs: 123,
+  });
+
+  assert.deepEqual(events, [
+    'clear',
+    'reason:Necesario para una actividad de clase',
+    'click',
+    'clear',
+    'reason:Necesario para una actividad de clase',
+    'click',
+  ]);
+  assert.match(statusText, /Solicitud enviada/);
+});
+
 test('submitBlockedScreenRequest includes blocked page status when success wait times out', async () => {
   const elements = new Map([
     [
