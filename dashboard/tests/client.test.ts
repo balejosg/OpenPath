@@ -14,6 +14,11 @@ interface ApiClientModule {
   login(username: string, password: string): Promise<LoginResult>;
   refreshToken(refreshTokenValue: string): Promise<LoginResult>;
   logout(token: string, refreshTokenValue: string): Promise<boolean>;
+  changePassword(
+    token: string,
+    currentPassword: string,
+    newPassword: string
+  ): Promise<{ success: boolean; error?: string }>;
 }
 
 interface TrpcModule {
@@ -26,6 +31,7 @@ interface TrpcModule {
 const originalFetch = globalThis.fetch;
 
 let fetchCalls: FetchCall[] = [];
+let failingPaths: Set<string>;
 
 function getRequestUrl(input: Parameters<typeof fetch>[0]): URL {
   if (typeof input === 'string') {
@@ -50,6 +56,7 @@ function trpcResponse(data: unknown): Response {
 
 beforeEach(() => {
   fetchCalls = [];
+  failingPaths = new Set();
   process.env.API_URL = 'http://dashboard.test';
   globalThis.fetch = ((input, init) => {
     const url = getRequestUrl(input);
@@ -57,6 +64,10 @@ beforeEach(() => {
       pathname: url.pathname,
       authorization: getAuthorizationHeader(init),
     });
+
+    if (failingPaths.has(url.pathname)) {
+      return Promise.reject(new Error(`Forced tRPC failure: ${url.pathname}`));
+    }
 
     switch (url.pathname) {
       case '/trpc/auth.login':
@@ -72,6 +83,8 @@ beforeEach(() => {
           trpcResponse({ accessToken: 'new-access-token', refreshToken: 'new-refresh-token' })
         );
       case '/trpc/auth.logout':
+        return Promise.resolve(trpcResponse({ success: true }));
+      case '/trpc/auth.changePassword':
         return Promise.resolve(trpcResponse({ success: true }));
       case '/trpc/groups.list':
         return Promise.resolve(
@@ -241,15 +254,49 @@ void describe('dashboard tRPC client wrappers', () => {
       refreshToken: 'new-refresh-token',
     });
     assert.strictEqual(await clientModule.logout('Bearer-Token', 'refresh-token'), true);
+    assert.deepStrictEqual(
+      await clientModule.changePassword('Bearer-Token', 'old-password', 'new-password'),
+      { success: true }
+    );
 
     const authCalls = fetchCalls.filter((call) => call.pathname.startsWith('/trpc/auth.'));
     assert.strictEqual(authCalls[0]?.authorization, null);
     assert.strictEqual(authCalls[1]?.authorization, null);
     assert.strictEqual(authCalls[2]?.authorization, 'Bearer Bearer-Token');
+    assert.strictEqual(authCalls[3]?.authorization, 'Bearer Bearer-Token');
 
     assert.strictEqual(trpcModule.getTRPCErrorCode(new Error('boom')), undefined);
     assert.strictEqual(trpcModule.getTRPCErrorMessage(new Error('boom')), 'boom');
     assert.strictEqual(trpcModule.getTRPCErrorStatus(new Error('boom')), 500);
     assert.strictEqual(trpcModule.API_URL, 'http://dashboard.test');
+  });
+
+  void it('returns auth failure results when tRPC calls fail', async () => {
+    const tag = randomUUID();
+    const clientModule = (await import(`../src/api-client.ts?${tag}`)) as ApiClientModule;
+
+    failingPaths.add('/trpc/auth.login');
+    assert.deepStrictEqual(await clientModule.login('teacher@example.com', 'Password123!'), {
+      success: false,
+      error: 'Forced tRPC failure: /trpc/auth.login',
+    });
+
+    failingPaths.add('/trpc/auth.refresh');
+    assert.deepStrictEqual(await clientModule.refreshToken('refresh-token'), {
+      success: false,
+      error: 'Forced tRPC failure: /trpc/auth.refresh',
+    });
+
+    failingPaths.add('/trpc/auth.logout');
+    assert.strictEqual(await clientModule.logout('Bearer-Token', 'refresh-token'), false);
+
+    failingPaths.add('/trpc/auth.changePassword');
+    assert.deepStrictEqual(
+      await clientModule.changePassword('Bearer-Token', 'old-password', 'new-password'),
+      {
+        success: false,
+        error: 'Forced tRPC failure: /trpc/auth.changePassword',
+      }
+    );
   });
 });
