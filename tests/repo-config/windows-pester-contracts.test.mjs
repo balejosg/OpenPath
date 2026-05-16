@@ -55,3 +55,24 @@ test('checkpoint restore Pester test keeps DNS and firewall helpers module-scope
     'Enable-OpenPathFirewall fallback should stay mocked and unused in the checkpoint restore test'
   );
 });
+
+test('Windows aggregate Pester entrypoint includes installer cleanup regressions', () => {
+  const aggregateSuite = readText('windows/tests/Windows.Tests.ps1');
+  const cleanupSuite = readText('windows/tests/Windows.Installer.Cleanup.Tests.ps1');
+
+  assert.match(
+    aggregateSuite,
+    /"Windows\.Installer\.Cleanup\.Tests\.ps1"/,
+    'Windows.Tests.ps1 should include installer cleanup contracts for local aggregate runs'
+  );
+  assert.match(
+    cleanupSuite,
+    /Ignores AppLocker policies without rule collections/,
+    'installer cleanup contracts should cover AppLocker policies that have no RuleCollection nodes'
+  );
+  assert.match(
+    cleanupSuite,
+    /Set-AppLockerPolicy should not be called when no OpenPath rules are present/,
+    'installer cleanup contracts should prove cleanup skips AppLocker writes when no OpenPath rules exist'
+  );
+});

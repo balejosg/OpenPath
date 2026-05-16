@@ -51,6 +51,29 @@ Describe "Installer cleanup helper" {
         $uninstallContent | Should -Not -Match '\\$rule\\.Name\\s+-like\\s+''OpenPath non-admin app control'
     }
 
+    It "Ignores AppLocker policies without rule collections" {
+        $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
+        . $cleanupHelperPath
+
+        function global:Get-AppLockerPolicy {
+            return @'
+<AppLockerPolicy Version="1"></AppLockerPolicy>
+'@
+        }
+
+        function global:Set-AppLockerPolicy {
+            throw 'Set-AppLockerPolicy should not be called when no OpenPath rules are present'
+        }
+
+        try {
+            { Remove-OpenPathInstallerAppLockerRules } | Should -Not -Throw
+        }
+        finally {
+            Remove-Item Function:\Get-AppLockerPolicy -ErrorAction SilentlyContinue
+            Remove-Item Function:\Set-AppLockerPolicy -ErrorAction SilentlyContinue
+        }
+    }
+
     It "Makes standalone uninstall independent of installed OpenPath modules" {
         $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
         $content = Get-Content $uninstallPath -Raw

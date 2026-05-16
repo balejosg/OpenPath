@@ -18,6 +18,7 @@ $suiteFiles = @(
     "Windows.Update.Tests.ps1",
     "Windows.Watchdog.Tests.ps1",
     "Windows.Installer.Tests.ps1",
+    "Windows.Installer.Cleanup.Tests.ps1",
     "Windows.Enrollment.Tests.ps1",
     "Windows.Whitelist.Tests.ps1",
     "Windows.Browser.RequestReadiness.Tests.ps1",

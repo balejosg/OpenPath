@@ -58,7 +58,11 @@ function Test-OpenPathExistingInstallation {
         try {
             $policyXml = [xml](Get-AppLockerPolicy -Local -Xml)
             $rules = @($policyXml.AppLockerPolicy.RuleCollection.FilePathRule)
-            if (@($rules | Where-Object { $_.GetAttribute('Name') -like 'OpenPath non-admin app control*' }).Count -gt 0) {
+            if (@($rules | Where-Object {
+                        $null -ne $_ -and
+                        $_ -is [System.Xml.XmlElement] -and
+                        $_.GetAttribute('Name') -like 'OpenPath non-admin app control*'
+                    }).Count -gt 0) {
                 return $true
             }
         }
@@ -178,7 +182,9 @@ function Remove-OpenPathInstallerAppLockerRules {
     $removed = $false
     foreach ($collection in @($policyXml.AppLockerPolicy.RuleCollection)) {
         foreach ($rule in @($collection.ChildNodes)) {
-            if ($rule.GetAttribute('Name') -like 'OpenPath non-admin app control*') {
+            if ($null -ne $rule -and
+                $rule -is [System.Xml.XmlElement] -and
+                $rule.GetAttribute('Name') -like 'OpenPath non-admin app control*') {
                 [void]$collection.RemoveChild($rule)
                 $removed = $true
             }
