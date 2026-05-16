@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
-import { describe, test } from 'node:test';
+import { afterEach, describe, test } from 'node:test';
 
 import { buildLinuxEnrollmentScript } from '../src/lib/enrollment-script.js';
+
+const originalNodeEnv = process.env.NODE_ENV;
+
+afterEach(() => {
+  if (originalNodeEnv === undefined) {
+    delete process.env.NODE_ENV;
+  } else {
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
 
 void describe('Linux enrollment bootstrap script generation', () => {
   void test('pins the requested linux agent version when one is available', () => {
@@ -76,5 +86,65 @@ void describe('Linux enrollment bootstrap script generation', () => {
 
     assert.match(script, /\nopenpath health\n/);
     assert.doesNotMatch(script, /openpath health \|\| true/);
+  });
+
+  void test('rejects remote plain HTTP URLs outside test environments', () => {
+    process.env.NODE_ENV = 'production';
+
+    assert.throws(
+      () =>
+        buildLinuxEnrollmentScript({
+          publicUrl: 'http://control.remote.example.net',
+          classroomId: 'cls_123',
+          classroomName: 'Aula 1',
+          enrollmentToken: 'token-123',
+          aptRepoUrl: 'https://repo.example/apt',
+          linuxAgentVersion: '',
+        }),
+      /publicUrl must use HTTPS outside local or test environments/
+    );
+
+    assert.throws(
+      () =>
+        buildLinuxEnrollmentScript({
+          publicUrl: 'https://control.example',
+          classroomId: 'cls_123',
+          classroomName: 'Aula 1',
+          enrollmentToken: 'token-123',
+          aptRepoUrl: 'http://repo.remote.example.net/apt',
+          linuxAgentVersion: '',
+        }),
+      /aptRepoUrl must use HTTPS outside local or test environments/
+    );
+  });
+
+  void test('allows local and fixture HTTP URLs for development and tests', () => {
+    process.env.NODE_ENV = 'development';
+
+    const localhostScript = buildLinuxEnrollmentScript({
+      publicUrl: 'http://localhost:3000',
+      classroomId: 'cls_123',
+      classroomName: 'Aula 1',
+      enrollmentToken: 'token-123',
+      aptRepoUrl: 'http://127.0.0.1:8080/apt',
+      linuxAgentVersion: '',
+    });
+    assert.match(localhostScript, /API_URL='http:\/\/localhost:3000'/);
+    assert.match(
+      localhostScript,
+      /APT_BOOTSTRAP_URL='http:\/\/127\.0\.0\.1:8080\/apt\/apt-bootstrap\.sh'/
+    );
+
+    process.env.NODE_ENV = 'test';
+
+    const testFixtureScript = buildLinuxEnrollmentScript({
+      publicUrl: 'http://control.fixture.invalid',
+      classroomId: 'cls_123',
+      classroomName: 'Aula 1',
+      enrollmentToken: 'token-123',
+      aptRepoUrl: 'http://repo.fixture.invalid/apt',
+      linuxAgentVersion: '',
+    });
+    assert.match(testFixtureScript, /API_URL='http:\/\/control\.fixture\.invalid'/);
   });
 });

@@ -11,7 +11,6 @@ import { createDashboardApp } from './app.js';
 const PORT = process.env.PORT ?? 3001;
 
 const app = createDashboardApp({
-  cookieSecret: process.env.COOKIE_SECRET ?? 'dashboard-dev-secret',
   cookieSecure: process.env.NODE_ENV === 'production',
 });
 

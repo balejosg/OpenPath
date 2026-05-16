@@ -18,6 +18,11 @@
 - verify `dnsmasq`, watchdog, SSE, and update services after install
 - protect `/etc/openpath` and monitor `/var/log/openpath.log`
 - keep package/upgrade trust anchored to the persistent APT signing key
+- serve enrollment and APT bootstrap URLs over HTTPS; without certificate
+  pinning, plain HTTP bootstrap can be modified by a network attacker before
+  the agent is installed
+- publish package or bootstrap artifact hashes through a trusted channel and
+  compare them during operational rollout when pinning is not available
 
 ## Windows Agents
 
