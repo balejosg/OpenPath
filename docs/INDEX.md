@@ -20,6 +20,7 @@
 - ADR index: [`docs/ADR.md`](ADR.md)
 - Transactional service writes: [`docs/adr/0009-transactional-service-writes.md`](adr/0009-transactional-service-writes.md)
 - Public SPA extension surface: [`docs/adr/0010-public-spa-extension-surface.md`](adr/0010-public-spa-extension-surface.md)
+- Group role join table plan: [`docs/group-role-join-table-plan.md`](group-role-join-table-plan.md)
 - API package guide: [`api/README.md`](../api/README.md)
 - Shared package guide: [`shared/README.md`](../shared/README.md)
 - Dashboard package guide: [`dashboard/README.md`](../dashboard/README.md)

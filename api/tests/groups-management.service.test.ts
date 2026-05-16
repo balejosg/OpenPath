@@ -4,6 +4,7 @@ import { describe, test } from 'node:test';
 import {
   cloneGroup,
   createGroup,
+  deleteGroup,
   exportGroup,
   toggleSystemStatus,
 } from '../src/services/groups-management.service.js';
@@ -97,6 +98,78 @@ await describe('groups management service', async () => {
       pausedGroups: 10,
     });
     assert.equal(published, true);
+  });
+
+  await test('removes deleted group references from roles before publishing refresh', async () => {
+    const calls: string[] = [];
+    const result = await deleteGroup('group-to-delete', {
+      deleteGroup: async () => {
+        calls.push('deleteGroup');
+        return true;
+      },
+      getGroupById: () =>
+        Promise.resolve({
+          id: 'group-to-delete',
+          name: 'group-to-delete',
+          displayName: 'Group To Delete',
+          enabled: true,
+          visibility: 'private',
+          ownerUserId: null,
+          createdAt: '2026-05-16T00:00:00.000Z',
+          updatedAt: '2026-05-16T00:00:00.000Z',
+          whitelistCount: 0,
+          blockedSubdomainCount: 0,
+          blockedPathCount: 0,
+        }),
+      publishWhitelistChanged: (groupId) => {
+        calls.push(`publishWhitelistChanged:${groupId}`);
+      },
+      removeGroupFromAllRoles: async (groupId) => {
+        calls.push(`removeGroupFromAllRoles:${groupId}`);
+        return 2;
+      },
+    });
+
+    assert.deepEqual(result, { ok: true, data: { deleted: true } });
+    assert.deepEqual(calls, [
+      'deleteGroup',
+      'removeGroupFromAllRoles:group-to-delete',
+      'publishWhitelistChanged:group-to-delete',
+    ]);
+  });
+
+  await test('does not remove role group references when storage deletion returns false', async () => {
+    const calls: string[] = [];
+    const result = await deleteGroup('group-to-delete', {
+      deleteGroup: async () => {
+        calls.push('deleteGroup');
+        return false;
+      },
+      getGroupById: () =>
+        Promise.resolve({
+          id: 'group-to-delete',
+          name: 'group-to-delete',
+          displayName: 'Group To Delete',
+          enabled: true,
+          visibility: 'private',
+          ownerUserId: null,
+          createdAt: '2026-05-16T00:00:00.000Z',
+          updatedAt: '2026-05-16T00:00:00.000Z',
+          whitelistCount: 0,
+          blockedSubdomainCount: 0,
+          blockedPathCount: 0,
+        }),
+      publishWhitelistChanged: (groupId) => {
+        calls.push(`publishWhitelistChanged:${groupId}`);
+      },
+      removeGroupFromAllRoles: async (groupId) => {
+        calls.push(`removeGroupFromAllRoles:${groupId}`);
+        return 1;
+      },
+    });
+
+    assert.deepEqual(result, { ok: true, data: { deleted: false } });
+    assert.deepEqual(calls, ['deleteGroup']);
   });
 
   await test('publishes clone events after the transaction commits', async () => {

@@ -130,7 +130,7 @@ export async function deleteGroup(
   id: string,
   deps: Pick<
     GroupsManagementDependencies,
-    'deleteGroup' | 'getGroupById' | 'publishWhitelistChanged'
+    'deleteGroup' | 'getGroupById' | 'publishWhitelistChanged' | 'removeGroupFromAllRoles'
   > = defaultManagementDependencies
 ): Promise<GroupsResult<{ deleted: boolean }>> {
   const existing = await deps.getGroupById(id);
@@ -144,6 +144,7 @@ export async function deleteGroup(
   const deleted = await DomainEventsService.withQueuedEvents(async (events) => {
     const didDelete = await deps.deleteGroup(id);
     if (didDelete) {
+      await deps.removeGroupFromAllRoles(id);
       events.publishWhitelistChanged(id);
     }
     return didDelete;

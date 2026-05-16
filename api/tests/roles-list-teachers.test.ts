@@ -35,4 +35,20 @@ void describe('Role management - teacher listings', () => {
     assert.ok(teacherEntry);
     assert.ok(teacherEntry.groupIds.includes(getHarness().groupIds.ciencias));
   });
+
+  void test('omits deleted groups from teacher approval groups', async (): Promise<void> => {
+    const teacher = await getHarness().createUser();
+    await getHarness().assignRole({
+      userId: teacher.id,
+      role: 'teacher',
+      groupIds: [getHarness().groupIds.ciencias, getHarness().groupIds.matematicas],
+    });
+
+    await getHarness().deleteGroup(getHarness().groupIds.ciencias);
+
+    const teachers = await getHarness().listTeachers();
+    const teacherEntry = teachers.find((entry) => entry.userId === teacher.id);
+    assert.ok(teacherEntry);
+    assert.deepEqual(teacherEntry.groupIds, [getHarness().groupIds.matematicas]);
+  });
 });

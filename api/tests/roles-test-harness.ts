@@ -26,6 +26,7 @@ export interface RolesTestHarness extends HttpTestHarness {
   assignRole: (input: { groupIds?: string[]; role: string; userId: string }) => Promise<RoleResult>;
   createGroup: (name: string) => Promise<{ id: string; name: string }>;
   createUser: (input?: { email?: string; name?: string; password?: string }) => Promise<UserResult>;
+  deleteGroup: (id: string) => Promise<{ deleted: boolean }>;
   fetchUser: (userId: string) => Promise<UserResult>;
   groupIds: { ciencias: string; matematicas: string };
   groupNames: { ciencias: string; matematicas: string };
@@ -119,6 +120,14 @@ export async function startRolesTestHarness(): Promise<RolesTestHarness> {
     assignRole,
     createGroup,
     createUser,
+    deleteGroup: async (id: string): Promise<{ deleted: boolean }> => {
+      const response = await harness.trpcMutate('groups.delete', { id }, bearerAuth(adminToken));
+      assertStatus(response, 200);
+      const payload = (await parseTRPC(response)) as { data?: { deleted: boolean } };
+      assert.equal(payload.data?.deleted, true);
+      assert.ok(payload.data, 'Expected deleted group response');
+      return payload.data;
+    },
     fetchUser,
     groupIds: { ciencias: ciencias.id, matematicas: matematicas.id },
     groupNames: { ciencias: ciencias.name, matematicas: matematicas.name },

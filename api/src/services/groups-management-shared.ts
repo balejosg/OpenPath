@@ -1,4 +1,5 @@
 import * as groupsStorage from '../lib/groups-storage.js';
+import { removeGroupFromAllRoles } from '../lib/role-storage-command.js';
 import { withTransaction } from '../db/index.js';
 
 import DomainEventsService from './domain-events.service.js';
@@ -15,6 +16,7 @@ export interface GroupsManagementDependencies {
   getSystemStatus: typeof groupsStorage.getSystemStatus;
   publishAllWhitelistsChanged: () => void;
   publishWhitelistChanged: (groupId: string) => void;
+  removeGroupFromAllRoles: typeof removeGroupFromAllRoles;
   toggleSystemStatus: typeof groupsStorage.toggleSystemStatus;
   touchGroupUpdatedAt: typeof groupsStorage.touchGroupUpdatedAt;
   updateGroup: typeof groupsStorage.updateGroup;
@@ -34,6 +36,7 @@ export const defaultManagementDependencies: GroupsManagementDependencies = {
   publishAllWhitelistsChanged:
     DomainEventsService.publishAllWhitelistsChanged.bind(DomainEventsService),
   publishWhitelistChanged: DomainEventsService.publishWhitelistChanged.bind(DomainEventsService),
+  removeGroupFromAllRoles,
   toggleSystemStatus: groupsStorage.toggleSystemStatus,
   touchGroupUpdatedAt: groupsStorage.touchGroupUpdatedAt,
   updateGroup: groupsStorage.updateGroup,
