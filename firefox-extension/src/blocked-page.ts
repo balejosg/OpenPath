@@ -246,6 +246,15 @@ async function submitUnblockRequest(input: {
   origin: string | null;
   error: string;
 }): Promise<unknown> {
+  const nativeRuntime = getNativeRuntime();
+  if (nativeRuntime?.sendNativeMessage) {
+    return withTimeout(
+      submitUnblockRequestWithNativeRuntime(input, nativeRuntime),
+      SUBMIT_REQUEST_TIMEOUT_MS,
+      'Tiempo de espera agotado al enviar la solicitud.'
+    );
+  }
+
   const runtime = getBrowserRuntime();
   if (runtime) {
     return withTimeout(
@@ -255,45 +264,47 @@ async function submitUnblockRequest(input: {
     );
   }
 
-  const nativeRuntime = getNativeRuntime();
-  if (nativeRuntime?.sendNativeMessage) {
-    const submitInput = {
-      domain: input.domain,
-      reason: input.reason,
-      ...(input.origin !== null ? { origin: input.origin } : {}),
-      error: input.error,
-    };
-    return withTimeout(
-      submitBlockedDomainRequestViaApi(submitInput, {
-        buildBlockedDomainSubmitBody,
-        getClientVersion: () => nativeRuntime.getManifest?.().version ?? 'unknown',
-        getRequestApiEndpoints: (config) =>
-          getRequestApiEndpoints({
-            ...config,
-            debugMode: false,
-            sharedSecret: '',
-          }),
-        loadRequestConfig: async () =>
-          loadRequestConfigWithNativeFallback(
-            await loadNativeRequestConfigWithSender(
-              (message) =>
-                nativeRuntime.sendNativeMessage?.(NATIVE_HOST_NAME, message) ??
-                Promise.reject(new Error('Native messaging unavailable'))
-            )
-          ),
-        sendNativeMessage: (message) =>
-          nativeRuntime.sendNativeMessage?.(NATIVE_HOST_NAME, message) ??
-          Promise.reject(new Error('Native messaging unavailable')),
-      }),
-      SUBMIT_REQUEST_TIMEOUT_MS,
-      'Tiempo de espera agotado al enviar la solicitud.'
-    );
-  }
-
   return {
     success: false,
     error: 'La extension no esta disponible en esta pagina.',
   };
+}
+
+async function submitUnblockRequestWithNativeRuntime(
+  input: {
+    domain: string;
+    reason: string;
+    origin: string | null;
+    error: string;
+  },
+  nativeRuntime: NativeRuntime
+): Promise<unknown> {
+  const submitInput = {
+    domain: input.domain,
+    reason: input.reason,
+    ...(input.origin !== null ? { origin: input.origin } : {}),
+    error: input.error,
+  };
+
+  const sendNativeMessage = (message: unknown): Promise<unknown> =>
+    nativeRuntime.sendNativeMessage?.(NATIVE_HOST_NAME, message) ??
+    Promise.reject(new Error('Native messaging unavailable'));
+
+  return submitBlockedDomainRequestViaApi(submitInput, {
+    buildBlockedDomainSubmitBody,
+    getClientVersion: () => nativeRuntime.getManifest?.().version ?? 'unknown',
+    getRequestApiEndpoints: (config) =>
+      getRequestApiEndpoints({
+        ...config,
+        debugMode: false,
+        sharedSecret: '',
+      }),
+    loadRequestConfig: async () =>
+      loadRequestConfigWithNativeFallback(
+        await loadNativeRequestConfigWithSender(sendNativeMessage)
+      ),
+    sendNativeMessage,
+  });
 }
 
 async function restoreRecentRequestStatusFromBackground(domain: string): Promise<void> {
