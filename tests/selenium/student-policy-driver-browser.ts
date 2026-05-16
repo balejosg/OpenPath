@@ -364,13 +364,15 @@ export async function submitBlockedScreenRequest(
 ): Promise<string> {
   const driver = state.getDriver();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  await grantBlockedPageDataCollectionConsentForSelenium(state);
+  let submitDiagnostics = await installBlockedPageSubmitDiagnostics(state);
+
   const reasonInput = await driver.findElement(By.css('#request-reason'));
   const submitButton = await driver.findElement(By.css('#submit-unblock-request'));
 
   await reasonInput.clear();
   await reasonInput.sendKeys(options.reason);
-  await grantBlockedPageDataCollectionConsentForSelenium(state);
-  let submitDiagnostics = await installBlockedPageSubmitDiagnostics(state);
   await submitButton.click();
 
   let latestStatus = '';
