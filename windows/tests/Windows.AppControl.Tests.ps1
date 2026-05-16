@@ -10,11 +10,15 @@ Describe "AppControl Module" {
     }
 
     Context "New-OpenPathNonAdminAppLockerPolicySpec" {
-        It "Defaults non-admin users to Firefox-only browser approval plus OpenPath paths and user-writable deny paths" {
+        It "Defaults non-admin users to Firefox-only browser approval plus admin-managed install paths and user-writable deny paths" {
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
             $expectedAllowPaths = @(
                 '%WINDIR%\*',
                 'C:\OpenPath\*',
+                '%PROGRAMFILES%\*',
+                '%PROGRAMFILES(X86)%\*',
+                'C:\Program Files\*',
+                'C:\Program Files (x86)\*',
                 '%PROGRAMFILES%\WindowsApps\Microsoft.*\*',
                 '%PROGRAMFILES%\WindowsApps\MicrosoftWindows.*\*',
                 'C:\Program Files\WindowsApps\Microsoft.*\*',
@@ -25,10 +29,36 @@ Describe "AppControl Module" {
             $expectedDenyPaths = @(
                 '%USERPROFILE%\Downloads\*',
                 '%USERPROFILE%\Desktop\*',
-                '%USERPROFILE%\AppData\Local\*',
-                '%APPDATA%\*',
                 '%LOCALAPPDATA%\Temp\*',
                 '%TEMP%\*'
+            )
+            $expectedAlwaysDeniedBrowsers = @(
+                '%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe',
+                '%PROGRAMFILES(X86)%\BraveSoftware\Brave-Browser\Application\brave.exe',
+                'C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe',
+                'C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe',
+                '%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe',
+                '%PROGRAMFILES%\Opera\launcher.exe',
+                '%PROGRAMFILES(X86)%\Opera\launcher.exe',
+                '%LOCALAPPDATA%\Programs\Opera\launcher.exe',
+                '%PROGRAMFILES%\Opera\opera.exe',
+                '%PROGRAMFILES(X86)%\Opera\opera.exe',
+                '%LOCALAPPDATA%\Programs\Opera\opera.exe',
+                '%PROGRAMFILES%\Vivaldi\Application\vivaldi.exe',
+                '%PROGRAMFILES(X86)%\Vivaldi\Application\vivaldi.exe',
+                '%LOCALAPPDATA%\Vivaldi\Application\vivaldi.exe',
+                '%PROGRAMFILES%\Tor Browser\Browser\firefox.exe',
+                '%PROGRAMFILES(X86)%\Tor Browser\Browser\firefox.exe',
+                '%PROGRAMFILES%\Chromium\Application\chrome.exe',
+                '%PROGRAMFILES(X86)%\Chromium\Application\chrome.exe',
+                '%LOCALAPPDATA%\Chromium\Application\chrome.exe',
+                '%PROGRAMFILES%\Chromium\Application\chromium.exe',
+                '%PROGRAMFILES(X86)%\Chromium\Application\chromium.exe',
+                '%LOCALAPPDATA%\Chromium\Application\chromium.exe',
+                '%PROGRAMFILES%\Internet Explorer\iexplore.exe',
+                '%PROGRAMFILES(X86)%\Internet Explorer\iexplore.exe',
+                'C:\Program Files\Internet Explorer\iexplore.exe',
+                'C:\Program Files (x86)\Internet Explorer\iexplore.exe'
             )
 
             $spec.NonAdminSid | Should -Be 'S-1-5-32-545'
@@ -57,10 +87,12 @@ Describe "AppControl Module" {
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files\Google\Chrome\Application\chrome.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
-            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\*'
-            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES(X86)%\*'
-            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Internet Explorer\iexplore.exe'
-            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES(X86)%\Internet Explorer\iexplore.exe'
+            @($spec.UserWritableDenyPaths) | Should -Not -Contain '%USERPROFILE%\AppData\Local\*'
+            @($spec.UserWritableDenyPaths) | Should -Not -Contain '%APPDATA%\*'
+            @($spec.AllowPaths) | Should -Not -Contain '%LOCALAPPDATA%\*'
+            foreach ($path in $expectedAlwaysDeniedBrowsers) {
+                @($spec.UnapprovedBrowserDenyPaths) | Should -Contain $path
+            }
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\curl.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\nslookup.exe'
             foreach ($path in $expectedDenyPaths) {
@@ -68,7 +100,7 @@ Describe "AppControl Module" {
             }
         }
 
-        It "Allows protected Microsoft WindowsApps launchers without allowing all Program Files" {
+        It "Allows protected Microsoft WindowsApps launchers and admin-managed Program Files without approving unmanaged browsers" {
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
             [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
             $exeCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Exe' })[0]
@@ -82,8 +114,18 @@ Describe "AppControl Module" {
             $allowedPaths | Should -Contain '%PROGRAMFILES%\WindowsApps\MicrosoftWindows.*\*'
             $allowedPaths | Should -Contain 'C:\Program Files\WindowsApps\Microsoft.*\*'
             $allowedPaths | Should -Contain 'C:\Program Files\WindowsApps\MicrosoftWindows.*\*'
-            $allowedPaths | Should -Not -Contain '%PROGRAMFILES%\*'
-            $allowedPaths | Should -Not -Contain 'C:\Program Files\*'
+            $allowedPaths | Should -Contain '%PROGRAMFILES%\*'
+            $allowedPaths | Should -Contain '%PROGRAMFILES(X86)%\*'
+            $allowedPaths | Should -Contain 'C:\Program Files\*'
+            $allowedPaths | Should -Contain 'C:\Program Files (x86)\*'
+
+            $denyRules = @($exeCollection.FilePathRule | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Deny' -and
+                    $_.GetAttribute('UserOrGroupSid') -eq 'S-1-5-32-545'
+                })
+            $deniedPaths = @($denyRules | ForEach-Object { $_.Conditions.FilePathCondition.GetAttribute('Path') })
+            $deniedPaths | Should -Contain '%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe'
+            $deniedPaths | Should -Contain '%PROGRAMFILES%\Internet Explorer\iexplore.exe'
         }
 
         It "Allows future explicit Edge approval without approving Chrome" {
@@ -108,6 +150,18 @@ Describe "AppControl Module" {
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files\Google\Chrome\Application\chrome.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
+        }
+
+        It "Denies Firefox when it is not an approved student browser" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -ApprovedBrowsers @('Edge')
+
+            @($spec.ApprovedBrowsers) | Should -Contain 'Edge'
+            @($spec.ApprovedBrowsers) | Should -Not -Contain 'Firefox'
+            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Mozilla Firefox\firefox.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Mozilla Firefox\firefox.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES(X86)%\Mozilla Firefox\firefox.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files\Mozilla Firefox\firefox.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
         }
 
         It "Supports AuditOnly mode without changing the target group" {

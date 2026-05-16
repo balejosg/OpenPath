@@ -94,17 +94,71 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         'C:\Program Files\Mozilla Firefox\firefox.exe',
         'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
     )
+    $firefoxUserWritablePaths = @(
+        '%LOCALAPPDATA%\Mozilla Firefox\firefox.exe'
+    )
     $edgePaths = @(
         '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe',
         '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe',
         'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
         'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
     )
+    $edgeUserWritablePaths = @(
+        '%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe'
+    )
     $chromePaths = @(
         '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe',
         '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe',
         'C:\Program Files\Google\Chrome\Application\chrome.exe',
         'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
+    )
+    $chromeUserWritablePaths = @(
+        '%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe'
+    )
+    $alwaysDeniedBrowserPaths = @(
+        '%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe',
+        '%PROGRAMFILES(X86)%\BraveSoftware\Brave-Browser\Application\brave.exe',
+        'C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe',
+        'C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe',
+        '%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe',
+        '%PROGRAMFILES%\Opera\launcher.exe',
+        '%PROGRAMFILES(X86)%\Opera\launcher.exe',
+        'C:\Program Files\Opera\launcher.exe',
+        'C:\Program Files (x86)\Opera\launcher.exe',
+        '%LOCALAPPDATA%\Programs\Opera\launcher.exe',
+        '%PROGRAMFILES%\Opera\opera.exe',
+        '%PROGRAMFILES(X86)%\Opera\opera.exe',
+        'C:\Program Files\Opera\opera.exe',
+        'C:\Program Files (x86)\Opera\opera.exe',
+        '%LOCALAPPDATA%\Programs\Opera\opera.exe',
+        '%PROGRAMFILES%\Opera GX\launcher.exe',
+        '%PROGRAMFILES(X86)%\Opera GX\launcher.exe',
+        'C:\Program Files\Opera GX\launcher.exe',
+        'C:\Program Files (x86)\Opera GX\launcher.exe',
+        '%LOCALAPPDATA%\Programs\Opera GX\launcher.exe',
+        '%PROGRAMFILES%\Vivaldi\Application\vivaldi.exe',
+        '%PROGRAMFILES(X86)%\Vivaldi\Application\vivaldi.exe',
+        'C:\Program Files\Vivaldi\Application\vivaldi.exe',
+        'C:\Program Files (x86)\Vivaldi\Application\vivaldi.exe',
+        '%LOCALAPPDATA%\Vivaldi\Application\vivaldi.exe',
+        '%PROGRAMFILES%\Tor Browser\Browser\firefox.exe',
+        '%PROGRAMFILES(X86)%\Tor Browser\Browser\firefox.exe',
+        'C:\Program Files\Tor Browser\Browser\firefox.exe',
+        'C:\Program Files (x86)\Tor Browser\Browser\firefox.exe',
+        '%PROGRAMFILES%\Chromium\Application\chrome.exe',
+        '%PROGRAMFILES(X86)%\Chromium\Application\chrome.exe',
+        'C:\Program Files\Chromium\Application\chrome.exe',
+        'C:\Program Files (x86)\Chromium\Application\chrome.exe',
+        '%LOCALAPPDATA%\Chromium\Application\chrome.exe',
+        '%PROGRAMFILES%\Chromium\Application\chromium.exe',
+        '%PROGRAMFILES(X86)%\Chromium\Application\chromium.exe',
+        'C:\Program Files\Chromium\Application\chromium.exe',
+        'C:\Program Files (x86)\Chromium\Application\chromium.exe',
+        '%LOCALAPPDATA%\Chromium\Application\chromium.exe',
+        '%PROGRAMFILES%\Internet Explorer\iexplore.exe',
+        '%PROGRAMFILES(X86)%\Internet Explorer\iexplore.exe',
+        'C:\Program Files\Internet Explorer\iexplore.exe',
+        'C:\Program Files (x86)\Internet Explorer\iexplore.exe'
     )
     $windowsAppsPaths = @(
         '%PROGRAMFILES%\WindowsApps\Microsoft.*\*',
@@ -115,7 +169,11 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
 
     $allowPaths = @(
         '%WINDIR%\*',
-        $openPathRuntimePath
+        $openPathRuntimePath,
+        '%PROGRAMFILES%\*',
+        '%PROGRAMFILES(X86)%\*',
+        'C:\Program Files\*',
+        'C:\Program Files (x86)\*'
     )
     $allowPaths += $windowsAppsPaths
     if ($approvedBrowserSet.Firefox) {
@@ -129,12 +187,19 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
     }
 
     $unapprovedBrowserDenyPaths = @()
+    if (-not $approvedBrowserSet.Firefox) {
+        $unapprovedBrowserDenyPaths += $firefoxPaths
+    }
+    $unapprovedBrowserDenyPaths += $firefoxUserWritablePaths
     if (-not $approvedBrowserSet.Edge) {
         $unapprovedBrowserDenyPaths += $edgePaths
     }
+    $unapprovedBrowserDenyPaths += $edgeUserWritablePaths
     if (-not $approvedBrowserSet.Chrome) {
         $unapprovedBrowserDenyPaths += $chromePaths
     }
+    $unapprovedBrowserDenyPaths += $chromeUserWritablePaths
+    $unapprovedBrowserDenyPaths += $alwaysDeniedBrowserPaths
 
     return [PSCustomObject]@{
         Mode = $Mode
@@ -164,8 +229,6 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         UserWritableDenyPaths = @(
             '%USERPROFILE%\Downloads\*',
             '%USERPROFILE%\Desktop\*',
-            '%USERPROFILE%\AppData\Local\*',
-            '%APPDATA%\*',
             '%LOCALAPPDATA%\Temp\*',
             '%TEMP%\*'
         )
