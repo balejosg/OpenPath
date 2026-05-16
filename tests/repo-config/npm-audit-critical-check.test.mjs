@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import process from 'node:process';
 import { describe, test } from 'node:test';
 
 import { projectRoot } from './support.mjs';
