@@ -139,7 +139,9 @@ Describe "Update Script" {
 
             Assert-ContentContainsAll -Content $runtimeContent -Needles @(
                 'EndpointPolicyState.ps1',
-                'EndpointStateReconciler.ps1'
+                'EndpointStateReconciler.ps1',
+                'Import-OpenPathUpdateRuntimeHelper',
+                'Function:script:$functionName'
             )
 
             Assert-ContentContainsAll -Content $stateContent -Needles @(
@@ -184,6 +186,13 @@ Describe "Update Script" {
 
             $applyContent | Should -Match '(?s)Handle-OpenPathNotModified.*?\$runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply.*?-QueueChanged \$runtimeDependencyQueueChanged.*?Invoke-OpenPathEndpointStateRepairPlan'
             $applyContent | Should -Match '(?s)Handle-OpenPathDownloadFailure.*?\$runtimeDependencyQueueChanged = Invoke-OpenPathRuntimeDependencyQueueApply.*?-QueueChanged \$runtimeDependencyQueueChanged.*?Invoke-OpenPathEndpointStateRepairPlan'
+        }
+
+        It "Keeps runtime dependency queue apply scalar when Acrylic emits helper output" {
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimeContent = Get-Content $runtimePath -Raw
+
+            $runtimeContent | Should -Match '(?s)function Invoke-OpenPathRuntimeDependencyQueueApply.*?Update-AcrylicHost .*?\| Out-Null.*?return \[bool\]\$runtimeDependencyQueueResult\.Changed'
         }
 
         It "Provides a queue-only runtime dependency fast apply without remote download" {

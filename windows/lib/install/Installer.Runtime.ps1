@@ -21,7 +21,13 @@ function Invoke-OpenPathInstallerFirstUpdate {
     }
 
     try {
-        & "$OpenPathRoot\scripts\Update-OpenPath.ps1"
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$OpenPathRoot\scripts\Update-OpenPath.ps1"
+        $updateExitCode = $LASTEXITCODE
+        if ($updateExitCode -ne 0) {
+            Write-InstallerWarning "  ADVERTENCIA: Primera actualizacion fallida con codigo $updateExitCode (se reintentara)"
+            return
+        }
+
         Write-InstallerVerbose '  Primera actualizacion completada'
     }
     catch {

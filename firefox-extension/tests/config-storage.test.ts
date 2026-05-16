@@ -6,8 +6,10 @@ import {
   getRequestApiEndpoints,
   hasValidRequestConfig,
   loadRequestConfig,
+  loadRequestConfigWithNativeFallback,
   saveRequestConfig,
 } from '../src/lib/config-storage.js';
+import { loadNativeRequestConfigWithSender } from '../src/lib/config-storage-native.js';
 
 function setMockBrowser(mock: unknown): void {
   Object.defineProperty(globalThis, 'browser', {
@@ -144,6 +146,53 @@ void describe('config-storage', () => {
     }
   });
 
+  void test('loadNativeRequestConfigWithSender normalizes config from the supplied native channel', async () => {
+    const sentMessages: unknown[] = [];
+
+    const nativeFallback = await loadNativeRequestConfigWithSender((message) => {
+      sentMessages.push(message);
+      return Promise.resolve({
+        success: true,
+        apiUrl: 'https://native-channel.example/',
+        fallbackApiUrls: ['https://native-channel-backup.example/'],
+      });
+    });
+
+    assert.deepStrictEqual(sentMessages, [{ action: 'get-config' }]);
+    assert.deepStrictEqual(nativeFallback, {
+      requestApiUrl: 'https://native-channel.example',
+      fallbackApiUrls: ['https://native-channel-backup.example'],
+      enableRequests: true,
+    });
+  });
+
+  void test('loadRequestConfigWithNativeFallback keeps supplied native config ahead of stale storage', async () => {
+    setMockBrowser(
+      createMockBrowser({
+        storedLocalConfig: {
+          config: {
+            requestApiUrl: '',
+            fallbackApiUrls: [],
+            enableRequests: false,
+          },
+        },
+      })
+    );
+
+    try {
+      const loaded = await loadRequestConfigWithNativeFallback({
+        requestApiUrl: 'https://native-channel.example',
+        fallbackApiUrls: [],
+        enableRequests: true,
+      });
+
+      assert.strictEqual(loaded.requestApiUrl, 'https://native-channel.example');
+      assert.strictEqual(loaded.enableRequests, true);
+    } finally {
+      clearMockBrowser();
+    }
+  });
+
   void test('loadRequestConfig treats native classroom endpoints as request-enabled despite stale legacy disable flags', async () => {
     setMockBrowser(
       createMockBrowser({
@@ -164,6 +213,34 @@ void describe('config-storage', () => {
     try {
       const loaded = await loadRequestConfig();
       assert.strictEqual(loaded.requestApiUrl, 'https://native.example');
+      assert.strictEqual(loaded.enableRequests, true);
+    } finally {
+      clearMockBrowser();
+    }
+  });
+
+  void test('loadRequestConfigWithNativeFallback lets native endpoints override malformed legacy request flags', async () => {
+    setMockBrowser(
+      createMockBrowser({
+        storedLocalConfig: {
+          config: {
+            requestApiUrl: '',
+            fallbackApiUrls: [],
+            enableRequests: null,
+          },
+        },
+      })
+    );
+
+    try {
+      const loaded = await loadRequestConfigWithNativeFallback({
+        requestApiUrl: 'https://native.example',
+        fallbackApiUrls: ['https://native-backup.example'],
+        enableRequests: true,
+      });
+
+      assert.strictEqual(loaded.requestApiUrl, 'https://native.example');
+      assert.deepStrictEqual(loaded.fallbackApiUrls, ['https://native-backup.example']);
       assert.strictEqual(loaded.enableRequests, true);
     } finally {
       clearMockBrowser();
@@ -191,12 +268,12 @@ void describe('config-storage', () => {
     }
   });
 
-  void test('loadRequestConfig keeps stored endpoints ahead of native fallback while preserving native request enablement', async () => {
+  void test('loadRequestConfig keeps native endpoints ahead of stale stored endpoints while preserving native request enablement', async () => {
     setMockBrowser(
       createMockBrowser({
         storedLocalConfig: {
           config: {
-            requestApiUrl: 'https://stored.example',
+            requestApiUrl: 'https://stored.example/cp',
             fallbackApiUrls: ['https://stored-backup.example'],
             enableRequests: false,
           },
@@ -211,8 +288,8 @@ void describe('config-storage', () => {
 
     try {
       const loaded = await loadRequestConfig();
-      assert.strictEqual(loaded.requestApiUrl, 'https://stored.example');
-      assert.deepStrictEqual(loaded.fallbackApiUrls, ['https://stored-backup.example']);
+      assert.strictEqual(loaded.requestApiUrl, 'https://native.example');
+      assert.deepStrictEqual(loaded.fallbackApiUrls, ['https://native-backup.example']);
       assert.strictEqual(loaded.enableRequests, true);
     } finally {
       clearMockBrowser();

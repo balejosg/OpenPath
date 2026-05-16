@@ -1,27 +1,28 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { ensureBrowsingActivityConsent } from '../src/lib/data-collection-consent.js';
+import {
+  ensureBrowsingActivityConsent,
+  startBrowsingActivityConsentRequest,
+} from '../src/lib/data-collection-consent.js';
 
 await describe('data collection consent', async () => {
-  await test('does not preflight contains before requesting consent from a user gesture', async () => {
-    let containsCalled = false;
+  await test('checks the required permission without requesting runtime consent', async () => {
+    let requestCalled = false;
 
     const result = await ensureBrowsingActivityConsent({
-      contains: () => {
-        containsCalled = true;
-        throw new Error('contains should not run before request');
-      },
+      contains: () => Promise.resolve(true),
       request: () => {
+        requestCalled = true;
         return Promise.resolve(true);
       },
     });
 
     assert.deepEqual(result, { granted: true });
-    assert.equal(containsCalled, false);
+    assert.equal(requestCalled, false);
   });
 
-  await test('falls back to contains when consent is already granted but request returns false', async () => {
+  await test('does not request runtime consent when required permission is already granted', async () => {
     let requested = false;
 
     const result = await ensureBrowsingActivityConsent({
@@ -35,10 +36,10 @@ await describe('data collection consent', async () => {
     });
 
     assert.deepEqual(result, { granted: true });
-    assert.equal(requested, true);
+    assert.equal(requested, false);
   });
 
-  await test('requests optional browsing activity consent when it is missing', async () => {
+  await test('returns a recovery message when the required browsing activity permission is missing', async () => {
     const requestedPayloads: unknown[] = [];
 
     const result = await ensureBrowsingActivityConsent({
@@ -49,8 +50,9 @@ await describe('data collection consent', async () => {
       },
     });
 
-    assert.deepEqual(result, { granted: true });
-    assert.deepEqual(requestedPayloads, [{ data_collection: ['browsingActivity'] }]);
+    assert.equal(result.granted, false);
+    assert.match(result.error, /permiso de actividad de navegacion requerido/);
+    assert.deepEqual(requestedPayloads, []);
   });
 
   await test('returns a denial message when the user does not grant consent', async () => {
@@ -72,21 +74,41 @@ await describe('data collection consent', async () => {
     assert.deepEqual(result, { granted: true });
   });
 
-  await test('returns the compatibility message with request failure detail when request and contains both fail', async () => {
+  await test('checks the required consent without opening a runtime prompt', async () => {
+    const events: string[] = [];
+
+    const consentPromise = startBrowsingActivityConsentRequest({
+      contains: () => {
+        events.push('contains');
+        return Promise.resolve(true);
+      },
+      request: () => Promise.reject(new Error('request should not run')),
+    });
+
+    events.push('after-start');
+    assert.deepEqual(events, ['contains', 'after-start']);
+
+    const result = await consentPromise;
+
+    assert.deepEqual(result, { granted: true });
+    assert.deepEqual(events, ['contains', 'after-start']);
+  });
+
+  await test('returns the compatibility message with contains failure detail when permission checks fail', async () => {
     const result = await ensureBrowsingActivityConsent({
       contains: () => Promise.reject(new Error('contains unavailable')),
       request: () => Promise.reject(new Error('user activation expired')),
     });
 
     assert.equal(result.granted, false);
-    assert.match(result.error, /no es compatible/);
-    assert.match(result.error, /user activation expired/);
+    assert.match(result.error, /no permite comprobar/);
+    assert.match(result.error, /contains unavailable/);
   });
 
   await test('returns a compatibility message when Firefox lacks the data collection API', async () => {
     const result = await ensureBrowsingActivityConsent(null);
 
     assert.equal(result.granted, false);
-    assert.match(result.error, /no es compatible/);
+    assert.match(result.error, /no permite comprobar/);
   });
 });

@@ -379,11 +379,13 @@ Describe "Browser Module - Native Host" {
                 '$stagedStateHelperPath = Join-Path $script:NativeRoot ''NativeHost.State.ps1''',
                 '$script:OpenPathRoot = Resolve-OpenPathNativeHostRoot',
                 '$script:RuntimeDependencyTaskName = ''OpenPath-RuntimeDependencyApply''',
+                '$ProgressPreference = ''SilentlyContinue''',
+                '$InformationPreference = ''SilentlyContinue''',
                 '(Join-Path $script:NativeRoot $FileName)',
                 '(Join-Path $script:OpenPathRoot "lib\internal\$FileName")',
-                '. (Resolve-OpenPathNativeHostSupportPath -FileName ''NativeHost.State.ps1'')',
-                '. (Resolve-OpenPathNativeHostSupportPath -FileName ''NativeHost.Protocol.ps1'')',
-                '. (Resolve-OpenPathNativeHostSupportPath -FileName ''NativeHost.Actions.ps1'')'
+                '$null = . (Resolve-OpenPathNativeHostSupportPath -FileName ''NativeHost.State.ps1'')',
+                '$null = . (Resolve-OpenPathNativeHostSupportPath -FileName ''NativeHost.Protocol.ps1'')',
+                '$null = . (Resolve-OpenPathNativeHostSupportPath -FileName ''NativeHost.Actions.ps1'')'
             )
 
             $legacyImportPattern = [regex]::Escape("Join-Path `$PSScriptRoot '..\lib\internal\NativeHost.State.ps1'")

@@ -99,15 +99,14 @@ raises compatibility to consent-aware Firefox runtimes:
 
 ```json
 "data_collection_permissions": {
-  "required": ["none"],
-  "optional": ["browsingActivity"]
+  "required": ["browsingActivity"]
 }
 ```
 
-Keep this disclosure in the manifest. Moving `browsingActivity` to optional
-keeps routine extension operation available without collection consent, while
-blocked-page and popup access requests request consent before transmitting
-user-initiated request details to the configured OpenPath service.
+Keep this disclosure in the manifest. `browsingActivity` is required because
+managed unblock requests transmit blocked-domain activity and related request
+context to the configured OpenPath service. The extension checks that install-time
+permission before transmitting user-initiated request details.
 
 ### Suggested Tags
 

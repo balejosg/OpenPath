@@ -3,6 +3,24 @@
 $script:OpenPathUpdateRuntimeSessionInitialized = $false
 $script:OpenPathUpdateRuntimeRoot = ''
 
+function Import-OpenPathUpdateRuntimeHelper {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$FunctionNames
+    )
+
+    . $Path
+
+    foreach ($functionName in $FunctionNames) {
+        $command = Get-Command -Name $functionName -CommandType Function -ErrorAction Stop
+        Set-Item -Path "Function:script:$functionName" -Value $command.ScriptBlock -Force
+    }
+}
+
 function Initialize-OpenPathUpdateRuntimeSession {
     [CmdletBinding()]
     param(
@@ -45,8 +63,18 @@ function Initialize-OpenPathUpdateRuntimeSession {
     ) `
         -ScriptName 'Update-OpenPath.ps1' | Out-Null
 
-    . (Join-Path $OpenPathRoot 'lib\internal\EndpointPolicyState.ps1')
-    . (Join-Path $OpenPathRoot 'lib\internal\EndpointStateReconciler.ps1')
+    Import-OpenPathUpdateRuntimeHelper `
+        -Path (Join-Path $OpenPathRoot 'lib\internal\EndpointPolicyState.ps1') `
+        -FunctionNames @(
+        'Get-OpenPathEndpointPolicyState'
+    )
+    Import-OpenPathUpdateRuntimeHelper `
+        -Path (Join-Path $OpenPathRoot 'lib\internal\EndpointStateReconciler.ps1') `
+        -FunctionNames @(
+        'New-OpenPathEndpointStateRepairPlan',
+        'New-OpenPathWatchdogProtectedModeRepairPlan',
+        'Invoke-OpenPathEndpointStateRepairPlan'
+    )
 
     $script:OpenPathUpdateRuntimeSessionInitialized = $true
     $script:OpenPathUpdateRuntimeRoot = $OpenPathRoot
@@ -95,7 +123,7 @@ function Invoke-OpenPathRuntimeDependencyQueueApply {
     }
 
     $acrylicStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    Update-AcrylicHost -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist -BlockedSubdomains $runtimeDependencyQueueSections.BlockedSubdomains
+    Update-AcrylicHost -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist -BlockedSubdomains $runtimeDependencyQueueSections.BlockedSubdomains | Out-Null
     $acrylicStopwatch.Stop()
     $result['AcrylicHostUpdateMs'] = [int]$acrylicStopwatch.ElapsedMilliseconds
 

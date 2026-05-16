@@ -40,10 +40,10 @@ browser data.
 | `storage`            | Keep managed config and local runtime state in browser storage        |
 | `<all_urls>`         | Evaluate managed navigation and resource requests across web origins  |
 
-The Firefox manifest declares no required Mozilla data collection and makes
-`browsingActivity` optional. User-initiated unblock requests ask for that
-permission before transmitting the blocked domain and related navigation/request
-context to the configured OpenPath service. Firefox Core registers a page activity
+The Firefox manifest declares `browsingActivity` as required Mozilla data
+collection. User-initiated unblock requests verify that install-time permission
+before transmitting the blocked domain and related navigation/request context to
+the configured OpenPath service. Firefox Core registers a page activity
 content script and a MAIN-world page-resource observer for local resource-candidate
 diagnostics. Automatic runtime dependency handling is local to Windows: the background
 script sends only the top-level anchor host, dependency host, and Firefox request type

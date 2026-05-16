@@ -3,10 +3,17 @@ import {
   buildGetRecentBlockedDomainRequestStatusMessage,
   buildSubmitBlockedDomainRequestMessage,
 } from './lib/blocked-screen-contract.js';
+import { buildBlockedDomainSubmitBody } from './lib/blocked-request.js';
 import {
-  ensureBrowsingActivityConsent,
+  getRequestApiEndpoints,
+  loadRequestConfigWithNativeFallback,
+} from './lib/config-storage.js';
+import { loadNativeRequestConfigWithSender } from './lib/config-storage-native.js';
+import {
+  startBrowsingActivityConsentRequest,
   type DataCollectionPermissionsApi,
 } from './lib/data-collection-consent.js';
+import { submitBlockedDomainRequest as submitBlockedDomainRequestViaApi } from './lib/request-api.js';
 
 interface BlockedPageRuntime {
   sendMessage(message: unknown): Promise<unknown>;
@@ -15,6 +22,11 @@ interface BlockedPageRuntime {
 interface CallbackRuntime {
   lastError?: { message?: string } | null;
   sendMessage(message: unknown, callback: (response: unknown) => void): void;
+}
+
+interface NativeRuntime {
+  getManifest?: () => { version?: string };
+  sendNativeMessage?: (hostName: string, message: unknown) => Promise<unknown>;
 }
 
 interface BrowserPermissionsGlobal {
@@ -26,6 +38,8 @@ type RequestStatusType = 'success' | 'error' | 'pending';
 const RECENT_REQUEST_STATUS_TTL_MS = 120_000;
 const BACKGROUND_REQUEST_STATUS_RESTORE_WINDOW_MS = 30_000;
 const BACKGROUND_REQUEST_STATUS_RESTORE_INTERVAL_MS = 500;
+const SUBMIT_REQUEST_TIMEOUT_MS = 15_000;
+const NATIVE_HOST_NAME = 'whitelist_native_host';
 const NATIVE_POLICY_BLOCKED_ERROR = 'OPENPATH_NATIVE_POLICY_BLOCKED';
 const REQUEST_SUBMITTED_SUCCESS_TEXT = 'Solicitud enviada. Quedara pendiente hasta que la revisen.';
 
@@ -166,15 +180,26 @@ function getBrowserRuntime(): BlockedPageRuntime | null {
   return null;
 }
 
+function getNativeRuntime(): NativeRuntime | null {
+  const globalWithRuntime = globalThis as {
+    browser?: { runtime?: NativeRuntime };
+  };
+  const runtime = globalWithRuntime.browser?.runtime;
+  if (typeof runtime?.sendNativeMessage === 'function') {
+    return runtime;
+  }
+
+  return null;
+}
+
 function getDataCollectionPermissionsApi(): DataCollectionPermissionsApi | null {
   const globalWithPermissions = globalThis as {
     browser?: BrowserPermissionsGlobal;
   };
   const permissions = globalWithPermissions.browser?.permissions;
-  if (typeof permissions?.contains === 'function' && typeof permissions.request === 'function') {
+  if (typeof permissions?.contains === 'function') {
     return {
       contains: permissions.contains.bind(permissions),
-      request: permissions.request.bind(permissions),
     };
   }
 
@@ -200,6 +225,21 @@ function buildFallbackMessage(error: unknown): string {
   return `No se pudo enviar la solicitud.${detail} Copia el dominio y avisa a tu profesor.`;
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  });
+}
+
 async function submitUnblockRequest(input: {
   domain: string;
   reason: string;
@@ -207,14 +247,53 @@ async function submitUnblockRequest(input: {
   error: string;
 }): Promise<unknown> {
   const runtime = getBrowserRuntime();
-  if (!runtime) {
-    return {
-      success: false,
-      error: 'La extension no esta disponible en esta pagina.',
-    };
+  if (runtime) {
+    return withTimeout(
+      runtime.sendMessage(buildSubmitBlockedDomainRequestMessage(input)),
+      SUBMIT_REQUEST_TIMEOUT_MS,
+      'Tiempo de espera agotado al contactar con la extension.'
+    );
   }
 
-  return runtime.sendMessage(buildSubmitBlockedDomainRequestMessage(input));
+  const nativeRuntime = getNativeRuntime();
+  if (nativeRuntime?.sendNativeMessage) {
+    const submitInput = {
+      domain: input.domain,
+      reason: input.reason,
+      ...(input.origin !== null ? { origin: input.origin } : {}),
+      error: input.error,
+    };
+    return withTimeout(
+      submitBlockedDomainRequestViaApi(submitInput, {
+        buildBlockedDomainSubmitBody,
+        getClientVersion: () => nativeRuntime.getManifest?.().version ?? 'unknown',
+        getRequestApiEndpoints: (config) =>
+          getRequestApiEndpoints({
+            ...config,
+            debugMode: false,
+            sharedSecret: '',
+          }),
+        loadRequestConfig: async () =>
+          loadRequestConfigWithNativeFallback(
+            await loadNativeRequestConfigWithSender(
+              (message) =>
+                nativeRuntime.sendNativeMessage?.(NATIVE_HOST_NAME, message) ??
+                Promise.reject(new Error('Native messaging unavailable'))
+            )
+          ),
+        sendNativeMessage: (message) =>
+          nativeRuntime.sendNativeMessage?.(NATIVE_HOST_NAME, message) ??
+          Promise.reject(new Error('Native messaging unavailable')),
+      }),
+      SUBMIT_REQUEST_TIMEOUT_MS,
+      'Tiempo de espera agotado al enviar la solicitud.'
+    );
+  }
+
+  return {
+    success: false,
+    error: 'La extension no esta disponible en esta pagina.',
+  };
 }
 
 async function restoreRecentRequestStatusFromBackground(domain: string): Promise<void> {
@@ -284,18 +363,21 @@ export function main(): void {
         return;
       }
 
+      const consentPromise = startBrowsingActivityConsentRequest(getDataCollectionPermissionsApi());
+
       submitBtn.disabled = true;
       clearRecentRequestStatus(context.blockedDomain);
-      setRequestStatus('Enviando solicitud...', 'pending');
+      setRequestStatus('Comprobando permiso de Firefox...', 'pending');
 
       try {
-        const consent = await ensureBrowsingActivityConsent(getDataCollectionPermissionsApi());
+        const consent = await consentPromise;
         if (!consent.granted) {
           clearRecentRequestStatus(context.blockedDomain);
           setRequestStatus(consent.error, 'error');
           return;
         }
 
+        setRequestStatus('Enviando solicitud...', 'pending');
         const response = (await submitUnblockRequest({
           domain: context.blockedDomain,
           reason,

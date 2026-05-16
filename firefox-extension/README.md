@@ -13,7 +13,7 @@ Firefox blocked-path and blocked-subdomain enforcement lives in this extension r
 - Manifest version: `3`
 - Firefox extension ID: `openpath-block-monitor@openpath`
 - Core permissions include `webRequest`, `webRequestBlocking`, `webNavigation`, `tabs`, `clipboardWrite`, `storage`, and `nativeMessaging`
-- Mozilla data collection declares `required: ["none"]` and optional `browsingActivity`; blocked-page and popup access requests ask for the optional consent before submitting request details
+- Mozilla data collection declares `required: ["browsingActivity"]`; blocked-page and popup access requests verify that install-time consent before submitting request details
 - Host permissions currently target `<all_urls>`
 - Firefox Core includes local Google game blocking for known Snake, doodle-game, and interactive logo-game surfaces.
 - Firefox Core includes a Google Search/Doodles visual guard content script that locally neutralizes detected playable game widgets.

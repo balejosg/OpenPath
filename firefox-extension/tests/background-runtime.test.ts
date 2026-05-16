@@ -319,6 +319,12 @@ void test('background runtime exposes native diagnostics through runtime message
       nativeBlockedPaths?: { success?: boolean };
       nativeBlockedSubdomains?: { success?: boolean };
       nativeCheck?: { results?: { domain?: string; resolves?: boolean }[] };
+      nativeRequestConfig?: {
+        enabled?: boolean;
+        endpointCount?: number;
+        nativeEndpointCount?: number;
+        valid?: boolean;
+      };
       pathRules?: { count?: number; success?: boolean };
       subdomainRules?: { count?: number; success?: boolean };
       success?: boolean;
@@ -337,6 +343,12 @@ void test('background runtime exposes native diagnostics through runtime message
     ]);
     assert.equal(diagnostics.nativeBlockedPaths?.success, true);
     assert.equal(diagnostics.nativeBlockedSubdomains?.success, true);
+    assert.deepEqual(diagnostics.nativeRequestConfig, {
+      nativeEndpointCount: 1,
+      endpointCount: 1,
+      enabled: true,
+      valid: true,
+    });
     assert.equal(diagnostics.pathRules?.success, true);
     assert.equal(diagnostics.pathRules.count, 0);
     assert.equal(diagnostics.subdomainRules?.success, true);

@@ -3,57 +3,54 @@ export const BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION = {
 } as const;
 
 const CONSENT_DENIED_MESSAGE =
-  'Se necesita el permiso de actividad de navegacion para enviar la solicitud de desbloqueo.';
+  'El permiso de actividad de navegacion requerido no esta concedido. Actualiza o reinstala la extension gestionada de Firefox.';
 const CONSENT_UNSUPPORTED_MESSAGE =
-  'Esta version de Firefox no es compatible con el permiso de datos requerido para enviar solicitudes.';
+  'Esta version de Firefox no permite comprobar el permiso de datos requerido para enviar solicitudes.';
 
 export interface DataCollectionPermissionsApi {
   contains(payload: typeof BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION): Promise<boolean>;
-  request(payload: typeof BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION): Promise<boolean>;
+  request?(payload: typeof BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION): Promise<boolean>;
 }
 
 export type DataCollectionConsentResult = { granted: true } | { error: string; granted: false };
 
-export async function ensureBrowsingActivityConsent(
+export function startBrowsingActivityConsentRequest(
   permissionsApi: DataCollectionPermissionsApi | null | undefined
 ): Promise<DataCollectionConsentResult> {
-  if (
-    !permissionsApi ||
-    typeof permissionsApi.contains !== 'function' ||
-    typeof permissionsApi.request !== 'function'
-  ) {
-    return {
+  if (!permissionsApi || typeof permissionsApi.contains !== 'function') {
+    return Promise.resolve({
       granted: false,
       error: CONSENT_UNSUPPORTED_MESSAGE,
-    };
+    });
   }
 
   try {
-    if (await permissionsApi.request(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
-      return { granted: true };
-    }
-
-    if (await permissionsApi.contains(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
-      return { granted: true };
-    }
-
-    return {
-      granted: false,
-      error: CONSENT_DENIED_MESSAGE,
-    };
+    return permissionsApi
+      .contains(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)
+      .then((granted) =>
+        granted
+          ? { granted: true as const }
+          : {
+              granted: false as const,
+              error: CONSENT_DENIED_MESSAGE,
+            }
+      )
+      .catch((error: unknown) => resolveBrowsingActivityConsentCheckFailure(error));
   } catch (error) {
-    try {
-      if (await permissionsApi.contains(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)) {
-        return { granted: true };
-      }
-    } catch {
-      // Keep the original request failure detail below.
-    }
-
-    const detail = error instanceof Error ? ` ${error.message}` : '';
-    return {
-      granted: false,
-      error: `${CONSENT_UNSUPPORTED_MESSAGE}${detail}`,
-    };
+    return Promise.resolve(resolveBrowsingActivityConsentCheckFailure(error));
   }
+}
+
+function resolveBrowsingActivityConsentCheckFailure(error: unknown): DataCollectionConsentResult {
+  const detail = error instanceof Error ? ` ${error.message}` : '';
+  return {
+    granted: false,
+    error: `${CONSENT_UNSUPPORTED_MESSAGE}${detail}`,
+  };
+}
+
+export function ensureBrowsingActivityConsent(
+  permissionsApi: DataCollectionPermissionsApi | null | undefined
+): Promise<DataCollectionConsentResult> {
+  return startBrowsingActivityConsentRequest(permissionsApi);
 }

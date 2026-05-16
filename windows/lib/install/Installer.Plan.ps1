@@ -104,7 +104,6 @@ function New-OpenPathInstallPlan {
         New-OpenPathInstallPhase -Name 'acrylic' -Step 4 -TotalSteps 7 -Status 'Instalando Acrylic DNS Proxy' -Inputs @{ SkipAcrylic = $Parameters.SkipAcrylic } -RecoveryHint 'Install or repair Acrylic DNS Proxy, then rerun the installer.'
         New-OpenPathInstallPhase -Name 'acrylic-configuration' -RecoveryHint 'Check Acrylic configuration file permissions.'
         New-OpenPathInstallPhase -Name 'local-dns' -Step 5 -TotalSteps 7 -Status 'Configurando DNS local' -RecoveryHint 'Check adapter DNS permissions and current network state.'
-        New-OpenPathInstallPhase -Name 'scheduled-tasks' -Step 6 -TotalSteps 7 -Status 'Registrando tareas programadas' -RecoveryHint 'Check Task Scheduler service and Administrator privileges.'
         New-OpenPathInstallPhase -Name 'enrollment' -Inputs @{
             ApiUrl = $Parameters.ApiUrl
             Classroom = $Parameters.Classroom
@@ -116,6 +115,7 @@ function New-OpenPathInstallPlan {
         New-OpenPathInstallPhase -Name 'native-host' -RecoveryHint 'Check Firefox native messaging host registry entries and request setup state.'
         New-OpenPathInstallPhase -Name 'first-update' -Step 7 -TotalSteps 7 -Status 'Ejecutando primera actualizacion' -RecoveryHint 'Run OpenPath.ps1 update after enrollment and network connectivity are available.'
         New-OpenPathInstallPhase -Name 'firefox-managed-extension-ready' -RecoveryHint 'Check Firefox policy, signed extension URL, and native host runtime registration.'
+        New-OpenPathInstallPhase -Name 'scheduled-tasks' -Step 6 -TotalSteps 7 -Status 'Registrando tareas programadas' -RecoveryHint 'Check Task Scheduler service and Administrator privileges.'
         New-OpenPathInstallPhase -Name 'realtime-updates' -RecoveryHint 'Check request setup state and SSE listener startup.'
         New-OpenPathInstallPhase -Name 'app-control' -RecoveryHint 'Check AppLocker support and local security policy permissions.'
         New-OpenPathInstallPhase -Name 'browser-inventory' -Inputs @{ BrowserCleanupMode = $Parameters.BrowserCleanupMode } -RecoveryHint 'Review browser inventory permissions and cleanup mode.'

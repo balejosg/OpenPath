@@ -1,5 +1,6 @@
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
+import { setImmediate } from 'node:timers/promises';
 import { test, describe } from 'node:test';
 
 import { main } from '../src/blocked-page.js';
@@ -9,6 +10,10 @@ type MockRuntimeResponse =
   | ((message: unknown) => Record<string, unknown>);
 
 type MockDataCollectionConsent = 'granted' | 'denied' | 'missing';
+type PermissionEvent =
+  | { type: 'contains' | 'request'; payload?: unknown }
+  | { type: 'sendMessage'; message: unknown }
+  | { type: 'sendNativeMessage'; hostName: string; message: unknown };
 
 class MockElement {
   className = '';
@@ -61,12 +66,18 @@ function normalizeMessages(messages: unknown[]): Record<string, unknown>[] {
 function runBlockedScript(
   response: MockRuntimeResponse,
   search = '?domain=learning.example&error=NS_ERROR_UNKNOWN_HOST&origin=portal.example',
-  runtimeApi: 'browser-promise' | 'chrome-callback' | 'browser-and-chrome' = 'browser-promise',
+  runtimeApi:
+    | 'browser-promise'
+    | 'browser-promise-with-native'
+    | 'browser-native-only'
+    | 'chrome-callback'
+    | 'browser-and-chrome' = 'browser-promise',
   sessionStorageStore = new Map<string, string>(),
   dataCollectionConsent: MockDataCollectionConsent = 'granted'
 ): {
   elements: Map<string, MockElement>;
   messages: unknown[];
+  permissionEvents: PermissionEvent[];
   permissionRequests: unknown[];
   runtimeApis: string[];
 } {
@@ -85,6 +96,7 @@ function runBlockedScript(
   ];
   const elements = new Map(ids.map((id) => [id, new MockElement()]));
   const messages: unknown[] = [];
+  const permissionEvents: PermissionEvent[] = [];
   const permissionRequests: unknown[] = [];
   const runtimeApis: string[] = [];
   const resolveResponse = (message: unknown): unknown =>
@@ -93,8 +105,12 @@ function runBlockedScript(
     dataCollectionConsent === 'missing'
       ? undefined
       : {
-          contains: (): Promise<boolean> => Promise.resolve(dataCollectionConsent === 'granted'),
+          contains: (): Promise<boolean> => {
+            permissionEvents.push({ type: 'contains' });
+            return Promise.resolve(dataCollectionConsent === 'granted');
+          },
           request: (payload: unknown): Promise<boolean> => {
+            permissionEvents.push({ type: 'request', payload });
             permissionRequests.push(payload);
             return Promise.resolve(dataCollectionConsent === 'granted');
           },
@@ -109,6 +125,7 @@ function runBlockedScript(
               runtime: {
                 sendMessage: (message: unknown): Promise<unknown> => {
                   runtimeApis.push('browser');
+                  permissionEvents.push({ type: 'sendMessage', message });
                   messages.push(message);
                   return Promise.resolve(resolveResponse(message));
                 },
@@ -123,6 +140,7 @@ function runBlockedScript(
                 lastError: null,
                 sendMessage: (message: unknown): void => {
                   runtimeApis.push('chrome');
+                  permissionEvents.push({ type: 'sendMessage', message });
                   messages.push(message);
                 },
               },
@@ -151,6 +169,7 @@ function runBlockedScript(
                     callback: ((response: unknown) => void) | undefined
                   ): void => {
                     runtimeApis.push('chrome');
+                    permissionEvents.push({ type: 'sendMessage', message });
                     messages.push(message);
                     callback?.(resolveResponse(message));
                   },
@@ -163,11 +182,36 @@ function runBlockedScript(
               configurable: true,
               value: {
                 runtime: {
-                  sendMessage: (message: unknown): Promise<unknown> => {
-                    runtimeApis.push('browser');
-                    messages.push(message);
-                    return Promise.resolve(resolveResponse(message));
-                  },
+                  ...(runtimeApi === 'browser-promise-with-native' ||
+                  runtimeApi === 'browser-native-only'
+                    ? {
+                        getManifest: (): { version: string } => ({ version: '2.0.0-test' }),
+                        sendNativeMessage: (
+                          hostName: string,
+                          message: unknown
+                        ): Promise<unknown> => {
+                          permissionEvents.push({ type: 'sendNativeMessage', hostName, message });
+                          if (runtimeApi === 'browser-promise-with-native') {
+                            return Promise.resolve({
+                              success: false,
+                              error: 'direct native submit should not be used',
+                            });
+                          }
+
+                          return Promise.resolve(resolveResponse(message));
+                        },
+                      }
+                    : {}),
+                  ...(runtimeApi !== 'browser-native-only'
+                    ? {
+                        sendMessage: (message: unknown): Promise<unknown> => {
+                          runtimeApis.push('browser');
+                          permissionEvents.push({ type: 'sendMessage', message });
+                          messages.push(message);
+                          return Promise.resolve(resolveResponse(message));
+                        },
+                      }
+                    : {}),
                 },
                 ...(permissions ? { permissions } : {}),
               },
@@ -213,7 +257,7 @@ function runBlockedScript(
 
   main();
 
-  return { elements, messages, permissionRequests, runtimeApis };
+  return { elements, messages, permissionEvents, permissionRequests, runtimeApis };
 }
 
 function clearBlockedScreenGlobals(): void {
@@ -235,6 +279,9 @@ function clearBlockedScreenGlobals(): void {
 async function flushBlockedScreenAsyncHandlers(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await setImmediate();
 }
 
 void describe('blocked screen', () => {
@@ -247,7 +294,7 @@ void describe('blocked screen', () => {
   });
 
   void test('submits unblock request through the background script without exposing a token', async () => {
-    const { elements, messages } = runBlockedScript({
+    const { elements, messages, permissionEvents } = runBlockedScript({
       success: true,
       id: 'req_123',
       status: 'pending',
@@ -257,9 +304,15 @@ void describe('blocked screen', () => {
     assert.ok(reason);
     reason.value = 'Lo necesito para una actividad de clase';
 
-    await elements.get('submit-unblock-request')?.trigger('click');
+    const clickPromise = elements.get('submit-unblock-request')?.trigger('click');
+    assert.deepStrictEqual(permissionEvents, [{ type: 'contains' }]);
+    await Promise.resolve();
+    assert.equal(messages.length, 0);
+    await clickPromise;
     await flushBlockedScreenAsyncHandlers();
 
+    assert.equal(permissionEvents[0]?.type, 'contains');
+    assert.equal(permissionEvents[1]?.type, 'sendMessage');
     assert.deepStrictEqual(normalizeMessages(messages), [
       {
         action: 'submitBlockedDomainRequest',
@@ -292,9 +345,12 @@ void describe('blocked screen', () => {
     await elements.get('submit-unblock-request')?.trigger('click');
     await flushBlockedScreenAsyncHandlers();
 
-    assert.deepStrictEqual(permissionRequests, [{ data_collection: ['browsingActivity'] }]);
+    assert.deepStrictEqual(permissionRequests, []);
     assert.deepStrictEqual(messages, []);
-    assert.match(elements.get('request-status')?.textContent ?? '', /actividad de navegacion/);
+    assert.match(
+      elements.get('request-status')?.textContent ?? '',
+      /permiso de actividad de navegacion requerido/
+    );
   });
 
   void test('does not submit unblock requests when Firefox lacks data collection consent support', async () => {
@@ -318,7 +374,7 @@ void describe('blocked screen', () => {
     await flushBlockedScreenAsyncHandlers();
 
     assert.deepStrictEqual(messages, []);
-    assert.match(elements.get('request-status')?.textContent ?? '', /no es compatible/);
+    assert.match(elements.get('request-status')?.textContent ?? '', /no permite comprobar/);
   });
 
   void test('restores a recent submitted status after the blocked page reloads', async () => {
@@ -440,6 +496,145 @@ void describe('blocked screen', () => {
 
     assert.deepStrictEqual(runtimeApis, ['browser']);
     assert.match(elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+  });
+
+  void test('submits through background messaging when native messaging is also exposed', async () => {
+    const { elements, messages, permissionEvents } = runBlockedScript(
+      {
+        success: true,
+        id: 'req_131',
+        status: 'pending',
+      },
+      '?domain=learning.example&error=NS_ERROR_UNKNOWN_HOST&origin=portal.example',
+      'browser-promise-with-native'
+    );
+
+    const reason = elements.get('request-reason');
+    assert.ok(reason);
+    reason.value = 'Lo necesito para una actividad de clase';
+
+    await elements.get('submit-unblock-request')?.trigger('click');
+    await flushBlockedScreenAsyncHandlers();
+
+    assert.equal(
+      permissionEvents.some((event) => event.type === 'sendNativeMessage'),
+      false
+    );
+    assert.deepStrictEqual(normalizeMessages(messages), [
+      {
+        action: 'submitBlockedDomainRequest',
+        domain: 'learning.example',
+        reason: 'Lo necesito para una actividad de clase',
+        origin: 'portal.example',
+        error: 'NS_ERROR_UNKNOWN_HOST',
+      },
+    ]);
+    assert.match(elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+  });
+
+  void test('falls back to direct native request submission when runtime messaging is absent', async () => {
+    const fetchCalls: { body: unknown; url: string }[] = [];
+    Object.defineProperty(globalThis, 'fetch', {
+      configurable: true,
+      value: (url: string, init: { body?: string }): Promise<Response> => {
+        fetchCalls.push({
+          url,
+          body: init.body ? JSON.parse(init.body) : null,
+        });
+        return Promise.resolve(
+          new Response(JSON.stringify({ success: true, id: 'req_native', status: 'pending' }), {
+            status: 200,
+          })
+        );
+      },
+    });
+
+    const { elements, permissionEvents, runtimeApis } = runBlockedScript(
+      (message: unknown) => {
+        const action = (message as { action?: string }).action;
+        if (action === 'get-config') {
+          return {
+            success: true,
+            requestApiUrl: 'https://classroompath.example/cp',
+          };
+        }
+        if (action === 'get-hostname') {
+          return { success: true, hostname: 'student-01' };
+        }
+        if (action === 'get-machine-token') {
+          return { success: true, token: 'machine-token' };
+        }
+
+        return { success: false, error: `unexpected native action ${String(action)}` };
+      },
+      '?domain=learning.example&error=OPENPATH_NATIVE_POLICY_BLOCKED&origin=portal.example',
+      'browser-native-only'
+    );
+
+    const reason = elements.get('request-reason');
+    assert.ok(reason);
+    reason.value = 'Lo necesito para una actividad de clase';
+
+    await elements.get('submit-unblock-request')?.trigger('click');
+    await flushBlockedScreenAsyncHandlers();
+
+    assert.deepStrictEqual(runtimeApis, []);
+    assert.deepStrictEqual(
+      permissionEvents
+        .filter((event) => event.type === 'sendNativeMessage')
+        .map((event) => (event.message as { action?: string }).action),
+      ['get-config', 'get-hostname', 'get-machine-token']
+    );
+    assert.equal(fetchCalls[0]?.url, 'https://classroompath.example/cp/api/requests/submit');
+    assert.deepStrictEqual(fetchCalls[0]?.body, {
+      client_version: '2.0.0-test',
+      domain: 'learning.example',
+      error_type: 'OPENPATH_NATIVE_POLICY_BLOCKED',
+      hostname: 'student-01',
+      origin_host: 'portal.example',
+      reason: 'Lo necesito para una actividad de clase',
+      token: 'machine-token',
+    });
+    assert.match(elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+  });
+
+  void test('shows a fallback when direct native request submission throws', async () => {
+    Object.defineProperty(globalThis, 'fetch', {
+      configurable: true,
+      value: (): Promise<Response> => Promise.reject(new Error('submit network down')),
+    });
+
+    const { elements } = runBlockedScript(
+      (message: unknown) => {
+        const action = (message as { action?: string }).action;
+        if (action === 'get-config') {
+          return {
+            success: true,
+            requestApiUrl: 'https://classroompath.example/cp',
+          };
+        }
+        if (action === 'get-hostname') {
+          return { success: true, hostname: 'student-01' };
+        }
+        if (action === 'get-machine-token') {
+          return { success: true, token: 'machine-token' };
+        }
+
+        return { success: false, error: `unexpected native action ${String(action)}` };
+      },
+      '?domain=learning.example&error=OPENPATH_NATIVE_POLICY_BLOCKED&origin=portal.example',
+      'browser-native-only'
+    );
+
+    const reason = elements.get('request-reason');
+    assert.ok(reason);
+    reason.value = 'Lo necesito para una actividad de clase';
+
+    await elements.get('submit-unblock-request')?.trigger('click');
+    await flushBlockedScreenAsyncHandlers();
+
+    assert.match(elements.get('request-status')?.textContent ?? '', /submit network down/);
+    assert.match(elements.get('request-status')?.textContent ?? '', /avisa a tu profesor/);
   });
 
   void test('does not send display-only fallback text as request context', async () => {

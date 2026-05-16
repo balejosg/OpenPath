@@ -14,7 +14,8 @@ import { retryPopupDomainLocalUpdate, submitPopupDomainRequest } from './popup-r
 import { syncPopupSubmitButtonState, togglePopupRequestSection } from './popup-ui.js';
 import type { PopupControllerState } from './popup-controller-state.js';
 import {
-  ensureBrowsingActivityConsent,
+  startBrowsingActivityConsentRequest,
+  type DataCollectionConsentResult,
   type DataCollectionPermissionsApi,
 } from './data-collection-consent.js';
 
@@ -47,10 +48,9 @@ function getPopupDataCollectionPermissionsApi(): DataCollectionPermissionsApi | 
     | { permissions?: Partial<DataCollectionPermissionsApi> }
     | undefined;
   const permissions = browserWithPermissions?.permissions;
-  if (typeof permissions?.contains === 'function' && typeof permissions.request === 'function') {
+  if (typeof permissions?.contains === 'function') {
     return {
       contains: permissions.contains.bind(permissions),
-      request: permissions.request.bind(permissions),
     };
   }
 
@@ -141,6 +141,12 @@ export function createPopupRequestController(
     const blockedDomainsData = options.blockedDomainsData();
     const domain = options.requestDomainSelectEl.value;
     const reason = options.requestReasonEl.value.trim();
+    const isRequestConfigured = options.isRequestConfigured();
+    const shouldStartConsent =
+      domain !== '' && reason.length >= 3 && options.state.isNativeAvailable && isRequestConfigured;
+    const consentPromise = shouldStartConsent
+      ? startBrowsingActivityConsentRequest(getPopupDataCollectionPermissionsApi())
+      : null;
 
     options.btnSubmitRequest.disabled = true;
     options.btnSubmitRequest.textContent = '⏳ Enviando...';
@@ -156,9 +162,13 @@ export function createPopupRequestController(
         buildSubmitMessage: options.buildSubmitMessage,
         domain,
         isNativeAvailable: options.state.isNativeAvailable,
-        isRequestConfigured: options.isRequestConfigured(),
-        requestBrowsingActivityConsent: () =>
-          ensureBrowsingActivityConsent(getPopupDataCollectionPermissionsApi()),
+        isRequestConfigured,
+        ...(consentPromise
+          ? {
+              requestBrowsingActivityConsent: (): Promise<DataCollectionConsentResult> =>
+                consentPromise,
+            }
+          : {}),
         reason,
         sendMessage: options.sendMessage,
       });

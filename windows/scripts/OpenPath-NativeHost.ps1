@@ -3,6 +3,10 @@
 # browser-readable mirror staged beneath C:\OpenPath\browser-extension\firefox\native.
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
+$VerbosePreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
 
 $script:NativeRoot = Split-Path -Parent $PSCommandPath
 
@@ -57,9 +61,9 @@ $script:RuntimeDependencyTaskName = 'OpenPath-RuntimeDependencyApply'
 $script:MaxDomains = 50
 $script:MaxMessageBytes = 1MB
 
-. (Resolve-OpenPathNativeHostSupportPath -FileName 'NativeHost.State.ps1')
-. (Resolve-OpenPathNativeHostSupportPath -FileName 'NativeHost.Protocol.ps1')
-. (Resolve-OpenPathNativeHostSupportPath -FileName 'NativeHost.Actions.ps1')
+$null = . (Resolve-OpenPathNativeHostSupportPath -FileName 'NativeHost.State.ps1')
+$null = . (Resolve-OpenPathNativeHostSupportPath -FileName 'NativeHost.Protocol.ps1')
+$null = . (Resolve-OpenPathNativeHostSupportPath -FileName 'NativeHost.Actions.ps1')
 
 function Write-NativeHostLog {
     param(

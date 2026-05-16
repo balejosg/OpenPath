@@ -4,7 +4,13 @@ import { createBackgroundMessageHandler } from './background-message-handler.js'
 import { createBackgroundPathRulesController } from './background-path-rules.js';
 import { createBackgroundSubdomainRulesController } from './background-subdomain-rules.js';
 import { logger, getErrorMessage } from './logger.js';
-import { getRequestApiEndpoints, loadRequestConfig } from './config-storage.js';
+import {
+  DEFAULT_REQUEST_CONFIG,
+  getRequestApiEndpoints,
+  hasValidRequestConfig,
+  loadRequestConfigWithNativeFallback,
+} from './config-storage.js';
+import { loadNativeRequestConfigWithSender } from './config-storage-native.js';
 import { buildBlockedDomainSubmitBody } from './blocked-request.js';
 import { createBlockedMonitorState } from './blocked-monitor-state.js';
 import {
@@ -156,23 +162,48 @@ export function createBackgroundRuntime(
     const requestedDomains = domains
       .map((domain) => domain.trim().toLowerCase())
       .filter((domain) => domain.length > 0);
-    const [nativeAvailable, nativeCheck, nativeBlockedPaths, nativeBlockedSubdomains] =
-      await Promise.all([
-        isNativeHostAvailable().catch(() => false),
-        requestedDomains.length > 0
-          ? checkDomainsWithNative(requestedDomains).catch((error: unknown) => ({
-              success: false,
-              results: [],
-              error: getErrorMessage(error),
-            }))
-          : Promise.resolve({ success: true, results: [] }),
-        nativeMessagingClient
-          .sendMessage({ action: 'get-blocked-paths' })
-          .catch((error: unknown) => ({ success: false, error: getErrorMessage(error) })),
-        nativeMessagingClient
-          .sendMessage({ action: 'get-blocked-subdomains' })
-          .catch((error: unknown) => ({ success: false, error: getErrorMessage(error) })),
-      ]);
+    const [
+      nativeAvailable,
+      nativeCheck,
+      nativeBlockedPaths,
+      nativeBlockedSubdomains,
+      nativeRequestConfig,
+    ] = await Promise.all([
+      isNativeHostAvailable().catch(() => false),
+      requestedDomains.length > 0
+        ? checkDomainsWithNative(requestedDomains).catch((error: unknown) => ({
+            success: false,
+            results: [],
+            error: getErrorMessage(error),
+          }))
+        : Promise.resolve({ success: true, results: [] }),
+      nativeMessagingClient
+        .sendMessage({ action: 'get-blocked-paths' })
+        .catch((error: unknown) => ({ success: false, error: getErrorMessage(error) })),
+      nativeMessagingClient
+        .sendMessage({ action: 'get-blocked-subdomains' })
+        .catch((error: unknown) => ({ success: false, error: getErrorMessage(error) })),
+      (async (): Promise<{
+        enabled: boolean;
+        endpointCount: number;
+        nativeEndpointCount: number;
+        valid: boolean;
+      }> => {
+        const nativeFallback = await loadNativeRequestConfigWithSender((message) =>
+          nativeMessagingClient.sendMessage(message)
+        );
+        const requestConfig = await loadRequestConfigWithNativeFallback(nativeFallback);
+        return {
+          nativeEndpointCount: getRequestApiEndpoints({
+            ...DEFAULT_REQUEST_CONFIG,
+            ...nativeFallback,
+          }).length,
+          endpointCount: getRequestApiEndpoints(requestConfig).length,
+          enabled: requestConfig.enableRequests,
+          valid: hasValidRequestConfig(requestConfig),
+        };
+      })().catch((error: unknown) => ({ success: false, error: getErrorMessage(error) })),
+    ]);
 
     return {
       success: true,
@@ -182,6 +213,7 @@ export function createBackgroundRuntime(
       nativeCheck,
       nativeBlockedPaths,
       nativeBlockedSubdomains,
+      nativeRequestConfig,
       pathRules: blockedPathRulesController.getDebugState(),
       subdomainRules: blockedSubdomainRulesController.getDebugState(),
     };
@@ -199,7 +231,12 @@ export function createBackgroundRuntime(
           debugMode: false,
           sharedSecret: '',
         }),
-      loadRequestConfig,
+      loadRequestConfig: async () => {
+        const nativeFallback = await loadNativeRequestConfigWithSender((message) =>
+          nativeMessagingClient.sendMessage(message)
+        );
+        return loadRequestConfigWithNativeFallback(nativeFallback);
+      },
       sendNativeMessage: (message) => nativeMessagingClient.sendMessage(message),
     });
   }

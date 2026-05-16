@@ -151,20 +151,17 @@ function createRuntimeMessageResponder(
   message: unknown,
   sender: Runtime.MessageSender,
   sendResponse: (response: unknown) => void
-) => true {
+) => unknown {
   return (message, sender, sendResponse) => {
-    const responsePromise = options.handleRuntimeMessage(message, sender);
-
-    void Promise.resolve(responsePromise).then(
-      (response) => {
-        sendResponse(response);
-      },
-      (error: unknown) => {
-        sendResponse({ success: false, error: getErrorMessage(error) });
-      }
+    const responsePromise = Promise.resolve(options.handleRuntimeMessage(message, sender)).catch(
+      (error: unknown) => ({ success: false, error: getErrorMessage(error) })
     );
 
-    return true;
+    void responsePromise.then((response) => {
+      sendResponse(response);
+    });
+
+    return responsePromise;
   };
 }
 
@@ -357,6 +354,6 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
   options.browser.runtime.onMessage.addListener(
     createRuntimeMessageResponder({
       handleRuntimeMessage: options.handleRuntimeMessage,
-    })
+    }) as Parameters<typeof options.browser.runtime.onMessage.addListener>[0]
   );
 }

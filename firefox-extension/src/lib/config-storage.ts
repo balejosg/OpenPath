@@ -26,14 +26,36 @@ export function hasValidRequestConfig(config: RequestConfig): boolean {
   return config.enableRequests && getRequestApiEndpoints(config).length > 0;
 }
 
-export async function loadRequestConfig(): Promise<RequestConfig> {
-  const nativeFallback = await loadNativeRequestConfig();
+export async function loadRequestConfigWithNativeFallback(
+  nativeFallback: Partial<RequestConfig>
+): Promise<RequestConfig> {
   const storedConfig = await loadLegacyStoredRequestConfig(nativeFallback);
-  return {
+  const mergedConfig = {
     ...DEFAULT_REQUEST_CONFIG,
     ...nativeFallback,
     ...storedConfig,
   };
+
+  const nativeEndpoints = getRequestApiEndpoints({
+    ...DEFAULT_REQUEST_CONFIG,
+    ...nativeFallback,
+  });
+
+  if (nativeEndpoints.length === 0) {
+    return mergedConfig;
+  }
+
+  return {
+    ...mergedConfig,
+    requestApiUrl: nativeFallback.requestApiUrl ?? DEFAULT_REQUEST_CONFIG.requestApiUrl,
+    fallbackApiUrls: nativeFallback.fallbackApiUrls ?? DEFAULT_REQUEST_CONFIG.fallbackApiUrls,
+    enableRequests: true,
+  };
+}
+
+export async function loadRequestConfig(): Promise<RequestConfig> {
+  const nativeFallback = await loadNativeRequestConfig();
+  return loadRequestConfigWithNativeFallback(nativeFallback);
 }
 
 export async function saveRequestConfig(newConfig: Partial<RequestConfig>): Promise<void> {

@@ -435,20 +435,14 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'local-dns' -Action {
     Start-OpenPathInstallTimedStep -Name 'local-dns'
     if ($deferLocalDnsUntilRemoteBootstrap) {
         Write-InstallerVerbose '  DNS local se activara tras descargar y aplicar la primera whitelist'
+        Ensure-InstallerRemoteBootstrapDns -ApiBaseUrl $apiBaseUrl -PrimaryDNS $primaryDNS -WhatIf:$WhatIfPreference | Out-Null
+        Write-InstallerVerbose '  DNS remoto verificado para enrollment'
     }
     else {
         Set-LocalDNS -WhatIf:$WhatIfPreference
         Write-InstallerVerbose '  DNS configurado a 127.0.0.1'
     }
     Complete-OpenPathInstallTimedStep -Name 'local-dns'
-}
-Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
-
-$phaseResult = Invoke-OpenPathPlannedPhase -Name 'scheduled-tasks' -Action {
-    Start-OpenPathInstallTimedStep -Name 'scheduled-tasks'
-    Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1 -WhatIf:$WhatIfPreference
-    Write-InstallerVerbose '  Tareas registradas'
-    Complete-OpenPathInstallTimedStep -Name 'scheduled-tasks'
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
@@ -562,6 +556,14 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
 
         Write-InstallerWarning "  ADVERTENCIA: No se pudo validar Firefox managed extension readiness: $_"
     }
+}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'scheduled-tasks' -Action {
+    Start-OpenPathInstallTimedStep -Name 'scheduled-tasks'
+    Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1 -WhatIf:$WhatIfPreference
+    Write-InstallerVerbose '  Tareas registradas'
+    Complete-OpenPathInstallTimedStep -Name 'scheduled-tasks'
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 

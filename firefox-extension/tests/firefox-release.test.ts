@@ -923,8 +923,7 @@ void describe('Firefox release signing helpers', () => {
         browser_specific_settings: {
           gecko: {
             data_collection_permissions: {
-              required: ['none'],
-              optional: ['browsingActivity'],
+              required: ['browsingActivity'],
             },
           },
         },

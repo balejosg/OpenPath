@@ -41,11 +41,11 @@ Describe "Installer" {
                 'acrylic',
                 'acrylic-configuration',
                 'local-dns',
-                'scheduled-tasks',
                 'enrollment',
                 'native-host',
                 'first-update',
                 'firefox-managed-extension-ready',
+                'scheduled-tasks',
                 'realtime-updates',
                 'app-control',
                 'browser-inventory',
@@ -524,11 +524,13 @@ Describe "Installer" {
             Assert-ContentContainsAll -Content $content -Needles @(
                 '$deferLocalDnsUntilRemoteBootstrap = $classroomModeRequested -or [bool]$WhitelistUrl',
                 'DNS local se activara tras descargar y aplicar la primera whitelist',
+                'Ensure-InstallerRemoteBootstrapDns -ApiBaseUrl $apiBaseUrl -PrimaryDNS $primaryDNS -WhatIf:$WhatIfPreference',
+                'DNS remoto verificado para enrollment',
                 'Set-LocalDNS',
                 'Invoke-OpenPathInstallerFirstUpdate'
             )
 
-            $content | Should -Match '(?s)if \(\$deferLocalDnsUntilRemoteBootstrap\).*?else \{\s+Set-LocalDNS'
+            $content | Should -Match '(?s)if \(\$deferLocalDnsUntilRemoteBootstrap\).*?Ensure-InstallerRemoteBootstrapDns.*?else \{\s+Set-LocalDNS'
             $content | Should -Match '(?s)Invoke-OpenPathInstallerFirstUpdate'
             $content | Should -Not -Match '(?s)Set-LocalDNS\s+Write-InstallerVerbose ''  DNS configurado a 127\.0\.0\.1''\s+Show-InstallerProgress -Step 6'
         }
@@ -603,6 +605,19 @@ Describe "Installer" {
                 'Registro no completado; se omite primera actualizacion',
                 '$ClassroomModeRequested -and $MachineRegistered -ne ''REGISTERED'''
             )
+        }
+
+        It "Runs the first update in a subprocess so retryable update failures do not exit the installer" {
+            $runtimeHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Runtime.ps1"
+            $runtimeHelper = Get-Content $runtimeHelperPath -Raw
+
+            Assert-ContentContainsAll -Content $runtimeHelper -Needles @(
+                'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$OpenPathRoot\scripts\Update-OpenPath.ps1"',
+                '$updateExitCode = $LASTEXITCODE',
+                'Primera actualizacion fallida con codigo $updateExitCode (se reintentara)'
+            )
+
+            $runtimeHelper | Should -Not -Match '(?m)^\s*& "\$OpenPathRoot\\scripts\\Update-OpenPath\.ps1"\s*$'
         }
 
         It "Fails closed when browser policy spec is missing from installer runtime" {
@@ -869,6 +884,72 @@ Describe "Installer" {
             $content.Contains('$primaryDNS = Get-InstallerPrimaryDNS') | Should -BeTrue
             $content.Contains('Select-Object -First 1).ServerAddresses[0]') | Should -BeFalse
             $dnsHelper.Contains('function Get-InstallerPrimaryDNS') | Should -BeTrue
+            $dnsHelper.Contains('function Ensure-InstallerRemoteBootstrapDns') | Should -BeTrue
+            $dnsHelper.Contains('Set-DnsClientServerAddress') | Should -BeTrue
+            $dnsHelper.Contains('Resolve-DnsName -Name $hostname') | Should -BeTrue
+        }
+
+        It "Does not mutate adapter DNS during remote bootstrap WhatIf" {
+            $dnsHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Dns.ps1"
+            . $dnsHelperPath
+
+            $script:setDnsCalls = 0
+            $script:clearCacheCalls = 0
+
+            function Resolve-DnsName {
+                [CmdletBinding()]
+                param(
+                    [string]$Name,
+                    [string]$Type,
+                    [switch]$QuickTimeout,
+                    [string]$Server,
+                    [switch]$DnsOnly
+                )
+
+                throw "Simulated DNS failure for $Name"
+            }
+
+            function Get-NetAdapter {
+                [CmdletBinding()]
+                param()
+
+                [pscustomobject]@{ Status = 'Up'; ifIndex = 12 }
+            }
+
+            function Set-DnsClientServerAddress {
+                [CmdletBinding()]
+                param(
+                    [int]$InterfaceIndex,
+                    [string[]]$ServerAddresses
+                )
+
+                $script:setDnsCalls += 1
+                throw 'WhatIf should not mutate live adapter DNS'
+            }
+
+            function Clear-DnsClientCache {
+                [CmdletBinding()]
+                param()
+
+                $script:clearCacheCalls += 1
+            }
+
+            try {
+                {
+                    Ensure-InstallerRemoteBootstrapDns -ApiBaseUrl 'https://api.example.test' -PrimaryDNS '8.8.8.8' -WhatIf
+                } | Should -Not -Throw
+
+                $script:setDnsCalls | Should -Be 0
+                $script:clearCacheCalls | Should -Be 0
+            }
+            finally {
+                Remove-Item function:\Resolve-DnsName -ErrorAction SilentlyContinue
+                Remove-Item function:\Get-NetAdapter -ErrorAction SilentlyContinue
+                Remove-Item function:\Set-DnsClientServerAddress -ErrorAction SilentlyContinue
+                Remove-Item function:\Clear-DnsClientCache -ErrorAction SilentlyContinue
+                Remove-Variable -Name setDnsCalls -Scope Script -ErrorAction SilentlyContinue
+                Remove-Variable -Name clearCacheCalls -Scope Script -ErrorAction SilentlyContinue
+            }
         }
     }
 
@@ -1016,7 +1097,7 @@ Describe "Installer" {
                 'Start-OpenPathTask -TaskType SSE'
             )
 
-            $content | Should -Match '(?s)Invoke-OpenPathInstallerFirstUpdate.*Start-OpenPathInstallerRealtimeUpdates'
+            $content | Should -Match '(?s)Invoke-OpenPathInstallerEnrollment.*Invoke-OpenPathInstallerFirstUpdate.*Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1.*Start-OpenPathInstallerRealtimeUpdates'
             $content | Should -Not -Match '(?s)Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1.*Start-OpenPathTask -TaskType SSE.*Invoke-OpenPathInstallerEnrollment'
         }
     }

@@ -35,9 +35,17 @@ function sanitizeStoredRequestConfig(
   const hasNativeEndpoint =
     (typeof nativeFallback.requestApiUrl === 'string' && nativeFallback.requestApiUrl.length > 0) ||
     (nativeFallback.fallbackApiUrls?.length ?? 0) > 0;
+
+  if (hasNativeEndpoint) {
+    delete sanitized.requestApiUrl;
+    delete sanitized.fallbackApiUrls;
+  }
+
   if (typeof incoming.requestApiUrl === 'string') {
     const normalizedRequestApiUrl = normalizeApiUrl(incoming.requestApiUrl);
-    if (normalizedRequestApiUrl.length > 0) {
+    if (hasNativeEndpoint) {
+      delete sanitized.requestApiUrl;
+    } else if (normalizedRequestApiUrl.length > 0) {
       sanitized.requestApiUrl = normalizedRequestApiUrl;
     } else if (nativeFallback.requestApiUrl) {
       delete sanitized.requestApiUrl;
@@ -48,7 +56,9 @@ function sanitizeStoredRequestConfig(
 
   if (Array.isArray(incoming.fallbackApiUrls)) {
     const normalizedFallbackApiUrls = normalizeApiUrlList(incoming.fallbackApiUrls);
-    if (normalizedFallbackApiUrls.length > 0) {
+    if (hasNativeEndpoint) {
+      delete sanitized.fallbackApiUrls;
+    } else if (normalizedFallbackApiUrls.length > 0) {
       sanitized.fallbackApiUrls = normalizedFallbackApiUrls;
     } else if ((nativeFallback.fallbackApiUrls?.length ?? 0) > 0) {
       delete sanitized.fallbackApiUrls;

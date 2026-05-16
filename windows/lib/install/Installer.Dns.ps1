@@ -52,3 +52,52 @@ function Get-InstallerPrimaryDNS {
     if ($disfavoredCandidates.Count -gt 0) { return $disfavoredCandidates[0] }
     return '8.8.8.8'
 }
+
+function Ensure-InstallerRemoteBootstrapDns {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [string]$ApiBaseUrl = '',
+        [string]$PrimaryDNS = ''
+    )
+
+    if (-not $ApiBaseUrl) { return $true }
+
+    try {
+        $hostname = ([Uri]$ApiBaseUrl).Host
+    }
+    catch {
+        return $true
+    }
+
+    if (-not $hostname -or $hostname -match '^\d{1,3}(?:\.\d{1,3}){3}$') {
+        return $true
+    }
+
+    try {
+        Resolve-DnsName -Name $hostname -Type A -QuickTimeout -ErrorAction Stop | Out-Null
+        return $true
+    }
+    catch {
+        if (-not $PrimaryDNS) { throw }
+    }
+
+    $networkAdapters = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })
+    foreach ($adapter in $networkAdapters) {
+        if ($PSCmdlet.ShouldProcess("network adapter $($adapter.ifIndex)", "Set bootstrap DNS server $PrimaryDNS")) {
+            Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses @($PrimaryDNS) -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($WhatIfPreference) {
+        return $true
+    }
+
+    try {
+        Clear-DnsClientCache -ErrorAction SilentlyContinue
+        Resolve-DnsName -Name $hostname -Type A -QuickTimeout -ErrorAction Stop | Out-Null
+        return $true
+    }
+    catch {
+        throw "Unable to resolve $hostname before remote enrollment after setting DNS server $PrimaryDNS"
+    }
+}

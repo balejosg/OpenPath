@@ -217,14 +217,14 @@ function createListenerHarness(
 }
 
 void describe('background listeners blocked-screen routing', () => {
-  void test('keeps runtime message channel open until async handlers send a response', async () => {
+  void test('returns runtime message promises while still supporting callback responses', async () => {
     const harness = createListenerHarness({
       handleRuntimeMessage: () => Promise.resolve({ success: true, id: 'request-1' }),
     });
     assert.ok(harness.runtimeMessage);
 
     const responses: unknown[] = [];
-    const keepAlive = harness.runtimeMessage(
+    const responsePromise = harness.runtimeMessage(
       { action: 'submitBlockedDomainRequest' },
       { tab: { id: 1 } },
       (response) => {
@@ -232,7 +232,8 @@ void describe('background listeners blocked-screen routing', () => {
       }
     );
 
-    assert.equal(keepAlive, true);
+    assert.equal(typeof (responsePromise as Promise<unknown>).then, 'function');
+    assert.deepEqual(await responsePromise, { success: true, id: 'request-1' });
     await waitForAsyncListeners();
     assert.deepEqual(responses, [{ success: true, id: 'request-1' }]);
   });
@@ -242,7 +243,7 @@ void describe('background listeners blocked-screen routing', () => {
     assert.ok(harness.runtimeMessage);
 
     const responses: unknown[] = [];
-    const keepAlive = harness.runtimeMessage(
+    const responsePromise = harness.runtimeMessage(
       {
         action: 'openpathPageResourceCandidate',
         kind: 'fetch',
@@ -256,7 +257,8 @@ void describe('background listeners blocked-screen routing', () => {
       }
     );
 
-    assert.equal(keepAlive, true);
+    assert.equal(typeof (responsePromise as Promise<unknown>).then, 'function');
+    assert.equal(await responsePromise, undefined);
     await waitForAsyncListeners();
     assert.deepEqual(responses, [undefined]);
     assert.deepEqual(harness.autoAllowCalls, []);

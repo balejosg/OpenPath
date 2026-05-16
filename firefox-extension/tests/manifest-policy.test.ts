@@ -111,8 +111,7 @@ void describe('Firefox extension manifest policy', () => {
         id: 'openpath-block-monitor@openpath',
         strict_min_version: '140.0',
         data_collection_permissions: {
-          required: ['none'],
-          optional: ['browsingActivity'],
+          required: ['browsingActivity'],
         },
       },
       gecko_android: {

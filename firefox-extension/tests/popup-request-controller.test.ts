@@ -63,10 +63,17 @@ await describe('popup request controller', async () => {
     const globalRecord = globalThis as typeof globalThis & { browser?: unknown };
     const previousBrowser = globalRecord.browser;
     const previousDocument = (globalRecord as { document?: unknown }).document;
+    const permissionEvents: string[] = [];
     globalRecord.browser = {
       permissions: {
-        contains: (): Promise<boolean> => Promise.resolve(false),
-        request: (): Promise<boolean> => Promise.resolve(true),
+        contains: (): Promise<boolean> => {
+          permissionEvents.push('contains');
+          return Promise.resolve(true);
+        },
+        request: (): Promise<boolean> => {
+          permissionEvents.push('request');
+          return Promise.resolve(true);
+        },
       },
     };
     (globalRecord as { document?: unknown }).document = {
@@ -154,7 +161,11 @@ await describe('popup request controller', async () => {
       assert.ok(verifyItem);
       assert.equal(verifyItem.children[0]?.textContent, 'cdn.example.com');
 
-      await controller.submitDomainRequest();
+      const submitPromise = controller.submitDomainRequest();
+      assert.deepEqual(permissionEvents, ['contains']);
+      await Promise.resolve();
+      assert.equal(messages.length, 1);
+      await submitPromise;
       assert.deepEqual(messages[1], {
         action: 'submitBlockedDomain',
         domain: 'cdn.example.com',
@@ -183,6 +194,73 @@ await describe('popup request controller', async () => {
     } finally {
       globalRecord.browser = previousBrowser;
       (globalRecord as { document?: unknown }).document = previousDocument;
+    }
+  });
+
+  await test('does not request browsing activity consent for invalid popup input', async () => {
+    const globalRecord = globalThis as typeof globalThis & { browser?: unknown };
+    const previousBrowser = globalRecord.browser;
+    let permissionRequests = 0;
+    globalRecord.browser = {
+      permissions: {
+        contains: (): Promise<boolean> => Promise.resolve(false),
+        request: (): Promise<boolean> => {
+          permissionRequests += 1;
+          return Promise.resolve(true);
+        },
+      },
+    };
+
+    try {
+      const state = createState();
+      const btnSubmitRequest = new FakeElement() as unknown as HTMLButtonElement;
+      const btnVerify = new FakeElement() as unknown as HTMLButtonElement;
+      const requestDomainSelectEl = new FakeElement() as unknown as HTMLSelectElement;
+      const requestReasonEl = new FakeElement() as unknown as HTMLInputElement;
+      const requestSectionEl = new FakeElement() as unknown as HTMLElement;
+      const requestStatusEl = new FakeElement() as unknown as HTMLElement;
+      const verifyListEl = new FakeElement() as unknown as HTMLElement;
+      const verifyResultsEl = new FakeElement() as unknown as HTMLElement;
+      const messages: unknown[] = [];
+
+      requestDomainSelectEl.value = 'cdn.example.com';
+      requestReasonEl.value = 'no';
+
+      const controller = createPopupRequestController({
+        blockedDomainsData: () => ({
+          'cdn.example.com': {
+            errors: ['NS_ERROR_UNKNOWN_HOST'],
+            origin: 'portal.school',
+            timestamp: 1,
+          },
+        }),
+        btnSubmitRequest,
+        btnVerify,
+        buildSubmitMessage: (payload) => ({ action: 'submitBlockedDomain', ...payload }),
+        isRequestConfigured: () => true,
+        loadDomainStatuses: () => Promise.resolve(),
+        renderDomainsList: () => undefined,
+        requestDomainSelectEl,
+        requestReasonEl,
+        requestSectionEl,
+        requestStatusEl,
+        sendMessage: (message) => {
+          messages.push(message);
+          return Promise.resolve({ success: true, id: 'req-1' });
+        },
+        showToast: () => undefined,
+        state,
+        verifyListEl,
+        verifyResultsEl,
+      });
+
+      await controller.submitDomainRequest();
+
+      assert.equal(permissionRequests, 0);
+      assert.deepEqual(messages, []);
+      assert.match(requestStatusEl.textContent, /Selecciona un dominio y escribe un motivo/);
+    } finally {
+      globalRecord.browser = previousBrowser;
     }
   });
 });
