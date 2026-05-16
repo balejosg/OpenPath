@@ -54,10 +54,12 @@ function Invoke-OpenPathWatchdogPrechecks {
         $captiveState = 'NoNetwork'
     }
 
-    if ($captiveState -eq 'Portal') {
+    $portalObservation = Update-OpenPathCaptivePortalObservation -DetectedState $captiveState
+
+    if ($portalObservation.ShouldEnterPortal) {
         Enable-OpenPathCaptivePortalMode -State $captiveState | Out-Null
     }
-    elseif ($captiveState -eq 'Authenticated' -and $portalModeActive) {
+    elseif ($portalObservation.ShouldExitPortal -and $portalModeActive) {
         Disable-OpenPathCaptivePortalMode -Config $Config | Out-Null
     }
 
@@ -65,6 +67,36 @@ function Invoke-OpenPathWatchdogPrechecks {
         PortalModeActive = (Test-OpenPathCaptivePortalModeActive)
         CaptiveState = $captiveState
     }
+}
+
+function Get-OpenPathActiveIpv4AdaptersMissingLocalDns {
+    [CmdletBinding()]
+    param()
+
+    $activeAdapters = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })
+    $missingAdapters = @()
+
+    foreach ($adapter in $activeAdapters) {
+        $interfaceIndex = if ($adapter.PSObject.Properties['ifIndex']) { $adapter.ifIndex } else { $adapter.InterfaceIndex }
+        if ($null -eq $interfaceIndex) {
+            continue
+        }
+
+        $address = Get-DnsClientServerAddress -AddressFamily IPv4 -InterfaceIndex $interfaceIndex -ErrorAction SilentlyContinue
+        $serverAddresses = @()
+        foreach ($entry in @($address)) {
+            $serverAddresses += @($entry.ServerAddresses)
+        }
+
+        if ($serverAddresses -notcontains '127.0.0.1') {
+            $missingAdapters += [PSCustomObject]@{
+                Name = [string]$adapter.Name
+                InterfaceIndex = $interfaceIndex
+            }
+        }
+    }
+
+    return @($missingAdapters)
 }
 
 function Invoke-OpenPathWatchdogChecks {
@@ -163,13 +195,15 @@ function Invoke-OpenPathWatchdogChecks {
     }
 
     try {
-        $dnsServers = Get-DnsClientServerAddress -AddressFamily IPv4 |
-            Where-Object { $_.ServerAddresses -contains "127.0.0.1" }
+        $adaptersMissingLocalDns = @(Get-OpenPathActiveIpv4AdaptersMissingLocalDns)
 
-        if ($shouldRunProtectedModeChecks -and -not $dnsServers) {
+        if ($shouldRunProtectedModeChecks -and $adaptersMissingLocalDns.Count -gt 0) {
+            $affectedAdapterNames = @($adaptersMissingLocalDns | ForEach-Object { $_.Name })
+            Write-OpenPathLog "Watchdog: active IPv4 adapters missing local DNS: $($affectedAdapterNames -join ', ')" -Level WARN
             $repairPlan = New-OpenPathWatchdogProtectedModeRepairPlan `
                 -PolicyState $policyState `
-                -LocalDnsConfigured:$false
+                -LocalDnsConfigured:$false `
+                -AffectedLocalDnsAdapterNames $affectedAdapterNames
             $issues += @($repairPlan.Issues)
             $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
             Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null

@@ -137,6 +137,7 @@ function Invoke-OpenPathAgentSelfUpdate {
 
     $mutex = $null
     $lockAcquired = $false
+    $replacementBackups = @()
 
     try {
         $mutex = [System.Threading.Mutex]::new($false, 'Global\OpenPathAgentUpdateLock')
@@ -165,12 +166,15 @@ function Invoke-OpenPathAgentSelfUpdate {
 
         $updateRoot = Join-Path $script:OpenPathRoot 'data\agent-update'
         $stagingRoot = Join-Path $updateRoot ("staging-$targetVersion")
+        $backupRoot = Join-Path (Join-Path $updateRoot 'backups') $currentVersion
 
         if (Test-Path $stagingRoot) {
             Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
 
         New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
+        New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+        $manifest | ConvertTo-Json -Depth 20 | Set-Content -Path (Join-Path $backupRoot 'manifest.json') -Encoding UTF8 -Force
 
         $downloadedFiles = @()
         foreach ($file in $manifestFiles) {
@@ -208,10 +212,12 @@ function Invoke-OpenPathAgentSelfUpdate {
             }
 
             $destinationPath = Join-Path $script:OpenPathRoot $relativePath
+            $backupPath = Join-Path $backupRoot $relativePath
             $downloadedFiles += [PSCustomObject]@{
                 RelativePath = $relativePath
                 StagedPath = $stagedPath
                 DestinationPath = $destinationPath
+                BackupPath = $backupPath
             }
         }
 
@@ -223,7 +229,36 @@ function Invoke-OpenPathAgentSelfUpdate {
                 New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
             }
 
-            Copy-Item -Path $download.StagedPath -Destination $download.DestinationPath -Force
+            $backupDir = Split-Path $download.BackupPath -Parent
+            if (-not (Test-Path $backupDir)) {
+                New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+            }
+
+            $hadExistingFile = Test-Path $download.DestinationPath
+            if ($hadExistingFile) {
+                Copy-Item -Path $download.DestinationPath -Destination $download.BackupPath -Force -ErrorAction Stop
+            }
+
+            $tempDestinationPath = "$($download.DestinationPath).openpath-update-$([guid]::NewGuid()).tmp"
+            Copy-Item -Path $download.StagedPath -Destination $tempDestinationPath -Force -ErrorAction Stop
+            Move-Item -Path $tempDestinationPath -Destination $download.DestinationPath -Force -ErrorAction Stop
+
+            $replacementBackups += [PSCustomObject]@{
+                DestinationPath = $download.DestinationPath
+                BackupPath = $download.BackupPath
+                HadExistingFile = [bool]$hadExistingFile
+            }
+        }
+
+        foreach ($download in $downloadedFiles) {
+            $manifestEntry = @($manifestFiles | Where-Object { ([string]$_.path -replace '/', '\') -eq $download.RelativePath })[0]
+            $expectedHash = if ($manifestEntry -and $manifestEntry.PSObject.Properties['sha256']) { [string]$manifestEntry.sha256 } else { '' }
+            if ($expectedHash) {
+                $actualHash = (Get-FileHash -Path $download.DestinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                if ($actualHash -ne $expectedHash.ToLowerInvariant()) {
+                    throw "Post-replacement checksum mismatch for $($download.RelativePath)"
+                }
+            }
         }
 
         if ($config.PSObject.Properties['version']) {
@@ -301,6 +336,19 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
     }
     catch {
+        foreach ($replacement in @($replacementBackups | Sort-Object { $_.DestinationPath.Length } -Descending)) {
+            try {
+                if ($replacement.HadExistingFile -and (Test-Path $replacement.BackupPath)) {
+                    Copy-Item -Path $replacement.BackupPath -Destination $replacement.DestinationPath -Force -ErrorAction Stop
+                }
+                elseif (-not $replacement.HadExistingFile -and (Test-Path $replacement.DestinationPath)) {
+                    Remove-Item -Path $replacement.DestinationPath -Force -ErrorAction Stop
+                }
+            }
+            catch {
+                Write-SelfUpdateMessage -Message "Rollback failed for $($replacement.DestinationPath): $_" -Level ERROR
+            }
+        }
         $message = "Self-update failed: $_"
         Write-SelfUpdateMessage -Message $message -Level ERROR
         return [PSCustomObject]@{

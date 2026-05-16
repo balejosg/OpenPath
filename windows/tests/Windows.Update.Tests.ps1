@@ -228,4 +228,28 @@ Describe "Update Script" {
             )
         }
     }
+
+    Context "Self-update transactions" {
+        It "Backs up the current version and rolls back file replacements on failure" {
+            $updateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $content = Get-Content $updateHelperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'data\agent-update',
+                '''backups''',
+                '$currentVersion',
+                'manifest.json',
+                '$replacementBackups',
+                '$tempDestinationPath',
+                'Move-Item -Path $tempDestinationPath -Destination $download.DestinationPath -Force -ErrorAction Stop',
+                'Post-replacement checksum mismatch',
+                'Rollback failed for $($replacement.DestinationPath)'
+            )
+
+            $replacementStart = $content.IndexOf('foreach ($download in $downloadedFiles)')
+            $configUpdateStart = $content.IndexOf('if ($config.PSObject.Properties[''version''])')
+            $postReplacementBody = $content.Substring($replacementStart, $configUpdateStart - $replacementStart)
+            $postReplacementBody | Should -Match 'Post-replacement checksum mismatch'
+        }
+    }
 }

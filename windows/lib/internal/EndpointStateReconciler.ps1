@@ -55,7 +55,9 @@ function New-OpenPathWatchdogProtectedModeRepairPlan {
 
         [bool]$FirewallActive = $true,
 
-        [bool]$LocalDnsConfigured = $true
+        [bool]$LocalDnsConfigured = $true,
+
+        [string[]]$AffectedLocalDnsAdapterNames = @()
     )
 
     $issues = @()
@@ -94,8 +96,12 @@ function New-OpenPathWatchdogProtectedModeRepairPlan {
     }
 
     if (-not $LocalDnsConfigured) {
-        $issues += 'Local DNS not configured'
-        $recoveryEligibleIssues += 'Local DNS not configured'
+        $adapterSuffix = ''
+        if (@($AffectedLocalDnsAdapterNames).Count -gt 0) {
+            $adapterSuffix = ": $(@($AffectedLocalDnsAdapterNames) -join ', ')"
+        }
+        $issues += "Local DNS not configured$adapterSuffix"
+        $recoveryEligibleIssues += "Local DNS not configured$adapterSuffix"
         $actions += 'SetLocalDns'
     }
 

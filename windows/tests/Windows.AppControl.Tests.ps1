@@ -193,5 +193,44 @@ Describe "AppControl Module" {
                 $collection.GetAttribute('EnforcementMode') | Should -Be 'AuditOnly'
             }
         }
+
+        It "Merges OpenPath rules while preserving non-OpenPath rules" {
+            [xml]$currentPolicy = @'
+<AppLockerPolicy Version="1">
+    <RuleCollection Type="Exe" EnforcementMode="Enabled">
+      <FilePathRule Id="11111111-1111-1111-1111-111111111111" Name="Vendor allow" Description="Existing rule" UserOrGroupSid="S-1-5-32-545" Action="Allow">
+        <Conditions><FilePathCondition Path="C:\Vendor\*" /></Conditions>
+      </FilePathRule>
+      <FilePathRule Id="22222222-2222-2222-2222-222222222222" Name="OpenPath non-admin app control stale" Description="Managed by OpenPath" UserOrGroupSid="S-1-5-32-545" Action="Allow">
+        <Conditions><FilePathCondition Path="C:\OldOpenPath\*" /></Conditions>
+      </FilePathRule>
+    </RuleCollection>
+    <RuleCollection Type="Script" EnforcementMode="Enabled" />
+</AppLockerPolicy>
+'@
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+            [xml]$openPathPolicy = New-OpenPathAppLockerPolicyXml -Spec $spec
+
+            $mergedPolicy = Merge-OpenPathAppLockerPolicyXml -CurrentPolicy $currentPolicy -OpenPathPolicy $openPathPolicy
+            $exeRules = @($mergedPolicy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Exe' }).FilePathRule
+            $ruleNames = @($exeRules | ForEach-Object { $_.GetAttribute('Name') })
+
+            $ruleNames | Should -Contain 'Vendor allow'
+            $ruleNames | Should -Not -Contain 'OpenPath non-admin app control stale'
+            @($ruleNames | Where-Object { $_ -like 'OpenPath non-admin app control*' }).Count | Should -BeGreaterThan 0
+        }
+
+        It "Uses backup and validation when applying AppLocker policy" {
+            $moduleContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "AppControl.psm1") -Raw
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'applocker-backup.xml',
+                'Merge-OpenPathAppLockerPolicyXml',
+                'if (@($sourceCollection.ChildNodes).Count -eq 0)',
+                'Set-Content -Path $script:OpenPathAppLockerBackupPath',
+                'Test-OpenPathNonAdminAppControlActive',
+                'Set-AppLockerPolicy -XMLPolicy $script:OpenPathAppLockerBackupPath'
+            )
+        }
     }
 }

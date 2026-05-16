@@ -5,6 +5,7 @@ $script:OpenPathRoot = "C:\OpenPath"
 Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction SilentlyContinue
 
 $script:OpenPathAppControlRulePrefix = 'OpenPath non-admin app control'
+$script:OpenPathAppLockerBackupPath = "$script:OpenPathRoot\data\applocker-backup.xml"
 
 function ConvertTo-OpenPathXmlAttribute {
     param(
@@ -215,6 +216,48 @@ $($ruleCollections -join "`n")
 "@
 }
 
+function Merge-OpenPathAppLockerPolicyXml {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [xml]$CurrentPolicy,
+
+        [Parameter(Mandatory = $true)]
+        [xml]$OpenPathPolicy
+    )
+
+    foreach ($sourceCollection in @($OpenPathPolicy.AppLockerPolicy.RuleCollection)) {
+        if (@($sourceCollection.ChildNodes).Count -eq 0) {
+            continue
+        }
+
+        $collectionType = $sourceCollection.GetAttribute('Type')
+        $targetCollection = @($CurrentPolicy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq $collectionType })[0]
+
+        if (-not $targetCollection) {
+            $targetCollection = $CurrentPolicy.ImportNode($sourceCollection, $false)
+            [void]$CurrentPolicy.AppLockerPolicy.AppendChild($targetCollection)
+        }
+
+        if ($sourceCollection.HasAttribute('EnforcementMode')) {
+            $targetCollection.SetAttribute('EnforcementMode', $sourceCollection.GetAttribute('EnforcementMode'))
+        }
+
+        foreach ($rule in @($targetCollection.ChildNodes)) {
+            if ($rule.Name -like "$script:OpenPathAppControlRulePrefix*") {
+                [void]$targetCollection.RemoveChild($rule)
+            }
+        }
+
+        foreach ($rule in @($sourceCollection.ChildNodes)) {
+            $importedRule = $CurrentPolicy.ImportNode($rule, $true)
+            [void]$targetCollection.AppendChild($importedRule)
+        }
+    }
+
+    return $CurrentPolicy
+}
+
 function Test-OpenPathAppControlAvailable {
     [CmdletBinding()]
     param()
@@ -253,12 +296,19 @@ function Set-OpenPathNonAdminAppControl {
     }
 
     try {
-        Remove-OpenPathNonAdminAppControl -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+        $backupDir = Split-Path $script:OpenPathAppLockerBackupPath -Parent
+        if (-not (Test-Path $backupDir)) {
+            New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+        }
+
+        $currentPolicyText = Get-AppLockerPolicy -Local -Xml
+        Set-Content -Path $script:OpenPathAppLockerBackupPath -Value $currentPolicyText -Encoding UTF8
 
         $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers
         $policyXml = New-OpenPathAppLockerPolicyXml -Spec $spec
+        $mergedPolicyXml = Merge-OpenPathAppLockerPolicyXml -CurrentPolicy ([xml]$currentPolicyText) -OpenPathPolicy ([xml]$policyXml)
         $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-applocker-$([guid]::NewGuid()).xml"
-        Set-Content -Path $policyPath -Value $policyXml -Encoding UTF8
+        $mergedPolicyXml.Save($policyPath)
         Set-AppLockerPolicy -XMLPolicy $policyPath
         Remove-Item $policyPath -Force -ErrorAction SilentlyContinue
 
@@ -268,6 +318,12 @@ function Set-OpenPathNonAdminAppControl {
         }
         catch {
             Write-OpenPathLog "AppLocker policy applied but AppIDSvc could not be started: $_" -Level WARN
+        }
+
+        if (-not (Test-OpenPathNonAdminAppControlActive)) {
+            Set-AppLockerPolicy -XMLPolicy $script:OpenPathAppLockerBackupPath
+            Write-OpenPathLog 'AppLocker validation failed after OpenPath policy apply; restored previous policy backup' -Level WARN
+            return $false
         }
 
         Write-OpenPathLog "OpenPath non-admin app control applied in $Mode mode"
@@ -334,6 +390,7 @@ function Remove-OpenPathNonAdminAppControl {
 Export-ModuleMember -Function @(
     'New-OpenPathNonAdminAppLockerPolicySpec',
     'New-OpenPathAppLockerPolicyXml',
+    'Merge-OpenPathAppLockerPolicyXml',
     'Test-OpenPathAppControlAvailable',
     'Set-OpenPathNonAdminAppControl',
     'Test-OpenPathNonAdminAppControlActive',

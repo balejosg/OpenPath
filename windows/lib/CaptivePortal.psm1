@@ -7,6 +7,7 @@ Import-Module "$modulePath\lib\Common.psm1" -ErrorAction SilentlyContinue
 
 $script:OpenPathRoot = "C:\OpenPath"
 $script:CaptivePortalStatePath = "$script:OpenPathRoot\data\captive-portal-active.json"
+$script:CaptivePortalObservationPath = "$script:OpenPathRoot\data\captive-portal-observation.json"
 
 function Test-OpenPathCaptivePortalModeActive {
     return (Test-Path $script:CaptivePortalStatePath)
@@ -69,6 +70,111 @@ function Clear-OpenPathCaptivePortalMarker {
     }
     catch {
         return $false
+    }
+}
+
+function Get-OpenPathCaptivePortalObservation {
+    if (-not (Test-Path $script:CaptivePortalObservationPath)) {
+        return $null
+    }
+
+    try {
+        $raw = Get-Content $script:CaptivePortalObservationPath -Raw -ErrorAction Stop
+        if (-not $raw) {
+            return $null
+        }
+        return ($raw | ConvertFrom-Json -ErrorAction Stop)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Update-OpenPathCaptivePortalObservation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Authenticated', 'Portal', 'NoNetwork')]
+        [string]$DetectedState,
+
+        [int]$EnterPortalCount = 2,
+
+        [int]$ExitAuthenticatedCount = 3,
+
+        [int]$MinimumPortalSeconds = 180
+    )
+
+    $now = Get-Date
+    $existing = Get-OpenPathCaptivePortalObservation
+    $portalCount = 0
+    $authenticatedCount = 0
+    $portalSince = $null
+
+    if ($existing) {
+        if ($existing.PSObject.Properties['portalCount']) { $portalCount = [int]$existing.portalCount }
+        if ($existing.PSObject.Properties['authenticatedCount']) { $authenticatedCount = [int]$existing.authenticatedCount }
+        if ($existing.PSObject.Properties['portalSince'] -and $existing.portalSince) {
+            try { $portalSince = [datetime]::Parse([string]$existing.portalSince) } catch { $portalSince = $null }
+        }
+    }
+
+    if (-not (Test-OpenPathCaptivePortalModeActive)) {
+        $portalSince = $null
+    }
+    elseif (-not $portalSince) {
+        $marker = Get-OpenPathCaptivePortalMarker
+        if ($marker -and $marker.PSObject.Properties['since'] -and $marker.since) {
+            try { $portalSince = [datetime]::Parse([string]$marker.since) } catch { $portalSince = $now }
+        }
+        else {
+            $portalSince = $now
+        }
+    }
+
+    if ($DetectedState -eq 'Portal') {
+        $portalCount += 1
+        $authenticatedCount = 0
+    }
+    elseif ($DetectedState -eq 'Authenticated') {
+        $authenticatedCount += 1
+        $portalCount = 0
+    }
+
+    $minimumPortalElapsed = $false
+    if ($portalSince) {
+        $minimumPortalElapsed = (($now - $portalSince).TotalSeconds -ge $MinimumPortalSeconds)
+    }
+
+    $shouldEnterPortal = ($DetectedState -eq 'Portal' -and $portalCount -ge $EnterPortalCount -and -not (Test-OpenPathCaptivePortalModeActive))
+    $shouldExitPortal = ($DetectedState -eq 'Authenticated' -and $authenticatedCount -ge $ExitAuthenticatedCount -and $minimumPortalElapsed -and (Test-OpenPathCaptivePortalModeActive))
+
+    try {
+        $dir = Split-Path $script:CaptivePortalObservationPath -Parent
+        if (-not (Test-Path $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+
+        [PSCustomObject]@{
+            detectedState = $DetectedState
+            portalCount = $portalCount
+            authenticatedCount = $authenticatedCount
+            portalSince = if ($portalSince) { $portalSince.ToString('o') } else { $null }
+            shouldEnterPortal = [bool]$shouldEnterPortal
+            shouldExitPortal = [bool]$shouldExitPortal
+            updatedAt = $now.ToString('o')
+        } | ConvertTo-Json -Depth 8 | Set-Content -Path $script:CaptivePortalObservationPath -Encoding UTF8 -Force
+    }
+    catch {
+        # Observation persistence is best-effort; callers still get the in-memory decision.
+    }
+
+    return [PSCustomObject]@{
+        ShouldEnterPortal = [bool]$shouldEnterPortal
+        ShouldExitPortal = [bool]$shouldExitPortal
+        DetectedState = $DetectedState
+        PortalCount = $portalCount
+        AuthenticatedCount = $authenticatedCount
+        MinimumPortalElapsed = [bool]$minimumPortalElapsed
     }
 }
 
@@ -221,6 +327,8 @@ Export-ModuleMember -Function @(
     'Get-OpenPathCaptivePortalMarker',
     'Set-OpenPathCaptivePortalMarker',
     'Clear-OpenPathCaptivePortalMarker',
+    'Get-OpenPathCaptivePortalObservation',
+    'Update-OpenPathCaptivePortalObservation',
     'Test-OpenPathCaptivePortalState',
     'Enable-OpenPathCaptivePortalMode',
     'Disable-OpenPathCaptivePortalMode'

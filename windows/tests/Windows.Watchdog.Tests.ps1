@@ -92,6 +92,32 @@ Describe "Watchdog Script" {
                 'Clear-OpenPathCaptivePortalMarker'
             )
         }
+
+        It "Uses hysteresis before entering or exiting captive portal mode" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $helperContent = Get-Content $helperPath -Raw
+            $moduleContent = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'captive-portal-observation.json',
+                'Update-OpenPathCaptivePortalObservation',
+                '[int]$EnterPortalCount = 2',
+                '[int]$ExitAuthenticatedCount = 3',
+                '[int]$MinimumPortalSeconds = 180',
+                '$DetectedState -eq ''Portal''',
+                '$DetectedState -eq ''Authenticated'''
+            )
+
+            Assert-ContentContainsAll -Content $helperContent -Needles @(
+                'Update-OpenPathCaptivePortalObservation -DetectedState $captiveState',
+                '$portalObservation.ShouldEnterPortal',
+                '$portalObservation.ShouldExitPortal'
+            )
+
+            $helperContent | Should -Not -Match "if \\(\\$captiveState -eq 'Portal'\\)"
+            $helperContent | Should -Not -Match "\\$captiveState -eq 'NoNetwork'.*Enable-OpenPathCaptivePortalMode"
+        }
     }
 
     Context "Integrity checks" {
@@ -113,7 +139,9 @@ Describe "Watchdog Script" {
             Assert-ContentContainsAll -Content $content -Needles @(
                 '$script:OpenPathRoot\lib\Update.Runtime.psm1',
                 '$script:OpenPathRoot\lib\internal\CapabilityStorage.ps1',
-                '$script:OpenPathRoot\lib\internal\NativeHost.Actions.ps1'
+                '$script:OpenPathRoot\lib\internal\NativeHost.Actions.ps1',
+                '$script:OpenPathRoot\lib\internal\EndpointStateReconciler.ps1',
+                '$script:OpenPathRoot\lib\internal\Watchdog.Runtime.ps1'
             )
         }
     }
@@ -185,6 +213,28 @@ Describe "Watchdog Script" {
                 'FailOpenActive = [bool]$policyState.FailOpenActive',
                 '$status = ''FAIL_OPEN''',
                 'fail_open_active'
+            )
+        }
+
+        It "Repairs local DNS when any active IPv4 adapter is missing loopback DNS" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $reconcilerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1"
+            $helperContent = Get-Content $helperPath -Raw
+            $reconcilerContent = Get-Content $reconcilerPath -Raw
+
+            Assert-ContentContainsAll -Content $helperContent -Needles @(
+                'function Get-OpenPathActiveIpv4AdaptersMissingLocalDns',
+                'Get-NetAdapter -ErrorAction SilentlyContinue',
+                'Get-DnsClientServerAddress -AddressFamily IPv4 -InterfaceIndex $interfaceIndex',
+                'active IPv4 adapters missing local DNS',
+                '-AffectedLocalDnsAdapterNames $affectedAdapterNames',
+                '$shouldRunProtectedModeChecks'
+            )
+
+            Assert-ContentContainsAll -Content $reconcilerContent -Needles @(
+                '[string[]]$AffectedLocalDnsAdapterNames = @()',
+                '$adapterSuffix',
+                '$actions += ''SetLocalDns'''
             )
         }
     }

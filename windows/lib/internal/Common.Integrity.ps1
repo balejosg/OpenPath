@@ -28,7 +28,9 @@ function Get-OpenPathCriticalFiles {
         "$script:OpenPathRoot\lib\internal\Common.Network.ps1",
         "$script:OpenPathRoot\lib\internal\Common.Update.ps1",
         "$script:OpenPathRoot\lib\internal\CapabilityStorage.ps1",
+        "$script:OpenPathRoot\lib\internal\EndpointStateReconciler.ps1",
         "$script:OpenPathRoot\lib\internal\NativeHost.Actions.ps1",
+        "$script:OpenPathRoot\lib\internal\Watchdog.Runtime.ps1",
         "$script:OpenPathRoot\scripts\Update-OpenPath.ps1",
         "$script:OpenPathRoot\scripts\Test-DNSHealth.ps1",
         "$script:OpenPathRoot\scripts\Start-SSEListener.ps1"
