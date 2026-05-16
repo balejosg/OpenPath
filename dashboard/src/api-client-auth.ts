@@ -18,9 +18,9 @@ export async function login(username: string, password: string): Promise<LoginRe
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
       user: {
-        id: result.user?.id ?? '',
-        email: result.user?.email ?? email,
-        name: result.user?.name ?? username,
+        id: result.user.id,
+        email: result.user.email,
+        name: result.user.name,
       },
     };
   } catch (error) {

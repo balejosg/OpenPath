@@ -50,6 +50,9 @@ export function useCurrentUser(): UseCurrentUserResult {
         .toUpperCase();
 
       const primaryRole = getPrimaryRole(roles);
+      const profileWithOptionalCapabilities = profile as {
+        capabilities?: { teacherGroups?: boolean };
+      };
 
       setUser({
         id: profile.id,
@@ -57,7 +60,7 @@ export function useCurrentUser(): UseCurrentUserResult {
         email: profile.email,
         roles,
         capabilities: {
-          teacherGroups: profile.capabilities?.teacherGroups === true,
+          teacherGroups: profileWithOptionalCapabilities.capabilities?.teacherGroups === true,
         },
         initials: initials || '??',
         primaryRole,

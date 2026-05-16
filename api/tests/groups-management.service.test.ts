@@ -103,9 +103,9 @@ await describe('groups management service', async () => {
   await test('removes deleted group references from roles before publishing refresh', async () => {
     const calls: string[] = [];
     const result = await deleteGroup('group-to-delete', {
-      deleteGroup: async () => {
+      deleteGroup: () => {
         calls.push('deleteGroup');
-        return true;
+        return Promise.resolve(true);
       },
       getGroupById: () =>
         Promise.resolve({
@@ -124,9 +124,9 @@ await describe('groups management service', async () => {
       publishWhitelistChanged: (groupId) => {
         calls.push(`publishWhitelistChanged:${groupId}`);
       },
-      removeGroupFromAllRoles: async (groupId) => {
+      removeGroupFromAllRoles: (groupId) => {
         calls.push(`removeGroupFromAllRoles:${groupId}`);
-        return 2;
+        return Promise.resolve(2);
       },
     });
 
@@ -141,9 +141,9 @@ await describe('groups management service', async () => {
   await test('does not remove role group references when storage deletion returns false', async () => {
     const calls: string[] = [];
     const result = await deleteGroup('group-to-delete', {
-      deleteGroup: async () => {
+      deleteGroup: () => {
         calls.push('deleteGroup');
-        return false;
+        return Promise.resolve(false);
       },
       getGroupById: () =>
         Promise.resolve({
@@ -162,9 +162,9 @@ await describe('groups management service', async () => {
       publishWhitelistChanged: (groupId) => {
         calls.push(`publishWhitelistChanged:${groupId}`);
       },
-      removeGroupFromAllRoles: async (groupId) => {
+      removeGroupFromAllRoles: (groupId) => {
         calls.push(`removeGroupFromAllRoles:${groupId}`);
-        return 1;
+        return Promise.resolve(1);
       },
     });
 
