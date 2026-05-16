@@ -48,6 +48,8 @@ generate_dnsmasq_config() {
     log "Generating dnsmasq configuration..."
 
     local temp_conf="${DNSMASQ_CONF}.tmp"
+    local upstream_dns
+    upstream_dns=$(select_usable_upstream_dns "${PRIMARY_DNS:-}")
 
     cat > "$temp_conf" << EOF
 # =============================================
@@ -83,21 +85,21 @@ EOF
     local protected_domain
     while IFS= read -r protected_domain; do
         [ -z "$protected_domain" ] && continue
-        echo "server=/${protected_domain}/${PRIMARY_DNS}" >> "$temp_conf"
+        echo "server=/${protected_domain}/${upstream_dns}" >> "$temp_conf"
     done < <(get_openpath_protected_domains)
 
     cat >> "$temp_conf" << EOF
 
 # Captive portal detection
-server=/detectportal.firefox.com/${PRIMARY_DNS}
-server=/connectivity-check.ubuntu.com/${PRIMARY_DNS}
-server=/captive.apple.com/${PRIMARY_DNS}
-server=/www.msftconnecttest.com/${PRIMARY_DNS}
-server=/clients3.google.com/${PRIMARY_DNS}
+server=/detectportal.firefox.com/${upstream_dns}
+server=/connectivity-check.ubuntu.com/${upstream_dns}
+server=/captive.apple.com/${upstream_dns}
+server=/www.msftconnecttest.com/${upstream_dns}
+server=/clients3.google.com/${upstream_dns}
 
 # NTP (time synchronization)
-server=/ntp.ubuntu.com/${PRIMARY_DNS}
-server=/time.google.com/${PRIMARY_DNS}
+server=/ntp.ubuntu.com/${upstream_dns}
+server=/time.google.com/${upstream_dns}
 
 EOF
 
@@ -112,7 +114,7 @@ EOF
         if validate_domain "$domain"; then
             local safe_domain
             safe_domain=$(sanitize_domain "$domain")
-            echo "server=/${safe_domain}/${PRIMARY_DNS}" >> "$temp_conf"
+            echo "server=/${safe_domain}/${upstream_dns}" >> "$temp_conf"
         else
             log_warn "Skipping invalid domain: $domain"
             invalid_count=$((invalid_count + 1))

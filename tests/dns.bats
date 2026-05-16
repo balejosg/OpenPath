@@ -221,6 +221,18 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+@test "select_usable_upstream_dns falls back when PRIMARY_DNS is loopback" {
+    export OPENPATH_FALLBACK_DNS="9.9.9.9"
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    run select_usable_upstream_dns "127.0.0.1"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "9.9.9.9" ]
+}
+
 # ============== Tests de generate_dnsmasq_config ==============
 
 @test "generate_dnsmasq_config creates configuration file" {
@@ -278,6 +290,32 @@ EOF
 
     [ "$address_line" -lt "$server_line" ]
     [ "$ipv6_line" -lt "$server_line" ]
+}
+
+@test "generate_dnsmasq_config falls back before writing stale loopback upstream" {
+    export DNSMASQ_CONF="$TEST_TMP_DIR/dnsmasq.d/url-whitelist.conf"
+    export PRIMARY_DNS="127.0.0.1"
+    export OPENPATH_FALLBACK_DNS="9.9.9.9"
+    export VERSION="3.5"
+    export LOG_FILE="$TEST_TMP_DIR/openpath.log"
+
+    mkdir -p "$(dirname "$DNSMASQ_CONF")"
+
+    log() { echo "$1"; }
+    export -f log
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    WHITELIST_DOMAINS=("google.com")
+    BLOCKED_SUBDOMAINS=()
+    BLOCKED_PATHS=()
+
+    run generate_dnsmasq_config
+
+    [ "$status" -eq 0 ]
+    grep -q "server=/google.com/9.9.9.9" "$DNSMASQ_CONF"
+    ! grep -q "^server=.*127.0.0.1" "$DNSMASQ_CONF"
 }
 
 @test "write_dnsmasq_default_sinkhole_rules emits explicit non-local IPv4 and IPv6 sinkholes only" {

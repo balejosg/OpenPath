@@ -35,6 +35,7 @@
 - Migration notes: [`docs/MIGRATION.md`](MIGRATION.md)
 - Security hardening: [`docs/SECURITY-HARDENING.md`](SECURITY-HARDENING.md)
 - APT signing key workflow: [`docs/apt-signing-key.md`](apt-signing-key.md)
+- Linux runtime library load order: [`docs/linux-load-order.md`](linux-load-order.md)
 - Linux deployment notes: [`linux/DEPLOYMENT.md`](../linux/DEPLOYMENT.md)
 - Linux troubleshooting: [`linux/TROUBLESHOOTING.md`](../linux/TROUBLESHOOTING.md)
 

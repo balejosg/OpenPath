@@ -139,6 +139,9 @@ apply_whitelist_download_plan() {
             log_warn "⚠ Whitelist expired: ${whitelist_age_hours}h old (max: ${WHITELIST_MAX_AGE_HOURS:-24}h)"
             log_warn "Entering fail-safe mode — blocking all DNS until fresh whitelist"
 
+            local fail_safe_upstream_dns
+            fail_safe_upstream_dns=$(select_usable_upstream_dns "${PRIMARY_DNS:-}")
+
             cat > "$DNSMASQ_CONF" << EOF
 # FAIL-SAFE MODE — whitelist expired (${whitelist_age_hours}h old, max ${WHITELIST_MAX_AGE_HOURS:-24}h)
 # Blocks all domains by default with local sinkhole addresses.
@@ -146,7 +149,7 @@ no-resolv
 resolv-file=/run/dnsmasq/resolv.conf
 listen-address=127.0.0.1
 bind-interfaces
-server=$PRIMARY_DNS
+server=$fail_safe_upstream_dns
 EOF
 
             write_dnsmasq_default_sinkhole_rules "$DNSMASQ_CONF" || return 1

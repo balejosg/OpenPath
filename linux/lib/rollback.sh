@@ -59,6 +59,34 @@ get_current_checkpoint() {
     fi
 }
 
+read_checkpoint_metadata_field() {
+    local metadata_file="$1"
+    local field="$2"
+
+    [ -n "$metadata_file" ] && [ -f "$metadata_file" ] || return 1
+    [ -n "$field" ] || return 1
+    command -v python3 >/dev/null 2>&1 || return 1
+
+    python3 - "$metadata_file" "$field" <<'PYEOF'
+import json
+import sys
+
+metadata_file = sys.argv[1]
+field = sys.argv[2]
+
+try:
+    with open(metadata_file, "r", encoding="utf-8") as handle:
+        value = json.load(handle).get(field, "")
+except (OSError, json.JSONDecodeError):
+    sys.exit(1)
+
+if value is None:
+    value = ""
+
+print(str(value))
+PYEOF
+}
+
 # Save a checkpoint with all critical files
 # Usage: save_checkpoint [optional_label]
 save_checkpoint() {
@@ -159,9 +187,9 @@ list_checkpoints() {
         local cp_path="$CHECKPOINT_DIR/checkpoint-$i"
         if [ -d "$cp_path" ] && [ -f "$cp_path/metadata.json" ]; then
             local ts
-            ts=$(grep -o '"timestamp": "[^"]*"' "$cp_path/metadata.json" | cut -d'"' -f4)
+            ts=$(read_checkpoint_metadata_field "$cp_path/metadata.json" "timestamp" || true)
             local label
-            label=$(grep -o '"label": "[^"]*"' "$cp_path/metadata.json" | cut -d'"' -f4)
+            label=$(read_checkpoint_metadata_field "$cp_path/metadata.json" "label" || true)
             local current
             current=$(get_current_checkpoint)
             local marker=""

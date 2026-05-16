@@ -48,6 +48,30 @@ teardown() {
     [[ "${lines[1]}" == *"2025-01-01T00:00:00Z"* ]]
 }
 
+@test "rollback: list_checkpoints parses escaped checkpoint metadata with python json" {
+    mkdir -p "$CHECKPOINT_DIR/checkpoint-0"
+    cat > "$CHECKPOINT_DIR/checkpoint-0/metadata.json" <<'EOF'
+{
+  "label": "pre-update: \"quoted\"",
+  "timestamp": "2025-01-01T00:00:00Z"
+}
+EOF
+
+    run list_checkpoints
+
+    [ "$status" -eq 0 ]
+    [[ "${lines[1]}" == *'2025-01-01T00:00:00Z (pre-update: "quoted")'* ]]
+}
+
+@test "rollback: metadata parser returns nonzero for malformed json" {
+    local metadata_file="$CHECKPOINT_DIR/bad-metadata.json"
+    printf '{"timestamp": ' > "$metadata_file"
+
+    run read_checkpoint_metadata_field "$metadata_file" "timestamp"
+
+    [ "$status" -ne 0 ]
+}
+
 @test "rollback: CHECKPOINT_DIR should use VAR_STATE_DIR" {
     [[ "$CHECKPOINT_DIR" == "${VAR_STATE_DIR}/checkpoints" ]]
 }

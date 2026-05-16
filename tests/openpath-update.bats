@@ -373,6 +373,52 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+@test "fail-safe whitelist expiry falls back before writing stale loopback upstream" {
+    local helper_script="$TEST_TMP_DIR/run-fail-safe-upstream.sh"
+    local state_dir="$TEST_TMP_DIR/fail-safe-upstream"
+
+    mkdir -p "$state_dir"
+
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+project_dir="$1"
+state_dir="$2"
+
+export DNSMASQ_CONF="$state_dir/openpath.conf"
+export DNSMASQ_CONF_HASH="$state_dir/openpath.conf.hash"
+export WHITELIST_MAX_AGE_HOURS="24"
+export PRIMARY_DNS="127.0.0.1"
+export OPENPATH_FALLBACK_DNS="9.9.9.9"
+
+log() { :; }
+log_warn() { :; }
+systemctl() { :; }
+append_fail_safe_allow_domain() { :; }
+
+source "$project_dir/linux/lib/common.sh"
+source "$project_dir/linux/lib/dns.sh"
+source "$project_dir/linux/lib/openpath-update-runtime.sh"
+
+set +e
+apply_whitelist_download_plan fail_safe 30 0 updates.openpath.local
+status=$?
+set -e
+
+printf 'status=%s\n' "$status"
+cat "$DNSMASQ_CONF"
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR" "$state_dir"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"status=1"* ]]
+    [[ "$output" == *"server=9.9.9.9"* ]]
+    [[ "$output" != *"server=127.0.0.1"* ]]
+}
+
 @test "openpath-update relies on shared get_url_host from common.sh" {
     run grep -n "^get_url_host()" "$PROJECT_DIR/linux/scripts/runtime/openpath-update.sh"
     [ "$status" -ne 0 ]

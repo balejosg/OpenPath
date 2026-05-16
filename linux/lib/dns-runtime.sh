@@ -183,7 +183,7 @@ configure_upstream_dns() {
 
     mkdir -p /run/dnsmasq
 
-    PRIMARY_DNS=$(detect_primary_dns)
+    PRIMARY_DNS=$(select_usable_upstream_dns "$(detect_primary_dns)")
 
     echo "$PRIMARY_DNS" > "$ORIGINAL_DNS_FILE"
 
@@ -194,6 +194,23 @@ nameserver ${FALLBACK_DNS_SECONDARY:-8.8.4.4}
 EOF
 
     log "✓ Upstream DNS configured: $PRIMARY_DNS"
+}
+
+select_usable_upstream_dns() {
+    local dns="${1:-}"
+    local fallback="${2:-${FALLBACK_DNS_PRIMARY:-8.8.8.8}}"
+
+    if declare -F is_usable_upstream_dns >/dev/null 2>&1 && is_usable_upstream_dns "$dns"; then
+        printf '%s\n' "$dns"
+        return 0
+    fi
+
+    if declare -F is_usable_upstream_dns >/dev/null 2>&1 && is_usable_upstream_dns "$fallback"; then
+        printf '%s\n' "$fallback"
+        return 0
+    fi
+
+    printf '%s\n' "8.8.8.8"
 }
 
 # Create DNS upstream initialization script
