@@ -81,14 +81,18 @@ const LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS = 150;
 const LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES = 20;
 const LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS = 30 * 60 * 1000;
 const LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS = 5 * 1000;
+const LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES = 100;
 
 export function createNativeMessagingClient(options: {
   browserApi?: Browser;
   hostName: string;
   logger?: Pick<typeof defaultLogger, 'error' | 'info'>;
+  runtimeDependencyCacheMaxEntries?: number;
 }): NativeMessagingClient {
   const browserApi = options.browserApi ?? browser;
   const logger = options.logger ?? defaultLogger;
+  const runtimeDependencyCacheMaxEntries =
+    options.runtimeDependencyCacheMaxEntries ?? LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES;
   let nativePort: Runtime.Port | null = null;
   const runtimeDependencyCache = new Map<string, number>();
   const queuedRuntimeDependencyDedupeCache = new Map<
@@ -126,6 +130,8 @@ export function createNativeMessagingClient(options: {
     return new Promise((resolve, reject) => {
       const attempt = async (): Promise<void> => {
         try {
+          // connectNative() owns the long-lived native-host availability state, while
+          // sendNativeMessage() keeps individual request/response actions one-shot.
           if (!nativePort) {
             const connected = await connect();
             if (!connected) {
@@ -221,14 +227,34 @@ export function createNativeMessagingClient(options: {
     return `${createRuntimeDependencyCacheKey(input)}|${input.requestType.toLowerCase()}`;
   }
 
+  function pruneExpiredRuntimeDependencyEntries<T extends number | { expiresAt: number }>(
+    cache: Map<string, T>,
+    now: number
+  ): void {
+    for (const [key, value] of cache) {
+      const expiresAt = typeof value === 'number' ? value : value.expiresAt;
+      if (expiresAt <= now) {
+        cache.delete(key);
+      }
+    }
+  }
+
+  function trimOldestRuntimeDependencyEntries<T>(cache: Map<string, T>): void {
+    while (cache.size > runtimeDependencyCacheMaxEntries) {
+      const oldestKey = cache.keys().next().value;
+      if (oldestKey === undefined) {
+        return;
+      }
+      cache.delete(oldestKey);
+    }
+  }
+
   function getCachedRuntimeDependency(input: LocalRuntimeDependencyInput): NativeResponse | null {
+    const now = Date.now();
+    pruneExpiredRuntimeDependencyEntries(runtimeDependencyCache, now);
     const cacheKey = createRuntimeDependencyCacheKey(input);
     const expiresAt = runtimeDependencyCache.get(cacheKey);
     if (expiresAt === undefined) {
-      return null;
-    }
-    if (expiresAt <= Date.now()) {
-      runtimeDependencyCache.delete(cacheKey);
       return null;
     }
 
@@ -244,13 +270,11 @@ export function createNativeMessagingClient(options: {
   function getQueuedRuntimeDependencyDedupe(
     input: LocalRuntimeDependencyInput
   ): NativeResponse | null {
+    const now = Date.now();
+    pruneExpiredRuntimeDependencyEntries(queuedRuntimeDependencyDedupeCache, now);
     const pendingKey = createRuntimeDependencyPendingKey(input);
     const cached = queuedRuntimeDependencyDedupeCache.get(pendingKey);
     if (!cached) {
-      return null;
-    }
-    if (cached.expiresAt <= Date.now()) {
-      queuedRuntimeDependencyDedupeCache.delete(pendingKey);
       return null;
     }
 
@@ -265,20 +289,25 @@ export function createNativeMessagingClient(options: {
     input: LocalRuntimeDependencyInput,
     response: NativeResponse
   ): void {
+    const now = Date.now();
     if (!response.success) {
       return;
     }
     if (isQueuedRuntimeDependencyResponse(response)) {
+      pruneExpiredRuntimeDependencyEntries(queuedRuntimeDependencyDedupeCache, now);
       queuedRuntimeDependencyDedupeCache.set(createRuntimeDependencyPendingKey(input), {
-        expiresAt: Date.now() + LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
+        expiresAt: now + LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
         response,
       });
+      trimOldestRuntimeDependencyEntries(queuedRuntimeDependencyDedupeCache);
       return;
     }
+    pruneExpiredRuntimeDependencyEntries(runtimeDependencyCache, now);
     runtimeDependencyCache.set(
       createRuntimeDependencyCacheKey(input),
-      Date.now() + LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS
+      now + LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS
     );
+    trimOldestRuntimeDependencyEntries(runtimeDependencyCache);
   }
 
   async function sendSingleLocalRuntimeDependency(

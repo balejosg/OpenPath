@@ -192,6 +192,55 @@ await describe('native messaging client', async () => {
     assert.equal(messages.length, 1);
   });
 
+  await test('bounds confirmed local runtime dependency cache entries', async () => {
+    const { browser, messages } = createRecordingBrowserStub((message) => {
+      const entries =
+        typeof message === 'object' && message !== null && 'entries' in message
+          ? (message as { entries?: unknown }).entries
+          : undefined;
+      assert.ok(Array.isArray(entries));
+      return {
+        success: true,
+        action: 'allow-local-runtime-dependency-batch',
+        results: entries.map((entry) => ({
+          ...(entry as object),
+          success: true,
+          action: 'allow-local-runtime-dependency',
+        })),
+      };
+    });
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+      runtimeDependencyCacheMaxEntries: 2,
+    });
+
+    for (const dependencyHost of ['cdn-1.example', 'cdn-2.example', 'cdn-3.example']) {
+      assert.equal(
+        (
+          await client.allowLocalRuntimeDependency({
+            anchorHost: 'allowed.example',
+            dependencyHost,
+            requestType: 'script',
+          })
+        ).success,
+        true
+      );
+    }
+
+    assert.equal(
+      (
+        await client.allowLocalRuntimeDependency({
+          anchorHost: 'allowed.example',
+          dependencyHost: 'cdn-1.example',
+          requestType: 'image',
+        })
+      ).success,
+      true
+    );
+    assert.equal(messages.length, 4);
+  });
+
   await test('falls back to single local runtime dependency action when batch is unknown', async () => {
     const { browser, messages } = createRecordingBrowserStub((message) => {
       const action =
@@ -357,5 +406,56 @@ await describe('native messaging client', async () => {
     } finally {
       Date.now = originalNow;
     }
+  });
+
+  await test('bounds queued local runtime dependency dedupe entries', async () => {
+    const { browser, messages } = createRecordingBrowserStub((message) => {
+      const entries =
+        typeof message === 'object' && message !== null && 'entries' in message
+          ? (message as { entries?: unknown }).entries
+          : undefined;
+      assert.ok(Array.isArray(entries));
+      return {
+        success: true,
+        action: 'allow-local-runtime-dependency-batch',
+        results: entries.map((entry) => ({
+          ...(entry as object),
+          success: true,
+          action: 'allow-local-runtime-dependency',
+          queued: true,
+          runtimeDependencyState: 'queued',
+        })),
+      };
+    });
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+      runtimeDependencyCacheMaxEntries: 2,
+    });
+
+    for (const dependencyHost of ['queued-1.example', 'queued-2.example', 'queued-3.example']) {
+      assert.equal(
+        (
+          await client.allowLocalRuntimeDependency({
+            anchorHost: 'allowed.example',
+            dependencyHost,
+            requestType: 'script',
+          })
+        ).runtimeDependencyState,
+        'queued'
+      );
+    }
+
+    assert.equal(
+      (
+        await client.allowLocalRuntimeDependency({
+          anchorHost: 'allowed.example',
+          dependencyHost: 'queued-1.example',
+          requestType: 'script',
+        })
+      ).runtimeDependencyState,
+      'queued'
+    );
+    assert.equal(messages.length, 4);
   });
 });
