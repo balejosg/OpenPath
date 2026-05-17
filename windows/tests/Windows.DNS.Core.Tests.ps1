@@ -114,7 +114,7 @@ Describe "DNS Module" {
         It "Resets captive portal DNS from active adapters without reading stale snapshots" {
             $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
             $content = Get-Content $servicePath -Raw
-            $portalRestoreBody = [regex]::Match($content, '(?s)function Restore-OpenPathCaptivePortalDNS \{.*?\n\}\n\nfunction Get-AcrylicService').Value
+            $portalRestoreBody = [regex]::Match($content, '(?s)function Restore-OpenPathCaptivePortalDNS \{.*?\r?\n\}\r?\n\r?\nfunction Get-AcrylicService').Value
 
             Assert-ContentContainsAll -Content $portalRestoreBody -Needles @(
                 'function Restore-OpenPathCaptivePortalDNS',
@@ -131,7 +131,7 @@ Describe "DNS Module" {
         It "Keeps Restore-OriginalDNS snapshot rollback behavior for OpenPath cleanup" {
             $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
             $content = Get-Content $servicePath -Raw
-            $restoreOriginalBody = [regex]::Match($content, '(?s)function Restore-OriginalDNS \{.*?\n\}\n\nfunction Restore-OpenPathCaptivePortalDNS').Value
+            $restoreOriginalBody = [regex]::Match($content, '(?s)function Restore-OriginalDNS \{.*?\r?\n\}\r?\n\r?\nfunction Restore-OpenPathCaptivePortalDNS').Value
 
             Assert-ContentContainsAll -Content $restoreOriginalBody -Needles @(
                 '$snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)',
