@@ -41,6 +41,7 @@ COPY runtime/ ./runtime/
 COPY windows/ ./windows/
 COPY tests/e2e/ ./tests/e2e/
 COPY firefox-extension/manifest.json ./firefox-extension/manifest.json
+COPY firefox-extension/_locales/ ./firefox-extension/_locales/
 COPY firefox-extension/dist/ ./firefox-extension/dist/
 COPY firefox-extension/popup/ ./firefox-extension/popup/
 COPY firefox-extension/blocked/ ./firefox-extension/blocked/

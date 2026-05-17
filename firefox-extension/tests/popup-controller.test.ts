@@ -128,32 +128,31 @@ await describe('popup controller', async () => {
     const messages: unknown[] = [];
     const browser = {
       runtime: {
-        sendMessage: async (message: unknown): Promise<unknown> => {
+        sendMessage: (message: unknown): Promise<unknown> => {
           messages.push(message);
           const action = (message as { action?: string }).action;
           if (action === 'getBlockedDomains') {
-            return {
+            return Promise.resolve({
               domains: {
                 'blocked.example': {
                   errors: ['NS_ERROR_UNKNOWN_HOST'],
                   origin: 'lesson.example',
                 },
               },
-            };
+            });
           }
           if (action === 'getDomainStatuses') {
-            return {};
+            return Promise.resolve({});
           }
           if (action === 'isNativeAvailable') {
-            return { available: true, version: '1.2.3' };
+            return Promise.resolve({ available: true, version: '1.2.3' });
           }
-          return {};
+          return Promise.resolve({});
         },
       },
       tabs: {
-        query: async (): Promise<{ id: number; url: string }[]> => [
-          { id: 42, url: 'https://lesson.example/path' },
-        ],
+        query: (): Promise<{ id: number; url: string }[]> =>
+          Promise.resolve([{ id: 42, url: 'https://lesson.example/path' }]),
       },
     };
 
@@ -182,13 +181,13 @@ await describe('popup controller', async () => {
     let sendCount = 0;
     const browser = {
       runtime: {
-        sendMessage: async (): Promise<unknown> => {
+        sendMessage: (): Promise<unknown> => {
           sendCount += 1;
-          return {};
+          return Promise.resolve({});
         },
       },
       tabs: {
-        query: async (): Promise<[]> => [],
+        query: (): Promise<[]> => Promise.resolve([]),
       },
     };
 

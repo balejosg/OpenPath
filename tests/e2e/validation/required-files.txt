@@ -27,6 +27,8 @@ required linux/scripts/runtime/openpath-cmd.sh
 
 # Firefox extension
 required firefox-extension/manifest.json
+required firefox-extension/_locales/en/messages.json
+required firefox-extension/_locales/es/messages.json
 required firefox-extension/dist/background.js
 required firefox-extension/dist/lib/logger.js
 required firefox-extension/popup/popup.html

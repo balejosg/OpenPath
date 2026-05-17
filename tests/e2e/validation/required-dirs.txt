@@ -8,6 +8,7 @@ required linux/scripts/dev
 required runtime
 
 required firefox-extension
+required firefox-extension/_locales
 required firefox-extension/icons
 required firefox-extension/popup
 required firefox-extension/native

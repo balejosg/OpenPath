@@ -94,6 +94,7 @@ create_minimal_context() {
 
     # Extension runtime assets validated by pre-install-validation.sh
     require_file "$PROJECT_ROOT/firefox-extension/manifest.json"
+    require_dir "$PROJECT_ROOT/firefox-extension/_locales"
     require_dir "$PROJECT_ROOT/firefox-extension/dist"
     require_dir "$PROJECT_ROOT/firefox-extension/popup"
     require_dir "$PROJECT_ROOT/firefox-extension/blocked"
@@ -102,6 +103,7 @@ create_minimal_context() {
 
     mkdir -p "$tmp/firefox-extension/dist"
     cp -a "$PROJECT_ROOT/firefox-extension/manifest.json" "$tmp/firefox-extension/"
+    cp -a "$PROJECT_ROOT/firefox-extension/_locales" "$tmp/firefox-extension/"
     cp -a "$PROJECT_ROOT/firefox-extension/dist/." "$tmp/firefox-extension/dist/"
     cp -a "$PROJECT_ROOT/firefox-extension/popup" "$tmp/firefox-extension/"
     cp -a "$PROJECT_ROOT/firefox-extension/blocked" "$tmp/firefox-extension/"

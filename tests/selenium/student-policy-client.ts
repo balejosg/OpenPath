@@ -113,20 +113,40 @@ export class StudentPolicyServerClient {
   }
 
   public async findPendingRequestByDomain(domain: string): Promise<DomainRequestSummary> {
-    const pendingRequests = await this.trpcQuery<DomainRequestSummary[]>(
-      'requests.list',
-      { status: 'pending' },
-      this.scenario.auth.teacher.accessToken
-    );
-    const request = pendingRequests.find(
-      (candidate) => candidate.domain === domain && candidate.status === 'pending'
-    );
+    const deadline = Date.now() + 10_000;
+    let latestPendingRequests: DomainRequestSummary[] = [];
 
-    if (!request) {
-      throw new Error(`No pending request found for domain ${domain}`);
+    while (Date.now() < deadline) {
+      latestPendingRequests = await this.trpcQuery<DomainRequestSummary[]>(
+        'requests.list',
+        { status: 'pending' },
+        this.scenario.auth.teacher.accessToken
+      );
+      const request = latestPendingRequests.find(
+        (candidate) => candidate.domain === domain && candidate.status === 'pending'
+      );
+
+      if (request) {
+        return request;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
-    return request;
+    const allRequests = await this.trpcQuery<DomainRequestSummary[]>(
+      'requests.list',
+      {},
+      this.scenario.auth.teacher.accessToken
+    );
+    const matchingRequests = allRequests.filter((candidate) => candidate.domain === domain);
+    const pendingDomains = latestPendingRequests.map((candidate) => candidate.domain).join(', ');
+    const matchingStatuses = matchingRequests
+      .map((candidate) => `${candidate.id}:${candidate.status}`)
+      .join(', ');
+
+    throw new Error(
+      `No pending request found for domain ${domain}; matchingStatuses=${matchingStatuses || 'none'}; pendingDomains=${pendingDomains || 'none'}`
+    );
   }
 
   public async approveRequest(requestId: string, groupId: string): Promise<void> {
@@ -207,11 +227,15 @@ export class StudentPolicyServerClient {
   }
 
   public async setAutoApprove(enabled: boolean): Promise<void> {
-    await this.postJson(
+    const result = await this.postJson<{ enabled?: boolean }>(
       '/api/test-support/auto-approve',
       { enabled },
       this.scenario.auth.teacher.accessToken
     );
+
+    if (result.enabled !== enabled) {
+      throw new Error(`Expected auto-approve=${String(enabled)}, got ${String(result.enabled)}`);
+    }
   }
 
   public async tickBoundaries(at: string): Promise<void> {

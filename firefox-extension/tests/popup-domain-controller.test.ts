@@ -35,9 +35,12 @@ function createState(): PopupControllerState {
   return {
     blockedDomainsData: {},
     config: {
-      apiBaseUrl: 'https://api.example',
-      enabled: true,
-      fallbackBaseUrls: [],
+      requestApiUrl: 'https://api.example',
+      enableRequests: true,
+      fallbackApiUrls: [],
+      requestTimeout: 5000,
+      sharedSecret: '',
+      debugMode: false,
     },
     currentTabId: 17,
     domainStatusesData: {},
@@ -58,8 +61,9 @@ await describe('popup domain controller', async () => {
       configurable: true,
       value: {
         clipboard: {
-          writeText: async (text: string): Promise<void> => {
+          writeText: (text: string): Promise<void> => {
             clipboardText = text;
+            return Promise.resolve();
           },
         },
       },
@@ -76,21 +80,21 @@ await describe('popup domain controller', async () => {
       refreshRequestButtonState: () => {
         refreshCount += 1;
       },
-      sendMessage: async (message: unknown): Promise<unknown> => {
+      sendMessage: (message: unknown): Promise<unknown> => {
         messages.push(message);
         const action = (message as { action?: string }).action;
         if (action === 'getBlockedDomains') {
-          return {
+          return Promise.resolve({
             domains: {
               'blocked.example': {
                 errors: ['NS_ERROR_UNKNOWN_HOST'],
                 origin: 'lesson.example',
               },
             },
-          };
+          });
         }
         if (action === 'getDomainStatuses') {
-          return {
+          return Promise.resolve({
             statuses: {
               'blocked.example': {
                 domain: 'blocked.example',
@@ -98,12 +102,12 @@ await describe('popup domain controller', async () => {
                 state: 'autoApproved',
               },
             },
-          };
+          });
         }
         if (action === 'isNativeAvailable') {
-          return { available: true, version: '1.2.3' };
+          return Promise.resolve({ available: true, version: '1.2.3' });
         }
-        return { ok: true };
+        return Promise.resolve({ ok: true });
       },
       showToast: (message) => {
         toasts.push(message);
@@ -160,9 +164,9 @@ await describe('popup domain controller', async () => {
       refreshRequestButtonState: () => {
         refreshCount += 1;
       },
-      sendMessage: async () => {
+      sendMessage: () => {
         sendCount += 1;
-        throw new Error('native unavailable');
+        return Promise.reject(new Error('native unavailable'));
       },
       showToast: () => undefined,
       state,

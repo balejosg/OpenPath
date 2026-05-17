@@ -415,6 +415,7 @@ create_context() {
     cp -a "$PROJECT_ROOT/tests/selenium/." "$tmp/tests/selenium/"
 
     require_file "$PROJECT_ROOT/firefox-extension/manifest.json"
+    require_dir "$PROJECT_ROOT/firefox-extension/_locales"
     require_dir "$PROJECT_ROOT/firefox-extension/dist"
     require_dir "$PROJECT_ROOT/firefox-extension/popup"
     require_dir "$PROJECT_ROOT/firefox-extension/blocked"
@@ -422,6 +423,7 @@ create_context() {
     require_dir "$PROJECT_ROOT/firefox-extension/icons"
 
     cp -a "$PROJECT_ROOT/firefox-extension/manifest.json" "$tmp/firefox-extension/"
+    cp -a "$PROJECT_ROOT/firefox-extension/_locales" "$tmp/firefox-extension/"
     cp -a "$PROJECT_ROOT/firefox-extension/dist" "$tmp/firefox-extension/"
     cp -a "$PROJECT_ROOT/firefox-extension/popup" "$tmp/firefox-extension/"
     cp -a "$PROJECT_ROOT/firefox-extension/blocked" "$tmp/firefox-extension/"

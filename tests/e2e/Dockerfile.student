@@ -89,6 +89,7 @@ COPY tests/selenium/package-lock.json ./tests/selenium/package-lock.json
 COPY tests/selenium/tsconfig.json ./tests/selenium/tsconfig.json
 COPY tests/selenium/*.ts ./tests/selenium/
 COPY firefox-extension/manifest.json ./firefox-extension/manifest.json
+COPY firefox-extension/_locales/ ./firefox-extension/_locales/
 COPY firefox-extension/dist/ ./firefox-extension/dist/
 COPY firefox-extension/popup/ ./firefox-extension/popup/
 COPY firefox-extension/blocked/ ./firefox-extension/blocked/
@@ -100,7 +101,7 @@ RUN cd /openpath/tests/selenium && npm install
 RUN find linux tests/e2e -type f -name "*.sh" -exec chmod +x {} +
 
 RUN cd /openpath/firefox-extension \
-    && zip -qr openpath-firefox-extension.xpi manifest.json dist popup blocked native icons
+    && zip -qr openpath-firefox-extension.xpi manifest.json _locales dist popup blocked native icons
 
 STOPSIGNAL SIGRTMIN+3
 VOLUME ["/sys/fs/cgroup"]
