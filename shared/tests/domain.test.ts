@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { getRootDomain, groupByRootDomain, CC_SLDS } from '../src/domain.js';
+import {
+  getRootDomain,
+  groupByRootDomain,
+  CC_SLDS,
+  normalizeManualRequestDomain,
+} from '../src/domain.js';
 
 describe('getRootDomain', () => {
   describe('standard TLDs', () => {
@@ -119,6 +124,13 @@ describe('getRootDomain', () => {
       // Trailing dots are technically valid in DNS
       assert.strictEqual(getRootDomain('google.com.'), 'com.');
     });
+  });
+});
+
+describe('normalizeManualRequestDomain', () => {
+  it('normalizes manual request subdomains to their root domain', () => {
+    assert.strictEqual(normalizeManualRequestDomain('es.wikipedia.org'), 'wikipedia.org');
+    assert.strictEqual(normalizeManualRequestDomain('mail.google.com'), 'google.com');
   });
 });
 

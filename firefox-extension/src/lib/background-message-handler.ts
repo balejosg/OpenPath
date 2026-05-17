@@ -1,8 +1,10 @@
 import type { Runtime } from 'webextension-polyfill';
 
 import {
+  GET_BLOCKED_PAGE_CONTEXT_ACTION,
   GET_RECENT_BLOCKED_DOMAIN_REQUEST_STATUS_ACTION,
   SUBMIT_BLOCKED_DOMAIN_REQUEST_ACTION,
+  isGetBlockedPageContextMessage,
   isGetRecentBlockedDomainRequestStatusMessage,
   isSubmitBlockedDomainRequestMessage,
 } from './blocked-screen-contract.js';
@@ -65,6 +67,10 @@ export interface BackgroundMessageHandlerDeps {
   forceBlockedSubdomainRulesRefresh: () => Promise<{ success: boolean; error?: string }>;
   getBlockedDomainsForTab: (tabId: number) => Record<string, unknown>;
   getDomainStatusesForTab: (tabId: number) => Record<string, unknown>;
+  getBlockedPageContext: (
+    tabId: number | null,
+    domain: string
+  ) => { originalUrl?: string; domain: string } | null;
   getErrorMessage: (error: unknown) => string;
   getMachineToken: () => Promise<unknown>;
   getNativeBlockedPathsDebug: () => Promise<unknown>;
@@ -99,7 +105,7 @@ export interface BackgroundMessageHandlerDeps {
   submitBlockedDomainRequest: (
     input: SubmitBlockedDomainInput
   ) => Promise<SubmitBlockedDomainResult>;
-  triggerWhitelistUpdate: () => Promise<NativeResponse>;
+  triggerWhitelistUpdate: (domains?: string[]) => Promise<NativeResponse>;
   verifyDomains: (domains: string[]) => Promise<VerifyResponse>;
 }
 
@@ -339,9 +345,19 @@ export function createBackgroundMessageHandler(
           request: readRecentBlockedDomainRequestStatus(message.domain),
         };
 
+      case GET_BLOCKED_PAGE_CONTEXT_ACTION:
+        if (!isGetBlockedPageContextMessage(message)) {
+          return { success: false, error: 'domain is required' };
+        }
+
+        return {
+          success: true,
+          context: deps.getBlockedPageContext(sender.tab?.id ?? null, message.domain),
+        };
+
       case 'triggerWhitelistUpdate':
         try {
-          return await deps.triggerWhitelistUpdate();
+          return await deps.triggerWhitelistUpdate(Array.isArray(msg.domains) ? msg.domains : []);
         } catch (error) {
           return { success: false, error: deps.getErrorMessage(error) };
         }

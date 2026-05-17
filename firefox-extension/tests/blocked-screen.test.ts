@@ -289,7 +289,6 @@ void describe('blocked screen', () => {
   void test('submits unblock request through the background script without exposing a token', async () => {
     const { elements, messages, permissionEvents } = runBlockedScript({
       success: true,
-      id: 'req_123',
       status: 'pending',
     });
 
@@ -376,7 +375,6 @@ void describe('blocked screen', () => {
     const firstLoad = runBlockedScript(
       {
         success: true,
-        id: 'req_126',
         status: 'pending',
       },
       search,
@@ -442,7 +440,6 @@ void describe('blocked screen', () => {
     const { elements, messages, runtimeApis } = runBlockedScript(
       {
         success: true,
-        id: 'req_125',
         status: 'pending',
       },
       '?domain=learning.example&error=NS_ERROR_UNKNOWN_HOST&origin=portal.example',
@@ -473,7 +470,6 @@ void describe('blocked screen', () => {
     const { elements, runtimeApis } = runBlockedScript(
       {
         success: true,
-        id: 'req_127',
         status: 'pending',
       },
       '?domain=learning.example&error=NS_ERROR_UNKNOWN_HOST&origin=portal.example',
@@ -501,7 +497,7 @@ void describe('blocked screen', () => {
           body: init.body ? JSON.parse(init.body) : null,
         });
         return Promise.resolve(
-          new Response(JSON.stringify({ success: true, id: 'req_131', status: 'pending' }), {
+          new Response(JSON.stringify({ success: true, status: 'pending' }), {
             status: 200,
           })
         );
@@ -568,7 +564,7 @@ void describe('blocked screen', () => {
           body: init.body ? JSON.parse(init.body) : null,
         });
         return Promise.resolve(
-          new Response(JSON.stringify({ success: true, id: 'req_native', status: 'pending' }), {
+          new Response(JSON.stringify({ success: true, status: 'pending' }), {
             status: 200,
           })
         );
@@ -667,7 +663,6 @@ void describe('blocked screen', () => {
     const { elements, messages } = runBlockedScript(
       {
         success: true,
-        id: 'req_124',
         status: 'pending',
       },
       '?blockedUrl=https%3A%2F%2Flearning.example%2Flesson&error=NS_ERROR_UNKNOWN_HOST'

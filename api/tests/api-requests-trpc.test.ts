@@ -13,8 +13,9 @@ registerRequestApiLifecycle();
 void describe('Request API tests - tRPC request procedures', async () => {
   await describe('tRPC requests.create - Submit Domain Request', async () => {
     await test('should accept valid domain request', async () => {
+      const rootDomain = `test-${Date.now().toString()}.test`;
       const response = await trpcMutate('requests.create', {
-        domain: `test-${Date.now().toString()}.example.com`,
+        domain: rootDomain,
         reason: 'Testing purposes',
         requesterEmail: 'test@example.com',
       });
@@ -25,6 +26,23 @@ void describe('Request API tests - tRPC request procedures', async () => {
       };
       assert.ok(data);
       assert.ok(data.id !== '');
+      assert.strictEqual(data.status, 'pending');
+    });
+
+    await test('normalizes subdomain requests to the root domain', async () => {
+      const rootDomain = `wikipedia-${Date.now().toString()}.org`;
+      const response = await trpcMutate('requests.create', {
+        domain: `es.${rootDomain}`,
+        reason: 'Testing root domain normalization',
+        requesterEmail: 'test@example.com',
+      });
+      assert.strictEqual(response.status, 200);
+
+      const { data } = (await parseTRPC(response)) as {
+        data?: { domain: string; id: string; status: string };
+      };
+      assert.ok(data);
+      assert.strictEqual(data.domain, rootDomain);
       assert.strictEqual(data.status, 'pending');
     });
 
@@ -62,7 +80,7 @@ void describe('Request API tests - tRPC request procedures', async () => {
 
     await test('should return status for existing request', async () => {
       const createResponse = await trpcMutate('requests.create', {
-        domain: `status-test-${Date.now().toString()}.example.com`,
+        domain: `status-test-${Date.now().toString()}.test`,
         reason: 'Testing status endpoint',
       });
       const { data: createData } = (await parseTRPC(createResponse)) as {
@@ -85,7 +103,7 @@ void describe('Request API tests - tRPC request procedures', async () => {
   await describe('Input Sanitization', async () => {
     await test('should sanitize reason field', async () => {
       const response = await trpcMutate('requests.create', {
-        domain: `sanitize-test-${Date.now().toString()}.example.com`,
+        domain: `sanitize-test-${Date.now().toString()}.test`,
         reason: '<script>alert("xss")</script>Normal reason',
       });
 
@@ -103,7 +121,7 @@ void describe('Request API tests - tRPC request procedures', async () => {
 
     await test('should handle special characters in email', async () => {
       const response = await trpcMutate('requests.create', {
-        domain: `email-test-${Date.now().toString()}.example.com`,
+        domain: `email-test-${Date.now().toString()}.test`,
         reason: 'Testing',
         requesterEmail: 'valid+tag@example.com',
       });

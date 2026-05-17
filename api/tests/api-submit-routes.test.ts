@@ -414,7 +414,7 @@ void describe('Request API tests - public submit routes', async () => {
       const classroomId = `cls-${suffix}`;
       const machineId = `mach-${suffix}`;
       const hostname = `host-${suffix}`;
-      const domain = `manual-${suffix}.example.com`;
+      const domain = `manual.${suffix}.test`;
       const token = `machine-token-${suffix}`;
 
       await insertMachineAccessContext({
@@ -483,7 +483,7 @@ void describe('Request API tests - public submit routes', async () => {
       const classroomId = `cls-${suffix}`;
       const machineId = `mach-${suffix}`;
       const hostname = `host-${suffix}`;
-      const domain = `manual-default-${suffix}.example.com`;
+      const domain = `manual-default.${suffix}.test`;
       const token = `machine-token-${suffix}`;
 
       await insertMachineAccessContext({
@@ -574,7 +574,7 @@ void describe('Request API tests - public submit routes', async () => {
       const machineId = `mach-${suffix}`;
       const hostname = `host-${suffix}`;
       const token = `machine-token-${suffix}`;
-      const domain = `submit-${suffix}.example.com`;
+      const domain = `submit.${suffix}.test`;
 
       await insertMachineAccessContext({
         activeGroupId: groupId,

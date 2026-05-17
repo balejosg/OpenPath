@@ -78,6 +78,14 @@ export function createBackgroundRuntime(
   options: BackgroundRuntimeOptions = {}
 ): BackgroundRuntime {
   const inFlightAutoRequests = new Map<string, Promise<void>>();
+  const blockedPageContextByTabAndDomain = new Map<
+    string,
+    { domain: string; originalUrl: string }
+  >();
+  const latestBlockedPageContextByDomain = new Map<
+    string,
+    { domain: string; originalUrl: string }
+  >();
   const blockedMonitorState = createBlockedMonitorState(
     {
       setBadgeText: (options) => browser.action.setBadgeText(options),
@@ -137,6 +145,49 @@ export function createBackgroundRuntime(
     getDomainStatusesForTab,
     setDomainStatus,
   } = blockedMonitorState;
+
+  function buildBlockedPageContextKey(tabId: number, domain: string): string {
+    return `${tabId.toString()}:${domain.trim().toLowerCase()}`;
+  }
+
+  function saveBlockedPageContext(
+    tabId: number,
+    domain: string,
+    originalUrl: string | undefined
+  ): void {
+    const normalizedDomain = domain.trim().toLowerCase();
+    if (tabId < 0 || normalizedDomain.length === 0 || !originalUrl) {
+      return;
+    }
+
+    const context = { domain: normalizedDomain, originalUrl };
+    blockedPageContextByTabAndDomain.set(
+      buildBlockedPageContextKey(tabId, normalizedDomain),
+      context
+    );
+    latestBlockedPageContextByDomain.set(normalizedDomain, context);
+  }
+
+  function getBlockedPageContext(
+    tabId: number | null,
+    domain: string
+  ): { domain: string; originalUrl: string } | null {
+    const normalizedDomain = domain.trim().toLowerCase();
+    if (normalizedDomain.length === 0) {
+      return null;
+    }
+
+    if (tabId !== null) {
+      const byTab = blockedPageContextByTabAndDomain.get(
+        buildBlockedPageContextKey(tabId, normalizedDomain)
+      );
+      if (byTab) {
+        return byTab;
+      }
+    }
+
+    return latestBlockedPageContextByDomain.get(normalizedDomain) ?? null;
+  }
 
   async function checkDomainsWithNative(domains: string[]): Promise<VerifyResponse> {
     return await nativeMessagingClient.checkDomains(domains);
@@ -287,6 +338,7 @@ export function createBackgroundRuntime(
     forceBlockedPathRulesRefresh,
     forceBlockedSubdomainRulesRefresh,
     getBlockedDomainsForTab,
+    getBlockedPageContext,
     getDomainStatusesForTab,
     getErrorMessage,
     getMachineToken: () => nativeMessagingClient.sendMessage({ action: 'get-machine-token' }),
@@ -313,9 +365,10 @@ export function createBackgroundRuntime(
     isNativeHostAvailable,
     retryLocalUpdate,
     submitBlockedDomainRequest,
-    triggerWhitelistUpdate: async (): Promise<NativeResponse> => {
+    triggerWhitelistUpdate: async (domains: string[] = []): Promise<NativeResponse> => {
       const response = (await nativeMessagingClient.sendMessage({
         action: 'update-whitelist',
+        ...(domains.length > 0 ? { domains } : {}),
       })) as NativeResponse;
       if (response.success) {
         await Promise.all([
@@ -337,13 +390,21 @@ export function createBackgroundRuntime(
       allowLocalRuntimeDependency: (input) =>
         nativeMessagingClient.allowLocalRuntimeDependency(input),
       clearTabRuntimeState,
-      disposeTab,
+      disposeTab: (tabId) => {
+        disposeTab(tabId);
+        for (const key of blockedPageContextByTabAndDomain.keys()) {
+          if (key.startsWith(`${tabId.toString()}:`)) {
+            blockedPageContextByTabAndDomain.delete(key);
+          }
+        }
+      },
       evaluateBlockedPath: blockedPathRulesController.evaluateRequest,
       evaluateBlockedSubdomain: blockedSubdomainRulesController.evaluateRequest,
       confirmBlockedScreenNavigation,
       handleRuntimeMessage,
       recordDependencyObservationEvent: recordOpenPathDependencyObservationEvent,
       redirectToBlockedScreen,
+      saveBlockedPageContext,
     });
     await blockedPathRulesController.init();
     await blockedSubdomainRulesController.init();

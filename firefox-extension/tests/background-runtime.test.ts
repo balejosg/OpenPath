@@ -28,11 +28,30 @@ function createRuntimeHarness(): {
   responses: unknown[];
   restoreGlobals: () => void;
   runtimeMessage: RuntimeMessageListener | null;
+  tabRemovedListener: ((tabId: number) => void) | null;
+  webRequestBeforeRequestListener: ((details: unknown) => unknown) | null;
+} {
+  return createRuntimeHarnessWithOptions({});
+}
+
+function createRuntimeHarnessWithOptions(options: { blockedPaths?: string[] }): {
+  browser: Browser;
+  fetchBodies: unknown[];
+  nativeMessages: unknown[];
+  pathRuleRefreshes: number;
+  subdomainRuleRefreshes: number;
+  responses: unknown[];
+  restoreGlobals: () => void;
+  runtimeMessage: RuntimeMessageListener | null;
+  tabRemovedListener: ((tabId: number) => void) | null;
+  webRequestBeforeRequestListener: ((details: unknown) => unknown) | null;
 } {
   const nativeMessages: unknown[] = [];
   const fetchBodies: unknown[] = [];
   const responses: unknown[] = [];
   let runtimeMessage: RuntimeMessageListener | null = null;
+  let tabRemovedListener: ((tabId: number) => void) | null = null;
+  let webRequestBeforeRequestListener: ((details: unknown) => unknown) | null = null;
   let pathRuleRefreshes = 0;
   let subdomainRuleRefreshes = 0;
   const originalBrowser = (globalThis as { browser?: Browser }).browser;
@@ -72,7 +91,7 @@ function createRuntimeHarness(): {
           pathRuleRefreshes += 1;
           return Promise.resolve({
             success: true,
-            paths: [],
+            paths: options.blockedPaths ?? [],
             count: 0,
             hash: '',
             mtime: pathRuleRefreshes,
@@ -127,7 +146,9 @@ function createRuntimeHarness(): {
     tabs: {
       get: () => Promise.resolve({ id: 5, url: 'http://portal.example/app' }),
       onRemoved: {
-        addListener: () => undefined,
+        addListener: (listener: (tabId: number) => void) => {
+          tabRemovedListener = listener;
+        },
       },
       update: () => Promise.resolve({}),
     },
@@ -141,7 +162,9 @@ function createRuntimeHarness(): {
     },
     webRequest: {
       onBeforeRequest: {
-        addListener: () => undefined,
+        addListener: (listener: (details: unknown) => unknown) => {
+          webRequestBeforeRequestListener = listener;
+        },
       },
       onErrorOccurred: {
         addListener: () => undefined,
@@ -184,6 +207,12 @@ function createRuntimeHarness(): {
     },
     get runtimeMessage(): RuntimeMessageListener | null {
       return runtimeMessage;
+    },
+    get tabRemovedListener(): ((tabId: number) => void) | null {
+      return tabRemovedListener;
+    },
+    get webRequestBeforeRequestListener(): ((details: unknown) => unknown) | null {
+      return webRequestBeforeRequestListener;
     },
   };
 }
@@ -365,19 +394,110 @@ void test('background runtime refreshes path rules after manual native whitelist
     await runtime.init();
     assert.ok(harness.runtimeMessage);
 
-    harness.runtimeMessage({ action: 'triggerWhitelistUpdate' }, { tab: { id: 5 } }, (response) => {
-      harness.responses.push(response);
-    });
+    harness.runtimeMessage(
+      { action: 'triggerWhitelistUpdate', domains: ['wikipedia.org'] },
+      { tab: { id: 5 } },
+      (response) => {
+        harness.responses.push(response);
+      }
+    );
     await waitForAsyncRuntime();
 
     assert.deepEqual(harness.responses, [{ success: true, action: 'update-whitelist' }]);
     assert.ok(
       harness.nativeMessages.some(
-        (message) => (message as { action?: string }).action === 'update-whitelist'
+        (message) =>
+          (message as { action?: string; domains?: string[] }).action === 'update-whitelist' &&
+          (message as { domains?: string[] }).domains?.[0] === 'wikipedia.org'
       )
     );
     assert.equal(harness.pathRuleRefreshes >= 2, true);
     assert.equal(harness.subdomainRuleRefreshes >= 2, true);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime submits blocked-domain requests through native config', async () => {
+  const harness = createRuntimeHarness();
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.runtimeMessage);
+
+    harness.runtimeMessage(
+      {
+        action: 'submitBlockedDomainRequest',
+        domain: 'blocked.example',
+        reason: 'Teacher approved lesson resource',
+        origin: 'https://classroom.example/activity',
+        error: 'BLOCKED_PATH_POLICY:blocked.example/private',
+      },
+      { tab: { id: 5 } },
+      (response) => {
+        harness.responses.push(response);
+      }
+    );
+    await waitForAsyncRuntime();
+
+    assert.deepEqual(harness.responses, [{ success: true, status: 'approved' }]);
+    assert.equal(harness.fetchBodies.length, 1);
+    assert.deepEqual(harness.fetchBodies[0], {
+      client_version: '2.0.0-test',
+      domain: 'blocked.example',
+      error_type: 'BLOCKED_PATH_POLICY:blocked.example/private',
+      hostname: 'lab-pc-01',
+      origin_host: 'https://classroom.example/activity',
+      reason: 'Teacher approved lesson resource',
+      token: 'machine-token',
+    });
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime preserves blocked original URLs in background state', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    blockedPaths: ['blocked.example/private'],
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.runtimeMessage);
+    assert.ok(harness.webRequestBeforeRequestListener);
+
+    const outcome = harness.webRequestBeforeRequestListener({
+      documentUrl: 'https://classroom.example/activity',
+      frameId: 0,
+      originUrl: 'https://classroom.example/activity',
+      requestId: 'request-1',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://blocked.example/private/page?student=1',
+    });
+    assert.ok(outcome && typeof outcome === 'object' && 'redirectUrl' in outcome);
+    const redirectUrl = new URL(String((outcome as { redirectUrl: string }).redirectUrl));
+    assert.equal(redirectUrl.searchParams.get('domain'), 'blocked.example');
+    assert.equal(redirectUrl.searchParams.has('url'), false);
+
+    harness.runtimeMessage(
+      { action: 'getBlockedPageContext', domain: 'blocked.example' },
+      { tab: { id: 5 } },
+      (response) => {
+        harness.responses.push(response);
+      }
+    );
+    await waitForAsyncRuntime();
+    assert.deepEqual(harness.responses[0], {
+      success: true,
+      context: {
+        domain: 'blocked.example',
+        originalUrl: 'https://blocked.example/private/page?student=1',
+      },
+    });
+
+    assert.ok(harness.tabRemovedListener);
+    harness.tabRemovedListener(5);
   } finally {
     harness.restoreGlobals();
   }

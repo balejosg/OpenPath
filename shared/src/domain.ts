@@ -184,6 +184,13 @@ export const getRootDomain = (value: string): string => {
 };
 
 /**
+ * Normalize manually submitted request domains to the root domain.
+ * Manual approvals intentionally whitelist the domain family, while automatic
+ * machine requests keep exact-host behavior at the caller.
+ */
+export const normalizeManualRequestDomain = (value: string): string => getRootDomain(value);
+
+/**
  * Group rules by their root domain.
  * Returns a Map where keys are root domains and values are arrays of rules.
  */

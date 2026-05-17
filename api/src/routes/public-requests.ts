@@ -7,6 +7,7 @@ import {
   type PublicRequestResult,
   submitMachineRequest,
 } from '../services/public-request.service.js';
+import RequestService from '../services/request.service.js';
 import {
   normalizeDiagnosticContext,
   parseAutoRequestPayload,
@@ -29,6 +30,27 @@ function sendRequestServiceError(res: Response, error: { code: string; message: 
 }
 
 export function registerPublicRequestRoutes(app: Express): void {
+  app.get(
+    '/api/requests/status/:id',
+    createAsyncRouteHandler(
+      'Request status route failed',
+      sendJsonInternalError,
+      async (req: Request, res: Response): Promise<void> => {
+        const requestId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+        const result = await RequestService.getRequestStatus(requestId ?? '');
+        if (!result.ok) {
+          sendRequestServiceError(res, result.error);
+          return;
+        }
+
+        res.json({
+          success: true,
+          ...result.data,
+        });
+      }
+    )
+  );
+
   app.post(
     '/api/requests/auto',
     createAsyncRouteHandler(

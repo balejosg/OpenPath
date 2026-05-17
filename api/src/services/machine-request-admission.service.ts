@@ -1,5 +1,6 @@
 import { config } from '../config.js';
 import { withTransaction, type DbExecutor } from '../db/index.js';
+import { normalizeManualRequestDomain } from '@openpath/shared/domain';
 import * as classroomStorage from '../lib/classroom-storage.js';
 import * as groupsStorage from '../lib/groups-storage.js';
 import { logger } from '../lib/logger.js';
@@ -308,7 +309,10 @@ async function createMachineRequest(
   }
 
   const created = await deps.createRequest({
-    domain: context.data.domain,
+    domain:
+      input.source === 'firefox-extension'
+        ? normalizeManualRequestDomain(context.data.domain)
+        : context.data.domain,
     reason:
       input.reason ??
       (input.source === 'auto_extension'
@@ -331,7 +335,10 @@ async function createMachineRequest(
     ok: true,
     data: {
       autoApproved: false,
-      domain: context.data.domain,
+      domain:
+        input.source === 'firefox-extension'
+          ? normalizeManualRequestDomain(context.data.domain)
+          : context.data.domain,
       groupId: context.data.groupId,
       requestId: created.data.id,
       requestStatus: created.data.status,

@@ -1,5 +1,6 @@
 import {
   buildBlockedScreenContextFromSearch,
+  buildGetBlockedPageContextMessage,
   buildGetRecentBlockedDomainRequestStatusMessage,
   buildSubmitBlockedDomainRequestMessage,
 } from './lib/blocked-screen-contract.js';
@@ -14,6 +15,7 @@ import {
   type DataCollectionPermissionsApi,
 } from './lib/data-collection-consent.js';
 import { submitBlockedDomainRequest as submitBlockedDomainRequestViaApi } from './lib/request-api.js';
+import { fetchWithFallback } from './lib/request-api.js';
 
 interface BlockedPageRuntime {
   sendMessage(message: unknown): Promise<unknown>;
@@ -39,9 +41,19 @@ const RECENT_REQUEST_STATUS_TTL_MS = 120_000;
 const BACKGROUND_REQUEST_STATUS_RESTORE_WINDOW_MS = 30_000;
 const BACKGROUND_REQUEST_STATUS_RESTORE_INTERVAL_MS = 500;
 const SUBMIT_REQUEST_TIMEOUT_MS = 15_000;
+const REQUEST_STATUS_POLL_INTERVAL_MS = 1_000;
+const REQUEST_STATUS_POLL_TIMEOUT_MS = 30_000;
 const NATIVE_HOST_NAME = 'whitelist_native_host';
 const NATIVE_POLICY_BLOCKED_ERROR = 'OPENPATH_NATIVE_POLICY_BLOCKED';
 const REQUEST_SUBMITTED_SUCCESS_TEXT = 'Solicitud enviada. Quedara pendiente hasta que la revisen.';
+const REQUEST_APPROVED_UPDATING_TEXT = 'Solicitud aprobada. Actualizando permisos locales...';
+
+interface RequestStatusResult {
+  success?: boolean;
+  status?: 'pending' | 'approved' | 'rejected';
+  domain?: string;
+  error?: string;
+}
 
 function getElement(id: string): HTMLElement | null {
   return document.getElementById(id);
@@ -225,6 +237,16 @@ function buildFallbackMessage(error: unknown): string {
   return `No se pudo enviar la solicitud.${detail} Copia el dominio y avisa a tu profesor.`;
 }
 
+function formatUnknownError(error: unknown, fallback: string): string {
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return fallback;
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_resolve, reject) => {
@@ -268,6 +290,140 @@ async function submitUnblockRequest(input: {
     success: false,
     error: 'La extension no esta disponible en esta pagina.',
   };
+}
+
+async function getBlockedPageOriginalUrl(domain: string): Promise<string | null> {
+  const runtime = getBrowserRuntime();
+  if (!runtime) {
+    return null;
+  }
+
+  try {
+    const response = (await runtime.sendMessage(buildGetBlockedPageContextMessage(domain))) as {
+      success?: boolean;
+      context?: { originalUrl?: unknown } | null;
+    } | null;
+    return response?.success === true && typeof response.context?.originalUrl === 'string'
+      ? response.context.originalUrl
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function getHostnameFromUrl(url: string | null): string | null {
+  if (!url) {
+    return null;
+  }
+
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+async function pollRequestStatus(requestId: string): Promise<RequestStatusResult> {
+  const nativeRuntime = getNativeRuntime();
+  const sendNativeMessage = (message: unknown): Promise<unknown> =>
+    nativeRuntime?.sendNativeMessage?.(NATIVE_HOST_NAME, message) ??
+    Promise.reject(new Error('Native messaging unavailable'));
+  const nativeFallback = nativeRuntime?.sendNativeMessage
+    ? await loadNativeRequestConfigWithSender(sendNativeMessage)
+    : {};
+  const config = await loadRequestConfigWithNativeFallback(nativeFallback);
+  const endpoints = getRequestApiEndpoints({
+    ...config,
+    debugMode: false,
+    sharedSecret: '',
+  });
+  if (!config.enableRequests || endpoints.length === 0) {
+    return { success: false, error: 'Configuracion incompleta para consultar la solicitud.' };
+  }
+
+  const expiresAt = Date.now() + REQUEST_STATUS_POLL_TIMEOUT_MS;
+  do {
+    const response = await fetchWithFallback(
+      endpoints,
+      `/api/requests/status/${encodeURIComponent(requestId)}`,
+      { method: 'GET' },
+      config.requestTimeout
+    );
+    const payload = (await response.json().catch(() => ({}))) as RequestStatusResult;
+    if (!response.ok || payload.success === false) {
+      return {
+        success: false,
+        error: payload.error ?? `No se pudo consultar la solicitud (${response.status.toString()})`,
+      };
+    }
+
+    if (payload.status === 'approved' || payload.status === 'rejected') {
+      return {
+        success: true,
+        status: payload.status,
+        ...(payload.domain ? { domain: payload.domain } : {}),
+      };
+    }
+
+    if (Date.now() >= expiresAt) {
+      break;
+    }
+
+    await delay(REQUEST_STATUS_POLL_INTERVAL_MS);
+  } while (Date.now() < expiresAt);
+
+  return {
+    success: false,
+    error: 'La solicitud sigue pendiente. Vuelve a intentarlo en un momento.',
+  };
+}
+
+async function refreshAndVerifyLocalAccess(input: {
+  originalUrl: string | null;
+  approvedDomain: string;
+}): Promise<{ success: boolean; error?: string }> {
+  const runtime = getBrowserRuntime();
+  if (!runtime) {
+    return { success: false, error: 'La extension no esta disponible para actualizar permisos.' };
+  }
+
+  const originalHost = getHostnameFromUrl(input.originalUrl);
+  const approvedDomain = input.approvedDomain.trim().toLowerCase();
+  const domains = Array.from(new Set([originalHost, approvedDomain].filter(Boolean))) as string[];
+  const updateDomains = approvedDomain ? [approvedDomain] : domains;
+
+  const update = (await runtime.sendMessage({
+    action: 'triggerWhitelistUpdate',
+    domains: updateDomains,
+  })) as {
+    success?: boolean;
+    error?: unknown;
+  } | null;
+  if (update?.success !== true) {
+    return {
+      success: false,
+      error: formatUnknownError(update?.error, 'No se pudo actualizar la whitelist local.'),
+    };
+  }
+
+  const verify = (await runtime.sendMessage({ action: 'verifyDomains', domains })) as {
+    success?: boolean;
+    results?: { domain?: string; inWhitelist?: boolean }[];
+    error?: unknown;
+  } | null;
+  if (verify?.success !== true) {
+    return {
+      success: false,
+      error: formatUnknownError(verify?.error, 'No se pudo verificar la whitelist local.'),
+    };
+  }
+
+  const verified = domains.some((domain) =>
+    verify.results?.some((result) => result.domain === domain && result.inWhitelist === true)
+  );
+  return verified
+    ? { success: true }
+    : { success: false, error: 'La whitelist local aun no permite el dominio aprobado.' };
 }
 
 async function submitUnblockRequestWithNativeRuntime(
@@ -394,10 +550,67 @@ export function main(): void {
           reason,
           origin: context.origin,
           error: context.error,
-        })) as { success?: boolean; error?: unknown } | null;
+        })) as {
+          success?: boolean;
+          id?: unknown;
+          status?: string;
+          domain?: string;
+          error?: unknown;
+        } | null;
         if (response?.success === true) {
+          if (typeof response.id !== 'string' || response.id.length === 0) {
+            if (response.status === 'pending') {
+              showSubmittedRequestStatus(context.blockedDomain);
+              reasonInput.value = '';
+              return;
+            }
+
+            clearRecentRequestStatus(context.blockedDomain);
+            setRequestStatus(
+              'Solicitud enviada sin identificador. No se recargara automaticamente.',
+              'error'
+            );
+            return;
+          }
+
+          const originalUrl = await getBlockedPageOriginalUrl(context.blockedDomain);
+          setRequestStatus('Solicitud enviada. Esperando aprobacion...', 'pending');
+          saveRecentRequestStatus(
+            context.blockedDomain,
+            'Solicitud enviada. Esperando aprobacion...',
+            'pending'
+          );
+          const status = await pollRequestStatus(response.id);
+          if (status.status === 'rejected') {
+            clearRecentRequestStatus(context.blockedDomain);
+            setRequestStatus('Solicitud rechazada. La pagina seguira bloqueada.', 'error');
+            return;
+          }
+          if (status.status !== 'approved') {
+            clearRecentRequestStatus(context.blockedDomain);
+            setRequestStatus(status.error ?? 'La solicitud sigue pendiente.', 'pending');
+            return;
+          }
+
+          setRequestStatus(REQUEST_APPROVED_UPDATING_TEXT, 'pending');
+          const approvedDomain = status.domain ?? response.domain ?? context.blockedDomain;
+          const localAccess = await refreshAndVerifyLocalAccess({
+            originalUrl,
+            approvedDomain,
+          });
+          if (!localAccess.success) {
+            clearRecentRequestStatus(context.blockedDomain);
+            setRequestStatus(
+              localAccess.error ?? 'No se pudo verificar el permiso local.',
+              'error'
+            );
+            return;
+          }
+
+          const destination = originalUrl ?? `https://${approvedDomain}/`;
           showSubmittedRequestStatus(context.blockedDomain);
           reasonInput.value = '';
+          window.location.replace(destination);
           return;
         }
 

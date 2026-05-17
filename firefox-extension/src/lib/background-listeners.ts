@@ -37,6 +37,7 @@ interface BackgroundListenersOptions {
   localRuntimeDependencyTimeoutMs?: number;
   recordDependencyObservationEvent?: (event: OpenPathDependencyObservationEventInput) => void;
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
+  saveBlockedPageContext?: (tabId: number, domain: string, originalUrl: string | undefined) => void;
 }
 
 const DEFAULT_LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_MS = 500;
@@ -178,6 +179,9 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
       return tab.url;
     },
     redirectToBlockedScreen: options.redirectToBlockedScreen,
+    ...(options.saveBlockedPageContext
+      ? { saveBlockedPageContext: options.saveBlockedPageContext }
+      : {}),
   });
   options.browser.webRequest.onBeforeRequest.addListener(
     (details: WebRequest.OnBeforeRequestDetailsType) => {
@@ -246,6 +250,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
           reason,
           details.originUrl ?? details.documentUrl
         );
+        options.saveBlockedPageContext?.(details.tabId, hostname, details.url);
       }
 
       if (result.redirectUrl) {

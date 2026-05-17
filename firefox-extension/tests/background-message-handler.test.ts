@@ -20,6 +20,10 @@ function createHandlerFixture(
     forceBlockedPathRulesRefresh: () => Promise.resolve({ success: true }),
     forceBlockedSubdomainRulesRefresh: () => Promise.resolve({ success: true }),
     getBlockedDomainsForTab: (tabId) => ({ [`tab-${tabId.toString()}`]: { errors: [] } }),
+    getBlockedPageContext: (_tabId, domain) => ({
+      domain,
+      originalUrl: `https://${domain}/lesson`,
+    }),
     getDomainStatusesForTab: (tabId) => ({ [`tab-${tabId.toString()}`]: { state: 'detected' } }),
     getErrorMessage: (error) => (error instanceof Error ? error.message : String(error)),
     getMachineToken: () => Promise.resolve({ success: true, token: 'machine-token' }),
@@ -718,7 +722,14 @@ await describe('background message handler', async () => {
   });
 
   await test('triggers native refresh operations and reports failures', async () => {
+    let requestedDomains: string[] | undefined;
     const handler = createHandlerFixture();
+    const domainHandler = createHandlerFixture({
+      triggerWhitelistUpdate: (domains) => {
+        requestedDomains = domains;
+        return Promise.resolve({ success: true });
+      },
+    });
     const failingHandler = createHandlerFixture({
       triggerWhitelistUpdate: () => Promise.reject(new Error('update failed')),
     });
@@ -726,6 +737,16 @@ await describe('background message handler', async () => {
     assert.deepEqual(await handler({ action: 'triggerWhitelistUpdate', tabId: 1 }, {}), {
       success: true,
     });
+    assert.deepEqual(
+      await domainHandler(
+        { action: 'triggerWhitelistUpdate', domains: ['wikipedia.org'], tabId: 1 },
+        {}
+      ),
+      {
+        success: true,
+      }
+    );
+    assert.deepEqual(requestedDomains, ['wikipedia.org']);
     assert.deepEqual(await failingHandler({ action: 'triggerWhitelistUpdate', tabId: 1 }, {}), {
       success: false,
       error: 'update failed',

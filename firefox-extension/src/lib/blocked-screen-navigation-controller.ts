@@ -43,6 +43,7 @@ export interface BlockedScreenNavigationControllerDeps {
   getCurrentTabUrl: (tabId: number) => Promise<string | null | undefined>;
   now?: () => number;
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
+  saveBlockedPageContext?: (tabId: number, domain: string, originalUrl: string | undefined) => void;
 }
 
 export interface BlockedScreenNavigationController {
@@ -216,6 +217,7 @@ export function createBlockedScreenNavigationController(
         deps.addBlockedDomain(context.tabId, context.hostname, context.error, context.origin);
       }
 
+      deps.saveBlockedPageContext?.(context.tabId, context.hostname, context.url);
       await deps.redirectToBlockedScreen({
         tabId: context.tabId,
         hostname: context.hostname,

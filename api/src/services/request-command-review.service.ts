@@ -1,5 +1,6 @@
 import * as auth from '../lib/auth.js';
 import * as groupsStorage from '../lib/groups-storage.js';
+import { normalizeManualRequestDomain } from '@openpath/shared/domain';
 
 import type { RequestResult } from './request-service-shared.js';
 import {
@@ -63,7 +64,7 @@ export async function approveRequest(
 
   try {
     const approval = await approveWhitelistRequest({
-      domain: request.domain,
+      domain: normalizeManualRequestDomain(request.domain),
       requestId: request.id,
       resolvedBy: user.name,
       targetGroup: resolvedTarget,

@@ -1,6 +1,7 @@
 import * as push from '../lib/push.js';
 import * as storage from '../lib/storage.js';
 import { logger } from '../lib/logger.js';
+import { normalizeManualRequestDomain } from '@openpath/shared/domain';
 
 import type { RequestResult } from './request-service-shared.js';
 import {
@@ -13,7 +14,13 @@ import {
 export async function createRequest(
   input: RequestCreationInput
 ): Promise<RequestResult<StoredDomainRequest>> {
-  if (await storage.hasPendingRequest(input.domain)) {
+  const normalizedInput = {
+    ...input,
+    domain:
+      input.source === 'auto_extension' ? input.domain : normalizeManualRequestDomain(input.domain),
+  };
+
+  if (await storage.hasPendingRequest(normalizedInput.domain)) {
     return {
       ok: false,
       error: { code: 'CONFLICT', message: 'Pending request exists for this domain' },
@@ -21,7 +28,7 @@ export async function createRequest(
   }
 
   try {
-    const request = await createStoredRequest(input);
+    const request = await createStoredRequest(normalizedInput);
 
     push.notifyTeachersOfNewRequest(request).catch((error: unknown) => {
       logger.error('Failed to notify teachers of new request', {

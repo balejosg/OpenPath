@@ -62,7 +62,8 @@ export function createTestGroup(overrides: Partial<TestGroup> = {}): TestGroup {
 export function createTestDomain(overrides: Partial<TestDomain> = {}): TestDomain {
   const uniqueSuffix = createUniqueFixtureSuffix();
   return {
-    domain: `test-${uniqueSuffix}.example.com`,
+    // Manual request flows normalize subdomains to root domains.
+    domain: `test-${uniqueSuffix}.test`,
     reason: 'Needed for E2E testing purposes',
     ...overrides,
   };
