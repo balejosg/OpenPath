@@ -236,10 +236,23 @@ let activeScenarioTiming: {
 
 const scenarioTimings: StudentPolicyScenarioTiming[] = [];
 
+function buildRequestOnlyHost(scenario: StudentScenario, label: string): string {
+  const suffix = (optionalEnv('OPENPATH_STUDENT_REQUEST_HOST_SUFFIX') ?? 'openpath-e2e.test')
+    .trim()
+    .replace(/^\.+|\.+$/g, '');
+  const token =
+    scenario.classroom.id
+      .replace(/[^a-z0-9]/gi, '')
+      .toLowerCase()
+      .slice(-8) || 'scenario';
+
+  return `${label}-${token}.${suffix}`;
+}
+
 function buildTargets(scenario: StudentScenario): StudentPolicyTargets {
   const requestHost = buildScenarioHost(scenario, 'request-domain');
-  const rejectedHost = buildScenarioHost(scenario, 'rejected-domain');
-  const duplicateHost = buildScenarioHost(scenario, 'duplicate-domain');
+  const rejectedHost = buildRequestOnlyHost(scenario, 'rejected-domain');
+  const duplicateHost = buildRequestOnlyHost(scenario, 'duplicate-domain');
   const exemptedHost = buildScenarioHost(scenario, 'exempted-domain');
   const baseOnlyHost = buildScenarioHost(scenario, 'base-only');
   const alternateOnlyHost = buildScenarioHost(scenario, 'alternate-only');
