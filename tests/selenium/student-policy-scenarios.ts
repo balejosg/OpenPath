@@ -816,7 +816,7 @@ async function runRequestLifecycleScenarioSet(
   await client.approveRequest(pending.id, driver.scenario.groups.restricted.id);
   await settlePolicyChange(driver, mode, async () => {
     await driver.assertDnsAllowed(targets.hosts.request);
-    await driver.assertWhitelistContains(targets.hosts.request);
+    await driver.assertWhitelistContains(pending.domain);
     await driver.openAndExpectLoaded({
       url: targets.requestDomainUrl,
       title: 'OpenPath Site Fixture',
@@ -2600,7 +2600,7 @@ export async function runFallbackPropagationProbe(
     mode,
     async () => {
       await driver.assertDnsAllowed(targets.hosts.request);
-      await driver.assertWhitelistContains(targets.hosts.request);
+      await driver.assertWhitelistContains(pending.domain);
       await driver.openAndExpectLoaded({
         url: targets.requestDomainUrl,
         title: 'OpenPath Site Fixture',
