@@ -40,7 +40,7 @@ test.describe('Authentication Flows', () => {
     await waitForDashboard(page);
 
     // User should see authenticated content - use heading to be specific
-    await expect(page.getByRole('heading', { name: /Vista General/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Overview|Vista General/i })).toBeVisible();
   });
 
   test('should show error with invalid credentials @auth', async ({ page }) => {
@@ -84,7 +84,7 @@ test.describe('Authentication Flows', () => {
     await waitForDashboard(page);
 
     // User content should be visible - use heading to be specific
-    await expect(page.getByRole('heading', { name: /Vista General/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Overview|Vista General/i })).toBeVisible();
   });
 
   test('should redirect to login when session expires @auth', async ({ page }) => {

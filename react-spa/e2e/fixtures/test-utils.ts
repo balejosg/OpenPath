@@ -109,7 +109,7 @@ export const TEACHER_CREDENTIALS = isStaging()
       password: 'TeacherPassword123!',
     };
 
-const LOGOUT_BUTTON_NAME = /Cerrar Ses(?:i[oó]n)?/i;
+const LOGOUT_BUTTON_NAME = /Cerrar Ses(?:i[oó]n)?|Sign Out/i;
 const LOGIN_ERROR_TEXT = /Credenciales inv[aá]lidas|error de conexi[oó]n/i;
 
 /**
@@ -220,7 +220,7 @@ export async function clearAuth(context: BrowserContext): Promise<void> {
 export async function waitForDashboard(page: Page, timeout = 15000): Promise<void> {
   // Dashboard has "Estado del Sistema" banner and stat cards like "Grupos Activos"
   await page
-    .getByText(/Estado del Sistema|Grupos Activos|Dominios Permitidos/i)
+    .getByText(/Overview|Estado del Sistema|Grupos Activos|Dominios Permitidos/i)
     .first()
     .waitFor({ timeout });
 }

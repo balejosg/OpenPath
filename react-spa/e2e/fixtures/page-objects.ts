@@ -163,7 +163,7 @@ export class DashboardPage {
   async goto() {
     // SPA uses state-based navigation, click sidebar if already logged in
     // Otherwise just ensure we're on the page
-    const sidebarDashboard = this.page.getByRole('button', { name: /Panel de Control/i });
+    const sidebarDashboard = this.page.getByRole('button', { name: /Dashboard|Panel de Control/i });
     await clickSidebarNav(this.page, sidebarDashboard);
     await this.page.waitForLoadState('networkidle');
   }
@@ -200,13 +200,17 @@ export class GroupsPage {
 
   async goto() {
     // SPA uses state-based navigation, click sidebar
-    const sidebarGroups = this.page.getByRole('button', { name: /Políticas de Grupo/i });
+    const sidebarGroups = this.page.getByRole('button', {
+      name: /Group Policies|Políticas de Grupo/i,
+    });
     await clickSidebarNav(this.page, sidebarGroups);
     await this.page.waitForLoadState('networkidle');
   }
 
   async expectLoaded() {
-    await expect(this.page.getByText(/Grupos y Políticas|Políticas de Grupo/i)).toBeVisible();
+    await expect(
+      this.page.getByText(/Groups and Policies|Grupos y Políticas|Políticas de Grupo/i)
+    ).toBeVisible();
   }
 
   async getGroupCount(): Promise<number> {
@@ -238,7 +242,9 @@ export class DomainRequestsPage {
 
   async goto() {
     // SPA uses state-based navigation, click sidebar
-    const domainsButton = this.page.getByRole('button', { name: /Control de Dominios/i });
+    const domainsButton = this.page.getByRole('button', {
+      name: /Domain Control|Control de Dominios/i,
+    });
     await clickSidebarNav(this.page, domainsButton);
     await this.page.waitForLoadState('networkidle');
   }
@@ -273,7 +279,9 @@ export class UsersPage {
   }
 
   async goto() {
-    const usersButton = this.page.getByRole('button', { name: /Usuarios y Roles/i });
+    const usersButton = this.page.getByRole('button', {
+      name: /Users and Roles|Usuarios y Roles/i,
+    });
     await clickSidebarNav(this.page, usersButton);
     await this.page.waitForLoadState('networkidle');
   }
@@ -320,7 +328,9 @@ export class BulkImportPage {
    */
   async open(): Promise<void> {
     // Navigate to Políticas de Grupo via sidebar
-    const groupsButton = this.page.getByRole('button', { name: /Políticas de Grupo/i });
+    const groupsButton = this.page.getByRole('button', {
+      name: /Group Policies|Políticas de Grupo/i,
+    });
     await clickSidebarNav(this.page, groupsButton);
     await this.page.waitForLoadState('networkidle');
 
@@ -531,7 +541,9 @@ export class RulesManagerPage {
    */
   async open(): Promise<void> {
     // Navigate to Políticas de Grupo via sidebar
-    const groupsButton = this.page.getByRole('button', { name: /Políticas de Grupo/i });
+    const groupsButton = this.page.getByRole('button', {
+      name: /Group Policies|Políticas de Grupo/i,
+    });
     await clickSidebarNav(this.page, groupsButton);
     await this.page.waitForLoadState('networkidle');
 

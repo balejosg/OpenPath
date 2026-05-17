@@ -120,22 +120,28 @@ test.describe('Dashboard Navigation', () => {
     await waitForDashboard(page);
 
     // Click on groups in sidebar
-    const groupsButton = page.getByRole('button', { name: /Políticas de Grupo/i });
+    const groupsButton = page.getByRole('button', { name: /Group Policies|Políticas de Grupo/i });
     await groupsButton.click();
 
     // Should show groups content - use heading to be specific
-    await expect(page.getByRole('heading', { name: 'Grupos y Políticas' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: /Groups and Policies|Grupos y Políticas/i })
+    ).toBeVisible();
   });
 
   test('should navigate to requests from sidebar @dashboard @navigation', async ({ page }) => {
     await waitForDashboard(page);
 
     // Click on domains/requests in sidebar
-    const requestsButton = page.getByRole('button', { name: /Control de Dominios/i });
+    const requestsButton = page.getByRole('button', {
+      name: /Domain Control|Control de Dominios/i,
+    });
     await requestsButton.click();
 
     // Should show requests content - use heading to be specific
-    await expect(page.getByRole('heading', { name: 'Solicitudes de Acceso' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: /Access Requests|Solicitudes de Acceso/i })
+    ).toBeVisible();
   });
 
   test('should refresh dashboard data on demand @dashboard', async ({ page }) => {
@@ -169,7 +175,7 @@ test.describe('Dashboard Responsive Design', () => {
     await waitForDashboard(page);
 
     // Stats should still be visible (may stack vertically) - use heading
-    await expect(page.getByRole('heading', { name: /Vista General/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Overview|Vista General/i })).toBeVisible();
   });
 
   test('should display correctly on tablet viewport @dashboard @responsive', async ({ page }) => {
@@ -180,7 +186,7 @@ test.describe('Dashboard Responsive Design', () => {
     await waitForDashboard(page);
 
     // All stats should be visible - use headings
-    await expect(page.getByRole('heading', { name: /Vista General/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Overview|Vista General/i })).toBeVisible();
     await expect(page.getByText('Dominios Permitidos')).toBeVisible();
   });
 });
@@ -208,6 +214,6 @@ test.describe('Dashboard Error States', () => {
     await waitForDashboard(page);
 
     // Dashboard should be visible after successful login - use heading
-    await expect(page.getByRole('heading', { name: /Vista General/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Overview|Vista General/i })).toBeVisible();
   });
 });

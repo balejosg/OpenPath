@@ -166,7 +166,9 @@ test.describe('Domain Request Management', () => {
       const requestsPage = new DomainRequestsPage(page);
       await requestsPage.goto();
 
-      await expect(page.getByRole('heading', { name: /Solicitudes de Acceso/i })).toBeVisible();
+      await expect(
+        page.getByRole('heading', { name: /Access Requests|Solicitudes de Acceso/i })
+      ).toBeVisible();
       await expect(getRequestRow(page, request.domain)).toHaveAttribute('data-status', 'pending');
     } finally {
       await deleteDomainRequestViaApi(page, request.id);
@@ -263,8 +265,10 @@ test.describe('Teacher Access Boundaries', () => {
     await loginAsTeacher(page);
     await waitForNetworkIdle(page);
 
-    await expect(page.getByRole('button', { name: /Control de Dominios/i })).toHaveCount(0);
-    await expect(page.getByRole('heading', { name: /Mi Panel/i })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: /Domain Control|Control de Dominios/i })
+    ).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: /My Dashboard|Mi Panel/i })).toBeVisible();
   });
 
   test('should show the teacher allowed policies on the panel @domains @teacher', async ({
