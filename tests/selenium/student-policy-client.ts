@@ -15,6 +15,13 @@ import type {
   StudentScenario,
 } from './student-policy-types';
 
+export function matchesRequestDomain(candidateDomain: string, requestedDomain: string): boolean {
+  const candidate = candidateDomain.trim().toLowerCase().replace(/\.+$/, '');
+  const requested = requestedDomain.trim().toLowerCase().replace(/\.+$/, '');
+
+  return candidate === requested || requested.endsWith(`.${candidate}`);
+}
+
 export class StudentPolicyServerClient {
   private readonly scenario: StudentScenario;
 
@@ -122,9 +129,14 @@ export class StudentPolicyServerClient {
         { status: 'pending' },
         this.scenario.auth.teacher.accessToken
       );
-      const request = latestPendingRequests.find(
-        (candidate) => candidate.domain === domain && candidate.status === 'pending'
-      );
+      const request =
+        latestPendingRequests.find(
+          (candidate) => candidate.domain === domain && candidate.status === 'pending'
+        ) ??
+        latestPendingRequests.find(
+          (candidate) =>
+            matchesRequestDomain(candidate.domain, domain) && candidate.status === 'pending'
+        );
 
       if (request) {
         return request;
@@ -138,7 +150,9 @@ export class StudentPolicyServerClient {
       {},
       this.scenario.auth.teacher.accessToken
     );
-    const matchingRequests = allRequests.filter((candidate) => candidate.domain === domain);
+    const matchingRequests = allRequests.filter((candidate) =>
+      matchesRequestDomain(candidate.domain, domain)
+    );
     const pendingDomains = latestPendingRequests.map((candidate) => candidate.domain).join(', ');
     const matchingStatuses = matchingRequests
       .map((candidate) => `${candidate.id}:${candidate.status}`)

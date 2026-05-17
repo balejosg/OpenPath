@@ -12,6 +12,7 @@ import {
   waitForFirefoxExtensionRuntimeReady,
   type StudentScenario,
 } from './student-policy-flow.e2e';
+import { matchesRequestDomain } from './student-policy-client';
 import { openAndExpectBlocked, submitBlockedScreenRequest } from './student-policy-driver-browser';
 import { getStudentPolicyCoverageProfile } from './student-policy-env';
 import { getBlockedPathRulesDebug } from './student-policy-driver-runtime';
@@ -177,6 +178,15 @@ test('buildWindowsHttpProbeCommand can direct-connect to sslip fixture IP while 
     decodedCommand,
     /-Headers @\{ Host = 'exempted-domain\.127\.0\.0\.1\.sslip\.io:18082' \}/
   );
+});
+
+test('matchesRequestDomain accepts API-normalized parent domains', () => {
+  assert.equal(
+    matchesRequestDomain('sslip.io', 'request-domain-ed8c931d.127.0.0.1.sslip.io'),
+    true
+  );
+  assert.equal(matchesRequestDomain('Example.COM.', 'www.example.com'), true);
+  assert.equal(matchesRequestDomain('example.com', 'notexample.com'), false);
 });
 
 test('student policy coverage plan keeps full SSE coverage and narrows fallback to propagation proof', () => {
