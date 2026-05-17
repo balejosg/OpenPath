@@ -179,6 +179,83 @@ function Update-OpenPathCaptivePortalObservation {
     }
 }
 
+function Test-OpenPathPotentialCaptiveNetwork {
+    <#
+    .SYNOPSIS
+        Detects local IPv4 network evidence before captive portal probes succeed.
+    .OUTPUTS
+        Boolean
+    #>
+    [CmdletBinding()]
+    param()
+
+    try {
+        $activeAdapters = @(
+            Get-NetAdapter -ErrorAction SilentlyContinue |
+                Where-Object { $_.Status -eq 'Up' }
+        )
+    }
+    catch {
+        $activeAdapters = @()
+    }
+
+    if ($activeAdapters.Count -le 0) {
+        return $false
+    }
+
+    $activeInterfaceIndexes = @(
+        $activeAdapters |
+            ForEach-Object {
+                if ($_.PSObject.Properties['ifIndex']) {
+                    [int]$_.ifIndex
+                }
+                elseif ($_.PSObject.Properties['InterfaceIndex']) {
+                    [int]$_.InterfaceIndex
+                }
+            } |
+            Where-Object { $null -ne $_ }
+    )
+
+    if ($activeInterfaceIndexes.Count -le 0) {
+        return $false
+    }
+
+    try {
+        $defaultRoutes = @(
+            Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $activeInterfaceIndexes -contains [int]$_.InterfaceIndex -and
+                    $_.NextHop -and
+                    [string]$_.NextHop -ne '0.0.0.0' -and
+                    -not ([string]$_.NextHop).StartsWith('127.')
+                }
+        )
+        if ($defaultRoutes.Count -gt 0) {
+            return $true
+        }
+    }
+    catch {
+        # Fall through to gateway evidence.
+    }
+
+    try {
+        $ipConfigurations = @(
+            Get-NetIPConfiguration -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $activeInterfaceIndexes -contains [int]$_.InterfaceIndex -and
+                    $_.IPv4DefaultGateway -and
+                    $_.IPv4DefaultGateway.NextHop -and
+                    [string]$_.IPv4DefaultGateway.NextHop -ne '0.0.0.0' -and
+                    -not ([string]$_.IPv4DefaultGateway.NextHop).StartsWith('127.')
+                }
+        )
+        return ($ipConfigurations.Count -gt 0)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Test-OpenPathCaptivePortalState {
     <#
     .SYNOPSIS
@@ -254,6 +331,9 @@ function Test-OpenPathCaptivePortalState {
         return 'NoNetwork'
     }
     if ($transportFail -ge $total) {
+        if (Test-OpenPathPotentialCaptiveNetwork) {
+            return 'Portal'
+        }
         return 'NoNetwork'
     }
 
@@ -282,7 +362,12 @@ function Enable-OpenPathCaptivePortalMode {
     Write-OpenPathLog 'Watchdog: Captive portal detected - entering portal mode (temporarily opening DNS + firewall)' -Level WARN
 
     Disable-OpenPathFirewall | Out-Null
-    Restore-OriginalDNS
+    if (Get-Command -Name Restore-OpenPathCaptivePortalDNS -ErrorAction SilentlyContinue) {
+        Restore-OpenPathCaptivePortalDNS | Out-Null
+    }
+    else {
+        Restore-OriginalDNS
+    }
     Set-OpenPathCaptivePortalMarker -State $State | Out-Null
     return $true
 }
@@ -330,6 +415,7 @@ Export-ModuleMember -Function @(
     'Clear-OpenPathCaptivePortalMarker',
     'Get-OpenPathCaptivePortalObservation',
     'Update-OpenPathCaptivePortalObservation',
+    'Test-OpenPathPotentialCaptiveNetwork',
     'Test-OpenPathCaptivePortalState',
     'Enable-OpenPathCaptivePortalMode',
     'Disable-OpenPathCaptivePortalMode'

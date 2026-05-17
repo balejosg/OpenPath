@@ -14,6 +14,35 @@ Describe "DNS Module" {
             ([string]$Encoding) | Should -Match 'ASCII'
         }
 
+        if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) {
+            function global:Get-NetAdapter { }
+        }
+        if (-not (Get-Command -Name Set-DnsClientServerAddress -ErrorAction SilentlyContinue)) {
+            function global:Set-DnsClientServerAddress { }
+        }
+        if (-not (Get-Command -Name Clear-DnsClientCache -ErrorAction SilentlyContinue)) {
+            function global:Clear-DnsClientCache { }
+        }
+        if (-not (Get-Command -Name Resolve-DnsName -ErrorAction SilentlyContinue)) {
+            function global:Resolve-DnsName {
+                param(
+                    [string]$Name,
+                    [string]$Server,
+                    [switch]$DnsOnly,
+                    [object]$ErrorAction
+                )
+            }
+        }
+        if (-not (Get-Command -Name Get-Service -ErrorAction SilentlyContinue)) {
+            function global:Get-Service { }
+        }
+        if (-not (Get-Command -Name Restart-Service -ErrorAction SilentlyContinue)) {
+            function global:Restart-Service { }
+        }
+        if (-not (Get-Command -Name Start-Service -ErrorAction SilentlyContinue)) {
+            function global:Start-Service { }
+        }
+
         $modulePath = Join-Path $PSScriptRoot ".." "lib"
         Import-Module "$modulePath\DNS.psm1" -Force -Global -ErrorAction Stop
     }
@@ -70,11 +99,45 @@ Describe "DNS Module" {
             $content = Get-Content $servicePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
+                'function Restore-OriginalDNS',
+                '$snapshotPath = Get-OpenPathOriginalDnsSnapshotPath',
+                'if (Test-Path $snapshotPath)',
+                '$snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)',
                 '[string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid',
                 '$_.ifIndex -eq [int]$entry.InterfaceIndex',
                 '$_.Name -eq [string]$entry.InterfaceAlias',
                 'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $servers',
                 'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses'
+            )
+        }
+
+        It "Resets captive portal DNS from active adapters without reading stale snapshots" {
+            $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
+            $content = Get-Content $servicePath -Raw
+            $portalRestoreBody = [regex]::Match($content, '(?s)function Restore-OpenPathCaptivePortalDNS \{.*?\n\}\n\nfunction Get-AcrylicService').Value
+
+            Assert-ContentContainsAll -Content $portalRestoreBody -Needles @(
+                'function Restore-OpenPathCaptivePortalDNS',
+                '$adapters = Get-NetAdapter | Where-Object { $_.Status -eq ''Up'' }',
+                'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction Stop',
+                'Clear-DnsClientCache'
+            )
+            $portalRestoreBody | Should -Not -Match 'Get-OpenPathOriginalDnsSnapshotPath'
+            $portalRestoreBody | Should -Not -Match 'original-dns\.json'
+            $portalRestoreBody | Should -Not -Match 'Get-Content'
+            $portalRestoreBody | Should -Not -Match 'ServerAddresses \$servers'
+        }
+
+        It "Keeps Restore-OriginalDNS snapshot rollback behavior for OpenPath cleanup" {
+            $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
+            $content = Get-Content $servicePath -Raw
+            $restoreOriginalBody = [regex]::Match($content, '(?s)function Restore-OriginalDNS \{.*?\n\}\n\nfunction Restore-OpenPathCaptivePortalDNS').Value
+
+            Assert-ContentContainsAll -Content $restoreOriginalBody -Needles @(
+                '$snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)',
+                'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $servers',
+                'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses',
+                'Clear-DnsClientCache'
             )
         }
     }

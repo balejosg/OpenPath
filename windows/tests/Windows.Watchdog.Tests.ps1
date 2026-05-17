@@ -16,7 +16,8 @@ Describe "Watchdog Script" {
                 '-RequiredCommands @(',
                 '-ScriptName ''Test-DNSHealth.ps1''',
                 '''Sync-OpenPathFirefoxManagedExtensionPolicy''',
-                '''Get-OpenPathWhitelistSectionsFromFile'''
+                '''Get-OpenPathWhitelistSectionsFromFile''',
+                '''Restore-OpenPathCaptivePortalDNS'''
             )
         }
     }
@@ -70,7 +71,22 @@ Describe "Watchdog Script" {
                 'captive-portal-active.json',
                 'Captive portal detected',
                 'Disable-OpenPathFirewall',
+                'Restore-OpenPathCaptivePortalDNS',
                 'Restore-OriginalDNS'
+            )
+        }
+
+        It "Treats transport failures as captive portal when local IPv4 network evidence exists" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'function Test-OpenPathPotentialCaptiveNetwork',
+                'Get-NetAdapter -ErrorAction SilentlyContinue',
+                'Get-NetRoute -DestinationPrefix ''0.0.0.0/0'' -ErrorAction SilentlyContinue',
+                '$transportFail -ge $total',
+                'Test-OpenPathPotentialCaptiveNetwork',
+                'return ''Portal'''
             )
         }
 

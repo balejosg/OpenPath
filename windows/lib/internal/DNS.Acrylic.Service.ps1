@@ -119,6 +119,24 @@ function Restore-OriginalDNS {
     Clear-DnsClientCache
 }
 
+function Restore-OpenPathCaptivePortalDNS {
+    [CmdletBinding(SupportsShouldProcess)] param()
+    if (-not $PSCmdlet.ShouldProcess("Network adapters", "Reset DNS server addresses for captive portal access")) { return }
+    Write-OpenPathLog "Resetting DNS settings for captive portal access..."
+
+    $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
+    foreach ($adapter in $adapters) {
+        try {
+            Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction Stop
+            Write-OpenPathLog "Reset DNS for adapter: $($adapter.Name)"
+        }
+        catch {
+            Write-OpenPathLog "Failed to reset DNS for $($adapter.Name): $_" -Level WARN
+        }
+    }
+    Clear-DnsClientCache
+}
+
 function Get-AcrylicService {
     $service = Get-Service -Name 'AcrylicDNSProxySvc' -ErrorAction SilentlyContinue
     if ($service) { return $service }
