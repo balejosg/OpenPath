@@ -211,6 +211,27 @@ export class StudentPolicyServerClient {
     );
   }
 
+  public async findGroupRule(
+    groupId: string,
+    type: string,
+    value: string
+  ): Promise<RuleResult | null> {
+    const rules = await this.trpcQuery<RuleResult[]>(
+      'groups.listRules',
+      { groupId, type },
+      this.scenario.auth.teacher.accessToken
+    );
+
+    return rules.find((rule) => rule.value === value) ?? null;
+  }
+
+  public async deleteGroupRuleByValue(groupId: string, type: string, value: string): Promise<void> {
+    const rule = await this.findGroupRule(groupId, type, value);
+    if (rule?.id !== undefined) {
+      await this.deleteGroupRule(rule.id, groupId);
+    }
+  }
+
   public async createTemporaryExemption(scheduleId: string): Promise<ExemptionResult> {
     return this.trpcMutate<ExemptionResult>(
       'classrooms.createExemption',

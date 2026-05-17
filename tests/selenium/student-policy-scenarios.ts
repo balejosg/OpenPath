@@ -866,6 +866,16 @@ async function runRequestLifecycleScenarioSet(
   assert.strictEqual(duplicateFollowUp.success, false);
   assert.ok((duplicateFollowUp.error ?? '').length > 0);
   await driver.assertDnsBlocked(targets.hosts.duplicate);
+
+  await client.deleteGroupRuleByValue(
+    driver.scenario.groups.restricted.id,
+    'whitelist',
+    pending.domain
+  );
+  await settlePolicyChange(driver, mode, async () => {
+    await driver.assertDnsBlocked(targets.hosts.request);
+    await driver.assertWhitelistMissing(pending.domain);
+  });
 }
 
 async function runAjaxAutoAllowScenarioSet(
