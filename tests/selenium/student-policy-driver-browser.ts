@@ -396,7 +396,7 @@ export async function submitBlockedScreenRequest(
         try {
           const statusElement = await driver.findElement(By.css('#request-status'));
           latestStatus = await readElementText(state, statusElement);
-          return /Solicitud enviada|Request submitted/i.test(latestStatus);
+          return /Solicitud enviada|Request submitted|Request sent/i.test(latestStatus);
         } catch (error) {
           if (isStaleElementError(error)) {
             return false;

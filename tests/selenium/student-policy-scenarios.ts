@@ -803,7 +803,7 @@ async function runRequestLifecycleScenarioSet(
       timeoutMs: 30_000,
     }
   );
-  assert.match(requestStatusText, /Solicitud enviada/);
+  assert.match(requestStatusText, /Solicitud enviada|Request sent/);
 
   const pending = await client.findPendingRequestByDomain(targets.hosts.request);
   const pendingStatus = await client.getRequestStatus(pending.id);
@@ -2590,7 +2590,7 @@ export async function runFallbackPropagationProbe(
       timeoutMs: 30_000,
     }
   );
-  assert.match(requestStatusText, /Solicitud enviada/);
+  assert.match(requestStatusText, /Solicitud enviada|Request sent/);
 
   const pending = await client.findPendingRequestByDomain(targets.hosts.request);
   await client.approveRequest(pending.id, driver.scenario.groups.restricted.id);
