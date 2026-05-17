@@ -19,9 +19,9 @@ void test('request-command service deletes existing requests and reports missing
     requesterEmail: 'student@example.test',
   });
   assert.equal(created.ok, true);
-  assert.ok(created.ok ? created.data.id : '');
+  assert.ok(created.data.id);
 
-  const requestId = created.ok ? created.data.id : '';
+  const requestId = created.data.id;
   assert.deepEqual(await requestCommandService.deleteRequest(requestId), {
     ok: true,
     data: { success: true },

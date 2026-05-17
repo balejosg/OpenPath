@@ -1,5 +1,6 @@
 import { formatNativeHostStatusLabel } from './native-status-label.js';
 import type { BlockedDomainsData } from './popup-state.js';
+import { t } from './i18n.js';
 
 export interface VerifyResult {
   domain: string;
@@ -70,7 +71,7 @@ export async function verifyPopupDomains(input: {
   if (!response.success) {
     return {
       ok: false,
-      errorMessage: response.error ?? 'Error desconocido',
+      errorMessage: response.error ?? t('popupUnknownError'),
     };
   }
 
@@ -94,7 +95,7 @@ export function buildVerifyResultViewModels(results: VerifyResult[]): {
       domain: result.domain,
       ...(resolvedIp !== undefined ? { resolvedIp } : {}),
       statusClass: inWhitelist ? 'status-allowed' : 'status-blocked',
-      statusText: inWhitelist ? 'PERMITIDO' : 'BLOQUEADO',
+      statusText: inWhitelist ? t('popupAllowed') : t('popupBlocked'),
     };
   });
 }

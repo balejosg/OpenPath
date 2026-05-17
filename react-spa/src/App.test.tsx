@@ -181,7 +181,7 @@ vi.mock('./views/ResetPassword', () => ({
 }));
 
 vi.mock('./views/Settings', () => ({
-  default: () => <div>Settings</div>,
+  default: () => <div>Settings view</div>,
 }));
 
 vi.mock('./views/DomainRequests', () => ({
@@ -207,9 +207,9 @@ describe('App', () => {
     fireEvent.click(screen.getByText('Abrir Informatica 3'));
 
     await waitFor(() => {
-      expect(screen.getByText('Gestión de Aulas')).toBeInTheDocument();
+      expect(screen.getByText('Classroom Management')).toBeInTheDocument();
       expect(screen.getByText('Classrooms classroom-3')).toBeInTheDocument();
-      expect(window.location.pathname).toBe('/aulas');
+      expect(window.location.pathname).toBe('/classrooms');
     });
 
     expect(testDoubles.classroomPropsSpy).toHaveBeenCalledWith({
@@ -237,7 +237,7 @@ describe('App', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Classrooms none')).toBeInTheDocument();
-      expect(window.location.pathname).toBe('/aulas');
+      expect(window.location.pathname).toBe('/classrooms');
     });
   });
 
@@ -271,7 +271,7 @@ describe('App', () => {
     fireEvent.click(screen.getByText('Completar login'));
 
     await waitFor(() => {
-      expect(screen.getByText('Vista General')).toBeInTheDocument();
+      expect(screen.getByText('Overview')).toBeInTheDocument();
       expect(window.location.pathname).toBe('/');
     });
 
@@ -284,7 +284,7 @@ describe('App', () => {
     fireEvent.click(screen.getByText('Completar registro'));
 
     await waitFor(() => {
-      expect(screen.getByText('Vista General')).toBeInTheDocument();
+      expect(screen.getByText('Overview')).toBeInTheDocument();
       expect(window.location.pathname).toBe('/');
     });
   });
@@ -293,38 +293,38 @@ describe('App', () => {
     render(<App />);
 
     fireEvent.click(screen.getByText('Ir grupos'));
-    expect(screen.getByText('Grupos y Políticas')).toBeInTheDocument();
+    expect(screen.getByText('Groups and Policies')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Abrir reglas grupo 1'));
-    expect(screen.getByText('Reglas: Grupo 1')).toBeInTheDocument();
+    expect(screen.getByText('Rules: Grupo 1')).toBeInTheDocument();
     expect(screen.getByText('RulesManager')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Ir usuarios'));
-    expect(screen.getByText('Administración de Usuarios')).toBeInTheDocument();
+    expect(screen.getByText('User Administration')).toBeInTheDocument();
     expect(screen.getByText('Users')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Ir dominios'));
-    expect(screen.getByText('Solicitudes de Acceso')).toBeInTheDocument();
+    expect(screen.getByText('Access Requests')).toBeInTheDocument();
     expect(screen.getByText('DomainRequests')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Ir configuracion'));
-    expect(screen.getByText('Configuración')).toBeInTheDocument();
-    expect(screen.getByText('Settings')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByText('Settings view')).toBeInTheDocument();
   });
 
   it('falls back to teacher views for protected admin tabs and toggles the mobile overlay', async () => {
     testDoubles.isAdmin.mockReturnValue(false);
     const { container } = render(<App />);
 
-    expect(screen.getByText('Mi Panel')).toBeInTheDocument();
+    expect(screen.getByText('My Dashboard')).toBeInTheDocument();
     expect(screen.getByText('Teacher dashboard')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Ir usuarios'));
-    expect(screen.getByText('Mi Panel')).toBeInTheDocument();
+    expect(screen.getByText('My Dashboard')).toBeInTheDocument();
     expect(screen.getByText('Teacher dashboard')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Ir dominios'));
-    expect(screen.getByText('Mi Panel')).toBeInTheDocument();
+    expect(screen.getByText('My Dashboard')).toBeInTheDocument();
     expect(screen.getByText('Teacher dashboard')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Abrir menu'));

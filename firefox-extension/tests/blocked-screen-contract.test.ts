@@ -17,7 +17,7 @@ void describe('blocked screen contract', () => {
 
     assert.deepStrictEqual(context, {
       blockedDomain: 'learning.example',
-      displayOrigin: 'sin informacion',
+      displayOrigin: 'unknown',
       error: 'NS_ERROR_UNKNOWN_HOST',
       origin: null,
     });

@@ -13,6 +13,7 @@ import {
   loadPopupDomainStatuses,
 } from './popup-runtime.js';
 import type { PopupControllerState } from './popup-controller-state.js';
+import { t } from './i18n.js';
 
 interface PopupDomainControllerOptions {
   btnVerify: HTMLButtonElement;
@@ -79,10 +80,10 @@ export function createPopupDomainController(
 
     try {
       await navigator.clipboard.writeText(text);
-      options.showToast('Copiado al portapapeles');
+      options.showToast(t('popupCopiedClipboard'));
     } catch (error) {
       logger.error('[Popup] Error copying to clipboard', { error: getErrorMessage(error) });
-      options.showToast('Error al copiar');
+      options.showToast(t('popupCopyError'));
     }
   }
 
@@ -103,7 +104,7 @@ export function createPopupDomainController(
       hidePopupRequestSection(options.requestSectionEl);
       options.requestStatusEl.classList.add('hidden');
       options.requestStatusEl.textContent = '';
-      options.showToast('Lista limpiada');
+      options.showToast(t('popupListCleared'));
     } catch (error) {
       logger.error('[Popup] Error clearing domains', { error: getErrorMessage(error) });
     }

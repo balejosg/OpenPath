@@ -16,6 +16,7 @@ import {
 } from './lib/data-collection-consent.js';
 import { submitBlockedDomainRequest as submitBlockedDomainRequestViaApi } from './lib/request-api.js';
 import { fetchWithFallback } from './lib/request-api.js';
+import { localizeDocument, t } from './lib/i18n.js';
 
 interface BlockedPageRuntime {
   sendMessage(message: unknown): Promise<unknown>;
@@ -45,8 +46,6 @@ const REQUEST_STATUS_POLL_INTERVAL_MS = 1_000;
 const REQUEST_STATUS_POLL_TIMEOUT_MS = 30_000;
 const NATIVE_HOST_NAME = 'whitelist_native_host';
 const NATIVE_POLICY_BLOCKED_ERROR = 'OPENPATH_NATIVE_POLICY_BLOCKED';
-const REQUEST_SUBMITTED_SUCCESS_TEXT = 'Solicitud enviada. Quedara pendiente hasta que la revisen.';
-const REQUEST_APPROVED_UPDATING_TEXT = 'Solicitud aprobada. Actualizando permisos locales...';
 
 interface RequestStatusResult {
   success?: boolean;
@@ -115,8 +114,9 @@ function saveRecentRequestStatus(domain: string, text: string, type: RequestStat
 }
 
 function showSubmittedRequestStatus(domain: string): void {
-  setRequestStatus(REQUEST_SUBMITTED_SUCCESS_TEXT, 'success');
-  saveRecentRequestStatus(domain, REQUEST_SUBMITTED_SUCCESS_TEXT, 'success');
+  const message = t('blockedRequestSubmittedSuccess');
+  setRequestStatus(message, 'success');
+  saveRecentRequestStatus(domain, message, 'success');
 }
 
 function restoreRecentRequestStatus(domain: string): void {
@@ -234,7 +234,7 @@ async function copyText(text: string): Promise<boolean> {
 function buildFallbackMessage(error: unknown): string {
   const detail =
     typeof error === 'string' ? ` ${error}` : error instanceof Error ? ` ${error.message}` : '';
-  return `No se pudo enviar la solicitud.${detail} Copia el dominio y avisa a tu profesor.`;
+  return t('blockedFallbackMessage', detail);
 }
 
 function formatUnknownError(error: unknown, fallback: string): string {
@@ -273,7 +273,7 @@ async function submitUnblockRequest(input: {
     return withTimeout(
       submitUnblockRequestWithNativeRuntime(input, nativeRuntime),
       SUBMIT_REQUEST_TIMEOUT_MS,
-      'Tiempo de espera agotado al enviar la solicitud.'
+      t('blockedRequestTimeout')
     );
   }
 
@@ -282,13 +282,13 @@ async function submitUnblockRequest(input: {
     return withTimeout(
       runtime.sendMessage(buildSubmitBlockedDomainRequestMessage(input)),
       SUBMIT_REQUEST_TIMEOUT_MS,
-      'Tiempo de espera agotado al contactar con la extension.'
+      t('blockedExtensionTimeout')
     );
   }
 
   return {
     success: false,
-    error: 'La extension no esta disponible en esta pagina.',
+    error: t('blockedExtensionUnavailable'),
   };
 }
 
@@ -338,7 +338,7 @@ async function pollRequestStatus(requestId: string): Promise<RequestStatusResult
     sharedSecret: '',
   });
   if (!config.enableRequests || endpoints.length === 0) {
-    return { success: false, error: 'Configuracion incompleta para consultar la solicitud.' };
+    return { success: false, error: t('blockedRequestStatusConfigIncomplete') };
   }
 
   const expiresAt = Date.now() + REQUEST_STATUS_POLL_TIMEOUT_MS;
@@ -353,7 +353,7 @@ async function pollRequestStatus(requestId: string): Promise<RequestStatusResult
     if (!response.ok || payload.success === false) {
       return {
         success: false,
-        error: payload.error ?? `No se pudo consultar la solicitud (${response.status.toString()})`,
+        error: payload.error ?? t('blockedRequestStatusFailed', response.status.toString()),
       };
     }
 
@@ -374,7 +374,7 @@ async function pollRequestStatus(requestId: string): Promise<RequestStatusResult
 
   return {
     success: false,
-    error: 'La solicitud sigue pendiente. Vuelve a intentarlo en un momento.',
+    error: t('blockedRequestStillPendingRetry'),
   };
 }
 
@@ -384,7 +384,7 @@ async function refreshAndVerifyLocalAccess(input: {
 }): Promise<{ success: boolean; error?: string }> {
   const runtime = getBrowserRuntime();
   if (!runtime) {
-    return { success: false, error: 'La extension no esta disponible para actualizar permisos.' };
+    return { success: false, error: t('blockedPermissionsExtensionUnavailable') };
   }
 
   const originalHost = getHostnameFromUrl(input.originalUrl);
@@ -402,7 +402,7 @@ async function refreshAndVerifyLocalAccess(input: {
   if (update?.success !== true) {
     return {
       success: false,
-      error: formatUnknownError(update?.error, 'No se pudo actualizar la whitelist local.'),
+      error: formatUnknownError(update?.error, t('blockedLocalAllowlistUpdateFailed')),
     };
   }
 
@@ -414,7 +414,7 @@ async function refreshAndVerifyLocalAccess(input: {
   if (verify?.success !== true) {
     return {
       success: false,
-      error: formatUnknownError(verify?.error, 'No se pudo verificar la whitelist local.'),
+      error: formatUnknownError(verify?.error, t('blockedLocalAllowlistVerifyFailed')),
     };
   }
 
@@ -423,7 +423,7 @@ async function refreshAndVerifyLocalAccess(input: {
   );
   return verified
     ? { success: true }
-    : { success: false, error: 'La whitelist local aun no permite el dominio aprobado.' };
+    : { success: false, error: t('blockedLocalAllowlistStillBlocked') };
 }
 
 async function submitUnblockRequestWithNativeRuntime(
@@ -489,6 +489,7 @@ async function restoreRecentRequestStatusFromBackground(domain: string): Promise
 }
 
 export function main(): void {
+  localizeDocument();
   const context = buildBlockedScreenContextFromSearch(window.location.search);
 
   setText('blocked-domain', context.blockedDomain);
@@ -507,7 +508,7 @@ export function main(): void {
   getElement('copy-domain')?.addEventListener('click', () => {
     void (async (): Promise<void> => {
       const ok = await copyText(context.blockedDomain);
-      setFeedback(ok ? 'Dominio copiado al portapapeles.' : 'No se pudo copiar el dominio.');
+      setFeedback(ok ? t('blockedDomainCopied') : t('blockedDomainCopyFailed'));
     })();
   });
 
@@ -526,7 +527,7 @@ export function main(): void {
     void (async (): Promise<void> => {
       const reason = reasonInput.value.trim();
       if (reason.length < 3) {
-        setRequestStatus('Escribe una breve razon para la solicitud.', 'error');
+        setRequestStatus(t('blockedBriefReasonRequired'), 'error');
         return;
       }
 
@@ -534,7 +535,7 @@ export function main(): void {
 
       submitBtn.disabled = true;
       clearRecentRequestStatus(context.blockedDomain);
-      setRequestStatus('Comprobando permiso de Firefox...', 'pending');
+      setRequestStatus(t('blockedCheckingFirefoxPermission'), 'pending');
 
       try {
         const consent = await consentPromise;
@@ -544,7 +545,7 @@ export function main(): void {
           return;
         }
 
-        setRequestStatus('Enviando solicitud...', 'pending');
+        setRequestStatus(t('blockedSendingRequest'), 'pending');
         const response = (await submitUnblockRequest({
           domain: context.blockedDomain,
           reason,
@@ -566,33 +567,26 @@ export function main(): void {
             }
 
             clearRecentRequestStatus(context.blockedDomain);
-            setRequestStatus(
-              'Solicitud enviada sin identificador. No se recargara automaticamente.',
-              'error'
-            );
+            setRequestStatus(t('blockedRequestSentWithoutId'), 'error');
             return;
           }
 
           const originalUrl = await getBlockedPageOriginalUrl(context.blockedDomain);
-          setRequestStatus('Solicitud enviada. Esperando aprobacion...', 'pending');
-          saveRecentRequestStatus(
-            context.blockedDomain,
-            'Solicitud enviada. Esperando aprobacion...',
-            'pending'
-          );
+          setRequestStatus(t('blockedWaitingApproval'), 'pending');
+          saveRecentRequestStatus(context.blockedDomain, t('blockedWaitingApproval'), 'pending');
           const status = await pollRequestStatus(response.id);
           if (status.status === 'rejected') {
             clearRecentRequestStatus(context.blockedDomain);
-            setRequestStatus('Solicitud rechazada. La pagina seguira bloqueada.', 'error');
+            setRequestStatus(t('blockedRequestRejected'), 'error');
             return;
           }
           if (status.status !== 'approved') {
             clearRecentRequestStatus(context.blockedDomain);
-            setRequestStatus(status.error ?? 'La solicitud sigue pendiente.', 'pending');
+            setRequestStatus(status.error ?? t('blockedRequestStillPending'), 'pending');
             return;
           }
 
-          setRequestStatus(REQUEST_APPROVED_UPDATING_TEXT, 'pending');
+          setRequestStatus(t('blockedRequestApprovedUpdating'), 'pending');
           const approvedDomain = status.domain ?? response.domain ?? context.blockedDomain;
           const localAccess = await refreshAndVerifyLocalAccess({
             originalUrl,
@@ -600,10 +594,7 @@ export function main(): void {
           });
           if (!localAccess.success) {
             clearRecentRequestStatus(context.blockedDomain);
-            setRequestStatus(
-              localAccess.error ?? 'No se pudo verificar el permiso local.',
-              'error'
-            );
+            setRequestStatus(localAccess.error ?? t('blockedLocalPermissionVerifyFailed'), 'error');
             return;
           }
 

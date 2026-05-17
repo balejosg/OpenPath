@@ -13,6 +13,7 @@ import { createPopupRequestController } from './popup-request-controller.js';
 import type { PopupControllerState } from './popup-controller-state.js';
 import { renderPopupDomainsList, syncPopupRequestButtonState } from './popup-ui.js';
 import { resolveActivePopupTab } from './popup-runtime.js';
+import { localizeDocument } from './i18n.js';
 
 interface PopupControllerOptions {
   buildSubmitMessage: (payload: {
@@ -154,6 +155,7 @@ export function createPopupController(
   }
 
   function mount(): void {
+    localizeDocument();
     registerPopupEventHandlers({
       elements: {
         btnCopy,

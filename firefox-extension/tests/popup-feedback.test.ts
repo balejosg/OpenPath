@@ -104,7 +104,7 @@ await describe('popup feedback helpers', async () => {
       nativeStatusEl,
     });
 
-    assert.equal(nativeStatusEl.textContent, 'Error de comunicación');
+    assert.equal(nativeStatusEl.textContent, 'Communication error');
     assert.equal(nativeStatusEl.className, 'status-indicator unavailable');
     assert.equal(btnVerify.disabled, true);
   });
@@ -121,11 +121,11 @@ await describe('popup feedback helpers', async () => {
     });
 
     assert.equal(btnVerify.disabled, true);
-    assert.equal(btnVerify.textContent, '⌛ Verificando...');
+    assert.equal(btnVerify.textContent, '⌛ Verifying...');
     assert.equal((verifyListEl as unknown as FakeElement).children[0]?.className, 'loading');
     assert.equal(
       (verifyListEl as unknown as FakeElement).children[0]?.textContent,
-      'Consultando host nativo...'
+      'Checking native host...'
     );
     assert.equal((verifyResultsEl.classList as unknown as FakeClassList).contains('hidden'), false);
 
@@ -160,7 +160,7 @@ await describe('popup feedback helpers', async () => {
     assert.equal(ipInfoEl.className, 'ip-info');
     assert.equal(ipInfoEl.textContent, '127.0.0.1');
     assert.match(statusEl.className, /verify-status/);
-    assert.equal(statusEl.textContent, 'PERMITIDO');
+    assert.equal(statusEl.textContent, 'ALLOWED');
 
     hidePopupVerifyResults({
       verifyListEl,
@@ -176,12 +176,12 @@ await describe('popup feedback helpers', async () => {
     showPopupVerifyCommunicationError(verifyListEl);
     assert.equal(
       (verifyListEl as unknown as FakeElement).children[0]?.textContent,
-      'Error al comunicar con el host nativo'
+      'Error communicating with native host'
     );
 
     resetPopupVerifyButton(btnVerify);
     assert.equal(btnVerify.disabled, false);
-    assert.equal(btnVerify.textContent, '🔍 Verificar en Whitelist');
+    assert.equal(btnVerify.textContent, '🔍 Verify in Allowlist');
   });
 
   await test('shows and hides popup request status messages', () => {

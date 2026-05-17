@@ -3,6 +3,7 @@ import {
   BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION,
   type DataCollectionConsentResult,
 } from './data-collection-consent.js';
+import { t } from './i18n.js';
 
 export interface SubmitRequestResult {
   success: boolean;
@@ -28,7 +29,7 @@ export function buildRequestDomainOptions(
       return [
         {
           hostname,
-          origin: data.origin ?? 'desconocido',
+          origin: data.origin ?? t('popupUnknownOrigin'),
         },
       ];
     });
@@ -79,7 +80,7 @@ export async function submitPopupDomainRequest(input: {
       success: false,
       shouldReloadDomainStatuses: false,
       shouldResetForm: false,
-      userMessage: '❌ Selecciona un dominio y escribe un motivo',
+      userMessage: `❌ ${t('popupSelectDomainAndReason')}`,
     };
   }
 
@@ -88,7 +89,7 @@ export async function submitPopupDomainRequest(input: {
       success: false,
       shouldReloadDomainStatuses: false,
       shouldResetForm: false,
-      userMessage: '❌ Configuración incompleta para solicitar dominios',
+      userMessage: `❌ ${t('popupIncompleteRequestConfig')}`,
     };
   }
 
@@ -97,8 +98,7 @@ export async function submitPopupDomainRequest(input: {
       ? await input.requestBrowsingActivityConsent(BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION)
       : {
           granted: false as const,
-          error:
-            'Esta version de Firefox no es compatible con el permiso de datos requerido para enviar solicitudes.',
+          error: t('popupFirefoxDataPermissionUnsupported'),
         };
     if (!consent.granted) {
       return {
@@ -126,11 +126,11 @@ export async function submitPopupDomainRequest(input: {
         success: true,
         shouldReloadDomainStatuses: true,
         shouldResetForm: true,
-        userMessage: `✅ Solicitud enviada para ${input.domain}. Queda pendiente de aprobación.`,
+        userMessage: `✅ ${t('requestSentForDomain', input.domain)}`,
       };
     }
 
-    const errorMessage = payload.error ?? 'Error desconocido';
+    const errorMessage = payload.error ?? t('popupUnknownError');
     return {
       success: false,
       errorMessage,
@@ -142,8 +142,8 @@ export async function submitPopupDomainRequest(input: {
     const err = error instanceof Error ? error : new Error(String(error));
     const errorMessage =
       err.name === 'AbortError'
-        ? 'Timeout - servidor no responde'
-        : err.message || 'Error de conexión';
+        ? t('popupTimeoutServerNoResponse')
+        : err.message || t('popupConnectionError');
 
     return {
       success: false,

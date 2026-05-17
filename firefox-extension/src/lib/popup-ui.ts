@@ -1,6 +1,7 @@
 import { buildRequestDomainOptions, shouldEnableSubmitRequest } from './popup-request-actions.js';
 import { shouldEnableRequestAction, type BlockedDomainsData } from './popup-state.js';
 import { buildBlockedDomainListItems } from './popup-view-models.js';
+import { t } from './i18n.js';
 
 function createElementFor<K extends keyof HTMLElementTagNameMap>(
   parent: HTMLElement,
@@ -88,7 +89,7 @@ export function renderPopupDomainsList(input: {
 
     const domainCount = createElementFor(item, 'span');
     domainCount.className = 'domain-count';
-    domainCount.title = 'Intentos de conexión';
+    domainCount.title = t('popupConnectionAttemptsTitle');
     domainCount.textContent = viewModel.attempts.toString();
 
     const domainStatus = createElementFor(item, 'span');
@@ -103,8 +104,8 @@ export function renderPopupDomainsList(input: {
       const retryButton = createElementFor(item, 'button');
       retryButton.className = 'retry-update-btn';
       retryButton.dataset.hostname = viewModel.retryHostname;
-      retryButton.title = 'Reintentar actualización local';
-      retryButton.textContent = 'Reintentar';
+      retryButton.title = t('popupRetryLocalUpdateTitle');
+      retryButton.textContent = t('popupRetryLocalUpdate');
       domainMeta.appendChild(retryButton);
     }
 
@@ -124,7 +125,7 @@ export function populatePopupRequestDomainSelect(input: {
 
   const defaultOption = createOption();
   defaultOption.value = '';
-  defaultOption.textContent = 'Seleccionar dominio...';
+  defaultOption.textContent = t('popupSelectDomain');
 
   const options = buildRequestDomainOptions(input.blockedDomainsData).map(
     ({ hostname, origin }) => {

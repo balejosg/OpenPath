@@ -4,6 +4,7 @@ import {
   type VerifyResult,
 } from './popup-native-actions.js';
 import { buildRequestStatusPresentation } from './popup-view-models.js';
+import { t } from './i18n.js';
 
 function createElementFor<K extends keyof HTMLElementTagNameMap>(
   parent: HTMLElement,
@@ -39,7 +40,7 @@ export function applyPopupNativeError(input: {
   btnVerify: HTMLButtonElement;
   nativeStatusEl: HTMLElement;
 }): void {
-  input.nativeStatusEl.textContent = 'Error de comunicación';
+  input.nativeStatusEl.textContent = t('popupNativeCommunicationError');
   input.nativeStatusEl.className = 'status-indicator unavailable';
   input.btnVerify.disabled = true;
 }
@@ -50,10 +51,10 @@ export function showPopupVerifyLoading(input: {
   verifyResultsEl: HTMLElement;
 }): void {
   input.btnVerify.disabled = true;
-  input.btnVerify.textContent = '⌛ Verificando...';
+  input.btnVerify.textContent = `⌛ ${t('popupVerifying')}`;
   const loadingEl = createElementFor(input.verifyListEl, 'div');
   loadingEl.className = 'loading';
-  loadingEl.textContent = 'Consultando host nativo...';
+  loadingEl.textContent = t('popupConsultingNativeHost');
   input.verifyListEl.replaceChildren(loadingEl);
   input.verifyResultsEl.classList.remove('hidden');
 }
@@ -68,13 +69,13 @@ export function showPopupVerifyError(verifyListEl: HTMLElement, message: string)
 export function showPopupVerifyCommunicationError(verifyListEl: HTMLElement): void {
   const errorEl = createElementFor(verifyListEl, 'div');
   errorEl.className = 'error-text';
-  errorEl.textContent = 'Error al comunicar con el host nativo';
+  errorEl.textContent = t('popupNativeHostCommunicationError');
   verifyListEl.replaceChildren(errorEl);
 }
 
 export function resetPopupVerifyButton(btnVerify: HTMLButtonElement): void {
   btnVerify.disabled = false;
-  btnVerify.textContent = '🔍 Verificar en Whitelist';
+  btnVerify.textContent = `🔍 ${t('popupVerifyResetButton')}`;
 }
 
 export function renderPopupVerifyResults(input: {
@@ -84,7 +85,7 @@ export function renderPopupVerifyResults(input: {
 }): void {
   if (input.results.length === 0) {
     const emptyEl = createElementFor(input.verifyListEl, 'div');
-    emptyEl.textContent = 'No hay resultados';
+    emptyEl.textContent = t('popupNoResults');
     input.verifyListEl.replaceChildren(emptyEl);
     return;
   }

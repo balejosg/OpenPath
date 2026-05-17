@@ -51,7 +51,7 @@ await describe('data collection consent', async () => {
     });
 
     assert.equal(result.granted, false);
-    assert.match(result.error, /permiso de actividad de navegacion requerido/);
+    assert.match(result.error, /required data permission/);
     assert.deepEqual(requestedPayloads, []);
   });
 
@@ -62,7 +62,7 @@ await describe('data collection consent', async () => {
     });
 
     assert.equal(result.granted, false);
-    assert.match(result.error, /permiso de actividad de navegacion/);
+    assert.match(result.error, /required data permission/);
   });
 
   await test('keeps working when Firefox throws during request but consent is already granted', async () => {
@@ -101,7 +101,7 @@ await describe('data collection consent', async () => {
     });
 
     assert.equal(result.granted, false);
-    assert.match(result.error, /no permite comprobar/);
+    assert.match(result.error, /does not support/);
     assert.match(result.error, /contains unavailable/);
   });
 
@@ -109,6 +109,6 @@ await describe('data collection consent', async () => {
     const result = await ensureBrowsingActivityConsent(null);
 
     assert.equal(result.granted, false);
-    assert.match(result.error, /no permite comprobar/);
+    assert.match(result.error, /does not support/);
   });
 });

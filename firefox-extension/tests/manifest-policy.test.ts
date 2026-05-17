@@ -20,6 +20,7 @@ interface FirefoxManifest {
     };
   };
   name?: string;
+  default_locale?: string;
   description?: string;
   content_security_policy?: {
     extension_pages?: string;
@@ -49,11 +50,17 @@ void describe('Firefox extension manifest policy', () => {
     const manifest = await readManifest();
     const description = manifest.description ?? '';
 
-    assert.match(manifest.name ?? '', /Monitor de Bloqueos/);
-    assert.match(description, /OpenPath/);
+    assert.equal(manifest.name, '__MSG_appName__');
+    assert.equal(manifest.default_locale, 'en');
+    assert.equal(description, '__MSG_appDescription__');
+    const messages = JSON.parse(
+      await readFile(path.join(extensionRoot, '_locales/en/messages.json'), 'utf8')
+    ) as Record<string, { message?: string }>;
+    const resolvedDescription = messages.appDescription?.message ?? '';
+    assert.match(resolvedDescription, /OpenPath/);
     assert.ok(
-      description.length <= 132,
-      `manifest description should stay short for browser and store UIs, got ${String(description.length)} characters`
+      resolvedDescription.length <= 132,
+      `manifest description should stay short for browser and store UIs, got ${String(resolvedDescription.length)} characters`
     );
   });
 
@@ -154,6 +161,29 @@ void describe('Firefox extension manifest policy', () => {
     assert.ok(action);
 
     assert.equal(action.default_popup, 'popup/popup.html');
-    assert.equal(action.default_title, 'Monitor de Bloqueos');
+    assert.equal(action.default_title, '__MSG_actionTitle__');
+  });
+
+  void test('keeps locale message keys in parity and resolves manifest messages', async () => {
+    const manifest = await readManifest();
+    const english = JSON.parse(
+      await readFile(path.join(extensionRoot, '_locales/en/messages.json'), 'utf8')
+    ) as Record<string, { message?: string }>;
+    const spanish = JSON.parse(
+      await readFile(path.join(extensionRoot, '_locales/es/messages.json'), 'utf8')
+    ) as Record<string, { message?: string }>;
+
+    assert.deepEqual(Object.keys(spanish).sort(), Object.keys(english).sort());
+
+    for (const manifestMessage of [
+      manifest.name,
+      manifest.description,
+      manifest.action?.default_title,
+    ]) {
+      assert.match(manifestMessage ?? '', /^__MSG_[A-Za-z0-9_]+__$/);
+      const key = manifestMessage?.replace(/^__MSG_/, '').replace(/__$/, '') ?? '';
+      assert.equal(typeof english[key]?.message, 'string');
+      assert.equal(typeof spanish[key]?.message, 'string');
+    }
   });
 });

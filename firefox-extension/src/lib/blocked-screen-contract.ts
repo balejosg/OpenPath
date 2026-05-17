@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 export const SUBMIT_BLOCKED_DOMAIN_REQUEST_ACTION = 'submitBlockedDomainRequest' as const;
 export const GET_RECENT_BLOCKED_DOMAIN_REQUEST_STATUS_ACTION =
   'getRecentBlockedDomainRequestStatus' as const;
@@ -70,10 +72,10 @@ export function buildBlockedScreenContextFromSearch(search: string): BlockedScre
   const origin = getSearchParam(params, 'origin');
 
   return {
-    blockedDomain: queryDomain ?? extractDomainFromUrl(blockedUrl) ?? 'dominio desconocido',
-    error: getSearchParam(params, 'error') ?? 'bloqueo de red/politica',
+    blockedDomain: queryDomain ?? extractDomainFromUrl(blockedUrl) ?? 'unknown domain',
+    error: getSearchParam(params, 'error') ?? 'network/policy block',
     origin,
-    displayOrigin: origin ?? 'sin informacion',
+    displayOrigin: origin ?? t('popupUnknownOrigin'),
   };
 }
 

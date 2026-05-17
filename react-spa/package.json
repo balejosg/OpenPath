@@ -7,6 +7,7 @@
     "./openpath.css": "./openpath.css",
     "./public-auth": "./public-auth.ts",
     "./public-google": "./public-google.ts",
+    "./public-i18n": "./public-i18n.ts",
     "./public-shell": "./public-shell.ts",
     "./public-ui": "./public-ui.ts"
   },

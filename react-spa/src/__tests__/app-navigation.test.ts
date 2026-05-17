@@ -10,7 +10,7 @@ import {
 
 describe('app-navigation', () => {
   it('normalizes trailing slashes without collapsing root', () => {
-    expect(normalizePathname('/aulas///')).toBe('/aulas');
+    expect(normalizePathname('/classrooms///')).toBe('/classrooms');
     expect(normalizePathname('/')).toBe('/');
     expect(normalizePathname('')).toBe('/');
   });
@@ -18,12 +18,16 @@ describe('app-navigation', () => {
   it('maps pathnames to tabs', () => {
     expect(getTabFromPathname('/')).toBe('dashboard');
     expect(getTabFromPathname('/dashboard/')).toBe('dashboard');
-    expect(getTabFromPathname('/aulas/1')).toBe('classrooms');
-    expect(getTabFromPathname('/politicas')).toBe('groups');
-    expect(getTabFromPathname('/reglas')).toBe('rules');
-    expect(getTabFromPathname('/usuarios')).toBe('users');
-    expect(getTabFromPathname('/dominios')).toBe('domains');
+    expect(getTabFromPathname('/classrooms/1')).toBe('classrooms');
+    expect(getTabFromPathname('/policies')).toBe('groups');
+    expect(getTabFromPathname('/groups')).toBe('groups');
+    expect(getTabFromPathname('/rules')).toBe('rules');
+    expect(getTabFromPathname('/users')).toBe('users');
+    expect(getTabFromPathname('/domain-requests')).toBe('domains');
+    expect(getTabFromPathname('/domains')).toBe('domains');
     expect(getTabFromPathname('/settings')).toBe('settings');
+    expect(getTabFromPathname('/aulas')).toBe('dashboard');
+    expect(getTabFromPathname('/configuracion')).toBe('dashboard');
     expect(getTabFromPathname('/desconocido')).toBe('dashboard');
   });
 
@@ -39,17 +43,17 @@ describe('app-navigation', () => {
     expect(isAuthPath('/register')).toBe(true);
     expect(isAuthPath('/forgot-password')).toBe(true);
     expect(isAuthPath('/reset-password')).toBe(true);
-    expect(isAuthPath('/aulas')).toBe(false);
+    expect(isAuthPath('/classrooms')).toBe(false);
   });
 
   it('maps tabs and auth views back to route paths', () => {
     expect(getPathForTab('dashboard')).toBe('/');
-    expect(getPathForTab('classrooms')).toBe('/aulas');
-    expect(getPathForTab('groups')).toBe('/politicas');
-    expect(getPathForTab('rules')).toBe('/reglas');
-    expect(getPathForTab('users')).toBe('/usuarios');
-    expect(getPathForTab('domains')).toBe('/dominios');
-    expect(getPathForTab('settings')).toBe('/configuracion');
+    expect(getPathForTab('classrooms')).toBe('/classrooms');
+    expect(getPathForTab('groups')).toBe('/policies');
+    expect(getPathForTab('rules')).toBe('/rules');
+    expect(getPathForTab('users')).toBe('/users');
+    expect(getPathForTab('domains')).toBe('/domain-requests');
+    expect(getPathForTab('settings')).toBe('/settings');
     expect(getPathForTab('unknown')).toBe('/');
 
     expect(getPathForAuthView('login')).toBe('/login');

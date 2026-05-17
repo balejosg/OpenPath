@@ -12,7 +12,14 @@ import { assertFirefoxAmoSignedXpi } from './xpi-signature-evidence.mjs';
 const __filename = fileURLToPath(import.meta.url);
 const extensionRoot = path.dirname(__filename);
 const defaultArtifactsDir = path.join(extensionRoot, 'build', 'firefox-release-signing');
-const firefoxReleaseSourceEntries = ['manifest.json', 'dist', 'popup', 'blocked', 'icons'];
+const firefoxReleaseSourceEntries = [
+  'manifest.json',
+  '_locales',
+  'dist',
+  'popup',
+  'blocked',
+  'icons',
+];
 const defaultWebExtSignMaxRetries = 2;
 const defaultWebExtSignRetryBufferSeconds = 10;
 const defaultWebExtSignMaxThrottleWaitSeconds = 900;

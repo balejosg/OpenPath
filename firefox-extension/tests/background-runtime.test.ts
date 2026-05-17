@@ -476,7 +476,7 @@ void test('background runtime preserves blocked original URLs in background stat
       url: 'https://blocked.example/private/page?student=1',
     });
     assert.ok(outcome && typeof outcome === 'object' && 'redirectUrl' in outcome);
-    const redirectUrl = new URL(String((outcome as { redirectUrl: string }).redirectUrl));
+    const redirectUrl = new URL((outcome as { redirectUrl: string }).redirectUrl);
     assert.equal(redirectUrl.searchParams.get('domain'), 'blocked.example');
     assert.equal(redirectUrl.searchParams.has('url'), false);
 

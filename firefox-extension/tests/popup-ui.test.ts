@@ -165,7 +165,7 @@ await describe('popup ui helpers', async () => {
     assert.equal((requestDomainSelectEl as unknown as FakeElement).children.length, 2);
     assert.equal(
       (requestDomainSelectEl as unknown as FakeElement).children[0]?.textContent,
-      'Seleccionar dominio...'
+      'Select domain...'
     );
     assert.equal(
       (requestDomainSelectEl as unknown as FakeElement).children[1]?.dataset.origin,

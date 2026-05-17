@@ -281,9 +281,9 @@ void describe('blocked screen', () => {
   void test('renders student-oriented unblock request affordance', () => {
     const html = readFileSync(new URL('../blocked/blocked.html', import.meta.url), 'utf8');
 
-    assert.match(html, /Este sitio esta bloqueado por ahora/);
-    assert.match(html, /Solicitar desbloqueo/);
-    assert.match(html, /Ver detalles tecnicos/);
+    assert.match(html, /This site is blocked for now/);
+    assert.match(html, /Request unblock/);
+    assert.match(html, /Show technical details/);
   });
 
   void test('submits unblock request through the background script without exposing a token', async () => {
@@ -314,7 +314,7 @@ void describe('blocked screen', () => {
         error: 'NS_ERROR_UNKNOWN_HOST',
       },
     ]);
-    assert.match(elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+    assert.match(elements.get('request-status')?.textContent ?? '', /Request sent/);
   });
 
   void test('does not submit unblock requests when browsing activity consent is denied', async () => {
@@ -339,10 +339,7 @@ void describe('blocked screen', () => {
 
     assert.deepStrictEqual(permissionRequests, []);
     assert.deepStrictEqual(messages, []);
-    assert.match(
-      elements.get('request-status')?.textContent ?? '',
-      /permiso de actividad de navegacion requerido/
-    );
+    assert.match(elements.get('request-status')?.textContent ?? '', /required data permission/);
   });
 
   void test('does not submit unblock requests when Firefox lacks data collection consent support', async () => {
@@ -366,7 +363,7 @@ void describe('blocked screen', () => {
     await flushBlockedScreenAsyncHandlers();
 
     assert.deepStrictEqual(messages, []);
-    assert.match(elements.get('request-status')?.textContent ?? '', /no permite comprobar/);
+    assert.match(elements.get('request-status')?.textContent ?? '', /does not support/);
   });
 
   void test('restores a recent submitted status after the blocked page reloads', async () => {
@@ -388,7 +385,7 @@ void describe('blocked screen', () => {
 
     await firstLoad.elements.get('submit-unblock-request')?.trigger('click');
     await flushBlockedScreenAsyncHandlers();
-    assert.match(firstLoad.elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+    assert.match(firstLoad.elements.get('request-status')?.textContent ?? '', /Request sent/);
 
     const secondLoad = runBlockedScript(
       {
@@ -401,7 +398,7 @@ void describe('blocked screen', () => {
     );
 
     assert.deepStrictEqual(secondLoad.messages, []);
-    assert.match(secondLoad.elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+    assert.match(secondLoad.elements.get('request-status')?.textContent ?? '', /Request sent/);
   });
 
   void test('restores a recent submitted status from the background after document replacement', async () => {
@@ -433,7 +430,7 @@ void describe('blocked screen', () => {
         error: undefined,
       },
     ]);
-    assert.match(elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+    assert.match(elements.get('request-status')?.textContent ?? '', /Request sent/);
   });
 
   void test('uses callback runtime messaging when the blocked page runs on the chrome namespace', async () => {
@@ -463,7 +460,7 @@ void describe('blocked screen', () => {
         error: 'NS_ERROR_UNKNOWN_HOST',
       },
     ]);
-    assert.match(elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+    assert.match(elements.get('request-status')?.textContent ?? '', /Request sent/);
   });
 
   void test('prefers browser promise messaging when both Firefox runtime aliases exist', async () => {
@@ -484,7 +481,7 @@ void describe('blocked screen', () => {
     await flushBlockedScreenAsyncHandlers();
 
     assert.deepStrictEqual(runtimeApis, ['browser']);
-    assert.match(elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+    assert.match(elements.get('request-status')?.textContent ?? '', /Request sent/);
   });
 
   void test('prefers direct native submission when native messaging is also exposed', async () => {
@@ -551,7 +548,7 @@ void describe('blocked screen', () => {
       reason: 'Lo necesito para una actividad de clase',
       token: 'machine-token',
     });
-    assert.match(elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+    assert.match(elements.get('request-status')?.textContent ?? '', /Request sent/);
   });
 
   void test('falls back to direct native request submission when runtime messaging is absent', async () => {
@@ -617,7 +614,7 @@ void describe('blocked screen', () => {
       reason: 'Lo necesito para una actividad de clase',
       token: 'machine-token',
     });
-    assert.match(elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+    assert.match(elements.get('request-status')?.textContent ?? '', /Request sent/);
   });
 
   void test('shows a fallback when direct native request submission throws', async () => {
@@ -656,7 +653,7 @@ void describe('blocked screen', () => {
     await flushBlockedScreenAsyncHandlers();
 
     assert.match(elements.get('request-status')?.textContent ?? '', /submit network down/);
-    assert.match(elements.get('request-status')?.textContent ?? '', /avisa a tu profesor/);
+    assert.match(elements.get('request-status')?.textContent ?? '', /tell your teacher/);
   });
 
   void test('does not send display-only fallback text as request context', async () => {
@@ -668,7 +665,7 @@ void describe('blocked screen', () => {
       '?blockedUrl=https%3A%2F%2Flearning.example%2Flesson&error=NS_ERROR_UNKNOWN_HOST'
     );
 
-    assert.equal(elements.get('blocked-origin')?.textContent, 'sin informacion');
+    assert.equal(elements.get('blocked-origin')?.textContent, 'unknown');
 
     const reason = elements.get('request-reason');
     assert.ok(reason);
@@ -691,7 +688,7 @@ void describe('blocked screen', () => {
   void test('shows a teacher fallback when request submission is unavailable', async () => {
     const { elements } = runBlockedScript({
       success: false,
-      error: 'Configuracion incompleta para solicitar dominios',
+      error: 'Incomplete configuration for domain requests',
     });
 
     const reason = elements.get('request-reason');
@@ -701,6 +698,6 @@ void describe('blocked screen', () => {
     await elements.get('submit-unblock-request')?.trigger('click');
     await flushBlockedScreenAsyncHandlers();
 
-    assert.match(elements.get('request-status')?.textContent ?? '', /avisa a tu profesor/);
+    assert.match(elements.get('request-status')?.textContent ?? '', /tell your teacher/);
   });
 });

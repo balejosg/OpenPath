@@ -12,8 +12,14 @@ interface GoogleSearchGameGuardRuntimeLike {
 }
 
 interface GoogleSearchGameGuardGlobal {
-  browser?: { runtime?: GoogleSearchGameGuardRuntimeLike };
-  chrome?: { runtime?: GoogleSearchGameGuardRuntimeLike };
+  browser?: {
+    i18n?: { getMessage?: (key: string) => string };
+    runtime?: GoogleSearchGameGuardRuntimeLike;
+  };
+  chrome?: {
+    i18n?: { getMessage?: (key: string) => string };
+    runtime?: GoogleSearchGameGuardRuntimeLike;
+  };
 }
 
 ((): void => {
@@ -46,6 +52,14 @@ interface GoogleSearchGameGuardGlobal {
     /\b(play|start|new game|tap to play|jugar|juega|empezar|iniciar|comenzar|reanudar)\b/i;
   const gameResourcePattern = /(?:doodles\.google|google\.[^/]+\/logos\/|\/logos\/doodles?\/)/i;
   const googleGamePolicyReason = 'GOOGLE_GAME_POLICY';
+
+  function getI18nMessage(key: string, fallback: string): string {
+    const i18n = guardGlobal.browser?.i18n ?? guardGlobal.chrome?.i18n;
+    if (typeof i18n?.getMessage !== 'function') {
+      return fallback;
+    }
+    return i18n.getMessage(key) || fallback;
+  }
 
   function getLocationParts(): { host: string; path: string; search: string } {
     return {
@@ -251,7 +265,7 @@ interface GoogleSearchGameGuardGlobal {
     const notice = document.createElement('div');
     notice.setAttribute(blockAttribute, blockedValue);
     notice.setAttribute('role', 'note');
-    notice.textContent = 'Juego bloqueado por OpenPath';
+    notice.textContent = getI18nMessage('googleGameBlockedNotice', 'Game blocked by OpenPath');
     notice.setAttribute(
       'style',
       'box-sizing:border-box;margin:8px 0;padding:12px;border:1px solid #b3261e;background:#fff5f5;color:#5f1b16;font:14px/1.4 system-ui,sans-serif;'

@@ -1,4 +1,5 @@
 import type { RequestConfig } from './config-storage.js';
+import { t } from './i18n.js';
 
 export interface SubmitBlockedDomainApiResponse {
   success?: boolean;
@@ -103,8 +104,7 @@ export async function submitBlockedDomainRequest(
   if (!requestConfig.enableRequests || endpoints.length === 0) {
     return {
       success: false,
-      error:
-        'Configuracion incompleta: Firefox no recibio la URL de API del host nativo de OpenPath',
+      error: t('popupIncompleteRequestConfig'),
     };
   }
 
@@ -116,7 +116,7 @@ export async function submitBlockedDomainRequest(
   if (!hostnameResponse.success || !hostnameResponse.hostname) {
     return {
       success: false,
-      error: hostnameResponse.error ?? 'No se pudo obtener el hostname del equipo',
+      error: hostnameResponse.error ?? t('popupIncompleteRequestConfig'),
     };
   }
 
@@ -128,7 +128,7 @@ export async function submitBlockedDomainRequest(
   if (!tokenResponse.success || !tokenResponse.token) {
     return {
       success: false,
-      error: tokenResponse.error ?? 'No se pudo obtener token de la maquina',
+      error: tokenResponse.error ?? t('popupIncompleteRequestConfig'),
     };
   }
 
@@ -169,7 +169,7 @@ export async function submitBlockedDomainRequest(
   if (!response.ok || payload.success !== true) {
     return {
       success: false,
-      error: payload.error ?? `No se pudo enviar la solicitud (${response.status.toString()})`,
+      error: payload.error ?? `${t('popupRequestSendErrorToast')} (${response.status.toString()})`,
     };
   }
 

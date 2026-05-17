@@ -1,11 +1,8 @@
+import { t } from './i18n.js';
+
 export const BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION = {
   data_collection: ['browsingActivity'],
 } as const;
-
-const CONSENT_DENIED_MESSAGE =
-  'El permiso de actividad de navegacion requerido no esta concedido. Actualiza o reinstala la extension gestionada de Firefox.';
-const CONSENT_UNSUPPORTED_MESSAGE =
-  'Esta version de Firefox no permite comprobar el permiso de datos requerido para enviar solicitudes.';
 
 export interface DataCollectionPermissionsApi {
   contains(payload: typeof BROWSING_ACTIVITY_DATA_COLLECTION_PERMISSION): Promise<boolean>;
@@ -20,7 +17,7 @@ export function startBrowsingActivityConsentRequest(
   if (!permissionsApi || typeof permissionsApi.contains !== 'function') {
     return Promise.resolve({
       granted: false,
-      error: CONSENT_UNSUPPORTED_MESSAGE,
+      error: t('popupFirefoxDataPermissionUnsupported'),
     });
   }
 
@@ -32,7 +29,7 @@ export function startBrowsingActivityConsentRequest(
           ? { granted: true as const }
           : {
               granted: false as const,
-              error: CONSENT_DENIED_MESSAGE,
+              error: t('popupFirefoxDataPermissionUnsupported'),
             }
       )
       .catch((error: unknown) => resolveBrowsingActivityConsentCheckFailure(error));
@@ -45,7 +42,7 @@ function resolveBrowsingActivityConsentCheckFailure(error: unknown): DataCollect
   const detail = error instanceof Error ? ` ${error.message}` : '';
   return {
     granted: false,
-    error: `${CONSENT_UNSUPPORTED_MESSAGE}${detail}`,
+    error: `${t('popupFirefoxDataPermissionUnsupported')}${detail}`,
   };
 }
 

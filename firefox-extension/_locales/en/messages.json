@@ -1,0 +1,119 @@
+{
+  "appName": { "message": "OpenPath Block Monitor" },
+  "appDescription": {
+    "message": "Shows OpenPath network blocks, helps request access, and checks local allowlist state without analytics or telemetry."
+  },
+  "actionTitle": { "message": "Block Monitor" },
+  "popupNativeMessagingAvailableTitle": { "message": "Native Messaging available" },
+  "popupTabLabel": { "message": "Tab:" },
+  "popupBlockedDomainsTitle": { "message": "Blocked Domains" },
+  "popupEmptyMessage": { "message": "No blocked domains in this tab" },
+  "popupVerifyResultsTitle": { "message": "Verification Result" },
+  "popupRequestTitle": { "message": "Request Domain" },
+  "popupSelectDomain": { "message": "Select domain..." },
+  "popupRequestReasonPlaceholder": { "message": "Reason for the request..." },
+  "popupSubmitRequest": { "message": "Send Request" },
+  "popupCopyTitle": { "message": "Copy list to clipboard" },
+  "popupCopyButton": { "message": "Copy" },
+  "popupVerifyTitle": { "message": "Check domains in local allowlist" },
+  "popupVerifyButton": { "message": "Verify" },
+  "popupRequestButtonTitle": { "message": "Request adding domain to allowlist" },
+  "popupRequestButton": { "message": "Request" },
+  "popupClearTitle": { "message": "Clear blocked list" },
+  "popupClearButton": { "message": "Clear" },
+  "popupCopiedToast": { "message": "Copied to clipboard" },
+  "popupConnectionAttemptsTitle": { "message": "Connection attempts" },
+  "popupRetryLocalUpdateTitle": { "message": "Retry local update" },
+  "popupRetryLocalUpdate": { "message": "Retry" },
+  "popupUnknownOrigin": { "message": "unknown" },
+  "popupSelectDomainAndReason": { "message": "Select a domain and enter a reason" },
+  "popupIncompleteRequestConfig": { "message": "Incomplete configuration for domain requests" },
+  "popupFirefoxDataPermissionUnsupported": {
+    "message": "This Firefox version does not support the required data permission for sending requests."
+  },
+  "popupUnknownError": { "message": "Unknown error" },
+  "popupTimeoutServerNoResponse": { "message": "Timeout - server is not responding" },
+  "popupConnectionError": { "message": "Connection error" },
+  "popupNativeCommunicationError": { "message": "Communication error" },
+  "popupVerifying": { "message": "Verifying..." },
+  "popupConsultingNativeHost": { "message": "Checking native host..." },
+  "popupNativeHostCommunicationError": { "message": "Error communicating with native host" },
+  "popupVerifyResetButton": { "message": "Verify in Allowlist" },
+  "popupNoResults": { "message": "No results" },
+  "popupRequestSendingButton": { "message": "Sending..." },
+  "popupSendingRequest": { "message": "Sending request..." },
+  "popupRequestSentToast": { "message": "Request sent" },
+  "popupRequestSendErrorToast": { "message": "Error sending" },
+  "popupLocalAllowlistUpdated": { "message": "Local allowlist updated" },
+  "popupLocalAllowlistUpdateFailed": { "message": "Could not update local allowlist" },
+  "popupLocalAllowlistRetryError": { "message": "Error retrying local update" },
+  "popupCopiedClipboard": { "message": "Copied to clipboard" },
+  "popupCopyError": { "message": "Error copying" },
+  "popupListCleared": { "message": "List cleared" },
+  "popupAllowed": { "message": "ALLOWED" },
+  "popupBlocked": { "message": "BLOCKED" },
+  "requestSentForDomain": {
+    "message": "Request sent for $DOMAIN$. It remains pending approval.",
+    "placeholders": { "domain": { "content": "$1" } }
+  },
+  "blockedPageTitle": { "message": "Site blocked" },
+  "blockedPageHeading": { "message": "This site is blocked for now" },
+  "blockedPageMessage": {
+    "message": "If it is part of your activity, you can request a review. The request will remain pending until it is approved."
+  },
+  "blockedRequestedSiteAria": { "message": "Requested site" },
+  "blockedRequestedSiteLabel": { "message": "Requested site" },
+  "blockedReasonLabel": { "message": "Why do you need it?" },
+  "blockedReasonPlaceholder": { "message": "Example: I need it for the class activity" },
+  "blockedSubmit": { "message": "Request unblock" },
+  "blockedSecondaryActionsAria": { "message": "Secondary actions" },
+  "blockedGoBack": { "message": "Back" },
+  "blockedCopyDomain": { "message": "Copy domain" },
+  "blockedTechnicalDetails": { "message": "Show technical details" },
+  "blockedTechnicalReason": { "message": "Technical reason" },
+  "blockedOriginPage": { "message": "Origin page" },
+  "blockedRequestSubmittedSuccess": {
+    "message": "Request sent. It remains pending until reviewed."
+  },
+  "blockedRequestApprovedUpdating": {
+    "message": "Request approved. Updating local permissions..."
+  },
+  "blockedFallbackMessage": {
+    "message": "Could not send the request.$DETAIL$ Copy the domain and tell your teacher.",
+    "placeholders": { "detail": { "content": "$1" } }
+  },
+  "blockedRequestTimeout": { "message": "Request timed out while sending." },
+  "blockedExtensionTimeout": { "message": "Request timed out while contacting the extension." },
+  "blockedExtensionUnavailable": { "message": "The extension is not available on this page." },
+  "blockedRequestStatusConfigIncomplete": {
+    "message": "Incomplete configuration for checking the request."
+  },
+  "blockedRequestStatusFailed": {
+    "message": "Could not check the request ($STATUS$)",
+    "placeholders": { "status": { "content": "$1" } }
+  },
+  "blockedRequestStillPendingRetry": {
+    "message": "The request is still pending. Try again in a moment."
+  },
+  "blockedPermissionsExtensionUnavailable": {
+    "message": "The extension is not available to update permissions."
+  },
+  "blockedLocalAllowlistUpdateFailed": { "message": "Could not update the local allowlist." },
+  "blockedLocalAllowlistVerifyFailed": { "message": "Could not verify the local allowlist." },
+  "blockedLocalAllowlistStillBlocked": {
+    "message": "The local allowlist still does not allow the approved domain."
+  },
+  "blockedBriefReasonRequired": { "message": "Enter a brief reason for the request." },
+  "blockedCheckingFirefoxPermission": { "message": "Checking Firefox permission..." },
+  "blockedSendingRequest": { "message": "Sending request..." },
+  "blockedRequestSentWithoutId": {
+    "message": "Request sent without an identifier. It will not reload automatically."
+  },
+  "blockedWaitingApproval": { "message": "Request sent. Waiting for approval..." },
+  "blockedRequestRejected": { "message": "Request rejected. The page will remain blocked." },
+  "blockedRequestStillPending": { "message": "The request is still pending." },
+  "blockedLocalPermissionVerifyFailed": { "message": "Could not verify the local permission." },
+  "blockedDomainCopied": { "message": "Domain copied to clipboard." },
+  "blockedDomainCopyFailed": { "message": "Could not copy the domain." },
+  "googleGameBlockedNotice": { "message": "Game blocked by OpenPath" }
+}

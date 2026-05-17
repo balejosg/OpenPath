@@ -18,6 +18,7 @@ import {
   type DataCollectionConsentResult,
   type DataCollectionPermissionsApi,
 } from './data-collection-consent.js';
+import { t } from './i18n.js';
 
 interface PopupRequestControllerOptions {
   blockedDomainsData: () => PopupControllerState['blockedDomainsData'];
@@ -149,9 +150,9 @@ export function createPopupRequestController(
       : null;
 
     options.btnSubmitRequest.disabled = true;
-    options.btnSubmitRequest.textContent = '⏳ Enviando...';
+    options.btnSubmitRequest.textContent = `⏳ ${t('popupRequestSendingButton')}`;
     showPopupRequestStatus({
-      message: 'Enviando solicitud...',
+      message: t('popupSendingRequest'),
       requestStatusEl: options.requestStatusEl,
       type: 'pending',
     });
@@ -180,7 +181,7 @@ export function createPopupRequestController(
       });
 
       if (result.success) {
-        options.showToast('✅ Solicitud enviada');
+        options.showToast(`✅ ${t('popupRequestSentToast')}`);
         if (result.shouldResetForm) {
           options.requestDomainSelectEl.value = '';
           options.requestReasonEl.value = '';
@@ -200,14 +201,14 @@ export function createPopupRequestController(
         requestStatusEl: options.requestStatusEl,
         type: 'error',
       });
-      options.showToast('❌ Error al enviar');
+      options.showToast(`❌ ${t('popupRequestSendErrorToast')}`);
 
       if (options.state.config.debugMode) {
         logger.error('[Popup] Request error', { error: errorMessage });
       }
     } finally {
       options.btnSubmitRequest.disabled = false;
-      options.btnSubmitRequest.textContent = 'Enviar Solicitud';
+      options.btnSubmitRequest.textContent = t('popupSubmitRequest');
       updateSubmitButtonState();
     }
   }
@@ -220,13 +221,13 @@ export function createPopupRequestController(
         tabId: options.state.currentTabId,
       });
       options.showToast(
-        result.success ? 'Whitelist local actualizada' : 'No se pudo actualizar whitelist local'
+        result.success ? t('popupLocalAllowlistUpdated') : t('popupLocalAllowlistUpdateFailed')
       );
       await options.loadDomainStatuses();
       options.renderDomainsList();
     } catch (error) {
       logger.error('[Popup] Error retrying local update', { error: getErrorMessage(error) });
-      options.showToast('Error al reintentar actualización local');
+      options.showToast(t('popupLocalAllowlistRetryError'));
     }
   }
 

@@ -12,10 +12,12 @@ import {
   getTabFromPathname,
   isAuthPath,
 } from './app-navigation';
+import { OpenPathI18nProvider, useT } from './i18n/product-i18n';
 
-const App: React.FC = () => {
+const AppContent: React.FC = () => {
   const initialPathname = typeof window !== 'undefined' ? window.location.pathname : '/';
   const initialIsAuth = isAuthenticated();
+  const t = useT();
 
   const [isAuth, setIsAuth] = useState(initialIsAuth);
   const [authView, setAuthView] = useState<AuthView>(() =>
@@ -156,7 +158,7 @@ const App: React.FC = () => {
       <div className="flex-1 md:ml-64 flex flex-col min-h-screen">
         <Header
           onMenuClick={() => setSidebarOpen(!sidebarOpen)}
-          title={getTitleForTab(activeTab, admin, selectedGroup)}
+          title={getTitleForTab(activeTab, admin, selectedGroup, t)}
         />
 
         <main className="flex-1 p-6 md:p-8 overflow-y-auto">
@@ -177,5 +179,11 @@ const App: React.FC = () => {
     </div>
   );
 };
+
+const App: React.FC = () => (
+  <OpenPathI18nProvider>
+    <AppContent />
+  </OpenPathI18nProvider>
+);
 
 export default App;

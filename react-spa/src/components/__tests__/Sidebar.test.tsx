@@ -21,7 +21,7 @@ describe('Sidebar', () => {
   it('marks selected navigation item as current page', () => {
     render(<Sidebar activeTab="dashboard" setActiveTab={setActiveTab} isOpen />);
 
-    expect(screen.getByRole('button', { name: 'Panel de Control' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Dashboard' })).toHaveAttribute(
       'aria-current',
       'page'
     );
@@ -30,7 +30,7 @@ describe('Sidebar', () => {
   it('maps rules view to group navigation active state', () => {
     render(<Sidebar activeTab="rules" setActiveTab={setActiveTab} isOpen />);
 
-    expect(screen.getByRole('button', { name: 'Políticas de Grupo' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Group Policies' })).toHaveAttribute(
       'aria-current',
       'page'
     );
@@ -39,7 +39,7 @@ describe('Sidebar', () => {
   it('marks settings button as current page when active', () => {
     render(<Sidebar activeTab="settings" setActiveTab={setActiveTab} isOpen />);
 
-    expect(screen.getByRole('button', { name: 'Configuración' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Settings' })).toHaveAttribute(
       'aria-current',
       'page'
     );
@@ -48,14 +48,14 @@ describe('Sidebar', () => {
   it('calls setActiveTab for navigation buttons', () => {
     render(<Sidebar activeTab="dashboard" setActiveTab={setActiveTab} isOpen />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Aulas Seguras' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Secure Classrooms' }));
     expect(setActiveTab).toHaveBeenCalledWith('classrooms');
   });
 
   it('calls logout when close session is clicked', () => {
     render(<Sidebar activeTab="dashboard" setActiveTab={setActiveTab} isOpen />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cerrar Sesión' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign Out' }));
     expect(logout).toHaveBeenCalledTimes(1);
   });
 
@@ -64,7 +64,7 @@ describe('Sidebar', () => {
 
     render(<Sidebar activeTab="dashboard" setActiveTab={setActiveTab} isOpen />);
 
-    expect(screen.queryByRole('button', { name: 'Control de Dominios' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Domain Control' })).not.toBeInTheDocument();
   });
 
   it('can expose domain requests to non-admin users through an explicit prop', () => {
@@ -79,7 +79,7 @@ describe('Sidebar', () => {
       />
     );
 
-    const domainsButton = screen.getByRole('button', { name: 'Control de Dominios' });
+    const domainsButton = screen.getByRole('button', { name: 'Domain Control' });
     expect(domainsButton).toHaveAttribute('aria-current', 'page');
 
     fireEvent.click(domainsButton);

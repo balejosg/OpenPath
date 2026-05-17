@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sitio bloqueado</title>
+    <title data-i18n="blockedPageTitle">Site blocked</title>
     <link rel="stylesheet" href="blocked.css" />
   </head>
   <body>
@@ -14,26 +14,33 @@
           <p class="eyebrow">OpenPath</p>
         </div>
 
-        <h1 id="blocked-title">Este sitio esta bloqueado por ahora</h1>
-        <p class="message">
-          Si forma parte de tu actividad, puedes pedir que lo revisen. La solicitud quedara
-          pendiente hasta que la aprueben.
+        <h1 id="blocked-title" data-i18n="blockedPageHeading">This site is blocked for now</h1>
+        <p class="message" data-i18n="blockedPageMessage">
+          If it is part of your activity, you can request a review. The request will remain pending
+          until it is approved.
         </p>
 
-        <section class="domain-summary" aria-label="Sitio solicitado">
-          <p>Sitio solicitado</p>
+        <section
+          class="domain-summary"
+          aria-label="Requested site"
+          data-i18n-aria-label="blockedRequestedSiteAria"
+        >
+          <p data-i18n="blockedRequestedSiteLabel">Requested site</p>
           <strong id="blocked-domain">-</strong>
         </section>
 
         <form id="request-form" class="request-form">
-          <label for="request-reason">Por que lo necesitas?</label>
+          <label for="request-reason" data-i18n="blockedReasonLabel">Why do you need it?</label>
           <textarea
             id="request-reason"
             maxlength="200"
             rows="3"
-            placeholder="Ejemplo: lo necesito para la actividad de clase"
+            placeholder="Example: I need it for the class activity"
+            data-i18n-placeholder="blockedReasonPlaceholder"
           ></textarea>
-          <button id="submit-unblock-request" type="button">Solicitar desbloqueo</button>
+          <button id="submit-unblock-request" type="button" data-i18n="blockedSubmit">
+            Request unblock
+          </button>
         </form>
 
         <p
@@ -43,20 +50,33 @@
           aria-live="polite"
         ></p>
 
-        <div class="actions" aria-label="Acciones secundarias">
-          <button id="go-back" class="secondary-button" type="button">Volver</button>
-          <button id="copy-domain" class="secondary-button" type="button">Copiar dominio</button>
+        <div
+          class="actions"
+          aria-label="Secondary actions"
+          data-i18n-aria-label="blockedSecondaryActionsAria"
+        >
+          <button id="go-back" class="secondary-button" type="button" data-i18n="blockedGoBack">
+            Back
+          </button>
+          <button
+            id="copy-domain"
+            class="secondary-button"
+            type="button"
+            data-i18n="blockedCopyDomain"
+          >
+            Copy domain
+          </button>
         </div>
 
         <details class="technical-details">
-          <summary>Ver detalles tecnicos</summary>
+          <summary data-i18n="blockedTechnicalDetails">Show technical details</summary>
           <dl>
             <div>
-              <dt>Motivo tecnico</dt>
+              <dt data-i18n="blockedTechnicalReason">Technical reason</dt>
               <dd id="blocked-error">-</dd>
             </div>
             <div>
-              <dt>Pagina origen</dt>
+              <dt data-i18n="blockedOriginPage">Origin page</dt>
               <dd id="blocked-origin">-</dd>
             </div>
           </dl>

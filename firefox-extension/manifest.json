@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Monitor de Bloqueos de Red",
+  "name": "__MSG_appName__",
+  "default_locale": "en",
   "version": "2.0.0",
-  "description": "Shows OpenPath network blocks, helps request access, and checks local allowlist state without analytics or telemetry.",
+  "description": "__MSG_appDescription__",
   "author": "OpenPath System",
   "homepage_url": "https://github.com/balejosg/openpath",
   "developer": {
@@ -66,7 +67,7 @@
     "default_icon": {
       "48": "icons/icon-48.png"
     },
-    "default_title": "Monitor de Bloqueos"
+    "default_title": "__MSG_actionTitle__"
   },
   "icons": {
     "48": "icons/icon-48.png",

@@ -140,8 +140,7 @@ await describe('request api helpers', async () => {
 
     assert.deepEqual(result, {
       success: false,
-      error:
-        'Configuracion incompleta: Firefox no recibio la URL de API del host nativo de OpenPath',
+      error: 'Incomplete configuration for domain requests',
     });
   });
 });

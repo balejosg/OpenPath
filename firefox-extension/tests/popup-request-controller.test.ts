@@ -177,7 +177,7 @@ await describe('popup request controller', async () => {
       assert.equal(requestReasonEl.value, '');
       assert.equal(
         requestStatusEl.textContent,
-        '✅ Solicitud enviada para cdn.example.com. Queda pendiente de aprobación.'
+        '✅ Request sent for cdn.example.com. It remains pending approval.'
       );
       assert.equal(loadDomainStatusesCalls, 1);
       assert.equal(renderDomainsListCalls, 1);
@@ -188,7 +188,7 @@ await describe('popup request controller', async () => {
         hostname: 'cdn.example.com',
         tabId: 7,
       });
-      assert.deepEqual(toasts, ['✅ Solicitud enviada', 'Whitelist local actualizada']);
+      assert.deepEqual(toasts, ['✅ Request sent', 'Local allowlist updated']);
       assert.equal(loadDomainStatusesCalls, 2);
       assert.equal(renderDomainsListCalls, 2);
     } finally {
@@ -258,7 +258,7 @@ await describe('popup request controller', async () => {
 
       assert.equal(permissionRequests, 0);
       assert.deepEqual(messages, []);
-      assert.match(requestStatusEl.textContent, /Selecciona un dominio y escribe un motivo/);
+      assert.match(requestStatusEl.textContent, /Select a domain and enter a reason/);
     } finally {
       globalRecord.browser = previousBrowser;
     }

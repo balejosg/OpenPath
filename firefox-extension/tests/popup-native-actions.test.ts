@@ -108,13 +108,13 @@ await describe('popup native actions', async () => {
           domain: 'allowed.example.com',
           resolvedIp: '127.0.0.1',
           statusClass: 'status-allowed',
-          statusText: 'PERMITIDO',
+          statusText: 'ALLOWED',
         },
         {
           domain: 'blocked.example.com',
           resolvedIp: '192.168.1.2',
           statusClass: 'status-blocked',
-          statusText: 'BLOQUEADO',
+          statusText: 'BLOCKED',
         },
       ]
     );

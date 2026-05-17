@@ -112,7 +112,7 @@ void describe('blocked page entrypoint', () => {
 
     assert.equal(elements.get('blocked-domain')?.textContent, 'learning.example');
     assert.equal(elements.get('blocked-error')?.textContent, 'NS_ERROR_UNKNOWN_HOST');
-    assert.equal(elements.get('blocked-origin')?.textContent, 'sin informacion');
+    assert.equal(elements.get('blocked-origin')?.textContent, 'unknown');
   });
 
   void test('submits unblock requests directly through native messaging when available', async () => {
@@ -281,7 +281,7 @@ void describe('blocked page entrypoint', () => {
           token: 'machine-token',
         },
       ]);
-      assert.match(elements.get('request-status')?.textContent ?? '', /Solicitud enviada/);
+      assert.match(elements.get('request-status')?.textContent ?? '', /Request sent/);
       assert.deepEqual(navigations, ['https://blocked.example/lesson?x=1']);
     } finally {
       Object.defineProperty(globalThis, 'fetch', {
@@ -300,9 +300,7 @@ void describe('blocked page entrypoint', () => {
 
     main();
     elements.get('submit-unblock-request')?.click();
-    await waitUntil(() =>
-      (elements.get('request-status')?.textContent ?? '').includes('rechazada')
-    );
+    await waitUntil(() => (elements.get('request-status')?.textContent ?? '').includes('rejected'));
 
     assert.deepEqual(navigations, []);
     assert.ok(elements.get('request-status')?.classes.has('error'));
@@ -318,7 +316,7 @@ void describe('blocked page entrypoint', () => {
     main();
     elements.get('submit-unblock-request')?.click();
     await waitUntil(() =>
-      (elements.get('request-status')?.textContent ?? '').includes('Quedara pendiente')
+      (elements.get('request-status')?.textContent ?? '').includes('remains pending')
     );
 
     assert.deepEqual(fetchUrls, []);
@@ -348,7 +346,7 @@ void describe('blocked page entrypoint', () => {
       }
 
       assert.deepEqual(navigations, []);
-      assert.match(elements.get('request-status')?.textContent ?? '', /sigue pendiente/);
+      assert.match(elements.get('request-status')?.textContent ?? '', /still pending/);
       assert.ok(elements.get('request-status')?.classes.has('pending'));
     } finally {
       Date.now = originalDateNow;
@@ -369,7 +367,7 @@ void describe('blocked page entrypoint', () => {
     main();
     elements.get('submit-unblock-request')?.click();
     await waitUntil(() =>
-      (elements.get('request-status')?.textContent ?? '').includes('aun no permite')
+      (elements.get('request-status')?.textContent ?? '').includes('still does not allow')
     );
 
     assert.deepEqual(navigations, []);

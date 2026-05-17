@@ -1,63 +1,91 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Monitor de Bloqueos</title>
+    <title data-i18n="actionTitle">Block Monitor</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
 
   <body>
     <header>
-      <h1>🛡️ Monitor de Bloqueos</h1>
-      <span id="native-status" class="status-indicator hidden" title="Native Messaging disponible"
+      <h1>🛡️ <span data-i18n="actionTitle">Block Monitor</span></h1>
+      <span
+        id="native-status"
+        class="status-indicator hidden"
+        title="Native Messaging available"
+        data-i18n-title="popupNativeMessagingAvailableTitle"
         >⚡</span
       >
     </header>
 
     <section id="context">
-      <span class="label">Pestaña:</span>
+      <span class="label" data-i18n="popupTabLabel">Tab:</span>
       <span id="tab-domain" class="domain">--</span>
     </section>
 
     <section id="domains-container">
-      <h2>Dominios Bloqueados (<span id="count">0</span>)</h2>
+      <h2>
+        <span data-i18n="popupBlockedDomainsTitle">Blocked Domains</span> (<span id="count">0</span
+        >)
+      </h2>
       <ul id="domains-list"></ul>
-      <p id="empty-message" class="hidden">✅ No hay dominios bloqueados en esta pestaña</p>
+      <p id="empty-message" class="hidden">
+        ✅ <span data-i18n="popupEmptyMessage">No blocked domains in this tab</span>
+      </p>
     </section>
 
     <!-- Sección de resultados de verificación -->
     <section id="verify-results" class="hidden">
-      <h2>Resultado de Verificación</h2>
+      <h2 data-i18n="popupVerifyResultsTitle">Verification Result</h2>
       <ul id="verify-list"></ul>
     </section>
 
     <!-- Sección de solicitud de dominio -->
     <section id="request-section" class="hidden">
-      <h2>📨 Solicitar Dominio</h2>
+      <h2>📨 <span data-i18n="popupRequestTitle">Request Domain</span></h2>
       <div id="request-form">
         <select id="request-domain-select">
-          <option value="">Seleccionar dominio...</option>
+          <option value="" data-i18n="popupSelectDomain">Select domain...</option>
         </select>
         <input
           type="text"
           id="request-reason"
-          placeholder="Motivo de la solicitud..."
+          placeholder="Reason for the request..."
+          data-i18n-placeholder="popupRequestReasonPlaceholder"
           maxlength="200"
         />
-        <button id="btn-submit-request" disabled>Enviar Solicitud</button>
+        <button id="btn-submit-request" disabled data-i18n="popupSubmitRequest">
+          Send Request
+        </button>
       </div>
       <div id="request-status" class="hidden"></div>
     </section>
 
     <footer>
-      <button id="btn-copy" title="Copiar lista al portapapeles">📋 Copiar</button>
-      <button id="btn-verify" title="Verificar dominios en whitelist local">🔍 Verificar</button>
-      <button id="btn-request" title="Solicitar añadir dominio a whitelist">📨 Solicitar</button>
-      <button id="btn-clear" title="Limpiar lista de bloqueos">🗑️ Limpiar</button>
+      <button id="btn-copy" title="Copy list to clipboard" data-i18n-title="popupCopyTitle">
+        📋 <span data-i18n="popupCopyButton">Copy</span>
+      </button>
+      <button
+        id="btn-verify"
+        title="Check domains in local allowlist"
+        data-i18n-title="popupVerifyTitle"
+      >
+        🔍 <span data-i18n="popupVerifyButton">Verify</span>
+      </button>
+      <button
+        id="btn-request"
+        title="Request adding domain to allowlist"
+        data-i18n-title="popupRequestButtonTitle"
+      >
+        📨 <span data-i18n="popupRequestButton">Request</span>
+      </button>
+      <button id="btn-clear" title="Clear blocked list" data-i18n-title="popupClearTitle">
+        🗑️ <span data-i18n="popupClearButton">Clear</span>
+      </button>
     </footer>
 
-    <div id="toast" class="hidden">Copiado al portapapeles</div>
+    <div id="toast" class="hidden" data-i18n="popupCopiedToast">Copied to clipboard</div>
 
     <script type="module" src="../dist/popup.js"></script>
   </body>

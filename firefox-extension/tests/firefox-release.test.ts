@@ -287,6 +287,19 @@ function createTempDir(prefix: string): string {
   return dir;
 }
 
+function writeLocalesFixture(sourceDir: string): void {
+  mkdirSync(path.join(sourceDir, '_locales', 'en'), { recursive: true });
+  mkdirSync(path.join(sourceDir, '_locales', 'es'), { recursive: true });
+  writeFileSync(
+    path.join(sourceDir, '_locales', 'en', 'messages.json'),
+    '{"appName":{"message":"OpenPath Block Monitor"}}\n'
+  );
+  writeFileSync(
+    path.join(sourceDir, '_locales', 'es', 'messages.json'),
+    '{"appName":{"message":"Monitor de Bloqueos de OpenPath"}}\n'
+  );
+}
+
 function requestInputToUrl(input: RequestInfo | URL): string {
   if (input instanceof Request) {
     return input.url;
@@ -345,6 +358,7 @@ void describe('Firefox release signing helpers', () => {
     mkdirSync(fakeBinDir, { recursive: true });
     mkdirSync(path.join(fixtureDir, 'popup'), { recursive: true });
     mkdirSync(path.join(fixtureDir, 'icons'), { recursive: true });
+    writeLocalesFixture(fixtureDir);
     mkdirSync(path.join(fixtureDir, 'blocked'), { recursive: true });
     mkdirSync(path.join(fixtureDir, 'dist'), { recursive: true });
 
@@ -1239,6 +1253,7 @@ void describe('Firefox release signing helpers', () => {
     mkdirSync(path.join(sourceDir, 'popup'), { recursive: true });
     mkdirSync(path.join(sourceDir, 'blocked'), { recursive: true });
     mkdirSync(path.join(sourceDir, 'icons'), { recursive: true });
+    writeLocalesFixture(sourceDir);
     mkdirSync(path.join(sourceDir, 'native'), { recursive: true });
 
     writeFileSync(
@@ -1771,6 +1786,7 @@ void describe('Firefox release signing helpers', () => {
     mkdirSync(path.join(sourceDir, 'popup'), { recursive: true });
     mkdirSync(path.join(sourceDir, 'blocked'), { recursive: true });
     mkdirSync(path.join(sourceDir, 'icons'), { recursive: true });
+    writeLocalesFixture(sourceDir);
     mkdirSync(path.join(sourceDir, 'src'), { recursive: true });
     mkdirSync(path.join(sourceDir, 'tests'), { recursive: true });
     mkdirSync(path.join(sourceDir, 'native'), { recursive: true });
@@ -1820,6 +1836,7 @@ void describe('Firefox release signing helpers', () => {
       mkdirSync(path.join(sourceDir, 'popup'), { recursive: true });
       mkdirSync(path.join(sourceDir, 'blocked'), { recursive: true });
       mkdirSync(path.join(sourceDir, 'icons'), { recursive: true });
+      writeLocalesFixture(sourceDir);
 
       writeFileSync(
         path.join(sourceDir, 'manifest.json'),
@@ -1855,6 +1872,7 @@ void describe('Firefox release signing helpers', () => {
       mkdirSync(path.join(sourceDir, 'popup'), { recursive: true });
       mkdirSync(path.join(sourceDir, 'blocked'), { recursive: true });
       mkdirSync(path.join(sourceDir, 'icons'), { recursive: true });
+      writeLocalesFixture(sourceDir);
 
       writeFileSync(
         path.join(sourceDir, 'manifest.json'),
@@ -1886,6 +1904,7 @@ void describe('Firefox release signing helpers', () => {
     mkdirSync(path.join(sourceDir, 'popup'), { recursive: true });
     mkdirSync(path.join(sourceDir, 'blocked'), { recursive: true });
     mkdirSync(path.join(sourceDir, 'icons'), { recursive: true });
+    writeLocalesFixture(sourceDir);
     mkdirSync(path.join(sourceDir, 'native'), { recursive: true });
 
     writeFileSync(

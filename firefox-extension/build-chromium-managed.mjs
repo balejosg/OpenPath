@@ -14,7 +14,7 @@ const manifestPath = path.join(extensionRoot, 'manifest.json');
 const crxPath = path.join(managedDir, 'openpath-chromium-extension.crx');
 const keyPath = path.join(managedDir, 'openpath-chromium-extension.pem');
 const metadataPath = path.join(managedDir, 'metadata.json');
-const requiredEntries = ['dist', 'popup', 'icons', 'blocked'];
+const requiredEntries = ['_locales', 'dist', 'popup', 'icons', 'blocked'];
 const requireManaged =
   process.argv.includes('--require-managed') ||
   process.env.OPENPATH_CHROMIUM_REQUIRE_MANAGED === 'true';

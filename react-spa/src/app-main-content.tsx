@@ -7,6 +7,7 @@ import UsersView from './views/Users';
 import Settings from './views/Settings';
 import DomainRequests from './views/DomainRequests';
 import RulesManager from './views/RulesManager';
+import { translateProductText, type ProductLocale, type ProductT } from './i18n/product-i18n';
 
 export interface SelectedGroup {
   id: string;
@@ -28,26 +29,40 @@ interface AppMainContentProps {
 export function getTitleForTab(
   activeTab: string,
   admin: boolean,
-  selectedGroup: SelectedGroup | null
+  selectedGroup: SelectedGroup | null,
+  t: ProductT = (key, params) => translateProductText('en', key, params)
 ): string {
   switch (activeTab) {
     case 'dashboard':
-      return admin ? 'Vista General' : 'Mi Panel';
+      return admin ? t('app.title.dashboard.admin') : t('app.title.dashboard.user');
     case 'classrooms':
-      return admin ? 'Gestión de Aulas' : 'Aulas';
+      return admin ? t('app.title.classrooms.admin') : t('app.title.classrooms.user');
     case 'groups':
-      return admin ? 'Grupos y Políticas' : 'Mis Políticas';
+      return admin ? t('app.title.groups.admin') : t('app.title.groups.user');
     case 'rules':
-      return selectedGroup ? `Reglas: ${selectedGroup.name}` : 'Gestión de Reglas';
+      return selectedGroup
+        ? t('app.title.rules.group', { groupName: selectedGroup.name })
+        : t('app.title.rules.default');
     case 'users':
-      return admin ? 'Administración de Usuarios' : 'Mi Panel';
+      return admin ? t('app.title.users.admin') : t('app.title.dashboard.user');
     case 'domains':
-      return admin ? 'Solicitudes de Acceso' : 'Mi Panel';
+      return admin ? t('app.title.domainRequests.admin') : t('app.title.dashboard.user');
     case 'settings':
-      return 'Configuración';
+      return t('app.title.settings');
     default:
       return 'OpenPath';
   }
+}
+
+export function getTitleForTabLocale(
+  activeTab: string,
+  admin: boolean,
+  selectedGroup: SelectedGroup | null,
+  locale: ProductLocale
+): string {
+  return getTitleForTab(activeTab, admin, selectedGroup, (key, params) =>
+    translateProductText(locale, key, params)
+  );
 }
 
 const AppMainContent: FC<AppMainContentProps> = ({

@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import AppMainContent, { getTitleForTab } from '../app-main-content';
+import AppMainContent, { getTitleForTab, getTitleForTabLocale } from '../app-main-content';
 
 vi.mock('../views/Dashboard', () => ({
   default: () => <div>Dashboard view</div>,
@@ -50,15 +50,22 @@ describe('app-main-content', () => {
   };
 
   it('returns the expected section titles', () => {
-    expect(getTitleForTab('dashboard', true, null)).toBe('Vista General');
-    expect(getTitleForTab('dashboard', false, null)).toBe('Mi Panel');
-    expect(getTitleForTab('classrooms', true, null)).toBe('Gestión de Aulas');
-    expect(getTitleForTab('groups', false, null)).toBe('Mis Políticas');
-    expect(getTitleForTab('rules', true, { id: 'g1', name: 'Grupo 1' })).toBe('Reglas: Grupo 1');
-    expect(getTitleForTab('users', false, null)).toBe('Mi Panel');
-    expect(getTitleForTab('domains', true, null)).toBe('Solicitudes de Acceso');
-    expect(getTitleForTab('settings', true, null)).toBe('Configuración');
+    expect(getTitleForTab('dashboard', true, null)).toBe('Overview');
+    expect(getTitleForTab('dashboard', false, null)).toBe('My Dashboard');
+    expect(getTitleForTab('classrooms', true, null)).toBe('Classroom Management');
+    expect(getTitleForTab('groups', false, null)).toBe('My Policies');
+    expect(getTitleForTab('rules', true, { id: 'g1', name: 'Group 1' })).toBe('Rules: Group 1');
+    expect(getTitleForTab('users', false, null)).toBe('My Dashboard');
+    expect(getTitleForTab('domains', true, null)).toBe('Access Requests');
+    expect(getTitleForTab('settings', true, null)).toBe('Settings');
     expect(getTitleForTab('unknown', true, null)).toBe('OpenPath');
+  });
+
+  it('can resolve Spanish section titles through the product catalog', () => {
+    expect(getTitleForTabLocale('dashboard', true, null, 'es')).toBe('Vista General');
+    expect(getTitleForTabLocale('rules', true, { id: 'g1', name: 'Grupo 1' }, 'es')).toBe(
+      'Reglas: Grupo 1'
+    );
   });
 
   it('renders admin dashboard, classrooms, rules and settings tabs', () => {

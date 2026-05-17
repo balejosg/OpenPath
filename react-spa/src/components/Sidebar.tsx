@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { NavItem } from '../types';
 import { logout, isAdmin } from '../lib/auth';
+import { useT } from '../i18n/product-i18n';
 
 interface SidebarProps {
   activeTab: string;
@@ -28,22 +29,27 @@ const Sidebar: React.FC<SidebarProps> = ({
   const normalizedActiveTab = activeTab === 'rules' ? 'groups' : activeTab;
   const admin = isAdmin();
   const showDomainRequests = admin || allowDomainRequestsForNonAdmins;
+  const t = useT();
 
   const navItems: NavItem[] = [
     {
       id: 'dashboard',
-      label: admin ? 'Panel de Control' : 'Mi Panel',
+      label: admin ? t('sidebar.nav.dashboard.admin') : t('sidebar.nav.dashboard.user'),
       icon: <LayoutDashboard size={20} />,
     },
-    { id: 'classrooms', label: admin ? 'Aulas Seguras' : 'Aulas', icon: <MonitorPlay size={20} /> },
+    {
+      id: 'classrooms',
+      label: admin ? t('sidebar.nav.classrooms.admin') : t('sidebar.nav.classrooms.user'),
+      icon: <MonitorPlay size={20} />,
+    },
     {
       id: 'groups',
-      label: admin ? 'Políticas de Grupo' : 'Mis Políticas',
+      label: admin ? t('sidebar.nav.groups.admin') : t('sidebar.nav.groups.user'),
       icon: <FolderTree size={20} />,
     },
-    ...(admin ? [{ id: 'users', label: 'Usuarios y Roles', icon: <Users size={20} /> }] : []),
+    ...(admin ? [{ id: 'users', label: t('sidebar.nav.users'), icon: <Users size={20} /> }] : []),
     ...(showDomainRequests
-      ? [{ id: 'domains', label: 'Control de Dominios', icon: <ShieldAlert size={20} /> }]
+      ? [{ id: 'domains', label: t('sidebar.nav.domainRequests'), icon: <ShieldAlert size={20} /> }]
       : []),
   ];
 
@@ -64,7 +70,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       {/* Navigation */}
       <div className="flex-1 py-6 px-3 space-y-1 overflow-y-auto">
         <div className="px-3 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-          Menu Principal
+          {t('sidebar.section.mainMenu')}
         </div>
         {navItems.map((item) => (
           <button
@@ -103,7 +109,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           }`}
         >
           <Settings size={18} />
-          <span className="text-sm">Configuración</span>
+          <span className="text-sm">{t('sidebar.nav.settings')}</span>
         </button>
         <button
           onClick={() => {
@@ -112,7 +118,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           className="flex items-center gap-3 px-3 py-2 w-full text-red-400 hover:text-red-300 transition-colors rounded-lg hover:bg-red-950/30"
         >
           <LogOut size={18} />
-          <span className="text-sm">Cerrar Sesión</span>
+          <span className="text-sm">{t('sidebar.nav.logout')}</span>
         </button>
       </div>
     </aside>

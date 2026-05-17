@@ -25,7 +25,7 @@ await describe('popup request actions', async () => {
 
     assert.deepEqual(options, [
       { hostname: 'a.example.com', origin: 'portal.school' },
-      { hostname: 'b.example.com', origin: 'desconocido' },
+      { hostname: 'b.example.com', origin: 'unknown' },
     ]);
   });
 
@@ -88,7 +88,7 @@ await describe('popup request actions', async () => {
       success: true,
       shouldReloadDomainStatuses: true,
       shouldResetForm: true,
-      userMessage: '✅ Solicitud enviada para cdn.example.com. Queda pendiente de aprobación.',
+      userMessage: '✅ Request sent for cdn.example.com. It remains pending approval.',
     });
   });
 
@@ -142,7 +142,7 @@ await describe('popup request actions', async () => {
 
     assert.equal(called, false);
     assert.equal(result.success, false);
-    assert.equal(result.userMessage, '❌ Selecciona un dominio y escribe un motivo');
+    assert.equal(result.userMessage, '❌ Select a domain and enter a reason');
   });
 
   await test('maps retry requests to the background message contract', async () => {

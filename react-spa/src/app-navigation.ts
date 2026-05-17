@@ -9,13 +9,13 @@ export function getTabFromPathname(pathname: string): string {
   const normalized = normalizePathname(pathname);
 
   if (normalized === '/' || normalized.startsWith('/dashboard')) return 'dashboard';
-  if (normalized.startsWith('/aulas')) return 'classrooms';
-  if (normalized.startsWith('/politicas') || normalized.startsWith('/grupos')) return 'groups';
-  if (normalized.startsWith('/reglas')) return 'rules';
-  if (normalized.startsWith('/usuarios')) return 'users';
-  if (normalized.startsWith('/dominios')) return 'domains';
-  if (normalized.startsWith('/configuracion') || normalized.startsWith('/settings'))
-    return 'settings';
+  if (normalized.startsWith('/classrooms')) return 'classrooms';
+  if (normalized.startsWith('/policies') || normalized.startsWith('/groups')) return 'groups';
+  if (normalized.startsWith('/rules')) return 'rules';
+  if (normalized.startsWith('/users')) return 'users';
+  if (normalized.startsWith('/domain-requests') || normalized.startsWith('/domains'))
+    return 'domains';
+  if (normalized.startsWith('/settings')) return 'settings';
 
   return 'dashboard';
 }
@@ -47,17 +47,17 @@ export function getPathForTab(tab: string): string {
     case 'dashboard':
       return '/';
     case 'classrooms':
-      return '/aulas';
+      return '/classrooms';
     case 'groups':
-      return '/politicas';
+      return '/policies';
     case 'rules':
-      return '/reglas';
+      return '/rules';
     case 'users':
-      return '/usuarios';
+      return '/users';
     case 'domains':
-      return '/dominios';
+      return '/domain-requests';
     case 'settings':
-      return '/configuracion';
+      return '/settings';
     default:
       return '/';
   }
