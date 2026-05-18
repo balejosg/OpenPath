@@ -173,3 +173,80 @@ process.exit(2);
   assert.match(output, /Release gate satisfied: CI \/ CI Success/);
   assert.match(output, /25104214917/);
 });
+
+test('release quality gate writes a clear skipped artifact summary when evidence is red', () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'openpath-gh-red-summary-'));
+  const fakeGh = path.join(tempDir, 'gh');
+  const summaryPath = path.join(tempDir, 'summary.md');
+  const matchingSha = '4b90d567a9d20ccbb7c54a5666c96212e833a004';
+
+  writeFileSync(
+    fakeGh,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'run' && args[1] === 'list') {
+  console.log(JSON.stringify([{
+    databaseId: 25201234567,
+    status: 'completed',
+    conclusion: 'failure',
+    headSha: '${matchingSha}',
+    createdAt: '2026-05-18T10:15:00Z',
+    url: 'https://example.invalid/runs/25201234567',
+    workflowName: 'E2E Tests'
+  }]));
+  process.exit(0);
+}
+if (args[0] === 'run' && args[1] === 'view') {
+  console.log(JSON.stringify({
+    status: 'completed',
+    conclusion: 'failure',
+    headSha: '${matchingSha}',
+    url: 'https://example.invalid/runs/25201234567',
+    workflowName: 'E2E Tests',
+    jobs: [{ name: 'E2E Summary', conclusion: 'failure' }]
+  }));
+  process.exit(0);
+}
+console.error('unexpected gh call: ' + args.join(' '));
+process.exit(2);
+`,
+    'utf8'
+  );
+  chmodSync(fakeGh, 0o755);
+
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [
+          'scripts/require-release-quality-gate.mjs',
+          '--repo',
+          'balejosg/Openpath',
+          '--sha',
+          matchingSha,
+          '--require',
+          'E2E Tests::E2E Summary',
+          '--timeout-minutes',
+          '1',
+          '--poll-seconds',
+          '1',
+        ],
+        {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            GITHUB_STEP_SUMMARY: summaryPath,
+            PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ''}`,
+          },
+        }
+      ),
+    /E2E Tests \/ E2E Summary concluded "failure"/
+  );
+
+  const summary = execFileSync('cat', [summaryPath], { encoding: 'utf8' });
+  assert.match(summary, /Release Quality Gate/);
+  assert.match(summary, /Package and publish jobs are blocked/);
+  assert.match(summary, /E2E Tests \/ E2E Summary.*failure/);
+  assert.match(summary, /https:\/\/example\.invalid\/runs\/25201234567/);
+});

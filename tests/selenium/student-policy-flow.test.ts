@@ -25,6 +25,7 @@ import {
   buildDnsDiscoverySpikePlan,
   buildBrowserDependencyObservabilitySpikeArtifact,
   buildBrowserDependencyObservabilitySpikePlan,
+  findResidualWhitelistEntries,
 } from './student-policy-scenarios';
 
 function createScenario(): StudentScenario {
@@ -187,6 +188,27 @@ test('matchesRequestDomain accepts API-normalized parent domains', () => {
   );
   assert.equal(matchesRequestDomain('Example.COM.', 'www.example.com'), true);
   assert.equal(matchesRequestDomain('example.com', 'notexample.com'), false);
+});
+
+test('findResidualWhitelistEntries detects request lifecycle residue before temporary exemptions', () => {
+  const residual = findResidualWhitelistEntries(
+    [
+      'portal.127.0.0.1.sslip.io',
+      'request-domain-ed8c931d.127.0.0.1.sslip.io',
+      'site.127.0.0.1.sslip.io',
+    ].join('\n'),
+    ['request-domain-ed8c931d.127.0.0.1.sslip.io', 'duplicate-domain-ed8c931d.127.0.0.1.sslip.io']
+  );
+
+  assert.deepEqual(residual, ['request-domain-ed8c931d.127.0.0.1.sslip.io']);
+});
+
+test('findResidualWhitelistEntries treats API-normalized parent rules as request residue', () => {
+  const residual = findResidualWhitelistEntries('request-domain-ed8c931d.127.0.0.1.sslip.io\n', [
+    'api.request-domain-ed8c931d.127.0.0.1.sslip.io',
+  ]);
+
+  assert.deepEqual(residual, ['request-domain-ed8c931d.127.0.0.1.sslip.io']);
 });
 
 test('student policy coverage plan keeps full SSE coverage and narrows fallback to propagation proof', () => {

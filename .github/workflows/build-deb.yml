@@ -33,14 +33,38 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
+  actions: read
   contents: write
   pages: write
   id-token: write
 
 jobs:
+  release-quality-gate:
+    name: Release Quality Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Require same-commit CI, E2E, and installer evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/require-release-quality-gate.mjs \
+            --sha "${{ github.sha }}" \
+            --require "CI::CI Success" \
+            --require "E2E Tests::E2E Summary" \
+            --require "Installer Contracts::Installer Contracts Success" \
+            --timeout-minutes 90 \
+            --poll-seconds 30
+
   build:
     name: Build Debian Package
     runs-on: ubuntu-latest
+    needs: release-quality-gate
     outputs:
       version: ${{ steps.version.outputs.version }}
       package_name: ${{ steps.version.outputs.package_name }}

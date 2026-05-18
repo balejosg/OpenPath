@@ -173,6 +173,41 @@ test('prerelease deb publish keys off the CI Success summary job instead of the 
   );
 });
 
+test('Debian package workflows block package creation behind the Release Quality Gate', () => {
+  const buildDebWorkflow = readText('.github/workflows/build-deb.yml');
+  const prereleaseWorkflow = readText('.github/workflows/prerelease-deb.yml');
+
+  for (const [name, workflow] of [
+    ['build-deb.yml', buildDebWorkflow],
+    ['prerelease-deb.yml', prereleaseWorkflow],
+  ]) {
+    const releaseGateBlock = extractWorkflowJobBlock(workflow, 'release-quality-gate');
+    const packageJobBlock =
+      name === 'build-deb.yml'
+        ? extractWorkflowJobBlock(workflow, 'build')
+        : extractWorkflowJobBlock(workflow, 'build-prerelease');
+
+    assert.ok(
+      releaseGateBlock.includes('name: Release Quality Gate'),
+      `${name} should concentrate missing E2E/installer evidence in a Release Quality Gate job`
+    );
+    assert.ok(
+      releaseGateBlock.includes('scripts/require-release-quality-gate.mjs'),
+      `${name} should use the shared release quality gate helper`
+    );
+    assert.ok(
+      releaseGateBlock.includes('--require "E2E Tests::E2E Summary"') &&
+        releaseGateBlock.includes('--require "Installer Contracts::Installer Contracts Success"'),
+      `${name} should require green E2E and installer evidence before package jobs run`
+    );
+    assert.ok(
+      packageJobBlock.includes('needs: release-quality-gate') ||
+        packageJobBlock.includes('needs: [ci-success, release-quality-gate]'),
+      `${name} package creation should wait for Release Quality Gate`
+    );
+  }
+});
+
 test('Firefox release signing workflows are resilient to AMO throttling and reruns', () => {
   const buildDebWorkflow = readText('.github/workflows/build-deb.yml');
   const prereleaseWorkflow = readText('.github/workflows/prerelease-deb.yml');
@@ -1498,12 +1533,8 @@ test('release artifact workflows wait for same-commit quality evidence before pu
     'prerelease-deb.yml should require CI, E2E, and installer contract summary jobs before publishing'
   );
   assert.ok(
-    prereleaseWorkflow.includes('needs: ci-success'),
-    'prerelease build should start as soon as CI Success is recovered so package build work runs in parallel with the release quality gate'
-  );
-  assert.ok(
-    !prereleaseWorkflow.includes('needs: [ci-success, release-quality-gate]'),
-    'prerelease build should not serialize behind the release quality gate'
+    prereleaseWorkflow.includes('needs: [ci-success, release-quality-gate]'),
+    'prerelease package build should wait for the same-SHA release quality gate so red E2E cannot produce package artifacts'
   );
   assert.ok(
     prereleaseWorkflow.includes('needs: [build-prerelease, release-quality-gate]'),

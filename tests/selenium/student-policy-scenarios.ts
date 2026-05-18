@@ -17,7 +17,7 @@ import {
   readWhitelistFile,
   runPlatformCommand,
 } from './student-policy-env';
-import { StudentPolicyServerClient } from './student-policy-client';
+import { matchesRequestDomain, StudentPolicyServerClient } from './student-policy-client';
 import { StudentPolicyDriver } from './student-policy-driver';
 import type { PolicyMode, StudentScenario } from './student-policy-types';
 
@@ -69,6 +69,35 @@ interface StudentPolicyScenarioTiming {
   endedAt: string;
   durationMs: number;
   durationSeconds: number;
+}
+
+export function findResidualWhitelistEntries(
+  whitelistText: string,
+  expectedBlockedDomains: string[]
+): string[] {
+  const entries = whitelistText
+    .split(/\r?\n/)
+    .map((entry) => entry.trim().toLowerCase().replace(/\.+$/, ''))
+    .filter((entry) => entry.length > 0 && !entry.startsWith('#'));
+
+  return entries.filter((entry) =>
+    expectedBlockedDomains.some((domain) => matchesRequestDomain(entry, domain))
+  );
+}
+
+async function assertNoResidualWhitelistEntries(
+  client: StudentPolicyServerClient,
+  domains: string[]
+): Promise<void> {
+  const residualEntries = findResidualWhitelistEntries(
+    await client.fetchMachineWhitelist(),
+    domains
+  );
+  assert.deepStrictEqual(
+    residualEntries,
+    [],
+    `Request lifecycle left residual whitelist entries before temporary exemptions: ${residualEntries.join(', ')}`
+  );
 }
 
 interface PageResourceObserverState {
@@ -872,9 +901,15 @@ async function runRequestLifecycleScenarioSet(
     'whitelist',
     pending.domain
   );
+  await client.deleteGroupRuleByValue(
+    driver.scenario.groups.restricted.id,
+    'whitelist',
+    targets.hosts.request
+  );
   await settlePolicyChange(driver, mode, async () => {
     await driver.assertDnsBlocked(targets.hosts.request);
     await driver.assertWhitelistMissing(pending.domain);
+    await driver.assertWhitelistMissing(targets.hosts.request);
   });
 }
 
@@ -2410,6 +2445,11 @@ async function runTemporaryExemptionScenarios(
 ): Promise<void> {
   logScenarioStep('SP-016 to SP-018 temporary exemptions');
 
+  await assertNoResidualWhitelistEntries(client, [
+    targets.hosts.request,
+    targets.hosts.rejected,
+    targets.hosts.duplicate,
+  ]);
   await driver.assertDnsBlocked(targets.hosts.exempted);
 
   const exemption = await client.createTemporaryExemption(

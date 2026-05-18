@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
 
 function parseArgs(argv) {
   const requirements = [];
@@ -162,24 +163,68 @@ async function waitForRequirement({ repo, sha, workflowName, jobName, timeoutAt,
     }
 
     console.log(`Release gate satisfied: ${workflowName} / ${jobName} (${details.url})`);
-    return;
+    return {
+      workflowName,
+      jobName,
+      conclusion: job.conclusion,
+      url: details.url,
+    };
   }
 
   throw new Error(`Timed out waiting for ${workflowName} / ${jobName} on ${sha}.`);
 }
 
+function appendReleaseGateSummary({ sha, results, error }) {
+  if (!process.env.GITHUB_STEP_SUMMARY) {
+    return;
+  }
+
+  const lines = ['## Release Quality Gate', '', `Commit: \`${sha}\``, ''];
+
+  if (error) {
+    lines.push(
+      'Package and publish jobs are blocked because required same-commit release evidence is not green.',
+      '',
+      `Failure: ${error.message}`,
+      ''
+    );
+  } else {
+    lines.push('Required same-commit release evidence is green.', '');
+  }
+
+  if (results.length > 0) {
+    lines.push('| Requirement | Conclusion | Run |', '| --- | --- | --- |');
+    for (const result of results) {
+      lines.push(
+        `| ${result.workflowName} / ${result.jobName} | ${result.conclusion} | ${result.url} |`
+      );
+    }
+    lines.push('');
+  }
+
+  appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
+}
+
 async function main() {
   const { repo, sha, requirements, timeoutMinutes, pollSeconds } = parseArgs(process.argv.slice(2));
   const timeoutAt = Date.now() + timeoutMinutes * 60 * 1000;
+  const results = [];
 
-  for (const requirement of requirements) {
-    await waitForRequirement({
-      repo,
-      sha,
-      ...requirement,
-      timeoutAt,
-      pollSeconds,
-    });
+  try {
+    for (const requirement of requirements) {
+      const result = await waitForRequirement({
+        repo,
+        sha,
+        ...requirement,
+        timeoutAt,
+        pollSeconds,
+      });
+      results.push(result);
+    }
+    appendReleaseGateSummary({ sha, results });
+  } catch (error) {
+    appendReleaseGateSummary({ sha, results, error });
+    throw error;
   }
 }
 
