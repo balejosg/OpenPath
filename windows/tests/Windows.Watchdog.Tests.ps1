@@ -104,9 +104,16 @@ Describe "Watchdog Script" {
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
                 'Captive portal resolved',
                 'restoring DNS protection',
-                'Restore-OpenPathProtectedMode -Config $Config -SkipAcrylicRestart',
+                'Restore-OpenPathProtectedMode -Config $Config',
+                'keeping captive portal marker active',
+                'Test-DNSResolution',
+                'Test-DNSSinkhole -Domain ''this-should-be-blocked-test-12345.com''',
+                '$firewallExpected = [bool]$Config.enableFirewall',
+                'Test-FirewallActive',
                 'Clear-OpenPathCaptivePortalMarker'
             )
+
+            $moduleContent | Should -Not -Match 'Disable-OpenPathCaptivePortalMode[\\s\\S]*Restore-OpenPathProtectedMode -Config \\$Config -SkipAcrylicRestart'
         }
 
         It "Uses hysteresis before entering or exiting captive portal mode" {
@@ -120,19 +127,30 @@ Describe "Watchdog Script" {
                 'Update-OpenPathCaptivePortalObservation',
                 '[int]$EnterPortalCount = 2',
                 '[int]$ExitAuthenticatedCount = 3',
-                '[int]$MinimumPortalSeconds = 180',
                 '$DetectedState -eq ''Portal''',
-                '$DetectedState -eq ''Authenticated'''
+                '$DetectedState -eq ''Authenticated''',
+                'portalAgeSeconds',
+                'minimumPortalElapsed',
+                'shouldExitPortal',
+                'PortalAgeSeconds',
+                'AuthenticatedCount'
             )
 
             Assert-ContentContainsAll -Content $helperContent -Needles @(
                 'Update-OpenPathCaptivePortalObservation -DetectedState $captiveState',
                 '$portalObservation.ShouldEnterPortal',
-                '$portalObservation.ShouldExitPortal'
+                '$portalObservation.ShouldExitPortal',
+                'PortalSince = $portalObservation.PortalSince',
+                'PortalAgeSeconds = $portalObservation.PortalAgeSeconds',
+                'AuthenticatedCount = $portalObservation.AuthenticatedCount',
+                'MinimumPortalElapsed = $portalObservation.MinimumPortalElapsed',
+                'ShouldExitPortal = $portalObservation.ShouldExitPortal'
             )
 
             $helperContent | Should -Not -Match "if \\(\\$captiveState -eq 'Portal'\\)"
             $helperContent | Should -Not -Match "\\$captiveState -eq 'NoNetwork'.*Enable-OpenPathCaptivePortalMode"
+            $moduleContent | Should -Not -Match 'MinimumPortalSeconds\\s*=\\s*180'
+            $moduleContent | Should -Not -Match 'authenticatedCount\\s+-ge\\s+\\$ExitAuthenticatedCount\\s+-and\\s+\\$minimumPortalElapsed'
         }
     }
 

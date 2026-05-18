@@ -20,6 +20,21 @@ function Get-OpenPathWhitelistDownloadResult {
     return [PSCustomObject]$result
 }
 
+function Join-OpenPathUpdateHealthActions {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Action,
+
+        [string]$Suffix = ''
+    )
+
+    if ($Suffix) {
+        return "$Action; $Suffix"
+    }
+
+    return $Action
+}
+
 function Handle-OpenPathDownloadFailure {
     param(
         [Parameter(Mandatory = $true)]
@@ -35,7 +50,9 @@ function Handle-OpenPathDownloadFailure {
         [double]$StaleWhitelistMaxAgeHours,
 
         [Parameter(Mandatory = $true)]
-        [bool]$EnableStaleFailsafe
+        [bool]$EnableStaleFailsafe,
+
+        [string]$HealthActionSuffix = ''
     )
 
     if (-not (Test-Path $WhitelistPath)) {
@@ -61,7 +78,7 @@ function Handle-OpenPathDownloadFailure {
             -DnsServiceRunning $runtimeHealth.DnsServiceRunning `
             -DnsResolving $runtimeHealth.DnsResolving `
             -FailCount 0 `
-            -Actions "stale_whitelist_failsafe age=${cachedAgeHours}h" | Out-Null
+            -Actions (Join-OpenPathUpdateHealthActions -Action "stale_whitelist_failsafe age=${cachedAgeHours}h" -Suffix $HealthActionSuffix) | Out-Null
         Write-OpenPathLog "Stale fail-safe activated after download failure (age=$cachedAgeHours h)" -Level WARN
         return
     }
@@ -71,7 +88,7 @@ function Handle-OpenPathDownloadFailure {
         -DnsServiceRunning $runtimeHealth.DnsServiceRunning `
         -DnsResolving $runtimeHealth.DnsResolving `
         -FailCount 0 `
-        -Actions 'download_failed_cached_whitelist' | Out-Null
+        -Actions (Join-OpenPathUpdateHealthActions -Action 'download_failed_cached_whitelist' -Suffix $HealthActionSuffix) | Out-Null
     Write-OpenPathLog "Using cached whitelist (age=$cachedAgeHours h) until next successful download" -Level WARN
 }
 
@@ -81,7 +98,9 @@ function Handle-OpenPathNotModified {
         [PSCustomObject]$Config,
 
         [Parameter(Mandatory = $true)]
-        [string]$WhitelistPath
+        [string]$WhitelistPath,
+
+        [string]$HealthActionSuffix = ''
     )
 
     $localWhitelistSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
@@ -98,7 +117,7 @@ function Handle-OpenPathNotModified {
                 -DnsServiceRunning $runtimeHealth.DnsServiceRunning `
                 -DnsResolving $runtimeHealth.DnsResolving `
                 -FailCount 0 `
-                -Actions 'remote_disable_marker_not_modified' | Out-Null
+                -Actions (Join-OpenPathUpdateHealthActions -Action 'remote_disable_marker_not_modified' -Suffix $HealthActionSuffix) | Out-Null
         }
         catch {
             # Ignore health reporting errors
@@ -123,7 +142,7 @@ function Handle-OpenPathNotModified {
             -DnsServiceRunning $runtimeHealth.DnsServiceRunning `
             -DnsResolving $runtimeHealth.DnsResolving `
             -FailCount 0 `
-            -Actions 'not_modified' | Out-Null
+            -Actions (Join-OpenPathUpdateHealthActions -Action 'not_modified' -Suffix $HealthActionSuffix) | Out-Null
     }
     catch {
         # Ignore health reporting errors
@@ -141,7 +160,9 @@ function Handle-OpenPathDisabledWhitelist {
         [string]$WhitelistPath,
 
         [Parameter(Mandatory = $true)]
-        [string]$StaleFailsafeStatePath
+        [string]$StaleFailsafeStatePath,
+
+        [string]$HealthActionSuffix = ''
     )
 
     Write-OpenPathLog "DEACTIVATION FLAG detected - entering fail-open mode" -Level WARN
@@ -159,7 +180,7 @@ function Handle-OpenPathDisabledWhitelist {
         -DnsServiceRunning $runtimeHealth.DnsServiceRunning `
         -DnsResolving $runtimeHealth.DnsResolving `
         -FailCount 0 `
-        -Actions 'remote_disable_marker' | Out-Null
+        -Actions (Join-OpenPathUpdateHealthActions -Action 'remote_disable_marker' -Suffix $HealthActionSuffix) | Out-Null
 
     Write-OpenPathLog "System in fail-open mode"
 }
@@ -176,7 +197,9 @@ function Handle-OpenPathWhitelistApply {
         [string]$WhitelistPath,
 
         [Parameter(Mandatory = $true)]
-        [string]$StaleFailsafeStatePath
+        [string]$StaleFailsafeStatePath,
+
+        [string]$HealthActionSuffix = ''
     )
 
     $serializedWhitelist = ConvertTo-OpenPathWhitelistFileContent `
@@ -205,7 +228,7 @@ function Handle-OpenPathWhitelistApply {
         -DnsServiceRunning $runtimeHealth.DnsServiceRunning `
         -DnsResolving $runtimeHealth.DnsResolving `
         -FailCount 0 `
-        -Actions 'update' | Out-Null
+        -Actions (Join-OpenPathUpdateHealthActions -Action 'update' -Suffix $HealthActionSuffix) | Out-Null
 
     Write-OpenPathLog "=== OpenPath update completed successfully ==="
 }

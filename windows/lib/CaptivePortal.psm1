@@ -100,9 +100,7 @@ function Update-OpenPathCaptivePortalObservation {
 
         [int]$EnterPortalCount = 2,
 
-        [int]$ExitAuthenticatedCount = 3,
-
-        [int]$MinimumPortalSeconds = 180
+        [int]$ExitAuthenticatedCount = 3
     )
 
     $now = Get-Date
@@ -141,13 +139,14 @@ function Update-OpenPathCaptivePortalObservation {
         $portalCount = 0
     }
 
-    $minimumPortalElapsed = $false
+    $portalAgeSeconds = $null
+    $minimumPortalElapsed = $true
     if ($portalSince) {
-        $minimumPortalElapsed = (($now - $portalSince).TotalSeconds -ge $MinimumPortalSeconds)
+        $portalAgeSeconds = [Math]::Max(0, [int][Math]::Floor(($now - $portalSince).TotalSeconds))
     }
 
     $shouldEnterPortal = ($DetectedState -eq 'Portal' -and $portalCount -ge $EnterPortalCount -and -not (Test-OpenPathCaptivePortalModeActive))
-    $shouldExitPortal = ($DetectedState -eq 'Authenticated' -and $authenticatedCount -ge $ExitAuthenticatedCount -and $minimumPortalElapsed -and (Test-OpenPathCaptivePortalModeActive))
+    $shouldExitPortal = ($DetectedState -eq 'Authenticated' -and $authenticatedCount -ge $ExitAuthenticatedCount -and (Test-OpenPathCaptivePortalModeActive))
 
     try {
         $dir = Split-Path $script:CaptivePortalObservationPath -Parent
@@ -160,6 +159,8 @@ function Update-OpenPathCaptivePortalObservation {
             portalCount = $portalCount
             authenticatedCount = $authenticatedCount
             portalSince = if ($portalSince) { $portalSince.ToString('o') } else { $null }
+            portalAgeSeconds = $portalAgeSeconds
+            minimumPortalElapsed = [bool]$minimumPortalElapsed
             shouldEnterPortal = [bool]$shouldEnterPortal
             shouldExitPortal = [bool]$shouldExitPortal
             updatedAt = $now.ToString('o')
@@ -175,6 +176,8 @@ function Update-OpenPathCaptivePortalObservation {
         DetectedState = $DetectedState
         PortalCount = $portalCount
         AuthenticatedCount = $authenticatedCount
+        PortalSince = if ($portalSince) { $portalSince.ToString('o') } else { $null }
+        PortalAgeSeconds = $portalAgeSeconds
         MinimumPortalElapsed = [bool]$minimumPortalElapsed
     }
 }
@@ -398,10 +401,42 @@ function Disable-OpenPathCaptivePortalMode {
     }
 
     try {
-        Restore-OpenPathProtectedMode -Config $Config -SkipAcrylicRestart | Out-Null
+        $restored = Restore-OpenPathProtectedMode -Config $Config
+        if (-not $restored) {
+            Write-OpenPathLog 'Watchdog: protected mode restore failed; keeping captive portal marker active' -Level WARN
+            return $false
+        }
     }
     catch {
-        # Non-fatal
+        Write-OpenPathLog "Watchdog: protected mode restore failed; keeping captive portal marker active: $_" -Level WARN
+        return $false
+    }
+
+    $enforcementHealthy = $true
+    $firewallExpected = $true
+    if ($Config -and $Config.PSObject.Properties['enableFirewall']) {
+        $firewallExpected = [bool]$Config.enableFirewall
+    }
+
+    try {
+        if ((Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) -and -not (Test-DNSResolution)) {
+            $enforcementHealthy = $false
+        }
+        if ((Get-Command -Name 'Test-DNSSinkhole' -ErrorAction SilentlyContinue) -and -not (Test-DNSSinkhole -Domain 'this-should-be-blocked-test-12345.com')) {
+            $enforcementHealthy = $false
+        }
+        if ($firewallExpected -and (Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue) -and -not (Test-FirewallActive)) {
+            $enforcementHealthy = $false
+        }
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: protected mode verification failed; keeping captive portal marker active: $_" -Level WARN
+        return $false
+    }
+
+    if (-not $enforcementHealthy) {
+        Write-OpenPathLog 'Watchdog: protected mode verification failed; keeping captive portal marker active' -Level WARN
+        return $false
     }
 
     Clear-OpenPathCaptivePortalMarker | Out-Null

@@ -155,7 +155,7 @@ function Start-OpenPathSseUpdateProcess {
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         Write-OpenPathLog "SSE: Starting in-process OpenPath update"
-        [int]$exitCode = Invoke-OpenPathUpdateCycle -OpenPathRoot $OpenPathRoot
+        [int]$exitCode = Invoke-OpenPathUpdateCycle -OpenPathRoot $OpenPathRoot -TriggerSource SSE
         $stopwatch.Stop()
         if ($exitCode -ne 0) {
             Write-OpenPathLog "SSE: In-process OpenPath update failed with exit code $exitCode after $($stopwatch.ElapsedMilliseconds)ms" -Level WARN

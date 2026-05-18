@@ -66,6 +66,11 @@ function Invoke-OpenPathWatchdogPrechecks {
     return [PSCustomObject]@{
         PortalModeActive = (Test-OpenPathCaptivePortalModeActive)
         CaptiveState = $captiveState
+        PortalSince = $portalObservation.PortalSince
+        PortalAgeSeconds = $portalObservation.PortalAgeSeconds
+        AuthenticatedCount = $portalObservation.AuthenticatedCount
+        MinimumPortalElapsed = $portalObservation.MinimumPortalElapsed
+        ShouldExitPortal = $portalObservation.ShouldExitPortal
     }
 }
 

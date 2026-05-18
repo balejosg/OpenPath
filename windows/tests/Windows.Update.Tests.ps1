@@ -36,9 +36,11 @@ Describe "Update Script" {
                 'Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force',
                 'Initialize-OpenPathScriptSession `',
                 '-OpenPathRoot $OpenPathRoot',
-                '-DependentModules @(''DNS'', ''Firewall'', ''Browser'')',
+                '-DependentModules @(''DNS'', ''Firewall'', ''Browser'', ''CaptivePortal'')',
                 '-RequiredCommands @(',
                 'Get-OpenPathCapabilityStoragePath',
+                'Test-OpenPathCaptivePortalModeActive',
+                'Get-OpenPathCaptivePortalMarker',
                 'CapabilityStorage.ps1',
                 '-ScriptName ''Update-OpenPath.ps1'''
             )
@@ -136,6 +138,40 @@ Describe "Update Script" {
             $updateContent.Contains('Send-OpenPathHealthReport') | Should -BeTrue
             $commonContent.Contains('/trpc/healthReports.submit') | Should -BeTrue
             $commonContent.Contains('dnsmasqRunning') | Should -BeTrue
+        }
+
+        It "Persists update portal-active state and annotates health actions" {
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $applyHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"
+            $sseScriptPath = Join-Path $PSScriptRoot ".." "scripts" "Start-SSEListener.ps1"
+            $runtimeContent = Get-Content $runtimePath -Raw
+            $applyContent = Get-Content $applyHelperPath -Raw
+            $sseContent = Get-Content $sseScriptPath -Raw
+
+            Assert-ContentContainsAll -Content $runtimeContent -Needles @(
+                'function Write-OpenPathUpdatePortalActiveState',
+                'Test-OpenPathCaptivePortalModeActive',
+                'Get-OpenPathCaptivePortalMarker',
+                'data\update-portal-active-state.json',
+                'triggerSource = $TriggerSource',
+                'healthAction = $healthAction',
+                'update_while_portal_active',
+                'sse_update_while_portal_active',
+                'OpenPath $TriggerSource update observed while captive portal mode is active',
+                '-HealthActionSuffix $portalActiveState.HealthAction'
+            )
+
+            Assert-ContentContainsAll -Content $applyContent -Needles @(
+                'function Join-OpenPathUpdateHealthActions',
+                '[string]$HealthActionSuffix = ''''',
+                'Join-OpenPathUpdateHealthActions -Action ''update'' -Suffix $HealthActionSuffix',
+                'Join-OpenPathUpdateHealthActions -Action ''not_modified'' -Suffix $HealthActionSuffix',
+                'Join-OpenPathUpdateHealthActions -Action ''download_failed_cached_whitelist'' -Suffix $HealthActionSuffix'
+            )
+
+            Assert-ContentContainsAll -Content $sseContent -Needles @(
+                'Invoke-OpenPathUpdateCycle -OpenPathRoot $OpenPathRoot -TriggerSource SSE'
+            )
         }
     }
 

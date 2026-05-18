@@ -40,7 +40,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
     Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force
     Initialize-OpenPathScriptSession `
         -OpenPathRoot $OpenPathRoot `
-        -DependentModules @('DNS', 'Firewall', 'Browser') `
+        -DependentModules @('DNS', 'Firewall', 'Browser', 'CaptivePortal') `
         -RequiredCommands @(
         'Write-OpenPathLog',
         'Get-OpenPathConfig',
@@ -63,7 +63,9 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Restore-OriginalDNS',
         'Remove-OpenPathFirewall',
         'Remove-BrowserPolicy',
-        'Set-AllBrowserPolicy'
+        'Set-AllBrowserPolicy',
+        'Test-OpenPathCaptivePortalModeActive',
+        'Get-OpenPathCaptivePortalMarker'
     ) `
         -ScriptName 'Update-OpenPath.ps1' | Out-Null
 
@@ -250,7 +252,10 @@ function Invoke-OpenPathUpdateCycle {
 
         [string]$UpdateMutexName = 'Global\OpenPathUpdateLock',
 
-        [int]$LockWaitTimeoutSeconds = 45
+        [int]$LockWaitTimeoutSeconds = 45,
+
+        [ValidateSet('Update', 'SSE')]
+        [string]$TriggerSource = 'Update'
     )
 
     $OpenPathRoot = Resolve-OpenPathWindowsRoot -OpenPathRoot $OpenPathRoot
@@ -292,6 +297,9 @@ function Invoke-OpenPathUpdateCycle {
             Write-OpenPathLog "=== Starting openpath update ==="
 
             $config = Get-OpenPathConfig
+            $portalActiveState = Write-OpenPathUpdatePortalActiveState `
+                -OpenPathRoot $OpenPathRoot `
+                -TriggerSource $TriggerSource
             $updateSettings = Get-OpenPathUpdatePolicySettings -Config $config
             $null = Backup-OpenPathWhitelistState `
                 -WhitelistPath $whitelistPath `
@@ -307,23 +315,29 @@ function Invoke-OpenPathUpdateCycle {
                     -WhitelistPath $whitelistPath `
                     -StaleFailsafeStatePath $staleFailsafeStatePath `
                     -StaleWhitelistMaxAgeHours $updateSettings.StaleWhitelistMaxAgeHours `
-                    -EnableStaleFailsafe $updateSettings.EnableStaleFailsafe
+                    -EnableStaleFailsafe $updateSettings.EnableStaleFailsafe `
+                    -HealthActionSuffix $portalActiveState.HealthAction
             }
             elseif ($downloadResult.Whitelist.PSObject.Properties['NotModified'] -and $downloadResult.Whitelist.NotModified) {
-                $null = Handle-OpenPathNotModified -Config $config -WhitelistPath $whitelistPath
+                $null = Handle-OpenPathNotModified `
+                    -Config $config `
+                    -WhitelistPath $whitelistPath `
+                    -HealthActionSuffix $portalActiveState.HealthAction
             }
             elseif ($downloadResult.Whitelist.IsDisabled) {
                 $null = Handle-OpenPathDisabledWhitelist `
                     -Config $config `
                     -WhitelistPath $whitelistPath `
-                    -StaleFailsafeStatePath $staleFailsafeStatePath
+                    -StaleFailsafeStatePath $staleFailsafeStatePath `
+                    -HealthActionSuffix $portalActiveState.HealthAction
             }
             else {
                 $null = Handle-OpenPathWhitelistApply `
                     -Config $config `
                     -Whitelist $downloadResult.Whitelist `
                     -WhitelistPath $whitelistPath `
-                    -StaleFailsafeStatePath $staleFailsafeStatePath
+                    -StaleFailsafeStatePath $staleFailsafeStatePath `
+                    -HealthActionSuffix $portalActiveState.HealthAction
             }
         }
     }
@@ -356,6 +370,57 @@ function Invoke-OpenPathUpdateCycle {
     }
 
     return [int]$exitCode
+}
+
+function Write-OpenPathUpdatePortalActiveState {
+    [CmdletBinding()]
+    param(
+        [string]$OpenPathRoot = (Resolve-OpenPathWindowsRoot),
+
+        [ValidateSet('Update', 'SSE')]
+        [string]$TriggerSource = 'Update'
+    )
+
+    $result = [ordered]@{
+        Active = $false
+        HealthAction = ''
+    }
+
+    try {
+        if (-not (Test-OpenPathCaptivePortalModeActive)) {
+            return [PSCustomObject]$result
+        }
+
+        $marker = Get-OpenPathCaptivePortalMarker
+        $statePath = Join-Path $OpenPathRoot 'data\update-portal-active-state.json'
+        $state = if ($marker -and $marker.PSObject.Properties['state']) { [string]$marker.state } else { 'Unknown' }
+        $since = if ($marker -and $marker.PSObject.Properties['since']) { [string]$marker.since } else { '' }
+        $healthAction = if ($TriggerSource -eq 'SSE') { 'sse_update_while_portal_active' } else { 'update_while_portal_active' }
+
+        $dir = Split-Path $statePath -Parent
+        if (-not (Test-Path $dir -ErrorAction SilentlyContinue)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+
+        @{
+            active = $true
+            triggerSource = $TriggerSource
+            state = $state
+            since = $since
+            observedAt = (Get-Date).ToString('o')
+            healthAction = $healthAction
+        } | ConvertTo-Json -Depth 8 | Set-Content -Path $statePath -Encoding UTF8 -Force
+
+        Write-OpenPathLog "OpenPath $TriggerSource update observed while captive portal mode is active (state=$state)" -Level WARN
+
+        $result['Active'] = $true
+        $result['HealthAction'] = $healthAction
+    }
+    catch {
+        Write-OpenPathLog "Failed to record update portal-active state: $_" -Level WARN
+    }
+
+    return [PSCustomObject]$result
 }
 
 function Clear-StaleFailsafeState {
@@ -496,6 +561,7 @@ Export-ModuleMember -Function @(
     'Enter-StaleWhitelistFailsafe',
     'Restore-OpenPathCheckpoint',
     'Write-UpdateCatchLog',
+    'Write-OpenPathUpdatePortalActiveState',
     'Invoke-OpenPathRuntimeDependencyQueueApply',
     'Invoke-OpenPathRuntimeDependencyFastApply',
     'Sync-FirefoxNativeHostMirror'
