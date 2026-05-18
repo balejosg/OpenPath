@@ -110,7 +110,8 @@ export const TEACHER_CREDENTIALS = isStaging()
     };
 
 const LOGOUT_BUTTON_NAME = /Cerrar Ses(?:i[oó]n)?|Sign Out/i;
-const LOGIN_ERROR_TEXT = /Credenciales inv[aá]lidas|error de conexi[oó]n/i;
+const LOGIN_ERROR_TEXT =
+  /Credenciales inv[aá]lidas|error de conexi[oó]n|Invalid credentials|connection error/i;
 
 /**
  * Waits for the authenticated layout (role-agnostic).
@@ -135,7 +136,7 @@ async function loginThroughForm(
 
     await page.locator('input[type="email"]').fill(credentials.email);
     await page.locator('input[type="password"]').fill(credentials.password);
-    await page.getByRole('button', { name: 'Entrar' }).click();
+    await page.getByRole('button', { name: /Entrar|Sign in/i }).click();
 
     const result = await Promise.race([
       page
@@ -220,7 +221,9 @@ export async function clearAuth(context: BrowserContext): Promise<void> {
 export async function waitForDashboard(page: Page, timeout = 15000): Promise<void> {
   // Dashboard has "Estado del Sistema" banner and stat cards like "Grupos Activos"
   await page
-    .getByText(/Overview|Estado del Sistema|Grupos Activos|Dominios Permitidos/i)
+    .getByText(
+      /Overview|Estado del Sistema|System Status|Grupos Activos|Active Groups|Dominios Permitidos|Allowed Domains/i
+    )
     .first()
     .waitFor({ timeout });
 }
@@ -237,7 +240,10 @@ export async function waitForLoginPage(page: Page, timeout = 10000): Promise<voi
  * Waits for register page to appear
  */
 export async function waitForRegisterPage(page: Page, timeout = 10000): Promise<void> {
-  await page.getByRole('heading', { name: 'Registro Institucional' }).first().waitFor({ timeout });
+  await page
+    .getByRole('heading', { name: /Registro institucional|Institution Registration/i })
+    .first()
+    .waitFor({ timeout });
 }
 
 /**

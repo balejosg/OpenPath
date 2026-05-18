@@ -38,7 +38,9 @@ test.describe('Dashboard Display', () => {
 
     // Status should show \"Seguro\" or \"Healthy\" - use heading to be specific
     await expect(
-      page.getByRole('heading', { name: /Estado del Sistema.*Seguro|System Status.*Healthy/i })
+      page.getByRole('heading', {
+        name: /Estado del Sistema.*Seguro|System Status.*(Secure|Healthy)/i,
+      })
     ).toBeVisible();
   });
 
@@ -74,9 +76,9 @@ test.describe('Dashboard Display', () => {
   });
 
   test('should display dashboard stats @dashboard', async ({ page }) => {
-    await expect(page.getByText(/Estado del Sistema/i)).toBeVisible();
-    await expect(page.getByText(/Grupos Activos/i)).toBeVisible();
-    await expect(page.getByText(/Solicitudes Pendientes/i)).toBeVisible();
+    await expect(page.getByText(/Estado del Sistema|System Status/i)).toBeVisible();
+    await expect(page.getByText(/Grupos Activos|Active Groups/i)).toBeVisible();
+    await expect(page.getByText(/Solicitudes Pendientes|Pending Requests/i)).toBeVisible();
   });
 
   test('should show traffic chart @dashboard', async ({ page }) => {
@@ -187,7 +189,7 @@ test.describe('Dashboard Responsive Design', () => {
 
     // All stats should be visible - use headings
     await expect(page.getByRole('heading', { name: /Overview|Vista General/i })).toBeVisible();
-    await expect(page.getByText('Dominios Permitidos')).toBeVisible();
+    await expect(page.getByText(/Dominios Permitidos|Allowed Domains/i)).toBeVisible();
   });
 });
 

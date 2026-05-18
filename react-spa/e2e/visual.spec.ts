@@ -56,11 +56,11 @@ test.describe('Visual Regression - Login Page', () => {
     // Trigger error state
     await page.locator('input[type="email"]').fill('invalid@test.com');
     await page.locator('input[type="password"]').fill('wrongpassword');
-    await page.getByRole('button', { name: 'Entrar' }).click();
+    await page.getByRole('button', { name: /Entrar|Sign in/i }).click();
 
     // Wait for error to appear
     await page
-      .getByText(/Credenciales|Error|inválid/i)
+      .getByText(/Credenciales|Invalid credentials|Error|inválid|connection error/i)
       .waitFor({ state: 'visible', timeout: 5000 })
       .catch(() => {});
     await page.waitForTimeout(500);
@@ -79,7 +79,7 @@ test.describe('Visual Regression - Register Page', () => {
     await page.waitForLoadState('networkidle');
 
     // Navigate to register
-    await page.getByRole('button', { name: 'Solicitar acceso' }).click();
+    await page.getByRole('button', { name: /Solicitar acceso|Request access/i }).click();
     await page.waitForTimeout(500);
 
     await expect(page).toHaveScreenshot('register-desktop.png', {
@@ -91,7 +91,7 @@ test.describe('Visual Regression - Register Page', () => {
   test('register page mobile @visual', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 });
     await page.goto('./');
-    await page.getByRole('button', { name: 'Solicitar acceso' }).click();
+    await page.getByRole('button', { name: /Solicitar acceso|Request access/i }).click();
     await page.waitForTimeout(500);
 
     await expect(page).toHaveScreenshot('register-mobile.png', {

@@ -50,7 +50,11 @@ test.describe('Authentication Flows', () => {
     await loginPage.login('invalid@email.com', 'wrongpassword');
 
     // Should show error message
-    await expect(page.getByText(/Credenciales inválidas|Error|incorrecta/i)).toBeVisible({
+    await expect(
+      page.getByText(
+        /Credenciales inv[aá]lidas|Invalid credentials|Error|incorrecta|connection error/i
+      )
+    ).toBeVisible({
       timeout: 5000,
     });
 
@@ -120,7 +124,9 @@ test.describe('Authentication Flows', () => {
     await loginPage.navigateToRegister();
 
     // Should show registration form - use heading to be specific
-    await expect(page.getByRole('heading', { name: 'Registro Institucional' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: /Registro institucional|Institution Registration/i })
+    ).toBeVisible();
     await expect(page.locator('input[type="email"]')).toBeVisible();
   });
 
@@ -160,17 +166,17 @@ test.describe('Registration Flow', () => {
     await page.waitForLoadState('networkidle');
 
     // Navigate to register - look for the register button
-    const registerLink = page.getByRole('button', { name: 'Solicitar acceso' });
+    const registerLink = page.getByRole('button', { name: /Solicitar acceso|Request access/i });
     await registerLink.click();
 
     // Wait for register form - use heading to be specific
-    await expect(page.getByRole('heading', { name: 'Registro Institucional' })).toBeVisible({
-      timeout: 5000,
-    });
+    await expect(
+      page.getByRole('heading', { name: /Registro institucional|Institution Registration/i })
+    ).toBeVisible({ timeout: 5000 });
 
     // Fill registration form - use flexible selectors
     const emailInput = page.locator('input[type="email"]');
-    const nameInput = page.getByPlaceholder(/nombre/i);
+    const nameInput = page.getByPlaceholder(/nombre|name/i);
     const passwordInputs = page.locator('input[type="password"]');
 
     await emailInput.fill(testUser.email);
@@ -189,15 +195,17 @@ test.describe('Registration Flow', () => {
     }
 
     // Submit - look for any submit button
-    const submitButton = page.getByRole('button', { name: /Crear|Registrar|Enviar/i });
+    const submitButton = page.getByRole('button', {
+      name: /Crear|Registrar|Enviar|Create|Submit/i,
+    });
     if (await submitButton.isEnabled()) {
       await submitButton.click();
     }
 
     // Should show success or redirect to dashboard/waiting
-    await expect(page.getByText(/Bienvenido|Dashboard|verificar|Panel|esperando/i)).toBeVisible({
-      timeout: 10000,
-    });
+    await expect(
+      page.getByText(/Bienvenido|Welcome|Dashboard|verificar|Panel|esperando/i)
+    ).toBeVisible({ timeout: 10000 });
   });
 
   test('should show validation errors for invalid registration @auth @registration', async ({
@@ -207,28 +215,34 @@ test.describe('Registration Flow', () => {
     await page.waitForLoadState('networkidle');
 
     // Navigate to register
-    const registerLink = page.getByText(/Crear cuenta|Regístrate|Solicitar acceso/i).first();
+    const registerLink = page
+      .getByText(/Crear cuenta|Create Account|Regístrate|Solicitar acceso|Request access/i)
+      .first();
     await registerLink.click();
 
     // Wait for register form - use heading to be specific
-    await expect(page.getByRole('heading', { name: 'Registro Institucional' })).toBeVisible({
-      timeout: 5000,
-    });
+    await expect(
+      page.getByRole('heading', { name: /Registro institucional|Institution Registration/i })
+    ).toBeVisible({ timeout: 5000 });
 
     // The submit button should be disabled when form is empty
-    const submitButton = page.getByRole('button', { name: /Crear|Registrar|Enviar/i });
+    const submitButton = page.getByRole('button', {
+      name: /Crear|Registrar|Enviar|Create|Submit/i,
+    });
     await expect(submitButton).toBeDisabled();
   });
 
   test('should validate password confirmation match @auth @registration', async ({ page }) => {
     await page.goto('./');
-    const registerLink = page.getByText(/Crear cuenta|Regístrate|Solicitar acceso/i).first();
+    const registerLink = page
+      .getByText(/Crear cuenta|Create Account|Regístrate|Solicitar acceso|Request access/i)
+      .first();
     await registerLink.click();
 
     // Wait for form - use heading to be specific
-    await expect(page.getByRole('heading', { name: 'Registro Institucional' })).toBeVisible({
-      timeout: 5000,
-    });
+    await expect(
+      page.getByRole('heading', { name: /Registro institucional|Institution Registration/i })
+    ).toBeVisible({ timeout: 5000 });
 
     // Fill with mismatched passwords
     const emailInput = page.locator('input[type="email"]');

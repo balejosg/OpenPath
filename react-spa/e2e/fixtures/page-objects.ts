@@ -12,7 +12,7 @@ function escapeRegExp(value: string): string {
 
 async function clickSidebarNav(page: Page, navButton: Locator): Promise<void> {
   // On mobile, the sidebar is off-canvas until the hamburger is clicked.
-  const menuButton = page.getByRole('button', { name: /Abrir menú/i });
+  const menuButton = page.getByRole('button', { name: /Abrir menú|Open menu/i });
   const menuVisible = await menuButton.isVisible({ timeout: 500 }).catch(() => false);
 
   if (menuVisible) {
@@ -47,10 +47,12 @@ export class LoginPage {
     this.page = page;
     this.emailInput = page.locator('input[type="email"]');
     this.passwordInput = page.locator('input[type="password"]');
-    this.loginButton = page.getByRole('button', { name: 'Entrar' });
+    this.loginButton = page.getByRole('button', { name: /Entrar|Sign in/i });
     this.googleLoginButton = page.getByRole('button', { name: /Google/i });
-    this.registerLink = page.getByRole('button', { name: 'Solicitar acceso' });
-    this.errorMessage = page.getByText('Credenciales inválidas');
+    this.registerLink = page.getByRole('button', { name: /Solicitar acceso|Request access/i });
+    this.errorMessage = page.getByText(
+      /Credenciales inv[aá]lidas|Invalid credentials|error de conexi[oó]n|connection error/i
+    );
     this.loadingSpinner = page.locator('.animate-spin');
   }
 
@@ -60,7 +62,7 @@ export class LoginPage {
       await this.page.waitForLoadState('networkidle');
 
       const loginVisible = await this.page
-        .getByRole('heading', { name: 'Acceso Seguro' })
+        .getByRole('heading', { name: /Acceso seguro|Secure Sign In/i })
         .isVisible({ timeout: 1000 })
         .catch(() => false);
 
@@ -90,7 +92,9 @@ export class LoginPage {
   }
 
   async expectLoaded() {
-    await expect(this.page.getByRole('heading', { name: 'Acceso Seguro' })).toBeVisible();
+    await expect(
+      this.page.getByRole('heading', { name: /Acceso seguro|Secure Sign In/i })
+    ).toBeVisible();
     await expect(this.emailInput).toBeVisible();
     await expect(this.passwordInput).toBeVisible();
   }
@@ -101,7 +105,9 @@ export class LoginPage {
 
   async navigateToRegister() {
     await this.registerLink.click();
-    await expect(this.page.getByRole('heading', { name: 'Registro Institucional' })).toBeVisible();
+    await expect(
+      this.page.getByRole('heading', { name: /Registro institucional|Institution Registration/i })
+    ).toBeVisible();
   }
 }
 
@@ -118,11 +124,13 @@ export class RegisterPage {
   constructor(page: Page) {
     this.page = page;
     this.emailInput = page.getByPlaceholder('correo@ejemplo.com');
-    this.nameInput = page.getByPlaceholder('Tu nombre completo');
+    this.nameInput = page.getByPlaceholder(/Tu nombre completo|Your full name/i);
     this.passwordInput = page.locator('input[type="password"]').first();
     this.confirmPasswordInput = page.locator('input[type="password"]').last();
-    this.termsCheckbox = page.getByLabel(/Acepto los/);
-    this.submitButton = page.getByRole('button', { name: 'Registrarse' });
+    this.termsCheckbox = page.getByLabel(/Acepto los|By registering/i);
+    this.submitButton = page.getByRole('button', {
+      name: /Registrarse|Crear cuenta|Create Account/i,
+    });
     this.errorMessage = page.locator('[role="alert"]');
   }
 
@@ -151,12 +159,14 @@ export class DashboardPage {
 
   constructor(page: Page) {
     this.page = page;
-    this.activeGroupsStat = page.getByText('Grupos Activos').locator('..');
-    this.allowedDomainsStat = page.getByText('Dominios Permitidos').locator('..');
-    this.blockedSitesStat = page.getByText('Sitios Bloqueados').locator('..');
-    this.pendingRequestsStat = page.getByText('Solicitudes Pendientes').locator('..');
-    this.systemStatusBanner = page.getByText('Estado del Sistema');
-    this.auditFeed = page.getByText('Auditoría Reciente').locator('..');
+    this.activeGroupsStat = page.getByText(/Grupos Activos|Active Groups/i).locator('..');
+    this.allowedDomainsStat = page.getByText(/Dominios Permitidos|Allowed Domains/i).locator('..');
+    this.blockedSitesStat = page.getByText(/Sitios Bloqueados|Blocked Sites/i).locator('..');
+    this.pendingRequestsStat = page
+      .getByText(/Solicitudes Pendientes|Pending Requests/i)
+      .locator('..');
+    this.systemStatusBanner = page.getByText(/Estado del Sistema|System Status/i);
+    this.auditFeed = page.getByText(/Auditoría Reciente|Recent Audit/i).locator('..');
     this.trafficChart = page.locator('[data-testid="traffic-chart"]');
   }
 
@@ -193,9 +203,9 @@ export class GroupsPage {
 
   constructor(page: Page) {
     this.page = page;
-    this.newGroupButton = page.getByRole('button', { name: /Nuevo Grupo/i });
+    this.newGroupButton = page.getByRole('button', { name: /Nuevo Grupo|New Group/i });
     this.groupList = page.locator('[data-testid="group-list"]');
-    this.searchInput = page.getByPlaceholder(/Buscar/i);
+    this.searchInput = page.getByPlaceholder(/Buscar|Search/i);
   }
 
   async goto() {
@@ -220,7 +230,7 @@ export class GroupsPage {
 
   async clickConfigureGroup(groupName: string) {
     const group = this.page.getByText(groupName).locator('..').locator('..');
-    await group.getByRole('button', { name: /Configurar/i }).click();
+    await group.getByRole('button', { name: /Configurar|Configure/i }).click();
   }
 
   async createGroup(name: string, description: string) {
@@ -310,17 +320,19 @@ export class BulkImportPage {
   constructor(page: Page) {
     this.page = page;
     // The import button in RulesManager has text "Importar" with Upload icon
-    this.importButton = page.getByRole('button', { name: 'Importar' }).first();
+    this.importButton = page.getByRole('button', { name: /Importar|Import/i }).first();
     this.modal = page.getByRole('dialog');
     this.textarea = page.locator('textarea');
     this.dropZone = page.locator('[data-testid="drop-zone"]');
-    this.formatIndicator = page.getByText(/Formato CSV detectado/i);
+    this.formatIndicator = page.getByText(/Formato CSV detectado|CSV format detected/i);
     this.warningBox = page.locator('.bg-amber-50');
     // BulkImportModal shows counts like: "(3 detectados)" / "(1 detectado)"
-    this.countDisplay = page.getByText(/\(\s*\d+\s+detectad[oa]s?\s*\)/i);
+    this.countDisplay = page.getByText(/\(\s*\d+\s+(detectad[oa]s?|detected)\s*\)/i);
     // Submit button in modal shows "Importar (N)" when there are domains
-    this.submitButton = page.getByRole('dialog').getByRole('button', { name: /^Importar/ });
-    this.cancelButton = page.getByRole('button', { name: /Cancelar/i });
+    this.submitButton = page
+      .getByRole('dialog')
+      .getByRole('button', { name: /^(Importar|Import)/i });
+    this.cancelButton = page.getByRole('button', { name: /Cancelar|Cancel/i });
   }
 
   /**
@@ -342,17 +354,19 @@ export class BulkImportPage {
       .locator('div.bg-white.border.border-slate-200.rounded-lg')
       .filter({ hasText: /E2E Test Group/i })
       .first();
-    const seededConfigButton = seededGroupCard.getByRole('button', { name: /Configurar/i });
+    const seededConfigButton = seededGroupCard.getByRole('button', {
+      name: /Configurar|Configure/i,
+    });
 
     const configButton = await Promise.race([
       seededConfigButton
         .waitFor({ state: 'visible', timeout: 5000 })
         .then(() => seededConfigButton),
       this.page
-        .getByRole('button', { name: /Configurar/i })
+        .getByRole('button', { name: /Configurar|Configure/i })
         .first()
         .waitFor({ state: 'visible', timeout: 5000 })
-        .then(() => this.page.getByRole('button', { name: /Configurar/i }).first()),
+        .then(() => this.page.getByRole('button', { name: /Configurar|Configure/i }).first()),
     ]);
     await configButton.waitFor({ state: 'visible', timeout: 5000 });
     await configButton.click();
@@ -361,7 +375,7 @@ export class BulkImportPage {
     await this.page.waitForTimeout(300);
 
     // Click "Gestionar" link inside the modal to navigate to RulesManager
-    const manageLink = this.page.getByRole('button', { name: /Gestionar/i });
+    const manageLink = this.page.getByRole('button', { name: /Gestionar|Manage Rules|Manage/i });
     await manageLink.waitFor({ state: 'visible', timeout: 5000 });
     await manageLink.click();
     await this.page.waitForLoadState('networkidle');
@@ -378,10 +392,10 @@ export class BulkImportPage {
    * Select a rule type in the modal
    */
   async selectRuleType(type: 'whitelist' | 'blocked_subdomain' | 'blocked_path'): Promise<void> {
-    const labels: Record<string, string> = {
-      whitelist: 'Dominios permitidos',
-      blocked_subdomain: 'Subdominios bloqueados',
-      blocked_path: 'Rutas bloqueadas',
+    const labels: Record<string, RegExp> = {
+      whitelist: /Dominios permitidos|Allowed domains/i,
+      blocked_subdomain: /Subdominios bloqueados|Blocked subdomains/i,
+      blocked_path: /Rutas bloqueadas|Blocked paths/i,
     };
     await this.page.getByRole('button', { name: labels[type] }).click();
   }
@@ -424,7 +438,7 @@ export class BulkImportPage {
     await this.countDisplay.waitFor({ state: 'visible', timeout: 5000 });
     const countText = await this.countDisplay.textContent();
     if (!countText) return 0;
-    const match = countText.match(/(\d+)\s+detectad/i);
+    const match = countText.match(/(\d+)\s+(?:detectad[oa]s?|detected)/i);
     return match ? parseInt(match[1], 10) : 0;
   }
 
@@ -437,7 +451,7 @@ export class BulkImportPage {
       return 'plain-text';
     }
     const hasColumnInfo = await this.page
-      .getByText(/columna:/i)
+      .getByText(/(?:columna|column):/i)
       .isVisible()
       .catch(() => false);
     return hasColumnInfo ? 'csv-with-headers' : 'csv-simple';
@@ -461,10 +475,10 @@ export class BulkImportPage {
    * Get the column name being used (if CSV with headers)
    */
   async getColumnName(): Promise<string | null> {
-    const columnInfo = this.page.getByText(/columna:/i);
+    const columnInfo = this.page.getByText(/(?:columna|column):/i);
     if (await columnInfo.isVisible().catch(() => false)) {
       const text = await columnInfo.textContent();
-      const match = text?.match(/columna:\s*(\w+)/i);
+      const match = text?.match(/(?:columna|column):\s*(\w+)/i);
       return match ? match[1] : null;
     }
     return null;
@@ -521,9 +535,9 @@ export class RulesManagerPage {
   constructor(page: Page) {
     this.page = page;
     this.rulesTable = page.locator('table');
-    this.searchInput = page.getByPlaceholder(/Buscar en/i);
-    this.addRuleInput = page.getByPlaceholder(/Añadir dominio/i);
-    this.addRuleButton = page.getByRole('button', { name: 'Añadir' });
+    this.searchInput = page.getByPlaceholder(/Buscar en|Search across/i);
+    this.addRuleInput = page.getByPlaceholder(/Añadir dominio|Add domain, subdomain, or path/i);
+    this.addRuleButton = page.getByRole('button', { name: /Añadir|Add/i });
   }
 
   async search(value: string): Promise<void> {
@@ -550,21 +564,21 @@ export class RulesManagerPage {
     await this.page.waitForTimeout(500);
 
     // Click the first "Configurar" button to open the config modal
-    const configButton = this.page.getByRole('button', { name: /Configurar/i }).first();
+    const configButton = this.page.getByRole('button', { name: /Configurar|Configure/i }).first();
     await configButton.waitFor({ state: 'visible', timeout: 5000 });
     await configButton.click();
 
     await this.page.waitForTimeout(300);
 
     // Click "Gestionar" link inside the modal to navigate to RulesManager
-    const manageLink = this.page.getByRole('button', { name: /Gestionar/i });
+    const manageLink = this.page.getByRole('button', { name: /Gestionar|Manage Rules|Manage/i });
     await manageLink.waitFor({ state: 'visible', timeout: 5000 });
     await manageLink.click();
     await this.page.waitForLoadState('networkidle');
 
     // Wait for RulesManager to load. Seed a baseline rule if the selected group is empty,
     // otherwise the table is intentionally replaced by the empty-state card.
-    const emptyState = this.page.getByText(/No hay reglas configuradas/i);
+    const emptyState = this.page.getByText(/No hay reglas configuradas|No rules configured/i);
 
     const loadedState = await Promise.race([
       this.rulesTable.waitFor({ state: 'visible', timeout: 10000 }).then(() => 'table' as const),
@@ -717,7 +731,7 @@ export class RulesManagerPage {
   async deleteRule(value: string): Promise<void> {
     const row = this.getRuleRow(value);
     await row.hover();
-    await row.getByTitle('Eliminar').click();
+    await row.getByTitle(/Eliminar|Delete|Revoke auto-approval/i).click();
     await this.page.waitForTimeout(500);
   }
 }

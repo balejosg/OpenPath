@@ -193,7 +193,7 @@ test.describe('Inline Editing - Save Operations', () => {
     await rulesManager.saveEdit();
 
     // Should show success toast
-    await expect(page.getByText(/actualizada/i)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(/actualizada|Rule updated/i)).toBeVisible({ timeout: 5000 });
   });
 
   test('should not save if value is empty', async ({ page }) => {

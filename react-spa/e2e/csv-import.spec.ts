@@ -84,7 +84,7 @@ test.describe('CSV Import Feature @domains @import', () => {
       await expect(bulkImport.formatIndicator).toBeVisible();
 
       // Should show column name
-      await expect(page.getByText(/columna:.*domain/i)).toBeVisible();
+      await expect(page.getByText(/(?:columna|column):.*domain/i)).toBeVisible();
 
       const count = await bulkImport.getDetectedCount();
       expect(count).toBe(4); // 4 data rows after header
@@ -99,7 +99,7 @@ test.describe('CSV Import Feature @domains @import', () => {
       expect(format).toBe('csv-with-headers');
 
       // Should detect Spanish column name
-      await expect(page.getByText(/columna:.*dominio/i)).toBeVisible();
+      await expect(page.getByText(/(?:columna|column):.*dominio/i)).toBeVisible();
 
       const count = await bulkImport.getDetectedCount();
       expect(count).toBe(3);
@@ -188,7 +188,7 @@ test.describe('CSV Import Feature @domains @import', () => {
       // Should show warning about duplicates removed
       await expect(bulkImport.warningBox).toBeVisible();
       const warnings = await bulkImport.getWarnings();
-      expect(warnings.some((w) => w.includes('duplicados'))).toBe(true);
+      expect(warnings.some((w) => /duplicados|duplicates removed/i.test(w))).toBe(true);
     });
 
     test('shows correct duplicate count in warning', async ({ page }) => {
@@ -200,7 +200,9 @@ test.describe('CSV Import Feature @domains @import', () => {
 
       // Warning should mention 2 duplicates removed
       const warnings = await bulkImport.getWarnings();
-      expect(warnings.some((w) => w.includes('2') && w.includes('duplicados'))).toBe(true);
+      expect(
+        warnings.some((w) => w.includes('2') && /duplicados|duplicates removed/i.test(w))
+      ).toBe(true);
     });
   });
 
@@ -209,7 +211,9 @@ test.describe('CSV Import Feature @domains @import', () => {
       await bulkImport.open();
 
       // Whitelist button should be selected (has blue border)
-      const whitelistButton = page.getByRole('button', { name: 'Dominios permitidos' });
+      const whitelistButton = page.getByRole('button', {
+        name: /Dominios permitidos|Allowed domains/i,
+      });
       await expect(whitelistButton).toHaveClass(/border-blue-500/);
     });
 
@@ -217,7 +221,9 @@ test.describe('CSV Import Feature @domains @import', () => {
       await bulkImport.open();
       await bulkImport.selectRuleType('blocked_subdomain');
 
-      const subdomainButton = page.getByRole('button', { name: 'Subdominios bloqueados' });
+      const subdomainButton = page.getByRole('button', {
+        name: /Subdominios bloqueados|Blocked subdomains/i,
+      });
       await expect(subdomainButton).toHaveClass(/border-blue-500/);
     });
 
@@ -225,7 +231,9 @@ test.describe('CSV Import Feature @domains @import', () => {
       await bulkImport.open();
       await bulkImport.selectRuleType('blocked_path');
 
-      const pathButton = page.getByRole('button', { name: 'Rutas bloqueadas' });
+      const pathButton = page.getByRole('button', {
+        name: /Rutas bloqueadas|Blocked paths/i,
+      });
       await expect(pathButton).toHaveClass(/border-blue-500/);
     });
   });
@@ -234,7 +242,7 @@ test.describe('CSV Import Feature @domains @import', () => {
     test('shows placeholder text when empty', async ({ page }) => {
       await bulkImport.open();
 
-      await expect(page.getByPlaceholder(/Pega los dominios/i)).toBeVisible();
+      await expect(page.getByPlaceholder(/Pega los dominios|Paste domains/i)).toBeVisible();
     });
 
     test('submit button is disabled when no domains entered', async ({ page }) => {

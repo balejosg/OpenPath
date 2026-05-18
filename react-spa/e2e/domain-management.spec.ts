@@ -183,9 +183,14 @@ test.describe('Domain Request Management', () => {
       const pendingRow = getRequestRow(page, request.domain);
 
       await expect(pendingRow).toHaveAttribute('data-status', 'pending');
-      await pendingRow.getByTitle('Aprobar').click();
-      await expect(page.getByRole('heading', { name: 'Aprobar Solicitud' })).toBeVisible();
-      await page.getByRole('button', { name: 'Aprobar' }).last().click();
+      await pendingRow.getByTitle(/Aprobar|Approve/i).click();
+      await expect(
+        page.getByRole('heading', { name: /Aprobar Solicitud|Approve Request/i })
+      ).toBeVisible();
+      await page
+        .getByRole('button', { name: /Aprobar|Approve/i })
+        .last()
+        .click();
       await expect(pendingRow).toHaveAttribute('data-status', 'approved');
     } finally {
       await deleteDomainRequestViaApi(page, request.id);
@@ -200,12 +205,19 @@ test.describe('Domain Request Management', () => {
       const pendingRow = getRequestRow(page, request.domain);
 
       await expect(pendingRow).toHaveAttribute('data-status', 'pending');
-      await pendingRow.getByTitle('Rechazar').click();
-      await expect(page.getByRole('heading', { name: 'Rechazar Solicitud' })).toBeVisible();
+      await pendingRow.getByTitle(/Rechazar|Reject/i).click();
+      await expect(
+        page.getByRole('heading', { name: /Rechazar Solicitud|Reject Request/i })
+      ).toBeVisible();
       await page
-        .getByPlaceholder('Explica por qué se rechaza esta solicitud...')
+        .getByPlaceholder(
+          /Explica por qué se rechaza esta solicitud|Explain why this request is rejected/i
+        )
         .fill('Not allowed per school policy');
-      await page.getByRole('button', { name: 'Rechazar' }).last().click();
+      await page
+        .getByRole('button', { name: /Rechazar|Reject/i })
+        .last()
+        .click();
       await expect(pendingRow).toHaveAttribute('data-status', 'rejected');
     } finally {
       await deleteDomainRequestViaApi(page, request.id);
