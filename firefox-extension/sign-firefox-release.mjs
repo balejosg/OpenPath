@@ -32,7 +32,12 @@ const defaultAmoBaseUrl = 'https://addons.mozilla.org/api/v5/';
 const amoVersionComponentModulo = 1_000_000_000n;
 const amoSigningStateArtifactName = 'amo-signing-state.json';
 const removedApprovalMaxRuntimeFilenameTokens = ['auto-allow', 'page-resource-auto-allow'];
-const removedRuntimeContentTokens = ['/api/requests/auto'];
+const removedRuntimeContentTokens = [
+  '/api/requests/auto',
+  'permissions.request',
+  'permissions.request may only be called from a user input handler',
+  'no es compatible con el permiso de datos requerido',
+];
 
 function fail(message) {
   throw new Error(message);
@@ -766,7 +771,7 @@ function assertNoRemovedRuntimeContent(sourceDir) {
   if (forbiddenFile) {
     fail(
       [
-        'Firefox AMO runtime payload contains removed remote auto-allow content',
+        'Firefox AMO runtime payload contains removed request-unblock content',
         `file=${forbiddenFile}`,
         `forbiddenTokens=${removedRuntimeContentTokens.join(',')}`,
       ].join(' ')

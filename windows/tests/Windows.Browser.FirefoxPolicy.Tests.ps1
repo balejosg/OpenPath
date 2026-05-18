@@ -93,6 +93,63 @@ Describe "Browser Module - Firefox Policy" {
             $machinePolicy.($contract.extensionId).install_url | Should -Be $contract.configuredInstallUrl
         }
 
+        It "Version-keys configured managed API Firefox install URLs from release metadata" {
+            $script:capturedFirefoxPolicyJson = $null
+            $script:capturedMachinePolicyValue = $null
+            $contract = Get-ContractFixtureJson -FileName 'browser-firefox-managed-extension.json'
+
+            Mock Test-Path {
+                param([string]$Path)
+                if ($Path -like '*firefox.exe') { return $true }
+                if ($Path -like '*metadata.json') { return $true }
+                return $false
+            } -ModuleName Browser.FirefoxPolicy
+
+            Mock New-Item { [PSCustomObject]@{ FullName = 'mock-path' } } -ModuleName Browser.FirefoxPolicy
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    firefoxExtensionId = $contract.extensionId
+                    firefoxExtensionInstallUrl = $contract.managedApiInstallUrl
+                }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Get-OpenPathFirefoxReleaseMetadata {
+                [PSCustomObject]@{
+                    extensionId = $contract.extensionId
+                    version = '2.0.0.779021904'
+                }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Get-Content {
+                param([string]$Path, [switch]$Raw)
+                if ($Path -like '*metadata.json') {
+                    return "{`"extensionId`":`"$($contract.extensionId)`",`"version`":`"2.0.0.779021904`"}"
+                }
+
+                throw "Unexpected path: $Path"
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Write-OpenPathUtf8NoBomFile {
+                param([string]$Path, [string]$Value)
+                if ($Path -like '*policies.json') {
+                    $script:capturedFirefoxPolicyJson = $Value
+                }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock New-ItemProperty {
+                param([string]$Path, [string]$Name, [object]$Value, [object]$PropertyType)
+                if ($Name -eq 'ExtensionSettings') {
+                    $script:capturedMachinePolicyValue = @($Value)
+                }
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Write-OpenPathLog { } -ModuleName Browser.FirefoxPolicy
+
+            $result = Sync-OpenPathFirefoxManagedExtensionPolicy
+            $result | Should -BeTrue
+
+            $policy = $script:capturedFirefoxPolicyJson | ConvertFrom-Json
+            $policy.policies.ExtensionSettings.($contract.extensionId).install_url | Should -Be $contract.managedApiVersionedInstallUrl
+
+            $machinePolicy = $script:capturedMachinePolicyValue[0] | ConvertFrom-Json
+            $machinePolicy.($contract.extensionId).install_url | Should -Be $contract.managedApiVersionedInstallUrl
+        }
+
         It "Uses caller-provided config without re-reading config.json" {
             $script:capturedFirefoxPolicyJson = $null
             $contract = Get-ContractFixtureJson -FileName 'browser-firefox-managed-extension.json'
@@ -270,17 +327,16 @@ Describe "Browser Module - Firefox Policy" {
 
             Mock New-Item { [PSCustomObject]@{ FullName = 'mock-path' } } -ModuleName Browser.FirefoxPolicy
             Mock Get-OpenPathConfig { [PSCustomObject]@{ apiUrl = 'https://school.example/' } } -ModuleName Browser.FirefoxPolicy
-            Mock Get-OpenPathFirefoxManagedExtensionPolicy {
+            Mock Get-OpenPathFirefoxReleaseMetadata {
                 [PSCustomObject]@{
-                    ExtensionId = $contract.extensionId
-                    InstallUrl = $contract.managedApiInstallUrl
-                    Source = 'managed-api'
+                    extensionId = $contract.extensionId
+                    version = '2.0.0.779021904'
                 }
             } -ModuleName Browser.FirefoxPolicy
             Mock Get-Content {
                 param([string]$Path, [switch]$Raw)
                 if ($Path -like '*metadata.json') {
-                    return '{"extensionId":"openpath-block-monitor@openpath","version":"2.0.0"}'
+                    return "{`"extensionId`":`"$($contract.extensionId)`",`"version`":`"2.0.0.779021904`"}"
                 }
 
                 throw "Unexpected path: $Path"
@@ -297,7 +353,7 @@ Describe "Browser Module - Firefox Policy" {
             $result | Should -BeTrue
 
             $policy = $script:capturedFirefoxPolicyJson | ConvertFrom-Json
-            $policy.policies.ExtensionSettings.($contract.extensionId).install_url | Should -Be $contract.managedApiInstallUrl
+            $policy.policies.ExtensionSettings.($contract.extensionId).install_url | Should -Be $contract.managedApiVersionedInstallUrl
         }
 
         It "Prefers the staged signed Firefox XPI over metadata installUrl when both exist" {

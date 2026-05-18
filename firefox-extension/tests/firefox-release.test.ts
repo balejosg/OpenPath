@@ -1863,8 +1863,13 @@ void describe('Firefox release signing helpers', () => {
     }
   });
 
-  void test('prepareSigningSourceDir rejects removed remote auto-allow runtime content before signing', () => {
-    for (const forbiddenContent of ['/api/requests/auto']) {
+  void test('prepareSigningSourceDir rejects removed request-unblock runtime content before signing', () => {
+    for (const forbiddenContent of [
+      '/api/requests/auto',
+      'permissions.request',
+      'permissions.request may only be called from a user input handler',
+      'no es compatible con el permiso de datos requerido',
+    ]) {
       const workingDir = createTempDir('openpath-firefox-signing-content-guard-');
       const sourceDir = path.join(workingDir, 'extension');
 
@@ -1891,7 +1896,7 @@ void describe('Firefox release signing helpers', () => {
 
       assert.throws(
         () => prepareSigningSourceDir({ sourceDir }),
-        /Firefox AMO runtime payload contains removed remote auto-allow content/
+        /Firefox AMO runtime payload contains removed request-unblock content/
       );
     }
   });

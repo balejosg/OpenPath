@@ -2,6 +2,7 @@
   "extensionId": "openpath-block-monitor@openpath",
   "configuredInstallUrl": "https://addons.mozilla.org/firefox/downloads/latest/openpath-block-monitor@openpath/latest.xpi",
   "managedApiInstallUrl": "https://school.example/api/extensions/firefox/openpath.xpi",
+  "managedApiVersionedInstallUrl": "https://school.example/api/extensions/firefox/openpath.xpi?openpath_version=2.0.0.779021904",
   "stagedReleaseInstallUrl": "file:///C:/OpenPath/browser-extension/firefox-release/openpath-firefox-extension.xpi",
   "metadataInstallUrl": "https://downloads.example/openpath-firefox-extension.xpi",
   "sourcePrecedence": [

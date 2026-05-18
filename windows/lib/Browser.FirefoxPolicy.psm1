@@ -79,7 +79,10 @@ function ConvertTo-OpenPathFirefoxMachineExtensionSettingsValue {
 function Get-OpenPathConfiguredFirefoxManagedExtensionPolicy {
     param(
         [AllowNull()]
-        [object]$Config
+        [object]$Config,
+
+        [AllowNull()]
+        [object]$Metadata = $null
     )
 
     $configuredExtensionId = Get-OpenPathConfigTrimmedValue -Config $Config -PropertyName 'firefoxExtensionId'
@@ -88,7 +91,9 @@ function Get-OpenPathConfiguredFirefoxManagedExtensionPolicy {
     if ($configuredExtensionId -and $configuredInstallUrl) {
         return [PSCustomObject]@{
             ExtensionId = $configuredExtensionId
-            InstallUrl = $configuredInstallUrl
+            InstallUrl = Add-OpenPathFirefoxManagedApiInstallUrlVersion `
+                -InstallUrl $configuredInstallUrl `
+                -Metadata $Metadata
             Source = 'configured-install-url'
         }
     }
@@ -128,6 +133,55 @@ function Get-OpenPathFirefoxReleaseExtensionId {
     return ''
 }
 
+function Get-OpenPathFirefoxReleaseMetadataVersion {
+    param(
+        [AllowNull()]
+        [object]$Metadata
+    )
+
+    if ($Metadata -and $Metadata.PSObject.Properties['version'] -and $Metadata.version) {
+        return ([string]$Metadata.version).Trim()
+    }
+
+    return ''
+}
+
+function Add-OpenPathFirefoxManagedApiInstallUrlVersion {
+    param(
+        [AllowNull()]
+        [string]$InstallUrl,
+
+        [AllowNull()]
+        [object]$Metadata
+    )
+
+    $url = ([string]$InstallUrl).Trim()
+    $version = Get-OpenPathFirefoxReleaseMetadataVersion -Metadata $Metadata
+    if (-not $url -or -not $version) {
+        return $url
+    }
+
+    if ($url -notmatch '^https?://' -or $url -notmatch '/api/extensions/firefox/openpath\.xpi(?:[?#]|$)') {
+        return $url
+    }
+
+    $encodedVersion = [uri]::EscapeDataString($version)
+    $fragment = ''
+    $urlWithoutFragment = $url
+    $fragmentIndex = $url.IndexOf('#')
+    if ($fragmentIndex -ge 0) {
+        $fragment = $url.Substring($fragmentIndex)
+        $urlWithoutFragment = $url.Substring(0, $fragmentIndex)
+    }
+
+    if ($urlWithoutFragment -match '([?&])openpath_version=') {
+        return (($urlWithoutFragment -replace '([?&])openpath_version=[^&]*', "`${1}openpath_version=$encodedVersion") + $fragment)
+    }
+
+    $separator = if ($urlWithoutFragment.Contains('?')) { '&' } else { '?' }
+    return "$urlWithoutFragment${separator}openpath_version=$encodedVersion$fragment"
+}
+
 function Resolve-OpenPathFirefoxReleaseInstallSpec {
     param(
         [AllowNull()]
@@ -145,7 +199,9 @@ function Resolve-OpenPathFirefoxReleaseInstallSpec {
     $signedXpiPath = Get-OpenPathFirefoxReleaseXpiPath
     if ($apiBaseUrl -and (Test-Path $signedXpiPath)) {
         return [PSCustomObject]@{
-            InstallUrl = "$apiBaseUrl/api/extensions/firefox/openpath.xpi"
+            InstallUrl = Add-OpenPathFirefoxManagedApiInstallUrlVersion `
+                -InstallUrl "$apiBaseUrl/api/extensions/firefox/openpath.xpi" `
+                -Metadata $Metadata
             Source = 'managed-api'
         }
     }
@@ -183,12 +239,13 @@ function Get-OpenPathFirefoxManagedExtensionPolicy {
         }
     }
 
-    $configuredPolicy = Get-OpenPathConfiguredFirefoxManagedExtensionPolicy -Config $config
+    $metadata = Get-OpenPathFirefoxReleaseMetadata
+
+    $configuredPolicy = Get-OpenPathConfiguredFirefoxManagedExtensionPolicy -Config $config -Metadata $metadata
     if ($configuredPolicy) {
         return $configuredPolicy
     }
 
-    $metadata = Get-OpenPathFirefoxReleaseMetadata
     if (-not $metadata) {
         return $null
     }
