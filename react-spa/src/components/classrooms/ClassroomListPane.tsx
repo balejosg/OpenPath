@@ -39,14 +39,14 @@ const ClassroomListPane: React.FC<ClassroomListPaneProps> = ({
   return (
     <div className="w-full shrink-0 md:max-w-md flex flex-col gap-4">
       <div className="flex justify-between items-center px-1">
-        <h2 className="text-lg font-bold text-slate-800">Aulas</h2>
+        <h2 className="text-lg font-bold text-slate-800">Classrooms</h2>
         {admin && (
           <button
             onClick={onOpenNewModal}
             className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 transition-colors shadow-sm font-medium"
             data-testid="classrooms-new-button"
           >
-            <Plus size={16} /> Nueva Aula
+            <Plus size={16} /> New Classroom
           </button>
         )}
       </div>
@@ -55,7 +55,7 @@ const ClassroomListPane: React.FC<ClassroomListPaneProps> = ({
         <Search size={16} className="absolute left-3 top-3 text-slate-400" />
         <input
           type="text"
-          placeholder="Buscar aula..."
+          placeholder="Search classroom..."
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
           className="w-full bg-white border border-slate-200 rounded-lg py-2.5 pl-9 pr-4 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none shadow-sm transition-all"
@@ -66,18 +66,18 @@ const ClassroomListPane: React.FC<ClassroomListPaneProps> = ({
         {isInitialLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
-            <span className="ml-2 text-slate-500 text-sm">Cargando aulas...</span>
+            <span className="ml-2 text-slate-500 text-sm">Loading classrooms...</span>
           </div>
         ) : loadError ? (
           <div className="text-center py-8">
             <AlertCircle className="w-6 h-6 text-red-400 mx-auto" />
             <span className="text-red-500 text-sm mt-2 block">{loadError}</span>
             <button onClick={onRetry} className="text-blue-600 hover:text-blue-800 text-sm mt-2">
-              Reintentar
+              Retry
             </button>
           </div>
         ) : filteredClassrooms.length === 0 ? (
-          <div className="text-center py-8 text-slate-500 text-sm">No se encontraron aulas</div>
+          <div className="text-center py-8 text-slate-500 text-sm">No classrooms found</div>
         ) : (
           filteredClassrooms.map((room) => {
             const inferredSource = inferGroupSource({
@@ -116,7 +116,7 @@ const ClassroomListPane: React.FC<ClassroomListPaneProps> = ({
                 </div>
                 <div className="flex items-center gap-4 text-xs text-slate-500">
                   <span className="flex items-center gap-1">
-                    <Laptop size={12} /> {room.computerCount} Equipos
+                    <Laptop size={12} /> {room.computerCount} Computers
                   </span>
                   <GroupLabel
                     groupId={room.currentGroupId}

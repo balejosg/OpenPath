@@ -51,15 +51,15 @@ describe('ClassroomConfigCard', () => {
     const props = buildProps();
     render(<ClassroomConfigCard {...props} />);
 
-    expect(screen.getByText('Configuración y estado del aula')).toBeInTheDocument();
+    expect(screen.getByText('Classroom settings and status')).toBeInTheDocument();
     expect(
       screen.getByText(
-        (_, node) => node?.textContent === 'Actualmente usando Grupo Default por defecto'
+        (_, node) => node?.textContent === 'Currently using Grupo Default by default'
       )
     ).toBeInTheDocument();
-    expect(screen.getByText('1/2 en línea')).toBeInTheDocument();
+    expect(screen.getByText('1/2 online')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /eliminar aula/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Delete Classroom/i }));
 
     expect(props.onOpenDeleteDialog).toHaveBeenCalledTimes(1);
   });
@@ -69,12 +69,14 @@ describe('ClassroomConfigCard', () => {
       <ClassroomConfigCard
         {...buildProps({
           classroom: buildClassroom({ status: 'degraded' }),
-          classroomConfigError: 'No puedes dejar el aula sin grupo por defecto.',
+          classroomConfigError: 'You cannot leave the classroom without a default group.',
         })}
       />
     );
 
-    expect(screen.getByText('Degradado')).toBeInTheDocument();
-    expect(screen.getByText('No puedes dejar el aula sin grupo por defecto.')).toBeInTheDocument();
+    expect(screen.getByText('Degraded')).toBeInTheDocument();
+    expect(
+      screen.getByText('You cannot leave the classroom without a default group.')
+    ).toBeInTheDocument();
   });
 });

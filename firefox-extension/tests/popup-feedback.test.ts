@@ -90,12 +90,12 @@ await describe('popup feedback helpers', async () => {
       nativeState: {
         available: true,
         className: 'status-indicator available',
-        label: 'Host nativo v1.2.3',
+        label: 'Native host v1.2.3',
       },
       nativeStatusEl,
     });
 
-    assert.equal(nativeStatusEl.textContent, 'Host nativo v1.2.3');
+    assert.equal(nativeStatusEl.textContent, 'Native host v1.2.3');
     assert.equal(nativeStatusEl.className, 'status-indicator available');
     assert.equal(btnVerify.disabled, false);
 

@@ -49,7 +49,7 @@ export function registerDashboardRoutes(app: express.Express): void {
     asyncHandler(async (req: Request, res: Response): Promise<void> => {
       const { name, displayName } = req.body as Record<string, unknown>;
       if (!name || !displayName || typeof name !== 'string' || typeof displayName !== 'string') {
-        res.status(400).json({ error: 'Nombre requerido' });
+        res.status(400).json({ error: 'Name is required' });
         return;
       }
 
@@ -58,7 +58,7 @@ export function registerDashboardRoutes(app: express.Express): void {
         res.json({ success: true, id: result.id, name: result.name });
       } catch (err: unknown) {
         if (isTRPCError(err) && getTRPCErrorCode(err) === 'CONFLICT') {
-          res.status(400).json({ error: 'Ya existe un grupo con ese nombre' });
+          res.status(400).json({ error: 'A group with that name already exists' });
           return;
         }
         throw err;
@@ -72,13 +72,13 @@ export function registerDashboardRoutes(app: express.Express): void {
     asyncHandler(async (req: Request, res: Response): Promise<void> => {
       const id = getFirstValue(req.params.id);
       if (!id) {
-        res.status(400).json({ error: 'ID requerido' });
+        res.status(400).json({ error: 'ID is required' });
         return;
       }
 
       const group = await getApiClient(req).getGroupById(id);
       if (!group) {
-        res.status(404).json({ error: 'Grupo no encontrado' });
+        res.status(404).json({ error: 'Group not found' });
         return;
       }
       res.json(group);
@@ -91,7 +91,7 @@ export function registerDashboardRoutes(app: express.Express): void {
     asyncHandler(async (req: Request, res: Response): Promise<void> => {
       const id = getFirstValue(req.params.id);
       if (!id) {
-        res.status(400).json({ error: 'ID requerido' });
+        res.status(400).json({ error: 'ID is required' });
         return;
       }
 
@@ -112,7 +112,7 @@ export function registerDashboardRoutes(app: express.Express): void {
     asyncHandler(async (req: Request, res: Response): Promise<void> => {
       const id = getFirstValue(req.params.id);
       if (!id) {
-        res.status(400).json({ error: 'ID requerido' });
+        res.status(400).json({ error: 'ID is required' });
         return;
       }
 
@@ -127,7 +127,7 @@ export function registerDashboardRoutes(app: express.Express): void {
     asyncHandler(async (req: Request, res: Response): Promise<void> => {
       const groupId = getFirstValue(req.params.groupId);
       if (!groupId) {
-        res.status(400).json({ error: 'Group ID requerido' });
+        res.status(400).json({ error: 'Group ID is required' });
         return;
       }
 
@@ -146,13 +146,13 @@ export function registerDashboardRoutes(app: express.Express): void {
     asyncHandler(async (req: Request, res: Response): Promise<void> => {
       const groupId = getFirstValue(req.params.groupId);
       if (!groupId) {
-        res.status(400).json({ error: 'Group ID requerido' });
+        res.status(400).json({ error: 'Group ID is required' });
         return;
       }
 
       const { type, value, comment } = req.body as Record<string, unknown>;
       if (!type || !value || typeof type !== 'string' || typeof value !== 'string') {
-        res.status(400).json({ error: 'Tipo y valor requeridos' });
+        res.status(400).json({ error: 'Type and value are required' });
         return;
       }
 
@@ -166,7 +166,7 @@ export function registerDashboardRoutes(app: express.Express): void {
         res.json({ success: true, id: result.id });
       } catch (err: unknown) {
         if (isTRPCError(err) && getTRPCErrorCode(err) === 'CONFLICT') {
-          res.status(400).json({ error: 'La regla ya existe' });
+          res.status(400).json({ error: 'Rule already exists' });
           return;
         }
         throw err;
@@ -180,13 +180,13 @@ export function registerDashboardRoutes(app: express.Express): void {
     asyncHandler(async (req: Request, res: Response): Promise<void> => {
       const groupId = getFirstValue(req.params.groupId);
       if (!groupId) {
-        res.status(400).json({ error: 'Group ID requerido' });
+        res.status(400).json({ error: 'Group ID is required' });
         return;
       }
 
       const { type, values } = req.body as Record<string, unknown>;
       if (!type || !values || !Array.isArray(values)) {
-        res.status(400).json({ error: 'Tipo y valores requeridos' });
+        res.status(400).json({ error: 'Type and values are required' });
         return;
       }
 
@@ -205,7 +205,7 @@ export function registerDashboardRoutes(app: express.Express): void {
     asyncHandler(async (req: Request, res: Response): Promise<void> => {
       const id = getFirstValue(req.params.id);
       if (!id) {
-        res.status(400).json({ error: 'ID requerido' });
+        res.status(400).json({ error: 'ID is required' });
         return;
       }
 
@@ -217,7 +217,7 @@ export function registerDashboardRoutes(app: express.Express): void {
   app.get('/export/:name.txt', (req: Request, res: Response): void => {
     const name = getFirstValue(req.params.name);
     if (!name) {
-      res.status(400).send('Nombre requerido');
+      res.status(400).send('Name is required');
       return;
     }
 

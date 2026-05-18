@@ -19,24 +19,24 @@ describe('GroupLabel', () => {
       />
     );
 
-    expect(screen.getByText('Grupo Uno · defecto')).toBeInTheDocument();
+    expect(screen.getByText('Grupo Uno · default')).toBeInTheDocument();
   });
 
   it('redacts unknown group ids for non-admin users based on source', () => {
     render(<GroupLabel groupId="secret" source="schedule" />);
-    expect(screen.getByText('Reservado por otro profesor · horario')).toBeInTheDocument();
+    expect(screen.getByText('Reserved by another teacher · schedule')).toBeInTheDocument();
   });
 
   it('reveals unknown group id when requested', () => {
     render(<GroupLabel groupId="secret" source="schedule" revealUnknownId />);
-    expect(screen.getByText('secret · horario')).toBeInTheDocument();
+    expect(screen.getByText('secret · schedule')).toBeInTheDocument();
   });
 });
 
 describe('resolveGroupDisplayName', () => {
   it('uses noneLabel when groupId is empty', () => {
-    const name = resolveGroupDisplayName({ groupId: '', source: 'none', noneLabel: 'Sin grupo' });
-    expect(name).toBe('Sin grupo');
+    const name = resolveGroupDisplayName({ groupId: '', source: 'none', noneLabel: 'No group' });
+    expect(name).toBe('No group');
   });
 });
 

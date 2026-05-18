@@ -89,12 +89,12 @@ describe('DomainRequests - Original group approval', () => {
     renderDomainRequests();
 
     await screen.findByText('example.com');
-    fireEvent.click(screen.getByTitle('Aprobar'));
+    fireEvent.click(screen.getByTitle('Approve'));
 
-    expect(await screen.findByText(/grupo original/i)).toBeInTheDocument();
-    expect(screen.queryByText('Grupo de destino')).not.toBeInTheDocument();
+    expect(await screen.findByText(/original group/i)).toBeInTheDocument();
+    expect(screen.queryByText('Target group')).not.toBeInTheDocument();
 
-    const approveButtons = screen.getAllByRole('button', { name: 'Aprobar' });
+    const approveButtons = screen.getAllByRole('button', { name: 'Approve' });
     const modalApproveButton = approveButtons.at(-1);
     if (!modalApproveButton) {
       throw new Error('Modal approve button not found');
@@ -124,13 +124,13 @@ describe('DomainRequests - Original group approval', () => {
     renderDomainRequests();
 
     await screen.findByText('example.com');
-    fireEvent.click(screen.getByLabelText('Seleccionar example.com'));
+    fireEvent.click(screen.getByLabelText('Select example.com'));
 
-    const reasonInput = screen.getByPlaceholderText('Motivo para rechazo en lote (opcional)');
+    const reasonInput = screen.getByPlaceholderText('Bulk rejection reason (optional)');
     fireEvent.change(reasonInput, { target: { value: 'No aplica' } });
     expect(screen.getByDisplayValue('No aplica')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Limpiar seleccion' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
 
     expect(screen.queryByDisplayValue('No aplica')).not.toBeInTheDocument();
   });
@@ -139,19 +139,17 @@ describe('DomainRequests - Original group approval', () => {
     renderDomainRequests();
 
     await screen.findByText('example.com');
-    fireEvent.click(screen.getByLabelText('Seleccionar example.com'));
-    fireEvent.click(screen.getByRole('button', { name: 'Aprobar seleccionadas' }));
+    fireEvent.click(screen.getByLabelText('Select example.com'));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve selected' }));
 
     expect(mockApprove).not.toHaveBeenCalled();
 
     const dialog = await screen.findByRole('dialog');
-    expect(
-      within(dialog).getByRole('heading', { name: 'Aprobar solicitudes' })
-    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: 'Approve requests' })).toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
-    expect(screen.queryByRole('heading', { name: 'Aprobar solicitudes' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Approve requests' })).not.toBeInTheDocument();
     expect(mockApprove).not.toHaveBeenCalled();
   });
 
@@ -159,19 +157,17 @@ describe('DomainRequests - Original group approval', () => {
     renderDomainRequests();
 
     await screen.findByText('example.com');
-    fireEvent.click(screen.getByLabelText('Seleccionar example.com'));
-    fireEvent.click(screen.getByRole('button', { name: 'Rechazar seleccionadas' }));
+    fireEvent.click(screen.getByLabelText('Select example.com'));
+    fireEvent.click(screen.getByRole('button', { name: 'Reject selected' }));
 
     expect(mockReject).not.toHaveBeenCalled();
 
     const dialog = await screen.findByRole('dialog');
-    expect(
-      within(dialog).getByRole('heading', { name: 'Rechazar solicitudes' })
-    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: 'Reject requests' })).toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
-    expect(screen.queryByRole('heading', { name: 'Rechazar solicitudes' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Reject requests' })).not.toBeInTheDocument();
     expect(mockReject).not.toHaveBeenCalled();
   });
 
@@ -180,12 +176,10 @@ describe('DomainRequests - Original group approval', () => {
 
     await screen.findByText('example.com');
 
-    const searchInput = screen.getByPlaceholderText('Buscar por dominio o máquina...');
+    const searchInput = screen.getByPlaceholderText('Search by domain or machine...');
     fireEvent.change(searchInput, { target: { value: 'zzzz-not-found' } });
 
-    expect(
-      screen.getByText('No hay solicitudes para los filtros seleccionados')
-    ).toBeInTheDocument();
+    expect(screen.getByText('No requests match the selected filters')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Limpiar busqueda' }));
 
@@ -198,13 +192,11 @@ describe('DomainRequests - Original group approval', () => {
 
     await screen.findByText('example.com');
 
-    const searchInput = screen.getByPlaceholderText('Buscar por dominio o máquina...');
+    const searchInput = screen.getByPlaceholderText('Search by domain or machine...');
     fireEvent.change(searchInput, { target: { value: '   EXAMPLE.COM   ' } });
 
     expect(screen.getByText('example.com')).toBeInTheDocument();
-    expect(
-      screen.queryByText('No hay solicitudes para los filtros seleccionados')
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText('No requests match the selected filters')).not.toBeInTheDocument();
   });
 
   it('keeps filters visible and allows clearing when source filter has no matches', async () => {
@@ -215,14 +207,12 @@ describe('DomainRequests - Original group approval', () => {
     const sourceFilter = screen.getByRole('combobox', { name: 'Filtrar por fuente' });
     fireEvent.change(sourceFilter, { target: { value: 'firefox-extension' } });
 
-    expect(screen.queryByText('Todo en orden')).not.toBeInTheDocument();
-    expect(
-      screen.getByText('No hay solicitudes para los filtros seleccionados')
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Limpiar filtros' })).toBeInTheDocument();
+    expect(screen.queryByText('All clear')).not.toBeInTheDocument();
+    expect(screen.getByText('No requests match the selected filters')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear filters' })).toBeInTheDocument();
     expect(sourceFilter).toHaveValue('firefox-extension');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Limpiar filtros' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
     expect(sourceFilter).toHaveValue('all');
     expect(screen.getByText('example.com')).toBeInTheDocument();
@@ -272,12 +262,12 @@ describe('DomainRequests - Original group approval', () => {
 
     await screen.findByText('approved.example.com');
 
-    const bulkSelectHeader = screen.getByRole('checkbox', { name: 'Seleccion masiva de pagina' });
+    const bulkSelectHeader = screen.getByRole('checkbox', { name: 'Bulk select page' });
     expect(bulkSelectHeader).toBeDisabled();
     expect(bulkSelectHeader).toHaveAttribute(
       'title',
-      'Seleccion masiva no disponible en este filtro'
+      'Bulk selection is not available for this filter'
     );
-    expect(screen.queryByLabelText('Seleccionar approved.example.com')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Select approved.example.com')).not.toBeInTheDocument();
   });
 });

@@ -10,7 +10,7 @@ activate_firewall() {
     local critical_failed=0
 
     if ! validate_ip "$PRIMARY_DNS"; then
-        log_warn "DNS primario '$PRIMARY_DNS' inválido - usando fallback"
+        log_warn "Primary DNS '$PRIMARY_DNS' invalid - usando fallback"
         PRIMARY_DNS="${FALLBACK_DNS_PRIMARY:-8.8.8.8}"
     fi
 

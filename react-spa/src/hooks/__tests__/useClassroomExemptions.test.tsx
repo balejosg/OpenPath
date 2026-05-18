@@ -234,7 +234,7 @@ describe('useClassroomExemptions', () => {
       await result.current.handleCreateOperationalExemption('machine-1', 4, 'Mantenimiento');
     });
 
-    expect(result.current.exemptionsError).toBe('No se pudo crear la exención');
+    expect(result.current.exemptionsError).toBe('Unable to create exemption');
   });
 
   it('reports an error when the initial exemptions fetch fails', async () => {
@@ -251,7 +251,7 @@ describe('useClassroomExemptions', () => {
 
     await waitFor(() => {
       expect(result.current.loadingExemptions).toBe(false);
-      expect(result.current.exemptionsError).toBe('Error al cargar exenciones');
+      expect(result.current.exemptionsError).toBe('Unable to load exemptions');
       expect(result.current.exemptionByMachineId.size).toBe(0);
     });
   });

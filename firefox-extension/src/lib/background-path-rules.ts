@@ -70,7 +70,7 @@ export function createBackgroundPathRulesController(
         }),
       };
 
-      logger.info('[Monitor] Reglas de rutas actualizadas', {
+      logger.info('[Monitor] Path rules updated', {
         count: blockedPathRulesState.rules.length,
         source: response.source,
       });

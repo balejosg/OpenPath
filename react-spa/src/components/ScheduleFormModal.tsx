@@ -13,11 +13,11 @@ import { isGroupEnabled, type GroupLike } from './groups/GroupLabel';
 import { Modal } from './ui/Modal';
 
 const DAY_OPTIONS = [
-  { value: 1, label: 'Lunes' },
-  { value: 2, label: 'Martes' },
-  { value: 3, label: 'Miércoles' },
-  { value: 4, label: 'Jueves' },
-  { value: 5, label: 'Viernes' },
+  { value: 1, label: 'Monday' },
+  { value: 2, label: 'Tuesday' },
+  { value: 3, label: 'Wednesday' },
+  { value: 4, label: 'Thursday' },
+  { value: 5, label: 'Friday' },
 ] as const;
 
 const TIME_OPTIONS = buildTimeOfDayOptions({ startHour: 7, endHour: 21, stepMinutes: 15 });
@@ -94,17 +94,17 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
   const handleSubmit = () => {
     setLocalError('');
     if (dayOfWeek === null) {
-      setLocalError('Selecciona un dia');
+      setLocalError('Select a day');
       return;
     }
     if (!groupId) {
-      setLocalError('Selecciona un grupo');
+      setLocalError('Select a group');
       return;
     }
 
     const cmp = compareTimeOfDay(startTime, endTime);
     if (cmp === null || cmp >= 0) {
-      setLocalError('La hora de fin debe ser posterior a la de inicio');
+      setLocalError('End time must be after start time');
       return;
     }
     onSave({ dayOfWeek, startTime, endTime, groupId });
@@ -119,13 +119,13 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
     <Modal
       isOpen
       onClose={handleClose}
-      title={isEdit ? 'Editar Horario' : 'Nuevo Horario'}
+      title={isEdit ? 'Edit Schedule' : 'New Schedule'}
       className="max-w-md"
     >
       <div className="space-y-4">
         {/* Day */}
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Día</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Day</label>
           <div className="flex gap-1.5">
             {DAY_OPTIONS.map((d) => (
               <button
@@ -151,7 +151,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
               htmlFor="schedule-start"
               className="block text-sm font-medium text-slate-700 mb-1"
             >
-              Hora Inicio
+              Start Time
             </label>
             <select
               id="schedule-start"
@@ -168,7 +168,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
           </div>
           <div>
             <label htmlFor="schedule-end" className="block text-sm font-medium text-slate-700 mb-1">
-              Hora Fin
+              End Time
             </label>
             <select
               id="schedule-end"
@@ -188,7 +188,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
         {/* Group */}
         <div>
           <label htmlFor="schedule-group" className="block text-sm font-medium text-slate-700 mb-1">
-            Grupo de Reglas
+            Rule Group
           </label>
           <GroupSelect
             id="schedule-group"
@@ -198,7 +198,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
             includeNoneOption={false}
             inactiveBehavior={schedule ? 'disable' : 'hide'}
             disabled={saving || groups.length === 0}
-            emptyLabel="Sin grupos disponibles"
+            emptyLabel="No groups available"
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none disabled:bg-slate-50 disabled:text-slate-500"
           />
         </div>
@@ -217,7 +217,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
             disabled={saving}
             className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
           >
-            Cancelar
+            Cancel
           </button>
           <button
             onClick={handleSubmit}
@@ -225,7 +225,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
             className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {saving && <Loader2 size={16} className="animate-spin" />}
-            {isEdit ? 'Guardar Cambios' : 'Crear Horario'}
+            {isEdit ? 'Save Changes' : 'Create Schedule'}
           </button>
         </div>
       </div>

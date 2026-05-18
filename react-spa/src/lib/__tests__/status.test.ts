@@ -17,13 +17,13 @@ describe('status helpers', () => {
   });
 
   it('returns Spanish labels for Active/Inactive', () => {
-    expect(getEsActiveInactiveLabel('Active')).toBe('Activo');
-    expect(getEsActiveInactiveLabel('Inactive')).toBe('Inactivo');
+    expect(getEsActiveInactiveLabel('Active')).toBe('Active');
+    expect(getEsActiveInactiveLabel('Inactive')).toBe('Inactive');
   });
 
   it('returns a safe label for unknown values', () => {
-    expect(getEsActiveInactiveLabelSafe('active')).toBe('Activo');
-    expect(getEsActiveInactiveLabelSafe('unknown')).toBe('Desconocido');
+    expect(getEsActiveInactiveLabelSafe('active')).toBe('Active');
+    expect(getEsActiveInactiveLabelSafe('unknown')).toBe('Unknown');
     expect(getEsActiveInactiveLabelSafe('unknown', 'N/A')).toBe('N/A');
   });
 });

@@ -27,8 +27,8 @@ const classroomModels: ClassroomListModel[] = [
   },
   {
     id: 'classroom-2',
-    name: 'Aula Sur',
-    displayName: 'Aula Sur',
+    name: 'South Classroom',
+    displayName: 'South Classroom',
     defaultGroupId: 'group-default',
     defaultGroupDisplayName: 'Plan Base',
     machineCount: 8,
@@ -60,8 +60,8 @@ const classrooms: Classroom[] = [
   },
   {
     id: 'classroom-2',
-    name: 'Aula Sur',
-    displayName: 'Aula Sur',
+    name: 'South Classroom',
+    displayName: 'South Classroom',
     defaultGroupId: 'group-default',
     defaultGroupDisplayName: 'Plan Base',
     computerCount: 8,
@@ -104,7 +104,7 @@ describe('classroom-selectors', () => {
   });
 
   it('filters classroom models through the shared classroom selector', () => {
-    expect(selectFilteredClassroomsFromModels(classroomModels, 'aula sur')).toEqual([
+    expect(selectFilteredClassroomsFromModels(classroomModels, 'south classroom')).toEqual([
       classrooms[1],
     ]);
   });
@@ -112,20 +112,20 @@ describe('classroom-selectors', () => {
   it('derives active classroom rows from classroom models', () => {
     expect(selectActiveClassroomRowsFromModels(classroomModels, groupById)).toEqual([
       {
-        classroomId: 'classroom-2',
-        classroomName: 'Aula Sur',
-        groupId: 'group-default',
-        group: groupById.get('group-default'),
-        source: 'default',
-        hasManualOverride: false,
-      },
-      {
         classroomId: 'classroom-1',
         classroomName: 'Laboratorio Norte',
         groupId: 'group-manual',
         group: groupById.get('group-manual'),
         source: 'manual',
         hasManualOverride: true,
+      },
+      {
+        classroomId: 'classroom-2',
+        classroomName: 'South Classroom',
+        groupId: 'group-default',
+        group: groupById.get('group-default'),
+        source: 'default',
+        hasManualOverride: false,
       },
     ]);
   });

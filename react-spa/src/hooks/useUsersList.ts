@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 import type { User } from '../types';
 import { trpc } from '../lib/trpc';
@@ -89,15 +89,23 @@ export function useUsersList(): {
     },
   });
 
+  const lastUsersRef = useRef<User[]>([]);
+
+  useEffect(() => {
+    if (query.data !== undefined) {
+      lastUsersRef.current = query.data;
+    }
+  }, [query.data]);
+
   const fetchUsers = useCallback(async () => {
     await query.refetch();
   }, [query.refetch]);
 
-  const hasData = query.data !== undefined;
-  const users = query.data ?? [];
+  const hasData = query.data !== undefined || lastUsersRef.current.length > 0;
+  const users = query.data ?? lastUsersRef.current;
   const loading = query.status === 'pending';
   const fetching = query.fetchStatus === 'fetching';
-  const error = query.error ? 'Error al cargar usuarios' : null;
+  const error = query.error ? 'Unable to load users' : null;
 
   return { users, hasData, loading, fetching, error, fetchUsers };
 }

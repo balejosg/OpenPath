@@ -22,9 +22,9 @@ step_install_firefox() {
 
 step_apply_policies() {
     echo ""
-    echo "[11/13] Verificando integraciones de navegadores..."
+    echo "[11/13] Verifying browser integrations..."
 
-    echo "✓ Integraciones preparadas"
+    echo "✓ Integrations prepared"
 }
 
 step_install_extension() {
@@ -86,7 +86,7 @@ step_install_extension() {
 
 step_enable_services() {
     echo ""
-    echo "[13/13] Habilitando servicios..."
+    echo "[13/13] Enabling services..."
 
     enable_services
 
@@ -98,12 +98,12 @@ step_enable_services() {
         [ -f "$f" ] && sha256sum "$f" >> "$INTEGRITY_HASH_FILE"
     done
     chmod 600 "$INTEGRITY_HASH_FILE"
-    echo "✓ Hashes de integridad generados"
+    echo "✓ Integrity hashes generated"
 
-    echo "Ejecutando primera actualización..."
-    "$SCRIPTS_DIR/openpath-update.sh" || echo "⚠ Primera actualización falló (el timer lo reintentará)"
+    echo "Running first update..."
+    "$SCRIPTS_DIR/openpath-update.sh" || echo "⚠ First update failed (the timer will retry)"
 
-    echo "✓ Servicios habilitados"
+    echo "✓ Services enabled"
 }
 
 run_smoke_tests() {
@@ -113,7 +113,7 @@ run_smoke_tests() {
     fi
 
     echo ""
-    echo "Ejecutando smoke tests..."
+    echo "Running smoke tests..."
     if "$SCRIPTS_DIR/smoke-test.sh" --quick 2>/dev/null; then
         SMOKE_STATUS="PASSED"
     else
@@ -130,7 +130,7 @@ run_classroom_registration() {
 
     if [ -n "$CLASSROOM_NAME" ] && [ -n "$API_URL" ]; then
         echo ""
-        echo "Registrando máquina en aula..."
+        echo "Registering machine in classroom..."
 
         if register_machine "$(hostname)" "$CLASSROOM_NAME" "" "$VERSION" "$API_URL" "$REGISTRATION_TOKEN"; then
             MACHINE_REGISTERED="REGISTERED"
@@ -139,22 +139,22 @@ run_classroom_registration() {
                 if [ -n "$REGISTERED_MACHINE_NAME" ]; then
                     persist_machine_name "$REGISTERED_MACHINE_NAME" || true
                 fi
-                echo "✓ Máquina registrada en aula: $CLASSROOM_NAME"
-                echo "  → Whitelist URL tokenizada guardada"
+                echo "✓ Machine registered in classroom: $CLASSROOM_NAME"
+                echo "  → Tokenized whitelist URL saved"
             else
                 MACHINE_REGISTERED="FAILED"
-                echo "⚠ Registro exitoso pero no se recibió URL tokenizada"
+                echo "⚠ Registration succeeded but no tokenized URL was received"
                 return 1
             fi
         else
             MACHINE_REGISTERED="FAILED"
-            echo "⚠ Error al registrar máquina"
-            echo "  Respuesta: $REGISTER_RESPONSE"
+            echo "⚠ Error registering machine"
+            echo "  Response: $REGISTER_RESPONSE"
             return 1
         fi
     elif [ "$INSTALL_NATIVE_HOST" = true ]; then
         MACHINE_REGISTERED="FAILED"
-        echo "⚠ Modo de solicitudes del navegador requiere configuración de aula"
+        echo "⚠ Browser request mode requires classroom configuration"
         return 1
     fi
 
@@ -177,33 +177,33 @@ print_summary() {
 
     echo ""
     echo "======================================================"
-    echo "  ✓ INSTALACIÓN COMPLETADA"
+    echo "  ✓ INSTALLATION COMPLETED"
     echo "======================================================"
     echo ""
-    echo "Estado:"
+    echo "Status:"
     echo "  - dnsmasq: $(systemctl is-active dnsmasq)"
     echo "  - Timer: $(systemctl is-active openpath-dnsmasq.timer)"
     echo "  - Agent Update: $(systemctl is-active openpath-agent-update.timer)"
     echo "  - Watchdog: $(systemctl is-active dnsmasq-watchdog.timer)"
     echo "  - Smoke Tests: $SMOKE_STATUS"
     if [ -n "$MACHINE_REGISTERED" ]; then
-        echo "  - Registro Aula: $MACHINE_REGISTERED"
+        echo "  - Classroom registration: $MACHINE_REGISTERED"
     fi
     echo ""
-    echo "Configuración:"
+    echo "Configuration:"
     echo "  - Whitelist: $WHITELIST_URL"
     echo "  - DNS upstream: $PRIMARY_DNS"
     echo ""
-    echo "Comando de gestión: openpath"
-    echo "  openpath status  - Ver estado"
-    echo "  openpath test    - Probar DNS"
-    echo "  openpath update  - Forzar actualización"
-    echo "  openpath help    - Ver ayuda completa"
+    echo "Management command: openpath"
+    echo "  openpath status  - View status"
+    echo "  openpath test    - Test DNS"
+    echo "  openpath update  - Force update"
+    echo "  openpath help    - View full help"
     echo ""
-    echo "Tests manuales:"
-    echo "  sudo smoke-test.sh        - Ejecutar smoke tests completos"
-    echo "  sudo smoke-test.sh --quick - Solo tests críticos"
+    echo "Manual tests:"
+    echo "  sudo smoke-test.sh        - Run full smoke tests"
+    echo "  sudo smoke-test.sh --quick - Critical tests only"
     echo ""
-    echo "Desinstalar: sudo $INSTALLER_SOURCE_DIR/uninstall.sh"
+    echo "Uninstall: sudo $INSTALLER_SOURCE_DIR/uninstall.sh"
     echo ""
 }

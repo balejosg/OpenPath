@@ -42,7 +42,7 @@ export function DomainRequestsFilters({
             type="text"
             name="domain-requests-search"
             autoComplete="off"
-            placeholder="Buscar por dominio o máquina..."
+            placeholder="Search by domain or machine..."
             value={searchTerm}
             onChange={(event) => onSearchChange(event.target.value)}
             onFocus={(event) => {
@@ -78,7 +78,7 @@ export function DomainRequestsFilters({
           <select
             value={sortBy}
             onChange={(event) => onSortChange(event.target.value as SortOption)}
-            aria-label="Ordenar solicitudes"
+            aria-label="Sort requests"
             className="px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="pending">Pendientes primero</option>

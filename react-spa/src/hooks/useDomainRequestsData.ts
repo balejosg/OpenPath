@@ -71,7 +71,7 @@ export function useDomainRequestsData(statusFilter: RequestStatus | 'all') {
     groups: groupsQuery.data ?? EMPTY_GROUPS,
     loading,
     fetching,
-    error: hasError ? 'Error al cargar las solicitudes' : null,
+    error: hasError ? 'Unable to load requests' : null,
     invalidateRequests,
     approveRequest: approveMutation.mutateAsync,
     rejectRequest: rejectMutation.mutateAsync,

@@ -80,16 +80,14 @@ describe('Groups view', () => {
     renderGroups();
 
     await screen.findByText('grupo-1');
-    fireEvent.click(screen.getByRole('button', { name: /configurar/i }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Guardar Cambios' }));
+    fireEvent.click(screen.getByRole('button', { name: /configure/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save Changes' }));
 
     await waitFor(() => {
       expect(mockUpdateGroup).toHaveBeenCalled();
     });
 
-    expect(
-      await screen.findByText('Revisa los datos del grupo antes de guardar.')
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Review the group details before saving.')).toBeInTheDocument();
   });
 
   it('does not show create CTA for teacher when feature flag is disabled', async () => {
@@ -102,13 +100,11 @@ describe('Groups view', () => {
 
     expect(
       await screen.findByText(
-        'Todavía no tienes políticas asignadas. Pide a un administrador que te asigne una.'
+        'You do not have assigned policies yet. Ask an administrator to assign one.'
       )
     ).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /\+\s*nuevo\s*grupo/i })).toBeNull();
-    expect(
-      screen.queryByRole('button', { name: /\+\s*crear\s*mi\s*primera\s*política/i })
-    ).toBeNull();
+    expect(screen.queryByRole('button', { name: /\+\s*new\s*group/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /\+\s*create\s*my\s*first\s*policy/i })).toBeNull();
   });
 
   it('shows create CTA + updated empty-state for teacher when feature flag is enabled', async () => {
@@ -120,11 +116,11 @@ describe('Groups view', () => {
     renderGroups();
 
     expect(
-      await screen.findByText('Todavía no tienes políticas. Crea una nueva para empezar.')
+      await screen.findByText('You do not have policies yet. Create one to get started.')
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /\+\s*nuevo\s*grupo/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /\+\s*new\s*group/i })).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /\+\s*crear\s*mi\s*primera\s*política/i })
+      screen.getByRole('button', { name: /\+\s*create\s*my\s*first\s*policy/i })
     ).toBeInTheDocument();
   });
 
@@ -132,10 +128,10 @@ describe('Groups view', () => {
     renderGroups();
 
     await screen.findByText('grupo-1');
-    fireEvent.click(screen.getByRole('button', { name: /\+\s*nuevo\s*grupo/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Crear Grupo' }));
+    fireEvent.click(screen.getByRole('button', { name: /\+\s*new\s*group/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Group' }));
 
-    expect(await screen.findByText('El nombre del grupo es obligatorio')).toBeInTheDocument();
+    expect(await screen.findByText('Group name is required')).toBeInTheDocument();
     expect(mockCreateGroup).not.toHaveBeenCalled();
   });
 
@@ -143,15 +139,15 @@ describe('Groups view', () => {
     renderGroups();
 
     await screen.findByText('grupo-1');
-    fireEvent.click(screen.getByRole('button', { name: /\+\s*nuevo\s*grupo/i }));
+    fireEvent.click(screen.getByRole('button', { name: /\+\s*new\s*group/i }));
 
-    fireEvent.change(screen.getByPlaceholderText('Ej: grupo-primaria'), {
+    fireEvent.change(screen.getByPlaceholderText('E.g. elementary-group'), {
       target: { value: 'grupo-primaria' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Descripción del grupo...'), {
+    fireEvent.change(screen.getByPlaceholderText('Group description...'), {
       target: { value: 'Primaria A' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Crear Grupo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Group' }));
 
     await waitFor(() => {
       expect(mockCreateGroup).toHaveBeenCalledWith({
@@ -161,7 +157,7 @@ describe('Groups view', () => {
     });
     expect(mockListGroups).toHaveBeenCalledTimes(2);
     await waitFor(() => {
-      expect(screen.queryByText('Nuevo Grupo')).not.toBeInTheDocument();
+      expect(screen.queryByText('New Group')).not.toBeInTheDocument();
     });
   });
 
@@ -185,11 +181,11 @@ describe('Groups view', () => {
     await screen.findByText('grupo-1');
     fireEvent.click(screen.getByRole('button', { name: 'Biblioteca' }));
 
-    const cloneButton = await screen.findByRole('button', { name: /clonar/i });
+    const cloneButton = await screen.findByRole('button', { name: /clone/i });
     fireEvent.click(cloneButton);
 
-    expect(await screen.findByText('Clonar: Biblioteca')).toBeInTheDocument();
-    const cloneButtons = screen.getAllByRole('button', { name: 'Clonar' });
+    expect(await screen.findByText('Clone: Biblioteca')).toBeInTheDocument();
+    const cloneButtons = screen.getAllByRole('button', { name: 'Clone' });
     const confirmCloneButton = cloneButtons.at(-1);
     expect(confirmCloneButton).toBeDefined();
     fireEvent.click(confirmCloneButton as HTMLButtonElement);

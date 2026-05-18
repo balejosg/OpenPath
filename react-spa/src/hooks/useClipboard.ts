@@ -54,7 +54,7 @@ export function useClipboard(options: UseClipboardOptions = {}) {
         return true;
       } catch (err) {
         reportError('Failed to copy to clipboard:', err);
-        setState((previous) => ({ ...previous, error: 'No se pudo copiar al portapapeles' }));
+        setState((previous) => ({ ...previous, error: 'Unable to copy to clipboard' }));
         return false;
       }
     },

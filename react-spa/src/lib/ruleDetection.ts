@@ -13,6 +13,11 @@ import type {
   RuleValidationResult as SharedRuleValidationResult,
 } from '@openpath/shared/rules-validation';
 import { categorizeRuleType } from './rules';
+import {
+  translateProductText,
+  type ProductI18nKey,
+  type ProductLocale,
+} from '../i18n/product-i18n';
 
 export { getRuleTypeBadge, getRuleTypeLabel } from './rules';
 
@@ -54,7 +59,8 @@ export function extractRootDomain(domain: string): string {
  */
 export function detectRuleType(
   value: string,
-  existingWhitelistDomains: string[] = []
+  existingWhitelistDomains: string[] = [],
+  locale: ProductLocale = 'en'
 ): DetectionResult {
   const cleaned = cleanRuleValue(value, true);
 
@@ -64,7 +70,7 @@ export function detectRuleType(
       type: 'blocked_path',
       cleanedValue: cleaned,
       confidence: 'high',
-      reason: 'Contiene una ruta (/)',
+      reason: translateProductText(locale, 'rules.detect.pathReason'),
     };
   }
 
@@ -80,7 +86,7 @@ export function detectRuleType(
       type: 'blocked_subdomain',
       cleanedValue: domainCleaned,
       confidence: 'high',
-      reason: `"${rootDomain}" ya está permitido, se bloqueará este subdominio`,
+      reason: translateProductText(locale, 'rules.detect.subdomainExistingReason', { rootDomain }),
     };
   }
 
@@ -94,7 +100,7 @@ export function detectRuleType(
         type: 'blocked_subdomain',
         cleanedValue: domainCleaned,
         confidence: 'high',
-        reason: `Patrón wildcard para bloquear subdominios de "${baseRoot}"`,
+        reason: translateProductText(locale, 'rules.detect.wildcardExistingReason', { baseRoot }),
       };
     }
 
@@ -103,7 +109,7 @@ export function detectRuleType(
       type: 'blocked_subdomain',
       cleanedValue: domainCleaned,
       confidence: 'medium',
-      reason: 'Patrón wildcard detectado',
+      reason: translateProductText(locale, 'rules.detect.wildcardReason'),
     };
   }
 
@@ -114,7 +120,7 @@ export function detectRuleType(
       type: 'blocked_subdomain',
       cleanedValue: domainCleaned,
       confidence: 'high',
-      reason: `"${rootDomain}" ya está permitido, se bloqueará este subdominio`,
+      reason: translateProductText(locale, 'rules.detect.subdomainExistingReason', { rootDomain }),
     };
   }
 
@@ -123,65 +129,70 @@ export function detectRuleType(
     type: 'whitelist',
     cleanedValue: domainCleaned,
     confidence: 'high',
-    reason: 'Dominio para añadir a la lista blanca',
+    reason: translateProductText(locale, 'rules.detect.whitelistReason'),
   };
 }
 
 // =============================================================================
-// Validation (canonical logic in @openpath/shared, UI messages in Spanish)
+// Validation (canonical logic in @openpath/shared, UI messages in product catalogs)
 // =============================================================================
 
-const SPANISH_VALIDATION_MESSAGES: Partial<Record<RuleValidationCode, string>> = {
-  EMPTY: 'El valor no puede estar vacío',
-
-  DOMAIN_TOO_SHORT: 'El dominio es demasiado corto (mínimo 4 caracteres)',
-  DOMAIN_TOO_LONG: 'El dominio excede los 253 caracteres permitidos',
-  DOMAIN_CONSECUTIVE_DOTS: 'El dominio no puede contener puntos consecutivos (..)',
-  DOMAIN_INVALID_FORMAT: 'Formato de dominio inválido. Ejemplo válido: example.com',
-  DOMAIN_LABEL_TOO_LONG: 'Cada parte del dominio debe tener como máximo 63 caracteres',
-
-  SUBDOMAIN_TOO_SHORT: 'El subdominio es demasiado corto (mínimo 4 caracteres)',
-  SUBDOMAIN_TOO_LONG: 'El subdominio excede los 253 caracteres permitidos',
-  SUBDOMAIN_CONSECUTIVE_DOTS: 'El subdominio no puede contener puntos consecutivos (..)',
-  SUBDOMAIN_INVALID_FORMAT:
-    'Formato de subdominio inválido. Ejemplo válido: sub.example.com o *.example.com',
-  SUBDOMAIN_LABEL_TOO_LONG: 'Cada parte del subdominio debe tener como máximo 63 caracteres',
-
-  PATH_MISSING_SLASH: 'La ruta debe contener una barra (/). Ejemplo: example.com/path',
-  PATH_EMPTY: 'La ruta después del dominio no puede estar vacía',
-  PATH_INVALID_CHARS: 'La ruta contiene caracteres no permitidos (espacios)',
+const RULE_VALIDATION_MESSAGE_KEYS: Partial<Record<RuleValidationCode, ProductI18nKey>> = {
+  EMPTY: 'rules.validation.empty',
+  DOMAIN_TOO_SHORT: 'rules.validation.domainTooShort',
+  DOMAIN_TOO_LONG: 'rules.validation.domainTooLong',
+  DOMAIN_CONSECUTIVE_DOTS: 'rules.validation.domainConsecutiveDots',
+  DOMAIN_INVALID_FORMAT: 'rules.validation.domainInvalidFormat',
+  DOMAIN_LABEL_TOO_LONG: 'rules.validation.domainLabelTooLong',
+  SUBDOMAIN_TOO_SHORT: 'rules.validation.subdomainTooShort',
+  SUBDOMAIN_TOO_LONG: 'rules.validation.subdomainTooLong',
+  SUBDOMAIN_CONSECUTIVE_DOTS: 'rules.validation.subdomainConsecutiveDots',
+  SUBDOMAIN_INVALID_FORMAT: 'rules.validation.subdomainInvalidFormat',
+  SUBDOMAIN_LABEL_TOO_LONG: 'rules.validation.subdomainLabelTooLong',
+  PATH_MISSING_SLASH: 'rules.validation.pathMissingSlash',
+  PATH_EMPTY: 'rules.validation.pathEmpty',
+  PATH_INVALID_CHARS: 'rules.validation.pathInvalidChars',
 };
 
-function toSpanishRuleValidationError(result: SharedRuleValidationResult): string {
+function toRuleValidationError(
+  result: SharedRuleValidationResult,
+  locale: ProductLocale = 'en'
+): string {
   if (result.code === 'PATH_INVALID_DOMAIN') {
     const domainCode = result.details?.domainCode;
+    const domainKey =
+      domainCode !== undefined ? RULE_VALIDATION_MESSAGE_KEYS[domainCode] : undefined;
     const domainError =
-      (domainCode !== undefined ? SPANISH_VALIDATION_MESSAGES[domainCode] : undefined) ??
+      (domainKey !== undefined ? translateProductText(locale, domainKey) : undefined) ??
       result.details?.domainError ??
       '';
-    return `Dominio inválido en la ruta: ${domainError}`;
+    return translateProductText(locale, 'rules.validation.pathInvalidDomain', { domainError });
   }
 
   if (result.code !== undefined) {
-    const message = SPANISH_VALIDATION_MESSAGES[result.code];
-    if (message) {
-      return message;
+    const key = RULE_VALIDATION_MESSAGE_KEYS[result.code];
+    if (key) {
+      return translateProductText(locale, key);
     }
   }
 
-  return result.error ?? 'Formato inválido';
+  return result.error ?? translateProductText(locale, 'rules.validation.invalidFormat');
 }
 
 /**
  * Validate a rule value based on its detected type.
  * Applies format validation for domains, subdomains, and paths.
  */
-export function validateRuleValue(value: string, type: RuleType): ValidationResult {
+export function validateRuleValue(
+  value: string,
+  type: RuleType,
+  locale: ProductLocale = 'en'
+): ValidationResult {
   const result = validateRuleValueShared(value, type);
   if (result.valid) {
     return { valid: true };
   }
-  return { valid: false, error: toSpanishRuleValidationError(result) };
+  return { valid: false, error: toRuleValidationError(result, locale) };
 }
 
 /**

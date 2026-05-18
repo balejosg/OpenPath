@@ -15,20 +15,20 @@ describe('BulkActionBar Component', () => {
   it('renders when items are selected', () => {
     render(<BulkActionBar selectedCount={3} onDelete={noop} onClear={noop} />);
 
-    expect(screen.getByText('3 seleccionados')).toBeInTheDocument();
+    expect(screen.getByText('3 selected')).toBeInTheDocument();
   });
 
   it('shows singular text for single selection', () => {
     render(<BulkActionBar selectedCount={1} onDelete={noop} onClear={noop} />);
 
-    expect(screen.getByText('1 seleccionado')).toBeInTheDocument();
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
   });
 
   it('calls onDelete when delete button is clicked', () => {
     const handleDelete = vi.fn();
     render(<BulkActionBar selectedCount={2} onDelete={handleDelete} onClear={noop} />);
 
-    const deleteButton = screen.getByRole('button', { name: /eliminar/i });
+    const deleteButton = screen.getByRole('button', { name: /delete/i });
     fireEvent.click(deleteButton);
 
     expect(handleDelete).toHaveBeenCalled();
@@ -38,7 +38,7 @@ describe('BulkActionBar Component', () => {
     const handleClear = vi.fn();
     render(<BulkActionBar selectedCount={2} onDelete={noop} onClear={handleClear} />);
 
-    const cancelButton = screen.getByTitle('Cancelar selección');
+    const cancelButton = screen.getByTitle('Cancel selection');
     fireEvent.click(cancelButton);
 
     expect(handleClear).toHaveBeenCalled();
@@ -47,8 +47,8 @@ describe('BulkActionBar Component', () => {
   it('disables buttons when isDeleting is true', () => {
     render(<BulkActionBar selectedCount={2} onDelete={noop} onClear={noop} isDeleting={true} />);
 
-    const deleteButton = screen.getByRole('button', { name: /eliminar/i });
-    const cancelButton = screen.getByTitle('Cancelar selección');
+    const deleteButton = screen.getByRole('button', { name: /delete/i });
+    const cancelButton = screen.getByTitle('Cancel selection');
 
     expect(deleteButton).toBeDisabled();
     expect(cancelButton).toBeDisabled();
@@ -58,7 +58,7 @@ describe('BulkActionBar Component', () => {
     render(<BulkActionBar selectedCount={2} onDelete={noop} onClear={noop} isDeleting={true} />);
 
     // The button should have isLoading prop which shows a spinner
-    const deleteButton = screen.getByRole('button', { name: /eliminar/i });
+    const deleteButton = screen.getByRole('button', { name: /delete/i });
     expect(deleteButton).toBeDisabled();
   });
 });

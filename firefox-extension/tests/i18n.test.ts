@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { describe, test } from 'node:test';
 
 import { localizeDocument, t } from '../src/lib/i18n.js';
@@ -51,6 +52,17 @@ function withBrowserI18n(
 }
 
 await describe('Firefox i18n helpers', async () => {
+  await test('keeps English and Spanish locale catalogs in parity', async () => {
+    const [englishCatalog, spanishCatalog] = await Promise.all([
+      readFile(new URL('../_locales/en/messages.json', import.meta.url), 'utf8'),
+      readFile(new URL('../_locales/es/messages.json', import.meta.url), 'utf8'),
+    ]);
+    const englishKeys = Object.keys(JSON.parse(englishCatalog) as Record<string, unknown>).sort();
+    const spanishKeys = Object.keys(JSON.parse(spanishCatalog) as Record<string, unknown>).sort();
+
+    assert.deepEqual(spanishKeys, englishKeys);
+  });
+
   await test('returns runtime messages when available', () => {
     withBrowserI18n(
       (key) => (key === 'popupCopyButton' ? 'Copiar' : ''),

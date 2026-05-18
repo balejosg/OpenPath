@@ -38,7 +38,7 @@ export function useClassroomExemptions({
       setExemptions(result.exemptions);
     } catch (err) {
       reportError('Failed to fetch exemptions:', err);
-      setExemptionsError('Error al cargar exenciones');
+      setExemptionsError('Unable to load exemptions');
       setExemptions([]);
     } finally {
       setLoadingExemptions(false);
@@ -87,7 +87,7 @@ export function useClassroomExemptions({
         await fetchExemptions(selectedClassroom.id);
       } catch (err) {
         reportError('Failed to create exemption:', err);
-        setExemptionsError('No se pudo liberar la maquina');
+        setExemptionsError('Unable to release the machine');
       } finally {
         setMachineExemptionMutating(machineId, false);
       }
@@ -113,7 +113,7 @@ export function useClassroomExemptions({
         await fetchExemptions(selectedClassroom.id);
       } catch (err) {
         reportError('Failed to delete exemption:', err);
-        setExemptionsError('No se pudo restaurar la restriccion');
+        setExemptionsError('Unable to restore restriction');
       } finally {
         setMachineExemptionMutating(machineId, false);
       }
@@ -139,7 +139,7 @@ export function useClassroomExemptions({
         await fetchExemptions(selectedClassroom.id);
       } catch (err) {
         reportError('Failed to create operational exemption:', err);
-        setExemptionsError('No se pudo crear la exención');
+        setExemptionsError('Unable to create exemption');
       } finally {
         setMachineExemptionMutating(machineId, false);
       }

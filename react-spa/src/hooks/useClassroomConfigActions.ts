@@ -65,13 +65,13 @@ export const useClassroomConfigActions = ({
         reportError('Failed to update default group:', err);
         const fallback =
           groupId === ''
-            ? 'No puedes dejar el aula sin grupo por defecto mientras no exista un grupo activo válido.'
-            : 'No se pudo actualizar el grupo por defecto. Intenta nuevamente.';
+            ? 'You cannot leave the classroom without a default group while no valid active group exists.'
+            : 'Unable to update the default group. Try again.';
 
         setClassroomConfigError(
           resolveTrpcErrorMessage(err, {
             badRequest:
-              'No puedes dejar el aula sin grupo por defecto mientras no exista un grupo activo válido.',
+              'You cannot leave the classroom without a default group while no valid active group exists.',
             forbidden: fallback,
             unauthorized: fallback,
             fallback,

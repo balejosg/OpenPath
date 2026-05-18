@@ -12,10 +12,8 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
         <div className="bg-green-50 p-4 rounded-full mb-4">
           <CheckCircle2 size={48} className="text-green-500" />
         </div>
-        <h2 className="text-xl font-semibold text-slate-800">Todo en orden</h2>
-        <p className="mt-2 text-slate-500 text-sm">
-          No hay solicitudes de dominio pendientes de revisión.
-        </p>
+        <h2 className="text-xl font-semibold text-slate-800">All clear</h2>
+        <p className="mt-2 text-slate-500 text-sm">No domain requests are pending review.</p>
       </div>
     );
   }
@@ -24,13 +22,13 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
     return (
       <div className="bg-white border border-slate-200 rounded-lg p-8 shadow-sm text-center">
         <Search size={32} className="mx-auto text-slate-300 mb-3" />
-        <p className="text-slate-500">No hay solicitudes para los filtros seleccionados</p>
+        <p className="text-slate-500">No requests match the selected filters</p>
         <button
           type="button"
           onClick={model.onClearFilters}
           className="mt-4 px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50"
         >
-          Limpiar filtros
+          Clear filters
         </button>
       </div>
     );
@@ -51,26 +49,26 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
                     disabled={!model.bulkSelection.canSelectPage}
                     className="rounded border-slate-300"
                     title={model.bulkSelection.title}
-                    aria-label="Seleccion masiva de pagina"
+                    aria-label="Bulk select page"
                   />
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Dominio
+                  Domain
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Máquina
+                  Machine
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Grupo
+                  Group
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Estado
+                  Status
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Fecha
+                  Date
                 </th>
                 <th className="text-right px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Acciones
+                  Actions
                 </th>
               </tr>
             </thead>
@@ -89,7 +87,7 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
                         checked={request.selected}
                         onChange={() => model.bulkSelection.onToggleRequest(request.id)}
                         className="rounded border-slate-300"
-                        aria-label={`Seleccionar ${request.domain}`}
+                        aria-label={`Select ${request.domain}`}
                       />
                     ) : null}
                   </td>
@@ -130,14 +128,14 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
                           <button
                             onClick={() => model.onOpenApprove(request.id)}
                             className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                            title="Aprobar"
+                            title="Approve"
                           >
                             <CheckCircle size={18} />
                           </button>
                           <button
                             onClick={() => model.onOpenReject(request.id)}
                             className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                            title="Rechazar"
+                            title="Reject"
                           >
                             <XCircle size={18} />
                           </button>
@@ -147,7 +145,7 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
                         <button
                           onClick={() => model.onOpenDelete(request.id)}
                           className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                          title="Eliminar"
+                          title="Delete"
                         >
                           <Trash2 size={18} />
                         </button>
@@ -164,7 +162,7 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
       {model.pagination.totalItems > 0 && (
         <div className="flex items-center justify-between text-sm text-slate-600">
           <span>
-            Mostrando {model.pagination.visibleStart}-{model.pagination.visibleEnd} de{' '}
+            Showing {model.pagination.visibleStart}-{model.pagination.visibleEnd} of{' '}
             {model.pagination.totalItems}
           </span>
           <div className="flex items-center gap-2">
@@ -173,10 +171,10 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
               disabled={model.pagination.currentPage <= 1}
               className="px-3 py-1 border border-slate-300 rounded disabled:opacity-50"
             >
-              Anterior
+              Previous
             </button>
             <span>
-              Pagina {model.pagination.currentPage} de {model.pagination.totalPages}
+              Page {model.pagination.currentPage} of {model.pagination.totalPages}
             </span>
             <button
               onClick={() =>
@@ -187,7 +185,7 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
               disabled={model.pagination.currentPage >= model.pagination.totalPages}
               className="px-3 py-1 border border-slate-300 rounded disabled:opacity-50"
             >
-              Siguiente
+              Next
             </button>
           </div>
         </div>

@@ -67,7 +67,7 @@ export function useBulkImportModalState({
       if (result.valid) {
         valid.push(value);
       } else {
-        invalid.push({ value, error: result.error ?? 'Formato inválido' });
+        invalid.push({ value, error: result.error ?? 'Invalid format' });
       }
     }
 
@@ -90,7 +90,7 @@ export function useBulkImportModalState({
     if (validCount === 0) {
       setError(
         invalidCount > 0
-          ? 'Ningún valor tiene formato válido. Corrige los errores antes de importar.'
+          ? 'No value has a valid format. Fix errors before importing.'
           : emptyErrorByType[ruleType]
       );
       return;
@@ -106,11 +106,11 @@ export function useBulkImportModalState({
         resetState();
         onClose();
       } else {
-        setError('Todas las reglas ya existen');
+        setError('All rules already exist');
       }
     } catch (err) {
       reportError('Import failed:', err);
-      setError('Error al importar reglas');
+      setError('Unable to import rules');
     } finally {
       setIsImporting(false);
     }
@@ -164,7 +164,7 @@ export function useBulkImportModalState({
       );
 
       if (validFiles.length === 0) {
-        setError('Solo se permiten archivos de texto (.txt, .csv, .list)');
+        setError('Only text files are allowed (.txt, .csv, .list)');
         return;
       }
 
@@ -173,7 +173,7 @@ export function useBulkImportModalState({
         const combinedContent = contents.join('\n');
         setText((previous) => (previous ? `${previous}\n${combinedContent}` : combinedContent));
       } catch {
-        setError('Error al leer los archivos');
+        setError('Unable to read files');
       }
     },
     [readFileContents]

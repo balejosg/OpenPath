@@ -74,11 +74,11 @@ function Install-OpenPathChromiumUnmanagedGuidance {
                     Write-InstallerVerbose "  Opened $($browserTarget.Name) store page for OpenPath extension"
                 }
                 catch {
-                    Write-InstallerWarning "  ADVERTENCIA: No se pudo abrir $($browserTarget.Name) automaticamente: $_"
+                    Write-InstallerWarning "  WARNING: Could not open $($browserTarget.Name) automatically: $_"
                 }
             }
             else {
-                Write-InstallerWarning "  ADVERTENCIA: $($browserTarget.Name) no se detecto localmente; abre manualmente $shortcutPath"
+                Write-InstallerWarning "  WARNING: $($browserTarget.Name) was not detected locally; open $shortcutPath manually"
             }
         }
     }

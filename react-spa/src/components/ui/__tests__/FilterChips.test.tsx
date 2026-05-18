@@ -120,7 +120,7 @@ describe('FilterChips', () => {
       render(<FilterChips options={defaultOptions} activeId="all" onChange={noop} />);
 
       const group = screen.getByRole('group');
-      expect(group).toHaveAttribute('aria-label', 'Filtros');
+      expect(group).toHaveAttribute('aria-label', 'Filters');
     });
 
     it('buttons have type="button"', () => {

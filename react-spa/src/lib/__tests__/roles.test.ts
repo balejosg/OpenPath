@@ -30,18 +30,18 @@ describe('roles helpers', () => {
   it('returns human-readable labels for raw role strings', () => {
     expect(getRoleDisplayLabel('admin')).toBe('Admin');
     expect(getRoleDisplayLabel('openpath-admin')).toBe('Admin');
-    expect(getRoleDisplayLabel('teacher')).toBe('Profesor');
-    expect(getRoleDisplayLabel('student')).toBe('Usuario');
-    expect(getRoleDisplayLabel('viewer')).toBe('Usuario');
-    expect(getRoleDisplayLabel('user')).toBe('Usuario');
+    expect(getRoleDisplayLabel('teacher')).toBe('Teacher');
+    expect(getRoleDisplayLabel('student')).toBe('User');
+    expect(getRoleDisplayLabel('viewer')).toBe('User');
+    expect(getRoleDisplayLabel('user')).toBe('User');
     expect(getRoleDisplayLabel('custom')).toBe('custom');
   });
 
   it('exposes UI role labels for UserRole enum', () => {
-    expect(USER_ROLE_LABELS[UserRole.ADMIN]).toBe('Administrador');
-    expect(USER_ROLE_LABELS[UserRole.TEACHER]).toBe('Profesor');
-    expect(USER_ROLE_LABELS[UserRole.STUDENT]).toBe('Usuario');
-    expect(USER_ROLE_LABELS[UserRole.NO_ROLES]).toBe('Sin Rol');
+    expect(USER_ROLE_LABELS[UserRole.ADMIN]).toBe('Admin');
+    expect(USER_ROLE_LABELS[UserRole.TEACHER]).toBe('Teacher');
+    expect(USER_ROLE_LABELS[UserRole.STUDENT]).toBe('User');
+    expect(USER_ROLE_LABELS[UserRole.NO_ROLES]).toBe('No Role');
   });
 
   it('defines allowed create-user roles and default', () => {

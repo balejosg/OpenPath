@@ -25,13 +25,13 @@ export function useGroupsViewModelActions({
 }: UseGroupsViewModelActionsOptions) {
   const handleCreateGroup = async () => {
     if (!state.newGroupName.trim()) {
-      state.setNewGroupError('El nombre del grupo es obligatorio');
+      state.setNewGroupError('Group name is required');
       return;
     }
 
     const slug = sanitizeSlug(state.newGroupName, { maxLength: 100, allowUnderscore: true });
     if (!slug) {
-      state.setNewGroupError('El slug del grupo es inválido');
+      state.setNewGroupError('Group slug is invalid');
       return;
     }
 
@@ -50,16 +50,16 @@ export function useGroupsViewModelActions({
       reportError('Failed to create group:', err);
       if (isDuplicateError(err)) {
         state.setNewGroupError(
-          `Ya existe un grupo con ese identificador (slug): "${slug}". Prueba con "${slug}-2".`
+          `A group already exists with that identifier (slug): "${slug}". Try "${slug}-2".`
         );
         return;
       }
 
       state.setNewGroupError(
         resolveTrpcErrorMessage(err, {
-          badRequest: 'Revisa el nombre del grupo (slug) antes de crear.',
-          forbidden: 'No tienes permisos para crear grupos.',
-          fallback: 'Error al crear grupo. Intenta nuevamente.',
+          badRequest: 'Review the group name (slug) before creating.',
+          forbidden: 'You do not have permission to create groups.',
+          fallback: 'Unable to create group. Try again.',
         })
       );
     } finally {
@@ -98,7 +98,7 @@ export function useGroupsViewModelActions({
       : '';
 
     if (trimmedName && !sanitizedName) {
-      state.setCloneError('El slug del grupo es inválido');
+      state.setCloneError('Group slug is invalid');
       return;
     }
 
@@ -125,9 +125,9 @@ export function useGroupsViewModelActions({
       reportError('Failed to clone group:', err);
       state.setCloneError(
         resolveTrpcErrorMessage(err, {
-          conflict: 'No se puede clonar un grupo inactivo.',
-          forbidden: 'No tienes permisos para clonar este grupo.',
-          fallback: 'No se pudo clonar el grupo. Intenta nuevamente.',
+          conflict: 'Inactive groups cannot be cloned.',
+          forbidden: 'You do not have permission to clone this group.',
+          fallback: 'Unable to clone group. Try again.',
         })
       );
     } finally {

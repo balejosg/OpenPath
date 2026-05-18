@@ -144,41 +144,41 @@ fi
 # Validate registration token in classroom mode
 if [ -n "$CLASSROOM_NAME" ] && [ -n "$API_URL" ]; then
     if [ -z "$REGISTRATION_TOKEN" ]; then
-        echo "❌ Error: --registration-token es requerido en modo aula"
-        echo "   Obtenga el token de registro del administrador del servidor central"
+        echo "❌ Error: --registration-token is required in classroom mode"
+        echo "   Get the registration token from the central server administrator"
         exit 1
     fi
     
-    log_verbose "Validando token de registro..."
+    log_verbose "Validating registration token..."
     VALIDATE_RESPONSE=$(curl -s -X POST \
         -H "Content-Type: application/json" \
         -d "{\"token\":\"$REGISTRATION_TOKEN\"}" \
         "$API_URL/api/setup/validate-token" 2>/dev/null || echo "{\"valid\":false}")
     
     if ! echo "$VALIDATE_RESPONSE" | grep -q '"valid":true'; then
-        echo "❌ Error: Token de registro inválido"
-        echo "   Verifique el token con el administrador del servidor central"
+        echo "❌ Error: Invalid registration token"
+        echo "   Verify the token with the central server administrator"
         exit 1
     fi
-    log_verbose "Token de registro validado"
+    log_verbose "Registration token validated"
 fi
 
 # Auto-elevación con sudo
 if [ "$EUID" -ne 0 ]; then
-    log_notice "Elevando permisos con sudo..."
+    log_notice "Elevating permissions with sudo..."
     exec sudo "$0" "${ORIGINAL_ARGS[@]}"
 fi
 
 if [ "$VERBOSE" = true ]; then
     echo "======================================================"
-    echo "  dnsmasq URL Whitelist System v$VERSION - Instalación"
+    echo "  dnsmasq URL Whitelist System v$VERSION - Installation"
     echo "======================================================"
     echo ""
     echo "URL Whitelist: $WHITELIST_URL"
-    echo "Extensión Firefox: $INSTALL_EXTENSION"
+    echo "Firefox extension: $INSTALL_EXTENSION"
     echo "Firefox: $INSTALL_FIREFOX"
     if [ -n "$CLASSROOM_NAME" ]; then
-        echo "Modo Aula: $CLASSROOM_NAME"
+        echo "Classroom mode: $CLASSROOM_NAME"
         echo "API URL: $API_URL"
     fi
     echo ""
@@ -193,9 +193,9 @@ fi
 main() {
     if [ "$SKIP_PREFLIGHT" = true ]; then
         log_verbose ""
-        log_verbose "[Preflight] Omitido por --skip-preflight"
+        log_verbose "[Preflight] Skipped by --skip-preflight"
     else
-        show_progress 0 "$INSTALLER_STEP_TOTAL" "Validando requisitos previos"
+        show_progress 0 "$INSTALLER_STEP_TOTAL" "Validating prerequisites"
         if [ "$VERBOSE" = true ]; then
             run_pre_install_validation
         else
@@ -203,21 +203,21 @@ main() {
         fi
     fi
 
-    run_installer_step 1 "$INSTALLER_STEP_TOTAL" "Instalando librerias" step_install_libraries
-    run_installer_step 2 "$INSTALLER_STEP_TOTAL" "Instalando dependencias" step_install_dependencies
-    run_installer_step 3 "$INSTALLER_STEP_TOTAL" "Detectando DNS primario" step_detect_dns
-    run_installer_step 4 "$INSTALLER_STEP_TOTAL" "Liberando puerto 53" step_free_port_53
-    run_installer_step 5 "$INSTALLER_STEP_TOTAL" "Instalando scripts" step_install_scripts
-    run_installer_step 6 "$INSTALLER_STEP_TOTAL" "Configurando permisos sudo" step_configure_sudoers
-    run_installer_step 7 "$INSTALLER_STEP_TOTAL" "Creando servicios systemd" step_create_services
-    run_installer_step 8 "$INSTALLER_STEP_TOTAL" "Configurando DNS" step_configure_dns
-    run_installer_step 9 "$INSTALLER_STEP_TOTAL" "Configurando dnsmasq" step_configure_dnsmasq
-    run_installer_step 10 "$INSTALLER_STEP_TOTAL" "Instalando Firefox" step_install_firefox
-    run_installer_step 11 "$INSTALLER_STEP_TOTAL" "Verificando integraciones de navegadores" step_apply_policies
-    run_installer_step 12 "$INSTALLER_STEP_TOTAL" "Instalando extensiones del navegador" step_install_extension
-    run_installer_step 13 "$INSTALLER_STEP_TOTAL" "Habilitando servicios" step_enable_services
-    run_installer_step 14 "$INSTALLER_STEP_TOTAL" "Ejecutando smoke tests" run_smoke_tests
-    run_installer_step 15 "$INSTALLER_STEP_TOTAL" "Registrando maquina" run_classroom_registration
+    run_installer_step 1 "$INSTALLER_STEP_TOTAL" "Installing libraries" step_install_libraries
+    run_installer_step 2 "$INSTALLER_STEP_TOTAL" "Installing dependencies" step_install_dependencies
+    run_installer_step 3 "$INSTALLER_STEP_TOTAL" "Detecting primary DNS" step_detect_dns
+    run_installer_step 4 "$INSTALLER_STEP_TOTAL" "Releasing port 53" step_free_port_53
+    run_installer_step 5 "$INSTALLER_STEP_TOTAL" "Installing scripts" step_install_scripts
+    run_installer_step 6 "$INSTALLER_STEP_TOTAL" "Configuring sudo permissions" step_configure_sudoers
+    run_installer_step 7 "$INSTALLER_STEP_TOTAL" "Creating systemd services" step_create_services
+    run_installer_step 8 "$INSTALLER_STEP_TOTAL" "Configuring DNS" step_configure_dns
+    run_installer_step 9 "$INSTALLER_STEP_TOTAL" "Configuring dnsmasq" step_configure_dnsmasq
+    run_installer_step 10 "$INSTALLER_STEP_TOTAL" "Installing Firefox" step_install_firefox
+    run_installer_step 11 "$INSTALLER_STEP_TOTAL" "Verifying browser integrations" step_apply_policies
+    run_installer_step 12 "$INSTALLER_STEP_TOTAL" "Installing browser extensions" step_install_extension
+    run_installer_step 13 "$INSTALLER_STEP_TOTAL" "Enabling services" step_enable_services
+    run_installer_step 14 "$INSTALLER_STEP_TOTAL" "Running smoke tests" run_smoke_tests
+    run_installer_step 15 "$INSTALLER_STEP_TOTAL" "Registering machine" run_classroom_registration
     print_summary
 }
 

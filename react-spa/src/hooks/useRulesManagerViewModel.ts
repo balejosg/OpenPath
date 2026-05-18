@@ -59,7 +59,7 @@ export function useRulesManagerViewModel({
     if (detectedType) {
       const validation = validateRuleValue(newValue, detectedType.type);
       if (!validation.valid) {
-        setInputError(validation.error ?? 'Formato inválido');
+        setInputError(validation.error ?? 'Invalid format');
         return;
       }
     }
@@ -132,7 +132,7 @@ export function useRulesManagerViewModel({
             onError('Solo se permiten archivos .txt, .csv o .list');
           }
         } catch {
-          onError('Error al leer los archivos');
+          onError('Unable to read files');
         }
       })();
     },
@@ -149,14 +149,14 @@ export function useRulesManagerViewModel({
   };
 
   const emptyMessage = collection.filters.search
-    ? 'No se encontraron resultados para tu búsqueda'
+    ? 'No results found for your search'
     : collection.filters.active === 'allowed'
-      ? 'No hay dominios permitidos'
+      ? 'No allowed domains'
       : collection.filters.active === 'automatic'
-        ? 'No hay aprobaciones automáticas'
+        ? 'No automatic approvals'
         : collection.filters.active === 'blocked'
-          ? 'No hay dominios bloqueados'
-          : 'No hay reglas configuradas. Añade una para empezar.';
+          ? 'No blocked domains'
+          : 'No rules configured. Add one to get started.';
 
   const tabs = [
     { id: 'all' as ManagedRulesFilterType, label: 'Todos', count: collection.filters.counts.all },
@@ -168,7 +168,7 @@ export function useRulesManagerViewModel({
     },
     {
       id: 'automatic' as ManagedRulesFilterType,
-      label: 'Automáticas',
+      label: 'Automatic',
       count: collection.filters.counts.automatic,
       icon: createElement(Check, { size: 14 }),
     },

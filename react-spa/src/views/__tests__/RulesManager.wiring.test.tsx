@@ -124,7 +124,7 @@ vi.mock('../../hooks/useRulesManagerViewModel', () => ({
         { id: 'automatic' as const, label: 'Automáticas', count: 0 },
         { id: 'blocked' as const, label: 'Bloqueadas', count: 1 },
       ],
-      emptyMessage: 'No hay reglas configuradas',
+      emptyMessage: 'No rules configured',
       handleAddRule: mockViewModel.handleAddRule,
       handleInputChange: mockViewModel.handleInputChange,
       handleBulkDelete: mockViewModel.handleBulkDelete,
@@ -156,28 +156,28 @@ describe('RulesManager wiring', () => {
     expect(mockToast.error).toHaveBeenCalledWith('failed');
     expect(mockToast.error).toHaveBeenCalledWith('direct error');
 
-    fireEvent.change(screen.getByPlaceholderText(/buscar en/i), {
+    fireEvent.change(screen.getByPlaceholderText(/search across/i), {
       target: { value: 'example' },
     });
     expect(mockViewModel.collectionSetSearch).toHaveBeenCalledWith('example');
 
-    fireEvent.change(screen.getByPlaceholderText(/añadir dominio/i), {
+    fireEvent.change(screen.getByPlaceholderText(/add domain/i), {
       target: { value: 'other.example.com' },
     });
     expect(mockViewModel.handleInputChange).toHaveBeenCalledWith('other.example.com');
 
-    fireEvent.click(screen.getByRole('button', { name: /añadir/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add/i }));
     expect(mockViewModel.handleAddRule).toHaveBeenCalledWith(false);
 
-    fireEvent.keyDown(screen.getByPlaceholderText(/añadir dominio/i), {
+    fireEvent.keyDown(screen.getByPlaceholderText(/add domain/i), {
       key: 'Enter',
     });
     expect(mockViewModel.handleAddRule).toHaveBeenCalledTimes(2);
 
-    fireEvent.click(screen.getByRole('button', { name: /importar/i }));
+    fireEvent.click(screen.getByRole('button', { name: /import/i }));
     expect(mockViewModel.openImportModal).toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: /exportar/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export/i }));
     fireEvent.click(screen.getByRole('button', { name: /csv/i }));
     expect(mockExportRules.exportRules).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ value: 'example.com' })]),
@@ -188,33 +188,33 @@ describe('RulesManager wiring', () => {
     fireEvent.click(screen.getByRole('tab', { name: /permitidas/i }));
     expect(mockViewModel.collectionSetFilter).toHaveBeenCalledWith('allowed');
 
-    fireEvent.click(screen.getByTitle('Deseleccionar'));
+    fireEvent.click(screen.getByTitle('Deselect'));
     expect(mockViewModel.collectionToggleSelection).toHaveBeenCalledWith('rule-1');
 
-    fireEvent.click(screen.getByTitle('Eliminar'));
+    fireEvent.click(screen.getByTitle('Delete'));
     expect(mockViewModel.collectionDeleteRule).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'rule-1' })
     );
 
-    const paginationControls = screen.getByText('Página 1 de 2').closest('div');
+    const paginationControls = screen.getByText('Page 1 of 2').closest('div');
     if (!paginationControls) throw new Error('Pagination controls not found');
     fireEvent.click(paginationControls.querySelectorAll('button')[1]);
     expect(mockViewModel.collectionSetPage).toHaveBeenCalledWith(2);
 
-    fireEvent.click(screen.getAllByRole('button', { name: /eliminar/i })[1]);
+    fireEvent.click(screen.getAllByRole('button', { name: /delete/i })[1]);
     expect(mockViewModel.handleBulkDelete).toHaveBeenCalled();
 
-    fireEvent.click(screen.getByTitle('Cancelar selección'));
+    fireEvent.click(screen.getByTitle('Cancel selection'));
     expect(mockViewModel.collectionClearSelection).toHaveBeenCalled();
   });
 
   it('uses read-only mode to disable mutable page handlers', () => {
     render(<RulesManager groupId="group-1" groupName="Read Only" readOnly onBack={vi.fn()} />);
 
-    expect(screen.getByText('Vista de solo lectura')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /añadir/i })).not.toBeInTheDocument();
+    expect(screen.getByText('Read-only view')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add/i })).not.toBeInTheDocument();
 
-    const container = screen.getByText('Gestión de Reglas').closest('div[class*="space-y-6"]');
+    const container = screen.getByText('Rules Management').closest('div[class*="space-y-6"]');
     if (!container) throw new Error('Container not found');
 
     fireEvent.dragEnter(container);

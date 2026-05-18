@@ -22,15 +22,15 @@ export function GroupsHeader({
         <div>
           <h2 className="text-xl font-bold text-slate-900">
             {activeView === 'library'
-              ? 'Biblioteca de Políticas'
+              ? 'Policy Library'
               : admin
-                ? 'Grupos de Seguridad'
-                : 'Mis Políticas'}
+                ? 'Security Groups'
+                : 'My Policies'}
           </h2>
           <p className="text-slate-500 text-sm">
             {activeView === 'library'
-              ? 'Explora políticas públicas para clonar.'
-              : 'Gestiona políticas de acceso y restricciones.'}
+              ? 'Explore public policies to clone.'
+              : 'Manage access and restriction policies.'}
           </p>
         </div>
 
@@ -40,7 +40,7 @@ export function GroupsHeader({
             className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeView === 'my' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
           >
             <Folder size={16} />
-            <span className="hidden sm:inline">Mis grupos</span>
+            <span className="hidden sm:inline">My groups</span>
           </button>
           <button
             onClick={() => onActiveViewChange('library')}
@@ -57,7 +57,7 @@ export function GroupsHeader({
           onClick={onOpenNewModal}
           className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
         >
-          + Nuevo Grupo
+          + New Group
         </button>
       )}
     </div>

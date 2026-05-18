@@ -55,7 +55,7 @@ describe('useUsersActions', () => {
     });
 
     expect(createResult.ok).toBe(false);
-    expect(result.current.createError).toBe('El nombre es obligatorio');
+    expect(result.current.createError).toBe('Name is required');
     expect(mockUsersCreateMutate).not.toHaveBeenCalled();
   });
 
@@ -65,14 +65,14 @@ describe('useUsersActions', () => {
 
     await act(async () => {
       await result.current.handleCreateUser({
-        name: 'Usuario Repetido',
+        name: 'User Repetido',
         email: 'dup@example.com',
         password: 'SecurePass123!',
         role: 'teacher',
       });
     });
 
-    expect(result.current.createError).toBe('Ya existe un usuario con ese email');
+    expect(result.current.createError).toBe('A user with that email already exists');
   });
 
   it('shows inline delete error when delete mutation fails', async () => {
@@ -89,7 +89,7 @@ describe('useUsersActions', () => {
     });
 
     expect(ok).toBe(false);
-    expect(result.current.deleteError).toBe('No se pudo eliminar usuario. Intenta nuevamente.');
+    expect(result.current.deleteError).toBe('Unable to delete user. Try again.');
   });
 
   it('maps reset-token permission failures into actionable message', async () => {
@@ -104,6 +104,6 @@ describe('useUsersActions', () => {
     });
 
     expect(resetResult.ok).toBe(false);
-    expect(result.current.resetError).toBe('No tienes permisos para restablecer contraseñas');
+    expect(result.current.resetError).toBe('You do not have permission to reset passwords');
   });
 });

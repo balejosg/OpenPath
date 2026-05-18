@@ -49,8 +49,8 @@ describe('DomainRequestsDialogs', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Aprobar' }));
-    fireEvent.change(screen.getByPlaceholderText('Explica por qué se rechaza esta solicitud...'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    fireEvent.change(screen.getByPlaceholderText('Explain why this request is rejected...'), {
       target: { value: 'No aplica' },
     });
 
@@ -72,10 +72,10 @@ describe('DomainRequestsDialogs', () => {
       />
     );
 
-    const dialog = screen.getByRole('dialog', { name: 'Aprobar solicitudes' });
-    expect(within(dialog).getByRole('button', { name: 'Aprobar' })).toBeDisabled();
+    const dialog = screen.getByRole('dialog', { name: 'Approve requests' });
+    expect(within(dialog).getByRole('button', { name: 'Approve' })).toBeDisabled();
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
     expect(onBulkApproveConfirm).not.toHaveBeenCalled();
     expect(onBulkConfirmClose).toHaveBeenCalled();
@@ -96,8 +96,8 @@ describe('DomainRequestsDialogs', () => {
       />
     );
 
-    let dialog = screen.getByRole('dialog', { name: 'Rechazar solicitudes' });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Rechazar' }));
+    let dialog = screen.getByRole('dialog', { name: 'Reject requests' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reject' }));
 
     expect(screen.getByText('Duplicado')).toBeInTheDocument();
     expect(onBulkRejectConfirm).toHaveBeenCalledWith(['req-1', 'req-2'], 'Duplicado');
@@ -111,10 +111,10 @@ describe('DomainRequestsDialogs', () => {
       />
     );
 
-    dialog = screen.getByRole('dialog', { name: 'Rechazar solicitudes' });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Rechazar' }));
+    dialog = screen.getByRole('dialog', { name: 'Reject requests' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reject' }));
 
-    expect(screen.getByText('Motivo (opcional): (sin motivo)')).toBeInTheDocument();
+    expect(screen.getByText('Reason (optional): (no reason)')).toBeInTheDocument();
     expect(onBulkRejectConfirm).toHaveBeenLastCalledWith(['req-3'], undefined);
   });
 
@@ -136,22 +136,22 @@ describe('DomainRequestsDialogs', () => {
     );
 
     fireEvent.click(
-      within(screen.getByRole('dialog', { name: 'Aprobar Solicitud' })).getByRole('button', {
-        name: 'Aprobar',
+      within(screen.getByRole('dialog', { name: 'Approve Request' })).getByRole('button', {
+        name: 'Approve',
       })
     );
     fireEvent.click(
-      within(screen.getByRole('dialog', { name: 'Eliminar Solicitud' })).getByRole('button', {
-        name: 'Eliminar',
+      within(screen.getByRole('dialog', { name: 'Delete Request' })).getByRole('button', {
+        name: 'Delete',
       })
     );
     fireEvent.click(
-      within(screen.getByRole('dialog', { name: 'Eliminar Solicitud' })).getByRole('button', {
-        name: 'Cancelar',
+      within(screen.getByRole('dialog', { name: 'Delete Request' })).getByRole('button', {
+        name: 'Cancel',
       })
     );
 
-    expect(screen.getByText('Esta acción no se puede deshacer.')).toBeInTheDocument();
+    expect(screen.getByText('This action cannot be undone.')).toBeInTheDocument();
     expect(onApproveConfirm).toHaveBeenCalled();
     expect(onDeleteConfirm).toHaveBeenCalled();
     expect(onDeleteClose).toHaveBeenCalled();

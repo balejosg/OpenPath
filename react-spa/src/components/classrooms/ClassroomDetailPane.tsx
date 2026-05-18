@@ -98,18 +98,18 @@ export default function ClassroomDetailPane({
         data-testid="classrooms-empty-state"
         className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm"
       >
-        <h2 className="text-2xl font-bold text-slate-900 mb-1">Sin aulas</h2>
+        <h2 className="text-2xl font-bold text-slate-900 mb-1">No classrooms</h2>
         <p className="text-slate-500 text-sm">
           {admin
-            ? 'Crea una nueva aula para ver su configuración y estado.'
-            : 'Selecciona un aula para ver su configuración y estado.'}
+            ? 'Create a classroom to view its settings and status.'
+            : 'Select a classroom to view its settings and status.'}
         </p>
         {admin && (
           <button
             onClick={onOpenNewModal}
             className="mt-6 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm inline-flex items-center gap-2 transition-colors shadow-sm font-medium"
           >
-            <Plus size={16} /> Crear aula
+            <Plus size={16} /> Create classroom
           </button>
         )}
       </div>

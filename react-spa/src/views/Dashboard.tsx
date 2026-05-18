@@ -89,31 +89,31 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigateToRules, onNavigateToCl
             ) : !systemStatus ? (
               <>
                 <AlertCircle size={20} className="text-slate-500" />
-                Estado del Sistema: No disponible
+                System Status: Unavailable
               </>
             ) : systemStatus.activeGroups > 0 ? (
               <>
                 <ShieldCheck size={20} className="text-green-600" />
-                Estado del Sistema: Seguro
+                System Status: Secure
               </>
             ) : (
               <>
                 <ShieldOff size={20} className="text-amber-600" />
-                Estado del Sistema: Sin grupos habilitados
+                System Status: No groups enabled
               </>
             )}
           </h2>
           <p className="text-slate-500 text-sm mt-1">
             {loading
-              ? 'Cargando información del sistema...'
+              ? 'Loading system information...'
               : !systemStatus
-                ? 'No se pudo obtener el estado del sistema.'
+                ? 'Unable to get system status.'
                 : systemStatus.activeGroups > 0
-                  ? `Hay ${String(systemStatus.activeGroups)} grupo(s) habilitado(s) aplicando reglas.`
-                  : 'No hay grupos habilitados; habilita uno para aplicar reglas.'}
+                  ? `${String(systemStatus.activeGroups)} enabled group(s) are applying rules.`
+                  : 'No groups enabled; enable one to apply rules.'}
             {systemStatus?.lastChecked && !loading && (
               <span className="ml-1">
-                Última verificación: {systemStatus.lastChecked.toLocaleTimeString()}
+                Last check: {systemStatus.lastChecked.toLocaleTimeString()}
               </span>
             )}
           </p>
@@ -122,7 +122,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigateToRules, onNavigateToCl
         <div className="w-full sm:w-[340px] bg-slate-50 border border-slate-200 rounded-lg p-4">
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-slate-600 uppercase tracking-wider">
-              Grupo vigente por aula
+              Active group by classroom
             </p>
             <Shield className="text-slate-400 w-4 h-4" />
           </div>
@@ -130,15 +130,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigateToRules, onNavigateToCl
           {classroomsLoading ? (
             <div className="flex items-center gap-2 mt-3 text-sm text-slate-500">
               <Loader2 size={14} className="animate-spin text-slate-400" />
-              Cargando aulas...
+              Loading classrooms...
             </div>
           ) : classroomsError ? (
             <p className="mt-3 text-sm text-red-600">{classroomsError}</p>
           ) : activeGroupsByClassroom.length === 0 ? (
             <p className="mt-3 text-sm text-slate-500">
               {classrooms.length === 0
-                ? 'No hay aulas configuradas.'
-                : 'No hay aulas con grupo asignado.'}
+                ? 'No classrooms configured.'
+                : 'No classrooms have an assigned group.'}
             </p>
           ) : (
             <ul className="mt-3 space-y-2 max-h-36 overflow-y-auto pr-1 custom-scrollbar">
@@ -190,7 +190,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigateToRules, onNavigateToCl
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard
-          title="Grupos Activos"
+          title="Active Groups"
           value={loading ? '...' : String(stats?.groupCount ?? 0)}
           icon={<Folder size={20} />}
           color={{
@@ -202,7 +202,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigateToRules, onNavigateToCl
           subtext="Total"
         />
         <StatCard
-          title="Dominios Permitidos"
+          title="Allowed Domains"
           value={loading ? '...' : String(stats?.whitelistCount ?? 0)}
           icon={<CheckCircle size={20} />}
           color={{
@@ -226,7 +226,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigateToRules, onNavigateToCl
           subtext="Seguridad"
         />
         <StatCard
-          title="Solicitudes Pendientes"
+          title="Pending Requests"
           value={loading ? '...' : String(stats?.pendingRequests ?? 0)}
           icon={<Server size={20} />}
           color={{
@@ -235,7 +235,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigateToRules, onNavigateToCl
             badgeBg: 'bg-amber-50',
             badgeText: 'text-amber-700',
           }}
-          subtext={stats?.pendingRequests ? 'Atención req.' : 'Sin pendientes'}
+          subtext={stats?.pendingRequests ? 'Needs attention' : 'None pending'}
         />
       </div>
 
@@ -250,7 +250,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigateToRules, onNavigateToCl
       {loading && (
         <div className="flex items-center justify-center py-8">
           <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
-          <span className="ml-2 text-slate-500">Cargando estadísticas...</span>
+          <span className="ml-2 text-slate-500">Loading statistics...</span>
         </div>
       )}
 

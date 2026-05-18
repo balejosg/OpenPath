@@ -111,7 +111,7 @@ describe('useUsersList', () => {
       expect(result.current.loading).toBe(false);
     });
 
-    expect(result.current.error).toBe('Error al cargar usuarios');
+    expect(result.current.error).toBe('Unable to load users');
     expect(result.current.users).toEqual([]);
   });
 });

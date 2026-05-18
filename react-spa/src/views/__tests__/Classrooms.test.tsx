@@ -66,8 +66,8 @@ vi.mock('../../components/WeeklyCalendar', () => ({
 vi.mock('../../components/ScheduleFormModal', () => ({
   default: ({ onSave, onClose }: { onSave: (value: unknown) => void; onClose: () => void }) => (
     <div data-testid="schedule-form-modal">
-      <button onClick={() => onSave({ groupId: 'group-default' })}>Guardar horario</button>
-      <button onClick={onClose}>Cerrar horario semanal</button>
+      <button onClick={() => onSave({ groupId: 'group-default' })}>Save schedule</button>
+      <button onClick={onClose}>Close weekly schedule</button>
     </div>
   ),
 }));
@@ -75,8 +75,8 @@ vi.mock('../../components/ScheduleFormModal', () => ({
 vi.mock('../../components/OneOffScheduleFormModal', () => ({
   default: ({ onSave, onClose }: { onSave: (value: unknown) => void; onClose: () => void }) => (
     <div data-testid="one-off-schedule-form-modal">
-      <button onClick={() => onSave({ groupId: 'group-next' })}>Guardar horario puntual</button>
-      <button onClick={onClose}>Cerrar horario puntual</button>
+      <button onClick={() => onSave({ groupId: 'group-next' })}>Save one-off schedule</button>
+      <button onClick={onClose}>Close one-off schedule</button>
     </div>
   ),
 }));
@@ -199,7 +199,7 @@ function installHookOverrides(options?: {
     admin: options?.admin ?? true,
     allowedGroups: [
       { id: 'group-default', name: 'default', displayName: 'Grupo Default' },
-      { id: 'group-next', name: 'next', displayName: 'Grupo Siguiente' },
+      { id: 'group-next', name: 'next', displayName: 'Grupo Next' },
     ],
     calendarGroupsForDisplay: [],
     deleteDialog: {
@@ -214,15 +214,19 @@ function installHookOverrides(options?: {
         ? []
         : [
             selectedClassroom,
-            buildClassroom({ id: 'classroom-2', name: 'Aula Sur', displayName: 'Aula Sur' }),
+            buildClassroom({
+              id: 'classroom-2',
+              name: 'South Classroom',
+              displayName: 'South Classroom',
+            }),
           ],
     groupById: new Map([
       ['group-default', { id: 'group-default', name: 'default', displayName: 'Grupo Default' }],
-      ['group-next', { id: 'group-next', name: 'next', displayName: 'Grupo Siguiente' }],
+      ['group-next', { id: 'group-next', name: 'next', displayName: 'Grupo Next' }],
     ]),
     groupOptions: [
       { value: 'group-default', label: 'Grupo Default' },
-      { value: 'group-next', label: 'Grupo Siguiente' },
+      { value: 'group-next', label: 'Grupo Next' },
     ],
     isInitialLoading: options?.isInitialLoading ?? false,
     loadError: options?.loadError ?? null,
@@ -231,7 +235,7 @@ function installHookOverrides(options?: {
       saving: false,
       newName: 'Laboratorio C',
       newGroup: 'group-default',
-      newError: 'El nombre es obligatorio',
+      newError: 'Name is required',
       open: vi.fn(),
       close: closeNewModal,
       setName: setNewModalName,
@@ -261,7 +265,7 @@ function installHookOverrides(options?: {
     handleDefaultGroupChange: vi.fn(),
     requestActiveGroupChange: vi.fn(),
     resolveGroupName: (groupId: string | null) =>
-      groupId === 'group-next' ? 'Grupo Siguiente' : 'Grupo Default',
+      groupId === 'group-next' ? 'Grupo Next' : 'Grupo Default',
     selectedClassroomSource: 'default',
   });
 
@@ -282,7 +286,7 @@ function installHookOverrides(options?: {
       scheduleSaving: false,
       scheduleError: '',
       scheduleDeleteTarget:
-        (options?.scheduleDeleteOpen ?? false) ? { label: 'Lunes 09:00-10:00' } : null,
+        (options?.scheduleDeleteOpen ?? false) ? { label: 'Monday 09:00-10:00' } : null,
       openScheduleCreate: vi.fn(),
       openScheduleEdit: vi.fn(),
       closeScheduleForm,
@@ -378,7 +382,7 @@ describe('Classrooms', () => {
     renderClassrooms();
 
     await waitFor(() => {
-      expect(screen.getByText(/por defecto/i, { selector: 'p' })).toBeInTheDocument();
+      expect(screen.getByText(/default/i, { selector: 'p' })).toBeInTheDocument();
     });
   });
 
@@ -400,7 +404,7 @@ describe('Classrooms', () => {
     renderClassrooms();
 
     await waitFor(() => {
-      expect(screen.getByText(/por horario/i)).toBeInTheDocument();
+      expect(screen.getByText(/by schedule/i)).toBeInTheDocument();
     });
   });
 
@@ -430,7 +434,7 @@ describe('Classrooms', () => {
     });
   });
 
-  it('updates default group when user changes "Grupo por defecto" selector', async () => {
+  it('updates default group when user changes "Default group" selector', async () => {
     mockClassroomsListQuery.mockResolvedValue([
       {
         id: 'classroom-1',
@@ -447,7 +451,7 @@ describe('Classrooms', () => {
 
     renderClassrooms();
 
-    const defaultGroupSelect = await screen.findByLabelText(/grupo por defecto/i);
+    const defaultGroupSelect = await screen.findByLabelText(/default group/i);
     fireEvent.change(defaultGroupSelect, { target: { value: 'group-calendar' } });
 
     await waitFor(() => {
@@ -478,12 +482,12 @@ describe('Classrooms', () => {
 
     renderClassrooms();
 
-    const defaultGroupSelect = await screen.findByLabelText(/grupo por defecto/i);
+    const defaultGroupSelect = await screen.findByLabelText(/default group/i);
     fireEvent.change(defaultGroupSelect, { target: { value: '' } });
 
     expect(
       await screen.findByText(
-        'No puedes dejar el aula sin grupo por defecto mientras no exista un grupo activo válido.'
+        'You cannot leave the classroom without a default group while no valid active group exists.'
       )
     ).toBeInTheDocument();
   });
@@ -507,13 +511,13 @@ describe('Classrooms', () => {
 
     expect((await screen.findAllByText('Laboratorio Norte')).length).toBeGreaterThan(0);
 
-    fireEvent.change(screen.getByPlaceholderText('Buscar aula...'), {
+    fireEvent.change(screen.getByPlaceholderText('Search classroom...'), {
       target: { value: '   LABORATORIO   NORTE  ' },
     });
 
     await waitFor(() => {
       expect(screen.getAllByText('Laboratorio Norte').length).toBeGreaterThan(0);
-      expect(screen.queryByText('No se encontraron aulas')).not.toBeInTheDocument();
+      expect(screen.queryByText('No classrooms found')).not.toBeInTheDocument();
     });
   });
 
@@ -534,15 +538,15 @@ describe('Classrooms', () => {
 
     renderClassrooms();
 
-    await screen.findByText('Configuración y estado del aula');
+    await screen.findByText('Classroom settings and status');
 
-    fireEvent.change(screen.getByPlaceholderText('Buscar aula...'), {
+    fireEvent.change(screen.getByPlaceholderText('Search classroom...'), {
       target: { value: 'no-match-value' },
     });
 
-    expect(screen.getByText('No se encontraron aulas')).toBeInTheDocument();
-    expect(screen.queryByText('Configuración y estado del aula')).not.toBeInTheDocument();
-    expect(screen.getByText('Sin aulas')).toBeInTheDocument();
+    expect(screen.getByText('No classrooms found')).toBeInTheDocument();
+    expect(screen.queryByText('Classroom settings and status')).not.toBeInTheDocument();
+    expect(screen.getByText('No classrooms')).toBeInTheDocument();
   });
 
   it('forwards the requested initial classroom selection and clears it after mount', async () => {
@@ -559,7 +563,7 @@ describe('Classrooms', () => {
       onInitialSelectedClassroomIdConsumed,
     });
 
-    await screen.findByText('Configuración y estado del aula');
+    await screen.findByText('Classroom settings and status');
 
     expect(viewModelSpy).toHaveBeenCalledWith({
       initialSelectedClassroomId: 'classroom-2',
@@ -585,7 +589,7 @@ describe('Classrooms', () => {
 
     const { container } = renderClassrooms();
 
-    await screen.findByText('Configuración y estado del aula');
+    await screen.findByText('Classroom settings and status');
 
     const splitView = container.querySelector('[class*="flex-col"][class*="md:flex-row"]');
     expect(splitView).not.toBeNull();
@@ -617,7 +621,7 @@ describe('Classrooms', () => {
 
     const { container } = renderClassrooms();
 
-    await screen.findByText('Configuración y estado del aula');
+    await screen.findByText('Classroom settings and status');
 
     const splitView = container.querySelector('[class*="flex-col"][class*="md:flex-row"]');
     expect(splitView).not.toBeNull();
@@ -636,14 +640,14 @@ describe('Classrooms', () => {
     const loadingControls = installHookOverrides({ isInitialLoading: true });
 
     renderClassrooms();
-    expect(screen.getByText('Cargando aulas...')).toBeInTheDocument();
+    expect(screen.getByText('Loading classrooms...')).toBeInTheDocument();
 
-    const errorControls = installHookOverrides({ loadError: 'No se pudieron cargar las aulas' });
+    const errorControls = installHookOverrides({ loadError: 'Unable to load classrooms' });
 
     renderClassrooms();
-    fireEvent.click(screen.getByText('Reintentar'));
+    fireEvent.click(screen.getByText('Retry'));
 
-    expect(screen.getByText('No se pudieron cargar las aulas')).toBeInTheDocument();
+    expect(screen.getByText('Unable to load classrooms')).toBeInTheDocument();
     expect(errorControls.retryLoad).toHaveBeenCalledTimes(1);
     expect(loadingControls.retryLoad).not.toHaveBeenCalled();
   });
@@ -662,40 +666,42 @@ describe('Classrooms', () => {
     renderClassrooms();
 
     expect((await screen.findAllByText('Laboratorio Norte')).length).toBeGreaterThan(0);
-    expect(screen.getByText('El nombre es obligatorio')).toBeInTheDocument();
+    expect(screen.getByText('Name is required')).toBeInTheDocument();
     expect(screen.getByTestId('schedule-form-modal')).toBeInTheDocument();
     expect(screen.getByTestId('one-off-schedule-form-modal')).toBeInTheDocument();
-    expect(screen.getByText('Reemplazar grupo activo')).toBeInTheDocument();
-    expect(screen.getByText('Eliminar Aula')).toBeInTheDocument();
-    expect(screen.getByText('Eliminar Horario')).toBeInTheDocument();
+    expect(screen.getByText('Replace active group')).toBeInTheDocument();
+    expect(screen.getByText('Delete Classroom')).toBeInTheDocument();
+    expect(screen.getByText('Delete Schedule')).toBeInTheDocument();
     expect(
       screen.getByText(/curl -fsSL https:\/\/example\.com\/install\.sh \| bash/i)
     ).toBeInTheDocument();
-    expect(screen.getByText(/auto-actualizará automáticamente vía APT/i)).toBeInTheDocument();
+    expect(screen.getByText(/auto-update via APT/i)).toBeInTheDocument();
 
-    fireEvent.change(screen.getByPlaceholderText('Ej: Laboratorio C'), {
+    fireEvent.change(screen.getByPlaceholderText('E.g. Lab C'), {
       target: { value: 'Laboratorio Creativo' },
     });
-    const groupSelect = screen.getByText('Grupo Inicial').parentElement?.querySelector('select');
+    const groupSelect = screen
+      .getAllByRole('combobox')
+      .find((element) => (element as HTMLSelectElement).options[0].textContent === 'No group');
     if (!groupSelect) {
       throw new Error('Expected the new classroom modal to render a group selector');
     }
     fireEvent.change(groupSelect, {
       target: { value: 'group-next' },
     });
-    fireEvent.click(screen.getByText('Crear Aula'));
-    fireEvent.click(screen.getByText('Aula Sur'));
-    fireEvent.click(screen.getByText('Reemplazar'));
-    fireEvent.click(screen.getByText('Guardar horario'));
-    fireEvent.click(screen.getByText('Cerrar horario semanal'));
-    fireEvent.click(screen.getByText('Guardar horario puntual'));
-    fireEvent.click(screen.getByText('Cerrar horario puntual'));
+    fireEvent.click(screen.getByText('Create Classroom'));
+    fireEvent.click(screen.getByText('South Classroom'));
+    fireEvent.click(screen.getByText('Replace'));
+    fireEvent.click(screen.getByText('Save schedule'));
+    fireEvent.click(screen.getByText('Close weekly schedule'));
+    fireEvent.click(screen.getByText('Save one-off schedule'));
+    fireEvent.click(screen.getByText('Close one-off schedule'));
     fireEvent.click(screen.getByText('Windows'));
-    fireEvent.click(screen.getByLabelText('Copiar al portapapeles'));
-    fireEvent.click(screen.getAllByText('Eliminar')[0]);
-    fireEvent.click(screen.getAllByText('Eliminar')[1]);
-    fireEvent.click(screen.getByText('Cerrar'));
-    fireEvent.click(screen.getAllByText('Cancelar')[0]);
+    fireEvent.click(screen.getByLabelText('Copy to clipboard'));
+    fireEvent.click(screen.getAllByText('Delete')[0]);
+    fireEvent.click(screen.getAllByText('Delete')[1]);
+    fireEvent.click(screen.getByText('Close'));
+    fireEvent.click(screen.getAllByText('Cancel')[0]);
 
     expect(controls.setSelectedClassroomId).toHaveBeenCalledWith('classroom-2');
     expect(controls.setNewModalName).toHaveBeenCalledWith('Laboratorio Creativo');
@@ -725,8 +731,8 @@ describe('Classrooms', () => {
     renderClassrooms();
 
     expect(await screen.findByText(/powershell -File install-agent\.ps1/i)).toBeInTheDocument();
-    expect(screen.getByText(/Ejecuta PowerShell como Administrador/i)).toBeInTheDocument();
-    expect(screen.getByText('Copiado')).toBeInTheDocument();
+    expect(screen.getByText(/Run PowerShell as Admin/i)).toBeInTheDocument();
+    expect(screen.getByText('Copied')).toBeInTheDocument();
   });
 
   it('warns when a groupless classroom will register machines with unrestricted browsing', async () => {
@@ -743,7 +749,7 @@ describe('Classrooms', () => {
     renderClassrooms();
 
     expect(
-      await screen.findByText(/navegación sin bloqueos hasta asignar un grupo/i)
+      await screen.findByText(/unrestricted browsing until a group is assigned/i)
     ).toBeInTheDocument();
   });
 });

@@ -248,33 +248,33 @@ EOF
     if ! check_dnsmasq_running; then
         status="CRITICAL"
         actions="dnsmasq_restart"
-        log "[WATCHDOG] CRÍTICO: dnsmasq no está corriendo"
+        log "[WATCHDOG] CRITICAL: dnsmasq is not running"
     fi
     
     # Check 2: upstream DNS config
     if ! check_upstream_dns; then
         [ "$status" = "HEALTHY" ] && status="DEGRADED"
         actions="$actions upstream_dns"
-        log "[WATCHDOG] ADVERTENCIA: /run/dnsmasq/resolv.conf no existe"
+        log "[WATCHDOG] WARNING: /run/dnsmasq/resolv.conf does not exist"
     fi
     
     # Check 3: resolv.conf
     if ! check_resolv_conf; then
         [ "$status" = "HEALTHY" ] && status="DEGRADED"
         actions="$actions resolv_conf"
-        log "[WATCHDOG] ADVERTENCIA: /etc/resolv.conf no apunta a localhost"
+        log "[WATCHDOG] WARNING: /etc/resolv.conf does not point to localhost"
     fi
     
     # Check 4: file integrity (anti-tampering)
     if ! check_integrity; then
         [ "$status" = "HEALTHY" ] && status="DEGRADED"
         actions="$actions integrity_recovery"
-        log "[WATCHDOG] ALERTA: Integridad de archivos comprometida"
+        log "[WATCHDOG] ALERT: File integrity compromised"
     fi
     
-    # Ejecutar recuperaciones
+    # Run recovery actions.
     if [ -n "$actions" ]; then
-        log "[WATCHDOG] Iniciando recuperación: $actions"
+        log "[WATCHDOG] Starting recovery: $actions"
         
         for action in $actions; do
             case "$action" in
@@ -380,7 +380,7 @@ attempt_rollback_recovery() {
         fi
     fi
     
-    log "[WATCHDOG] Rollback falló o no hay checkpoint disponible"
+    log "[WATCHDOG] Rollback failed or no checkpoint is available"
     return 1
 }
 

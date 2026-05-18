@@ -42,7 +42,7 @@ export const RulesTableHeader: React.FC<RulesTableHeaderProps> = ({
             <button
               onClick={onToggleSelectAll}
               className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
-              title={isAllSelected ? 'Deseleccionar todo' : 'Seleccionar todo'}
+              title={isAllSelected ? 'Deselect all' : 'Select all'}
             >
               {isAllSelected ? (
                 <CheckSquare size={18} className="text-blue-600" />
@@ -60,7 +60,7 @@ export const RulesTableHeader: React.FC<RulesTableHeaderProps> = ({
             className="flex items-center gap-1 hover:text-slate-700 transition-colors group/sort"
             data-testid="sort-value"
           >
-            Valor
+            Value
             <span className="opacity-50 group-hover/sort:opacity-100 transition-opacity">
               {renderSortIcon('value', sortConfig)}
             </span>
@@ -72,26 +72,26 @@ export const RulesTableHeader: React.FC<RulesTableHeaderProps> = ({
             className="flex items-center gap-1 hover:text-slate-700 transition-colors group/sort"
             data-testid="sort-type"
           >
-            Tipo
+            Type
             <span className="opacity-50 group-hover/sort:opacity-100 transition-opacity">
               {renderSortIcon('type', sortConfig)}
             </span>
           </button>
         </th>
-        <th className="px-4 py-3 hidden md:table-cell">Comentario</th>
+        <th className="px-4 py-3 hidden md:table-cell">Comment</th>
         <th className="px-4 py-3 w-28 hidden sm:table-cell">
           <button
             onClick={() => onSort('createdAt')}
             className="flex items-center gap-1 hover:text-slate-700 transition-colors group/sort"
             data-testid="sort-createdAt"
           >
-            Fecha
+            Date
             <span className="opacity-50 group-hover/sort:opacity-100 transition-opacity">
               {renderSortIcon('createdAt', sortConfig)}
             </span>
           </button>
         </th>
-        {!readOnly && <th className="px-4 py-3 w-20 text-right">Acciones</th>}
+        {!readOnly && <th className="px-4 py-3 w-20 text-right">Actions</th>}
       </tr>
     </thead>
   );

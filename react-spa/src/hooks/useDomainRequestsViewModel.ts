@@ -84,7 +84,7 @@ export function useDomainRequestsViewModel({
     return {
       domain: request.domain,
       groupName: state.getGroupName(request.groupId),
-      machineHostname: request.machineHostname ?? 'máquina desconocida',
+      machineHostname: request.machineHostname ?? 'unknown machine',
     };
   };
 

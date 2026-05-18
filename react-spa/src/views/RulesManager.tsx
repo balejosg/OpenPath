@@ -52,8 +52,8 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
         >
           <div className="text-center">
             <FileUp size={48} className="mx-auto text-blue-500 mb-3" />
-            <p className="text-lg font-medium text-blue-700">Suelta los archivos aquí</p>
-            <p className="text-sm text-blue-500 mt-1">Se abrirá el importador con el contenido</p>
+            <p className="text-lg font-medium text-blue-700">Drop files here</p>
+            <p className="text-sm text-blue-500 mt-1">The importer will open with the content</p>
             <p className="text-xs text-blue-400 mt-2">.txt, .csv, .list</p>
           </div>
         </div>
@@ -70,8 +70,8 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-900 text-sm flex items-start gap-2">
           <Info size={16} className="mt-0.5 text-amber-700" />
           <div>
-            <p className="font-medium">Vista de solo lectura</p>
-            <p className="text-amber-800">Clona este grupo para editar sus reglas.</p>
+            <p className="font-medium">Read-only view</p>
+            <p className="text-amber-800">Clone this group to edit its rules.</p>
           </div>
         </div>
       )}

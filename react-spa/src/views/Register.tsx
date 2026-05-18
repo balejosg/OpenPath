@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Mail, Lock, User, ArrowRight, Loader2, Shield, Briefcase } from 'lucide-react';
 import { trpc } from '../lib/trpc';
 import { reportError } from '../lib/reportError';
+import { useT } from '../i18n/product-i18n';
 
 interface RegisterProps {
   onRegister: () => void;
@@ -9,6 +10,7 @@ interface RegisterProps {
 }
 
 const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) => {
+  const t = useT();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
@@ -16,7 +18,7 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
   // Form state
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState('Director de TI');
+  const [role, setRole] = useState('it_director');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
@@ -41,9 +43,9 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
 
     if (!isFormValid) {
       if (!passwordsMatch) {
-        setError('Las contraseñas no coinciden');
+        setError(t('auth.validation.passwordMismatch'));
       } else if (!passwordLongEnough) {
-        setError('La contraseña debe tener al menos 8 caracteres');
+        setError(t('auth.validation.passwordMin'));
       }
       return;
     }
@@ -64,7 +66,7 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
         onRegister();
       }, 1000);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Error al registrar la cuenta';
+      const message = err instanceof Error ? err.message : t('auth.register.createError');
       setError(message);
       reportError('Failed to register user:', err);
       setIsLoading(false);
@@ -89,20 +91,20 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
             <Shield size={32} className="text-white" />
           </div>
           <h1 className="text-4xl font-bold text-white mb-6 leading-tight">
-            Únete a la red más segura.
+            {t('auth.register.heroTitle')}
           </h1>
           <div className="space-y-4 flex flex-col items-end">
             <div className="bg-slate-800/50 p-4 rounded-lg border-l-4 border-emerald-500 max-w-sm backdrop-blur-sm">
-              <h3 className="text-emerald-400 font-bold text-sm mb-1">Control Granular</h3>
-              <p className="text-slate-300 text-sm">
-                Define permisos específicos por aula, grupo o usuario individual.
-              </p>
+              <h3 className="text-emerald-400 font-bold text-sm mb-1">
+                {t('auth.register.featureGranularTitle')}
+              </h3>
+              <p className="text-slate-300 text-sm">{t('auth.register.featureGranularBody')}</p>
             </div>
             <div className="bg-slate-800/50 p-4 rounded-lg border-l-4 border-blue-500 max-w-sm backdrop-blur-sm">
-              <h3 className="text-blue-400 font-bold text-sm mb-1">Auditoría Completa</h3>
-              <p className="text-slate-300 text-sm">
-                Registro inmutable de todas las acciones administrativas.
-              </p>
+              <h3 className="text-blue-400 font-bold text-sm mb-1">
+                {t('auth.register.featureAuditTitle')}
+              </h3>
+              <p className="text-slate-300 text-sm">{t('auth.register.featureAuditBody')}</p>
             </div>
           </div>
         </div>
@@ -112,20 +114,20 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
       <div className="w-full lg:w-1/2 flex items-center justify-center p-8 bg-slate-50 order-1">
         <div className="w-full max-w-md bg-white p-8 rounded-xl shadow-sm border border-slate-200">
           <div className="mb-8">
-            <h2 className="text-2xl font-bold text-slate-900">Registro Institucional</h2>
-            <p className="text-slate-500 text-sm mt-2">Crea una nueva cuenta de administrador</p>
+            <h2 className="text-2xl font-bold text-slate-900">{t('auth.register.title')}</h2>
+            <p className="text-slate-500 text-sm mt-2">{t('auth.register.subtitle')}</p>
           </div>
 
           {error && (
             <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100 flex items-center gap-2">
-              <span className="font-semibold">Error:</span> {error}
+              <span className="font-semibold">{t('auth.common.errorLabel')}</span> {error}
             </div>
           )}
 
           {success && (
             <div className="mb-4 p-3 bg-green-50 text-green-600 text-sm rounded-lg border border-green-100 flex items-center gap-2">
-              <span className="font-semibold">¡Bienvenido!</span> Cuenta creada exitosamente.
-              Redirigiendo al Panel...
+              <span className="font-semibold">{t('auth.register.successLabel')}</span>{' '}
+              {t('auth.register.successBody')}
             </div>
           )}
 
@@ -137,7 +139,7 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
           >
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-1">
-                Nombre Completo
+                {t('auth.register.fullName')}
               </label>
               <div className="relative">
                 <User className="absolute left-3 top-2.5 text-slate-400" size={18} />
@@ -147,14 +149,14 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-900 transition-all"
-                  placeholder="Tu nombre completo"
+                  placeholder={t('auth.register.fullNamePlaceholder')}
                 />
               </div>
             </div>
 
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-1">
-                Email Corporativo
+                {t('auth.register.corporateEmail')}
               </label>
               <div className="relative">
                 <Mail className="absolute left-3 top-2.5 text-slate-400" size={18} />
@@ -170,7 +172,9 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-1">Cargo</label>
+              <label className="block text-sm font-semibold text-slate-700 mb-1">
+                {t('auth.register.role')}
+              </label>
               <div className="relative">
                 <Briefcase className="absolute left-3 top-2.5 text-slate-400" size={18} />
                 <select
@@ -178,9 +182,11 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
                   onChange={(e) => setRole(e.target.value)}
                   className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-900 bg-white transition-all appearance-none"
                 >
-                  <option>Director de TI</option>
-                  <option>Administrador de Sistemas</option>
-                  <option>Coordinador Académico</option>
+                  <option value="it_director">{t('auth.register.role.itDirector')}</option>
+                  <option value="systems_admin">{t('auth.register.role.systemsAdmin')}</option>
+                  <option value="academic_coordinator">
+                    {t('auth.register.role.academicCoordinator')}
+                  </option>
                 </select>
               </div>
             </div>
@@ -188,7 +194,7 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-1">
-                  Contraseña
+                  {t('auth.common.password')}
                 </label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-2.5 text-slate-400" size={18} />
@@ -202,15 +208,17 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
                         ? 'border-red-300'
                         : 'border-slate-300'
                     }`}
-                    placeholder="Min 8 car."
+                    placeholder={t('auth.register.passwordMinShort')}
                   />
                 </div>
                 {password.length > 0 && !passwordLongEnough && (
-                  <p className="text-red-500 text-xs mt-1">Mínimo 8 caracteres</p>
+                  <p className="text-red-500 text-xs mt-1">{t('auth.register.passwordMinShort')}</p>
                 )}
               </div>
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1">Confirmar</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-1">
+                  {t('auth.register.confirmPassword')}
+                </label>
                 <div className="relative">
                   <input
                     type="password"
@@ -224,19 +232,20 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
                   />
                 </div>
                 {showPasswordMismatch && (
-                  <p className="text-red-500 text-xs mt-1">Las contraseñas no coinciden</p>
+                  <p className="text-red-500 text-xs mt-1">
+                    {t('auth.validation.passwordMismatch')}
+                  </p>
                 )}
               </div>
             </div>
 
             <div className="pt-2">
               <p className="text-xs text-slate-500 leading-normal">
-                Al registrarte, aceptas nuestros{' '}
+                {t('auth.register.termsPrefix')}
                 <a href="#" className="text-blue-600 font-semibold">
-                  Términos de Servicio
+                  {t('auth.register.termsLink')}
                 </a>{' '}
-                y confirmas que representas a una institución educativa verificada. Los accesos
-                externos se habilitan después de la aprobación institucional.
+                {t('auth.register.termsSuffix')}
               </p>
             </div>
 
@@ -249,16 +258,16 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onNavigateToLogin }) =>
                 <Loader2 className="animate-spin" size={18} />
               ) : (
                 <>
-                  Crear Cuenta <ArrowRight size={18} />
+                  {t('auth.register.createAccount')} <ArrowRight size={18} />
                 </>
               )}
             </button>
           </form>
 
           <div className="mt-6 text-center text-sm">
-            <span className="text-slate-500">¿Ya tienes cuenta? </span>
+            <span className="text-slate-500">{t('auth.common.alreadyHaveAccount')}</span>
             <button onClick={onNavigateToLogin} className="text-blue-600 font-bold hover:underline">
-              Iniciar Sesión
+              {t('auth.common.signIn')}
             </button>
           </div>
         </div>

@@ -190,20 +190,20 @@ const Classrooms: React.FC<ClassroomsProps> = ({
 
       <ConfirmDialog
         isOpen={activeGroupOverwriteConfirm !== null}
-        title="Reemplazar grupo activo"
-        confirmLabel="Reemplazar"
-        cancelLabel="Cancelar"
+        title="Replace active group"
+        confirmLabel="Replace"
+        cancelLabel="Cancel"
         isLoading={activeGroupOverwriteLoading}
         onClose={closeActiveGroupOverwriteConfirm}
         onConfirm={() => void confirmActiveGroupOverwrite()}
       >
         <p className="text-sm text-slate-600">
-          Este aula ya tiene un grupo aplicado manualmente (
+          This classroom already has a manually applied group (
           <strong>{resolveGroupName(activeGroupOverwriteConfirm?.currentGroupId ?? null)}</strong>
           ).
         </p>
         <p className="text-sm text-slate-600">
-          ¿Reemplazar por{' '}
+          Replace with{' '}
           <strong>{resolveGroupName(activeGroupOverwriteConfirm?.nextGroupId ?? null)}</strong>?
         </p>
       </ConfirmDialog>
@@ -239,9 +239,9 @@ const Classrooms: React.FC<ClassroomsProps> = ({
       {deleteDialog.isOpen && selectedClassroom && (
         <DangerConfirmDialog
           isOpen
-          title="Eliminar Aula"
-          confirmLabel="Eliminar"
-          cancelLabel="Cancelar"
+          title="Delete Classroom"
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
           isLoading={deleteDialog.deleting}
           onClose={deleteDialog.close}
           onConfirm={() => void deleteDialog.confirm()}
@@ -251,9 +251,9 @@ const Classrooms: React.FC<ClassroomsProps> = ({
               <Trash2 className="text-red-600" size={24} />
             </div>
             <p className="text-sm text-slate-600">
-              ¿Estás seguro de que quieres eliminar <strong>{selectedClassroom.name}</strong>?
+              Delete <strong>{selectedClassroom.name}</strong>?
             </p>
-            <p className="text-xs text-slate-500 mt-1">Esta acción no se puede deshacer.</p>
+            <p className="text-xs text-slate-500 mt-1">This action cannot be undone.</p>
           </div>
         </DangerConfirmDialog>
       )}
@@ -262,9 +262,9 @@ const Classrooms: React.FC<ClassroomsProps> = ({
       {scheduleDeleteTarget && selectedClassroom && (
         <DangerConfirmDialog
           isOpen
-          title="Eliminar Horario"
-          confirmLabel="Eliminar"
-          cancelLabel="Cancelar"
+          title="Delete Schedule"
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
           isLoading={scheduleSaving}
           errorMessage={scheduleError}
           onClose={closeScheduleDelete}
@@ -275,9 +275,9 @@ const Classrooms: React.FC<ClassroomsProps> = ({
               <Trash2 className="text-red-600" size={24} />
             </div>
             <p className="text-sm text-slate-600">
-              ¿Eliminar este bloque ({scheduleDeleteTarget.label})?
+              Delete this block ({scheduleDeleteTarget.label})?
             </p>
-            <p className="text-xs text-slate-500 mt-1">Esta acción no se puede deshacer.</p>
+            <p className="text-xs text-slate-500 mt-1">This action cannot be undone.</p>
           </div>
         </DangerConfirmDialog>
       )}

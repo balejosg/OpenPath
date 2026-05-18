@@ -27,12 +27,12 @@ describe('RulesTable Component', () => {
 
   it('renders loading state', () => {
     render(<RulesTable rules={[]} loading={true} onDelete={noop} />);
-    expect(screen.getByText(/cargando/i)).toBeInTheDocument();
+    expect(screen.getByText(/loading/i)).toBeInTheDocument();
   });
 
   it('renders empty state when no rules', () => {
     render(<RulesTable rules={[]} loading={false} onDelete={noop} />);
-    expect(screen.getByText(/no hay reglas configuradas/i)).toBeInTheDocument();
+    expect(screen.getByText(/no rules configured/i)).toBeInTheDocument();
   });
 
   it('renders custom empty message', () => {
@@ -52,8 +52,8 @@ describe('RulesTable Component', () => {
   it('displays rule type badges', () => {
     render(<RulesTable rules={mockRules} loading={false} onDelete={noop} />);
 
-    expect(screen.getByText('Permitido')).toBeInTheDocument();
-    expect(screen.getByText('Sub. bloq.')).toBeInTheDocument();
+    expect(screen.getByText('Allowed')).toBeInTheDocument();
+    expect(screen.getByText('Sub. blocked')).toBeInTheDocument();
   });
 
   it('displays comments when present', () => {
@@ -66,7 +66,7 @@ describe('RulesTable Component', () => {
     const handleDelete = vi.fn();
     render(<RulesTable rules={mockRules} loading={false} onDelete={handleDelete} />);
 
-    const deleteButtons = screen.getAllByTitle('Eliminar');
+    const deleteButtons = screen.getAllByTitle('Delete');
     fireEvent.click(deleteButtons[0]);
 
     expect(handleDelete).toHaveBeenCalledWith(mockRules[0]);
@@ -86,7 +86,7 @@ describe('RulesTable Component', () => {
     render(<RulesTable rules={[autoRule]} loading={false} onDelete={noop} />);
 
     expect(screen.getByText('Auto (Firefox)')).toBeInTheDocument();
-    expect(screen.getByTitle('Revocar autoaprobación')).toBeInTheDocument();
+    expect(screen.getByTitle('Revoke auto-approval')).toBeInTheDocument();
   });
 
   it('shows edit button when onSave is provided', () => {
@@ -120,7 +120,7 @@ describe('RulesTable Component', () => {
       );
 
       // Should have select all button + 2 row checkboxes
-      const selectButtons = screen.getAllByTitle(/seleccionar/i);
+      const selectButtons = screen.getAllByTitle(/select/i);
       expect(selectButtons.length).toBeGreaterThanOrEqual(2);
     });
 
@@ -140,7 +140,7 @@ describe('RulesTable Component', () => {
         />
       );
 
-      const selectButtons = screen.getAllByTitle('Seleccionar');
+      const selectButtons = screen.getAllByTitle('Select');
       fireEvent.click(selectButtons[0]);
 
       expect(handleToggleSelection).toHaveBeenCalledWith('1');
@@ -162,7 +162,7 @@ describe('RulesTable Component', () => {
         />
       );
 
-      const selectAllButton = screen.getByTitle('Seleccionar todo');
+      const selectAllButton = screen.getByTitle('Select all');
       fireEvent.click(selectAllButton);
 
       expect(handleToggleSelectAll).toHaveBeenCalled();
@@ -183,15 +183,15 @@ describe('RulesTable Component', () => {
         />
       );
 
-      // Check that Deseleccionar button appears for selected row
-      expect(screen.getByTitle('Deseleccionar')).toBeInTheDocument();
+      // Check that Deselect button appears for selected row
+      expect(screen.getByTitle('Deselect')).toBeInTheDocument();
     });
 
     it('does not render checkboxes when selection props are not provided', () => {
       render(<RulesTable rules={mockRules} loading={false} onDelete={noop} />);
 
-      expect(screen.queryByTitle('Seleccionar todo')).not.toBeInTheDocument();
-      expect(screen.queryByTitle('Seleccionar')).not.toBeInTheDocument();
+      expect(screen.queryByTitle('Select all')).not.toBeInTheDocument();
+      expect(screen.queryByTitle('Select')).not.toBeInTheDocument();
     });
   });
 
@@ -583,7 +583,7 @@ describe('RulesTable Component', () => {
       fireEvent.click(editButtons[0]);
 
       // The checkbox in the editing row should be disabled
-      const selectButtons = screen.getAllByTitle(/seleccionar/i);
+      const selectButtons = screen.getAllByTitle(/select/i);
       expect(selectButtons[1]).toBeDisabled(); // First is select all, second is the row checkbox
     });
 

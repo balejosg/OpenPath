@@ -54,16 +54,16 @@ export const useUsersActions = () => {
     // Yield to let React render the optimistic data before triggering
     // a background refetch. If the refetch fails, the rendering logic
     // now shows data independently of error state, so the grid survives.
-    void Promise.resolve().then(() => {
+    window.setTimeout(() => {
       invalidateUsersList();
-    });
+    }, 0);
   }, [invalidateUsersList]);
 
   const mutateUsersCache = useCallback(
     (mutate: (users: User[]) => User[]) => {
       // Cancel any in-flight list query synchronously so its stale response
       // cannot overwrite the optimistic data we are about to set.
-      void queryClient.cancelQueries({ queryKey: USERS_QUERY_KEY });
+      void queryClient.cancelQueries({ queryKey: USERS_QUERY_KEY }, { revert: false });
       queryClient.setQueryData<User[]>(USERS_QUERY_KEY, (prev) => {
         const prevUsers = Array.isArray(prev) ? prev : [];
         return mutate(prevUsers);
@@ -159,15 +159,15 @@ export const useUsersActions = () => {
   const handleCreateUser = useCallback(
     async (input: CreateUserInput): Promise<CreateUserResult> => {
       if (!input.name.trim()) {
-        setCreateError('El nombre es obligatorio');
+        setCreateError('Name is required');
         return { ok: false };
       }
       if (!input.email.trim()) {
-        setCreateError('El email es obligatorio');
+        setCreateError('Email is required');
         return { ok: false };
       }
       if (!input.password.trim() || input.password.length < 8) {
-        setCreateError('La contraseña debe tener al menos 8 caracteres');
+        setCreateError('Password must be at least 8 characters');
         return { ok: false };
       }
 
@@ -186,11 +186,11 @@ export const useUsersActions = () => {
         reportError('Failed to create user:', err);
         setCreateError(
           resolveTrpcErrorMessage(err, {
-            badRequest: 'El email no es válido',
-            conflict: 'Ya existe un usuario con ese email',
-            forbidden: 'No tienes permisos para crear usuarios',
-            unauthorized: 'No tienes permisos para crear usuarios',
-            fallback: 'Error al crear usuario. Intenta nuevamente.',
+            badRequest: 'Email is invalid',
+            conflict: 'A user with that email already exists',
+            forbidden: 'You do not have permission to create users',
+            unauthorized: 'You do not have permission to create users',
+            fallback: 'Unable to create user. Try again.',
           })
         );
         return { ok: false };
@@ -226,7 +226,7 @@ export const useUsersActions = () => {
       return true;
     } catch (err) {
       reportError('Failed to delete user:', err);
-      setDeleteError('No se pudo eliminar usuario. Intenta nuevamente.');
+      setDeleteError('Unable to delete user. Try again.');
       return false;
     }
   }, [deleteTarget, deleteMutation, mutateUsersCache]);
@@ -243,10 +243,10 @@ export const useUsersActions = () => {
         reportError('Failed to generate reset token:', err);
         setResetError(
           resolveTrpcErrorMessage(err, {
-            forbidden: 'No tienes permisos para restablecer contraseñas',
-            unauthorized: 'No tienes permisos para restablecer contraseñas',
-            notFound: 'No existe un usuario con ese email',
-            fallback: 'No se pudo generar el token. Intenta nuevamente.',
+            forbidden: 'You do not have permission to reset passwords',
+            unauthorized: 'You do not have permission to reset passwords',
+            notFound: 'No user exists with that email',
+            fallback: 'Unable to generate token. Try again.',
           })
         );
         return { ok: false };

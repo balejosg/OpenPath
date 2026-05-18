@@ -5,11 +5,13 @@ import {
   extractTabHostname,
   normalizeBlockedDomains,
   shouldEnableRequestAction,
+  statusMeta,
 } from '../src/lib/popup-state.js';
 
 void test('popup-state utilities normalize tab hostname and request state', () => {
   assert.equal(extractTabHostname('https://example.test/page'), 'example.test');
-  assert.equal(extractTabHostname(undefined), 'Desconocido');
+  assert.equal(extractTabHostname(undefined), 'Unknown');
+  assert.equal(statusMeta({ state: 'pending', updatedAt: 1 }).label, 'Pending');
   assert.equal(
     shouldEnableRequestAction({
       hasDomains: true,

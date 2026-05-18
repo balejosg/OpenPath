@@ -214,13 +214,13 @@ export function useUsersViewModel(): UseUsersViewModelReturn {
 
   const handleExportUsers = () => {
     if (filteredUsers.length === 0) {
-      setExportMessage('No hay usuarios para exportar');
+      setExportMessage('No users to export');
       return;
     }
 
     const exportData = buildUsersCsvExport(filteredUsers);
     downloadFile(exportData.content, exportData.filename, exportData.mimeType);
-    setExportMessage('Exportación iniciada');
+    setExportMessage('Export started');
   };
 
   const requestPasswordReset = (user: User) => {

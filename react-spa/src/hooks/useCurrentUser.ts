@@ -67,7 +67,7 @@ export function useCurrentUser(): UseCurrentUserResult {
       });
     } catch (err) {
       reportError('Failed to fetch current user:', err);
-      setError('Error al cargar perfil de usuario');
+      setError('Unable to load user profile');
       setUser(null);
     } finally {
       setLoading(false);

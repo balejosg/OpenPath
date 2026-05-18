@@ -41,10 +41,9 @@ export function useGroupsViewModel({ onNavigateToRules }: UseGroupsViewModelOpti
     clearError: clearConfigError,
     captureError: captureConfigError,
   } = useMutationFeedback({
-    badRequest: 'Revisa los datos del grupo antes de guardar.',
-    conflict:
-      'No se pudo guardar porque el grupo fue modificado recientemente. Recarga e intenta de nuevo.',
-    fallback: 'No se pudo guardar la configuración del grupo. Intenta nuevamente.',
+    badRequest: 'Review the group details before saving.',
+    conflict: 'Unable to save because the group was recently modified. Reload and try again.',
+    fallback: 'Unable to save group settings. Try again.',
   });
 
   const actions = useGroupsViewModelActions({

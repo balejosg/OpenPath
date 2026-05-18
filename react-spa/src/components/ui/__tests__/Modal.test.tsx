@@ -148,7 +148,7 @@ describe('Modal Component', () => {
       </Modal>
     );
 
-    const closeButton = screen.getByRole('button', { name: 'Cerrar' });
+    const closeButton = screen.getByRole('button', { name: 'Close' });
     const innerButton = screen.getByRole('button', { name: 'Inner' });
 
     expect(document.activeElement).toBe(closeButton);
@@ -183,7 +183,7 @@ describe('Modal Component', () => {
 
     fireEvent.click(openButton);
 
-    expect(screen.getByRole('button', { name: 'Cerrar' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: 'Escape' });
 

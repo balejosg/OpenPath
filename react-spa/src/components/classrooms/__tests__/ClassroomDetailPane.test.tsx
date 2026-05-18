@@ -150,8 +150,8 @@ describe('ClassroomDetailPane', () => {
     render(<ClassroomDetailPane {...props} />);
 
     expect(screen.getByTestId('classrooms-empty-state')).toBeInTheDocument();
-    expect(screen.getByText('Sin aulas')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /crear aula/i }));
+    expect(screen.getByText('No classrooms')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /create classroom/i }));
 
     expect(props.onOpenNewModal).toHaveBeenCalledTimes(1);
   });
@@ -159,33 +159,33 @@ describe('ClassroomDetailPane', () => {
   it('hides the create CTA in the empty non-admin state', () => {
     render(<ClassroomDetailPane {...buildProps({ admin: false, selectedClassroom: null })} />);
 
-    expect(screen.getByText('Sin aulas')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /crear aula/i })).not.toBeInTheDocument();
+    expect(screen.getByText('No classrooms')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /create classroom/i })).not.toBeInTheDocument();
   });
 
   it('renders classroom actions, machine exemptions, and one-off schedule actions', () => {
     const props = buildProps();
     render(<ClassroomDetailPane {...props} />);
 
-    expect(screen.getByText('Configuración y estado del aula')).toBeInTheDocument();
-    expect(screen.getByText('Operativo')).toBeInTheDocument();
-    expect(screen.getByText(/actualmente usando/i)).toBeInTheDocument();
+    expect(screen.getByText('Classroom settings and status')).toBeInTheDocument();
+    expect(screen.getByText('Operational')).toBeInTheDocument();
+    expect(screen.getByText(/currently using/i)).toBeInTheDocument();
     expect(
       screen.getByText(
-        (_, node) => node?.textContent === 'Actualmente usando Grupo Default por defecto'
+        (_, node) => node?.textContent === 'Currently using Grupo Default by default'
       )
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/sin restricción/)[0]).toBeInTheDocument();
+    expect(screen.getAllByText(/no restriction/)[0]).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /eliminar aula/i }));
-    fireEvent.click(screen.getByRole('button', { name: /instalar equipos/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Restringir' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Eximir' }));
-    fireEvent.change(screen.getByLabelText('Horas'), { target: { value: '2' } });
-    fireEvent.change(screen.getByLabelText('Motivo'), { target: { value: 'Mantenimiento' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Crear exención' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Editar' })[0]);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Eliminar' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /Delete Classroom/i }));
+    fireEvent.click(screen.getByRole('button', { name: /install computers/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restrict' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Exempt' }));
+    fireEvent.change(screen.getByLabelText('Hours'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Mantenimiento' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create exemption' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
 
     expect(props.onOpenDeleteDialog).toHaveBeenCalledTimes(1);
     expect(props.onOpenEnrollModal).toHaveBeenCalledTimes(1);
@@ -206,16 +206,18 @@ describe('ClassroomDetailPane', () => {
       <ClassroomDetailPane
         {...buildProps({
           selectedClassroom: buildClassroom({ status: 'degraded' }),
-          classroomConfigError: 'No puedes dejar el aula sin grupo por defecto.',
+          classroomConfigError: 'You cannot leave the classroom without a default group.',
           loadingSchedules: true,
-          scheduleError: 'Error al cargar horarios',
+          scheduleError: 'Unable to load schedules',
         })}
       />
     );
 
-    expect(screen.getByText('Degradado')).toBeInTheDocument();
-    expect(screen.getByText('No puedes dejar el aula sin grupo por defecto.')).toBeInTheDocument();
-    expect(screen.getByText('Cargando horarios...')).toBeInTheDocument();
+    expect(screen.getByText('Degraded')).toBeInTheDocument();
+    expect(
+      screen.getByText('You cannot leave the classroom without a default group.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Loading schedules...')).toBeInTheDocument();
   });
 
   it('renders offline and empty-machine states without release controls', () => {
@@ -234,10 +236,10 @@ describe('ClassroomDetailPane', () => {
       />
     );
 
-    expect(screen.getByText('Sin conexión')).toBeInTheDocument();
-    expect(screen.getByText('Sin máquinas activas')).toBeInTheDocument();
-    expect(screen.getByText('No hay asignaciones puntuales.')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Liberar' })).not.toBeInTheDocument();
+    expect(screen.getByText('Offline')).toBeInTheDocument();
+    expect(screen.getByText('No active machines')).toBeInTheDocument();
+    expect(screen.getByText('No one-off assignments.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Release' })).not.toBeInTheDocument();
   });
 
   it('forwards calendar add actions from the extracted weekly calendar section', () => {

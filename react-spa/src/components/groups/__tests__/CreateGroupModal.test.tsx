@@ -22,13 +22,13 @@ describe('CreateGroupModal', () => {
       />
     );
 
-    fireEvent.change(screen.getByPlaceholderText('Ej: grupo-primaria'), {
+    fireEvent.change(screen.getByPlaceholderText('E.g. elementary-group'), {
       target: { value: 'grupo-aula' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Descripción del grupo...'), {
+    fireEvent.change(screen.getByPlaceholderText('Group description...'), {
       target: { value: 'Grupo Aula' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Crear Grupo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Group' }));
 
     expect(onNameChange).toHaveBeenCalledWith('grupo-aula');
     expect(onDescriptionChange).toHaveBeenCalledWith('Grupo Aula');

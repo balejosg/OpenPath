@@ -41,7 +41,7 @@ youtube.com`;
         const result = parseCSV(input);
 
         expect(result.values).toEqual(['google.com', 'youtube.com', 'github.com']);
-        expect(result.warnings).toContainEqual(expect.stringContaining('duplicados'));
+        expect(result.warnings).toContainEqual(expect.stringContaining('duplicates removed'));
       });
 
       it('handles empty input', () => {
@@ -49,7 +49,7 @@ youtube.com`;
 
         expect(result.values).toEqual([]);
         expect(result.totalRows).toBe(0);
-        expect(result.warnings).toContainEqual(expect.stringContaining('vacío'));
+        expect(result.warnings).toContainEqual(expect.stringContaining('empty'));
       });
     });
 
@@ -132,7 +132,7 @@ youtube.com,video,streaming`;
 
         const result = parseCSV(input);
 
-        // 'site' is in preferred columns list
+        // 'site' is in preferred columnas list
         expect(result.valueColumn).toBe('site');
         expect(result.values).toEqual(['google.com', 'youtube.com']);
       });
@@ -219,7 +219,7 @@ twitter.com/explore`;
         expect(result.values).toContain('github.com');
       });
 
-      it('handles CSV with many columns and shows warning', () => {
+      it('handles CSV with many columnas and shows warning', () => {
         const input = `id,domain,type,created,modified,user,status,priority
 1,google.com,whitelist,2024-01-01,2024-01-02,admin,active,high
 2,youtube.com,whitelist,2024-01-01,2024-01-02,admin,active,high`;

@@ -42,18 +42,18 @@ describe('Settings View - Change Password', () => {
     render(<Settings />);
 
     expect(screen.queryByText('API Keys')).not.toBeInTheDocument();
-    expect(screen.queryByText('Base de Datos')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Crear token' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Database')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create token' })).not.toBeInTheDocument();
     expect(screen.queryByText(/OpenPath v/i)).not.toBeInTheDocument();
   });
 
   it('blocks submit when required fields are missing', async () => {
     render(<Settings />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar contraseña' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar Contraseña' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
 
-    expect(await screen.findByText('Todos los campos son obligatorios')).toBeInTheDocument();
+    expect(await screen.findByText('All fields are required')).toBeInTheDocument();
     expect(mockChangePassword).not.toHaveBeenCalled();
   });
 
@@ -62,39 +62,39 @@ describe('Settings View - Change Password', () => {
 
     render(<Settings />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar contraseña' }));
-    fireEvent.change(screen.getByPlaceholderText('Ingresa tu contraseña actual'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+    fireEvent.change(screen.getByPlaceholderText('Enter your current password'), {
       target: { value: 'wrong-password' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'NewPassword123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Repite la nueva contraseña'), {
+    fireEvent.change(screen.getByPlaceholderText('Repeat the new password'), {
       target: { value: 'NewPassword123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar Contraseña' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
 
     expect(
-      await screen.findByText('No se pudo cambiar la contraseña. Verifica tu contraseña actual.')
+      await screen.findByText('Unable to change password. Check your current password.')
     ).toBeInTheDocument();
   });
 
   it('calls API and shows success message', async () => {
     render(<Settings />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar contraseña' }));
-    fireEvent.change(screen.getByPlaceholderText('Ingresa tu contraseña actual'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+    fireEvent.change(screen.getByPlaceholderText('Enter your current password'), {
       target: { value: 'CurrentPassword123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'NewPassword123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Repite la nueva contraseña'), {
+    fireEvent.change(screen.getByPlaceholderText('Repeat the new password'), {
       target: { value: 'NewPassword123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar Contraseña' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
 
     await waitFor(() => {
       expect(mockChangePassword).toHaveBeenCalledWith({
@@ -103,112 +103,110 @@ describe('Settings View - Change Password', () => {
       });
     });
 
-    expect(await screen.findByText('¡Contraseña actualizada correctamente!')).toBeInTheDocument();
+    expect(await screen.findByText('Password updated successfully!')).toBeInTheDocument();
   });
 
   it('validates password length and confirmation before calling the API', async () => {
     render(<Settings />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar contraseña' }));
-    fireEvent.change(screen.getByPlaceholderText('Ingresa tu contraseña actual'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+    fireEvent.change(screen.getByPlaceholderText('Enter your current password'), {
       target: { value: 'CurrentPassword123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'short' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Repite la nueva contraseña'), {
+    fireEvent.change(screen.getByPlaceholderText('Repeat the new password'), {
       target: { value: 'short' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar Contraseña' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
     expect(
-      await screen.findByText('La nueva contraseña debe tener al menos 8 caracteres')
+      await screen.findByText('New password must be at least 8 characters')
     ).toBeInTheDocument();
     expect(mockChangePassword).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'NewPassword123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Repite la nueva contraseña'), {
+    fireEvent.change(screen.getByPlaceholderText('Repeat the new password'), {
       target: { value: 'MismatchPassword123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar Contraseña' }));
-    expect(await screen.findByText('Las contraseñas no coinciden')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
+    expect(await screen.findByText('Passwords do not match')).toBeInTheDocument();
     expect(mockChangePassword).not.toHaveBeenCalled();
   });
 
   it('closes and resets the modal after a successful password change', async () => {
     render(<Settings />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar contraseña' }));
-    fireEvent.change(screen.getByPlaceholderText('Ingresa tu contraseña actual'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+    fireEvent.change(screen.getByPlaceholderText('Enter your current password'), {
       target: { value: 'CurrentPassword123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'NewPassword123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Repite la nueva contraseña'), {
+    fireEvent.change(screen.getByPlaceholderText('Repeat the new password'), {
       target: { value: 'NewPassword123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar Contraseña' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
 
-    expect(await screen.findByText('¡Contraseña actualizada correctamente!')).toBeInTheDocument();
+    expect(await screen.findByText('Password updated successfully!')).toBeInTheDocument();
 
     await waitFor(
       () => {
-        expect(
-          screen.queryByText('¡Contraseña actualizada correctamente!')
-        ).not.toBeInTheDocument();
+        expect(screen.queryByText('Password updated successfully!')).not.toBeInTheDocument();
       },
       { timeout: 2500 }
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar contraseña' }));
-    expect(screen.getByPlaceholderText('Ingresa tu contraseña actual')).toHaveValue('');
-    expect(screen.getByPlaceholderText('Mínimo 8 caracteres')).toHaveValue('');
-    expect(screen.getByPlaceholderText('Repite la nueva contraseña')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+    expect(screen.getByPlaceholderText('Enter your current password')).toHaveValue('');
+    expect(screen.getByPlaceholderText('Minimum 8 characters')).toHaveValue('');
+    expect(screen.getByPlaceholderText('Repeat the new password')).toHaveValue('');
   });
 
   it('closes the modal and clears previous validation state when cancelled', async () => {
     render(<Settings />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar contraseña' }));
-    fireEvent.change(screen.getByPlaceholderText('Ingresa tu contraseña actual'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+    fireEvent.change(screen.getByPlaceholderText('Enter your current password'), {
       target: { value: 'CurrentPassword123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'MismatchPassword123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Repite la nueva contraseña'), {
+    fireEvent.change(screen.getByPlaceholderText('Repeat the new password'), {
       target: { value: 'OtherPassword123!' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar Contraseña' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
 
-    expect(await screen.findByText('Las contraseñas no coinciden')).toBeInTheDocument();
+    expect(await screen.findByText('Passwords do not match')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => {
-      expect(screen.queryByText('Las contraseñas no coinciden')).not.toBeInTheDocument();
+      expect(screen.queryByText('Passwords do not match')).not.toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cambiar contraseña' }));
-    expect(screen.queryByText('Las contraseñas no coinciden')).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Ingresa tu contraseña actual')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+    expect(screen.queryByText('Passwords do not match')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Enter your current password')).toHaveValue('');
   });
 
   it('persists notification toggles across remounts', async () => {
     const { unmount } = render(<Settings />);
 
     const securityAlertsCheckbox = await screen.findByRole('checkbox', {
-      name: 'Alertas de seguridad',
+      name: 'Security alerts',
     });
     const domainRequestsCheckbox = await screen.findByRole('checkbox', {
-      name: 'Nuevas solicitudes de dominio',
+      name: 'New domain requests',
     });
     const weeklyReportsCheckbox = await screen.findByRole('checkbox', {
-      name: 'Reportes semanales',
+      name: 'Weekly reports',
     });
     expect(securityAlertsCheckbox).toBeChecked();
     expect(domainRequestsCheckbox).toBeChecked();
@@ -224,11 +222,9 @@ describe('Settings View - Change Password', () => {
     unmount();
     render(<Settings />);
 
-    expect(await screen.findByRole('checkbox', { name: 'Alertas de seguridad' })).not.toBeChecked();
-    expect(
-      await screen.findByRole('checkbox', { name: 'Nuevas solicitudes de dominio' })
-    ).not.toBeChecked();
-    expect(await screen.findByRole('checkbox', { name: 'Reportes semanales' })).toBeChecked();
+    expect(await screen.findByRole('checkbox', { name: 'Security alerts' })).not.toBeChecked();
+    expect(await screen.findByRole('checkbox', { name: 'New domain requests' })).not.toBeChecked();
+    expect(await screen.findByRole('checkbox', { name: 'Weekly reports' })).toBeChecked();
   });
 });
 
@@ -248,9 +244,9 @@ describe('Register View', () => {
 
     render(<Register onRegister={onRegister} onNavigateToLogin={onNavigateToLogin} />);
 
-    expect(screen.getByText('Registro Institucional')).toBeInTheDocument();
+    expect(screen.getByText('Institution Registration')).toBeInTheDocument();
     expect(screen.queryByText(/google/i)).not.toBeInTheDocument();
-    expect(screen.queryByText('O también')).not.toBeInTheDocument();
+    expect(screen.queryByText('Or continue with')).not.toBeInTheDocument();
   });
 
   it('shows short-password validation and blocks submission', async () => {
@@ -258,55 +254,53 @@ describe('Register View', () => {
 
     render(<Register onRegister={onRegister} onNavigateToLogin={vi.fn()} />);
 
-    fireEvent.change(screen.getByPlaceholderText('Tu nombre completo'), {
+    fireEvent.change(screen.getByPlaceholderText('Your full name'), {
       target: { value: 'Admin User' },
     });
     fireEvent.change(screen.getByPlaceholderText('admin@escuela.edu'), {
       target: { value: 'admin@example.edu' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Min 8 car.'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'short' },
     });
     fireEvent.change(screen.getByPlaceholderText('••••••••'), {
       target: { value: 'short' },
     });
 
-    const form = screen.getByRole('button', { name: /crear cuenta/i }).closest('form');
+    const form = screen.getByRole('button', { name: /create account/i }).closest('form');
     if (!(form instanceof HTMLFormElement)) {
       throw new Error('Expected register form to be rendered');
     }
     fireEvent.submit(form);
 
-    expect(
-      await screen.findByText('La contraseña debe tener al menos 8 caracteres')
-    ).toBeInTheDocument();
-    expect(screen.getByText('Mínimo 8 caracteres')).toBeInTheDocument();
+    expect(await screen.findByText('Password must be at least 8 characters')).toBeInTheDocument();
+    expect(screen.getByText('Minimum 8 characters')).toBeInTheDocument();
     expect(mockRegister).not.toHaveBeenCalled();
   });
 
   it('shows mismatch validation and prevents submission', async () => {
     render(<Register onRegister={vi.fn()} onNavigateToLogin={vi.fn()} />);
 
-    fireEvent.change(screen.getByPlaceholderText('Tu nombre completo'), {
+    fireEvent.change(screen.getByPlaceholderText('Your full name'), {
       target: { value: 'Admin User' },
     });
     fireEvent.change(screen.getByPlaceholderText('admin@escuela.edu'), {
       target: { value: 'admin@example.edu' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Min 8 car.'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'Password123!' },
     });
     fireEvent.change(screen.getByPlaceholderText('••••••••'), {
       target: { value: 'Mismatch123!' },
     });
 
-    const form = screen.getByRole('button', { name: /crear cuenta/i }).closest('form');
+    const form = screen.getByRole('button', { name: /create account/i }).closest('form');
     if (!(form instanceof HTMLFormElement)) {
       throw new Error('Expected register form to be rendered');
     }
     fireEvent.submit(form);
 
-    expect(await screen.findAllByText('Las contraseñas no coinciden')).toHaveLength(2);
+    expect(await screen.findAllByText('Passwords do not match')).toHaveLength(2);
     expect(mockRegister).not.toHaveBeenCalled();
   });
 
@@ -315,23 +309,23 @@ describe('Register View', () => {
 
     render(<Register onRegister={onRegister} onNavigateToLogin={vi.fn()} />);
 
-    fireEvent.change(screen.getByPlaceholderText('Tu nombre completo'), {
+    fireEvent.change(screen.getByPlaceholderText('Your full name'), {
       target: { value: '  Ada Lovelace  ' },
     });
     fireEvent.change(screen.getByPlaceholderText('admin@escuela.edu'), {
       target: { value: '  ADMIN@Example.EDU  ' },
     });
     fireEvent.change(screen.getByRole('combobox'), {
-      target: { value: 'Administrador de Sistemas' },
+      target: { value: 'systems_admin' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Min 8 car.'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'Password123!' },
     });
     fireEvent.change(screen.getByPlaceholderText('••••••••'), {
       target: { value: 'Password123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /crear cuenta/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create account/i }));
 
     await waitFor(() => {
       expect(mockRegister).toHaveBeenCalledWith({
@@ -341,7 +335,7 @@ describe('Register View', () => {
       });
     });
     expect(
-      await screen.findByText(/Cuenta creada exitosamente\. Redirigiendo al Panel\.\.\./i)
+      await screen.findByText(/Account created successfully\. Redirecting to Dashboard\.\.\./i)
     ).toBeInTheDocument();
 
     await waitFor(
@@ -358,20 +352,20 @@ describe('Register View', () => {
 
     render(<Register onRegister={onRegister} onNavigateToLogin={vi.fn()} />);
 
-    fireEvent.change(screen.getByPlaceholderText('Tu nombre completo'), {
+    fireEvent.change(screen.getByPlaceholderText('Your full name'), {
       target: { value: 'Admin User' },
     });
     fireEvent.change(screen.getByPlaceholderText('admin@escuela.edu'), {
       target: { value: 'admin@example.edu' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Min 8 car.'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'Password123!' },
     });
     fireEvent.change(screen.getByPlaceholderText('••••••••'), {
       target: { value: 'Password123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /crear cuenta/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create account/i }));
 
     expect(await screen.findByText(/Correo ya registrado/i)).toBeInTheDocument();
     expect(mockReportError).toHaveBeenCalledWith('Failed to register user:', expect.any(Error));
@@ -383,7 +377,7 @@ describe('Register View', () => {
 
     render(<Register onRegister={vi.fn()} onNavigateToLogin={onNavigateToLogin} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Iniciar Sesión' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
     expect(onNavigateToLogin).toHaveBeenCalledTimes(1);
   });

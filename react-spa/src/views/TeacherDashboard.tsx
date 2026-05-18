@@ -133,9 +133,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }
 
       <ConfirmDialog
         isOpen={viewModel.controlConfirm !== null}
-        title="Confirmar cambio"
-        confirmLabel={viewModel.controlConfirm?.nextGroupId ? 'Reemplazar' : 'Liberar Aula'}
-        cancelLabel="Cancelar"
+        title="Confirm change"
+        confirmLabel={viewModel.controlConfirm?.nextGroupId ? 'Replace' : 'Release Classroom'}
+        cancelLabel="Cancel"
         isLoading={viewModel.controlLoading}
         errorMessage={viewModel.controlConfirm ? (viewModel.controlError ?? undefined) : undefined}
         onClose={() => {
@@ -153,11 +153,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }
         }}
       >
         <p className="text-sm text-slate-600">
-          El aula ya tiene una política aplicada manualmente (
+          The classroom already has a manually applied policy (
           <strong>{viewModel.controlConfirm?.currentName}</strong>).
         </p>
         <p className="text-sm text-slate-600">
-          {viewModel.controlConfirm?.nextGroupId ? 'Reemplazar por' : 'Liberar (sin grupo)'}:{' '}
+          {viewModel.controlConfirm?.nextGroupId ? 'Replace with' : 'Release (no group)'}:{' '}
           <strong>{viewModel.controlConfirm?.nextName}</strong>?
         </p>
       </ConfirmDialog>
@@ -189,9 +189,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }
       {scheduleCommands.deleteEntry ? (
         <DangerConfirmDialog
           isOpen
-          title="Eliminar horario"
-          confirmLabel="Eliminar"
-          cancelLabel="Cancelar"
+          title="Delete schedule"
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
           isLoading={scheduleCommands.scheduleSaving}
           errorMessage={scheduleCommands.scheduleError || undefined}
           onClose={scheduleCommands.closeDeleteSchedule}
@@ -199,11 +199,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }
         >
           <div className="space-y-2 text-sm text-slate-600">
             <p>
-              ¿Eliminar <strong>{scheduleCommands.deleteEntry.label}</strong>?
+              Delete <strong>{scheduleCommands.deleteEntry.label}</strong>?
             </p>
-            <p>Tipo: {scheduleCommands.deleteEntry.kind === 'one_off' ? 'Puntual' : 'Semanal'}</p>
+            <p>Type: {scheduleCommands.deleteEntry.kind === 'one_off' ? 'One-off' : 'Weekly'}</p>
             <p>
-              Horario: {scheduleCommands.deleteEntry.startTime} -{' '}
+              Schedule: {scheduleCommands.deleteEntry.startTime} -{' '}
               {scheduleCommands.deleteEntry.endTime}
             </p>
           </div>

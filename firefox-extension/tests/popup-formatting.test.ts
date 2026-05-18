@@ -40,12 +40,12 @@ void describe('popup formatting and hostname extraction', () => {
   void test('extracts tab hostnames from browser-facing URLs', () => {
     assert.strictEqual(extractTabHostname('https://www.example.com/page'), 'www.example.com');
     assert.strictEqual(extractTabHostname('http://example.com'), 'example.com');
-    assert.strictEqual(extractTabHostname(undefined), 'Desconocido');
-    assert.strictEqual(extractTabHostname(''), 'Desconocido');
-    assert.strictEqual(extractTabHostname('not-a-valid-url'), 'Página local');
+    assert.strictEqual(extractTabHostname(undefined), 'Unknown');
+    assert.strictEqual(extractTabHostname(''), 'Unknown');
+    assert.strictEqual(extractTabHostname('not-a-valid-url'), 'Local page');
 
     const aboutResult = extractTabHostname('about:blank');
-    assert.ok(aboutResult === '' || aboutResult === 'Página local');
+    assert.ok(aboutResult === '' || aboutResult === 'Local page');
 
     assert.strictEqual(extractTabHostname('http://localhost:3000/api'), 'localhost');
     assert.strictEqual(

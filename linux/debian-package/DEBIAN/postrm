@@ -8,7 +8,7 @@ set -e
 
 case "$1" in
     purge)
-        echo "Limpiando configuración openpath..."
+        echo "Cleaning openpath configuration..."
 
         CHROMIUM_EXT_ID=""
         if [ -f /var/lib/openpath/browser-extension/extension-id ]; then
@@ -36,7 +36,7 @@ case "$1" in
         chattr -i /etc/resolv.conf 2>/dev/null || true
         
         # Restore systemd-resolved
-        echo "Restaurando systemd-resolved..."
+        echo "Restoring systemd-resolved..."
         systemctl unmask systemd-resolved.socket 2>/dev/null || true
         systemctl unmask systemd-resolved 2>/dev/null || true
         systemctl enable systemd-resolved.socket 2>/dev/null || true
@@ -66,13 +66,13 @@ EOF
         fi
         
         # Clear firewall rules
-        echo "Restaurando firewall..."
+        echo "Restoring firewall..."
         iptables -F OUTPUT 2>/dev/null || true
         iptables -P OUTPUT ACCEPT 2>/dev/null || true
         iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
         
         # Clean browser policies
-        echo "Limpiando políticas de navegadores..."
+        echo "Cleaning browser policies..."
         if [ -d /etc/firefox/policies ]; then
             echo '{"policies": {}}' > /etc/firefox/policies/policies.json 2>/dev/null || true
         fi
@@ -105,7 +105,7 @@ EOF
         
         systemctl daemon-reload
         
-        echo "✓ Sistema restaurado"
+        echo "✓ System restored"
         ;;
     
     remove)

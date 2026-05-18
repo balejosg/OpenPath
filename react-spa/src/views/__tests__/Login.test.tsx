@@ -64,7 +64,7 @@ describe('Login View', () => {
     fireEvent.change(screen.getByPlaceholderText('••••••••'), {
       target: { value: 'SecurePassword123!' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /entrar/i }));
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
     await waitFor(() => {
       expect(mockLogin).toHaveBeenCalledWith('admin@example.edu', 'SecurePassword123!');
@@ -83,11 +83,9 @@ describe('Login View', () => {
     fireEvent.change(screen.getByPlaceholderText('••••••••'), {
       target: { value: 'WrongPassword123!' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /entrar/i }));
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
-    expect(
-      await screen.findByText('Credenciales inválidas o error de conexión')
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Invalid credentials or connection error')).toBeInTheDocument();
     expect(mockReportError).toHaveBeenCalledWith('Failed to login:', expect.any(Error));
   });
 
@@ -104,8 +102,8 @@ describe('Login View', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Recuperar clave' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Solicitar acceso' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Recover password' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Request access' }));
 
     expect(onNavigateToForgot).toHaveBeenCalledTimes(1);
     expect(onNavigateToRegister).toHaveBeenCalledTimes(1);

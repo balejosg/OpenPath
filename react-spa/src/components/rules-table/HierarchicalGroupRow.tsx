@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { DomainGroup } from '../HierarchicalRulesTable';
+import { useT } from '../../i18n/product-i18n';
 
 interface HierarchicalGroupRowProps {
   group: DomainGroup;
@@ -37,6 +38,7 @@ export const HierarchicalGroupRow: React.FC<HierarchicalGroupRowProps> = ({
   selectedIds,
   someGroupSelected,
 }) => {
+  const t = useT();
   const groupRuleIds = group.rules.map((rule) => rule.id);
 
   return (
@@ -61,7 +63,7 @@ export const HierarchicalGroupRow: React.FC<HierarchicalGroupRowProps> = ({
               });
             }}
             className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
-            title={allGroupSelected ? 'Deseleccionar grupo' : 'Seleccionar grupo'}
+            title={allGroupSelected ? t('rules.group.deselectGroup') : t('rules.group.selectGroup')}
           >
             {allGroupSelected ? (
               <CheckSquare size={18} className="text-blue-600" />
@@ -86,7 +88,7 @@ export const HierarchicalGroupRow: React.FC<HierarchicalGroupRowProps> = ({
           <span
             className={cn('font-medium', group.root ? 'text-slate-700' : 'text-slate-500 italic')}
           >
-            {group.root || 'Rutas globales'}
+            {group.root || t('rules.group.globalPaths')}
           </span>
           <span className="text-xs text-slate-400 font-normal">({group.rules.length})</span>
         </div>
@@ -101,10 +103,10 @@ export const HierarchicalGroupRow: React.FC<HierarchicalGroupRowProps> = ({
           )}
         >
           {group.status === 'allowed'
-            ? 'Permitido'
+            ? t('rules.group.status.allowed')
             : group.status === 'blocked'
-              ? 'Bloqueado'
-              : 'Mixto'}
+              ? t('rules.group.status.blocked')
+              : t('rules.group.status.mixed')}
         </span>
       </td>
       {!readOnly && (
@@ -116,7 +118,7 @@ export const HierarchicalGroupRow: React.FC<HierarchicalGroupRowProps> = ({
                 onAddSubdomain(group.root);
               }}
               className="p-1.5 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-700 transition-colors"
-              title={`Añadir subdominio a ${group.root}`}
+              title={t('rules.group.addSubdomain', { rootDomain: group.root })}
             >
               <Plus size={16} />
             </button>

@@ -445,7 +445,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'acrylic' -Action {
         }
     }
     else {
-        Write-InstallerWarning '  Instalacion de Acrylic omitida'
+        Write-InstallerWarning '  Acrylic installation skipped'
     }
     Complete-OpenPathInstallTimedStep -Name 'acrylic'
 }
@@ -454,7 +454,7 @@ Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'acrylic-configuration' -Action {
     Start-OpenPathInstallTimedStep -Name 'acrylic-configuration'
     if ($SkipAcrylic) {
-        Write-InstallerWarning '  Configuracion de Acrylic omitida por -SkipAcrylic'
+        Write-InstallerWarning '  Acrylic configuration skipped by -SkipAcrylic'
     }
     else {
         $acrylicConfigurationApplied = Set-AcrylicConfiguration -WhatIf:$WhatIfPreference
@@ -538,11 +538,11 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'native-host' -Action {
             else {
                 'OpenPath request setup is incomplete.'
             }
-            Write-InstallerWarning "  ADVERTENCIA: Registro del host nativo de Firefox incompleto tras enrollment. $requestSetupMessage"
+            Write-InstallerWarning "  WARNING: Firefox native host registration incomplete after enrollment. $requestSetupMessage"
         }
     }
     catch {
-        Write-InstallerWarning "  ADVERTENCIA: No se pudo registrar el host nativo de Firefox tras enrollment: $_"
+        Write-InstallerWarning "  WARNING: Could not register Firefox native host after enrollment: $_"
     }
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
@@ -589,7 +589,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
             throw 'Firefox managed extension readiness validation failed'
         }
 
-        Write-InstallerWarning "  ADVERTENCIA: No se pudo validar Firefox managed extension readiness: $_"
+        Write-InstallerWarning "  WARNING: Could not validate Firefox managed extension readiness: $_"
     }
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
@@ -631,7 +631,7 @@ $phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'app-control' -Action {
     }
     catch {
         Complete-OpenPathInstallTimedStep -Name 'app-control' -Status 'warning' -ErrorMessage ([string]$_)
-        Write-InstallerWarning "  ADVERTENCIA: No se pudo configurar AppLocker para usuarios no administradores: $_"
+        Write-InstallerWarning "  WARNING: Could not configure AppLocker for non-admin users: $_"
     }
 }
 
@@ -648,11 +648,11 @@ $phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'browser-inventory' -Act
                 $removalCandidateCount = @($browserInventory.RemovalCandidates).Count
                 Write-InstallerVerbose "  Browser cleanup report: $unmanagedCount unmanaged finding(s), $removalCandidateCount removable known installer candidate(s)"
                 if ($BrowserCleanupMode -eq 'RemoveKnownInstallers' -and $removalCandidateCount -gt 0) {
-                    Write-InstallerWarning '  ADVERTENCIA: RemoveKnownInstallers reports candidates only; automatic browser uninstall is not enabled in this release.'
+                    Write-InstallerWarning '  WARNING: RemoveKnownInstallers reports candidates only; automatic browser uninstall is not enabled in this release.'
                 }
             }
             catch {
-                Write-InstallerWarning "  ADVERTENCIA: No se pudo generar el reporte de navegadores: $_"
+                Write-InstallerWarning "  WARNING: Could not generate browser report: $_"
             }
         }
     }

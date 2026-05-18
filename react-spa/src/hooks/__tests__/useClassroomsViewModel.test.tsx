@@ -86,8 +86,8 @@ describe('useClassroomsViewModel', () => {
       },
       {
         id: 'classroom-2',
-        name: 'Aula Sur',
-        displayName: 'Aula Sur',
+        name: 'South Classroom',
+        displayName: 'South Classroom',
         defaultGroupId: null,
         activeGroupId: null,
         currentGroupId: null,
@@ -113,7 +113,7 @@ describe('useClassroomsViewModel', () => {
     ]);
 
     act(() => {
-      result.current.setSearchQuery('  aula sur  ');
+      result.current.setSearchQuery('  south classroom  ');
     });
 
     await waitFor(() => {
@@ -150,8 +150,8 @@ describe('useClassroomsViewModel', () => {
       },
       {
         id: 'classroom-2',
-        name: 'Aula Sur',
-        displayName: 'Aula Sur',
+        name: 'South Classroom',
+        displayName: 'South Classroom',
         defaultGroupId: null,
         activeGroupId: null,
         currentGroupId: null,
@@ -266,7 +266,7 @@ describe('useClassroomsViewModel', () => {
     });
 
     expect(mockCreateClassroom).not.toHaveBeenCalled();
-    expect(result.current.newModal.newError).toBe('El nombre del aula es obligatorio');
+    expect(result.current.newModal.newError).toBe('Classroom name is required');
   });
 
   it('deletes the selected classroom and exposes retry helpers after load failures', async () => {
@@ -320,7 +320,7 @@ describe('useClassroomsViewModel', () => {
 
     await waitFor(() => {
       expect(result.current.isInitialLoading).toBe(false);
-      expect(result.current.loadError).toBe('Error al cargar aulas');
+      expect(result.current.loadError).toBe('Unable to load classrooms');
     });
 
     act(() => {

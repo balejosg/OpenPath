@@ -159,7 +159,7 @@ export function useClassroomMachines(params: {
     setLoadingToken(true);
     try {
       if (!selectedClassroom) {
-        setExemptionsError('Selecciona un aula primero');
+        setExemptionsError('Select a classroom first');
         return;
       }
 
@@ -193,7 +193,7 @@ export function useClassroomMachines(params: {
       setShowEnrollModal(true);
     } catch (err) {
       reportError('Failed to get enrollment ticket:', err);
-      setExemptionsError('No se pudo generar el comando de instalacion');
+      setExemptionsError('Unable to generate install command');
     } finally {
       setLoadingToken(false);
     }

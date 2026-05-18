@@ -20,9 +20,9 @@ describe('WeeklyCalendar Component', () => {
       />
     );
 
-    expect(screen.getByText('Hora')).toBeInTheDocument();
-    expect(screen.getByText('Lunes')).toBeInTheDocument();
-    expect(screen.getByText('Viernes')).toBeInTheDocument();
+    expect(screen.getByText('Time')).toBeInTheDocument();
+    expect(screen.getByText('Monday')).toBeInTheDocument();
+    expect(screen.getByText('Friday')).toBeInTheDocument();
   });
 
   it('calls onAddClick when clicking an hour cell', () => {
@@ -38,7 +38,7 @@ describe('WeeklyCalendar Component', () => {
     );
 
     // Click a known hour cell via aria-label
-    const cell = screen.getByRole('button', { name: 'Agregar Lunes 07:00' });
+    const cell = screen.getByRole('button', { name: 'Add Monday 07:00' });
     fireEvent.click(cell);
 
     expect(onAddClick).toHaveBeenCalled();
@@ -107,7 +107,7 @@ describe('WeeklyCalendar Component', () => {
     );
 
     const block = screen.getByTestId('schedule-block-s2');
-    expect(block).toHaveTextContent('Reservado por otro profesor');
+    expect(block).toHaveTextContent('Reserved by another teacher');
 
     fireEvent.click(block);
     expect(onEditClick).not.toHaveBeenCalled();

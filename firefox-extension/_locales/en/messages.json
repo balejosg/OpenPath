@@ -26,6 +26,10 @@
   "popupRetryLocalUpdateTitle": { "message": "Retry local update" },
   "popupRetryLocalUpdate": { "message": "Retry" },
   "popupUnknownOrigin": { "message": "unknown" },
+  "popupUnknownTab": { "message": "Unknown" },
+  "popupLocalPage": { "message": "Local page" },
+  "popupNoActiveTab": { "message": "No active tab" },
+  "popupInvalidTab": { "message": "Error: Invalid tab" },
   "popupSelectDomainAndReason": { "message": "Select a domain and enter a reason" },
   "popupIncompleteRequestConfig": { "message": "Incomplete configuration for domain requests" },
   "popupFirefoxDataPermissionUnsupported": {
@@ -52,6 +56,23 @@
   "popupListCleared": { "message": "List cleared" },
   "popupAllowed": { "message": "ALLOWED" },
   "popupBlocked": { "message": "BLOCKED" },
+  "popupStatusPending": { "message": "Pending" },
+  "popupStatusAutoApproved": { "message": "Auto-approved" },
+  "popupStatusDuplicate": { "message": "Duplicate" },
+  "popupStatusLocalUpdateError": { "message": "Local update error" },
+  "popupStatusApiError": { "message": "API error" },
+  "popupStatusDetected": { "message": "Detected" },
+  "popupNativeHostUnavailable": { "message": "Native host unavailable" },
+  "popupNativeHostAvailable": { "message": "Native host available" },
+  "popupNativeHostVersion": {
+    "message": "Native host v$VERSION$",
+    "placeholders": { "version": { "content": "$1" } }
+  },
+  "popupNativeHostConnectError": { "message": "Could not connect to the native host" },
+  "popupLocalUpdateRetrying": { "message": "Retrying local update" },
+  "popupLocalUpdateCompleted": { "message": "Local update completed" },
+  "popupLocalUpdateStillFailing": { "message": "Local update is still failing" },
+  "blockedUnknownDomain": { "message": "unknown domain" },
   "requestSentForDomain": {
     "message": "Request sent for $DOMAIN$. It remains pending approval.",
     "placeholders": { "domain": { "content": "$1" } }

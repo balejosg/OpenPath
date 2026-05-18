@@ -180,8 +180,8 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, classNa
             size="icon"
             className="h-8 w-8 text-slate-400 hover:text-slate-600"
             onClick={onClose}
-            aria-label="Cerrar"
-            title="Cerrar"
+            aria-label="Close"
+            title="Close"
             ref={closeButtonRef}
           >
             <X size={18} />

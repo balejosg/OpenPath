@@ -19,7 +19,7 @@ const ForgotPassword: React.FC<ForgotPasswordProps> = ({
             <Shield className="text-white" size={32} />
           </div>
           <h1 className="text-2xl font-bold text-white">OpenPath</h1>
-          <p className="text-slate-400 mt-1">Recuperar contraseña</p>
+          <p className="text-slate-400 mt-1">Recover password</p>
         </div>
 
         {/* Card */}
@@ -29,17 +29,17 @@ const ForgotPassword: React.FC<ForgotPasswordProps> = ({
             className="flex items-center gap-2 text-slate-500 hover:text-slate-700 mb-6 text-sm font-medium transition-colors"
           >
             <ArrowLeft size={16} />
-            Volver al inicio
+            Back to sign in
           </button>
 
           <div className="mb-6">
             <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-lg">
               <AlertCircle className="text-amber-600 flex-shrink-0 mt-0.5" size={20} />
               <div>
-                <h3 className="font-semibold text-amber-800 text-sm">Proceso de recuperación</h3>
+                <h3 className="font-semibold text-amber-800 text-sm">Recovery process</h3>
                 <p className="text-amber-700 text-sm mt-1">
-                  Para restablecer tu contraseña, contacta al administrador de tu institución. Te
-                  proporcionará un token de recuperación.
+                  To reset your password, contact your institution administrator. They will provide
+                  a recovery token.
                 </p>
               </div>
             </div>
@@ -49,7 +49,7 @@ const ForgotPassword: React.FC<ForgotPasswordProps> = ({
             <div className="text-center py-6 border-2 border-dashed border-slate-200 rounded-lg">
               <Mail className="mx-auto text-slate-400 mb-3" size={32} />
               <p className="text-slate-600 text-sm">
-                Solicita un token de recuperación a tu administrador
+                Request a recovery token from your administrator
               </p>
             </div>
 
@@ -57,7 +57,7 @@ const ForgotPassword: React.FC<ForgotPasswordProps> = ({
               onClick={onNavigateToReset}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors shadow-sm"
             >
-              Ya tengo un token
+              I have a token
             </button>
 
             <div className="text-center">
@@ -65,7 +65,7 @@ const ForgotPassword: React.FC<ForgotPasswordProps> = ({
                 onClick={onNavigateToLogin}
                 className="text-slate-500 hover:text-slate-700 text-sm font-medium transition-colors"
               >
-                Cancelar
+                Cancel
               </button>
             </div>
           </div>

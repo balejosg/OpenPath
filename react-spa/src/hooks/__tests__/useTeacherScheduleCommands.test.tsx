@@ -248,7 +248,7 @@ describe('useTeacherScheduleCommands', () => {
     });
 
     await waitFor(() => {
-      expect(result.current.scheduleError).toBe('Ese tramo horario ya está reservado');
+      expect(result.current.scheduleError).toBe('That time slot is already reserved');
     });
     expect(result.current.editingEntry).not.toBeNull();
     expect(reportError).toHaveBeenCalledWith('Failed to save schedule:', {

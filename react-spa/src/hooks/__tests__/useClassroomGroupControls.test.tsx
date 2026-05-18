@@ -17,7 +17,7 @@ vi.mock('../useClassroomConfigActions', () => ({
 const groupById = new Map([
   ['group-default', { id: 'group-default', name: 'default', displayName: 'Grupo Default' }],
   ['group-manual', { id: 'group-manual', name: 'manual', displayName: 'Grupo Manual' }],
-  ['group-next', { id: 'group-next', name: 'next', displayName: 'Grupo Siguiente' }],
+  ['group-next', { id: 'group-next', name: 'next', displayName: 'Grupo Next' }],
 ]);
 
 const baseClassroom: Classroom = {

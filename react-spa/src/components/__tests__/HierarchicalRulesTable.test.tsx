@@ -137,12 +137,12 @@ describe('HierarchicalRulesTable Component', () => {
   describe('Basic Rendering', () => {
     it('renders loading state', () => {
       render(<HierarchicalRulesTable rules={[]} loading={true} onDelete={noop} />);
-      expect(screen.getByText(/cargando/i)).toBeInTheDocument();
+      expect(screen.getByText(/loading/i)).toBeInTheDocument();
     });
 
     it('renders empty state when no rules', () => {
       render(<HierarchicalRulesTable rules={[]} loading={false} onDelete={noop} />);
-      expect(screen.getByText(/no hay reglas configuradas/i)).toBeInTheDocument();
+      expect(screen.getByText(/no rules configured/i)).toBeInTheDocument();
     });
 
     it('renders custom empty message', () => {
@@ -171,7 +171,7 @@ describe('HierarchicalRulesTable Component', () => {
   });
 
   describe('Group Status', () => {
-    it('shows "Permitido" for groups with only whitelist rules', () => {
+    it('shows "Allowed" for groups with only whitelist rules', () => {
       const allowedRules: Rule[] = [
         {
           id: '1',
@@ -184,7 +184,7 @@ describe('HierarchicalRulesTable Component', () => {
       ];
 
       render(<HierarchicalRulesTable rules={allowedRules} loading={false} onDelete={noop} />);
-      expect(screen.getByText('Permitido')).toBeInTheDocument();
+      expect(screen.getByText('Allowed')).toBeInTheDocument();
     });
 
     it('shows automatic approval labels and revoke action on expanded rows', () => {
@@ -208,13 +208,13 @@ describe('HierarchicalRulesTable Component', () => {
       fireEvent.click(screen.getByText('example.com'));
 
       expect(screen.getByText('Auto (Firefox)')).toBeInTheDocument();
-      const revokeButton = screen.getByTitle('Revocar autoaprobación');
+      const revokeButton = screen.getByTitle('Revoke auto-approval');
       fireEvent.click(revokeButton);
 
       expect(handleDelete).toHaveBeenCalledWith(automaticRules[0]);
     });
 
-    it('shows "Bloqueado" for groups with only blocked rules', () => {
+    it('shows "Blocked" for groups with only blocked rules', () => {
       const blockedRules: Rule[] = [
         {
           id: '1',
@@ -235,13 +235,13 @@ describe('HierarchicalRulesTable Component', () => {
       ];
 
       render(<HierarchicalRulesTable rules={blockedRules} loading={false} onDelete={noop} />);
-      expect(screen.getByText('Bloqueado')).toBeInTheDocument();
+      expect(screen.getByText('Blocked')).toBeInTheDocument();
     });
 
-    it('shows "Mixto" for groups with mixed rules', () => {
+    it('shows "Mixed" for groups with mixed rules', () => {
       render(<HierarchicalRulesTable rules={mockRules} loading={false} onDelete={noop} />);
       // google.com has whitelist + blocked_subdomain = mixed
-      expect(screen.getByText('Mixto')).toBeInTheDocument();
+      expect(screen.getByText('Mixed')).toBeInTheDocument();
     });
   });
 
@@ -296,7 +296,7 @@ describe('HierarchicalRulesTable Component', () => {
       fireEvent.click(screen.getByText('google.com'));
 
       // Click delete on first child rule
-      const deleteButtons = screen.getAllByTitle('Eliminar');
+      const deleteButtons = screen.getAllByTitle('Delete');
       fireEvent.click(deleteButtons[0]);
 
       expect(handleDelete).toHaveBeenCalledWith(expect.objectContaining({ value: 'google.com' }));
@@ -315,7 +315,7 @@ describe('HierarchicalRulesTable Component', () => {
         />
       );
 
-      const addButtons = screen.getAllByTitle(/añadir subdominio/i);
+      const addButtons = screen.getAllByTitle(/add subdomain/i);
       expect(addButtons.length).toBeGreaterThan(0);
     });
 
@@ -330,7 +330,7 @@ describe('HierarchicalRulesTable Component', () => {
         />
       );
 
-      const addButton = screen.getByTitle('Añadir subdominio a google.com');
+      const addButton = screen.getByTitle('Add subdomain to google.com');
       fireEvent.click(addButton);
 
       expect(handleAddSubdomain).toHaveBeenCalledWith('google.com');
@@ -339,7 +339,7 @@ describe('HierarchicalRulesTable Component', () => {
     it('does not show add button when onAddSubdomain is not provided', () => {
       render(<HierarchicalRulesTable rules={mockRules} loading={false} onDelete={noop} />);
 
-      expect(screen.queryByTitle(/añadir subdominio/i)).not.toBeInTheDocument();
+      expect(screen.queryByTitle(/add subdomain/i)).not.toBeInTheDocument();
     });
   });
 
@@ -360,7 +360,7 @@ describe('HierarchicalRulesTable Component', () => {
       );
 
       // Should have select all button
-      expect(screen.getByTitle('Seleccionar todo')).toBeInTheDocument();
+      expect(screen.getByTitle('Select all')).toBeInTheDocument();
     });
 
     it('calls onToggleSelectAll when header checkbox is clicked', () => {
@@ -379,7 +379,7 @@ describe('HierarchicalRulesTable Component', () => {
         />
       );
 
-      fireEvent.click(screen.getByTitle('Seleccionar todo'));
+      fireEvent.click(screen.getByTitle('Select all'));
       expect(handleToggleSelectAll).toHaveBeenCalled();
     });
 
@@ -401,7 +401,7 @@ describe('HierarchicalRulesTable Component', () => {
 
       // Groups are sorted alphabetically: facebook.com, google.com
       // Click on google.com group checkbox (second one) which has 2 rules
-      const groupCheckboxes = screen.getAllByTitle('Seleccionar grupo');
+      const groupCheckboxes = screen.getAllByTitle('Select group');
       fireEvent.click(groupCheckboxes[1]); // google.com is second (after facebook.com)
 
       // Should toggle all rules in google.com group (2 rules: google.com and ads.google.com)
@@ -431,7 +431,7 @@ describe('HierarchicalRulesTable Component', () => {
       handleToggleSelection.mockClear();
 
       // Click on individual rule checkbox
-      const selectButtons = screen.getAllByTitle('Seleccionar');
+      const selectButtons = screen.getAllByTitle('Select');
       fireEvent.click(selectButtons[0]);
 
       expect(handleToggleSelection).toHaveBeenCalledWith('1');
@@ -662,7 +662,7 @@ describe('HierarchicalRulesTable Component', () => {
   });
 
   describe('Global paths (domainless rules)', () => {
-    it('shows "Rutas globales" label for rules with empty root domain', () => {
+    it('shows "Global paths" label for rules with empty root domain', () => {
       const domainGroups: DomainGroup[] = [
         {
           root: '',
@@ -698,7 +698,7 @@ describe('HierarchicalRulesTable Component', () => {
         <HierarchicalRulesTable domainGroups={domainGroups} loading={false} onDelete={noop} />
       );
 
-      expect(screen.getByText('Rutas globales')).toBeInTheDocument();
+      expect(screen.getByText('Global paths')).toBeInTheDocument();
       expect(screen.getByText('google.com')).toBeInTheDocument();
     });
 
@@ -724,7 +724,7 @@ describe('HierarchicalRulesTable Component', () => {
 
       render(<HierarchicalRulesTable rules={pathRules} loading={false} onDelete={noop} />);
 
-      expect(screen.getByText('Rutas globales')).toBeInTheDocument();
+      expect(screen.getByText('Global paths')).toBeInTheDocument();
       expect(screen.getByText('(2)')).toBeInTheDocument();
     });
 
@@ -757,12 +757,12 @@ describe('HierarchicalRulesTable Component', () => {
         />
       );
 
-      expect(screen.getByText('Rutas globales')).toBeInTheDocument();
+      expect(screen.getByText('Global paths')).toBeInTheDocument();
       // The + button should not be present for domainless groups
       const rows = screen.getAllByRole('row');
       // Header row + 1 group row = 2 rows; the group row should NOT have a + button
       const groupRow = rows[1];
-      expect(groupRow.querySelector('button[title*="Añadir"]')).toBeNull();
+      expect(groupRow.querySelector('button[title*="Add"]')).toBeNull();
     });
   });
 });

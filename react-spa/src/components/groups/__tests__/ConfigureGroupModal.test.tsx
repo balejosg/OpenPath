@@ -40,10 +40,10 @@ describe('ConfigureGroupModal', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Inactivo' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Público' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Inactive' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Public' }));
     fireEvent.click(screen.getByRole('button', { name: 'Gestionar' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
     expect(onStatusChange).toHaveBeenCalledWith('Inactive');
     expect(onVisibilityChange).toHaveBeenCalledWith('instance_public');

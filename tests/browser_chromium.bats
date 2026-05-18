@@ -84,7 +84,7 @@
         --chromium-best-effort \
         --native-host-best-effort
     [ "$status" -eq 0 ]
-    [[ "$output" == *"⚠ Extensión Chrome/Edge no instalada (se puede reintentar más tarde)"* ]]
+    [[ "$output" == *"⚠ Chrome/Edge extension not installed (can retry later)"* ]]
     [[ "$output" == *"install_native_host $ext_dir/native"* ]]
 }
 

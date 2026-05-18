@@ -168,7 +168,7 @@ await describe('popup controller', async () => {
     assert.equal(doc.getElementById('count')?.textContent, '1');
     assert.equal(doc.getElementById('btn-copy')?.disabled, false);
     assert.equal(doc.getElementById('btn-request')?.disabled, true);
-    assert.equal(doc.getElementById('native-status')?.textContent, 'Host nativo v1.2.3');
+    assert.equal(doc.getElementById('native-status')?.textContent, 'Native host v1.2.3');
     assert.equal(doc.listeners.get('DOMContentLoaded')?.length, 1);
     assert.deepEqual(
       messages.map((message) => (message as { action?: string }).action),
@@ -198,7 +198,7 @@ await describe('popup controller', async () => {
       await controller.init();
     });
 
-    assert.equal(doc.getElementById('tab-domain')?.textContent, 'Sin pestaña activa');
+    assert.equal(doc.getElementById('tab-domain')?.textContent, 'No active tab');
     assert.equal(sendCount, 0);
   });
 });

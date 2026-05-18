@@ -30,15 +30,18 @@ const EnrollClassroomModal: React.FC<EnrollClassroomModalProps> = ({
   if (!isOpen || !enrollToken || !selectedClassroom) return null;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Instalar Equipos">
+    <Modal isOpen={isOpen} onClose={onClose} title="Install Computers">
       <p className="text-sm text-slate-600 mb-3">
-        Selecciona plataforma y ejecuta el comando en cada equipo del aula{' '}
+        Select a platform and run the command on each classroom computer{' '}
         <strong>{selectedClassroom.displayName}</strong> para instalar y registrar el agente:
       </p>
       {selectedClassroom.currentGroupId === null ? (
         <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           <AlertCircle size={16} className="mt-0.5 shrink-0" />
-          <p>El equipo se registrará con navegación sin bloqueos hasta asignar un grupo al aula.</p>
+          <p>
+            The computer will register with unrestricted browsing until a group is assigned to the
+            classroom.
+          </p>
         </div>
       ) : null}
       <div className="mb-3 inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
@@ -67,13 +70,13 @@ const EnrollClassroomModal: React.FC<EnrollClassroomModalProps> = ({
         <button
           onClick={onCopy}
           className="absolute top-2 right-2 inline-flex items-center gap-1 text-slate-400 hover:text-white"
-          title={isCopied ? 'Copiado' : 'Copiar al portapapeles'}
-          aria-label={isCopied ? 'Copiado' : 'Copiar al portapapeles'}
+          title={isCopied ? 'Copied' : 'Copy to clipboard'}
+          aria-label={isCopied ? 'Copied' : 'Copy to clipboard'}
         >
           {isCopied ? (
             <>
               <Check size={16} className="text-green-400" />
-              <span className="text-[10px] font-semibold text-green-400">Copiado</span>
+              <span className="text-[10px] font-semibold text-green-400">Copied</span>
             </>
           ) : (
             <Copy size={16} />
@@ -83,13 +86,13 @@ const EnrollClassroomModal: React.FC<EnrollClassroomModalProps> = ({
       </div>
       {enrollPlatform === 'linux' ? (
         <p className="text-xs text-slate-500 mt-3">
-          El agente se auto-actualizará automáticamente vía APT. Asegúrate de tener conexión a
-          internet en el equipo durante la instalación.
+          The agent will auto-update via APT. Make sure the computer has internet access during
+          installation.
         </p>
       ) : (
         <p className="text-xs text-slate-500 mt-3">
-          Ejecuta PowerShell como Administrador. El instalador registra el equipo con token de aula
-          y configura actualizaciones silenciosas diarias del agente.
+          Run PowerShell as Administrator. The installer registers the computer with a classroom
+          token and configures daily silent agent updates.
         </p>
       )}
       <div className="mt-6 flex justify-end">
@@ -97,7 +100,7 @@ const EnrollClassroomModal: React.FC<EnrollClassroomModalProps> = ({
           onClick={onClose}
           className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors font-medium"
         >
-          Cerrar
+          Close
         </button>
       </div>
     </Modal>

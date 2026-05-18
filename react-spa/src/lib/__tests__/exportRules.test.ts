@@ -42,11 +42,11 @@ describe('exportRules utilities', () => {
 
       expect(lines).toHaveLength(4); // header + 3 rules
       expect(lines[0]).toBe('value,type,type_label,created_at');
-      expect(lines[1]).toBe('google.com,whitelist,Permitido,2026-01-15T10:00:00Z');
+      expect(lines[1]).toBe('google.com,whitelist,Allowed,2026-01-15T10:00:00Z');
       expect(lines[2]).toBe(
-        'ads.example.com,blocked_subdomain,Subdominio bloqueado,2026-01-16T10:00:00Z'
+        'ads.example.com,blocked_subdomain,Blocked subdomain,2026-01-16T10:00:00Z'
       );
-      expect(lines[3]).toBe('/tracking/*,blocked_path,Ruta bloqueada,2026-01-17T10:00:00Z');
+      expect(lines[3]).toBe('/tracking/*,blocked_path,Blocked path,2026-01-17T10:00:00Z');
     });
 
     it('escapes fields with commas', () => {
@@ -107,7 +107,7 @@ describe('exportRules utilities', () => {
       expect(parsed[0]).toEqual({
         value: 'google.com',
         type: 'whitelist',
-        typeLabel: 'Permitido',
+        typeLabel: 'Allowed',
         createdAt: '2026-01-15T10:00:00Z',
       });
     });
@@ -123,9 +123,9 @@ describe('exportRules utilities', () => {
       const json = rulesToJSON(mockRules);
       const parsed = JSON.parse(json) as { typeLabel: string }[];
 
-      expect(parsed[0].typeLabel).toBe('Permitido');
-      expect(parsed[1].typeLabel).toBe('Subdominio bloqueado');
-      expect(parsed[2].typeLabel).toBe('Ruta bloqueada');
+      expect(parsed[0].typeLabel).toBe('Allowed');
+      expect(parsed[1].typeLabel).toBe('Blocked subdomain');
+      expect(parsed[2].typeLabel).toBe('Blocked path');
     });
   });
 

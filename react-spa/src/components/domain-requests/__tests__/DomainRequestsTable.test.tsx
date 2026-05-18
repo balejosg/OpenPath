@@ -27,7 +27,7 @@ function buildModel(overrides: Partial<DomainRequestsTableModel> = {}): DomainRe
     onClearFilters: vi.fn(),
     bulkSelection: {
       canSelectPage: true,
-      title: 'Seleccionar',
+      title: 'Select',
       allPagePendingSelected: false,
       onToggleSelectPage: vi.fn(),
       onToggleRequest: vi.fn(),
@@ -65,10 +65,8 @@ describe('DomainRequestsTable', () => {
       />
     );
 
-    expect(screen.getByText('Todo en orden')).toBeInTheDocument();
-    expect(
-      screen.getByText('No hay solicitudes de dominio pendientes de revisión.')
-    ).toBeInTheDocument();
+    expect(screen.getByText('All clear')).toBeInTheDocument();
+    expect(screen.getByText('No domain requests are pending review.')).toBeInTheDocument();
   });
 
   it('renders the filtered empty state and clears filters', () => {
@@ -90,11 +88,9 @@ describe('DomainRequestsTable', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Limpiar filtros' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
-    expect(
-      screen.getByText('No hay solicitudes para los filtros seleccionados')
-    ).toBeInTheDocument();
+    expect(screen.getByText('No requests match the selected filters')).toBeInTheDocument();
     expect(onClearFilters).toHaveBeenCalled();
   });
 
@@ -113,7 +109,7 @@ describe('DomainRequestsTable', () => {
           onOpenDelete,
           bulkSelection: {
             canSelectPage: true,
-            title: 'Seleccionar',
+            title: 'Select',
             allPagePendingSelected: false,
             onToggleSelectPage,
             onToggleRequest,
@@ -122,11 +118,11 @@ describe('DomainRequestsTable', () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText('Seleccion masiva de pagina'));
-    fireEvent.click(screen.getByLabelText('Seleccionar example.com'));
-    fireEvent.click(screen.getByTitle('Aprobar'));
-    fireEvent.click(screen.getByTitle('Rechazar'));
-    fireEvent.click(screen.getByTitle('Eliminar'));
+    fireEvent.click(screen.getByLabelText('Bulk select page'));
+    fireEvent.click(screen.getByLabelText('Select example.com'));
+    fireEvent.click(screen.getByTitle('Approve'));
+    fireEvent.click(screen.getByTitle('Reject'));
+    fireEvent.click(screen.getByTitle('Delete'));
 
     expect(onToggleSelectPage).toHaveBeenCalled();
     expect(onToggleRequest).toHaveBeenCalledWith('req-1');
@@ -144,9 +140,9 @@ describe('DomainRequestsTable', () => {
       />
     );
 
-    expect(screen.getByTitle('Aprobar')).toBeInTheDocument();
-    expect(screen.getByTitle('Rechazar')).toBeInTheDocument();
-    expect(screen.queryByTitle('Eliminar')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Approve')).toBeInTheDocument();
+    expect(screen.getByTitle('Reject')).toBeInTheDocument();
+    expect(screen.queryByTitle('Delete')).not.toBeInTheDocument();
   });
 
   it('renders reviewed rows without selection or review actions and hides empty pagination', () => {
@@ -178,10 +174,10 @@ describe('DomainRequestsTable', () => {
     );
 
     expect(screen.getByText('approved.example')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Seleccionar approved.example')).not.toBeInTheDocument();
-    expect(screen.queryByTitle('Aprobar')).not.toBeInTheDocument();
-    expect(screen.queryByTitle('Rechazar')).not.toBeInTheDocument();
-    expect(screen.getByTitle('Eliminar')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Select approved.example')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Approve')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Reject')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Delete')).toBeInTheDocument();
     expect(screen.queryByText(/Mostrando/)).not.toBeInTheDocument();
   });
 
@@ -206,8 +202,8 @@ describe('DomainRequestsTable', () => {
       />
     );
 
-    expect(screen.getByRole('button', { name: 'Anterior' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }));
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(pageUpdates).toHaveLength(1);
     const nextPageUpdater = pageUpdates[0];
     expect(typeof nextPageUpdater).toBe('function');
@@ -229,10 +225,10 @@ describe('DomainRequestsTable', () => {
       />
     );
 
-    expect(screen.getByText('Mostrando 41-45 de 45')).toBeInTheDocument();
-    expect(screen.getByText('Pagina 3 de 3')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Siguiente' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Anterior' }));
+    expect(screen.getByText('Showing 41-45 of 45')).toBeInTheDocument();
+    expect(screen.getByText('Page 3 of 3')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
     expect(pageUpdates).toHaveLength(2);
     const previousPageUpdater = pageUpdates[1];
     expect(typeof previousPageUpdater).toBe('function');

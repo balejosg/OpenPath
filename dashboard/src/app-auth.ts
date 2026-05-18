@@ -38,7 +38,7 @@ export function registerAuthRoutes(app: express.Express, options: RegisterAuthRo
 
         res.json({ success: true, user: result.user });
       } else {
-        res.status(401).json({ error: result.error ?? 'Credenciales inválidas' });
+        res.status(401).json({ error: result.error ?? 'Invalid credentials' });
       }
     })
   );
@@ -73,7 +73,7 @@ export function registerAuthRoutes(app: express.Express, options: RegisterAuthRo
         typeof newPassword !== 'string' ||
         newPassword.length < 8
       ) {
-        res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+        res.status(400).json({ error: 'Password must be at least 8 characters' });
         return;
       }
 

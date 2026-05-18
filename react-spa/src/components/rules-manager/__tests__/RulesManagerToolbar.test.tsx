@@ -31,19 +31,19 @@ describe('RulesManagerToolbar', () => {
       />
     );
 
-    fireEvent.change(screen.getByPlaceholderText('Buscar en 3 reglas...'), {
+    fireEvent.change(screen.getByPlaceholderText('Search across 3 rules...'), {
       target: { value: 'google' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Añadir dominio, subdominio o ruta...'), {
+    fireEvent.change(screen.getByPlaceholderText('Add domain, subdomain, or path...'), {
       target: { value: 'docs.example.com' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /añadir/i }));
-    fireEvent.click(screen.getByRole('button', { name: /importar/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add/i }));
+    fireEvent.click(screen.getByRole('button', { name: /import/i }));
 
     expect(onSearchChange).toHaveBeenCalledWith('google');
     expect(onInputChange).toHaveBeenCalledWith('docs.example.com');
     expect(onAddRule).toHaveBeenCalled();
     expect(onOpenImport).toHaveBeenCalled();
-    expect(screen.getByText(/se añadirá como/i)).toBeInTheDocument();
+    expect(screen.getByText(/Will be added as/i)).toBeInTheDocument();
   });
 });

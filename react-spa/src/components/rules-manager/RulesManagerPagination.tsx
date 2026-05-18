@@ -33,11 +33,11 @@ export function RulesManagerPagination({
       <p className="text-sm text-slate-500">
         {viewMode === 'hierarchical' ? (
           <>
-            Mostrando {visibleGroups} de {totalGroups} grupos ({total} reglas)
+            Showing {visibleGroups} of {totalGroups} groups ({total} rules)
           </>
         ) : (
           <>
-            Mostrando {(page - 1) * 50 + 1}-{Math.min(page * 50, total)} de {total} reglas
+            Showing {(page - 1) * 50 + 1}-{Math.min(page * 50, total)} of {total} rules
           </>
         )}
       </p>
@@ -50,7 +50,7 @@ export function RulesManagerPagination({
           <ChevronLeft size={18} />
         </button>
         <span className="text-sm text-slate-600">
-          Página {page} de {totalPages}
+          Page {page} of {totalPages}
         </span>
         <button
           onClick={() => onPageChange(page + 1)}

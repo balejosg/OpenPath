@@ -20,14 +20,14 @@ export function UsersToolbar({
     <>
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-900">Gestión de Usuarios</h2>
-          <p className="text-slate-500 text-sm">Administra los accesos y roles de la plataforma.</p>
+          <h2 className="text-xl font-bold text-slate-900">User Management</h2>
+          <p className="text-slate-500 text-sm">Manage platform access and roles.</p>
         </div>
         <button
           onClick={onOpenNewUser}
           className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
         >
-          + Nuevo Usuario
+          + New User
         </button>
       </div>
 
@@ -36,7 +36,7 @@ export function UsersToolbar({
           <Search size={18} className="absolute left-3 top-2.5 text-slate-400" />
           <input
             type="text"
-            placeholder="Buscar por nombre o email..."
+            placeholder="Search by name or email..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-slate-50 border border-slate-300 rounded-lg py-2 pl-10 pr-4 text-sm text-slate-900 focus:border-blue-500 focus:bg-white outline-none transition-all"
@@ -45,16 +45,16 @@ export function UsersToolbar({
         <div className="flex gap-2 w-full md:w-auto">
           <button
             disabled
-            title="Filtros próximamente"
+            title="Filters coming soon"
             className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-500 opacity-60 cursor-not-allowed"
           >
-            <Filter size={16} /> Filtros
+            <Filter size={16} /> Filters
           </button>
           <button
             onClick={onExportUsers}
             className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-700 hover:bg-slate-50 transition-colors"
           >
-            Exportar
+            Export
           </button>
         </div>
       </div>

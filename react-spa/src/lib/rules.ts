@@ -1,4 +1,9 @@
 import type { RuleType } from '@openpath/shared/rules-validation';
+import {
+  translateProductText,
+  type ProductLocale,
+  type ProductI18nKey,
+} from '../i18n/product-i18n';
 
 export type { RuleType };
 
@@ -14,47 +19,47 @@ export interface Rule {
   createdAt: string;
 }
 
-const RULE_TYPE_META_ES: Record<
+const RULE_TYPE_META: Record<
   RuleType,
   {
-    label: string;
-    badge: string;
-    exportLabel: string;
+    labelKey: ProductI18nKey;
+    badgeKey: ProductI18nKey;
+    exportKey: ProductI18nKey;
     category: RuleCategory;
   }
 > = {
   whitelist: {
-    label: 'Dominio permitido',
-    badge: 'Permitido',
-    exportLabel: 'Permitido',
+    labelKey: 'rules.type.whitelist.label',
+    badgeKey: 'rules.type.whitelist.badge',
+    exportKey: 'rules.type.whitelist.export',
     category: 'allowed',
   },
   blocked_subdomain: {
-    label: 'Subdominio bloqueado',
-    badge: 'Sub. bloq.',
-    exportLabel: 'Subdominio bloqueado',
+    labelKey: 'rules.type.blockedSubdomain.label',
+    badgeKey: 'rules.type.blockedSubdomain.badge',
+    exportKey: 'rules.type.blockedSubdomain.export',
     category: 'blocked',
   },
   blocked_path: {
-    label: 'Ruta bloqueada',
-    badge: 'Ruta bloq.',
-    exportLabel: 'Ruta bloqueada',
+    labelKey: 'rules.type.blockedPath.label',
+    badgeKey: 'rules.type.blockedPath.badge',
+    exportKey: 'rules.type.blockedPath.export',
     category: 'blocked',
   },
 };
 
-export function getRuleTypeLabel(type: RuleType): string {
-  return RULE_TYPE_META_ES[type].label;
+export function getRuleTypeLabel(type: RuleType, locale: ProductLocale = 'en'): string {
+  return translateProductText(locale, RULE_TYPE_META[type].labelKey);
 }
 
-export function getRuleTypeBadge(type: RuleType): string {
-  return RULE_TYPE_META_ES[type].badge;
+export function getRuleTypeBadge(type: RuleType, locale: ProductLocale = 'en'): string {
+  return translateProductText(locale, RULE_TYPE_META[type].badgeKey);
 }
 
-export function getRuleTypeExportLabel(type: RuleType): string {
-  return RULE_TYPE_META_ES[type].exportLabel;
+export function getRuleTypeExportLabel(type: RuleType, locale: ProductLocale = 'en'): string {
+  return translateProductText(locale, RULE_TYPE_META[type].exportKey);
 }
 
 export function categorizeRuleType(type: RuleType): RuleCategory {
-  return RULE_TYPE_META_ES[type].category;
+  return RULE_TYPE_META[type].category;
 }

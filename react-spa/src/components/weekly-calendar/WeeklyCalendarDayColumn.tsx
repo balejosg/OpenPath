@@ -32,7 +32,7 @@ export const WeeklyCalendarDayColumn: React.FC<WeeklyCalendarDayColumnProps> = (
         onClick={() => onAddClick(dayKey, `${String(h).padStart(2, '0')}:00`)}
         role="button"
         tabIndex={0}
-        aria-label={`Agregar ${dayFull} ${String(h).padStart(2, '0')}:00`}
+        aria-label={`Add ${dayFull} ${String(h).padStart(2, '0')}:00`}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
@@ -96,7 +96,7 @@ export const WeeklyCalendarDayColumn: React.FC<WeeklyCalendarDayColumnProps> = (
           tabIndex={canEdit ? 0 : -1}
           aria-label={
             canEdit
-              ? `Editar ${groupName} ${s.startTime}-${s.endTime}`
+              ? `Edit ${groupName} ${s.startTime}-${s.endTime}`
               : `${groupName} ${s.startTime}-${s.endTime}`
           }
           data-testid={`schedule-block-${s.id}`}
@@ -115,7 +115,7 @@ export const WeeklyCalendarDayColumn: React.FC<WeeklyCalendarDayColumnProps> = (
                       e.stopPropagation();
                       onEditClick(s);
                     }}
-                    title="Editar"
+                    title="Edit"
                   >
                     <Edit2 size={10} className={color.text} />
                   </button>
@@ -125,7 +125,7 @@ export const WeeklyCalendarDayColumn: React.FC<WeeklyCalendarDayColumnProps> = (
                       e.stopPropagation();
                       onDeleteClick(s);
                     }}
-                    title="Eliminar"
+                    title="Delete"
                   >
                     <Trash2 size={10} className="text-red-500" />
                   </button>

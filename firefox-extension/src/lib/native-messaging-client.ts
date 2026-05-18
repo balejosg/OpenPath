@@ -1,5 +1,6 @@
 import type { Browser, Runtime } from 'webextension-polyfill';
 
+import { t } from './i18n.js';
 import { getErrorMessage, logger as defaultLogger } from './logger.js';
 
 declare const browser: Browser;
@@ -108,13 +109,13 @@ export function createNativeMessagingClient(options: {
       try {
         nativePort = browserApi.runtime.connectNative(options.hostName);
         nativePort.onDisconnect.addListener(() => {
-          logger.info('[Monitor] Native host desconectado', {
+          logger.info('[Monitor] Native host disconnected', {
             lastError: browserApi.runtime.lastError,
           });
           nativePort = null;
         });
 
-        logger.info('[Monitor] Native host conectado');
+        logger.info('[Monitor] Native host connected');
         resolve(true);
       } catch (error) {
         logger.error('[Monitor] Error conectando Native host', {
@@ -135,7 +136,7 @@ export function createNativeMessagingClient(options: {
           if (!nativePort) {
             const connected = await connect();
             if (!connected) {
-              reject(new Error('No se pudo conectar con el host nativo'));
+              reject(new Error(t('popupNativeHostConnectError')));
               return;
             }
           }
@@ -191,7 +192,7 @@ export function createNativeMessagingClient(options: {
       return {
         success: false,
         results: [],
-        error: error instanceof Error ? error.message : 'Error desconocido',
+        error: error instanceof Error ? error.message : t('popupUnknownError'),
       };
     }
   }

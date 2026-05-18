@@ -81,14 +81,14 @@ export async function addRuleWithDetection(
     const created = readCreatedFlag(result);
     if (created === false) {
       params.onToast(
-        `"${detected.cleanedValue}" ya existe como ${getRuleTypeBadge(detected.type)}`,
+        `"${detected.cleanedValue}" already exists as ${getRuleTypeBadge(detected.type)}`,
         'error'
       );
       return false;
     }
 
     params.onToast(
-      `"${detected.cleanedValue}" añadido como ${getRuleTypeBadge(detected.type)}`,
+      `"${detected.cleanedValue}" added as ${getRuleTypeBadge(detected.type)}`,
       'success'
     );
     await params.fetchRules();
@@ -99,13 +99,13 @@ export async function addRuleWithDetection(
 
     if (isDuplicateError(err)) {
       params.onToast(
-        `"${detected.cleanedValue}" ya existe como ${getRuleTypeBadge(detected.type)}`,
+        `"${detected.cleanedValue}" already exists as ${getRuleTypeBadge(detected.type)}`,
         'error'
       );
       return false;
     }
 
-    params.onToast('Error al añadir regla', 'error');
+    params.onToast('Unable to add rule', 'error');
     return false;
   }
 }
@@ -130,20 +130,20 @@ export async function bulkCreateRulesAction(
     if (created > 0) {
       params.onToast(
         created === total
-          ? `${String(created)} reglas importadas`
-          : `${String(created)} de ${String(total)} reglas importadas (${String(total - created)} duplicadas)`,
+          ? `${String(created)} rules imported`
+          : `${String(created)} of ${String(total)} rules imported (${String(total - created)} duplicates)`,
         'success'
       );
       await params.fetchRules();
       await params.fetchCounts();
     } else {
-      params.onToast('Todas las reglas ya existen', 'error');
+      params.onToast('All rules already exist', 'error');
     }
 
     return { created, total };
   } catch (err) {
     reportError('Failed to bulk create rules:', err);
-    params.onToast('Error al importar reglas', 'error');
+    params.onToast('Unable to import rules', 'error');
     return { created: 0, total: values.length };
   }
 }
@@ -161,12 +161,12 @@ export async function updateRuleAction(
       comment: data.comment,
     });
 
-    params.onToast('Regla actualizada', 'success');
+    params.onToast('Rule updated', 'success');
     await params.fetchRules();
     return true;
   } catch (err) {
     reportError('Failed to update rule:', err);
-    params.onToast('Error al actualizar regla', 'error');
+    params.onToast('Unable to update rule', 'error');
     return false;
   }
 }
@@ -178,7 +178,7 @@ export async function deleteRuleWithUndoAction(
   try {
     await trpc.groups.deleteRule.mutate({ id: rule.id, groupId: rule.groupId });
 
-    params.onToast(`"${rule.value}" eliminado`, 'success', () => {
+    params.onToast(`"${rule.value}" deleted`, 'success', () => {
       void (async () => {
         try {
           await trpc.groups.createRule.mutate({
@@ -189,10 +189,10 @@ export async function deleteRuleWithUndoAction(
           });
           await params.fetchRules();
           await params.fetchCounts();
-          params.onToast(`"${rule.value}" restaurado`, 'success');
+          params.onToast(`"${rule.value}" restored`, 'success');
         } catch (err) {
           reportError('Failed to undo delete:', err);
-          params.onToast('Error al restaurar regla', 'error');
+          params.onToast('Unable to restore rule', 'error');
         }
       })();
     });
@@ -201,7 +201,7 @@ export async function deleteRuleWithUndoAction(
     await params.fetchCounts();
   } catch (err) {
     reportError('Failed to delete rule:', err);
-    params.onToast('Error al eliminar regla', 'error');
+    params.onToast('Unable to delete rule', 'error');
   }
 }
 
@@ -213,17 +213,17 @@ export async function revokeAutoApprovalAction(
     const confirmed =
       typeof window === 'undefined' ||
       window.confirm(
-        `Revocar la aprobación automática de "${rule.value}" bloqueará este dominio para que no vuelva a autoaprobarse.`
+        `Revoking automatic approval for "${rule.value}" will block this domain from being auto-approved again.`
       );
     if (!confirmed) return;
 
     await trpc.groups.revokeAutoApproval.mutate({ id: rule.id, groupId: rule.groupId });
-    params.onToast(`"${rule.value}" bloqueado tras revocar la aprobación automática`, 'success');
+    params.onToast(`"${rule.value}" blocked after revoking automatic approval`, 'success');
     await params.fetchRules();
     await params.fetchCounts();
   } catch (err) {
     reportError('Failed to revoke automatic approval:', err);
-    params.onToast('Error al revocar aprobación automática', 'error');
+    params.onToast('Unable to revoke automatic approval', 'error');
   }
 }
 
@@ -238,7 +238,7 @@ export async function bulkDeleteRulesWithUndoAction(params: BulkDeleteRulesParam
 
     params.clearSelection?.();
 
-    params.onToast(`${String(count)} reglas eliminadas`, 'success', () => {
+    params.onToast(`${String(count)} rules deleted`, 'success', () => {
       void (async () => {
         try {
           for (const rule of deletedRules) {
@@ -251,10 +251,10 @@ export async function bulkDeleteRulesWithUndoAction(params: BulkDeleteRulesParam
           }
           await params.fetchRules();
           await params.fetchCounts();
-          params.onToast(`${String(deletedRules.length)} reglas restauradas`, 'success');
+          params.onToast(`${String(deletedRules.length)} rules restored`, 'success');
         } catch (err) {
           reportError('Failed to undo bulk delete:', err);
-          params.onToast('Error al restaurar reglas', 'error');
+          params.onToast('Unable to restore rules', 'error');
         }
       })();
     });
@@ -263,6 +263,6 @@ export async function bulkDeleteRulesWithUndoAction(params: BulkDeleteRulesParam
     await params.fetchCounts();
   } catch (err) {
     reportError('Failed to bulk delete rules:', err);
-    params.onToast('Error al eliminar reglas', 'error');
+    params.onToast('Unable to delete rules', 'error');
   }
 }

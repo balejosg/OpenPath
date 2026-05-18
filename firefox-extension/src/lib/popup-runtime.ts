@@ -4,6 +4,7 @@ import {
   resolveNativeAvailabilityState,
   type NativeAvailabilityState,
 } from './popup-native-actions.js';
+import { t } from './i18n.js';
 import {
   extractTabHostname,
   normalizeBlockedDomains,
@@ -77,12 +78,12 @@ export function resolveActivePopupTab(tabs: Tabs.Tab[]): {
   errorText?: string;
 } {
   if (tabs.length === 0) {
-    return { errorText: 'Sin pestaña activa' };
+    return { errorText: t('popupNoActiveTab') };
   }
 
   const tab = tabs[0];
   if (!tab?.id) {
-    return { errorText: 'Error: Pestaña inválida' };
+    return { errorText: t('popupInvalidTab') };
   }
 
   return {

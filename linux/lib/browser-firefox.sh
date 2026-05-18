@@ -57,7 +57,7 @@ EOF
 }
 
 install_firefox_esr() {
-    log "Verificando instalación de Firefox..."
+    log "Checking Firefox installation..."
 
     if command -v snap &>/dev/null 2>&1 && snap list firefox &>/dev/null 2>&1; then
         log "⚠ Firefox Snap detected - removing..."

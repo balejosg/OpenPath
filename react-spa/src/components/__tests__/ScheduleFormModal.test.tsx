@@ -22,8 +22,8 @@ describe('ScheduleFormModal Component', () => {
       />
     );
 
-    expect(screen.getByText('Nuevo Horario')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /cerrar/i }));
+    expect(screen.getByText('New Schedule')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -43,12 +43,12 @@ describe('ScheduleFormModal Component', () => {
     );
 
     // Day buttons show first 3 letters
-    const dayBtn = screen.getByRole('button', { name: 'Mié' });
+    const dayBtn = screen.getByRole('button', { name: 'Wed' });
     expect(dayBtn).toBeInTheDocument();
 
     // Change end time to ensure > start
-    fireEvent.change(screen.getByLabelText('Hora Fin'), { target: { value: '11:00' } });
-    fireEvent.click(screen.getByRole('button', { name: /crear horario/i }));
+    fireEvent.change(screen.getByLabelText('End Time'), { target: { value: '11:00' } });
+    fireEvent.click(screen.getByRole('button', { name: /create schedule/i }));
 
     expect(onSave).toHaveBeenCalled();
     const saved = onSave.mock.calls[0]?.[0] as {
@@ -76,9 +76,9 @@ describe('ScheduleFormModal Component', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /crear horario/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create schedule/i }));
     expect(onSave).not.toHaveBeenCalled();
-    expect(screen.getByText('Selecciona un dia')).toBeInTheDocument();
+    expect(screen.getByText('Select a day')).toBeInTheDocument();
   });
 
   it('accepts numeric dayOfWeek even if returned as a string', () => {
@@ -109,7 +109,7 @@ describe('ScheduleFormModal Component', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /guardar cambios/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     expect(onSave).toHaveBeenCalled();
     const saved = onSave.mock.calls[0]?.[0] as { dayOfWeek: number };
     expect(saved.dayOfWeek).toBe(2);
@@ -142,8 +142,8 @@ describe('ScheduleFormModal Component', () => {
       />
     );
 
-    expect(screen.getByText('Editar Horario')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Mar' })).toHaveClass('bg-blue-600');
-    expect(screen.getByRole('button', { name: /guardar cambios/i })).toBeInTheDocument();
+    expect(screen.getByText('Edit Schedule')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tue' })).toHaveClass('bg-blue-600');
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument();
   });
 });

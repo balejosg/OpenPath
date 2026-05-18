@@ -81,7 +81,7 @@ describe('rules-actions', () => {
     mockCreateRule.mockResolvedValue({ created: false });
 
     await expect(addRuleWithDetection('example.com', params)).resolves.toBe(false);
-    expect(onToast).toHaveBeenCalledWith('"example.com" ya existe como Permitido', 'error');
+    expect(onToast).toHaveBeenCalledWith('"example.com" already exists as Allowed', 'error');
     expect(fetchRules).not.toHaveBeenCalled();
     expect(fetchCounts).not.toHaveBeenCalled();
   });
@@ -90,14 +90,14 @@ describe('rules-actions', () => {
     mockCreateRule.mockRejectedValue({ data: { code: 'CONFLICT' } });
 
     await expect(addRuleWithDetection('example.com', params)).resolves.toBe(false);
-    expect(onToast).toHaveBeenCalledWith('"example.com" ya existe como Permitido', 'error');
+    expect(onToast).toHaveBeenCalledWith('"example.com" already exists as Allowed', 'error');
   });
 
   it('toasts success and refetches on success', async () => {
     mockCreateRule.mockResolvedValue({ id: 'r1' });
 
     await expect(addRuleWithDetection('example.com', params)).resolves.toBe(true);
-    expect(onToast).toHaveBeenCalledWith('"example.com" añadido como Permitido', 'success');
+    expect(onToast).toHaveBeenCalledWith('"example.com" added as Allowed', 'success');
     expect(fetchRules).toHaveBeenCalledTimes(1);
     expect(fetchCounts).toHaveBeenCalledTimes(1);
   });
@@ -114,7 +114,7 @@ describe('rules-actions', () => {
       })
     ).resolves.toEqual({ created: 2, total: 2 });
 
-    expect(onToast).toHaveBeenCalledWith('2 reglas importadas', 'success');
+    expect(onToast).toHaveBeenCalledWith('2 rules imported', 'success');
     expect(fetchRules).toHaveBeenCalled();
     expect(fetchCounts).toHaveBeenCalled();
   });
@@ -131,7 +131,7 @@ describe('rules-actions', () => {
       })
     ).resolves.toEqual({ created: 0, total: 1 });
 
-    expect(onToast).toHaveBeenCalledWith('Todas las reglas ya existen', 'error');
+    expect(onToast).toHaveBeenCalledWith('All rules already exist', 'error');
     expect(fetchRules).not.toHaveBeenCalled();
     expect(fetchCounts).not.toHaveBeenCalled();
   });
@@ -143,7 +143,7 @@ describe('rules-actions', () => {
       updateRuleAction('r1', { value: 'example.com' }, { groupId: 'g1', onToast, fetchRules })
     ).resolves.toBe(true);
 
-    expect(onToast).toHaveBeenCalledWith('Regla actualizada', 'success');
+    expect(onToast).toHaveBeenCalledWith('Rule updated', 'success');
     expect(fetchRules).toHaveBeenCalledTimes(1);
   });
 
@@ -154,7 +154,7 @@ describe('rules-actions', () => {
       updateRuleAction('r1', { value: 'example.com' }, { groupId: 'g1', onToast, fetchRules })
     ).resolves.toBe(false);
 
-    expect(onToast).toHaveBeenCalledWith('Error al actualizar regla', 'error');
+    expect(onToast).toHaveBeenCalledWith('Unable to update rule', 'error');
     expect(fetchRules).not.toHaveBeenCalled();
   });
 
@@ -177,7 +177,7 @@ describe('rules-actions', () => {
     expect(fetchRules).toHaveBeenCalledTimes(1);
     expect(fetchCounts).toHaveBeenCalledTimes(1);
 
-    const undo = onToast.mock.calls.find((call) => call[0] === '"example.com" eliminado')?.[2];
+    const undo = onToast.mock.calls.find((call) => call[0] === '"example.com" deleted')?.[2];
     expect(typeof undo).toBe('function');
 
     (undo as () => void)();
@@ -192,7 +192,7 @@ describe('rules-actions', () => {
     });
 
     await waitFor(() => {
-      expect(onToast).toHaveBeenCalledWith('"example.com" restaurado', 'success');
+      expect(onToast).toHaveBeenCalledWith('"example.com" restored', 'success');
     });
   });
 
@@ -213,11 +213,11 @@ describe('rules-actions', () => {
     );
 
     expect(confirmSpy).toHaveBeenCalledWith(
-      'Revocar la aprobación automática de "cdn.example.com" bloqueará este dominio para que no vuelva a autoaprobarse.'
+      'Revoking automatic approval for "cdn.example.com" will block this domain from being auto-approved again.'
     );
     expect(mockRevokeAutoApproval).toHaveBeenCalledWith({ id: 'auto-1', groupId: 'g1' });
     expect(onToast).toHaveBeenCalledWith(
-      '"cdn.example.com" bloqueado tras revocar la aprobación automática',
+      '"cdn.example.com" blocked after revoking automatic approval',
       'success'
     );
     expect(fetchRules).toHaveBeenCalledTimes(1);
@@ -265,7 +265,7 @@ describe('rules-actions', () => {
       { onToast, fetchRules, fetchCounts }
     );
 
-    expect(onToast).toHaveBeenCalledWith('Error al revocar aprobación automática', 'error');
+    expect(onToast).toHaveBeenCalledWith('Unable to revoke automatic approval', 'error');
     expect(fetchRules).not.toHaveBeenCalled();
     expect(fetchCounts).not.toHaveBeenCalled();
 
@@ -310,7 +310,7 @@ describe('rules-actions', () => {
     expect(fetchRules).toHaveBeenCalledTimes(1);
     expect(fetchCounts).toHaveBeenCalledTimes(1);
 
-    const undo = onToast.mock.calls.find((call) => call[0] === '2 reglas eliminadas')?.[2];
+    const undo = onToast.mock.calls.find((call) => call[0] === '2 rules deleted')?.[2];
     expect(typeof undo).toBe('function');
 
     (undo as () => void)();
@@ -320,7 +320,7 @@ describe('rules-actions', () => {
     });
 
     await waitFor(() => {
-      expect(onToast).toHaveBeenCalledWith('2 reglas restauradas', 'success');
+      expect(onToast).toHaveBeenCalledWith('2 rules restored', 'success');
     });
   });
 });

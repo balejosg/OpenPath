@@ -28,14 +28,14 @@ describe('DomainRequestsBulkActions', () => {
       />
     );
 
-    fireEvent.change(screen.getByPlaceholderText('Motivo para rechazo en lote (opcional)'), {
+    fireEvent.change(screen.getByPlaceholderText('Bulk rejection reason (optional)'), {
       target: { value: 'No procede' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Aprobar seleccionadas' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Rechazar seleccionadas' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Limpiar seleccion' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Seleccionar fallidas' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Reintentar fallidas' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reject selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select failed' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry failed' }));
 
     expect(onBulkRejectReasonChange).toHaveBeenCalledWith('No procede');
     expect(onApproveSelected).toHaveBeenCalled();

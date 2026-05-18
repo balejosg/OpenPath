@@ -55,9 +55,9 @@ describe('Tabs Component', () => {
   });
 
   it('renders without count when not provided', () => {
-    const tabsWithoutCount = [{ id: 'nocount', label: 'Sin Contador' }];
+    const tabsWithoutCount = [{ id: 'nocount', label: 'No Counter' }];
 
     render(<Tabs tabs={tabsWithoutCount} activeTab="nocount" onChange={noop} />);
-    expect(screen.getByRole('tab', { name: /sin contador/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /no counter/i })).toBeInTheDocument();
   });
 });

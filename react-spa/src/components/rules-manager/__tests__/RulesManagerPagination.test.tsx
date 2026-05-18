@@ -22,8 +22,8 @@ describe('RulesManagerPagination', () => {
 
     fireEvent.click(screen.getAllByRole('button')[1]);
 
-    expect(screen.getByText('Página 1 de 3')).toBeInTheDocument();
-    expect(screen.getByText('Mostrando 1-50 de 120 reglas')).toBeInTheDocument();
+    expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();
+    expect(screen.getByText('Showing 1-50 of 120 rules')).toBeInTheDocument();
     expect(onPageChange).toHaveBeenCalledWith(2);
   });
 });

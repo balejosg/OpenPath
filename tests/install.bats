@@ -111,7 +111,7 @@ load 'test_helper'
     run grep -nF 'if [ -n "$WHITELIST_URL" ]; then' "$PROJECT_DIR/linux/lib/install-core-steps.sh"
     [ "$status" -eq 0 ]
 
-    run grep -nF 'Whitelist URL no configurada todavía' "$PROJECT_DIR/linux/lib/install-core-steps.sh"
+    run grep -nF 'Whitelist URL not configured yet' "$PROJECT_DIR/linux/lib/install-core-steps.sh"
     [ "$status" -eq 0 ]
 }
 
@@ -131,13 +131,13 @@ load 'test_helper'
 
     local install_detect_line
     local install_free_line
-    install_detect_line=$(grep -n 'Detectando DNS primario" step_detect_dns' "$install_file" | cut -d: -f1)
-    install_free_line=$(grep -n 'Liberando puerto 53" step_free_port_53' "$install_file" | cut -d: -f1)
+    install_detect_line=$(grep -n 'Detecting primary DNS" step_detect_dns' "$install_file" | cut -d: -f1)
+    install_free_line=$(grep -n 'Releasing port 53" step_free_port_53' "$install_file" | cut -d: -f1)
 
     local postinst_detect_line
     local postinst_free_line
-    postinst_detect_line=$(grep -n "Detectando DNS primario" "$postinst_file" | head -1 | cut -d: -f1)
-    postinst_free_line=$(grep -n "Liberando puerto 53" "$postinst_file" | head -1 | cut -d: -f1)
+    postinst_detect_line=$(grep -n "Detecting primary DNS" "$postinst_file" | head -1 | cut -d: -f1)
+    postinst_free_line=$(grep -n "Releasing port 53" "$postinst_file" | head -1 | cut -d: -f1)
 
     [ -n "$install_detect_line" ]
     [ -n "$install_free_line" ]
@@ -541,7 +541,7 @@ EOF
     local dns_timer_start_line
     local watchdog_timer_start_line
 
-    initial_update_line=$(grep -n "Ejecutando primera actualización" "$postinst_file" | head -1 | cut -d: -f1)
+    initial_update_line=$(grep -n "Running first update" "$postinst_file" | head -1 | cut -d: -f1)
     dns_reset_failed_line=$(grep -n "systemctl reset-failed dnsmasq" "$postinst_file" | head -1 | cut -d: -f1)
     dns_restart_line=$(grep -n "systemctl restart dnsmasq" "$postinst_file" | head -1 | cut -d: -f1)
     dns_timer_start_line=$(grep -n "systemctl start openpath-dnsmasq.timer" "$postinst_file" | head -1 | cut -d: -f1)
@@ -796,7 +796,7 @@ EOF
     run grep -n 'INSTALLER_STEP_TOTAL=15' "$PROJECT_DIR/linux/install.sh"
     [ "$status" -eq 0 ]
 
-    run grep -n 'run_installer_step 1 "\$INSTALLER_STEP_TOTAL" "Instalando librerias" step_install_libraries' "$PROJECT_DIR/linux/install.sh"
+    run grep -n 'run_installer_step 1 "\$INSTALLER_STEP_TOTAL" "Installing libraries" step_install_libraries' "$PROJECT_DIR/linux/install.sh"
     [ "$status" -eq 0 ]
 
     run grep -n 'ORIGINAL_ARGS=("\$@")' "$PROJECT_DIR/linux/install.sh"

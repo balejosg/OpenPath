@@ -163,29 +163,31 @@ describe('ruleDetection', () => {
 
   describe('getRuleTypeLabel', () => {
     it('returns correct label for whitelist', () => {
-      expect(getRuleTypeLabel('whitelist')).toBe('Dominio permitido');
+      expect(getRuleTypeLabel('whitelist')).toBe('Allowed domain');
+      expect(getRuleTypeLabel('whitelist', 'es')).toBe('Dominio permitido');
     });
 
     it('returns correct label for blocked_subdomain', () => {
-      expect(getRuleTypeLabel('blocked_subdomain')).toBe('Subdominio bloqueado');
+      expect(getRuleTypeLabel('blocked_subdomain')).toBe('Blocked subdomain');
     });
 
     it('returns correct label for blocked_path', () => {
-      expect(getRuleTypeLabel('blocked_path')).toBe('Ruta bloqueada');
+      expect(getRuleTypeLabel('blocked_path')).toBe('Blocked path');
     });
   });
 
   describe('getRuleTypeBadge', () => {
     it('returns short badge for whitelist', () => {
-      expect(getRuleTypeBadge('whitelist')).toBe('Permitido');
+      expect(getRuleTypeBadge('whitelist')).toBe('Allowed');
+      expect(getRuleTypeBadge('whitelist', 'es')).toBe('Permitido');
     });
 
     it('returns short badge for blocked_subdomain', () => {
-      expect(getRuleTypeBadge('blocked_subdomain')).toBe('Sub. bloq.');
+      expect(getRuleTypeBadge('blocked_subdomain')).toBe('Sub. blocked');
     });
 
     it('returns short badge for blocked_path', () => {
-      expect(getRuleTypeBadge('blocked_path')).toBe('Ruta bloq.');
+      expect(getRuleTypeBadge('blocked_path')).toBe('Path blocked');
     });
   });
 
@@ -247,13 +249,13 @@ describe('ruleDetection', () => {
       it('rejects domain too short', () => {
         const result = validateRuleValue('a.b', 'whitelist');
         expect(result.valid).toBe(false);
-        expect(result.error).toContain('corto');
+        expect(result.error).toContain('too short');
       });
 
       it('rejects domain with consecutive dots', () => {
         const result = validateRuleValue('google..com', 'whitelist');
         expect(result.valid).toBe(false);
-        expect(result.error).toContain('consecutivos');
+        expect(result.error).toContain('consecutive');
       });
 
       it('rejects domain starting with hyphen', () => {
@@ -370,7 +372,7 @@ describe('ruleDetection', () => {
       it('rejects path with empty path part', () => {
         const result = validateRuleValue('example.com/', 'blocked_path');
         expect(result.valid).toBe(false);
-        expect(result.error).toContain('vacía');
+        expect(result.error).toContain('empty');
       });
 
       it('rejects empty value', () => {

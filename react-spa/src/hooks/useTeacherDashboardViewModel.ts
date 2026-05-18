@@ -38,7 +38,7 @@ export function useTeacherDashboardViewModel() {
     refetchSchedules: refetchMySchedules,
   } = useTeacherDashboardSchedules(classrooms);
 
-  const groupsError = groupsQueryError ? 'No se pudieron cargar tus grupos' : null;
+  const groupsError = groupsQueryError ? 'Unable to load your groups' : null;
 
   const [selectedClassroomForControl, setSelectedClassroomForControl] = useState('');
   const [selectedGroupForControl, setSelectedGroupForControl] = useState('');
@@ -87,7 +87,7 @@ export function useTeacherDashboardViewModel() {
         return true;
       } catch (e) {
         reportError('Failed to apply active group:', e);
-        setControlError('Error al aplicar el grupo al aula');
+        setControlError('Unable to apply the group to the classroom');
         return false;
       } finally {
         setControlLoading(false);

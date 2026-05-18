@@ -13,7 +13,7 @@ describe('GroupSelect', () => {
       />
     );
 
-    expect(screen.getByRole('option', { name: 'Sin grupo' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'No group' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Grupo 1' })).toBeInTheDocument();
   });
 
@@ -39,14 +39,14 @@ describe('GroupSelect', () => {
         onChange={() => undefined}
         inactiveBehavior="hide"
         groups={[
-          { id: 'g1', name: 'n1', displayName: 'Activo', enabled: true },
-          { id: 'g2', name: 'n2', displayName: 'Inactivo', enabled: false },
+          { id: 'g1', name: 'n1', displayName: 'Active', enabled: true },
+          { id: 'g2', name: 'n2', displayName: 'Inactive', enabled: false },
         ]}
       />
     );
 
-    expect(screen.getByRole('option', { name: 'Activo' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: /Inactivo/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Active' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Inactive/ })).not.toBeInTheDocument();
   });
 
   it('disables inactive groups when inactiveBehavior=disable', () => {
@@ -57,13 +57,13 @@ describe('GroupSelect', () => {
         onChange={() => undefined}
         inactiveBehavior="disable"
         groups={[
-          { id: 'g1', name: 'n1', displayName: 'Activo', enabled: true },
-          { id: 'g2', name: 'n2', displayName: 'Inactivo', enabled: false },
+          { id: 'g1', name: 'n1', displayName: 'Active', enabled: true },
+          { id: 'g2', name: 'n2', displayName: 'Inactive', enabled: false },
         ]}
       />
     );
 
-    const inactive = screen.getByRole('option', { name: 'Inactivo (Inactivo)' });
+    const inactive = screen.getByRole('option', { name: 'Inactive (Inactive)' });
     expect(inactive).toBeDisabled();
   });
 

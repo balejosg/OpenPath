@@ -64,7 +64,7 @@ Describe "Installer" {
                     Name = 'configuration'
                     Step = 3
                     TotalSteps = 7
-                    Status = 'Creando configuracion'
+                    Status = 'Creating configuration'
                     Inputs = @{ WhitelistUrl = 'https://allow.example.test'; RegistrationToken = 'secret-token' }
                     RecoveryHint = 'Check installer configuration inputs.'
                     Action = { param($Context) $Context.Value = 42 }
@@ -543,7 +543,7 @@ Describe "Installer" {
                 '$nativeHostRequestSetup = Get-OpenPathRequestSetupState -Config $nativeHostConfig',
                 '$nativeHostRegistered = Register-OpenPathFirefoxNativeHost -Config $nativeHostConfig -ClearWhitelist',
                 '$nativeHostRequestSetup.DiagnosticMessage',
-                'No se pudo registrar el host nativo de Firefox tras enrollment'
+                'Could not register Firefox native host after enrollment'
             )
 
             $content | Should -Match 'try \{\s+Import-Module "\$OpenPathRoot\\lib\\RequestSetup\.State\.psm1" -Force -Global\s+\$nativeHostConfig = Get-OpenPathConfig'
@@ -634,7 +634,7 @@ Describe "Installer" {
             )
 
             Assert-ContentContainsAll -Content $runtimeHelper -Needles @(
-                'Registro no completado; se omite primera actualizacion',
+                'Registration not completed; skipping first update',
                 '$ClassroomModeRequested -and $MachineRegistered -ne ''REGISTERED'''
             )
         }
@@ -646,7 +646,7 @@ Describe "Installer" {
             Assert-ContentContainsAll -Content $runtimeHelper -Needles @(
                 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$OpenPathRoot\scripts\Update-OpenPath.ps1"',
                 '$updateExitCode = $LASTEXITCODE',
-                'Primera actualizacion fallida con codigo $updateExitCode (se reintentara)'
+                'First update failed with code $updateExitCode (will retry)'
             )
 
             $runtimeHelper | Should -Not -Match '(?m)^\s*& "\$OpenPathRoot\\scripts\\Update-OpenPath\.ps1"\s*$'
@@ -686,8 +686,8 @@ Describe "Installer" {
 
             Assert-ContentContainsAll -Content $runtimeHelper -Needles @(
                 '$ClassroomModeRequested -and $MachineRegistered -ne ''REGISTERED''',
-                'Solicitudes de dominio: NO CONFIGURADAS',
-                'ejecuta .\OpenPath.ps1 enroll'
+                'Domain requests: NOT CONFIGURED',
+                'run .\OpenPath.ps1 enroll'
             )
         }
     }
@@ -886,7 +886,7 @@ Describe "Installer" {
 
             foreach ($helperPath in $installHelperPaths) {
                 $content = Get-Content $helperPath -Raw
-                $content | Should -Not -Match 'Write-Host\s+[''"][^''"]*ADVERTENCIA:'
+                $content | Should -Not -Match 'Write-Host\s+[''"][^''"]*WARNING:'
                 $content | Should -Not -Match "Write-Warning\s+"
             }
         }

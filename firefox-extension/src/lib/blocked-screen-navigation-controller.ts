@@ -211,7 +211,7 @@ export function createBlockedScreenNavigationController(
       }
 
       if (optionsForRedirect.recordBlockedDomain) {
-        logger.info(`[Monitor] Bloqueado por política nativa: ${context.hostname}`, {
+        logger.info(`[Monitor] Blocked by native policy: ${context.hostname}`, {
           error: context.error,
         });
         deps.addBlockedDomain(context.tabId, context.hostname, context.error, context.origin);
@@ -292,7 +292,7 @@ export function createBlockedScreenNavigationController(
     }
 
     if (optionsForError.recordBlockedDomain) {
-      logger.info(`[Monitor] Bloqueado: ${context.hostname}`, {
+      logger.info(`[Monitor] Blocked: ${context.hostname}`, {
         error: details.error,
         requestType: optionsForError.requestType,
       });

@@ -193,7 +193,7 @@ describe('useTeacherDashboardSchedules', () => {
       expect(result.current.loading).toBe(false);
     });
 
-    expect(result.current.error).toBe('No se pudieron cargar tus horarios');
+    expect(result.current.error).toBe('Unable to load your schedules');
   });
 
   it('refetches every classroom schedule query', async () => {

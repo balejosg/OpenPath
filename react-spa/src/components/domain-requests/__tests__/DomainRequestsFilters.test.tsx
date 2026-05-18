@@ -29,13 +29,13 @@ describe('DomainRequestsFilters', () => {
       />
     );
 
-    fireEvent.change(screen.getByPlaceholderText('Buscar por dominio o máquina...'), {
+    fireEvent.change(screen.getByPlaceholderText('Search by domain or machine...'), {
       target: { value: 'example.com' },
     });
     fireEvent.change(screen.getByRole('combobox', { name: 'Filtrar por estado' }), {
       target: { value: 'approved' },
     });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Ordenar solicitudes' }), {
+    fireEvent.change(screen.getByRole('combobox', { name: 'Sort requests' }), {
       target: { value: 'oldest' },
     });
     fireEvent.change(screen.getByRole('combobox', { name: 'Filtrar por fuente' }), {

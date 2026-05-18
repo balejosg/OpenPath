@@ -39,15 +39,15 @@ await describe('popup view models', async () => {
         hostname: 'a.example.com',
         retryHostname: 'a.example.com',
         statusClassName: 'status-update-error',
-        statusLabel: 'Error update local',
+        statusLabel: 'Local update error',
         statusTitle: 'Token is not valid for this hostname',
       },
       {
         attempts: 1,
         hostname: 'b.example.com',
         statusClassName: 'status-pending',
-        statusLabel: 'Pendiente',
-        statusTitle: 'Pendiente',
+        statusLabel: 'Pending',
+        statusTitle: 'Pending',
       },
     ]);
   });

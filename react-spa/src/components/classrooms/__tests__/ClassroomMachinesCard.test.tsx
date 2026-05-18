@@ -73,18 +73,18 @@ describe('ClassroomMachinesCard', () => {
     const props = buildProps();
     render(<ClassroomMachinesCard {...props} />);
 
-    expect(screen.getByText(/sin restricción/)).toBeInTheDocument();
+    expect(screen.getByText(/no restriction/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /instalar equipos/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Restringir' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Eximir' }));
+    fireEvent.click(screen.getByRole('button', { name: /install computers/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restrict' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Exempt' }));
 
     expect(props.onOpenEnrollModal).toHaveBeenCalledTimes(1);
     expect(props.onDeleteExemption).toHaveBeenCalledWith('machine-1');
-    expect(screen.getByLabelText('Horas')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Horas'), { target: { value: '3' } });
-    fireEvent.change(screen.getByLabelText('Motivo'), { target: { value: 'Mantenimiento' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Crear exención' }));
+    expect(screen.getByLabelText('Hours')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Hours'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Mantenimiento' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create exemption' }));
     expect(props.onCreateOperationalExemption).toHaveBeenCalledWith(
       'machine-2',
       3,
@@ -107,8 +107,8 @@ describe('ClassroomMachinesCard', () => {
       />
     );
 
-    expect(screen.getByText('Sin máquinas activas')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Liberar' })).not.toBeInTheDocument();
+    expect(screen.getByText('No active machines')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Release' })).not.toBeInTheDocument();
   });
 
   it('shows teacher release only for calendar-controlled classrooms', () => {
@@ -120,7 +120,7 @@ describe('ClassroomMachinesCard', () => {
     });
     const { rerender } = render(<ClassroomMachinesCard {...props} />);
 
-    expect(screen.queryByRole('button', { name: 'Liberar' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Release' })).not.toBeInTheDocument();
 
     rerender(
       <ClassroomMachinesCard
@@ -129,7 +129,7 @@ describe('ClassroomMachinesCard', () => {
       />
     );
 
-    expect(screen.getAllByRole('button', { name: 'Liberar' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Release' })).toHaveLength(2);
   });
 
   it('labels operational exemptions before schedule exemptions', () => {

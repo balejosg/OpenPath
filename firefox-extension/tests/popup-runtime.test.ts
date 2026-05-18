@@ -100,13 +100,13 @@ await describe('popup runtime', async () => {
     assert.deepEqual(state, {
       available: true,
       className: 'status-indicator available',
-      label: 'Host nativo v1.2.3',
+      label: 'Native host v1.2.3',
     });
   });
 
   await test('resolves the active popup tab state', () => {
     assert.deepEqual(resolveActivePopupTab([]), {
-      errorText: 'Sin pestaña activa',
+      errorText: 'No active tab',
     });
 
     const tabs = [{ id: 9, url: 'https://portal.school/home' }] as Tabs.Tab[];

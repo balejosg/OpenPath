@@ -108,7 +108,7 @@ describe('TeacherCalendarDayColumn', () => {
 
     expect(screen.getByText('Group One - Lab A')).toBeInTheDocument();
     const oneOffButton = screen.getByRole('button', {
-      name: 'Ver detalles Group Two - Lab B 10:15-11:00',
+      name: 'View details Group Two - Lab B 10:15-11:00',
     });
     expect(oneOffButton).toHaveAttribute('data-kind', 'one_off');
 
@@ -148,10 +148,10 @@ describe('TeacherCalendarDayColumn', () => {
     );
 
     const firstButton = screen.getByRole('button', {
-      name: 'Ver detalles Group One - Lab A 06:30-07:30',
+      name: 'View details Group One - Lab A 06:30-07:30',
     });
     const secondButton = screen.getByRole('button', {
-      name: 'Ver detalles Group Two - Lab B 08:00-09:00',
+      name: 'View details Group Two - Lab B 08:00-09:00',
     });
 
     expect(firstButton).toHaveStyle({ top: '0px', height: '30px' });

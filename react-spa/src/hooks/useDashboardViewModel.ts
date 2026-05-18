@@ -35,7 +35,7 @@ export type DashboardSortOption = 'name' | 'rules' | 'recent';
 
 export const DASHBOARD_SORT_OPTIONS: { value: DashboardSortOption; label: string }[] = [
   { value: 'name', label: 'Nombre (A-Z)' },
-  { value: 'rules', label: 'Más reglas' },
+  { value: 'rules', label: 'Most rules' },
   { value: 'recent', label: 'Recientes' },
 ];
 
@@ -76,7 +76,7 @@ export function useDashboardViewModel() {
       setError(null);
     } catch (err) {
       reportError('Failed to fetch dashboard stats:', err);
-      setError('Error al cargar estadísticas');
+      setError('Unable to load statistics');
     } finally {
       setLoading(false);
     }
@@ -114,7 +114,7 @@ export function useDashboardViewModel() {
         setGroupsError(null);
       } catch (err) {
         reportError('Failed to fetch groups:', err);
-        setGroupsError('Error al cargar grupos');
+        setGroupsError('Unable to load groups');
       } finally {
         setGroupsLoading(false);
       }

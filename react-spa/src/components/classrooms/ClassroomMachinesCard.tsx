@@ -53,7 +53,7 @@ export default function ClassroomMachinesCard({
       <div className="flex justify-between items-center mb-6">
         <h3 className="font-semibold text-slate-900 flex items-center gap-2">
           <Monitor size={18} className="text-blue-500" />
-          Máquinas Registradas
+          Registered Machines
         </h3>
         <div className="flex items-center gap-2">
           {admin && (
@@ -67,7 +67,7 @@ export default function ClassroomMachinesCard({
               ) : (
                 <Download size={16} />
               )}
-              Instalar equipos
+              Install computers
             </button>
           )}
           <span className="text-xs bg-slate-100 px-2 py-1 rounded text-slate-600 border border-slate-200 font-medium">
@@ -100,8 +100,7 @@ export default function ClassroomMachinesCard({
             const expiresTime = exemption
               ? new Date(exemption.expiresAt).toTimeString().slice(0, 5)
               : null;
-            const exemptionSourceLabel =
-              exemption?.source === 'operational' ? 'Admin' : 'Calendario';
+            const exemptionSourceLabel = exemption?.source === 'operational' ? 'Admin' : 'Schedule';
 
             return (
               <div
@@ -116,12 +115,12 @@ export default function ClassroomMachinesCard({
                     </p>
                     <p className="text-xs text-slate-500 truncate">
                       {machine.status === 'online'
-                        ? 'En línea'
+                        ? 'Online'
                         : machine.status === 'stale'
-                          ? 'Conexión inestable'
-                          : 'Sin conexión'}
+                          ? 'Unstable connection'
+                          : 'Offline'}
                       {machine.lastSeen
-                        ? ` · Último: ${new Date(machine.lastSeen).toLocaleString()}`
+                        ? ` · Last: ${new Date(machine.lastSeen).toLocaleString()}`
                         : ''}
                     </p>
                   </div>
@@ -130,8 +129,8 @@ export default function ClassroomMachinesCard({
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {isExempt && (
                     <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full border border-green-200 font-medium">
-                      {exemptionSourceLabel}: sin restricción
-                      {expiresTime ? ` · hasta ${expiresTime}` : ''}
+                      {exemptionSourceLabel}: no restriction
+                      {expiresTime ? ` · until ${expiresTime}` : ''}
                       {exemption.source === 'operational' && exemption.reason
                         ? ` · ${exemption.reason}`
                         : ''}
@@ -144,7 +143,7 @@ export default function ClassroomMachinesCard({
                       disabled={mutating}
                       className="bg-slate-900 hover:bg-slate-800 text-white px-3 py-1.5 rounded-lg text-sm transition-colors shadow-sm font-medium disabled:opacity-50"
                     >
-                      {mutating ? '...' : 'Restringir'}
+                      {mutating ? '...' : 'Restrict'}
                     </button>
                   ) : admin ? (
                     <button
@@ -152,7 +151,7 @@ export default function ClassroomMachinesCard({
                       disabled={mutating || loadingExemptions}
                       className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm transition-colors shadow-sm font-medium disabled:opacity-50"
                     >
-                      {mutating ? '...' : 'Eximir'}
+                      {mutating ? '...' : 'Exempt'}
                     </button>
                   ) : hasActiveSchedule && canCreateScheduleExemption ? (
                     <button
@@ -160,7 +159,7 @@ export default function ClassroomMachinesCard({
                       disabled={mutating || loadingExemptions}
                       className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm transition-colors shadow-sm font-medium disabled:opacity-50"
                     >
-                      {mutating ? '...' : 'Liberar'}
+                      {mutating ? '...' : 'Release'}
                     </button>
                   ) : null}
                 </div>
@@ -171,9 +170,9 @@ export default function ClassroomMachinesCard({
       ) : (
         <div className="flex-1 border-2 border-dashed border-slate-200 rounded-lg flex flex-col items-center justify-center p-8 text-center bg-slate-50/50">
           <Monitor size={48} className="text-slate-300 mb-3" />
-          <p className="text-slate-900 font-medium text-sm">Sin máquinas activas</p>
+          <p className="text-slate-900 font-medium text-sm">No active machines</p>
           <p className="text-slate-500 text-xs mt-1 max-w-xs">
-            Instala el agente de OpenPath en los equipos para verlos aquí.
+            Install the OpenPath agent on computers to see them here.
           </p>
         </div>
       )}
@@ -183,8 +182,8 @@ export default function ClassroomMachinesCard({
         classroom.machines &&
         classroom.machines.length > 0 && (
           <p className="mt-3 text-xs text-slate-500 italic">
-            La liberación temporal solo está disponible cuando el aula está controlada por
-            calendario.
+            Temporary release is only available when the classroom is controlled by calendar
+            schedule.
           </p>
         )}
 
@@ -192,22 +191,22 @@ export default function ClassroomMachinesCard({
         <div className="fixed inset-0 z-50 bg-slate-900/30 flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 rounded-lg shadow-xl w-full max-w-sm p-5">
             <div className="flex items-center justify-between mb-4">
-              <h4 className="font-semibold text-slate-900">Eximir máquina</h4>
+              <h4 className="font-semibold text-slate-900">Exempt machine</h4>
               <button
                 type="button"
                 onClick={() => setOperationalMachineId(null)}
                 className="text-slate-500 hover:text-slate-700 p-1"
-                aria-label="Cerrar"
+                aria-label="Close"
               >
                 <X size={18} />
               </button>
             </div>
             <label className="block text-sm font-medium text-slate-700 mb-1" htmlFor="hours">
-              Horas
+              Hours
             </label>
             <input
               id="hours"
-              aria-label="Horas"
+              aria-label="Hours"
               type="number"
               min={1}
               max={24}
@@ -217,11 +216,11 @@ export default function ClassroomMachinesCard({
               className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm mb-3"
             />
             <label className="block text-sm font-medium text-slate-700 mb-1" htmlFor="reason">
-              Motivo
+              Reason
             </label>
             <textarea
               id="reason"
-              aria-label="Motivo"
+              aria-label="Reason"
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm min-h-20 mb-4"
@@ -232,7 +231,7 @@ export default function ClassroomMachinesCard({
                 onClick={() => setOperationalMachineId(null)}
                 className="px-3 py-1.5 text-sm rounded-md border border-slate-300 text-slate-700"
               >
-                Cancelar
+                Cancel
               </button>
               <button
                 type="button"
@@ -240,7 +239,7 @@ export default function ClassroomMachinesCard({
                 disabled={!reason.trim() || Number(durationHours) < 1 || Number(durationHours) > 24}
                 className="px-3 py-1.5 text-sm rounded-md bg-green-600 text-white disabled:opacity-50"
               >
-                Crear exención
+                Create exemption
               </button>
             </div>
           </div>

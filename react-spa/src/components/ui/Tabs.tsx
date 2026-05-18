@@ -36,7 +36,7 @@ export const Tabs: React.FC<TabsProps> = ({ tabs, activeTab, onChange, className
     <div
       className={cn('border-b border-slate-200', className)}
       role="tablist"
-      aria-label="Pestañas de navegación"
+      aria-label="Navigation tabs"
     >
       <div className="flex gap-1">
         {tabs.map((tab) => {

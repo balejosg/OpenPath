@@ -59,7 +59,7 @@ export const TeacherCalendarDayColumn: React.FC<TeacherCalendarDayColumnProps> =
             left: `calc(${leftPercent}% + 0.125rem)`,
             width: `calc(${widthPercent}% - 0.25rem)`,
           }}
-          aria-label={`Ver detalles ${entry.label} ${entry.startTime}-${entry.endTime}`}
+          aria-label={`View details ${entry.label} ${entry.startTime}-${entry.endTime}`}
           data-kind={entry.kind}
           onClick={() => onSelectEntry(entry)}
         >

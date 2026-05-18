@@ -14,9 +14,7 @@ export default function DomainRequests({ canDeleteRequests = true }: DomainReque
 
   return (
     <div className="space-y-6">
-      <p className="text-slate-500 text-sm">
-        Gestiona las solicitudes de acceso a dominios bloqueados
-      </p>
+      <p className="text-slate-500 text-sm">Manage access requests for blocked domains</p>
 
       <DomainRequestsFilters
         searchInputRef={viewModel.filters.searchInputRef}

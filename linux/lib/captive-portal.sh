@@ -68,16 +68,16 @@ enter_portal_mode_locked() {
         cp "$DNSMASQ_CONF" "$CAPTIVE_DNSMASQ_BACKUP_FILE" 2>/dev/null || true
     fi
 
-    log "[CAPTIVE] Portal cautivo detectado - activando modo fail-open (DNS passthrough + firewall permisivo)" "WARN"
+    log "[CAPTIVE] Captive portal detected - enabling fail-open mode (DNS passthrough + permissive firewall)" "WARN"
 
     if ! write_dnsmasq_passthrough_config "$PRIMARY_DNS" "$DNSMASQ_CONF"; then
-        log "[CAPTIVE] ERROR: No se pudo escribir la configuración DNS de modo portal" "ERROR"
+        log "[CAPTIVE] ERROR: Could not write portal-mode DNS configuration" "ERROR"
     fi
 
     if ! restart_dnsmasq; then
-        log "[CAPTIVE] ERROR: dnsmasq no reinició en modo portal" "ERROR"
+        log "[CAPTIVE] ERROR: dnsmasq did not restart in portal mode" "ERROR"
         if [ -f "$CAPTIVE_DNSMASQ_BACKUP_FILE" ]; then
-            log "[CAPTIVE] Restaurando configuración DNS previa" "WARN"
+            log "[CAPTIVE] Restoring previous DNS configuration" "WARN"
             cp "$CAPTIVE_DNSMASQ_BACKUP_FILE" "$DNSMASQ_CONF" 2>/dev/null || true
             restart_dnsmasq 2>/dev/null || true
         fi
@@ -100,7 +100,7 @@ exit_portal_mode_locked() {
         duration=$(( $(date +%s) - start_ts ))
     fi
 
-    log "[CAPTIVE] Autenticación completada - restaurando protecciones" "INFO"
+    log "[CAPTIVE] Authentication completed - restoring protections" "INFO"
     if [ -n "$duration" ]; then
         log "[CAPTIVE] Tiempo en modo portal: ${duration}s" "INFO"
     fi

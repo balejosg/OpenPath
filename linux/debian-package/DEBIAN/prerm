@@ -8,7 +8,7 @@ set -e
 
 case "$1" in
     remove|upgrade|deconfigure)
-        echo "Deteniendo servicios openpath..."
+        echo "Stopping OpenPath services..."
         
         # Stop timers first
         systemctl stop openpath-dnsmasq.timer 2>/dev/null || true
@@ -35,7 +35,7 @@ case "$1" in
             sleep 1
         fi
         
-        echo "✓ Servicios detenidos"
+        echo "✓ Services stopped"
         ;;
     
     failed-upgrade)

@@ -53,7 +53,7 @@ export function useClassroomsViewModel({
     initialSelectedId: initialSelectedClassroomId,
   });
 
-  const allowedGroupsError = groupsQueryError ? 'Error al cargar aulas' : null;
+  const allowedGroupsError = groupsQueryError ? 'Unable to load classrooms' : null;
   const isInitialLoading = classroomsQuery.loading || groupsLoading;
   const loadError = loadingError ?? allowedGroupsError;
 
@@ -99,7 +99,7 @@ export function useClassroomsViewModel({
 
   const handleCreateClassroom = useCallback(async () => {
     if (!newName.trim()) {
-      setNewError('El nombre del aula es obligatorio');
+      setNewError('Classroom name is required');
       return;
     }
 
@@ -120,7 +120,7 @@ export function useClassroomsViewModel({
       setShowNewModal(false);
     } catch (err) {
       reportError('Failed to create classroom:', err);
-      setNewError('Error al crear aula');
+      setNewError('Unable to create classroom');
     } finally {
       setSaving(false);
     }

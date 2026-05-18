@@ -34,7 +34,7 @@ export function UsersEditModal({
   }
 
   return (
-    <Modal isOpen onClose={closeEditModal} title="Editar Usuario" className="max-w-md">
+    <Modal isOpen onClose={closeEditModal} title="Edit User" className="max-w-md">
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Nombre</label>
@@ -61,11 +61,11 @@ export function UsersEditModal({
               {selectedUser.roles.length > 0 ? (
                 selectedUser.roles.map((role) => <UserRoleBadge key={role} role={role} />)
               ) : (
-                <span className="text-sm text-slate-500">Sin roles asignados</span>
+                <span className="text-sm text-slate-500">No roles assigned</span>
               )}
             </div>
             <p className="text-xs text-slate-500">
-              La gestión de roles se realiza desde el flujo de permisos.
+              Role management is handled in the permissions flow.
             </p>
           </div>
         </div>
@@ -75,7 +75,7 @@ export function UsersEditModal({
             disabled={saving}
             className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            Cancelar
+            Cancel
           </button>
           <button
             onClick={() => void saveEdit()}
@@ -83,7 +83,7 @@ export function UsersEditModal({
             className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {saving && <Loader2 size={16} className="animate-spin" />}
-            Guardar Cambios
+            Save Changes
           </button>
         </div>
       </div>

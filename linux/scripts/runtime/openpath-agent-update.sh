@@ -86,7 +86,7 @@ main() {
 
     if output=$("$SELF_UPDATE_SCRIPT" "$@" 2>&1); then
         printf '%s\n' "$output"
-        if printf '%s\n' "$output" | grep -q "Ya tienes la última versión"; then
+        if printf '%s\n' "$output" | grep -q "You already have the latest version"; then
             status="up-to-date"
         else
             status="success"

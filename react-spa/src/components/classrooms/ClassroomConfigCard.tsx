@@ -28,7 +28,7 @@ function renderClassroomStatus(classroom: Classroom) {
   if (classroom.status === 'operational') {
     return (
       <span className="text-green-700 font-medium flex items-center gap-2 text-sm">
-        <div className="w-2 h-2 bg-green-500 rounded-full"></div> Operativo
+        <div className="w-2 h-2 bg-green-500 rounded-full"></div> Operational
       </span>
     );
   }
@@ -36,14 +36,14 @@ function renderClassroomStatus(classroom: Classroom) {
   if (classroom.status === 'degraded') {
     return (
       <span className="text-yellow-700 font-medium flex items-center gap-2 text-sm">
-        <div className="w-2 h-2 bg-yellow-500 rounded-full"></div> Degradado
+        <div className="w-2 h-2 bg-yellow-500 rounded-full"></div> Degraded
       </span>
     );
   }
 
   return (
     <span className="text-red-700 font-medium flex items-center gap-2 text-sm">
-      <div className="w-2 h-2 bg-red-500 rounded-full"></div> Sin conexión
+      <div className="w-2 h-2 bg-red-500 rounded-full"></div> Offline
     </span>
   );
 }
@@ -66,14 +66,14 @@ export default function ClassroomConfigCard({
       <div className="flex justify-between items-start">
         <div>
           <h2 className="text-2xl font-bold text-slate-900 mb-1">{classroom.name}</h2>
-          <p className="text-slate-500 text-sm">Configuración y estado del aula</p>
+          <p className="text-slate-500 text-sm">Classroom settings and status</p>
         </div>
         <div className="flex gap-2">
           {admin && (
             <button
               onClick={onOpenDeleteDialog}
               className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-100"
-              title="Eliminar Aula"
+              title="Delete Classroom"
             >
               <Trash2 size={18} />
             </button>
@@ -87,7 +87,7 @@ export default function ClassroomConfigCard({
             htmlFor="classroom-active-group"
             className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block"
           >
-            Grupo Activo
+            Active Group
           </label>
           <GroupSelect
             id="classroom-active-group"
@@ -95,7 +95,7 @@ export default function ClassroomConfigCard({
             onChange={onRequestActiveGroupChange}
             groups={allowedGroups}
             includeNoneOption
-            noneLabel="Sin grupo activo"
+            noneLabel="No active group"
             inactiveBehavior="hide"
             unknownValueLabel={
               !admin && activeGroupSelectValue && !groupById.get(activeGroupSelectValue)
@@ -111,7 +111,7 @@ export default function ClassroomConfigCard({
           />
           {!activeGroupSelectValue && classroom.currentGroupId && (
             <p className="mt-2 text-xs text-slate-500 italic">
-              Actualmente usando{' '}
+              Currently using{' '}
               <GroupLabel
                 variant="text"
                 className="font-semibold text-slate-700"
@@ -138,7 +138,7 @@ export default function ClassroomConfigCard({
             htmlFor="classroom-default-group"
             className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block"
           >
-            Grupo por defecto
+            Default group
           </label>
           <GroupSelect
             id="classroom-default-group"
@@ -147,7 +147,7 @@ export default function ClassroomConfigCard({
             disabled={!admin}
             groups={allowedGroups}
             includeNoneOption
-            noneLabel="Sin grupo por defecto"
+            noneLabel="No default group"
             inactiveBehavior="disable"
             unknownValueLabel={
               !admin && defaultGroupSelectValue && !groupById.get(defaultGroupSelectValue)
@@ -162,7 +162,7 @@ export default function ClassroomConfigCard({
             className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:border-blue-500 outline-none shadow-sm disabled:bg-slate-50 disabled:text-slate-500"
           />
           <p className="mt-2 text-xs text-slate-500 italic">
-            Se usa cuando no hay grupo activo ni bloque de horario vigente.
+            Used when there is no active group or active schedule block.
           </p>
           {classroomConfigError && (
             <p className="mt-2 text-xs text-red-600 flex items-start gap-1">
@@ -175,13 +175,13 @@ export default function ClassroomConfigCard({
         <div className="bg-slate-50 rounded-lg p-4 border border-slate-200 flex items-center justify-between">
           <div>
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1 block">
-              Estado
+              Status
             </label>
             {renderClassroomStatus(classroom)}
           </div>
           {classroom.computerCount > 0 && (
             <span className="text-xs text-slate-500">
-              {classroom.onlineMachineCount}/{classroom.computerCount} en línea
+              {classroom.onlineMachineCount}/{classroom.computerCount} online
             </span>
           )}
         </div>

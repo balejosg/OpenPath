@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 export interface BlockedDomainInfo {
   count?: number;
   errors?: string[];
@@ -23,14 +25,14 @@ interface DomainStatusesResponse {
 
 export function extractTabHostname(url: string | undefined): string {
   if (!url) {
-    return 'Desconocido';
+    return t('popupUnknownTab');
   }
 
   try {
     const urlObj = new URL(url);
     return urlObj.hostname;
   } catch {
-    return 'Página local';
+    return t('popupLocalPage');
   }
 }
 
@@ -75,16 +77,24 @@ export function statusMeta(status?: DomainStatus): {
 } {
   switch (status?.state) {
     case 'pending':
-      return { label: 'Pendiente', className: 'status-pending', retryable: false };
+      return { label: t('popupStatusPending'), className: 'status-pending', retryable: false };
     case 'autoApproved':
-      return { label: 'Auto-aprobado', className: 'status-approved', retryable: false };
+      return {
+        label: t('popupStatusAutoApproved'),
+        className: 'status-approved',
+        retryable: false,
+      };
     case 'duplicate':
-      return { label: 'Duplicado', className: 'status-duplicate', retryable: false };
+      return { label: t('popupStatusDuplicate'), className: 'status-duplicate', retryable: false };
     case 'localUpdateError':
-      return { label: 'Error update local', className: 'status-update-error', retryable: true };
+      return {
+        label: t('popupStatusLocalUpdateError'),
+        className: 'status-update-error',
+        retryable: true,
+      };
     case 'apiError':
-      return { label: 'Error API', className: 'status-api-error', retryable: false };
+      return { label: t('popupStatusApiError'), className: 'status-api-error', retryable: false };
     default:
-      return { label: 'Detectado', className: 'status-detected', retryable: false };
+      return { label: t('popupStatusDetected'), className: 'status-detected', retryable: false };
   }
 }

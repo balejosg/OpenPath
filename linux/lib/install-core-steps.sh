@@ -9,82 +9,82 @@ run_pre_install_validation() {
     local warnings=0
 
     echo ""
-    echo "[Preflight] Validando requisitos del sistema..."
+    echo "[Preflight] Validating system requirements..."
 
     if [ "$EUID" -ne 0 ]; then
-        echo "  ✗ Requiere privilegios root"
+        echo "  ✗ Requires root privileges"
         errors=$((errors + 1))
     else
-        echo "  ✓ Privilegios root detectados"
+        echo "  ✓ Root privileges detected"
     fi
 
     if [ ! -d /run/systemd/system ]; then
-        echo "  ✗ systemd no está activo (requerido para timers/servicios)"
+        echo "  ✗ systemd is not active (required for timers/services)"
         errors=$((errors + 1))
     else
-        echo "  ✓ systemd activo"
+        echo "  ✓ systemd active"
     fi
 
     if ! command -v apt-get >/dev/null 2>&1; then
-        echo "  ✗ apt-get no disponible (se requiere distribución Debian/Ubuntu)"
+        echo "  ✗ apt-get is not available (Debian/Ubuntu distribution required)"
         errors=$((errors + 1))
     else
-        echo "  ✓ apt-get disponible"
+        echo "  ✓ apt-get available"
     fi
 
     if ! command -v systemctl >/dev/null 2>&1; then
-        echo "  ✗ systemctl no disponible"
+        echo "  ✗ systemctl not available"
         errors=$((errors + 1))
     else
-        echo "  ✓ systemctl disponible"
+        echo "  ✓ systemctl available"
     fi
 
     local free_mb
     free_mb=$(df -Pm / | awk 'NR==2 {print $4}')
     if [ -n "$free_mb" ] && [ "$free_mb" -lt 200 ]; then
-        echo "  ✗ Espacio insuficiente en / (${free_mb}MB libres, mínimo 200MB)"
+        echo "  ✗ Insufficient space on / (${free_mb}MB free, minimum 200MB)"
         errors=$((errors + 1))
     else
-        echo "  ✓ Espacio en disco suficiente"
+        echo "  ✓ Sufficient disk space"
     fi
 
     if ! ip -o link show up 2>/dev/null | grep -q "state UP"; then
-        echo "  ⚠ No se detecta interfaz de red activa"
+        echo "  ⚠ No active network interface detected"
         warnings=$((warnings + 1))
     else
-        echo "  ✓ Interfaz de red activa detectada"
+        echo "  ✓ Active network interface detected"
     fi
 
     if ! timeout 5 getent hosts github.com >/dev/null 2>&1; then
-        echo "  ⚠ DNS/Internet no verificado (continuará igualmente)"
+        echo "  ⚠ DNS/Internet not verified (continuing anyway)"
         warnings=$((warnings + 1))
     else
-        echo "  ✓ Resolución DNS funcional"
+        echo "  ✓ DNS resolution is functional"
     fi
 
     if ss -lntu 2>/dev/null | grep -qE '[:.]53\s'; then
-        echo "  ⚠ Puerto 53 ya en uso (se intentará liberar durante la instalación)"
+        echo "  ⚠ Port 53 already in use (will try to release it during installation)"
         warnings=$((warnings + 1))
     else
-        echo "  ✓ Puerto 53 disponible"
+        echo "  ✓ Port 53 available"
     fi
 
     if [ "$errors" -gt 0 ]; then
         echo ""
-        echo "✗ Preflight fallido: ${errors} error(es), ${warnings} advertencia(s)"
-        echo "  Corrija los errores o use --skip-preflight bajo su propio riesgo"
+        echo "✗ Preflight failed: ${errors} error(s), ${warnings} warning(s)"
+        echo "  Fix the errors or use --skip-preflight at your own risk"
         exit 1
     fi
 
     if [ "$warnings" -gt 0 ]; then
-        echo "  ✓ Preflight completado con ${warnings} advertencia(s)"
+        echo "  ✓ Preflight completed with ${warnings} warning(s)"
     else
-        echo "  ✓ Preflight completado sin advertencias"
+        echo "  ✓ Preflight completed without warnings"
     fi
 }
 
 step_install_libraries() {
-    echo "[1/13] Instalando librerías..."
+    echo "[1/13] Installing libraries..."
     mkdir -p "$INSTALL_DIR/lib"
     mkdir -p "$INSTALL_DIR/libexec"
     mkdir -p "$CONFIG_DIR"
@@ -97,7 +97,7 @@ step_install_libraries() {
     chmod +x "$INSTALL_DIR/lib/"*.sh
     chmod +x "$INSTALL_DIR/libexec/browser-json.py"
     chmod +x "$INSTALL_DIR/uninstall.sh"
-    echo "✓ Librerías instaladas"
+    echo "✓ Libraries installed"
 
     source "$INSTALL_DIR/lib/common.sh"
     load_libraries
@@ -105,10 +105,10 @@ step_install_libraries() {
 
 step_install_dependencies() {
     echo ""
-    echo "[2/13] Instalando dependencias..."
+    echo "[2/13] Installing dependencies..."
 
     apt_update_with_retry
-    DEBIAN_FRONTEND=noninteractive apt_install_with_retry "dependencias base" \
+    DEBIAN_FRONTEND=noninteractive apt_install_with_retry "base dependencies" \
         apt-get install -y \
         iptables ipset curl iproute2 \
         libcap2-bin dnsutils conntrack python3
@@ -127,15 +127,15 @@ step_install_dependencies() {
 
 step_free_port_53() {
     echo ""
-    echo "[3/13] Liberando puerto 53..."
+    echo "[3/13] Releasing port 53..."
 
     free_port_53
-    echo "✓ Puerto 53 liberado"
+    echo "✓ Port 53 released"
 }
 
 step_detect_dns() {
     echo ""
-    echo "[4/13] Detectando DNS primario..."
+    echo "[4/13] Detecting primary DNS..."
 
     PRIMARY_DNS=$(detect_primary_dns)
     echo "$PRIMARY_DNS" > "$CONFIG_DIR/original-dns.conf"
@@ -178,11 +178,11 @@ step_install_scripts() {
 
     if [ -n "$WHITELIST_URL" ]; then
         if ! persist_openpath_whitelist_url "$WHITELIST_URL"; then
-            echo "✗ ERROR: whitelist URL inválida"
+            echo "✗ ERROR: invalid whitelist URL"
             exit 1
         fi
     else
-        echo "  → Whitelist URL no configurada todavía"
+        echo "  → Whitelist URL not configured yet"
     fi
 
     if persist_openpath_health_api_config "$HEALTH_API_URL" "$HEALTH_API_SECRET"; then
@@ -193,13 +193,13 @@ step_install_scripts() {
             echo "  → Health API secret configurado"
         fi
     else
-        echo "✗ ERROR: configuración health API inválida"
+        echo "✗ ERROR: invalid health API configuration"
         exit 1
     fi
 
     if [ -n "$CLASSROOM_NAME" ] && [ -n "$API_URL" ]; then
         if ! persist_openpath_classroom_runtime_config "$API_URL" "$CLASSROOM_NAME" ""; then
-            echo "✗ ERROR: configuración de aula inválida"
+            echo "✗ ERROR: invalid classroom configuration"
             exit 1
         fi
 
@@ -208,15 +208,15 @@ step_install_scripts() {
             chown root:root "$ETC_CONFIG_DIR/api-secret.conf" 2>/dev/null || true
             chmod 600 "$ETC_CONFIG_DIR/api-secret.conf"
         fi
-        echo "  → Modo Aula configurado: $CLASSROOM_NAME"
+        echo "  → Classroom mode configured: $CLASSROOM_NAME"
     fi
 
-    echo "✓ Scripts instalados"
+    echo "✓ Scripts installed"
 }
 
 step_configure_sudoers() {
     echo ""
-    echo "[6/13] Configurando permisos sudo..."
+    echo "[6/13] Configuring sudo permissions..."
 
     if [[ ! -d /etc/sudoers.d ]]; then
         mkdir -p /etc/sudoers.d
@@ -224,8 +224,8 @@ step_configure_sudoers() {
     fi
 
     cat > /etc/sudoers.d/openpath << 'EOF'
-# Permitir a todos los usuarios ejecutar comandos de LECTURA sin contraseña
-# Estos son seguros: no modifican configuración ni desactivan protecciones
+# Allow all users to run READ commands without a password.
+# These are safe: they do not modify configuration or disable protections.
 ALL ALL=(root) NOPASSWD: /usr/local/bin/openpath status
 ALL ALL=(root) NOPASSWD: /usr/local/bin/openpath test
 ALL ALL=(root) NOPASSWD: /usr/local/bin/openpath check *
@@ -237,42 +237,42 @@ ALL ALL=(root) NOPASSWD: /usr/local/bin/openpath log *
 ALL ALL=(root) NOPASSWD: /usr/local/bin/openpath logs
 ALL ALL=(root) NOPASSWD: /usr/local/bin/openpath help
 
-# Comandos de sistema (solo internos, no expuestos al usuario)
+# System commands (internal only, not exposed to users)
 ALL ALL=(root) NOPASSWD: /usr/local/bin/openpath-update.sh
 ALL ALL=(root) NOPASSWD: /usr/local/bin/dnsmasq-watchdog.sh
 
-# NOTA: Los siguientes comandos REQUIEREN contraseña de root:
+# NOTE: The following commands REQUIRE the root password:
 # openpath update, enable, disable, force, restart, rotate-token, enroll, setup
 EOF
 
     chmod 440 /etc/sudoers.d/openpath
-    echo "✓ Permisos sudo configurados"
+    echo "✓ Sudo permissions configured"
 }
 
 step_create_services() {
     echo ""
-    echo "[7/13] Creando servicios systemd..."
+    echo "[7/13] Creating systemd services..."
 
     create_systemd_services
     create_logrotate_config
     create_tmpfiles_config
 
-    echo "✓ Servicios creados"
+    echo "✓ Services created"
 }
 
 step_configure_dns() {
     echo ""
-    echo "[8/13] Configurando DNS..."
+    echo "[8/13] Configuring DNS..."
 
     configure_upstream_dns
     configure_resolv_conf
 
-    echo "✓ DNS configurado"
+    echo "✓ DNS configured"
 }
 
 step_configure_dnsmasq() {
     echo ""
-    echo "[9/13] Configurando dnsmasq..."
+    echo "[9/13] Configuring dnsmasq..."
 
     if [ -f /etc/dnsmasq.conf ]; then
         sed -i 's/^no-resolv/#no-resolv/g' /etc/dnsmasq.conf 2>/dev/null || true
@@ -280,7 +280,7 @@ step_configure_dnsmasq() {
     fi
 
     cat > /etc/dnsmasq.d/openpath.conf << EOF
-# Configuración inicial - será sobrescrita por dnsmasq-whitelist.sh
+# Initial configuration - will be overwritten by dnsmasq-whitelist.sh
 no-resolv
 resolv-file=/run/dnsmasq/resolv.conf
 listen-address=127.0.0.1
@@ -292,7 +292,7 @@ EOF
     systemctl reset-failed dnsmasq 2>/dev/null || true
     systemctl restart dnsmasq
 
-    echo "  Esperando a que dnsmasq esté activo..."
+    echo "  Waiting for dnsmasq to become active..."
     for _ in $(seq 1 5); do
         if systemctl is-active --quiet dnsmasq; then
             break
@@ -301,9 +301,9 @@ EOF
     done
 
     if systemctl is-active --quiet dnsmasq; then
-        echo "✓ dnsmasq activo"
+        echo "✓ dnsmasq active"
     else
-        echo "✗ ERROR: dnsmasq no arrancó"
+        echo "✗ ERROR: dnsmasq did not start"
         journalctl -u dnsmasq -n 10 --no-pager
         exit 1
     fi

@@ -34,9 +34,7 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
       )}
     >
       {/* Selection count */}
-      <span className="text-sm font-medium whitespace-nowrap">
-        {selectedCount} {selectedCount === 1 ? 'seleccionado' : 'seleccionados'}
-      </span>
+      <span className="text-sm font-medium whitespace-nowrap">{selectedCount} selected</span>
 
       {/* Divider */}
       <div className="w-px h-6 bg-slate-700" />
@@ -51,14 +49,14 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
           className="bg-red-600 hover:bg-red-700 text-white border-0"
         >
           <Trash2 size={14} className="mr-1" />
-          Eliminar
+          Delete
         </Button>
 
         <button
           onClick={onClear}
           disabled={isDeleting}
           className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors disabled:opacity-50"
-          title="Cancelar selección"
+          title="Cancel selection"
         >
           <X size={16} />
         </button>

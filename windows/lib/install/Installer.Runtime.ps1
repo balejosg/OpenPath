@@ -12,7 +12,7 @@ function Invoke-OpenPathInstallerFirstUpdate {
 
     $shouldRunFirstUpdate = $true
     if ($ClassroomModeRequested -and $MachineRegistered -ne 'REGISTERED') {
-        Write-InstallerWarning '  ADVERTENCIA: Registro no completado; se omite primera actualizacion'
+        Write-InstallerWarning '  WARNING: Registration not completed; skipping first update'
         $shouldRunFirstUpdate = $false
     }
 
@@ -24,14 +24,14 @@ function Invoke-OpenPathInstallerFirstUpdate {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$OpenPathRoot\scripts\Update-OpenPath.ps1"
         $updateExitCode = $LASTEXITCODE
         if ($updateExitCode -ne 0) {
-            Write-InstallerWarning "  ADVERTENCIA: Primera actualizacion fallida con codigo $updateExitCode (se reintentara)"
+            Write-InstallerWarning "  WARNING: First update failed with code $updateExitCode (will retry)"
             return
         }
 
-        Write-InstallerVerbose '  Primera actualizacion completada'
+        Write-InstallerVerbose '  First update completed'
     }
     catch {
-        Write-InstallerWarning '  ADVERTENCIA: Primera actualizacion fallida (se reintentara)'
+        Write-InstallerWarning '  WARNING: First update failed (will retry)'
     }
 }
 
@@ -55,7 +55,7 @@ function Restore-OpenPathInstallerConfigIfMissing {
     }
 
     $Config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
-    Write-InstallerWarning '  ADVERTENCIA: Configuracion restaurada tras primera actualizacion fallida'
+    Write-InstallerWarning '  WARNING: Configuration restored after failed first update'
 }
 
 function Start-OpenPathInstallerRealtimeUpdates {
@@ -68,7 +68,7 @@ function Start-OpenPathInstallerRealtimeUpdates {
     )
 
     if ($ClassroomModeRequested -and $MachineRegistered -ne 'REGISTERED') {
-        Write-InstallerWarning '  ADVERTENCIA: Registro no completado; se omite listener SSE'
+        Write-InstallerWarning '  WARNING: Registration not completed; skipping SSE listener'
         return $false
     }
 
@@ -76,12 +76,12 @@ function Start-OpenPathInstallerRealtimeUpdates {
         $config = Get-OpenPathConfig
         $readiness = Get-OpenPathBrowserRequestReadiness -Config $config
         if (-not $readiness.Ready) {
-            Write-InstallerWarning '  ADVERTENCIA: Configuracion de solicitudes incompleta; se omite listener SSE'
+            Write-InstallerWarning '  WARNING: Request configuration incomplete; skipping SSE listener'
             return $false
         }
     }
     catch {
-        Write-InstallerWarning "  ADVERTENCIA: No se pudo validar la configuracion de solicitudes: $_"
+        Write-InstallerWarning "  WARNING: Could not validate request configuration: $_"
         return $false
     }
 
@@ -90,7 +90,7 @@ function Start-OpenPathInstallerRealtimeUpdates {
         return $true
     }
 
-    Write-InstallerWarning '  ADVERTENCIA: No se pudo iniciar el listener SSE automaticamente'
+    Write-InstallerWarning '  WARNING: Could not start SSE listener automatically'
     return $false
 }
 
@@ -103,7 +103,7 @@ function Initialize-OpenPathInstallerIntegrity {
         }
     }
     catch {
-        Write-InstallerWarning '  ADVERTENCIA: No se pudo inicializar baseline de integridad'
+        Write-InstallerWarning '  WARNING: Could not initialize integrity baseline'
     }
 }
 
@@ -175,7 +175,7 @@ function Write-OpenPathInstallerSummary {
 
     Write-Host ''
     Write-Host '==========================================' -ForegroundColor Cyan
-    Write-Host '  Verificando instalacion...' -ForegroundColor Cyan
+    Write-Host '  Verifying installation...' -ForegroundColor Cyan
     Write-Host '==========================================' -ForegroundColor Cyan
 
     foreach ($check in @(Get-OpenPathInstallerChecks)) {
@@ -189,17 +189,17 @@ function Write-OpenPathInstallerSummary {
 
     Write-Host ''
     Write-Host '==========================================' -ForegroundColor Green
-    Write-Host '  INSTALACION COMPLETADA' -ForegroundColor Green
+    Write-Host '  INSTALLATION COMPLETED' -ForegroundColor Green
     Write-Host '==========================================' -ForegroundColor Green
     Write-Host ''
-    Write-Host 'Configuracion:'
+    Write-Host 'Configuration:'
     if ($ClassroomModeRequested) {
         if ($Classroom) { Write-Host "  - Classroom: $Classroom" }
         if ($ClassroomId) { Write-Host "  - Classroom ID: $ClassroomId" }
         Write-Host "  - Enrollment: $MachineRegistered"
         if ($ClassroomModeRequested -and $MachineRegistered -ne 'REGISTERED') {
-            Write-Host '  - Solicitudes de dominio: NO CONFIGURADAS' -ForegroundColor Red
-            Write-Host '    Para repararlo, ejecuta .\OpenPath.ps1 enroll con los parametros del aula.' -ForegroundColor Yellow
+            Write-Host '  - Domain requests: NOT CONFIGURED' -ForegroundColor Red
+            Write-Host '    To repair it, run .\OpenPath.ps1 enroll with the classroom parameters.' -ForegroundColor Yellow
         }
     }
     Write-Host "  - Whitelist: $WhitelistUrl"
@@ -220,20 +220,20 @@ function Write-OpenPathInstallerSummary {
 
     Write-Host 'Comandos utiles:'
     Write-Host '  .\OpenPath.ps1 status          # Estado del agente'
-    Write-Host '  .\OpenPath.ps1 update          # Forzar actualizacion'
+    Write-Host '  .\OpenPath.ps1 update          # Force update'
     Write-Host '  .\OpenPath.ps1 health          # Ejecutar watchdog'
     Write-Host '  .\OpenPath.ps1 self-update --check  # Comprobar actualizacion de agente'
-    Write-Host "  nslookup $dnsProbeDomain 127.0.0.1  # Probar DNS"
+    Write-Host "  nslookup $dnsProbeDomain 127.0.0.1  # Test DNS"
     Write-Host '  Get-ScheduledTask OpenPath-*  # Ver tareas'
     if ($ClassroomModeRequested) {
         Write-Host '  .\OpenPath.ps1 rotate-token -Secret <secret>  # Rotar token'
-        Write-Host '  .\OpenPath.ps1 enroll -Classroom <aula> -ApiUrl <url> -RegistrationToken <token>'
+        Write-Host '  .\OpenPath.ps1 enroll -Classroom <classroom> -ApiUrl <url> -RegistrationToken <token>'
         Write-Host '  .\OpenPath.ps1 enroll -ApiUrl <url> -ClassroomId <id> -EnrollmentToken <token> -Unattended'
     }
     Write-Host ''
 
     Write-Progress -Activity 'Installing OpenPath' -Completed
 
-    Write-Host 'Desinstalar: .\Uninstall-OpenPath.ps1'
+    Write-Host 'Uninstall: .\Uninstall-OpenPath.ps1'
     Write-Host ''
 }

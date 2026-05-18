@@ -23,9 +23,9 @@
 # Verifies the system works correctly after installation.
 # Returns 0 if OK, 1 if critical failures.
 #
-# Uso:
-#   sudo ./smoke-test.sh           # Test completo
-#   sudo ./smoke-test.sh --quick   # Solo tests críticos
+# Usage:
+#   sudo ./smoke-test.sh           # Full test
+#   sudo ./smoke-test.sh --quick   # Critical tests only
 ################################################################################
 
 # Load common.sh for VERSION and shared functions
@@ -42,16 +42,16 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Contadores
+# Counters
 PASSED=0
 FAILED=0
 WARNINGS=0
 
-# Modo rápido
+# Quick mode
 QUICK_MODE=false
 [[ "$1" == "--quick" ]] && QUICK_MODE=true
 
-# ============== Funciones de Test ==============
+# ============== Test Functions ==============
 
 test_pass() {
     echo -e "  ${GREEN}✓${NC} $1"
@@ -73,37 +73,37 @@ test_section() {
     echo -e "${BLUE}[$1]${NC} $2"
 }
 
-# ============== Tests Críticos ==============
+# ============== Critical Tests ==============
 
 test_dnsmasq_running() {
     test_section "1/6" "dnsmasq service"
     
     if systemctl is-active --quiet dnsmasq; then
-        test_pass "dnsmasq está activo"
+        test_pass "dnsmasq is active"
     else
-        test_fail "dnsmasq no está activo"
+        test_fail "dnsmasq is not active"
         return 1
     fi
 }
 
 test_port_53() {
-    test_section "2/6" "Puerto 53"
+    test_section "2/6" "Port 53"
     
     if ss -ulnp 2>/dev/null | grep -q ":53 "; then
         local proc
         proc=$(ss -ulnp 2>/dev/null | grep ":53 " | grep -oP 'users:\(\("\K[^"]+')
-        test_pass "Puerto 53 UDP escuchando ($proc)"
+        test_pass "Port 53 UDP listening ($proc)"
     else
         # In Docker/CI environments, DNS may work via --dns flag without local port 53
         # This is a warning, not a failure - actual DNS tests verify functionality
-        test_warn "Puerto 53 UDP no está escuchando (puede ser normal en Docker/CI)"
+        test_warn "UDP port 53 is not listening (can be normal in Docker/CI)"
     fi
 }
 
 test_dns_resolves_whitelisted() {
-    test_section "3/6" "DNS resuelve dominios whitelisteados"
+    test_section "3/6" "DNS resolves allowlisted domains"
     
-    # Estos dominios deberían estar siempre whitelisteados
+    # These domains should always be allowlisted.
     local test_domains=("google.com" "github.com")
     local all_ok=true
     
@@ -113,7 +113,7 @@ test_dns_resolves_whitelisted() {
         if [ -n "$result" ]; then
             test_pass "$domain → $result"
         else
-            test_fail "$domain no resuelve"
+            test_fail "$domain does not resolve"
             all_ok=false
         fi
     done
@@ -122,9 +122,9 @@ test_dns_resolves_whitelisted() {
 }
 
 test_dns_blocks_unknown() {
-    test_section "4/6" "DNS bloquea dominios no whitelisteados"
+    test_section "4/6" "DNS blocks non-allowlisted domains"
     
-    # Dominios que NO deberían existir/resolver
+    # Domains that should not exist or resolve.
     local blocked_domains=("thisdomaindoesnotexist12345.com" "malware-test-blocked.net")
     local all_ok=true
     
@@ -132,9 +132,9 @@ test_dns_blocks_unknown() {
         local result
         result=$(timeout 3 dig @127.0.0.1 "$domain" +short 2>/dev/null | head -1)
         if [ -z "$result" ] || [ "$result" == "127.0.0.1" ] || [ "$result" == "0.0.0.0" ] || [ "$result" == "192.0.2.1" ]; then
-            test_pass "$domain bloqueado correctamente"
+            test_pass "$domain blocked correctly"
         else
-            test_warn "$domain resuelve a $result (debería estar bloqueado)"
+            test_warn "$domain resolves to $result (should be blocked)"
             all_ok=false
         fi
     done
@@ -143,55 +143,55 @@ test_dns_blocks_unknown() {
 }
 
 test_firewall_rules() {
-    test_section "5/6" "Reglas de firewall"
+    test_section "5/6" "Firewall rules"
     
     if ! command -v iptables &>/dev/null; then
-        test_warn "iptables no disponible"
+        test_warn "iptables is not available"
         return 0
     fi
     
-    # Verificar que hay reglas en OUTPUT
+    # Verify OUTPUT rules exist.
     local rules_count
     rules_count=$(iptables -L OUTPUT -n 2>/dev/null | wc -l)
     if [ "$rules_count" -gt 3 ]; then
-        test_pass "Firewall configurado ($((rules_count - 2)) reglas en OUTPUT)"
+        test_pass "Firewall configured ($((rules_count - 2)) OUTPUT rules)"
     else
-        test_warn "Firewall puede no estar configurado (pocas reglas)"
+        test_warn "Firewall may not be configured (few rules)"
     fi
     
-    # Verificar bloqueo de puertos DNS externos
+    # Verify external DNS port blocking.
     if iptables -L OUTPUT -n 2>/dev/null | grep -q "dpt:53"; then
-        test_pass "Bloqueo de DNS externo configurado"
+        test_pass "External DNS blocking configured"
     else
-        test_warn "No se detectó bloqueo de DNS externo"
+        test_warn "External DNS blocking was not detected"
     fi
 }
 
 test_config_files() {
-    test_section "6/6" "Archivos de configuración"
+    test_section "6/6" "Configuration files"
     
     local all_ok=true
     
     if [ -f /etc/dnsmasq.d/openpath.conf ]; then
-        test_pass "/etc/dnsmasq.d/openpath.conf existe"
+        test_pass "/etc/dnsmasq.d/openpath.conf exists"
     else
-        test_fail "Configuración dnsmasq no encontrada"
+        test_fail "dnsmasq configuration not found"
         all_ok=false
     fi
     
     if [ -f /var/lib/openpath/whitelist.txt ]; then
         local count
         count=$(grep -cv "^#\|^$" /var/lib/openpath/whitelist.txt 2>/dev/null || echo "0")
-        test_pass "Whitelist descargada ($count dominios)"
+        test_pass "Allowlist downloaded ($count domains)"
     else
-        test_warn "Whitelist no descargada aún (el timer lo hará)"
+        test_warn "Whitelist not downloaded yet (the timer will do it)"
     fi
     
     # Config in /etc/ (Debian FHS compliant)
     if [ -f /etc/openpath/whitelist-url.conf ]; then
-        test_pass "URL de whitelist configurada"
+        test_pass "Allowlist URL configured"
     else
-        test_fail "URL de whitelist no configurada"
+        test_fail "Allowlist URL not configured"
         all_ok=false
     fi
     
@@ -206,30 +206,30 @@ main() {
     echo -e "${BLUE}  Smoke Tests - OpenPath System v$VERSION${NC}"
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
     
-    # Tests críticos (siempre se ejecutan)
+    # Critical tests always run.
     test_dnsmasq_running
     test_port_53
     
     if [ "$QUICK_MODE" = false ]; then
-        # Tests completos
+        # Full tests.
         test_dns_resolves_whitelisted
         test_dns_blocks_unknown
         test_firewall_rules
         test_config_files
     fi
     
-    # Resumen
+    # Summary.
     echo ""
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
-    echo -e "  Resultados: ${GREEN}$PASSED passed${NC}, ${RED}$FAILED failed${NC}, ${YELLOW}$WARNINGS warnings${NC}"
+    echo -e "  Results: ${GREEN}$PASSED passed${NC}, ${RED}$FAILED failed${NC}, ${YELLOW}$WARNINGS warnings${NC}"
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
     echo ""
     
     if [ "$FAILED" -gt 0 ]; then
         echo -e "${RED}✗ SMOKE TESTS FAILED${NC}"
         echo ""
-        echo "El sistema puede no funcionar correctamente."
-        echo "Ejecuta 'openpath status' para más detalles."
+        echo "The system may not work correctly."
+        echo "Run 'openpath status' for more details."
         return 1
     elif [ "$WARNINGS" -gt 0 ]; then
         echo -e "${YELLOW}⚠ SMOKE TESTS PASSED WITH WARNINGS${NC}"
@@ -242,9 +242,9 @@ main() {
     fi
 }
 
-# Verificar root
+# Verify root.
 if [ "$EUID" -ne 0 ]; then
-    echo "ERROR: Ejecutar con sudo"
+    echo "ERROR: Run with sudo"
     exit 1
 fi
 

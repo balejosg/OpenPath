@@ -98,19 +98,19 @@ describe('TeacherScheduleDetailPanel', () => {
 
     render(<TeacherScheduleDetailPanel {...props} />);
 
-    expect(screen.getByText('Detalle del horario')).toBeInTheDocument();
+    expect(screen.getByText('Schedule details')).toBeInTheDocument();
     expect(screen.getByText('Group One - Lab A')).toBeInTheDocument();
     expect(screen.getByText('Group One')).toBeInTheDocument();
     expect(screen.getByText('Lab A')).toBeInTheDocument();
-    expect(screen.getByText('Semanal')).toBeInTheDocument();
+    expect(screen.getByText('Weekly')).toBeInTheDocument();
     expect(screen.getByText('09:00-10:00')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ir al aula' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Ver reglas' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Tomar control' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Liberar aula' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Editar horario' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Eliminar horario' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Go to classroom' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View rules' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Take control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release classroom' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit schedule' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete schedule' }));
 
     expect(props.onOpenClassroom).toHaveBeenCalledWith(props.entry);
     expect(props.onOpenRules).toHaveBeenCalledWith(props.entry);
@@ -131,15 +131,15 @@ describe('TeacherScheduleDetailPanel', () => {
 
     render(<TeacherScheduleDetailPanel {...props} />);
 
-    expect(screen.getByText('Puntual')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Ir al aula' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Editar horario' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Eliminar horario' })).toBeDisabled();
+    expect(screen.getByText('One-off')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Go to classroom' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Edit schedule' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete schedule' })).toBeDisabled();
   });
 
   it('renders nothing when there is no selected entry', () => {
     render(<TeacherScheduleDetailPanel {...buildProps({ entry: null })} />);
 
-    expect(screen.queryByText('Detalle del horario')).not.toBeInTheDocument();
+    expect(screen.queryByText('Schedule details')).not.toBeInTheDocument();
   });
 });

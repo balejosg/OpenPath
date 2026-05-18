@@ -17,8 +17,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ################################################################################
-# uninstall.sh - Desinstalador del sistema whitelist
-# Parte del sistema dnsmasq URL Whitelist v3.5
+# uninstall.sh - OpenPath DNS uninstaller
+# Part of the OpenPath DNS system
 #
 # Corregido para:
 # - Restaurar systemd-resolved correctamente (socket primero)
@@ -29,25 +29,25 @@
 
 set -eo pipefail
 
-# Verificar root
+# Verify root
 if [ "$EUID" -ne 0 ]; then
-    echo "ERROR: Ejecutar con sudo"
+    echo "ERROR: Run with sudo"
     exit 1
 fi
 
 echo "======================================================"
-echo "  Desinstalación: dnsmasq URL Whitelist System"
+echo "  Uninstall: dnsmasq URL Whitelist System"
 echo "======================================================"
 echo ""
 
 # Confirmar (skip si --auto-yes o --unattended o -y)
 if [[ ! "${1:-}" =~ ^(--auto-yes|--unattended|-y)$ ]]; then
-    read -p "¿Desinstalar el sistema? (y/N): " confirm
-    [[ ! "$confirm" =~ ^[Yy]$ ]] && { echo "Cancelado"; exit 0; }
+    read -p "Uninstall the system? (y/N): " confirm
+    [[ ! "$confirm" =~ ^[Yy]$ ]] && { echo "Canceled"; exit 0; }
 fi
 
 echo ""
-echo "[1/7] Deteniendo servicios..."
+echo "[1/7] Stopping services..."
 systemctl stop openpath-dnsmasq.timer 2>/dev/null || true
 systemctl stop openpath-agent-update.timer 2>/dev/null || true
 systemctl stop dnsmasq-watchdog.timer 2>/dev/null || true
@@ -55,8 +55,8 @@ systemctl stop captive-portal-detector.service 2>/dev/null || true
 systemctl stop dnsmasq 2>/dev/null || true
 systemctl disable dnsmasq 2>/dev/null || true
 
-# Esperar a que dnsmasq se detenga (máx 5 segundos)
-echo "  Esperando a que dnsmasq se detenga..."
+# Wait for dnsmasq to stop (max 5 seconds)
+echo "  Waiting for dnsmasq to stop..."
 for _ in $(seq 1 5); do
     if ! pgrep -x dnsmasq >/dev/null 2>&1; then
         break
@@ -65,26 +65,26 @@ for _ in $(seq 1 5); do
 done
 
 if pgrep -x dnsmasq >/dev/null 2>&1; then
-    echo "  Matando procesos dnsmasq residuales (SIGKILL)..."
+    echo "  Killing residual dnsmasq processes (SIGKILL)..."
     pkill -9 dnsmasq 2>/dev/null || true
 fi
 
-# Verificar que el puerto 53 está libre
+# Verify port 53 is free
 if ss -tulpn 2>/dev/null | grep -q ":53 "; then
-    echo "  ⚠ Puerto 53 aún ocupado, intentando liberar..."
+    echo "  ⚠ Port 53 still in use, trying to release it..."
     fuser -k 53/udp 2>/dev/null || true
     fuser -k 53/tcp 2>/dev/null || true
-    # Breve espera para que el kernel libere el socket
+    # Brief wait for the kernel to release the socket.
     sleep 0.5
 fi
 
-echo "[2/7] Deshabilitando servicios..."
+echo "[2/7] Disabling services..."
 systemctl disable openpath-dnsmasq.timer 2>/dev/null || true
 systemctl disable openpath-agent-update.timer 2>/dev/null || true
 systemctl disable dnsmasq-watchdog.timer 2>/dev/null || true
 systemctl disable captive-portal-detector.service 2>/dev/null || true
 
-echo "[3/7] Eliminando servicios systemd..."
+echo "[3/7] Removing systemd services..."
 rm -f /etc/systemd/system/openpath-dnsmasq.service
 rm -f /etc/systemd/system/openpath-dnsmasq.timer
 rm -f /etc/systemd/system/openpath-agent-update.service
@@ -95,105 +95,105 @@ rm -f /etc/systemd/system/captive-portal-detector.service
 rm -rf /etc/systemd/system/dnsmasq.service.d
 systemctl daemon-reload
 
-echo "[4/7] Restaurando DNS..."
+echo "[4/7] Restoring DNS..."
 
-# Desproteger resolv.conf
+# Unprotect resolv.conf
 chattr -i /etc/resolv.conf 2>/dev/null || true
 
-# Detectar gateway (necesario para fallback compatible con portales cautivos)
+# Detect gateway for captive-portal compatible fallback.
 GATEWAY=$(ip route | grep default | awk '{print $3}' | head -1)
-echo "  Gateway detectado: ${GATEWAY:-ninguno}"
+echo "  Detected gateway: ${GATEWAY:-none}"
 
-# Función para obtener DNS inteligente (gateway primero, luego externos)
+# Resolve fallback DNS (gateway first, then external DNS).
 get_fallback_dns() {
     local dns=""
-    # Intentar obtener DNS de NetworkManager
+    # Try NetworkManager DNS first.
     if command -v nmcli >/dev/null 2>&1; then
         dns=$(nmcli dev show 2>/dev/null | grep -i "IP4.DNS\[1\]" | awk '{print $2}' | head -1)
     fi
-    # Si no hay DNS de NM, usar gateway (funciona en portales cautivos)
+    # If NetworkManager has no DNS, use the gateway for captive portals.
     if [ -z "$dns" ] && [ -n "$GATEWAY" ]; then
         dns="$GATEWAY"
     fi
-    # Fallback final
+    # Final fallback.
     [ -z "$dns" ] && dns="8.8.8.8"
     echo "$dns"
 }
 
-# PASO 1: Restaurar systemd-resolved PRIMERO (antes de tocar resolv.conf)
-echo "  Restaurando systemd-resolved..."
+# Step 1: Restore systemd-resolved first, before changing resolv.conf.
+echo "  Restoring systemd-resolved..."
 
-# Desenmascar por si estaba enmascarado (versiones antiguas)
+# Unmask in case older versions masked it.
 systemctl unmask systemd-resolved.socket 2>/dev/null || true
 systemctl unmask systemd-resolved 2>/dev/null || true
 
-# Habilitar socket PRIMERO, luego servicio
+# Enable socket first, then service.
 systemctl enable systemd-resolved.socket 2>/dev/null || true
 systemctl enable systemd-resolved 2>/dev/null || true
 
-# Iniciar socket PRIMERO, luego servicio
+# Start socket first, then service.
 systemctl start systemd-resolved.socket 2>/dev/null || true
 systemctl start systemd-resolved 2>/dev/null || true
 
-# Esperar a que systemd-resolved cree el stub (máx 10 segundos)
-echo "  Esperando a systemd-resolved..."
+# Wait for systemd-resolved to create the stub (max 10 seconds).
+echo "  Waiting for systemd-resolved..."
 for _ in $(seq 1 10); do
     if [ -f /run/systemd/resolve/stub-resolv.conf ]; then
-        echo "  ✓ systemd-resolved activo"
+        echo "  ✓ systemd-resolved active"
         break
     fi
     sleep 1
 done
 
-# PASO 2: Restaurar resolv.conf
+# Step 2: Restore resolv.conf.
 rm -f /etc/resolv.conf 2>/dev/null || true
 
 if systemctl is-active --quiet systemd-resolved; then
-    # systemd-resolved funciona: usar su stub
-    echo "  Usando systemd-resolved stub..."
+    # systemd-resolved works: use its stub.
+    echo "  Using systemd-resolved stub..."
     if ! ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf 2>/dev/null; then
-        echo "  ⚠ No se pudo recrear el symlink de /etc/resolv.conf; copiando stub..."
+        echo "  ⚠ Could not recreate /etc/resolv.conf symlink; copying stub..."
         cp /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
     fi
 elif [ -f /var/lib/openpath/resolv.conf.symlink.backup ]; then
-    # Intentar restaurar backup de symlink
+    # Try restoring symlink backup.
     target=$(cat /var/lib/openpath/resolv.conf.symlink.backup)
     if [ -f "$target" ]; then
-        echo "  Restaurando symlink desde backup..."
+        echo "  Restoring symlink from backup..."
         ln -sf "$target" /etc/resolv.conf
     else
-        # El target no existe, crear resolv.conf con DNS inteligente
-        echo "  Target del backup no existe, usando DNS del gateway..."
+        # Target does not exist; create resolv.conf with fallback DNS.
+        echo "  Backup target does not exist; using gateway DNS..."
         FALLBACK_DNS=$(get_fallback_dns)
         cat > /etc/resolv.conf << EOF
-# Restaurado por uninstall.sh (fallback)
+# Restored by uninstall.sh (fallback)
 nameserver $FALLBACK_DNS
 nameserver 8.8.8.8
 EOF
     fi
 elif [ -f /var/lib/openpath/resolv.conf.backup ]; then
-    # Restaurar backup de archivo
-    echo "  Restaurando resolv.conf desde backup..."
+    # Restore file backup.
+    echo "  Restoring resolv.conf from backup..."
     cp /var/lib/openpath/resolv.conf.backup /etc/resolv.conf
 else
-    # Sin backups: crear resolv.conf con DNS inteligente
-    # Usar gateway como DNS primario (funciona en portales cautivos)
-    echo "  Sin backups, usando DNS del gateway/DHCP..."
+    # No backups: create resolv.conf with fallback DNS.
+    # Use gateway as primary DNS for captive portal compatibility.
+    echo "  No backups found; using gateway/DHCP DNS..."
     FALLBACK_DNS=$(get_fallback_dns)
     cat > /etc/resolv.conf << EOF
-# Restaurado por uninstall.sh (sin backup previo)
-# Usando gateway/DHCP DNS para compatibilidad con portales cautivos
+# Restored by uninstall.sh (no previous backup)
+# Using gateway/DHCP DNS for captive portal compatibility
 nameserver $FALLBACK_DNS
 nameserver 8.8.8.8
 EOF
 fi
 
-echo "[5/7] Limpiando firewall..."
+echo "[5/7] Cleaning firewall..."
 iptables -F OUTPUT 2>/dev/null || true
 iptables -P OUTPUT ACCEPT 2>/dev/null || true
 iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 
-echo "[6/7] Eliminando archivos..."
+echo "[6/7] Removing files..."
 CHROMIUM_EXT_ID=""
 if [ -f /var/lib/openpath/browser-extension/extension-id ]; then
     CHROMIUM_EXT_ID=$(cat /var/lib/openpath/browser-extension/extension-id 2>/dev/null || true)
@@ -218,7 +218,7 @@ rm -rf /run/dnsmasq
 rm -f /etc/sudoers.d/openpath
 rm -f /etc/NetworkManager/dispatcher.d/99-openpath-captive-check
 
-# Limpiar políticas de navegadores
+# Clean browser policies.
 if [ -d /etc/firefox/policies ]; then
     echo '{"policies": {}}' > /etc/firefox/policies/policies.json 2>/dev/null || true
 fi
@@ -226,8 +226,8 @@ rm -f /etc/chromium/policies/managed/url-whitelist.json 2>/dev/null || true
 rm -f /etc/chromium-browser/policies/managed/url-whitelist.json 2>/dev/null || true
 rm -f /etc/opt/chrome/policies/managed/url-whitelist.json 2>/dev/null || true
 
-# Eliminar extensión de Firefox
-echo "  Eliminando extensión Firefox..."
+# Remove Firefox extension.
+echo "  Removing Firefox extension..."
 rm -rf "/usr/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/openpath-block-monitor@openpath" 2>/dev/null || true
 rm -rf "/usr/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/monitor-bloqueos@whitelist-system" 2>/dev/null || true
 rm -f /usr/lib/mozilla/native-messaging-hosts/whitelist_native_host.json 2>/dev/null || true
@@ -240,7 +240,7 @@ if [ -n "$CHROMIUM_EXT_ID" ]; then
     rm -f "/usr/share/microsoft-edge/extensions/$CHROMIUM_EXT_ID.json" 2>/dev/null || true
 fi
 
-# Eliminar autoconfig de Firefox (restaurar verificación de firmas)
+# Remove Firefox autoconfig and restore signature verification.
 for firefox_dir in /usr/lib/firefox-esr /usr/lib/firefox /opt/firefox; do
     if [ -d "$firefox_dir" ]; then
         rm -f "$firefox_dir/defaults/pref/autoconfig.js" 2>/dev/null || true
@@ -248,55 +248,55 @@ for firefox_dir in /usr/lib/firefox-esr /usr/lib/firefox /opt/firefox; do
     fi
 done
 
-# Eliminar preferencias de APT para Mozilla PPA
+# Remove Mozilla PPA APT preferences.
 rm -f /etc/apt/preferences.d/mozilla-firefox 2>/dev/null || true
 
 echo ""
-echo "[7/7] Verificando conectividad..."
+echo "[7/7] Checking connectivity..."
 
-# Función para detectar portal cautivo
+# Detect captive portal.
 detect_captive_portal() {
-    # Verificar si hay gateway accesible
+    # Verify whether the gateway is reachable.
     if [ -n "$GATEWAY" ] && ping -c 1 -W 2 "$GATEWAY" >/dev/null 2>&1; then
-        # Intentar detectar portal cautivo via HTTP
+        # Try captive portal detection via HTTP.
         local response
         response=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://detectportal.firefox.com/success.txt" 2>/dev/null)
-        # 200 = sin portal (autenticado), 302/301/otros = portal cautivo
+        # 200 = no portal/authenticated; redirects or other responses = captive portal.
         if [ "$response" = "200" ]; then
-            return 1  # No hay portal cautivo (o ya autenticado)
+            return 1
         elif [ -n "$response" ]; then
-            return 0  # Portal cautivo detectado
+            return 0
         fi
-        # Sin respuesta HTTP pero gateway accesible = probablemente portal cautivo bloqueando
+        # No HTTP response but reachable gateway: probably captive portal blocking.
         return 0
     fi
-    return 1  # No se puede determinar (sin gateway)
+    return 1
 }
 
-# Test de conectividad
+# Connectivity test.
 CONN_OK=false
 DNS_OK=false
 CAPTIVE_PORTAL=false
 
 if ping -c 2 8.8.8.8 >/dev/null 2>&1; then
-    echo "  ✓ Conectividad IP: OK"
+    echo "  ✓ IP connectivity: OK"
     CONN_OK=true
 else
-    # Sin conectividad externa - verificar si es portal cautivo
+    # No external connectivity; check for captive portal.
     if [ -n "$GATEWAY" ] && ping -c 1 -W 2 "$GATEWAY" >/dev/null 2>&1; then
-        echo "  ℹ Gateway accesible ($GATEWAY) pero sin Internet externo"
+        echo "  ℹ Gateway reachable ($GATEWAY), but external Internet is unavailable"
         if detect_captive_portal; then
-            echo "  ℹ Portal cautivo detectado"
+            echo "  ℹ Captive portal detected"
             CAPTIVE_PORTAL=true
         else
-            echo "  ✗ Sin conectividad IP externa"
+            echo "  ✗ No external IP connectivity"
         fi
     else
-        echo "  ✗ Sin conectividad de red"
+        echo "  ✗ No network connectivity"
     fi
 fi
 
-# Test DNS con múltiples métodos
+# DNS test with multiple methods.
 if timeout 5 nslookup google.com >/dev/null 2>&1; then
     echo "  ✓ DNS: OK"
     DNS_OK=true
@@ -307,60 +307,60 @@ elif timeout 5 dig google.com +short >/dev/null 2>&1; then
     echo "  ✓ DNS: OK (via dig)"
     DNS_OK=true
 else
-    echo "  ✗ DNS: FALLO"
+    echo "  ✗ DNS: FAILED"
 fi
 
-# Si DNS falla pero hay conectividad, intentar reparación
+# If DNS fails but connectivity exists, try repair.
 if [ "$CONN_OK" = true ] && [ "$DNS_OK" = false ]; then
     echo ""
-    echo "  Intentando reparación de DNS..."
+    echo "  Attempting DNS repair..."
 
-    # Reintentar systemd-resolved
+    # Retry systemd-resolved.
     systemctl restart systemd-resolved 2>/dev/null || true
     sleep 2
 
     if systemctl is-active --quiet systemd-resolved; then
-        # Forzar uso del stub
+        # Force stub usage.
         rm -f /etc/resolv.conf 2>/dev/null || true
         ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-        echo "  Reconfigurado a systemd-resolved"
+        echo "  Reconfigured to systemd-resolved"
     else
-        # systemd-resolved no funciona, usar gateway directamente
+        # systemd-resolved is unavailable; use gateway directly.
         FALLBACK_DNS=$(get_fallback_dns)
         cat > /etc/resolv.conf << EOF
 nameserver $FALLBACK_DNS
 nameserver 8.8.8.8
 EOF
-        echo "  Reconfigurado a DNS: $FALLBACK_DNS"
+        echo "  Reconfigured DNS: $FALLBACK_DNS"
     fi
 
-    # Verificar de nuevo
+    # Verify again.
     sleep 1
     if timeout 5 nslookup google.com >/dev/null 2>&1; then
-        echo "  ✓ DNS reparado correctamente"
+        echo "  ✓ DNS repaired successfully"
         DNS_OK=true
     else
-        echo "  ⚠ DNS aún con problemas - puede requerir reinicio"
+        echo "  ⚠ DNS still has problems - a restart may be required"
     fi
 fi
 
 echo ""
 echo "======================================================"
-echo "  ✓ DESINSTALACIÓN COMPLETADA"
+echo "  ✓ UNINSTALL COMPLETED"
 echo "======================================================"
 echo ""
 
 if [ "$CAPTIVE_PORTAL" = true ]; then
-    echo "Sistema restaurado correctamente."
+    echo "System restored successfully."
     echo ""
-    echo "Portal cautivo detectado - DNS configurado para funcionar tras autenticación."
-    echo "→ Abre un navegador para autenticarte en la red WiFi."
+    echo "Captive portal detected - DNS configured to work after authentication."
+    echo "→ Open a browser to authenticate on the Wi-Fi network."
 elif [ "$CONN_OK" = true ] && [ "$DNS_OK" = true ]; then
-    echo "Sistema restaurado correctamente."
+    echo "System restored successfully."
 elif [ "$CONN_OK" = true ]; then
-    echo "⚠ Conectividad OK pero DNS puede necesitar reinicio del sistema."
+    echo "⚠ Connectivity OK but DNS may require a system restart."
 else
-    echo "⚠ Sin conectividad de red detectada."
-    echo "  Verifica la conexión de red."
+    echo "⚠ No network connectivity detected."
+    echo "  Check the network connection."
 fi
 echo ""

@@ -88,7 +88,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
           <button
             onClick={() => onToggleSelection?.(rule.id)}
             className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
-            title={isSelected ? 'Deseleccionar' : 'Seleccionar'}
+            title={isSelected ? 'Deselect' : 'Select'}
             disabled={isEditing}
           >
             {isSelected ? (
@@ -118,7 +118,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
             )}
             onClick={() => hasOnSave && onStartEdit(rule)}
             onDoubleClick={() => hasOnSave && onStartEdit(rule)}
-            title={hasOnSave ? 'Haz clic para editar' : undefined}
+            title={hasOnSave ? 'Click to edit' : undefined}
           >
             {rule.value}
           </span>
@@ -149,7 +149,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
             value={editComment}
             onChange={(e) => onSetEditComment(e.target.value)}
             onKeyDown={onHandleEditKeyDown}
-            placeholder="Comentario (opcional)"
+            placeholder="Comment (optional)"
             className="w-full px-2 py-1 text-sm border border-amber-300 rounded focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none bg-white"
             data-testid="edit-comment-input"
           />
@@ -161,7 +161,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
             )}
             onClick={() => hasOnSave && onStartEdit(rule)}
             onDoubleClick={() => hasOnSave && onStartEdit(rule)}
-            title={hasOnSave ? 'Haz clic para editar' : undefined}
+            title={hasOnSave ? 'Click to edit' : undefined}
           >
             {rule.comment ?? '-'}
           </span>
@@ -178,7 +178,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
                 onClick={() => void onSaveEdit()}
                 disabled={isSaving || !editValue.trim()}
                 className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Guardar (Enter)"
+                title="Save (Enter)"
                 data-testid="save-edit-button"
               >
                 {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
@@ -187,7 +187,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
                 onClick={onCancelEdit}
                 disabled={isSaving}
                 className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors disabled:opacity-50"
-                title="Cancelar (Esc)"
+                title="Cancel (Esc)"
                 data-testid="cancel-edit-button"
               >
                 <X size={14} />
@@ -199,7 +199,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
                 <button
                   onClick={() => onStartEdit(rule)}
                   className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                  title="Editar"
+                  title="Edit"
                   data-testid="edit-button"
                 >
                   <Edit2 size={14} />
@@ -210,8 +210,8 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
                 className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
                 title={
                   rule.type === 'whitelist' && rule.source === 'auto_extension'
-                    ? 'Revocar autoaprobación'
-                    : 'Eliminar'
+                    ? 'Revoke auto-approval'
+                    : 'Delete'
                 }
               >
                 <Trash2 size={14} />

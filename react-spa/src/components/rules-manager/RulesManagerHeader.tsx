@@ -21,12 +21,12 @@ export function RulesManagerHeader({
         <button
           onClick={onBack}
           className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
-          title="Volver a grupos"
+          title="Back to groups"
         >
           <ArrowLeft size={20} />
         </button>
         <div>
-          <h2 className="text-xl font-bold text-slate-900">Gestión de Reglas</h2>
+          <h2 className="text-xl font-bold text-slate-900">Rules Management</h2>
           <p className="text-slate-500 text-sm">{groupName}</p>
         </div>
       </div>
@@ -40,10 +40,10 @@ export function RulesManagerHeader({
               ? 'bg-white text-slate-900 shadow-sm'
               : 'text-slate-600 hover:text-slate-900'
           )}
-          title="Vista plana"
+          title="Flat view"
         >
           <List size={16} />
-          <span className="hidden sm:inline">Lista</span>
+          <span className="hidden sm:inline">List</span>
         </button>
         <button
           onClick={() => onViewModeChange('hierarchical')}
@@ -53,10 +53,10 @@ export function RulesManagerHeader({
               ? 'bg-white text-slate-900 shadow-sm'
               : 'text-slate-600 hover:text-slate-900'
           )}
-          title="Vista jerárquica"
+          title="Hierarchical view"
         >
           <GitBranch size={16} />
-          <span className="hidden sm:inline">Árbol</span>
+          <span className="hidden sm:inline">Tree</span>
         </button>
       </div>
     </div>

@@ -90,8 +90,8 @@ export function useDomainRequestsBulkActions({
 
     setBulkMessage(
       failedCount > 0
-        ? `Aprobadas ${successCount}. Fallaron ${failedCount}.`
-        : `Aprobadas ${successCount} solicitudes.`
+        ? `Approved ${successCount}. Failed ${failedCount}.`
+        : `Approved ${successCount} requests.`
     );
     setBulkFailedIds(failedIds);
     setBulkFailedMode(failedCount > 0 ? 'approve' : null);
@@ -133,8 +133,8 @@ export function useDomainRequestsBulkActions({
 
     setBulkMessage(
       failedCount > 0
-        ? `Rechazadas ${successCount}. Fallaron ${failedCount}.`
-        : `Rechazadas ${successCount} solicitudes.`
+        ? `Rejected ${successCount}. Failed ${failedCount}.`
+        : `Rejected ${successCount} requests.`
     );
     setBulkFailedIds(failedIds);
     setBulkFailedMode(failedCount > 0 ? 'reject' : null);
@@ -149,7 +149,7 @@ export function useDomainRequestsBulkActions({
       (request) => request.status === 'pending' && bulkFailedIds.includes(request.id)
     );
     if (retryCandidates.length === 0) {
-      setBulkMessage('No hay solicitudes fallidas pendientes para reintentar.');
+      setBulkMessage('No failed pending requests to retry.');
       setBulkFailedIds([]);
       setBulkFailedMode(null);
       return;

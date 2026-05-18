@@ -230,7 +230,7 @@ function Remove-OpenPathInstallRoot {
 }
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  OpenPath DNS para Windows - Desinstalador" -ForegroundColor Cyan
+Write-Host "  OpenPath DNS for Windows - Uninstaller" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -255,19 +255,19 @@ if (Test-Path "$OpenPathRoot\lib\Services.psm1") {
 }
 
 # Step 1: Remove scheduled tasks
-Write-Host "[1/6] Eliminando tareas programadas..." -ForegroundColor Yellow
+Write-Host "[1/6] Removing scheduled tasks..." -ForegroundColor Yellow
 Stop-OpenPathScheduledTask
-Write-Host "  Tareas eliminadas" -ForegroundColor Green
+Write-Host "  Scheduled tasks removed" -ForegroundColor Green
 
 # Step 2: Restore DNS
-Write-Host "[2/6] Restaurando configuracion DNS..." -ForegroundColor Yellow
+Write-Host "[2/6] Restoring DNS configuration..." -ForegroundColor Yellow
 Restore-OpenPathOriginalDns
-Write-Host "  DNS restaurado" -ForegroundColor Green
+Write-Host "  DNS restored" -ForegroundColor Green
 
 # Step 3: Remove firewall rules
-Write-Host "[3/6] Eliminando reglas de firewall..." -ForegroundColor Yellow
+Write-Host "[3/6] Removing firewall rules..." -ForegroundColor Yellow
 Remove-OpenPathFirewallRules
-Write-Host "  Reglas eliminadas" -ForegroundColor Green
+Write-Host "  Firewall rules removed" -ForegroundColor Green
 
 if (Get-Command -Name Remove-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue) {
     Remove-OpenPathNonAdminAppControl | Out-Null
@@ -277,7 +277,7 @@ else {
 }
 
 # Step 4: Remove browser policies
-Write-Host "[4/6] Eliminando politicas de navegadores..." -ForegroundColor Yellow
+Write-Host "[4/6] Removing browser policies..." -ForegroundColor Yellow
 
 # Firefox
 $firefoxPolicies = @(
@@ -326,10 +326,10 @@ foreach ($path in $regPaths) {
         Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
-Write-Host "  Politicas eliminadas" -ForegroundColor Green
+Write-Host "  Browser policies removed" -ForegroundColor Green
 
 # Step 5: Stop and optionally remove Acrylic
-Write-Host "[5/6] Deteniendo Acrylic DNS..." -ForegroundColor Yellow
+Write-Host "[5/6] Stopping Acrylic DNS..." -ForegroundColor Yellow
 $acrylicService = Get-Service -DisplayName "*Acrylic*" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($acrylicService) {
     Stop-Service -Name $acrylicService.Name -Force -ErrorAction SilentlyContinue
@@ -344,36 +344,36 @@ if ($acrylicService) {
         if ($remainingAcrylicService) {
             & sc.exe delete AcrylicDNSProxySvc 2>$null | Out-Null
         }
-        Write-Host "  Acrylic detenido y desinstalado" -ForegroundColor Green
+        Write-Host "  Acrylic stopped and uninstalled" -ForegroundColor Green
     }
     else {
-        Write-Host "  Acrylic detenido (mantenido instalado)" -ForegroundColor Green
+        Write-Host "  Acrylic stopped (kept installed)" -ForegroundColor Green
     }
 }
 else {
-    Write-Host "  Acrylic no encontrado" -ForegroundColor Yellow
+    Write-Host "  Acrylic not found" -ForegroundColor Yellow
 }
 
 # Step 6: Remove whitelist files
-Write-Host "[6/6] Eliminando archivos..." -ForegroundColor Yellow
+Write-Host "[6/6] Removing files..." -ForegroundColor Yellow
 if (Test-Path $OpenPathRoot) {
     Stop-OpenPathRootedProcess
 
     if ($KeepLogs) {
         Remove-OpenPathInstallRoot -KeepLogs
-        Write-Host "  Archivos eliminados (logs conservados)" -ForegroundColor Green
+        Write-Host "  Files removed (logs preserved)" -ForegroundColor Green
     }
     else {
         Remove-OpenPathInstallRoot
-        Write-Host "  Archivos eliminados" -ForegroundColor Green
+        Write-Host "  Files removed" -ForegroundColor Green
     }
 }
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
-Write-Host "  DESINSTALACION COMPLETADA" -ForegroundColor Green
+Write-Host "  UNINSTALL COMPLETED" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "El sistema ha sido restaurado a su estado original."
-Write-Host "Puede ser necesario reiniciar para aplicar todos los cambios."
+Write-Host "The system has been restored to its original state."
+Write-Host "A restart may be required to apply all changes."
 Write-Host ""

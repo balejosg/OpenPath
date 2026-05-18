@@ -61,7 +61,7 @@ function useClassroomsListQuery<TResult>(
     hasData: query.data !== undefined,
     loading: query.status === 'pending',
     fetching: query.fetchStatus === 'fetching',
-    error: query.error ? 'Error al cargar aulas' : null,
+    error: query.error ? 'Unable to load classrooms' : null,
     refetchClassrooms,
   };
 }

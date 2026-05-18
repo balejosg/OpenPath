@@ -12,9 +12,9 @@ cmd_status() {
     echo -e "${YELLOW}Servicios:${NC}"
     for svc in dnsmasq openpath-dnsmasq.timer openpath-agent-update.timer dnsmasq-watchdog.timer captive-portal-detector openpath-sse-listener; do
         if systemctl is-active --quiet "$svc" 2>/dev/null; then
-            echo -e "  $svc: ${GREEN}● activo${NC}"
+            echo -e "  $svc: ${GREEN}● active${NC}"
         else
-            echo -e "  $svc: ${RED}● inactivo${NC}"
+            echo -e "  $svc: ${RED}● inactive${NC}"
         fi
     done
 
@@ -25,9 +25,9 @@ cmd_status() {
     status_probe_domain=$(select_allowed_dns_probe_domain)
     status_probe_result=$(resolve_local_dns_probe "$status_probe_domain")
     if dns_probe_result_is_public "$status_probe_result"; then
-        echo -e "  Resolución: ${GREEN}● funcional${NC}"
+        echo -e "  Resolution: ${GREEN}● working${NC}"
     else
-        echo -e "  Resolución: ${RED}● fallando${NC}"
+        echo -e "  Resolution: ${RED}● failing${NC}"
     fi
 
     if [ -f /run/dnsmasq/resolv.conf ]; then
@@ -70,9 +70,9 @@ cmd_status() {
     fi
 
     if is_openpath_request_setup_complete; then
-        echo -e "  Solicitudes: ${GREEN}✓ configuradas${NC}"
+        echo -e "  Requests: ${GREEN}✓ configured${NC}"
     else
-        echo -e "  Solicitudes: ${RED}✗ no configuradas${NC}"
+        echo -e "  Requests: ${RED}✗ not configured${NC}"
         echo "  Falta: $(describe_openpath_request_setup_missing)"
     fi
 
@@ -118,9 +118,9 @@ cmd_status() {
     fi
 
     if systemctl is-active --quiet openpath-sse-listener.service 2>/dev/null; then
-        echo -e "  SSE listener: ${GREEN}● activo${NC}"
+        echo -e "  SSE listener: ${GREEN}● active${NC}"
     else
-        echo -e "  SSE listener: ${YELLOW}● inactivo${NC}"
+        echo -e "  SSE listener: ${YELLOW}● inactive${NC}"
     fi
 
     echo ""
@@ -230,9 +230,9 @@ cmd_check() {
     local blocked_subdomain=false
     local blocked_path=false
     local result=""
-    [ -z "$domain" ] && { echo "Uso: whitelist check <dominio>"; exit 1; }
+    [ -z "$domain" ] && { echo "Usage: openpath check <domain>"; exit 1; }
 
-    echo -e "${BLUE}Verificando: $domain${NC}"
+    echo -e "${BLUE}Checking: $domain${NC}"
     echo ""
 
     normalized_target="$(normalize_check_target "$domain")"
@@ -253,22 +253,22 @@ cmd_check() {
     fi
 
     if [ "$in_whitelist" = true ]; then
-        echo -e "  En whitelist: ${GREEN}✓ SÍ${NC}"
+        echo -e "  In whitelist: ${GREEN}✓ YES${NC}"
     else
-        echo -e "  En whitelist: ${YELLOW}✗ NO${NC}"
+        echo -e "  In whitelist: ${YELLOW}✗ NO${NC}"
     fi
     if [ "$blocked_subdomain" = true ]; then
-        echo -e "  Bloqueado por subdominio: ${GREEN}✓ SÍ${NC}"
+        echo -e "  Blocked by subdomain: ${GREEN}✓ YES${NC}"
     else
-        echo -e "  Bloqueado por subdominio: ${YELLOW}✗ NO${NC}"
+        echo -e "  Blocked by subdomain: ${YELLOW}✗ NO${NC}"
     fi
     if [ "$blocked_path" = true ]; then
-        echo -e "  Bloqueado por ruta: ${GREEN}✓ SÍ${NC}"
+        echo -e "  Blocked by path: ${GREEN}✓ YES${NC}"
     else
-        echo -e "  Bloqueado por ruta: ${YELLOW}✗ NO${NC}"
+        echo -e "  Blocked by path: ${YELLOW}✗ NO${NC}"
     fi
 
-    echo -n "  Resuelve: "
+    echo -n "  Resolves: "
     result=$(resolve_local_dns_probe "$normalized_host")
     if dns_probe_result_is_public "$result"; then
         echo -e "${GREEN}✓${NC} → $(printf '%s\n' "$result" | head -1)"
@@ -453,8 +453,8 @@ cmd_health() {
 }
 
 cmd_force() {
-    echo -e "${BLUE}Forzando aplicación de cambios...${NC}"
-    echo -e "${YELLOW}Se cerrarán los navegadores${NC}"
+    echo -e "${BLUE}Forcing change application...${NC}"
+    echo -e "${YELLOW}Browsers will be closed${NC}"
     echo ""
 
     flush_connections
@@ -465,7 +465,7 @@ cmd_force() {
 }
 
 cmd_enable() {
-    echo -e "${BLUE}Habilitando sistema...${NC}"
+    echo -e "${BLUE}Enabling system...${NC}"
     enable_services
     /usr/local/bin/openpath-update.sh
 
@@ -476,7 +476,7 @@ cmd_enable() {
 }
 
 cmd_disable() {
-    echo -e "${YELLOW}Deshabilitando sistema...${NC}"
+    echo -e "${YELLOW}Disabling system...${NC}"
 
     systemctl stop openpath-dnsmasq.timer
     systemctl stop dnsmasq-watchdog.timer
@@ -487,7 +487,7 @@ cmd_disable() {
 }
 
 cmd_restart() {
-    echo -e "${BLUE}Reiniciando servicios...${NC}"
+    echo -e "${BLUE}Restarting services...${NC}"
 
     systemctl restart dnsmasq
     systemctl restart openpath-dnsmasq.timer
@@ -506,27 +506,27 @@ cmd_restart() {
 }
 
 cmd_help() {
-    echo -e "${BLUE}openpath - Gestión del sistema OpenPath DNS v$VERSION${NC}"
+    echo -e "${BLUE}openpath - OpenPath DNS system management v$VERSION${NC}"
     echo ""
-    echo "Uso: openpath <comando> [opciones]"
+    echo "Usage: openpath <command> [options]"
     echo ""
-    echo "Comandos:"
-    echo "  status          Estado del sistema"
-    echo "  update          Forzar actualización"
-    echo "  test            Probar resolución DNS"
-    echo "  logs            Ver logs en tiempo real"
-    echo "  log [N]         Ver últimas N líneas del log"
-    echo "  domains [texto] Listar dominios (filtrar opcional)"
-    echo "  check <dominio> Verificar si dominio está permitido"
-    echo "  health          Verificar salud del sistema"
-    echo "  force           Forzar aplicación de cambios"
-    echo "  enable          Habilitar sistema"
-    echo "  disable         Deshabilitar sistema"
-    echo "  restart         Reiniciar servicios"
-    echo "  setup           Asistente de configuración (solo modo Aula)"
-    echo "  rotate-token    Rotar token de descarga (modo Aula)"
-    echo "  enroll          Registrar maquina en un aula"
-    echo "  self-update     Actualizar agente a la última versión"
-    echo "  help            Mostrar esta ayuda"
+    echo "Commands:"
+    echo "  status          System status"
+    echo "  update          Force update"
+    echo "  test            Test DNS resolution"
+    echo "  logs            Show logs in real time"
+    echo "  log [N]         Show last N log lines"
+    echo "  domains [texto] List domains (optional filter)"
+    echo "  check <domain>  Check whether a domain is allowed"
+    echo "  health          Check system health"
+    echo "  force           Force change application"
+    echo "  enable          Enable system"
+    echo "  disable         Disable system"
+    echo "  restart         Restart services"
+    echo "  setup           Setup assistant (Classroom mode only)"
+    echo "  rotate-token    Rotate download token (Classroom mode)"
+    echo "  enroll          Register machine in a classroom"
+    echo "  self-update     Update agent to the latest version"
+    echo "  help            Show this help"
     echo ""
 }

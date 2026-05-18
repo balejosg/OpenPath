@@ -28,7 +28,7 @@ resolve_rotation_machine_token() {
 
 resolve_rotation_auth_with_compat() {
     ROTATION_AUTH_TOKEN="$(resolve_rotation_machine_token)"
-    ROTATION_AUTH_SOURCE="token de máquina"
+    ROTATION_AUTH_SOURCE="machine token"
 
     if [ -n "$ROTATION_AUTH_TOKEN" ]; then
         return 0

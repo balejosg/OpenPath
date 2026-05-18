@@ -114,14 +114,14 @@ describe('RulesManager View', () => {
   it('renders view with group name', () => {
     render(<RulesManager {...defaultProps} />);
 
-    expect(screen.getByText('Gestión de Reglas')).toBeInTheDocument();
+    expect(screen.getByText('Rules Management')).toBeInTheDocument();
     expect(screen.getByText('Test Group')).toBeInTheDocument();
   });
 
   it('renders back button', () => {
     render(<RulesManager {...defaultProps} />);
 
-    const backButton = screen.getByTitle('Volver a grupos');
+    const backButton = screen.getByTitle('Back to groups');
     expect(backButton).toBeInTheDocument();
   });
 
@@ -129,21 +129,21 @@ describe('RulesManager View', () => {
     const handleBack = vi.fn();
     render(<RulesManager {...defaultProps} onBack={handleBack} />);
 
-    fireEvent.click(screen.getByTitle('Volver a grupos'));
+    fireEvent.click(screen.getByTitle('Back to groups'));
     expect(handleBack).toHaveBeenCalled();
   });
 
   it('renders search input', () => {
     render(<RulesManager {...defaultProps} />);
 
-    expect(screen.getByPlaceholderText(/buscar en/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/search across/i)).toBeInTheDocument();
   });
 
   it('renders add rule input and button', () => {
     render(<RulesManager {...defaultProps} />);
 
-    expect(screen.getByPlaceholderText(/añadir dominio/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /añadir/i })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/add domain/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add/i })).toBeInTheDocument();
   });
 
   it('renders filter tabs', () => {
@@ -206,7 +206,7 @@ describe('RulesManager - Page-level Drag and Drop', () => {
   it('shows drag overlay when dragging file over page', () => {
     render(<RulesManager {...defaultProps} />);
 
-    const container = screen.getByText('Gestión de Reglas').closest('div[class*="space-y-6"]');
+    const container = screen.getByText('Rules Management').closest('div[class*="space-y-6"]');
     if (!container) throw new Error('Container not found');
 
     const file = createMockFile('domains.txt', 'google.com');
@@ -215,13 +215,13 @@ describe('RulesManager - Page-level Drag and Drop', () => {
     fireEvent.dragEnter(container, { dataTransfer });
 
     expect(screen.getByTestId('page-drag-overlay')).toBeInTheDocument();
-    expect(screen.getByText('Suelta los archivos aquí')).toBeInTheDocument();
+    expect(screen.getByText('Drop files here')).toBeInTheDocument();
   });
 
   it('hides drag overlay when drag leaves', () => {
     render(<RulesManager {...defaultProps} />);
 
-    const container = screen.getByText('Gestión de Reglas').closest('div[class*="space-y-6"]');
+    const container = screen.getByText('Rules Management').closest('div[class*="space-y-6"]');
     if (!container) throw new Error('Container not found');
 
     const file = createMockFile('domains.txt', 'google.com');
@@ -237,7 +237,7 @@ describe('RulesManager - Page-level Drag and Drop', () => {
   it('opens import modal with file content when valid file is dropped', async () => {
     render(<RulesManager {...defaultProps} />);
 
-    const container = screen.getByText('Gestión de Reglas').closest('div[class*="space-y-6"]');
+    const container = screen.getByText('Rules Management').closest('div[class*="space-y-6"]');
     if (!container) throw new Error('Container not found');
 
     const file = createMockFile('domains.txt', 'google.com\nyoutube.com');
@@ -246,14 +246,14 @@ describe('RulesManager - Page-level Drag and Drop', () => {
     fireEvent.drop(container, { dataTransfer });
 
     await waitFor(() => {
-      expect(screen.getByText('Importar reglas')).toBeInTheDocument();
+      expect(screen.getByText('Import rules')).toBeInTheDocument();
     });
   });
 
   it('shows error toast when invalid file is dropped', async () => {
     render(<RulesManager {...defaultProps} />);
 
-    const container = screen.getByText('Gestión de Reglas').closest('div[class*="space-y-6"]');
+    const container = screen.getByText('Rules Management').closest('div[class*="space-y-6"]');
     if (!container) throw new Error('Container not found');
 
     const file = createMockFile('image.png', '', 'image/png');
@@ -269,7 +269,7 @@ describe('RulesManager - Page-level Drag and Drop', () => {
   it('shows skipped files in toast when mixed files are dropped', async () => {
     render(<RulesManager {...defaultProps} />);
 
-    const container = screen.getByText('Gestión de Reglas').closest('div[class*="space-y-6"]');
+    const container = screen.getByText('Rules Management').closest('div[class*="space-y-6"]');
     if (!container) throw new Error('Container not found');
 
     const validFile = createMockFile('domains.txt', 'google.com');
@@ -286,10 +286,10 @@ describe('RulesManager - Page-level Drag and Drop', () => {
   it('renders import button that opens modal', () => {
     render(<RulesManager {...defaultProps} />);
 
-    const importButton = screen.getByRole('button', { name: /importar/i });
+    const importButton = screen.getByRole('button', { name: /import/i });
     expect(importButton).toBeInTheDocument();
 
     fireEvent.click(importButton);
-    expect(screen.getByText('Importar reglas')).toBeInTheDocument();
+    expect(screen.getByText('Import rules')).toBeInTheDocument();
   });
 });

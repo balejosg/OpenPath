@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 export interface NativeBlockedPathsResponse {
   success: boolean;
   paths?: string[];
@@ -238,7 +240,7 @@ export function evaluatePathBlocking(
     return null;
   }
 
-  const hostname = extractHostname(details.url) ?? 'dominio desconocido';
+  const hostname = extractHostname(details.url) ?? t('blockedUnknownDomain');
   const origin = extractHostname(details.originUrl ?? details.documentUrl ?? '');
   const reason = `${ROUTE_BLOCK_REASON}:${matchedRule.rawRule}`;
 

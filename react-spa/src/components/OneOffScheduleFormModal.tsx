@@ -105,23 +105,23 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
     setLocalError('');
 
     if (!groupId) {
-      setLocalError('Selecciona un grupo');
+      setLocalError('Select a group');
       return;
     }
 
     const start = parseDateTimeLocalValue(startAt);
     const end = parseDateTimeLocalValue(endAt);
     if (!start) {
-      setLocalError('Selecciona una fecha/hora de inicio');
+      setLocalError('Select a start date/time');
       return;
     }
     if (!end) {
-      setLocalError('Selecciona una fecha/hora de fin');
+      setLocalError('Select an end date/time');
       return;
     }
 
     if (end.getTime() <= start.getTime()) {
-      setLocalError('La fecha/hora de fin debe ser posterior a la de inicio');
+      setLocalError('End date/time must be after start date/time');
       return;
     }
 
@@ -137,14 +137,14 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
     <Modal
       isOpen
       onClose={handleClose}
-      title={isEdit ? 'Editar Asignación Puntual' : 'Nueva Asignación Puntual'}
+      title={isEdit ? 'Edit One-Off Assignment' : 'New One-Off Assignment'}
       className="max-w-md"
     >
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label htmlFor="oneoff-start" className="block text-sm font-medium text-slate-700 mb-1">
-              Inicio
+              Start
             </label>
             <input
               id="oneoff-start"
@@ -157,7 +157,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
           </div>
           <div>
             <label htmlFor="oneoff-end" className="block text-sm font-medium text-slate-700 mb-1">
-              Fin
+              End
             </label>
             <input
               id="oneoff-end"
@@ -172,7 +172,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
 
         <div>
           <label htmlFor="oneoff-group" className="block text-sm font-medium text-slate-700 mb-1">
-            Grupo de Reglas
+            Rule Group
           </label>
           <GroupSelect
             id="oneoff-group"
@@ -182,7 +182,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
             includeNoneOption={false}
             inactiveBehavior={schedule ? 'disable' : 'hide'}
             disabled={saving || groups.length === 0}
-            emptyLabel="Sin grupos disponibles"
+            emptyLabel="No groups available"
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none disabled:bg-slate-50 disabled:text-slate-500"
           />
         </div>
@@ -199,7 +199,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
             disabled={saving}
             className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
           >
-            Cancelar
+            Cancel
           </button>
           <button
             onClick={handleSubmit}
@@ -207,7 +207,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
             className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {saving && <Loader2 size={16} className="animate-spin" />}
-            {isEdit ? 'Guardar Cambios' : 'Crear Asignación'}
+            {isEdit ? 'Save Changes' : 'Create Assignment'}
           </button>
         </div>
       </div>

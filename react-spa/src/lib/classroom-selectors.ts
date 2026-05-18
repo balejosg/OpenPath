@@ -75,7 +75,7 @@ export function selectClassroomControlConfirmation(params: {
       groupId: params.nextGroupId,
       group: nextGroup ?? null,
       source: 'manual',
-      noneLabel: 'Sin grupo',
+      noneLabel: 'No group',
       revealUnknownId: true,
     }),
   };

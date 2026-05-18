@@ -272,6 +272,6 @@ install_update() {
 
     log "✓ OpenPath updated to v${new_version}"
     echo ""
-    echo "✓ Actualización completada: v${previous_version} → v${new_version}"
-    echo "  Los servicios se han reiniciado automáticamente."
+    echo "✓ Update completed: v${previous_version} → v${new_version}"
+    echo "  Services have been restarted automatically."
 }

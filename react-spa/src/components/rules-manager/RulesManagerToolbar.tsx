@@ -50,7 +50,7 @@ export function RulesManagerToolbar({
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder={`Buscar en ${String(countsAll)} reglas...`}
+            placeholder={`Search across ${String(countsAll)} rules...`}
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
@@ -63,7 +63,7 @@ export function RulesManagerToolbar({
               <div className="flex-1 sm:w-80">
                 <input
                   type="text"
-                  placeholder="Añadir dominio, subdominio o ruta..."
+                  placeholder="Add domain, subdomain, or path..."
                   value={newValue}
                   onChange={(event) => onInputChange(event.target.value)}
                   onKeyDown={onAddKeyDown}
@@ -82,16 +82,16 @@ export function RulesManagerToolbar({
                 size="md"
               >
                 <Plus size={16} className="mr-1" />
-                Añadir
+                Add
               </Button>
               <Button
                 variant="outline"
                 onClick={onOpenImport}
                 size="md"
-                title="Importar múltiples reglas"
+                title="Import multiple rules"
               >
                 <Upload size={16} className="mr-1" />
-                Importar
+                Import
               </Button>
             </>
           )}
@@ -102,7 +102,7 @@ export function RulesManagerToolbar({
       {detectedType && !inputError && !validationError && (
         <p className="text-xs text-slate-500 flex items-center gap-1 -mt-2">
           <Info size={12} />
-          Se añadirá como:{' '}
+          Will be added as:{' '}
           <span
             className={cn(
               'font-medium',
@@ -112,7 +112,7 @@ export function RulesManagerToolbar({
             {getRuleTypeBadge(detectedType.type)}
           </span>
           {detectedType.confidence === 'medium' && (
-            <span className="text-amber-600"> (sugerido)</span>
+            <span className="text-amber-600"> (suggested)</span>
           )}
         </p>
       )}

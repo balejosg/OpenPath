@@ -48,7 +48,7 @@ const GoogleLoginButton: React.FC<GoogleLoginButtonProps> = ({ onSuccess, disabl
         {!isLoaded && disabled !== true && (
           <div
             className="w-[300px] h-10 bg-slate-100 animate-pulse rounded-lg border border-slate-200"
-            aria-label="Cargando botón de Google..."
+            aria-label="Loading Google button..."
           />
         )}
         {/* 

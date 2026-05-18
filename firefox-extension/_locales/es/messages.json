@@ -1,23 +1,23 @@
 {
   "appName": { "message": "Monitor de Bloqueos de OpenPath" },
   "appDescription": {
-    "message": "Muestra bloqueos de red de OpenPath, ayuda a solicitar acceso y comprueba la whitelist local sin analiticas ni telemetria."
+    "message": "Muestra los bloqueos de red de OpenPath, ayuda a solicitar acceso y comprueba la lista de permitidos local sin analíticas ni telemetría."
   },
-  "actionTitle": { "message": "Monitor de Bloqueos" },
-  "popupNativeMessagingAvailableTitle": { "message": "Native Messaging disponible" },
+  "actionTitle": { "message": "Monitor de bloqueos" },
+  "popupNativeMessagingAvailableTitle": { "message": "Mensajería nativa disponible" },
   "popupTabLabel": { "message": "Pestaña:" },
-  "popupBlockedDomainsTitle": { "message": "Dominios Bloqueados" },
+  "popupBlockedDomainsTitle": { "message": "Dominios bloqueados" },
   "popupEmptyMessage": { "message": "No hay dominios bloqueados en esta pestaña" },
-  "popupVerifyResultsTitle": { "message": "Resultado de Verificación" },
-  "popupRequestTitle": { "message": "Solicitar Dominio" },
+  "popupVerifyResultsTitle": { "message": "Resultado de verificación" },
+  "popupRequestTitle": { "message": "Solicitar dominio" },
   "popupSelectDomain": { "message": "Seleccionar dominio..." },
   "popupRequestReasonPlaceholder": { "message": "Motivo de la solicitud..." },
-  "popupSubmitRequest": { "message": "Enviar Solicitud" },
+  "popupSubmitRequest": { "message": "Enviar solicitud" },
   "popupCopyTitle": { "message": "Copiar lista al portapapeles" },
   "popupCopyButton": { "message": "Copiar" },
-  "popupVerifyTitle": { "message": "Verificar dominios en whitelist local" },
+  "popupVerifyTitle": { "message": "Comprobar dominios en la lista de permitidos local" },
   "popupVerifyButton": { "message": "Verificar" },
-  "popupRequestButtonTitle": { "message": "Solicitar añadir dominio a whitelist" },
+  "popupRequestButtonTitle": { "message": "Solicitar añadir el dominio a la lista de permitidos" },
   "popupRequestButton": { "message": "Solicitar" },
   "popupClearTitle": { "message": "Limpiar lista de bloqueos" },
   "popupClearButton": { "message": "Limpiar" },
@@ -26,54 +26,79 @@
   "popupRetryLocalUpdateTitle": { "message": "Reintentar actualización local" },
   "popupRetryLocalUpdate": { "message": "Reintentar" },
   "popupUnknownOrigin": { "message": "desconocido" },
+  "popupUnknownTab": { "message": "Desconocido" },
+  "popupLocalPage": { "message": "Página local" },
+  "popupNoActiveTab": { "message": "Sin pestaña activa" },
+  "popupInvalidTab": { "message": "Error: pestaña no válida" },
   "popupSelectDomainAndReason": { "message": "Selecciona un dominio y escribe un motivo" },
   "popupIncompleteRequestConfig": { "message": "Configuración incompleta para solicitar dominios" },
   "popupFirefoxDataPermissionUnsupported": {
-    "message": "Esta version de Firefox no es compatible con el permiso de datos requerido para enviar solicitudes."
+    "message": "Esta versión de Firefox no es compatible con el permiso de datos requerido para enviar solicitudes."
   },
   "popupUnknownError": { "message": "Error desconocido" },
-  "popupTimeoutServerNoResponse": { "message": "Timeout - servidor no responde" },
+  "popupTimeoutServerNoResponse": {
+    "message": "Tiempo de espera agotado: el servidor no responde"
+  },
   "popupConnectionError": { "message": "Error de conexión" },
   "popupNativeCommunicationError": { "message": "Error de comunicación" },
   "popupVerifying": { "message": "Verificando..." },
-  "popupConsultingNativeHost": { "message": "Consultando host nativo..." },
-  "popupNativeHostCommunicationError": { "message": "Error al comunicar con el host nativo" },
-  "popupVerifyResetButton": { "message": "Verificar en Whitelist" },
+  "popupConsultingNativeHost": { "message": "Consultando el host nativo..." },
+  "popupNativeHostCommunicationError": { "message": "Error al comunicarse con el host nativo" },
+  "popupVerifyResetButton": { "message": "Comprobar en la lista de permitidos" },
   "popupNoResults": { "message": "No hay resultados" },
   "popupRequestSendingButton": { "message": "Enviando..." },
   "popupSendingRequest": { "message": "Enviando solicitud..." },
   "popupRequestSentToast": { "message": "Solicitud enviada" },
   "popupRequestSendErrorToast": { "message": "Error al enviar" },
-  "popupLocalAllowlistUpdated": { "message": "Whitelist local actualizada" },
-  "popupLocalAllowlistUpdateFailed": { "message": "No se pudo actualizar whitelist local" },
+  "popupLocalAllowlistUpdated": { "message": "Lista de permitidos local actualizada" },
+  "popupLocalAllowlistUpdateFailed": {
+    "message": "No se pudo actualizar la lista de permitidos local"
+  },
   "popupLocalAllowlistRetryError": { "message": "Error al reintentar actualización local" },
   "popupCopiedClipboard": { "message": "Copiado al portapapeles" },
   "popupCopyError": { "message": "Error al copiar" },
   "popupListCleared": { "message": "Lista limpiada" },
   "popupAllowed": { "message": "PERMITIDO" },
   "popupBlocked": { "message": "BLOQUEADO" },
+  "popupStatusPending": { "message": "Pendiente" },
+  "popupStatusAutoApproved": { "message": "Aprobado automáticamente" },
+  "popupStatusDuplicate": { "message": "Duplicado" },
+  "popupStatusLocalUpdateError": { "message": "Error de actualización local" },
+  "popupStatusApiError": { "message": "Error de API" },
+  "popupStatusDetected": { "message": "Detectado" },
+  "popupNativeHostUnavailable": { "message": "Host nativo no disponible" },
+  "popupNativeHostAvailable": { "message": "Host nativo disponible" },
+  "popupNativeHostVersion": {
+    "message": "Host nativo v$VERSION$",
+    "placeholders": { "version": { "content": "$1" } }
+  },
+  "popupNativeHostConnectError": { "message": "No se pudo conectar con el host nativo" },
+  "popupLocalUpdateRetrying": { "message": "Reintentando la actualización local" },
+  "popupLocalUpdateCompleted": { "message": "Actualización local completada" },
+  "popupLocalUpdateStillFailing": { "message": "La actualización local sigue fallando" },
+  "blockedUnknownDomain": { "message": "dominio desconocido" },
   "requestSentForDomain": {
     "message": "Solicitud enviada para $DOMAIN$. Queda pendiente de aprobación.",
     "placeholders": { "domain": { "content": "$1" } }
   },
   "blockedPageTitle": { "message": "Sitio bloqueado" },
-  "blockedPageHeading": { "message": "Este sitio esta bloqueado por ahora" },
+  "blockedPageHeading": { "message": "Este sitio está bloqueado por ahora" },
   "blockedPageMessage": {
-    "message": "Si forma parte de tu actividad, puedes pedir que lo revisen. La solicitud quedara pendiente hasta que la aprueben."
+    "message": "Si forma parte de tu actividad, puedes pedir que lo revisen. La solicitud quedará pendiente hasta que la aprueben."
   },
   "blockedRequestedSiteAria": { "message": "Sitio solicitado" },
   "blockedRequestedSiteLabel": { "message": "Sitio solicitado" },
-  "blockedReasonLabel": { "message": "Por que lo necesitas?" },
+  "blockedReasonLabel": { "message": "¿Por qué lo necesitas?" },
   "blockedReasonPlaceholder": { "message": "Ejemplo: lo necesito para la actividad de clase" },
   "blockedSubmit": { "message": "Solicitar desbloqueo" },
   "blockedSecondaryActionsAria": { "message": "Acciones secundarias" },
   "blockedGoBack": { "message": "Volver" },
   "blockedCopyDomain": { "message": "Copiar dominio" },
-  "blockedTechnicalDetails": { "message": "Ver detalles tecnicos" },
-  "blockedTechnicalReason": { "message": "Motivo tecnico" },
-  "blockedOriginPage": { "message": "Pagina origen" },
+  "blockedTechnicalDetails": { "message": "Ver detalles técnicos" },
+  "blockedTechnicalReason": { "message": "Motivo técnico" },
+  "blockedOriginPage": { "message": "Página de origen" },
   "blockedRequestSubmittedSuccess": {
-    "message": "Solicitud enviada. Quedara pendiente hasta que la revisen."
+    "message": "Solicitud enviada. Quedará pendiente hasta que la revisen."
   },
   "blockedRequestApprovedUpdating": {
     "message": "Solicitud aprobada. Actualizando permisos locales..."
@@ -84,11 +109,11 @@
   },
   "blockedRequestTimeout": { "message": "Tiempo de espera agotado al enviar la solicitud." },
   "blockedExtensionTimeout": {
-    "message": "Tiempo de espera agotado al contactar con la extension."
+    "message": "Tiempo de espera agotado al contactar con la extensión."
   },
-  "blockedExtensionUnavailable": { "message": "La extension no esta disponible en esta pagina." },
+  "blockedExtensionUnavailable": { "message": "La extensión no está disponible en esta página." },
   "blockedRequestStatusConfigIncomplete": {
-    "message": "Configuracion incompleta para consultar la solicitud."
+    "message": "Configuración incompleta para consultar la solicitud."
   },
   "blockedRequestStatusFailed": {
     "message": "No se pudo consultar la solicitud ($STATUS$)",
@@ -98,21 +123,25 @@
     "message": "La solicitud sigue pendiente. Vuelve a intentarlo en un momento."
   },
   "blockedPermissionsExtensionUnavailable": {
-    "message": "La extension no esta disponible para actualizar permisos."
+    "message": "La extensión no está disponible para actualizar permisos."
   },
-  "blockedLocalAllowlistUpdateFailed": { "message": "No se pudo actualizar la whitelist local." },
-  "blockedLocalAllowlistVerifyFailed": { "message": "No se pudo verificar la whitelist local." },
+  "blockedLocalAllowlistUpdateFailed": {
+    "message": "No se pudo actualizar la lista de permitidos local."
+  },
+  "blockedLocalAllowlistVerifyFailed": {
+    "message": "No se pudo comprobar la lista de permitidos local."
+  },
   "blockedLocalAllowlistStillBlocked": {
-    "message": "La whitelist local aun no permite el dominio aprobado."
+    "message": "La lista de permitidos local aún no permite el dominio aprobado."
   },
-  "blockedBriefReasonRequired": { "message": "Escribe una breve razon para la solicitud." },
+  "blockedBriefReasonRequired": { "message": "Escribe un motivo breve para la solicitud." },
   "blockedCheckingFirefoxPermission": { "message": "Comprobando permiso de Firefox..." },
   "blockedSendingRequest": { "message": "Enviando solicitud..." },
   "blockedRequestSentWithoutId": {
-    "message": "Solicitud enviada sin identificador. No se recargara automaticamente."
+    "message": "Solicitud enviada sin identificador. No se recargará automáticamente."
   },
-  "blockedWaitingApproval": { "message": "Solicitud enviada. Esperando aprobacion..." },
-  "blockedRequestRejected": { "message": "Solicitud rechazada. La pagina seguira bloqueada." },
+  "blockedWaitingApproval": { "message": "Solicitud enviada. Esperando aprobación..." },
+  "blockedRequestRejected": { "message": "Solicitud rechazada. La página seguirá bloqueada." },
   "blockedRequestStillPending": { "message": "La solicitud sigue pendiente." },
   "blockedLocalPermissionVerifyFailed": { "message": "No se pudo verificar el permiso local." },
   "blockedDomainCopied": { "message": "Dominio copiado al portapapeles." },

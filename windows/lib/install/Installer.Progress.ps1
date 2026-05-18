@@ -172,6 +172,6 @@ function Save-OpenPathInstallTiming {
             Set-Content -Path $Path -Encoding UTF8
     }
     catch {
-        Write-InstallerWarning "  ADVERTENCIA: No se pudieron guardar timings de instalacion: $_"
+        Write-InstallerWarning "  WARNING: Could not save installation timings: $_"
     }
 }

@@ -22,81 +22,81 @@ describe('BulkImportModal Component', () => {
   it('renders modal when open', () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    expect(screen.getByText('Importar reglas')).toBeInTheDocument();
-    expect(screen.getByText('Tipo de regla')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/pega los dominios/i)).toBeInTheDocument();
+    expect(screen.getByText('Import rules')).toBeInTheDocument();
+    expect(screen.getByText('Rule type')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/paste domains/i)).toBeInTheDocument();
   });
 
   it('shows rule type options', () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    expect(screen.getByText('Dominios permitidos')).toBeInTheDocument();
-    expect(screen.getByText('Subdominios bloqueados')).toBeInTheDocument();
-    expect(screen.getByText('Rutas bloqueadas')).toBeInTheDocument();
+    expect(screen.getByText('Allowed domains')).toBeInTheDocument();
+    expect(screen.getByText('Blocked subdomains')).toBeInTheDocument();
+    expect(screen.getByText('Blocked paths')).toBeInTheDocument();
   });
 
   it('counts domains correctly from textarea input', async () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+    const textarea = screen.getByPlaceholderText(/paste domains/i);
     await userEvent.type(textarea, 'google.com\nyoutube.com\nexample.org');
 
-    expect(screen.getByText('3 válidos')).toBeInTheDocument();
+    expect(screen.getByText('3 valid')).toBeInTheDocument();
   });
 
   it('shows singular text for single domain', async () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+    const textarea = screen.getByPlaceholderText(/paste domains/i);
     await userEvent.type(textarea, 'google.com');
 
-    expect(screen.getByText('1 válido')).toBeInTheDocument();
+    expect(screen.getByText('1 valid')).toBeInTheDocument();
   });
 
   it('handles comma-separated values', async () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+    const textarea = screen.getByPlaceholderText(/paste domains/i);
     await userEvent.type(textarea, 'google.com, youtube.com, example.org');
 
-    expect(screen.getByText('3 válidos')).toBeInTheDocument();
+    expect(screen.getByText('3 valid')).toBeInTheDocument();
   });
 
   it('filters out duplicate domains', async () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+    const textarea = screen.getByPlaceholderText(/paste domains/i);
     await userEvent.type(textarea, 'google.com\ngoogle.com\nyoutube.com');
 
-    expect(screen.getByText('2 válidos')).toBeInTheDocument();
+    expect(screen.getByText('2 valid')).toBeInTheDocument();
   });
 
   it('filters out comment lines starting with #', async () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+    const textarea = screen.getByPlaceholderText(/paste domains/i);
     await userEvent.type(
       textarea,
       '# This is a comment\ngoogle.com\n# Another comment\nyoutube.com'
     );
 
-    expect(screen.getByText('2 válidos')).toBeInTheDocument();
+    expect(screen.getByText('2 valid')).toBeInTheDocument();
   });
 
   it('disables import button when no domains entered', () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const importButton = screen.getByRole('button', { name: /importar/i });
+    const importButton = screen.getByRole('button', { name: /import/i });
     expect(importButton).toBeDisabled();
   });
 
   it('enables import button when domains are entered', async () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+    const textarea = screen.getByPlaceholderText(/paste domains/i);
     await userEvent.type(textarea, 'google.com');
 
-    const importButton = screen.getByRole('button', { name: /importar/i });
+    const importButton = screen.getByRole('button', { name: /import/i });
     expect(importButton).not.toBeDisabled();
   });
 
@@ -104,10 +104,10 @@ describe('BulkImportModal Component', () => {
     mockOnImport.mockResolvedValue({ created: 2, total: 2 });
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+    const textarea = screen.getByPlaceholderText(/paste domains/i);
     await userEvent.type(textarea, 'google.com\nyoutube.com');
 
-    const importButton = screen.getByRole('button', { name: /importar/i });
+    const importButton = screen.getByRole('button', { name: /import/i });
     fireEvent.click(importButton);
 
     await waitFor(() => {
@@ -120,13 +120,13 @@ describe('BulkImportModal Component', () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
     // Select blocked_subdomain type
-    const blockedOption = screen.getByText('Subdominios bloqueados');
+    const blockedOption = screen.getByText('Blocked subdomains');
     fireEvent.click(blockedOption);
 
-    const textarea = screen.getByPlaceholderText(/pega los subdominios/i);
+    const textarea = screen.getByPlaceholderText(/paste subdomains/i);
     await userEvent.type(textarea, 'ads.example.com');
 
-    const importButton = screen.getByRole('button', { name: /importar/i });
+    const importButton = screen.getByRole('button', { name: /import/i });
     fireEvent.click(importButton);
 
     await waitFor(() => {
@@ -138,51 +138,51 @@ describe('BulkImportModal Component', () => {
     it('shows domain-specific label and placeholder for whitelist type', () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      expect(screen.getByText('Dominios a importar')).toBeInTheDocument();
-      expect(screen.getByPlaceholderText(/pega los dominios aquí/i)).toBeInTheDocument();
-      expect(screen.getByText(/pega o escribe los dominios arriba/i)).toBeInTheDocument();
+      expect(screen.getByText('Domains to import')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/paste domains here/i)).toBeInTheDocument();
+      expect(screen.getByText(/paste or type domains above/i)).toBeInTheDocument();
     });
 
     it('shows subdomain-specific label and placeholder for blocked_subdomain type', () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      fireEvent.click(screen.getByText('Subdominios bloqueados'));
+      fireEvent.click(screen.getByText('Blocked subdomains'));
 
-      expect(screen.getByText('Subdominios a importar')).toBeInTheDocument();
-      expect(screen.getByPlaceholderText(/pega los subdominios aquí/i)).toBeInTheDocument();
-      expect(screen.getByText(/pega o escribe los subdominios arriba/i)).toBeInTheDocument();
+      expect(screen.getByText('Subdomains to import')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/paste subdomains here/i)).toBeInTheDocument();
+      expect(screen.getByText(/paste or type subdomains above/i)).toBeInTheDocument();
     });
 
     it('shows path-specific label and placeholder for blocked_path type', () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      fireEvent.click(screen.getByText('Rutas bloqueadas'));
+      fireEvent.click(screen.getByText('Blocked paths'));
 
-      expect(screen.getByText('Rutas a importar')).toBeInTheDocument();
-      expect(screen.getByPlaceholderText(/pega las rutas aquí/i)).toBeInTheDocument();
-      expect(screen.getByText(/pega o escribe las rutas arriba/i)).toBeInTheDocument();
+      expect(screen.getByText('Paths to import')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/paste paths here/i)).toBeInTheDocument();
+      expect(screen.getByText(/paste or type paths above/i)).toBeInTheDocument();
     });
 
     it('updates label and placeholder when switching rule types', () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
       // Start with whitelist (default)
-      expect(screen.getByText('Dominios a importar')).toBeInTheDocument();
+      expect(screen.getByText('Domains to import')).toBeInTheDocument();
 
       // Switch to blocked_subdomain
-      fireEvent.click(screen.getByText('Subdominios bloqueados'));
-      expect(screen.getByText('Subdominios a importar')).toBeInTheDocument();
-      expect(screen.queryByText('Dominios a importar')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByText('Blocked subdomains'));
+      expect(screen.getByText('Subdomains to import')).toBeInTheDocument();
+      expect(screen.queryByText('Domains to import')).not.toBeInTheDocument();
 
       // Switch to blocked_path
-      fireEvent.click(screen.getByText('Rutas bloqueadas'));
-      expect(screen.getByText('Rutas a importar')).toBeInTheDocument();
-      expect(screen.queryByText('Subdominios a importar')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByText('Blocked paths'));
+      expect(screen.getByText('Paths to import')).toBeInTheDocument();
+      expect(screen.queryByText('Subdomains to import')).not.toBeInTheDocument();
 
       // Switch back to whitelist
-      fireEvent.click(screen.getByText('Dominios permitidos'));
-      expect(screen.getByText('Dominios a importar')).toBeInTheDocument();
-      expect(screen.queryByText('Rutas a importar')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByText('Allowed domains'));
+      expect(screen.getByText('Domains to import')).toBeInTheDocument();
+      expect(screen.queryByText('Paths to import')).not.toBeInTheDocument();
     });
   });
 
@@ -190,10 +190,10 @@ describe('BulkImportModal Component', () => {
     mockOnImport.mockResolvedValue({ created: 1, total: 1 });
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+    const textarea = screen.getByPlaceholderText(/paste domains/i);
     await userEvent.type(textarea, 'google.com');
 
-    const importButton = screen.getByRole('button', { name: /importar/i });
+    const importButton = screen.getByRole('button', { name: /import/i });
     fireEvent.click(importButton);
 
     await waitFor(() => {
@@ -205,14 +205,14 @@ describe('BulkImportModal Component', () => {
     mockOnImport.mockResolvedValue({ created: 0, total: 2 });
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+    const textarea = screen.getByPlaceholderText(/paste domains/i);
     await userEvent.type(textarea, 'google.com\nyoutube.com');
 
-    const importButton = screen.getByRole('button', { name: /importar/i });
+    const importButton = screen.getByRole('button', { name: /import/i });
     fireEvent.click(importButton);
 
     await waitFor(() => {
-      expect(screen.getByText('Todas las reglas ya existen')).toBeInTheDocument();
+      expect(screen.getByText('All rules already exist')).toBeInTheDocument();
     });
 
     // Modal should NOT close
@@ -222,7 +222,7 @@ describe('BulkImportModal Component', () => {
   it('calls onClose when cancel button is clicked', () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const cancelButton = screen.getByRole('button', { name: /cancelar/i });
+    const cancelButton = screen.getByRole('button', { name: /cancel/i });
     fireEvent.click(cancelButton);
 
     expect(mockOnClose).toHaveBeenCalled();
@@ -231,10 +231,10 @@ describe('BulkImportModal Component', () => {
   it('shows count in import button', async () => {
     render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-    const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+    const textarea = screen.getByPlaceholderText(/paste domains/i);
     await userEvent.type(textarea, 'google.com\nyoutube.com\nexample.org');
 
-    const importButton = screen.getByRole('button', { name: /importar \(3\)/i });
+    const importButton = screen.getByRole('button', { name: /import \(3\)/i });
     expect(importButton).toBeInTheDocument();
   });
 
@@ -255,7 +255,7 @@ describe('BulkImportModal Component', () => {
     it('shows drag hint text', () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      expect(screen.getByText(/arrastra archivos .txt o .csv aquí/i)).toBeInTheDocument();
+      expect(screen.getByText(/Drag .txt or .csv files here/i)).toBeInTheDocument();
     });
 
     it('shows drag overlay when file is dragged over', () => {
@@ -267,7 +267,7 @@ describe('BulkImportModal Component', () => {
       fireEvent.dragEnter(dropZone, createDragEvent([mockFile]));
 
       expect(screen.getByTestId('drag-overlay')).toBeInTheDocument();
-      expect(screen.getByText('Suelta el archivo aquí')).toBeInTheDocument();
+      expect(screen.getByText('Drop the file here')).toBeInTheDocument();
     });
 
     it('hides drag overlay when drag leaves', () => {
@@ -293,7 +293,7 @@ describe('BulkImportModal Component', () => {
       fireEvent.drop(dropZone, createDragEvent([mockFile]));
 
       await waitFor(() => {
-        expect(screen.getByText('3 válidos')).toBeInTheDocument();
+        expect(screen.getByText('3 valid')).toBeInTheDocument();
       });
     });
 
@@ -307,7 +307,7 @@ describe('BulkImportModal Component', () => {
       fireEvent.drop(dropZone, createDragEvent([mockFile]));
 
       await waitFor(() => {
-        expect(screen.getByText('3 válidos')).toBeInTheDocument();
+        expect(screen.getByText('3 valid')).toBeInTheDocument();
       });
     });
 
@@ -321,7 +321,7 @@ describe('BulkImportModal Component', () => {
       fireEvent.drop(dropZone, createDragEvent([mockFile]));
 
       await waitFor(() => {
-        expect(screen.getByText('2 válidos')).toBeInTheDocument();
+        expect(screen.getByText('2 valid')).toBeInTheDocument();
       });
     });
 
@@ -329,9 +329,9 @@ describe('BulkImportModal Component', () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
       // First type some domains
-      const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+      const textarea = screen.getByPlaceholderText(/paste domains/i);
       await userEvent.type(textarea, 'existing.com');
-      expect(screen.getByText('1 válido')).toBeInTheDocument();
+      expect(screen.getByText('1 valid')).toBeInTheDocument();
 
       // Then drop a file
       const dropZone = screen.getByTestId('drop-zone');
@@ -341,7 +341,7 @@ describe('BulkImportModal Component', () => {
       fireEvent.drop(dropZone, createDragEvent([mockFile]));
 
       await waitFor(() => {
-        expect(screen.getByText('3 válidos')).toBeInTheDocument();
+        expect(screen.getByText('3 valid')).toBeInTheDocument();
       });
     });
 
@@ -355,7 +355,7 @@ describe('BulkImportModal Component', () => {
       fireEvent.drop(dropZone, createDragEvent([file1, file2]));
 
       await waitFor(() => {
-        expect(screen.getByText('4 válidos')).toBeInTheDocument();
+        expect(screen.getByText('4 valid')).toBeInTheDocument();
       });
     });
 
@@ -369,7 +369,7 @@ describe('BulkImportModal Component', () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText('Solo se permiten archivos de texto (.txt, .csv, .list)')
+          screen.getByText('Only text files are allowed (.txt, .csv, .list)')
         ).toBeInTheDocument();
       });
     });
@@ -384,7 +384,7 @@ describe('BulkImportModal Component', () => {
       fireEvent.drop(dropZone, createDragEvent([mockFile]));
 
       await waitFor(() => {
-        expect(screen.getByText('2 válidos')).toBeInTheDocument();
+        expect(screen.getByText('2 valid')).toBeInTheDocument();
       });
     });
 
@@ -398,7 +398,7 @@ describe('BulkImportModal Component', () => {
       fireEvent.drop(dropZone, createDragEvent([mockFile]));
 
       await waitFor(() => {
-        expect(screen.getByText('2 válidos')).toBeInTheDocument();
+        expect(screen.getByText('2 valid')).toBeInTheDocument();
       });
     });
 
@@ -424,44 +424,44 @@ describe('BulkImportModal Component', () => {
     it('shows validation errors for invalid domain formats', async () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+      const textarea = screen.getByPlaceholderText(/paste domains/i);
       // "not-a-domain" has no dot, CSV parser's cleanValue filters it out entirely
       // "x" also filtered out by cleanValue. Use values that pass CSV parsing but fail domain validation.
       await userEvent.type(textarea, 'google.com\n!!!.invalid\n-bad.com');
 
       // google.com is valid, !!!.invalid and -bad.com are invalid format
-      expect(screen.getByText('1 válido')).toBeInTheDocument();
-      expect(screen.getByText('2 inválidos')).toBeInTheDocument();
+      expect(screen.getByText('1 valid')).toBeInTheDocument();
+      expect(screen.getByText('2 invalid')).toBeInTheDocument();
       expect(screen.getByTestId('validation-errors')).toBeInTheDocument();
     });
 
     it('shows singular text for single invalid value', async () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+      const textarea = screen.getByPlaceholderText(/paste domains/i);
       await userEvent.type(textarea, 'google.com\n!!!.bad');
 
-      expect(screen.getByText('1 válido')).toBeInTheDocument();
-      expect(screen.getByText('1 inválido')).toBeInTheDocument();
+      expect(screen.getByText('1 valid')).toBeInTheDocument();
+      expect(screen.getByText('1 invalid')).toBeInTheDocument();
     });
 
     it('does not show validation errors when all values are valid', async () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+      const textarea = screen.getByPlaceholderText(/paste domains/i);
       await userEvent.type(textarea, 'google.com\nyoutube.com');
 
-      expect(screen.getByText('2 válidos')).toBeInTheDocument();
+      expect(screen.getByText('2 valid')).toBeInTheDocument();
       expect(screen.queryByTestId('validation-errors')).not.toBeInTheDocument();
     });
 
     it('disables import button when all values are invalid', async () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+      const textarea = screen.getByPlaceholderText(/paste domains/i);
       await userEvent.type(textarea, '!!!.invalid\n-bad-.com');
 
-      const importButton = screen.getByRole('button', { name: /importar/i });
+      const importButton = screen.getByRole('button', { name: /import/i });
       expect(importButton).toBeDisabled();
     });
 
@@ -469,10 +469,10 @@ describe('BulkImportModal Component', () => {
       mockOnImport.mockResolvedValue({ created: 1, total: 1 });
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+      const textarea = screen.getByPlaceholderText(/paste domains/i);
       await userEvent.type(textarea, 'google.com\n!!!.invalid');
 
-      const importButton = screen.getByRole('button', { name: /importar/i });
+      const importButton = screen.getByRole('button', { name: /import/i });
       fireEvent.click(importButton);
 
       await waitFor(() => {
@@ -484,7 +484,7 @@ describe('BulkImportModal Component', () => {
     it('re-validates when rule type changes', async () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+      const textarea = screen.getByPlaceholderText(/paste domains/i);
       // *.example.com is invalid as whitelist domain but valid as subdomain pattern
       await userEvent.type(textarea, '*.example.com');
 
@@ -492,42 +492,42 @@ describe('BulkImportModal Component', () => {
       expect(screen.getByTestId('validation-errors')).toBeInTheDocument();
 
       // Switch to blocked_subdomain - wildcard is valid
-      const blockedOption = screen.getByText('Subdominios bloqueados');
+      const blockedOption = screen.getByText('Blocked subdomains');
       fireEvent.click(blockedOption);
 
       expect(screen.queryByTestId('validation-errors')).not.toBeInTheDocument();
-      expect(screen.getByText('1 válido')).toBeInTheDocument();
+      expect(screen.getByText('1 valid')).toBeInTheDocument();
     });
 
     it('validates paths correctly with blocked_path type', async () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
       // Select blocked_path type
-      const pathOption = screen.getByText('Rutas bloqueadas');
+      const pathOption = screen.getByText('Blocked paths');
       fireEvent.click(pathOption);
 
-      const textarea = screen.getByPlaceholderText(/pega las rutas/i);
+      const textarea = screen.getByPlaceholderText(/paste paths/i);
       await userEvent.type(textarea, 'example.com/ads\n*/tracking/*');
 
-      expect(screen.getByText('2 válidos')).toBeInTheDocument();
+      expect(screen.getByText('2 valid')).toBeInTheDocument();
       expect(screen.queryByTestId('validation-errors')).not.toBeInTheDocument();
     });
 
     it('shows import button count with only valid values', async () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+      const textarea = screen.getByPlaceholderText(/paste domains/i);
       await userEvent.type(textarea, 'google.com\n!!!.invalid\nyoutube.com');
 
       // Button should show count of valid values only (2, not 3)
-      const importButton = screen.getByRole('button', { name: /importar \(2\)/i });
+      const importButton = screen.getByRole('button', { name: /import \(2\)/i });
       expect(importButton).toBeInTheDocument();
     });
 
     it('shows specific error message for each invalid value', async () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+      const textarea = screen.getByPlaceholderText(/paste domains/i);
       await userEvent.type(textarea, 'google.com\n!!!.bad');
 
       // The invalid value should be shown in the error list
@@ -538,25 +538,25 @@ describe('BulkImportModal Component', () => {
     it('shows "only valid will be imported" message when mixed', async () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+      const textarea = screen.getByPlaceholderText(/paste domains/i);
       await userEvent.type(textarea, 'google.com\n!!!.bad');
 
-      expect(screen.getByText(/solo se importarán los 1 valores válidos/i)).toBeInTheDocument();
+      expect(screen.getByText(/Only the 1 valid value will be imported/i)).toBeInTheDocument();
     });
 
     it('disables import and shows errors when only invalid values present', async () => {
       render(<BulkImportModal isOpen={true} onClose={mockOnClose} onImport={mockOnImport} />);
 
-      const textarea = screen.getByPlaceholderText(/pega los dominios/i);
+      const textarea = screen.getByPlaceholderText(/paste domains/i);
       await userEvent.type(textarea, '!!!.invalid');
 
       // Validation errors panel is visible
       expect(screen.getByTestId('validation-errors')).toBeInTheDocument();
       // Import button is disabled
-      const importButton = screen.getByRole('button', { name: /importar/i });
+      const importButton = screen.getByRole('button', { name: /import/i });
       expect(importButton).toBeDisabled();
       // Shows 0 valid count
-      expect(screen.getByText('0 válidos')).toBeInTheDocument();
+      expect(screen.getByText('0 valid')).toBeInTheDocument();
     });
   });
 });

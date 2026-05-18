@@ -69,7 +69,7 @@ export function createBackgroundSubdomainRulesController(
         }),
       };
 
-      logger.info('[Monitor] Reglas de subdominios actualizadas', {
+      logger.info('[Monitor] Subdomain rules updated', {
         count: state.rules.length,
         source: response.source,
       });

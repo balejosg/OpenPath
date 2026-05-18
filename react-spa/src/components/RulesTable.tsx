@@ -37,7 +37,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({
   onEdit: _onEdit,
   onSave,
   readOnly = false,
-  emptyMessage = 'No hay reglas configuradas',
+  emptyMessage = 'No rules configured',
   className,
   selectedIds,
   onToggleSelection,
@@ -82,7 +82,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({
       <div className={cn('bg-white border border-slate-200 rounded-lg', className)}>
         <div className="flex items-center justify-center py-12 text-slate-400">
           <Loader2 size={20} className="animate-spin mr-2" />
-          Cargando reglas...
+          Loading rules...
         </div>
       </div>
     );

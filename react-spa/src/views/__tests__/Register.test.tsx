@@ -33,20 +33,20 @@ describe('Register View', () => {
 
     render(<Register onRegister={onRegister} onNavigateToLogin={vi.fn()} />);
 
-    fireEvent.change(screen.getByPlaceholderText('Tu nombre completo'), {
+    fireEvent.change(screen.getByPlaceholderText('Your full name'), {
       target: { value: '  Ada Lovelace  ' },
     });
     fireEvent.change(screen.getByPlaceholderText('admin@escuela.edu'), {
       target: { value: '  ADMIN@Example.EDU  ' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Min 8 car.'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'SecurePassword123!' },
     });
     fireEvent.change(screen.getByPlaceholderText('••••••••'), {
       target: { value: 'SecurePassword123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /crear cuenta/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create account/i }));
 
     await waitFor(() => {
       expect(mockRegister).toHaveBeenCalledWith({
@@ -56,7 +56,7 @@ describe('Register View', () => {
       });
     });
 
-    expect(await screen.findByText(/Cuenta creada exitosamente/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Account created successfully/i)).toBeInTheDocument();
 
     await waitFor(
       () => {
@@ -72,25 +72,25 @@ describe('Register View', () => {
 
     render(<Register onRegister={vi.fn()} onNavigateToLogin={onNavigateToLogin} />);
 
-    fireEvent.change(screen.getByPlaceholderText('Tu nombre completo'), {
+    fireEvent.change(screen.getByPlaceholderText('Your full name'), {
       target: { value: 'Admin User' },
     });
     fireEvent.change(screen.getByPlaceholderText('admin@escuela.edu'), {
       target: { value: 'admin@example.edu' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Min 8 car.'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'SecurePassword123!' },
     });
     fireEvent.change(screen.getByPlaceholderText('••••••••'), {
       target: { value: 'SecurePassword123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /crear cuenta/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create account/i }));
 
     expect(await screen.findByText('Correo ya registrado')).toBeInTheDocument();
     expect(mockReportError).toHaveBeenCalledWith('Failed to register user:', expect.any(Error));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Iniciar Sesión' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     expect(onNavigateToLogin).toHaveBeenCalledTimes(1);
   });
 });

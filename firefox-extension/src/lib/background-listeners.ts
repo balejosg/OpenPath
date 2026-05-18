@@ -1,5 +1,6 @@
 import type { Browser, Runtime, WebNavigation, WebRequest } from 'webextension-polyfill';
 import { getErrorMessage, logger } from './logger.js';
+import { t } from './i18n.js';
 import { shouldClearBlockedMonitorStateOnNavigate } from './blocked-screen-contract.js';
 import { BLOCKED_SCREEN_PATH, ROUTE_BLOCK_REASON, extractHostname } from './path-blocking.js';
 import { BLOCKED_SUBDOMAIN_REASON } from './subdomain-blocking.js';
@@ -234,7 +235,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
         tabAnchorHosts.set(details.tabId, dependencyHost);
       }
 
-      const hostname = extractHostname(details.url) ?? 'dominio desconocido';
+      const hostname = extractHostname(details.url) ?? t('blockedUnknownDomain');
 
       if (details.tabId >= 0) {
         const fallbackReason =

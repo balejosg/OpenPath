@@ -5,7 +5,7 @@ describe('resolveMutationFeedback', () => {
   const messages = {
     badRequest: 'Revisa los datos enviados.',
     conflict: 'Existe un conflicto con el estado actual.',
-    fallback: 'No se pudo guardar la configuracion. Intenta nuevamente.',
+    fallback: 'Unable to save configuration. Try again.',
   };
 
   it('maps tRPC error codes to messages when available', () => {

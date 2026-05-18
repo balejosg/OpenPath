@@ -23,7 +23,7 @@ export function useGroupsViewModelData(activeView: GroupsActiveView) {
   const libraryGroups: LibraryGroup[] = (libraryQuery.data ?? []) as LibraryGroup[];
   const libraryLoading =
     libraryQuery.status === 'pending' || libraryQuery.fetchStatus === 'fetching';
-  const libraryError = libraryQuery.error ? 'Error al cargar biblioteca' : null;
+  const libraryError = libraryQuery.error ? 'Unable to load library' : null;
   const visibleGroups = activeView === 'library' ? libraryGroups : allowedGroups;
 
   const groups = useMemo<GroupCardViewModel[]>(() => {
@@ -44,7 +44,7 @@ export function useGroupsViewModelData(activeView: GroupsActiveView) {
 
   const loading = activeView === 'library' ? libraryLoading : isLoading;
   const error =
-    activeView === 'library' ? libraryError : groupsQueryError ? 'Error al cargar grupos' : null;
+    activeView === 'library' ? libraryError : groupsQueryError ? 'Unable to load groups' : null;
 
   const refetchActiveView = async () => {
     if (activeView === 'library') {

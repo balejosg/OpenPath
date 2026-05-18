@@ -7,7 +7,7 @@ import { reportError } from '../lib/reportError';
 function formatScheduleError(err: unknown, fallback: string): string {
   const raw = err instanceof Error ? err.message : '';
   return resolveTrpcErrorMessage(err, {
-    conflict: 'Ese tramo horario ya est\u00e1 reservado',
+    conflict: 'That time slot is already reserved',
     fallback: raw || fallback,
   });
 }
@@ -62,7 +62,7 @@ export const useClassroomSchedules = ({
       setOneOffSchedules(result.oneOffSchedules);
     } catch (err) {
       reportError('Failed to fetch schedules:', err);
-      setScheduleError('Error al cargar horarios');
+      setScheduleError('Unable to load schedules');
       setSchedules([]);
       setOneOffSchedules([]);
     } finally {
@@ -165,7 +165,7 @@ export const useClassroomSchedules = ({
         setScheduleFormStartTime(undefined);
       } catch (err: unknown) {
         reportError('Failed to save schedule:', err);
-        setScheduleError(formatScheduleError(err, 'Error al guardar horario'));
+        setScheduleError(formatScheduleError(err, 'Unable to save schedule'));
       } finally {
         setScheduleSaving(false);
       }
@@ -203,7 +203,7 @@ export const useClassroomSchedules = ({
         setEditingOneOffSchedule(null);
       } catch (err: unknown) {
         reportError('Failed to save one-off schedule:', err);
-        setScheduleError(formatScheduleError(err, 'Error al guardar horario'));
+        setScheduleError(formatScheduleError(err, 'Unable to save schedule'));
       } finally {
         setScheduleSaving(false);
       }
@@ -245,7 +245,7 @@ export const useClassroomSchedules = ({
       setScheduleDeleteTarget(null);
     } catch (err: unknown) {
       reportError('Failed to delete schedule:', err);
-      setScheduleError(formatScheduleError(err, 'Error al eliminar horario'));
+      setScheduleError(formatScheduleError(err, 'Unable to delete schedule'));
     } finally {
       setScheduleSaving(false);
     }

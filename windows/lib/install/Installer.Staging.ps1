@@ -37,13 +37,13 @@ function Initialize-OpenPathInstallDirectories {
     }
     Write-InstallerVerbose "  Estructura creada en $OpenPathRoot"
 
-    Write-InstallerVerbose "  Aplicando permisos restrictivos..."
+    Write-InstallerVerbose "  Applying restrictive permissions..."
     try {
         Set-OpenPathCapabilityStorageAcl -Path $OpenPathRoot -Profile RestrictedRoot
         Write-InstallerVerbose "  Permisos aplicados (solo SYSTEM y Administradores)"
     }
     catch {
-        Write-InstallerWarning "  ADVERTENCIA: No se pudieron restringir permisos: $_"
+        Write-InstallerWarning "  WARNING: Could not restrict permissions: $_"
     }
 
     $browserExtensionAclPath = "$OpenPathRoot\browser-extension"
@@ -53,7 +53,7 @@ function Initialize-OpenPathInstallDirectories {
             Write-InstallerVerbose "  Read access granted for browser extension artifacts"
         }
         catch {
-            Write-InstallerWarning "  ADVERTENCIA: No se pudo habilitar lectura para browser-extension: $_"
+            Write-InstallerWarning "  WARNING: Could not enable read access for browser-extension: $_"
         }
     }
 
@@ -64,7 +64,7 @@ function Initialize-OpenPathInstallDirectories {
             Write-InstallerVerbose "  Runtime dependency queue write access granted for browser users"
         }
         catch {
-            Write-InstallerWarning "  ADVERTENCIA: No se pudo habilitar escritura para runtime-dependency-queue: $_"
+            Write-InstallerWarning "  WARNING: Could not enable write access for runtime-dependency-queue: $_"
         }
     }
 }
@@ -183,11 +183,11 @@ function Copy-OpenPathInstallerRuntime {
             Write-InstallerVerbose "  Firefox development extension assets staged in $OpenPathRoot\browser-extension\firefox"
         }
         else {
-            Write-InstallerWarning "  ADVERTENCIA: Firefox development extension source incomplete ($($missingItems -join ', '))"
+            Write-InstallerWarning "  WARNING: Firefox development extension source incomplete ($($missingItems -join ', '))"
         }
     }
     else {
-        Write-InstallerWarning "  ADVERTENCIA: Firefox development extension source not found; local unsigned bundle staging skipped"
+        Write-InstallerWarning "  WARNING: Firefox development extension source not found; local unsigned bundle staging skipped"
     }
 
     $firefoxNativeHostTarget = "$OpenPathRoot\browser-extension\firefox\native"
@@ -209,7 +209,7 @@ function Copy-OpenPathInstallerRuntime {
         Write-InstallerVerbose "  Firefox native host assets staged in $OpenPathRoot\browser-extension\firefox\native"
     }
     else {
-        Write-InstallerWarning "  ADVERTENCIA: Firefox native host artifacts missing ($($missingNativeHostArtifacts -join ', '))"
+        Write-InstallerWarning "  WARNING: Firefox native host artifacts missing ($($missingNativeHostArtifacts -join ', '))"
     }
 
     $firefoxReleaseCandidates = @(
@@ -236,7 +236,7 @@ function Copy-OpenPathInstallerRuntime {
         Write-InstallerVerbose "  Signed Firefox Release artifacts staged in $OpenPathRoot\browser-extension\firefox-release"
     }
     elseif (-not ($FirefoxExtensionId -and $FirefoxExtensionInstallUrl)) {
-        Write-InstallerWarning "  ADVERTENCIA: Firefox Release extension auto-install requires a signed XPI distribution (AMO, HTTPS URL, or staged signed artifact)."
+        Write-InstallerWarning "  WARNING: Firefox Release extension auto-install requires a signed XPI distribution (AMO, HTTPS URL, or staged signed artifact)."
         Write-InstallerWarning "  Firefox browser policies will not be written until a signed extension distribution is configured."
     }
 
@@ -257,7 +257,7 @@ function Copy-OpenPathInstallerRuntime {
         Write-InstallerVerbose "  Chromium managed rollout metadata staged in $OpenPathRoot\browser-extension\chromium-managed"
     }
     else {
-        Write-InstallerWarning "  ADVERTENCIA: Chromium managed rollout metadata not found in browser-extension\chromium-managed or firefox-extension\build\chromium-managed; Edge/Chrome managed extension install skipped"
+        Write-InstallerWarning "  WARNING: Chromium managed rollout metadata not found in browser-extension\chromium-managed or firefox-extension\build\chromium-managed; Edge/Chrome managed extension install skipped"
     }
 
     if (-not $chromiumManagedSource) {
@@ -265,7 +265,7 @@ function Copy-OpenPathInstallerRuntime {
             -ChromeStoreUrl $ChromeExtensionStoreUrl `
             -EdgeStoreUrl $EdgeExtensionStoreUrl `
             -Unattended:$Unattended)) {
-            Write-InstallerWarning "  ADVERTENCIA: No Chromium store URLs configured; non-managed Chrome/Edge installs require user-initiated store install."
+            Write-InstallerWarning "  WARNING: No Chromium store URLs configured; non-managed Chrome/Edge installs require user-initiated store install."
         }
     }
 

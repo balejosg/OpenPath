@@ -135,9 +135,9 @@ apply_runtime_reconciliation_plan() {
         activate)
             if ! activate_firewall; then
                 if [ "$activation_context" = "reactivate" ]; then
-                    log "⚠ Fallo al reactivar firewall restrictivo - manteniendo modo permisivo"
+                    log "⚠ Failed to reactivate restrictive firewall - keeping permissive mode"
                 else
-                    log "⚠ Fallo al activar firewall restrictivo - manteniendo modo permisivo"
+                    log "⚠ Failed to activate restrictive firewall - keeping permissive mode"
                 fi
                 deactivate_firewall
             fi
@@ -150,7 +150,7 @@ apply_runtime_reconciliation_plan() {
     if [ "$flush_connections_required" = true ]; then
         case "$flush_reason" in
             policy_change)
-                log "Cambio en políticas detectado (sin cierre de navegadores)"
+                log "Policy change detected (without closing browsers)"
                 ;;
             system_reactivated)
                 log "Sistema reactivado (sin cierre de navegadores)"

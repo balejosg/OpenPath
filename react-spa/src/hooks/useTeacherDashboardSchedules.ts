@@ -32,7 +32,7 @@ export function useTeacherDashboardSchedules(
 
   const loading = scheduleQueries.some((query) => query.isPending);
   const error = scheduleQueries.some((query) => query.error)
-    ? 'No se pudieron cargar tus horarios'
+    ? 'Unable to load your schedules'
     : null;
 
   async function refetchSchedules(): Promise<void> {

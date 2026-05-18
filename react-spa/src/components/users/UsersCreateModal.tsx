@@ -45,13 +45,13 @@ export function UsersCreateModal({
   }
 
   return (
-    <Modal isOpen onClose={closeNewModal} title="Nuevo Usuario" className="max-w-md">
+    <Modal isOpen onClose={closeNewModal} title="New User" className="max-w-md">
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Nombre</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>
           <input
             type="text"
-            placeholder="Nombre completo"
+            placeholder="Full name"
             value={newName}
             onChange={(e) => {
               setNewName(e.target.value);
@@ -64,7 +64,7 @@ export function UsersCreateModal({
           <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
           <input
             type="email"
-            placeholder="usuario@dominio.com"
+            placeholder="user@example.com"
             value={newEmail}
             onChange={(e) => {
               setNewEmail(e.target.value);
@@ -74,10 +74,10 @@ export function UsersCreateModal({
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Contraseña</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
           <input
             type="password"
-            placeholder="Mínimo 8 caracteres"
+            placeholder="Minimum 8 characters"
             value={newPassword}
             onChange={(e) => {
               setNewPassword(e.target.value);
@@ -87,7 +87,7 @@ export function UsersCreateModal({
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Rol</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Role</label>
           <select
             value={newRole}
             onChange={(e) => {
@@ -96,8 +96,8 @@ export function UsersCreateModal({
             }}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
           >
-            <option value="teacher">Profesor</option>
-            <option value="admin">Administrador</option>
+            <option value="teacher">Teacher</option>
+            <option value="admin">Admin</option>
           </select>
         </div>
         {createError && (
@@ -114,7 +114,7 @@ export function UsersCreateModal({
             disabled={saving}
             className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            Cancelar
+            Cancel
           </button>
           <button
             onClick={() => void createUser()}
@@ -122,7 +122,7 @@ export function UsersCreateModal({
             className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {saving && <Loader2 size={16} className="animate-spin" />}
-            Crear Usuario
+            Create User
           </button>
         </div>
       </div>

@@ -5,25 +5,25 @@
 ################################################################################
 
 cleanup_system() {
-    log "=== Activando modo fail-open ==="
+    log "=== Activating fail-open mode ==="
 
-    log "Desactivando firewall..."
-    log "Limpiando políticas de navegadores..."
-    log "Configurando dnsmasq en modo passthrough..."
-    log "Reiniciando dnsmasq..."
-    log "Limpiando conexiones..."
+    log "Disabling firewall..."
+    log "Cleaning browser policies..."
+    log "Configuring dnsmasq in passthrough mode..."
+    log "Restarting dnsmasq..."
+    log "Clearing connections..."
 
     enter_fail_open_mode "$PRIMARY_DNS"
 
-    log "=== Sistema en modo fail-open ==="
+    log "=== System in fail-open mode ==="
 }
 
 force_apply_changes() {
-    log "Forzando aplicación de cambios..."
+    log "Forcing change application..."
     flush_connections
     flush_dns_cache
     force_browser_close
-    log "✓ Cambios aplicados"
+    log "✓ Changes applied"
 }
 
 has_config_changed() {
@@ -67,12 +67,12 @@ apply_captive_portal_preflight() {
 
     case "$captive_portal_action" in
         defer_for_authentication)
-            log "⚠ Portal cautivo detectado - desactivando firewall para autenticación"
+            log "⚠ Captive portal detected - disabling firewall for authentication"
             deactivate_firewall
             return 1
             ;;
         continue_without_network_confirmation)
-            log "⚠ Sin conectividad para validar portal cautivo - manteniendo enforcement actual"
+            log "⚠ No connectivity to validate captive portal - keeping current enforcement"
             ;;
     esac
 
@@ -124,18 +124,18 @@ apply_whitelist_download_plan() {
             return 0
             ;;
         fail_open)
-            log "⚠ Error al descargar - usando whitelist existente"
-            log "⚠ Sin whitelist disponible - modo fail-open"
+            log "⚠ Download failed - using existing whitelist"
+            log "⚠ No whitelist available - fail-open mode"
             cleanup_system
             return 1
             ;;
         reuse_cached)
-            log "⚠ Error al descargar - usando whitelist existente"
+            log "⚠ Download failed - using existing whitelist"
             log "Whitelist age OK (expires in ~${whitelist_remaining_hours}h)"
             return 0
             ;;
         fail_safe)
-            log "⚠ Error al descargar - usando whitelist existente"
+            log "⚠ Download failed - using existing whitelist"
             log_warn "⚠ Whitelist expired: ${whitelist_age_hours}h old (max: ${WHITELIST_MAX_AGE_HOURS:-24}h)"
             log_warn "Entering fail-safe mode — blocking all DNS until fresh whitelist"
 
@@ -158,7 +158,7 @@ EOF
 
             rm -f "$DNSMASQ_CONF_HASH" 2>/dev/null || true
             systemctl restart dnsmasq 2>/dev/null || true
-            log "=== Sistema en modo fail-safe (whitelist expirada) ==="
+            log "=== System in fail-safe mode (whitelist expired) ==="
             return 1
             ;;
     esac

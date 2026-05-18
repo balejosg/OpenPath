@@ -42,7 +42,7 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
   onDelete,
   onSave,
   onAddSubdomain,
-  emptyMessage = 'No hay reglas configuradas',
+  emptyMessage = 'No rules configured',
   className,
   selectedIds,
   onToggleSelection,
@@ -82,7 +82,7 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
       <div className={cn('bg-white border border-slate-200 rounded-lg', className)}>
         <div className="flex items-center justify-center py-12 text-slate-400">
           <Loader2 size={20} className="animate-spin mr-2" />
-          Cargando reglas...
+          Loading rules...
         </div>
       </div>
     );
@@ -108,7 +108,7 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
                   <button
                     onClick={onToggleSelectAll}
                     className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
-                    title={isAllSelected ? 'Deseleccionar todo' : 'Seleccionar todo'}
+                    title={isAllSelected ? 'Deselect all' : 'Select all'}
                   >
                     {isAllSelected ? (
                       <CheckSquare size={18} className="text-blue-600" />
@@ -121,7 +121,7 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
                 </th>
               )}
               <th className="px-4 py-3 w-8"></th>
-              <th className="px-4 py-3">Dominio / Regla</th>
+              <th className="px-4 py-3">Domain / Rule</th>
               <th className="px-4 py-3 w-32">Estado</th>
               {!readOnly && <th className="px-4 py-3 w-24 text-right">Acciones</th>}
             </tr>

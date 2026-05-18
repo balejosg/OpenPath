@@ -1,11 +1,11 @@
 import type { ScheduleWithPermissions } from '../../types';
 
 export const DAYS = [
-  { key: 1, short: 'Lun', full: 'Lunes' },
-  { key: 2, short: 'Mar', full: 'Martes' },
-  { key: 3, short: 'Mié', full: 'Miércoles' },
-  { key: 4, short: 'Jue', full: 'Jueves' },
-  { key: 5, short: 'Vie', full: 'Viernes' },
+  { key: 1, short: 'Mon', full: 'Monday' },
+  { key: 2, short: 'Tue', full: 'Tuesday' },
+  { key: 3, short: 'Wed', full: 'Wednesday' },
+  { key: 4, short: 'Thu', full: 'Thursday' },
+  { key: 5, short: 'Fri', full: 'Friday' },
 ] as const;
 
 export const START_HOUR = 7;

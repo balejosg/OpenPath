@@ -116,20 +116,20 @@ describe('TeacherDashboardCalendar', () => {
 
     render(<TeacherDashboardCalendar {...props} />);
 
-    expect(screen.getByRole('heading', { name: 'Semana' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Semana anterior' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Hoy' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Semana siguiente' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Week' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous week' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Today' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next week' })).toBeInTheDocument();
     expect(screen.getAllByText('Group One - Lab A').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Group Two - Lab B').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Puntual').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('One-off').length).toBeGreaterThan(0);
 
     const oneOffBlock = screen.getByRole('button', {
-      name: 'Ver detalles Group Two - Lab B 10:15-11:00',
+      name: 'View details Group Two - Lab B 10:15-11:00',
     });
     expect(oneOffBlock).toHaveAttribute('data-kind', 'one_off');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hoy' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
     expect(props.onToday).toHaveBeenCalledTimes(1);
 
     fireEvent.click(oneOffBlock);
@@ -168,28 +168,28 @@ describe('TeacherDashboardCalendar', () => {
     );
 
     expect(screen.queryByText('Outside Week - Lab Z')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Editar/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Eliminar/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Edit/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Delete/ })).not.toBeInTheDocument();
   });
 
   it('renders loading, error, and empty states with the expected copy', () => {
     const loadingProps = buildProps({ loading: true });
     const { rerender } = render(<TeacherDashboardCalendar {...loadingProps} />);
 
-    expect(screen.getByText('Cargando tu horario...')).toBeInTheDocument();
+    expect(screen.getByText('Loading your schedule...')).toBeInTheDocument();
 
-    const errorProps = buildProps({ error: 'No se pudieron cargar tus horarios' });
+    const errorProps = buildProps({ error: 'Unable to load your schedules' });
     rerender(<TeacherDashboardCalendar {...errorProps} />);
 
-    expect(screen.getByText('No se pudieron cargar tus horarios')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }));
+    expect(screen.getByText('Unable to load your schedules')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(errorProps.onRetry).toHaveBeenCalledTimes(1);
 
     rerender(<TeacherDashboardCalendar {...buildProps({ entries: [] })} />);
 
     expect(
       screen.getByText(
-        'No tienes horarios asignados esta semana. Gestiona los horarios desde cada aula.'
+        'You have no schedules assigned this week. Manage schedules from each classroom.'
       )
     ).toBeInTheDocument();
   });

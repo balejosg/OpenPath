@@ -33,8 +33,8 @@ describe('GroupsGrid', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /ver/i }));
-    fireEvent.click(screen.getByRole('button', { name: /clonar/i }));
+    fireEvent.click(screen.getByRole('button', { name: /view/i }));
+    fireEvent.click(screen.getByRole('button', { name: /clone/i }));
 
     expect(onNavigateToRules).toHaveBeenCalledWith({
       id: 'library-1',

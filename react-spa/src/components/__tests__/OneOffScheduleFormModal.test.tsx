@@ -23,8 +23,8 @@ describe('OneOffScheduleFormModal', () => {
       />
     );
 
-    expect(screen.getByText('Nueva Asignación Puntual')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /cerrar/i }));
+    expect(screen.getByText('New One-Off Assignment')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -42,10 +42,10 @@ describe('OneOffScheduleFormModal', () => {
       />
     );
 
-    fireEvent.change(screen.getByLabelText('Inicio'), { target: { value: '2026-02-23T10:00' } });
-    fireEvent.change(screen.getByLabelText('Fin'), { target: { value: '2026-02-23T11:00' } });
+    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2026-02-23T10:00' } });
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '2026-02-23T11:00' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /crear asignación/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create assignment/i }));
 
     expect(onSave).toHaveBeenCalled();
     const saved = onSave.mock.calls[0]?.[0] as { startAt: string; endAt: string; groupId: string };

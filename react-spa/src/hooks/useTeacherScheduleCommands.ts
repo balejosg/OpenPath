@@ -59,7 +59,7 @@ interface UseTeacherScheduleCommandsParams {
 export function formatTeacherScheduleError(err: unknown, fallback: string): string {
   const raw = err instanceof Error ? err.message : '';
   return resolveTrpcErrorMessage(err, {
-    conflict: 'Ese tramo horario ya está reservado',
+    conflict: 'That time slot is already reserved',
     fallback: raw || fallback,
   });
 }
@@ -115,7 +115,7 @@ export function useTeacherScheduleCommands({
         await refreshDashboard();
       } catch (err) {
         reportError('Failed to apply active group:', err);
-        setScheduleError('Error al aplicar el grupo al aula');
+        setScheduleError('Unable to apply the group to the classroom');
       } finally {
         setScheduleSaving(false);
       }
@@ -135,7 +135,7 @@ export function useTeacherScheduleCommands({
         await refreshDashboard();
       } catch (err) {
         reportError('Failed to release classroom:', err);
-        setScheduleError('Error al aplicar el grupo al aula');
+        setScheduleError('Unable to apply the group to the classroom');
       } finally {
         setScheduleSaving(false);
       }
@@ -194,7 +194,7 @@ export function useTeacherScheduleCommands({
         setEditingEntry(null);
       } catch (err) {
         reportError('Failed to save schedule:', err);
-        setScheduleError(formatTeacherScheduleError(err, 'Error al guardar horario'));
+        setScheduleError(formatTeacherScheduleError(err, 'Unable to save schedule'));
       } finally {
         setScheduleSaving(false);
       }
@@ -219,7 +219,7 @@ export function useTeacherScheduleCommands({
         setEditingEntry(null);
       } catch (err) {
         reportError('Failed to save one-off schedule:', err);
-        setScheduleError(formatTeacherScheduleError(err, 'Error al guardar horario'));
+        setScheduleError(formatTeacherScheduleError(err, 'Unable to save schedule'));
       } finally {
         setScheduleSaving(false);
       }
@@ -239,7 +239,7 @@ export function useTeacherScheduleCommands({
       setSelectedEntry(null);
     } catch (err) {
       reportError('Failed to delete schedule:', err);
-      setScheduleError(formatTeacherScheduleError(err, 'Error al eliminar horario'));
+      setScheduleError(formatTeacherScheduleError(err, 'Unable to delete schedule'));
     } finally {
       setScheduleSaving(false);
     }

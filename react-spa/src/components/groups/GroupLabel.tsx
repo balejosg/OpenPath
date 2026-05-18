@@ -105,14 +105,14 @@ export function resolveClassroomGroupSelectState(params: {
 
 export function getGroupSourceTag(source: CurrentGroupSource): string {
   if (source === 'manual') return 'manual';
-  if (source === 'schedule') return 'horario';
-  if (source === 'default') return 'defecto';
+  if (source === 'schedule') return 'schedule';
+  if (source === 'default') return 'default';
   return '';
 }
 
 export function getGroupSourcePhrase(source: CurrentGroupSource): string {
-  if (source === 'default') return 'por defecto';
-  if (source === 'schedule') return 'por horario';
+  if (source === 'default') return 'by default';
+  if (source === 'schedule') return 'by schedule';
   if (source === 'manual') return 'manual';
   return '';
 }
@@ -126,15 +126,15 @@ export function resolveGroupDisplayName(params: {
 }): string {
   const { groupId, group, source, revealUnknownId, noneLabel } = params;
 
-  if (!groupId) return noneLabel ?? 'Sin grupo';
+  if (!groupId) return noneLabel ?? 'No group';
   if (group) return group.displayName ?? group.name;
   if (revealUnknownId) return groupId;
 
-  if (source === 'manual') return 'Aplicado por otro profesor';
-  if (source === 'default') return 'Asignado por admin';
-  if (source === 'schedule') return 'Reservado por otro profesor';
+  if (source === 'manual') return 'Applied by another teacher';
+  if (source === 'default') return 'Assigned by admin';
+  if (source === 'schedule') return 'Reserved by another teacher';
 
-  return 'Grupo no disponible';
+  return 'Group unavailable';
 }
 
 export function resolveGroupDisplayNameFromLookup(params: {
@@ -197,7 +197,7 @@ export const GroupLabel: React.FC<GroupLabelProps> = ({
   const parts: string[] = [name];
   const sourceTag = showSourceTag ? getGroupSourceTag(source) : '';
   if (sourceTag) parts.push(sourceTag);
-  if (showInactiveTag && !enabled) parts.push('inactivo');
+  if (showInactiveTag && !enabled) parts.push('inactive');
   const text = parts.join(' · ');
 
   if (variant === 'text') {

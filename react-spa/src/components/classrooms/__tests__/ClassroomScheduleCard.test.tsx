@@ -42,7 +42,7 @@ function buildOneOffSchedule(
     groupId: 'group-default',
     groupDisplayName: 'Grupo Default',
     teacherId: 'teacher-1',
-    teacherName: 'Profesor Uno',
+    teacherName: 'Teacher Uno',
     recurrence: 'one_off',
     createdAt: '2026-03-06T08:00:00.000Z',
     isMine: true,
@@ -78,8 +78,8 @@ describe('ClassroomScheduleCard', () => {
     render(<ClassroomScheduleCard {...props} />);
 
     fireEvent.click(screen.getByTestId('weekly-calendar'));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Editar' })[0]);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Eliminar' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
 
     expect(props.onOpenScheduleCreate).toHaveBeenCalledWith(2, '10:00');
     expect(props.onOpenOneOffScheduleEdit).toHaveBeenCalledWith(props.sortedOneOffSchedules[0]);
@@ -99,33 +99,33 @@ describe('ClassroomScheduleCard', () => {
               groupId: 'group-hidden',
               groupDisplayName: null,
               canEdit: false,
-              teacherName: 'Profesor Dos',
+              teacherName: 'Teacher Dos',
             }),
           ],
         })}
       />
     );
 
-    expect(screen.getByText('Cargando horarios...')).toBeInTheDocument();
+    expect(screen.getByText('Loading schedules...')).toBeInTheDocument();
 
     rerender(
       <ClassroomScheduleCard
         {...buildProps({
           admin: false,
-          scheduleError: 'Error al cargar horarios',
+          scheduleError: 'Unable to load schedules',
           sortedOneOffSchedules: [
             buildOneOffSchedule({
               groupId: 'group-hidden',
               groupDisplayName: null,
               canEdit: false,
-              teacherName: 'Profesor Dos',
+              teacherName: 'Teacher Dos',
             }),
           ],
         })}
       />
     );
 
-    expect(screen.getByText('Error al cargar horarios')).toBeInTheDocument();
-    expect(screen.getByText('Reservado por Profesor Dos')).toBeInTheDocument();
+    expect(screen.getByText('Unable to load schedules')).toBeInTheDocument();
+    expect(screen.getByText('Reserved by Teacher Dos')).toBeInTheDocument();
   });
 });

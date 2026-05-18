@@ -43,17 +43,17 @@ const Settings: React.FC = () => {
     setPasswordError('');
 
     if (!currentPassword || !newPassword || !confirmPassword) {
-      setPasswordError('Todos los campos son obligatorios');
+      setPasswordError('All fields are required');
       return;
     }
 
     if (newPassword.length < 8) {
-      setPasswordError('La nueva contraseña debe tener al menos 8 caracteres');
+      setPasswordError('New password must be at least 8 characters');
       return;
     }
 
     if (newPassword !== confirmPassword) {
-      setPasswordError('Las contraseñas no coinciden');
+      setPasswordError('Passwords do not match');
       return;
     }
 
@@ -83,7 +83,7 @@ const Settings: React.FC = () => {
       }, 1500);
     } catch (err) {
       reportError('Failed to change password:', err);
-      setPasswordError('No se pudo cambiar la contraseña. Verifica tu contraseña actual.');
+      setPasswordError('Unable to change password. Check your current password.');
     } finally {
       setIsChangingPassword(false);
     }
@@ -96,7 +96,7 @@ const Settings: React.FC = () => {
           <SettingsIcon className="text-slate-600" size={24} />
         </div>
         <div>
-          <h1 className="text-xl font-bold text-slate-800">Configuración</h1>
+          <h1 className="text-xl font-bold text-slate-800">Settings</h1>
           <p className="text-sm text-slate-500">Administra tus preferencias esenciales</p>
         </div>
       </div>
@@ -111,7 +111,7 @@ const Settings: React.FC = () => {
           </div>
           <div className="space-y-4">
             <label className="flex items-center justify-between cursor-pointer">
-              <span className="text-sm text-slate-600">Alertas de seguridad</span>
+              <span className="text-sm text-slate-600">Security alerts</span>
               <input
                 type="checkbox"
                 checked={prefs.securityAlerts}
@@ -122,7 +122,7 @@ const Settings: React.FC = () => {
               />
             </label>
             <label className="flex items-center justify-between cursor-pointer">
-              <span className="text-sm text-slate-600">Nuevas solicitudes de dominio</span>
+              <span className="text-sm text-slate-600">New domain requests</span>
               <input
                 type="checkbox"
                 checked={prefs.domainRequests}
@@ -133,7 +133,7 @@ const Settings: React.FC = () => {
               />
             </label>
             <label className="flex items-center justify-between cursor-pointer">
-              <span className="text-sm text-slate-600">Reportes semanales</span>
+              <span className="text-sm text-slate-600">Weekly reports</span>
               <input
                 type="checkbox"
                 checked={prefs.weeklyReports}
@@ -155,13 +155,13 @@ const Settings: React.FC = () => {
           </div>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-600">Autenticación de dos factores</span>
+              <span className="text-sm text-slate-600">Two-factor authentication</span>
               <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded font-medium">
-                Próximamente
+                Coming soon
               </span>
             </div>
             <div className="flex items-start justify-between gap-4">
-              <span className="text-sm text-slate-600">Protección de sesión</span>
+              <span className="text-sm text-slate-600">Session protection</span>
               <span className="text-sm text-slate-800 font-medium text-right">
                 Administrada por el servidor
               </span>
@@ -170,7 +170,7 @@ const Settings: React.FC = () => {
               onClick={openPasswordModal}
               className="w-full mt-2 text-sm text-blue-600 hover:text-blue-800 font-medium py-2 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
             >
-              Cambiar contraseña
+              Change password
             </button>
           </div>
         </div>
@@ -178,53 +178,53 @@ const Settings: React.FC = () => {
 
       <div className="flex items-center gap-2 text-sm text-slate-400 pt-4">
         <Info size={16} />
-        <span>Los cambios de esta página se guardan automáticamente en tu navegador.</span>
+        <span>Changes on this page are saved automatically in your browser.</span>
       </div>
 
       {showPasswordModal && (
-        <Modal isOpen onClose={closePasswordModal} title="Cambiar Contraseña" className="max-w-md">
+        <Modal isOpen onClose={closePasswordModal} title="Change Password" className="max-w-md">
           {passwordSuccess ? (
             <div className="text-center py-8">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Shield className="text-green-600" size={32} />
               </div>
-              <p className="text-green-700 font-medium">¡Contraseña actualizada correctamente!</p>
+              <p className="text-green-700 font-medium">Password updated successfully!</p>
             </div>
           ) : (
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Contraseña actual
+                  Current password
                 </label>
                 <input
                   type="password"
                   value={currentPassword}
                   onChange={(e) => setCurrentPassword(e.target.value)}
-                  placeholder="Ingresa tu contraseña actual"
+                  placeholder="Enter your current password"
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Nueva contraseña
+                  New password
                 </label>
                 <input
                   type="password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Mínimo 8 caracteres"
+                  placeholder="Minimum 8 characters"
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Confirmar nueva contraseña
+                  Confirm new password
                 </label>
                 <input
                   type="password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Repite la nueva contraseña"
+                  placeholder="Repeat the new password"
                   className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none ${passwordError ? 'border-red-300' : 'border-slate-300'}`}
                 />
               </div>
@@ -240,7 +240,7 @@ const Settings: React.FC = () => {
                   onClick={closePasswordModal}
                   className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50"
                 >
-                  Cancelar
+                  Cancel
                 </button>
                 <button
                   onClick={() => void handleChangePassword()}
@@ -252,7 +252,7 @@ const Settings: React.FC = () => {
                       <Loader2 size={16} className="animate-spin" /> Guardando...
                     </span>
                   ) : (
-                    'Cambiar Contraseña'
+                    'Change Password'
                   )}
                 </button>
               </div>

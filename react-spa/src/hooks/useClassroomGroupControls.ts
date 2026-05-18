@@ -59,7 +59,7 @@ export function useClassroomGroupControls(params: {
               : null,
         source: groupId ? 'manual' : 'none',
         revealUnknownId: admin,
-        noneLabel: 'Sin grupo activo',
+        noneLabel: 'No active group',
       }),
     [admin, groupById, selectedClassroom]
   );

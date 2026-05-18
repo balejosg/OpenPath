@@ -35,13 +35,13 @@ describe('CloneGroupModal', () => {
       />
     );
 
-    fireEvent.change(screen.getByPlaceholderText('Ej: politica-primaria'), {
+    fireEvent.change(screen.getByPlaceholderText('E.g. primary-policy'), {
       target: { value: 'biblioteca-aula' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Descripción de la política...'), {
+    fireEvent.change(screen.getByPlaceholderText('Policy description...'), {
       target: { value: 'Biblioteca Aula' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Clonar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clone' }));
 
     expect(onNameChange).toHaveBeenCalledWith('biblioteca-aula');
     expect(onDisplayNameChange).toHaveBeenCalledWith('Biblioteca Aula');

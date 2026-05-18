@@ -35,6 +35,7 @@ import {
   getOpenPathDependencyObservationDiagnostics,
   recordOpenPathDependencyObservationEvent,
 } from './dependency-observation-diagnostics.js';
+import { t } from './i18n.js';
 
 interface BlockedScreenContext {
   tabId: number;
@@ -301,7 +302,7 @@ export function createBackgroundRuntime(
     setDomainStatus(tabId, hostname, {
       state: 'pending',
       updatedAt: Date.now(),
-      message: 'Reintentando actualizacion local',
+      message: t('popupLocalUpdateRetrying'),
       ...requestTypePatch,
     });
 
@@ -317,7 +318,7 @@ export function createBackgroundRuntime(
     setDomainStatus(tabId, hostname, {
       state: success ? 'autoApproved' : 'localUpdateError',
       updatedAt: Date.now(),
-      message: success ? 'Actualizacion local completada' : 'Sigue fallando la actualizacion local',
+      message: success ? t('popupLocalUpdateCompleted') : t('popupLocalUpdateStillFailing'),
       ...requestTypePatch,
     });
 
@@ -410,7 +411,7 @@ export function createBackgroundRuntime(
     await blockedSubdomainRulesController.init();
     blockedPathRulesController.startRefreshLoop();
     blockedSubdomainRulesController.startRefreshLoop();
-    logger.info('[Monitor de Bloqueos] Background script v2.0.0 (MV3) cargado');
+    logger.info('[Blocking Monitor] Background script v2.0.0 (MV3) loaded');
   }
 
   return {

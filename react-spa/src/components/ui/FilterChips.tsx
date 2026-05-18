@@ -41,7 +41,7 @@ export const FilterChips: React.FC<FilterChipsProps> = ({
     <div
       className={cn('flex items-center gap-2 flex-wrap', className)}
       role="group"
-      aria-label="Filtros"
+      aria-label="Filters"
     >
       {options.map((option) => {
         const isActive = option.id === activeId;

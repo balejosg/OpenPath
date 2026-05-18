@@ -61,16 +61,16 @@ case "$1" in
         fi
         
         # Step 1: Detect and save primary DNS before disabling systemd-resolved.
-        echo "  Detectando DNS primario..."
+        echo "  Detecting primary DNS..."
         PRIMARY_DNS=$(detect_primary_dns)
         echo "$PRIMARY_DNS" > "$ORIGINAL_DNS_FILE"
 
         # Step 2: Free port 53 (disable systemd-resolved)
-        echo "  Liberando puerto 53..."
+        echo "  Releasing port 53..."
         free_port_53
         
         # Step 3: Configure DNS
-        echo "  Configurando DNS..."
+        echo "  Configuring DNS..."
         configure_upstream_dns
         configure_resolv_conf
         create_dns_init_script
@@ -83,14 +83,14 @@ ExecStartPre=/usr/local/bin/dnsmasq-init-resolv.sh
 EOF
 
         # Step 5: Configure initial dnsmasq
-        echo "  Configurando dnsmasq..."
+        echo "  Configuring dnsmasq..."
         if [ -f /etc/dnsmasq.conf ]; then
             sed -i 's/^no-resolv/#no-resolv/g' /etc/dnsmasq.conf 2>/dev/null || true
             sed -i 's/^cache-size=/#cache-size=/g' /etc/dnsmasq.conf 2>/dev/null || true
         fi
         
         cat > /etc/dnsmasq.d/openpath.conf << EOF
-# Configuración inicial - será sobrescrita por openpath-update.sh
+# Initial configuration - will be overwritten by openpath-update.sh
 no-resolv
 resolv-file=/run/dnsmasq/resolv.conf
 listen-address=127.0.0.1
@@ -108,7 +108,7 @@ EOF
         install_nm_dispatcher
         
         # Step 10: Reload systemd and enable services
-        echo "  Habilitando servicios..."
+        echo "  Enabling services..."
         systemctl daemon-reload
         
         systemctl enable dnsmasq
@@ -120,7 +120,7 @@ EOF
         
         # Step 10b: Enable unattended-upgrades if available
         if command -v unattended-upgrade &>/dev/null; then
-            echo "  Habilitando auto-actualizaciones..."
+            echo "  Enabling automatic updates..."
             systemctl enable apt-daily.timer 2>/dev/null || true
             systemctl enable apt-daily-upgrade.timer 2>/dev/null || true
             systemctl start apt-daily.timer 2>/dev/null || true
@@ -135,16 +135,16 @@ EOF
         sleep 2
 
         if ! systemctl is-active --quiet dnsmasq; then
-            echo "ERROR: dnsmasq no arrancó"
+            echo "ERROR: dnsmasq did not start"
             journalctl -u dnsmasq -n 10 --no-pager
             exit 1
         fi
 
         # Step 11b: Install Firefox extension only after local DNS is active.
-        echo "  Validando configuración de solicitudes del navegador..."
+        echo "  Validating browser request configuration..."
         if is_openpath_request_setup_complete; then
             if detect_firefox_dir >/dev/null 2>&1; then
-                echo "  Ejecutando configuración estricta Firefox..."
+                echo "  Running strict Firefox configuration..."
                 if ! /usr/local/bin/openpath-browser-setup.sh; then
                     echo "  ⚠ Firefox browser setup failed; package configuration will continue"
                     echo "    Reintente con: sudo /usr/local/bin/openpath-browser-setup.sh"
@@ -159,8 +159,8 @@ EOF
         fi
 
         # Step 12: Run initial whitelist update
-        echo "  Ejecutando primera actualización..."
-        /usr/local/bin/openpath-update.sh || echo "⚠ Primera actualización falló (el timer lo reintentará)"
+        echo "  Running first update..."
+        /usr/local/bin/openpath-update.sh || echo "⚠ First update failed (the timer will retry)"
 
         # Step 13: Start timers and background services after the initial
         # update settles to avoid concurrent dnsmasq restarts during install.

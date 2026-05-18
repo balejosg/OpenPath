@@ -1,9 +1,9 @@
-export const ACTIVE_INACTIVE_LABELS_ES = {
-  Active: 'Activo',
-  Inactive: 'Inactivo',
+export const ACTIVE_INACTIVE_LABELS = {
+  Active: 'Active',
+  Inactive: 'Inactive',
 } as const;
 
-export type ActiveInactiveStatus = keyof typeof ACTIVE_INACTIVE_LABELS_ES;
+export type ActiveInactiveStatus = keyof typeof ACTIVE_INACTIVE_LABELS;
 
 export function normalizeActiveInactiveStatus(value: unknown): ActiveInactiveStatus | null {
   if (value === 'Active' || value === 'Inactive') return value;
@@ -15,12 +15,16 @@ export function normalizeActiveInactiveStatus(value: unknown): ActiveInactiveSta
   return null;
 }
 
-export function getEsActiveInactiveLabel(status: ActiveInactiveStatus): string {
-  return ACTIVE_INACTIVE_LABELS_ES[status];
+export function getActiveInactiveLabel(status: ActiveInactiveStatus): string {
+  return ACTIVE_INACTIVE_LABELS[status];
 }
 
-export function getEsActiveInactiveLabelSafe(value: unknown, fallback = 'Desconocido'): string {
+export function getActiveInactiveLabelSafe(value: unknown, fallback = 'Unknown'): string {
   const normalized = normalizeActiveInactiveStatus(value);
   if (!normalized) return fallback;
-  return getEsActiveInactiveLabel(normalized);
+  return getActiveInactiveLabel(normalized);
 }
+
+export const ACTIVE_INACTIVE_LABELS_ES = ACTIVE_INACTIVE_LABELS;
+export const getEsActiveInactiveLabel = getActiveInactiveLabel;
+export const getEsActiveInactiveLabelSafe = getActiveInactiveLabelSafe;

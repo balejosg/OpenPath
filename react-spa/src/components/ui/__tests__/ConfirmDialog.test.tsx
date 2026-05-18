@@ -9,18 +9,18 @@ describe('ConfirmDialog', () => {
     const onConfirm = vi.fn();
 
     render(
-      <ConfirmDialog isOpen title="Eliminar" onClose={onClose} onConfirm={onConfirm}>
+      <ConfirmDialog isOpen title="Delete" onClose={onClose} onConfirm={onConfirm}>
         <p>Seguro?</p>
       </ConfirmDialog>
     );
 
-    expect(screen.getByText('Eliminar')).toBeInTheDocument();
+    expect(screen.getByText('Delete')).toBeInTheDocument();
     expect(screen.getByText('Seguro?')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onClose).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
@@ -28,7 +28,7 @@ describe('ConfirmDialog', () => {
     render(
       <ConfirmDialog
         isOpen
-        title="Eliminar"
+        title="Delete"
         onClose={() => undefined}
         onConfirm={() => undefined}
         errorMessage="Fallo"
@@ -41,13 +41,7 @@ describe('ConfirmDialog', () => {
   it('prevents closing while loading', () => {
     const onClose = vi.fn();
     render(
-      <ConfirmDialog
-        isOpen
-        title="Eliminar"
-        onClose={onClose}
-        onConfirm={() => undefined}
-        isLoading
-      >
+      <ConfirmDialog isOpen title="Delete" onClose={onClose} onConfirm={() => undefined} isLoading>
         <p>Seguro?</p>
       </ConfirmDialog>
     );
@@ -55,7 +49,7 @@ describe('ConfirmDialog', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onClose).not.toHaveBeenCalled();
 
-    const cancel = screen.getByRole('button', { name: 'Cancelar' });
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
     expect(cancel).toBeDisabled();
   });
 });

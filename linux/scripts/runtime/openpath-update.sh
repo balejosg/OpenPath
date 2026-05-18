@@ -54,7 +54,7 @@ fi
 WHITELIST_URL=$(get_whitelist_url)
 
 main() {
-    log "=== Iniciando actualización de whitelist ==="
+    log "=== Starting whitelist update ==="
 
     init_directories
     # shellcheck disable=SC2034  # PRIMARY_DNS is consumed by sourced helper modules.
@@ -90,7 +90,7 @@ main() {
         if [ ! -f "$SYSTEM_DISABLED_FLAG" ]; then
             log "=== SISTEMA DESACTIVADO REMOTAMENTE ==="
             cleanup_system
-            log "Cerrando navegadores por desactivación del sistema..."
+            log "Closing browsers because the system is disabled..."
             force_browser_close
             touch "$SYSTEM_DISABLED_FLAG"
         else
@@ -100,7 +100,7 @@ main() {
     fi
 
     if [ -f "$SYSTEM_DISABLED_FLAG" ]; then
-        log "Sistema reactivándose desde modo desactivado"
+        log "System reactivating from disabled mode"
         rm -f "$SYSTEM_DISABLED_FLAG"
     fi
 
@@ -128,7 +128,7 @@ main() {
     local policies_changed=false
     if [ "$old_policies_hash" != "$new_policies_hash" ]; then
         policies_changed=true
-        log "Detectados cambios en políticas de navegador"
+        log "Browser policy changes detected"
         echo "$new_policies_hash" > "$BROWSER_POLICIES_HASH"
     fi
 
@@ -137,19 +137,19 @@ main() {
 
     if has_config_changed; then
         dns_config_changed=true
-        log "Detectados cambios en configuración DNS - aplicando..."
+        log "DNS configuration changes detected - applying..."
 
         if restart_dnsmasq; then
             sha256sum "$DNSMASQ_CONF" | cut -d' ' -f1 > "$DNSMASQ_CONF_HASH"
 
             if verify_dns; then
                 dns_healthy=true
-                log "✓ DNS funcional"
+                log "✓ DNS functional"
             else
-                log "⚠ DNS no funcional - modo permisivo"
+                log "⚠ DNS not functional - permissive mode"
             fi
         else
-            log "ERROR: Fallo al reiniciar dnsmasq"
+            log "ERROR: Failed to restart dnsmasq"
             cleanup_system
             return
         fi
@@ -157,7 +157,7 @@ main() {
         if verify_dns; then
             dns_healthy=true
         else
-            log "⚠ DNS no funcional - manteniendo firewall permisivo"
+            log "⚠ DNS not functional - keeping firewall permissive"
         fi
     fi
 
@@ -169,7 +169,7 @@ main() {
         "$FLUSH_REASON" \
         "$ACTIVATION_CONTEXT"
 
-    log "=== Actualización completada ==="
+    log "=== Update completed ==="
 }
 
 main "$@"

@@ -118,7 +118,7 @@ export function useGroupedRulesData({
     } catch (err) {
       if (!fetchSeqRef.current.isLatest(seq)) return;
       reportError('Failed to fetch grouped rules:', err);
-      setError('Error al cargar reglas');
+      setError('Unable to load rules');
     } finally {
       if (fetchSeqRef.current.isLatest(seq)) {
         setLoading(false);

@@ -30,11 +30,11 @@ export const GroupSelect: React.FC<GroupSelectProps> = ({
   onChange,
   groups,
   includeNoneOption = true,
-  noneLabel = 'Sin grupo',
+  noneLabel = 'No group',
   inactiveBehavior = 'hide',
   unknownValueLabel,
   unknownValueDisabled = true,
-  emptyLabel = 'Sin grupos disponibles',
+  emptyLabel = 'No groups disponibles',
   disabled,
   className,
 }) => {
@@ -65,7 +65,7 @@ export const GroupSelect: React.FC<GroupSelectProps> = ({
     for (const g of filtered) {
       const enabled = isGroupEnabled(g);
       const base = g.displayName ?? g.name;
-      const label = !enabled && inactiveBehavior === 'disable' ? `${base} (Inactivo)` : base;
+      const label = !enabled && inactiveBehavior === 'disable' ? `${base} (Inactive)` : base;
       opts.push({
         value: g.id,
         label,

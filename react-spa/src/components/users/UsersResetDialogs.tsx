@@ -28,9 +28,9 @@ export function UsersResetDialogs({
     <>
       <DangerConfirmDialog
         isOpen={resetFlow.status === 'confirm'}
-        title="Generar token de recuperación"
+        title="Generate recovery token"
         confirmLabel="Generar token"
-        cancelLabel="Cancelar"
+        cancelLabel="Cancel"
         isLoading={resettingPassword}
         errorMessage={resetError}
         onClose={closeResetFlow}
@@ -39,7 +39,7 @@ export function UsersResetDialogs({
         {resetUser ? (
           <div className="space-y-2 text-sm text-slate-600">
             <p>
-              Vas a generar un token de recuperación para{' '}
+              You are generating a recovery token for{' '}
               <span className="font-semibold text-slate-800">{resetUser.name}</span>.
             </p>
             <p className="font-mono text-xs text-slate-500">{resetUser.email}</p>
@@ -50,13 +50,13 @@ export function UsersResetDialogs({
       <Modal
         isOpen={resetFlow.status === 'success'}
         onClose={closeResetFlow}
-        title="Token de recuperación generado"
+        title="Recovery token generated"
         className="max-w-md"
       >
         <div className="space-y-4">
           <p className="text-sm text-slate-600">
-            Comparte este token de forma segura con la persona usuaria para que pueda completar el
-            restablecimiento desde la pantalla de acceso.
+            Share this token securely with the user so they can complete the reset from the sign-in
+            screen.
           </p>
           <div className="space-y-2">
             <label htmlFor="reset-token" className="text-sm font-medium text-slate-700">
@@ -75,7 +75,7 @@ export function UsersResetDialogs({
               onClick={closeResetFlow}
               className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
             >
-              Cerrar
+              Close
             </button>
           </div>
         </div>

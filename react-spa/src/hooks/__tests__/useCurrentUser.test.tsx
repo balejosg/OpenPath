@@ -64,7 +64,7 @@ describe('useCurrentUser', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     expect(result.current.user).toBeNull();
-    expect(result.current.error).toBe('Error al cargar perfil de usuario');
+    expect(result.current.error).toBe('Unable to load user profile');
     expect(reportErrorMock).toHaveBeenCalledWith('Failed to fetch current user:', failure);
   });
 
@@ -100,6 +100,6 @@ describe('useCurrentUser', () => {
 
     await waitFor(() => expect(result.current.user?.id).toBe('user-2'));
     expect(result.current.user?.primaryRole).toBe('admin');
-    expect(getRoleDisplayLabel('teacher')).toBe('Profesor');
+    expect(getRoleDisplayLabel('teacher')).toBe('Teacher');
   });
 });

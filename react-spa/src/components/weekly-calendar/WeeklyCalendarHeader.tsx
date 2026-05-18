@@ -18,7 +18,7 @@ export const WeeklyCalendarHeader: React.FC<WeeklyCalendarHeaderProps> = ({
     </div>
     <div className="grid grid-cols-[60px_repeat(5,1fr)] border-b border-slate-200 bg-slate-50">
       <div className="p-2 text-xs font-semibold text-slate-400 text-center flex items-center justify-center">
-        Hora
+        Time
       </div>
       {DAYS.map((d, i) => {
         const isToday = todayKey === d.key;

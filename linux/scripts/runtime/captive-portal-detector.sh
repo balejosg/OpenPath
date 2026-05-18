@@ -58,12 +58,12 @@ interruptible_sleep() {
     SLEEP_PID=""
 }
 
-# Bucle principal
+# Main loop
 main() {
-    log "[CAPTIVE] Iniciando detector de portal cautivo"
+    log "[CAPTIVE] Starting captive portal detector"
 
     if is_portal_mode_active; then
-        log "[CAPTIVE] Portal mode marker detectado al inicio - manteniendo modo fail-open hasta AUTHENTICATED" "WARN"
+        log "[CAPTIVE] Portal mode marker detected at startup - keeping fail-open mode until AUTHENTICATED" "WARN"
         CAPTIVE_PORTAL_DETECTED=true
     fi
 

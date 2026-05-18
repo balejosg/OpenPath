@@ -72,11 +72,11 @@ cmd_enroll() {
             --token-stdin) token_from_stdin=true; shift ;;
             --enrollment-token) enrollment_token="$2"; shift 2 ;;
             --machine-name) machine_name="$2"; shift 2 ;;
-            *)            echo -e "${RED}Opcion desconocida: $1${NC}"; exit 1 ;;
+            *)            echo -e "${RED}Unknown option: $1${NC}"; exit 1 ;;
         esac
     done
 
-    [[ -z "$api_url" ]] && { echo -e "${RED}Error: --api-url requerido${NC}"; exit 1; }
+    [[ -z "$api_url" ]] && { echo -e "${RED}Error: --api-url is required${NC}"; exit 1; }
     api_url="${api_url%/}"
 
     local token_source_count=0
@@ -86,24 +86,24 @@ cmd_enroll() {
 
     if [[ -n "$enrollment_token" ]]; then
         if [ "$token_source_count" -gt 0 ]; then
-            echo -e "${RED}Error: --enrollment-token no se puede combinar con opciones de token de registro${NC}"
+            echo -e "${RED}Error: --enrollment-token cannot be combined with registration token options${NC}"
             exit 1
         fi
-        [[ -z "$classroom_id" ]] && { echo -e "${RED}Error: --classroom-id requerido con --enrollment-token${NC}"; exit 1; }
+        [[ -z "$classroom_id" ]] && { echo -e "${RED}Error: --classroom-id is required with --enrollment-token${NC}"; exit 1; }
     else
-        [[ -z "$classroom" ]] && { echo -e "${RED}Error: --classroom requerido${NC}"; exit 1; }
+        [[ -z "$classroom" ]] && { echo -e "${RED}Error: --classroom is required${NC}"; exit 1; }
         if [ "$token_source_count" -eq 0 ]; then
-            echo -e "${RED}Error: requiere --token, --token-file o --token-stdin${NC}"
+            echo -e "${RED}Error: requires --token, --token-file, or --token-stdin${NC}"
             exit 1
         fi
         if [ "$token_source_count" -gt 1 ]; then
-            echo -e "${RED}Error: usa solo una opcion de token (--token, --token-file o --token-stdin)${NC}"
+            echo -e "${RED}Error: use only one token option (--token, --token-file o --token-stdin)${NC}"
             exit 1
         fi
 
         if [ -n "$token_file" ]; then
             if [ ! -r "$token_file" ]; then
-                echo -e "${RED}Error: no se puede leer el archivo de token: $token_file${NC}"
+                echo -e "${RED}Error: cannot read token file: $token_file${NC}"
                 exit 1
             fi
             token=$(tr -d '\r\n' < "$token_file")
@@ -111,22 +111,22 @@ cmd_enroll() {
 
         if [ "$token_from_stdin" = true ]; then
             if [ -t 0 ]; then
-                echo -e "${RED}Error: --token-stdin requiere token por entrada estandar${NC}"
+                echo -e "${RED}Error: --token-stdin requires token on standard input${NC}"
                 exit 1
             fi
             IFS= read -r token || true
             token="${token%$'\r'}"
         fi
 
-        [[ -z "$token" ]] && { echo -e "${RED}Error: token vacio${NC}"; exit 1; }
+        [[ -z "$token" ]] && { echo -e "${RED}Error: empty token${NC}"; exit 1; }
     fi
 
     if ! prepare_registration_connectivity "$api_url" "$classroom" "$classroom_id"; then
-        echo -e "${RED}Error: no se pudo preparar la conectividad con la API${NC}"
+        echo -e "${RED}Error: could not prepare API connectivity${NC}"
         exit 1
     fi
 
-    echo -e "${BLUE}Registrando en aula...${NC}"
+    echo -e "${BLUE}Registering in classroom...${NC}"
 
     if [[ -z "$enrollment_token" ]]; then
         local validate_response
@@ -134,7 +134,7 @@ cmd_enroll() {
             -H "Content-Type: application/json" \
             -d "{\"token\":\"$token\"}" \
             "$api_url/api/setup/validate-token" 2>/dev/null) || {
-            echo -e "${RED}Error: No se pudo validar el token (API no accesible)${NC}"
+            echo -e "${RED}Error: Could not validate token (API unreachable)${NC}"
             exit 1
         }
 
@@ -148,10 +148,10 @@ except Exception:
 ')
 
         if [[ "$is_valid" != "true" ]]; then
-            echo -e "${RED}Error: Token de registro invalido${NC}"
+            echo -e "${RED}Error: Invalid registration token${NC}"
             exit 1
         fi
-        echo -e "  Token: ${GREEN}valido${NC}"
+        echo -e "  Token: ${GREEN}valid${NC}"
     fi
 
     local hostname version
@@ -162,7 +162,7 @@ except Exception:
         machine_name="$hostname"
     fi
 
-    [[ -z "$machine_name" ]] && { echo -e "${RED}Error: nombre de maquina invalido${NC}"; exit 1; }
+    [[ -z "$machine_name" ]] && { echo -e "${RED}Error: nombre de maquina invalid${NC}"; exit 1; }
     version=$(dpkg -s openpath-dnsmasq 2>/dev/null | grep "^Version:" | awk '{print $2}' || echo "unknown")
 
     local auth_token=""
@@ -174,8 +174,8 @@ except Exception:
 
     if register_machine "$machine_name" "$classroom" "$classroom_id" "$version" "$api_url" "$auth_token"; then
         if [[ -z "${TOKENIZED_URL:-}" ]] || ! is_tokenized_whitelist_url "$TOKENIZED_URL"; then
-            echo -e "${RED}Error: la API no devolvio una whitelist URL tokenizada valida${NC}"
-            echo "  Respuesta: ${REGISTER_RESPONSE:-sin respuesta}"
+            echo -e "${RED}Error: the API did not return a valid tokenized whitelist URL${NC}"
+            echo "  Response: ${REGISTER_RESPONSE:-no response}"
             exit 1
         fi
 
@@ -189,40 +189,40 @@ except Exception:
         fi
 
         if ! persist_openpath_enrollment_state "$api_url" "$persisted_classroom" "$persisted_classroom_id" "$TOKENIZED_URL"; then
-            echo -e "${RED}Error: no se pudo persistir el estado de enrolado${NC}"
+            echo -e "${RED}Error: could not persist enrollment state${NC}"
             exit 1
         fi
         persist_machine_name "${REGISTERED_MACHINE_NAME:-$machine_name}" || true
 
         if ! activate_enrolled_connectivity; then
-            echo -e "${RED}Error: no se pudo activar la conectividad DNS tras el registro${NC}"
+            echo -e "${RED}Error: could not activate DNS connectivity after registration${NC}"
             exit 1
         fi
 
         classroom="$persisted_classroom"
         classroom_id="$persisted_classroom_id"
 
-        echo -e "  Registro: ${GREEN}exitoso${NC}"
+        echo -e "  Registration: ${GREEN}successful${NC}"
         echo "  URL: $TOKENIZED_URL"
     else
-        echo -e "${RED}Error al registrar maquina${NC}"
-        echo "  Respuesta: $REGISTER_RESPONSE"
+        echo -e "${RED}Error registering machine${NC}"
+        echo "  Response: $REGISTER_RESPONSE"
         exit 1
     fi
 
     reset_cached_whitelist_state
 
-    echo -e "  Aplicando configuracion..."
+    echo -e "  Applying configuration..."
     systemctl restart openpath-sse-listener.service 2>/dev/null || true
-    /usr/local/bin/openpath-update.sh || echo -e "${YELLOW}Primera actualizacion fallo (el timer lo reintentara)${NC}"
+    /usr/local/bin/openpath-update.sh || echo -e "${YELLOW}First update failed (the timer will retry)${NC}"
     /usr/local/bin/openpath-browser-setup.sh
 
     if [[ -n "$classroom" ]]; then
-        echo -e "${GREEN}✓ Registrado en aula: $classroom${NC}"
+        echo -e "${GREEN}✓ Registered in classroom: $classroom${NC}"
     elif [[ -n "$classroom_id" ]]; then
-        echo -e "${GREEN}✓ Registrado en aula ID: $classroom_id${NC}"
+        echo -e "${GREEN}✓ Registered in classroom ID: $classroom_id${NC}"
     else
-        echo -e "${GREEN}✓ Registrado en aula${NC}"
+        echo -e "${GREEN}✓ Registered in classroom${NC}"
     fi
 }
 
@@ -255,43 +255,43 @@ cmd_setup() {
             --enrollment-token) enrollment_token="$2"; shift 2 ;;
             --machine-name) machine_name="$2"; shift 2 ;;
             --help)
-                echo "Uso: openpath setup [--api-url URL] [--classroom AULA] [--token-file ARCHIVO|--token-stdin]"
-                echo "   o: openpath setup --api-url URL --classroom-id ID --enrollment-token TOKEN [--machine-name NOMBRE]"
-                echo "Si no pasas argumentos, se inicia modo interactivo."
+                echo "Usage: openpath setup [--api-url URL] [--classroom CLASSROOM] [--token-file FILE|--token-stdin]"
+                echo "   or: openpath setup --api-url URL --classroom-id ID --enrollment-token TOKEN [--machine-name NAME]"
+                echo "If you pass no arguments, interactive mode starts."
                 return 0
                 ;;
             *)
-                echo -e "${RED}Opcion desconocida: $1${NC}"
+                echo -e "${RED}Unknown option: $1${NC}"
                 return 1
                 ;;
         esac
     done
 
     if [[ -z "$api_url" ]]; then
-        if ! read_prompt_value api_url "API URL (ej: https://openpath.centro.edu): "; then
-            echo -e "${RED}Error: no hay entrada interactiva para solicitar API URL${NC}"
-            echo "  Usa --api-url o ejecuta en una terminal interactiva"
+        if ! read_prompt_value api_url "API URL (example: https://openpath.school.edu): "; then
+            echo -e "${RED}Error: no interactive input available to request API URL${NC}"
+            echo "  Use --api-url or run in an interactive terminal"
             return 1
         fi
     fi
     api_url="${api_url%/}"
-    [[ -z "$api_url" ]] && { echo -e "${RED}Error: API URL vacia${NC}"; return 1; }
+    [[ -z "$api_url" ]] && { echo -e "${RED}Error: empty API URL${NC}"; return 1; }
 
     if [[ -z "$classroom" ]] && [[ -z "$enrollment_token" ]]; then
-        if ! read_prompt_value classroom "Nombre del aula (ej: Aula-101): "; then
-            echo -e "${RED}Error: no hay entrada interactiva para solicitar el aula${NC}"
-            echo "  Usa --classroom o ejecuta en una terminal interactiva"
+        if ! read_prompt_value classroom "Classroom name (example: Room-101): "; then
+            echo -e "${RED}Error: no interactive input available to request classroom${NC}"
+            echo "  Use --classroom or run in an interactive terminal"
             return 1
         fi
     fi
 
     if [[ -n "$enrollment_token" ]]; then
         if [[ -z "$classroom_id" ]]; then
-            echo -e "${RED}Error: --classroom-id requerido con --enrollment-token${NC}"
+            echo -e "${RED}Error: --classroom-id is required with --enrollment-token${NC}"
             return 1
         fi
         if [ -n "$token_file" ] || [ "$token_from_stdin" = true ]; then
-            echo -e "${RED}Error: --enrollment-token no se puede combinar con --token-file/--token-stdin${NC}"
+            echo -e "${RED}Error: --enrollment-token cannot be combined with --token-file/--token-stdin${NC}"
             return 1
         fi
 
@@ -303,25 +303,25 @@ cmd_setup() {
         return $?
     fi
 
-    [[ -z "$classroom" ]] && { echo -e "${RED}Error: aula vacia${NC}"; return 1; }
+    [[ -z "$classroom" ]] && { echo -e "${RED}Error: empty classroom${NC}"; return 1; }
 
     local token_source_count=0
     [ -n "$token_file" ] && token_source_count=$((token_source_count + 1))
     [ "$token_from_stdin" = true ] && token_source_count=$((token_source_count + 1))
 
     if [ "$token_source_count" -gt 1 ]; then
-        echo -e "${RED}Error: usa solo una opcion de token (--token-file o --token-stdin)${NC}"
+        echo -e "${RED}Error: use only one token option (--token-file o --token-stdin)${NC}"
         return 1
     fi
 
     if [ "$token_source_count" -eq 0 ]; then
-        if ! read_prompt_secret token_prompt "Token de registro: "; then
-            echo -e "${RED}Error: sin terminal interactiva; usa --token-file o --token-stdin${NC}"
+        if ! read_prompt_secret token_prompt "Registration token: "; then
+            echo -e "${RED}Error: no interactive terminal; use --token-file or --token-stdin${NC}"
             return 1
         fi
 
         if [[ -z "$token_prompt" ]]; then
-            echo -e "${RED}Error: token vacio${NC}"
+            echo -e "${RED}Error: empty token${NC}"
             return 1
         fi
 
@@ -359,8 +359,8 @@ cmd_setup() {
 
 cmd_rotate_token() {
     if [ ! -f "$ETC_CONFIG_DIR/api-url.conf" ]; then
-        echo -e "${RED}Error: No está configurado el modo Aula${NC}"
-        echo "  Solo las máquinas registradas en un aula pueden rotar su token"
+        echo -e "${RED}Error: Classroom mode is not configured${NC}"
+        echo "  Only machines registered in a classroom can rotate their token"
         exit 1
     fi
 
@@ -374,14 +374,14 @@ cmd_rotate_token() {
     auth_source="$ROTATION_AUTH_SOURCE"
 
     if [ -z "$auth_token" ]; then
-        echo -e "${RED}Error: No se encontró credencial para rotar el token${NC}"
-        echo "  Se esperaba un token derivable desde $WHITELIST_URL_CONF"
+        echo -e "${RED}Error: Could not find a credential to rotate the token${NC}"
+        echo "  Expected a token derivable from $WHITELIST_URL_CONF"
         echo "  Fallback legacy: $(rotation_legacy_secret_path)"
         exit 1
     fi
 
-    echo -e "${BLUE}Rotando token de descarga...${NC}"
-    echo "  Autenticación: $auth_source"
+    echo -e "${BLUE}Rotating download token...${NC}"
+    echo "  Authentication: $auth_source"
 
     local response
     response=$(timeout 30 curl -s -X POST \
@@ -393,15 +393,15 @@ cmd_rotate_token() {
         local new_url
         new_url=$(echo "$response" | grep -o '"whitelistUrl":"[^"]*"' | sed 's/"whitelistUrl":"//;s/"$//')
         if [ -n "$new_url" ] && is_tokenized_whitelist_url "$new_url" && persist_openpath_whitelist_url "$new_url"; then
-            echo -e "${GREEN}✓ Token rotado exitosamente${NC}"
-            echo "  Nueva URL guardada en $WHITELIST_URL_CONF"
+            echo -e "${GREEN}✓ Token rotated successfully${NC}"
+            echo "  New URL saved in $WHITELIST_URL_CONF"
         else
-            echo -e "${RED}✗ Rotación exitosa pero no se recibió nueva URL${NC}"
+            echo -e "${RED}✗ Rotation succeeded but no new URL was received${NC}"
             exit 1
         fi
     else
-        echo -e "${RED}✗ Error al rotar token${NC}"
-        echo "  Respuesta: $response"
+        echo -e "${RED}✗ Error rotating token${NC}"
+        echo "  Response: $response"
         exit 1
     fi
 }

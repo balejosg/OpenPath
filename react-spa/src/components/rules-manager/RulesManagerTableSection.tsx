@@ -64,7 +64,7 @@ export function RulesManagerTableSection({
             onClick={onRetry}
             className="text-red-700 hover:text-red-800 text-sm mt-2 underline"
           >
-            Reintentar
+            Retry
           </button>
         </div>
       )}

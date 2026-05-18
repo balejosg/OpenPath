@@ -84,8 +84,8 @@ export async function notifyTeachersOfNewRequest(
   }
 
   const payload: NotificationPayload = {
-    title: '📨 Nueva solicitud',
-    body: `Dominio: ${request.domain}`,
+    title: '📨 New request',
+    body: `Domain: ${request.domain}`,
     icon: config.pushIconPath,
     badge: config.pushBadgePath,
     data: {

@@ -66,7 +66,7 @@ describe('Dashboard', () => {
     {
       id: 'group-3',
       name: 'profesores',
-      displayName: 'Profesores',
+      displayName: 'Teacheres',
       enabled: false,
       whitelistCount: 12,
       blockedSubdomainCount: 0,
@@ -127,10 +127,10 @@ describe('Dashboard', () => {
     renderDashboard();
 
     await waitFor(() => {
-      expect(screen.getByText('Grupos Activos')).toBeInTheDocument();
-      expect(screen.getByText('Dominios Permitidos')).toBeInTheDocument();
+      expect(screen.getByText('Active Groups')).toBeInTheDocument();
+      expect(screen.getByText('Allowed Domains')).toBeInTheDocument();
       expect(screen.getByText('Sitios Bloqueados')).toBeInTheDocument();
-      expect(screen.getByText('Solicitudes Pendientes')).toBeInTheDocument();
+      expect(screen.getByText('Pending Requests')).toBeInTheDocument();
     });
   });
 
@@ -138,7 +138,7 @@ describe('Dashboard', () => {
     renderDashboard();
 
     await waitFor(() => {
-      expect(screen.getByText('Estado del Sistema: Seguro')).toBeInTheDocument();
+      expect(screen.getByText('System Status: Secure')).toBeInTheDocument();
     });
   });
 
@@ -153,7 +153,7 @@ describe('Dashboard', () => {
     renderDashboard();
 
     await waitFor(() => {
-      expect(screen.getByText('Estado del Sistema: Sin grupos habilitados')).toBeInTheDocument();
+      expect(screen.getByText('System Status: No groups enabled')).toBeInTheDocument();
     });
   });
 
@@ -161,7 +161,7 @@ describe('Dashboard', () => {
     renderDashboard();
 
     await waitFor(() => {
-      expect(screen.getByText('Grupo vigente por aula')).toBeInTheDocument();
+      expect(screen.getByText('Active group by classroom')).toBeInTheDocument();
       expect(screen.getByText('Laboratorio A')).toBeInTheDocument();
       expect(screen.getByText(/Grupo Primaria/)).toBeInTheDocument();
     });
@@ -190,7 +190,7 @@ describe('Dashboard', () => {
     renderDashboard({ onNavigateToRules });
 
     await waitFor(() => {
-      expect(screen.getByText('Acceso Rápido')).toBeInTheDocument();
+      expect(screen.getByText('Quick Access')).toBeInTheDocument();
     });
   });
 
@@ -198,10 +198,10 @@ describe('Dashboard', () => {
     renderDashboard();
 
     await waitFor(() => {
-      expect(screen.getByText('Grupos Activos')).toBeInTheDocument();
+      expect(screen.getByText('Active Groups')).toBeInTheDocument();
     });
 
-    expect(screen.queryByText('Acceso Rápido')).not.toBeInTheDocument();
+    expect(screen.queryByText('Quick Access')).not.toBeInTheDocument();
   });
 
   it('renders group cards in quick access section', async () => {
@@ -212,7 +212,7 @@ describe('Dashboard', () => {
     await waitFor(() => {
       expect(screen.getByText('Grupo Primaria')).toBeInTheDocument();
       expect(screen.getByText('Grupo Secundaria')).toBeInTheDocument();
-      expect(screen.getByText('Profesores')).toBeInTheDocument();
+      expect(screen.getByText('Teacheres')).toBeInTheDocument();
     });
   });
 
@@ -267,24 +267,24 @@ describe('Dashboard', () => {
     });
   });
 
-  it('shows Activo badge for enabled groups', async () => {
+  it('shows Active badge for enabled groups', async () => {
     const onNavigateToRules = vi.fn();
 
     renderDashboard({ onNavigateToRules });
 
     await waitFor(() => {
-      const activeBadges = screen.getAllByText('Activo');
+      const activeBadges = screen.getAllByText('Active');
       expect(activeBadges.length).toBe(2);
     });
   });
 
-  it('shows Inactivo badge for disabled groups', async () => {
+  it('shows Inactive badge for disabled groups', async () => {
     const onNavigateToRules = vi.fn();
 
     renderDashboard({ onNavigateToRules });
 
     await waitFor(() => {
-      expect(screen.getByText('Inactivo')).toBeInTheDocument();
+      expect(screen.getByText('Inactive')).toBeInTheDocument();
     });
   });
 
@@ -334,7 +334,7 @@ describe('Dashboard', () => {
     renderDashboard({ onNavigateToRules });
 
     await waitFor(() => {
-      expect(screen.getByText(/Mostrando 6 de 10 grupos/)).toBeInTheDocument();
+      expect(screen.getByText(/Showing 6 of 10 groups/)).toBeInTheDocument();
     });
   });
 
@@ -358,7 +358,7 @@ describe('Dashboard', () => {
     renderDashboard({ onNavigateToRules });
 
     await waitFor(() => {
-      expect(screen.getByText('No hay grupos configurados.')).toBeInTheDocument();
+      expect(screen.getByText('No groups configured.')).toBeInTheDocument();
     });
   });
 
@@ -375,12 +375,12 @@ describe('Dashboard', () => {
 
     renderDashboard({ onNavigateToRules });
 
-    expect(screen.getByText('Cargando grupos...')).toBeInTheDocument();
+    expect(screen.getByText('Loading groups...')).toBeInTheDocument();
 
     // Flush other async effects (stats/classrooms) to avoid act warnings.
     await waitFor(() => {
-      expect(screen.queryByText('Cargando estadísticas...')).not.toBeInTheDocument();
-      expect(screen.queryByText('Cargando aulas...')).not.toBeInTheDocument();
+      expect(screen.queryByText('Loading stats...')).not.toBeInTheDocument();
+      expect(screen.queryByText('Loading classrooms...')).not.toBeInTheDocument();
     });
   });
 
@@ -410,13 +410,13 @@ describe('Dashboard', () => {
     renderDashboard({ onNavigateToRules });
 
     await waitFor(() => {
-      expect(screen.getByText('Error al cargar grupos')).toBeInTheDocument();
+      expect(screen.getByText('Unable to load groups')).toBeInTheDocument();
     });
 
     // Flush other async effects (stats/classrooms) to avoid act warnings.
     await waitFor(() => {
-      expect(screen.queryByText('Cargando estadísticas...')).not.toBeInTheDocument();
-      expect(screen.queryByText('Cargando aulas...')).not.toBeInTheDocument();
+      expect(screen.queryByText('Loading stats...')).not.toBeInTheDocument();
+      expect(screen.queryByText('Loading classrooms...')).not.toBeInTheDocument();
     });
   });
 
@@ -471,11 +471,11 @@ describe('Dashboard', () => {
       fireEvent.click(screen.getByTestId('sort-option-rules'));
 
       await waitFor(() => {
-        expect(screen.getByText(/Más reglas/)).toBeInTheDocument();
+        expect(screen.getByText(/Most rules/)).toBeInTheDocument();
       });
     });
 
-    it('sorts by rules count descending when "Más reglas" is selected', async () => {
+    it('sorts by rules count descending when "Most rules" is selected', async () => {
       const onNavigateToRules = vi.fn();
 
       renderDashboard({ onNavigateToRules });

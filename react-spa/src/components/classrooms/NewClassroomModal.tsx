@@ -32,13 +32,13 @@ const NewClassroomModal: React.FC<NewClassroomModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <Modal isOpen onClose={onClose} title="Nueva Aula" className="max-w-md">
+    <Modal isOpen onClose={onClose} title="New Classroom" className="max-w-md">
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Nombre del Aula</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Classroom Name</label>
           <input
             type="text"
-            placeholder="Ej: Laboratorio C"
+            placeholder="E.g. Lab C"
             value={newName}
             onChange={(e) => onNameChange(e.target.value)}
             className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none ${
@@ -52,13 +52,13 @@ const NewClassroomModal: React.FC<NewClassroomModalProps> = ({
           )}
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Grupo Inicial</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Initial Group</label>
           <select
             value={newGroup}
             onChange={(e) => onGroupChange(e.target.value)}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
           >
-            <option value="">Sin grupo</option>
+            <option value="">No group</option>
             {groupOptions.map((g) => (
               <option key={g.value} value={g.value}>
                 {g.label}
@@ -72,7 +72,7 @@ const NewClassroomModal: React.FC<NewClassroomModalProps> = ({
             disabled={saving}
             className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
           >
-            Cancelar
+            Cancel
           </button>
           <button
             onClick={onCreate}
@@ -80,7 +80,7 @@ const NewClassroomModal: React.FC<NewClassroomModalProps> = ({
             className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {saving && <Loader2 size={16} className="animate-spin" />}
-            Crear Aula
+            Create Classroom
           </button>
         </div>
       </div>

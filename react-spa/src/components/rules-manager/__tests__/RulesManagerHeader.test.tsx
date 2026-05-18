@@ -16,8 +16,8 @@ describe('RulesManagerHeader', () => {
       />
     );
 
-    fireEvent.click(screen.getByTitle('Volver a grupos'));
-    fireEvent.click(screen.getByTitle('Vista jerárquica'));
+    fireEvent.click(screen.getByTitle('Back to groups'));
+    fireEvent.click(screen.getByTitle('Hierarchical view'));
 
     expect(onBack).toHaveBeenCalled();
     expect(onViewModeChange).toHaveBeenCalledWith('hierarchical');

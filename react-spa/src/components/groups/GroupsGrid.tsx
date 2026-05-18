@@ -43,7 +43,7 @@ export function GroupsGrid({
         <div className="col-span-full flex items-center justify-center py-12">
           <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
           <span className="ml-2 text-slate-500">
-            {activeView === 'library' ? 'Cargando biblioteca...' : 'Cargando grupos...'}
+            {activeView === 'library' ? 'Loading library...' : 'Loading groups...'}
           </span>
         </div>
       ) : error ? (
@@ -51,18 +51,18 @@ export function GroupsGrid({
           <AlertCircle className="w-6 h-6 text-red-400 mx-auto" />
           <span className="text-red-500 text-sm mt-2 block">{error}</span>
           <button onClick={onRetry} className="text-blue-600 hover:text-blue-800 text-sm mt-2">
-            Reintentar
+            Retry
           </button>
         </div>
       ) : groups.length === 0 ? (
         <div className="col-span-full text-center py-12 text-slate-500">
           {activeView === 'library'
-            ? 'Todavía no hay políticas públicas en la biblioteca.'
+            ? 'No public policies in the library yet.'
             : admin
-              ? 'No hay grupos configurados. Crea uno nuevo para empezar.'
+              ? 'No groups configured. Create one to get started.'
               : teacherCanCreateGroups
-                ? 'Todavía no tienes políticas. Crea una nueva para empezar.'
-                : 'Todavía no tienes políticas asignadas. Pide a un administrador que te asigne una.'}
+                ? 'You do not have policies yet. Create one to get started.'
+                : 'You do not have assigned policies yet. Ask an administrator to assign one.'}
 
           {activeView === 'my' && !admin && teacherCanCreateGroups && (
             <div className="mt-4">
@@ -70,7 +70,7 @@ export function GroupsGrid({
                 onClick={onOpenNewModal}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
               >
-                + Crear mi primera política
+                + Create my first policy
               </button>
             </div>
           )}
@@ -106,7 +106,7 @@ export function GroupsGrid({
             <div className="space-y-3">
               <div className="flex justify-between items-center text-sm py-2 border-t border-slate-100 border-b">
                 <span className="text-slate-500 flex items-center gap-2 text-xs">
-                  <ShieldCheck size={14} /> Dominios
+                  <ShieldCheck size={14} /> Allowed domains
                 </span>
                 <span className="font-medium text-slate-900">{group.domainCount}</span>
               </div>
@@ -122,11 +122,11 @@ export function GroupsGrid({
                     className={`text-xs px-2 py-0.5 rounded-full border font-medium ${group.visibility === 'instance_public' ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-100 text-slate-600'}`}
                     title={
                       group.visibility === 'instance_public'
-                        ? 'Visible para todos en la biblioteca'
-                        : 'Solo visible para ti'
+                        ? 'Visible to everyone in the library'
+                        : 'Only visible to you'
                     }
                   >
-                    {group.visibility === 'instance_public' ? 'Público' : 'Privado'}
+                    {group.visibility === 'instance_public' ? 'Public' : 'Private'}
                   </span>
                 </div>
 
@@ -141,9 +141,9 @@ export function GroupsGrid({
                         })
                       }
                       className="text-xs text-slate-700 hover:text-slate-900 flex items-center gap-1 font-medium"
-                      title="Ver reglas (solo lectura)"
+                      title="View rules (read only)"
                     >
-                      <ArrowRight size={12} /> Ver
+                      <ArrowRight size={12} /> View
                     </button>
                     <button
                       onClick={() => onOpenCloneModal(group.id)}
@@ -155,11 +155,11 @@ export function GroupsGrid({
                       }`}
                       title={
                         group.status === 'Active'
-                          ? 'Clonar para editar'
-                          : 'No se puede clonar un grupo inactivo'
+                          ? 'Clone to edit'
+                          : 'Inactive groups cannot be cloned'
                       }
                     >
-                      <Copy size={12} /> Clonar
+                      <Copy size={12} /> Clone
                     </button>
                   </div>
                 ) : (
@@ -167,7 +167,7 @@ export function GroupsGrid({
                     onClick={() => onOpenConfigModal(group.id)}
                     className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 font-medium transition-opacity"
                   >
-                    Configurar <ArrowRight size={12} />
+                    Configure <ArrowRight size={12} />
                   </button>
                 )}
               </div>

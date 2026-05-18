@@ -13,7 +13,7 @@ interface ExportDropdownProps {
 const EXPORT_OPTIONS: { format: ExportFormat; label: string; icon: React.ReactNode }[] = [
   { format: 'csv', label: 'CSV (.csv)', icon: <FileSpreadsheet size={14} /> },
   { format: 'json', label: 'JSON (.json)', icon: <FileJson size={14} /> },
-  { format: 'txt', label: 'Texto (.txt)', icon: <FileText size={14} /> },
+  { format: 'txt', label: 'Text (.txt)', icon: <FileText size={14} /> },
 ];
 
 /**
@@ -73,10 +73,10 @@ export const ExportDropdown: React.FC<ExportDropdownProps> = ({
         size="md"
         onClick={() => setIsOpen(!isOpen)}
         disabled={disabled || rulesCount === 0}
-        title={rulesCount === 0 ? 'No hay reglas para exportar' : 'Exportar reglas'}
+        title={rulesCount === 0 ? 'No rules to export' : 'Export rules'}
       >
         <Download size={16} className="mr-1" />
-        Exportar
+        Export
         <ChevronDown
           size={14}
           className={cn('ml-1 transition-transform', isOpen && 'rotate-180')}
@@ -92,7 +92,7 @@ export const ExportDropdown: React.FC<ExportDropdownProps> = ({
         >
           <div className="px-3 py-2 border-b border-slate-100">
             <p className="text-xs text-slate-500">
-              Exportar {rulesCount} {rulesCount === 1 ? 'regla' : 'reglas'}
+              Export {rulesCount} {rulesCount === 1 ? 'rule' : 'rules'}
             </p>
           </div>
 

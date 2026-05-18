@@ -75,16 +75,16 @@ vi.mock('../../components/ScheduleFormModal', () => ({
     onClose: () => void;
   }) => (
     <div data-testid="schedule-form-modal">
-      Horario semanal:{schedule?.id ?? 'nuevo'}
+      Weekly schedule:{schedule?.id ?? 'nuevo'}
       {error ? <p>{error}</p> : null}
       <button
         onClick={() =>
           onSave({ dayOfWeek: 4, startTime: '10:00', endTime: '11:00', groupId: 'group-2' })
         }
       >
-        Guardar horario semanal
+        Save weekly schedule
       </button>
-      <button onClick={onClose}>Cerrar horario semanal</button>
+      <button onClick={onClose}>Close weekly schedule</button>
     </div>
   ),
 }));
@@ -102,7 +102,7 @@ vi.mock('../../components/OneOffScheduleFormModal', () => ({
     onClose: () => void;
   }) => (
     <div data-testid="one-off-schedule-form-modal">
-      Horario puntual:{schedule?.id ?? 'nuevo'}
+      One-off schedule:{schedule?.id ?? 'nuevo'}
       {error ? <p>{error}</p> : null}
       <button
         onClick={() =>
@@ -113,9 +113,9 @@ vi.mock('../../components/OneOffScheduleFormModal', () => ({
           })
         }
       >
-        Guardar horario puntual
+        Save one-off schedule
       </button>
-      <button onClick={onClose}>Cerrar horario puntual</button>
+      <button onClick={onClose}>Close one-off schedule</button>
     </div>
   ),
 }));
@@ -351,15 +351,15 @@ describe('TeacherDashboard', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Tu horario de hoy')).toBeInTheDocument();
+      expect(screen.getByText("Today's schedule")).toBeInTheDocument();
     });
     await waitFor(() => {
-      expect(screen.getByText('Clase actual')).toBeInTheDocument();
+      expect(screen.getByText('Current class')).toBeInTheDocument();
     });
     expect(screen.getAllByText('Investigacion - Lab A').length).toBeGreaterThan(0);
 
     const headings = screen.getAllByRole('heading').map((heading) => heading.textContent);
-    expect(headings.indexOf('Tu horario de hoy')).toBeLessThan(headings.indexOf('Semana'));
+    expect(headings.indexOf("Today's schedule")).toBeLessThan(headings.indexOf('Week'));
   });
 
   it('shows the next class when no entry is active', async () => {
@@ -369,28 +369,28 @@ describe('TeacherDashboard', () => {
       expect(mockGetByClassroomQuery).toHaveBeenCalledTimes(2);
     });
 
-    expect(await screen.findByText('Siguiente clase')).toBeInTheDocument();
+    expect(await screen.findByText('Next class')).toBeInTheDocument();
     expect(screen.getAllByText('Examen - Lab B').length).toBeGreaterThan(0);
   });
 
-  it('resets the selected week when pressing Hoy', async () => {
+  it('resets the selected week when pressing Today', async () => {
     await renderTeacherDashboardReady();
     await waitFor(() => {
       expect(mockGetByClassroomQuery).toHaveBeenCalledTimes(2);
     });
 
-    await screen.findByRole('button', { name: 'Ver detalles Investigacion - Lab A 09:00-10:00' });
+    await screen.findByRole('button', { name: 'View details Investigacion - Lab A 09:00-10:00' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Semana siguiente' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next week' }));
     await waitFor(() => {
       expect(
-        screen.queryByRole('button', { name: 'Ver detalles Examen - Lab B 12:00-13:00' })
+        screen.queryByRole('button', { name: 'View details Examen - Lab B 12:00-13:00' })
       ).not.toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hoy' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
     expect(
-      await screen.findByRole('button', { name: 'Ver detalles Examen - Lab B 12:00-13:00' })
+      await screen.findByRole('button', { name: 'View details Examen - Lab B 12:00-13:00' })
     ).toBeInTheDocument();
   });
 
@@ -424,10 +424,10 @@ describe('TeacherDashboard', () => {
       expect(mockGetByClassroomQuery).toHaveBeenCalledTimes(2);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Semana anterior' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Previous week' }));
 
     expect(
-      await screen.findByRole('button', { name: 'Ver detalles Examen - Lab B 12:00-13:00' })
+      await screen.findByRole('button', { name: 'View details Examen - Lab B 12:00-13:00' })
     ).toBeInTheDocument();
   });
 
@@ -438,13 +438,13 @@ describe('TeacherDashboard', () => {
     });
 
     const block = await screen.findByRole('button', {
-      name: 'Ver detalles Investigacion - Lab A 09:00-10:00',
+      name: 'View details Investigacion - Lab A 09:00-10:00',
     });
 
     fireEvent.click(block);
 
-    expect(await screen.findByRole('heading', { name: 'Detalle del horario' })).toBeInTheDocument();
-    expect(screen.getByText('Semanal')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Schedule details' })).toBeInTheDocument();
+    expect(screen.getByText('Weekly')).toBeInTheDocument();
   });
 
   it('routes classroom actions from the detail panel and opens the expected edit and delete flows', async () => {
@@ -455,63 +455,63 @@ describe('TeacherDashboard', () => {
     });
 
     const block = await screen.findByRole('button', {
-      name: 'Ver detalles Investigacion - Lab A 09:00-10:00',
+      name: 'View details Investigacion - Lab A 09:00-10:00',
     });
     fireEvent.click(block);
 
-    const dialog = await screen.findByRole('dialog', { name: 'Detalle del horario' });
+    const dialog = await screen.findByRole('dialog', { name: 'Schedule details' });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Ver reglas' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'View rules' }));
     expect(onNavigateToRules).toHaveBeenCalledWith({ id: 'group-1', name: 'Investigacion' });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Tomar control' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Take control' }));
     await waitFor(() => {
       expect(mockSetActiveGroup).toHaveBeenCalledWith({ id: 'classroom-1', groupId: 'group-1' });
     });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Liberar aula' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Release classroom' }));
     await waitFor(() => {
       expect(mockSetActiveGroup).toHaveBeenCalledWith({ id: 'classroom-1', groupId: null });
     });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Editar horario' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit schedule' }));
     expect(await screen.findByTestId('schedule-form-modal')).toHaveTextContent(
-      'Horario semanal:weekly-1'
+      'Weekly schedule:weekly-1'
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cerrar horario semanal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close weekly schedule' }));
     await waitFor(() => {
       expect(screen.queryByTestId('schedule-form-modal')).not.toBeInTheDocument();
     });
 
     fireEvent.click(
       screen.getByRole('button', {
-        name: 'Ver detalles Examen - Lab B 12:00-13:00',
+        name: 'View details Examen - Lab B 12:00-13:00',
       })
     );
 
-    const oneOffDialog = await screen.findByRole('dialog', { name: 'Detalle del horario' });
-    fireEvent.click(within(oneOffDialog).getByRole('button', { name: 'Editar horario' }));
+    const oneOffDialog = await screen.findByRole('dialog', { name: 'Schedule details' });
+    fireEvent.click(within(oneOffDialog).getByRole('button', { name: 'Edit schedule' }));
     expect(await screen.findByTestId('one-off-schedule-form-modal')).toHaveTextContent(
-      'Horario puntual:one-off-1'
+      'One-off schedule:one-off-1'
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cerrar horario puntual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close one-off schedule' }));
     await waitFor(() => {
       expect(screen.queryByTestId('one-off-schedule-form-modal')).not.toBeInTheDocument();
     });
 
     fireEvent.click(
       screen.getByRole('button', {
-        name: 'Ver detalles Investigacion - Lab A 09:00-10:00',
+        name: 'View details Investigacion - Lab A 09:00-10:00',
       })
     );
-    const deleteDialog = await screen.findByRole('dialog', { name: 'Detalle del horario' });
-    fireEvent.click(within(deleteDialog).getByRole('button', { name: 'Eliminar horario' }));
+    const deleteDialog = await screen.findByRole('dialog', { name: 'Schedule details' });
+    fireEvent.click(within(deleteDialog).getByRole('button', { name: 'Delete schedule' }));
 
-    const confirmDialog = await screen.findByRole('dialog', { name: 'Eliminar horario' });
+    const confirmDialog = await screen.findByRole('dialog', { name: 'Delete schedule' });
     expect(confirmDialog).toHaveTextContent('Investigacion - Lab A');
-    expect(confirmDialog).toHaveTextContent('Semanal');
+    expect(confirmDialog).toHaveTextContent('Weekly');
     expect(confirmDialog).toHaveTextContent('09:00 - 10:00');
   });
 
@@ -523,16 +523,15 @@ describe('TeacherDashboard', () => {
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'Ver detalles Investigacion - Lab A 09:00-10:00',
+        name: 'View details Investigacion - Lab A 09:00-10:00',
       })
     );
     fireEvent.click(
-      within(await screen.findByRole('dialog', { name: 'Detalle del horario' })).getByRole(
-        'button',
-        { name: 'Editar horario' }
-      )
+      within(await screen.findByRole('dialog', { name: 'Schedule details' })).getByRole('button', {
+        name: 'Edit schedule',
+      })
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Guardar horario semanal' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save weekly schedule' }));
 
     await waitFor(() => {
       expect(mockSchedulesUpdate).toHaveBeenCalledWith({
@@ -549,16 +548,15 @@ describe('TeacherDashboard', () => {
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'Ver detalles Examen - Lab B 12:00-13:00',
+        name: 'View details Examen - Lab B 12:00-13:00',
       })
     );
     fireEvent.click(
-      within(await screen.findByRole('dialog', { name: 'Detalle del horario' })).getByRole(
-        'button',
-        { name: 'Editar horario' }
-      )
+      within(await screen.findByRole('dialog', { name: 'Schedule details' })).getByRole('button', {
+        name: 'Edit schedule',
+      })
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Guardar horario puntual' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save one-off schedule' }));
 
     await waitFor(() => {
       expect(mockSchedulesUpdateOneOff).toHaveBeenCalledWith({
@@ -582,18 +580,17 @@ describe('TeacherDashboard', () => {
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'Ver detalles Investigacion - Lab A 09:00-10:00',
+        name: 'View details Investigacion - Lab A 09:00-10:00',
       })
     );
     fireEvent.click(
-      within(await screen.findByRole('dialog', { name: 'Detalle del horario' })).getByRole(
-        'button',
-        { name: 'Eliminar horario' }
-      )
+      within(await screen.findByRole('dialog', { name: 'Schedule details' })).getByRole('button', {
+        name: 'Delete schedule',
+      })
     );
     fireEvent.click(
-      within(await screen.findByRole('dialog', { name: 'Eliminar horario' })).getByRole('button', {
-        name: 'Eliminar',
+      within(await screen.findByRole('dialog', { name: 'Delete schedule' })).getByRole('button', {
+        name: 'Delete',
       })
     );
 
@@ -601,9 +598,9 @@ describe('TeacherDashboard', () => {
       expect(mockSchedulesDelete).toHaveBeenCalledWith({ id: 'weekly-1' });
     });
     await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: 'Eliminar horario' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'Delete schedule' })).not.toBeInTheDocument();
     });
-    expect(screen.queryByRole('dialog', { name: 'Detalle del horario' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Schedule details' })).not.toBeInTheDocument();
   });
 
   it('shows schedule mutation errors and reports the failed operation', async () => {
@@ -615,24 +612,26 @@ describe('TeacherDashboard', () => {
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'Ver detalles Investigacion - Lab A 09:00-10:00',
+        name: 'View details Investigacion - Lab A 09:00-10:00',
       })
     );
-    const dialog = await screen.findByRole('dialog', { name: 'Detalle del horario' });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Tomar control' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Schedule details' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Take control' }));
 
-    expect(await screen.findByText('Error al aplicar el grupo al aula')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Unable to apply the group to the classroom')
+    ).toBeInTheDocument();
     expect(mockReportError).toHaveBeenCalledWith(
       'Failed to apply active group:',
       expect.any(Error)
     );
 
-    mockSchedulesUpdate.mockRejectedValueOnce(new Error('Ese tramo horario ya está reservado'));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Editar horario' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Guardar horario semanal' }));
+    mockSchedulesUpdate.mockRejectedValueOnce(new Error('That time slot is already reserved'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit schedule' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save weekly schedule' }));
 
     await waitFor(() => {
-      expect(screen.getAllByText('Ese tramo horario ya está reservado').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('That time slot is already reserved').length).toBeGreaterThan(0);
     });
     expect(mockReportError).toHaveBeenCalledWith('Failed to save schedule:', expect.any(Error));
   });
@@ -649,27 +648,28 @@ describe('TeacherDashboard', () => {
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'Ver detalles Investigacion - Lab A 09:00-10:00',
+        name: 'View details Investigacion - Lab A 09:00-10:00',
       })
     );
-    const weeklyDialog = await screen.findByRole('dialog', { name: 'Detalle del horario' });
+    const weeklyDialog = await screen.findByRole('dialog', { name: 'Schedule details' });
 
-    fireEvent.click(within(weeklyDialog).getByRole('button', { name: 'Liberar aula' }));
-    expect(await screen.findByText('Error al aplicar el grupo al aula')).toBeInTheDocument();
+    fireEvent.click(within(weeklyDialog).getByRole('button', { name: 'Release classroom' }));
+    expect(
+      await screen.findByText('Unable to apply the group to the classroom')
+    ).toBeInTheDocument();
     expect(mockReportError).toHaveBeenCalledWith('Failed to release classroom:', expect.any(Error));
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'Ver detalles Examen - Lab B 12:00-13:00',
+        name: 'View details Examen - Lab B 12:00-13:00',
       })
     );
     fireEvent.click(
-      within(await screen.findByRole('dialog', { name: 'Detalle del horario' })).getByRole(
-        'button',
-        { name: 'Editar horario' }
-      )
+      within(await screen.findByRole('dialog', { name: 'Schedule details' })).getByRole('button', {
+        name: 'Edit schedule',
+      })
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Guardar horario puntual' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save one-off schedule' }));
 
     await waitFor(() => {
       expect(mockSchedulesUpdateOneOff).toHaveBeenCalledWith({
@@ -685,28 +685,27 @@ describe('TeacherDashboard', () => {
       expect.any(Error)
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cerrar horario puntual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close one-off schedule' }));
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'Ver detalles Investigacion - Lab A 09:00-10:00',
+        name: 'View details Investigacion - Lab A 09:00-10:00',
       })
     );
     fireEvent.click(
-      within(await screen.findByRole('dialog', { name: 'Detalle del horario' })).getByRole(
-        'button',
-        { name: 'Eliminar horario' }
-      )
+      within(await screen.findByRole('dialog', { name: 'Schedule details' })).getByRole('button', {
+        name: 'Delete schedule',
+      })
     );
     fireEvent.click(
-      within(await screen.findByRole('dialog', { name: 'Eliminar horario' })).getByRole('button', {
-        name: 'Eliminar',
+      within(await screen.findByRole('dialog', { name: 'Delete schedule' })).getByRole('button', {
+        name: 'Delete',
       })
     );
 
     await waitFor(() => {
       expect(screen.getAllByText('cannot delete').length).toBeGreaterThan(0);
     });
-    expect(screen.getByRole('dialog', { name: 'Eliminar horario' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Delete schedule' })).toBeInTheDocument();
     expect(mockReportError).toHaveBeenCalledWith('Failed to delete schedule:', expect.any(Error));
   });
 
@@ -734,17 +733,17 @@ describe('TeacherDashboard', () => {
 
     fireEvent.change(classroomSelect, { target: { value: 'classroom-1' } });
     fireEvent.change(groupSelect, { target: { value: 'group-1' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Gestionar reglas de esta política' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage rules for this policy' }));
     expect(onNavigateToRules).toHaveBeenCalledWith({ id: 'group-1', name: 'research' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Aplicar Política' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
 
-    const confirmDialog = await screen.findByRole('dialog', { name: 'Confirmar cambio' });
+    const confirmDialog = await screen.findByRole('dialog', { name: 'Confirm change' });
     expect(confirmDialog).toHaveTextContent('Examen');
     expect(confirmDialog).toHaveTextContent('Investigacion');
     expect(mockSetActiveGroup).not.toHaveBeenCalled();
 
-    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Reemplazar' }));
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Replace' }));
 
     await waitFor(() => {
       expect(mockSetActiveGroup).toHaveBeenCalledWith({ id: 'classroom-1', groupId: 'group-1' });
@@ -774,13 +773,13 @@ describe('TeacherDashboard', () => {
 
     fireEvent.change(classroomSelect, { target: { value: 'classroom-1' } });
     fireEvent.change(groupSelect, { target: { value: 'group-1' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Aplicar Política' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
 
-    const confirmDialog = await screen.findByRole('dialog', { name: 'Confirmar cambio' });
-    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Cancelar' }));
+    const confirmDialog = await screen.findByRole('dialog', { name: 'Confirm change' });
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Cancel' }));
 
     await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: 'Confirmar cambio' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'Confirm change' })).not.toBeInTheDocument();
     });
     expect(mockSetActiveGroup).not.toHaveBeenCalled();
   });
@@ -793,23 +792,22 @@ describe('TeacherDashboard', () => {
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'Ver detalles Examen - Lab B 12:00-13:00',
+        name: 'View details Examen - Lab B 12:00-13:00',
       })
     );
     fireEvent.click(
-      within(await screen.findByRole('dialog', { name: 'Detalle del horario' })).getByRole(
-        'button',
-        { name: 'Eliminar horario' }
-      )
+      within(await screen.findByRole('dialog', { name: 'Schedule details' })).getByRole('button', {
+        name: 'Delete schedule',
+      })
     );
 
-    const confirmDialog = await screen.findByRole('dialog', { name: 'Eliminar horario' });
-    expect(confirmDialog).toHaveTextContent('Tipo: Puntual');
+    const confirmDialog = await screen.findByRole('dialog', { name: 'Delete schedule' });
+    expect(confirmDialog).toHaveTextContent('Type: One-off');
 
-    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Cancelar' }));
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Cancel' }));
 
     await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: 'Eliminar horario' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'Delete schedule' })).not.toBeInTheDocument();
     });
     expect(mockSchedulesDelete).not.toHaveBeenCalled();
   });
@@ -819,9 +817,7 @@ describe('TeacherDashboard', () => {
     const firstRender = await renderTeacherDashboardReady();
 
     expect(
-      await screen.findByText(
-        'No tienes políticas asignadas. Pide a un administrador que te asigne una.'
-      )
+      await screen.findByText('You have no assigned policies. Ask an administrator to assign one.')
     ).toBeInTheDocument();
 
     firstRender.unmount();
@@ -840,7 +836,7 @@ describe('TeacherDashboard', () => {
     await renderTeacherDashboardReady();
 
     expect(
-      await screen.findByText('No tienes políticas. Ve a "Mis Políticas" para crear una.')
+      await screen.findByText('You have no policies. Go to "My Policies" to create one.')
     ).toBeInTheDocument();
   });
 
@@ -850,9 +846,9 @@ describe('TeacherDashboard', () => {
 
     await renderTeacherDashboardReady();
 
-    expect(await screen.findByText('Error al cargar aulas')).toBeInTheDocument();
+    expect(await screen.findByText('Unable to load classrooms')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     await waitFor(() => {
       expect(mockClassroomsListQuery).toHaveBeenCalledTimes(2);

@@ -26,7 +26,7 @@ install_browser_integrations() {
             --native-host-best-effort) native_host_best_effort=true ;;
             --native-host-required) native_host_best_effort=false ;;
             *)
-                log "⚠ Opción de integración de navegador desconocida: $1"
+                log "⚠ Unknown browser integration option: $1"
                 return 1
                 ;;
         esac
@@ -35,7 +35,7 @@ install_browser_integrations() {
 
     if ! install_firefox_extension "$ext_source" "$release_source"; then
         if [ "$firefox_best_effort" = true ]; then
-            echo "⚠ Extensión Firefox no instalada (se puede reintentar más tarde)"
+            echo "⚠ Firefox extension not installed (can retry later)"
         else
             return 1
         fi
@@ -45,7 +45,7 @@ install_browser_integrations() {
         chromium_ext_id="$(cat "$(get_chromium_extension_id_file)" 2>/dev/null || true)"
     else
         if [ "$chromium_best_effort" = true ]; then
-            echo "⚠ Extensión Chrome/Edge no instalada (se puede reintentar más tarde)"
+            echo "⚠ Chrome/Edge extension not installed (can retry later)"
         else
             return 1
         fi
@@ -54,7 +54,7 @@ install_browser_integrations() {
     if [ "$install_native_host_enabled" = true ]; then
         if ! install_native_host "$ext_source/native" "$chromium_ext_id"; then
             if [ "$native_host_best_effort" = true ]; then
-                echo "⚠ Native host no instalado (se puede reintentar más tarde)"
+                echo "⚠ Native host not installed (can retry later)"
             else
                 return 1
             fi

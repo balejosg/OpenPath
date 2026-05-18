@@ -52,6 +52,6 @@ describe('useClipboard', () => {
       expect(ok).toBe(false);
     });
 
-    expect(result.current.error).toBe('No se pudo copiar al portapapeles');
+    expect(result.current.error).toBe('Unable to copy to clipboard');
   });
 });

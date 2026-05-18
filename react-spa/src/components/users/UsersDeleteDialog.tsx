@@ -22,19 +22,18 @@ export function UsersDeleteDialog({
   return (
     <DangerConfirmDialog
       isOpen
-      title="Eliminar Usuario"
-      confirmLabel="Eliminar usuario"
-      cancelLabel="Cancelar"
+      title="Delete User"
+      confirmLabel="Delete user"
+      cancelLabel="Cancel"
       isLoading={deleting}
       errorMessage={deleteError}
       onClose={clearDeleteState}
       onConfirm={() => void handleConfirmDeleteUser()}
     >
       <p className="text-sm text-slate-600">
-        ¿Estás seguro de que quieres eliminar a{' '}
-        <span className="font-semibold text-slate-800">{deleteTarget.name}</span>?
+        Delete <span className="font-semibold text-slate-800">{deleteTarget.name}</span>?
       </p>
-      <p className="text-xs text-slate-500">Esta acción no se puede deshacer.</p>
+      <p className="text-xs text-slate-500">This action cannot be undone.</p>
     </DangerConfirmDialog>
   );
 }

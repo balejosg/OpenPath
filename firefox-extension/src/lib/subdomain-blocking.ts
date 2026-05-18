@@ -5,6 +5,7 @@ import {
   type PathBlockingEvaluationDetails,
   type PathBlockingEvaluationResult,
 } from './path-blocking.js';
+import { t } from './i18n.js';
 
 export interface NativeBlockedSubdomainsResponse {
   success: boolean;
@@ -96,7 +97,7 @@ export function evaluateSubdomainBlocking(
     return null;
   }
 
-  const hostname = extractHostname(details.url) ?? 'dominio desconocido';
+  const hostname = extractHostname(details.url) ?? t('blockedUnknownDomain');
   const origin = extractHostname(details.originUrl ?? details.documentUrl ?? '');
   const reason = `${BLOCKED_SUBDOMAIN_REASON}:${matchedRule.rawRule}`;
 

@@ -25,7 +25,7 @@ describe('buildUsersCsvExport', () => {
     },
   ];
 
-  it('builds a localized CSV with code columns by default', () => {
+  it('builds a localized CSV with code columnas by default', () => {
     const result = buildUsersCsvExport(users);
 
     expect(result.filename).toBe(USERS_CSV_EXPORT_FILENAME);
@@ -33,20 +33,20 @@ describe('buildUsersCsvExport', () => {
     expect(result.content).toBe(
       [
         'Nombre,Email,Roles,Estado,Roles_codigo,Estado_codigo',
-        'Admin QA,admin@example.com,Administrador,Activo,admin,Active',
-        'Teacher QA,teacher@example.com,Profesor,Inactivo,teacher,Inactive',
+        'Admin QA,admin@example.com,Admin,Active,admin,Active',
+        'Teacher QA,teacher@example.com,Teacher,Inactive,teacher,Inactive',
       ].join('\n')
     );
   });
 
-  it('can omit code columns when requested', () => {
+  it('can omit code columnas when requested', () => {
     const result = buildUsersCsvExport(users, { includeCodeColumns: false });
 
     expect(result.content).toBe(
       [
         'Nombre,Email,Roles,Estado',
-        'Admin QA,admin@example.com,Administrador,Activo',
-        'Teacher QA,teacher@example.com,Profesor,Inactivo',
+        'Admin QA,admin@example.com,Admin,Active',
+        'Teacher QA,teacher@example.com,Teacher,Inactive',
       ].join('\n')
     );
   });

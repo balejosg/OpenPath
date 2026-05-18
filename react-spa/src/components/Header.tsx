@@ -15,7 +15,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, title }) => {
       <div className="flex items-center gap-4">
         <button
           onClick={onMenuClick}
-          aria-label="Abrir menú"
+          aria-label="Open menu"
           className="md:hidden p-2 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-100"
         >
           <Menu size={24} />
@@ -31,7 +31,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, title }) => {
           <Search size={16} className="text-slate-400" />
           <input
             type="text"
-            placeholder="Buscar..."
+            placeholder="Search..."
             className="bg-transparent border-none outline-none text-sm text-slate-700 ml-2 w-full placeholder-slate-400"
           />
         </div>
@@ -39,7 +39,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, title }) => {
         {/* Security Indicator */}
         <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-green-50 border border-green-200 rounded-full">
           <ShieldCheck size={14} className="text-green-600" />
-          <span className="text-xs font-medium text-green-700">Conexión Segura</span>
+          <span className="text-xs font-medium text-green-700">Secure Connection</span>
         </div>
 
         <div className="h-6 w-[1px] bg-slate-200 hidden sm:block"></div>
@@ -48,7 +48,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, title }) => {
         <div className="flex items-center gap-4">
           <button
             className="relative text-slate-400 hover:text-blue-600 transition-colors"
-            title="Notificaciones (próximamente)"
+            title="Notifications (coming soon)"
           >
             <Bell size={20} />
             {/* Notification badge - hidden until notifications feature is implemented */}
@@ -63,11 +63,9 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, title }) => {
                   {user?.initials ?? '??'}
                 </div>
                 <div className="text-sm hidden md:block">
-                  <p className="font-medium text-slate-700 leading-none">
-                    {user?.name ?? 'Usuario'}
-                  </p>
+                  <p className="font-medium text-slate-700 leading-none">{user?.name ?? 'User'}</p>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {user?.primaryRole ? getRoleDisplayLabel(user.primaryRole) : 'Sin rol'}
+                    {user?.primaryRole ? getRoleDisplayLabel(user.primaryRole) : 'No role'}
                   </p>
                 </div>
               </>

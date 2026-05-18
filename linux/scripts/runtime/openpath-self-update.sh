@@ -156,7 +156,7 @@ main() {
     local min_support_result=0
     compare_versions "$current_version" "$MIN_SUPPORTED_VERSION" || min_support_result=$?
     if [ "$min_support_result" -eq 2 ]; then
-        echo "✗ Tu versión (v${current_version}) está por debajo del mínimo soportado para auto-update (v${MIN_SUPPORTED_VERSION})"
+        echo "✗ Your version (v) is below the minimum supported version for auto-update (v)"
         exit 1
     fi
 
@@ -165,8 +165,8 @@ main() {
     local min_direct_result=0
     compare_versions "$current_version" "$MIN_DIRECT_UPGRADE_VERSION" || min_direct_result=$?
     if [ "$min_direct_result" -eq 2 ] && [ "${#UPDATE_SEQUENCE[@]}" -le 1 ]; then
-        echo "✗ Tu versión (v${current_version}) está por debajo del mínimo de actualización directa (v${MIN_DIRECT_UPGRADE_VERSION})"
-        echo "  Se requiere una actualización puente o recuperación manual."
+        echo "✗ Your version (v) is below the minimum direct update version (v)"
+        echo "  A bridge update or manual recovery is required."
         exit 1
     fi
 
@@ -186,18 +186,18 @@ main() {
             if [ "$mode" = "force" ]; then
                 echo "Same version installed. Forcing reinstall..."
             else
-                echo "✓ Ya tienes la última versión (v${current_version})"
+                echo "✓ You already have the latest version (v${current_version})"
                 exit 0
             fi
             ;;
         1)
-            echo "⬆ Actualización disponible: v${current_version} → v${LATEST_VERSION}"
+            echo "⬆ Update available: v${current_version} → v${LATEST_VERSION}"
             ;;
         2)
             if [ "$mode" = "force" ]; then
                 echo "Current version is newer than release. Forcing reinstall..."
             else
-                echo "✓ Tu versión (v${current_version}) es más reciente que el último release (v${LATEST_VERSION})"
+                echo "✓ Your version (v) is newer than the latest release (v)"
                 exit 0
             fi
             ;;

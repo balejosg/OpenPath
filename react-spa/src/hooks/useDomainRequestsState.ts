@@ -110,10 +110,10 @@ export function useDomainRequestsState({
     normalizedSearchTerm.length > 0 || statusFilter !== 'all' || sourceFilter !== 'all';
   const canBulkSelectInPage = pendingIdsInPage.length > 0;
   const bulkSelectTitle = canBulkSelectInPage
-    ? 'Seleccionar elementos pendientes de esta pagina'
+    ? 'Select pending items on this page'
     : statusFilter === 'approved' || statusFilter === 'rejected'
-      ? 'Seleccion masiva no disponible en este filtro'
-      : 'No hay elementos pendientes seleccionables en esta pagina';
+      ? 'Bulk selection is not available for this filter'
+      : 'No selectable pending items on this page';
 
   useEffect(() => {
     setCurrentPage(1);

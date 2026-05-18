@@ -18,14 +18,14 @@ await describe('popup native actions', async () => {
       {
         available: true,
         className: 'status-indicator available',
-        label: 'Host nativo v1.2.3',
+        label: 'Native host v1.2.3',
       }
     );
 
     assert.deepEqual(resolveNativeAvailabilityState({ success: false }), {
       available: false,
       className: 'status-indicator unavailable',
-      label: 'Host nativo no disponible',
+      label: 'Native host unavailable',
     });
   });
 

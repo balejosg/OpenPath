@@ -127,11 +127,11 @@ describe('TeacherTodayFocusPanel', () => {
 
     render(<TeacherTodayFocusPanel {...props} />);
 
-    expect(screen.getByText('Clase actual')).toBeInTheDocument();
+    expect(screen.getByText('Current class')).toBeInTheDocument();
     expect(screen.getByText('Group One - Lab A')).toBeInTheDocument();
     expect(screen.getByText('09:00-10:00')).toBeInTheDocument();
-    expect(screen.getByText('Puntual')).toBeInTheDocument();
-    expect(screen.getByText('Hoy')).toBeInTheDocument();
+    expect(screen.getByText('One-off')).toBeInTheDocument();
+    expect(screen.getByText('Today')).toBeInTheDocument();
     expect(screen.getByText('12:00-13:00')).toBeInTheDocument();
     expect(screen.getByText('Group Two - Lab B')).toBeInTheDocument();
   });
@@ -141,11 +141,11 @@ describe('TeacherTodayFocusPanel', () => {
 
     render(<TeacherTodayFocusPanel {...props} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ir al aula' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Ver reglas' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Tomar control' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Liberar aula' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Ver detalles' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Go to classroom' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View rules' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Take control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release classroom' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View details' }));
 
     expect(props.onOpenClassroom).toHaveBeenCalledWith(props.focus.currentEntry);
     expect(props.onOpenRules).toHaveBeenCalledWith(props.focus.currentEntry);
@@ -185,7 +185,7 @@ describe('TeacherTodayFocusPanel', () => {
 
     render(<TeacherTodayFocusPanel {...props} />);
 
-    expect(screen.getByText('Siguiente clase')).toBeInTheDocument();
+    expect(screen.getByText('Next class')).toBeInTheDocument();
     expect(screen.getByText('Group Three - Lab C')).toBeInTheDocument();
     expect(screen.getByText('11:00-12:00')).toBeInTheDocument();
   });
@@ -194,13 +194,13 @@ describe('TeacherTodayFocusPanel', () => {
     const loadingProps = buildProps({ loading: true });
     const { rerender } = render(<TeacherTodayFocusPanel {...loadingProps} />);
 
-    expect(screen.getByText('Cargando tu horario...')).toBeInTheDocument();
+    expect(screen.getByText('Loading your schedule...')).toBeInTheDocument();
 
-    const errorProps = buildProps({ error: 'No se pudieron cargar tus horarios' });
+    const errorProps = buildProps({ error: 'Unable to load your schedules' });
     rerender(<TeacherTodayFocusPanel {...errorProps} />);
 
-    expect(screen.getByText('No se pudieron cargar tus horarios')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }));
+    expect(screen.getByText('Unable to load your schedules')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(errorProps.onRetry).toHaveBeenCalledTimes(1);
   });
 
@@ -215,8 +215,8 @@ describe('TeacherTodayFocusPanel', () => {
 
     render(<TeacherTodayFocusPanel {...props} />);
 
-    expect(screen.getByText('No tienes más clases programadas hoy.')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Editar horario' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Eliminar horario' })).not.toBeInTheDocument();
+    expect(screen.getByText('No more classes scheduled today.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit schedule' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete schedule' })).not.toBeInTheDocument();
   });
 });

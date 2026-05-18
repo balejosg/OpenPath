@@ -3,7 +3,7 @@ import { USER_ROLE_LABELS } from './roles';
 import { toCsv } from './csv';
 import { getEsActiveInactiveLabel } from './status';
 
-export const USERS_CSV_EXPORT_FILENAME = 'usuarios.csv';
+export const USERS_CSV_EXPORT_FILENAME = 'users.csv';
 export const USERS_CSV_EXPORT_MIME_TYPE = 'text/csv;charset=utf-8';
 
 export interface UsersCsvExportOptions {

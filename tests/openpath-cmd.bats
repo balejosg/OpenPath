@@ -92,7 +92,7 @@ teardown() {
 }
 
 @test "incluye comando setup para modo aula" {
-    run grep -n "setup           Asistente de configuración" "$PROJECT_DIR/linux/lib/runtime-cli-system.sh"
+    run grep -n "setup           Setup assistant" "$PROJECT_DIR/linux/lib/runtime-cli-system.sh"
     [ "$status" -eq 0 ]
 }
 
@@ -102,7 +102,7 @@ teardown() {
 }
 
 @test "cmd_status reports request setup once" {
-    run sh -c "awk '/^cmd_status\\(\\) \\{/ { capture = 1 } /^cmd_update\\(\\)/ { capture = 0 } capture { print }' '$PROJECT_DIR/linux/lib/runtime-cli-system.sh' | grep -c 'Solicitudes:'"
+    run sh -c "awk '/^cmd_status\\(\\) \\{/ { capture = 1 } /^cmd_update\\(\\)/ { capture = 0 } capture { print }' '$PROJECT_DIR/linux/lib/runtime-cli-system.sh' | grep -c 'Requests:'"
     [ "$status" -eq 0 ]
     [ "$output" -eq 2 ]
 }
@@ -984,7 +984,7 @@ EOF
     run "$helper_script" "$PROJECT_DIR" "$TEST_TMP_DIR" "$whitelist_file" "$probe_log"
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Resolución: ● funcional"* ]]
+    [[ "$output" == *"Resolution: ● working"* ]]
     grep -qx "google.es" "$probe_log"
     ! grep -qx "google.com" "$probe_log"
 }
@@ -1036,7 +1036,7 @@ EOF
     run "$helper_script" "$PROJECT_DIR" "$TEST_TMP_DIR" "$whitelist_file"
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Resuelve: ✗"* ]]
+    [[ "$output" == *"Resolves: ✗"* ]]
     [[ "$output" != *"→ 0.0.0.0"* ]]
 }
 
@@ -1097,13 +1097,13 @@ EOF
     run "$helper_script" "$PROJECT_DIR" "$TEST_TMP_DIR" "$whitelist_file"
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Verificando: allowed.example"* ]]
-    [[ "$output" == *"En whitelist: ✓ SÍ"* ]]
-    [[ "$output" == *"Verificando: chat.allowed.example"* ]]
-    [[ "$output" == *"Bloqueado por subdominio: ✓ SÍ"* ]]
-    [[ "$output" == *"Verificando: lessons.example/games"* ]]
-    [[ "$output" == *"Bloqueado por ruta: ✓ SÍ"* ]]
-    [ "$(grep -o "En whitelist: ✓ SÍ" <<< "$output" | wc -l)" -eq 1 ]
+    [[ "$output" == *"Checking: allowed.example"* ]]
+    [[ "$output" == *"In whitelist: ✓ YES"* ]]
+    [[ "$output" == *"Checking: chat.allowed.example"* ]]
+    [[ "$output" == *"Blocked by subdomain: ✓ YES"* ]]
+    [[ "$output" == *"Checking: lessons.example/games"* ]]
+    [[ "$output" == *"Blocked by path: ✓ YES"* ]]
+    [ "$(grep -o "In whitelist: ✓ YES" <<< "$output" | wc -l)" -eq 1 ]
 }
 
 @test "read-only commands that need protected config auto-elevate through sudoers" {

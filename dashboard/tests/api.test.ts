@@ -63,7 +63,7 @@ await describe('Dashboard API Routes', async () => {
 
       assert.strictEqual(response.status, 400);
       const body = response.body as { error?: string };
-      assert.strictEqual(body.error, 'La contraseña debe tener al menos 8 caracteres');
+      assert.strictEqual(body.error, 'Password must be at least 8 characters');
     });
   });
 

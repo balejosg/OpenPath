@@ -73,7 +73,7 @@ describe('Users View', () => {
     mockUsersList.mockResolvedValue([]);
     mockCreateUser.mockResolvedValue({
       id: 'user-created',
-      name: 'Usuario Creado',
+      name: 'User Creado',
       email: 'creado@example.com',
       isActive: true,
       roles: [],
@@ -85,7 +85,7 @@ describe('Users View', () => {
   it('shows role selector with default teacher', async () => {
     renderUsersView();
 
-    fireEvent.click(screen.getByRole('button', { name: '+ Nuevo Usuario' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ New User' }));
 
     const roleSelect = await screen.findByRole('combobox');
     expect((roleSelect as HTMLSelectElement).value).toBe('teacher');
@@ -94,20 +94,20 @@ describe('Users View', () => {
   it('sends selected role in create mutation', async () => {
     renderUsersView();
 
-    fireEvent.click(screen.getByRole('button', { name: '+ Nuevo Usuario' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ New User' }));
 
-    fireEvent.change(await screen.findByPlaceholderText('Nombre completo'), {
+    fireEvent.change(await screen.findByPlaceholderText('Full name'), {
       target: { value: 'Teacher User' },
     });
-    fireEvent.change(screen.getByPlaceholderText('usuario@dominio.com'), {
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), {
       target: { value: 'teacher@example.com' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'SecurePass123!' },
     });
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'teacher' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Crear Usuario' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create User' }));
 
     await waitFor(() => {
       expect(mockCreateUser).toHaveBeenCalledWith({
@@ -122,19 +122,19 @@ describe('Users View', () => {
   it('uses default teacher role when unchanged', async () => {
     renderUsersView();
 
-    fireEvent.click(screen.getByRole('button', { name: '+ Nuevo Usuario' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ New User' }));
 
-    fireEvent.change(await screen.findByPlaceholderText('Nombre completo'), {
+    fireEvent.change(await screen.findByPlaceholderText('Full name'), {
       target: { value: 'Teacher User' },
     });
-    fireEvent.change(screen.getByPlaceholderText('usuario@dominio.com'), {
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), {
       target: { value: 'teacher@example.com' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'SecurePass123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Crear Usuario' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create User' }));
 
     await waitFor(() => {
       expect(mockCreateUser).toHaveBeenCalledWith({
@@ -149,17 +149,17 @@ describe('Users View', () => {
   it('shows valid empty pagination range and disables navigation on empty state', async () => {
     renderUsersView();
 
-    expect(await screen.findByText('Mostrando 0-0 de 0 usuarios')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Filtros' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Anterior' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Siguiente' })).toBeDisabled();
+    expect(await screen.findByText('Showing 0-0 of 0 users')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
   });
 
   it('paginates users ten at a time and updates the visible range', async () => {
     mockUsersList.mockResolvedValue(
       Array.from({ length: 12 }, (_, index) => ({
         id: `user-${index + 1}`,
-        name: `Usuario ${index + 1}`,
+        name: `User ${index + 1}`,
         email: `user${index + 1}@example.com`,
         isActive: true,
         roles: [{ role: 'teacher' }],
@@ -168,29 +168,29 @@ describe('Users View', () => {
 
     renderUsersView();
 
-    expect(await screen.findByText('Mostrando 1-10 de 12 usuarios')).toBeInTheDocument();
-    expect(screen.getByText('Usuario 1')).toBeInTheDocument();
-    expect(screen.getByText('Usuario 10')).toBeInTheDocument();
-    expect(screen.queryByText('Usuario 11')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Anterior' })).toBeDisabled();
+    expect(await screen.findByText('Showing 1-10 of 12 users')).toBeInTheDocument();
+    expect(screen.getByText('User 1')).toBeInTheDocument();
+    expect(screen.getByText('User 10')).toBeInTheDocument();
+    expect(screen.queryByText('User 11')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }));
-
-    await waitFor(() => {
-      expect(screen.getByText('Mostrando 11-12 de 12 usuarios')).toBeInTheDocument();
-    });
-    expect(screen.queryByText('Usuario 1')).not.toBeInTheDocument();
-    expect(screen.getByText('Usuario 11')).toBeInTheDocument();
-    expect(screen.getByText('Usuario 12')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Siguiente' })).toBeDisabled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Anterior' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Mostrando 1-10 de 12 usuarios')).toBeInTheDocument();
+      expect(screen.getByText('Showing 11-12 of 12 users')).toBeInTheDocument();
     });
-    expect(screen.getByText('Usuario 1')).toBeInTheDocument();
-    expect(screen.queryByText('Usuario 11')).not.toBeInTheDocument();
+    expect(screen.queryByText('User 1')).not.toBeInTheDocument();
+    expect(screen.getByText('User 11')).toBeInTheDocument();
+    expect(screen.getByText('User 12')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Showing 1-10 of 12 users')).toBeInTheDocument();
+    });
+    expect(screen.getByText('User 1')).toBeInTheDocument();
+    expect(screen.queryByText('User 11')).not.toBeInTheDocument();
   });
 
   it('shows assigned roles as read-only information in the edit modal', async () => {
@@ -208,26 +208,26 @@ describe('Users View', () => {
 
     await screen.findByText('Admin QA');
 
-    fireEvent.click(screen.getByTitle('Editar'));
+    fireEvent.click(screen.getByTitle('Edit'));
 
-    const dialog = await screen.findByRole('dialog', { name: 'Editar Usuario' });
+    const dialog = await screen.findByRole('dialog', { name: 'Edit User' });
 
     expect(within(dialog).getByText('Roles actuales')).toBeInTheDocument();
     expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(within(dialog).getByText('Administrador')).toBeInTheDocument();
-    expect(within(dialog).getByText('Profesor')).toBeInTheDocument();
+    expect(within(dialog).getByText('Admin')).toBeInTheDocument();
+    expect(within(dialog).getByText('Teacher')).toBeInTheDocument();
     expect(
-      within(dialog).getByText(/La gestión de roles se realiza desde el flujo de permisos/i)
+      within(dialog).getByText(/Role management is handled in the permissions flow/i)
     ).toBeInTheDocument();
   });
 
   it('shows feedback when exporting with no users', async () => {
     renderUsersView();
 
-    await screen.findByText('Mostrando 0-0 de 0 usuarios');
-    fireEvent.click(screen.getByRole('button', { name: 'Exportar' }));
+    await screen.findByText('Showing 0-0 of 0 users');
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
 
-    expect(screen.getByRole('status')).toHaveTextContent('No hay usuarios para exportar');
+    expect(screen.getByRole('status')).toHaveTextContent('No users to export');
   });
 
   it('exports users with localized role and status values', async () => {
@@ -253,7 +253,7 @@ describe('Users View', () => {
     await screen.findByText('Admin QA');
     await screen.findByText('Teacher QA');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Exportar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
 
     await waitFor(() => {
       expect(mockDownloadFile).toHaveBeenCalledTimes(1);
@@ -261,11 +261,11 @@ describe('Users View', () => {
 
     const [csvContent, filename, mimeType] = mockDownloadFile.mock.calls[0];
 
-    expect(filename).toBe('usuarios.csv');
+    expect(filename).toBe('users.csv');
     expect(mimeType).toBe('text/csv;charset=utf-8');
     expect(csvContent).toContain('Nombre,Email,Roles,Estado');
-    expect(csvContent).toContain('Admin QA,admin@example.com,Administrador,Activo');
-    expect(csvContent).toContain('Teacher QA,teacher@example.com,Profesor,Inactivo');
+    expect(csvContent).toContain('Admin QA,admin@example.com,Admin,Active');
+    expect(csvContent).toContain('Teacher QA,teacher@example.com,Teacher,Inactive');
   });
 
   it('shows specific message when email format is invalid', async () => {
@@ -273,20 +273,20 @@ describe('Users View', () => {
 
     renderUsersView();
 
-    fireEvent.click(screen.getByRole('button', { name: '+ Nuevo Usuario' }));
-    fireEvent.change(await screen.findByPlaceholderText('Nombre completo'), {
-      target: { value: 'Usuario Test' },
+    fireEvent.click(screen.getByRole('button', { name: '+ New User' }));
+    fireEvent.change(await screen.findByPlaceholderText('Full name'), {
+      target: { value: 'User Test' },
     });
-    fireEvent.change(screen.getByPlaceholderText('usuario@dominio.com'), {
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), {
       target: { value: 'a' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'SecurePass123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Crear Usuario' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create User' }));
 
-    expect(await screen.findByText('El email no es válido')).toBeInTheDocument();
+    expect(await screen.findByText('Email is invalid')).toBeInTheDocument();
   });
 
   it('shows duplicate-email message when backend reports conflict', async () => {
@@ -294,20 +294,20 @@ describe('Users View', () => {
 
     renderUsersView();
 
-    fireEvent.click(screen.getByRole('button', { name: '+ Nuevo Usuario' }));
-    fireEvent.change(await screen.findByPlaceholderText('Nombre completo'), {
-      target: { value: 'Usuario Repetido' },
+    fireEvent.click(screen.getByRole('button', { name: '+ New User' }));
+    fireEvent.change(await screen.findByPlaceholderText('Full name'), {
+      target: { value: 'User Repetido' },
     });
-    fireEvent.change(screen.getByPlaceholderText('usuario@dominio.com'), {
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), {
       target: { value: 'dup@example.com' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'SecurePass123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Crear Usuario' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create User' }));
 
-    expect(await screen.findByText('Ya existe un usuario con ese email')).toBeInTheDocument();
+    expect(await screen.findByText('A user with that email already exists')).toBeInTheDocument();
   });
 
   it('keeps existing rows visible while refreshing and ignores stale list responses after create', async () => {
@@ -319,24 +319,24 @@ describe('Users View', () => {
 
     renderUsersView();
 
-    fireEvent.click(screen.getByRole('button', { name: '+ Nuevo Usuario' }));
-    fireEvent.change(await screen.findByPlaceholderText('Nombre completo'), {
-      target: { value: 'Usuario Creado' },
+    fireEvent.click(screen.getByRole('button', { name: '+ New User' }));
+    fireEvent.change(await screen.findByPlaceholderText('Full name'), {
+      target: { value: 'User Creado' },
     });
-    fireEvent.change(screen.getByPlaceholderText('usuario@dominio.com'), {
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), {
       target: { value: 'creado@example.com' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'SecurePass123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Crear Usuario' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create User' }));
 
     // Optimistic insert should render immediately and should NOT replace the grid
     // with the initial loading state.
-    expect(await screen.findByText('Usuario Creado')).toBeInTheDocument();
+    expect(await screen.findByText('User Creado')).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.queryByText('Cargando usuarios...')).not.toBeInTheDocument();
+      expect(screen.queryByText('Loading users...')).not.toBeInTheDocument();
     });
 
     await waitFor(() => {
@@ -344,13 +344,13 @@ describe('Users View', () => {
     });
 
     // While the post-create refresh is in-flight, the grid should remain visible.
-    expect(screen.getByLabelText('Actualizando usuarios')).toBeInTheDocument();
+    expect(screen.getByLabelText('Updating users')).toBeInTheDocument();
 
     // Newer fetch returns the created user.
     secondList.resolve([
       {
         id: 'user-created',
-        name: 'Usuario Creado',
+        name: 'User Creado',
         email: 'creado@example.com',
         isActive: true,
         roles: [],
@@ -358,7 +358,7 @@ describe('Users View', () => {
     ]);
 
     await waitFor(() => {
-      expect(screen.queryByLabelText('Actualizando usuarios')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Updating users')).not.toBeInTheDocument();
     });
 
     // Older in-flight fetch resolves after: it should be ignored.
@@ -366,7 +366,7 @@ describe('Users View', () => {
 
     // Allow any stale promise handlers to run.
     await new Promise((r) => setTimeout(r, 0));
-    expect(screen.getByText('Usuario Creado')).toBeInTheDocument();
+    expect(screen.getByText('User Creado')).toBeInTheDocument();
   });
 
   it('refetches users list after create even when create response is unmappable and initial list is in-flight', async () => {
@@ -380,7 +380,7 @@ describe('Users View', () => {
     // The UI mapper will treat this as unmappable and must still refresh the list.
     mockCreateUser.mockResolvedValueOnce({
       id: 'user-created',
-      name: 'Usuario Creado',
+      name: 'User Creado',
       email: 'creado@example.com',
       active: true,
       roles: [],
@@ -388,18 +388,18 @@ describe('Users View', () => {
 
     renderUsersView();
 
-    fireEvent.click(screen.getByRole('button', { name: '+ Nuevo Usuario' }));
-    fireEvent.change(await screen.findByPlaceholderText('Nombre completo'), {
-      target: { value: 'Usuario Creado' },
+    fireEvent.click(screen.getByRole('button', { name: '+ New User' }));
+    fireEvent.change(await screen.findByPlaceholderText('Full name'), {
+      target: { value: 'User Creado' },
     });
-    fireEvent.change(screen.getByPlaceholderText('usuario@dominio.com'), {
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), {
       target: { value: 'creado@example.com' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'SecurePass123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Crear Usuario' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create User' }));
 
     await waitFor(() => {
       expect(mockCreateUser).toHaveBeenCalledTimes(1);
@@ -418,14 +418,14 @@ describe('Users View', () => {
     secondList.resolve([
       {
         id: 'user-created',
-        name: 'Usuario Creado',
+        name: 'User Creado',
         email: 'creado@example.com',
         isActive: true,
         roles: [],
       },
     ]);
 
-    expect(await screen.findByText('Usuario Creado')).toBeInTheDocument();
+    expect(await screen.findByText('User Creado')).toBeInTheDocument();
   });
 
   it('keeps grid data visible when post-create background refetch fails', async () => {
@@ -457,20 +457,26 @@ describe('Users View', () => {
     await screen.findByText('Existing User');
 
     // Post-create refetch will fail
-    mockUsersList.mockRejectedValueOnce(new Error('network error'));
+    mockUsersList.mockImplementationOnce(
+      () => new Promise((_, reject) => setTimeout(() => reject(new Error('network error')), 10))
+    );
 
-    fireEvent.click(screen.getByRole('button', { name: '+ Nuevo Usuario' }));
-    fireEvent.change(await screen.findByPlaceholderText('Nombre completo'), {
+    fireEvent.click(screen.getByRole('button', { name: '+ New User' }));
+    fireEvent.change(await screen.findByPlaceholderText('Full name'), {
       target: { value: 'New User' },
     });
-    fireEvent.change(screen.getByPlaceholderText('usuario@dominio.com'), {
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), {
       target: { value: 'new@example.com' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 8 caracteres'), {
+    fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), {
       target: { value: 'SecurePass123!' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Crear Usuario' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create User' }));
+
+    await waitFor(() => {
+      expect(mockCreateUser).toHaveBeenCalled();
+    });
 
     // The optimistic insert should show the new user immediately
     expect(await screen.findByText('New User')).toBeInTheDocument();
@@ -484,16 +490,16 @@ describe('Users View', () => {
     });
 
     // The view should surface the failure as a non-blocking inline warning.
-    expect(await screen.findByText(/Error al actualizar/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Reintentar' })).toBeInTheDocument();
+    expect(await screen.findByText(/Unable to update/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
 
     // After the failed refetch, BOTH users must still be visible
     expect(screen.getByText('New User')).toBeInTheDocument();
     expect(screen.getByText('Existing User')).toBeInTheDocument();
 
     // The grid must NOT show the full-page error or loading state
-    expect(screen.queryByText('Cargando usuarios...')).not.toBeInTheDocument();
-    expect(screen.queryByText('Error al cargar usuarios')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading users...')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unable to load users')).not.toBeInTheDocument();
   });
 
   it('opens delete confirmation modal and deletes user on confirm', async () => {
@@ -510,10 +516,10 @@ describe('Users View', () => {
     renderUsersView();
 
     await screen.findByText('Delete Me');
-    fireEvent.click(screen.getByRole('button', { name: 'Eliminar usuario Delete Me' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete user Delete Me' }));
 
-    expect(await screen.findByText('Eliminar Usuario')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Eliminar usuario' }));
+    expect(await screen.findByText('Delete User')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete user' }));
 
     await waitFor(() => {
       expect(mockDeleteUser).toHaveBeenCalledWith({ id: 'user-1' });
@@ -535,9 +541,9 @@ describe('Users View', () => {
 
     await screen.findByText('Admin QA');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Restablecer contraseña de Admin QA' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset password for Admin QA' }));
 
-    expect(await screen.findByText('Generar token de recuperación')).toBeInTheDocument();
+    expect(await screen.findByText('Generate recovery token')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Generar token' }));
 
@@ -546,9 +552,7 @@ describe('Users View', () => {
     });
 
     expect(await screen.findByDisplayValue('RESET-123')).toBeInTheDocument();
-    expect(
-      screen.getByText(/Comparte este token de forma segura con la persona usuaria/i)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Share this token securely with the user/i)).toBeInTheDocument();
   });
 
   it('shows inline error when delete fails', async () => {
@@ -566,11 +570,9 @@ describe('Users View', () => {
     renderUsersView();
 
     await screen.findByText('Cannot Delete');
-    fireEvent.click(screen.getByRole('button', { name: 'Eliminar usuario Cannot Delete' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Eliminar usuario' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete user Cannot Delete' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete user' }));
 
-    expect(
-      await screen.findByText('No se pudo eliminar usuario. Intenta nuevamente.')
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Unable to delete user. Try again.')).toBeInTheDocument();
   });
 });

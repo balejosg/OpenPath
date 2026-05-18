@@ -186,7 +186,7 @@ export function parseCSV(content: string, options: CSVParseOptions = {}): CSVPar
       format: 'plain-text',
       totalRows: 0,
       skippedRows: 0,
-      warnings: ['El archivo está vacío'],
+      warnings: ['The file is empty'],
     };
   }
 
@@ -279,7 +279,7 @@ export function parseCSV(content: string, options: CSVParseOptions = {}): CSVPar
   const duplicatesRemoved = values.length - uniqueValues.length;
 
   if (duplicatesRemoved > 0) {
-    warnings.push(`${String(duplicatesRemoved)} duplicados eliminados.`);
+    warnings.push(`${String(duplicatesRemoved)} duplicates removed.`);
   }
 
   return {

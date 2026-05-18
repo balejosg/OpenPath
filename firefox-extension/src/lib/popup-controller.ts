@@ -149,7 +149,7 @@ export function createPopupController(
       await domainController.checkNativeAvailable();
       refreshRequestButtonState();
     } catch (error) {
-      logger.error('[Popup] Error de inicialización', { error: getErrorMessage(error) });
+      logger.error('[Popup] Initialization error', { error: getErrorMessage(error) });
       tabDomainEl.textContent = 'Error';
     }
   }

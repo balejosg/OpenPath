@@ -3,6 +3,7 @@ import { Mail, Lock, ArrowRight, Loader2, ShieldCheck } from 'lucide-react';
 import { login, loginWithGoogle } from '../lib/auth';
 import { reportError } from '../lib/reportError';
 import GoogleLoginButton from '../components/GoogleLoginButton';
+import { useT } from '../i18n/product-i18n';
 
 interface LoginProps {
   onLogin: () => void;
@@ -11,6 +12,7 @@ interface LoginProps {
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, onNavigateToForgot }) => {
+  const t = useT();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [email, setEmail] = useState('');
@@ -25,7 +27,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, onNavigate
       await login(email, password);
       onLogin();
     } catch (err) {
-      setError('Credenciales inválidas o error de conexión');
+      setError(t('auth.login.invalidCredentials'));
       reportError('Failed to login:', err);
     } finally {
       setIsLoading(false);
@@ -39,7 +41,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, onNavigate
       await loginWithGoogle(idToken);
       onLogin();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Error al iniciar sesión con Google';
+      const message = err instanceof Error ? err.message : t('auth.login.googleError');
       setError(message);
       reportError('Failed to login with Google:', err);
     } finally {
@@ -65,19 +67,19 @@ const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, onNavigate
             <ShieldCheck size={32} className="text-white" />
           </div>
           <h1 className="text-4xl font-bold text-white mb-6 leading-tight">
-            Seguridad simplificada para tu entorno educativo.
+            {t('auth.login.heroTitle')}
           </h1>
           <p className="text-slate-400 text-lg leading-relaxed max-w-md">
-            Plataforma de gestión centralizada diseñada para la estabilidad, el control y la
-            tranquilidad de tu institución.
+            {t('auth.login.heroBody')}
           </p>
 
           <div className="mt-12 flex items-center gap-4 text-sm font-medium text-slate-500">
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 bg-green-500 rounded-full"></div> Conexión Segura
+              <div className="w-2 h-2 bg-green-500 rounded-full"></div>{' '}
+              {t('auth.login.secureConnection')}
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 bg-green-500 rounded-full"></div> Código Abierto
+              <div className="w-2 h-2 bg-green-500 rounded-full"></div> {t('auth.login.openSource')}
             </div>
           </div>
         </div>
@@ -87,13 +89,13 @@ const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, onNavigate
       <div className="w-full lg:w-1/2 flex items-center justify-center p-8 bg-slate-50">
         <div className="w-full max-w-md bg-white p-8 rounded-xl shadow-sm border border-slate-200">
           <div className="text-center mb-8">
-            <h2 className="text-2xl font-bold text-slate-900">Acceso Seguro</h2>
-            <p className="text-slate-500 text-sm mt-2">Ingresa tus credenciales de administrador</p>
+            <h2 className="text-2xl font-bold text-slate-900">{t('auth.login.title')}</h2>
+            <p className="text-slate-500 text-sm mt-2">{t('auth.login.subtitle')}</p>
           </div>
 
           {error && (
             <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100 flex items-center gap-2">
-              <span className="font-semibold">Error:</span> {error}
+              <span className="font-semibold">{t('auth.common.errorLabel')}</span> {error}
             </div>
           )}
 
@@ -105,7 +107,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, onNavigate
           >
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-2">
-                Correo Electrónico
+                {t('auth.common.email')}
               </label>
               <div className="relative">
                 <Mail className="absolute left-3 top-2.5 text-slate-400" size={18} />
@@ -121,7 +123,9 @@ const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, onNavigate
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-2">Contraseña</label>
+              <label className="block text-sm font-semibold text-slate-700 mb-2">
+                {t('auth.common.password')}
+              </label>
               <div className="relative">
                 <Lock className="absolute left-3 top-2.5 text-slate-400" size={18} />
                 <input
@@ -141,14 +145,14 @@ const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, onNavigate
                   type="checkbox"
                   className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 mr-2"
                 />
-                Mantener sesión
+                {t('auth.login.rememberSession')}
               </label>
               <button
                 type="button"
                 onClick={onNavigateToForgot}
                 className="text-blue-600 hover:text-blue-800 font-medium"
               >
-                Recuperar clave
+                {t('auth.login.recoverPassword')}
               </button>
             </div>
 
@@ -161,7 +165,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, onNavigate
                 <Loader2 className="animate-spin" size={18} />
               ) : (
                 <>
-                  Entrar <ArrowRight size={18} />
+                  {t('auth.common.signIn')} <ArrowRight size={18} />
                 </>
               )}
             </button>
@@ -171,7 +175,9 @@ const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, onNavigate
                 <div className="w-full border-t border-slate-200"></div>
               </div>
               <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-white px-2 text-slate-400">O también</span>
+                <span className="bg-white px-2 text-slate-400">
+                  {t('auth.login.alternativeDivider')}
+                </span>
               </div>
             </div>
 
@@ -184,12 +190,12 @@ const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, onNavigate
           </form>
 
           <div className="mt-6 pt-6 border-t border-slate-100 text-center text-sm">
-            <span className="text-slate-500">¿Nuevo en la plataforma? </span>
+            <span className="text-slate-500">{t('auth.common.newToPlatform')}</span>
             <button
               onClick={onNavigateToRegister}
               className="text-blue-600 font-bold hover:underline"
             >
-              Solicitar acceso
+              {t('auth.common.requestAccess')}
             </button>
           </div>
         </div>
