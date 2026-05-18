@@ -71,7 +71,7 @@
     "eslint": "^10.0.0",
     "eslint-plugin-no-only-tests": "^3.3.0",
     "husky": "^9.1.7",
-    "lint-staged": "^16.2.7",
+    "lint-staged": "^17.0.5",
     "node-gyp-build": "^4.8.4",
     "pg": "8.20.0",
     "prettier": "^3.8.1",
