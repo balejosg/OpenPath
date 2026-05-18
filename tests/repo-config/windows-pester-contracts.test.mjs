@@ -76,3 +76,21 @@ test('Windows aggregate Pester entrypoint includes installer cleanup regressions
     'installer cleanup contracts should prove cleanup skips AppLocker writes when no OpenPath rules exist'
   );
 });
+
+test('Windows AppControl Pester suite keeps Appx AppLocker regression coverage', () => {
+  const appControlSuite = readText('windows/tests/Windows.AppControl.Tests.ps1');
+
+  assert.match(
+    appControlSuite,
+    /Generates an Appx FilePublisherRule instead of leaving packaged apps NotConfigured/,
+    'Windows.AppControl.Tests.ps1 should keep the Appx AppLocker regression test'
+  );
+
+  for (const marker of ['Appx', 'FilePublisherRule', 'NotConfigured']) {
+    assert.match(
+      appControlSuite,
+      new RegExp(marker),
+      `Windows.AppControl.Tests.ps1 should keep explicit ${marker} coverage for packaged apps`
+    );
+  }
+});

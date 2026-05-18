@@ -203,6 +203,32 @@ Describe "AppControl Module" {
             }
         }
 
+        It "Generates an Appx FilePublisherRule instead of leaving packaged apps NotConfigured" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+            $policyXml = New-OpenPathAppLockerPolicyXml -Spec $spec
+            $policyXml | Should -Not -Match '<RuleCollection Type="Appx" EnforcementMode="NotConfigured"'
+            $policyXml | Should -Match '<RuleCollection Type="Appx" EnforcementMode="Enabled">'
+            [xml]$policy = $policyXml
+
+            $appxCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+            $appxCollection | Should -Not -BeNullOrEmpty
+            $appxCollection.GetAttribute('EnforcementMode') | Should -Be 'Enabled'
+            $appxCollection.GetAttribute('EnforcementMode') | Should -Not -Be 'NotConfigured'
+
+            $rules = @($appxCollection.FilePublisherRule)
+            $rules.Count | Should -Be 1
+            $rule = $rules[0]
+            $rule.GetAttribute('Name') | Should -Be 'OpenPath non-admin app control Appx users allow signed packaged apps'
+            $rule.GetAttribute('Action') | Should -Be 'Allow'
+            $rule.GetAttribute('UserOrGroupSid') | Should -Be 'S-1-1-0'
+            $condition = $rule.Conditions.FilePublisherCondition
+            $condition.GetAttribute('PublisherName') | Should -Be '*'
+            $condition.GetAttribute('ProductName') | Should -Be '*'
+            $condition.GetAttribute('BinaryName') | Should -Be '*'
+            $condition.BinaryVersionRange.GetAttribute('LowSection') | Should -Be '*'
+            $condition.BinaryVersionRange.GetAttribute('HighSection') | Should -Be '*'
+        }
+
         It "Generates non-admin deny rules for user-writable paths before user allow rules in Exe and Script collections" {
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
             [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
@@ -261,7 +287,7 @@ Describe "AppControl Module" {
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -Mode 'AuditOnly'
             [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
 
-            foreach ($collectionType in @('Exe', 'Script')) {
+            foreach ($collectionType in @('Exe', 'Script', 'Appx')) {
                 $collection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq $collectionType })[0]
                 $collection.GetAttribute('EnforcementMode') | Should -Be 'AuditOnly'
             }
@@ -279,6 +305,11 @@ Describe "AppControl Module" {
       </FilePathRule>
     </RuleCollection>
     <RuleCollection Type="Script" EnforcementMode="Enabled" />
+    <RuleCollection Type="Appx" EnforcementMode="NotConfigured">
+      <FilePublisherRule Id="33333333-3333-3333-3333-333333333333" Name="Vendor packaged allow" Description="Existing rule" UserOrGroupSid="S-1-1-0" Action="Allow">
+        <Conditions><FilePublisherCondition PublisherName="CN=Vendor" ProductName="VendorApp" BinaryName="*"><BinaryVersionRange LowSection="*" HighSection="*" /></FilePublisherCondition></Conditions>
+      </FilePublisherRule>
+    </RuleCollection>
 </AppLockerPolicy>
 '@
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
@@ -292,6 +323,20 @@ Describe "AppControl Module" {
             $ruleNames | Should -Not -Contain 'OpenPath non-admin app control stale'
             @($exeRules | Where-Object { $_.Conditions.FilePathCondition.GetAttribute('Path') -eq 'C:\OldOpenPath\*' }).Count | Should -Be 0
             @($ruleNames | Where-Object { $_ -like 'OpenPath non-admin app control*' }).Count | Should -BeGreaterThan 0
+
+            $appxCollection = @($mergedPolicy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+            $appxCollection.GetAttribute('EnforcementMode') | Should -Be 'Enabled'
+            $appxRuleNames = @($appxCollection.FilePublisherRule | ForEach-Object { $_.GetAttribute('Name') })
+            $appxRuleNames | Should -Contain 'Vendor packaged allow'
+            $appxRuleNames | Should -Contain 'OpenPath non-admin app control Appx users allow signed packaged apps'
+            $openPathAppxRule = @($appxCollection.FilePublisherRule | Where-Object { $_.GetAttribute('Name') -eq 'OpenPath non-admin app control Appx users allow signed packaged apps' })[0]
+            $openPathAppxRule.GetAttribute('Action') | Should -Be 'Allow'
+            $openPathAppxRule.GetAttribute('UserOrGroupSid') | Should -Be 'S-1-1-0'
+            $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('PublisherName') | Should -Be '*'
+            $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('ProductName') | Should -Be '*'
+            $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('BinaryName') | Should -Be '*'
+            $openPathAppxRule.Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('LowSection') | Should -Be '*'
+            $openPathAppxRule.Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('HighSection') | Should -Be '*'
         }
 
         It "Classifies managed AppLocker rules using the rule Name attribute" {

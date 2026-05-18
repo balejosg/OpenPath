@@ -298,6 +298,44 @@ function New-OpenPathFilePathRuleXml {
     return $xml
 }
 
+function New-OpenPathFilePublisherRuleXml {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Sid,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Action,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PublisherName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ProductName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BinaryName
+    )
+
+    $id = [guid]::NewGuid().ToString()
+    $escapedName = ConvertTo-OpenPathXmlAttribute -Value $Name
+    $escapedSid = ConvertTo-OpenPathXmlAttribute -Value $Sid
+    $escapedAction = ConvertTo-OpenPathXmlAttribute -Value $Action
+    $escapedPublisherName = ConvertTo-OpenPathXmlAttribute -Value $PublisherName
+    $escapedProductName = ConvertTo-OpenPathXmlAttribute -Value $ProductName
+    $escapedBinaryName = ConvertTo-OpenPathXmlAttribute -Value $BinaryName
+    $xml = "      <FilePublisherRule Id=`"$id`" Name=`"$escapedName`" Description=`"Managed by OpenPath`" UserOrGroupSid=`"$escapedSid`" Action=`"$escapedAction`">`n"
+    $xml += "        <Conditions>`n"
+    $xml += "          <FilePublisherCondition PublisherName=`"$escapedPublisherName`" ProductName=`"$escapedProductName`" BinaryName=`"$escapedBinaryName`">`n"
+    $xml += "            <BinaryVersionRange LowSection=`"*`" HighSection=`"*`" />`n"
+    $xml += "          </FilePublisherCondition>`n"
+    $xml += "        </Conditions>`n"
+    $xml += "      </FilePublisherRule>"
+    return $xml
+}
+
 function New-OpenPathAppLockerPolicyXml {
     [CmdletBinding()]
     param(
@@ -334,12 +372,16 @@ function New-OpenPathAppLockerPolicyXml {
         $ruleCollections += "    <RuleCollection Type=`"$collectionType`" EnforcementMode=`"$($Spec.EnforcementMode)`">`n$($rules -join "`n")`n    </RuleCollection>"
     }
 
+    $appxRules = @(
+        New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow signed packaged apps" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName '*' -ProductName '*' -BinaryName '*'
+    )
+    $ruleCollections += "    <RuleCollection Type=`"Appx`" EnforcementMode=`"$($Spec.EnforcementMode)`">`n$($appxRules -join "`n")`n    </RuleCollection>"
+
     return @"
 <AppLockerPolicy Version="1">
 $($ruleCollections -join "`n")
     <RuleCollection Type="Dll" EnforcementMode="NotConfigured" />
     <RuleCollection Type="Msi" EnforcementMode="NotConfigured" />
-    <RuleCollection Type="Appx" EnforcementMode="NotConfigured" />
 </AppLockerPolicy>
 "@
 }
