@@ -104,10 +104,12 @@ Describe "DNS Module" {
                 'if (Test-Path $snapshotPath)',
                 '$snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)',
                 '[string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid',
-                '$_.ifIndex -eq [int]$entry.InterfaceIndex',
+                '$entryInterfaceIndex = ConvertTo-OpenPathDnsNullableInt -Value $entry.InterfaceIndex',
+                '(ConvertTo-OpenPathDnsNullableInt -Value $_.ifIndex) -eq $entryInterfaceIndex',
                 '$_.Name -eq [string]$entry.InterfaceAlias',
-                'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $servers',
-                'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses'
+                '$adapterInterfaceIndex = ConvertTo-OpenPathDnsNullableInt -Value $adapter.ifIndex',
+                'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers',
+                'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses'
             )
         }
 
@@ -135,8 +137,8 @@ Describe "DNS Module" {
 
             Assert-ContentContainsAll -Content $restoreOriginalBody -Needles @(
                 '$snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)',
-                'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $servers',
-                'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses',
+                'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers',
+                'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses',
                 'Clear-DnsClientCache'
             )
         }

@@ -130,6 +130,35 @@ function Remove-OpenPathFallbackAppLockerRules {
     }
 }
 
+function Select-OpenPathUninstallScalarValue {
+    param([object]$Value)
+
+    foreach ($item in @($Value)) {
+        if ($null -ne $item) {
+            return $item
+        }
+    }
+
+    return $null
+}
+
+function ConvertTo-OpenPathUninstallNullableInt {
+    param([object]$Value)
+
+    $scalarValue = Select-OpenPathUninstallScalarValue -Value $Value
+    if ($null -eq $scalarValue) { return $null }
+
+    $stringValue = [string]$scalarValue
+    if ([string]::IsNullOrWhiteSpace($stringValue)) { return $null }
+
+    try {
+        return [int]$stringValue
+    }
+    catch {
+        return $null
+    }
+}
+
 function Restore-OpenPathOriginalDns {
     $snapshotPath = Join-Path $OpenPathRoot 'data\original-dns.json'
     if ((Test-Path $snapshotPath) -and (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) {
@@ -137,21 +166,27 @@ function Restore-OpenPathOriginalDns {
             $snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)
             $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
             foreach ($entry in $snapshot) {
-                $adapter = @($adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1)
-                if (-not $adapter -and $entry.InterfaceIndex -ne $null) {
-                    $adapter = @($adapters | Where-Object { $_.ifIndex -eq [int]$entry.InterfaceIndex } | Select-Object -First 1)
+                $adapter = $adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1
+                $entryInterfaceIndex = ConvertTo-OpenPathUninstallNullableInt -Value $entry.InterfaceIndex
+                if (-not $adapter -and $null -ne $entryInterfaceIndex) {
+                    $adapter = $adapters | Where-Object {
+                        (ConvertTo-OpenPathUninstallNullableInt -Value $_.ifIndex) -eq $entryInterfaceIndex
+                    } | Select-Object -First 1
                 }
                 if (-not $adapter -and $entry.InterfaceAlias) {
-                    $adapter = @($adapters | Where-Object { $_.Name -eq [string]$entry.InterfaceAlias } | Select-Object -First 1)
+                    $adapter = $adapters | Where-Object { $_.Name -eq [string]$entry.InterfaceAlias } | Select-Object -First 1
                 }
                 if (-not $adapter) { continue }
 
+                $adapterInterfaceIndex = ConvertTo-OpenPathUninstallNullableInt -Value $adapter.ifIndex
+                if ($null -eq $adapterInterfaceIndex) { continue }
+
                 $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object { $_ })
                 if ($servers.Count -gt 0) {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $servers -ErrorAction SilentlyContinue
+                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers -ErrorAction SilentlyContinue
                 }
                 else {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
                 }
             }
             Clear-DnsClientCache -ErrorAction SilentlyContinue

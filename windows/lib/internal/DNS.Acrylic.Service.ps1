@@ -38,6 +38,35 @@ function Get-OpenPathOriginalDnsSnapshotPath {
     return 'C:\OpenPath\data\original-dns.json'
 }
 
+function Select-OpenPathDnsScalarValue {
+    param([object]$Value)
+
+    foreach ($item in @($Value)) {
+        if ($null -ne $item) {
+            return $item
+        }
+    }
+
+    return $null
+}
+
+function ConvertTo-OpenPathDnsNullableInt {
+    param([object]$Value)
+
+    $scalarValue = Select-OpenPathDnsScalarValue -Value $Value
+    if ($null -eq $scalarValue) { return $null }
+
+    $stringValue = [string]$scalarValue
+    if ([string]::IsNullOrWhiteSpace($stringValue)) { return $null }
+
+    try {
+        return [int]$stringValue
+    }
+    catch {
+        return $null
+    }
+}
+
 function Save-OpenPathOriginalDnsSnapshot {
     [CmdletBinding()]
     param([string]$Path = (Get-OpenPathOriginalDnsSnapshotPath))
@@ -85,22 +114,28 @@ function Restore-OriginalDNS {
             $snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)
             $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
             foreach ($entry in $snapshot) {
-                $adapter = @($adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1)
-                if (-not $adapter -and $entry.InterfaceIndex -ne $null) {
-                    $adapter = @($adapters | Where-Object { $_.ifIndex -eq [int]$entry.InterfaceIndex } | Select-Object -First 1)
+                $adapter = $adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1
+                $entryInterfaceIndex = ConvertTo-OpenPathDnsNullableInt -Value $entry.InterfaceIndex
+                if (-not $adapter -and $null -ne $entryInterfaceIndex) {
+                    $adapter = $adapters | Where-Object {
+                        (ConvertTo-OpenPathDnsNullableInt -Value $_.ifIndex) -eq $entryInterfaceIndex
+                    } | Select-Object -First 1
                 }
                 if (-not $adapter -and $entry.InterfaceAlias) {
-                    $adapter = @($adapters | Where-Object { $_.Name -eq [string]$entry.InterfaceAlias } | Select-Object -First 1)
+                    $adapter = $adapters | Where-Object { $_.Name -eq [string]$entry.InterfaceAlias } | Select-Object -First 1
                 }
                 if (-not $adapter) { continue }
 
+                $adapterInterfaceIndex = ConvertTo-OpenPathDnsNullableInt -Value $adapter.ifIndex
+                if ($null -eq $adapterInterfaceIndex) { continue }
+
                 $servers = @($entry.ServerAddresses | ForEach-Object { [string]$_ } | Where-Object { $_ })
                 if ($servers.Count -gt 0) {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $servers -ErrorAction Stop
+                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers -ErrorAction Stop
                     Write-OpenPathLog "Restored DNS for adapter: $($adapter.Name)"
                 }
                 else {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction Stop
+                    Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses -ErrorAction Stop
                     Write-OpenPathLog "Reset DNS for adapter: $($adapter.Name)"
                 }
             }
