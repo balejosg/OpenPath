@@ -106,6 +106,10 @@ main() {
 
     parse_whitelist_sections "$WHITELIST_FILE"
 
+    if declare -F process_runtime_dependency_queue >/dev/null 2>&1; then
+        process_runtime_dependency_queue || log_warn "Runtime dependency queue processing failed"
+    fi
+
     local firewall_was_inactive=false
     if [ "$(check_firewall_status)" != "active" ]; then
         firewall_was_inactive=true

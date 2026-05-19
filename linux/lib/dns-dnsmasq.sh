@@ -127,6 +127,29 @@ EOF
 
     echo "" >> "$temp_conf"
 
+    local runtime_dependency_domains=()
+    if declare -F get_runtime_dependency_domains >/dev/null 2>&1; then
+        local runtime_dependency_domain
+        while IFS= read -r runtime_dependency_domain; do
+            [ -n "$runtime_dependency_domain" ] && runtime_dependency_domains+=("$runtime_dependency_domain")
+        done < <(get_runtime_dependency_domains --prune)
+    fi
+
+    if [ "${#runtime_dependency_domains[@]}" -gt 0 ]; then
+        echo "# Runtime dependency domains (${#runtime_dependency_domains[@]} domains)" >> "$temp_conf"
+        local runtime_dependency_domain
+        for runtime_dependency_domain in "${runtime_dependency_domains[@]}"; do
+            if validate_domain "$runtime_dependency_domain"; then
+                local safe_runtime_dependency_domain
+                safe_runtime_dependency_domain="$(sanitize_domain "$runtime_dependency_domain")"
+                echo "server=/${safe_runtime_dependency_domain}/${upstream_dns}" >> "$temp_conf"
+            else
+                log_warn "Skipping invalid runtime dependency domain: $runtime_dependency_domain"
+            fi
+        done
+        echo "" >> "$temp_conf"
+    fi
+
     if [ ${#BLOCKED_SUBDOMAINS[@]} -gt 0 ]; then
         echo "# Blocked subdomains (NXDOMAIN)" >> "$temp_conf"
         for blocked in "${BLOCKED_SUBDOMAINS[@]}"; do

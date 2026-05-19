@@ -190,6 +190,83 @@ EOF
     [[ "$output" == *"deactivate_calls=1"* ]]
 }
 
+@test "openpath update processes runtime dependency queue before dnsmasq render" {
+    local helper_script="$TEST_TMP_DIR/run-main-runtime-dependency-order.sh"
+    local state_dir="$TEST_TMP_DIR/update-runtime-dependency-state"
+
+    mkdir -p "$state_dir"
+
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -uo pipefail
+
+project_dir="$1"
+state_dir="$2"
+extracted_script="$state_dir/openpath-update-main.sh"
+
+export WHITELIST_FILE="$state_dir/whitelist.txt"
+export DNSMASQ_CONF="$state_dir/openpath.conf"
+export DNSMASQ_CONF_HASH="$state_dir/openpath.conf.hash"
+export BROWSER_POLICIES_HASH="$state_dir/browser.hash"
+export SYSTEM_DISABLED_FLAG="$state_dir/system-disabled.flag"
+export INSTALL_DIR="$state_dir/install"
+export LOG_FILE="$state_dir/openpath.log"
+
+mkdir -p "$state_dir" "$INSTALL_DIR/lib"
+cat > "$WHITELIST_FILE" <<'WHITELIST'
+## WHITELIST
+allowed.example
+WHITELIST
+: > "$DNSMASQ_CONF"
+cp "$project_dir/linux/lib/common.sh" "$INSTALL_DIR/lib/"
+: > "$INSTALL_DIR/VERSION"
+: > "$INSTALL_DIR/lib/defaults.conf"
+
+source "$project_dir/linux/lib/common.sh"
+
+events=()
+log() { :; }
+log_warn() { echo "$1"; }
+init_directories() { :; }
+detect_primary_dns() { echo "8.8.8.8"; }
+get_captive_portal_state() { echo "CLEAR"; }
+download_whitelist() { return 0; }
+check_emergency_disable() { return 1; }
+parse_whitelist_sections() { events+=("parse"); WHITELIST_DOMAINS=("allowed.example"); BLOCKED_SUBDOMAINS=(); }
+process_runtime_dependency_queue() { events+=("queue"); }
+check_firewall_status() { echo "active"; }
+save_checkpoint() { :; }
+generate_dnsmasq_config() { events+=("dns"); }
+sync_runtime_browser_integrations() { :; }
+get_policies_hash() { echo "policies-hash"; }
+has_config_changed() { return 1; }
+restart_dnsmasq() { events+=("restart"); return 0; }
+verify_dns() { return 0; }
+activate_firewall() { :; }
+deactivate_firewall() { :; }
+cleanup_system() { :; }
+flush_connections() { :; }
+force_browser_close() { :; }
+sha256sum() { printf 'deadbeef  %s\n' "$1"; }
+
+{
+    cat "$project_dir/linux/lib/openpath-update-runtime.sh"
+    awk '/^main\(\) \{/,/^}/' \
+        "$project_dir/linux/scripts/runtime/openpath-update.sh"
+} > "$extracted_script"
+source "$extracted_script"
+
+main
+printf '%s\n' "${events[*]}"
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR" "$state_dir"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"parse queue dns"* ]]
+}
+
 @test "main keeps enforcement path when captive portal state is NO_NETWORK" {
     local helper_script="$TEST_TMP_DIR/run-main-no-network.sh"
     local state_dir="$TEST_TMP_DIR/update-state-no-network"

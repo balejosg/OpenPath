@@ -263,6 +263,80 @@ EOF
     grep -q "/run/dnsmasq" "$tmpfiles_file"
 }
 
+@test "create_systemd_services creates runtime dependency apply service and path" {
+    run grep -nF "create_runtime_dependency_apply_service" "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "create_runtime_dependency_apply_path" "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "ExecStart=/usr/local/bin/openpath-runtime-dependency-apply.sh" "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "PathExistsGlob=/var/lib/openpath/runtime-dependency-queue/*.json" "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "tmpfiles config provisions runtime dependency queue with root-owned sticky dropbox permissions" {
+    run grep -nF "d /var/lib/openpath/runtime-dependency-queue 1733 root root -" "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "d /var/lib/openpath/runtime-dependency-rejected 0700 root root -" "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "runtime dependency apply script restarts dnsmasq only when config changed" {
+    local install_dir="$TEST_TMP_DIR/install-runtime-apply"
+    local script_path="$PROJECT_DIR/linux/scripts/runtime/openpath-runtime-dependency-apply.sh"
+
+    mkdir -p "$install_dir/lib" "$install_dir/libexec" "$TEST_TMP_DIR/bin"
+    cp "$PROJECT_DIR/linux/lib/"*.sh "$install_dir/lib/"
+    cp "$PROJECT_DIR/linux/libexec/"*.py "$install_dir/libexec/"
+    cp "$PROJECT_DIR/runtime/browser-policy-spec.json" "$install_dir/libexec/"
+    printf '4.1.0\n' > "$install_dir/VERSION"
+    : > "$install_dir/lib/defaults.conf"
+
+    cat >> "$install_dir/lib/dns.sh" <<'EOF'
+parse_whitelist_sections() { :; }
+process_runtime_dependency_queue() { :; }
+generate_dnsmasq_config() { printf 'dns-config\n' > "$DNSMASQ_CONF"; }
+has_config_changed() { [ "$(cat "$DNSMASQ_CONF_HASH" 2>/dev/null)" != "newhash" ]; }
+restart_dnsmasq() { printf 'restart\n' >> "$RESTART_LOG"; return 0; }
+flush_dns_cache() { :; }
+with_openpath_lock() { "$@"; }
+EOF
+
+    cat > "$TEST_TMP_DIR/bin/sha256sum" <<'EOF'
+#!/bin/bash
+printf 'newhash  %s\n' "$1"
+EOF
+    chmod +x "$TEST_TMP_DIR/bin/sha256sum"
+
+    export INSTALL_DIR="$install_dir"
+    export WHITELIST_FILE="$TEST_TMP_DIR/whitelist.txt"
+    export DNSMASQ_CONF="$TEST_TMP_DIR/openpath.conf"
+    export DNSMASQ_CONF_HASH="$TEST_TMP_DIR/openpath.conf.hash"
+    export RESTART_LOG="$TEST_TMP_DIR/restart.log"
+    export PATH="$TEST_TMP_DIR/bin:$PATH"
+    cat > "$WHITELIST_FILE" <<'EOF'
+allowed.example
+EOF
+
+    generate_dnsmasq_config() { :; }
+
+    printf 'newhash\n' > "$DNSMASQ_CONF_HASH"
+    printf 'dns-config\n' > "$DNSMASQ_CONF"
+    run "$script_path"
+    [ "$status" -eq 0 ]
+    [ ! -f "$RESTART_LOG" ]
+
+    printf 'oldhash\n' > "$DNSMASQ_CONF_HASH"
+    run "$script_path"
+    [ "$status" -eq 0 ]
+    grep -q "restart" "$RESTART_LOG"
+    grep -q "newhash" "$DNSMASQ_CONF_HASH"
+}
+
 # ============== Tests de enable_services / disable_services ==============
 
 @test "enable_services runs without errors" {

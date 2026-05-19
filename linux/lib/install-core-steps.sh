@@ -91,11 +91,13 @@ step_install_libraries() {
 
     cp "$INSTALLER_SOURCE_DIR/lib/"*.sh "$INSTALL_DIR/lib/"
     cp "$INSTALLER_SOURCE_DIR/libexec/browser-json.py" "$INSTALL_DIR/libexec/"
+    cp "$INSTALLER_SOURCE_DIR/libexec/runtime-dependency-overlay.py" "$INSTALL_DIR/libexec/"
     cp "$INSTALLER_SOURCE_DIR/../runtime/browser-policy-spec.json" "$INSTALL_DIR/libexec/"
     cp "$INSTALLER_SOURCE_DIR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
 
     chmod +x "$INSTALL_DIR/lib/"*.sh
     chmod +x "$INSTALL_DIR/libexec/browser-json.py"
+    chmod +x "$INSTALL_DIR/libexec/runtime-dependency-overlay.py"
     chmod +x "$INSTALL_DIR/uninstall.sh"
     echo "✓ Libraries installed"
 
@@ -148,6 +150,9 @@ step_install_scripts() {
 
     cp "$INSTALLER_SOURCE_DIR/scripts/runtime/openpath-update.sh" "$SCRIPTS_DIR/"
     chmod +x "$SCRIPTS_DIR/openpath-update.sh"
+
+    cp "$INSTALLER_SOURCE_DIR/scripts/runtime/openpath-runtime-dependency-apply.sh" "$SCRIPTS_DIR/"
+    chmod +x "$SCRIPTS_DIR/openpath-runtime-dependency-apply.sh"
 
     cp "$INSTALLER_SOURCE_DIR/scripts/runtime/dnsmasq-watchdog.sh" "$SCRIPTS_DIR/"
     chmod +x "$SCRIPTS_DIR/dnsmasq-watchdog.sh"
@@ -256,6 +261,12 @@ step_create_services() {
     create_systemd_services
     create_logrotate_config
     create_tmpfiles_config
+    mkdir -p "$VAR_STATE_DIR/runtime-dependency-queue"
+    chown root:root "$VAR_STATE_DIR/runtime-dependency-queue" 2>/dev/null || true
+    chmod 1733 "$VAR_STATE_DIR/runtime-dependency-queue"
+    mkdir -p "$VAR_STATE_DIR/runtime-dependency-rejected"
+    chown root:root "$VAR_STATE_DIR/runtime-dependency-rejected" 2>/dev/null || true
+    chmod 0700 "$VAR_STATE_DIR/runtime-dependency-rejected"
 
     echo "✓ Services created"
 }

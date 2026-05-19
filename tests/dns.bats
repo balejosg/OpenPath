@@ -402,6 +402,72 @@ EOF
     [[ "$output" == *"reason=same-host"* ]]
 }
 
+@test "generate_dnsmasq_config includes runtime dependency domains as exact local allows" {
+    export DNSMASQ_CONF="$TEST_TMP_DIR/openpath.conf"
+    export PRIMARY_DNS="8.8.8.8"
+    export VERSION="3.5"
+    export LOG_FILE="$TEST_TMP_DIR/openpath.log"
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var/lib/openpath"
+    export RUNTIME_DEPENDENCY_OVERLAY_FILE="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+    mkdir -p "$VAR_STATE_DIR"
+    cat > "$RUNTIME_DEPENDENCY_OVERLAY_FILE" <<'JSON'
+{"version":1,"entries":[
+  {"anchorHost":"allowed.example","dependencyHost":"cdn.example","requestTypes":["fetch"],"firstSeen":"2099-01-01T00:00:00Z","lastSeen":"2099-01-01T00:00:00Z","expiresAt":"2099-01-02T00:00:00Z","source":"firefox-webrequest-local"}
+]}
+JSON
+
+    log() { echo "$1"; }
+    export -f log
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-overlay.sh"
+
+    WHITELIST_DOMAINS=("allowed.example")
+    BLOCKED_SUBDOMAINS=()
+    BLOCKED_PATHS=()
+
+    run generate_dnsmasq_config
+
+    [ "$status" -eq 0 ]
+    grep -q "server=/cdn.example/8.8.8.8" "$DNSMASQ_CONF"
+}
+
+@test "generate_dnsmasq_config renders runtime dependency domains before blocked subdomain NXDOMAIN entries" {
+    export DNSMASQ_CONF="$TEST_TMP_DIR/openpath.conf"
+    export PRIMARY_DNS="8.8.8.8"
+    export VERSION="3.5"
+    export LOG_FILE="$TEST_TMP_DIR/openpath.log"
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var/lib/openpath"
+    export RUNTIME_DEPENDENCY_OVERLAY_FILE="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+    mkdir -p "$VAR_STATE_DIR"
+    cat > "$RUNTIME_DEPENDENCY_OVERLAY_FILE" <<'JSON'
+{"version":1,"entries":[
+  {"anchorHost":"allowed.example","dependencyHost":"cdn.example","requestTypes":["fetch"],"firstSeen":"2099-01-01T00:00:00Z","lastSeen":"2099-01-01T00:00:00Z","expiresAt":"2099-01-02T00:00:00Z","source":"firefox-webrequest-local"}
+]}
+JSON
+
+    log() { echo "$1"; }
+    export -f log
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-overlay.sh"
+
+    WHITELIST_DOMAINS=("allowed.example")
+    BLOCKED_SUBDOMAINS=("blocked.allowed.example")
+    BLOCKED_PATHS=()
+
+    run generate_dnsmasq_config
+
+    [ "$status" -eq 0 ]
+    local runtime_line
+    local blocked_line
+    runtime_line=$(grep -n "server=/cdn.example/8.8.8.8" "$DNSMASQ_CONF" | cut -d: -f1)
+    blocked_line=$(grep -n "address=/blocked.allowed.example/" "$DNSMASQ_CONF" | cut -d: -f1)
+    [ "$runtime_line" -lt "$blocked_line" ]
+}
+
 @test "generate_dnsmasq_config includes domains from whitelist" {
     export DNSMASQ_CONF="$TEST_TMP_DIR/dnsmasq.d/url-whitelist.conf"
     export PRIMARY_DNS="8.8.8.8"

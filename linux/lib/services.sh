@@ -33,6 +33,8 @@ create_systemd_services() {
     create_watchdog_service
     create_watchdog_timer
     create_captive_portal_service
+    create_runtime_dependency_apply_service
+    create_runtime_dependency_apply_path
     create_dnsmasq_override
     create_tmpfiles_config
     install_nm_dispatcher
@@ -201,6 +203,41 @@ WantedBy=multi-user.target
 EOF
 }
 
+create_runtime_dependency_apply_service() {
+    cat > /etc/systemd/system/openpath-runtime-dependency-apply.service << 'EOF'
+[Unit]
+Description=Apply OpenPath Browser Runtime Dependencies
+After=dnsmasq.service
+Wants=dnsmasq.service
+StartLimitIntervalSec=60
+StartLimitBurst=20
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/openpath-runtime-dependency-apply.sh
+TimeoutStartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+create_runtime_dependency_apply_path() {
+    cat > /etc/systemd/system/openpath-runtime-dependency-apply.path << 'EOF'
+[Unit]
+Description=Watch OpenPath Browser Runtime Dependency Queue
+
+[Path]
+PathExistsGlob=/var/lib/openpath/runtime-dependency-queue/*.json
+Unit=openpath-runtime-dependency-apply.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
 # Override for dnsmasq to initialize upstream DNS
 create_dnsmasq_override() {
     mkdir -p /etc/systemd/system/dnsmasq.service.d
@@ -220,12 +257,14 @@ enable_services() {
     systemctl enable dnsmasq-watchdog.timer
     systemctl enable captive-portal-detector.service
     systemctl enable openpath-sse-listener.service 2>/dev/null || true
+    systemctl enable openpath-runtime-dependency-apply.path
     
     systemctl start openpath-dnsmasq.timer
     systemctl start openpath-agent-update.timer
     systemctl start dnsmasq-watchdog.timer
     systemctl start captive-portal-detector.service
     systemctl start openpath-sse-listener.service 2>/dev/null || true
+    systemctl start openpath-runtime-dependency-apply.path
     
     log "✓ Services enabled and started"
 }
@@ -239,6 +278,7 @@ disable_services() {
     systemctl stop openpath-agent-update.timer 2>/dev/null || true
     systemctl stop dnsmasq-watchdog.timer 2>/dev/null || true
     systemctl stop captive-portal-detector.service 2>/dev/null || true
+    systemctl stop openpath-runtime-dependency-apply.path 2>/dev/null || true
     systemctl stop dnsmasq 2>/dev/null || true
     
     systemctl disable openpath-sse-listener.service 2>/dev/null || true
@@ -246,6 +286,7 @@ disable_services() {
     systemctl disable openpath-agent-update.timer 2>/dev/null || true
     systemctl disable dnsmasq-watchdog.timer 2>/dev/null || true
     systemctl disable captive-portal-detector.service 2>/dev/null || true
+    systemctl disable openpath-runtime-dependency-apply.path 2>/dev/null || true
     
     log "✓ Services disabled"
 }
@@ -261,6 +302,8 @@ remove_services() {
     rm -f /etc/systemd/system/openpath-agent-update.service
     rm -f /etc/systemd/system/openpath-agent-update.timer
     rm -f /etc/systemd/system/openpath-sse-listener.service
+    rm -f /etc/systemd/system/openpath-runtime-dependency-apply.service
+    rm -f /etc/systemd/system/openpath-runtime-dependency-apply.path
     rm -f /etc/systemd/system/dnsmasq-watchdog.service
     rm -f /etc/systemd/system/dnsmasq-watchdog.timer
     rm -f /etc/systemd/system/captive-portal-detector.service
@@ -296,6 +339,8 @@ create_tmpfiles_config() {
     mkdir -p /etc/tmpfiles.d
     cat > /etc/tmpfiles.d/openpath-dnsmasq.conf << 'EOF'
 d /run/dnsmasq 0755 root root -
+d /var/lib/openpath/runtime-dependency-queue 1733 root root -
+d /var/lib/openpath/runtime-dependency-rejected 0700 root root -
 EOF
 }
 

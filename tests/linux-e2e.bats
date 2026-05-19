@@ -641,6 +641,57 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+@test "linux runtime stages runtime dependency apply assets" {
+    run grep -nF '$INSTALLER_SOURCE_DIR/libexec/runtime-dependency-overlay.py' "$PROJECT_DIR/linux/lib/install-core-steps.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF '$INSTALLER_SOURCE_DIR/scripts/runtime/openpath-runtime-dependency-apply.sh' "$PROJECT_DIR/linux/lib/install-core-steps.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF '$LINUX_DIR/libexec/runtime-dependency-overlay.py' "$PROJECT_DIR/linux/scripts/build/build-deb.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF '$LINUX_DIR/scripts/runtime/openpath-runtime-dependency-apply.sh' "$PROJECT_DIR/linux/scripts/build/build-deb.sh"
+    [ "$status" -eq 0 ]
+
+    run test -f "$PROJECT_DIR/linux/libexec/runtime-dependency-overlay.py"
+    [ "$status" -eq 0 ]
+
+    run test -f "$PROJECT_DIR/linux/scripts/runtime/openpath-runtime-dependency-apply.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "linux runtime dependency lifecycle removes service units and state" {
+    run grep -nF '/etc/systemd/system/openpath-runtime-dependency-apply.service' "$PROJECT_DIR/linux/uninstall.sh" "$PROJECT_DIR/linux/debian-package/DEBIAN/postrm"
+    [ "$status" -eq 0 ]
+
+    run grep -nF '/etc/systemd/system/openpath-runtime-dependency-apply.path' "$PROJECT_DIR/linux/uninstall.sh" "$PROJECT_DIR/linux/debian-package/DEBIAN/postrm"
+    [ "$status" -eq 0 ]
+
+    run grep -nF '/usr/local/bin/openpath-runtime-dependency-apply.sh' "$PROJECT_DIR/linux/uninstall.sh" "$PROJECT_DIR/linux/debian-package/DEBIAN/postrm"
+    [ "$status" -eq 0 ]
+
+    run grep -nF '/usr/local/lib/openpath/libexec/runtime-dependency-overlay.py' "$PROJECT_DIR/linux/debian-package/DEBIAN/postrm"
+    [ "$status" -eq 0 ]
+
+    run grep -nF '/var/lib/openpath/runtime-dependency-overlay.json' "$PROJECT_DIR/linux/uninstall.sh" "$PROJECT_DIR/linux/debian-package/DEBIAN/postrm"
+    [ "$status" -eq 0 ]
+}
+
+@test "linux runtime dependency install keeps python3 and provisions queue directories" {
+    run grep -nF 'libcap2-bin dnsutils conntrack python3' "$PROJECT_DIR/linux/lib/install-core-steps.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'Depends: dnsmasq, iptables, ipset, iproute2, curl, libcap2-bin, dnsutils, conntrack, python3' "$PROJECT_DIR/linux/debian-package/DEBIAN/control"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'chmod 1733 "$VAR_STATE_DIR/runtime-dependency-queue"' "$PROJECT_DIR/linux/lib/install-core-steps.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -nF 'chmod 0700 "$VAR_STATE_DIR/runtime-dependency-rejected"' "$PROJECT_DIR/linux/lib/install-core-steps.sh"
+    [ "$status" -eq 0 ]
+}
+
 @test "linux install script stages chromium browser helper modules required by common.sh" {
     run grep -nF 'source "$INSTALLER_SOURCE_DIR/lib/install-core-steps.sh"' "$PROJECT_DIR/linux/install.sh"
     [ "$status" -eq 0 ]

@@ -23,6 +23,8 @@ case "$1" in
         
         # Remove other system files
         rm -f /etc/dnsmasq.d/openpath.conf
+        rm -f /etc/systemd/system/openpath-runtime-dependency-apply.service
+        rm -f /etc/systemd/system/openpath-runtime-dependency-apply.path
         rm -rf /etc/systemd/system/dnsmasq.service.d
         rm -f /var/log/openpath.log
         rm -f /var/log/captive-portal-detector.log
@@ -30,6 +32,11 @@ case "$1" in
         rm -f /etc/logrotate.d/openpath-dnsmasq
         rm -f /etc/NetworkManager/dispatcher.d/99-openpath-captive-check
         rm -rf /run/dnsmasq
+        rm -f /usr/local/bin/openpath-runtime-dependency-apply.sh
+        rm -f /usr/local/lib/openpath/libexec/runtime-dependency-overlay.py
+        rm -rf /var/lib/openpath/runtime-dependency-queue
+        rm -rf /var/lib/openpath/runtime-dependency-rejected
+        rm -f /var/lib/openpath/runtime-dependency-overlay.json
         rm -f /usr/local/bin/openpath-browser-setup.sh
         
         # Unprotect resolv.conf

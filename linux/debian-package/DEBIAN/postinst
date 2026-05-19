@@ -48,6 +48,12 @@ case "$1" in
         # Create directories (Debian FHS compliant)
         mkdir -p "$ETC_CONFIG_DIR"     # /etc/openpath - config (preserved)
         mkdir -p "$VAR_STATE_DIR"      # /var/lib/openpath - state/cache
+        mkdir -p "$RUNTIME_DEPENDENCY_QUEUE_DIR"
+        chown root:root "$RUNTIME_DEPENDENCY_QUEUE_DIR" 2>/dev/null || true
+        chmod 1733 "$RUNTIME_DEPENDENCY_QUEUE_DIR"
+        mkdir -p "$RUNTIME_DEPENDENCY_REJECTED_DIR"
+        chown root:root "$RUNTIME_DEPENDENCY_REJECTED_DIR" 2>/dev/null || true
+        chmod 0700 "$RUNTIME_DEPENDENCY_REJECTED_DIR"
         
         # Save configuration to /etc/ (preserved on upgrade)
         if [ -n "$WHITELIST_URL" ] && ! persist_openpath_whitelist_url "$WHITELIST_URL"; then
@@ -104,6 +110,8 @@ EOF
         
         # Step 9: Create logrotate and tmpfiles config
         create_logrotate_config
+        create_runtime_dependency_apply_service
+        create_runtime_dependency_apply_path
         create_tmpfiles_config
         install_nm_dispatcher
         
@@ -117,6 +125,7 @@ EOF
         systemctl enable dnsmasq-watchdog.timer
         systemctl enable captive-portal-detector.service
         systemctl enable openpath-sse-listener.service
+        systemctl enable openpath-runtime-dependency-apply.path
         
         # Step 10b: Enable unattended-upgrades if available
         if command -v unattended-upgrade &>/dev/null; then
@@ -169,6 +178,7 @@ EOF
         systemctl start dnsmasq-watchdog.timer
         systemctl start captive-portal-detector.service
         systemctl start openpath-sse-listener.service
+        systemctl start openpath-runtime-dependency-apply.path
         
         echo "✓ openpath-dnsmasq configurado correctamente"
         ;;
