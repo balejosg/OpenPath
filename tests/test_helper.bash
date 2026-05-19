@@ -17,10 +17,11 @@ setup() {
     export CONFIG_DIR="$TEST_TMP_DIR/config"
     export INSTALL_DIR="$TEST_TMP_DIR/install"
     mkdir -p "$CONFIG_DIR"
-    mkdir -p "$INSTALL_DIR/lib"
+    mkdir -p "$INSTALL_DIR/lib" "$INSTALL_DIR/libexec"
     
     # Copiar librerías al directorio de test
     cp "$PROJECT_DIR/linux/lib/"*.sh "$INSTALL_DIR/lib/" 2>/dev/null || true
+    cp "$PROJECT_DIR/linux/libexec/"* "$INSTALL_DIR/libexec/" 2>/dev/null || true
 }
 
 # Teardown después de cada test

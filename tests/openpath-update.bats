@@ -424,6 +424,110 @@ EOF
     [ "$status" -ne 0 ]
 }
 
+@test "runtime dependency queue writes valid dependency into overlay" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-policy.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-overlay.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-queue.sh"
+
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var/lib/openpath"
+    export RUNTIME_DEPENDENCY_QUEUE_DIR="$VAR_STATE_DIR/runtime-dependency-queue"
+    export RUNTIME_DEPENDENCY_OVERLAY_FILE="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+    mkdir -p "$RUNTIME_DEPENDENCY_QUEUE_DIR"
+    chmod 1733 "$RUNTIME_DEPENDENCY_QUEUE_DIR"
+
+    WHITELIST_DOMAINS=("allowed.example")
+    BLOCKED_SUBDOMAINS=()
+    write_runtime_dependency_queue_request "allowed.example" "cdn.example" "fetch"
+
+    run process_runtime_dependency_queue
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"processed=1"* ]]
+    grep -q '"dependencyHost": "cdn.example"' "$RUNTIME_DEPENDENCY_OVERLAY_FILE"
+}
+
+@test "runtime dependency overlay prunes expired and blocked entries" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-policy.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-overlay.sh"
+
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var/lib/openpath"
+    export RUNTIME_DEPENDENCY_OVERLAY_FILE="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+    mkdir -p "$VAR_STATE_DIR"
+    cat > "$RUNTIME_DEPENDENCY_OVERLAY_FILE" <<'JSON'
+{"version":1,"entries":[
+  {"anchorHost":"allowed.example","dependencyHost":"cdn.example","requestTypes":["fetch"],"firstSeen":"2099-01-01T00:00:00Z","lastSeen":"2099-01-01T00:00:00Z","expiresAt":"2099-01-02T00:00:00Z","source":"firefox-webrequest-local"},
+  {"anchorHost":"allowed.example","dependencyHost":"blocked.example","requestTypes":["script"],"firstSeen":"2099-01-01T00:00:00Z","lastSeen":"2099-01-01T00:00:00Z","expiresAt":"2099-01-02T00:00:00Z","source":"firefox-webrequest-local"}
+]}
+JSON
+    WHITELIST_DOMAINS=("allowed.example")
+    BLOCKED_SUBDOMAINS=("blocked.example")
+
+    run get_runtime_dependency_domains --prune
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"cdn.example"* ]]
+    [[ "$output" != *"blocked.example"* ]]
+}
+
+@test "runtime dependency queue rejects or quarantines malformed and unsafe artifacts without losing new files" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-policy.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-overlay.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-queue.sh"
+
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var/lib/openpath"
+    export RUNTIME_DEPENDENCY_QUEUE_DIR="$VAR_STATE_DIR/runtime-dependency-queue"
+    export RUNTIME_DEPENDENCY_REJECTED_DIR="$VAR_STATE_DIR/runtime-dependency-rejected"
+    export RUNTIME_DEPENDENCY_OVERLAY_FILE="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+    mkdir -p "$RUNTIME_DEPENDENCY_QUEUE_DIR"
+    chmod 1733 "$RUNTIME_DEPENDENCY_QUEUE_DIR"
+    printf '{bad json}\n' > "$RUNTIME_DEPENDENCY_QUEUE_DIR/bad.json"
+    printf '{"anchorHost":"allowed.example","dependencyHost":"cdn.example","requestType":"fetch","url":"https://cdn.example/private"}\n' > "$RUNTIME_DEPENDENCY_QUEUE_DIR/sensitive.json"
+    mkdir "$RUNTIME_DEPENDENCY_QUEUE_DIR/not-a-file.json"
+    ln -s /etc/passwd "$RUNTIME_DEPENDENCY_QUEUE_DIR/link.json"
+    dd if=/dev/zero of="$RUNTIME_DEPENDENCY_QUEUE_DIR/too-large.json" bs=5000 count=1 2>/dev/null
+
+    WHITELIST_DOMAINS=("allowed.example")
+    BLOCKED_SUBDOMAINS=()
+
+    run process_runtime_dependency_queue
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rejected="* ]]
+    [ ! -e "$RUNTIME_DEPENDENCY_QUEUE_DIR/bad.json" ]
+    [ ! -e "$RUNTIME_DEPENDENCY_QUEUE_DIR/sensitive.json" ]
+    [ ! -e "$RUNTIME_DEPENDENCY_QUEUE_DIR/not-a-file.json" ]
+    [ ! -e "$RUNTIME_DEPENDENCY_QUEUE_DIR/link.json" ]
+    [ ! -e "$RUNTIME_DEPENDENCY_QUEUE_DIR/too-large.json" ]
+}
+
+@test "runtime dependency queue processes a bounded batch and leaves overflow for convergence" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-policy.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-overlay.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-queue.sh"
+
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var/lib/openpath"
+    export RUNTIME_DEPENDENCY_QUEUE_DIR="$VAR_STATE_DIR/runtime-dependency-queue"
+    export RUNTIME_DEPENDENCY_OVERLAY_FILE="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+    export OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PROCESS_LIMIT=2
+    mkdir -p "$RUNTIME_DEPENDENCY_QUEUE_DIR"
+    chmod 1733 "$RUNTIME_DEPENDENCY_QUEUE_DIR"
+
+    WHITELIST_DOMAINS=("allowed.example")
+    BLOCKED_SUBDOMAINS=()
+    write_runtime_dependency_queue_request "allowed.example" "cdn1.example" "fetch"
+    write_runtime_dependency_queue_request "allowed.example" "cdn2.example" "fetch"
+    write_runtime_dependency_queue_request "allowed.example" "cdn3.example" "fetch"
+
+    run process_runtime_dependency_queue
+
+    [ "$status" -eq 0 ]
+    [ "$(find "$RUNTIME_DEPENDENCY_QUEUE_DIR" -maxdepth 1 -type f -name '*.json' | wc -l)" -eq 1 ]
+}
+
 @test "sync_runtime_browser_integrations applies managed Firefox sync before browser policy hashing" {
     local helper_script="$TEST_TMP_DIR/run-sync-runtime-browser-integrations.sh"
     local state_dir="$TEST_TMP_DIR/update-state"

@@ -70,6 +70,10 @@ export DNSMASQ_CONF_HASH="${DNSMASQ_CONF_HASH:-$VAR_STATE_DIR/dnsmasq.hash}"
 export BROWSER_POLICIES_HASH="${BROWSER_POLICIES_HASH:-$VAR_STATE_DIR/browser-policies.hash}"
 export SYSTEM_DISABLED_FLAG="${SYSTEM_DISABLED_FLAG:-$VAR_STATE_DIR/system-disabled.flag}"
 export WHITELIST_FILE="${WHITELIST_FILE:-$VAR_STATE_DIR/whitelist.txt}"
+export RUNTIME_DEPENDENCY_QUEUE_DIR="${RUNTIME_DEPENDENCY_QUEUE_DIR:-$VAR_STATE_DIR/runtime-dependency-queue}"
+export RUNTIME_DEPENDENCY_REJECTED_DIR="${RUNTIME_DEPENDENCY_REJECTED_DIR:-$VAR_STATE_DIR/runtime-dependency-rejected}"
+export RUNTIME_DEPENDENCY_OVERLAY_FILE="${RUNTIME_DEPENDENCY_OVERLAY_FILE:-$VAR_STATE_DIR/runtime-dependency-overlay.json}"
+export OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PROCESS_LIMIT="${OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PROCESS_LIMIT:-100}"
 
 # Legacy compatibility (for migration) - exported for use by other scripts
 export CONFIG_DIR="$VAR_STATE_DIR"
@@ -304,10 +308,14 @@ CRITICAL_FILES=(
     "$INSTALL_DIR/lib/firefox-managed-extension.sh"
     "$INSTALL_DIR/lib/openpath-update-whitelist.sh"
     "$INSTALL_DIR/lib/openpath-update-runtime.sh"
+    "$INSTALL_DIR/lib/runtime-dependency-policy.sh"
+    "$INSTALL_DIR/lib/runtime-dependency-overlay.sh"
+    "$INSTALL_DIR/lib/runtime-dependency-queue.sh"
     "$INSTALL_DIR/lib/openpath-self-update-metadata.sh"
     "$INSTALL_DIR/lib/openpath-self-update-package.sh"
     "$INSTALL_DIR/libexec/browser-json.py"
     "$INSTALL_DIR/libexec/browser-policy-spec.json"
+    "$INSTALL_DIR/libexec/runtime-dependency-overlay.py"
     "$INSTALL_DIR/lib/services.sh"
     "$INSTALL_DIR/lib/rollback.sh"
     "$SCRIPTS_DIR/openpath-update.sh"
@@ -341,6 +349,9 @@ load_libraries() {
         firewall-runtime.sh \
         openpath-update-whitelist.sh \
         openpath-update-runtime.sh \
+        runtime-dependency-policy.sh \
+        runtime-dependency-overlay.sh \
+        runtime-dependency-queue.sh \
         openpath-self-update-metadata.sh \
         openpath-self-update-package.sh; do
         if [ ! -f "$lib_dir/$helper_lib" ]; then
@@ -349,14 +360,14 @@ load_libraries() {
         fi
     done
 
-    for helper_runtime in browser-json.py browser-policy-spec.json; do
+    for helper_runtime in browser-json.py browser-policy-spec.json runtime-dependency-overlay.py; do
         if [ ! -f "$libexec_dir/$helper_runtime" ]; then
             log_error "Required helper not found: $libexec_dir/$helper_runtime"
             return 1
         fi
     done
 
-    for lib in apt.sh dns.sh firewall.sh browser.sh services.sh rollback.sh; do
+    for lib in apt.sh runtime-dependency-policy.sh runtime-dependency-overlay.sh runtime-dependency-queue.sh dns.sh firewall.sh browser.sh services.sh rollback.sh; do
         if [ ! -f "$lib_dir/$lib" ]; then
             log_error "Required library not found: $lib_dir/$lib"
             return 1

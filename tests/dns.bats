@@ -342,6 +342,66 @@ EOF
     [ "$status" -ne 0 ]
 }
 
+@test "runtime dependency policy accepts dependency only when anchor is locally whitelisted" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-policy.sh"
+
+    WHITELIST_DOMAINS=("allowed.example")
+    BLOCKED_SUBDOMAINS=()
+
+    run validate_runtime_dependency_candidate "allowed.example" "cdn.example" "fetch"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"anchorHost=allowed.example"* ]]
+    [[ "$output" == *"dependencyHost=cdn.example"* ]]
+    [[ "$output" == *"requestType=fetch"* ]]
+}
+
+@test "runtime dependency policy rejects unapproved anchor host" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-policy.sh"
+
+    WHITELIST_DOMAINS=("other.example")
+    BLOCKED_SUBDOMAINS=()
+
+    run validate_runtime_dependency_candidate "blocked.example" "cdn.example" "fetch"
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Anchor host is not locally whitelisted"* ]]
+}
+
+@test "runtime dependency policy rejects main_frame and blocked dependency hosts" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-policy.sh"
+
+    WHITELIST_DOMAINS=("allowed.example")
+    BLOCKED_SUBDOMAINS=("cdn.example")
+
+    run validate_runtime_dependency_candidate "allowed.example" "cdn.example" "fetch"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Blocked hosts are not accepted as runtime dependencies"* ]]
+
+    run validate_runtime_dependency_candidate "allowed.example" "asset.example" "main_frame"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"main_frame dependencies are not supported"* ]]
+}
+
+@test "runtime dependency policy rejects protected hosts and reports same-host as skipped" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-policy.sh"
+
+    WHITELIST_DOMAINS=("allowed.example" "github.com")
+    BLOCKED_SUBDOMAINS=()
+
+    run validate_runtime_dependency_candidate "allowed.example" "github.com" "fetch"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Protected hosts are not accepted as runtime dependencies"* ]]
+
+    run validate_runtime_dependency_candidate "allowed.example" "allowed.example" "fetch"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"reason=same-host"* ]]
+}
+
 @test "generate_dnsmasq_config includes domains from whitelist" {
     export DNSMASQ_CONF="$TEST_TMP_DIR/dnsmasq.d/url-whitelist.conf"
     export PRIMARY_DNS="8.8.8.8"
