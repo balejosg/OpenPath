@@ -362,10 +362,10 @@ load 'test_helper'
     run grep -nF "[string]\$_.InterfaceGuid -eq [string]\$entry.InterfaceGuid" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF "Set-DnsClientServerAddress -InterfaceIndex \$adapter.ifIndex -ServerAddresses \$servers" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
+    run grep -nF "Set-DnsClientServerAddress -InterfaceIndex \$adapterInterfaceIndex -ServerAddresses \$servers" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF "Set-DnsClientServerAddress -InterfaceIndex \$adapter.ifIndex -ResetServerAddresses" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
+    run grep -nF "Set-DnsClientServerAddress -InterfaceIndex \$adapterInterfaceIndex -ResetServerAddresses" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Service.ps1"
     [ "$status" -eq 0 ]
 }
 
