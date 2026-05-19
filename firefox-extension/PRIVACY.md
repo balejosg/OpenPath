@@ -18,7 +18,7 @@ The OpenPath extension is designed to operate locally in the browser. It is used
 - Google game blocking is enforced locally through `webRequest` for known Snake, doodle-game, and interactive logo-game surfaces
 - the Google visual guard locally neutralizes detected playable Google Search/Doodles game widgets without uploading browsing data
 - Firefox Core includes an isolated-world page activity relay only; it does not use content scripts to observe AJAX/subresource URLs
-- Windows Firefox runtime dependencies are reduced to `{ anchorHost, dependencyHost, requestType }` and sent only to the local native host for exact-host Acrylic overlay validation
+- Firefox runtime dependencies are reduced to `{ anchorHost, dependencyHost, requestType }` and sent only to the local native host for local overlay validation
 - Firefox Core does not include Android support, remote automatic AJAX/page-resource allowlisting, or live/automatic AMO upload
 - clipboard access is used only when the user copies a blocked-domain list
 - `nativeMessaging` communicates only with the local OpenPath native host on the same machine
@@ -45,9 +45,10 @@ collection. User-initiated unblock requests verify that install-time permission
 before transmitting the blocked domain and related navigation/request context to
 the configured OpenPath service. Firefox Core registers a page activity
 content script and a MAIN-world page-resource observer for local resource-candidate
-diagnostics. Automatic runtime dependency handling is local to Windows: the background
+diagnostics. Automatic runtime dependency handling is local to the managed computer: the background
 script sends only the top-level anchor host, dependency host, and Firefox request type
-to the native host, and the native host writes only a local Acrylic exact-host overlay.
+to the native host. Windows writes a local Acrylic exact-host overlay; Linux queues the
+same minimal payload for root-side validation and local `dnsmasq` overlay application.
 Those dependency hosts are not uploaded or synchronized with the OpenPath service.
 Firefox Core registers a Google Search/Doodles visual guard that locally neutralizes detected
 playable game widgets without sending Google browsing activity to OpenPath or

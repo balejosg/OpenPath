@@ -25,6 +25,7 @@ import {
   buildDnsDiscoverySpikePlan,
   buildBrowserDependencyObservabilitySpikeArtifact,
   buildBrowserDependencyObservabilitySpikePlan,
+  buildLinuxRuntimeDependencyApplyPlan,
   findResidualWhitelistEntries,
 } from './student-policy-scenarios';
 
@@ -308,6 +309,24 @@ test('student policy coverage profile accepts the browser dependency observabili
   }
 });
 
+test('student policy coverage profile accepts linux runtime dependency apply', () => {
+  const original = process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+
+  try {
+    delete process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+    assert.equal(getStudentPolicyCoverageProfile(), 'full');
+
+    process.env.OPENPATH_STUDENT_COVERAGE_PROFILE = 'linux-runtime-dependency-apply';
+    assert.equal(getStudentPolicyCoverageProfile(), 'linux-runtime-dependency-apply');
+  } finally {
+    if (original === undefined) {
+      delete process.env.OPENPATH_STUDENT_COVERAGE_PROFILE;
+    } else {
+      process.env.OPENPATH_STUDENT_COVERAGE_PROFILE = original;
+    }
+  }
+});
+
 test('DNS discovery spike plans a browser-only phase outside the full matrix', () => {
   assert.deepEqual(
     getStudentPolicyPhasePlan('sse', 'dns-discovery-spike').map(({ name, suite, useBrowser }) => ({
@@ -356,6 +375,25 @@ test('browser dependency observability spike plans a browser-only diagnostic pha
       {
         name: 'browser-dependency-observability-spike',
         suite: 'browser-dependency-observability-spike',
+        useBrowser: true,
+      },
+    ]
+  );
+});
+
+test('linux runtime dependency apply plans a browser-only diagnostic phase', () => {
+  assert.deepEqual(
+    getStudentPolicyPhasePlan('sse', 'linux-runtime-dependency-apply').map(
+      ({ name, suite, useBrowser }) => ({
+        name,
+        suite,
+        useBrowser,
+      })
+    ),
+    [
+      {
+        name: 'linux-runtime-dependency-apply',
+        suite: 'linux-runtime-dependency-apply',
         useBrowser: true,
       },
     ]
@@ -449,6 +487,24 @@ test('browser dependency observability spike uses approved anchors and unpreseed
       ['css', 'style.browser-dependency-css-assroom1'],
       ['font', 'font.browser-dependency-font-assroom1'],
     ]
+  );
+});
+
+test('linux runtime dependency route applies local overlay without remote whitelist mutation', () => {
+  const scenario = createScenario();
+  const plan = buildLinuxRuntimeDependencyApplyPlan(scenario);
+
+  assert.equal(plan.profile, 'linux-runtime-dependency-apply');
+  assert.equal(plan.dependencies.length > 0, true);
+  assert.equal(plan.origin.host.includes('site.'), true);
+  assert.equal(plan.expectedRemoteWhitelistMutation, false);
+  assert.equal(plan.expectedLocalRuntimeDependencyApply, true);
+  assert.deepEqual(
+    plan.dependencies.map(({ type, host }) => [
+      type,
+      host.replace(/\.127\.0\.0\.1\.sslip\.io$/, ''),
+    ]),
+    [['fetch', 'api.linux-runtime-dependency-fetch-assroom1']]
   );
 });
 

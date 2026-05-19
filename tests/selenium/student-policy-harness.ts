@@ -15,6 +15,7 @@ import {
   runDnsEvidenceMatrixV2Scenario,
   runBrowserDependencyObservabilitySpikeScenario,
   runDnsDiscoverySpikeScenario,
+  runLinuxRuntimeDependencyApplyScenario,
   runPathBlockingScenarios,
   runRequestLifecycleScenarios,
   runStudentPolicyMatrix,
@@ -37,6 +38,7 @@ type StudentPolicySuite =
   | 'dns-evidence-matrix'
   | 'dns-evidence-matrix-v2'
   | 'browser-dependency-observability-spike'
+  | 'linux-runtime-dependency-apply'
   | 'request-lifecycle'
   | 'path-blocking'
   | 'exemptions';
@@ -95,6 +97,20 @@ export function getStudentPolicyPhasePlan(
       {
         name: 'browser-dependency-observability-spike',
         suite: 'browser-dependency-observability-spike',
+        useBrowser: true,
+      },
+    ];
+  }
+
+  if (coverageProfile === 'linux-runtime-dependency-apply') {
+    if (mode !== 'sse') {
+      throw new Error('The linux-runtime-dependency-apply coverage profile requires sse mode');
+    }
+
+    return [
+      {
+        name: 'linux-runtime-dependency-apply',
+        suite: 'linux-runtime-dependency-apply',
         useBrowser: true,
       },
     ];
@@ -195,6 +211,11 @@ export async function runStudentPolicySuite(
 
           if (phase.suite === 'browser-dependency-observability-spike') {
             await runBrowserDependencyObservabilitySpikeScenario(client, driver, mode);
+            return;
+          }
+
+          if (phase.suite === 'linux-runtime-dependency-apply') {
+            await runLinuxRuntimeDependencyApplyScenario(client, driver, mode);
             return;
           }
 

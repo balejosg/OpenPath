@@ -207,13 +207,14 @@ export function getStudentPolicyCoverageProfile(): StudentPolicyCoverageProfile 
     profile === 'dns-discovery-spike' ||
     profile === 'dns-evidence-matrix' ||
     profile === 'dns-evidence-matrix-v2' ||
-    profile === 'browser-dependency-observability-spike'
+    profile === 'browser-dependency-observability-spike' ||
+    profile === 'linux-runtime-dependency-apply'
   ) {
     return profile;
   }
 
   throw new Error(
-    `OPENPATH_STUDENT_COVERAGE_PROFILE must be "full", "fallback-propagation", "dns-discovery-spike", "dns-evidence-matrix", "dns-evidence-matrix-v2", or "browser-dependency-observability-spike", received "${profile}"`
+    `OPENPATH_STUDENT_COVERAGE_PROFILE must be "full", "fallback-propagation", "dns-discovery-spike", "dns-evidence-matrix", "dns-evidence-matrix-v2", "browser-dependency-observability-spike", or "linux-runtime-dependency-apply", received "${profile}"`
   );
 }
 

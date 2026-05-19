@@ -44,6 +44,20 @@ cmd_status() {
         echo "  Dominios: $domains"
     fi
 
+    if [ -f "$WHITELIST_FILE" ] && declare -F parse_whitelist_sections >/dev/null 2>&1; then
+        parse_whitelist_sections "$WHITELIST_FILE" >/dev/null 2>&1 || true
+    fi
+    local runtime_dependency_active="0"
+    if declare -F get_runtime_dependency_domains >/dev/null 2>&1; then
+        runtime_dependency_active=$(get_runtime_dependency_domains --prune 2>/dev/null | sed '/^[[:space:]]*$/d' | wc -l | tr -d '[:space:]')
+    fi
+    local runtime_dependency_pending="0"
+    if [ -d "${RUNTIME_DEPENDENCY_QUEUE_DIR:-}" ]; then
+        runtime_dependency_pending=$(find "$RUNTIME_DEPENDENCY_QUEUE_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d '[:space:]')
+    fi
+    echo "  Runtime dependencies: ${runtime_dependency_active:-0} active"
+    echo "  Runtime dependency queue: ${runtime_dependency_pending:-0} pending"
+
     local api_url=""
     local classroom=""
     local classroom_id=""

@@ -7,6 +7,7 @@ import {
   type LinuxAutoAllowProbe,
   upsertLinuxAutoAllowPhase,
   writeLinuxAutoAllowBoundaryArtifact,
+  writeLinuxRuntimeDependencyApplyArtifact,
 } from './linux-auto-allow-diagnostics';
 import {
   buildFixtureUrl,
@@ -257,6 +258,17 @@ export interface BrowserDependencyObservabilitySpikeArtifact {
   writtenAt: string;
 }
 
+export interface LinuxRuntimeDependencyApplyPlan {
+  profile: 'linux-runtime-dependency-apply';
+  origin: {
+    host: string;
+    url: string;
+  };
+  dependencies: DnsDiscoverySpikeDependency[];
+  expectedRemoteWhitelistMutation: false;
+  expectedLocalRuntimeDependencyApply: true;
+}
+
 let activeScenarioTiming: {
   name: string;
   startedAt: string;
@@ -444,6 +456,30 @@ export function buildBrowserDependencyObservabilitySpikePlan(
       dependency('css', 'style', 'browser-dependency-css', '/style.css'),
       dependency('font', 'font', 'browser-dependency-font', '/font.woff2'),
     ],
+  };
+}
+
+export function buildLinuxRuntimeDependencyApplyPlan(
+  scenario: StudentScenario
+): LinuxRuntimeDependencyApplyPlan {
+  return {
+    profile: 'linux-runtime-dependency-apply',
+    origin: {
+      host: scenario.fixtures.site,
+      url: buildFixtureUrl(scenario.fixtures.site, '/ok'),
+    },
+    dependencies: [
+      {
+        type: 'fetch',
+        host: `api.${buildScenarioHost(scenario, 'linux-runtime-dependency-fetch')}`,
+        url: buildFixtureUrl(
+          `api.${buildScenarioHost(scenario, 'linux-runtime-dependency-fetch')}`,
+          '/fetch/private.json'
+        ),
+      },
+    ],
+    expectedRemoteWhitelistMutation: false,
+    expectedLocalRuntimeDependencyApply: true,
   };
 }
 
@@ -1876,6 +1912,88 @@ export async function runBrowserDependencyObservabilitySpikeScenario(
       outcomes: {},
     });
     await writeArtifact(false, 'insufficientEvidence');
+    throw error;
+  }
+}
+
+export async function runLinuxRuntimeDependencyApplyScenario(
+  client: StudentPolicyServerClient,
+  driver: StudentPolicyDriver,
+  mode: PolicyMode
+): Promise<void> {
+  if (mode !== 'sse') {
+    throw new Error('Linux runtime dependency apply requires sse mode');
+  }
+
+  const plan = buildLinuxRuntimeDependencyApplyPlan(driver.scenario);
+  const restrictedGroupId = driver.scenario.groups.restricted.id;
+
+  try {
+    logScenarioStep('SP-LINUX-RUNTIME-DEPENDENCY-APPLY prepare approved anchor');
+    await client.setAutoApprove(false);
+    await client.ensureWhitelistRule(
+      restrictedGroupId,
+      plan.origin.host,
+      'Linux runtime dependency approved anchor'
+    );
+    await driver.forceLocalUpdate();
+    await settlePolicyChange(driver, mode, async () => {
+      await driver.assertWhitelistContains(plan.origin.host);
+      await driver.assertDnsAllowed(plan.origin.host);
+    });
+
+    const remoteBefore = await client.fetchMachineWhitelist();
+    for (const dependency of plan.dependencies) {
+      assert.doesNotMatch(
+        remoteBefore,
+        new RegExp(`(^|\\n)${escapeRegExp(dependency.host)}($|\\n)`),
+        `${dependency.host} must not be present before local runtime dependency apply`
+      );
+      await driver.assertWhitelistMissing(dependency.host);
+    }
+
+    logScenarioStep('SP-LINUX-RUNTIME-DEPENDENCY-APPLY trigger browser dependency');
+    await driver.openAndExpectLoaded({
+      url: plan.origin.url,
+      title: 'OpenPath Site Fixture',
+      selector: '#page-status',
+    });
+    await runDnsDiscoveryDependencyProbe(driver, plan.dependencies[0]);
+
+    logScenarioStep('SP-LINUX-RUNTIME-DEPENDENCY-APPLY wait for local overlay');
+    await driver.waitForConvergence(
+      async () => {
+        await driver.forceLocalUpdate();
+        for (const dependency of plan.dependencies) {
+          await driver.assertDnsAllowed(dependency.host);
+          const result = await runDnsDiscoveryDependencyProbe(driver, dependency);
+          assert.strictEqual(result.status, 'ok');
+        }
+      },
+      { timeoutMs: 60_000, pollMs: 2_000 }
+    );
+
+    const remoteAfter = await client.fetchMachineWhitelist();
+    for (const dependency of plan.dependencies) {
+      assert.doesNotMatch(
+        remoteAfter,
+        new RegExp(`(^|\\n)${escapeRegExp(dependency.host)}($|\\n)`),
+        `${dependency.host} must remain absent from the remote whitelist`
+      );
+    }
+    await writeLinuxRuntimeDependencyApplyArtifact({
+      diagnosticsDir: driver.diagnosticsDir,
+      success: true,
+      originHost: plan.origin.host,
+      dependencyHosts: plan.dependencies.map((dependency) => dependency.host),
+    });
+  } catch (error) {
+    await writeLinuxRuntimeDependencyApplyArtifact({
+      diagnosticsDir: driver.diagnosticsDir,
+      success: false,
+      originHost: plan.origin.host,
+      dependencyHosts: plan.dependencies.map((dependency) => dependency.host),
+    });
     throw error;
   }
 }

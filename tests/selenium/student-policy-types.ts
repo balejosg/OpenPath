@@ -110,7 +110,8 @@ export type StudentPolicyCoverageProfile =
   | 'dns-discovery-spike'
   | 'dns-evidence-matrix'
   | 'dns-evidence-matrix-v2'
-  | 'browser-dependency-observability-spike';
+  | 'browser-dependency-observability-spike'
+  | 'linux-runtime-dependency-apply';
 
 export type StudentPolicyScenarioGroup =
   | 'full'

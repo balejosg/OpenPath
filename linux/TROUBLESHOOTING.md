@@ -43,6 +43,20 @@ sudo openpath update
 sudo openpath force
 ```
 
+### Firefox-approved page dependencies still fail
+
+Firefox runtime dependencies are local-only. The browser native host writes a
+small queue entry and the root-owned Linux agent validates it before adding a
+temporary `dnsmasq` overlay entry.
+
+```bash
+sudo systemctl status openpath-runtime-dependency-apply.path
+sudo systemctl status openpath-runtime-dependency-apply.service
+sudo ls -la /var/lib/openpath/runtime-dependency-queue
+sudo jq . /var/lib/openpath/runtime-dependency-overlay.json
+sudo openpath status
+```
+
 ### Browser unblock request says configuration is incomplete
 
 If the blocked page shows `No se pudo enviar la solicitud` and mentions
@@ -95,5 +109,7 @@ dpkg -s openpath-dnsmasq
 - `/var/lib/openpath/health-status`
 - `/var/lib/openpath/watchdog-fails`
 - `/var/lib/openpath/integrity.sha256`
+- `/var/lib/openpath/runtime-dependency-queue/`
+- `/var/lib/openpath/runtime-dependency-overlay.json`
 - `/var/log/openpath.log`
 - `/var/log/captive-portal-detector.log`

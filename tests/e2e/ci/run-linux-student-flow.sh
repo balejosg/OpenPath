@@ -127,7 +127,7 @@ publish_github_step_summary() {
         echo "Status: $mode"
         echo "Scenario group: ${STUDENT_SCENARIO_GROUP:-full}"
         echo ""
-        echo "Artifacts: linux-student-policy-timings.json, firefox-xpi-sha256.txt, linux-auto-allow-boundary.json, linux-dns-readiness.err.log, and linux-firefox-readiness.err.log are uploaded with this job when present."
+        echo "Artifacts: linux-student-policy-timings.json, firefox-xpi-sha256.txt, linux-auto-allow-boundary.json, linux-runtime-dependency-apply.json, linux-dns-readiness.err.log, and linux-firefox-readiness.err.log are uploaded with this job when present."
         echo ""
         echo "## Linux Student Policy Timing"
         echo ""

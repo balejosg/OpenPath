@@ -989,6 +989,70 @@ EOF
     ! grep -qx "google.com" "$probe_log"
 }
 
+@test "cmd_status reports runtime dependency overlay counts without sensitive host details" {
+    local helper_script="$TEST_TMP_DIR/run-cmd-status-runtime-dependency.sh"
+
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+project_dir="$1"
+state_dir="$2"
+extracted_script="$state_dir/cmd-status.sh"
+
+export VERSION="test"
+export VAR_STATE_DIR="$state_dir/var/lib/openpath"
+export ETC_CONFIG_DIR="$state_dir/etc/openpath"
+export WHITELIST_FILE="$VAR_STATE_DIR/whitelist.txt"
+export WHITELIST_URL_CONF="$ETC_CONFIG_DIR/whitelist-url.conf"
+export RUNTIME_DEPENDENCY_QUEUE_DIR="$VAR_STATE_DIR/runtime-dependency-queue"
+export RUNTIME_DEPENDENCY_OVERLAY_FILE="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+export RED=""
+export GREEN=""
+export YELLOW=""
+export BLUE=""
+export NC=""
+mkdir -p "$ETC_CONFIG_DIR" "$VAR_STATE_DIR" "$RUNTIME_DEPENDENCY_QUEUE_DIR"
+cat > "$WHITELIST_FILE" <<'WHITELIST'
+## WHITELIST
+allowed.example
+WHITELIST
+cat > "$RUNTIME_DEPENDENCY_OVERLAY_FILE" <<'JSON'
+{"version":1,"entries":[
+  {"anchorHost":"allowed.example","dependencyHost":"cdn.example","requestTypes":["fetch"],"firstSeen":"2099-01-01T00:00:00Z","lastSeen":"2099-01-01T00:00:00Z","expiresAt":"2099-01-02T00:00:00Z","source":"firefox-webrequest-local"}
+]}
+JSON
+printf '%s\n' '{"anchorHost":"allowed.example","dependencyHost":"queued.example","requestType":"fetch"}' > "$RUNTIME_DEPENDENCY_QUEUE_DIR/pending.json"
+
+systemctl() {
+    [ "$1" = "is-active" ] && return 0
+    return 1
+}
+
+dig() {
+    echo "216.58.204.163"
+}
+
+source "$project_dir/linux/lib/common.sh"
+source "$project_dir/linux/lib/dns.sh"
+source "$project_dir/linux/lib/runtime-dependency-overlay.sh"
+awk '/^cmd_status\(\) \{/,/^}/' \
+    "$project_dir/linux/lib/runtime-cli-system.sh" > "$extracted_script"
+source "$extracted_script"
+
+cmd_status
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR" "$TEST_TMP_DIR"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Runtime dependencies: 1 active"* ]]
+    [[ "$output" == *"Runtime dependency queue: 1 pending"* ]]
+    [[ "$output" != *"cdn.example"* ]]
+    [[ "$output" != *"queued.example"* ]]
+}
+
 @test "cmd_check reports sinkhole-only answers as not resolving" {
     local whitelist_file="$TEST_TMP_DIR/google-es-whitelist.txt"
     local helper_script="$TEST_TMP_DIR/run-cmd-check-sinkhole.sh"

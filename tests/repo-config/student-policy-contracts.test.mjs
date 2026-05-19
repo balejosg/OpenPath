@@ -1043,6 +1043,16 @@ describe('repository verification contract', () => {
       'SP-006 diagnostics should prove observed dependencies are not automatically applied locally'
     );
     assert.match(
+      helper,
+      /linux-runtime-dependency-apply\.json/,
+      'Linux runtime dependency apply should use a separate artifact from the SP-006 observation boundary'
+    );
+    assert.match(
+      scenarios,
+      /SP-LINUX-RUNTIME-DEPENDENCY-APPLY[\s\S]*assertDnsAllowed[\s\S]*assert\.doesNotMatch/,
+      'Linux runtime dependency apply should prove local DNS overlay without remote whitelist mutation'
+    );
+    assert.match(
       scenarios,
       /explicit-whitelist-apply[\s\S]*ensureWhitelistRule/,
       'SP-006 should validate explicit allowlist application after observation'

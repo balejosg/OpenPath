@@ -9,6 +9,7 @@ import {
 } from './student-policy-env';
 
 export const LINUX_AUTO_ALLOW_BOUNDARY_ARTIFACT = 'linux-auto-allow-boundary.json';
+export const LINUX_RUNTIME_DEPENDENCY_APPLY_ARTIFACT = 'linux-runtime-dependency-apply.json';
 
 export const LINUX_AUTO_ALLOW_DIAGNOSTIC_PHASES = [
   'firefox-extension-ready',
@@ -72,6 +73,16 @@ export interface LinuxAutoAllowArtifact {
   diagnosticPhases: LinuxAutoAllowDiagnosticPhase[];
   probes: LinuxAutoAllowProbe[];
   diagnostics: LinuxAutoAllowDiagnostics;
+  writtenAt: string;
+}
+
+export interface LinuxRuntimeDependencyApplyArtifact {
+  platform: 'linux';
+  outcome: 'runtime-dependency-applied';
+  success: boolean;
+  originHost: string;
+  dependencyHosts: string[];
+  remoteWhitelistMutated: false;
   writtenAt: string;
 }
 
@@ -247,5 +258,33 @@ export async function writeLinuxAutoAllowBoundaryArtifact(options: {
 
   await mkdir(options.diagnosticsDir, { recursive: true });
   await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+  return artifact;
+}
+
+export async function writeLinuxRuntimeDependencyApplyArtifact(options: {
+  diagnosticsDir: string;
+  success: boolean;
+  originHost: string;
+  dependencyHosts: string[];
+}): Promise<LinuxRuntimeDependencyApplyArtifact | null> {
+  if (isWindows()) {
+    return null;
+  }
+
+  const artifact: LinuxRuntimeDependencyApplyArtifact = {
+    platform: 'linux',
+    outcome: 'runtime-dependency-applied',
+    success: options.success,
+    originHost: options.originHost,
+    dependencyHosts: options.dependencyHosts,
+    remoteWhitelistMutated: false,
+    writtenAt: new Date().toISOString(),
+  };
+  await mkdir(options.diagnosticsDir, { recursive: true });
+  await writeFile(
+    join(options.diagnosticsDir, LINUX_RUNTIME_DEPENDENCY_APPLY_ARTIFACT),
+    `${JSON.stringify(artifact, null, 2)}\n`,
+    'utf8'
+  );
   return artifact;
 }
