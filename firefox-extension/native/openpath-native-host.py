@@ -28,7 +28,7 @@ import fcntl
 import threading
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 WHITELIST_CMD_CANDIDATES = ["/usr/local/bin/openpath", "/usr/local/bin/whitelist"]
 MAX_DOMAINS = 50
@@ -37,6 +37,11 @@ MAX_LOG_SIZE_MB = 5
 BLOCKED_DNS_SENTINELS = {"0.0.0.0", "::", "192.0.2.1", "100::"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 UPDATE_TRIGGER_LOCK = threading.Lock()
+RUNTIME_DEPENDENCY_BATCH_LIMIT = 20
+RUNTIME_DEPENDENCY_SOURCE = "firefox-webrequest-local"
+RUNTIME_DEPENDENCY_HOST_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
+)
 
 
 def get_log_path():
@@ -54,6 +59,101 @@ def get_log_path():
 
 
 LOG_FILE = get_log_path()
+
+
+def normalize_runtime_dependency_host(value):
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip().strip(".").lower()
+    if normalized.endswith(".local"):
+        return ""
+    if len(normalized) < 4 or len(normalized) > 253:
+        return ""
+    if not RUNTIME_DEPENDENCY_HOST_RE.match(normalized):
+        return ""
+    return normalized
+
+
+def get_runtime_dependency_queue_dir():
+    return Path(
+        os.environ.get(
+            "OPENPATH_RUNTIME_DEPENDENCY_QUEUE_DIR",
+            "/var/lib/openpath/runtime-dependency-queue",
+        )
+    )
+
+
+def format_utc_timestamp():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
+        "+00:00", "Z"
+    )
+
+
+def write_runtime_dependency_request(entry):
+    if not isinstance(entry, dict):
+        return {
+            "success": False,
+            "action": "allow-local-runtime-dependency",
+            "error": "Invalid runtime dependency payload",
+        }
+
+    anchor_host = normalize_runtime_dependency_host(entry.get("anchorHost"))
+    dependency_host = normalize_runtime_dependency_host(entry.get("dependencyHost"))
+    request_type = str(entry.get("requestType", "")).strip().lower()
+    if not anchor_host or not dependency_host or not request_type:
+        return {
+            "success": False,
+            "action": "allow-local-runtime-dependency",
+            "error": "Invalid runtime dependency payload",
+        }
+    if request_type == "main_frame":
+        return {
+            "success": False,
+            "action": "allow-local-runtime-dependency",
+            "anchorHost": anchor_host,
+            "dependencyHost": dependency_host,
+            "requestType": request_type,
+            "error": "main_frame dependencies are not supported",
+        }
+
+    queue_dir = get_runtime_dependency_queue_dir()
+    if not queue_dir.is_dir():
+        return {
+            "success": False,
+            "action": "allow-local-runtime-dependency",
+            "anchorHost": anchor_host,
+            "dependencyHost": dependency_host,
+            "requestType": request_type,
+            "error": "Queue directory not configured",
+        }
+
+    request_id = f"{int(time.time() * 1000)}-{os.getpid()}-{os.urandom(8).hex()}"
+    request_path = queue_dir / f"{request_id}.json"
+    payload = {
+        "version": 1,
+        "queuedAt": format_utc_timestamp(),
+        "anchorHost": anchor_host,
+        "dependencyHost": dependency_host,
+        "requestType": request_type,
+        "source": RUNTIME_DEPENDENCY_SOURCE,
+    }
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(request_path, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+        handle.write("\n")
+
+    return {
+        "success": True,
+        "action": "allow-local-runtime-dependency",
+        "anchorHost": anchor_host,
+        "dependencyHost": dependency_host,
+        "requestType": request_type,
+        "queued": True,
+        "source": RUNTIME_DEPENDENCY_SOURCE,
+    }
 
 
 def rotate_log_if_needed():
@@ -717,10 +817,39 @@ def handle_message(message):
         return get_blocked_subdomains()
 
     elif action == "allow-local-runtime-dependency":
+        return write_runtime_dependency_request(message)
+
+    elif action == "allow-local-runtime-dependency-batch":
+        entries = message.get("entries", [])
+        if not isinstance(entries, list) or not entries:
+            return {
+                "success": False,
+                "action": "allow-local-runtime-dependency-batch",
+                "error": "Invalid runtime dependency batch payload",
+                "results": [],
+            }
+
+        results = [
+            write_runtime_dependency_request(entry)
+            for entry in entries[:RUNTIME_DEPENDENCY_BATCH_LIMIT]
+        ]
+        if len(entries) > RUNTIME_DEPENDENCY_BATCH_LIMIT:
+            results.append(
+                {
+                    "success": False,
+                    "action": "allow-local-runtime-dependency",
+                    "error": "Runtime dependency batch limit exceeded",
+                }
+            )
+
         return {
-            "success": False,
-            "action": "allow-local-runtime-dependency",
-            "error": "unsupported",
+            "success": all(result.get("success") is True for result in results),
+            "action": "allow-local-runtime-dependency-batch",
+            "count": len(results),
+            "queuedCount": len(
+                [result for result in results if result.get("queued") is True]
+            ),
+            "results": results,
         }
 
     else:

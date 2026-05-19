@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -101,31 +109,254 @@ void test('native host confirms local DNS blocks when OpenPath CLI is unavailabl
   ]);
 });
 
-void test('linux native host reports local runtime dependency overlay as unsupported', () => {
-  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-unsupported-'));
+function readQueuedRuntimeDependency(queueDir: string): Record<string, unknown> {
+  const files = readdirSync(queueDir).filter((entry) => entry.endsWith('.json'));
+  assert.equal(files.length, 1);
+  const [queueFile] = files;
+  assert.ok(queueFile);
+  return JSON.parse(readFileSync(join(queueDir, queueFile), 'utf8')) as Record<string, unknown>;
+}
+
+void test('linux native host queues a local runtime dependency request', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-runtime-dependency-'));
+  const queueDir = join(runtimeDir, 'queue');
+  mkdirSync(queueDir, { recursive: true });
 
   const response = runNativeHostOnce(
     {
       ...process.env,
       XDG_DATA_HOME: runtimeDir,
+      OPENPATH_RUNTIME_DEPENDENCY_QUEUE_DIR: queueDir,
+    },
+    {
+      action: 'allow-local-runtime-dependency',
+      anchorHost: 'Allowed.Example.',
+      dependencyHost: 'CDN.Example',
+      requestType: 'FETCH',
+    }
+  ) as {
+    action?: string;
+    anchorHost?: string;
+    dependencyHost?: string;
+    queued?: boolean;
+    requestType?: string;
+    success?: boolean;
+  };
+
+  assert.equal(response.success, true);
+  assert.equal(response.action, 'allow-local-runtime-dependency');
+  assert.equal(response.anchorHost, 'allowed.example');
+  assert.equal(response.dependencyHost, 'cdn.example');
+  assert.equal(response.requestType, 'fetch');
+  assert.equal(response.queued, true);
+
+  const queued = readQueuedRuntimeDependency(queueDir);
+  assert.deepEqual(Object.keys(queued).sort(), [
+    'anchorHost',
+    'dependencyHost',
+    'queuedAt',
+    'requestType',
+    'source',
+    'version',
+  ]);
+  assert.equal(queued.version, 1);
+  assert.match(String(queued.queuedAt), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  assert.equal(queued.anchorHost, 'allowed.example');
+  assert.equal(queued.dependencyHost, 'cdn.example');
+  assert.equal(queued.requestType, 'fetch');
+  assert.equal(queued.source, 'firefox-webrequest-local');
+  const queuedFile = readdirSync(queueDir).find((entry) => entry.endsWith('.json'));
+  assert.ok(queuedFile);
+  assert.equal(statSync(join(queueDir, queuedFile)).mode & 0o777, 0o600);
+});
+
+void test('linux native host queues runtime dependency batches', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-runtime-dependency-batch-'));
+  const queueDir = join(runtimeDir, 'queue');
+  mkdirSync(queueDir, { recursive: true });
+
+  const response = runNativeHostOnce(
+    {
+      ...process.env,
+      XDG_DATA_HOME: runtimeDir,
+      OPENPATH_RUNTIME_DEPENDENCY_QUEUE_DIR: queueDir,
+    },
+    {
+      action: 'allow-local-runtime-dependency-batch',
+      entries: [
+        { anchorHost: 'allowed.example', dependencyHost: 'cdn1.example', requestType: 'fetch' },
+        { anchorHost: 'allowed.example', dependencyHost: 'cdn2.example', requestType: 'script' },
+      ],
+    }
+  ) as {
+    action?: string;
+    count?: number;
+    queuedCount?: number;
+    results?: { dependencyHost?: string; success?: boolean }[];
+    success?: boolean;
+  };
+
+  assert.equal(response.success, true);
+  assert.equal(response.action, 'allow-local-runtime-dependency-batch');
+  assert.equal(response.count, 2);
+  assert.equal(response.queuedCount, 2);
+  assert.deepEqual(
+    response.results?.map((entry) => entry.dependencyHost),
+    ['cdn1.example', 'cdn2.example']
+  );
+  assert.equal(readdirSync(queueDir).filter((entry) => entry.endsWith('.json')).length, 2);
+});
+
+void test('linux native host fails when runtime dependency queue is not provisioned', () => {
+  const runtimeDir = mkdtempSync(
+    join(tmpdir(), 'openpath-native-host-runtime-dependency-missing-')
+  );
+  const queueDir = join(runtimeDir, 'missing-queue');
+
+  const response = runNativeHostOnce(
+    {
+      ...process.env,
+      XDG_DATA_HOME: runtimeDir,
+      OPENPATH_RUNTIME_DEPENDENCY_QUEUE_DIR: queueDir,
     },
     {
       action: 'allow-local-runtime-dependency',
       anchorHost: 'allowed.example',
       dependencyHost: 'cdn.example',
-      requestType: 'script',
+      requestType: 'fetch',
     }
   ) as {
-    action?: string;
     error?: string;
     success?: boolean;
   };
 
-  assert.deepEqual(response, {
-    success: false,
-    action: 'allow-local-runtime-dependency',
-    error: 'unsupported',
-  });
+  assert.equal(response.success, false);
+  assert.match(response.error ?? '', /Queue directory not configured/);
+  assert.equal(readdirSync(runtimeDir).includes('missing-queue'), false);
+});
+
+void test('linux native host rejects runtime dependency batches over the limit', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-runtime-dependency-limit-'));
+  const queueDir = join(runtimeDir, 'queue');
+  mkdirSync(queueDir, { recursive: true });
+  const entries = Array.from({ length: 21 }, (_, index) => ({
+    anchorHost: 'allowed.example',
+    dependencyHost: `cdn${index.toString()}.example`,
+    requestType: 'fetch',
+  }));
+
+  const response = runNativeHostOnce(
+    {
+      ...process.env,
+      XDG_DATA_HOME: runtimeDir,
+      OPENPATH_RUNTIME_DEPENDENCY_QUEUE_DIR: queueDir,
+    },
+    {
+      action: 'allow-local-runtime-dependency-batch',
+      entries,
+    }
+  ) as {
+    count?: number;
+    queuedCount?: number;
+    results?: { error?: string; success?: boolean }[];
+    success?: boolean;
+  };
+
+  assert.equal(response.success, false);
+  assert.equal(response.count, 21);
+  assert.equal(response.queuedCount, 20);
+  assert.equal(
+    response.results?.some((entry) => entry.error === 'Runtime dependency batch limit exceeded'),
+    true
+  );
+  assert.equal(readdirSync(queueDir).filter((entry) => entry.endsWith('.json')).length, 20);
+});
+
+void test('linux native host keeps queueing when stale overlay contains dependency', () => {
+  const runtimeDir = mkdtempSync(
+    join(tmpdir(), 'openpath-native-host-runtime-dependency-overlay-')
+  );
+  const queueDir = join(runtimeDir, 'queue');
+  const overlayPath = join(runtimeDir, 'runtime-dependency-overlay.json');
+  mkdirSync(queueDir, { recursive: true });
+  writeFileSync(
+    overlayPath,
+    JSON.stringify({
+      version: 1,
+      entries: [
+        {
+          anchorHost: 'allowed.example',
+          dependencyHost: 'cdn.example',
+          requestTypes: ['fetch'],
+          expiresAt: '2000-01-02T00:00:00Z',
+        },
+      ],
+    }),
+    'utf8'
+  );
+
+  const response = runNativeHostOnce(
+    {
+      ...process.env,
+      XDG_DATA_HOME: runtimeDir,
+      OPENPATH_RUNTIME_DEPENDENCY_QUEUE_DIR: queueDir,
+      OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE: overlayPath,
+    },
+    {
+      action: 'allow-local-runtime-dependency',
+      anchorHost: 'allowed.example',
+      dependencyHost: 'cdn.example',
+      requestType: 'fetch',
+    }
+  ) as {
+    queued?: boolean;
+    success?: boolean;
+  };
+
+  assert.equal(response.success, true);
+  assert.equal(response.queued, true);
+  assert.equal(readdirSync(queueDir).filter((entry) => entry.endsWith('.json')).length, 1);
+});
+
+void test('linux native host validates runtime dependency schema before queueing', () => {
+  const runtimeDir = mkdtempSync(
+    join(tmpdir(), 'openpath-native-host-runtime-dependency-invalid-')
+  );
+  const queueDir = join(runtimeDir, 'queue');
+  mkdirSync(queueDir, { recursive: true });
+
+  const cases = [
+    { anchorHost: 'allowed.local', dependencyHost: 'cdn.example', requestType: 'fetch' },
+    { anchorHost: 'allowed.example', dependencyHost: 'cdn.example', requestType: 'main_frame' },
+    { anchorHost: 'allowed.example', dependencyHost: 'bad_host.example', requestType: 'script' },
+  ];
+
+  for (const entry of cases) {
+    const response = runNativeHostOnce(
+      {
+        ...process.env,
+        XDG_DATA_HOME: runtimeDir,
+        OPENPATH_RUNTIME_DEPENDENCY_QUEUE_DIR: queueDir,
+      },
+      {
+        action: 'allow-local-runtime-dependency',
+        ...entry,
+      }
+    ) as {
+      action?: string;
+      error?: string;
+      success?: boolean;
+    };
+
+    assert.equal(response.success, false);
+    assert.equal(response.action, 'allow-local-runtime-dependency');
+    assert.match(
+      response.error ?? '',
+      /Invalid runtime dependency payload|main_frame dependencies are not supported/
+    );
+  }
+
+  assert.equal(readdirSync(queueDir).filter((entry) => entry.endsWith('.json')).length, 0);
 });
 
 void test('native host treats CLI sinkhole responses as blocked', () => {
