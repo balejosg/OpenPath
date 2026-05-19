@@ -110,7 +110,7 @@ await describe('popup request actions', async () => {
       requestBrowsingActivityConsent: () =>
         Promise.resolve({
           granted: false,
-          error: 'Se necesita el permiso de actividad de navegacion para enviar la solicitud.',
+          error: 'Se necesita el permiso de actividad de navegación para enviar la solicitud.',
         }),
       reason: 'needed for class',
       sendMessage: () => {
@@ -121,7 +121,7 @@ await describe('popup request actions', async () => {
 
     assert.equal(called, false);
     assert.equal(result.success, false);
-    assert.match(result.userMessage, /actividad de navegacion/);
+    assert.match(result.userMessage, /actividad de navegación/);
   });
 
   await test('returns validation failures without contacting the background script', async () => {
