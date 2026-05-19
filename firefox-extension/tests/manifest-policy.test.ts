@@ -186,4 +186,17 @@ void describe('Firefox extension manifest policy', () => {
       assert.equal(typeof spanish[key]?.message, 'string');
     }
   });
+
+  void test('keeps installation and store metadata English-only in Spanish locale', async () => {
+    const english = JSON.parse(
+      await readFile(path.join(extensionRoot, '_locales/en/messages.json'), 'utf8')
+    ) as Record<string, { message?: string }>;
+    const spanish = JSON.parse(
+      await readFile(path.join(extensionRoot, '_locales/es/messages.json'), 'utf8')
+    ) as Record<string, { message?: string }>;
+
+    assert.equal(spanish.appName?.message, english.appName?.message);
+    assert.equal(spanish.appDescription?.message, english.appDescription?.message);
+    assert.notEqual(spanish.actionTitle?.message, english.actionTitle?.message);
+  });
 });

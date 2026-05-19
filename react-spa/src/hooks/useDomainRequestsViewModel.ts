@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { DomainRequest, RequestStatus } from '@openpath/api';
-import { STATUS_COLORS, STATUS_LABELS } from '../views/domain-requests.constants';
+import { STATUS_COLORS } from '../views/domain-requests.constants';
 import { useDomainRequestsBulkActions } from './useDomainRequestsBulkActions';
 import { useDomainRequestsData } from './useDomainRequestsData';
 import { useDomainRequestsDialogs } from './useDomainRequestsDialogs';
@@ -9,6 +9,7 @@ import {
   type SortOption,
   type SourceFilter,
 } from './useDomainRequestsState';
+import { useOpenPathI18n } from '../i18n/product-i18n';
 
 interface UseDomainRequestsViewModelOptions {
   canDeleteRequests: boolean;
@@ -41,6 +42,7 @@ export interface DomainRequestsRowViewModel {
 export function useDomainRequestsViewModel({
   canDeleteRequests,
 }: UseDomainRequestsViewModelOptions) {
+  const { locale, t } = useOpenPathI18n();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [statusFilter, setStatusFilter] = useState<RequestStatus | 'all'>('all');
 
@@ -68,7 +70,7 @@ export function useDomainRequestsViewModel({
   const loading = data.loading || data.fetching;
 
   const formatDate = (dateStr: string) =>
-    new Date(dateStr).toLocaleDateString('es-ES', {
+    new Date(dateStr).toLocaleDateString(locale, {
       day: '2-digit',
       month: 'short',
       year: 'numeric',
@@ -79,12 +81,23 @@ export function useDomainRequestsViewModel({
   const getRequestById = (requestId: string) =>
     data.requests.find((request) => request.id === requestId) ?? null;
 
+  const getStatusLabel = (status: RequestStatus) => {
+    switch (status) {
+      case 'pending':
+        return t('domainRequests.status.pending');
+      case 'approved':
+        return t('domainRequests.status.approved');
+      case 'rejected':
+        return t('domainRequests.status.rejected');
+    }
+  };
+
   const toDialogRequest = (request: DomainRequest | null): DialogRequestViewModel | null => {
     if (!request) return null;
     return {
       domain: request.domain,
       groupName: state.getGroupName(request.groupId),
-      machineHostname: request.machineHostname ?? 'unknown machine',
+      machineHostname: request.machineHostname ?? t('domainRequests.machine.unknown'),
     };
   };
 
@@ -110,13 +123,15 @@ export function useDomainRequestsViewModel({
     const source = request.source ?? 'manual';
     const sourceSummary =
       source === 'firefox-extension'
-        ? `Firefox${request.clientVersion ? ` v${request.clientVersion}` : ''}`
-        : 'Manual/API';
+        ? `${t('domainRequests.source.firefox')}${request.clientVersion ? ` v${request.clientVersion}` : ''}`
+        : t('domainRequests.source.manual');
     const metadata = [
       sourceSummary,
-      request.originHost ? `Origen: ${request.originHost}` : null,
-      request.machineHostname ? `Host: ${request.machineHostname}` : null,
-      request.errorType ? `Error: ${request.errorType}` : null,
+      request.originHost ? t('domainRequests.source.origin', { origin: request.originHost }) : null,
+      request.machineHostname
+        ? t('domainRequests.source.host', { host: request.machineHostname })
+        : null,
+      request.errorType ? t('domainRequests.source.error', { error: request.errorType }) : null,
     ].filter(Boolean);
 
     return {
@@ -126,7 +141,7 @@ export function useDomainRequestsViewModel({
       machineHostname: request.machineHostname ?? '—',
       groupName: state.getGroupName(request.groupId),
       status: request.status,
-      statusLabel: STATUS_LABELS[request.status],
+      statusLabel: getStatusLabel(request.status),
       statusClassName: STATUS_COLORS[request.status],
       sourceSummary: metadata.join(' · '),
       formattedCreatedAt: formatDate(request.createdAt),

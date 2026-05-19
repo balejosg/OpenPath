@@ -232,9 +232,8 @@ async function copyText(text: string): Promise<boolean> {
 }
 
 function buildFallbackMessage(error: unknown): string {
-  const detail =
-    typeof error === 'string' ? ` ${error}` : error instanceof Error ? ` ${error.message}` : '';
-  return t('blockedFallbackMessage', detail);
+  void error;
+  return t('blockedFallbackMessage', '');
 }
 
 function formatUnknownError(error: unknown, fallback: string): string {

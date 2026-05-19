@@ -2,6 +2,7 @@ import type { RefObject } from 'react';
 import type { RequestStatus } from '@openpath/api';
 import { Filter, Search } from 'lucide-react';
 import type { SortOption, SourceFilter } from '../../hooks/useDomainRequestsState';
+import { useT } from '../../i18n/product-i18n';
 
 interface DomainRequestsFiltersProps {
   searchInputRef: RefObject<HTMLInputElement | null>;
@@ -32,6 +33,8 @@ export function DomainRequestsFilters({
   onPageSizeChange,
   onClearSearch,
 }: DomainRequestsFiltersProps) {
+  const t = useT();
+
   return (
     <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
       <div className="flex flex-col sm:flex-row gap-4">
@@ -42,7 +45,7 @@ export function DomainRequestsFilters({
             type="text"
             name="domain-requests-search"
             autoComplete="off"
-            placeholder="Search by domain or machine..."
+            placeholder={t('domainRequests.filters.searchPlaceholder')}
             value={searchTerm}
             onChange={(event) => onSearchChange(event.target.value)}
             onFocus={(event) => {
@@ -55,10 +58,10 @@ export function DomainRequestsFilters({
           <button
             type="button"
             onClick={onClearSearch}
-            aria-label="Limpiar busqueda"
+            aria-label={t('domainRequests.filters.clearSearchAria')}
             className="absolute right-2 top-1/2 -translate-y-1/2 text-xs px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50"
           >
-            Limpiar
+            {t('domainRequests.filters.clearSearch')}
           </button>
         </div>
 
@@ -67,43 +70,43 @@ export function DomainRequestsFilters({
           <select
             value={statusFilter}
             onChange={(event) => onStatusFilterChange(event.target.value as RequestStatus | 'all')}
-            aria-label="Filtrar por estado"
+            aria-label={t('domainRequests.filters.statusAria')}
             className="px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
-            <option value="all">Todos</option>
-            <option value="pending">Pendientes</option>
-            <option value="approved">Aprobados</option>
-            <option value="rejected">Rechazados</option>
+            <option value="all">{t('domainRequests.filters.status.all')}</option>
+            <option value="pending">{t('domainRequests.filters.status.pending')}</option>
+            <option value="approved">{t('domainRequests.filters.status.approved')}</option>
+            <option value="rejected">{t('domainRequests.filters.status.rejected')}</option>
           </select>
           <select
             value={sortBy}
             onChange={(event) => onSortChange(event.target.value as SortOption)}
-            aria-label="Sort requests"
+            aria-label={t('domainRequests.filters.sortAria')}
             className="px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
-            <option value="pending">Pendientes primero</option>
-            <option value="newest">Mas nuevas</option>
-            <option value="oldest">Mas antiguas</option>
+            <option value="pending">{t('domainRequests.filters.sort.pending')}</option>
+            <option value="newest">{t('domainRequests.filters.sort.newest')}</option>
+            <option value="oldest">{t('domainRequests.filters.sort.oldest')}</option>
           </select>
           <select
             value={sourceFilter}
             onChange={(event) => onSourceFilterChange(event.target.value as SourceFilter)}
-            aria-label="Filtrar por fuente"
+            aria-label={t('domainRequests.filters.sourceAria')}
             className="px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
-            <option value="all">Todas las fuentes</option>
-            <option value="firefox-extension">Firefox Extension</option>
+            <option value="all">{t('domainRequests.filters.source.all')}</option>
+            <option value="firefox-extension">{t('domainRequests.filters.source.firefox')}</option>
             <option value="manual">Manual/API</option>
           </select>
           <select
             value={String(pageSize)}
             onChange={(event) => onPageSizeChange(Number(event.target.value))}
-            aria-label="Elementos por pagina"
+            aria-label={t('domainRequests.filters.pageSizeAria')}
             className="px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
-            <option value="10">10/pag</option>
-            <option value="20">20/pag</option>
-            <option value="50">50/pag</option>
+            <option value="10">{t('domainRequests.filters.pageSize', { count: 10 })}</option>
+            <option value="20">{t('domainRequests.filters.pageSize', { count: 20 })}</option>
+            <option value="50">{t('domainRequests.filters.pageSize', { count: 50 })}</option>
           </select>
         </div>
       </div>

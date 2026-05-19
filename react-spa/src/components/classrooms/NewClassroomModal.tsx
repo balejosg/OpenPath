@@ -3,6 +3,7 @@ import { AlertCircle, Loader2 } from 'lucide-react';
 
 import type { AllowedGroupOption } from '../../hooks/useAllowedGroups';
 import { Modal } from '../ui/Modal';
+import { useT } from '../../i18n/product-i18n';
 
 interface NewClassroomModalProps {
   isOpen: boolean;
@@ -29,16 +30,19 @@ const NewClassroomModal: React.FC<NewClassroomModalProps> = ({
   onGroupChange,
   onCreate,
 }) => {
+  const t = useT();
   if (!isOpen) return null;
 
   return (
-    <Modal isOpen onClose={onClose} title="New Classroom" className="max-w-md">
+    <Modal isOpen onClose={onClose} title={t('classrooms.modal.new.title')} className="max-w-md">
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Classroom Name</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            {t('classrooms.modal.new.nameLabel')}
+          </label>
           <input
             type="text"
-            placeholder="E.g. Lab C"
+            placeholder={t('classrooms.modal.new.namePlaceholder')}
             value={newName}
             onChange={(e) => onNameChange(e.target.value)}
             className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none ${
@@ -52,13 +56,15 @@ const NewClassroomModal: React.FC<NewClassroomModalProps> = ({
           )}
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Initial Group</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            {t('classrooms.modal.new.initialGroup')}
+          </label>
           <select
             value={newGroup}
             onChange={(e) => onGroupChange(e.target.value)}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
           >
-            <option value="">No group</option>
+            <option value="">{t('classrooms.modal.new.noGroup')}</option>
             {groupOptions.map((g) => (
               <option key={g.value} value={g.value}>
                 {g.label}
@@ -72,7 +78,7 @@ const NewClassroomModal: React.FC<NewClassroomModalProps> = ({
             disabled={saving}
             className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
           >
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             onClick={onCreate}
@@ -80,7 +86,7 @@ const NewClassroomModal: React.FC<NewClassroomModalProps> = ({
             className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {saving && <Loader2 size={16} className="animate-spin" />}
-            Create Classroom
+            {t('classrooms.modal.new.create')}
           </button>
         </div>
       </div>

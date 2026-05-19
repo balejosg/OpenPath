@@ -31,3 +31,25 @@ void test('blocked-monitor-state stores blocked domains and serializes them by t
   });
   assert.equal(badgeCalls.length > 0, true);
 });
+
+void test('blocked-monitor-state stores detected status as a localization key', () => {
+  const state = createBlockedMonitorState(
+    {
+      setBadgeBackgroundColor: () => undefined,
+      setBadgeText: () => undefined,
+    },
+    {
+      extractHostname: (url) => new URL(url).hostname,
+      now: () => 123,
+    }
+  );
+
+  state.addBlockedDomain(7, 'example.test', 'blocked');
+
+  assert.deepEqual(state.getDomainStatusesForTab(7)['example.test'], {
+    hostname: 'example.test',
+    state: 'detected',
+    updatedAt: 123,
+    messageKey: 'popupStatusDetected',
+  });
+});

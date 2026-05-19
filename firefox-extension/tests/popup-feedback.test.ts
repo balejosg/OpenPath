@@ -42,6 +42,7 @@ class FakeElement {
     createElement: (): FakeElement => new FakeElement(),
   };
   textContent = '';
+  title = '';
   children: FakeElement[] = [];
 
   appendChild(child: FakeElement): void {
@@ -172,7 +173,11 @@ await describe('popup feedback helpers', async () => {
 
     showPopupVerifyError(verifyListEl, 'fallo');
     assert.equal((verifyListEl as unknown as FakeElement).children[0]?.className, 'error-text');
-    assert.equal((verifyListEl as unknown as FakeElement).children[0]?.textContent, 'Error: fallo');
+    assert.equal(
+      (verifyListEl as unknown as FakeElement).children[0]?.textContent,
+      'Error communicating with native host'
+    );
+    assert.equal((verifyListEl as unknown as FakeElement).children[0]?.title, 'fallo');
     showPopupVerifyCommunicationError(verifyListEl);
     assert.equal(
       (verifyListEl as unknown as FakeElement).children[0]?.textContent,

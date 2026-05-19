@@ -6,6 +6,7 @@ import { RulesTableHeader } from './rules-table/RulesTableHeader';
 import { RulesTableRow } from './rules-table/RulesTableRow';
 import { useRuleEditor } from '../hooks/useRuleEditor';
 import { useRuleTableSort } from '../hooks/useRuleTableSort';
+import { useOpenPathI18n } from '../i18n/product-i18n';
 
 export type { Rule, RuleType };
 export type { SortConfig, SortDirection, SortField } from '../hooks/useRuleTableSort';
@@ -37,7 +38,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({
   onEdit: _onEdit,
   onSave,
   readOnly = false,
-  emptyMessage = 'No rules configured',
+  emptyMessage,
   className,
   selectedIds,
   onToggleSelection,
@@ -45,6 +46,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({
   isAllSelected,
   hasSelection,
 }) => {
+  const { locale, t } = useOpenPathI18n();
   const hasSelectionFeature =
     !readOnly && selectedIds !== undefined && onToggleSelection !== undefined;
   const {
@@ -67,7 +69,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({
   const formatDate = (dateString: string) => {
     try {
       const date = new Date(dateString);
-      return date.toLocaleDateString('es-ES', {
+      return date.toLocaleDateString(locale, {
         day: '2-digit',
         month: 'short',
         year: 'numeric',
@@ -82,7 +84,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({
       <div className={cn('bg-white border border-slate-200 rounded-lg', className)}>
         <div className="flex items-center justify-center py-12 text-slate-400">
           <Loader2 size={20} className="animate-spin mr-2" />
-          Loading rules...
+          {t('rules.table.loading')}
         </div>
       </div>
     );
@@ -91,7 +93,9 @@ export const RulesTable: React.FC<RulesTableProps> = ({
   if (rules.length === 0) {
     return (
       <div className={cn('bg-white border border-slate-200 rounded-lg', className)}>
-        <div className="py-12 text-center text-slate-400 text-sm">{emptyMessage}</div>
+        <div className="py-12 text-center text-slate-400 text-sm">
+          {emptyMessage ?? t('rules.table.empty')}
+        </div>
       </div>
     );
   }

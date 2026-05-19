@@ -15,6 +15,7 @@ declare global {
     state: DomainStatusState;
     updatedAt: number;
     message?: string;
+    messageKey?: string;
     requestType?: string;
   }
 }

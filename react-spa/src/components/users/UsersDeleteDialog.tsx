@@ -1,6 +1,7 @@
 import type React from 'react';
 
 import type { UseUsersViewModelReturn } from '../../hooks/useUsersViewModel';
+import { useT } from '../../i18n/product-i18n';
 import { DangerConfirmDialog } from '../ui/ConfirmDialog';
 
 type Props = Pick<
@@ -15,6 +16,8 @@ export function UsersDeleteDialog({
   deleting,
   handleConfirmDeleteUser,
 }: Props): React.JSX.Element | null {
+  const t = useT();
+
   if (!deleteTarget) {
     return null;
   }
@@ -33,7 +36,7 @@ export function UsersDeleteDialog({
       <p className="text-sm text-slate-600">
         Delete <span className="font-semibold text-slate-800">{deleteTarget.name}</span>?
       </p>
-      <p className="text-xs text-slate-500">This action cannot be undone.</p>
+      <p className="text-xs text-slate-500">{t('common.dialog.destructiveActionCannotBeUndone')}</p>
     </DangerConfirmDialog>
   );
 }

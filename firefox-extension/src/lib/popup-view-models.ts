@@ -1,4 +1,5 @@
 import { statusMeta, type BlockedDomainsData } from './popup-state.js';
+import { t } from './i18n.js';
 
 export interface BlockedDomainListItemViewModel {
   attempts: number;
@@ -31,7 +32,7 @@ export function buildBlockedDomainListItems(input: {
           ...(meta.retryable && input.currentTabId !== null ? { retryHostname: hostname } : {}),
           statusClassName: meta.className,
           statusLabel: meta.label,
-          statusTitle: status?.message ?? meta.label,
+          statusTitle: status?.message ?? (status?.messageKey ? t(status.messageKey) : meta.label),
         },
       ];
     });

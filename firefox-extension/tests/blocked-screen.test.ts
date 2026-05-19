@@ -286,6 +286,14 @@ void describe('blocked screen', () => {
     assert.match(html, /Show technical details/);
   });
 
+  void test('blocked and popup pages use runtime language initialization', () => {
+    const blockedHtml = readFileSync(new URL('../blocked/blocked.html', import.meta.url), 'utf8');
+    const popupHtml = readFileSync(new URL('../popup/popup.html', import.meta.url), 'utf8');
+
+    assert.match(blockedHtml, /<html lang="">/);
+    assert.match(popupHtml, /<html lang="">/);
+  });
+
   void test('submits unblock request through the background script without exposing a token', async () => {
     const { elements, messages, permissionEvents } = runBlockedScript({
       success: true,
@@ -652,7 +660,7 @@ void describe('blocked screen', () => {
     await elements.get('submit-unblock-request')?.trigger('click');
     await flushBlockedScreenAsyncHandlers();
 
-    assert.match(elements.get('request-status')?.textContent ?? '', /submit network down/);
+    assert.doesNotMatch(elements.get('request-status')?.textContent ?? '', /submit network down/);
     assert.match(elements.get('request-status')?.textContent ?? '', /tell your teacher/);
   });
 

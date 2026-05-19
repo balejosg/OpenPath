@@ -5,6 +5,8 @@ import type { TeacherScheduleEntry } from './teacher-schedule-model';
 import { getWeekMonday, groupTeacherScheduleEntriesByDay } from './teacher-schedule-model';
 import { TeacherCalendarDayColumn } from './TeacherCalendarDayColumn';
 import { DAYS, GROUP_COLORS, HOURS, START_HOUR } from '../weekly-calendar/shared';
+import { useOpenPathI18n } from '../../i18n/product-i18n';
+import type { ProductT } from '../../i18n/product-i18n';
 
 export interface TeacherDashboardCalendarProps {
   entries: readonly TeacherScheduleEntry[];
@@ -26,16 +28,27 @@ function isEntryInWeek(entry: TeacherScheduleEntry, weekMonday: Date): boolean {
   return entry.endAt.getTime() > weekStart.getTime() && entry.startAt.getTime() < weekEnd.getTime();
 }
 
-function formatWeekLabel(weekMonday: Date): string {
+function formatWeekLabel(weekMonday: Date, locale: string): string {
   const weekFriday = new Date(weekMonday);
   weekFriday.setDate(weekFriday.getDate() + 4);
 
-  const formatter = new Intl.DateTimeFormat('es-ES', {
+  const formatter = new Intl.DateTimeFormat(locale, {
     day: 'numeric',
     month: 'short',
   });
 
   return `${formatter.format(weekMonday)} - ${formatter.format(weekFriday)}`;
+}
+
+function formatDayLabel(dayKey: (typeof DAYS)[number]['key'], t: ProductT): string {
+  const labels = {
+    1: t('teacher.day.monday'),
+    2: t('teacher.day.tuesday'),
+    3: t('teacher.day.wednesday'),
+    4: t('teacher.day.thursday'),
+    5: t('teacher.day.friday'),
+  };
+  return labels[dayKey];
 }
 
 export const TeacherDashboardCalendar: React.FC<TeacherDashboardCalendarProps> = ({
@@ -49,6 +62,7 @@ export const TeacherDashboardCalendar: React.FC<TeacherDashboardCalendarProps> =
   onRetry,
   onSelectEntry,
 }) => {
+  const { locale, t } = useOpenPathI18n();
   const normalizedWeekMonday = getWeekMonday(weekMonday);
   const visibleEntries = useMemo(
     () => entries.filter((entry) => isEntryInWeek(entry, normalizedWeekMonday)),
@@ -77,7 +91,7 @@ export const TeacherDashboardCalendar: React.FC<TeacherDashboardCalendarProps> =
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex items-center gap-2 text-sm text-slate-500">
           <Loader2 size={16} className="animate-spin text-slate-400" />
-          <span>Loading your schedule...</span>
+          <span>{t('teacher.schedule.loading')}</span>
         </div>
       </section>
     );
@@ -93,7 +107,7 @@ export const TeacherDashboardCalendar: React.FC<TeacherDashboardCalendarProps> =
             onClick={onRetry}
             className="inline-flex items-center justify-center rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50"
           >
-            Retry
+            {t('common.retry')}
           </button>
         </div>
       </section>
@@ -104,8 +118,10 @@ export const TeacherDashboardCalendar: React.FC<TeacherDashboardCalendarProps> =
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-slate-800">Week</h3>
-          <p className="mt-1 text-sm text-slate-500">{formatWeekLabel(normalizedWeekMonday)}</p>
+          <h3 className="text-lg font-semibold text-slate-800">{t('teacher.calendar.week')}</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            {formatWeekLabel(normalizedWeekMonday, locale)}
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -113,28 +129,28 @@ export const TeacherDashboardCalendar: React.FC<TeacherDashboardCalendarProps> =
             onClick={onPrevWeek}
             className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
           >
-            Previous week
+            {t('teacher.calendar.previousWeek')}
           </button>
           <button
             type="button"
             onClick={onToday}
             className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
           >
-            Today
+            {t('teacher.calendar.today')}
           </button>
           <button
             type="button"
             onClick={onNextWeek}
             className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
           >
-            Next week
+            {t('teacher.calendar.nextWeek')}
           </button>
         </div>
       </div>
 
       {visibleEntries.length === 0 ? (
         <div className="mt-6 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
-          You have no schedules assigned this week. Manage schedules from each classroom.
+          {t('teacher.calendar.noSchedules')}
         </div>
       ) : (
         <>
@@ -146,7 +162,7 @@ export const TeacherDashboardCalendar: React.FC<TeacherDashboardCalendarProps> =
               return (
                 <div key={day.key} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                   <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-                    {day.full}
+                    {formatDayLabel(day.key, t)}
                   </h4>
                   <ul className="mt-3 space-y-2">
                     {dayEntries.map((entry) => (
@@ -164,7 +180,7 @@ export const TeacherDashboardCalendar: React.FC<TeacherDashboardCalendarProps> =
                           </div>
                           {entry.kind === 'one_off' ? (
                             <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
-                              One-off
+                              {t('teacher.schedule.oneOff')}
                             </span>
                           ) : null}
                         </button>
@@ -179,14 +195,14 @@ export const TeacherDashboardCalendar: React.FC<TeacherDashboardCalendarProps> =
           <div className="mt-6 hidden overflow-hidden rounded-lg border border-slate-200 md:block">
             <div className="grid grid-cols-[60px_repeat(5,1fr)] border-b border-slate-200 bg-slate-50">
               <div className="flex items-center justify-center p-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Time
+                {t('teacher.calendar.time')}
               </div>
               {DAYS.map((day) => (
                 <div
                   key={day.key}
                   className="border-l border-slate-200 p-2 text-center text-xs font-semibold uppercase tracking-wider text-slate-500"
                 >
-                  {day.full}
+                  {formatDayLabel(day.key, t)}
                 </div>
               ))}
             </div>

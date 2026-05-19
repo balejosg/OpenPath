@@ -1,4 +1,5 @@
 import type { DomainRequestsDialogsModel } from '../../hooks/useDomainRequestsViewModel';
+import { useT } from '../../i18n/product-i18n';
 import { ConfirmDialog, DangerConfirmDialog } from '../ui/ConfirmDialog';
 
 interface DomainRequestsDialogsProps {
@@ -6,15 +7,17 @@ interface DomainRequestsDialogsProps {
 }
 
 export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
+  const t = useT();
+
   return (
     <>
       {model.bulkConfirm ? (
         model.bulkConfirm.mode === 'approve' ? (
           <ConfirmDialog
             isOpen
-            title="Approve requests"
-            confirmLabel="Approve"
-            cancelLabel="Cancel"
+            title={t('domainRequests.dialogs.approveRequestsTitle')}
+            confirmLabel={t('domainRequests.table.approve')}
+            cancelLabel={t('common.cancel')}
             disableConfirm={model.bulkConfirm.requestIds.length === 0}
             onClose={model.onBulkConfirmClose}
             onConfirm={() => {
@@ -22,18 +25,20 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
             }}
           >
             <p className="text-sm text-slate-600">
-              Approve {model.bulkConfirm.requestIds.length} selected requests?
+              {t('domainRequests.dialogs.approveSelected', {
+                count: model.bulkConfirm.requestIds.length,
+              })}
             </p>
             <p className="text-xs text-slate-500">
-              Requests will be approved in their original groups.
+              {t('domainRequests.dialogs.approveOriginalGroups')}
             </p>
           </ConfirmDialog>
         ) : (
           <DangerConfirmDialog
             isOpen
-            title="Reject requests"
-            confirmLabel="Reject"
-            cancelLabel="Cancel"
+            title={t('domainRequests.dialogs.rejectRequestsTitle')}
+            confirmLabel={t('domainRequests.table.reject')}
+            cancelLabel={t('common.cancel')}
             disableConfirm={model.bulkConfirm.requestIds.length === 0}
             onClose={model.onBulkConfirmClose}
             onConfirm={() => {
@@ -44,15 +49,19 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
             }}
           >
             <p className="text-sm text-slate-600">
-              Reject {model.bulkConfirm.requestIds.length} selected requests?
+              {t('domainRequests.dialogs.rejectSelected', {
+                count: model.bulkConfirm.requestIds.length,
+              })}
             </p>
             {model.bulkConfirm.rejectReason ? (
               <p className="text-xs text-slate-500 break-words">
-                Reason (optional):{' '}
+                {t('domainRequests.dialogs.rejectReason')}{' '}
                 <span className="font-medium">{model.bulkConfirm.rejectReason}</span>
               </p>
             ) : (
-              <p className="text-xs text-slate-500">Reason (optional): (no reason)</p>
+              <p className="text-xs text-slate-500">
+                {t('domainRequests.dialogs.rejectReason')} {t('domainRequests.dialogs.noReason')}
+              </p>
             )}
           </DangerConfirmDialog>
         )
@@ -61,20 +70,23 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
       {model.approveModal.open && model.approveModal.request && (
         <ConfirmDialog
           isOpen
-          title="Approve Request"
-          confirmLabel="Approve"
-          cancelLabel="Cancel"
+          title={t('domainRequests.dialogs.approveRequestTitle')}
+          confirmLabel={t('domainRequests.table.approve')}
+          cancelLabel={t('common.cancel')}
           isLoading={model.actionsLoading}
           onClose={model.onApproveClose}
           onConfirm={model.onApproveConfirm}
         >
           <p className="text-sm text-slate-600">
-            Approve access to <strong>{model.approveModal.request.domain}</strong> requested by{' '}
-            <strong>{model.approveModal.request.machineHostname}</strong>
+            {t('domainRequests.dialogs.approveAccess', {
+              domain: model.approveModal.request.domain,
+              machine: model.approveModal.request.machineHostname,
+            })}
           </p>
           <p className="text-sm text-slate-600">
-            The request will be approved in the original group:{' '}
-            <strong>{model.approveModal.request.groupName}</strong>
+            {t('domainRequests.dialogs.originalGroup', {
+              group: model.approveModal.request.groupName,
+            })}
           </p>
         </ConfirmDialog>
       )}
@@ -82,26 +94,28 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
       {model.rejectModal.open && model.rejectModal.request && (
         <DangerConfirmDialog
           isOpen
-          title="Reject Request"
-          confirmLabel="Reject"
-          cancelLabel="Cancel"
+          title={t('domainRequests.dialogs.rejectRequestTitle')}
+          confirmLabel={t('domainRequests.table.reject')}
+          cancelLabel={t('common.cancel')}
           isLoading={model.actionsLoading}
           onClose={model.onRejectClose}
           onConfirm={model.onRejectConfirm}
         >
           <p className="text-sm text-slate-600">
-            Reject access to <strong>{model.rejectModal.request.domain}</strong> requested by{' '}
-            <strong>{model.rejectModal.request.machineHostname}</strong>
+            {t('domainRequests.dialogs.rejectAccess', {
+              domain: model.rejectModal.request.domain,
+              machine: model.rejectModal.request.machineHostname,
+            })}
           </p>
 
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">
-              Rejection reason (optional)
+              {t('domainRequests.dialogs.rejectionReasonLabel')}
             </label>
             <textarea
               value={model.rejectionReason}
               onChange={(event) => model.onRejectReasonChange(event.target.value)}
-              placeholder="Explain why this request is rejected..."
+              placeholder={t('domainRequests.dialogs.rejectionReasonPlaceholder')}
               rows={3}
               className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
             />
@@ -112,17 +126,21 @@ export function DomainRequestsDialogs({ model }: DomainRequestsDialogsProps) {
       {model.deleteModal.open && model.deleteModal.request && (
         <DangerConfirmDialog
           isOpen
-          title="Delete Request"
-          confirmLabel="Delete"
-          cancelLabel="Cancel"
+          title={t('domainRequests.dialogs.deleteRequestTitle')}
+          confirmLabel={t('domainRequests.table.delete')}
+          cancelLabel={t('common.cancel')}
           isLoading={model.actionsLoading}
           onClose={model.onDeleteClose}
           onConfirm={model.onDeleteConfirm}
         >
           <p className="text-sm text-slate-600">
-            Delete the access request for <strong>{model.deleteModal.request.domain}</strong>?
+            {t('domainRequests.dialogs.deleteAccess', {
+              domain: model.deleteModal.request.domain,
+            })}
           </p>
-          <p className="text-xs text-slate-500">This action cannot be undone.</p>
+          <p className="text-xs text-slate-500">
+            {t('common.dialog.destructiveActionCannotBeUndone')}
+          </p>
         </DangerConfirmDialog>
       )}
     </>

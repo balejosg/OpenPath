@@ -32,19 +32,19 @@ describe('DomainRequestsFilters', () => {
     fireEvent.change(screen.getByPlaceholderText('Search by domain or machine...'), {
       target: { value: 'example.com' },
     });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Filtrar por estado' }), {
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter by status' }), {
       target: { value: 'approved' },
     });
     fireEvent.change(screen.getByRole('combobox', { name: 'Sort requests' }), {
       target: { value: 'oldest' },
     });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Filtrar por fuente' }), {
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter by source' }), {
       target: { value: 'manual' },
     });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Elementos por pagina' }), {
+    fireEvent.change(screen.getByRole('combobox', { name: 'Items per page' }), {
       target: { value: '50' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Limpiar busqueda' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
 
     expect(onSearchChange).toHaveBeenCalledWith('example.com');
     expect(onStatusFilterChange).toHaveBeenCalledWith('approved');

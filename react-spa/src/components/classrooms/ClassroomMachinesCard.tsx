@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AlertCircle, Download, Loader2, Monitor, X } from 'lucide-react';
 import type { Classroom, ClassroomExemption } from '../../types';
+import { useOpenPathI18n } from '../../i18n/product-i18n';
 
 interface ClassroomMachinesCardProps {
   admin: boolean;
@@ -35,6 +36,7 @@ export default function ClassroomMachinesCard({
   onCreateOperationalExemption,
   onDeleteExemption,
 }: ClassroomMachinesCardProps) {
+  const { locale, t } = useOpenPathI18n();
   const [operationalMachineId, setOperationalMachineId] = useState<string | null>(null);
   const [durationHours, setDurationHours] = useState('1');
   const [reason, setReason] = useState('');
@@ -53,7 +55,7 @@ export default function ClassroomMachinesCard({
       <div className="flex justify-between items-center mb-6">
         <h3 className="font-semibold text-slate-900 flex items-center gap-2">
           <Monitor size={18} className="text-blue-500" />
-          Registered Machines
+          {t('classrooms.machines.title')}
         </h3>
         <div className="flex items-center gap-2">
           {admin && (
@@ -67,11 +69,11 @@ export default function ClassroomMachinesCard({
               ) : (
                 <Download size={16} />
               )}
-              Install computers
+              {t('classrooms.machines.install')}
             </button>
           )}
           <span className="text-xs bg-slate-100 px-2 py-1 rounded text-slate-600 border border-slate-200 font-medium">
-            Total: {classroom.computerCount}
+            {t('classrooms.machines.total', { count: classroom.computerCount })}
           </span>
         </div>
       </div>
@@ -100,7 +102,21 @@ export default function ClassroomMachinesCard({
             const expiresTime = exemption
               ? new Date(exemption.expiresAt).toTimeString().slice(0, 5)
               : null;
-            const exemptionSourceLabel = exemption?.source === 'operational' ? 'Admin' : 'Schedule';
+            const exemptionSourceLabel =
+              exemption?.source === 'operational'
+                ? t('classrooms.machines.exemption.admin')
+                : t('classrooms.machines.exemption.schedule');
+            const machineStatusLabel =
+              machine.status === 'online'
+                ? t('classrooms.machines.status.online')
+                : machine.status === 'stale'
+                  ? t('classrooms.machines.status.stale')
+                  : t('classrooms.machines.status.offline');
+            const lastSeenLabel = machine.lastSeen
+              ? t('classrooms.machines.lastSeen', {
+                  date: new Date(machine.lastSeen).toLocaleString(locale),
+                })
+              : '';
 
             return (
               <div
@@ -114,14 +130,8 @@ export default function ClassroomMachinesCard({
                       {machine.hostname}
                     </p>
                     <p className="text-xs text-slate-500 truncate">
-                      {machine.status === 'online'
-                        ? 'Online'
-                        : machine.status === 'stale'
-                          ? 'Unstable connection'
-                          : 'Offline'}
-                      {machine.lastSeen
-                        ? ` · Last: ${new Date(machine.lastSeen).toLocaleString()}`
-                        : ''}
+                      {machineStatusLabel}
+                      {lastSeenLabel ? ` · ${lastSeenLabel}` : ''}
                     </p>
                   </div>
                 </div>
@@ -129,8 +139,10 @@ export default function ClassroomMachinesCard({
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {isExempt && (
                     <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full border border-green-200 font-medium">
-                      {exemptionSourceLabel}: no restriction
-                      {expiresTime ? ` · until ${expiresTime}` : ''}
+                      {exemptionSourceLabel}: {t('classrooms.machines.exemption.noRestriction')}
+                      {expiresTime
+                        ? ` · ${t('classrooms.machines.exemption.until', { time: expiresTime })}`
+                        : ''}
                       {exemption.source === 'operational' && exemption.reason
                         ? ` · ${exemption.reason}`
                         : ''}
@@ -143,7 +155,7 @@ export default function ClassroomMachinesCard({
                       disabled={mutating}
                       className="bg-slate-900 hover:bg-slate-800 text-white px-3 py-1.5 rounded-lg text-sm transition-colors shadow-sm font-medium disabled:opacity-50"
                     >
-                      {mutating ? '...' : 'Restrict'}
+                      {mutating ? t('common.loadingEllipsis') : t('classrooms.machines.restrict')}
                     </button>
                   ) : admin ? (
                     <button
@@ -151,7 +163,7 @@ export default function ClassroomMachinesCard({
                       disabled={mutating || loadingExemptions}
                       className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm transition-colors shadow-sm font-medium disabled:opacity-50"
                     >
-                      {mutating ? '...' : 'Exempt'}
+                      {mutating ? t('common.loadingEllipsis') : t('classrooms.machines.exempt')}
                     </button>
                   ) : hasActiveSchedule && canCreateScheduleExemption ? (
                     <button
@@ -159,7 +171,7 @@ export default function ClassroomMachinesCard({
                       disabled={mutating || loadingExemptions}
                       className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm transition-colors shadow-sm font-medium disabled:opacity-50"
                     >
-                      {mutating ? '...' : 'Release'}
+                      {mutating ? t('common.loadingEllipsis') : t('classrooms.machines.release')}
                     </button>
                   ) : null}
                 </div>
@@ -170,9 +182,11 @@ export default function ClassroomMachinesCard({
       ) : (
         <div className="flex-1 border-2 border-dashed border-slate-200 rounded-lg flex flex-col items-center justify-center p-8 text-center bg-slate-50/50">
           <Monitor size={48} className="text-slate-300 mb-3" />
-          <p className="text-slate-900 font-medium text-sm">No active machines</p>
+          <p className="text-slate-900 font-medium text-sm">
+            {t('classrooms.machines.emptyTitle')}
+          </p>
           <p className="text-slate-500 text-xs mt-1 max-w-xs">
-            Install the OpenPath agent on computers to see them here.
+            {t('classrooms.machines.emptyBody')}
           </p>
         </div>
       )}
@@ -182,8 +196,7 @@ export default function ClassroomMachinesCard({
         classroom.machines &&
         classroom.machines.length > 0 && (
           <p className="mt-3 text-xs text-slate-500 italic">
-            Temporary release is only available when the classroom is controlled by calendar
-            schedule.
+            {t('classrooms.machines.scheduleOnly')}
           </p>
         )}
 
@@ -191,22 +204,24 @@ export default function ClassroomMachinesCard({
         <div className="fixed inset-0 z-50 bg-slate-900/30 flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 rounded-lg shadow-xl w-full max-w-sm p-5">
             <div className="flex items-center justify-between mb-4">
-              <h4 className="font-semibold text-slate-900">Exempt machine</h4>
+              <h4 className="font-semibold text-slate-900">
+                {t('classrooms.machines.exemptMachine')}
+              </h4>
               <button
                 type="button"
                 onClick={() => setOperationalMachineId(null)}
                 className="text-slate-500 hover:text-slate-700 p-1"
-                aria-label="Close"
+                aria-label={t('classrooms.machines.close')}
               >
                 <X size={18} />
               </button>
             </div>
             <label className="block text-sm font-medium text-slate-700 mb-1" htmlFor="hours">
-              Hours
+              {t('classrooms.machines.hours')}
             </label>
             <input
               id="hours"
-              aria-label="Hours"
+              aria-label={t('classrooms.machines.hours')}
               type="number"
               min={1}
               max={24}
@@ -216,11 +231,11 @@ export default function ClassroomMachinesCard({
               className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm mb-3"
             />
             <label className="block text-sm font-medium text-slate-700 mb-1" htmlFor="reason">
-              Reason
+              {t('classrooms.machines.reason')}
             </label>
             <textarea
               id="reason"
-              aria-label="Reason"
+              aria-label={t('classrooms.machines.reason')}
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm min-h-20 mb-4"
@@ -231,7 +246,7 @@ export default function ClassroomMachinesCard({
                 onClick={() => setOperationalMachineId(null)}
                 className="px-3 py-1.5 text-sm rounded-md border border-slate-300 text-slate-700"
               >
-                Cancel
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
@@ -239,7 +254,7 @@ export default function ClassroomMachinesCard({
                 disabled={!reason.trim() || Number(durationHours) < 1 || Number(durationHours) > 24}
                 className="px-3 py-1.5 text-sm rounded-md bg-green-600 text-white disabled:opacity-50"
               >
-                Create exemption
+                {t('classrooms.machines.createExemption')}
               </button>
             </div>
           </div>

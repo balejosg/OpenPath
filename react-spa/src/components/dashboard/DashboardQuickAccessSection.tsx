@@ -4,6 +4,7 @@ import {
   type DashboardGroup,
   type DashboardSortOption,
 } from '../../hooks/useDashboardViewModel';
+import { useT } from '../../i18n/product-i18n';
 
 interface DashboardQuickAccessSectionProps {
   groups: DashboardGroup[];
@@ -30,10 +31,13 @@ export function DashboardQuickAccessSection({
   hasMoreGroups,
   onNavigateToRules,
 }: DashboardQuickAccessSectionProps) {
+  const t = useT();
+  const sortLabel = DASHBOARD_SORT_OPTIONS.find((option) => option.value === sortBy)?.label ?? '';
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-slate-800">Quick Access</h3>
+        <h3 className="text-lg font-semibold text-slate-800">{t('dashboard.quickAccess.title')}</h3>
         <div className="relative">
           <button
             onClick={(e) => {
@@ -43,7 +47,7 @@ export function DashboardQuickAccessSection({
             className="flex items-center gap-2 px-3 py-1.5 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
             data-testid="sort-dropdown-button"
           >
-            Sort: {DASHBOARD_SORT_OPTIONS.find((option) => option.value === sortBy)?.label}
+            {t('dashboard.quickAccess.sort', { label: sortLabel })}
             <ChevronDown size={14} />
           </button>
           {showSortDropdown && (
@@ -75,7 +79,7 @@ export function DashboardQuickAccessSection({
       {groupsLoading ? (
         <div className="flex items-center justify-center py-8">
           <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
-          <span className="ml-2 text-slate-500">Loading groups...</span>
+          <span className="ml-2 text-slate-500">{t('dashboard.quickAccess.loadingGroups')}</span>
         </div>
       ) : groupsError ? (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700 text-sm">
@@ -84,10 +88,8 @@ export function DashboardQuickAccessSection({
       ) : groups.length === 0 ? (
         <div className="bg-slate-50 border border-slate-200 rounded-lg p-8 text-center">
           <Folder className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-          <p className="text-slate-500 text-sm">No groups configured.</p>
-          <p className="text-slate-400 text-xs mt-1">
-            Create a group in &quot;Group Policies&quot; to get started.
-          </p>
+          <p className="text-slate-500 text-sm">{t('dashboard.quickAccess.noGroups')}</p>
+          <p className="text-slate-400 text-xs mt-1">{t('dashboard.quickAccess.noGroupsHint')}</p>
         </div>
       ) : (
         <>
@@ -130,7 +132,7 @@ export function DashboardQuickAccessSection({
                           : 'bg-green-50 text-green-700 border border-green-200'
                       }`}
                     >
-                      {isInactive ? 'Inactive' : 'Active'}
+                      {isInactive ? t('common.status.inactive') : t('common.status.active')}
                     </span>
                   </div>
 
@@ -154,7 +156,7 @@ export function DashboardQuickAccessSection({
                     }`}
                     data-testid={`manage-rules-${group.id}`}
                   >
-                    Manage Rules
+                    {t('dashboard.quickAccess.manageRules')}
                     <ArrowRight size={14} />
                   </button>
                 </div>
@@ -165,8 +167,11 @@ export function DashboardQuickAccessSection({
           {hasMoreGroups && (
             <div className="text-center pt-2">
               <p className="text-sm text-slate-500">
-                Showing {sortedGroups.length} of {groups.length} groups.{' '}
-                <span className="text-slate-400">Go to &quot;Group Policies&quot; to see all.</span>
+                {t('dashboard.quickAccess.moreGroups', {
+                  visibleCount: sortedGroups.length,
+                  totalCount: groups.length,
+                })}{' '}
+                <span className="text-slate-400">{t('dashboard.quickAccess.moreGroupsHint')}</span>
               </p>
             </div>
           )}

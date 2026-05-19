@@ -1,19 +1,24 @@
 import { CheckCircle, CheckCircle2, Clock, Search, Trash2, XCircle } from 'lucide-react';
 import type { DomainRequestsTableModel } from '../../hooks/useDomainRequestsViewModel';
+import { useT } from '../../i18n/product-i18n';
 
 interface DomainRequestsTableProps {
   model: DomainRequestsTableModel;
 }
 
 export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
+  const t = useT();
+
   if (model.emptyState === 'no-requests') {
     return (
       <div className="flex flex-col items-center justify-center h-[50vh] bg-white rounded-lg border border-slate-200 shadow-sm text-slate-500">
         <div className="bg-green-50 p-4 rounded-full mb-4">
           <CheckCircle2 size={48} className="text-green-500" />
         </div>
-        <h2 className="text-xl font-semibold text-slate-800">All clear</h2>
-        <p className="mt-2 text-slate-500 text-sm">No domain requests are pending review.</p>
+        <h2 className="text-xl font-semibold text-slate-800">
+          {t('domainRequests.table.emptyTitle')}
+        </h2>
+        <p className="mt-2 text-slate-500 text-sm">{t('domainRequests.table.emptyBody')}</p>
       </div>
     );
   }
@@ -22,13 +27,13 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
     return (
       <div className="bg-white border border-slate-200 rounded-lg p-8 shadow-sm text-center">
         <Search size={32} className="mx-auto text-slate-300 mb-3" />
-        <p className="text-slate-500">No requests match the selected filters</p>
+        <p className="text-slate-500">{t('domainRequests.table.noFilterResults')}</p>
         <button
           type="button"
           onClick={model.onClearFilters}
           className="mt-4 px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50"
         >
-          Clear filters
+          {t('domainRequests.table.clearFilters')}
         </button>
       </div>
     );
@@ -49,26 +54,26 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
                     disabled={!model.bulkSelection.canSelectPage}
                     className="rounded border-slate-300"
                     title={model.bulkSelection.title}
-                    aria-label="Bulk select page"
+                    aria-label={t('domainRequests.table.bulkSelectPage')}
                   />
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Domain
+                  {t('domainRequests.table.domain')}
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Machine
+                  {t('domainRequests.table.machine')}
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Group
+                  {t('domainRequests.table.group')}
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Status
+                  {t('domainRequests.table.status')}
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Date
+                  {t('domainRequests.table.date')}
                 </th>
                 <th className="text-right px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Actions
+                  {t('domainRequests.table.actions')}
                 </th>
               </tr>
             </thead>
@@ -87,7 +92,9 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
                         checked={request.selected}
                         onChange={() => model.bulkSelection.onToggleRequest(request.id)}
                         className="rounded border-slate-300"
-                        aria-label={`Select ${request.domain}`}
+                        aria-label={t('domainRequests.table.selectDomain', {
+                          domain: request.domain,
+                        })}
                       />
                     ) : null}
                   </td>
@@ -128,14 +135,14 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
                           <button
                             onClick={() => model.onOpenApprove(request.id)}
                             className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                            title="Approve"
+                            title={t('domainRequests.table.approve')}
                           >
                             <CheckCircle size={18} />
                           </button>
                           <button
                             onClick={() => model.onOpenReject(request.id)}
                             className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                            title="Reject"
+                            title={t('domainRequests.table.reject')}
                           >
                             <XCircle size={18} />
                           </button>
@@ -145,7 +152,7 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
                         <button
                           onClick={() => model.onOpenDelete(request.id)}
                           className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                          title="Delete"
+                          title={t('domainRequests.table.delete')}
                         >
                           <Trash2 size={18} />
                         </button>
@@ -162,8 +169,11 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
       {model.pagination.totalItems > 0 && (
         <div className="flex items-center justify-between text-sm text-slate-600">
           <span>
-            Showing {model.pagination.visibleStart}-{model.pagination.visibleEnd} of{' '}
-            {model.pagination.totalItems}
+            {t('domainRequests.pagination.showing', {
+              start: model.pagination.visibleStart,
+              end: model.pagination.visibleEnd,
+              total: model.pagination.totalItems,
+            })}
           </span>
           <div className="flex items-center gap-2">
             <button
@@ -171,10 +181,13 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
               disabled={model.pagination.currentPage <= 1}
               className="px-3 py-1 border border-slate-300 rounded disabled:opacity-50"
             >
-              Previous
+              {t('common.previous')}
             </button>
             <span>
-              Page {model.pagination.currentPage} of {model.pagination.totalPages}
+              {t('domainRequests.pagination.page', {
+                current: model.pagination.currentPage,
+                total: model.pagination.totalPages,
+              })}
             </span>
             <button
               onClick={() =>
@@ -185,7 +198,7 @@ export function DomainRequestsTable({ model }: DomainRequestsTableProps) {
               disabled={model.pagination.currentPage >= model.pagination.totalPages}
               className="px-3 py-1 border border-slate-300 rounded disabled:opacity-50"
             >
-              Next
+              {t('common.next')}
             </button>
           </div>
         </div>

@@ -11,6 +11,7 @@ import type { GroupLike } from '../groups/GroupLabel';
 import ClassroomConfigCard from './ClassroomConfigCard';
 import ClassroomMachinesCard from './ClassroomMachinesCard';
 import ClassroomScheduleCard from './ClassroomScheduleCard';
+import { useT } from '../../i18n/product-i18n';
 
 interface CalendarGroupDisplay {
   id: string;
@@ -92,24 +93,24 @@ export default function ClassroomDetailPane({
   onOpenOneOffScheduleEdit,
   onRequestOneOffScheduleDelete,
 }: ClassroomDetailPaneProps) {
+  const t = useT();
+
   if (!selectedClassroom) {
     return (
       <div
         data-testid="classrooms-empty-state"
         className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm"
       >
-        <h2 className="text-2xl font-bold text-slate-900 mb-1">No classrooms</h2>
+        <h2 className="text-2xl font-bold text-slate-900 mb-1">{t('classrooms.empty.title')}</h2>
         <p className="text-slate-500 text-sm">
-          {admin
-            ? 'Create a classroom to view its settings and status.'
-            : 'Select a classroom to view its settings and status.'}
+          {admin ? t('classrooms.empty.adminBody') : t('classrooms.empty.userBody')}
         </p>
         {admin && (
           <button
             onClick={onOpenNewModal}
             className="mt-6 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm inline-flex items-center gap-2 transition-colors shadow-sm font-medium"
           >
-            <Plus size={16} /> Create classroom
+            <Plus size={16} /> {t('classrooms.empty.create')}
           </button>
         )}
       </div>

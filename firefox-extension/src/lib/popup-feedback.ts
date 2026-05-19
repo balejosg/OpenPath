@@ -62,7 +62,8 @@ export function showPopupVerifyLoading(input: {
 export function showPopupVerifyError(verifyListEl: HTMLElement, message: string): void {
   const errorEl = createElementFor(verifyListEl, 'div');
   errorEl.className = 'error-text';
-  errorEl.textContent = `Error: ${message}`;
+  errorEl.textContent = t('popupNativeHostCommunicationError');
+  errorEl.title = message;
   verifyListEl.replaceChildren(errorEl);
 }
 

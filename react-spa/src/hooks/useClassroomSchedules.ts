@@ -3,6 +3,7 @@ import type { OneOffScheduleWithPermissions, ScheduleWithPermissions } from '../
 import { trpc } from '../lib/trpc';
 import { resolveTrpcErrorMessage } from '../lib/error-utils';
 import { reportError } from '../lib/reportError';
+import { useOpenPathI18n } from '../i18n/product-i18n';
 
 function formatScheduleError(err: unknown, fallback: string): string {
   const raw = err instanceof Error ? err.message : '';
@@ -34,6 +35,7 @@ export const useClassroomSchedules = ({
   selectedClassroomId,
   onSchedulesUpdated,
 }: UseClassroomSchedulesParams) => {
+  const { locale } = useOpenPathI18n();
   const [schedules, setSchedules] = useState<ScheduleWithPermissions[]>([]);
   const [oneOffSchedules, setOneOffSchedules] = useState<OneOffScheduleWithPermissions[]>([]);
   const [loadingSchedules, setLoadingSchedules] = useState(false);
@@ -219,13 +221,18 @@ export const useClassroomSchedules = ({
     });
   }, []);
 
-  const requestOneOffScheduleDelete = useCallback((schedule: OneOffScheduleWithPermissions) => {
-    setScheduleError('');
-    setScheduleDeleteTarget({
-      id: schedule.id,
-      label: `${new Date(schedule.startAt).toLocaleString()}–${new Date(schedule.endAt).toLocaleString()}`,
-    });
-  }, []);
+  const requestOneOffScheduleDelete = useCallback(
+    (schedule: OneOffScheduleWithPermissions) => {
+      setScheduleError('');
+      setScheduleDeleteTarget({
+        id: schedule.id,
+        label: `${new Date(schedule.startAt).toLocaleString(locale)}–${new Date(
+          schedule.endAt
+        ).toLocaleString(locale)}`,
+      });
+    },
+    [locale]
+  );
 
   const closeScheduleDelete = useCallback(() => {
     if (scheduleSaving) return;

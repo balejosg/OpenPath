@@ -232,7 +232,9 @@ test.describe('Domain Request Management', () => {
       const requestsPage = new DomainRequestsPage(page);
       await requestsPage.goto();
 
-      const statusFilter = page.getByRole('combobox', { name: /Filtrar por estado/i });
+      const statusFilter = page.getByRole('combobox', {
+        name: /Filter by status|Filtrar por estado/i,
+      });
       await expect(statusFilter).toBeVisible();
       await statusFilter.selectOption('approved');
 

@@ -137,7 +137,7 @@ export function createBlockedMonitorState(
       setDomainStatus(tabId, hostname, {
         state: 'detected',
         updatedAt: now(),
-        message: 'Bloqueo detectado',
+        messageKey: 'popupStatusDetected',
       });
     }
     blockedDomains[tabId]?.get(hostname)?.errors.add(error);

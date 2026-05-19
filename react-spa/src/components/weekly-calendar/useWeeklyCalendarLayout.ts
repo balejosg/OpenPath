@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import type { ScheduleWithPermissions } from '../../types';
+import { useOpenPathI18n } from '../../i18n/product-i18n';
 import type { WeeklyCalendarGroupInfo } from './shared';
 import { DAYS, GROUP_COLORS } from './shared';
 
@@ -7,6 +8,7 @@ export function useWeeklyCalendarLayout(
   schedules: ScheduleWithPermissions[],
   groups: WeeklyCalendarGroupInfo[]
 ) {
+  const { locale } = useOpenPathI18n();
   const groupColorMap = useMemo(() => {
     const uniqueIds = [...new Set(schedules.map((s) => s.groupId))];
     const map = new Map<string, number>();
@@ -51,12 +53,12 @@ export function useWeeklyCalendarLayout(
     monday.setDate(today.getDate() + mondayOffset);
     const friday = new Date(monday);
     friday.setDate(monday.getDate() + 4);
-    const fmt = new Intl.DateTimeFormat('es-ES', { month: 'long' });
+    const fmt = new Intl.DateTimeFormat(locale, { month: 'long' });
     const mon = fmt.format(monday);
     const fri = fmt.format(friday);
     const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
     return mon === fri ? cap(mon) : `${cap(mon)} – ${cap(fri)}`;
-  }, []);
+  }, [locale]);
 
   const todayKey = useMemo(() => {
     const d = new Date().getDay();

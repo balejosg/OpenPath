@@ -1,6 +1,7 @@
 import React from 'react';
 import { Loader2, MonitorPlay } from 'lucide-react';
 import type { useTeacherDashboardViewModel } from '../../hooks/useTeacherDashboardViewModel';
+import { useT } from '../../i18n/product-i18n';
 import { GroupSelect } from '../groups/GroupSelect';
 
 type TeacherDashboardViewModel = ReturnType<typeof useTeacherDashboardViewModel>;
@@ -14,6 +15,7 @@ export const TeacherClassroomControlCard: React.FC<TeacherClassroomControlCardPr
   viewModel,
   onNavigateToRules,
 }) => {
+  const t = useT();
   const {
     classrooms,
     groups,
@@ -34,22 +36,21 @@ export const TeacherClassroomControlCard: React.FC<TeacherClassroomControlCardPr
     <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
       <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
         <MonitorPlay className="text-blue-500" size={20} />
-        Classroom Control
+        {t('teacher.control.title')}
       </h3>
-      <p className="text-sm text-slate-500 mb-4">
-        Select a classroom and instantly apply one of your policies. This overrides any default
-        policy.
-      </p>
+      <p className="text-sm text-slate-500 mb-4">{t('teacher.control.body')}</p>
 
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Classroom</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            {t('teacher.control.classroom')}
+          </label>
           <select
             className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 outline-none"
             value={selectedClassroomForControl}
             onChange={(e) => setSelectedClassroomForControl(e.target.value)}
           >
-            <option value="">Select classroom...</option>
+            <option value="">{t('teacher.control.selectClassroom')}</option>
             {classrooms.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.displayName || c.name}
@@ -59,7 +60,9 @@ export const TeacherClassroomControlCard: React.FC<TeacherClassroomControlCardPr
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Policy to apply</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            {t('teacher.control.policyToApply')}
+          </label>
           <GroupSelect
             id="teacher-control-group"
             className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 outline-none"
@@ -68,7 +71,7 @@ export const TeacherClassroomControlCard: React.FC<TeacherClassroomControlCardPr
             disabled={groupsLoading || !!groupsError || groups.length === 0}
             groups={groups}
             includeNoneOption
-            noneLabel="Restore default (No group)"
+            noneLabel={t('teacher.control.restoreDefault')}
             inactiveBehavior="hide"
           />
 
@@ -77,8 +80,8 @@ export const TeacherClassroomControlCard: React.FC<TeacherClassroomControlCardPr
           {!groupsLoading && !groupsError && groups.length === 0 && (
             <p className="mt-2 text-xs text-slate-500 italic">
               {teacherGroupsEnabled
-                ? 'You have no policies. Go to "My Policies" to create one.'
-                : 'You have no assigned policies. Ask an administrator to assign one.'}
+                ? t('teacher.control.noPolicies')
+                : t('teacher.control.noAssignedPolicies')}
             </p>
           )}
 
@@ -94,7 +97,7 @@ export const TeacherClassroomControlCard: React.FC<TeacherClassroomControlCardPr
                 onClick={() => onNavigateToRules({ id: selected.id, name: selected.name })}
                 className="mt-2 text-xs text-blue-600 hover:text-blue-800 font-medium underline"
               >
-                Manage rules for this policy
+                {t('teacher.control.manageRules')}
               </button>
             );
           })()}
@@ -106,7 +109,9 @@ export const TeacherClassroomControlCard: React.FC<TeacherClassroomControlCardPr
           className="w-full mt-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors"
         >
           {controlLoading && <Loader2 size={16} className="animate-spin" />}
-          {selectedGroupForControl ? 'Apply Policy' : 'Release Classroom'}
+          {selectedGroupForControl
+            ? t('teacher.control.applyPolicy')
+            : t('teacher.control.releaseClassroom')}
         </button>
 
         {controlError && <p className="text-xs text-red-600">{controlError}</p>}

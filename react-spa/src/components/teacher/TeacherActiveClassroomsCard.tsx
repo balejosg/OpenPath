@@ -1,6 +1,7 @@
 import React from 'react';
 import { Calendar, Folder, Loader2 } from 'lucide-react';
 import type { useTeacherDashboardViewModel } from '../../hooks/useTeacherDashboardViewModel';
+import { useT } from '../../i18n/product-i18n';
 import { GroupLabel } from '../groups/GroupLabel';
 
 type TeacherDashboardViewModel = ReturnType<typeof useTeacherDashboardViewModel>;
@@ -12,13 +13,14 @@ interface TeacherActiveClassroomsCardProps {
 export const TeacherActiveClassroomsCard: React.FC<TeacherActiveClassroomsCardProps> = ({
   viewModel,
 }) => {
+  const t = useT();
   const { classroomsLoading, activeClassrooms, groupById, handleReleaseClass } = viewModel;
 
   return (
     <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm flex flex-col">
       <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
         <Calendar className="text-indigo-500" size={20} />
-        Classrooms With Active Group
+        {t('teacher.activeClassrooms.title')}
       </h3>
 
       <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
@@ -29,7 +31,7 @@ export const TeacherActiveClassroomsCard: React.FC<TeacherActiveClassroomsCardPr
         ) : activeClassrooms.length === 0 ? (
           <div className="text-center py-8">
             <Folder className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-            <p className="text-slate-500 text-sm">No active classrooms right now.</p>
+            <p className="text-slate-500 text-sm">{t('teacher.activeClassrooms.empty')}</p>
           </div>
         ) : (
           activeClassrooms.map((c) => (
@@ -40,7 +42,7 @@ export const TeacherActiveClassroomsCard: React.FC<TeacherActiveClassroomsCardPr
               <div>
                 <h4 className="font-semibold text-slate-800 text-sm">{c.classroomName}</h4>
                 <p className="text-xs text-slate-500 mt-1">
-                  Usando:{' '}
+                  {t('teacher.activeClassrooms.using')}{' '}
                   <GroupLabel
                     variant="text"
                     className="font-medium text-slate-700"
@@ -55,7 +57,7 @@ export const TeacherActiveClassroomsCard: React.FC<TeacherActiveClassroomsCardPr
                   onClick={() => void handleReleaseClass(c.classroomId)}
                   className="text-xs bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 px-3 py-1.5 rounded-lg transition-colors font-medium shadow-sm"
                 >
-                  End Class
+                  {t('teacher.activeClassrooms.endClass')}
                 </button>
               )}
             </div>

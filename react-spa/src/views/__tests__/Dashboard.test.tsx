@@ -129,7 +129,7 @@ describe('Dashboard', () => {
     await waitFor(() => {
       expect(screen.getByText('Active Groups')).toBeInTheDocument();
       expect(screen.getByText('Allowed Domains')).toBeInTheDocument();
-      expect(screen.getByText('Sitios Bloqueados')).toBeInTheDocument();
+      expect(screen.getByText('Blocked Sites')).toBeInTheDocument();
       expect(screen.getByText('Pending Requests')).toBeInTheDocument();
     });
   });

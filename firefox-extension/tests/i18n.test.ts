@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { describe, test } from 'node:test';
 
-import { localizeDocument, t } from '../src/lib/i18n.js';
+import { getDocumentLanguage, localizeDocument, t } from '../src/lib/i18n.js';
 
 class FakeElement {
   textContent = '';
@@ -51,6 +51,28 @@ function withBrowserI18n(
   }
 }
 
+function withBrowserLocale(getUILanguage: () => string, callback: () => void): void {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'browser');
+  Object.defineProperty(globalThis, 'browser', {
+    configurable: true,
+    value: {
+      i18n: {
+        getUILanguage,
+      },
+    },
+  });
+
+  try {
+    callback();
+  } finally {
+    if (previous) {
+      Object.defineProperty(globalThis, 'browser', previous);
+    } else {
+      Reflect.deleteProperty(globalThis, 'browser');
+    }
+  }
+}
+
 await describe('Firefox i18n helpers', async () => {
   await test('keeps English and Spanish locale catalogs in parity', async () => {
     const [englishCatalog, spanishCatalog] = await Promise.all([
@@ -78,6 +100,25 @@ await describe('Firefox i18n helpers', async () => {
       'Request sent for learning.example. It remains pending approval.'
     );
     assert.equal(t('missingMessageKey'), 'missingMessageKey');
+  });
+
+  await test('normalizes named placeholders in bundled fallback messages', () => {
+    assert.equal(t('blockedRequestStatusFailed', '503'), 'Could not check the request (503)');
+  });
+
+  await test('resolves document language from the Firefox UI locale', () => {
+    withBrowserLocale(
+      () => 'es-ES',
+      () => {
+        assert.equal(getDocumentLanguage(), 'es');
+      }
+    );
+    withBrowserLocale(
+      () => 'pt-BR',
+      () => {
+        assert.equal(getDocumentLanguage(), 'pt');
+      }
+    );
   });
 
   await test('localizes text, title, placeholder, and aria-label attributes', () => {

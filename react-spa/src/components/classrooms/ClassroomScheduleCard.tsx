@@ -3,6 +3,7 @@ import { AlertCircle, Clock, Loader2, Plus } from 'lucide-react';
 import type { OneOffScheduleWithPermissions, ScheduleWithPermissions } from '../../types';
 import WeeklyCalendar from '../WeeklyCalendar';
 import { resolveGroupLike, type GroupLike } from '../groups/GroupLabel';
+import { useOpenPathI18n } from '../../i18n/product-i18n';
 
 interface CalendarGroupDisplay {
   id: string;
@@ -25,13 +26,13 @@ interface ClassroomScheduleCardProps {
   onRequestOneOffScheduleDelete: (schedule: OneOffScheduleWithPermissions) => void;
 }
 
-function formatOneOffDateLabel(value: string): string {
+function formatOneOffDateLabel(value: string, locale: string): string {
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) {
     return value;
   }
 
-  return parsed.toLocaleString(undefined, {
+  return parsed.toLocaleString(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -55,25 +56,27 @@ export default function ClassroomScheduleCard({
   onOpenOneOffScheduleEdit,
   onRequestOneOffScheduleDelete,
 }: ClassroomScheduleCardProps) {
+  const { locale, t } = useOpenPathI18n();
+
   return (
     <div className="bg-white border border-slate-200 rounded-lg p-6 flex-1 flex flex-col shadow-sm">
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-semibold text-slate-900 flex items-center gap-2">
           <Clock size={18} className="text-slate-500" />
-          Classroom Schedule
+          {t('classrooms.schedule.title')}
         </h3>
         <div className="flex gap-2">
           <button
             onClick={onOpenOneOffScheduleCreate}
             className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 transition-colors shadow-sm font-medium border border-slate-200"
           >
-            <Plus size={16} /> One-off
+            <Plus size={16} /> {t('classrooms.schedule.oneOff')}
           </button>
           <button
             onClick={() => onOpenScheduleCreate()}
             className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 transition-colors shadow-sm font-medium"
           >
-            <Plus size={16} /> Weekly
+            <Plus size={16} /> {t('classrooms.schedule.weekly')}
           </button>
         </div>
       </div>
@@ -81,7 +84,7 @@ export default function ClassroomScheduleCard({
       {loadingSchedules ? (
         <div className="flex items-center justify-center py-10 text-slate-500 text-sm">
           <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
-          <span className="ml-2">Loading schedules...</span>
+          <span className="ml-2">{t('classrooms.schedule.loading')}</span>
         </div>
       ) : (
         <>
@@ -98,25 +101,25 @@ export default function ClassroomScheduleCard({
             onEditClick={onOpenScheduleEdit}
             onDeleteClick={onRequestScheduleDelete}
           />
-          <p className="mt-3 text-xs text-slate-500">
-            Tip: click a cell to create a block. You can edit or delete your blocks on hover.
-          </p>
+          <p className="mt-3 text-xs text-slate-500">{t('classrooms.schedule.tip')}</p>
 
           <div className="mt-5 pt-4 border-t border-slate-200">
             <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-semibold text-slate-900">One-off assignments</h4>
+              <h4 className="text-sm font-semibold text-slate-900">
+                {t('classrooms.schedule.oneOffAssignments')}
+              </h4>
               <button
                 onClick={onOpenOneOffScheduleCreate}
                 className="text-xs font-semibold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-2.5 py-1.5 rounded-lg transition-colors"
               >
                 <span className="inline-flex items-center gap-1">
-                  <Plus size={14} /> New
+                  <Plus size={14} /> {t('classrooms.schedule.new')}
                 </span>
               </button>
             </div>
 
             {sortedOneOffSchedules.length === 0 ? (
-              <p className="text-xs text-slate-500">No one-off assignments.</p>
+              <p className="text-xs text-slate-500">{t('classrooms.schedule.noneOneOff')}</p>
             ) : (
               <div className="space-y-2">
                 {sortedOneOffSchedules.map((schedule) => {
@@ -130,8 +133,10 @@ export default function ClassroomScheduleCard({
                     : schedule.canEdit || admin
                       ? schedule.groupId
                       : schedule.teacherName
-                        ? `Reserved by ${schedule.teacherName}`
-                        : 'Reserved by another teacher';
+                        ? t('classrooms.schedule.reservedBy', {
+                            teacherName: schedule.teacherName,
+                          })
+                        : t('classrooms.schedule.reservedByAnotherTeacher');
 
                   return (
                     <div
@@ -141,8 +146,8 @@ export default function ClassroomScheduleCard({
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-slate-900 truncate">{groupName}</p>
                         <p className="text-xs text-slate-500 truncate">
-                          {formatOneOffDateLabel(schedule.startAt)} –{' '}
-                          {formatOneOffDateLabel(schedule.endAt)}
+                          {formatOneOffDateLabel(schedule.startAt, locale)} –{' '}
+                          {formatOneOffDateLabel(schedule.endAt, locale)}
                           {schedule.teacherName ? ` · ${schedule.teacherName}` : ''}
                         </p>
                       </div>
@@ -153,13 +158,13 @@ export default function ClassroomScheduleCard({
                             onClick={() => onOpenOneOffScheduleEdit(schedule)}
                             className="text-xs font-semibold text-slate-700 hover:text-slate-900 px-2 py-1 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors"
                           >
-                            Edit
+                            {t('classrooms.schedule.edit')}
                           </button>
                           <button
                             onClick={() => onRequestOneOffScheduleDelete(schedule)}
                             className="text-xs font-semibold text-red-600 hover:text-red-700 px-2 py-1 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-100 transition-colors"
                           >
-                            Delete
+                            {t('classrooms.schedule.delete')}
                           </button>
                         </div>
                       )}

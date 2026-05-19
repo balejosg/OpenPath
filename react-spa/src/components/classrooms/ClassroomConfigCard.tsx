@@ -2,13 +2,13 @@ import React from 'react';
 import { AlertCircle, Trash2 } from 'lucide-react';
 import type { Classroom, CurrentGroupSource } from '../../types';
 import {
-  getGroupSourcePhrase,
   GroupLabel,
   resolveGroupDisplayNameFromLookup,
   resolveGroupLike,
   type GroupLike,
 } from '../groups/GroupLabel';
 import { GroupSelect } from '../groups/GroupSelect';
+import { useT, type ProductT } from '../../i18n/product-i18n';
 
 interface ClassroomConfigCardProps {
   admin: boolean;
@@ -24,11 +24,19 @@ interface ClassroomConfigCardProps {
   onDefaultGroupChange: (next: string) => void | Promise<void>;
 }
 
-function renderClassroomStatus(classroom: Classroom) {
+function getSourcePhrase(source: CurrentGroupSource, t: ProductT): string {
+  if (source === 'default') return t('classrooms.detail.source.default');
+  if (source === 'schedule') return t('classrooms.detail.source.schedule');
+  if (source === 'manual') return t('classrooms.detail.source.manual');
+  return '';
+}
+
+function renderClassroomStatus(classroom: Classroom, t: ProductT) {
   if (classroom.status === 'operational') {
     return (
       <span className="text-green-700 font-medium flex items-center gap-2 text-sm">
-        <div className="w-2 h-2 bg-green-500 rounded-full"></div> Operational
+        <div className="w-2 h-2 bg-green-500 rounded-full"></div>{' '}
+        {t('classrooms.detail.status.operational')}
       </span>
     );
   }
@@ -36,14 +44,16 @@ function renderClassroomStatus(classroom: Classroom) {
   if (classroom.status === 'degraded') {
     return (
       <span className="text-yellow-700 font-medium flex items-center gap-2 text-sm">
-        <div className="w-2 h-2 bg-yellow-500 rounded-full"></div> Degraded
+        <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>{' '}
+        {t('classrooms.detail.status.degraded')}
       </span>
     );
   }
 
   return (
     <span className="text-red-700 font-medium flex items-center gap-2 text-sm">
-      <div className="w-2 h-2 bg-red-500 rounded-full"></div> Offline
+      <div className="w-2 h-2 bg-red-500 rounded-full"></div>{' '}
+      {t('classrooms.detail.status.offline')}
     </span>
   );
 }
@@ -61,19 +71,22 @@ export default function ClassroomConfigCard({
   onRequestActiveGroupChange,
   onDefaultGroupChange,
 }: ClassroomConfigCardProps) {
+  const t = useT();
+
   return (
     <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
       <div className="flex justify-between items-start">
         <div>
           <h2 className="text-2xl font-bold text-slate-900 mb-1">{classroom.name}</h2>
-          <p className="text-slate-500 text-sm">Classroom settings and status</p>
+          <p className="text-slate-500 text-sm">{t('classrooms.detail.settingsStatus')}</p>
         </div>
         <div className="flex gap-2">
           {admin && (
             <button
               onClick={onOpenDeleteDialog}
               className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-100"
-              title="Delete Classroom"
+              title={t('classrooms.dialog.deleteClassroom.title')}
+              aria-label={t('classrooms.dialog.deleteClassroom.title')}
             >
               <Trash2 size={18} />
             </button>
@@ -87,7 +100,7 @@ export default function ClassroomConfigCard({
             htmlFor="classroom-active-group"
             className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block"
           >
-            Active Group
+            {t('classrooms.detail.activeGroup')}
           </label>
           <GroupSelect
             id="classroom-active-group"
@@ -95,7 +108,7 @@ export default function ClassroomConfigCard({
             onChange={onRequestActiveGroupChange}
             groups={allowedGroups}
             includeNoneOption
-            noneLabel="No active group"
+            noneLabel={t('classrooms.detail.noActiveGroup')}
             inactiveBehavior="hide"
             unknownValueLabel={
               !admin && activeGroupSelectValue && !groupById.get(activeGroupSelectValue)
@@ -111,7 +124,7 @@ export default function ClassroomConfigCard({
           />
           {!activeGroupSelectValue && classroom.currentGroupId && (
             <p className="mt-2 text-xs text-slate-500 italic">
-              Currently using{' '}
+              {t('classrooms.detail.currentlyUsing')}{' '}
               <GroupLabel
                 variant="text"
                 className="font-semibold text-slate-700"
@@ -126,7 +139,7 @@ export default function ClassroomConfigCard({
                 showSourceTag={false}
               />
               {(() => {
-                const phrase = getGroupSourcePhrase(classroomSource);
+                const phrase = getSourcePhrase(classroomSource, t);
                 return phrase ? ` ${phrase}` : '';
               })()}
             </p>
@@ -138,7 +151,7 @@ export default function ClassroomConfigCard({
             htmlFor="classroom-default-group"
             className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block"
           >
-            Default group
+            {t('classrooms.detail.defaultGroup')}
           </label>
           <GroupSelect
             id="classroom-default-group"
@@ -147,7 +160,7 @@ export default function ClassroomConfigCard({
             disabled={!admin}
             groups={allowedGroups}
             includeNoneOption
-            noneLabel="No default group"
+            noneLabel={t('classrooms.detail.noDefaultGroup')}
             inactiveBehavior="disable"
             unknownValueLabel={
               !admin && defaultGroupSelectValue && !groupById.get(defaultGroupSelectValue)
@@ -162,7 +175,7 @@ export default function ClassroomConfigCard({
             className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:border-blue-500 outline-none shadow-sm disabled:bg-slate-50 disabled:text-slate-500"
           />
           <p className="mt-2 text-xs text-slate-500 italic">
-            Used when there is no active group or active schedule block.
+            {t('classrooms.detail.defaultGroupHelp')}
           </p>
           {classroomConfigError && (
             <p className="mt-2 text-xs text-red-600 flex items-start gap-1">
@@ -175,13 +188,16 @@ export default function ClassroomConfigCard({
         <div className="bg-slate-50 rounded-lg p-4 border border-slate-200 flex items-center justify-between">
           <div>
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1 block">
-              Status
+              {t('classrooms.detail.status')}
             </label>
-            {renderClassroomStatus(classroom)}
+            {renderClassroomStatus(classroom, t)}
           </div>
           {classroom.computerCount > 0 && (
             <span className="text-xs text-slate-500">
-              {classroom.onlineMachineCount}/{classroom.computerCount} online
+              {t('classrooms.detail.onlineMachines', {
+                onlineCount: classroom.onlineMachineCount,
+                totalCount: classroom.computerCount,
+              })}
             </span>
           )}
         </div>

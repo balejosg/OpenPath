@@ -1,7 +1,7 @@
 {
-  "appName": { "message": "Monitor de Bloqueos de OpenPath" },
+  "appName": { "message": "OpenPath Block Monitor" },
   "appDescription": {
-    "message": "Muestra los bloqueos de red de OpenPath, ayuda a solicitar acceso y comprueba la lista de permitidos local sin analíticas ni telemetría."
+    "message": "Shows OpenPath network blocks, helps request access, and checks local allowlist state without analytics or telemetry."
   },
   "actionTitle": { "message": "Monitor de bloqueos" },
   "popupNativeMessagingAvailableTitle": { "message": "Mensajería nativa disponible" },

@@ -1,5 +1,6 @@
 interface I18nRuntime {
   getMessage?: (key: string, substitutions?: string | string[]) => string;
+  getUILanguage?: () => string;
 }
 
 interface LocalizableRoot {
@@ -152,22 +153,30 @@ export function t(key: string, substitutions?: string | string[]): string {
       .replaceAll(`$${messageIndex}`, value)
       .replaceAll(`{${zeroBasedIndex}}`, value);
   });
-  if (key === 'requestSentForDomain' && values[0]) {
-    fallback = fallback.replaceAll('{domain}', values[0]);
-  }
-  if (key === 'blockedFallbackMessage' && values[0] !== undefined) {
-    fallback = fallback.replaceAll('{detail}', values[0]);
-  }
-  if (key === 'popupBlockedDomainsTitle' && values[0] !== undefined) {
-    fallback = fallback.replaceAll('{count}', values[0]);
-  }
-  if (key === 'blockedRequestStatusFailed' && values[0] !== undefined) {
-    fallback = fallback.replaceAll('{status}', values[0]);
+  if (values[0] !== undefined) {
+    fallback = fallback.replace(/\{[a-zA-Z][a-zA-Z0-9_]*\}/g, values[0]);
   }
   return fallback;
 }
 
+export function getDocumentLanguage(): string {
+  const uiLanguage = getRuntime()?.getUILanguage?.();
+  const normalized = typeof uiLanguage === 'string' ? uiLanguage.trim().toLowerCase() : '';
+  const [language = ''] = normalized.split('-');
+  return language || 'en';
+}
+
 export function localizeDocument(root: ParentNode = document): void {
+  const ownerDocument: Document | undefined =
+    'documentElement' in root
+      ? (root as Document)
+      : ((root as Node).ownerDocument ??
+        (typeof globalThis.document === 'undefined' ? undefined : globalThis.document));
+  const documentElement = ownerDocument?.documentElement;
+  if (documentElement) {
+    documentElement.setAttribute('lang', getDocumentLanguage());
+  }
+
   if (!canLocalizeRoot(root)) {
     return;
   }

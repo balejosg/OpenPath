@@ -181,7 +181,7 @@ describe('DomainRequests - Original group approval', () => {
 
     expect(screen.getByText('No requests match the selected filters')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Limpiar busqueda' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
 
     expect(searchInput).toHaveValue('');
     expect(screen.getByText('example.com')).toBeInTheDocument();
@@ -204,7 +204,7 @@ describe('DomainRequests - Original group approval', () => {
 
     await screen.findByText('example.com');
 
-    const sourceFilter = screen.getByRole('combobox', { name: 'Filtrar por fuente' });
+    const sourceFilter = screen.getByRole('combobox', { name: 'Filter by source' });
     fireEvent.change(sourceFilter, { target: { value: 'firefox-extension' } });
 
     expect(screen.queryByText('All clear')).not.toBeInTheDocument();
@@ -257,7 +257,7 @@ describe('DomainRequests - Original group approval', () => {
 
     await screen.findByText('pending.example.com');
 
-    const statusFilter = screen.getByRole('combobox', { name: 'Filtrar por estado' });
+    const statusFilter = screen.getByRole('combobox', { name: 'Filter by status' });
     fireEvent.change(statusFilter, { target: { value: 'approved' } });
 
     await screen.findByText('approved.example.com');

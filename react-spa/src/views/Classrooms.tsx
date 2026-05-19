@@ -12,6 +12,7 @@ import NewClassroomModal from '../components/classrooms/NewClassroomModal';
 import ScheduleFormModal from '../components/ScheduleFormModal';
 import OneOffScheduleFormModal from '../components/OneOffScheduleFormModal';
 import { ConfirmDialog, DangerConfirmDialog } from '../components/ui/ConfirmDialog';
+import { useT } from '../i18n/product-i18n';
 
 interface ClassroomsProps {
   initialSelectedClassroomId?: string | null;
@@ -22,6 +23,7 @@ const Classrooms: React.FC<ClassroomsProps> = ({
   initialSelectedClassroomId = null,
   onInitialSelectedClassroomIdConsumed,
 }) => {
+  const t = useT();
   const {
     admin,
     allowedGroups,
@@ -190,21 +192,22 @@ const Classrooms: React.FC<ClassroomsProps> = ({
 
       <ConfirmDialog
         isOpen={activeGroupOverwriteConfirm !== null}
-        title="Replace active group"
-        confirmLabel="Replace"
-        cancelLabel="Cancel"
+        title={t('classrooms.dialog.replaceActiveGroup.title')}
+        confirmLabel={t('classrooms.dialog.replaceActiveGroup.confirm')}
+        cancelLabel={t('common.cancel')}
         isLoading={activeGroupOverwriteLoading}
         onClose={closeActiveGroupOverwriteConfirm}
         onConfirm={() => void confirmActiveGroupOverwrite()}
       >
         <p className="text-sm text-slate-600">
-          This classroom already has a manually applied group (
-          <strong>{resolveGroupName(activeGroupOverwriteConfirm?.currentGroupId ?? null)}</strong>
-          ).
+          {t('classrooms.dialog.replaceActiveGroup.current', {
+            groupName: resolveGroupName(activeGroupOverwriteConfirm?.currentGroupId ?? null),
+          })}
         </p>
         <p className="text-sm text-slate-600">
-          Replace with{' '}
-          <strong>{resolveGroupName(activeGroupOverwriteConfirm?.nextGroupId ?? null)}</strong>?
+          {t('classrooms.dialog.replaceActiveGroup.next', {
+            groupName: resolveGroupName(activeGroupOverwriteConfirm?.nextGroupId ?? null),
+          })}
         </p>
       </ConfirmDialog>
 
@@ -239,9 +242,9 @@ const Classrooms: React.FC<ClassroomsProps> = ({
       {deleteDialog.isOpen && selectedClassroom && (
         <DangerConfirmDialog
           isOpen
-          title="Delete Classroom"
-          confirmLabel="Delete"
-          cancelLabel="Cancel"
+          title={t('classrooms.dialog.deleteClassroom.title')}
+          confirmLabel={t('common.delete')}
+          cancelLabel={t('common.cancel')}
           isLoading={deleteDialog.deleting}
           onClose={deleteDialog.close}
           onConfirm={() => void deleteDialog.confirm()}
@@ -251,9 +254,13 @@ const Classrooms: React.FC<ClassroomsProps> = ({
               <Trash2 className="text-red-600" size={24} />
             </div>
             <p className="text-sm text-slate-600">
-              Delete <strong>{selectedClassroom.name}</strong>?
+              {t('classrooms.dialog.deleteClassroom.body', {
+                classroomName: selectedClassroom.name,
+              })}
             </p>
-            <p className="text-xs text-slate-500 mt-1">This action cannot be undone.</p>
+            <p className="text-xs text-slate-500 mt-1">
+              {t('common.dialog.destructiveActionCannotBeUndone')}
+            </p>
           </div>
         </DangerConfirmDialog>
       )}
@@ -262,9 +269,9 @@ const Classrooms: React.FC<ClassroomsProps> = ({
       {scheduleDeleteTarget && selectedClassroom && (
         <DangerConfirmDialog
           isOpen
-          title="Delete Schedule"
-          confirmLabel="Delete"
-          cancelLabel="Cancel"
+          title={t('classrooms.dialog.deleteSchedule.title')}
+          confirmLabel={t('common.delete')}
+          cancelLabel={t('common.cancel')}
           isLoading={scheduleSaving}
           errorMessage={scheduleError}
           onClose={closeScheduleDelete}
@@ -275,9 +282,11 @@ const Classrooms: React.FC<ClassroomsProps> = ({
               <Trash2 className="text-red-600" size={24} />
             </div>
             <p className="text-sm text-slate-600">
-              Delete this block ({scheduleDeleteTarget.label})?
+              {t('classrooms.dialog.deleteSchedule.body', { label: scheduleDeleteTarget.label })}
             </p>
-            <p className="text-xs text-slate-500 mt-1">This action cannot be undone.</p>
+            <p className="text-xs text-slate-500 mt-1">
+              {t('common.dialog.destructiveActionCannotBeUndone')}
+            </p>
           </div>
         </DangerConfirmDialog>
       )}
