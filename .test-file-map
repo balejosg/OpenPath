@@ -226,6 +226,10 @@ linux/lib/openpath-self-update-package.sh|tests/linux-e2e.bats
 linux/scripts/runtime/openpath-update.sh|tests/openpath-update.bats,tests/linux-e2e.bats
 linux/scripts/runtime/openpath-self-update.sh|tests/linux-e2e.bats
 linux/lib/apt.sh|tests/install.bats,tests/linux-e2e.bats
+linux/lib/runtime-dependency-policy.sh|tests/dns.bats,tests/openpath-update.bats
+linux/lib/runtime-dependency-overlay.sh|tests/dns.bats,tests/openpath-update.bats,tests/openpath-cmd.bats
+linux/lib/runtime-dependency-queue.sh|tests/openpath-update.bats
+linux/scripts/runtime/openpath-runtime-dependency-apply.sh|tests/services.bats,tests/linux-e2e.bats
 linux/lib/captive-portal.sh|tests/captive-portal.bats,tests/linux-e2e.bats
 linux/lib/chromium-managed-extension.sh|tests/browser_chromium.bats,tests/linux-e2e.bats
 linux/lib/common-config-persistence.sh|tests/install.bats,tests/openpath-update.bats

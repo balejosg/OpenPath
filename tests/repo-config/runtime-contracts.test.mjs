@@ -327,7 +327,7 @@ describe('repository verification contract', () => {
     );
     assert.match(
       common,
-      /for lib in apt\.sh dns\.sh firewall\.sh browser\.sh services\.sh rollback\.sh;/,
+      /for lib in apt\.sh(?: [a-z0-9-]+\.sh)* dns\.sh firewall\.sh browser\.sh services\.sh rollback\.sh;/,
       'linux/lib/common.sh should source apt.sh before runtime libraries that may install packages'
     );
     assert.ok(
