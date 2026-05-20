@@ -44,6 +44,48 @@ describe('Modal Component', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('uses the default close label and default body classes', () => {
+    render(
+      <Modal isOpen={true} onClose={onClose} title="Default body">
+        <div data-testid="modal-child">Modal Content</div>
+      </Modal>
+    );
+
+    const closeButton = screen.getByRole('button', { name: 'Close' });
+    expect(closeButton).toHaveAttribute('title', 'Close');
+
+    const body = screen.getByTestId('modal-child').parentElement;
+    expect(body).toHaveClass('min-h-0', 'overflow-y-auto', 'p-6');
+  });
+
+  it('uses a custom close label for accessible name and title', () => {
+    render(
+      <Modal isOpen={true} onClose={onClose} title="Solicitud" closeLabel="Cerrar panel">
+        Modal Content
+      </Modal>
+    );
+
+    const closeButton = screen.getByRole('button', { name: 'Cerrar panel' });
+    expect(closeButton).toHaveAttribute('title', 'Cerrar panel');
+  });
+
+  it('lets callers own body scrolling with a custom body class name', () => {
+    render(
+      <Modal
+        isOpen={true}
+        onClose={onClose}
+        title="Custom body"
+        bodyClassName="flex flex-1 flex-col overflow-hidden"
+      >
+        <div data-testid="modal-child">Modal Content</div>
+      </Modal>
+    );
+
+    const body = screen.getByTestId('modal-child').parentElement;
+    expect(body).toHaveClass('min-h-0', 'flex', 'flex-1', 'flex-col', 'overflow-hidden');
+    expect(body).not.toHaveClass('overflow-y-auto', 'p-6');
+  });
+
   it('calls onClose when escape key is pressed', () => {
     render(
       <Modal isOpen={true} onClose={onClose}>

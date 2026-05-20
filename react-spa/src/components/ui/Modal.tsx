@@ -68,9 +68,19 @@ interface ModalProps {
   title?: string;
   children: React.ReactNode;
   className?: string;
+  closeLabel?: string;
+  bodyClassName?: string;
 }
 
-const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, className }) => {
+const Modal: React.FC<ModalProps> = ({
+  isOpen,
+  onClose,
+  title,
+  children,
+  className,
+  closeLabel = 'Close',
+  bodyClassName,
+}) => {
   const modalId = useId();
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -180,15 +190,15 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, classNa
             size="icon"
             className="h-8 w-8 text-slate-400 hover:text-slate-600"
             onClick={onClose}
-            aria-label="Close"
-            title="Close"
+            aria-label={closeLabel}
+            title={closeLabel}
             ref={closeButtonRef}
           >
             <X size={18} />
           </Button>
         </div>
 
-        <div className="p-6 min-h-0 overflow-y-auto">{children}</div>
+        <div className={cn('min-h-0', bodyClassName ?? 'overflow-y-auto p-6')}>{children}</div>
       </div>
     </div>,
     document.body
