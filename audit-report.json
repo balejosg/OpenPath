@@ -26,6 +26,45 @@
       "nodes": ["node_modules/brace-expansion"],
       "fixAvailable": true
     },
+    "turbo": {
+      "name": "turbo",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        {
+          "source": 1119386,
+          "name": "turbo",
+          "dependency": "turbo",
+          "title": "Trubo: Login callback CSRF/session fixation",
+          "url": "https://github.com/advisories/GHSA-hcf7-66rw-9f5r",
+          "severity": "moderate",
+          "cwe": ["CWE-352"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": "<=2.9.13"
+        },
+        {
+          "source": 1119389,
+          "name": "turbo",
+          "dependency": "turbo",
+          "title": "Turbo: Unexpected local code execution during Yarn Berry detection",
+          "url": "https://github.com/advisories/GHSA-3qcw-2rhx-2726",
+          "severity": "low",
+          "cwe": ["CWE-426"],
+          "cvss": {
+            "score": 9.8,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+          },
+          "range": ">=1.1.0 <2.9.14"
+        }
+      ],
+      "effects": [],
+      "range": "<=2.9.13-canary.1",
+      "nodes": ["node_modules/turbo"],
+      "fixAvailable": true
+    },
     "ws": {
       "name": "ws",
       "severity": "moderate",
@@ -56,10 +95,10 @@
     "vulnerabilities": {
       "info": 0,
       "low": 0,
-      "moderate": 2,
+      "moderate": 3,
       "high": 0,
       "critical": 0,
-      "total": 2
+      "total": 3
     },
     "dependencies": {
       "prod": 276,
