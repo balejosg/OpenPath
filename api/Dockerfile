@@ -64,6 +64,7 @@ COPY --from=builder /app/api/package.json ./api/package.json
 COPY --from=builder /app/shared/package.json ./shared/package.json
 COPY --from=builder /app/react-spa/package.json ./react-spa/package.json
 COPY --from=builder /app/api/dist ./api/dist
+COPY --from=builder /app/api/drizzle ./api/drizzle
 COPY --from=builder /app/shared/dist ./shared/dist
 COPY --from=builder /app/react-spa/dist ./react-spa/dist
 COPY --from=builder /app/api/data ./api/data
