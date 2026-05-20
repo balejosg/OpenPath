@@ -173,6 +173,39 @@ test('prerelease deb publish keys off the CI Success summary job instead of the 
   );
 });
 
+test('prerelease deb supports generic workflow dispatch from the dispatched ref', () => {
+  const prereleaseWorkflow = readText('.github/workflows/prerelease-deb.yml');
+  const ciSuccessBlock = extractWorkflowJobBlock(prereleaseWorkflow, 'ci-success');
+  const buildBlock = extractWorkflowJobBlock(prereleaseWorkflow, 'build-prerelease');
+  const releaseGateBlock = extractWorkflowJobBlock(prereleaseWorkflow, 'release-quality-gate');
+
+  assert.match(
+    prereleaseWorkflow,
+    /on:\s*\n(?:[\s\S]*?)workflow_dispatch:\s*\n(?:[\s\S]*?)workflow_run:/,
+    'prerelease-deb.yml should allow generic manual dispatch while preserving workflow_run triggering'
+  );
+  assert.ok(
+    prereleaseWorkflow.includes('prerelease_sha:'),
+    'prerelease-deb.yml should expose one resolved prerelease SHA for all downstream jobs'
+  );
+  assert.ok(
+    ciSuccessBlock.includes('echo "prerelease_sha=${{ github.sha }}"'),
+    'workflow_dispatch prerelease runs should resolve the dispatched ref SHA from github.sha'
+  );
+  assert.ok(
+    ciSuccessBlock.includes('echo "prerelease_sha=${{ github.event.workflow_run.head_sha }}"'),
+    'workflow_run prerelease runs should keep using the triggering CI workflow head SHA'
+  );
+  assert.ok(
+    buildBlock.includes('ref: ${{ needs.ci-success.outputs.prerelease_sha }}'),
+    'prerelease build should checkout the resolved prerelease SHA'
+  );
+  assert.ok(
+    releaseGateBlock.includes('--sha "${{ needs.ci-success.outputs.prerelease_sha }}"'),
+    'prerelease release gate should require evidence for the resolved prerelease SHA'
+  );
+});
+
 test('Debian package workflows block package creation behind the Release Quality Gate', () => {
   const buildDebWorkflow = readText('.github/workflows/build-deb.yml');
   const prereleaseWorkflow = readText('.github/workflows/prerelease-deb.yml');
@@ -1523,8 +1556,10 @@ test('release artifact workflows wait for same-commit quality evidence before pu
     'prerelease-deb.yml should define a dedicated release quality gate job'
   );
   assert.ok(
-    prereleaseWorkflow.includes('--sha "${{ github.event.workflow_run.head_sha }}"'),
-    'prerelease-deb.yml should gate the same commit that triggered CI'
+    prereleaseWorkflow.includes(
+      'echo "prerelease_sha=${{ github.event.workflow_run.head_sha }}"'
+    ) && prereleaseWorkflow.includes('--sha "${{ needs.ci-success.outputs.prerelease_sha }}"'),
+    'prerelease-deb.yml should gate the resolved prerelease SHA while preserving the workflow_run CI head SHA'
   );
   assert.ok(
     prereleaseWorkflow.includes('--require "CI::CI Success"') &&
@@ -1541,8 +1576,8 @@ test('release artifact workflows wait for same-commit quality evidence before pu
     'prerelease publish should remain blocked on both the package build and the same-SHA release quality gate'
   );
   assert.ok(
-    prereleaseWorkflow.includes('ref: ${{ github.event.workflow_run.head_sha }}'),
-    'prerelease build should checkout the exact commit that passed the gate'
+    prereleaseWorkflow.includes('ref: ${{ needs.ci-success.outputs.prerelease_sha }}'),
+    'prerelease build should checkout the exact resolved commit that passed the gate'
   );
 
   for (const [relativePath, workflow] of [

@@ -1,6 +1,7 @@
 name: Build Prerelease Deb
 
 on:
+  workflow_dispatch:
   workflow_run:
     workflows: ['CI']
     types: [completed]
@@ -22,13 +23,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       ci_success_conclusion: ${{ steps.inspect.outputs.ci_success_conclusion }}
+      prerelease_sha: ${{ steps.inspect.outputs.prerelease_sha }}
 
     steps:
-      - name: Recover CI Success conclusion
+      - name: Recover CI Success conclusion and prerelease SHA
         id: inspect
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "ci_success_conclusion=success" >> "$GITHUB_OUTPUT"
+            echo "prerelease_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "prerelease_sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+
           ci_success_conclusion="$(
             gh api repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/jobs \
               --paginate \
@@ -55,7 +65,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ needs.ci-success.outputs.prerelease_sha }}
 
       - name: Get version from run number
         id: version
@@ -119,7 +129,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ needs.ci-success.outputs.prerelease_sha }}
           persist-credentials: false
 
       - name: Require same-commit CI, E2E, and installer evidence
@@ -127,7 +137,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           node scripts/require-release-quality-gate.mjs \
-            --sha "${{ github.event.workflow_run.head_sha }}" \
+            --sha "${{ needs.ci-success.outputs.prerelease_sha }}" \
             --require "CI::CI Success" \
             --require "E2E Tests::E2E Summary" \
             --require "Installer Contracts::Installer Contracts Success" \
