@@ -23,6 +23,28 @@ Supported classroom-oriented install patterns include:
 .\Install-OpenPath.ps1 -WhitelistUrl "http://your-server:3000/export/group.txt" -Verbose
 ```
 
+## AppLocker / Managed Browser Boundary Warning
+
+Classroom-oriented unattended installs enable the managed browser boundary by
+default unless the switch is explicitly passed as false
+(`-EnforceManagedBrowserBoundary:$false`). On Windows this boundary uses
+AppLocker for standard non-admin student accounts; it is not limited to browser
+windows.
+
+The policy is intended to keep approved managed browsers usable while blocking
+common bypass paths. It allows Windows, OpenPath, Program Files, Program Files
+(x86), and signed Microsoft packaged apps, and it preserves administrator and
+SYSTEM allow-all rules. It can deny unapproved browsers, portable browsers,
+executables or scripts launched from student-writable locations such as
+Downloads, Desktop, or Temp, and selected bypass tools such as `curl`, `ssh`,
+`winget`, `certutil`, `bitsadmin`, `mshta`, `wscript`, and `cscript`.
+
+Before enabling enforcement on real student PCs, inventory the software teachers
+need, install required classroom applications through IT-managed locations such
+as Program Files, and validate the exact student account flow on a limited pilot
+machine. Do not treat a successful administrator-account test as proof that
+student software will run.
+
 The installer stages browser-extension artifacts when present and registers scheduled tasks for update, watchdog, startup, SSE, and agent self-update flows.
 
 ## Operational Commands

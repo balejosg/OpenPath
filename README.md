@@ -53,6 +53,13 @@ surface is still maturing:
   from bypassing local DNS and firewall policy. On Windows this includes
   denying common alternative browsers and portable browsers unless a managed
   browser path is explicitly supported.
+- On Windows, the managed browser boundary uses AppLocker for standard
+  non-admin student accounts. This is not a browser-only switch: it can also
+  block executables or scripts launched from student-writable locations such as
+  Downloads, Desktop, or Temp, and selected bypass tools such as `curl`, `ssh`,
+  `winget`, `certutil`, and Windows script hosts. Classroom software should be
+  inventoried and installed by IT into managed locations such as Program Files
+  before enabling enforcement on real student PCs.
 - Managed Chromium artifacts exist in the repository, but they should not be
   treated as equivalent full-browser support for every deployment. Use Firefox
   as the supported browser path unless the target environment has explicitly
