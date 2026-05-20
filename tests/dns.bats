@@ -492,7 +492,7 @@ JSON
     grep -q "server=/test.com/8.8.8.8" "$DNSMASQ_CONF"
 }
 
-@test "generate_dnsmasq_config includes protected control-plane and bootstrap domains" {
+@test "generate_dnsmasq_config includes protected control-plane, Firefox, and bootstrap domains" {
     export DNSMASQ_CONF="$TEST_TMP_DIR/dnsmasq.d/url-whitelist.conf"
     export PRIMARY_DNS="8.8.8.8"
     export VERSION="3.5"
@@ -523,6 +523,19 @@ JSON
     grep -q "server=/api.github.com/8.8.8.8" "$DNSMASQ_CONF"
     grep -q "server=/release-assets.githubusercontent.com/8.8.8.8" "$DNSMASQ_CONF"
     grep -q "server=/downloads.sourceforge.net/8.8.8.8" "$DNSMASQ_CONF"
+    grep -q "server=/aus5.mozilla.org/8.8.8.8" "$DNSMASQ_CONF"
+    grep -q "server=/download.mozilla.org/8.8.8.8" "$DNSMASQ_CONF"
+    grep -q "server=/download.cdn.mozilla.net/8.8.8.8" "$DNSMASQ_CONF"
+    grep -q "server=/archive.mozilla.org/8.8.8.8" "$DNSMASQ_CONF"
+    grep -q "server=/firefox.settings.services.mozilla.com/8.8.8.8" "$DNSMASQ_CONF"
+    grep -q "server=/addons.mozilla.org/8.8.8.8" "$DNSMASQ_CONF"
+    grep -q "server=/versioncheck.addons.mozilla.org/8.8.8.8" "$DNSMASQ_CONF"
+    grep -q "server=/safebrowsing.googleapis.com/8.8.8.8" "$DNSMASQ_CONF"
+    grep -q "server=/ciscobinary.openh264.org/8.8.8.8" "$DNSMASQ_CONF"
+    grep -q "server=/redirector.gvt1.com/8.8.8.8" "$DNSMASQ_CONF"
+    ! grep -q "server=/incoming.telemetry.mozilla.org/" "$DNSMASQ_CONF"
+    ! grep -q "server=/ads.mozilla.org/" "$DNSMASQ_CONF"
+    ! grep -q "server=/mozilla.cloudflare-dns.com/" "$DNSMASQ_CONF"
 }
 
 @test "generate_dnsmasq_config includes blocked subdomains" {

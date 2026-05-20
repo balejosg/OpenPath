@@ -237,7 +237,7 @@ teardown() {
     [ "$(stat -c '%a' "$WHITELIST_URL_CONF")" = "644" ]
 }
 
-@test "parse_whitelist_sections preserves protected control-plane domains and strips their block rules" {
+@test "parse_whitelist_sections preserves protected always-allowed domains and strips their block rules" {
     local wl_file="$TEST_TMP_DIR/protected-whitelist.txt"
     cat > "$wl_file" <<'EOF'
 ## WHITELIST
@@ -245,9 +245,11 @@ safe.example
 
 ## BLOCKED-SUBDOMAINS
 control.example
+aus5.mozilla.org
 
 ## BLOCKED-PATHS
 downloads.example/blocked
+download.mozilla.org/firefox/releases
 EOF
 
     ETC_CONFIG_DIR="$TEST_TMP_DIR/etc"
@@ -262,6 +264,11 @@ EOF
     log_warn() { echo "$1"; }
 
     parse_whitelist_sections "$wl_file"
+
+    [[ " ${WHITELIST_DOMAINS[*]} " == *" aus5.mozilla.org "* ]]
+    [[ " ${WHITELIST_DOMAINS[*]} " == *" download.mozilla.org "* ]]
+    [[ " ${BLOCKED_SUBDOMAINS[*]} " != *" aus5.mozilla.org "* ]]
+    [[ " ${BLOCKED_PATHS[*]} " != *"download.mozilla.org/firefox/releases"* ]]
 
     [[ " ${WHITELIST_DOMAINS[*]} " == *" safe.example "* ]]
     [[ " ${WHITELIST_DOMAINS[*]} " == *" control.example "* ]]
@@ -495,7 +502,7 @@ EOF
     [ "$status" -eq 0 ]
 }
 
-@test "protected domains include persisted API URL before machine registration" {
+@test "protected domains include persisted API URL and Firefox system domains before machine registration" {
     local etc_dir="$TEST_TMP_DIR/etc/openpath"
     mkdir -p "$etc_dir"
 
@@ -509,6 +516,12 @@ EOF
     run get_openpath_protected_domains
     [ "$status" -eq 0 ]
     [[ "$output" == *"classroompath.eu"* ]]
+    [[ "$output" == *"aus5.mozilla.org"* ]]
+    [[ "$output" == *"download.mozilla.org"* ]]
+    [[ "$output" == *"versioncheck.addons.mozilla.org"* ]]
+    [[ "$output" != *"incoming.telemetry.mozilla.org"* ]]
+    [[ "$output" != *"ads.mozilla.org"* ]]
+    [[ "$output" != *"mozilla.cloudflare-dns.com"* ]]
 }
 
 @test "send_health_report_to_api prefers machine token auth derived from whitelist URL" {

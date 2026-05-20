@@ -46,6 +46,7 @@ Export-ModuleMember -Function @(
     'Normalize-OpenPathAlwaysAllowedDomain',
     'Get-OpenPathProtectedDomains',
     'Get-OpenPathMicrosoftSystemDomains',
+    'Get-OpenPathFirefoxSystemDomains',
     'Get-OpenPathAlwaysAllowedDomainGroups',
     'Get-OpenPathAlwaysAllowedDomains',
     'ConvertTo-OpenPathMachineName',

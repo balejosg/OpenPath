@@ -1,8 +1,28 @@
 #!/bin/bash
 
 ################################################################################
-# common-protected-domains.sh - Protected control-plane domain helpers
+# common-protected-domains.sh - Protected control-plane and browser-system domain helpers
 ################################################################################
+
+get_openpath_firefox_system_domains() {
+    cat <<'EOF'
+aus5.mozilla.org
+firefox.settings.services.mozilla.com
+firefox-settings-attachments.cdn.mozilla.net
+content-signature-2.cdn.mozilla.net
+download.mozilla.org
+download.cdn.mozilla.net
+archive.mozilla.org
+ftp.mozilla.org
+safebrowsing.googleapis.com
+addons.mozilla.org
+versioncheck.addons.mozilla.org
+services.addons.mozilla.org
+ciscobinary.openh264.org
+redirector.gvt1.com
+clients2.googleusercontent.com
+EOF
+}
 
 append_unique_openpath_domain() {
     local domain="$1"
@@ -41,6 +61,10 @@ refresh_openpath_protected_domains() {
         downloads.sourceforge.net; do
         append_unique_openpath_domain "$domain"
     done
+
+    while IFS= read -r domain; do
+        append_unique_openpath_domain "$domain"
+    done < <(get_openpath_firefox_system_domains)
 
     local whitelist_url=""
     if [ -f "$WHITELIST_URL_CONF" ]; then
@@ -182,6 +206,6 @@ protect_control_plane_rules() {
     BLOCKED_PATHS=("${filtered_paths[@]}")
 
     if [ "$removed_subdomains" -gt 0 ] || [ "$removed_paths" -gt 0 ]; then
-        log_warn "Removed ${removed_subdomains} blocked subdomains and ${removed_paths} blocked paths targeting protected control-plane domains"
+        log_warn "Removed ${removed_subdomains} blocked subdomains and ${removed_paths} blocked paths targeting protected always-allowed domains"
     fi
 }

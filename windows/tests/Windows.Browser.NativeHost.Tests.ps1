@@ -536,7 +536,7 @@ Describe "Browser Module - Native Host" {
             $nativeHostActionsContent | Should -Not -Match '/api/requests/auto'
         }
 
-        It "Rejects Microsoft system and update hosts as runtime dependencies" {
+        It "Rejects system and browser update hosts as runtime dependencies" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
 
             . $nativeHostActionsPath
@@ -557,7 +557,13 @@ Describe "Browser Module - Native Host" {
                     'delivery.mp.microsoft.com',
                     'login.microsoftonline.com',
                     'assets.azureedge.net',
-                    'tenant.blob.core.windows.net'
+                    'tenant.blob.core.windows.net',
+                    'aus5.mozilla.org',
+                    'download.mozilla.org',
+                    'firefox.settings.services.mozilla.com',
+                    'versioncheck.addons.mozilla.org',
+                    'safebrowsing.googleapis.com',
+                    'ciscobinary.openh264.org'
                 )) {
                 $candidate = Resolve-NativeHostLocalRuntimeDependencyCandidate `
                     -State $state `

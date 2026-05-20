@@ -89,8 +89,9 @@ function Get-OpenPathFromUrl {
     }
 
     $protectedDomains = @(Get-OpenPathProtectedDomains)
+    $alwaysAllowedDomains = @(Get-OpenPathAlwaysAllowedDomains)
     $protectedDomainSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($domain in $protectedDomains) {
+    foreach ($domain in $alwaysAllowedDomains) {
         if ($domain) {
             $protectedDomainSet.Add($domain) | Out-Null
         }
@@ -138,7 +139,7 @@ function Get-OpenPathFromUrl {
         )
 
         if ($blockedSubdomainRemovals -gt 0 -or $blockedPathRemovals -gt 0) {
-            Write-OpenPathLog "Removed $blockedSubdomainRemovals blocked subdomains and $blockedPathRemovals blocked paths targeting protected control-plane domains" -Level WARN
+            Write-OpenPathLog "Removed $blockedSubdomainRemovals blocked subdomains and $blockedPathRemovals blocked paths targeting protected always-allowed domains" -Level WARN
         }
 
         $result.Whitelist = @($effectiveWhitelist)

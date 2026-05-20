@@ -283,7 +283,7 @@ Describe "Common Module" {
             $domains | Should -Contain 'downloads.sourceforge.net'
         }
 
-        It "Builds normalized always-allowed domains from control-plane and Microsoft system roots" {
+        It "Builds normalized always-allowed domains from control-plane, Microsoft, and Firefox system roots" {
             Mock Get-OpenPathConfig {
                 [PSCustomObject]@{
                     apiUrl = 'https://control.example'
@@ -303,7 +303,24 @@ Describe "Common Module" {
             $domains | Should -Contain 'login.microsoftonline.com'
             $domains | Should -Contain 'azureedge.net'
             $domains | Should -Contain 'blob.core.windows.net'
+            $domains | Should -Contain 'aus5.mozilla.org'
+            $domains | Should -Contain 'download.mozilla.org'
+            $domains | Should -Contain 'download.cdn.mozilla.net'
+            $domains | Should -Contain 'archive.mozilla.org'
+            $domains | Should -Contain 'firefox.settings.services.mozilla.com'
+            $domains | Should -Contain 'firefox-settings-attachments.cdn.mozilla.net'
+            $domains | Should -Contain 'content-signature-2.cdn.mozilla.net'
+            $domains | Should -Contain 'addons.mozilla.org'
+            $domains | Should -Contain 'versioncheck.addons.mozilla.org'
+            $domains | Should -Contain 'services.addons.mozilla.org'
+            $domains | Should -Contain 'safebrowsing.googleapis.com'
+            $domains | Should -Contain 'ciscobinary.openh264.org'
+            $domains | Should -Contain 'redirector.gvt1.com'
+            $domains | Should -Contain 'clients2.googleusercontent.com'
             $domains | Should -Not -Contain '*.windowsupdate.com'
+            $domains | Should -Not -Contain 'incoming.telemetry.mozilla.org'
+            $domains | Should -Not -Contain 'ads.mozilla.org'
+            $domains | Should -Not -Contain 'mozilla.cloudflare-dns.com'
             @($domains | Where-Object { $_ -eq 'msftconnecttest.com' }).Count | Should -Be 1
         }
 

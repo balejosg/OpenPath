@@ -431,6 +431,47 @@ Describe "DNS Module" {
             }
         }
 
+        It "Renders Firefox update and security domains as essential FW rules before the default block" {
+            InModuleScope DNS {
+                $definition = New-AcrylicHostsDefinition `
+                    -WhitelistedDomains @('example.com') `
+                    -DnsSettings ([PSCustomObject]@{
+                        PrimaryDNS = '1.1.1.1'
+                        SecondaryDNS = '1.0.0.1'
+                        MaxDomains = 10
+                    })
+
+                $content = ConvertTo-AcrylicHostsContent -Definition $definition
+                $defaultBlockRuleIndex = $content.IndexOf('NX *')
+
+                foreach ($domain in @(
+                        'aus5.mozilla.org',
+                        'download.mozilla.org',
+                        'download.cdn.mozilla.net',
+                        'archive.mozilla.org',
+                        'firefox.settings.services.mozilla.com',
+                        'firefox-settings-attachments.cdn.mozilla.net',
+                        'content-signature-2.cdn.mozilla.net',
+                        'addons.mozilla.org',
+                        'versioncheck.addons.mozilla.org',
+                        'services.addons.mozilla.org',
+                        'safebrowsing.googleapis.com',
+                        'ciscobinary.openh264.org',
+                        'redirector.gvt1.com',
+                        'clients2.googleusercontent.com'
+                    )) {
+                    $content | Should -Match "(?m)^FW $([regex]::Escape($domain))$"
+                    $content | Should -Match "(?m)^FW >$([regex]::Escape($domain))$"
+                    $content.IndexOf("FW $domain") | Should -BeLessThan $defaultBlockRuleIndex
+                    $definition.DomainAffinityMask | Should -Match "$([regex]::Escape($domain));\*\.$([regex]::Escape($domain))"
+                }
+
+                $content | Should -Not -Match 'incoming\.telemetry\.mozilla\.org'
+                $content | Should -Not -Match 'ads\.mozilla\.org'
+                $content | Should -Not -Match 'mozilla\.cloudflare-dns\.com'
+            }
+        }
+
         It "Keeps blocked descendants ahead of a whitelisted parent wildcard" {
             InModuleScope DNS {
                 $definition = New-AcrylicHostsDefinition `
@@ -751,6 +792,13 @@ Describe "DNS Module" {
                 'login.microsoftonline.com;*.login.microsoftonline.com',
                 'azureedge.net;*.azureedge.net',
                 'blob.core.windows.net;*.blob.core.windows.net',
+                'aus5.mozilla.org;*.aus5.mozilla.org',
+                'download.mozilla.org;*.download.mozilla.org',
+                'archive.mozilla.org;*.archive.mozilla.org',
+                'firefox.settings.services.mozilla.com;*.firefox.settings.services.mozilla.com',
+                'versioncheck.addons.mozilla.org;*.versioncheck.addons.mozilla.org',
+                'safebrowsing.googleapis.com;*.safebrowsing.googleapis.com',
+                'ciscobinary.openh264.org;*.ciscobinary.openh264.org',
                 'example.com;*.example.com',
                 'test.com;*.test.com',
                 'PrimaryServerPort=53',

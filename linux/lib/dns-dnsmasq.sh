@@ -79,7 +79,7 @@ EOF
 # Required for system operation
 # =============================================
 
-# Control plane and bootstrap/download
+# Control plane, browser updates, and bootstrap/download
 EOF
 
     local protected_domain

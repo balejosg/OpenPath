@@ -137,7 +137,7 @@ Describe "Common Module - Mocked Tests" {
             $result.Whitelist | Should -HaveCount 0
         }
 
-        It "Protects control-plane hosts from blocked sections and injects them into the effective whitelist" {
+        It "Protects always-allowed hosts from blocked sections and injects control-plane hosts into the effective whitelist" {
             Mock Get-OpenPathConfig {
                 [PSCustomObject]@{
                     apiUrl = 'https://control.example'
@@ -152,8 +152,10 @@ Describe "Common Module - Mocked Tests" {
 safe.example
 ## BLOCKED-SUBDOMAINS
 control.example
+aus5.mozilla.org
 ## BLOCKED-PATHS
 downloads.example/blocked
+download.mozilla.org/firefox/releases
 "@
                     ETag = $null
                 }
@@ -165,7 +167,9 @@ downloads.example/blocked
             $result.Whitelist | Should -Contain 'control.example'
             $result.Whitelist | Should -Contain 'downloads.example'
             $result.BlockedSubdomains | Should -Not -Contain 'control.example'
+            $result.BlockedSubdomains | Should -Not -Contain 'aus5.mozilla.org'
             $result.BlockedPaths | Should -Not -Contain 'downloads.example/blocked'
+            $result.BlockedPaths | Should -Not -Contain 'download.mozilla.org/firefox/releases'
         }
     }
 

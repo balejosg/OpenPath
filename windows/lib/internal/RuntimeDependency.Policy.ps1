@@ -103,7 +103,22 @@ function Get-OpenPathRuntimeDependencyProtectedHosts {
         'aadcdn.msauth.net',
         'aadcdn.msftauth.net',
         'azureedge.net',
-        'blob.core.windows.net'
+        'blob.core.windows.net',
+        'aus5.mozilla.org',
+        'firefox.settings.services.mozilla.com',
+        'firefox-settings-attachments.cdn.mozilla.net',
+        'content-signature-2.cdn.mozilla.net',
+        'download.mozilla.org',
+        'download.cdn.mozilla.net',
+        'archive.mozilla.org',
+        'ftp.mozilla.org',
+        'safebrowsing.googleapis.com',
+        'addons.mozilla.org',
+        'versioncheck.addons.mozilla.org',
+        'services.addons.mozilla.org',
+        'ciscobinary.openh264.org',
+        'redirector.gvt1.com',
+        'clients2.googleusercontent.com'
     )
 
     foreach ($domain in $domainSources) {

@@ -47,7 +47,7 @@ function Normalize-OpenPathAlwaysAllowedDomain {
 function Get-OpenPathProtectedDomains {
     <#
     .SYNOPSIS
-        Returns control-plane and bootstrap/download domains that must never be blocked
+        Returns OpenPath control-plane and bootstrap/download domains that must never be blocked
     #>
     $domains = [System.Collections.Generic.List[string]]::new()
     $seenDomains = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -139,6 +139,30 @@ function Get-OpenPathMicrosoftSystemDomains {
     )
 }
 
+function Get-OpenPathFirefoxSystemDomains {
+    <#
+    .SYNOPSIS
+        Returns Firefox update, security, extension, and component service roots that must stay reachable
+    #>
+    return @(
+        'aus5.mozilla.org',
+        'firefox.settings.services.mozilla.com',
+        'firefox-settings-attachments.cdn.mozilla.net',
+        'content-signature-2.cdn.mozilla.net',
+        'download.mozilla.org',
+        'download.cdn.mozilla.net',
+        'archive.mozilla.org',
+        'ftp.mozilla.org',
+        'safebrowsing.googleapis.com',
+        'addons.mozilla.org',
+        'versioncheck.addons.mozilla.org',
+        'services.addons.mozilla.org',
+        'ciscobinary.openh264.org',
+        'redirector.gvt1.com',
+        'clients2.googleusercontent.com'
+    )
+}
+
 function Get-OpenPathAlwaysAllowedDomainGroups {
     <#
     .SYNOPSIS
@@ -148,6 +172,7 @@ function Get-OpenPathAlwaysAllowedDomainGroups {
         [PSCustomObject]@{ Comment = '# Control plane and bootstrap/download'; Domains = @(Get-OpenPathProtectedDomains) },
         [PSCustomObject]@{ Comment = '# Captive portal detection'; Domains = @('detectportal.firefox.com', 'connectivity-check.ubuntu.com', 'captive.apple.com', 'www.msftconnecttest.com', 'msftconnecttest.com', 'clients3.google.com') },
         [PSCustomObject]@{ Comment = '# Microsoft system and component updates'; Domains = @(Get-OpenPathMicrosoftSystemDomains) },
+        [PSCustomObject]@{ Comment = '# Firefox system and component updates'; Domains = @(Get-OpenPathFirefoxSystemDomains) },
         [PSCustomObject]@{ Comment = '# NTP'; Domains = @('time.windows.com', 'time.google.com') }
     )
 }
