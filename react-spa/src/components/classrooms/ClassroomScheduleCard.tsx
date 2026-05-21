@@ -4,6 +4,7 @@ import type { OneOffScheduleWithPermissions, ScheduleWithPermissions } from '../
 import WeeklyCalendar from '../WeeklyCalendar';
 import { resolveGroupLike, type GroupLike } from '../groups/GroupLabel';
 import { useOpenPathI18n } from '../../i18n/product-i18n';
+import { cn } from '../../lib/utils';
 
 interface CalendarGroupDisplay {
   id: string;
@@ -24,6 +25,7 @@ interface ClassroomScheduleCardProps {
   onOpenOneOffScheduleCreate: () => void;
   onOpenOneOffScheduleEdit: (schedule: OneOffScheduleWithPermissions) => void;
   onRequestOneOffScheduleDelete: (schedule: OneOffScheduleWithPermissions) => void;
+  fillAvailable?: boolean;
 }
 
 function formatOneOffDateLabel(value: string, locale: string): string {
@@ -55,11 +57,17 @@ export default function ClassroomScheduleCard({
   onOpenOneOffScheduleCreate,
   onOpenOneOffScheduleEdit,
   onRequestOneOffScheduleDelete,
+  fillAvailable = false,
 }: ClassroomScheduleCardProps) {
   const { locale, t } = useOpenPathI18n();
 
   return (
-    <div className="bg-white border border-slate-200 rounded-lg p-6 flex-1 flex flex-col shadow-sm">
+    <div
+      className={cn(
+        'bg-white border border-slate-200 rounded-lg p-6 flex-1 flex flex-col shadow-sm',
+        fillAvailable ? 'md:min-h-0 md:overflow-hidden' : ''
+      )}
+    >
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-semibold text-slate-900 flex items-center gap-2">
           <Clock size={18} className="text-slate-500" />
@@ -100,10 +108,16 @@ export default function ClassroomScheduleCard({
             onAddClick={(dayOfWeek, startTime) => onOpenScheduleCreate(dayOfWeek, startTime)}
             onEditClick={onOpenScheduleEdit}
             onDeleteClick={onRequestScheduleDelete}
+            fillAvailable={fillAvailable}
           />
           <p className="mt-3 text-xs text-slate-500">{t('classrooms.schedule.tip')}</p>
 
-          <div className="mt-5 pt-4 border-t border-slate-200">
+          <div
+            className={cn(
+              'mt-5 pt-4 border-t border-slate-200',
+              fillAvailable ? 'md:max-h-56 md:overflow-y-auto' : ''
+            )}
+          >
             <div className="flex items-center justify-between mb-3">
               <h4 className="text-sm font-semibold text-slate-900">
                 {t('classrooms.schedule.oneOffAssignments')}

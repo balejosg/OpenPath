@@ -241,6 +241,39 @@ describe('App', () => {
     });
   });
 
+  it('applies desktop viewport containment only to the classrooms shell', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByText('Ir aulas'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Classrooms none')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('openpath-shell-root')).toHaveClass('md:h-screen');
+    expect(screen.getByTestId('openpath-shell-root')).toHaveClass('md:overflow-hidden');
+    expect(screen.getByTestId('openpath-shell-content')).toHaveClass('md:h-full');
+    expect(screen.getByTestId('openpath-shell-content')).toHaveClass('md:min-h-0');
+    expect(screen.getByTestId('openpath-shell-content')).toHaveClass('md:overflow-hidden');
+    expect(screen.getByTestId('openpath-shell-main')).toHaveClass('overflow-y-auto');
+    expect(screen.getByTestId('openpath-shell-main')).toHaveClass('md:min-h-0');
+    expect(screen.getByTestId('openpath-shell-main')).toHaveClass('md:overflow-hidden');
+    expect(screen.getByTestId('openpath-shell-content-wrapper')).toHaveClass('md:h-full');
+    expect(screen.getByTestId('openpath-shell-content-wrapper')).toHaveClass('md:min-h-0');
+
+    fireEvent.click(screen.getByText('Ir configuracion'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Settings view')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('openpath-shell-root')).not.toHaveClass('md:h-screen');
+    expect(screen.getByTestId('openpath-shell-root')).not.toHaveClass('md:overflow-hidden');
+    expect(screen.getByTestId('openpath-shell-content')).not.toHaveClass('md:h-screen');
+    expect(screen.getByTestId('openpath-shell-content')).not.toHaveClass('md:overflow-hidden');
+    expect(screen.getByTestId('openpath-shell-main')).toHaveClass('overflow-y-auto');
+  });
+
   it('renders auth views from unauthenticated routes and allows moving between them', () => {
     testDoubles.isAuthenticated.mockReturnValue(false);
     window.history.pushState(null, '', '/register');

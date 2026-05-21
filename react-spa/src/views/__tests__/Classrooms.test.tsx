@@ -598,9 +598,11 @@ describe('Classrooms', () => {
     const detailPane = splitView?.children.item(1);
     const splitViewTokens = (splitView?.className ?? '').split(/\s+/);
 
-    expect(splitViewTokens).toContain('md:h-[calc(100vh-8rem)]');
+    expect(splitViewTokens).toContain('md:h-full');
+    expect(splitViewTokens).toContain('md:min-h-0');
+    expect(splitViewTokens).toContain('md:overflow-hidden');
     expect(listPane?.className).toContain('shrink-0');
-    expect(listPane?.className).toContain('md:max-w-md');
+    expect(listPane?.className).toContain('md:w-80');
     expect(detailPane?.className).toContain('min-w-0');
   });
 
@@ -630,9 +632,12 @@ describe('Classrooms', () => {
     const detailPane = splitView?.children.item(1);
     const detailPaneTokens = (detailPane?.className ?? '').split(/\s+/);
 
-    expect(splitViewTokens).toContain('md:h-[calc(100vh-8rem)]');
+    expect(splitViewTokens).toContain('md:h-full');
+    expect(splitViewTokens).toContain('md:min-h-0');
+    expect(splitViewTokens).toContain('md:overflow-hidden');
     expect(splitViewTokens).not.toContain('h-[calc(100vh-8rem)]');
-    expect(detailPaneTokens).toContain('md:overflow-y-auto');
+    expect(detailPaneTokens).toContain('md:min-h-0');
+    expect(detailPaneTokens).toContain('md:overflow-hidden');
     expect(detailPaneTokens).not.toContain('overflow-y-auto');
   });
 

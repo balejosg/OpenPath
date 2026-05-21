@@ -1,5 +1,6 @@
 import type React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   Classroom,
@@ -150,6 +151,7 @@ describe('ClassroomDetailPane', () => {
     render(<ClassroomDetailPane {...props} />);
 
     expect(screen.getByTestId('classrooms-empty-state')).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     expect(screen.getByText('No classrooms')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /create classroom/i }));
 
@@ -175,15 +177,17 @@ describe('ClassroomDetailPane', () => {
         (_, node) => node?.textContent === 'Currently using Grupo Default by default'
       )
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/no restriction/)[0]).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Delete Classroom/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /machines|equipos/i }));
+    expect(screen.getAllByText(/no restriction/)[0]).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /install computers/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Restrict' }));
     fireEvent.click(screen.getByRole('button', { name: 'Exempt' }));
     fireEvent.change(screen.getByLabelText('Hours'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Mantenimiento' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create exemption' }));
+    fireEvent.click(screen.getByRole('tab', { name: /schedule|horarios/i }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
     fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
 
@@ -217,6 +221,7 @@ describe('ClassroomDetailPane', () => {
     expect(
       screen.getByText('You cannot leave the classroom without a default group.')
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /schedule|horarios/i }));
     expect(screen.getByText('Loading schedules...')).toBeInTheDocument();
   });
 
@@ -237,7 +242,9 @@ describe('ClassroomDetailPane', () => {
     );
 
     expect(screen.getByText('Offline')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /machines|equipos/i }));
     expect(screen.getByText('No active machines')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /schedule|horarios/i }));
     expect(screen.getByText('No one-off assignments.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Release' })).not.toBeInTheDocument();
   });
@@ -246,8 +253,86 @@ describe('ClassroomDetailPane', () => {
     const props = buildProps();
     render(<ClassroomDetailPane {...props} />);
 
+    fireEvent.click(screen.getByRole('tab', { name: /schedule|horarios/i }));
     fireEvent.click(screen.getByTestId('weekly-calendar'));
 
     expect(props.onOpenScheduleCreate).toHaveBeenCalledWith(2, '10:00');
+  });
+
+  it('switches tabs with click and keeps inactive panels hidden on the panel sections', () => {
+    render(<ClassroomDetailPane {...buildProps()} />);
+
+    const settingsTab = screen.getByRole('tab', { name: /settings|ajustes/i });
+    const machinesTab = screen.getByRole('tab', { name: /machines|equipos/i });
+    const scheduleTab = screen.getByRole('tab', { name: /schedule|horarios/i });
+
+    expect(screen.getByRole('tablist', { name: /classroom detail sections/i })).toBeInTheDocument();
+    expect(settingsTab).toHaveAttribute('aria-selected', 'true');
+    expect(machinesTab).toHaveAttribute('aria-selected', 'false');
+
+    fireEvent.click(machinesTab);
+
+    expect(settingsTab).toHaveAttribute('aria-selected', 'false');
+    expect(machinesTab).toHaveAttribute('aria-selected', 'true');
+    expect(document.getElementById('classroom-detail-panel-settings')).toHaveAttribute('hidden');
+    expect(document.getElementById('classroom-detail-panel-machines')).not.toHaveAttribute(
+      'hidden'
+    );
+
+    fireEvent.click(scheduleTab);
+
+    expect(scheduleTab).toHaveAttribute('aria-selected', 'true');
+    expect(document.getElementById('classroom-detail-panel-machines')).toHaveAttribute('hidden');
+    expect(document.getElementById('classroom-detail-panel-schedule')).not.toHaveAttribute(
+      'hidden'
+    );
+  });
+
+  it('changes and focuses classroom tabs with arrow keys', async () => {
+    const user = userEvent.setup();
+    render(<ClassroomDetailPane {...buildProps()} />);
+
+    const settingsTab = screen.getByRole('tab', { name: /settings|ajustes/i });
+    settingsTab.focus();
+
+    await user.keyboard('{ArrowRight}');
+    const machinesTab = screen.getByRole('tab', { name: /machines|equipos/i });
+    expect(machinesTab).toHaveAttribute('aria-selected', 'true');
+    expect(machinesTab).toHaveFocus();
+
+    await user.keyboard('{ArrowLeft}');
+    expect(settingsTab).toHaveAttribute('aria-selected', 'true');
+    expect(settingsTab).toHaveFocus();
+  });
+
+  it('persists the active tab when selected classroom changes and resets after no selection', () => {
+    const { rerender } = render(<ClassroomDetailPane {...buildProps()} />);
+
+    fireEvent.click(screen.getByRole('tab', { name: /schedule|horarios/i }));
+    expect(screen.getByRole('tab', { name: /schedule|horarios/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+
+    rerender(
+      <ClassroomDetailPane
+        {...buildProps({
+          selectedClassroom: buildClassroom({ id: 'classroom-2', name: 'Aula 2' }),
+        })}
+      />
+    );
+
+    expect(screen.getByRole('tab', { name: /schedule|horarios/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+
+    rerender(<ClassroomDetailPane {...buildProps({ selectedClassroom: null })} />);
+    rerender(<ClassroomDetailPane {...buildProps()} />);
+
+    expect(screen.getByRole('tab', { name: /settings|ajustes/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
   });
 });

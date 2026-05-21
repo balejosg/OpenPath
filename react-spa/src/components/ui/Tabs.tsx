@@ -13,6 +13,9 @@ interface TabsProps {
   activeTab: string;
   onChange: (id: string) => void;
   className?: string;
+  ariaLabel?: string;
+  getTabId?: (id: string) => string;
+  getPanelId?: (id: string) => string;
 }
 
 /**
@@ -31,23 +34,55 @@ interface TabsProps {
  * />
  * ```
  */
-export const Tabs: React.FC<TabsProps> = ({ tabs, activeTab, onChange, className }) => {
+export const Tabs: React.FC<TabsProps> = ({
+  tabs,
+  activeTab,
+  onChange,
+  className,
+  ariaLabel,
+  getTabId,
+  getPanelId,
+}) => {
+  const tabRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
+
+  const moveFocus = (currentIndex: number, direction: 1 | -1) => {
+    if (tabs.length === 0) return;
+
+    const nextIndex = (currentIndex + direction + tabs.length) % tabs.length;
+    const nextTab = tabs[nextIndex];
+    onChange(nextTab.id);
+    tabRefs.current[nextIndex]?.focus();
+  };
+
   return (
     <div
-      className={cn('border-b border-slate-200', className)}
+      className={cn('overflow-x-auto border-b border-slate-200', className)}
       role="tablist"
-      aria-label="Navigation tabs"
+      aria-label={ariaLabel ?? 'Navigation tabs'}
     >
-      <div className="flex gap-1">
-        {tabs.map((tab) => {
+      <div className="flex min-w-max gap-1">
+        {tabs.map((tab, index) => {
           const isActive = tab.id === activeTab;
 
           return (
             <button
               key={tab.id}
+              id={getTabId?.(tab.id)}
+              ref={(element) => {
+                tabRefs.current[index] = element;
+              }}
               onClick={() => onChange(tab.id)}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowRight') {
+                  event.preventDefault();
+                  moveFocus(index, 1);
+                } else if (event.key === 'ArrowLeft') {
+                  event.preventDefault();
+                  moveFocus(index, -1);
+                }
+              }}
               className={cn(
-                'relative inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors',
+                'relative inline-flex items-center gap-2 whitespace-nowrap px-4 py-2.5 text-sm font-medium transition-colors',
                 'focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded-t-lg',
                 isActive
                   ? 'text-blue-600 bg-white border-t border-l border-r border-slate-200 -mb-px'
@@ -55,7 +90,8 @@ export const Tabs: React.FC<TabsProps> = ({ tabs, activeTab, onChange, className
               )}
               role="tab"
               aria-selected={isActive}
-              aria-controls={`tabpanel-${tab.id}`}
+              aria-controls={getPanelId?.(tab.id) ?? `tabpanel-${tab.id}`}
+              tabIndex={isActive ? 0 : -1}
               type="button"
             >
               {tab.icon && <span className="flex-shrink-0">{tab.icon}</span>}

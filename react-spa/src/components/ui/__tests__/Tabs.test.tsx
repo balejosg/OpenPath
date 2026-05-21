@@ -1,5 +1,7 @@
+import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { Tabs } from '../Tabs';
 
 describe('Tabs Component', () => {
@@ -59,5 +61,56 @@ describe('Tabs Component', () => {
 
     render(<Tabs tabs={tabsWithoutCount} activeTab="nocount" onChange={noop} />);
     expect(screen.getByRole('tab', { name: /no counter/i })).toBeInTheDocument();
+  });
+
+  it('applies custom tab and panel ids while preserving default panel ids', () => {
+    const { rerender } = render(
+      <Tabs
+        tabs={defaultTabs}
+        activeTab="all"
+        onChange={noop}
+        ariaLabel="Request filters"
+        getTabId={(id) => `tab-${id}`}
+        getPanelId={(id) => `panel-${id}`}
+      />
+    );
+
+    expect(screen.getByRole('tablist', { name: 'Request filters' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /todos/i })).toHaveAttribute('id', 'tab-all');
+    expect(screen.getByRole('tab', { name: /todos/i })).toHaveAttribute(
+      'aria-controls',
+      'panel-all'
+    );
+
+    rerender(<Tabs tabs={defaultTabs} activeTab="all" onChange={noop} />);
+
+    expect(screen.getByRole('tablist', { name: 'Navigation tabs' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /todos/i })).toHaveAttribute(
+      'aria-controls',
+      'tabpanel-all'
+    );
+  });
+
+  it('moves selection and focus with wrapping arrow keys', async () => {
+    const user = userEvent.setup();
+
+    function TabsHarness() {
+      const [activeTab, setActiveTab] = React.useState('all');
+      return <Tabs tabs={defaultTabs} activeTab={activeTab} onChange={setActiveTab} />;
+    }
+
+    render(<TabsHarness />);
+
+    const all = screen.getByRole('tab', { name: /todos/i });
+    all.focus();
+
+    await user.keyboard('{ArrowLeft}');
+    const blocked = screen.getByRole('tab', { name: /bloqueados/i });
+    expect(blocked).toHaveAttribute('aria-selected', 'true');
+    expect(blocked).toHaveFocus();
+
+    await user.keyboard('{ArrowRight}');
+    expect(all).toHaveAttribute('aria-selected', 'true');
+    expect(all).toHaveFocus();
   });
 });

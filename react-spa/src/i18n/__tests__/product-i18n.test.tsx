@@ -49,6 +49,16 @@ describe('product i18n', () => {
       'Estado del sistema: seguro'
     );
     expect(translateProductText('en', 'classrooms.list.title')).toBe('Classrooms');
+    expect(translateProductText('en', 'classrooms.tabs.ariaLabel')).toBe(
+      'Classroom detail sections'
+    );
+    expect(translateProductText('en', 'classrooms.tabs.settings')).toBe('Settings');
+    expect(translateProductText('en', 'classrooms.tabs.machines')).toBe('Machines');
+    expect(translateProductText('en', 'classrooms.tabs.schedule')).toBe('Schedule');
+    expect(translateProductText('es', 'classrooms.tabs.ariaLabel')).toBe('Secciones del aula');
+    expect(translateProductText('es', 'classrooms.tabs.settings')).toBe('Ajustes');
+    expect(translateProductText('es', 'classrooms.tabs.machines')).toBe('Equipos');
+    expect(translateProductText('es', 'classrooms.tabs.schedule')).toBe('Horarios');
     expect(translateProductText('es', 'classrooms.dialog.deleteSchedule.title')).toBe(
       'Eliminar horario'
     );

@@ -4,6 +4,7 @@ import { WeeklyCalendarDayColumn } from './weekly-calendar/WeeklyCalendarDayColu
 import { WeeklyCalendarHeader } from './weekly-calendar/WeeklyCalendarHeader';
 import { DAYS, HOURS, START_HOUR, type WeeklyCalendarGroupInfo } from './weekly-calendar/shared';
 import { useWeeklyCalendarLayout } from './weekly-calendar/useWeeklyCalendarLayout';
+import { cn } from '../lib/utils';
 
 interface WeeklyCalendarProps {
   schedules: ScheduleWithPermissions[];
@@ -11,6 +12,7 @@ interface WeeklyCalendarProps {
   onAddClick: (dayOfWeek: number, startTime: string) => void;
   onEditClick: (schedule: ScheduleWithPermissions) => void;
   onDeleteClick: (schedule: ScheduleWithPermissions) => void;
+  fillAvailable?: boolean;
 }
 
 const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
@@ -19,20 +21,32 @@ const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
   onAddClick,
   onEditClick,
   onDeleteClick,
+  fillAvailable = false,
 }) => {
   const rowHeight = 64;
   const { groupColorMap, groupNameMap, byDay, weekDates, weekMonthLabel, todayKey } =
     useWeeklyCalendarLayout(schedules, groups);
 
   return (
-    <div className="border border-slate-200 rounded-lg bg-white overflow-hidden shadow-sm">
+    <div
+      className={cn(
+        'border border-slate-200 rounded-lg bg-white overflow-hidden shadow-sm',
+        fillAvailable ? 'md:min-h-0 md:flex-1 md:flex md:flex-col' : ''
+      )}
+    >
       <WeeklyCalendarHeader
         weekMonthLabel={weekMonthLabel}
         weekDates={weekDates}
         todayKey={todayKey}
       />
 
-      <div className="max-h-[520px] md:max-h-[640px] overflow-y-auto">
+      <div
+        className={cn(
+          fillAvailable
+            ? 'max-h-[520px] overflow-y-auto md:max-h-none md:min-h-0 md:flex-1'
+            : 'max-h-[520px] md:max-h-[640px] overflow-y-auto'
+        )}
+      >
         <div
           className="grid grid-cols-[60px_repeat(5,1fr)] relative"
           style={{ height: HOURS.length * rowHeight }}

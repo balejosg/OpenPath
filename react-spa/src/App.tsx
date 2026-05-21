@@ -13,6 +13,7 @@ import {
   isAuthPath,
 } from './app-navigation';
 import { OpenPathI18nProvider, useT } from './i18n/product-i18n';
+import { cn } from './lib/utils';
 
 const AppContent: React.FC = () => {
   const initialPathname = typeof window !== 'undefined' ? window.location.pathname : '/';
@@ -130,6 +131,23 @@ const AppContent: React.FC = () => {
   };
 
   const admin = isAdmin();
+  const isClassroomsView = activeTab === 'classrooms';
+  const appShellClassName = cn(
+    'flex min-h-screen bg-slate-50 font-sans text-slate-900',
+    isClassroomsView ? 'md:h-screen md:overflow-hidden' : ''
+  );
+  const contentShellClassName = cn(
+    'flex-1 md:ml-64 flex flex-col min-h-screen',
+    isClassroomsView ? 'md:h-full md:min-h-0 md:overflow-hidden' : ''
+  );
+  const mainClassName = cn(
+    'flex-1 p-6 md:p-8',
+    isClassroomsView ? 'overflow-y-auto md:min-h-0 md:overflow-hidden' : 'overflow-y-auto'
+  );
+  const contentWrapperClassName = cn(
+    'mx-auto max-w-7xl',
+    isClassroomsView ? 'md:h-full md:min-h-0' : ''
+  );
 
   if (!isAuth) {
     return (
@@ -143,7 +161,7 @@ const AppContent: React.FC = () => {
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-50 font-sans text-slate-900">
+    <div data-testid="openpath-shell-root" className={appShellClassName}>
       <Sidebar activeTab={activeTab} setActiveTab={handleSidebarTabChange} isOpen={sidebarOpen} />
 
       {/* Overlay */}
@@ -155,14 +173,14 @@ const AppContent: React.FC = () => {
       )}
 
       {/* Main Content */}
-      <div className="flex-1 md:ml-64 flex flex-col min-h-screen">
+      <div data-testid="openpath-shell-content" className={contentShellClassName}>
         <Header
           onMenuClick={() => setSidebarOpen(!sidebarOpen)}
           title={getTitleForTab(activeTab, admin, selectedGroup, t)}
         />
 
-        <main className="flex-1 p-6 md:p-8 overflow-y-auto">
-          <div className="max-w-7xl mx-auto">
+        <main data-testid="openpath-shell-main" className={mainClassName}>
+          <div data-testid="openpath-shell-content-wrapper" className={contentWrapperClassName}>
             <AppMainContent
               activeTab={activeTab}
               admin={admin}

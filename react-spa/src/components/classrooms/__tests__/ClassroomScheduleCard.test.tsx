@@ -5,8 +5,18 @@ import type { OneOffScheduleWithPermissions, ScheduleWithPermissions } from '../
 import ClassroomScheduleCard from '../ClassroomScheduleCard';
 
 vi.mock('../../WeeklyCalendar', () => ({
-  default: ({ onAddClick }: { onAddClick: (dayOfWeek: number, startTime: string) => void }) => (
-    <button data-testid="weekly-calendar" onClick={() => onAddClick(2, '10:00')}>
+  default: ({
+    onAddClick,
+    fillAvailable,
+  }: {
+    onAddClick: (dayOfWeek: number, startTime: string) => void;
+    fillAvailable?: boolean;
+  }) => (
+    <button
+      data-testid="weekly-calendar"
+      data-fill-available={fillAvailable ? 'true' : 'false'}
+      onClick={() => onAddClick(2, '10:00')}
+    >
       weekly-calendar
     </button>
   ),
@@ -127,5 +137,26 @@ describe('ClassroomScheduleCard', () => {
 
     expect(screen.getByText('Unable to load schedules')).toBeInTheDocument();
     expect(screen.getByText('Reserved by Teacher Dos')).toBeInTheDocument();
+  });
+
+  it('enables desktop-constrained fill mode without changing the mobile defaults', () => {
+    const { container, rerender } = render(<ClassroomScheduleCard {...buildProps()} />);
+
+    expect(container.firstElementChild).not.toHaveClass('md:min-h-0', 'md:overflow-hidden');
+    expect(screen.getByTestId('weekly-calendar')).toHaveAttribute('data-fill-available', 'false');
+
+    rerender(<ClassroomScheduleCard {...buildProps({ fillAvailable: true })} />);
+
+    expect(container.firstElementChild).toHaveClass('md:min-h-0', 'md:overflow-hidden');
+    expect(container.firstElementChild).not.toHaveClass('min-h-0', 'overflow-hidden');
+    expect(screen.getByTestId('weekly-calendar')).toHaveAttribute('data-fill-available', 'true');
+    expect(screen.getByText('One-off assignments').closest('div.mt-5')).toHaveClass(
+      'md:overflow-y-auto',
+      'md:max-h-56'
+    );
+    expect(screen.getByText('One-off assignments').closest('div.mt-5')).not.toHaveClass(
+      'max-h-48',
+      'overflow-y-auto'
+    );
   });
 });

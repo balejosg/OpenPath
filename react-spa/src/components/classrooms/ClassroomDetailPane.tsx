@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus } from 'lucide-react';
+import { Clock, Cog, Monitor, Plus } from 'lucide-react';
 import type {
   Classroom,
   ClassroomExemption,
@@ -12,6 +12,7 @@ import ClassroomConfigCard from './ClassroomConfigCard';
 import ClassroomMachinesCard from './ClassroomMachinesCard';
 import ClassroomScheduleCard from './ClassroomScheduleCard';
 import { useT } from '../../i18n/product-i18n';
+import Tabs from '../ui/Tabs';
 
 interface CalendarGroupDisplay {
   id: string;
@@ -58,6 +59,8 @@ interface ClassroomDetailPaneProps {
   onRequestOneOffScheduleDelete: (schedule: OneOffScheduleWithPermissions) => void;
 }
 
+type ClassroomDetailTab = 'settings' | 'machines' | 'schedule';
+
 export default function ClassroomDetailPane({
   admin,
   allowedGroups,
@@ -94,6 +97,13 @@ export default function ClassroomDetailPane({
   onRequestOneOffScheduleDelete,
 }: ClassroomDetailPaneProps) {
   const t = useT();
+  const [activeTab, setActiveTab] = React.useState<ClassroomDetailTab>('settings');
+
+  React.useEffect(() => {
+    if (!selectedClassroom) {
+      setActiveTab('settings');
+    }
+  }, [selectedClassroom]);
 
   if (!selectedClassroom) {
     return (
@@ -117,52 +127,103 @@ export default function ClassroomDetailPane({
     );
   }
 
+  const tabs = [
+    { id: 'settings', label: t('classrooms.tabs.settings'), icon: <Cog size={16} /> },
+    {
+      id: 'machines',
+      label: t('classrooms.tabs.machines'),
+      count: selectedClassroom.computerCount,
+      icon: <Monitor size={16} />,
+    },
+    {
+      id: 'schedule',
+      label: t('classrooms.tabs.schedule'),
+      count: schedules.length + sortedOneOffSchedules.length,
+      icon: <Clock size={16} />,
+    },
+  ];
+
   return (
-    <>
-      <ClassroomConfigCard
-        admin={admin}
-        allowedGroups={allowedGroups}
-        classroomConfigError={classroomConfigError}
-        activeGroupSelectValue={activeGroupSelectValue}
-        defaultGroupSelectValue={defaultGroupSelectValue}
-        classroom={selectedClassroom}
-        classroomSource={selectedClassroomSource}
-        groupById={groupById}
-        onOpenDeleteDialog={onOpenDeleteDialog}
-        onRequestActiveGroupChange={onRequestActiveGroupChange}
-        onDefaultGroupChange={onDefaultGroupChange}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <Tabs
+        tabs={tabs}
+        activeTab={activeTab}
+        onChange={(next) => setActiveTab(next as ClassroomDetailTab)}
+        ariaLabel={t('classrooms.tabs.ariaLabel')}
+        getTabId={(id) => `classroom-detail-tab-${id}`}
+        getPanelId={(id) => `classroom-detail-panel-${id}`}
       />
+      <div className="min-h-0 flex-1">
+        <section
+          id="classroom-detail-panel-settings"
+          role="tabpanel"
+          aria-labelledby="classroom-detail-tab-settings"
+          hidden={activeTab !== 'settings'}
+          className="h-full min-h-0 md:overflow-y-auto custom-scrollbar"
+        >
+          <ClassroomConfigCard
+            admin={admin}
+            allowedGroups={allowedGroups}
+            classroomConfigError={classroomConfigError}
+            activeGroupSelectValue={activeGroupSelectValue}
+            defaultGroupSelectValue={defaultGroupSelectValue}
+            classroom={selectedClassroom}
+            classroomSource={selectedClassroomSource}
+            groupById={groupById}
+            onOpenDeleteDialog={onOpenDeleteDialog}
+            onRequestActiveGroupChange={onRequestActiveGroupChange}
+            onDefaultGroupChange={onDefaultGroupChange}
+          />
+        </section>
 
-      <ClassroomMachinesCard
-        admin={admin}
-        classroom={selectedClassroom}
-        hasActiveSchedule={activeSchedule !== null}
-        exemptionByMachineId={exemptionByMachineId}
-        exemptionMutating={exemptionMutating}
-        exemptionsError={exemptionsError}
-        loadingExemptions={loadingExemptions}
-        enrollModalLoadingToken={enrollModalLoadingToken}
-        onOpenEnrollModal={onOpenEnrollModal}
-        onCreateExemption={onCreateExemption}
-        onCreateOperationalExemption={onCreateOperationalExemption}
-        onDeleteExemption={onDeleteExemption}
-      />
+        <section
+          id="classroom-detail-panel-machines"
+          role="tabpanel"
+          aria-labelledby="classroom-detail-tab-machines"
+          hidden={activeTab !== 'machines'}
+          className="h-full min-h-0 md:overflow-y-auto custom-scrollbar"
+        >
+          <ClassroomMachinesCard
+            admin={admin}
+            classroom={selectedClassroom}
+            hasActiveSchedule={activeSchedule !== null}
+            exemptionByMachineId={exemptionByMachineId}
+            exemptionMutating={exemptionMutating}
+            exemptionsError={exemptionsError}
+            loadingExemptions={loadingExemptions}
+            enrollModalLoadingToken={enrollModalLoadingToken}
+            onOpenEnrollModal={onOpenEnrollModal}
+            onCreateExemption={onCreateExemption}
+            onCreateOperationalExemption={onCreateOperationalExemption}
+            onDeleteExemption={onDeleteExemption}
+          />
+        </section>
 
-      <ClassroomScheduleCard
-        admin={admin}
-        calendarGroupsForDisplay={calendarGroupsForDisplay}
-        groupById={groupById}
-        schedules={schedules}
-        sortedOneOffSchedules={sortedOneOffSchedules}
-        loadingSchedules={loadingSchedules}
-        scheduleError={scheduleError}
-        onOpenScheduleCreate={onOpenScheduleCreate}
-        onOpenScheduleEdit={onOpenScheduleEdit}
-        onRequestScheduleDelete={onRequestScheduleDelete}
-        onOpenOneOffScheduleCreate={onOpenOneOffScheduleCreate}
-        onOpenOneOffScheduleEdit={onOpenOneOffScheduleEdit}
-        onRequestOneOffScheduleDelete={onRequestOneOffScheduleDelete}
-      />
-    </>
+        <section
+          id="classroom-detail-panel-schedule"
+          role="tabpanel"
+          aria-labelledby="classroom-detail-tab-schedule"
+          hidden={activeTab !== 'schedule'}
+          className="h-full min-h-0 md:overflow-hidden"
+        >
+          <ClassroomScheduleCard
+            admin={admin}
+            calendarGroupsForDisplay={calendarGroupsForDisplay}
+            groupById={groupById}
+            schedules={schedules}
+            sortedOneOffSchedules={sortedOneOffSchedules}
+            loadingSchedules={loadingSchedules}
+            scheduleError={scheduleError}
+            onOpenScheduleCreate={onOpenScheduleCreate}
+            onOpenScheduleEdit={onOpenScheduleEdit}
+            onRequestScheduleDelete={onRequestScheduleDelete}
+            onOpenOneOffScheduleCreate={onOpenOneOffScheduleCreate}
+            onOpenOneOffScheduleEdit={onOpenOneOffScheduleEdit}
+            onRequestOneOffScheduleDelete={onRequestOneOffScheduleDelete}
+            fillAvailable={activeTab === 'schedule'}
+          />
+        </section>
+      </div>
+    </div>
   );
 }

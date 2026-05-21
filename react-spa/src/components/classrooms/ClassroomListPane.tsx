@@ -39,7 +39,7 @@ const ClassroomListPane: React.FC<ClassroomListPaneProps> = ({
 }) => {
   const t = useT();
   return (
-    <div className="w-full shrink-0 md:max-w-md flex flex-col gap-4">
+    <div className="w-full shrink-0 flex flex-col gap-4 md:w-80 md:min-h-0">
       <div className="flex justify-between items-center px-1">
         <h2 className="text-lg font-bold text-slate-800">{t('classrooms.list.title')}</h2>
         {admin && (
@@ -64,7 +64,7 @@ const ClassroomListPane: React.FC<ClassroomListPaneProps> = ({
         />
       </div>
 
-      <div className="flex-1 space-y-3 md:overflow-y-auto md:pr-2 custom-scrollbar">
+      <div className="min-h-0 flex-1 space-y-3 md:overflow-y-auto md:pr-2 custom-scrollbar">
         {isInitialLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-slate-400" />

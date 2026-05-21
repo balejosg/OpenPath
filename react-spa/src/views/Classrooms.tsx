@@ -123,7 +123,7 @@ const Classrooms: React.FC<ClassroomsProps> = ({
   });
 
   return (
-    <div className="flex flex-col gap-6 md:h-[calc(100vh-8rem)] md:flex-row">
+    <div className="flex flex-col gap-6 md:h-full md:min-h-0 md:flex-row md:overflow-hidden">
       <ClassroomListPane
         admin={admin}
         searchQuery={searchQuery}
@@ -139,7 +139,7 @@ const Classrooms: React.FC<ClassroomsProps> = ({
       />
 
       {/* Detail Column */}
-      <div className="min-w-0 flex-1 flex flex-col gap-6 md:overflow-y-auto custom-scrollbar">
+      <div className="min-w-0 flex-1 flex flex-col md:min-h-0 md:overflow-hidden">
         <ClassroomDetailPane
           admin={admin}
           allowedGroups={allowedGroups}
