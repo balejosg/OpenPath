@@ -207,6 +207,18 @@ Describe "Installer" {
             )
         }
 
+        It "Creates captive portal recovery queue and result directories with narrow ACLs" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue',
+                'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult',
+                'Set-OpenPathCapabilityStorageAcl -Path $captivePortalRecoveryQueuePath -Profile CaptivePortalRecoveryQueue',
+                'Set-OpenPathCapabilityStorageAcl -Path $captivePortalRecoveryResultPath -Profile CaptivePortalRecoveryResultRead'
+            )
+        }
+
         It "Stages Firefox release assets beneath the user-readable browser-extension ACL root" {
             $scriptPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
             $content = Get-Content $scriptPath -Raw

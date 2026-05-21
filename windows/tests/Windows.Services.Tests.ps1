@@ -28,8 +28,12 @@ Describe "Services Module" {
             $catalog.Tasks.RuntimeDependencyApply.Name | Should -Be "OpenPath-RuntimeDependencyApply"
             $catalog.Tasks.RuntimeDependencyApply.Script | Should -Be "scripts\Apply-RuntimeDependencyQueue.ps1"
             $catalog.Tasks.RuntimeDependencyApply.GrantUsersRunAccess | Should -BeTrue
+            $catalog.Tasks.CaptivePortalRecovery.Name | Should -Be "OpenPath-CaptivePortalRecovery"
+            $catalog.Tasks.CaptivePortalRecovery.Script | Should -Be "scripts\Recover-CaptivePortal.ps1"
+            $catalog.Tasks.CaptivePortalRecovery.GrantUsersRunAccess | Should -BeTrue
             $catalog.Tasks.SSE.Name | Should -Be "OpenPath-SSE"
             @($catalog.ValidTaskTypes) | Should -Contain "RuntimeDependencyApply"
+            @($catalog.ValidTaskTypes) | Should -Contain "CaptivePortalRecovery"
         }
 
         It "Builds scheduled task definitions from catalog specs without changing task names" {
@@ -130,6 +134,29 @@ Describe "Services Module" {
             $installerContent.Contains("'Apply-RuntimeDependencyQueue.ps1'") | Should -BeTrue
         }
 
+        It "Includes on-demand captive portal recovery task with unelevated run access" {
+            $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "ScheduledTaskCatalog.ps1"
+            $servicesPath = Join-Path $PSScriptRoot ".." "lib" "Services.psm1"
+            $installerPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $catalogContent = Get-Content $catalogPath -Raw
+            $servicesContent = Get-Content $servicesPath -Raw
+            $installerContent = Get-Content $installerPath -Raw
+
+            Assert-ContentContainsAll -Content $catalogContent -Needles @(
+                '$prefix-CaptivePortalRecovery',
+                'scripts\Recover-CaptivePortal.ps1',
+                'GrantUsersRunAccess = $true',
+                "'CaptivePortalRecovery'"
+            )
+            Assert-ContentContainsAll -Content $servicesContent -Needles @(
+                '$captivePortalRecoverySpec = Get-OpenPathScheduledTaskSpec -TaskType CaptivePortalRecovery',
+                '$captivePortalRecoveryDefinition = New-OpenPathTaskDefinition',
+                'Grant-OpenPathTaskRunAccessToUsers -TaskName $captivePortalRecoveryDefinition.TaskName',
+                '"CaptivePortalRecovery"'
+            )
+            $installerContent.Contains("'Recover-CaptivePortal.ps1'") | Should -BeTrue
+        }
+
         It "Avoids explicit max repetition duration for recurring tasks" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Services.TaskBuilders.ps1"
             $content = Get-Content $helperPath -Raw
@@ -218,6 +245,10 @@ Describe "Services Module" {
 
         It "Accepts RuntimeDependencyApply as a valid task type" -Skip:(-not (Test-FunctionExists 'Start-OpenPathTask')) {
             { Start-OpenPathTask -TaskType RuntimeDependencyApply -WhatIf } | Should -Not -Throw
+        }
+
+        It "Accepts CaptivePortalRecovery as a valid task type" -Skip:(-not (Test-FunctionExists 'Start-OpenPathTask')) {
+            { Start-OpenPathTask -TaskType CaptivePortalRecovery -WhatIf } | Should -Not -Throw
         }
     }
 }

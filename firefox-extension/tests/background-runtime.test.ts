@@ -30,28 +30,36 @@ function createRuntimeHarness(): {
   runtimeMessage: RuntimeMessageListener | null;
   tabRemovedListener: ((tabId: number) => void) | null;
   webRequestBeforeRequestListener: ((details: unknown) => unknown) | null;
+  webRequestErrorListener: ((details: unknown) => unknown) | null;
 } {
   return createRuntimeHarnessWithOptions({});
 }
 
-function createRuntimeHarnessWithOptions(options: { blockedPaths?: string[] }): {
+function createRuntimeHarnessWithOptions(options: {
+  blockedPaths?: string[];
+  nativeMessageResponder?: (message: unknown) => unknown;
+}): {
   browser: Browser;
   fetchBodies: unknown[];
   nativeMessages: unknown[];
   pathRuleRefreshes: number;
   subdomainRuleRefreshes: number;
+  tabUpdates: { tabId: number; update: { url?: string } }[];
   responses: unknown[];
   restoreGlobals: () => void;
   runtimeMessage: RuntimeMessageListener | null;
   tabRemovedListener: ((tabId: number) => void) | null;
   webRequestBeforeRequestListener: ((details: unknown) => unknown) | null;
+  webRequestErrorListener: ((details: unknown) => unknown) | null;
 } {
   const nativeMessages: unknown[] = [];
   const fetchBodies: unknown[] = [];
   const responses: unknown[] = [];
+  const tabUpdates: { tabId: number; update: { url?: string } }[] = [];
   let runtimeMessage: RuntimeMessageListener | null = null;
   let tabRemovedListener: ((tabId: number) => void) | null = null;
   let webRequestBeforeRequestListener: ((details: unknown) => unknown) | null = null;
+  let webRequestErrorListener: ((details: unknown) => unknown) | null = null;
   let pathRuleRefreshes = 0;
   let subdomainRuleRefreshes = 0;
   const originalBrowser = (globalThis as { browser?: Browser }).browser;
@@ -79,6 +87,10 @@ function createRuntimeHarnessWithOptions(options: { blockedPaths?: string[] }): 
       },
       sendNativeMessage: (_hostName: string, message: unknown) => {
         nativeMessages.push(message);
+        const customResponse = options.nativeMessageResponder?.(message);
+        if (customResponse !== undefined) {
+          return Promise.resolve(customResponse);
+        }
         const action = (message as { action?: string }).action;
         if (action === 'get-config') {
           return Promise.resolve({
@@ -150,14 +162,19 @@ function createRuntimeHarnessWithOptions(options: { blockedPaths?: string[] }): 
           tabRemovedListener = listener;
         },
       },
-      update: () => Promise.resolve({}),
+      update: (tabId: number, update: { url?: string }) => {
+        tabUpdates.push({ tabId, update });
+        return Promise.resolve({});
+      },
     },
     webNavigation: {
       onBeforeNavigate: {
         addListener: () => undefined,
       },
       onErrorOccurred: {
-        addListener: () => undefined,
+        addListener: (listener: (details: unknown) => unknown) => {
+          webRequestErrorListener = listener;
+        },
       },
     },
     webRequest: {
@@ -197,6 +214,7 @@ function createRuntimeHarnessWithOptions(options: { blockedPaths?: string[] }): 
     get subdomainRuleRefreshes(): number {
       return subdomainRuleRefreshes;
     },
+    tabUpdates,
     responses,
     restoreGlobals: (): void => {
       Object.assign(globalThis, {
@@ -213,6 +231,9 @@ function createRuntimeHarnessWithOptions(options: { blockedPaths?: string[] }): 
     },
     get webRequestBeforeRequestListener(): ((details: unknown) => unknown) | null {
       return webRequestBeforeRequestListener;
+    },
+    get webRequestErrorListener(): ((details: unknown) => unknown) | null {
+      return webRequestErrorListener;
     },
   };
 }
@@ -284,6 +305,65 @@ void test('native policy confirmation treats null resolvedIp as unresolved', () 
     } as unknown as Parameters<typeof isNativePolicyBlockedResult>[0]),
     true
   );
+});
+
+void test('background runtime skips captive portal retry when recovery resolves after a newer navigation error', async () => {
+  let resolveOldRecovery!: (value: unknown) => void;
+  const oldRecovery = new Promise<unknown>((resolve) => {
+    resolveOldRecovery = resolve;
+  });
+  const harness = createRuntimeHarnessWithOptions({
+    nativeMessageResponder: (message) => {
+      if ((message as { action?: string }).action !== 'recover-captive-portal-navigation') {
+        return undefined;
+      }
+      return (message as { triggerHost?: string }).triggerHost === 'old.example'
+        ? oldRecovery
+        : { success: false };
+    },
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.webRequestErrorListener);
+
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_UNKNOWN_HOST',
+      frameId: 0,
+      requestId: 'old-request',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://old.example/login',
+    });
+    await waitForAsyncRuntime();
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_UNKNOWN_HOST',
+      frameId: 0,
+      requestId: 'new-request',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://new.example/login',
+    });
+    await waitForAsyncRuntime();
+
+    resolveOldRecovery({ success: true });
+    await waitForAsyncRuntime();
+
+    assert.equal(
+      harness.tabUpdates.some((update) => update.update.url === 'https://old.example/login'),
+      false
+    );
+    assert.deepEqual(harness.tabUpdates, [
+      {
+        tabId: 5,
+        update: {
+          url: 'moz-extension://unit-test/blocked/blocked.html?domain=new.example&error=NS_ERROR_UNKNOWN_HOST',
+        },
+      },
+    ]);
+  } finally {
+    harness.restoreGlobals();
+  }
 });
 
 void test('background runtime keeps manual local update retry through native whitelist updates', async () => {

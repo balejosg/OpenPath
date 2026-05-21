@@ -56,6 +56,19 @@ interface LocalRuntimeDependencyInput {
   requestType: string;
 }
 
+export interface CaptivePortalRecoveryInput {
+  triggerHost: string;
+  tabId?: number;
+}
+
+export interface CaptivePortalRecoveryResponse extends NativeResponse {
+  action?: 'recover-captive-portal-navigation';
+  portalModeActive?: boolean;
+  requestId?: string;
+  state?: string;
+  triggerHost?: string;
+}
+
 interface LocalRuntimeDependencyBatchResponse extends NativeResponse {
   action?: 'allow-local-runtime-dependency-batch';
   results?: NativeResponse[];
@@ -74,6 +87,9 @@ export interface NativeMessagingClient {
   checkDomains: (domains: string[]) => Promise<VerifyResponse>;
   connect: () => Promise<boolean>;
   isAvailable: () => Promise<boolean>;
+  recoverCaptivePortalNavigation: (
+    input: CaptivePortalRecoveryInput
+  ) => Promise<CaptivePortalRecoveryResponse>;
   requestLocalWhitelistUpdate: (domains?: string[]) => Promise<boolean>;
   sendMessage: (message: unknown) => Promise<unknown>;
 }
@@ -216,6 +232,16 @@ export function createNativeMessagingClient(options: {
     } catch {
       return false;
     }
+  }
+
+  async function recoverCaptivePortalNavigation(
+    input: CaptivePortalRecoveryInput
+  ): Promise<CaptivePortalRecoveryResponse> {
+    return (await sendMessage({
+      action: 'recover-captive-portal-navigation',
+      triggerHost: input.triggerHost,
+      ...(input.tabId !== undefined ? { tabId: input.tabId } : {}),
+    })) as CaptivePortalRecoveryResponse;
   }
 
   function createRuntimeDependencyCacheKey(
@@ -456,6 +482,7 @@ export function createNativeMessagingClient(options: {
     checkDomains,
     connect,
     isAvailable,
+    recoverCaptivePortalNavigation,
     requestLocalWhitelistUpdate,
     sendMessage,
   };

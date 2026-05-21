@@ -460,6 +460,66 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     }
   });
 
+  test('captive-portal-navigation mode runs the recovery retry fixture and collects artifacts', () => {
+    const result = runDirectDiagnostic([
+      '--mode',
+      'captive-portal-navigation',
+      '--source-mode',
+      'local-overlay',
+    ]);
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+    const captiveScript = readText('tests/e2e/ci/run-windows-captive-portal-navigation.ps1');
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /source_mode=local-overlay/);
+    assert.match(result.stdout, /mode=captive-portal-navigation/);
+    assert.match(result.stdout, /step=run-windows-captive-portal-navigation/);
+    assert.match(script, /run-windows-captive-portal-navigation\.ps1/);
+    assert.match(script, /openpath-captive-portal-navigation/);
+    assert.match(script, /captive-portal-navigation-result\.json/);
+    assert.match(script, /captive-portal-recovery-result/);
+    assert.match(script, /Captive portal navigation result was not successful/);
+    assert.match(script, /captive-portal-dns-before\.json/);
+    assert.match(script, /captive-portal-dns-after\.json/);
+    assert.match(script, /captive-portal-observation\.json/);
+    assert.match(script, /captive-portal-firefox-navigation-result\.json/);
+    assert.match(script, /direct-captive-portal-navigation-completion\.json/);
+    assert.match(captiveScript, /nce\.127\.0\.0\.1\.sslip\.io/);
+    assert.match(captiveScript, /fixtureDoesNotProveRealWeduCaptiveDns/);
+    assert.match(captiveScript, /captive-portal-recovery-fixture-state\.json/);
+    assert.match(captiveScript, /Recover-CaptivePortal\.ps1\.product-backup/);
+    assert.match(captiveScript, /Stage-OpenPathRuntimeForDirectRunner/);
+    assert.match(captiveScript, /Register-OpenPathTask/);
+    assert.match(captiveScript, /C:\\OpenPath/);
+    assert.match(captiveScript, /Install-LocalOnlyCaptivePortalRecoveryFixture/);
+    assert.match(captiveScript, /Restore-LocalOnlyCaptivePortalRecoveryFixture/);
+    assert.match(
+      captiveScript,
+      /Installed recovery script already contains the direct-runner fixture bypass/
+    );
+    assert.match(captiveScript, /direct-runner-captive-portal-navigation/);
+    assert.match(captiveScript, /recover-captive-portal-navigation/);
+    assert.match(captiveScript, /WaitForExit\(30000\)/);
+    assert.match(captiveScript, /captive-portal-active\.json/);
+    assert.match(captiveScript, /dnsRecoveredFromAcrylicOnly/);
+    assert.match(captiveScript, /nativeRecoveryVerified/);
+    const nativeRecoveryVerifiedExpression =
+      captiveScript.match(/\$nativeRecoveryVerified\s*=\s*\[bool\]\(([^)]*)\)/)?.[1] ?? '';
+    assert.match(nativeRecoveryVerifiedExpression, /nativeResponse\.success/);
+    assert.doesNotMatch(nativeRecoveryVerifiedExpression, /dnsRecoveredFromAcrylicOnly/);
+    assert.match(captiveScript, /browserNavigationVerified = \$false/);
+    assert.match(captiveScript, /targetPlatformSymptomCleared = \$false/);
+    assert.match(captiveScript, /nativeStateIsPortal/);
+    assert.match(captiveScript, /browserObservationLevel/);
+    assert.match(captiveScript, /headless-process-launch-only/);
+    assert.match(captiveScript, /target-platform evidence must inspect the real browser/);
+    assert.match(captiveScript, /expectedOneActivePortalMarker/);
+    assert.match(captiveScript, /watchdogRecoveryConcurrencyHook/);
+    assert.match(captiveScript, /noFailedTask/);
+    assert.match(captiveScript, /noPrematureExit/);
+    assert.match(captiveScript, /blockedByOpenPath/);
+  });
+
   test('acrylic-purgecache-spike mode runs only the runner diagnostic for host reload evidence', () => {
     const result = runDirectDiagnostic([
       '--mode',

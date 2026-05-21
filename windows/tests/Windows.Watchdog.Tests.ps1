@@ -48,6 +48,42 @@ Describe "Watchdog Script" {
     }
 
     Context "Captive portal detection" {
+        It "Defines admin-only captive portal recovery script with bounded queue processing" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '#Requires -RunAsAdministrator',
+                'Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force',
+                "-DependentModules @('DNS', 'Firewall', 'CaptivePortal')",
+                'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue',
+                'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult',
+                'Get-OpenPathCaptivePortalRecoveryRequests',
+                'Invoke-OpenPathCaptivePortalRecoveryRequest',
+                '$MaxRequestAgeSeconds = 60',
+                '$RecentSuccessSeconds = 30',
+                'createdAtUtc',
+                'Test-OpenPathCaptivePortalState -TimeoutSec 3',
+                'Update-OpenPathCaptivePortalObservation -DetectedState Portal',
+                'Enable-OpenPathCaptivePortalMode -State Portal',
+                'portalModeActive',
+                'ConvertTo-Json -Depth 6'
+            )
+
+            $content | Should -Not -Match 'captive-portal-recovery-fixture-state\.json'
+            $content | Should -Not -Match 'direct-runner-captive-portal-navigation'
+            $content | Should -Not -Match 'Get-OpenPathCaptivePortalRecoveryFixtureState'
+        }
+
+        It "Orders recovery observation before enabling portal mode and never uses stale DNS rollback" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            $content.IndexOf('Update-OpenPathCaptivePortalObservation -DetectedState Portal') |
+                Should -BeLessThan $content.IndexOf('Enable-OpenPathCaptivePortalMode -State Portal')
+            $content | Should -Not -Match 'Restore-OriginalDNS'
+        }
+
         It "Detects captive portals and temporarily opens DNS" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"

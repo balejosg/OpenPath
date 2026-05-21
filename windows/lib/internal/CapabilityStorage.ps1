@@ -32,6 +32,8 @@ function Get-OpenPathCapabilityStoragePath {
     param(
         [ValidateSet(
             'RuntimeDependencyQueue',
+            'CaptivePortalRecoveryQueue',
+            'CaptivePortalRecoveryResult',
             'RuntimeDependencyOverlay',
             'RuntimeDependencyOverlayParent',
             'FirefoxNativeHostRoot',
@@ -53,6 +55,12 @@ function Get-OpenPathCapabilityStoragePath {
                 return $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH
             }
             return (Join-OpenPathCapabilityStoragePath -Parent (Get-OpenPathCapabilityStorageRoot -OpenPathRoot $OpenPathRoot) -Child 'runtime-dependency-queue')
+        }
+        'CaptivePortalRecoveryQueue' {
+            return (Join-OpenPathCapabilityStoragePath -Parent (Get-OpenPathCapabilityStorageRoot -OpenPathRoot $OpenPathRoot) -Child 'captive-portal-recovery-queue')
+        }
+        'CaptivePortalRecoveryResult' {
+            return (Join-OpenPathCapabilityStoragePath -Parent (Get-OpenPathCapabilityStorageRoot -OpenPathRoot $OpenPathRoot) -Child 'captive-portal-recovery-result')
         }
         'RuntimeDependencyOverlay' {
             if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH) {
@@ -95,7 +103,7 @@ function Set-OpenPathCapabilityStorageAcl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [ValidateSet('RestrictedRoot', 'RuntimeDependencyQueue', 'BrowserExtensionRead')]
+        [ValidateSet('RestrictedRoot', 'RuntimeDependencyQueue', 'CaptivePortalRecoveryQueue', 'CaptivePortalRecoveryResultRead', 'BrowserExtensionRead')]
         [string]$Profile = 'RestrictedRoot'
     )
 
@@ -109,6 +117,12 @@ function Set-OpenPathCapabilityStorageAcl {
     elseif ($Profile -eq 'RuntimeDependencyQueue') {
         $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'Modify'))
     }
+    elseif ($Profile -eq 'CaptivePortalRecoveryQueue') {
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'Modify'))
+    }
+    elseif ($Profile -eq 'CaptivePortalRecoveryResultRead') {
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'ReadAndExecute'))
+    }
     elseif ($Profile -eq 'BrowserExtensionRead') {
         $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'ReadAndExecute'))
     }
@@ -120,7 +134,7 @@ function Test-OpenPathCapabilityStorageAcl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [ValidateSet('RestrictedRoot', 'RuntimeDependencyQueue', 'BrowserExtensionRead')]
+        [ValidateSet('RestrictedRoot', 'RuntimeDependencyQueue', 'CaptivePortalRecoveryQueue', 'CaptivePortalRecoveryResultRead', 'BrowserExtensionRead')]
         [string]$Profile = 'RestrictedRoot'
     )
 
@@ -140,7 +154,7 @@ function Test-OpenPathCapabilityStorageAcl {
         return ($hasSystem -and $hasAdmins)
     }
 
-    $expectedRight = if ($Profile -eq 'RuntimeDependencyQueue') {
+    $expectedRight = if ($Profile -in @('RuntimeDependencyQueue', 'CaptivePortalRecoveryQueue')) {
         [System.Security.AccessControl.FileSystemRights]::Modify
     }
     else {
@@ -157,7 +171,7 @@ function Ensure-OpenPathCapabilityStorageDirectory {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [ValidateSet('None', 'RestrictedRoot', 'RuntimeDependencyQueue', 'BrowserExtensionRead')]
+        [ValidateSet('None', 'RestrictedRoot', 'RuntimeDependencyQueue', 'CaptivePortalRecoveryQueue', 'CaptivePortalRecoveryResultRead', 'BrowserExtensionRead')]
         [string]$AclProfile = 'None',
         [switch]$ValidateAcl
     )

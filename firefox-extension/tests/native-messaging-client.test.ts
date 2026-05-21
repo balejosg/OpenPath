@@ -85,6 +85,37 @@ await describe('native messaging client', async () => {
     assert.equal(await client.isAvailable(), true);
   });
 
+  await test('requests captive portal recovery without browser-generated requestId', async () => {
+    const { browser, messages } = createRecordingBrowserStub(() => ({
+      success: true,
+      action: 'recover-captive-portal-navigation',
+      triggerHost: 'nce.wedu.comunidad.madrid',
+      tabId: 42,
+      requestId: 'native-request-1',
+      portalModeActive: true,
+    }));
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+    });
+
+    const response = await client.recoverCaptivePortalNavigation({
+      triggerHost: 'nce.wedu.comunidad.madrid',
+      tabId: 42,
+    });
+
+    assert.equal(response.success, true);
+    assert.equal(response.requestId, 'native-request-1');
+    assert.deepEqual(messages, [
+      {
+        action: 'recover-captive-portal-navigation',
+        triggerHost: 'nce.wedu.comunidad.madrid',
+        tabId: 42,
+      },
+    ]);
+    assert.equal('requestId' in (messages[0] as Record<string, unknown>), false);
+  });
+
   await test('batches simultaneous local runtime dependency requests', async () => {
     const { browser, messages } = createRecordingBrowserStub((message) => {
       assert.deepEqual(message, {

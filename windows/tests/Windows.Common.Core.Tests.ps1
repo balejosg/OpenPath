@@ -20,12 +20,34 @@ Describe "Common Module" {
 
             Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue -OpenPathRoot $root |
                 Should -Be (Join-Path $root "data\runtime-dependency-queue")
+            Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue -OpenPathRoot $root |
+                Should -Be (Join-Path $root "data\captive-portal-recovery-queue")
+            Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult -OpenPathRoot $root |
+                Should -Be (Join-Path $root "data\captive-portal-recovery-result")
             Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $root |
                 Should -Be (Join-Path $root "data\runtime-dependency-overlay.json")
             Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostRoot -OpenPathRoot $root |
                 Should -Be (Join-Path $root "browser-extension\firefox\native")
             Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostState -OpenPathRoot $root |
                 Should -Be (Join-Path $root "browser-extension\firefox\native\native-state.json")
+        }
+
+        It "Exposes narrow ACL profiles for captive portal recovery queue and result storage" {
+            $capabilityStoragePath = Join-Path $PSScriptRoot ".." "lib" "internal" "CapabilityStorage.ps1"
+            $content = Get-Content $capabilityStoragePath -Raw
+
+            foreach ($needle in @(
+                "'CaptivePortalRecoveryQueue'",
+                "'CaptivePortalRecoveryResult'",
+                "'CaptivePortalRecoveryQueue'",
+                "'CaptivePortalRecoveryResultRead'",
+                "elseif (`$Profile -eq 'CaptivePortalRecoveryQueue')",
+                "elseif (`$Profile -eq 'CaptivePortalRecoveryResultRead')",
+                "'BUILTIN\Users' -Rights 'Modify'",
+                "'BUILTIN\Users' -Rights 'ReadAndExecute'"
+            )) {
+                $content.Contains($needle) | Should -BeTrue -Because "Expected content to include '$needle'"
+            }
         }
 
         It "Honors runtime dependency queue and overlay environment overrides" {
@@ -63,6 +85,24 @@ Describe "Common Module" {
             }
             Should -Invoke Test-OpenPathCapabilityStorageAcl -Times 1 -ParameterFilter {
                 $Path -eq $path -and $Profile -eq 'RuntimeDependencyQueue'
+            }
+        }
+
+        It "Creates captive portal result directories with read-only browser-user validation" {
+            $path = Join-Path $TestDrive "captive-result"
+
+            Mock Set-OpenPathCapabilityStorageAcl {}
+            Mock Test-OpenPathCapabilityStorageAcl { return $true }
+
+            Ensure-OpenPathCapabilityStorageDirectory -Path $path -AclProfile CaptivePortalRecoveryResultRead -ValidateAcl |
+                Should -Be $path
+
+            Test-Path $path | Should -BeTrue
+            Should -Invoke Set-OpenPathCapabilityStorageAcl -Times 1 -ParameterFilter {
+                $Path -eq $path -and $Profile -eq 'CaptivePortalRecoveryResultRead'
+            }
+            Should -Invoke Test-OpenPathCapabilityStorageAcl -Times 1 -ParameterFilter {
+                $Path -eq $path -and $Profile -eq 'CaptivePortalRecoveryResultRead'
             }
         }
 

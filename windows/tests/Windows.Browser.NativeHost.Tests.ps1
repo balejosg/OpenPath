@@ -536,6 +536,258 @@ Describe "Browser Module - Native Host" {
             $nativeHostActionsContent | Should -Not -Match '/api/requests/auto'
         }
 
+        It "Supports captive portal recovery without URL fields or whitelist/runtime overlay mutation" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+
+            Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
+                'recover-captive-portal-navigation',
+                'function Normalize-NativeHostCaptivePortalTriggerHost',
+                'function Write-NativeHostCaptivePortalRecoveryRequest',
+                'function Read-NativeHostCaptivePortalRecoveryResult',
+                'function Get-NativeHostRecentCaptivePortalRecoverySuccess',
+                'function Invoke-NativeHostCaptivePortalRecoveryAction',
+                'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue',
+                'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult',
+                'Global\OpenPathCaptivePortalRecoveryTrigger',
+                'OpenPath-CaptivePortalRecovery',
+                'New-Guid',
+                'triggerHost',
+                'tabId',
+                'createdAtUtc',
+                'portalModeActive',
+                'requestId',
+                'recentSuccess',
+                'triggerMs',
+                'waitMs',
+                '-TimeoutMilliseconds 20000',
+                '-TimeoutSeconds 20',
+                'state = ''Timeout'''
+            )
+
+            $recoveryFunction = [regex]::Match(
+                $nativeHostActionsContent,
+                '(?s)function Invoke-NativeHostCaptivePortalRecoveryAction.*?(?=function Test-NativeWhitelistContainsDomains)'
+            ).Value
+            $recoveryFunction | Should -Not -Match 'Global\\OpenPathNativeWhitelistUpdateTrigger'
+            $recoveryFunction | Should -Not -Match 'Invoke-UpdateTask'
+            $recoveryFunction | Should -Not -Match 'Write-NativeHostRuntimeDependencyQueueRequest'
+            $recoveryFunction | Should -Not -Match 'Update-AcrylicHost'
+            $recoveryFunction | Should -Not -Match 'whitelistUrl'
+            $recoveryFunction | Should -Not -Match 'cookies?'
+            $recoveryFunction | Should -Not -Match 'query'
+        }
+
+        It "Rejects invalid captive portal trigger hosts before queueing or triggering tasks" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+
+            $script:capturedTaskNames = @()
+            function Invoke-OpenPathScheduledTask {
+                param([string]$TaskName)
+                $script:capturedTaskNames += $TaskName
+                return @{ success = $true; taskName = $TaskName; triggerMs = 0; waitMs = 0 }
+            }
+
+            $result = Invoke-NativeHostCaptivePortalRecoveryAction `
+                -Message ([PSCustomObject]@{ triggerHost = 'https://portal.example/login?token=secret'; tabId = 9 })
+
+            $result.success | Should -BeFalse
+            $result.action | Should -Be 'recover-captive-portal-navigation'
+            $result.state | Should -Be 'InvalidHost'
+            $result.triggerHost | Should -Be ''
+            @($script:capturedTaskNames).Count | Should -Be 0
+        }
+
+        It "Queues valid captive portal recovery and triggers only the recovery task" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+
+            $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
+            $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-result-" + [guid]::NewGuid().ToString('N'))
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH = $queuePath
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH = $resultPath
+            $script:capturedTaskNames = @()
+            try {
+                function Invoke-OpenPathScheduledTask {
+                    param(
+                        [string]$TaskName,
+                        [object]$Runner,
+                        [int]$TimeoutSeconds,
+                        [scriptblock]$WaitCondition,
+                        [int]$PollMilliseconds
+                    )
+                    $script:capturedTaskNames += $TaskName
+                    $request = Get-ChildItem -Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -Filter *.json |
+                        Select-Object -First 1 |
+                        Get-Content -Raw |
+                        ConvertFrom-Json
+                    New-Item -ItemType Directory -Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -Force | Out-Null
+                    @{
+                        requestId = [string]$request.requestId
+                        state = 'Portal'
+                        success = $true
+                        portalModeActive = $true
+                    } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH "$($request.requestId).json")
+                    & $WaitCondition | Out-Null
+                    return @{ success = $true; taskName = $TaskName; triggerMs = 3; waitMs = 4 }
+                }
+
+                $result = Invoke-NativeHostCaptivePortalRecoveryAction `
+                    -Message ([PSCustomObject]@{ triggerHost = 'Portal.Example.'; tabId = 12 })
+
+                $result.success | Should -BeTrue
+                $result.state | Should -Be 'Portal'
+                $result.portalModeActive | Should -BeTrue
+                $result.triggerHost | Should -Be 'portal.example'
+                $result.taskName | Should -Be 'OpenPath-CaptivePortalRecovery'
+                $result.triggerMs | Should -Be 3
+                $result.waitMs | Should -Be 4
+                @($script:capturedTaskNames) | Should -Be @('OpenPath-CaptivePortalRecovery')
+
+                $queuedRaw = Get-ChildItem -Path $queuePath -Filter *.json | Select-Object -First 1 | Get-Content -Raw
+                $queued = $queuedRaw | ConvertFrom-Json
+                [string]$queued.requestId | Should -Be $result.requestId
+                [string]$queued.triggerHost | Should -Be 'portal.example'
+                [int]$queued.tabId | Should -Be 12
+                $queuedRaw | Should -Match '"createdAtUtc":\s*"[^"]+Z"'
+                $queued.PSObject.Properties.Name | Should -Not -Contain 'url'
+                $queued.PSObject.Properties.Name | Should -Not -Contain 'cookies'
+                $queued.PSObject.Properties.Name | Should -Not -Contain 'query'
+            }
+            finally {
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -ErrorAction SilentlyContinue
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -ErrorAction SilentlyContinue
+                Remove-Item $queuePath, $resultPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Returns recent captive portal recovery success without triggering the elevated task again" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+
+            $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
+            $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-result-" + [guid]::NewGuid().ToString('N'))
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH = $queuePath
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH = $resultPath
+            $script:capturedTaskNames = @()
+            try {
+                New-Item -ItemType Directory -Path $resultPath -Force | Out-Null
+                @{
+                    requestId = 'recent-request'
+                    state = 'Portal'
+                    success = $true
+                    portalModeActive = $true
+                } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $resultPath 'recent-request.json')
+
+                function Invoke-OpenPathScheduledTask {
+                    param([string]$TaskName)
+                    $script:capturedTaskNames += $TaskName
+                    return @{ success = $true; taskName = $TaskName; triggerMs = 0; waitMs = 0 }
+                }
+
+                $result = Invoke-NativeHostCaptivePortalRecoveryAction `
+                    -Message ([PSCustomObject]@{ triggerHost = 'portal.example'; tabId = 14 })
+
+                $result.success | Should -BeTrue
+                $result.state | Should -Be 'RecentSuccess'
+                $result.portalModeActive | Should -BeTrue
+                $result.requestId | Should -Be 'recent-request'
+                $result.triggerMs | Should -Be 0
+                $result.waitMs | Should -Be 0
+                @($script:capturedTaskNames).Count | Should -Be 0
+                Test-Path $queuePath | Should -BeFalse
+            }
+            finally {
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -ErrorAction SilentlyContinue
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -ErrorAction SilentlyContinue
+                Remove-Item $queuePath, $resultPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Ignores stale captive portal recovery results with a different request id" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+
+            $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
+            $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-result-" + [guid]::NewGuid().ToString('N'))
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH = $queuePath
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH = $resultPath
+            try {
+                function Invoke-OpenPathScheduledTask {
+                    param(
+                        [string]$TaskName,
+                        [scriptblock]$WaitCondition
+                    )
+                    New-Item -ItemType Directory -Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -Force | Out-Null
+                    @{
+                        requestId = 'different-request-id'
+                        state = 'Portal'
+                        success = $true
+                        portalModeActive = $true
+                    } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH 'different-request-id.json')
+                    & $WaitCondition | Should -BeFalse
+                    return @{ success = $false; taskName = $TaskName; triggerMs = 1; waitMs = 20000; timedOut = $true; error = 'Timed out waiting for task condition' }
+                }
+
+                $result = Invoke-NativeHostCaptivePortalRecoveryAction `
+                    -Message ([PSCustomObject]@{ triggerHost = 'portal.example' })
+
+                $result.success | Should -BeFalse
+                $result.state | Should -Be 'Timeout'
+                $result.portalModeActive | Should -BeFalse
+                $result.waitMs | Should -Be 20000
+            }
+            finally {
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -ErrorAction SilentlyContinue
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -ErrorAction SilentlyContinue
+                Remove-Item $queuePath, $resultPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Returns clean non-portal captive portal recovery fallback" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+
+            $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
+            $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-result-" + [guid]::NewGuid().ToString('N'))
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH = $queuePath
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH = $resultPath
+            try {
+                function Invoke-OpenPathScheduledTask {
+                    param(
+                        [string]$TaskName,
+                        [scriptblock]$WaitCondition
+                    )
+                    $request = Get-ChildItem -Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -Filter *.json |
+                        Select-Object -First 1 |
+                        Get-Content -Raw |
+                        ConvertFrom-Json
+                    New-Item -ItemType Directory -Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -Force | Out-Null
+                    @{
+                        requestId = [string]$request.requestId
+                        state = 'Authenticated'
+                        success = $false
+                        portalModeActive = $false
+                    } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH "$($request.requestId).json")
+                    & $WaitCondition | Out-Null
+                    return @{ success = $true; taskName = $TaskName; triggerMs = 2; waitMs = 5 }
+                }
+
+                $result = Invoke-NativeHostCaptivePortalRecoveryAction `
+                    -Message ([PSCustomObject]@{ triggerHost = 'portal.example' })
+
+                $result.success | Should -BeFalse
+                $result.state | Should -Be 'Authenticated'
+                $result.portalModeActive | Should -BeFalse
+            }
+            finally {
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -ErrorAction SilentlyContinue
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -ErrorAction SilentlyContinue
+                Remove-Item $queuePath, $resultPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Rejects system and browser update hosts as runtime dependencies" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
 

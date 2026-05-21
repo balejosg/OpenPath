@@ -58,6 +58,7 @@ function createListenerHarness(
     evaluateBlockedPath?: EvaluateBlockedPath;
     evaluateBlockedSubdomain?: EvaluateBlockedSubdomain;
     handleRuntimeMessage?: (message: unknown, sender: unknown) => unknown;
+    recoverCaptivePortalNavigation?: (context: ConfirmBlockedScreenContext) => Promise<boolean>;
     allowLocalRuntimeDependency?: (input: {
       anchorHost: string;
       dependencyHost: string;
@@ -183,6 +184,9 @@ function createListenerHarness(
         ? await options.confirmBlockedScreenNavigation(context)
         : false;
     },
+    ...(options.recoverCaptivePortalNavigation
+      ? { recoverCaptivePortalNavigation: options.recoverCaptivePortalNavigation }
+      : {}),
   } as Parameters<typeof registerBackgroundListeners>[0] & {
     confirmBlockedScreenNavigation: (context: ConfirmBlockedScreenContext) => Promise<boolean>;
   };
@@ -697,6 +701,47 @@ void describe('background listeners blocked-screen routing', () => {
     assert.deepEqual(harness.redirects, []);
   });
 
+  void test('tries captive portal recovery for unconfirmed main-frame timeout before giving up', async () => {
+    const recoveryCalls: ConfirmBlockedScreenContext[] = [];
+    const harness = createListenerHarness({
+      confirmBlockedScreenNavigation: () => Promise.resolve(false),
+      recoverCaptivePortalNavigation: (context) => {
+        recoveryCalls.push(context);
+        return Promise.resolve(true);
+      },
+    });
+    assert.ok(harness.webRequestError);
+
+    harness.webRequestError({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      tabId: 18,
+      type: 'main_frame',
+      url: 'https://nce.wedu.comunidad.madrid/login',
+    } as WebRequest.OnErrorOccurredDetailsType);
+
+    await waitForAsyncListeners();
+
+    assert.deepEqual(harness.confirmCalls, [
+      {
+        tabId: 18,
+        hostname: 'nce.wedu.comunidad.madrid',
+        error: 'NS_ERROR_NET_TIMEOUT',
+        origin: null,
+        url: 'https://nce.wedu.comunidad.madrid/login',
+      },
+    ]);
+    assert.deepEqual(recoveryCalls, [
+      {
+        tabId: 18,
+        hostname: 'nce.wedu.comunidad.madrid',
+        error: 'NS_ERROR_NET_TIMEOUT',
+        origin: null,
+        url: 'https://nce.wedu.comunidad.madrid/login',
+      },
+    ]);
+    assert.deepEqual(harness.redirects, []);
+  });
+
   void test('keeps unknown-host main-frame redirects immediate without native confirmation', async () => {
     const harness = createListenerHarness({
       confirmBlockedScreenNavigation: () => Promise.reject(new Error('should not be called')),
@@ -721,6 +766,39 @@ void describe('background listeners blocked-screen routing', () => {
         origin: null,
       },
     ]);
+  });
+
+  void test('passes unknown-host main-frame errors through captive portal recovery before redirect', async () => {
+    const recoveryCalls: ConfirmBlockedScreenContext[] = [];
+    const harness = createListenerHarness({
+      confirmBlockedScreenNavigation: () => Promise.reject(new Error('should not be called')),
+      recoverCaptivePortalNavigation: (context) => {
+        recoveryCalls.push(context);
+        return Promise.resolve(true);
+      },
+    });
+    assert.ok(harness.webRequestError);
+
+    harness.webRequestError({
+      error: 'NS_ERROR_UNKNOWN_HOST',
+      tabId: 19,
+      type: 'main_frame',
+      url: 'https://nce.wedu.comunidad.madrid/login',
+    } as WebRequest.OnErrorOccurredDetailsType);
+
+    await waitForAsyncListeners();
+
+    assert.deepEqual(harness.confirmCalls, []);
+    assert.deepEqual(recoveryCalls, [
+      {
+        tabId: 19,
+        hostname: 'nce.wedu.comunidad.madrid',
+        error: 'NS_ERROR_UNKNOWN_HOST',
+        origin: null,
+        url: 'https://nce.wedu.comunidad.madrid/login',
+      },
+    ]);
+    assert.deepEqual(harness.redirects, []);
   });
 
   void test('uses webNavigation top-frame errors as a fallback for native-confirmed blocks', async () => {

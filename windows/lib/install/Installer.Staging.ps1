@@ -24,6 +24,8 @@ function Initialize-OpenPathInstallDirectories {
         "$OpenPathRoot\scripts",
         "$OpenPathRoot\data\logs",
         "$OpenPathRoot\data\runtime-dependency-queue",
+        "$OpenPathRoot\data\captive-portal-recovery-queue",
+        "$OpenPathRoot\data\captive-portal-recovery-result",
         "$OpenPathRoot\browser-extension\firefox",
         "$OpenPathRoot\browser-extension\firefox-release",
         "$OpenPathRoot\browser-extension\chromium-managed",
@@ -67,6 +69,28 @@ function Initialize-OpenPathInstallDirectories {
             Write-InstallerWarning "  WARNING: Could not enable write access for runtime-dependency-queue: $_"
         }
     }
+
+    $captivePortalRecoveryQueuePath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue -OpenPathRoot $OpenPathRoot
+    if (Test-Path $captivePortalRecoveryQueuePath) {
+        try {
+            Set-OpenPathCapabilityStorageAcl -Path $captivePortalRecoveryQueuePath -Profile CaptivePortalRecoveryQueue
+            Write-InstallerVerbose "  Captive portal recovery queue write access granted for browser users"
+        }
+        catch {
+            Write-InstallerWarning "  WARNING: Could not enable write access for captive-portal-recovery-queue: $_"
+        }
+    }
+
+    $captivePortalRecoveryResultPath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult -OpenPathRoot $OpenPathRoot
+    if (Test-Path $captivePortalRecoveryResultPath) {
+        try {
+            Set-OpenPathCapabilityStorageAcl -Path $captivePortalRecoveryResultPath -Profile CaptivePortalRecoveryResultRead
+            Write-InstallerVerbose "  Captive portal recovery result read access granted for browser users"
+        }
+        catch {
+            Write-InstallerWarning "  WARNING: Could not enable read access for captive-portal-recovery-result: $_"
+        }
+    }
 }
 
 function Copy-OpenPathInstallerRuntime {
@@ -92,6 +116,7 @@ function Copy-OpenPathInstallerRuntime {
         'Apply-RuntimeDependencyQueue.ps1',
         'Enroll-Machine.ps1',
         'Pre-Install-Validation.ps1',
+        'Recover-CaptivePortal.ps1',
         'Start-SSEListener.ps1',
         'Test-DNSHealth.ps1',
         'Update-OpenPath.ps1'

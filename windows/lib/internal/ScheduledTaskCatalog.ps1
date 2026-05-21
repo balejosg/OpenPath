@@ -13,6 +13,12 @@ function Get-OpenPathScheduledTaskCatalog {
             Script = 'scripts\Apply-RuntimeDependencyQueue.ps1'
             GrantUsersRunAccess = $true
         }
+        CaptivePortalRecovery = [PSCustomObject]@{
+            Type = 'CaptivePortalRecovery'
+            Name = "$prefix-CaptivePortalRecovery"
+            Script = 'scripts\Recover-CaptivePortal.ps1'
+            GrantUsersRunAccess = $true
+        }
         Watchdog = [PSCustomObject]@{
             Type = 'Watchdog'
             Name = "$prefix-Watchdog"
@@ -51,7 +57,7 @@ function Get-OpenPathScheduledTaskCatalog {
 function Get-OpenPathScheduledTaskSpec {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Update', 'RuntimeDependencyApply', 'Watchdog', 'Startup', 'SSE', 'AgentUpdate')]
+        [ValidateSet('Update', 'RuntimeDependencyApply', 'CaptivePortalRecovery', 'Watchdog', 'Startup', 'SSE', 'AgentUpdate')]
         [string]$TaskType
     )
 

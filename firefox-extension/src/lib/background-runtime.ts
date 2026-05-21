@@ -50,6 +50,7 @@ interface ConfirmBlockedScreenContext extends BlockedScreenContext {
 
 const NATIVE_HOST_NAME = 'whitelist_native_host';
 const BLOCKED_DNS_SENTINELS = new Set(['0.0.0.0', '::', '192.0.2.1', '100::']);
+const CAPTIVE_PORTAL_RECOVERY_RATE_LIMIT_MS = 30_000;
 interface BackgroundRuntimeOptions {
   hostName?: string;
 }
@@ -87,6 +88,7 @@ export function createBackgroundRuntime(
     string,
     { domain: string; originalUrl: string }
   >();
+  const captivePortalRecoveryAttemptByTabAndHost = new Map<string, number>();
   const blockedMonitorState = createBlockedMonitorState(
     {
       setBadgeText: (options) => browser.action.setBadgeText(options),
@@ -204,6 +206,57 @@ export function createBackgroundRuntime(
 
     const result = response.results.find((item) => item.domain === context.hostname);
     return isNativePolicyBlockedResult(result);
+  }
+
+  function buildCaptivePortalRecoveryKey(tabId: number, hostname: string): string {
+    return `${tabId.toString()}:${hostname.trim().toLowerCase()}`;
+  }
+
+  async function recoverCaptivePortalNavigation(
+    context: ConfirmBlockedScreenContext,
+    options?: { isCurrentNavigation?: () => boolean }
+  ): Promise<boolean> {
+    const key = buildCaptivePortalRecoveryKey(context.tabId, context.hostname);
+    const now = Date.now();
+    const lastAttempt = captivePortalRecoveryAttemptByTabAndHost.get(key);
+    if (lastAttempt !== undefined && now - lastAttempt < CAPTIVE_PORTAL_RECOVERY_RATE_LIMIT_MS) {
+      return false;
+    }
+
+    captivePortalRecoveryAttemptByTabAndHost.set(key, now);
+    const response = await nativeMessagingClient
+      .recoverCaptivePortalNavigation({
+        triggerHost: context.hostname,
+        tabId: context.tabId,
+      })
+      .catch((error: unknown) => {
+        logger.info('[Monitor] Captive portal recovery unavailable', {
+          tabId: context.tabId,
+          hostname: context.hostname,
+          error: getErrorMessage(error),
+        });
+        return { success: false };
+      });
+
+    if (!response.success) {
+      return false;
+    }
+
+    if (options?.isCurrentNavigation?.() === false) {
+      return false;
+    }
+
+    try {
+      await browser.tabs.update(context.tabId, { url: context.url });
+      return true;
+    } catch (error) {
+      logger.info('[Monitor] Captive portal recovery retry failed', {
+        tabId: context.tabId,
+        hostname: context.hostname,
+        error: getErrorMessage(error),
+      });
+      return false;
+    }
   }
 
   async function isNativeHostAvailable(): Promise<boolean> {
@@ -398,10 +451,16 @@ export function createBackgroundRuntime(
             blockedPageContextByTabAndDomain.delete(key);
           }
         }
+        for (const key of captivePortalRecoveryAttemptByTabAndHost.keys()) {
+          if (key.startsWith(`${tabId.toString()}:`)) {
+            captivePortalRecoveryAttemptByTabAndHost.delete(key);
+          }
+        }
       },
       evaluateBlockedPath: blockedPathRulesController.evaluateRequest,
       evaluateBlockedSubdomain: blockedSubdomainRulesController.evaluateRequest,
       confirmBlockedScreenNavigation,
+      recoverCaptivePortalNavigation,
       handleRuntimeMessage,
       recordDependencyObservationEvent: recordOpenPathDependencyObservationEvent,
       redirectToBlockedScreen,

@@ -87,6 +87,26 @@ function Register-OpenPathTask {
     Grant-OpenPathTaskRunAccessToUsers -TaskName $runtimeDependencyDefinition.TaskName | Out-Null
     Write-OpenPathLog "Registered: $($runtimeDependencyDefinition.TaskName) (on demand runtime dependencies)"
 
+    $captivePortalRecoverySpec = Get-OpenPathScheduledTaskSpec -TaskType CaptivePortalRecovery
+    $captivePortalRecoveryAction = New-OpenPathTaskAction -Target (Join-OpenPathTaskScriptPath -OpenPathRoot $openPathRoot -RelativePath $captivePortalRecoverySpec.Script)
+    $captivePortalRecoveryTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(10)
+    $captivePortalRecoverySettings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -RestartCount 1 `
+        -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 1)
+    $captivePortalRecoveryDefinition = New-OpenPathTaskDefinition `
+        -TaskName $captivePortalRecoverySpec.Name `
+        -Action $captivePortalRecoveryAction `
+        -Trigger $captivePortalRecoveryTrigger `
+        -Principal $updatePrincipal `
+        -Settings $captivePortalRecoverySettings
+    Register-OpenPathTaskDefinition -Definition $captivePortalRecoveryDefinition
+    Grant-OpenPathTaskRunAccessToUsers -TaskName $captivePortalRecoveryDefinition.TaskName | Out-Null
+    Write-OpenPathLog "Registered: $($captivePortalRecoveryDefinition.TaskName) (on demand captive portal recovery)"
+
     $watchdogDefinition = New-OpenPathWatchdogTaskDefinition `
         -OpenPathRoot $openPathRoot `
         -WatchdogIntervalMinutes $WatchdogIntervalMinutes `
@@ -175,7 +195,7 @@ function Start-OpenPathTask {
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [ValidateSet("Update", "RuntimeDependencyApply", "Watchdog", "Startup", "SSE", "AgentUpdate")]
+        [ValidateSet("Update", "RuntimeDependencyApply", "CaptivePortalRecovery", "Watchdog", "Startup", "SSE", "AgentUpdate")]
         [string]$TaskType = "Update"
     )
 

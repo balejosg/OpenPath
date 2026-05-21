@@ -136,6 +136,123 @@ function Normalize-NativeHostRuntimeDependencyHost {
     return (Normalize-OpenPathRuntimeDependencyHost -Value $Value)
 }
 
+function Normalize-NativeHostCaptivePortalTriggerHost {
+    param([AllowNull()][object]$Value)
+
+    return (Normalize-NativeHostRuntimeDependencyHost -Value $Value)
+}
+
+function Get-NativeHostCaptivePortalRecoveryQueuePath {
+    if ($env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH) {
+        return $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH
+    }
+
+    return (Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue -OpenPathRoot $script:OpenPathRoot)
+}
+
+function Get-NativeHostCaptivePortalRecoveryResultPath {
+    if ($env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH) {
+        return $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH
+    }
+
+    return (Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult -OpenPathRoot $script:OpenPathRoot)
+}
+
+function Write-NativeHostCaptivePortalRecoveryRequest {
+    param(
+        [Parameter(Mandatory = $true)][string]$RequestId,
+        [Parameter(Mandatory = $true)][string]$TriggerHost,
+        [AllowNull()][object]$TabId = $null
+    )
+
+    $queuePath = Get-NativeHostCaptivePortalRecoveryQueuePath
+    New-Item -ItemType Directory -Path $queuePath -Force | Out-Null
+
+    $request = [ordered]@{
+        requestId = $RequestId
+        triggerHost = $TriggerHost
+        createdAtUtc = [DateTime]::UtcNow.ToString('o')
+    }
+
+    if ($null -ne $TabId) {
+        try {
+            $request['tabId'] = [int]$TabId
+        }
+        catch {
+            $request['tabId'] = [string]$TabId
+        }
+    }
+
+    $requestPath = Join-Path $queuePath "$RequestId.json"
+    $request | ConvertTo-Json -Depth 4 | Set-Content -Path $requestPath -Encoding UTF8
+    return $requestPath
+}
+
+function Read-NativeHostCaptivePortalRecoveryResult {
+    param(
+        [Parameter(Mandatory = $true)][string]$RequestId
+    )
+
+    $resultPath = Join-Path (Get-NativeHostCaptivePortalRecoveryResultPath) "$RequestId.json"
+    if (-not (Test-Path $resultPath -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    try {
+        $result = Get-Content -Path $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if (-not $result.PSObject.Properties['requestId']) {
+            return $null
+        }
+        if (-not ([string]$result.requestId).Equals($RequestId, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $null
+        }
+
+        return $result
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-NativeHostRecentCaptivePortalRecoverySuccess {
+    param([int]$RecentSuccessSeconds = 30)
+
+    $resultRoot = Get-NativeHostCaptivePortalRecoveryResultPath
+    if (-not (Test-Path $resultRoot -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    $cutoffUtc = [DateTime]::UtcNow.AddSeconds(-1 * [Math]::Max(1, $RecentSuccessSeconds))
+    $recentResultFile = Get-ChildItem -Path $resultRoot -Filter '*.json' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTimeUtc -ge $cutoffUtc } |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+    if (-not $recentResultFile) {
+        return $null
+    }
+
+    try {
+        $payload = Get-Content -Path $recentResultFile.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $state = if ($payload.PSObject.Properties['state'] -and $payload.state) { [string]$payload.state } else { 'Unknown' }
+        $portalModeActive = if ($payload.PSObject.Properties['portalModeActive']) { [bool]$payload.portalModeActive } else { $false }
+        $success = if ($payload.PSObject.Properties['success']) { [bool]$payload.success } else { $false }
+        if (-not ($success -and ($portalModeActive -or $state -in @('Portal', 'RecentSuccess')))) {
+            return $null
+        }
+
+        return [PSCustomObject]@{
+            RequestId = if ($payload.PSObject.Properties['requestId']) { [string]$payload.requestId } else { '' }
+            State = $state
+            PortalModeActive = $true
+            Path = $recentResultFile.FullName
+            LastWriteTimeUtc = $recentResultFile.LastWriteTimeUtc
+        }
+    }
+    catch {
+        return $null
+    }
+}
+
 function Test-NativeHostBlockedSubdomainMatch {
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
@@ -544,6 +661,124 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
         runtimeDependencyFallback = if ($updateResult -and $updateResult.ContainsKey('runtimeDependencyFallback')) { [bool]$updateResult.runtimeDependencyFallback } else { $false }
         updateTaskName = if ($updateResult -and $updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
         results = $results
+    }
+}
+
+function Invoke-NativeHostCaptivePortalRecoveryAction {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Message
+    )
+
+    $action = 'recover-captive-portal-navigation'
+    $taskName = 'OpenPath-CaptivePortalRecovery'
+    $triggerHost = Normalize-NativeHostCaptivePortalTriggerHost -Value $Message.triggerHost
+    if (-not $triggerHost) {
+        return @{
+            success = $false
+            action = $action
+            state = 'InvalidHost'
+            portalModeActive = $false
+            triggerHost = ''
+            requestId = ''
+            taskName = $taskName
+            triggerMs = 0
+            waitMs = 0
+            error = 'Invalid captive portal trigger host'
+        }
+    }
+
+    $recentSuccess = Get-NativeHostRecentCaptivePortalRecoverySuccess
+    if ($recentSuccess) {
+        return @{
+            success = $true
+            action = $action
+            state = 'RecentSuccess'
+            portalModeActive = $true
+            triggerHost = $triggerHost
+            requestId = [string]$recentSuccess.RequestId
+            taskName = $taskName
+            triggerMs = 0
+            waitMs = 0
+            recentSuccess = $true
+        }
+    }
+
+    $requestId = (New-Guid).Guid
+    $tabId = $null
+    if ($Message.PSObject.Properties['tabId']) {
+        $tabId = $Message.tabId
+    }
+
+    $null = Write-NativeHostCaptivePortalRecoveryRequest `
+        -RequestId $requestId `
+        -TriggerHost $triggerHost `
+        -TabId $tabId
+
+    try {
+        $taskResult = Invoke-NativeHostMutex `
+            -Name 'Global\OpenPathCaptivePortalRecoveryTrigger' `
+            -TimeoutMilliseconds 20000 `
+            -Action {
+                Invoke-OpenPathScheduledTask `
+                    -TaskName $taskName `
+                    -Runner (Get-NativeHostTaskRunner) `
+                    -TimeoutSeconds 20 `
+                    -PollMilliseconds 250 `
+                    -WaitCondition {
+                        return ($null -ne (Read-NativeHostCaptivePortalRecoveryResult -RequestId $requestId))
+                    }
+            }
+    }
+    catch {
+        return @{
+            success = $false
+            action = $action
+            state = 'TriggerFailed'
+            portalModeActive = $false
+            triggerHost = $triggerHost
+            requestId = $requestId
+            taskName = $taskName
+            triggerMs = 0
+            waitMs = 0
+            error = [string]$_
+        }
+    }
+
+    $taskNameResult = if ($taskResult.ContainsKey('taskName') -and $taskResult.taskName) { [string]$taskResult.taskName } else { $taskName }
+    $triggerMs = if ($taskResult.ContainsKey('triggerMs')) { [int]$taskResult.triggerMs } else { 0 }
+    $waitMs = if ($taskResult.ContainsKey('waitMs')) { [int]$taskResult.waitMs } else { 0 }
+
+    $result = Read-NativeHostCaptivePortalRecoveryResult -RequestId $requestId
+    if (-not $result) {
+        return @{
+            success = $false
+            action = $action
+            state = 'Timeout'
+            portalModeActive = $false
+            triggerHost = $triggerHost
+            requestId = $requestId
+            taskName = $taskNameResult
+            triggerMs = $triggerMs
+            waitMs = $waitMs
+            error = if ($taskResult.ContainsKey('error') -and $taskResult.error) { [string]$taskResult.error } else { 'Timed out waiting for captive portal recovery result' }
+        }
+    }
+
+    $state = if ($result.PSObject.Properties['state'] -and $result.state) { [string]$result.state } else { 'Unknown' }
+    $portalModeActive = if ($result.PSObject.Properties['portalModeActive']) { [bool]$result.portalModeActive } else { $false }
+    $success = (($result.PSObject.Properties['success'] -and [bool]$result.success) -or $portalModeActive)
+
+    return @{
+        success = ($success -and ($state -eq 'Portal' -or $portalModeActive))
+        action = $action
+        state = $state
+        portalModeActive = $portalModeActive
+        triggerHost = $triggerHost
+        requestId = $requestId
+        taskName = $taskNameResult
+        triggerMs = $triggerMs
+        waitMs = $waitMs
     }
 }
 
@@ -1076,6 +1311,10 @@ function Invoke-NativeHostMessageAction {
 
         'allow-local-runtime-dependency-batch' {
             return (Invoke-NativeHostLocalRuntimeDependencyBatchAction -Message $Message -State $State -Sections $sections)
+        }
+
+        'recover-captive-portal-navigation' {
+            return (Invoke-NativeHostCaptivePortalRecoveryAction -Message $Message)
         }
 
         default {

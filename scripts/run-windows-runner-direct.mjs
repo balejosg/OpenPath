@@ -24,6 +24,7 @@ const RUN_MODES = new Set([
   'dns-observability-controls',
   'acrylic-purgecache-spike',
   'browser-dependency-observability-spike',
+  'captive-portal-navigation',
   'all',
 ]);
 const DEFAULT_RUN_MODE = 'pester';
@@ -38,6 +39,8 @@ const ACRYLIC_PURGECACHE_SPIKE_GUEST_ARTIFACT_ROOT =
   'C:\\Windows\\Temp\\openpath-acrylic-purgecache-spike';
 const BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_GUEST_ARTIFACT_ROOT =
   'C:\\Windows\\Temp\\openpath-browser-dependency-observability-spike';
+const CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT =
+  'C:\\Windows\\Temp\\openpath-captive-portal-navigation';
 const BROWSER_ENFORCEMENT_ARTIFACTS = [
   'browser-boundary-summary.json',
   'student\\windows-browser-enforcement-report.json',
@@ -161,6 +164,16 @@ const BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_ARTIFACTS = [
   'student-scenario.json',
   'student-policy-scenario-timings.json',
 ];
+const CAPTIVE_PORTAL_NAVIGATION_ARTIFACTS = [
+  'captive-portal-navigation-result.json',
+  'captive-portal-dns-before.json',
+  'captive-portal-dns-after.json',
+  'captive-portal-observation.json',
+  'captive-portal-firefox-navigation-result.json',
+  'direct-captive-portal-navigation-completion.json',
+  'direct-captive-portal-navigation.out.log',
+  'direct-captive-portal-navigation.err.log',
+];
 const DRY_RUN = process.env.OPENPATH_WINDOWS_DIRECT_DRY_RUN === '1';
 
 const currentFilePath = fileURLToPath(import.meta.url);
@@ -178,7 +191,7 @@ Options:
   --results-path <path>       Result file path on the Windows runner relative to the repo root (default: ${DEFAULT_RESULTS_RELATIVE_PATH})
   --runner-repo-root <path>   Explicit OpenPath checkout root on the Windows runner (default: auto-detect under ${DEFAULT_RUNNER_ROOT_GLOB})
   --source-mode <mode>        Source to execute on Windows: runner-checkout or local-overlay (default: ${DEFAULT_SOURCE_MODE})
-  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, browser-dependency-observability-spike, or all (default: ${DEFAULT_RUN_MODE})
+  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, browser-dependency-observability-spike, captive-portal-navigation, or all (default: ${DEFAULT_RUN_MODE})
   --overlay-host <ip>         Local host/IP the Windows VM can use to download the local overlay ZIP
   --browser-enforcement-report
                               Run tests/e2e/ci/windows-browser-enforcement.ps1 -Scope Report after Pester
@@ -497,6 +510,11 @@ function waitForGuestCompletionFile(options, completionPath, { timeoutSeconds = 
 
   const suffix = lastReadError ? ` Last read error: ${lastReadError}` : '';
   throw new Error(`Timed out waiting for Windows completion marker: ${completionPath}.${suffix}`);
+}
+
+function parseJsonText(text) {
+  const trimmed = text.replace(/^\uFEFF/, '').trim();
+  return JSON.parse(trimmed);
 }
 
 function parseGuestNetworkInterfaces(output) {
@@ -1956,6 +1974,110 @@ if ($exitCode -ne 0) {
   }
 }
 
+function runWindowsCaptivePortalNavigation(options, runnerRepoRoot) {
+  const captiveScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-captive-portal-navigation.ps1`;
+  const artifactsRoot = CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT;
+  const completionPath = `${artifactsRoot}\\direct-captive-portal-navigation-completion.json`;
+  const timeoutSeconds = Number.parseInt(options.timeoutSeconds, 10);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$repoRoot = ${JSON.stringify(runnerRepoRoot)}
+$captiveScriptPath = ${JSON.stringify(captiveScriptPath)}
+$artifactsRoot = ${JSON.stringify(artifactsRoot)}
+$completionPath = ${JSON.stringify(completionPath)}
+
+if (-not (Test-Path -LiteralPath $captiveScriptPath)) {
+  throw 'run-windows-captive-portal-navigation.ps1 is missing on the Windows runner checkout.'
+}
+
+function Invoke-OpenPathDirectChildPowerShell {
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    [string[]]$ExtraArguments = @(),
+    [Parameter(Mandatory = $true)][string]$LogName,
+    [int]$TimeoutSeconds = 1800
+  )
+
+  $outPath = Join-Path $artifactsRoot "$LogName.out.log"
+  $errPath = Join-Path $artifactsRoot "$LogName.err.log"
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $ExtraArguments
+  $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $repoRoot -RedirectStandardOutput $outPath -RedirectStandardError $errPath -PassThru
+
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "$LogName timed out after $TimeoutSeconds seconds"
+  }
+
+  $process.Refresh()
+  $exitCode = $process.ExitCode
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+  if ($exitCode -ne 0) {
+    $maxFailureLogChars = 12000
+    $stdout = if (Test-Path -LiteralPath $outPath) { Get-Content -LiteralPath $outPath -Raw } else { '' }
+    $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -LiteralPath $errPath -Raw } else { '' }
+    if ($stdout.Length -gt $maxFailureLogChars) {
+      $stdout = $stdout.Substring($stdout.Length - $maxFailureLogChars)
+    }
+    if ($stderr.Length -gt $maxFailureLogChars) {
+      $stderr = $stderr.Substring($stderr.Length - $maxFailureLogChars)
+    }
+    throw ($LogName + ' exited with code ' + $exitCode + [Environment]::NewLine + 'STDOUT:' + [Environment]::NewLine + $stdout + [Environment]::NewLine + 'STDERR:' + [Environment]::NewLine + $stderr)
+  }
+}
+
+$primaryFailure = $null
+$exitCode = 0
+$errorText = ''
+try {
+  Remove-Item -LiteralPath $artifactsRoot -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
+  Remove-Item -LiteralPath $completionPath -Force -ErrorAction SilentlyContinue
+  Set-Location $repoRoot
+  Invoke-OpenPathDirectChildPowerShell -ScriptPath $captiveScriptPath -ExtraArguments @('-Mode', 'Run', '-ArtifactsRoot', $artifactsRoot) -LogName 'direct-captive-portal-navigation' -TimeoutSeconds ${timeoutSeconds}
+  $resultPath = Join-Path $artifactsRoot 'captive-portal-navigation-result.json'
+  if (-not (Test-Path -LiteralPath $resultPath)) {
+    throw "Captive portal navigation result was not written: $resultPath"
+  }
+  $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+  if (-not ($result.PSObject.Properties['success'] -and [bool]$result.success)) {
+    $resultError = if ($result.PSObject.Properties['error'] -and $result.error) { [string]$result.error } else { 'success=false' }
+    throw "Captive portal navigation result was not successful: $resultError"
+  }
+}
+catch {
+  $primaryFailure = $_
+  $exitCode = 1
+  $errorText = [string]$_
+}
+finally {
+  [pscustomobject]@{
+    exitCode = $exitCode
+    error = $errorText
+    artifactsRoot = $artifactsRoot
+    resultPath = (Join-Path $artifactsRoot 'captive-portal-navigation-result.json')
+    timestamp = (Get-Date).ToString('o')
+  } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $completionPath -Encoding UTF8
+}
+
+if ($exitCode -ne 0) {
+  exit $exitCode
+}
+`;
+  runGuestPowerShellDetached(options, script, {
+    label: 'Run Windows captive portal navigation',
+  });
+  const completion = waitForGuestCompletionFile(options, completionPath, {
+    timeoutSeconds: timeoutSeconds + 900,
+  });
+  if (completion.exitCode !== 0) {
+    throw new Error(
+      `Run Windows captive portal navigation failed: ${completion.error ?? 'unknown error'}`
+    );
+  }
+}
+
 function runBrowserBoundaryCi(options, runnerRepoRoot) {
   const boundaryScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-browser-boundary-ci.ps1`;
   const artifactsRoot = `${runnerRepoRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\browser-boundary`;
@@ -2181,6 +2303,49 @@ function collectArtifacts(options, artifactDir, runnerRoot) {
       64 * 1024 * 1024
     );
   }
+
+  for (const artifactName of CAPTIVE_PORTAL_NAVIGATION_ARTIFACTS) {
+    collectGuestArtifact(
+      options,
+      artifactDir,
+      `${CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
+      artifactName.replace(/\\/g, '-'),
+      64 * 1024 * 1024
+    );
+  }
+
+  const recoveryManifest = readGuestArtifact(
+    options,
+    `${CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT}\\captive-portal-recovery-result-manifest.json`,
+    1024 * 1024
+  );
+  if (recoveryManifest.exists) {
+    writeFileSync(
+      resolve(artifactDir, 'captive-portal-recovery-result-manifest.json'),
+      recoveryManifest.content
+    );
+    try {
+      const manifest = parseJsonText(recoveryManifest.content.toString('utf8'));
+      for (const artifactName of Array.isArray(manifest.files) ? manifest.files : []) {
+        if (!/^captive-portal-recovery-result[\\\/][A-Za-z0-9_.-]+\.json$/.test(artifactName)) {
+          continue;
+        }
+        collectGuestArtifact(
+          options,
+          artifactDir,
+          `${CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT}\\${artifactName.replace(/\//g, '\\')}`,
+          artifactName.replace(/[\\/]/g, '-'),
+          1024 * 1024
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `warning: failed to parse captive portal recovery artifact manifest: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
 }
 
 async function main() {
@@ -2294,6 +2459,10 @@ async function main() {
         options,
         runnerRepoRoot || options.runnerRepoRoot
       );
+    }
+    if (options.mode === 'captive-portal-navigation' || options.mode === 'all') {
+      console.log('step=run-windows-captive-portal-navigation');
+      runWindowsCaptivePortalNavigation(options, runnerRepoRoot || options.runnerRepoRoot);
     }
     if (options.browserEnforcementReport) {
       console.log('step=run-browser-enforcement-report');

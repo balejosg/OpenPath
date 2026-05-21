@@ -34,6 +34,10 @@ interface BackgroundListenersOptions {
     details: WebRequest.OnBeforeRequestDetailsType
   ) => { cancel?: boolean; redirectUrl?: string; reason?: string } | null;
   confirmBlockedScreenNavigation?: (context: ConfirmBlockedScreenContext) => Promise<boolean>;
+  recoverCaptivePortalNavigation?: (
+    context: ConfirmBlockedScreenContext,
+    options?: { isCurrentNavigation?: () => boolean }
+  ) => Promise<boolean>;
   handleRuntimeMessage: (message: unknown, sender: Runtime.MessageSender) => Promise<unknown>;
   localRuntimeDependencyTimeoutMs?: number;
   recordDependencyObservationEvent?: (event: OpenPathDependencyObservationEventInput) => void;
@@ -173,6 +177,9 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
     addBlockedDomain: options.addBlockedDomain,
     ...(options.confirmBlockedScreenNavigation
       ? { confirmBlockedScreenNavigation: options.confirmBlockedScreenNavigation }
+      : {}),
+    ...(options.recoverCaptivePortalNavigation
+      ? { recoverCaptivePortalNavigation: options.recoverCaptivePortalNavigation }
       : {}),
     getBlockedScreenUrl: () => options.browser.runtime.getURL(BLOCKED_SCREEN_PATH),
     getCurrentTabUrl: async (tabId) => {
