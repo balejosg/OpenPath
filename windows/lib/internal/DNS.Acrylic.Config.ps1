@@ -82,7 +82,7 @@ function Update-AcrylicHost {
         $content = ConvertTo-AcrylicHostsContent -Definition $definition
         Write-AcrylicHostsFile -Path $hostsPath -Content $content
 
-        $configurationUpdated = Set-AcrylicConfiguration -WhitelistedDomains $definition.EffectiveWhitelistedDomains -RuntimeDependencyDomains $definition.RuntimeDependencyDomains
+        $configurationUpdated = Set-AcrylicConfiguration -WhitelistedDomains $definition.EffectiveWhitelistedDomains -BlockedSubdomains $definition.BlockedSubdomains -RuntimeDependencyDomains $definition.RuntimeDependencyDomains
         if (-not $configurationUpdated) {
             Write-OpenPathLog "Failed to update AcrylicConfiguration.ini" -Level ERROR
             return $false
@@ -96,6 +96,7 @@ function Set-AcrylicConfiguration {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [AllowEmptyCollection()][string[]]$WhitelistedDomains = @(),
+        [AllowEmptyCollection()][string[]]$BlockedSubdomains = @(),
         [AllowEmptyCollection()][string[]]$RuntimeDependencyDomains = @()
     )
 
@@ -107,14 +108,15 @@ function Set-AcrylicConfiguration {
     $dnsSettings = Get-OpenPathDnsSettings
     Write-OpenPathLog "Configuring Acrylic..."
 
-    $allowedForwardDomains = @(
+    $essentialForwardDomains = @(
         foreach ($group in @(Get-AcrylicEssentialDomainGroups)) {
             @($group.Domains)
         }
-    ) + @($WhitelistedDomains)
+    )
     $affinityMaskEntries = @(
-        Get-AcrylicAffinityMaskEntries -Domains $allowedForwardDomains
-        Get-AcrylicExactAffinityMaskEntries -Domains $RuntimeDependencyDomains
+        Get-AcrylicAffinityMaskEntries -Domains $essentialForwardDomains
+        Get-AcrylicAffinityMaskEntries -Domains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains
+        Get-AcrylicExactAffinityMaskEntries -Domains (Get-AcrylicAllowedRuntimeDependencyDomains -Domains $RuntimeDependencyDomains -BlockedSubdomains $BlockedSubdomains)
     ) | Select-Object -Unique
     $domainAffinityMask = ($affinityMaskEntries -join ';')
 

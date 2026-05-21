@@ -1254,8 +1254,8 @@ describe('repository verification contract', () => {
 
     assert.match(
       dnsConfigModule,
-      /\$allowedForwardDomains = @\([\s\S]*?Get-AcrylicEssentialDomainGroups[\s\S]*?\+ @\(\$WhitelistedDomains\)[\s\S]*?\)/,
-      'Set-AcrylicConfiguration should build upstream forwarding masks from essential and whitelisted domains'
+      /\$essentialForwardDomains = @\([\s\S]*?Get-AcrylicEssentialDomainGroups[\s\S]*?\)[\s\S]*?Get-AcrylicAffinityMaskEntries -Domains \$essentialForwardDomains[\s\S]*?Get-AcrylicAffinityMaskEntries -Domains \$WhitelistedDomains -BlockedSubdomains \$BlockedSubdomains/,
+      'Set-AcrylicConfiguration should build upstream forwarding masks from essential domains and blocked-descendant-aware whitelisted domains'
     );
     assert.match(
       dnsConfigModule,

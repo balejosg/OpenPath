@@ -56,7 +56,10 @@ function Get-AcrylicEssentialDomainGroups {
 
 function Get-AcrylicAffinityMaskEntries {
     [CmdletBinding()]
-    param([string[]]$Domains = @())
+    param(
+        [string[]]$Domains = @(),
+        [string[]]$BlockedSubdomains = @()
+    )
 
     $entries = [System.Collections.Generic.List[string]]::new()
     $seenEntries = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -66,7 +69,19 @@ function Get-AcrylicAffinityMaskEntries {
         if ($normalizedDomain.StartsWith('*.')) { $normalizedDomain = $normalizedDomain.Substring(2) }
         if (-not $normalizedDomain) { continue }
 
-        foreach ($entry in @($normalizedDomain, "*.$normalizedDomain")) {
+        $hasBlockedDescendant = $false
+        foreach ($subdomain in @($BlockedSubdomains)) {
+            $normalizedSubdomain = ([string]$subdomain).Trim().TrimEnd('.')
+            if (-not $normalizedSubdomain) { continue }
+            if ($normalizedSubdomain.Length -le ($normalizedDomain.Length + 1)) { continue }
+            if ($normalizedSubdomain.EndsWith(".$normalizedDomain", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $hasBlockedDescendant = $true
+                break
+            }
+        }
+
+        $domainEntries = if ($hasBlockedDescendant) { @($normalizedDomain) } else { @($normalizedDomain, "*.$normalizedDomain") }
+        foreach ($entry in $domainEntries) {
             if ($seenEntries.Add($entry)) { [void]$entries.Add($entry) }
         }
     }
@@ -89,6 +104,23 @@ function Get-AcrylicExactAffinityMaskEntries {
     }
 
     return $entries.ToArray()
+}
+
+function Get-AcrylicAllowedRuntimeDependencyDomains {
+    [CmdletBinding()]
+    param(
+        [string[]]$Domains = @(),
+        [string[]]$BlockedSubdomains = @()
+    )
+
+    return @(
+        foreach ($domain in @($Domains)) {
+            $normalizedDependency = ([string]$domain).Trim().Trim('.')
+            if (-not $normalizedDependency) { continue }
+            if (Test-OpenPathBlockedSubdomainMatch -Domain $normalizedDependency -BlockedSubdomains $BlockedSubdomains) { continue }
+            $normalizedDependency
+        }
+    )
 }
 
 function Get-AcrylicExactForwardRule {
@@ -154,14 +186,8 @@ function New-AcrylicHostsDefinition {
 
     $blockedLines = @(foreach ($subdomain in $BlockedSubdomains) { $normalizedSubdomain = ([string]$subdomain).Trim(); if ($normalizedSubdomain) { "NX >$normalizedSubdomain" } })
     $whitelistLines = @(foreach ($domain in $effectiveWhitelistedDomains) { @(Get-AcrylicForwardRules -Domain $domain -BlockedSubdomains $BlockedSubdomains) })
-    $runtimeDependencyLines = @(
-        foreach ($domain in @($RuntimeDependencyDomains)) {
-            $normalizedDependency = ([string]$domain).Trim().Trim('.')
-            if (-not $normalizedDependency) { continue }
-            if (Test-OpenPathBlockedSubdomainMatch -Domain $normalizedDependency -BlockedSubdomains $BlockedSubdomains) { continue }
-            Get-AcrylicExactForwardRule -Domain $normalizedDependency
-        }
-    )
+    $effectiveRuntimeDependencyDomains = @(Get-AcrylicAllowedRuntimeDependencyDomains -Domains $RuntimeDependencyDomains -BlockedSubdomains $BlockedSubdomains)
+    $runtimeDependencyLines = @(foreach ($domain in $effectiveRuntimeDependencyDomains) { Get-AcrylicExactForwardRule -Domain $domain })
 
     $sections = @(
         (New-AcrylicHostsSection -Title 'ESSENTIAL DOMAINS (always allowed)' -Description 'Required for system operation' -Lines $essentialLines)
@@ -176,8 +202,9 @@ function New-AcrylicHostsDefinition {
     $sections += New-AcrylicHostsSection -Title 'DEFAULT BLOCK (NXDOMAIN for everything else)' -Description 'This MUST come last after FW rules.' -Lines @('NX *')
 
     $affinityMaskEntries = @(
-        Get-AcrylicAffinityMaskEntries -Domains @($essentialDomains + $effectiveWhitelistedDomains)
-        Get-AcrylicExactAffinityMaskEntries -Domains @($RuntimeDependencyDomains)
+        Get-AcrylicAffinityMaskEntries -Domains @($essentialDomains)
+        Get-AcrylicAffinityMaskEntries -Domains @($effectiveWhitelistedDomains) -BlockedSubdomains $BlockedSubdomains
+        Get-AcrylicExactAffinityMaskEntries -Domains @($effectiveRuntimeDependencyDomains)
     ) | Select-Object -Unique
 
     return [PSCustomObject]@{
@@ -187,7 +214,7 @@ function New-AcrylicHostsDefinition {
         OriginalWhitelistedDomainCount = $originalWhitelistedDomainCount
         EffectiveWhitelistedDomains = $effectiveWhitelistedDomains
         EssentialDomains = @($essentialDomains)
-        RuntimeDependencyDomains = @($RuntimeDependencyDomains)
+        RuntimeDependencyDomains = @($effectiveRuntimeDependencyDomains)
         AffinityMaskEntries = @($affinityMaskEntries)
         DomainAffinityMask = ($affinityMaskEntries -join ';')
         BlockedSubdomains = @($BlockedSubdomains)

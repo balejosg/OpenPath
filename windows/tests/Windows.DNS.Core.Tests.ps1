@@ -819,6 +819,93 @@ Describe "DNS Module" {
             $script:capturedAcrylicConfig | Should -Not -Match 'SecondaryServerDomainNameAffinityMask=.*blocked\.127\.0\.0\.1\.sslip\.io'
         }
 
+        It "Does not forward blocked descendants through a whitelisted parent affinity wildcard" {
+            $script:capturedAcrylicConfig = $null
+
+            Mock Get-AcrylicPath { 'C:\Program Files (x86)\Acrylic DNS Proxy' } -ModuleName DNS
+            Mock Get-OpenPathDnsSettings {
+                [PSCustomObject]@{
+                    PrimaryDNS = '1.1.1.1'
+                    SecondaryDNS = '1.0.0.1'
+                    MaxDomains = 10
+                }
+            } -ModuleName DNS
+            Mock Test-Path { $false } -ModuleName DNS -ParameterFilter { $Path -like '*AcrylicConfiguration.ini' }
+            Mock Write-AcrylicConfigFile {
+                param(
+                    [string]$Path,
+                    [string]$Content
+                )
+
+                if ($Path -like '*AcrylicConfiguration.ini') {
+                    $script:capturedAcrylicConfig = $Content
+                }
+            } -ModuleName DNS
+
+            $result = Set-AcrylicConfiguration `
+                -WhitelistedDomains @('base-only.127.0.0.1.sslip.io', 'static.example.test') `
+                -BlockedSubdomains @('cdn.base-only.127.0.0.1.sslip.io')
+
+            $result | Should -BeTrue
+            $script:capturedAcrylicConfig | Should -Not -BeNullOrEmpty
+            $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*base-only\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*\*\.base-only\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*cdn\.base-only\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*static\.example\.test;\*\.static\.example\.test'
+            $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*raw\.githubusercontent\.com;\*\.raw\.githubusercontent\.com'
+            $script:capturedAcrylicConfig | Should -Not -Match 'SecondaryServerDomainNameAffinityMask=.*\*\.base-only\.127\.0\.0\.1\.sslip\.io'
+        }
+
+        It "Does not forward runtime dependency domains blocked by policy" {
+            $script:capturedAcrylicConfig = $null
+
+            Mock Get-AcrylicPath { 'C:\Program Files (x86)\Acrylic DNS Proxy' } -ModuleName DNS
+            Mock Get-OpenPathDnsSettings {
+                [PSCustomObject]@{
+                    PrimaryDNS = '1.1.1.1'
+                    SecondaryDNS = '1.0.0.1'
+                    MaxDomains = 10
+                }
+            } -ModuleName DNS
+            Mock Test-Path { $false } -ModuleName DNS -ParameterFilter { $Path -like '*AcrylicConfiguration.ini' }
+            Mock Write-AcrylicConfigFile {
+                param(
+                    [string]$Path,
+                    [string]$Content
+                )
+
+                if ($Path -like '*AcrylicConfiguration.ini') {
+                    $script:capturedAcrylicConfig = $Content
+                }
+            } -ModuleName DNS
+
+            $definition = InModuleScope DNS {
+                New-AcrylicHostsDefinition `
+                    -WhitelistedDomains @('base-only.127.0.0.1.sslip.io') `
+                    -BlockedSubdomains @('cdn.base-only.127.0.0.1.sslip.io') `
+                    -RuntimeDependencyDomains @('cdn.base-only.127.0.0.1.sslip.io', 'api.base-only.127.0.0.1.sslip.io') `
+                    -DnsSettings ([PSCustomObject]@{
+                        PrimaryDNS = '1.1.1.1'
+                        SecondaryDNS = '1.0.0.1'
+                        MaxDomains = 10
+                    })
+            }
+
+            $definition.RuntimeDependencyDomains | Should -Not -Contain 'cdn.base-only.127.0.0.1.sslip.io'
+            $definition.DomainAffinityMask | Should -Not -Match 'cdn\.base-only\.127\.0\.0\.1\.sslip\.io'
+            $definition.DomainAffinityMask | Should -Match 'api\.base-only\.127\.0\.0\.1\.sslip\.io'
+
+            $result = Set-AcrylicConfiguration `
+                -WhitelistedDomains @('base-only.127.0.0.1.sslip.io') `
+                -BlockedSubdomains @('cdn.base-only.127.0.0.1.sslip.io') `
+                -RuntimeDependencyDomains @('cdn.base-only.127.0.0.1.sslip.io', 'api.base-only.127.0.0.1.sslip.io')
+
+            $result | Should -BeTrue
+            $script:capturedAcrylicConfig | Should -Not -BeNullOrEmpty
+            $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*cdn\.base-only\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*api\.base-only\.127\.0\.0\.1\.sslip\.io'
+        }
+
         It "Allows install-time Acrylic configuration before any classroom whitelist exists" {
             $script:capturedAcrylicConfig = $null
 
