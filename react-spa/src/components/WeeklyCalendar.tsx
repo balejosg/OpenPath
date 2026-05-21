@@ -31,7 +31,7 @@ const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     <div
       className={cn(
         'border border-slate-200 rounded-lg bg-white overflow-hidden shadow-sm',
-        fillAvailable ? 'md:min-h-0 md:flex-1 md:flex md:flex-col' : ''
+        fillAvailable ? 'lg:min-h-0 lg:flex-1 lg:flex lg:flex-col' : ''
       )}
     >
       <WeeklyCalendarHeader
@@ -43,7 +43,7 @@ const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
       <div
         className={cn(
           fillAvailable
-            ? 'max-h-[520px] overflow-y-auto md:max-h-none md:min-h-0 md:flex-1'
+            ? 'max-h-[520px] overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1'
             : 'max-h-[520px] md:max-h-[640px] overflow-y-auto'
         )}
       >

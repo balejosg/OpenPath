@@ -56,7 +56,7 @@ export const Tabs: React.FC<TabsProps> = ({
 
   return (
     <div
-      className={cn('overflow-x-auto border-b border-slate-200', className)}
+      className={cn('overflow-x-auto overflow-y-hidden border-b border-slate-200', className)}
       role="tablist"
       aria-label={ariaLabel ?? 'Navigation tabs'}
     >

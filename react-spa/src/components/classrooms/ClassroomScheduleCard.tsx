@@ -65,7 +65,7 @@ export default function ClassroomScheduleCard({
     <div
       className={cn(
         'bg-white border border-slate-200 rounded-lg p-6 flex-1 flex flex-col shadow-sm',
-        fillAvailable ? 'md:min-h-0 md:overflow-hidden' : ''
+        fillAvailable ? 'lg:min-h-0 lg:overflow-hidden' : ''
       )}
     >
       <div className="flex justify-between items-center mb-4">
@@ -115,7 +115,7 @@ export default function ClassroomScheduleCard({
           <div
             className={cn(
               'mt-5 pt-4 border-t border-slate-200',
-              fillAvailable ? 'md:max-h-56 md:overflow-y-auto' : ''
+              fillAvailable ? 'lg:max-h-56 lg:overflow-y-auto' : ''
             )}
           >
             <div className="flex items-center justify-between mb-3">

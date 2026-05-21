@@ -134,19 +134,19 @@ const AppContent: React.FC = () => {
   const isClassroomsView = activeTab === 'classrooms';
   const appShellClassName = cn(
     'flex min-h-screen bg-slate-50 font-sans text-slate-900',
-    isClassroomsView ? 'md:h-screen md:overflow-hidden' : ''
+    isClassroomsView ? 'lg:h-screen lg:overflow-hidden' : ''
   );
   const contentShellClassName = cn(
     'flex-1 md:ml-64 flex flex-col min-h-screen',
-    isClassroomsView ? 'md:h-full md:min-h-0 md:overflow-hidden' : ''
+    isClassroomsView ? 'lg:h-full lg:min-h-0 lg:overflow-hidden' : ''
   );
   const mainClassName = cn(
     'flex-1 p-6 md:p-8',
-    isClassroomsView ? 'overflow-y-auto md:min-h-0 md:overflow-hidden' : 'overflow-y-auto'
+    isClassroomsView ? 'overflow-y-auto lg:min-h-0 lg:overflow-hidden' : 'overflow-y-auto'
   );
   const contentWrapperClassName = cn(
     'mx-auto max-w-7xl',
-    isClassroomsView ? 'md:h-full md:min-h-0' : ''
+    isClassroomsView ? 'lg:h-full lg:min-h-0' : ''
   );
 
   if (!isAuth) {

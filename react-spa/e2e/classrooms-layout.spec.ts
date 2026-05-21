@@ -202,4 +202,39 @@ test.describe('Classrooms split-view layout', () => {
     expect(panelBox).not.toBeNull();
     expect(tabBox!.y + tabBox!.height).toBeLessThanOrEqual(panelBox!.y + 4);
   });
+
+  test('keeps compact layouts usable when the classroom list is long', async ({ page }) => {
+    for (const width of [760, 900]) {
+      await page.setViewportSize({ width, height: 800 });
+      await navigateToClassrooms(page);
+
+      const listScrollArea = await getClassroomListScrollArea(page);
+      const listMetrics = await listScrollArea.evaluate((list) => ({
+        scrollHeight: list.scrollHeight,
+        clientHeight: list.clientHeight,
+        overflowY: window.getComputedStyle(list).overflowY,
+      }));
+      expect(listMetrics.overflowY).toBe('auto');
+      expect(listMetrics.scrollHeight).toBeGreaterThan(listMetrics.clientHeight + 100);
+      expect(listMetrics.clientHeight).toBeLessThanOrEqual(360);
+
+      const tabListBox = await page
+        .getByRole('tablist', { name: /classroom detail sections/i })
+        .boundingBox();
+      expect(tabListBox).not.toBeNull();
+      expect(tabListBox!.y).toBeLessThan(760);
+
+      const tabListOverflow = await page
+        .getByRole('tablist', { name: /classroom detail sections/i })
+        .evaluate((tabList) => ({
+          overflowX: window.getComputedStyle(tabList).overflowX,
+          overflowY: window.getComputedStyle(tabList).overflowY,
+          scrollHeight: tabList.scrollHeight,
+          clientHeight: tabList.clientHeight,
+        }));
+      expect(tabListOverflow.overflowX).toBe('auto');
+      expect(tabListOverflow.overflowY).toBe('hidden');
+      expect(tabListOverflow.scrollHeight).toBeLessThanOrEqual(tabListOverflow.clientHeight + 2);
+    }
+  });
 });

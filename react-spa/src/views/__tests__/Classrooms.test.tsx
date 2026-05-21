@@ -591,22 +591,22 @@ describe('Classrooms', () => {
 
     await screen.findByText('Classroom settings and status');
 
-    const splitView = container.querySelector('[class*="flex-col"][class*="md:flex-row"]');
+    const splitView = container.querySelector('[class*="flex-col"][class*="lg:flex-row"]');
     expect(splitView).not.toBeNull();
 
     const listPane = splitView?.children.item(0);
     const detailPane = splitView?.children.item(1);
     const splitViewTokens = (splitView?.className ?? '').split(/\s+/);
 
-    expect(splitViewTokens).toContain('md:h-full');
-    expect(splitViewTokens).toContain('md:min-h-0');
-    expect(splitViewTokens).toContain('md:overflow-hidden');
+    expect(splitViewTokens).toContain('lg:h-full');
+    expect(splitViewTokens).toContain('lg:min-h-0');
+    expect(splitViewTokens).toContain('lg:overflow-hidden');
     expect(listPane?.className).toContain('shrink-0');
-    expect(listPane?.className).toContain('md:w-80');
+    expect(listPane?.className).toContain('lg:w-80');
     expect(detailPane?.className).toContain('min-w-0');
   });
 
-  it('only constrains the classrooms split view height from md upwards', async () => {
+  it('only constrains the classrooms split view height from lg upwards', async () => {
     mockClassroomsListQuery.mockResolvedValue([
       {
         id: 'classroom-1',
@@ -625,19 +625,19 @@ describe('Classrooms', () => {
 
     await screen.findByText('Classroom settings and status');
 
-    const splitView = container.querySelector('[class*="flex-col"][class*="md:flex-row"]');
+    const splitView = container.querySelector('[class*="flex-col"][class*="lg:flex-row"]');
     expect(splitView).not.toBeNull();
 
     const splitViewTokens = (splitView?.className ?? '').split(/\s+/);
     const detailPane = splitView?.children.item(1);
     const detailPaneTokens = (detailPane?.className ?? '').split(/\s+/);
 
-    expect(splitViewTokens).toContain('md:h-full');
-    expect(splitViewTokens).toContain('md:min-h-0');
-    expect(splitViewTokens).toContain('md:overflow-hidden');
+    expect(splitViewTokens).toContain('lg:h-full');
+    expect(splitViewTokens).toContain('lg:min-h-0');
+    expect(splitViewTokens).toContain('lg:overflow-hidden');
     expect(splitViewTokens).not.toContain('h-[calc(100vh-8rem)]');
-    expect(detailPaneTokens).toContain('md:min-h-0');
-    expect(detailPaneTokens).toContain('md:overflow-hidden');
+    expect(detailPaneTokens).toContain('lg:min-h-0');
+    expect(detailPaneTokens).toContain('lg:overflow-hidden');
     expect(detailPaneTokens).not.toContain('overflow-y-auto');
   });
 

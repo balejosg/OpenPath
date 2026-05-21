@@ -142,17 +142,17 @@ describe('ClassroomScheduleCard', () => {
   it('enables desktop-constrained fill mode without changing the mobile defaults', () => {
     const { container, rerender } = render(<ClassroomScheduleCard {...buildProps()} />);
 
-    expect(container.firstElementChild).not.toHaveClass('md:min-h-0', 'md:overflow-hidden');
+    expect(container.firstElementChild).not.toHaveClass('lg:min-h-0', 'lg:overflow-hidden');
     expect(screen.getByTestId('weekly-calendar')).toHaveAttribute('data-fill-available', 'false');
 
     rerender(<ClassroomScheduleCard {...buildProps({ fillAvailable: true })} />);
 
-    expect(container.firstElementChild).toHaveClass('md:min-h-0', 'md:overflow-hidden');
+    expect(container.firstElementChild).toHaveClass('lg:min-h-0', 'lg:overflow-hidden');
     expect(container.firstElementChild).not.toHaveClass('min-h-0', 'overflow-hidden');
     expect(screen.getByTestId('weekly-calendar')).toHaveAttribute('data-fill-available', 'true');
     expect(screen.getByText('One-off assignments').closest('div.mt-5')).toHaveClass(
-      'md:overflow-y-auto',
-      'md:max-h-56'
+      'lg:overflow-y-auto',
+      'lg:max-h-56'
     );
     expect(screen.getByText('One-off assignments').closest('div.mt-5')).not.toHaveClass(
       'max-h-48',

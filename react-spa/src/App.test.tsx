@@ -250,16 +250,16 @@ describe('App', () => {
       expect(screen.getByText('Classrooms none')).toBeInTheDocument();
     });
 
-    expect(screen.getByTestId('openpath-shell-root')).toHaveClass('md:h-screen');
-    expect(screen.getByTestId('openpath-shell-root')).toHaveClass('md:overflow-hidden');
-    expect(screen.getByTestId('openpath-shell-content')).toHaveClass('md:h-full');
-    expect(screen.getByTestId('openpath-shell-content')).toHaveClass('md:min-h-0');
-    expect(screen.getByTestId('openpath-shell-content')).toHaveClass('md:overflow-hidden');
+    expect(screen.getByTestId('openpath-shell-root')).toHaveClass('lg:h-screen');
+    expect(screen.getByTestId('openpath-shell-root')).toHaveClass('lg:overflow-hidden');
+    expect(screen.getByTestId('openpath-shell-content')).toHaveClass('lg:h-full');
+    expect(screen.getByTestId('openpath-shell-content')).toHaveClass('lg:min-h-0');
+    expect(screen.getByTestId('openpath-shell-content')).toHaveClass('lg:overflow-hidden');
     expect(screen.getByTestId('openpath-shell-main')).toHaveClass('overflow-y-auto');
-    expect(screen.getByTestId('openpath-shell-main')).toHaveClass('md:min-h-0');
-    expect(screen.getByTestId('openpath-shell-main')).toHaveClass('md:overflow-hidden');
-    expect(screen.getByTestId('openpath-shell-content-wrapper')).toHaveClass('md:h-full');
-    expect(screen.getByTestId('openpath-shell-content-wrapper')).toHaveClass('md:min-h-0');
+    expect(screen.getByTestId('openpath-shell-main')).toHaveClass('lg:min-h-0');
+    expect(screen.getByTestId('openpath-shell-main')).toHaveClass('lg:overflow-hidden');
+    expect(screen.getByTestId('openpath-shell-content-wrapper')).toHaveClass('lg:h-full');
+    expect(screen.getByTestId('openpath-shell-content-wrapper')).toHaveClass('lg:min-h-0');
 
     fireEvent.click(screen.getByText('Ir configuracion'));
 
@@ -267,10 +267,10 @@ describe('App', () => {
       expect(screen.getByText('Settings view')).toBeInTheDocument();
     });
 
-    expect(screen.getByTestId('openpath-shell-root')).not.toHaveClass('md:h-screen');
-    expect(screen.getByTestId('openpath-shell-root')).not.toHaveClass('md:overflow-hidden');
-    expect(screen.getByTestId('openpath-shell-content')).not.toHaveClass('md:h-screen');
-    expect(screen.getByTestId('openpath-shell-content')).not.toHaveClass('md:overflow-hidden');
+    expect(screen.getByTestId('openpath-shell-root')).not.toHaveClass('lg:h-screen');
+    expect(screen.getByTestId('openpath-shell-root')).not.toHaveClass('lg:overflow-hidden');
+    expect(screen.getByTestId('openpath-shell-content')).not.toHaveClass('lg:h-screen');
+    expect(screen.getByTestId('openpath-shell-content')).not.toHaveClass('lg:overflow-hidden');
     expect(screen.getByTestId('openpath-shell-main')).toHaveClass('overflow-y-auto');
   });
 

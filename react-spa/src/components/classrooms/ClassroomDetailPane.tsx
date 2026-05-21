@@ -159,7 +159,7 @@ export default function ClassroomDetailPane({
           role="tabpanel"
           aria-labelledby="classroom-detail-tab-settings"
           hidden={activeTab !== 'settings'}
-          className="h-full min-h-0 md:overflow-y-auto custom-scrollbar"
+          className="h-full min-h-0 lg:overflow-y-auto custom-scrollbar"
         >
           <ClassroomConfigCard
             admin={admin}
@@ -181,7 +181,7 @@ export default function ClassroomDetailPane({
           role="tabpanel"
           aria-labelledby="classroom-detail-tab-machines"
           hidden={activeTab !== 'machines'}
-          className="h-full min-h-0 md:overflow-y-auto custom-scrollbar"
+          className="h-full min-h-0 lg:overflow-y-auto custom-scrollbar"
         >
           <ClassroomMachinesCard
             admin={admin}
@@ -204,7 +204,7 @@ export default function ClassroomDetailPane({
           role="tabpanel"
           aria-labelledby="classroom-detail-tab-schedule"
           hidden={activeTab !== 'schedule'}
-          className="h-full min-h-0 md:overflow-hidden"
+          className="h-full min-h-0 lg:overflow-hidden"
         >
           <ClassroomScheduleCard
             admin={admin}
