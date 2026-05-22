@@ -26,6 +26,30 @@
       "nodes": ["node_modules/brace-expansion"],
       "fixAvailable": true
     },
+    "gaxios": {
+      "name": "gaxios",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": ["uuid"],
+      "effects": [],
+      "range": "6.4.0 - 6.7.1",
+      "nodes": ["node_modules/gaxios"],
+      "fixAvailable": true
+    },
+    "node-notifier": {
+      "name": "node-notifier",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": ["uuid"],
+      "effects": ["web-ext"],
+      "range": ">=7.0.0",
+      "nodes": ["node_modules/node-notifier"],
+      "fixAvailable": {
+        "name": "web-ext",
+        "version": "10.2.0",
+        "isSemVerMajor": false
+      }
+    },
     "turbo": {
       "name": "turbo",
       "severity": "moderate",
@@ -65,6 +89,52 @@
       "nodes": ["node_modules/turbo"],
       "fixAvailable": true
     },
+    "uuid": {
+      "name": "uuid",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1119441,
+          "name": "uuid",
+          "dependency": "uuid",
+          "title": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided",
+          "url": "https://github.com/advisories/GHSA-w5hq-g745-h8pq",
+          "severity": "moderate",
+          "cwe": ["CWE-787", "CWE-1285"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": "<11.1.1"
+        }
+      ],
+      "effects": ["gaxios", "node-notifier"],
+      "range": "<11.1.1",
+      "nodes": [
+        "node_modules/gaxios/node_modules/uuid",
+        "node_modules/node-notifier/node_modules/uuid"
+      ],
+      "fixAvailable": {
+        "name": "web-ext",
+        "version": "10.2.0",
+        "isSemVerMajor": false
+      }
+    },
+    "web-ext": {
+      "name": "web-ext",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": ["node-notifier"],
+      "effects": [],
+      "range": "5.0.0 - 10.1.0",
+      "nodes": ["node_modules/web-ext"],
+      "fixAvailable": {
+        "name": "web-ext",
+        "version": "10.2.0",
+        "isSemVerMajor": false
+      }
+    },
     "ws": {
       "name": "ws",
       "severity": "moderate",
@@ -95,10 +165,10 @@
     "vulnerabilities": {
       "info": 0,
       "low": 0,
-      "moderate": 3,
+      "moderate": 7,
       "high": 0,
       "critical": 0,
-      "total": 3
+      "total": 7
     },
     "dependencies": {
       "prod": 276,
