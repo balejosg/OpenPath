@@ -54,6 +54,7 @@ await describe('native messaging client', async () => {
             domain: 'example.com',
             in_whitelist: true,
             policy_active: true,
+            portal_recovery_eligible: true,
             resolves: true,
             resolved_ip: '127.0.0.1',
           },
@@ -69,6 +70,7 @@ await describe('native messaging client', async () => {
           domain: 'example.com',
           inWhitelist: true,
           policyActive: true,
+          portalRecoveryEligible: true,
           resolves: true,
           resolvedIp: '127.0.0.1',
         },
@@ -89,7 +91,7 @@ await describe('native messaging client', async () => {
     const { browser, messages } = createRecordingBrowserStub(() => ({
       success: true,
       action: 'recover-captive-portal-navigation',
-      triggerHost: 'nce.wedu.comunidad.madrid',
+      triggerHost: 'portal.example',
       tabId: 42,
       requestId: 'native-request-1',
       portalModeActive: true,
@@ -100,7 +102,7 @@ await describe('native messaging client', async () => {
     });
 
     const response = await client.recoverCaptivePortalNavigation({
-      triggerHost: 'nce.wedu.comunidad.madrid',
+      triggerHost: 'portal.example',
       tabId: 42,
     });
 
@@ -109,7 +111,8 @@ await describe('native messaging client', async () => {
     assert.deepEqual(messages, [
       {
         action: 'recover-captive-portal-navigation',
-        triggerHost: 'nce.wedu.comunidad.madrid',
+        operation: 'open',
+        triggerHost: 'portal.example',
         tabId: 42,
       },
     ]);

@@ -103,6 +103,7 @@ void describe('Firefox extension manifest policy', () => {
       'webRequest',
       'webRequestBlocking',
       'webNavigation',
+      'captivePortal',
       'tabs',
       'clipboardWrite',
       'nativeMessaging',

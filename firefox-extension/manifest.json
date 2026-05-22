@@ -26,6 +26,7 @@
     "webRequest",
     "webRequestBlocking",
     "webNavigation",
+    "captivePortal",
     "tabs",
     "clipboardWrite",
     "nativeMessaging",

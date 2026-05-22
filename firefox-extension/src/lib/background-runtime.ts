@@ -48,6 +48,16 @@ interface ConfirmBlockedScreenContext extends BlockedScreenContext {
   url: string;
 }
 
+interface CaptivePortalBrowserApi {
+  getState?: () => Promise<string>;
+  onConnectivityAvailable?: {
+    addListener: (listener: () => void) => void;
+  };
+  onStateChanged?: {
+    addListener: (listener: (details: { state: string }) => void) => void;
+  };
+}
+
 const NATIVE_HOST_NAME = 'whitelist_native_host';
 const BLOCKED_DNS_SENTINELS = new Set(['0.0.0.0', '::', '192.0.2.1', '100::']);
 const CAPTIVE_PORTAL_RECOVERY_RATE_LIMIT_MS = 30_000;
@@ -89,6 +99,7 @@ export function createBackgroundRuntime(
     { domain: string; originalUrl: string }
   >();
   const captivePortalRecoveryAttemptByTabAndHost = new Map<string, number>();
+  const portalRecoveryEligibleByHost = new Map<string, boolean>();
   const blockedMonitorState = createBlockedMonitorState(
     {
       setBadgeText: (options) => browser.action.setBadgeText(options),
@@ -196,16 +207,38 @@ export function createBackgroundRuntime(
     return await nativeMessagingClient.checkDomains(domains);
   }
 
-  async function confirmBlockedScreenNavigation(
-    context: ConfirmBlockedScreenContext
-  ): Promise<boolean> {
+  function getCaptivePortalApi(): CaptivePortalBrowserApi | undefined {
+    return (browser as unknown as { captivePortal?: CaptivePortalBrowserApi }).captivePortal;
+  }
+
+  function clearCaptivePortalRecoveryLimiter(): void {
+    captivePortalRecoveryAttemptByTabAndHost.clear();
+  }
+
+  async function confirmBlockedScreenNavigation(context: ConfirmBlockedScreenContext): Promise<{
+    blocked: boolean;
+    portalRecoveryEligible?: boolean;
+  }> {
     const response = await checkDomainsWithNative([context.hostname]);
     if (!response.success) {
-      return false;
+      return { blocked: false };
     }
 
     const result = response.results.find((item) => item.domain === context.hostname);
-    return isNativePolicyBlockedResult(result);
+    if (result?.portalRecoveryEligible !== undefined) {
+      const normalizedHost = context.hostname.trim().toLowerCase();
+      if (portalRecoveryEligibleByHost.get(normalizedHost) !== result.portalRecoveryEligible) {
+        portalRecoveryEligibleByHost.set(normalizedHost, result.portalRecoveryEligible);
+        clearCaptivePortalRecoveryLimiter();
+      }
+    }
+
+    return {
+      blocked: isNativePolicyBlockedResult(result),
+      ...(result?.portalRecoveryEligible !== undefined
+        ? { portalRecoveryEligible: result.portalRecoveryEligible }
+        : {}),
+    };
   }
 
   function buildCaptivePortalRecoveryKey(tabId: number, hostname: string): string {
@@ -220,6 +253,20 @@ export function createBackgroundRuntime(
     const now = Date.now();
     const lastAttempt = captivePortalRecoveryAttemptByTabAndHost.get(key);
     if (lastAttempt !== undefined && now - lastAttempt < CAPTIVE_PORTAL_RECOVERY_RATE_LIMIT_MS) {
+      return false;
+    }
+
+    const portalState = await getCaptivePortalApi()
+      ?.getState?.()
+      .catch((error: unknown) => {
+        logger.info('[Monitor] Captive portal state unavailable', {
+          tabId: context.tabId,
+          hostname: context.hostname,
+          error: getErrorMessage(error),
+        });
+        return null;
+      });
+    if (portalState !== 'locked_portal') {
       return false;
     }
 
@@ -257,6 +304,38 @@ export function createBackgroundRuntime(
       });
       return false;
     }
+  }
+
+  async function reconcileCaptivePortalRecovery(input: {
+    reason: string;
+    state?: string;
+  }): Promise<void> {
+    await nativeMessagingClient
+      .recoverCaptivePortalNavigation({
+        operation: 'reconcile',
+        portalState: input.state ?? 'Unknown',
+        source: `firefox-captivePortal:${input.reason}`,
+      })
+      .catch((error: unknown) => {
+        logger.info('[Monitor] Captive portal recovery reconcile unavailable', {
+          reason: input.reason,
+          error: getErrorMessage(error),
+        });
+      });
+  }
+
+  function registerCaptivePortalListeners(): void {
+    const captivePortal = getCaptivePortalApi();
+    captivePortal?.onConnectivityAvailable?.addListener(() => {
+      clearCaptivePortalRecoveryLimiter();
+      void reconcileCaptivePortalRecovery({ reason: 'connectivity-available' });
+    });
+    captivePortal?.onStateChanged?.addListener((details) => {
+      clearCaptivePortalRecoveryLimiter();
+      if (details.state !== 'locked_portal') {
+        void reconcileCaptivePortalRecovery({ reason: 'state-changed', state: details.state });
+      }
+    });
   }
 
   async function isNativeHostAvailable(): Promise<boolean> {
@@ -466,6 +545,7 @@ export function createBackgroundRuntime(
       redirectToBlockedScreen,
       saveBlockedPageContext,
     });
+    registerCaptivePortalListeners();
     await blockedPathRulesController.init();
     await blockedSubdomainRulesController.init();
     blockedPathRulesController.startRefreshLoop();

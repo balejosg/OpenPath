@@ -8,6 +8,7 @@ import {
   createBlockedScreenNavigationController,
   type BlockedScreenContext,
   type ConfirmBlockedScreenContext,
+  type NativeBlockedScreenConfirmation,
 } from './blocked-screen-navigation-controller.js';
 import { evaluateGoogleGameBlocking, isGoogleGamePolicyOutcome } from './google-game-blocking.js';
 import type { OpenPathDependencyObservationEventInput } from './dependency-observation-diagnostics.js';
@@ -33,7 +34,9 @@ interface BackgroundListenersOptions {
   evaluateBlockedSubdomain: (
     details: WebRequest.OnBeforeRequestDetailsType
   ) => { cancel?: boolean; redirectUrl?: string; reason?: string } | null;
-  confirmBlockedScreenNavigation?: (context: ConfirmBlockedScreenContext) => Promise<boolean>;
+  confirmBlockedScreenNavigation?: (
+    context: ConfirmBlockedScreenContext
+  ) => Promise<boolean | NativeBlockedScreenConfirmation>;
   recoverCaptivePortalNavigation?: (
     context: ConfirmBlockedScreenContext,
     options?: { isCurrentNavigation?: () => boolean }

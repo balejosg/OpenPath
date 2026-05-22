@@ -11,6 +11,10 @@ interface BlockedScreenContext {
   origin: string | null;
 }
 
+interface ConfirmBlockedScreenContext extends BlockedScreenContext {
+  url: string;
+}
+
 void describe('blocked screen navigation controller', () => {
   void test('native policy preflight records and redirects only after confirmation succeeds', async () => {
     const addedBlocks: BlockedScreenContext[] = [];
@@ -471,6 +475,89 @@ void describe('blocked screen navigation controller', () => {
     assert.deepEqual(redirects, [
       {
         tabId: 15,
+        hostname: 'blocked.example',
+        error: 'NS_ERROR_NET_TIMEOUT',
+        origin: null,
+      },
+    ]);
+  });
+
+  void test('native-confirmed portal eligible timeout tries captive portal recovery before redirect', async () => {
+    const redirects: BlockedScreenContext[] = [];
+    const recoveryCalls: unknown[] = [];
+    const controller = createBlockedScreenNavigationController({
+      addBlockedDomain: () => undefined,
+      confirmBlockedScreenNavigation: () =>
+        Promise.resolve({ blocked: true, portalRecoveryEligible: true }),
+      getBlockedScreenUrl: () => 'moz-extension://unit-test/blocked/blocked.html',
+      getCurrentTabUrl: () => Promise.resolve('https://portal.example/login'),
+      recoverCaptivePortalNavigation: (context) => {
+        recoveryCalls.push(context);
+        return Promise.resolve(true);
+      },
+      redirectToBlockedScreen: (context) => {
+        redirects.push(context);
+        return Promise.resolve();
+      },
+    });
+
+    controller.handleBlockedScreenNavigationError(
+      {
+        error: 'NS_ERROR_NET_TIMEOUT',
+        tabId: 21,
+        type: 'main_frame',
+        url: 'https://portal.example/login',
+      } as WebRequest.OnErrorOccurredDetailsType,
+      { recordBlockedDomain: true, requestType: 'main_frame' }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(recoveryCalls, [
+      {
+        tabId: 21,
+        hostname: 'portal.example',
+        error: 'NS_ERROR_NET_TIMEOUT',
+        origin: null,
+        url: 'https://portal.example/login',
+      },
+    ]);
+    assert.deepEqual(redirects, []);
+  });
+
+  void test('ordinary native-confirmed timeout redirects when not portal eligible', async () => {
+    const redirects: BlockedScreenContext[] = [];
+    const recoveryCalls: ConfirmBlockedScreenContext[] = [];
+    const controller = createBlockedScreenNavigationController({
+      addBlockedDomain: () => undefined,
+      confirmBlockedScreenNavigation: () =>
+        Promise.resolve({ blocked: true, portalRecoveryEligible: false }),
+      getBlockedScreenUrl: () => 'moz-extension://unit-test/blocked/blocked.html',
+      getCurrentTabUrl: () => Promise.resolve('https://blocked.example/lesson'),
+      recoverCaptivePortalNavigation: (context) => {
+        recoveryCalls.push(context);
+        return Promise.resolve(true);
+      },
+      redirectToBlockedScreen: (context) => {
+        redirects.push(context);
+        return Promise.resolve();
+      },
+    });
+
+    controller.handleBlockedScreenNavigationError(
+      {
+        error: 'NS_ERROR_NET_TIMEOUT',
+        tabId: 22,
+        type: 'main_frame',
+        url: 'https://blocked.example/lesson',
+      } as WebRequest.OnErrorOccurredDetailsType,
+      { recordBlockedDomain: true, requestType: 'main_frame' }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(recoveryCalls, []);
+    assert.deepEqual(redirects, [
+      {
+        tabId: 22,
         hostname: 'blocked.example',
         error: 'NS_ERROR_NET_TIMEOUT',
         origin: null,

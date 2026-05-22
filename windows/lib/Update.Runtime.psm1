@@ -56,6 +56,9 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Send-OpenPathHealthReport',
         'Sync-OpenPathFirefoxNativeHostState',
         'Invoke-OpenPathRuntimeDependencyQueue',
+        'Test-OpenPathCaptivePortalState',
+        'Update-OpenPathCaptivePortalObservation',
+        'Disable-OpenPathCaptivePortalMode',
         'Get-OpenPathCapabilityStoragePath',
         'Update-AcrylicHost',
         'Restart-AcrylicService',
@@ -89,6 +92,51 @@ function Initialize-OpenPathUpdateRuntimeSession {
 
     $script:OpenPathUpdateRuntimeSessionInitialized = $true
     $script:OpenPathUpdateRuntimeRoot = $OpenPathRoot
+}
+
+function Invoke-OpenPathCaptivePortalImmediateReconcile {
+    [CmdletBinding()]
+    param([PSCustomObject]$Config = $null)
+
+    try {
+        $state = Test-OpenPathCaptivePortalState -TimeoutSec 3
+        if ($state -eq 'Authenticated') {
+            Update-OpenPathCaptivePortalObservation -DetectedState Authenticated | Out-Null
+            Disable-OpenPathCaptivePortalMode -Config $Config | Out-Null
+            return 'Authenticated'
+        }
+
+        Update-OpenPathCaptivePortalObservation -DetectedState $state | Out-Null
+        return [string]$state
+    }
+    catch {
+        Write-OpenPathLog "Startup captive portal reconcile failed: $_" -Level WARN
+        return 'Error'
+    }
+}
+
+function Invoke-OpenPathStartupLocalReconcile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$WhitelistPath,
+        [PSCustomObject]$Config = $null
+    )
+
+    if (-not (Test-Path $WhitelistPath -ErrorAction SilentlyContinue)) {
+        return 'NoCachedWhitelist'
+    }
+
+    $cachedSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
+    if ($cachedSections.IsDisabled) {
+        return 'Disabled'
+    }
+
+    if (Test-OpenPathCaptivePortalModeActive) {
+        return (Invoke-OpenPathCaptivePortalImmediateReconcile -Config $Config)
+    }
+
+    Restore-OpenPathProtectedMode -Config $Config | Out-Null
+    return 'ProtectedModeRestored'
 }
 
 function Invoke-OpenPathRuntimeDependencyQueueApply {
@@ -301,6 +349,9 @@ function Invoke-OpenPathUpdateCycle {
                 -OpenPathRoot $OpenPathRoot `
                 -TriggerSource $TriggerSource
             $updateSettings = Get-OpenPathUpdatePolicySettings -Config $config
+            $null = Invoke-OpenPathStartupLocalReconcile `
+                -WhitelistPath $whitelistPath `
+                -Config $config
             $null = Backup-OpenPathWhitelistState `
                 -WhitelistPath $whitelistPath `
                 -BackupPath $backupPath `

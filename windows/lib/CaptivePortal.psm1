@@ -6,12 +6,36 @@ $modulePath = Split-Path $PSScriptRoot -Parent
 Import-Module "$modulePath\lib\Common.psm1" -ErrorAction SilentlyContinue
 
 . (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')
+. (Join-Path $PSScriptRoot 'internal\AcrylicHostsModel.ps1')
+. (Join-Path $PSScriptRoot 'internal\AcrylicHostsRenderer.ps1')
 $script:OpenPathRoot = Resolve-OpenPathWindowsRoot
 $script:CaptivePortalStatePath = "$script:OpenPathRoot\data\captive-portal-active.json"
 $script:CaptivePortalObservationPath = "$script:OpenPathRoot\data\captive-portal-observation.json"
 
 function Test-OpenPathCaptivePortalModeActive {
-    return (Test-Path $script:CaptivePortalStatePath)
+    if (-not (Test-Path $script:CaptivePortalStatePath)) {
+        return $false
+    }
+
+    $marker = Get-OpenPathCaptivePortalMarker
+    if (-not $marker) {
+        return $true
+    }
+
+    if ($marker.PSObject.Properties['expiresAt'] -and $marker.expiresAt) {
+        try {
+            $expiresAt = ([DateTimeOffset]::Parse([string]$marker.expiresAt)).UtcDateTime
+            if ([DateTime]::UtcNow -ge $expiresAt) {
+                $disabled = Disable-OpenPathCaptivePortalMode
+                return (-not [bool]$disabled)
+            }
+        }
+        catch {
+            return $true
+        }
+    }
+
+    return $true
 }
 
 function Get-OpenPathCaptivePortalMarker {
@@ -34,7 +58,13 @@ function Get-OpenPathCaptivePortalMarker {
 function Set-OpenPathCaptivePortalMarker {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$State
+        [string]$State,
+
+        [string[]]$AllowedHosts = @(),
+
+        [string]$UpstreamDns = '',
+
+        [int]$TtlSeconds = 300
     )
 
     try {
@@ -52,6 +82,10 @@ function Set-OpenPathCaptivePortalMarker {
         $payload = @{
             active = $true
             state = [string]$State
+            mode = 'limited'
+            allowedHosts = @($AllowedHosts)
+            expiresAt = ([DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TtlSeconds))).ToString('o')
+            upstreamDns = [string]$UpstreamDns
             since = [string]$since
             updatedAt = (Get-Date).ToString('o')
         } | ConvertTo-Json -Depth 8
@@ -61,6 +95,153 @@ function Set-OpenPathCaptivePortalMarker {
     }
     catch {
         return $false
+    }
+}
+
+function Get-OpenPathCaptivePortalAllowedHosts {
+    param([string[]]$Hosts = @())
+
+    return @(
+        foreach ($hostName in @($Hosts)) {
+            $normalizedHost = ([string]$hostName).Trim().TrimEnd('.').ToLowerInvariant()
+            if (-not $normalizedHost) { continue }
+            if ($normalizedHost -notmatch '^[a-z0-9.-]+$') { continue }
+            if ($normalizedHost.StartsWith('.') -or $normalizedHost.EndsWith('.') -or $normalizedHost.Contains('..')) { continue }
+            $normalizedHost
+        }
+    ) | Select-Object -Unique
+}
+
+function New-OpenPathLimitedCaptivePortalHostsDefinition {
+    [CmdletBinding()]
+    param(
+        [string[]]$PortalRecoveryDomains = @(),
+        [Parameter(Mandatory = $true)][string]$UpstreamDns
+    )
+
+    $dnsSettings = [PSCustomObject]@{
+        PrimaryDNS = $UpstreamDns
+        SecondaryDNS = $UpstreamDns
+        MaxDomains = 500
+    }
+    $definition = New-AcrylicHostsDefinition -WhitelistedDomains @() -BlockedSubdomains @() -RuntimeDependencyDomains @() -DnsSettings $dnsSettings
+    $portalRecoveryLines = @(
+        foreach ($domain in @($PortalRecoveryDomains)) {
+            Get-AcrylicExactForwardRule -Domain $domain
+        }
+    )
+
+    $sections = @()
+    foreach ($section in @($definition.Sections)) {
+        if ([string]$section.Title -like 'DEFAULT BLOCK*') {
+            if ($portalRecoveryLines.Count -gt 0) {
+                $sections += New-AcrylicHostsSection -Title 'CAPTIVE PORTAL RECOVERY' -Description 'Temporary exact-host recovery access' -Lines @($portalRecoveryLines)
+            }
+        }
+        $sections += $section
+    }
+    $definition.Sections = @($sections)
+    $definition.UpstreamDNS = $UpstreamDns
+    return $definition
+}
+
+function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$UpstreamDns)
+
+    $acrylicPath = Get-AcrylicPath
+    if (-not $acrylicPath) { return $false }
+
+    $configPath = Join-Path $acrylicPath 'AcrylicConfiguration.ini'
+    $iniContent = if (Test-Path $configPath -ErrorAction SilentlyContinue) { Get-Content $configPath -Raw } else { "[GlobalSection]`n" }
+    if ($iniContent -notmatch '(?m)^\[GlobalSection\]\s*$') {
+        $iniContent = "[GlobalSection]`n$iniContent"
+    }
+
+    $settings = [ordered]@{
+        PrimaryServerAddress = $UpstreamDns
+        SecondaryServerAddress = $UpstreamDns
+        PrimaryServerDomainNameAffinityMask = ''
+        SecondaryServerDomainNameAffinityMask = ''
+    }
+    foreach ($key in $settings.Keys) {
+        $escapedKey = [regex]::Escape($key)
+        $pattern = "(?m)^$escapedKey=.*$"
+        $replacement = "$key=$($settings[$key])"
+        if ($iniContent -match $pattern) {
+            $iniContent = $iniContent -replace $pattern, $replacement
+        }
+        else {
+            $globalSection = [regex]::Match($iniContent, '(?m)^\[GlobalSection\]\s*$')
+            $iniContent = $iniContent.Insert($globalSection.Index + $globalSection.Length, "`n$replacement")
+        }
+    }
+
+    Set-Content -Path $configPath -Value $iniContent -Encoding ASCII -Force
+    return $true
+}
+
+function Test-OpenPathLimitedCaptivePortalProtection {
+    [CmdletBinding()]
+    param()
+
+    try {
+        if ((Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue) -and -not (Test-FirewallActive)) {
+            return $false
+        }
+        if ((Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) -and -not (Test-DNSResolution)) {
+            return $false
+        }
+        if ((Get-Command -Name 'Test-DNSSinkhole' -ErrorAction SilentlyContinue) -and -not (Test-DNSSinkhole -Domain 'this-should-be-blocked-test-12345.com')) {
+            return $false
+        }
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Restore-OpenPathCaptivePortalAcrylicHostState {
+    [CmdletBinding()]
+    param()
+
+    try {
+        if (-not (Get-Command -Name 'Update-AcrylicHost' -ErrorAction SilentlyContinue)) {
+            return $true
+        }
+
+        $whitelistDomains = @()
+        $blockedSubdomains = @()
+        $whitelistPath = Join-Path $script:OpenPathRoot 'data\whitelist.txt'
+        if ((Get-Command -Name 'Get-OpenPathWhitelistSectionsFromFile' -ErrorAction SilentlyContinue) -and
+            (Test-Path $whitelistPath -ErrorAction SilentlyContinue)) {
+            $sections = Get-OpenPathWhitelistSectionsFromFile -Path $whitelistPath
+            if ($sections -and -not $sections.IsDisabled) {
+                $whitelistDomains = @($sections.Whitelist)
+                $blockedSubdomains = @($sections.BlockedSubdomains)
+            }
+        }
+
+        return [bool](Update-AcrylicHost -WhitelistedDomains $whitelistDomains -BlockedSubdomains $blockedSubdomains)
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: failed to restore Acrylic host state after captive portal mode: $_" -Level WARN
+        return $false
+    }
+}
+
+function Restore-OpenPathLimitedCaptivePortalAttempt {
+    [CmdletBinding()]
+    param()
+
+    try {
+        $config = Get-OpenPathConfig
+        Restore-OpenPathCaptivePortalAcrylicHostState | Out-Null
+        Restore-OpenPathProtectedMode -Config $config | Out-Null
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: failed to restore protected mode after limited captive portal setup failure: $_" -Level WARN
     }
 }
 
@@ -350,7 +531,11 @@ function Test-OpenPathCaptivePortalState {
 function Enable-OpenPathCaptivePortalMode {
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [string]$State = 'Portal'
+        [string]$State = 'Portal',
+
+        [string[]]$PortalRecoveryDomains = @(),
+
+        [int]$TtlSeconds = 300
     )
 
     if (-not $PSCmdlet.ShouldProcess('OpenPath', 'Enable captive portal mode')) {
@@ -358,20 +543,52 @@ function Enable-OpenPathCaptivePortalMode {
     }
 
     if (Test-OpenPathCaptivePortalModeActive) {
-        Set-OpenPathCaptivePortalMarker -State $State | Out-Null
+        $marker = Get-OpenPathCaptivePortalMarker
+        $upstreamDns = if ($marker -and $marker.PSObject.Properties['upstreamDns']) { [string]$marker.upstreamDns } else { '' }
+        Set-OpenPathCaptivePortalMarker -State $State -AllowedHosts (Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains) -UpstreamDns $upstreamDns -TtlSeconds $TtlSeconds | Out-Null
         return $true
     }
 
-    Write-OpenPathLog 'Watchdog: Captive portal detected - entering portal mode (temporarily opening DNS + firewall)' -Level WARN
+    $allowedHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains)
+    if ($allowedHosts.Count -le 0) {
+        Write-OpenPathLog 'Watchdog: Captive portal detected but no exact recovery host was supplied; staying protected' -Level WARN
+        return $false
+    }
 
-    Disable-OpenPathFirewall | Out-Null
-    if (Get-Command -Name Restore-OpenPathCaptivePortalDNS -ErrorAction SilentlyContinue) {
-        Restore-OpenPathCaptivePortalDNS | Out-Null
+    $upstreamDns = ''
+    try { $upstreamDns = [string](Get-PrimaryDNS) } catch { $upstreamDns = '' }
+    if (-not $upstreamDns) {
+        Write-OpenPathLog 'Watchdog: captive portal limited mode failed because no temporary upstream DNS was available' -Level WARN
+        return $false
     }
-    else {
-        Restore-OriginalDNS
+
+    Write-OpenPathLog 'Watchdog: Captive portal detected - entering limited portal mode for exact recovery hosts' -Level WARN
+
+    $acrylicPath = Get-AcrylicPath
+    if (-not $acrylicPath) { return $false }
+    $hostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
+    $definition = New-OpenPathLimitedCaptivePortalHostsDefinition -PortalRecoveryDomains $allowedHosts -UpstreamDns $upstreamDns
+    $content = ConvertTo-AcrylicHostsContent -Definition $definition
+    Set-Content -Path $hostsPath -Value $content -Encoding ASCII -Force
+    if (-not (Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns $upstreamDns)) {
+        Restore-OpenPathLimitedCaptivePortalAttempt
+        return $false
     }
-    Set-OpenPathCaptivePortalMarker -State $State | Out-Null
+
+    if (Get-Command -Name 'Set-LocalDNS' -ErrorAction SilentlyContinue) {
+        Set-LocalDNS | Out-Null
+    }
+    if (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue) {
+        Restart-AcrylicService | Out-Null
+    }
+
+    if (-not (Test-OpenPathLimitedCaptivePortalProtection)) {
+        Write-OpenPathLog 'Watchdog: captive portal limited mode verification failed; staying protected' -Level WARN
+        Restore-OpenPathLimitedCaptivePortalAttempt
+        return $false
+    }
+
+    Set-OpenPathCaptivePortalMarker -State $State -AllowedHosts $allowedHosts -UpstreamDns $upstreamDns -TtlSeconds $TtlSeconds | Out-Null
     return $true
 }
 
@@ -385,7 +602,7 @@ function Disable-OpenPathCaptivePortalMode {
         return $false
     }
 
-    if (-not (Test-OpenPathCaptivePortalModeActive)) {
+    if (-not (Test-Path $script:CaptivePortalStatePath)) {
         return $true
     }
 
@@ -401,6 +618,11 @@ function Disable-OpenPathCaptivePortalMode {
     }
 
     try {
+        if (-not (Restore-OpenPathCaptivePortalAcrylicHostState)) {
+            Write-OpenPathLog 'Watchdog: Acrylic host restore failed; keeping captive portal marker active' -Level WARN
+            return $false
+        }
+
         $restored = Restore-OpenPathProtectedMode -Config $Config
         if (-not $restored) {
             Write-OpenPathLog 'Watchdog: protected mode restore failed; keeping captive portal marker active' -Level WARN

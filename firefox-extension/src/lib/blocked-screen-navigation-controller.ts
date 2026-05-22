@@ -29,6 +29,13 @@ interface CaptivePortalRecoveryOptions {
   isCurrentNavigation?: () => boolean;
 }
 
+export interface NativeBlockedScreenConfirmation {
+  blocked: boolean;
+  portalRecoveryEligible?: boolean;
+}
+
+type NativeBlockedScreenConfirmationResult = boolean | NativeBlockedScreenConfirmation;
+
 type CaptivePortalRecoveryHandler = (
   context: ConfirmBlockedScreenContext,
   options?: CaptivePortalRecoveryOptions
@@ -52,13 +59,25 @@ export interface BlockedScreenNavigationControllerDeps {
     error: string,
     origin?: string | null
   ) => void;
-  confirmBlockedScreenNavigation?: (context: ConfirmBlockedScreenContext) => Promise<boolean>;
+  confirmBlockedScreenNavigation?: (
+    context: ConfirmBlockedScreenContext
+  ) => Promise<NativeBlockedScreenConfirmationResult>;
   getBlockedScreenUrl?: () => string;
   getCurrentTabUrl: (tabId: number) => Promise<string | null | undefined>;
   now?: () => number;
   recoverCaptivePortalNavigation?: CaptivePortalRecoveryHandler;
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
   saveBlockedPageContext?: (tabId: number, domain: string, originalUrl: string | undefined) => void;
+}
+
+function normalizeNativeBlockedScreenConfirmation(
+  confirmation: NativeBlockedScreenConfirmationResult | undefined
+): NativeBlockedScreenConfirmation {
+  if (typeof confirmation === 'boolean') {
+    return { blocked: confirmation };
+  }
+
+  return confirmation ?? { blocked: false };
 }
 
 export interface BlockedScreenNavigationController {
@@ -228,8 +247,10 @@ export function createBlockedScreenNavigationController(
       }
 
       if (optionsForRedirect.requireNativeConfirmation) {
-        const confirmed = await deps.confirmBlockedScreenNavigation?.(context);
-        if (confirmed !== true) {
+        const confirmation = normalizeNativeBlockedScreenConfirmation(
+          await deps.confirmBlockedScreenNavigation?.(context)
+        );
+        if (!confirmation.blocked) {
           if (optionsForRedirect.isCurrentNavigation?.() === false) {
             return;
           }
@@ -238,6 +259,18 @@ export function createBlockedScreenNavigationController(
             recoverCaptivePortalNavigation,
             optionsForRedirect
           );
+          return;
+        }
+
+        if (
+          confirmation.portalRecoveryEligible === true &&
+          optionsForRedirect.isCurrentNavigation?.() !== false &&
+          (await recoverCaptivePortalNavigationIfEligible(
+            context,
+            recoverCaptivePortalNavigation,
+            optionsForRedirect
+          ))
+        ) {
           return;
         }
       } else if (

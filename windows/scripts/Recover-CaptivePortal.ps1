@@ -20,7 +20,8 @@ Initialize-OpenPathScriptSession `
     'Get-OpenPathCapabilityStoragePath',
     'Test-OpenPathCaptivePortalState',
     'Update-OpenPathCaptivePortalObservation',
-    'Enable-OpenPathCaptivePortalMode'
+    'Enable-OpenPathCaptivePortalMode',
+    'Disable-OpenPathCaptivePortalMode'
 ) `
     -ScriptName 'Recover-CaptivePortal.ps1' | Out-Null
 
@@ -164,6 +165,17 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
     )
 
     $requestId = [string]$RequestEnvelope.Request.requestId
+    $operation = 'open'
+    if ($RequestEnvelope.Request.PSObject.Properties['operation'] -and $RequestEnvelope.Request.operation) {
+        $candidateOperation = ([string]$RequestEnvelope.Request.operation).Trim().ToLowerInvariant()
+        if ($candidateOperation -in @('open', 'reconcile')) {
+            $operation = $candidateOperation
+        }
+    }
+    $triggerHost = ''
+    if ($RequestEnvelope.Request.PSObject.Properties['triggerHost'] -and $RequestEnvelope.Request.triggerHost) {
+        $triggerHost = [string]$RequestEnvelope.Request.triggerHost
+    }
 
     try {
         if (-not (Test-OpenPathRecoveryRequestFresh -RequestEnvelope $RequestEnvelope -NowUtc $NowUtc)) {
@@ -177,10 +189,36 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
             return
         }
 
+        if ($operation -eq 'reconcile') {
+            $state = Get-OpenPathCaptivePortalRecoveryState -NowUtc $NowUtc
+            if ($state -eq 'Authenticated') {
+                Update-OpenPathCaptivePortalObservation -DetectedState Authenticated | Out-Null
+                $disabled = [bool](Disable-OpenPathCaptivePortalMode)
+                Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
+                    success = $disabled
+                    operation = $operation
+                    state = [string]$state
+                    activeMarker = (-not $disabled)
+                    portalModeActive = (-not $disabled)
+                } | Out-Null
+                return
+            }
+
+            Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
+                success = $false
+                operation = $operation
+                state = [string]$state
+                activeMarker = (Test-OpenPathCaptivePortalModeActive)
+                portalModeActive = (Test-OpenPathCaptivePortalModeActive)
+            } | Out-Null
+            return
+        }
+
         $recentSuccess = Get-OpenPathRecentCaptivePortalRecoverySuccess -ResultPath $ResultPath -NowUtc $NowUtc
         if ($recentSuccess) {
             Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
                 success = $true
+                operation = $operation
                 state = 'RecentSuccess'
                 activeMarker = $true
                 portalModeActive = $true
@@ -196,13 +234,13 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
 
         if ($state -eq 'Portal') {
             Update-OpenPathCaptivePortalObservation -DetectedState Portal | Out-Null
-            Enable-OpenPathCaptivePortalMode -State Portal | Out-Null
-            $success = $true
-            $activeMarker = $true
+            $success = [bool](Enable-OpenPathCaptivePortalMode -State Portal -PortalRecoveryDomains @($triggerHost))
+            $activeMarker = $success
         }
 
         Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
             success = $success
+            operation = $operation
             state = [string]$state
             activeMarker = $activeMarker
             portalModeActive = $activeMarker

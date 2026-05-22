@@ -47,6 +47,28 @@ Describe "Update Script" {
         }
     }
 
+    Context "Startup captive portal reconciliation" {
+        It "Runs local protected-mode or portal reconciliation before remote whitelist download" {
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimeContent = Get-Content $runtimePath -Raw
+
+            Assert-ContentContainsAll -Content $runtimeContent -Needles @(
+                'Invoke-OpenPathStartupLocalReconcile',
+                'Test-Path $WhitelistPath',
+                'Get-OpenPathWhitelistSectionsFromFile',
+                'Test-OpenPathCaptivePortalModeActive',
+                'Restore-OpenPathProtectedMode -Config $Config',
+                'Invoke-OpenPathCaptivePortalImmediateReconcile -Config $Config'
+            )
+
+            $cycleStart = $runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle')
+            $cycleEnd = $runtimeContent.IndexOf('function Write-OpenPathUpdatePortalActiveState')
+            $cycleBody = $runtimeContent.Substring($cycleStart, $cycleEnd - $cycleStart)
+            $cycleBody.IndexOf('Invoke-OpenPathStartupLocalReconcile') |
+                Should -BeLessThan $cycleBody.IndexOf('Get-OpenPathWhitelistDownloadResult')
+        }
+    }
+
     Context "Rollback system" {
         It "Creates rolling checkpoints before applying new whitelist" {
             $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"

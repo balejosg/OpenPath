@@ -29,16 +29,17 @@ browser data.
 
 ## Current Permissions
 
-| Permission           | Purpose                                                               |
-| -------------------- | --------------------------------------------------------------------- |
-| `webRequest`         | Observe network failures and apply managed path/subdomain rules       |
-| `webRequestBlocking` | Redirect or cancel blocked navigation/resource requests when required |
-| `webNavigation`      | Reset per-tab blocked-resource state when navigation changes          |
-| `tabs`               | Scope badge and popup data to the active tab                          |
-| `clipboardWrite`     | Copy blocked-domain lists only after a user action                    |
-| `nativeMessaging`    | Communicate with the local OpenPath native host when it is installed  |
-| `storage`            | Keep managed config and local runtime state in browser storage        |
-| `<all_urls>`         | Evaluate managed navigation and resource requests across web origins  |
+| Permission           | Purpose                                                                                |
+| -------------------- | -------------------------------------------------------------------------------------- |
+| `webRequest`         | Observe network failures and apply managed path/subdomain rules                        |
+| `webRequestBlocking` | Redirect or cancel blocked navigation/resource requests when required                  |
+| `webNavigation`      | Reset per-tab blocked-resource state when navigation changes                           |
+| `captivePortal`      | Read Firefox captive-portal state for exact-host recovery and reconnect reconciliation |
+| `tabs`               | Scope badge and popup data to the active tab                                           |
+| `clipboardWrite`     | Copy blocked-domain lists only after a user action                                     |
+| `nativeMessaging`    | Communicate with the local OpenPath native host when it is installed                   |
+| `storage`            | Keep managed config and local runtime state in browser storage                         |
+| `<all_urls>`         | Evaluate managed navigation and resource requests across web origins                   |
 
 The Firefox manifest declares `browsingActivity` as required Mozilla data
 collection. User-initiated unblock requests verify that install-time permission

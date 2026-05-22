@@ -65,7 +65,12 @@ Describe "Watchdog Script" {
                 'createdAtUtc',
                 'Test-OpenPathCaptivePortalState -TimeoutSec 3',
                 'Update-OpenPathCaptivePortalObservation -DetectedState Portal',
-                'Enable-OpenPathCaptivePortalMode -State Portal',
+                'Enable-OpenPathCaptivePortalMode -State Portal -PortalRecoveryDomains',
+                'Disable-OpenPathCaptivePortalMode',
+                '$operation',
+                '''open''',
+                '''reconcile''',
+                '''Authenticated''',
                 'portalModeActive',
                 'ConvertTo-Json -Depth 6'
             )
@@ -84,7 +89,7 @@ Describe "Watchdog Script" {
             $content | Should -Not -Match 'Restore-OriginalDNS'
         }
 
-        It "Detects captive portals and temporarily opens DNS" {
+        It "Detects captive portals and opens only exact recovery hosts without dropping protection" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $scriptContent = Get-Content $scriptPath -Raw
@@ -106,10 +111,46 @@ Describe "Watchdog Script" {
                 'clients3.google.com',
                 'captive-portal-active.json',
                 'Captive portal detected',
-                'Disable-OpenPathFirewall',
-                'Restore-OpenPathCaptivePortalDNS',
-                'Restore-OriginalDNS'
+                'mode = ''limited''',
+                'allowedHosts',
+                'expiresAt',
+                'upstreamDns',
+                'Get-PrimaryDNS',
+                'New-AcrylicHostsDefinition',
+                'Get-AcrylicExactForwardRule',
+                'Test-FirewallActive',
+                'Test-DNSResolution',
+                'Test-DNSSinkhole'
             )
+
+            $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalMode')
+            $disableStart = $moduleContent.IndexOf('function Disable-OpenPathCaptivePortalMode')
+            $enableBody = $moduleContent.Substring($enableStart, $disableStart - $enableStart)
+            $enableBody | Should -Not -Match 'Disable-OpenPathFirewall'
+            $enableBody | Should -Not -Match 'Restore-OpenPathCaptivePortalDNS'
+            $enableBody | Should -Not -Match 'Restore-OriginalDNS'
+        }
+
+        It "Renders exact temporary portal hosts before the default NX block and clears them on exit" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'CAPTIVE PORTAL RECOVERY',
+                '$PortalRecoveryDomains',
+                '$portalRecoveryLines',
+                '$sections += New-AcrylicHostsSection -Title ''CAPTIVE PORTAL RECOVERY',
+                'Restore-OpenPathCaptivePortalAcrylicHostState',
+                'Update-AcrylicHost -WhitelistedDomains $whitelistDomains -BlockedSubdomains $blockedSubdomains',
+                'Clear-OpenPathCaptivePortalMarker'
+            )
+
+            $definitionStart = $moduleContent.IndexOf('function New-OpenPathLimitedCaptivePortalHostsDefinition')
+            $definitionEnd = $moduleContent.IndexOf('function Test-OpenPathLimitedCaptivePortalProtection')
+            $definitionBody = $moduleContent.Substring($definitionStart, $definitionEnd - $definitionStart)
+            $definitionBody.IndexOf('$sections += New-AcrylicHostsSection -Title ''CAPTIVE PORTAL RECOVERY') |
+                Should -BeLessThan $definitionBody.IndexOf('$sections += $section')
+            $definitionBody | Should -Match '(?s)foreach \(\$domain in @\(\$PortalRecoveryDomains\)\).*?Get-AcrylicExactForwardRule'
         }
 
         It "Treats transport failures as captive portal when local IPv4 network evidence exists" {

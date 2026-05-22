@@ -103,11 +103,16 @@ function Get-NativeHostValidDomains {
         [object[]]$Domains = @()
     )
 
+    $maxDomains = 200
+    if ($script:MaxDomains) {
+        try { $maxDomains = [Math]::Max(1, [int]$script:MaxDomains) } catch { $maxDomains = 200 }
+    }
+
     return @($Domains) |
         Where-Object { $_ -is [string] } |
         ForEach-Object { ([string]$_).Trim().ToLowerInvariant() } |
         Where-Object { $_ -match '^[a-z0-9.-]+$' } |
-        Select-Object -First $script:MaxDomains
+        Select-Object -First $maxDomains
 }
 
 function Get-NativeHostRuntimeDependencyQueuePath {
@@ -161,7 +166,11 @@ function Get-NativeHostCaptivePortalRecoveryResultPath {
 function Write-NativeHostCaptivePortalRecoveryRequest {
     param(
         [Parameter(Mandatory = $true)][string]$RequestId,
-        [Parameter(Mandatory = $true)][string]$TriggerHost,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$TriggerHost,
+        [ValidateSet('open', 'reconcile')]
+        [string]$Operation = 'open',
+        [string]$PortalState = 'Unknown',
+        [string]$Source = 'native-host',
         [AllowNull()][object]$TabId = $null
     )
 
@@ -170,7 +179,10 @@ function Write-NativeHostCaptivePortalRecoveryRequest {
 
     $request = [ordered]@{
         requestId = $RequestId
+        operation = $Operation
         triggerHost = $TriggerHost
+        portalState = $PortalState
+        source = $Source
         createdAtUtc = [DateTime]::UtcNow.ToString('o')
     }
 
@@ -672,8 +684,21 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
 
     $action = 'recover-captive-portal-navigation'
     $taskName = 'OpenPath-CaptivePortalRecovery'
-    $triggerHost = Normalize-NativeHostCaptivePortalTriggerHost -Value $Message.triggerHost
-    if (-not $triggerHost) {
+    $operation = 'open'
+    if ($Message.PSObject.Properties['operation'] -and $Message.operation) {
+        $candidateOperation = ([string]$Message.operation).Trim().ToLowerInvariant()
+        if ($candidateOperation -in @('open', 'reconcile')) {
+            $operation = $candidateOperation
+        }
+    }
+    $portalState = if ($Message.PSObject.Properties['portalState'] -and $Message.portalState) { [string]$Message.portalState } else { 'Unknown' }
+    $source = if ($Message.PSObject.Properties['source'] -and $Message.source) { [string]$Message.source } else { 'native-host' }
+    $triggerHost = ''
+    if ($Message.PSObject.Properties['triggerHost'] -and $Message.triggerHost) {
+        $triggerHost = Normalize-NativeHostCaptivePortalTriggerHost -Value $Message.triggerHost
+    }
+
+    if ($operation -eq 'open' -and -not $triggerHost) {
         return @{
             success = $false
             action = $action
@@ -688,11 +713,12 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         }
     }
 
-    $recentSuccess = Get-NativeHostRecentCaptivePortalRecoverySuccess
+    $recentSuccess = if ($operation -eq 'open') { Get-NativeHostRecentCaptivePortalRecoverySuccess } else { $null }
     if ($recentSuccess) {
         return @{
             success = $true
             action = $action
+            operation = $operation
             state = 'RecentSuccess'
             portalModeActive = $true
             triggerHost = $triggerHost
@@ -713,6 +739,9 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     $null = Write-NativeHostCaptivePortalRecoveryRequest `
         -RequestId $requestId `
         -TriggerHost $triggerHost `
+        -Operation $operation `
+        -PortalState $portalState `
+        -Source $source `
         -TabId $tabId
 
     try {
@@ -734,6 +763,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         return @{
             success = $false
             action = $action
+            operation = $operation
             state = 'TriggerFailed'
             portalModeActive = $false
             triggerHost = $triggerHost
@@ -754,6 +784,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         return @{
             success = $false
             action = $action
+            operation = $operation
             state = 'Timeout'
             portalModeActive = $false
             triggerHost = $triggerHost
@@ -768,10 +799,17 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     $state = if ($result.PSObject.Properties['state'] -and $result.state) { [string]$result.state } else { 'Unknown' }
     $portalModeActive = if ($result.PSObject.Properties['portalModeActive']) { [bool]$result.portalModeActive } else { $false }
     $success = (($result.PSObject.Properties['success'] -and [bool]$result.success) -or $portalModeActive)
+    $operationSucceeded = if ($operation -eq 'reconcile') {
+        ($success -and $state -eq 'Authenticated' -and -not $portalModeActive)
+    }
+    else {
+        ($success -and ($state -eq 'Portal' -or $portalModeActive))
+    }
 
     return @{
-        success = ($success -and ($state -eq 'Portal' -or $portalModeActive))
+        success = $operationSucceeded
         action = $action
+        operation = $operation
         state = $state
         portalModeActive = $portalModeActive
         triggerHost = $triggerHost
@@ -1204,6 +1242,7 @@ function Invoke-NativeHostCheckAction {
             domain = $domain
             in_whitelist = $whitelistSet.Contains($domain)
             resolved_ip = (Resolve-DomainIp -Domain $domain)
+            portal_recovery_eligible = (-not $whitelistSet.Contains($domain))
         }
     }
 

@@ -24,6 +24,7 @@ export interface NativeCheckResult {
   domain: string;
   in_whitelist: boolean;
   policy_active?: boolean;
+  portal_recovery_eligible?: boolean;
   resolves?: boolean;
   resolved_ip?: string;
   error?: string;
@@ -39,6 +40,7 @@ export interface VerifyResult {
   domain: string;
   inWhitelist: boolean;
   policyActive?: boolean;
+  portalRecoveryEligible?: boolean;
   resolves?: boolean;
   resolvedIp?: string;
   error?: string;
@@ -57,8 +59,11 @@ interface LocalRuntimeDependencyInput {
 }
 
 export interface CaptivePortalRecoveryInput {
-  triggerHost: string;
+  operation?: 'open' | 'reconcile';
+  portalState?: string;
+  source?: string;
   tabId?: number;
+  triggerHost?: string;
 }
 
 export interface CaptivePortalRecoveryResponse extends NativeResponse {
@@ -186,6 +191,9 @@ export function createNativeMessagingClient(options: {
         if (result.policy_active !== undefined) {
           mapped.policyActive = result.policy_active;
         }
+        if (result.portal_recovery_eligible !== undefined) {
+          mapped.portalRecoveryEligible = result.portal_recovery_eligible;
+        }
         if (result.resolves !== undefined) {
           mapped.resolves = result.resolves;
         }
@@ -239,7 +247,10 @@ export function createNativeMessagingClient(options: {
   ): Promise<CaptivePortalRecoveryResponse> {
     return (await sendMessage({
       action: 'recover-captive-portal-navigation',
-      triggerHost: input.triggerHost,
+      operation: input.operation ?? 'open',
+      ...(input.triggerHost !== undefined ? { triggerHost: input.triggerHost } : {}),
+      ...(input.portalState !== undefined ? { portalState: input.portalState } : {}),
+      ...(input.source !== undefined ? { source: input.source } : {}),
       ...(input.tabId !== undefined ? { tabId: input.tabId } : {}),
     })) as CaptivePortalRecoveryResponse;
   }

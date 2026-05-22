@@ -29,6 +29,8 @@ function createRuntimeHarness(): {
   restoreGlobals: () => void;
   runtimeMessage: RuntimeMessageListener | null;
   tabRemovedListener: ((tabId: number) => void) | null;
+  captivePortalConnectivityListener: (() => void) | null;
+  captivePortalStateChangedListener: ((details: { state: string }) => void) | null;
   webRequestBeforeRequestListener: ((details: unknown) => unknown) | null;
   webRequestErrorListener: ((details: unknown) => unknown) | null;
 } {
@@ -37,6 +39,7 @@ function createRuntimeHarness(): {
 
 function createRuntimeHarnessWithOptions(options: {
   blockedPaths?: string[];
+  captivePortalState?: string;
   nativeMessageResponder?: (message: unknown) => unknown;
 }): {
   browser: Browser;
@@ -49,6 +52,8 @@ function createRuntimeHarnessWithOptions(options: {
   restoreGlobals: () => void;
   runtimeMessage: RuntimeMessageListener | null;
   tabRemovedListener: ((tabId: number) => void) | null;
+  captivePortalConnectivityListener: (() => void) | null;
+  captivePortalStateChangedListener: ((details: { state: string }) => void) | null;
   webRequestBeforeRequestListener: ((details: unknown) => unknown) | null;
   webRequestErrorListener: ((details: unknown) => unknown) | null;
 } {
@@ -60,6 +65,8 @@ function createRuntimeHarnessWithOptions(options: {
   let tabRemovedListener: ((tabId: number) => void) | null = null;
   let webRequestBeforeRequestListener: ((details: unknown) => unknown) | null = null;
   let webRequestErrorListener: ((details: unknown) => unknown) | null = null;
+  let captivePortalConnectivityListener: (() => void) | null = null;
+  let captivePortalStateChangedListener: ((details: { state: string }) => void) | null = null;
   let pathRuleRefreshes = 0;
   let subdomainRuleRefreshes = 0;
   const originalBrowser = (globalThis as { browser?: Browser }).browser;
@@ -69,6 +76,19 @@ function createRuntimeHarnessWithOptions(options: {
     action: {
       setBadgeBackgroundColor: () => Promise.resolve(),
       setBadgeText: () => Promise.resolve(),
+    },
+    captivePortal: {
+      getState: () => Promise.resolve(options.captivePortalState ?? 'locked_portal'),
+      onConnectivityAvailable: {
+        addListener: (listener: () => void) => {
+          captivePortalConnectivityListener = listener;
+        },
+      },
+      onStateChanged: {
+        addListener: (listener: (details: { state: string }) => void) => {
+          captivePortalStateChangedListener = listener;
+        },
+      },
     },
     runtime: {
       connectNative: () =>
@@ -235,6 +255,12 @@ function createRuntimeHarnessWithOptions(options: {
     get webRequestErrorListener(): ((details: unknown) => unknown) | null {
       return webRequestErrorListener;
     },
+    get captivePortalConnectivityListener(): (() => void) | null {
+      return captivePortalConnectivityListener;
+    },
+    get captivePortalStateChangedListener(): ((details: { state: string }) => void) | null {
+      return captivePortalStateChangedListener;
+    },
   };
 }
 
@@ -361,6 +387,218 @@ void test('background runtime skips captive portal retry when recovery resolves 
         },
       },
     ]);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime gates portal-eligible recovery on locked portal state', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    captivePortalState: 'not_captive',
+    nativeMessageResponder: (message) => {
+      if ((message as { action?: string }).action === 'check') {
+        return {
+          success: true,
+          results: [
+            {
+              domain: 'portal.example',
+              in_whitelist: false,
+              policy_active: true,
+              portal_recovery_eligible: true,
+              resolves: false,
+            },
+          ],
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.webRequestErrorListener);
+
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      frameId: 0,
+      requestId: 'portal-request',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://portal.example/login',
+    });
+    await waitForAsyncRuntime();
+
+    assert.equal(
+      harness.nativeMessages.some(
+        (message) => (message as { action?: string }).action === 'recover-captive-portal-navigation'
+      ),
+      false
+    );
+    assert.deepEqual(harness.tabUpdates, [
+      {
+        tabId: 5,
+        update: {
+          url: 'moz-extension://unit-test/blocked/blocked.html?domain=portal.example&error=NS_ERROR_NET_TIMEOUT',
+        },
+      },
+    ]);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime recovers portal-eligible native-confirmed blocks before redirect', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    captivePortalState: 'locked_portal',
+    nativeMessageResponder: (message) => {
+      if ((message as { action?: string }).action === 'check') {
+        return {
+          success: true,
+          results: [
+            {
+              domain: 'portal.example',
+              in_whitelist: false,
+              policy_active: true,
+              portal_recovery_eligible: true,
+              resolves: false,
+            },
+          ],
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.webRequestErrorListener);
+
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      frameId: 0,
+      requestId: 'portal-request',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://portal.example/login',
+    });
+    await waitForAsyncRuntime();
+
+    assert.ok(
+      harness.nativeMessages.some(
+        (message) =>
+          (message as { action?: string; triggerHost?: string }).action ===
+            'recover-captive-portal-navigation' &&
+          (message as { triggerHost?: string }).triggerHost === 'portal.example'
+      )
+    );
+    assert.deepEqual(harness.tabUpdates, [
+      {
+        tabId: 5,
+        update: { url: 'https://portal.example/login' },
+      },
+    ]);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime reconciles native recovery on captive portal connectivity events', async () => {
+  const harness = createRuntimeHarnessWithOptions({});
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.captivePortalConnectivityListener);
+    assert.ok(harness.captivePortalStateChangedListener);
+
+    harness.captivePortalConnectivityListener();
+    harness.captivePortalStateChangedListener({ state: 'not_captive' });
+    await waitForAsyncRuntime();
+
+    assert.deepEqual(
+      harness.nativeMessages.filter(
+        (message) => (message as { operation?: string }).operation === 'reconcile'
+      ),
+      [
+        {
+          action: 'recover-captive-portal-navigation',
+          operation: 'reconcile',
+          portalState: 'Unknown',
+          source: 'firefox-captivePortal:connectivity-available',
+        },
+        {
+          action: 'recover-captive-portal-navigation',
+          operation: 'reconcile',
+          portalState: 'not_captive',
+          source: 'firefox-captivePortal:state-changed',
+        },
+      ]
+    );
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime resets captive portal retry limiter on portal state changes', async () => {
+  let captivePortalState = 'locked_portal';
+  const harness = createRuntimeHarnessWithOptions({
+    nativeMessageResponder: (message) => {
+      if ((message as { action?: string }).action === 'check') {
+        return {
+          success: true,
+          results: [
+            {
+              domain: 'portal.example',
+              in_whitelist: false,
+              policy_active: true,
+              portal_recovery_eligible: true,
+              resolves: false,
+            },
+          ],
+        };
+      }
+      return undefined;
+    },
+  });
+  (
+    harness.browser as unknown as { captivePortal: { getState: () => Promise<string> } }
+  ).captivePortal.getState = (): Promise<string> => Promise.resolve(captivePortalState);
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.webRequestErrorListener);
+    assert.ok(harness.captivePortalStateChangedListener);
+
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      frameId: 0,
+      requestId: 'first',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://portal.example/login',
+    });
+    await waitForAsyncRuntime();
+    captivePortalState = 'unknown';
+    harness.captivePortalStateChangedListener({ state: 'unknown' });
+    captivePortalState = 'locked_portal';
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      frameId: 0,
+      requestId: 'third',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://portal.example/login',
+    });
+    await waitForAsyncRuntime();
+
+    assert.equal(
+      harness.nativeMessages.filter(
+        (message) =>
+          (message as { action?: string; operation?: string }).action ===
+            'recover-captive-portal-navigation' &&
+          (message as { operation?: string }).operation === 'open'
+      ).length,
+      2
+    );
   } finally {
     harness.restoreGlobals();
   }
