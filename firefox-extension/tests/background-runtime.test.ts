@@ -340,7 +340,20 @@ void test('background runtime skips captive portal retry when recovery resolves 
   });
   const harness = createRuntimeHarnessWithOptions({
     nativeMessageResponder: (message) => {
-      if ((message as { action?: string }).action !== 'recover-captive-portal-navigation') {
+      const action = (message as { action?: string }).action;
+      if (action === 'check') {
+        return {
+          success: true,
+          results: ((message as { domains?: string[] }).domains ?? []).map((domain) => ({
+            domain,
+            in_whitelist: false,
+            policy_active: true,
+            portal_recovery_eligible: true,
+            resolves: false,
+          })),
+        };
+      }
+      if (action !== 'recover-captive-portal-navigation') {
         return undefined;
       }
       return (message as { triggerHost?: string }).triggerHost === 'old.example'
@@ -387,6 +400,53 @@ void test('background runtime skips captive portal retry when recovery resolves 
         },
       },
     ]);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime leaves allowed unknown-host navigations on the browser network page', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    captivePortalState: 'not_captive_portal',
+    nativeMessageResponder: (message) => {
+      if ((message as { action?: string }).action !== 'check') {
+        return undefined;
+      }
+      return {
+        success: true,
+        results: ((message as { domains?: string[] }).domains ?? []).map((domain) => ({
+          domain,
+          in_whitelist: true,
+          policy_active: true,
+          portal_recovery_eligible: false,
+          resolves: false,
+        })),
+      };
+    },
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.webRequestErrorListener);
+
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_UNKNOWN_HOST',
+      frameId: 0,
+      requestId: 'allowed-request',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://allowed.example/lesson',
+    });
+    await waitForAsyncRuntime();
+
+    assert.deepEqual(harness.tabUpdates, []);
+    assert.ok(
+      harness.nativeMessages.some(
+        (message) =>
+          (message as { action?: string; domains?: string[] }).action === 'check' &&
+          (message as { domains?: string[] }).domains?.includes('allowed.example') === true
+      )
+    );
   } finally {
     harness.restoreGlobals();
   }

@@ -742,9 +742,9 @@ void describe('background listeners blocked-screen routing', () => {
     assert.deepEqual(harness.redirects, []);
   });
 
-  void test('keeps unknown-host main-frame redirects immediate without native confirmation', async () => {
+  void test('does not redirect unknown-host main-frame errors when native policy says it is allowed', async () => {
     const harness = createListenerHarness({
-      confirmBlockedScreenNavigation: () => Promise.reject(new Error('should not be called')),
+      confirmBlockedScreenNavigation: () => Promise.resolve(false),
     });
     assert.ok(harness.webRequestError);
 
@@ -757,21 +757,23 @@ void describe('background listeners blocked-screen routing', () => {
 
     await waitForAsyncListeners();
 
-    assert.deepEqual(harness.confirmCalls, []);
-    assert.deepEqual(harness.redirects, [
+    assert.deepEqual(harness.confirmCalls, [
       {
         tabId: 9,
         hostname: 'missing.example',
         error: 'NS_ERROR_UNKNOWN_HOST',
         origin: null,
+        url: 'https://missing.example/lesson',
       },
     ]);
+    assert.deepEqual(harness.redirects, []);
+    assert.deepEqual(harness.addedBlocks, []);
   });
 
   void test('passes unknown-host main-frame errors through captive portal recovery before redirect', async () => {
     const recoveryCalls: ConfirmBlockedScreenContext[] = [];
     const harness = createListenerHarness({
-      confirmBlockedScreenNavigation: () => Promise.reject(new Error('should not be called')),
+      confirmBlockedScreenNavigation: () => Promise.resolve(false),
       recoverCaptivePortalNavigation: (context) => {
         recoveryCalls.push(context);
         return Promise.resolve(true);
@@ -788,7 +790,15 @@ void describe('background listeners blocked-screen routing', () => {
 
     await waitForAsyncListeners();
 
-    assert.deepEqual(harness.confirmCalls, []);
+    assert.deepEqual(harness.confirmCalls, [
+      {
+        tabId: 19,
+        hostname: 'nce.wedu.comunidad.madrid',
+        error: 'NS_ERROR_UNKNOWN_HOST',
+        origin: null,
+        url: 'https://nce.wedu.comunidad.madrid/login',
+      },
+    ]);
     assert.deepEqual(recoveryCalls, [
       {
         tabId: 19,

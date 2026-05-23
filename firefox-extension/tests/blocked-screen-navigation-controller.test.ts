@@ -167,13 +167,18 @@ void describe('blocked screen navigation controller', () => {
     assert.deepEqual(redirects, []);
   });
 
-  void test('captive portal recovery failure keeps unknown-host blocked page behavior', async () => {
+  void test('unconfirmed unknown-host errors stay on the browser network page', async () => {
     const redirects: BlockedScreenContext[] = [];
+    const recoveryCalls: unknown[] = [];
     const controller = createBlockedScreenNavigationController({
       addBlockedDomain: () => undefined,
+      confirmBlockedScreenNavigation: () => Promise.resolve(false),
       getBlockedScreenUrl: () => 'moz-extension://unit-test/blocked/blocked.html',
       getCurrentTabUrl: () => Promise.resolve('https://missing.example/lesson'),
-      recoverCaptivePortalNavigation: () => Promise.resolve(false),
+      recoverCaptivePortalNavigation: (context) => {
+        recoveryCalls.push(context);
+        return Promise.resolve(false);
+      },
       redirectToBlockedScreen: (context) => {
         redirects.push(context);
         return Promise.resolve();
@@ -191,14 +196,16 @@ void describe('blocked screen navigation controller', () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.deepEqual(redirects, [
+    assert.deepEqual(recoveryCalls, [
       {
         tabId: 12,
         hostname: 'missing.example',
         error: 'NS_ERROR_UNKNOWN_HOST',
         origin: null,
+        url: 'https://missing.example/lesson',
       },
     ]);
+    assert.deepEqual(redirects, []);
   });
 
   void test('captive portal recovery can suppress timeout when native confirmation does not prove a block', async () => {
@@ -326,7 +333,7 @@ void describe('blocked screen navigation controller', () => {
 
     controller.handleBlockedScreenNavigationError(
       {
-        error: 'NS_ERROR_UNKNOWN_HOST',
+        error: 'NS_ERROR_PROXY_CONNECTION_REFUSED',
         type: 'main_frame',
         tabId: 17,
         url: 'https://portal.example/login',
@@ -335,7 +342,7 @@ void describe('blocked screen navigation controller', () => {
     );
     controller.handleBlockedScreenNavigationError(
       {
-        error: 'NS_ERROR_UNKNOWN_HOST',
+        error: 'NS_ERROR_PROXY_CONNECTION_REFUSED',
         type: 'main_frame',
         tabId: 17,
         url: 'https://allowed.example/next',
@@ -344,20 +351,12 @@ void describe('blocked screen navigation controller', () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.deepEqual(recoveryCalls, [
-      {
-        tabId: 17,
-        hostname: 'allowed.example',
-        error: 'NS_ERROR_UNKNOWN_HOST',
-        origin: null,
-        url: 'https://allowed.example/next',
-      },
-    ]);
+    assert.deepEqual(recoveryCalls, []);
     assert.deepEqual(redirects, [
       {
         tabId: 17,
         hostname: 'allowed.example',
-        error: 'NS_ERROR_UNKNOWN_HOST',
+        error: 'NS_ERROR_PROXY_CONNECTION_REFUSED',
         origin: null,
       },
     ]);

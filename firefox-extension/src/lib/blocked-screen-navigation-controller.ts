@@ -9,11 +9,9 @@ const BLOCKING_ERRORS = [
   'NS_ERROR_PROXY_CONNECTION_REFUSED',
 ];
 const IGNORED_ERRORS = ['NS_BINDING_ABORTED', 'NS_ERROR_ABORT'];
-const IMMEDIATE_BLOCKED_SCREEN_ERRORS = new Set([
-  'NS_ERROR_UNKNOWN_HOST',
-  'NS_ERROR_PROXY_CONNECTION_REFUSED',
-]);
+const IMMEDIATE_BLOCKED_SCREEN_ERRORS = new Set(['NS_ERROR_PROXY_CONNECTION_REFUSED']);
 const NATIVE_CONFIRMED_BLOCKED_SCREEN_ERRORS = new Set([
+  'NS_ERROR_UNKNOWN_HOST',
   'NS_ERROR_CONNECTION_REFUSED',
   'NS_ERROR_NET_TIMEOUT',
 ]);
@@ -369,7 +367,7 @@ export function createBlockedScreenNavigationController(
       return;
     }
 
-    if (optionsForError.recordBlockedDomain) {
+    if (optionsForError.recordBlockedDomain && !isTopFrameNavigation(details)) {
       logger.info(`[Monitor] Blocked: ${context.hostname}`, {
         error: details.error,
         requestType: optionsForError.requestType,
@@ -387,6 +385,7 @@ export function createBlockedScreenNavigationController(
       void redirectToBlockedScreenOnce(context, {
         isCurrentNavigation: () =>
           latestBlockedScreenNavigationByTab.get(context.tabId) === context.url,
+        recordBlockedDomain: optionsForError.recordBlockedDomain,
         requireNativeConfirmation: false,
       });
     } else if (shouldConfirmBlockedScreenNavigation(details)) {
@@ -394,6 +393,7 @@ export function createBlockedScreenNavigationController(
       void redirectToBlockedScreenOnce(context, {
         isCurrentNavigation: () =>
           latestBlockedScreenNavigationByTab.get(context.tabId) === context.url,
+        recordBlockedDomain: optionsForError.recordBlockedDomain,
         requireNativeConfirmation: true,
       });
     }
