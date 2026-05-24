@@ -152,8 +152,9 @@ await describe('machine request admission service', async () => {
     assert.ok(result.ok);
     assert.equal(result.data.domain, 'example.com');
     assert.equal(createdRequests.length, 1);
-    assert.equal(createdRequests[0]?.domain, 'example.com');
-    assert.equal(createdRequests[0]?.source, 'firefox-extension');
+    const createdRequest = createdRequests[0];
+    assert.equal(createdRequest.domain, 'example.com');
+    assert.equal(createdRequest.source, 'firefox-extension');
   });
 
   await test('hostname mismatch rejects before policy lookup', async () => {
@@ -256,9 +257,7 @@ await describe('machine request admission service', async () => {
     assert.equal(tokenProofs, 1);
     assert.equal(policyLookups, 0);
     assert.equal(result.ok, false);
-    if (!result.ok) {
-      assert.equal(result.error.code, 'BAD_REQUEST');
-    }
+    assert.equal(result.error.code, 'BAD_REQUEST');
   });
 
   await test('blocked subdomain rejects auto approval', async () => {
@@ -461,10 +460,12 @@ await describe('machine request admission service', async () => {
 
   await test('automatic whitelist event is published only after transaction commit', async () => {
     const calls: string[] = [];
+    const transaction = 'tx-1' as unknown as DbExecutor;
     const { deps } = createDeps({
       autoApproveMachineRequests: true,
       createRule: (groupId, type, value, comment, source, tx) => {
-        calls.push(`create:${String(tx)}`);
+        assert.equal(tx, transaction);
+        calls.push('create:tx-1');
         return Promise.resolve({ success: true, id: 'rule-1' });
       },
       publishWhitelistChanged: (groupId) => {
@@ -472,7 +473,7 @@ await describe('machine request admission service', async () => {
       },
       withTransaction: async (operation) => {
         calls.push('begin');
-        const result = await operation('tx-1' as unknown as DbExecutor);
+        const result = await operation(transaction);
         calls.push('commit');
         return result;
       },
