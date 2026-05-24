@@ -15,6 +15,11 @@ import type { RequestCreationInput } from './request-command.service.js';
 import type { RequestResult, RequestServiceError } from './request-service-shared.js';
 import { createAutomaticWhitelistRule } from './whitelist-rule-command.service.js';
 import type { EffectivePolicyContext } from '../lib/classroom-storage.js';
+import {
+  admissionOriginMatchesWhitelist,
+  admissionTargetMatchesBlockedPath,
+  ruleValues,
+} from './machine-request-admission-policy.js';
 
 export type PublicRequestServiceError = RequestServiceError;
 export type PublicRequestResult<T> = RequestResult<T>;
@@ -81,6 +86,20 @@ export type AutoMachineRequestOutcome =
   | PendingMachineRequestOutcome
   | ApprovedMachineRequestOutcome;
 
+type AutoMachineAdmissionDecision =
+  | {
+      kind: 'rejected';
+      error: RequestServiceError;
+    }
+  | {
+      kind: 'pending';
+      context: MachineRequestContext;
+    }
+  | {
+      kind: 'approved';
+      context: MachineRequestContext;
+    };
+
 type MachineHostnameAccess =
   | { ok: true; machine: AuthenticatedMachine; requestedHostname: string }
   | {
@@ -136,86 +155,13 @@ function resolveDeps(deps?: Partial<MachineRequestAdmissionDeps>): MachineReques
   return { ...defaultDeps, autoApproveMachineRequests: config.autoApproveMachineRequests, ...deps };
 }
 
-function normalizeDomainCandidate(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/^\.+|\.+$/g, '');
-}
-
-function extractHostname(value: string | undefined): string | null {
-  const raw = value?.trim();
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    return normalizeDomainCandidate(new URL(raw).hostname);
-  } catch {
-    const withoutProtocol = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
-    const host = withoutProtocol.split(/[/?#]/, 1)[0]?.split(':', 1)[0] ?? '';
-    const normalized = normalizeDomainCandidate(host);
-    return normalized.length > 0 ? normalized : null;
-  }
-}
-
-function domainMatchesRule(hostname: string, ruleValue: string): boolean {
-  const normalizedHostname = normalizeDomainCandidate(hostname);
-  const normalizedRule = normalizeDomainCandidate(ruleValue.replace(/^\*\./, ''));
-  return normalizedHostname === normalizedRule || normalizedHostname.endsWith(`.${normalizedRule}`);
-}
-
 async function isOriginWhitelisted(
   groupId: string,
   originPage: string | undefined,
   deps: MachineRequestAdmissionDeps
 ): Promise<boolean> {
-  const originHost = extractHostname(originPage);
-  if (!originHost) {
-    return false;
-  }
-
   const rules = await deps.getRulesByGroup(groupId, 'whitelist');
-  return rules.some((rule) => domainMatchesRule(originHost, rule.value));
-}
-
-function wildcardToRegex(value: string): RegExp {
-  const escaped = value.replace(/[\\^$+?.()|[\]{}]/g, '\\$&').replace(/\*/g, '.*');
-  return new RegExp(`^${escaped}$`, 'i');
-}
-
-function blockedPathRuleMatchesUrl(ruleValue: string, targetUrl: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(targetUrl);
-  } catch {
-    return false;
-  }
-
-  const normalizedRule = ruleValue
-    .trim()
-    .toLowerCase()
-    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
-  const slashIndex = normalizedRule.indexOf('/');
-  if (slashIndex < 0) {
-    return false;
-  }
-
-  const ruleDomain = normalizedRule.slice(0, slashIndex);
-  const rulePath = normalizedRule.slice(slashIndex);
-  const targetHostname = normalizeDomainCandidate(parsed.hostname);
-  const domainMatches =
-    ruleDomain === '*' ||
-    (ruleDomain.startsWith('*.')
-      ? domainMatchesRule(targetHostname, ruleDomain)
-      : domainMatchesRule(targetHostname, ruleDomain));
-
-  if (!domainMatches) {
-    return false;
-  }
-
-  const pathPattern = rulePath.endsWith('*') ? rulePath : `${rulePath}*`;
-  return wildcardToRegex(pathPattern).test(`${parsed.pathname}${parsed.search}`);
+  return admissionOriginMatchesWhitelist(originPage, ruleValues(rules));
 }
 
 async function isTargetBlockedPath(
@@ -228,7 +174,35 @@ async function isTargetBlockedPath(
   }
 
   const rules = await deps.getRulesByGroup(groupId, 'blocked_path');
-  return rules.some((rule) => blockedPathRuleMatchesUrl(rule.value, targetUrl));
+  return admissionTargetMatchesBlockedPath(targetUrl, ruleValues(rules));
+}
+
+async function decideAutoMachineAdmission(
+  input: DecideAutoMachineRequestInput,
+  context: MachineRequestContext,
+  deps: MachineRequestAdmissionDeps
+): Promise<AutoMachineAdmissionDecision> {
+  const blockedSubdomain = await deps.isDomainBlocked(context.groupId, context.domain);
+  if (blockedSubdomain.blocked) {
+    return {
+      kind: 'rejected',
+      error: { code: 'FORBIDDEN', message: 'Target matches a blocked subdomain rule' },
+    };
+  }
+
+  if (await isTargetBlockedPath(context.groupId, input.targetUrl, deps)) {
+    return {
+      kind: 'rejected',
+      error: { code: 'FORBIDDEN', message: 'Target URL matches a blocked path rule' },
+    };
+  }
+
+  const originWhitelisted = await isOriginWhitelisted(context.groupId, input.originPage, deps);
+  if (!deps.autoApproveMachineRequests && !originWhitelisted) {
+    return { kind: 'pending', context };
+  }
+
+  return { kind: 'approved', context };
 }
 
 export async function resolveMachineRequestAdmission(
@@ -298,29 +272,31 @@ export async function resolveMachineRequestAdmission(
   };
 }
 
-async function createMachineRequest(
-  input: CreateMachineRequestInput,
-  depsInput?: Partial<MachineRequestAdmissionDeps>
-): Promise<PublicRequestResult<PendingMachineRequestOutcome>> {
-  const deps = resolveDeps(depsInput);
-  const context = await resolveMachineRequestAdmission(input, deps);
-  if (!context.ok) {
-    return context;
-  }
+function requestDomainForSource(
+  input: Pick<CreateMachineRequestInput, 'source'>,
+  context: MachineRequestContext
+): string {
+  return input.source === 'firefox-extension'
+    ? normalizeManualRequestDomain(context.domain)
+    : context.domain;
+}
 
+async function createMachineRequestFromContext(
+  input: CreateMachineRequestInput,
+  context: MachineRequestContext,
+  deps: MachineRequestAdmissionDeps
+): Promise<PublicRequestResult<PendingMachineRequestOutcome>> {
+  const domain = requestDomainForSource(input, context);
   const created = await deps.createRequest({
-    domain:
-      input.source === 'firefox-extension'
-        ? normalizeManualRequestDomain(context.data.domain)
-        : context.data.domain,
+    domain,
     reason:
       input.reason ??
       (input.source === 'auto_extension'
         ? 'Submitted via Firefox extension auto request'
         : 'Submitted via Firefox extension'),
-    groupId: context.data.groupId,
+    groupId: context.groupId,
     source: input.source,
-    machineHostname: context.data.machineHostname,
+    machineHostname: context.machineHostname,
     ...(input.originHost ? { originHost: input.originHost } : {}),
     ...(input.originPage ? { originPage: input.originPage } : {}),
     ...(input.clientVersion ? { clientVersion: input.clientVersion } : {}),
@@ -335,16 +311,26 @@ async function createMachineRequest(
     ok: true,
     data: {
       autoApproved: false,
-      domain:
-        input.source === 'firefox-extension'
-          ? normalizeManualRequestDomain(context.data.domain)
-          : context.data.domain,
-      groupId: context.data.groupId,
+      domain,
+      groupId: context.groupId,
       requestId: created.data.id,
       requestStatus: created.data.status,
       source: input.source,
     },
   };
+}
+
+async function createMachineRequest(
+  input: CreateMachineRequestInput,
+  depsInput?: Partial<MachineRequestAdmissionDeps>
+): Promise<PublicRequestResult<PendingMachineRequestOutcome>> {
+  const deps = resolveDeps(depsInput);
+  const context = await resolveMachineRequestAdmission(input, deps);
+  if (!context.ok) {
+    return context;
+  }
+
+  return createMachineRequestFromContext(input, context.data, deps);
 }
 
 export async function createSubmittedMachineRequest(
@@ -377,29 +363,19 @@ export async function decideAutoMachineRequest(
     return context;
   }
 
-  const blockedSubdomain = await deps.isDomainBlocked(context.data.groupId, context.data.domain);
-  if (blockedSubdomain.blocked) {
-    return {
-      ok: false,
-      error: { code: 'FORBIDDEN', message: 'Target matches a blocked subdomain rule' },
-    };
+  const decision = await decideAutoMachineAdmission(input, context.data, deps);
+  if (decision.kind === 'rejected') {
+    return { ok: false, error: decision.error };
   }
 
-  if (await isTargetBlockedPath(context.data.groupId, input.targetUrl, deps)) {
-    return {
-      ok: false,
-      error: { code: 'FORBIDDEN', message: 'Target URL matches a blocked path rule' },
-    };
-  }
-
-  const originWhitelisted = await isOriginWhitelisted(context.data.groupId, input.originPage, deps);
-  if (!deps.autoApproveMachineRequests && !originWhitelisted) {
-    return createMachineRequest(
+  if (decision.kind === 'pending') {
+    return createMachineRequestFromContext(
       {
         ...input,
         logContext: 'Auto request',
         source: 'auto_extension',
       },
+      decision.context,
       deps
     );
   }
@@ -408,8 +384,8 @@ export async function decideAutoMachineRequest(
     const created = await createAutomaticWhitelistRule(
       {
         diagnosticContext: input.diagnosticContext,
-        domain: context.data.domain,
-        groupId: context.data.groupId,
+        domain: decision.context.domain,
+        groupId: decision.context.groupId,
         originPage: input.originPage,
         reason: input.reason,
       },
@@ -425,9 +401,9 @@ export async function decideAutoMachineRequest(
       ok: true,
       data: {
         autoApproved: true,
-        domain: context.data.domain,
+        domain: decision.context.domain,
         duplicate: created.duplicate,
-        groupId: context.data.groupId,
+        groupId: decision.context.groupId,
         source: 'auto_extension',
         status: created.status,
       },

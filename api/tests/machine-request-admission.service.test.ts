@@ -141,6 +141,51 @@ await describe('machine request admission service', async () => {
     });
   });
 
+  await test('manual submissions normalize subdomains to the root request domain', async () => {
+    const { deps, createdRequests } = createDeps();
+
+    const result = await createSubmittedMachineRequest(
+      { domainRaw: 'Video.CDN.Example.COM', hostnameRaw: 'lab-host-01', token: 'token' },
+      deps
+    );
+
+    assert.ok(result.ok);
+    assert.equal(result.data.domain, 'example.com');
+    assert.equal(createdRequests.length, 1);
+    assert.equal(createdRequests[0]?.domain, 'example.com');
+    assert.equal(createdRequests[0]?.source, 'firefox-extension');
+  });
+
+  await test('hostname mismatch rejects before policy lookup', async () => {
+    let policyLookups = 0;
+    const { deps } = createDeps({
+      resolveEffectiveMachinePolicyContext: () => {
+        policyLookups += 1;
+        return Promise.resolve(null);
+      },
+      resolveMachineTokenHostnameAccess: () =>
+        Promise.resolve({
+          ok: false,
+          error: 'hostname-mismatch',
+          requestedHostname: 'lab-host-02',
+          machine: testMachine,
+        } as AccessResult) as ReturnType<
+          MachineRequestAdmissionDeps['resolveMachineTokenHostnameAccess']
+        >,
+    });
+
+    const result = await decideAutoMachineRequest(
+      { domainRaw: 'example.com', hostnameRaw: 'lab-host-02', token: 'token' },
+      deps
+    );
+
+    assert.deepEqual(result, {
+      ok: false,
+      error: { code: 'FORBIDDEN', message: 'Token is not valid for this hostname' },
+    });
+    assert.equal(policyLookups, 0);
+  });
+
   await test('missing active policy context returns not found', async () => {
     const { deps } = createDeps({
       resolveEffectiveMachinePolicyContext: () => Promise.resolve(null),
@@ -155,6 +200,65 @@ await describe('machine request admission service', async () => {
       ok: false,
       error: { code: 'NOT_FOUND', message: 'No active group found for machine hostname' },
     });
+  });
+
+  await test('missing group rejects like unrestricted classrooms', async () => {
+    const { deps } = createDeps({
+      resolveEffectiveMachinePolicyContext: () =>
+        Promise.resolve({
+          classroomId: 'classroom-1',
+          classroomName: 'Classroom 1',
+          groupId: null,
+          mode: 'grouped',
+          reason: 'manual',
+        }),
+    });
+
+    const result = await decideAutoMachineRequest(
+      { domainRaw: 'example.com', hostnameRaw: 'lab-host-01', token: 'token' },
+      deps
+    );
+
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: 'BAD_REQUEST',
+        message: 'Machine classroom is unrestricted and does not require access requests',
+      },
+    });
+  });
+
+  await test('invalid domains fail after machine token proof succeeds', async () => {
+    let tokenProofs = 0;
+    let policyLookups = 0;
+    const { deps } = createDeps({
+      resolveEffectiveMachinePolicyContext: () => {
+        policyLookups += 1;
+        return Promise.resolve(null);
+      },
+      resolveMachineTokenHostnameAccess: () => {
+        tokenProofs += 1;
+        return Promise.resolve({
+          ok: true,
+          machine: testMachine,
+          requestedHostname: 'lab-host-01',
+        } as AccessResult) as ReturnType<
+          MachineRequestAdmissionDeps['resolveMachineTokenHostnameAccess']
+        >;
+      },
+    });
+
+    const result = await decideAutoMachineRequest(
+      { domainRaw: 'http://', hostnameRaw: 'lab-host-01', token: 'token' },
+      deps
+    );
+
+    assert.equal(tokenProofs, 1);
+    assert.equal(policyLookups, 0);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.error.code, 'BAD_REQUEST');
+    }
   });
 
   await test('blocked subdomain rejects auto approval', async () => {
@@ -236,6 +340,78 @@ await describe('machine request admission service', async () => {
     assert.equal(createdRequests[0]?.source, 'auto_extension');
   });
 
+  await test('malformed origin creates pending request instead of auto approval', async () => {
+    const { deps, createdRequests, createdRules } = createDeps({
+      getRulesByGroup: (_groupId, type) =>
+        Promise.resolve(
+          type === 'whitelist'
+            ? [
+                {
+                  id: 'rule-origin',
+                  groupId: 'group-1',
+                  type: 'whitelist',
+                  value: '*.school.example',
+                  source: 'manual',
+                  comment: null,
+                  createdAt: new Date().toISOString(),
+                },
+              ]
+            : []
+        ) as Promise<Rule[]>,
+    });
+
+    const result = await decideAutoMachineRequest(
+      {
+        domainRaw: 'cdn.example.com',
+        hostnameRaw: 'lab-host-01',
+        originPage: 'not a host',
+        token: 'token',
+      },
+      deps
+    );
+
+    assert.ok(result.ok);
+    assert.equal(result.data.autoApproved, false);
+    assert.equal(createdRequests.length, 1);
+    assert.equal(createdRules.length, 0);
+  });
+
+  await test('auto request preserves exact subresource domain when origin is trusted', async () => {
+    const { deps, createdRules } = createDeps({
+      getRulesByGroup: (_groupId, type) =>
+        Promise.resolve(
+          type === 'whitelist'
+            ? [
+                {
+                  id: 'rule-origin',
+                  groupId: 'group-1',
+                  type: 'whitelist',
+                  value: 'school.example',
+                  source: 'manual',
+                  comment: null,
+                  createdAt: new Date().toISOString(),
+                },
+              ]
+            : []
+        ) as Promise<Rule[]>,
+    });
+
+    const result = await decideAutoMachineRequest(
+      {
+        domainRaw: 'Video.CDN.Example.COM',
+        hostnameRaw: 'lab-host-01',
+        originPage: 'https://school.example/dashboard',
+        token: 'token',
+      },
+      deps
+    );
+
+    assert.ok(result.ok);
+    assert.equal(result.data.autoApproved, true);
+    assert.equal(result.data.domain, 'video.cdn.example.com');
+    assert.equal(createdRules[0]?.value, 'video.cdn.example.com');
+  });
+
   await test('whitelisted origin auto approves and publishes whitelist event after commit', async () => {
     const { deps, events, createdRules } = createDeps({
       getRulesByGroup: (_groupId, type) =>
@@ -281,6 +457,34 @@ await describe('machine request admission service', async () => {
     assert.ok(createdRules[0]);
     assert.equal(createdRules[0].source, 'auto_extension');
     assert.match(String(createdRules[0].comment), /diagnostic \(xmlhttprequest\)/);
+  });
+
+  await test('automatic whitelist event is published only after transaction commit', async () => {
+    const calls: string[] = [];
+    const { deps } = createDeps({
+      autoApproveMachineRequests: true,
+      createRule: (groupId, type, value, comment, source, tx) => {
+        calls.push(`create:${String(tx)}`);
+        return Promise.resolve({ success: true, id: 'rule-1' });
+      },
+      publishWhitelistChanged: (groupId) => {
+        calls.push(`event:${groupId}`);
+      },
+      withTransaction: async (operation) => {
+        calls.push('begin');
+        const result = await operation('tx-1' as unknown as DbExecutor);
+        calls.push('commit');
+        return result;
+      },
+    });
+
+    const result = await decideAutoMachineRequest(
+      { domainRaw: 'cdn.example.com', hostnameRaw: 'lab-host-01', token: 'token' },
+      deps
+    );
+
+    assert.ok(result.ok);
+    assert.deepEqual(calls, ['begin', 'create:tx-1', 'commit', 'event:group-1']);
   });
 
   await test('duplicate whitelist rule returns duplicate status', async () => {
