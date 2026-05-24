@@ -71,12 +71,14 @@ if (-not (Get-Command -Name 'Invoke-OpenPathScheduledTask' -ErrorAction Silently
 $nativeHostRuntimeDependencyCandidatePaths = @()
 if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\CapabilityStorage.ps1')
+    $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\RuntimeDependency.Protocol.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\RuntimeDependency.Policy.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\RuntimeDependency.Queue.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\RuntimeDependency.Overlay.ps1')
 }
 if ($PSScriptRoot) {
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $PSScriptRoot 'CapabilityStorage.ps1')
+    $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $PSScriptRoot 'RuntimeDependency.Protocol.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $PSScriptRoot 'RuntimeDependency.Policy.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $PSScriptRoot 'RuntimeDependency.Queue.ps1')
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $PSScriptRoot 'RuntimeDependency.Overlay.ps1')
@@ -547,7 +549,7 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
     if ($updateResult.success -ne $true) {
         return @{
             success = $false
-            action = 'allow-local-runtime-dependency'
+            action = $script:OpenPathRuntimeDependencyActionAllowLocal
             anchorHost = $candidate.AnchorHost
             dependencyHost = $candidate.DependencyHost
             requestType = $candidate.RequestType
@@ -566,7 +568,7 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
 
     return @{
         success = $true
-        action = 'allow-local-runtime-dependency'
+        action = $script:OpenPathRuntimeDependencyActionAllowLocal
         anchorHost = $candidate.AnchorHost
         dependencyHost = $candidate.DependencyHost
         requestType = $candidate.RequestType
@@ -579,7 +581,7 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
         runtimeDependencyFastPath = if ($updateResult.ContainsKey('runtimeDependencyFastPath')) { [bool]$updateResult.runtimeDependencyFastPath } else { $false }
         runtimeDependencyFallback = if ($updateResult.ContainsKey('runtimeDependencyFallback')) { [bool]$updateResult.runtimeDependencyFallback } else { $false }
         updateTaskName = if ($updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
-        source = 'firefox-webrequest-local'
+        source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal
     }
 }
 
@@ -597,7 +599,7 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
 
     $entries = @($Message.entries)
     if ($entries.Count -eq 0) {
-        return @{ success = $false; action = 'allow-local-runtime-dependency-batch'; error = 'Invalid runtime dependency batch payload'; results = @() }
+        return @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocalBatch; error = 'Invalid runtime dependency batch payload'; results = @() }
     }
 
     $results = @()
@@ -605,7 +607,7 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
     $queuedDependencyHosts = @()
     $updateResult = $null
 
-    foreach ($entry in @($entries | Select-Object -First 20)) {
+    foreach ($entry in @($entries | Select-Object -First $script:OpenPathRuntimeDependencyBatchMaxEntries)) {
         $candidate = Resolve-NativeHostLocalRuntimeDependencyCandidate -Message $entry -State $State -Sections $Sections
         if ($candidate.Valid -ne $true) {
             $results += $candidate.Result
@@ -620,22 +622,22 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
         $queueWriteStopwatch.Stop()
         $result = @{
             success = $true
-            action = 'allow-local-runtime-dependency'
+            action = $script:OpenPathRuntimeDependencyActionAllowLocal
             anchorHost = $candidate.AnchorHost
             dependencyHost = $candidate.DependencyHost
             requestType = $candidate.RequestType
             queued = $true
             requestPath = $requestPath
             queueWriteMs = [int]$queueWriteStopwatch.ElapsedMilliseconds
-            source = 'firefox-webrequest-local'
+            source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal
         }
         $results += $result
         $queuedResults += $result
         $queuedDependencyHosts += $candidate.DependencyHost
     }
 
-    if ($entries.Count -gt 20) {
-        $results += @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Runtime dependency batch limit exceeded' }
+    if ($entries.Count -gt $script:OpenPathRuntimeDependencyBatchMaxEntries) {
+        $results += @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; error = 'Runtime dependency batch limit exceeded' }
     }
 
     if ($queuedDependencyHosts.Count -gt 0) {
@@ -662,7 +664,7 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
     $failedResults = @($results | Where-Object { $_.success -ne $true })
     return @{
         success = ($failedResults.Count -eq 0)
-        action = 'allow-local-runtime-dependency-batch'
+        action = $script:OpenPathRuntimeDependencyActionAllowLocalBatch
         count = $results.Count
         queuedCount = $queuedResults.Count
         queueWriteMs = [int](@($queuedResults | ForEach-Object { if ($_.ContainsKey('queueWriteMs')) { [int]$_.queueWriteMs } else { 0 } } | Measure-Object -Sum).Sum)
@@ -1344,11 +1346,11 @@ function Invoke-NativeHostMessageAction {
             return (Invoke-UpdateTask -Domains $domains)
         }
 
-        'allow-local-runtime-dependency' {
+        $script:OpenPathRuntimeDependencyActionAllowLocal {
             return (Invoke-NativeHostLocalRuntimeDependencyAction -Message $Message -State $State -Sections $sections)
         }
 
-        'allow-local-runtime-dependency-batch' {
+        $script:OpenPathRuntimeDependencyActionAllowLocalBatch {
             return (Invoke-NativeHostLocalRuntimeDependencyBatchAction -Message $Message -State $State -Sections $sections)
         }
 

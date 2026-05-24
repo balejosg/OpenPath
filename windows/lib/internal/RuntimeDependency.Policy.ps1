@@ -1,3 +1,10 @@
+if (-not (Get-Variable -Name OpenPathRuntimeDependencyActionAllowLocal -Scope Script -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $runtimeDependencyProtocolPath = Join-Path $PSScriptRoot 'RuntimeDependency.Protocol.ps1'
+    if (Test-Path $runtimeDependencyProtocolPath -ErrorAction SilentlyContinue) {
+        . $runtimeDependencyProtocolPath
+    }
+}
+
 function Normalize-OpenPathRuntimeDependencyHost {
     [CmdletBinding()]
     param([AllowNull()][object]$Value)
@@ -216,7 +223,7 @@ function Test-OpenPathRuntimeDependencyCandidate {
     if (Test-OpenPathRuntimeDependencySensitiveField -Message $Message) {
         return @{
             Valid = $false
-            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Sensitive fields are not accepted' }
+            Result = @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; error = 'Sensitive fields are not accepted' }
         }
     }
 
@@ -227,19 +234,19 @@ function Test-OpenPathRuntimeDependencyCandidate {
     if (-not $anchorHost -or -not $dependencyHost -or -not $requestType) {
         return @{
             Valid = $false
-            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'Invalid runtime dependency payload' }
+            Result = @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; error = 'Invalid runtime dependency payload' }
         }
     }
     if ($requestType -eq 'main_frame') {
         return @{
             Valid = $false
-            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; error = 'main_frame dependencies are not supported' }
+            Result = @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; error = 'main_frame dependencies are not supported' }
         }
     }
     if ($anchorHost -eq $dependencyHost) {
         return @{
             Valid = $false
-            Result = @{ success = $true; action = 'allow-local-runtime-dependency'; skipped = $true; reason = 'same-host' }
+            Result = @{ success = $true; action = $script:OpenPathRuntimeDependencyActionAllowLocal; skipped = $true; reason = 'same-host' }
         }
     }
 
@@ -247,7 +254,7 @@ function Test-OpenPathRuntimeDependencyCandidate {
     if (-not (Test-OpenPathWhitelistCoversHost -Hostname $anchorHost -WhitelistSet $whitelistSet)) {
         return @{
             Valid = $false
-            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Anchor host is not locally whitelisted' }
+            Result = @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Anchor host is not locally whitelisted' }
         }
     }
 
@@ -258,26 +265,26 @@ function Test-OpenPathRuntimeDependencyCandidate {
     ) {
         return @{
             Valid = $false
-            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Protected hosts are not accepted as runtime dependencies' }
+            Result = @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Protected hosts are not accepted as runtime dependencies' }
         }
     }
     if (Test-OpenPathBlockedSubdomainMatch -Domain $dependencyHost -BlockedSubdomains $BlockedSubdomains) {
         return @{
             Valid = $false
-            Result = @{ success = $false; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Blocked hosts are not accepted as runtime dependencies' }
+            Result = @{ success = $false; action = $script:OpenPathRuntimeDependencyActionAllowLocal; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; error = 'Blocked hosts are not accepted as runtime dependencies' }
         }
     }
     if (Test-OpenPathWhitelistCoversHost -Hostname $dependencyHost -WhitelistSet $whitelistSet) {
         return @{
             Valid = $false
-            Result = @{ success = $true; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; skipped = $true; reason = 'dependency-already-whitelisted' }
+            Result = @{ success = $true; action = $script:OpenPathRuntimeDependencyActionAllowLocal; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; skipped = $true; reason = 'dependency-already-whitelisted' }
         }
     }
     if (-not $SkipOverlayCheck -and (Get-Command -Name 'Test-OpenPathRuntimeDependencyOverlayContainsDomains' -ErrorAction SilentlyContinue)) {
         if (Test-OpenPathRuntimeDependencyOverlayContainsDomains -Domains @($dependencyHost)) {
             return @{
                 Valid = $false
-                Result = @{ success = $true; action = 'allow-local-runtime-dependency'; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; skipped = $true; reason = 'runtime-dependency-overlay-present' }
+                Result = @{ success = $true; action = $script:OpenPathRuntimeDependencyActionAllowLocal; anchorHost = $anchorHost; dependencyHost = $dependencyHost; requestType = $requestType; skipped = $true; reason = 'runtime-dependency-overlay-present' }
             }
         }
     }

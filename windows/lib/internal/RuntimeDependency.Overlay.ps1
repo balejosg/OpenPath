@@ -5,6 +5,13 @@ if (-not (Get-Command -Name 'Get-OpenPathCapabilityStoragePath' -ErrorAction Sil
     }
 }
 
+if (-not (Get-Variable -Name OpenPathRuntimeDependencyOverlayVersion -Scope Script -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $runtimeDependencyProtocolPath = Join-Path $PSScriptRoot 'RuntimeDependency.Protocol.ps1'
+    if (Test-Path $runtimeDependencyProtocolPath -ErrorAction SilentlyContinue) {
+        . $runtimeDependencyProtocolPath
+    }
+}
+
 function Get-OpenPathRuntimeDependencyOverlayPath {
     [CmdletBinding()]
     param()
@@ -62,7 +69,7 @@ function Write-OpenPathRuntimeDependencyOverlay {
     }
 
     @{
-        version = 1
+        version = $script:OpenPathRuntimeDependencyOverlayVersion
         updatedAt = (Get-Date).ToUniversalTime().ToString('o')
         entries = @($Entries)
     } | ConvertTo-Json -Depth 8 | Set-Content $Path -Encoding UTF8 -Force
@@ -155,7 +162,7 @@ function Update-OpenPathRuntimeDependencyOverlay {
                 firstSeen = $now.ToString('o')
                 lastSeen = $now.ToString('o')
                 expiresAt = $expiresAt.ToString('o')
-                source = 'firefox-webrequest-local'
+                source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal
             }
         }
         $processed += 1

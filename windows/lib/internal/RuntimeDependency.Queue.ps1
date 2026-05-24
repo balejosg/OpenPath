@@ -5,6 +5,13 @@ if (-not (Get-Command -Name 'Get-OpenPathCapabilityStoragePath' -ErrorAction Sil
     }
 }
 
+if (-not (Get-Variable -Name OpenPathRuntimeDependencyQueueVersion -Scope Script -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $runtimeDependencyProtocolPath = Join-Path $PSScriptRoot 'RuntimeDependency.Protocol.ps1'
+    if (Test-Path $runtimeDependencyProtocolPath -ErrorAction SilentlyContinue) {
+        . $runtimeDependencyProtocolPath
+    }
+}
+
 function Get-OpenPathRuntimeDependencyQueuePath {
     [CmdletBinding()]
     param()
@@ -69,12 +76,12 @@ function Write-OpenPathRuntimeDependencyQueueRequest {
     $requestId = [Guid]::NewGuid().ToString('N')
     $requestPath = Join-Path $QueuePath "$requestId.json"
     @{
-        version = 1
+        version = $script:OpenPathRuntimeDependencyQueueVersion
         queuedAt = (Get-Date).ToUniversalTime().ToString('o')
         anchorHost = $normalizedAnchor
         dependencyHost = $normalizedDependency
         requestType = $normalizedRequestType
-        source = 'firefox-webrequest-local'
+        source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal
     } | ConvertTo-Json -Depth 6 | Set-Content $requestPath -Encoding UTF8 -Force
 
     return $requestPath

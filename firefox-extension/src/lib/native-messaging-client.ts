@@ -2,6 +2,18 @@ import type { Browser, Runtime } from 'webextension-polyfill';
 
 import { t } from './i18n.js';
 import { getErrorMessage, logger as defaultLogger } from './logger.js';
+import {
+  LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS,
+  LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES,
+  LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES,
+  LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS,
+  LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
+  RUNTIME_DEPENDENCY_ACTIONS,
+  createRuntimeDependencyCacheKey,
+  createRuntimeDependencyPendingKey,
+  isQueuedRuntimeDependencyResponse,
+  type LocalRuntimeDependencyInput,
+} from './runtime-dependency-protocol.js';
 
 declare const browser: Browser;
 
@@ -52,12 +64,6 @@ export interface VerifyResponse {
   error?: string;
 }
 
-interface LocalRuntimeDependencyInput {
-  anchorHost: string;
-  dependencyHost: string;
-  requestType: string;
-}
-
 export interface CaptivePortalRecoveryInput {
   operation?: 'open' | 'reconcile';
   portalState?: string;
@@ -75,7 +81,7 @@ export interface CaptivePortalRecoveryResponse extends NativeResponse {
 }
 
 interface LocalRuntimeDependencyBatchResponse extends NativeResponse {
-  action?: 'allow-local-runtime-dependency-batch';
+  action?: typeof RUNTIME_DEPENDENCY_ACTIONS.allowLocalBatch;
   results?: NativeResponse[];
   error?: string;
 }
@@ -98,12 +104,6 @@ export interface NativeMessagingClient {
   requestLocalWhitelistUpdate: (domains?: string[]) => Promise<boolean>;
   sendMessage: (message: unknown) => Promise<unknown>;
 }
-
-const LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS = 150;
-const LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES = 20;
-const LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS = 30 * 60 * 1000;
-const LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS = 5 * 1000;
-const LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES = 100;
 
 export function createNativeMessagingClient(options: {
   browserApi?: Browser;
@@ -255,16 +255,6 @@ export function createNativeMessagingClient(options: {
     })) as CaptivePortalRecoveryResponse;
   }
 
-  function createRuntimeDependencyCacheKey(
-    input: Pick<LocalRuntimeDependencyInput, 'anchorHost' | 'dependencyHost'>
-  ): string {
-    return `${input.anchorHost.toLowerCase()}|${input.dependencyHost.toLowerCase()}`;
-  }
-
-  function createRuntimeDependencyPendingKey(input: LocalRuntimeDependencyInput): string {
-    return `${createRuntimeDependencyCacheKey(input)}|${input.requestType.toLowerCase()}`;
-  }
-
   function pruneExpiredRuntimeDependencyEntries<T extends number | { expiresAt: number }>(
     cache: Map<string, T>,
     now: number
@@ -298,7 +288,7 @@ export function createNativeMessagingClient(options: {
 
     return {
       success: true,
-      action: 'allow-local-runtime-dependency',
+      action: RUNTIME_DEPENDENCY_ACTIONS.allowLocal,
       anchorHost: input.anchorHost,
       dependencyHost: input.dependencyHost,
       cached: true,
@@ -317,10 +307,6 @@ export function createNativeMessagingClient(options: {
     }
 
     return { ...cached.response, deduped: true };
-  }
-
-  function isQueuedRuntimeDependencyResponse(response: NativeResponse): boolean {
-    return response.runtimeDependencyState === 'queued';
   }
 
   function cacheRuntimeDependencySuccess(
@@ -352,7 +338,7 @@ export function createNativeMessagingClient(options: {
     input: LocalRuntimeDependencyInput
   ): Promise<NativeResponse> {
     const response = (await sendMessage({
-      action: 'allow-local-runtime-dependency',
+      action: RUNTIME_DEPENDENCY_ACTIONS.allowLocal,
       anchorHost: input.anchorHost,
       dependencyHost: input.dependencyHost,
       requestType: input.requestType,
@@ -418,7 +404,7 @@ export function createNativeMessagingClient(options: {
 
     try {
       const batchResponse = (await sendMessage({
-        action: 'allow-local-runtime-dependency-batch',
+        action: RUNTIME_DEPENDENCY_ACTIONS.allowLocalBatch,
         entries: batch.map((request) => request.input),
       })) as LocalRuntimeDependencyBatchResponse;
 

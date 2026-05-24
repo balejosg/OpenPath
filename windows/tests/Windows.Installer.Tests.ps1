@@ -253,6 +253,7 @@ Describe "Installer" {
             $artifactNames | Should -Contain 'OpenPath-NativeHost.ps1'
             $artifactNames | Should -Contain 'OpenPath-NativeHost.cmd'
             $artifactNames | Should -Contain 'NativeHost.Actions.ps1'
+            $artifactNames | Should -Contain 'RuntimeDependency.Protocol.ps1'
 
             $scriptRoot = Join-Path $TestDrive 'package\scripts'
             $libRoot = Join-Path $TestDrive 'package\lib'

@@ -3,6 +3,20 @@ import { describe, test } from 'node:test';
 import type { Browser } from 'webextension-polyfill';
 
 import { createNativeMessagingClient } from '../src/lib/native-messaging-client.js';
+import {
+  LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS,
+  LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES,
+  LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES,
+  LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS,
+  LOCAL_RUNTIME_DEPENDENCY_OVERLAY_VERSION,
+  LOCAL_RUNTIME_DEPENDENCY_QUEUE_SOURCE,
+  LOCAL_RUNTIME_DEPENDENCY_QUEUE_VERSION,
+  LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
+  RUNTIME_DEPENDENCY_ACTIONS,
+  createRuntimeDependencyCacheKey,
+  createRuntimeDependencyPendingKey,
+  isQueuedRuntimeDependencyResponse,
+} from '../src/lib/runtime-dependency-protocol.js';
 
 function createBrowserStub(sendResult: unknown): Browser {
   return {
@@ -45,6 +59,41 @@ function createRecordingBrowserStub(handler: (message: unknown) => unknown): {
 }
 
 await describe('native messaging client', async () => {
+  await test('exports local runtime dependency protocol constants and cache semantics', () => {
+    assert.deepEqual(RUNTIME_DEPENDENCY_ACTIONS, {
+      allowLocal: 'allow-local-runtime-dependency',
+      allowLocalBatch: 'allow-local-runtime-dependency-batch',
+    });
+    assert.equal(LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS, 150);
+    assert.equal(LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES, 20);
+    assert.equal(LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS, 30 * 60 * 1000);
+    assert.equal(LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS, 5 * 1000);
+    assert.equal(LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES, 100);
+    assert.equal(LOCAL_RUNTIME_DEPENDENCY_QUEUE_VERSION, 1);
+    assert.equal(LOCAL_RUNTIME_DEPENDENCY_OVERLAY_VERSION, 1);
+    assert.equal(LOCAL_RUNTIME_DEPENDENCY_QUEUE_SOURCE, 'firefox-webrequest-local');
+    assert.equal(
+      createRuntimeDependencyCacheKey({
+        anchorHost: 'Allowed.EXAMPLE',
+        dependencyHost: 'CDN.EXAMPLE',
+      }),
+      'allowed.example|cdn.example'
+    );
+    assert.equal(
+      createRuntimeDependencyPendingKey({
+        anchorHost: 'Allowed.EXAMPLE',
+        dependencyHost: 'CDN.EXAMPLE',
+        requestType: 'Script',
+      }),
+      'allowed.example|cdn.example|script'
+    );
+    assert.equal(isQueuedRuntimeDependencyResponse({ success: true, queued: true }), true);
+    assert.equal(
+      isQueuedRuntimeDependencyResponse({ success: true, runtimeDependencyState: 'queued' }),
+      true
+    );
+  });
+
   await test('maps native check responses to popup-friendly fields', async () => {
     const client = createNativeMessagingClient({
       browserApi: createBrowserStub({
@@ -387,7 +436,6 @@ await describe('native messaging client', async () => {
             dependencyHost: 'cdn.example',
             requestType: 'script',
             queued: true,
-            runtimeDependencyState: 'queued',
           },
         ],
       }));
@@ -403,8 +451,8 @@ await describe('native messaging client', async () => {
             dependencyHost: 'cdn.example',
             requestType: 'script',
           })
-        ).runtimeDependencyState,
-        'queued'
+        ).queued,
+        true
       );
       assert.deepEqual(
         await client.allowLocalRuntimeDependency({
@@ -419,7 +467,6 @@ await describe('native messaging client', async () => {
           dependencyHost: 'cdn.example',
           requestType: 'script',
           queued: true,
-          runtimeDependencyState: 'queued',
           deduped: true,
         }
       );
@@ -433,8 +480,8 @@ await describe('native messaging client', async () => {
             dependencyHost: 'cdn.example',
             requestType: 'script',
           })
-        ).runtimeDependencyState,
-        'queued'
+        ).queued,
+        true
       );
       assert.equal(messages.length, 2);
     } finally {
@@ -457,7 +504,6 @@ await describe('native messaging client', async () => {
           success: true,
           action: 'allow-local-runtime-dependency',
           queued: true,
-          runtimeDependencyState: 'queued',
         })),
       };
     });
@@ -475,8 +521,8 @@ await describe('native messaging client', async () => {
             dependencyHost,
             requestType: 'script',
           })
-        ).runtimeDependencyState,
-        'queued'
+        ).queued,
+        true
       );
     }
 
@@ -487,8 +533,8 @@ await describe('native messaging client', async () => {
           dependencyHost: 'queued-1.example',
           requestType: 'script',
         })
-      ).runtimeDependencyState,
-      'queued'
+      ).queued,
+      true
     );
     assert.equal(messages.length, 4);
   });

@@ -123,6 +123,7 @@ Describe "Browser Module - Native Host" {
             try {
                 . (Join-Path $repoWindowsRoot "lib\internal\NativeHost.ArtifactCatalog.ps1")
                 $nativeFiles = @(Get-OpenPathNativeHostArtifactNames)
+                $nativeFiles | Should -Contain "RuntimeDependency.Protocol.ps1"
 
                 foreach ($nativeFile in $nativeFiles) {
                     $sourcePath = Join-Path $repoWindowsRoot "scripts\$nativeFile"
@@ -322,6 +323,7 @@ Describe "Browser Module - Native Host" {
             $artifactNames | Should -Contain 'OpenPath-NativeHost.ps1'
             $artifactNames | Should -Contain 'OpenPath-NativeHost.cmd'
             $artifactNames | Should -Contain 'NativeHost.Actions.ps1'
+            $artifactNames | Should -Contain 'RuntimeDependency.Protocol.ps1'
 
             $sourceRoot = Join-Path $TestDrive 'scripts'
             $nativeRoot = Join-Path $TestDrive 'native'
@@ -352,6 +354,8 @@ Describe "Browser Module - Native Host" {
                 'Resolve-OpenPathNativeHostArtifactSources -ArtifactNames $artifactNames -CandidateRoots $candidateRoots',
                 '[string]::Equals($sourcePath, $destinationPath, [System.StringComparison]::OrdinalIgnoreCase)'
             )
+            $nativeFilesForRuntimeDependency = @(Get-OpenPathNativeHostArtifactNames)
+            $nativeFilesForRuntimeDependency | Should -Contain 'RuntimeDependency.Protocol.ps1'
 
             Assert-ContentContainsAll -Content $browserContent -Needles @(
                 'function Sync-OpenPathFirefoxNativeHostArtifacts',
@@ -484,14 +488,30 @@ Describe "Browser Module - Native Host" {
         It "Supports local runtime dependency overlay action without full URL fields" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+            $runtimeDependencyProtocolPath = Join-Path $PSScriptRoot ".." "lib" "internal" "RuntimeDependency.Protocol.ps1"
+            $runtimeDependencyProtocolContent = Get-Content $runtimeDependencyProtocolPath -Raw
+            $runtimeDependencyQueuePath = Join-Path $PSScriptRoot ".." "lib" "internal" "RuntimeDependency.Queue.ps1"
+            $runtimeDependencyQueueContent = Get-Content $runtimeDependencyQueuePath -Raw
+            $runtimeDependencyOverlayPath = Join-Path $PSScriptRoot ".." "lib" "internal" "RuntimeDependency.Overlay.ps1"
+            $runtimeDependencyOverlayContent = Get-Content $runtimeDependencyOverlayPath -Raw
             $installerStagingPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
             $installerStagingContent = Get-Content $installerStagingPath -Raw
             $updateRuntimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
             $updateRuntimeContent = Get-Content $updateRuntimePath -Raw
 
+            Assert-ContentContainsAll -Content $runtimeDependencyProtocolContent -Needles @(
+                '$script:OpenPathRuntimeDependencyActionAllowLocal = ''allow-local-runtime-dependency''',
+                '$script:OpenPathRuntimeDependencyActionAllowLocalBatch = ''allow-local-runtime-dependency-batch''',
+                '$script:OpenPathRuntimeDependencyBatchMaxEntries = 20',
+                '$script:OpenPathRuntimeDependencyQueueVersion = 1',
+                '$script:OpenPathRuntimeDependencyOverlayVersion = 1',
+                '$script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal = ''firefox-webrequest-local'''
+            )
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
-                'allow-local-runtime-dependency',
-                'allow-local-runtime-dependency-batch',
+                'RuntimeDependency.Protocol.ps1',
+                '$script:OpenPathRuntimeDependencyActionAllowLocal',
+                '$script:OpenPathRuntimeDependencyActionAllowLocalBatch',
+                '$script:OpenPathRuntimeDependencyBatchMaxEntries',
                 'function Invoke-NativeHostLocalRuntimeDependencyAction',
                 'function Invoke-NativeHostLocalRuntimeDependencyBatchAction',
                 'function Get-NativeHostRuntimeDependencyQueuePath',
@@ -502,7 +522,7 @@ Describe "Browser Module - Native Host" {
                 'anchorHost',
                 'dependencyHost',
                 'requestType',
-                'source = ''firefox-webrequest-local''',
+                'source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal',
                 'Sensitive fields are not accepted',
                 'reason = ''dependency-already-whitelisted''',
                 'reason = ''runtime-dependency-overlay-present''',
@@ -512,6 +532,16 @@ Describe "Browser Module - Native Host" {
                 'updateTriggerMs',
                 'runtimeDependencyFastPath',
                 'runtimeDependencyFallback'
+            )
+            Assert-ContentContainsAll -Content $runtimeDependencyQueueContent -Needles @(
+                'RuntimeDependency.Protocol.ps1',
+                'version = $script:OpenPathRuntimeDependencyQueueVersion',
+                'source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal'
+            )
+            Assert-ContentContainsAll -Content $runtimeDependencyOverlayContent -Needles @(
+                'RuntimeDependency.Protocol.ps1',
+                'version = $script:OpenPathRuntimeDependencyOverlayVersion',
+                'source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal'
             )
             Assert-ContentContainsAll -Content $installerStagingContent -Needles @(
                 'Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue',
