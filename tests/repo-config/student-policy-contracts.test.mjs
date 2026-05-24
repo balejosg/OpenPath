@@ -1188,13 +1188,13 @@ describe('repository verification contract', () => {
     );
     assert.match(
       acrylicHostsModel,
-      /\$domainEntries = @\(\$normalizedDomain, "\*\.\$normalizedDomain"\)/,
-      'Get-AcrylicAffinityMaskEntries should keep the parent wildcard so allowed sibling subdomains can resolve'
+      /\$domainEntries = if \(\$hasBlockedDescendant\) \{ @\(\$normalizedDomain\) \} else \{ @\(\$normalizedDomain, "\*\.\$normalizedDomain"\) \}/,
+      'Get-AcrylicAffinityMaskEntries should omit the parent wildcard when a blocked descendant would otherwise resolve upstream'
     );
-    assert.doesNotMatch(
+    assert.match(
       acrylicHostsModel,
       /\$domainEntries = if \(\$hasBlockedDescendant\)/,
-      'Get-AcrylicAffinityMaskEntries should not remove the parent wildcard when a blocked descendant exists'
+      'Get-AcrylicAffinityMaskEntries should detect blocked descendants before emitting the parent wildcard'
     );
     assert.doesNotMatch(
       dnsConfigModule,

@@ -503,6 +503,8 @@ Describe "DNS Module" {
                 'www.example.com' | Should -Match $regexPattern
                 'ads.example.com' | Should -Not -Match $regexPattern
                 'cdn.ads.example.com' | Should -Not -Match $regexPattern
+                $definition.DomainAffinityMask | Should -Match 'example\.com'
+                $definition.DomainAffinityMask | Should -Not -Match '\*\.example\.com'
             }
         }
 
@@ -848,11 +850,13 @@ Describe "DNS Module" {
 
             $result | Should -BeTrue
             $script:capturedAcrylicConfig | Should -Not -BeNullOrEmpty
-            $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*base-only\.127\.0\.0\.1\.sslip\.io;\*\.base-only\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*base-only\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*\*\.base-only\.127\.0\.0\.1\.sslip\.io'
             $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*cdn\.base-only\.127\.0\.0\.1\.sslip\.io'
             $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*static\.example\.test;\*\.static\.example\.test'
             $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*raw\.githubusercontent\.com;\*\.raw\.githubusercontent\.com'
-            $script:capturedAcrylicConfig | Should -Match 'SecondaryServerDomainNameAffinityMask=.*base-only\.127\.0\.0\.1\.sslip\.io;\*\.base-only\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Match 'SecondaryServerDomainNameAffinityMask=.*base-only\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Not -Match 'SecondaryServerDomainNameAffinityMask=.*\*\.base-only\.127\.0\.0\.1\.sslip\.io'
         }
 
         It "Does not forward runtime dependency domains blocked by policy" {

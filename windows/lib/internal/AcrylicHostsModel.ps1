@@ -69,7 +69,18 @@ function Get-AcrylicAffinityMaskEntries {
         if ($normalizedDomain.StartsWith('*.')) { $normalizedDomain = $normalizedDomain.Substring(2) }
         if (-not $normalizedDomain) { continue }
 
-        $domainEntries = @($normalizedDomain, "*.$normalizedDomain")
+        $hasBlockedDescendant = $false
+        foreach ($subdomain in @($BlockedSubdomains)) {
+            $normalizedSubdomain = ([string]$subdomain).Trim().TrimEnd('.')
+            if (-not $normalizedSubdomain) { continue }
+            if ($normalizedSubdomain.Length -le ($normalizedDomain.Length + 1)) { continue }
+            if ($normalizedSubdomain.EndsWith(".$normalizedDomain", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $hasBlockedDescendant = $true
+                break
+            }
+        }
+
+        $domainEntries = if ($hasBlockedDescendant) { @($normalizedDomain) } else { @($normalizedDomain, "*.$normalizedDomain") }
         foreach ($entry in $domainEntries) {
             if ($seenEntries.Add($entry)) { [void]$entries.Add($entry) }
         }
