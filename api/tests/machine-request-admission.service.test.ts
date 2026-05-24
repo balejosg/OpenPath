@@ -153,6 +153,7 @@ await describe('machine request admission service', async () => {
     assert.equal(result.data.domain, 'example.com');
     assert.equal(createdRequests.length, 1);
     const createdRequest = createdRequests[0];
+    assert.ok(createdRequest);
     assert.equal(createdRequest.domain, 'example.com');
     assert.equal(createdRequest.source, 'firefox-extension');
   });
