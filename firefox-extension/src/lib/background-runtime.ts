@@ -18,6 +18,7 @@ import {
   type NativeResponse,
   type VerifyResponse,
 } from './native-messaging-client.js';
+import { createCaptivePortalRecoveryController } from './captive-portal-recovery-controller.js';
 import {
   submitBlockedDomainRequest as submitBlockedDomainRequestViaApi,
   type SubmitBlockedDomainInput,
@@ -60,7 +61,6 @@ interface CaptivePortalBrowserApi {
 
 const NATIVE_HOST_NAME = 'whitelist_native_host';
 const BLOCKED_DNS_SENTINELS = new Set(['0.0.0.0', '::', '192.0.2.1', '100::']);
-const CAPTIVE_PORTAL_RECOVERY_RATE_LIMIT_MS = 30_000;
 interface BackgroundRuntimeOptions {
   hostName?: string;
 }
@@ -98,7 +98,6 @@ export function createBackgroundRuntime(
     string,
     { domain: string; originalUrl: string }
   >();
-  const captivePortalRecoveryAttemptByTabAndHost = new Map<string, number>();
   const portalRecoveryEligibleByHost = new Map<string, boolean>();
   const blockedMonitorState = createBlockedMonitorState(
     {
@@ -129,6 +128,15 @@ export function createBackgroundRuntime(
       (await nativeMessagingClient.sendMessage({
         action: 'get-blocked-subdomains',
       })) as NativeBlockedSubdomainsResponse,
+  });
+  const captivePortalRecoveryController = createCaptivePortalRecoveryController({
+    getPortalState: async () => getCaptivePortalApi()?.getState?.(),
+    logger,
+    recoverCaptivePortalNavigation: (input) =>
+      nativeMessagingClient.recoverCaptivePortalNavigation(input),
+    retryNavigation: async (tabId, url) => {
+      await browser.tabs.update(tabId, { url });
+    },
   });
 
   async function redirectToBlockedScreen(context: BlockedScreenContext): Promise<void> {
@@ -211,10 +219,6 @@ export function createBackgroundRuntime(
     return (browser as unknown as { captivePortal?: CaptivePortalBrowserApi }).captivePortal;
   }
 
-  function clearCaptivePortalRecoveryLimiter(): void {
-    captivePortalRecoveryAttemptByTabAndHost.clear();
-  }
-
   async function confirmBlockedScreenNavigation(context: ConfirmBlockedScreenContext): Promise<{
     blocked: boolean;
     portalRecoveryEligible?: boolean;
@@ -229,7 +233,7 @@ export function createBackgroundRuntime(
       const normalizedHost = context.hostname.trim().toLowerCase();
       if (portalRecoveryEligibleByHost.get(normalizedHost) !== result.portalRecoveryEligible) {
         portalRecoveryEligibleByHost.set(normalizedHost, result.portalRecoveryEligible);
-        clearCaptivePortalRecoveryLimiter();
+        captivePortalRecoveryController.clearLimiter();
       }
     }
 
@@ -241,100 +245,20 @@ export function createBackgroundRuntime(
     };
   }
 
-  function buildCaptivePortalRecoveryKey(tabId: number, hostname: string): string {
-    return `${tabId.toString()}:${hostname.trim().toLowerCase()}`;
-  }
-
   async function recoverCaptivePortalNavigation(
     context: ConfirmBlockedScreenContext,
     options?: { isCurrentNavigation?: () => boolean }
   ): Promise<boolean> {
-    const key = buildCaptivePortalRecoveryKey(context.tabId, context.hostname);
-    const now = Date.now();
-    const lastAttempt = captivePortalRecoveryAttemptByTabAndHost.get(key);
-    if (lastAttempt !== undefined && now - lastAttempt < CAPTIVE_PORTAL_RECOVERY_RATE_LIMIT_MS) {
-      return false;
-    }
-
-    const portalState = await getCaptivePortalApi()
-      ?.getState?.()
-      .catch((error: unknown) => {
-        logger.info('[Monitor] Captive portal state unavailable', {
-          tabId: context.tabId,
-          hostname: context.hostname,
-          error: getErrorMessage(error),
-        });
-        return null;
-      });
-    if (portalState !== 'locked_portal') {
-      return false;
-    }
-
-    captivePortalRecoveryAttemptByTabAndHost.set(key, now);
-    const response = await nativeMessagingClient
-      .recoverCaptivePortalNavigation({
-        triggerHost: context.hostname,
-        tabId: context.tabId,
-      })
-      .catch((error: unknown) => {
-        logger.info('[Monitor] Captive portal recovery unavailable', {
-          tabId: context.tabId,
-          hostname: context.hostname,
-          error: getErrorMessage(error),
-        });
-        return { success: false };
-      });
-
-    if (!response.success) {
-      return false;
-    }
-
-    if (options?.isCurrentNavigation?.() === false) {
-      return false;
-    }
-
-    try {
-      await browser.tabs.update(context.tabId, { url: context.url });
-      return true;
-    } catch (error) {
-      logger.info('[Monitor] Captive portal recovery retry failed', {
-        tabId: context.tabId,
-        hostname: context.hostname,
-        error: getErrorMessage(error),
-      });
-      return false;
-    }
-  }
-
-  async function reconcileCaptivePortalRecovery(input: {
-    reason: string;
-    state?: string;
-  }): Promise<void> {
-    await nativeMessagingClient
-      .recoverCaptivePortalNavigation({
-        operation: 'reconcile',
-        portalState: input.state ?? 'Unknown',
-        source: `firefox-captivePortal:${input.reason}`,
-      })
-      .catch((error: unknown) => {
-        logger.info('[Monitor] Captive portal recovery reconcile unavailable', {
-          reason: input.reason,
-          error: getErrorMessage(error),
-        });
-      });
+    return await captivePortalRecoveryController.recoverNavigation(context, options);
   }
 
   function registerCaptivePortalListeners(): void {
     const captivePortal = getCaptivePortalApi();
     captivePortal?.onConnectivityAvailable?.addListener(() => {
-      clearCaptivePortalRecoveryLimiter();
-      void reconcileCaptivePortalRecovery({ reason: 'connectivity-available' });
+      void captivePortalRecoveryController.handleConnectivityAvailable();
     });
     captivePortal?.onStateChanged?.addListener((details) => {
-      clearCaptivePortalRecoveryLimiter();
-      if (details.state !== 'locked_portal') {
-        void reconcileCaptivePortalRecovery({ reason: 'state-changed', state: details.state });
-      }
+      void captivePortalRecoveryController.handlePortalStateChanged(details.state);
     });
   }
 
@@ -530,11 +454,7 @@ export function createBackgroundRuntime(
             blockedPageContextByTabAndDomain.delete(key);
           }
         }
-        for (const key of captivePortalRecoveryAttemptByTabAndHost.keys()) {
-          if (key.startsWith(`${tabId.toString()}:`)) {
-            captivePortalRecoveryAttemptByTabAndHost.delete(key);
-          }
-        }
+        captivePortalRecoveryController.disposeTab(tabId);
       },
       evaluateBlockedPath: blockedPathRulesController.evaluateRequest,
       evaluateBlockedSubdomain: blockedSubdomainRulesController.evaluateRequest,

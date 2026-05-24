@@ -6,6 +6,7 @@ import {
   createBackgroundRuntime,
   isNativePolicyBlockedResult,
 } from '../src/lib/background-runtime.js';
+import { createCaptivePortalRecoveryController } from '../src/lib/captive-portal-recovery-controller.js';
 
 type RuntimeMessageListener = (
   message: unknown,
@@ -403,6 +404,78 @@ void test('background runtime skips captive portal retry when recovery resolves 
   } finally {
     harness.restoreGlobals();
   }
+});
+
+void test('captive portal recovery controller gates native open on locked portal and resets limiter on state changes', async () => {
+  let now = 10_000;
+  let portalState = 'locked_portal';
+  const recoveries: unknown[] = [];
+  const reconciles: unknown[] = [];
+  const tabUpdates: unknown[] = [];
+  const controller = createCaptivePortalRecoveryController({
+    getPortalState: () => Promise.resolve(portalState),
+    logger: { info: () => undefined },
+    now: () => now,
+    recoverCaptivePortalNavigation: (input) => {
+      if (input.operation === 'reconcile') {
+        reconciles.push(input);
+      } else {
+        recoveries.push(input);
+      }
+      return Promise.resolve({ success: true });
+    },
+    retryNavigation: (tabId, url) => {
+      tabUpdates.push({ tabId, url });
+      return Promise.resolve();
+    },
+  });
+
+  assert.equal(
+    await controller.recoverNavigation({
+      tabId: 5,
+      hostname: 'portal.example',
+      url: 'https://portal.example/login',
+    }),
+    true
+  );
+  assert.equal(
+    await controller.recoverNavigation({
+      tabId: 5,
+      hostname: 'portal.example',
+      url: 'https://portal.example/login',
+    }),
+    false
+  );
+
+  portalState = 'not_captive';
+  await controller.handlePortalStateChanged('not_captive');
+  now += 1;
+  portalState = 'locked_portal';
+
+  assert.equal(
+    await controller.recoverNavigation({
+      tabId: 5,
+      hostname: 'portal.example',
+      url: 'https://portal.example/login',
+    }),
+    true
+  );
+
+  assert.deepEqual(recoveries, [
+    { triggerHost: 'portal.example', tabId: 5 },
+    { triggerHost: 'portal.example', tabId: 5 },
+  ]);
+  assert.deepEqual(reconciles, [
+    {
+      operation: 'reconcile',
+      portalState: 'not_captive',
+      source: 'firefox-captivePortal:state-changed',
+    },
+  ]);
+  assert.deepEqual(tabUpdates, [
+    { tabId: 5, url: 'https://portal.example/login' },
+    { tabId: 5, url: 'https://portal.example/login' },
+  ]);
 });
 
 void test('background runtime leaves allowed unknown-host navigations on the browser network page', async () => {
