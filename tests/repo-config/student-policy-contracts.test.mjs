@@ -1125,7 +1125,7 @@ describe('repository verification contract', () => {
     );
   });
 
-  test('windows DNS renderer avoids wildcard FW rules that override blocked descendants', () => {
+  test('windows DNS renderer separates host blocking from upstream affinity wildcards', () => {
     const dnsModule = readText('windows/lib/DNS.psm1');
     const dnsConfigModule = readText('windows/lib/internal/DNS.Acrylic.Config.ps1');
     const acrylicHostsModel = readText('windows/lib/internal/AcrylicHostsModel.ps1');
@@ -1180,6 +1180,21 @@ describe('repository verification contract', () => {
       acrylicHostsModel,
       /if \(\$blockedDescendants\.Count -eq 0\) \{[\s\S]*?"FW >\$normalizedDomain"[\s\S]*?\}/,
       'Get-AcrylicForwardRules should keep the wildcard FW shortcut only for domains without blocked descendants'
+    );
+    assert.match(
+      acrylicHostsModel,
+      /function Get-AcrylicAffinityMaskEntries/,
+      'AcrylicHostsModel.ps1 should keep Acrylic upstream affinity generation in a dedicated helper'
+    );
+    assert.match(
+      acrylicHostsModel,
+      /\$domainEntries = @\(\$normalizedDomain, "\*\.\$normalizedDomain"\)/,
+      'Get-AcrylicAffinityMaskEntries should keep the parent wildcard so allowed sibling subdomains can resolve'
+    );
+    assert.doesNotMatch(
+      acrylicHostsModel,
+      /\$domainEntries = if \(\$hasBlockedDescendant\)/,
+      'Get-AcrylicAffinityMaskEntries should not remove the parent wildcard when a blocked descendant exists'
     );
     assert.doesNotMatch(
       dnsConfigModule,
