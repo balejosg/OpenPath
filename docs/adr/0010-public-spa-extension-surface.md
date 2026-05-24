@@ -17,6 +17,7 @@ OpenPath React SPA now exposes a small public surface through explicit entrypoin
 - `public-shell`
 - `public-auth`
 - `public-google`
+- `public-i18n`
 
 Consumers should use these entrypoints instead of deep-importing files under `src/`.
 

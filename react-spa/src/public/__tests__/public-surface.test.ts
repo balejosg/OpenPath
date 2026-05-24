@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import * as publicAuth from '../auth';
 import * as publicGoogle from '../google';
+import * as publicI18n from '../i18n';
 import * as publicShell from '../shell';
 import * as publicUi from '../ui';
 
@@ -33,5 +34,14 @@ describe('public OpenPath SPA surface', () => {
     expect(typeof publicUi.DangerConfirmDialog).toBe('function');
 
     expect(typeof publicGoogle).toBe('object');
+  });
+
+  it('exports stable i18n helpers and provider hooks', () => {
+    expect(publicI18n.SUPPORTED_PRODUCT_LOCALES).toEqual(['en', 'es']);
+    expect(typeof publicI18n.OpenPathI18nProvider).toBe('function');
+    expect(typeof publicI18n.resolveProductLocale).toBe('function');
+    expect(typeof publicI18n.translateProductText).toBe('function');
+    expect(typeof publicI18n.useOpenPathI18n).toBe('function');
+    expect(typeof publicI18n.useT).toBe('function');
   });
 });
