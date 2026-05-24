@@ -315,6 +315,7 @@ windows/lib/internal/CapabilityStorage.ps1|windows/tests/Windows.Common.Core.Tes
 windows/lib/internal/RuntimeDependency.Policy.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/RuntimeDependency.Queue.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/RuntimeDependency.Overlay.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/RuntimeDependency.Protocol.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1
 windows/lib/internal/ScheduledTaskCatalog.ps1|windows/tests/Windows.Services.Tests.ps1
 windows/lib/internal/TaskRunner.ps1|windows/tests/Windows.Services.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1
 windows/lib/internal/AcrylicHostsModel.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
