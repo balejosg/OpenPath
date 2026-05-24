@@ -16,7 +16,7 @@ import {
   isQueuedRuntimeDependencyResponse,
 } from '../src/lib/runtime-dependency-protocol.js';
 
-test('runtime dependency protocol exports stable native-host constants', () => {
+void test('runtime dependency protocol exports stable native-host constants', () => {
   assert.deepEqual(RUNTIME_DEPENDENCY_ACTIONS, {
     allowLocal: 'allow-local-runtime-dependency',
     allowLocalBatch: 'allow-local-runtime-dependency-batch',
@@ -31,7 +31,7 @@ test('runtime dependency protocol exports stable native-host constants', () => {
   assert.equal(LOCAL_RUNTIME_DEPENDENCY_QUEUE_SOURCE, 'firefox-webrequest-local');
 });
 
-test('runtime dependency protocol normalizes cache and pending keys', () => {
+void test('runtime dependency protocol normalizes cache and pending keys', () => {
   assert.equal(
     createRuntimeDependencyCacheKey({
       anchorHost: 'Allowed.EXAMPLE',
@@ -49,7 +49,7 @@ test('runtime dependency protocol normalizes cache and pending keys', () => {
   );
 });
 
-test('runtime dependency protocol accepts both queued response shapes', () => {
+void test('runtime dependency protocol accepts both queued response shapes', () => {
   assert.equal(isQueuedRuntimeDependencyResponse({ success: true, queued: true }), true);
   assert.equal(
     isQueuedRuntimeDependencyResponse({ success: true, runtimeDependencyState: 'queued' }),

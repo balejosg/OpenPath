@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { createCaptivePortalRecoveryController } from '../src/lib/captive-portal-recovery-controller.js';
 import type { CaptivePortalRecoveryInput } from '../src/lib/native-messaging-client.js';
 
-test('captive portal recovery retries current locked-portal navigations once per rate window', async () => {
+void test('captive portal recovery retries current locked-portal navigations once per rate window', async () => {
   let now = 1_000;
   const recoveryInputs: CaptivePortalRecoveryInput[] = [];
   const retries: { tabId: number; url: string }[] = [];
@@ -55,7 +55,7 @@ test('captive portal recovery retries current locked-portal navigations once per
   assert.equal(retries.length, 2);
 });
 
-test('captive portal recovery clears per-tab limiter on dispose', async () => {
+void test('captive portal recovery clears per-tab limiter on dispose', async () => {
   const controller = createCaptivePortalRecoveryController({
     getPortalState: () => Promise.resolve('locked_portal'),
     now: () => 5_000,
@@ -76,7 +76,7 @@ test('captive portal recovery clears per-tab limiter on dispose', async () => {
   assert.equal(await controller.recoverNavigation(navigation), true);
 });
 
-test('captive portal recovery reconciles only unlocked portal state changes', async () => {
+void test('captive portal recovery reconciles only unlocked portal state changes', async () => {
   const operations: CaptivePortalRecoveryInput[] = [];
   const controller = createCaptivePortalRecoveryController({
     getPortalState: () => Promise.resolve('not_locked'),
