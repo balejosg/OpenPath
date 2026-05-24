@@ -10,6 +10,7 @@ import {
   parseRunnerRepoRootCandidates,
   selectPreferredRunnerRepoRoot,
 } from '../scripts/run-windows-runner-direct.mjs';
+import { resolveWindowsDirectDiagnosticMode } from '../scripts/lib/windows-direct-diagnostic-modes.mjs';
 import { readPackageJson, readText } from './repo-config/support.mjs';
 
 const currentFilePath = fileURLToPath(import.meta.url);
@@ -64,6 +65,77 @@ function assertWindowsDirectCommand(result, expectedOptions = []) {
 }
 
 describe('direct OpenPath Windows runner diagnostic', () => {
+  test('resolver exposes direct Windows diagnostic mode metadata', () => {
+    const expectations = [
+      {
+        mode: 'browser-boundary',
+        artifactRoot:
+          'C:\\actions-runner*\\_work\\Openpath\\Openpath\\tests\\e2e\\artifacts\\windows-student-policy',
+        completionFileName: 'direct-browser-boundary-completion.json',
+        runnerScriptPath: 'tests\\e2e\\ci\\run-windows-browser-boundary-ci.ps1',
+      },
+      {
+        mode: 'dns-discovery-spike',
+        artifactRoot: 'C:\\Windows\\Temp\\openpath-dns-discovery-spike',
+        completionFileName: 'direct-dns-discovery-spike-completion.json',
+        runnerScriptPath: 'tests\\e2e\\ci\\run-windows-dns-discovery-spike.ps1',
+      },
+      {
+        mode: 'dns-evidence-matrix',
+        artifactRoot: 'C:\\Windows\\Temp\\openpath-dns-evidence-matrix',
+        completionFileName: 'direct-dns-evidence-matrix-completion.json',
+        runnerScriptPath: 'tests\\e2e\\ci\\run-windows-dns-evidence-matrix.ps1',
+      },
+      {
+        mode: 'dns-evidence-matrix-v2',
+        artifactRoot: 'C:\\Windows\\Temp\\openpath-dns-evidence-matrix-v2',
+        completionFileName: 'direct-dns-evidence-matrix-v2-completion.json',
+        runnerScriptPath: 'tests\\e2e\\ci\\run-windows-dns-evidence-matrix-v2.ps1',
+      },
+      {
+        mode: 'dns-observability-controls',
+        artifactRoot: 'C:\\Windows\\Temp\\openpath-dns-observability-controls',
+        completionFileName: 'direct-dns-observability-controls-completion.json',
+        runnerScriptPath: 'tests\\e2e\\ci\\run-windows-dns-observability-controls.ps1',
+      },
+      {
+        mode: 'acrylic-purgecache-spike',
+        artifactRoot: 'C:\\Windows\\Temp\\openpath-acrylic-purgecache-spike',
+        completionFileName: 'direct-acrylic-purgecache-spike-completion.json',
+        runnerScriptPath: 'tests\\e2e\\ci\\run-windows-acrylic-purgecache-spike.ps1',
+      },
+      {
+        mode: 'browser-dependency-observability-spike',
+        artifactRoot: 'C:\\Windows\\Temp\\openpath-browser-dependency-observability-spike',
+        completionFileName: 'direct-browser-dependency-observability-spike-completion.json',
+        runnerScriptPath: 'tests\\e2e\\ci\\run-windows-browser-dependency-observability-spike.ps1',
+      },
+      {
+        mode: 'captive-portal-navigation',
+        artifactRoot: 'C:\\Windows\\Temp\\openpath-captive-portal-navigation',
+        completionFileName: 'direct-captive-portal-navigation-completion.json',
+        runnerScriptPath: 'tests\\e2e\\ci\\run-windows-captive-portal-navigation.ps1',
+      },
+    ];
+
+    for (const expectation of expectations) {
+      assert.deepEqual(resolveWindowsDirectDiagnosticMode(expectation.mode), {
+        ...expectation,
+        requiresSharedPowerShellPreamble: true,
+      });
+    }
+  });
+
+  test('CLI usage still advertises the supported direct diagnostic modes', () => {
+    const result = runDirectDiagnostic(['--help']);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stderr,
+      /pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, browser-dependency-observability-spike, captive-portal-navigation, or all/
+    );
+  });
+
   test('package.json exposes the direct Windows diagnostic entrypoint', () => {
     const packageJson = readPackageJson();
 
@@ -297,8 +369,11 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(result.stdout, /source_mode=local-overlay/);
     assert.match(result.stdout, /mode=dns-evidence-matrix/);
     assert.match(result.stdout, /step=run-windows-dns-evidence-matrix/);
+    assert.equal(
+      resolveWindowsDirectDiagnosticMode('dns-evidence-matrix').artifactRoot,
+      'C:\\Windows\\Temp\\openpath-dns-evidence-matrix'
+    );
     assert.match(script, /run-windows-dns-evidence-matrix\.ps1/);
-    assert.match(script, /openpath-dns-evidence-matrix/);
     assert.match(script, /dns-evidence-matrix-result\.json/);
     assert.match(script, /dns-evidence-matrix-browser-artifact\.json/);
     assert.match(script, /pktmon/);
@@ -347,8 +422,11 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(result.stdout, /source_mode=local-overlay/);
     assert.match(result.stdout, /mode=dns-evidence-matrix-v2/);
     assert.match(result.stdout, /step=run-windows-dns-evidence-matrix-v2/);
+    assert.equal(
+      resolveWindowsDirectDiagnosticMode('dns-evidence-matrix-v2').artifactRoot,
+      'C:\\Windows\\Temp\\openpath-dns-evidence-matrix-v2'
+    );
     assert.match(script, /run-windows-dns-evidence-matrix-v2\.ps1/);
-    assert.match(script, /openpath-dns-evidence-matrix-v2/);
     assert.match(script, /dns-evidence-matrix-v2-result\.json/);
     assert.match(script, /direct-dns-evidence-matrix-v2-completion\.json/);
     assert.match(matrixScript, /AcrylicConfiguration\.ini/);
@@ -396,8 +474,11 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(result.stdout, /source_mode=local-overlay/);
     assert.match(result.stdout, /mode=dns-observability-controls/);
     assert.match(result.stdout, /step=run-windows-dns-observability-controls/);
+    assert.equal(
+      resolveWindowsDirectDiagnosticMode('dns-observability-controls').artifactRoot,
+      'C:\\Windows\\Temp\\openpath-dns-observability-controls'
+    );
     assert.match(script, /run-windows-dns-observability-controls\.ps1/);
-    assert.match(script, /openpath-dns-observability-controls/);
     assert.match(script, /dns-observability-controls-result\.json/);
     assert.match(script, /direct-dns-observability-controls-completion\.json/);
     assert.match(controlsScript, /AcrylicConfiguration\.ini/);
@@ -439,8 +520,11 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(result.stdout, /source_mode=local-overlay/);
     assert.match(result.stdout, /mode=browser-dependency-observability-spike/);
     assert.match(result.stdout, /step=run-windows-browser-dependency-observability-spike/);
+    assert.equal(
+      resolveWindowsDirectDiagnosticMode('browser-dependency-observability-spike').artifactRoot,
+      'C:\\Windows\\Temp\\openpath-browser-dependency-observability-spike'
+    );
     assert.match(script, /run-windows-browser-dependency-observability-spike\.ps1/);
-    assert.match(script, /openpath-browser-dependency-observability-spike/);
     assert.match(script, /browser-dependency-observability-spike-result\.json/);
     assert.match(script, /direct-browser-dependency-observability-spike-completion\.json/);
     assert.doesNotMatch(spikeScript, /HitLog/i);
@@ -474,8 +558,11 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(result.stdout, /source_mode=local-overlay/);
     assert.match(result.stdout, /mode=captive-portal-navigation/);
     assert.match(result.stdout, /step=run-windows-captive-portal-navigation/);
+    assert.equal(
+      resolveWindowsDirectDiagnosticMode('captive-portal-navigation').artifactRoot,
+      'C:\\Windows\\Temp\\openpath-captive-portal-navigation'
+    );
     assert.match(script, /run-windows-captive-portal-navigation\.ps1/);
-    assert.match(script, /openpath-captive-portal-navigation/);
     assert.match(script, /captive-portal-navigation-result\.json/);
     assert.match(script, /captive-portal-recovery-result/);
     assert.match(script, /Captive portal navigation result was not successful/);
@@ -534,8 +621,11 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(result.stdout, /source_mode=local-overlay/);
     assert.match(result.stdout, /mode=acrylic-purgecache-spike/);
     assert.match(result.stdout, /step=run-windows-acrylic-purgecache-spike/);
+    assert.equal(
+      resolveWindowsDirectDiagnosticMode('acrylic-purgecache-spike').artifactRoot,
+      'C:\\Windows\\Temp\\openpath-acrylic-purgecache-spike'
+    );
     assert.match(script, /run-windows-acrylic-purgecache-spike\.ps1/);
-    assert.match(script, /openpath-acrylic-purgecache-spike/);
     assert.match(script, /acrylic-purgecache-spike-result\.json/);
     assert.match(script, /direct-acrylic-purgecache-spike-completion\.json/);
     assert.match(spikeScript, /AcrylicController\.exe/);

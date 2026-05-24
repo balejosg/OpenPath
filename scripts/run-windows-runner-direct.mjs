@@ -5,6 +5,10 @@ import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  WINDOWS_DIRECT_RUN_MODE_NAMES,
+  resolveWindowsDirectDiagnosticMode,
+} from './lib/windows-direct-diagnostic-modes.mjs';
 
 const DEFAULT_PROXMOX_HOST = 'whitelist-proxmox';
 const DEFAULT_WINDOWS_RUNNER_VMID = '103';
@@ -15,32 +19,26 @@ const DEFAULT_ARTIFACT_LOG_NAME = 'windows-runner-direct.log';
 const DEFAULT_RUNNER_ROOT_GLOB = 'C:\\actions-runner*';
 const SOURCE_MODES = new Set(['runner-checkout', 'local-overlay']);
 const DEFAULT_SOURCE_MODE = 'runner-checkout';
-const RUN_MODES = new Set([
-  'pester',
-  'browser-boundary',
-  'dns-discovery-spike',
-  'dns-evidence-matrix',
-  'dns-evidence-matrix-v2',
-  'dns-observability-controls',
-  'acrylic-purgecache-spike',
-  'browser-dependency-observability-spike',
-  'captive-portal-navigation',
-  'all',
-]);
+const RUN_MODES = new Set(WINDOWS_DIRECT_RUN_MODE_NAMES);
 const DEFAULT_RUN_MODE = 'pester';
 const OVERLAY_ZIP_NAME = 'openpath-local-overlay.zip';
-const DNS_DISCOVERY_SPIKE_GUEST_ARTIFACT_ROOT = 'C:\\Windows\\Temp\\openpath-dns-discovery-spike';
-const DNS_EVIDENCE_MATRIX_GUEST_ARTIFACT_ROOT = 'C:\\Windows\\Temp\\openpath-dns-evidence-matrix';
+const DNS_DISCOVERY_SPIKE_GUEST_ARTIFACT_ROOT =
+  resolveWindowsDirectDiagnosticMode('dns-discovery-spike').artifactRoot;
+const DNS_EVIDENCE_MATRIX_GUEST_ARTIFACT_ROOT =
+  resolveWindowsDirectDiagnosticMode('dns-evidence-matrix').artifactRoot;
 const DNS_EVIDENCE_MATRIX_V2_GUEST_ARTIFACT_ROOT =
-  'C:\\Windows\\Temp\\openpath-dns-evidence-matrix-v2';
-const DNS_OBSERVABILITY_CONTROLS_GUEST_ARTIFACT_ROOT =
-  'C:\\Windows\\Temp\\openpath-dns-observability-controls';
-const ACRYLIC_PURGECACHE_SPIKE_GUEST_ARTIFACT_ROOT =
-  'C:\\Windows\\Temp\\openpath-acrylic-purgecache-spike';
+  resolveWindowsDirectDiagnosticMode('dns-evidence-matrix-v2').artifactRoot;
+const DNS_OBSERVABILITY_CONTROLS_GUEST_ARTIFACT_ROOT = resolveWindowsDirectDiagnosticMode(
+  'dns-observability-controls'
+).artifactRoot;
+const ACRYLIC_PURGECACHE_SPIKE_GUEST_ARTIFACT_ROOT = resolveWindowsDirectDiagnosticMode(
+  'acrylic-purgecache-spike'
+).artifactRoot;
 const BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_GUEST_ARTIFACT_ROOT =
-  'C:\\Windows\\Temp\\openpath-browser-dependency-observability-spike';
-const CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT =
-  'C:\\Windows\\Temp\\openpath-captive-portal-navigation';
+  resolveWindowsDirectDiagnosticMode('browser-dependency-observability-spike').artifactRoot;
+const CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT = resolveWindowsDirectDiagnosticMode(
+  'captive-portal-navigation'
+).artifactRoot;
 const BROWSER_ENFORCEMENT_ARTIFACTS = [
   'browser-boundary-summary.json',
   'student\\windows-browser-enforcement-report.json',
@@ -2348,6 +2346,56 @@ function collectArtifacts(options, artifactDir, runnerRoot) {
   }
 }
 
+function runWindowsDirectDiagnosticMode({ mode, options, runnerRepoRoot }) {
+  resolveWindowsDirectDiagnosticMode(mode);
+  const effectiveRunnerRepoRoot = runnerRepoRoot || options.runnerRepoRoot;
+
+  if (mode === 'pester') {
+    console.log('step=run-direct-pester');
+    runDirectPester(options, effectiveRunnerRepoRoot);
+    return;
+  }
+  if (mode === 'browser-boundary') {
+    console.log('step=run-windows-student-policy-flow-for-browser-boundary');
+    runWindowsStudentPolicyFlowForBoundary(options, effectiveRunnerRepoRoot);
+    return;
+  }
+  if (mode === 'dns-discovery-spike') {
+    console.log('step=run-windows-dns-discovery-spike');
+    runWindowsDnsDiscoverySpike(options, effectiveRunnerRepoRoot);
+    return;
+  }
+  if (mode === 'dns-evidence-matrix') {
+    console.log('step=run-windows-dns-evidence-matrix');
+    runWindowsDnsEvidenceMatrix(options, effectiveRunnerRepoRoot);
+    return;
+  }
+  if (mode === 'dns-evidence-matrix-v2') {
+    console.log('step=run-windows-dns-evidence-matrix-v2');
+    runWindowsDnsEvidenceMatrixV2(options, effectiveRunnerRepoRoot);
+    return;
+  }
+  if (mode === 'dns-observability-controls') {
+    console.log('step=run-windows-dns-observability-controls');
+    runWindowsDnsObservabilityControls(options, effectiveRunnerRepoRoot);
+    return;
+  }
+  if (mode === 'acrylic-purgecache-spike') {
+    console.log('step=run-windows-acrylic-purgecache-spike');
+    runWindowsAcrylicPurgeCacheSpike(options, effectiveRunnerRepoRoot);
+    return;
+  }
+  if (mode === 'browser-dependency-observability-spike') {
+    console.log('step=run-windows-browser-dependency-observability-spike');
+    runWindowsBrowserDependencyObservabilitySpike(options, effectiveRunnerRepoRoot);
+    return;
+  }
+  if (mode === 'captive-portal-navigation') {
+    console.log('step=run-windows-captive-portal-navigation');
+    runWindowsCaptivePortalNavigation(options, effectiveRunnerRepoRoot);
+  }
+}
+
 async function main() {
   let options;
   try {
@@ -2425,44 +2473,12 @@ async function main() {
     ensureWindowsRunnerBaseline(options, runnerRepoRoot || options.runnerRepoRoot);
     console.log('step=reset-windows-runner');
     resetWindowsRunner(options, runnerRepoRoot || options.runnerRepoRoot);
-    if (options.mode === 'pester' || options.mode === 'all') {
-      console.log('step=run-direct-pester');
-      runDirectPester(options, runnerRepoRoot || options.runnerRepoRoot);
-    }
-    if (options.mode === 'browser-boundary' || options.mode === 'all') {
-      console.log('step=run-windows-student-policy-flow-for-browser-boundary');
-      runWindowsStudentPolicyFlowForBoundary(options, runnerRepoRoot || options.runnerRepoRoot);
-    }
-    if (options.mode === 'dns-discovery-spike' || options.mode === 'all') {
-      console.log('step=run-windows-dns-discovery-spike');
-      runWindowsDnsDiscoverySpike(options, runnerRepoRoot || options.runnerRepoRoot);
-    }
-    if (options.mode === 'dns-evidence-matrix' || options.mode === 'all') {
-      console.log('step=run-windows-dns-evidence-matrix');
-      runWindowsDnsEvidenceMatrix(options, runnerRepoRoot || options.runnerRepoRoot);
-    }
-    if (options.mode === 'dns-evidence-matrix-v2' || options.mode === 'all') {
-      console.log('step=run-windows-dns-evidence-matrix-v2');
-      runWindowsDnsEvidenceMatrixV2(options, runnerRepoRoot || options.runnerRepoRoot);
-    }
-    if (options.mode === 'dns-observability-controls' || options.mode === 'all') {
-      console.log('step=run-windows-dns-observability-controls');
-      runWindowsDnsObservabilityControls(options, runnerRepoRoot || options.runnerRepoRoot);
-    }
-    if (options.mode === 'acrylic-purgecache-spike' || options.mode === 'all') {
-      console.log('step=run-windows-acrylic-purgecache-spike');
-      runWindowsAcrylicPurgeCacheSpike(options, runnerRepoRoot || options.runnerRepoRoot);
-    }
-    if (options.mode === 'browser-dependency-observability-spike' || options.mode === 'all') {
-      console.log('step=run-windows-browser-dependency-observability-spike');
-      runWindowsBrowserDependencyObservabilitySpike(
-        options,
-        runnerRepoRoot || options.runnerRepoRoot
-      );
-    }
-    if (options.mode === 'captive-portal-navigation' || options.mode === 'all') {
-      console.log('step=run-windows-captive-portal-navigation');
-      runWindowsCaptivePortalNavigation(options, runnerRepoRoot || options.runnerRepoRoot);
+    const modesToRun =
+      options.mode === 'all'
+        ? WINDOWS_DIRECT_RUN_MODE_NAMES.filter((mode) => mode !== 'all')
+        : [options.mode];
+    for (const mode of modesToRun) {
+      runWindowsDirectDiagnosticMode({ mode, options, runnerRepoRoot });
     }
     if (options.browserEnforcementReport) {
       console.log('step=run-browser-enforcement-report');
@@ -2509,4 +2525,9 @@ if (isDirectExecution) {
   }
 }
 
-export { extractUsableGuestIPv4, parseRunnerRepoRootCandidates, selectPreferredRunnerRepoRoot };
+export {
+  extractUsableGuestIPv4,
+  parseRunnerRepoRootCandidates,
+  runWindowsDirectDiagnosticMode,
+  selectPreferredRunnerRepoRoot,
+};
