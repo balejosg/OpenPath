@@ -570,13 +570,13 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
         Start-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
         $firefoxReadyConfig = Get-OpenPathConfig
         if ($classroomModeRequested) {
-            $firefoxReady = Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig -RequireRuntimeRegistration
+            $firefoxReady = Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig
             if (-not $firefoxReady.Ready) {
                 Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$firefoxReady.FailureCode)
-                Write-InstallerError 'ERROR: Firefox managed extension is not active after installation.'
+                Write-InstallerError 'ERROR: Firefox managed extension policy is not ready after installation.'
                 Write-InstallerError "  Failure: $($firefoxReady.FailureCode)"
                 Write-InstallerError "  $($firefoxReady.Message)"
-                throw "Firefox managed extension is not active after installation: $($firefoxReady.FailureCode)"
+                throw "Firefox managed extension policy is not ready after installation: $($firefoxReady.FailureCode)"
             }
         }
         Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
@@ -584,7 +584,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
     catch {
         Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$_)
         if ($classroomModeRequested) {
-            Write-InstallerError 'ERROR: Firefox managed extension is not active after installation.'
+            Write-InstallerError 'ERROR: Firefox managed extension policy is not ready after installation.'
             Write-InstallerError "  $_"
             throw 'Firefox managed extension readiness validation failed'
         }
