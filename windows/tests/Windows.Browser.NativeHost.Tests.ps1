@@ -793,6 +793,27 @@ Describe "Browser Module - Native Host" {
             }
         }
 
+        It "Does not treat a recent passthrough marker as terminal success when a new trigger host arrives" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeContent = Get-Content $nativeHostActionsPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'recentSuccessSource',
+                '$recentSuccess.Source',
+                'Enable-OpenPathCaptivePortalMode -State Portal -PortalRecoveryDomains @($triggerHost)'
+            )
+            Assert-ContentContainsAll -Content $nativeContent -Needles @(
+                'Get-NativeHostCaptivePortalActiveMarker',
+                '$recentSuccess.Source -eq ''active-marker''',
+                '$activeMarker.mode -eq ''passthrough''',
+                'allowedHosts',
+                '$passthroughNeedsExactHost',
+                'Invoke-OpenPathScheduledTask'
+            )
+        }
+
         It "Ignores stale captive portal recovery results with a different request id" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             . $nativeHostActionsPath
@@ -879,10 +900,15 @@ Describe "Browser Module - Native Host" {
         It "Exposes portal recovery eligibility in native check results" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             . $nativeHostActionsPath
+            $script:NativeHostPortalProbeCache = @{}
 
             function Resolve-DomainIp {
                 param([string]$Domain)
                 return "127.0.0.1"
+            }
+            function Test-OpenPathCaptivePortalState {
+                param([int]$TimeoutSec)
+                return 'Portal'
             }
 
             $sections = [PSCustomObject]@{
@@ -890,12 +916,87 @@ Describe "Browser Module - Native Host" {
             }
 
             $result = Invoke-NativeHostCheckAction `
-                -Message ([PSCustomObject]@{ domains = @('portal.example') }) `
+                -Message ([PSCustomObject]@{ domains = @('portal.example'); error = 'NS_ERROR_UNKNOWN_HOST'; source = 'blocked-screen-navigation' }) `
                 -Sections $sections
 
             $result.success | Should -BeTrue
             $result.results[0].domain | Should -Be 'portal.example'
             $result.results[0].portal_recovery_eligible | Should -BeTrue
+            $result.results[0].portal_recovery_signal | Should -Be 'sync-probe'
+        }
+
+        It "Ignores expired captive portal markers and stale observations in native check results" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+            $script:NativeHostPortalProbeCache = @{}
+
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-portal-signal-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                New-Item -ItemType Directory -Path (Join-Path $tempRoot 'data') -Force | Out-Null
+                @{
+                    active = $true
+                    state = 'Portal'
+                    mode = 'passthrough'
+                    expiresAt = ([DateTime]::UtcNow.AddMinutes(-5)).ToString('o')
+                    updatedAt = ([DateTime]::UtcNow.AddMinutes(-5)).ToString('o')
+                } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $tempRoot 'data\captive-portal-active.json')
+                @{
+                    detectedState = 'Portal'
+                    updatedAt = ([DateTime]::UtcNow.AddMinutes(-10)).ToString('o')
+                } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $tempRoot 'data\captive-portal-observation.json')
+
+                function Resolve-DomainIp {
+                    param([string]$Domain)
+                    return "127.0.0.1"
+                }
+
+                $sections = [PSCustomObject]@{
+                    Whitelist = @()
+                }
+
+                $result = Invoke-NativeHostCheckAction `
+                    -Message ([PSCustomObject]@{ domains = @('portal.example') }) `
+                    -Sections $sections
+
+                $result.results[0].portal_recovery_eligible | Should -BeFalse
+                $result.results[0].portal_recovery_signal | Should -Be 'none'
+            }
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Caches bounded sync probes for native portal eligibility" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+            $script:NativeHostPortalProbeCache = @{}
+            $script:portalProbeCount = 0
+
+            function Resolve-DomainIp {
+                param([string]$Domain)
+                return "127.0.0.1"
+            }
+            function Test-OpenPathCaptivePortalState {
+                param([int]$TimeoutSec)
+                $script:portalProbeCount += 1
+                return 'Portal'
+            }
+
+            $sections = [PSCustomObject]@{
+                Whitelist = @()
+            }
+            $message = [PSCustomObject]@{ domains = @('portal.example'); error = 'NS_ERROR_UNKNOWN_HOST'; source = 'blocked-screen-navigation' }
+
+            $first = Invoke-NativeHostCheckAction -Message $message -Sections $sections
+            $second = Invoke-NativeHostCheckAction -Message $message -Sections $sections
+
+            $first.results[0].portal_recovery_signal | Should -Be 'sync-probe'
+            $second.results[0].portal_recovery_signal | Should -Be 'sync-probe'
+            $script:portalProbeCount | Should -Be 1
         }
 
         It "Rejects system and browser update hosts as runtime dependencies" {

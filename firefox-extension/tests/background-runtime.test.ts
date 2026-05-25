@@ -462,8 +462,8 @@ void test('captive portal recovery controller gates native open on locked portal
   );
 
   assert.deepEqual(recoveries, [
-    { triggerHost: 'portal.example', tabId: 5 },
-    { triggerHost: 'portal.example', tabId: 5 },
+    { portalState: 'locked_portal', triggerHost: 'portal.example', tabId: 5 },
+    { portalState: 'locked_portal', triggerHost: 'portal.example', tabId: 5 },
   ]);
   assert.deepEqual(reconciles, [
     {

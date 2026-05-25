@@ -76,6 +76,41 @@ void test('captive portal recovery clears per-tab limiter on dispose', async () 
   assert.equal(await controller.recoverNavigation(navigation), true);
 });
 
+void test('captive portal recovery allows unknown Firefox state only with native portal eligibility', async () => {
+  const recoveryInputs: CaptivePortalRecoveryInput[] = [];
+  const retries: { tabId: number; url: string }[] = [];
+  const controller = createCaptivePortalRecoveryController({
+    getPortalState: () => Promise.resolve('unknown'),
+    isNativePortalRecoveryEligible: ({ hostname }: { hostname: string }) =>
+      Promise.resolve(hostname === 'portal.example'),
+    recoverCaptivePortalNavigation: (input) => {
+      recoveryInputs.push(input);
+      return Promise.resolve({ success: true });
+    },
+    retryNavigation: (tabId, url) => {
+      retries.push({ tabId, url });
+      return Promise.resolve();
+    },
+  } as Parameters<typeof createCaptivePortalRecoveryController>[0] & {
+    isNativePortalRecoveryEligible: (context: { hostname: string }) => Promise<boolean>;
+  });
+
+  assert.equal(
+    await controller.recoverNavigation({
+      tabId: 11,
+      hostname: 'portal.example',
+      url: 'https://portal.example/login',
+    }),
+    true
+  );
+
+  assert.deepEqual(
+    recoveryInputs.map((input) => input.triggerHost),
+    ['portal.example']
+  );
+  assert.deepEqual(retries, [{ tabId: 11, url: 'https://portal.example/login' }]);
+});
+
 void test('captive portal recovery reconciles only unlocked portal state changes', async () => {
   const operations: CaptivePortalRecoveryInput[] = [];
   const controller = createCaptivePortalRecoveryController({

@@ -49,6 +49,10 @@ if (-not (Get-Command -Name 'ConvertTo-OpenPathRedactedValue' -ErrorAction Silen
     throw 'Common.Redaction.ps1 is required for native host log redaction.'
 }
 
+if (-not (Get-Variable -Name NativeHostPortalProbeCache -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:NativeHostPortalProbeCache = @{}
+}
+
 $nativeHostTaskRunnerCandidatePaths = @()
 if ($PSScriptRoot) {
     $nativeHostTaskRunnerCandidatePaths += (Join-Path $PSScriptRoot 'TaskRunner.ps1')
@@ -228,8 +232,55 @@ function Read-NativeHostCaptivePortalRecoveryResult {
     }
 }
 
+function Get-NativeHostCaptivePortalActiveMarker {
+    $markerPath = 'C:\OpenPath\data\captive-portal-active.json'
+    if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+        $markerPath = Join-Path (Join-Path $script:OpenPathRoot 'data') 'captive-portal-active.json'
+    }
+
+    if (-not (Test-Path $markerPath -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    try {
+        $payload = Get-Content -Path $markerPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($payload.PSObject.Properties['active'] -and -not [bool]$payload.active) {
+            return $null
+        }
+        if (-not $payload.PSObject.Properties['expiresAt'] -or -not $payload.expiresAt) {
+            return $null
+        }
+        $expiresAt = [DateTime]::Parse([string]$payload.expiresAt).ToUniversalTime()
+        if ([DateTime]::UtcNow -ge $expiresAt) {
+            return $null
+        }
+        $payload | Add-Member -NotePropertyName Path -NotePropertyValue $markerPath -Force
+        $payload | Add-Member -NotePropertyName LastWriteTimeUtc -NotePropertyValue (Get-Item $markerPath).LastWriteTimeUtc -Force
+        return $payload
+    }
+    catch {
+        return $null
+    }
+}
+
 function Get-NativeHostRecentCaptivePortalRecoverySuccess {
     param([int]$RecentSuccessSeconds = 30)
+
+    $activeMarker = Get-NativeHostCaptivePortalActiveMarker
+    if ($activeMarker -and $activeMarker.PSObject.Properties['LastWriteTimeUtc']) {
+        $markerAgeSeconds = ([DateTime]::UtcNow - $activeMarker.LastWriteTimeUtc).TotalSeconds
+        if ($markerAgeSeconds -le [Math]::Max(1, $RecentSuccessSeconds)) {
+            return [PSCustomObject]@{
+                Source = 'active-marker'
+                RequestId = ''
+                State = if ($activeMarker.PSObject.Properties['state']) { [string]$activeMarker.state } else { 'Portal' }
+                PortalModeActive = $true
+                Marker = $activeMarker
+                Path = if ($activeMarker.PSObject.Properties['Path']) { [string]$activeMarker.Path } else { '' }
+                LastWriteTimeUtc = $activeMarker.LastWriteTimeUtc
+            }
+        }
+    }
 
     $resultRoot = Get-NativeHostCaptivePortalRecoveryResultPath
     if (-not (Test-Path $resultRoot -ErrorAction SilentlyContinue)) {
@@ -255,6 +306,7 @@ function Get-NativeHostRecentCaptivePortalRecoverySuccess {
         }
 
         return [PSCustomObject]@{
+            Source = 'result'
             RequestId = if ($payload.PSObject.Properties['requestId']) { [string]$payload.requestId } else { '' }
             State = $state
             PortalModeActive = $true
@@ -717,18 +769,29 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
 
     $recentSuccess = if ($operation -eq 'open') { Get-NativeHostRecentCaptivePortalRecoverySuccess } else { $null }
     if ($recentSuccess) {
-        return @{
-            success = $true
-            action = $action
-            operation = $operation
-            state = 'RecentSuccess'
-            portalModeActive = $true
-            triggerHost = $triggerHost
-            requestId = [string]$recentSuccess.RequestId
-            taskName = $taskName
-            triggerMs = 0
-            waitMs = 0
-            recentSuccess = $true
+        $activeMarker = if ($recentSuccess.Source -eq 'active-marker') { $recentSuccess.Marker } else { $null }
+        $allowedHosts = if ($activeMarker -and $activeMarker.PSObject.Properties['allowedHosts']) { @($activeMarker.allowedHosts | ForEach-Object { [string]$_ }) } else { @() }
+        $passthroughNeedsExactHost = (
+            $activeMarker -and
+            $activeMarker.mode -eq 'passthrough' -and
+            $triggerHost -and
+            ($allowedHosts -notcontains $triggerHost)
+        )
+        if (-not $passthroughNeedsExactHost) {
+            return @{
+                success = $true
+                action = $action
+                operation = $operation
+                state = 'RecentSuccess'
+                portalModeActive = $true
+                triggerHost = $triggerHost
+                requestId = [string]$recentSuccess.RequestId
+                taskName = $taskName
+                triggerMs = 0
+                waitMs = 0
+                recentSuccess = $true
+                recentSuccessSource = [string]$recentSuccess.Source
+            }
         }
     }
 
@@ -1221,6 +1284,130 @@ function Get-NativeHostBlockedSubdomainResponse {
     }
 }
 
+function Get-NativeHostCaptivePortalObservation {
+    $observationPath = 'C:\OpenPath\data\captive-portal-observation.json'
+    if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+        $observationPath = Join-Path (Join-Path $script:OpenPathRoot 'data') 'captive-portal-observation.json'
+    }
+
+    if (-not (Test-Path $observationPath -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    try {
+        return (Get-Content -Path $observationPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Test-NativeHostCaptivePortalObservationRecent {
+    param(
+        [object]$Observation,
+        [int]$MaxAgeSeconds = 120
+    )
+
+    if (-not $Observation -or -not $Observation.PSObject.Properties['detectedState'] -or [string]$Observation.detectedState -ne 'Portal') {
+        return $false
+    }
+
+    $timestamp = $null
+    foreach ($propertyName in @('updatedAt', 'observedAt', 'detectedAt')) {
+        $property = $Observation.PSObject.Properties[$propertyName]
+        if ($property -and $property.Value) {
+            try {
+                $timestamp = [DateTime]::Parse([string]$property.Value).ToUniversalTime()
+                break
+            }
+            catch {
+                $timestamp = $null
+            }
+        }
+    }
+
+    if (-not $timestamp) {
+        return $false
+    }
+
+    return (([DateTime]::UtcNow - $timestamp).TotalSeconds -le [Math]::Max(1, $MaxAgeSeconds))
+}
+
+function Test-NativeHostRecoverablePortalError {
+    param([string]$ErrorName)
+
+    return $ErrorName -in @(
+        'NS_ERROR_UNKNOWN_HOST',
+        'NS_ERROR_CONNECTION_REFUSED',
+        'NS_ERROR_NET_TIMEOUT'
+    )
+}
+
+function Invoke-NativeHostCaptivePortalSyncProbe {
+    param(
+        [Parameter(Mandatory = $true)][string]$Domain,
+        [int]$CooldownSeconds = 15
+    )
+
+    $cacheKey = $Domain.Trim().ToLowerInvariant()
+    $now = [DateTime]::UtcNow
+    if ($script:NativeHostPortalProbeCache.ContainsKey($cacheKey)) {
+        $cached = $script:NativeHostPortalProbeCache[$cacheKey]
+        if ($cached -and $cached.PSObject.Properties['ProbedAt'] -and (($now - $cached.ProbedAt).TotalSeconds -lt [Math]::Max(1, $CooldownSeconds))) {
+            return [string]$cached.Signal
+        }
+    }
+
+    $signal = 'none'
+    try {
+        if ((Test-OpenPathCaptivePortalState -TimeoutSec 2) -eq 'Portal') {
+            $signal = 'sync-probe'
+        }
+    }
+    catch {
+        $signal = 'none'
+    }
+
+    $script:NativeHostPortalProbeCache[$cacheKey] = [PSCustomObject]@{
+        ProbedAt = $now
+        Signal = $signal
+    }
+    return $signal
+}
+
+function Get-NativeHostPortalRecoverySignal {
+    param(
+        [Parameter(Mandatory = $true)][string]$Domain,
+        [Parameter(Mandatory = $true)][object]$Message
+    )
+
+    $marker = Get-NativeHostCaptivePortalActiveMarker
+    if ($marker) {
+        return 'marker'
+    }
+
+    $observation = Get-NativeHostCaptivePortalObservation
+    if (Test-NativeHostCaptivePortalObservationRecent -Observation $observation) {
+        return 'observation'
+    }
+
+    if ($Message.PSObject.Properties['portalState'] -and [string]$Message.portalState -eq 'locked_portal') {
+        return 'firefox-locked'
+    }
+
+    $errorName = if ($Message.PSObject.Properties['error']) { [string]$Message.error } else { '' }
+    $source = if ($Message.PSObject.Properties['source']) { [string]$Message.source } else { '' }
+    if (
+        $source -eq 'blocked-screen-navigation' -and
+        (Test-NativeHostRecoverablePortalError -ErrorName $errorName) -and
+        (Get-Command -Name 'Test-OpenPathCaptivePortalState' -ErrorAction SilentlyContinue)
+    ) {
+        return (Invoke-NativeHostCaptivePortalSyncProbe -Domain $Domain)
+    }
+
+    return 'none'
+}
+
 function Invoke-NativeHostCheckAction {
     param(
         [Parameter(Mandatory = $true)]
@@ -1240,11 +1427,13 @@ function Invoke-NativeHostCheckAction {
     }
 
     $results = foreach ($domain in $validDomains) {
+        $portalRecoverySignal = Get-NativeHostPortalRecoverySignal -Domain $domain -Message $Message
         @{
             domain = $domain
             in_whitelist = $whitelistSet.Contains($domain)
             resolved_ip = (Resolve-DomainIp -Domain $domain)
-            portal_recovery_eligible = (-not $whitelistSet.Contains($domain))
+            portal_recovery_eligible = ((-not $whitelistSet.Contains($domain)) -and $portalRecoverySignal -ne 'none')
+            portal_recovery_signal = $portalRecoverySignal
         }
     }
 

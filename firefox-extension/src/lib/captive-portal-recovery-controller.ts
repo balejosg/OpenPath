@@ -29,6 +29,9 @@ export interface CaptivePortalRecoveryController {
 
 export interface CaptivePortalRecoveryControllerDeps {
   getPortalState: () => Promise<string | null | undefined>;
+  isNativePortalRecoveryEligible?: (
+    context: CaptivePortalRecoveryNavigationContext
+  ) => Promise<boolean>;
   logger?: CaptivePortalRecoveryLogger;
   now?: () => number;
   recoverCaptivePortalNavigation: (
@@ -93,12 +96,27 @@ export function createCaptivePortalRecoveryController(
       return null;
     });
     if (portalState !== 'locked_portal') {
-      return false;
+      const stateAllowsNativeSignal =
+        portalState === null || portalState === undefined || portalState === 'unknown';
+      const nativeEligible =
+        stateAllowsNativeSignal &&
+        (await deps.isNativePortalRecoveryEligible?.(context).catch((error: unknown) => {
+          logger.info('[Monitor] Native captive portal recovery signal unavailable', {
+            tabId: context.tabId,
+            hostname: context.hostname,
+            error: getErrorMessage(error),
+          });
+          return false;
+        })) === true;
+      if (!nativeEligible) {
+        return false;
+      }
     }
 
     recoveryAttemptByTabAndHost.set(key, currentTime);
     const response = await deps
       .recoverCaptivePortalNavigation({
+        portalState: portalState ?? 'Unknown',
         triggerHost: context.hostname,
         tabId: context.tabId,
       })

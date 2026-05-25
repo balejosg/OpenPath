@@ -37,6 +37,7 @@ export interface NativeCheckResult {
   in_whitelist: boolean;
   policy_active?: boolean;
   portal_recovery_eligible?: boolean;
+  portal_recovery_signal?: string;
   resolves?: boolean;
   resolved_ip?: string;
   error?: string;
@@ -53,6 +54,7 @@ export interface VerifyResult {
   inWhitelist: boolean;
   policyActive?: boolean;
   portalRecoveryEligible?: boolean;
+  portalRecoverySignal?: string;
   resolves?: boolean;
   resolvedIp?: string;
   error?: string;
@@ -95,7 +97,10 @@ interface PendingLocalRuntimeDependency {
 
 export interface NativeMessagingClient {
   allowLocalRuntimeDependency: (input: LocalRuntimeDependencyInput) => Promise<NativeResponse>;
-  checkDomains: (domains: string[]) => Promise<VerifyResponse>;
+  checkDomains: (
+    domains: string[],
+    context?: { error?: string; source?: string }
+  ) => Promise<VerifyResponse>;
   connect: () => Promise<boolean>;
   isAvailable: () => Promise<boolean>;
   recoverCaptivePortalNavigation: (
@@ -178,9 +183,17 @@ export function createNativeMessagingClient(options: {
     });
   }
 
-  async function checkDomains(domains: string[]): Promise<VerifyResponse> {
+  async function checkDomains(
+    domains: string[],
+    context?: { error?: string; source?: string }
+  ): Promise<VerifyResponse> {
     try {
-      const response = await sendMessage({ action: 'check', domains });
+      const response = await sendMessage({
+        action: 'check',
+        domains,
+        ...(context?.error ? { error: context.error } : {}),
+        ...(context?.source ? { source: context.source } : {}),
+      });
       const nativeResponse = response as NativeCheckResponse;
       const results: VerifyResult[] = (nativeResponse.results ?? []).map((result) => {
         const mapped: VerifyResult = {
@@ -193,6 +206,9 @@ export function createNativeMessagingClient(options: {
         }
         if (result.portal_recovery_eligible !== undefined) {
           mapped.portalRecoveryEligible = result.portal_recovery_eligible;
+        }
+        if (result.portal_recovery_signal !== undefined) {
+          mapped.portalRecoverySignal = result.portal_recovery_signal;
         }
         if (result.resolves !== undefined) {
           mapped.resolves = result.resolves;

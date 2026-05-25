@@ -131,6 +131,8 @@ export function createBackgroundRuntime(
   });
   const captivePortalRecoveryController = createCaptivePortalRecoveryController({
     getPortalState: async () => getCaptivePortalApi()?.getState?.(),
+    isNativePortalRecoveryEligible: ({ hostname }) =>
+      Promise.resolve(portalRecoveryEligibleByHost.get(hostname.trim().toLowerCase()) === true),
     logger,
     recoverCaptivePortalNavigation: (input) =>
       nativeMessagingClient.recoverCaptivePortalNavigation(input),
@@ -211,8 +213,11 @@ export function createBackgroundRuntime(
     return latestBlockedPageContextByDomain.get(normalizedDomain) ?? null;
   }
 
-  async function checkDomainsWithNative(domains: string[]): Promise<VerifyResponse> {
-    return await nativeMessagingClient.checkDomains(domains);
+  async function checkDomainsWithNative(
+    domains: string[],
+    context?: { error?: string; source?: string }
+  ): Promise<VerifyResponse> {
+    return await nativeMessagingClient.checkDomains(domains, context);
   }
 
   function getCaptivePortalApi(): CaptivePortalBrowserApi | undefined {
@@ -223,7 +228,10 @@ export function createBackgroundRuntime(
     blocked: boolean;
     portalRecoveryEligible?: boolean;
   }> {
-    const response = await checkDomainsWithNative([context.hostname]);
+    const response = await checkDomainsWithNative([context.hostname], {
+      error: context.error,
+      source: 'blocked-screen-navigation',
+    });
     if (!response.success) {
       return { blocked: false };
     }
