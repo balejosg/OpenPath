@@ -82,6 +82,7 @@ Describe "DNS Module" {
         It "Snapshots adapter identity and IPv4 DNS before local DNS mutation" {
             $servicePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Service.ps1"
             $content = Get-Content $servicePath -Raw
+            $fingerprintBody = [regex]::Match($content, '(?s)function Get-OpenPathDnsNetworkFingerprint \{.*?\r?\n\}\r?\n\r?\nfunction Get-OpenPathCurrentDnsSnapshotEntries').Value
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 'function Save-OpenPathOriginalDnsSnapshot',
@@ -89,9 +90,12 @@ Describe "DNS Module" {
                 'InterfaceGuid = [string]$adapter.InterfaceGuid',
                 'InterfaceAlias = [string]$adapter.Name',
                 'InterfaceIndex = [int]$adapter.ifIndex',
+                'Gateway = [string]$gateway',
                 'ServerAddresses = @($dns.ServerAddresses | ForEach-Object { [string]$_ })',
+                'networkFingerprint',
                 'Save-OpenPathOriginalDnsSnapshot | Out-Null'
             )
+            $fingerprintBody | Should -Not -Match 'ServerAddresses'
         }
 
         It "Restores DNS by InterfaceGuid with index and alias fallback and resets empty server lists" {
@@ -102,7 +106,8 @@ Describe "DNS Module" {
                 'function Restore-OriginalDNS',
                 '$snapshotPath = Get-OpenPathOriginalDnsSnapshotPath',
                 'if (Test-Path $snapshotPath)',
-                '$snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)',
+                '$snapshotPayload = Get-Content $snapshotPath -Raw | ConvertFrom-Json',
+                '$snapshot = if ($snapshotPayload.PSObject.Properties[''adapters''])',
                 '[string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid',
                 '$entryInterfaceIndex = ConvertTo-OpenPathDnsNullableInt -Value $entry.InterfaceIndex',
                 '(ConvertTo-OpenPathDnsNullableInt -Value $_.ifIndex) -eq $entryInterfaceIndex',
@@ -121,8 +126,10 @@ Describe "DNS Module" {
             Assert-ContentContainsAll -Content $portalRestoreBody -Needles @(
                 'function Restore-OpenPathCaptivePortalDNS',
                 '$adapters = Get-NetAdapter | Where-Object { $_.Status -eq ''Up'' }',
+                '$resetSucceeded',
                 'Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction Stop',
-                'Clear-DnsClientCache'
+                'Clear-DnsClientCache',
+                'return [bool]$resetSucceeded'
             )
             $portalRestoreBody | Should -Not -Match 'Get-OpenPathOriginalDnsSnapshotPath'
             $portalRestoreBody | Should -Not -Match 'original-dns\.json'
@@ -136,7 +143,8 @@ Describe "DNS Module" {
             $restoreOriginalBody = [regex]::Match($content, '(?s)function Restore-OriginalDNS \{.*?\r?\n\}\r?\n\r?\nfunction Restore-OpenPathCaptivePortalDNS').Value
 
             Assert-ContentContainsAll -Content $restoreOriginalBody -Needles @(
-                '$snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)',
+                '$snapshotPayload = Get-Content $snapshotPath -Raw | ConvertFrom-Json',
+                '$snapshot = if ($snapshotPayload.PSObject.Properties[''adapters''])',
                 'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ServerAddresses $servers',
                 'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses',
                 'Clear-DnsClientCache'

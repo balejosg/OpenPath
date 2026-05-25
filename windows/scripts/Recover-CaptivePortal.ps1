@@ -99,9 +99,17 @@ function Get-OpenPathRecentCaptivePortalRecoverySuccess {
 
     $activeMarkerPath = Join-Path (Join-Path $OpenPathRoot 'data') 'captive-portal-active.json'
     if ((Test-Path $activeMarkerPath -ErrorAction SilentlyContinue) -and (($NowUtc - (Get-Item $activeMarkerPath).LastWriteTimeUtc).TotalSeconds -le $RecentSuccessSeconds)) {
+        $marker = $null
+        try {
+            $marker = Get-Content $activeMarkerPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            $marker = $null
+        }
         return [PSCustomObject]@{
             Source = 'active-marker'
             Path = $activeMarkerPath
+            Marker = $marker
         }
     }
 
@@ -216,16 +224,26 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
 
         $recentSuccess = Get-OpenPathRecentCaptivePortalRecoverySuccess -ResultPath $ResultPath -NowUtc $NowUtc
         if ($recentSuccess) {
-            Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
-                success = $true
-                operation = $operation
-                state = 'RecentSuccess'
-                activeMarker = $true
-                portalModeActive = $true
-                recentSuccessSource = $recentSuccess.Source
-                recentSuccessRequestId = $recentSuccess.RequestId
-            } | Out-Null
-            return
+            $activeMarker = if ($recentSuccess.Source -eq 'active-marker') { $recentSuccess.Marker } else { $null }
+            $allowedHosts = if ($activeMarker -and $activeMarker.PSObject.Properties['allowedHosts']) { @($activeMarker.allowedHosts | ForEach-Object { [string]$_ }) } else { @() }
+            $passthroughNeedsExactHost = (
+                $activeMarker -and
+                $activeMarker.mode -eq 'passthrough' -and
+                $triggerHost -and
+                ($allowedHosts -notcontains $triggerHost)
+            )
+            if (-not $passthroughNeedsExactHost) {
+                Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
+                    success = $true
+                    operation = $operation
+                    state = 'RecentSuccess'
+                    activeMarker = $true
+                    portalModeActive = $true
+                    recentSuccessSource = $recentSuccess.Source
+                    recentSuccessRequestId = $recentSuccess.RequestId
+                } | Out-Null
+                return
+            }
         }
 
         $state = Get-OpenPathCaptivePortalRecoveryState -NowUtc $NowUtc

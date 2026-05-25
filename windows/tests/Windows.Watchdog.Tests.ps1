@@ -111,7 +111,7 @@ Describe "Watchdog Script" {
                 'clients3.google.com',
                 'captive-portal-active.json',
                 'Captive portal detected',
-                'mode = ''limited''',
+                '-Mode limited',
                 'allowedHosts',
                 'expiresAt',
                 'upstreamDns',
@@ -129,6 +129,45 @@ Describe "Watchdog Script" {
             $enableBody | Should -Not -Match 'Disable-OpenPathFirewall'
             $enableBody | Should -Not -Match 'Restore-OpenPathCaptivePortalDNS'
             $enableBody | Should -Not -Match 'Restore-OriginalDNS'
+        }
+
+        It "Enters bounded passthrough instead of staying protected when watchdog has no exact host" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalMode')
+            $disableStart = $moduleContent.IndexOf('function Disable-OpenPathCaptivePortalMode')
+            $enableBody = $moduleContent.Substring($enableStart, $disableStart - $enableStart)
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'Enable-OpenPathCaptivePortalPassthroughMode',
+                '-Mode passthrough',
+                'Restore-OpenPathCaptivePortalDNS',
+                'Test-OpenPathCaptivePortalPassthroughEgressUsable',
+                'adapter DNS reset did not complete',
+                'reset DNS did not expose DNS/HTTP/HTTPS egress',
+                'upstreamUsableForLimited'
+            )
+            $enableBody | Should -Not -Match 'no exact recovery host was supplied; staying protected'
+            $enableBody | Should -Not -Match '(?s)if \(\$allowedHosts\.Count -le 0\).*?return \$false'
+        }
+
+        It "Promotes an active passthrough marker with a new exact host into limited Acrylic recovery" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalMode')
+            $disableStart = $moduleContent.IndexOf('function Disable-OpenPathCaptivePortalMode')
+            $enableBody = $moduleContent.Substring($enableStart, $disableStart - $enableStart)
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                '$marker.mode -eq ''passthrough''',
+                'New-OpenPathLimitedCaptivePortalHostsDefinition',
+                'Set-Content -Path $hostsPath',
+                'Set-OpenPathCaptivePortalMarker -State $State -Mode limited',
+                'CAPTIVE PORTAL RECOVERY'
+            )
+            $enableBody | Should -Not -Match '(?s)if \(Test-OpenPathCaptivePortalModeActive\).*?Set-OpenPathCaptivePortalMarker.*?return \$true'
         }
 
         It "Renders exact temporary portal hosts before the default NX block and clears them on exit" {

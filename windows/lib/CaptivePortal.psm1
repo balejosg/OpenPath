@@ -64,6 +64,21 @@ function Set-OpenPathCaptivePortalMarker {
 
         [string]$UpstreamDns = '',
 
+        [ValidateSet('limited', 'passthrough')]
+        [string]$Mode = 'limited',
+
+        [string]$UpstreamDnsSource = '',
+
+        [bool]$UpstreamUsableForLimited = $false,
+
+        [bool]$UpstreamVerified = $false,
+
+        [string]$DnsResetAt = '',
+
+        [string]$UpstreamCapturedAt = '',
+
+        [object]$PassthroughEgress = $null,
+
         [int]$TtlSeconds = 300
     )
 
@@ -82,10 +97,16 @@ function Set-OpenPathCaptivePortalMarker {
         $payload = @{
             active = $true
             state = [string]$State
-            mode = 'limited'
+            mode = [string]$Mode
             allowedHosts = @($AllowedHosts)
             expiresAt = ([DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TtlSeconds))).ToString('o')
             upstreamDns = [string]$UpstreamDns
+            upstreamDnsSource = [string]$UpstreamDnsSource
+            upstreamUsableForLimited = [bool]$UpstreamUsableForLimited
+            upstreamVerified = [bool]$UpstreamVerified
+            dnsResetAt = [string]$DnsResetAt
+            upstreamCapturedAt = [string]$UpstreamCapturedAt
+            passthroughEgress = $PassthroughEgress
             since = [string]$since
             updatedAt = (Get-Date).ToString('o')
         } | ConvertTo-Json -Depth 8
@@ -110,6 +131,282 @@ function Get-OpenPathCaptivePortalAllowedHosts {
             $normalizedHost
         }
     ) | Select-Object -Unique
+}
+
+function Get-OpenPathCaptivePortalMarkerMode {
+    param([object]$Marker)
+
+    if ($Marker -and $Marker.PSObject.Properties['mode'] -and $Marker.mode) {
+        $mode = ([string]$Marker.mode).Trim().ToLowerInvariant()
+        if ($mode -in @('limited', 'passthrough')) {
+            return $mode
+        }
+    }
+
+    return 'limited'
+}
+
+function Get-OpenPathCaptivePortalUpstreamFromMarker {
+    param([object]$Marker)
+
+    if (-not $Marker -or -not $Marker.PSObject.Properties['upstreamDns'] -or -not $Marker.upstreamDns) {
+        return $null
+    }
+
+    $source = if ($Marker.PSObject.Properties['upstreamDnsSource'] -and $Marker.upstreamDnsSource) { [string]$Marker.upstreamDnsSource } else { 'marker' }
+    $usableForLimited = if ($Marker.PSObject.Properties['upstreamUsableForLimited']) { [bool]$Marker.upstreamUsableForLimited } else { $true }
+    $verified = if ($Marker.PSObject.Properties['upstreamVerified']) { [bool]$Marker.upstreamVerified } else { $false }
+
+    return [PSCustomObject]@{
+        Address = [string]$Marker.upstreamDns
+        Source = $source
+        Verified = $verified
+        UsableForLimited = $usableForLimited
+        PreReset = $false
+    }
+}
+
+function New-OpenPathCaptivePortalFallbackUpstream {
+    return [PSCustomObject]@{
+        Address = ''
+        Source = 'unavailable'
+        Verified = $false
+        UsableForLimited = $false
+        PreReset = $false
+    }
+}
+
+function Resolve-OpenPathCaptivePortalUpstreamDns {
+    param(
+        [object]$Marker = $null,
+        [switch]$AfterAdapterReset
+    )
+
+    $markerUpstream = Get-OpenPathCaptivePortalUpstreamFromMarker -Marker $Marker
+    if ($markerUpstream -and $markerUpstream.Address) {
+        return $markerUpstream
+    }
+
+    if (Get-Command -Name 'Get-OpenPathCaptivePortalUpstreamDns' -ErrorAction SilentlyContinue) {
+        try {
+            return (Get-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset:$AfterAdapterReset)
+        }
+        catch {
+            Write-OpenPathLog "Watchdog: captive portal upstream selection failed: $_" -Level WARN
+        }
+    }
+
+    try {
+        $primaryDns = [string](Get-PrimaryDNS)
+        if ($primaryDns) {
+            return [PSCustomObject]@{
+                Address = $primaryDns
+                Source = 'primary-dns'
+                Verified = $true
+                UsableForLimited = $true
+                PreReset = (-not [bool]$AfterAdapterReset)
+            }
+        }
+    }
+    catch {
+        # Fall through to unavailable marker.
+    }
+
+    return (New-OpenPathCaptivePortalFallbackUpstream)
+}
+
+function Test-OpenPathCaptivePortalPassthroughEgress {
+    [CmdletBinding()]
+    param()
+
+    $result = [ordered]@{
+        dns = $null
+        http = $null
+        https = $null
+    }
+
+    if (Get-Command -Name Test-NetConnection -ErrorAction SilentlyContinue) {
+        try {
+            $result.dns = [bool](Test-NetConnection -ComputerName '1.1.1.1' -Port 53 -InformationLevel Quiet -WarningAction SilentlyContinue)
+        }
+        catch {
+            $result.dns = $false
+        }
+        try {
+            $result.http = [bool](Test-NetConnection -ComputerName 'detectportal.firefox.com' -Port 80 -InformationLevel Quiet -WarningAction SilentlyContinue)
+        }
+        catch {
+            $result.http = $false
+        }
+        try {
+            $result.https = [bool](Test-NetConnection -ComputerName 'detectportal.firefox.com' -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue)
+        }
+        catch {
+            $result.https = $false
+        }
+    }
+
+    return [PSCustomObject]$result
+}
+
+function Test-OpenPathCaptivePortalPassthroughEgressUsable {
+    param([object]$Egress)
+
+    if (-not $Egress) { return $false }
+
+    foreach ($propertyName in @('dns', 'http', 'https')) {
+        $property = $Egress.PSObject.Properties[$propertyName]
+        if ($property -and [bool]$property.Value) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Enable-OpenPathCaptivePortalPassthroughMode {
+    [CmdletBinding()]
+    param(
+        [string]$State = 'Portal',
+        [int]$TtlSeconds = 120,
+        [object]$ExistingMarker = $null
+    )
+
+    if ($ExistingMarker -and (Get-OpenPathCaptivePortalMarkerMode -Marker $ExistingMarker) -eq 'limited') {
+        $existingHosts = @($ExistingMarker.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { $_ })
+        $existingUpstream = Get-OpenPathCaptivePortalUpstreamFromMarker -Marker $ExistingMarker
+        Set-OpenPathCaptivePortalMarker `
+            -State $State `
+            -AllowedHosts $existingHosts `
+            -Mode limited `
+            -UpstreamDns $(if ($existingUpstream) { [string]$existingUpstream.Address } else { '' }) `
+            -UpstreamDnsSource $(if ($existingUpstream) { [string]$existingUpstream.Source } else { '' }) `
+            -UpstreamUsableForLimited $(if ($existingUpstream) { [bool]$existingUpstream.UsableForLimited } else { $false }) `
+            -UpstreamVerified $(if ($existingUpstream) { [bool]$existingUpstream.Verified } else { $false }) `
+            -TtlSeconds $TtlSeconds | Out-Null
+        return $true
+    }
+
+    Write-OpenPathLog 'Watchdog: Captive portal detected without exact recovery hosts; entering passthrough mode' -Level WARN
+
+    $dnsResetAt = (Get-Date).ToUniversalTime().ToString('o')
+    $dnsResetSucceeded = $false
+    if (Get-Command -Name 'Restore-OpenPathCaptivePortalDNS' -ErrorAction SilentlyContinue) {
+        $dnsResetSucceeded = [bool](Restore-OpenPathCaptivePortalDNS)
+    }
+    if (-not $dnsResetSucceeded) {
+        Write-OpenPathLog 'Watchdog: captive portal passthrough failed because adapter DNS reset did not complete' -Level WARN
+        return $false
+    }
+
+    Start-Sleep -Milliseconds 500
+    if (Get-Command -Name 'Update-OpenPathOriginalDnsSnapshotForCurrentNetwork' -ErrorAction SilentlyContinue) {
+        Update-OpenPathOriginalDnsSnapshotForCurrentNetwork | Out-Null
+    }
+
+    $upstream = Resolve-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset
+    $upstreamCapturedAt = (Get-Date).ToUniversalTime().ToString('o')
+    $egress = Test-OpenPathCaptivePortalPassthroughEgress
+    if (-not (Test-OpenPathCaptivePortalPassthroughEgressUsable -Egress $egress)) {
+        Write-OpenPathLog 'Watchdog: captive portal passthrough failed because reset DNS did not expose DNS/HTTP/HTTPS egress' -Level WARN
+        return $false
+    }
+
+    Set-OpenPathCaptivePortalMarker `
+        -State $State `
+        -AllowedHosts @() `
+        -Mode passthrough `
+        -UpstreamDns ([string]$upstream.Address) `
+        -UpstreamDnsSource ([string]$upstream.Source) `
+        -UpstreamUsableForLimited ([bool]$upstream.UsableForLimited) `
+        -UpstreamVerified ([bool]$upstream.Verified) `
+        -DnsResetAt $dnsResetAt `
+        -UpstreamCapturedAt $upstreamCapturedAt `
+        -PassthroughEgress $egress `
+        -TtlSeconds ([Math]::Min([Math]::Max(1, $TtlSeconds), 120)) | Out-Null
+
+    return $true
+}
+
+function Enable-OpenPathCaptivePortalLimitedMode {
+    [CmdletBinding()]
+    param(
+        [string]$State = 'Portal',
+        [string[]]$AllowedHosts = @(),
+        [int]$TtlSeconds = 300,
+        [object]$Marker = $null
+    )
+
+    $markerMode = Get-OpenPathCaptivePortalMarkerMode -Marker $Marker
+    if ($Marker -and $marker.mode -eq 'passthrough') {
+        $markerMode = 'passthrough'
+    }
+
+    $existingHosts = @()
+    if ($Marker -and $Marker.PSObject.Properties['allowedHosts']) {
+        $existingHosts = @($Marker.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { $_ })
+    }
+    $mergedHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($existingHosts) + @($AllowedHosts)))
+    if ($mergedHosts.Count -le 0) {
+        return (Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $Marker)
+    }
+
+    $upstream = Resolve-OpenPathCaptivePortalUpstreamDns -Marker $Marker
+    if (-not $upstream -or -not $upstream.Address) {
+        Write-OpenPathLog 'Watchdog: captive portal limited mode failed because no temporary upstream DNS was available' -Level WARN
+        return $false
+    }
+
+    if (-not [bool]$upstream.UsableForLimited) {
+        Write-OpenPathLog "Watchdog: captive portal limited mode deferred because upstream source $($upstream.Source) is not usable for limited mode" -Level WARN
+        if ($markerMode -eq 'passthrough') {
+            Set-OpenPathCaptivePortalMarker `
+                -State $State `
+                -Mode passthrough `
+                -AllowedHosts @() `
+                -UpstreamDns ([string]$upstream.Address) `
+                -UpstreamDnsSource ([string]$upstream.Source) `
+                -UpstreamUsableForLimited ([bool]$upstream.UsableForLimited) `
+                -UpstreamVerified ([bool]$upstream.Verified) `
+                -TtlSeconds $TtlSeconds | Out-Null
+        }
+        return $false
+    }
+
+    Write-OpenPathLog 'Watchdog: Captive portal detected - entering limited portal mode for exact recovery hosts' -Level WARN
+
+    $acrylicPath = Get-AcrylicPath
+    if (-not $acrylicPath) { return $false }
+    $hostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
+    $definition = New-OpenPathLimitedCaptivePortalHostsDefinition -PortalRecoveryDomains $mergedHosts -UpstreamDns ([string]$upstream.Address)
+    $content = ConvertTo-AcrylicHostsContent -Definition $definition
+    Set-Content -Path $hostsPath -Value $content -Encoding ASCII -Force
+    if (-not (Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns ([string]$upstream.Address))) {
+        Restore-OpenPathLimitedCaptivePortalAttempt
+        return $false
+    }
+
+    if (Get-Command -Name 'Set-LocalDNS' -ErrorAction SilentlyContinue) {
+        Set-LocalDNS | Out-Null
+    }
+    if (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue) {
+        Restart-AcrylicService | Out-Null
+    }
+
+    if (-not (Test-OpenPathLimitedCaptivePortalProtection)) {
+        Write-OpenPathLog 'Watchdog: captive portal limited mode verification failed; staying protected' -Level WARN
+        Restore-OpenPathLimitedCaptivePortalAttempt
+        return $false
+    }
+
+    Set-OpenPathCaptivePortalMarker -State $State -Mode limited `
+        -AllowedHosts $mergedHosts `
+        -UpstreamDns ([string]$upstream.Address) `
+        -UpstreamDnsSource ([string]$upstream.Source) `
+        -UpstreamUsableForLimited ([bool]$upstream.UsableForLimited) `
+        -UpstreamVerified ([bool]$upstream.Verified) `
+        -TtlSeconds $TtlSeconds | Out-Null
+    return $true
 }
 
 function New-OpenPathLimitedCaptivePortalHostsDefinition {
@@ -542,54 +839,20 @@ function Enable-OpenPathCaptivePortalMode {
         return $false
     }
 
+    $marker = $null
     if (Test-OpenPathCaptivePortalModeActive) {
         $marker = Get-OpenPathCaptivePortalMarker
-        $upstreamDns = if ($marker -and $marker.PSObject.Properties['upstreamDns']) { [string]$marker.upstreamDns } else { '' }
-        Set-OpenPathCaptivePortalMarker -State $State -AllowedHosts (Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains) -UpstreamDns $upstreamDns -TtlSeconds $TtlSeconds | Out-Null
-        return $true
     }
-
     $allowedHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains)
     if ($allowedHosts.Count -le 0) {
-        Write-OpenPathLog 'Watchdog: Captive portal detected but no exact recovery host was supplied; staying protected' -Level WARN
-        return $false
+        return (Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $marker)
     }
 
-    $upstreamDns = ''
-    try { $upstreamDns = [string](Get-PrimaryDNS) } catch { $upstreamDns = '' }
-    if (-not $upstreamDns) {
-        Write-OpenPathLog 'Watchdog: captive portal limited mode failed because no temporary upstream DNS was available' -Level WARN
-        return $false
+    if ($marker -and $marker.mode -eq 'passthrough') {
+        return (Enable-OpenPathCaptivePortalLimitedMode -State $State -AllowedHosts $allowedHosts -TtlSeconds $TtlSeconds -Marker $marker)
     }
 
-    Write-OpenPathLog 'Watchdog: Captive portal detected - entering limited portal mode for exact recovery hosts' -Level WARN
-
-    $acrylicPath = Get-AcrylicPath
-    if (-not $acrylicPath) { return $false }
-    $hostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
-    $definition = New-OpenPathLimitedCaptivePortalHostsDefinition -PortalRecoveryDomains $allowedHosts -UpstreamDns $upstreamDns
-    $content = ConvertTo-AcrylicHostsContent -Definition $definition
-    Set-Content -Path $hostsPath -Value $content -Encoding ASCII -Force
-    if (-not (Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns $upstreamDns)) {
-        Restore-OpenPathLimitedCaptivePortalAttempt
-        return $false
-    }
-
-    if (Get-Command -Name 'Set-LocalDNS' -ErrorAction SilentlyContinue) {
-        Set-LocalDNS | Out-Null
-    }
-    if (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue) {
-        Restart-AcrylicService | Out-Null
-    }
-
-    if (-not (Test-OpenPathLimitedCaptivePortalProtection)) {
-        Write-OpenPathLog 'Watchdog: captive portal limited mode verification failed; staying protected' -Level WARN
-        Restore-OpenPathLimitedCaptivePortalAttempt
-        return $false
-    }
-
-    Set-OpenPathCaptivePortalMarker -State $State -AllowedHosts $allowedHosts -UpstreamDns $upstreamDns -TtlSeconds $TtlSeconds | Out-Null
-    return $true
+    return (Enable-OpenPathCaptivePortalLimitedMode -State $State -AllowedHosts $allowedHosts -TtlSeconds $TtlSeconds -Marker $marker)
 }
 
 function Disable-OpenPathCaptivePortalMode {

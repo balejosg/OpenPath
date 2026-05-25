@@ -67,38 +67,134 @@ function ConvertTo-OpenPathDnsNullableInt {
     }
 }
 
+function Get-OpenPathDnsNetworkFingerprint {
+    param([object[]]$Entries = @())
+
+    $parts = @(
+        foreach ($entry in @($Entries)) {
+            $gateway = if ($entry.PSObject.Properties['Gateway']) { [string]$entry.Gateway } else { '' }
+            @(
+                [string]$entry.InterfaceGuid,
+                [string]$entry.InterfaceAlias,
+                [string]$entry.InterfaceIndex,
+                [string]$gateway
+            ) -join '|'
+        }
+    ) | Sort-Object
+
+    return ($parts -join ';')
+}
+
+function Get-OpenPathCurrentDnsSnapshotEntries {
+    if (-not (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return @() }
+    if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) { return @() }
+
+    return @(
+        Get-NetAdapter -ErrorAction Stop | ForEach-Object {
+            $adapter = $_
+            $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+            $gateway = ''
+            try {
+                $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceIndex $adapter.ifIndex -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+                if ($route -and $route.NextHop) { $gateway = [string]$route.NextHop }
+            }
+            catch {
+                $gateway = ''
+            }
+
+            [PSCustomObject]@{
+                InterfaceGuid = [string]$adapter.InterfaceGuid
+                InterfaceAlias = [string]$adapter.Name
+                InterfaceIndex = [int]$adapter.ifIndex
+                Gateway = [string]$gateway
+                ServerAddresses = @($dns.ServerAddresses | ForEach-Object { [string]$_ })
+            }
+        }
+    )
+}
+
 function Save-OpenPathOriginalDnsSnapshot {
     [CmdletBinding()]
-    param([string]$Path = (Get-OpenPathOriginalDnsSnapshotPath))
+    param(
+        [string]$Path = (Get-OpenPathOriginalDnsSnapshotPath),
+        [switch]$Force
+    )
 
-    if (Test-Path $Path) { return $true }
+    if ((Test-Path $Path) -and -not $Force) { return $true }
     if (-not (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return $false }
     if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) { return $false }
 
     try {
-        $snapshot = @(
-            Get-NetAdapter -ErrorAction Stop | ForEach-Object {
-                $adapter = $_
-                $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
-                [PSCustomObject]@{
-                    InterfaceGuid = [string]$adapter.InterfaceGuid
-                    InterfaceAlias = [string]$adapter.Name
-                    InterfaceIndex = [int]$adapter.ifIndex
-                    ServerAddresses = @($dns.ServerAddresses | ForEach-Object { [string]$_ })
-                }
-            }
-        )
+        $snapshot = @(Get-OpenPathCurrentDnsSnapshotEntries)
+        $networkFingerprint = Get-OpenPathDnsNetworkFingerprint -Entries $snapshot
+        $payload = [PSCustomObject]@{
+            version = 2
+            networkFingerprint = [string]$networkFingerprint
+            adapters = @($snapshot)
+        }
 
         $directory = Split-Path $Path -Parent
         if (-not (Test-Path $directory)) {
             New-Item -ItemType Directory -Path $directory -Force | Out-Null
         }
-        $snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path $Path -Encoding UTF8
+        $payload | ConvertTo-Json -Depth 8 | Set-Content -Path $Path -Encoding UTF8
         Write-OpenPathLog "Saved original DNS snapshot to $Path"
         return $true
     }
     catch {
         Write-OpenPathLog "Failed to save original DNS snapshot: $_" -Level WARN
+        return $false
+    }
+}
+
+function Update-OpenPathOriginalDnsSnapshotForCurrentNetwork {
+    [CmdletBinding()]
+    param([string]$Path = (Get-OpenPathOriginalDnsSnapshotPath))
+
+    try {
+        $snapshot = @(Get-OpenPathCurrentDnsSnapshotEntries)
+        $visibleDns = @(
+            $snapshot |
+                ForEach-Object { @($_.ServerAddresses) } |
+                Where-Object {
+                    $_ -and
+                    $_ -notin @('127.0.0.1', '0.0.0.0') -and
+                    $_ -match '^\d{1,3}(?:\.\d{1,3}){3}$'
+                }
+        )
+        if ($visibleDns.Count -le 0) {
+            return $false
+        }
+
+        $currentFingerprint = Get-OpenPathDnsNetworkFingerprint -Entries $snapshot
+        $existingFingerprint = ''
+        if (Test-Path $Path -ErrorAction SilentlyContinue) {
+            try {
+                $existing = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if ($existing.PSObject.Properties['networkFingerprint']) {
+                    $existingFingerprint = [string]$existing.networkFingerprint
+                }
+                elseif ($existing.PSObject.Properties['adapters']) {
+                    $existingFingerprint = Get-OpenPathDnsNetworkFingerprint -Entries @($existing.adapters)
+                }
+                else {
+                    $existingFingerprint = Get-OpenPathDnsNetworkFingerprint -Entries @($existing)
+                }
+            }
+            catch {
+                $existingFingerprint = ''
+            }
+        }
+
+        if ($currentFingerprint -and $currentFingerprint -ne $existingFingerprint) {
+            return (Save-OpenPathOriginalDnsSnapshot -Path $Path -Force)
+        }
+
+        return $true
+    }
+    catch {
+        Write-OpenPathLog "Failed to refresh DNS snapshot for current network: $_" -Level WARN
         return $false
     }
 }
@@ -111,7 +207,8 @@ function Restore-OriginalDNS {
     $snapshotPath = Get-OpenPathOriginalDnsSnapshotPath
     if (Test-Path $snapshotPath) {
         try {
-            $snapshot = @(Get-Content $snapshotPath -Raw | ConvertFrom-Json)
+            $snapshotPayload = Get-Content $snapshotPath -Raw | ConvertFrom-Json
+            $snapshot = if ($snapshotPayload.PSObject.Properties['adapters']) { @($snapshotPayload.adapters) } else { @($snapshotPayload) }
             $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
             foreach ($entry in $snapshot) {
                 $adapter = $adapters | Where-Object { [string]$_.InterfaceGuid -eq [string]$entry.InterfaceGuid } | Select-Object -First 1
@@ -156,20 +253,23 @@ function Restore-OriginalDNS {
 
 function Restore-OpenPathCaptivePortalDNS {
     [CmdletBinding(SupportsShouldProcess)] param()
-    if (-not $PSCmdlet.ShouldProcess("Network adapters", "Reset DNS server addresses for captive portal access")) { return }
+    if (-not $PSCmdlet.ShouldProcess("Network adapters", "Reset DNS server addresses for captive portal access")) { return $false }
     Write-OpenPathLog "Resetting DNS settings for captive portal access..."
 
     $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
+    $resetSucceeded = ($null -ne $adapters -and @($adapters).Count -gt 0)
     foreach ($adapter in $adapters) {
         try {
             Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ResetServerAddresses -ErrorAction Stop
             Write-OpenPathLog "Reset DNS for adapter: $($adapter.Name)"
         }
         catch {
+            $resetSucceeded = $false
             Write-OpenPathLog "Failed to reset DNS for $($adapter.Name): $_" -Level WARN
         }
     }
     Clear-DnsClientCache
+    return [bool]$resetSucceeded
 }
 
 function Get-AcrylicService {

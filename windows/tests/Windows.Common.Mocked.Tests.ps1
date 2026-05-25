@@ -32,6 +32,39 @@ Describe "Common Module - Mocked Tests" {
                     return $true
                 }
             }
+            if (-not (Get-Command -Name 'Get-DnsClientServerAddress' -ErrorAction SilentlyContinue)) {
+                function script:Get-DnsClientServerAddress {
+                    param(
+                        [int]$InterfaceIndex,
+                        [string]$AddressFamily,
+                        [object]$ErrorAction
+                    )
+                }
+            }
+            if (-not (Get-Command -Name 'Get-NetRoute' -ErrorAction SilentlyContinue)) {
+                function script:Get-NetRoute {
+                    param(
+                        [string]$DestinationPrefix,
+                        [int]$InterfaceIndex,
+                        [object]$ErrorAction
+                    )
+                }
+            }
+            if (-not (Get-Command -Name 'Get-NetAdapter' -ErrorAction SilentlyContinue)) {
+                function script:Get-NetAdapter {
+                    param([object]$ErrorAction)
+                }
+            }
+            if (-not (Get-Command -Name 'Resolve-DnsName' -ErrorAction SilentlyContinue)) {
+                function script:Resolve-DnsName {
+                    param(
+                        [string]$Name,
+                        [string]$Server,
+                        [switch]$DnsOnly,
+                        [object]$ErrorAction
+                    )
+                }
+            }
         }
     }
 
@@ -241,6 +274,56 @@ download.mozilla.org/firefox/releases
 
             $dns = Get-PrimaryDNS
             $dns | Should -Be "8.8.8.8"
+        }
+    }
+
+    Context "Get-OpenPathCaptivePortalUpstreamDns with mocked network" {
+        It "Prefers visible non-local adapter DNS after captive portal reset without public probes" {
+            Mock Get-NetAdapter {
+                @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 })
+            } -ModuleName Common
+            Mock Get-DnsClientServerAddress {
+                @([PSCustomObject]@{ InterfaceIndex = 7; ServerAddresses = @('192.168.50.1') })
+            } -ModuleName Common
+            Mock Resolve-DnsName { throw 'public probe should not be required' } -ModuleName Common
+
+            $dns = Get-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset
+
+            $dns.Address | Should -Be '192.168.50.1'
+            $dns.Source | Should -Be 'active-adapter-dns'
+            $dns.UsableForLimited | Should -BeTrue
+            $dns.PreReset | Should -BeFalse
+        }
+
+        It "Falls back to gateway as unverified when no adapter DNS is visible" {
+            Mock Get-NetAdapter {
+                @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 })
+            } -ModuleName Common
+            Mock Get-DnsClientServerAddress { @() } -ModuleName Common
+            Mock Get-NetRoute {
+                @([PSCustomObject]@{ InterfaceIndex = 7; NextHop = '10.0.0.1' })
+            } -ModuleName Common
+            Mock Resolve-DnsName { throw 'gateway dns blocked by captive portal' } -ModuleName Common -ParameterFilter { $Server -eq '10.0.0.1' }
+
+            $dns = Get-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset
+
+            $dns.Address | Should -Be '10.0.0.1'
+            $dns.Source | Should -Be 'gateway'
+            $dns.Verified | Should -BeFalse
+            $dns.UsableForLimited | Should -BeFalse
+        }
+
+        It "Marks public fallback as diagnostic and not usable for limited mode" {
+            Mock Get-NetAdapter { @() } -ModuleName Common
+            Mock Get-DnsClientServerAddress { @() } -ModuleName Common
+            Mock Get-NetRoute { @() } -ModuleName Common
+            Mock Resolve-DnsName { throw 'unreachable' } -ModuleName Common
+
+            $dns = Get-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset
+
+            $dns.Address | Should -Be '8.8.8.8'
+            $dns.Source | Should -Be 'fallback'
+            $dns.UsableForLimited | Should -BeFalse
         }
     }
 

@@ -28,6 +28,7 @@ Export-ModuleMember -Function @(
     'Set-LocalDNS',
     'Restore-OriginalDNS',
     'Restore-OpenPathCaptivePortalDNS',
+    'Update-OpenPathOriginalDnsSnapshotForCurrentNetwork',
     'Restart-AcrylicService',
     'Start-AcrylicService',
     'Stop-AcrylicService',

@@ -67,6 +67,7 @@ Export-ModuleMember -Function @(
     'Test-OpenPathIntegrity',
     'Restore-OpenPathIntegrity',
     'Get-PrimaryDNS',
+    'Get-OpenPathCaptivePortalUpstreamDns',
     'Get-OpenPathFromUrl',
     'Test-InternetConnection',
     'Send-OpenPathHealthReport',
