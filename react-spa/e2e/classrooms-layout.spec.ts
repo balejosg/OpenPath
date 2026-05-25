@@ -108,7 +108,21 @@ async function installClassroomsLayoutPatch(page: Page): Promise<void> {
 }
 
 async function navigateToClassrooms(page: Page): Promise<void> {
-  await page.goto('/classrooms');
+  const menuButton = page.getByRole('button', { name: /Abrir menú|Open menu/i });
+  if (await menuButton.isVisible({ timeout: 500 }).catch(() => false)) {
+    const sidebar = page.locator('aside').first();
+    const sidebarClosed = await sidebar
+      .evaluate((el) => el.className.includes('-translate-x-full'))
+      .catch(() => false);
+    if (sidebarClosed) {
+      await menuButton.click();
+      await expect(sidebar).not.toHaveClass(/-translate-x-full/);
+    }
+  }
+
+  await page
+    .getByRole('button', { name: /Secure Classrooms|Aulas Seguras|Classrooms|Aulas/i })
+    .click();
   await waitForNetworkIdle(page).catch(() => {});
   await expect(page.getByRole('heading', { name: 'Layout Room 01', level: 2 })).toBeVisible();
 }
