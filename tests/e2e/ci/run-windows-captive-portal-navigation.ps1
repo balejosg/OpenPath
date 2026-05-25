@@ -309,14 +309,55 @@ function Copy-CaptivePortalObservationArtifact {
 function Get-PortalConcurrencyObservation {
     $activeMarkerPath = 'C:\OpenPath\data\captive-portal-active.json'
     $activeMarkers = @($activeMarkerPath | Where-Object { Test-Path -LiteralPath $_ })
+    $activeMarker = $null
+    if (Test-Path -LiteralPath $activeMarkerPath) {
+        try {
+            $activeMarker = Get-Content -LiteralPath $activeMarkerPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            $activeMarker = [pscustomobject]@{ readError = [string]$_ }
+        }
+    }
     $task = Get-ScheduledTask -TaskName 'OpenPath-CaptivePortalRecovery' -ErrorAction SilentlyContinue
     $taskInfo = if ($task) { Get-ScheduledTaskInfo -TaskName 'OpenPath-CaptivePortalRecovery' -ErrorAction SilentlyContinue } else { $null }
+    $latestResult = Get-ChildItem -LiteralPath 'C:\OpenPath\data\captive-portal-recovery-result' -Filter '*.json' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+    $latestPayload = $null
+    if ($latestResult) {
+        try {
+            $latestPayload = Get-Content -LiteralPath $latestResult.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            $latestPayload = [pscustomobject]@{ readError = [string]$_ }
+        }
+    }
+    $hostsPath = 'C:\Program Files (x86)\Acrylic DNS Proxy\AcrylicHosts.txt'
+    $hostsSnapshot = ''
+    if (Test-Path -LiteralPath $hostsPath) {
+        $hostsSnapshot = (Get-Content -LiteralPath $hostsPath -Raw -ErrorAction SilentlyContinue) `
+            -replace '(?m)^(\s*\d{1,3}(?:\.\d{1,3}){3}\s+).+$', '$1<redacted-host>'
+    }
 
     return [pscustomobject]@{
         watchdogRecoveryConcurrencyHook = 'Portal watchdog+recovery concurrency observation'
         expectedOneActivePortalMarker = ($activeMarkers.Count -eq 1)
         activePortalMarkerCount = $activeMarkers.Count
         activePortalMarkerPath = $activeMarkerPath
+        marker = [pscustomobject]@{
+            mode = if ($activeMarker -and $activeMarker.PSObject.Properties['mode']) { [string]$activeMarker.mode } else { '' }
+            allowedHosts = if ($activeMarker -and $activeMarker.PSObject.Properties['allowedHosts']) { @($activeMarker.allowedHosts) } else { @() }
+            upstreamDns = [pscustomobject]@{
+                source = if ($activeMarker -and $activeMarker.PSObject.Properties['upstreamDnsSource']) { [string]$activeMarker.upstreamDnsSource } else { '' }
+                usableForLimited = if ($activeMarker -and $activeMarker.PSObject.Properties['upstreamUsableForLimited']) { [bool]$activeMarker.upstreamUsableForLimited } else { $null }
+            }
+        }
+        recentSuccessSource = if ($latestPayload -and $latestPayload.PSObject.Properties['recentSuccessSource']) { [string]$latestPayload.recentSuccessSource } else { '' }
+        exactHostEnableAttempted = if ($latestPayload -and $latestPayload.PSObject.Properties['triggerHost']) { -not [string]::IsNullOrWhiteSpace([string]$latestPayload.triggerHost) } else { $null }
+        dnsResetAt = if ($activeMarker -and $activeMarker.PSObject.Properties['dnsResetAt']) { [string]$activeMarker.dnsResetAt } else { '' }
+        upstreamCapturedAt = if ($activeMarker -and $activeMarker.PSObject.Properties['upstreamCapturedAt']) { [string]$activeMarker.upstreamCapturedAt } else { '' }
+        passthroughEgress = if ($activeMarker -and $activeMarker.PSObject.Properties['passthroughEgress']) { $activeMarker.passthroughEgress } else { $null }
+        acrylicHostsSnapshotRedacted = $hostsSnapshot
         noFailedTask = if ($taskInfo) { [int]$taskInfo.LastTaskResult -eq 0 } else { $false }
         taskLastResult = if ($taskInfo) { [int]$taskInfo.LastTaskResult } else { $null }
         noPrematureExit = Test-Path -LiteralPath $activeMarkerPath
