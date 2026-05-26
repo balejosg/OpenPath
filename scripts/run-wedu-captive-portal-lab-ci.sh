@@ -4,6 +4,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+source "$REPO_ROOT/scripts/lib/wedu-captive-portal-lab-controller.sh"
+
 PROXMOX_HOST="${OPENPATH_WEDU_CI_PROXMOX_HOST:-whitelist-proxmox}"
 WINDOWS_VMID="${OPENPATH_WEDU_CI_WINDOWS_VMID:-103}"
 GATEWAY_VMID="${OPENPATH_WEDU_CI_GATEWAY_VMID:-121}"
@@ -21,6 +23,7 @@ DRY_RUN="${OPENPATH_WEDU_CI_DRY_RUN:-0}"
 ARTIFACT_DIR="$(cd "$REPO_ROOT" && mkdir -p "$ARTIFACT_DIR" && cd "$ARTIFACT_DIR" && pwd)"
 HTTP_SERVER_PID=""
 HTTP_SERVER_LOG="$ARTIFACT_DIR/overlay-http.log"
+OVERLAY_ARCHIVE_URL=""
 LOCK_OWNER="${GITHUB_RUN_ID:-local}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 SNAPSHOT_NAME=""
 SNAPSHOT_CREATED=0
@@ -48,7 +51,7 @@ require_cmd() {
 }
 
 ssh_proxmox() {
-  ssh "$PROXMOX_HOST" "$@"
+  openpath_wedu_ssh_proxmox "$PROXMOX_HOST" "$@"
 }
 
 extract_first_usable_ipv4() {
@@ -220,28 +223,14 @@ read_gateway_token() {
 start_overlay_server() {
   local archive="$1"
   local guest_ip="$2"
-  local host_ip
-  local port
-  host_ip="$(ip route get "$guest_ip" | sed -n 's/.* src \([0-9.][0-9.]*\).*/\1/p' | head -n 1)"
-  [ -n "$host_ip" ] || fail "Unable to detect controller source IP for guest $guest_ip"
-  port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')"
-  (cd "$ARTIFACT_DIR" && python3 -m http.server "$port" --bind "$host_ip" >"$HTTP_SERVER_LOG" 2>&1) &
-  HTTP_SERVER_PID="$!"
-  for _ in $(seq 1 20); do
-    if curl -fsS "http://$host_ip:$port/$(basename "$archive")" >/dev/null; then
-      printf 'http://%s:%s/%s\n' "$host_ip" "$port" "$(basename "$archive")"
-      return 0
-    fi
-    sleep 0.5
-  done
-  fail "Local checkout archive HTTP server did not become ready"
+  openpath_wedu_start_overlay_server "$ARTIFACT_DIR" "$HTTP_SERVER_LOG" "$archive" "$guest_ip" ||
+    fail "Local checkout archive HTTP server did not become ready"
+  HTTP_SERVER_PID="$OPENPATH_WEDU_OVERLAY_PID"
+  OVERLAY_ARCHIVE_URL="$OPENPATH_WEDU_OVERLAY_URL"
 }
 
 stop_overlay_server() {
-  if [ -n "$HTTP_SERVER_PID" ] && kill -0 "$HTTP_SERVER_PID" >/dev/null 2>&1; then
-    kill "$HTTP_SERVER_PID" >/dev/null 2>&1 || true
-    wait "$HTTP_SERVER_PID" >/dev/null 2>&1 || true
-  fi
+  openpath_wedu_stop_overlay_server "$HTTP_SERVER_PID"
   HTTP_SERVER_PID=""
 }
 
@@ -253,10 +242,11 @@ prepare_current_checkout_on_windows() {
   local archive_url
   head_sha="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD)"
   archive="$ARTIFACT_DIR/openpath-wedu-ci-$head_sha.zip"
-  git -C "$REPO_ROOT" archive --format=zip --output "$archive" HEAD
+  openpath_wedu_create_tracked_checkout_archive "$REPO_ROOT" "$archive"
   guest_json="$(ssh_proxmox qm guest cmd "$WINDOWS_VMID" network-get-interfaces)"
   guest_ip="$(printf '%s' "$guest_json" | extract_first_usable_ipv4)"
-  archive_url="$(start_overlay_server "$archive" "$guest_ip")"
+  start_overlay_server "$archive" "$guest_ip"
+  archive_url="$OVERLAY_ARCHIVE_URL"
   run_windows_ps 300 "
 \$ErrorActionPreference = 'Stop'
 \$ProgressPreference = 'SilentlyContinue'

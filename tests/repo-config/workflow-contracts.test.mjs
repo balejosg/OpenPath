@@ -573,6 +573,7 @@ test('self-hosted Windows runner smoke workflow is manual and pinned to the Open
 test('WEDU captive portal lab workflow is manual or nightly and restores the shared runner', () => {
   const workflow = readText('.github/workflows/wedu-captive-portal-lab.yml');
   const script = readText('scripts/run-wedu-captive-portal-lab-ci.sh');
+  const controller = readText('scripts/lib/wedu-captive-portal-lab-controller.sh');
 
   assert.ok(workflow.includes('workflow_dispatch:'), 'WEDU lab should allow manual dispatch');
   assert.ok(workflow.includes('schedule:'), 'WEDU lab should run on a nightly schedule');
@@ -621,6 +622,41 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
   ]) {
     assert.ok(script.includes(required), `WEDU lab script should include ${required}`);
   }
+
+  assert.ok(
+    !script.includes('archive_url="$(start_overlay_server "$archive" "$guest_ip")"'),
+    'WEDU lab should not start the overlay server inside command substitution because Bash waits for background jobs'
+  );
+  assert.ok(
+    script.includes(
+      'openpath_wedu_start_overlay_server "$ARTIFACT_DIR" "$HTTP_SERVER_LOG" "$archive" "$guest_ip"'
+    ),
+    'WEDU lab should keep the overlay server PID in the parent shell before downloading the archive from Windows'
+  );
+  assert.ok(
+    !script.includes('ssh "$PROXMOX_HOST" "$@"'),
+    'WEDU lab should shell-quote ssh command arguments before they cross the remote shell boundary'
+  );
+  assert.ok(
+    controller.includes('function openpath_wedu_ssh_proxmox') &&
+      controller.includes('printf -v quoted_arg %q "$arg"') &&
+      controller.includes('ssh "$host" "${quoted_args[*]}"') &&
+      script.includes('openpath_wedu_ssh_proxmox "$PROXMOX_HOST" "$@"'),
+    'WEDU lab should preserve arguments with spaces for qm snapshot descriptions and guest bash scripts'
+  );
+  assert.ok(
+    controller.includes("subprocess.check_output(['git', '-C', root, 'ls-files', '-z'])") &&
+      controller.includes('zipfile.ZipFile(archive,') &&
+      script.includes('openpath_wedu_create_tracked_checkout_archive "$REPO_ROOT" "$archive"') &&
+      !script.includes('git -C "$REPO_ROOT" archive --format=zip --output "$archive" HEAD'),
+    'WEDU lab should package tracked working-tree files so local harness fixes are exercised before commit'
+  );
+  assert.ok(
+    script.includes('source "$REPO_ROOT/scripts/lib/wedu-captive-portal-lab-controller.sh"') &&
+      controller.includes('function openpath_wedu_stop_overlay_server') &&
+      script.includes('openpath_wedu_stop_overlay_server "$HTTP_SERVER_PID"'),
+    'WEDU lab controller helpers should live behind a shell module seam'
+  );
 
   assert.ok(
     !workflow.includes('runs-on: [self-hosted, Windows') &&

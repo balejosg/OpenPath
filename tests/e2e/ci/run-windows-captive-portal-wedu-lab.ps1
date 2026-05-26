@@ -27,6 +27,10 @@ $script:RecoveryQueueManifestPath = Join-Path $script:ArtifactsRoot 'captive-por
 $script:RecoveryProgressManifestPath = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-progress-manifest.json'
 $script:WeduHost = 'nce.wedu.comunidad.madrid'
 $script:DetectionUrl = 'http://detectportal.firefox.com/success.txt'
+$script:InstalledOpenPathRoot = 'C:\OpenPath'
+$script:InstalledRecoveryScriptPath = Join-Path $script:InstalledOpenPathRoot 'scripts\Recover-CaptivePortal.ps1'
+
+. (Join-Path $PSScriptRoot 'windows-direct-runtime-staging.ps1')
 
 function Ensure-ArtifactRoot {
     New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
@@ -591,6 +595,11 @@ function Invoke-WeduLabRun {
     }
     Save-Json -Value $browserPayload -Path $script:BrowserBeforePath
 
+    Stage-OpenPathDirectRunnerRuntime `
+        -RepoRoot $script:RepoRoot `
+        -InstalledOpenPathRoot $script:InstalledOpenPathRoot `
+        -InstalledRecoveryScriptPath $script:InstalledRecoveryScriptPath `
+        -MissingArtifactContext 'WEDU direct-runner checkout'
     $nativeRecovery = Invoke-NativeHostAction -Message @{
         action = 'recover-captive-portal-navigation'
         triggerHost = $script:WeduHost

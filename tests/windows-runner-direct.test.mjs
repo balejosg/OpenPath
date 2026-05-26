@@ -600,8 +600,8 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(captiveScript, /captive-portal-recovery-queue-manifest\.json/);
     assert.match(captiveScript, /captive-portal-recovery-progress-manifest\.json/);
     assert.match(captiveScript, /captive-portal-task-state\.json/);
-    assert.match(captiveScript, /Stage-OpenPathRuntimeForDirectRunner/);
-    assert.match(captiveScript, /Register-OpenPathTask/);
+    assert.match(captiveScript, /windows-direct-runtime-staging\.ps1/);
+    assert.match(captiveScript, /Stage-OpenPathDirectRunnerRuntime/);
     assert.match(captiveScript, /C:\\OpenPath/);
     assert.match(captiveScript, /Install-LocalOnlyCaptivePortalRecoveryFixture/);
     assert.match(captiveScript, /Restore-LocalOnlyCaptivePortalRecoveryFixture/);
@@ -698,6 +698,29 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduScript, /gateway-reset/);
     assert.match(weduScript, /recover-captive-portal-navigation/);
     assert.match(weduScript, /operation = 'reconcile'/);
+    assert.match(weduScript, /windows-direct-runtime-staging\.ps1/);
+    assert.match(weduScript, /Stage-OpenPathDirectRunnerRuntime/);
+    assert.match(
+      weduScript,
+      /Stage-OpenPathDirectRunnerRuntime[\s\S]*\$nativeRecovery = Invoke-NativeHostAction/
+    );
+  });
+
+  test('captive portal lanes share the direct-runner runtime staging helper', () => {
+    const helper = readText('tests/e2e/ci/windows-direct-runtime-staging.ps1');
+    const captiveScript = readText('tests/e2e/ci/run-windows-captive-portal-navigation.ps1');
+    const weduScript = readText('tests/e2e/ci/run-windows-captive-portal-wedu-lab.ps1');
+
+    assert.match(helper, /function Stage-OpenPathDirectRunnerRuntime/);
+    assert.match(helper, /function Copy-OpenPathDirectRunnerNativeArtifact/);
+    assert.match(helper, /Register-OpenPathTask/);
+
+    for (const scriptText of [captiveScript, weduScript]) {
+      assert.match(scriptText, /windows-direct-runtime-staging\.ps1/);
+      assert.doesNotMatch(scriptText, /function Copy-OpenPath(?:DirectRunner|Wedu)NativeArtifact/);
+      assert.doesNotMatch(scriptText, /function Stage-OpenPathRuntimeFor(?:DirectRunner|WeduLab)/);
+      assert.match(scriptText, /Stage-OpenPathDirectRunnerRuntime/);
+    }
   });
 
   test('captive-portal-wedu-lab artifact collection is scoped to WEDU outputs', () => {

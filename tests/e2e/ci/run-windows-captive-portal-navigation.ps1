@@ -33,6 +33,8 @@ $script:RecoveryScriptBackupPath = Join-Path $script:ArtifactsRoot 'Recover-Capt
 $script:FixtureHost = 'nce.127.0.0.1.sslip.io'
 $script:FixtureUrl = "http://$script:FixtureHost/"
 
+. (Join-Path $PSScriptRoot 'windows-direct-runtime-staging.ps1')
+
 function Ensure-ArtifactRoot {
     New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
     New-Item -ItemType Directory -Path $script:RecoveryArtifactRoot, $script:RecoveryQueueArtifactRoot, $script:RecoveryProgressArtifactRoot -Force | Out-Null
@@ -414,59 +416,6 @@ function Copy-RecoveryDiagnosticArtifacts {
         progressManifestPath = 'captive-portal-recovery-progress-manifest.json'
         taskStatePath = $taskState
     }
-}
-
-function Copy-OpenPathDirectRunnerNativeArtifact {
-    param([Parameter(Mandatory = $true)][string]$ArtifactName)
-
-    $candidateRoots = @(
-        (Join-Path $script:RepoRoot 'windows\scripts'),
-        (Join-Path $script:RepoRoot 'windows\lib'),
-        (Join-Path $script:RepoRoot 'windows\lib\internal')
-    )
-    $sourcePath = $candidateRoots |
-        ForEach-Object { Join-Path $_ $ArtifactName } |
-        Where-Object { Test-Path -LiteralPath $_ } |
-        Select-Object -First 1
-    if (-not $sourcePath) {
-        throw "Native host artifact was not found in direct-runner overlay: $ArtifactName"
-    }
-
-    $nativeRoot = Join-Path $script:InstalledOpenPathRoot 'browser-extension\firefox\native'
-    New-Item -ItemType Directory -Path $nativeRoot -Force | Out-Null
-    Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $nativeRoot $ArtifactName) -Force
-}
-
-function Stage-OpenPathRuntimeForDirectRunner {
-    $installedLibRoot = Join-Path $script:InstalledOpenPathRoot 'lib'
-    $installedScriptRoot = Join-Path $script:InstalledOpenPathRoot 'scripts'
-    New-Item -ItemType Directory -Path $installedLibRoot, $installedScriptRoot -Force | Out-Null
-
-    Copy-Item -Path (Join-Path $script:RepoRoot 'windows\lib\*') -Destination $installedLibRoot -Recurse -Force
-    Copy-Item `
-        -LiteralPath (Join-Path $script:RepoRoot 'windows\scripts\Recover-CaptivePortal.ps1') `
-        -Destination $script:InstalledRecoveryScriptPath `
-        -Force
-
-    foreach ($artifactName in @(
-            'OpenPath-NativeHost.ps1',
-            'OpenPath-NativeHost.cmd',
-            'CapabilityStorage.ps1',
-            'RequestSetup.State.psm1',
-            'Common.Redaction.ps1',
-            'RuntimeDependency.Policy.ps1',
-            'RuntimeDependency.Queue.ps1',
-            'RuntimeDependency.Overlay.ps1',
-            'TaskRunner.ps1',
-            'NativeHost.State.ps1',
-            'NativeHost.Protocol.ps1',
-            'NativeHost.Actions.ps1'
-        )) {
-        Copy-OpenPathDirectRunnerNativeArtifact -ArtifactName $artifactName
-    }
-
-    Import-Module (Join-Path $script:RepoRoot 'windows\lib\Services.psm1') -Force
-    Register-OpenPathTask | Out-Null
 }
 
 function Install-LocalOnlyCaptivePortalRecoveryFixture {
@@ -950,7 +899,10 @@ function Invoke-CaptivePortalNavigationRun {
     }
 
     try {
-        Stage-OpenPathRuntimeForDirectRunner
+        Stage-OpenPathDirectRunnerRuntime `
+            -RepoRoot $script:RepoRoot `
+            -InstalledOpenPathRoot $script:InstalledOpenPathRoot `
+            -InstalledRecoveryScriptPath $script:InstalledRecoveryScriptPath
         $environmentSnapshots = Copy-CaptivePortalEnvironmentSnapshots
         Install-LocalOnlyCaptivePortalRecoveryFixture
         $nativeResponse = Invoke-NativeHostAction -Message @{
