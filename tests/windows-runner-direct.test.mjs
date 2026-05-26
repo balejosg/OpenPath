@@ -565,6 +565,9 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(script, /run-windows-captive-portal-navigation\.ps1/);
     assert.match(script, /captive-portal-navigation-result\.json/);
     assert.match(script, /captive-portal-recovery-result/);
+    assert.match(script, /captive-portal-recovery-queue/);
+    assert.match(script, /captive-portal-recovery-progress/);
+    assert.match(script, /captive-portal-task-state\.json/);
     assert.match(script, /Captive portal navigation result was not successful/);
     assert.match(script, /captive-portal-dns-before\.json/);
     assert.match(script, /captive-portal-dns-after\.json/);
@@ -575,6 +578,10 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(captiveScript, /fixtureDoesNotProveRealWeduCaptiveDns/);
     assert.match(captiveScript, /captive-portal-recovery-fixture-state\.json/);
     assert.match(captiveScript, /Recover-CaptivePortal\.ps1\.product-backup/);
+    assert.match(captiveScript, /Copy-RecoveryDiagnosticArtifacts/);
+    assert.match(captiveScript, /captive-portal-recovery-queue-manifest\.json/);
+    assert.match(captiveScript, /captive-portal-recovery-progress-manifest\.json/);
+    assert.match(captiveScript, /captive-portal-task-state\.json/);
     assert.match(captiveScript, /Stage-OpenPathRuntimeForDirectRunner/);
     assert.match(captiveScript, /Register-OpenPathTask/);
     assert.match(captiveScript, /C:\\OpenPath/);

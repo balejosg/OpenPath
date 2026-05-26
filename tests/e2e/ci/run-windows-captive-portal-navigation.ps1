@@ -16,6 +16,11 @@ $script:FirefoxNavigationResultPath = Join-Path $script:ArtifactsRoot 'captive-p
 $script:CaptivePortalObservationPath = Join-Path $script:ArtifactsRoot 'captive-portal-observation.json'
 $script:RecoveryArtifactRoot = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-result'
 $script:RecoveryManifestPath = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-result-manifest.json'
+$script:RecoveryQueueArtifactRoot = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-queue'
+$script:RecoveryQueueManifestPath = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-queue-manifest.json'
+$script:RecoveryProgressArtifactRoot = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-progress'
+$script:RecoveryProgressManifestPath = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-progress-manifest.json'
+$script:TaskStatePath = Join-Path $script:ArtifactsRoot 'captive-portal-task-state.json'
 $script:MarkerBeforeAuthPath = Join-Path $script:ArtifactsRoot 'captive-portal-marker-before-auth.json'
 $script:MarkerAfterAuthPath = Join-Path $script:ArtifactsRoot 'captive-portal-marker-after-auth.json'
 $script:FixtureStatePath = 'C:\OpenPath\data\captive-portal-recovery-fixture-state.json'
@@ -27,7 +32,7 @@ $script:FixtureUrl = "http://$script:FixtureHost/"
 
 function Ensure-ArtifactRoot {
     New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
-    New-Item -ItemType Directory -Path $script:RecoveryArtifactRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $script:RecoveryArtifactRoot, $script:RecoveryQueueArtifactRoot, $script:RecoveryProgressArtifactRoot -Force | Out-Null
 }
 
 function Get-DnsAddressSnapshot {
@@ -202,6 +207,98 @@ function Copy-RecoveryResultArtifact {
     }) -Path $script:RecoveryManifestPath
 
     return $files
+}
+
+function Copy-RecoveryDirectoryArtifact {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [Parameter(Mandatory = $true)][string]$TargetRoot,
+        [Parameter(Mandatory = $true)][string]$ManifestPath,
+        [Parameter(Mandatory = $true)][string]$ArtifactPrefix
+    )
+
+    $files = @()
+    if (Test-Path -LiteralPath $SourceRoot) {
+        New-Item -ItemType Directory -Path $TargetRoot -Force | Out-Null
+        foreach ($file in @(Get-ChildItem -LiteralPath $SourceRoot -Filter '*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc, Name)) {
+            if ($file.Name -notmatch '^[A-Za-z0-9_.-]+\.json$') {
+                continue
+            }
+            Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $TargetRoot $file.Name) -Force
+            $files += "$ArtifactPrefix\$($file.Name)"
+        }
+    }
+
+    Save-Json -Value ([pscustomobject]@{
+        files = $files
+        sourceRoot = $SourceRoot
+    }) -Path $ManifestPath
+
+    return $files
+}
+
+function Save-CaptivePortalTaskStateArtifact {
+    $taskName = 'OpenPath-CaptivePortalRecovery'
+    $payload = [ordered]@{
+        taskName = $taskName
+        taskPresent = $false
+        taskState = ''
+        taskLastResult = $null
+        taskLastResultHex = ''
+        capturedAt = (Get-Date).ToString('o')
+        error = ''
+    }
+
+    try {
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        $taskInfo = if ($task) { Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue } else { $null }
+        $payload.taskPresent = ($null -ne $task)
+        if ($task -and $task.PSObject.Properties['State']) {
+            $payload.taskState = [string]$task.State
+        }
+        if ($taskInfo -and $taskInfo.PSObject.Properties['LastTaskResult']) {
+            $lastResult = Convert-ToScheduledTaskResultCode $taskInfo.LastTaskResult
+            $payload.taskLastResult = $lastResult
+            if ($null -ne $lastResult) {
+                $payload.taskLastResultHex = ('0x{0:X8}' -f ([uint32]([long]$lastResult -band 0xffffffff)))
+            }
+        }
+    }
+    catch {
+        $payload.error = [string]$_
+    }
+
+    Save-Json -Value ([pscustomobject]$payload) -Path $script:TaskStatePath
+    return 'captive-portal-task-state.json'
+}
+
+function Copy-RecoveryDiagnosticArtifacts {
+    $queueFiles = Copy-RecoveryDirectoryArtifact `
+        -SourceRoot 'C:\OpenPath\data\captive-portal-recovery-queue' `
+        -TargetRoot $script:RecoveryQueueArtifactRoot `
+        -ManifestPath $script:RecoveryQueueManifestPath `
+        -ArtifactPrefix 'captive-portal-recovery-queue'
+    $resultFiles = Copy-RecoveryDirectoryArtifact `
+        -SourceRoot 'C:\OpenPath\data\captive-portal-recovery-result' `
+        -TargetRoot $script:RecoveryArtifactRoot `
+        -ManifestPath $script:RecoveryManifestPath `
+        -ArtifactPrefix 'captive-portal-recovery-result'
+    $progressFiles = Copy-RecoveryDirectoryArtifact `
+        -SourceRoot 'C:\OpenPath\data\captive-portal-recovery-progress' `
+        -TargetRoot $script:RecoveryProgressArtifactRoot `
+        -ManifestPath $script:RecoveryProgressManifestPath `
+        -ArtifactPrefix 'captive-portal-recovery-progress'
+    $taskState = Save-CaptivePortalTaskStateArtifact
+
+    return [pscustomobject]@{
+        queueFiles = @($queueFiles)
+        resultFiles = @($resultFiles)
+        progressFiles = @($progressFiles)
+        queueManifestPath = 'captive-portal-recovery-queue-manifest.json'
+        resultManifestPath = 'captive-portal-recovery-result-manifest.json'
+        progressManifestPath = 'captive-portal-recovery-progress-manifest.json'
+        taskStatePath = $taskState
+    }
 }
 
 function Copy-OpenPathDirectRunnerNativeArtifact {
@@ -558,7 +655,9 @@ function Invoke-CaptivePortalNavigationRun {
     $markerAfterAuth = Get-PortalMarkerSnapshot
     Save-PortalMarkerSnapshot -Marker $markerAfterAuth -Path $script:MarkerAfterAuthPath
     $dnsRecoveredFromAcrylicOnly = Test-DnsSnapshotHasNonAcrylicServer -Snapshot $dnsAfter
-    $recoveryFiles = Copy-RecoveryResultArtifact -NativeResponses @($nativeResponse, $nativeReconcileResponse)
+    Copy-RecoveryResultArtifact -NativeResponses @($nativeResponse, $nativeReconcileResponse) | Out-Null
+    $recoveryDiagnostics = Copy-RecoveryDiagnosticArtifacts
+    $recoveryFiles = @($recoveryDiagnostics.resultFiles)
     $observationArtifact = Copy-CaptivePortalObservationArtifact
     $firefoxNavigation = Invoke-FirefoxRetryObservation -NativeResponse $nativeResponse
     $concurrency = Get-PortalConcurrencyObservation
@@ -624,6 +723,7 @@ function Invoke-CaptivePortalNavigationRun {
         postAuthProtectedModeRestored = $postAuthProtectedModeRestored
         limitedPostAuthUnproven = $limitedPostAuthUnproven
         recoveryArtifacts = $recoveryFiles
+        recoveryDiagnostics = $recoveryDiagnostics
         captivePortalObservationPath = $observationArtifact
         dnsBeforePath = 'captive-portal-dns-before.json'
         dnsDuringPath = 'captive-portal-dns-during.json'
@@ -650,6 +750,7 @@ try {
 catch {
     try {
         Ensure-ArtifactRoot
+        $recoveryDiagnostics = Copy-RecoveryDiagnosticArtifacts
         if (-not (Test-Path -LiteralPath $script:ResultPath)) {
             Save-Json -Value ([pscustomobject]@{
                 profile = 'captive-portal-navigation'
@@ -657,6 +758,7 @@ catch {
                 decision = 'insufficientEvidence'
                 fixtureDoesNotProveRealWeduCaptiveDns = $true
                 error = [string]$_
+                recoveryDiagnostics = $recoveryDiagnostics
                 writtenAt = (Get-Date).ToString('o')
             }) -Path $script:ResultPath
         }

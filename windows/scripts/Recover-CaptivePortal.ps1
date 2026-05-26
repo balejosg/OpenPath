@@ -163,6 +163,37 @@ function Write-OpenPathCaptivePortalRecoveryResult {
     return $targetPath
 }
 
+function Write-OpenPathCaptivePortalRecoveryProgress {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProgressPath,
+        [Parameter(Mandatory = $true)][string]$RequestId,
+        [ValidateSet('request-read', 'state-probe', 'enable', 'disable', 'write-result', 'error')]
+        [Parameter(Mandatory = $true)][string]$Phase,
+        [hashtable]$Payload = @{}
+    )
+
+    if (-not (Test-Path $ProgressPath -ErrorAction SilentlyContinue)) {
+        New-Item -ItemType Directory -Path $ProgressPath -Force | Out-Null
+    }
+
+    $progress = [ordered]@{
+        requestId = $RequestId
+        phase = $Phase
+        updatedAt = (Get-OpenPathRecoveryUtcNow).ToString('o')
+    }
+
+    foreach ($key in @($Payload.Keys | Sort-Object)) {
+        if ($key -in @('requestId', 'phase', 'updatedAt')) {
+            continue
+        }
+        $progress[$key] = $Payload[$key]
+    }
+
+    $targetPath = Join-Path $ProgressPath "$RequestId.json"
+    $progress | ConvertTo-Json -Depth 6 | Set-Content -Path $targetPath -Encoding ASCII
+    return $targetPath
+}
+
 function Get-OpenPathCaptivePortalRecoveryState {
     param([Parameter(Mandatory = $true)][DateTime]$NowUtc)
 
@@ -244,6 +275,7 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
     param(
         [Parameter(Mandatory = $true)][object]$RequestEnvelope,
         [Parameter(Mandatory = $true)][string]$ResultPath,
+        [Parameter(Mandatory = $true)][string]$ProgressPath,
         [Parameter(Mandatory = $true)][DateTime]$NowUtc
     )
 
@@ -261,7 +293,15 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
     }
 
     try {
+        Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'request-read' -Payload @{
+            operation = $operation
+            hasTriggerHost = (-not [string]::IsNullOrWhiteSpace($triggerHost))
+        } | Out-Null
+
         if (-not (Test-OpenPathRecoveryRequestFresh -RequestEnvelope $RequestEnvelope -NowUtc $NowUtc)) {
+            Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'write-result' -Payload @{
+                state = 'StaleRequest'
+            } | Out-Null
             Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
                 success = $false
                 state = 'StaleRequest'
@@ -273,11 +313,21 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
         }
 
         if ($operation -eq 'reconcile') {
+            Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'state-probe' -Payload @{
+                operation = $operation
+            } | Out-Null
             $state = Get-OpenPathCaptivePortalRecoveryState -NowUtc $NowUtc
             if ($state -eq 'Authenticated') {
                 Update-OpenPathCaptivePortalObservation -DetectedState Authenticated | Out-Null
+                Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'disable' -Payload @{
+                    state = [string]$state
+                } | Out-Null
                 $disabled = [bool](Disable-OpenPathCaptivePortalMode)
                 $postAuthEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence
+                Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'write-result' -Payload @{
+                    state = [string]$state
+                    disabled = [bool]$disabled
+                } | Out-Null
                 Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
                     success = $disabled
                     operation = $operation
@@ -300,6 +350,9 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
 
             $activeMarker = if (Test-OpenPathCaptivePortalModeActive) { Get-OpenPathCaptivePortalMarker } else { $null }
             $markerSummary = Get-OpenPathCaptivePortalRecoveryMarkerSummary -Marker $activeMarker
+            Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'write-result' -Payload @{
+                state = [string]$state
+            } | Out-Null
             Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
                 success = $false
                 operation = $operation
@@ -330,6 +383,10 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
                 }
             }
 
+                Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'write-result' -Payload @{
+                    state = 'RecentSuccess'
+                    recentSuccessSource = $recentSuccess.Source
+                } | Out-Null
                 Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
                     success = $true
                     operation = $operation
@@ -347,12 +404,19 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
                 return
         }
 
+        Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'state-probe' -Payload @{
+            operation = $operation
+        } | Out-Null
         $state = Get-OpenPathCaptivePortalRecoveryState -NowUtc $NowUtc
         $success = $false
         $activeMarker = $null
 
         if ($state -eq 'Portal') {
             Update-OpenPathCaptivePortalObservation -DetectedState Portal | Out-Null
+            Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'enable' -Payload @{
+                state = [string]$state
+                triggerHost = $triggerHost
+            } | Out-Null
             $success = [bool](Enable-OpenPathCaptivePortalMode -State Portal -PortalRecoveryDomains @($triggerHost))
             if ($success) {
                 $activeMarker = Get-OpenPathCaptivePortalMarker
@@ -362,6 +426,10 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
         $markerSummary = Get-OpenPathCaptivePortalRecoveryMarkerSummary -Marker $activeMarker -TriggerHost $triggerHost
         $portalModeActive = [bool]$success
 
+        Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'write-result' -Payload @{
+            state = [string]$state
+            portalModeActive = $portalModeActive
+        } | Out-Null
         Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
             success = $success
             operation = $operation
@@ -376,6 +444,9 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
         } | Out-Null
     }
     catch {
+        Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'error' -Payload @{
+            error = [string]$_
+        } | Out-Null
         Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
             success = $false
             state = 'Error'
@@ -392,6 +463,7 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
 
 $queuePath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue -OpenPathRoot $OpenPathRoot
 $resultPath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult -OpenPathRoot $OpenPathRoot
+$progressPath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryProgress -OpenPathRoot $OpenPathRoot
 $nowUtc = Get-OpenPathRecoveryUtcNow
 $requestEnvelopes = @(Get-OpenPathCaptivePortalRecoveryRequests -QueuePath $queuePath)
 
@@ -401,5 +473,5 @@ if ($requestEnvelopes.Count -eq 0) {
 }
 
 foreach ($requestEnvelope in $requestEnvelopes) {
-    Invoke-OpenPathCaptivePortalRecoveryRequest -RequestEnvelope $requestEnvelope -ResultPath $resultPath -NowUtc $nowUtc
+    Invoke-OpenPathCaptivePortalRecoveryRequest -RequestEnvelope $requestEnvelope -ResultPath $resultPath -ProgressPath $progressPath -NowUtc $nowUtc
 }

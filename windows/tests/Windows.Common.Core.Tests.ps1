@@ -24,6 +24,8 @@ Describe "Common Module" {
                 Should -Be (Join-Path $root "data\captive-portal-recovery-queue")
             Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult -OpenPathRoot $root |
                 Should -Be (Join-Path $root "data\captive-portal-recovery-result")
+            Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryProgress -OpenPathRoot $root |
+                Should -Be (Join-Path $root "data\captive-portal-recovery-progress")
             Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $root |
                 Should -Be (Join-Path $root "data\runtime-dependency-overlay.json")
             Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostRoot -OpenPathRoot $root |
@@ -39,6 +41,7 @@ Describe "Common Module" {
             foreach ($needle in @(
                 "'CaptivePortalRecoveryQueue'",
                 "'CaptivePortalRecoveryResult'",
+                "'CaptivePortalRecoveryProgress'",
                 "'CaptivePortalRecoveryQueue'",
                 "'CaptivePortalRecoveryResultRead'",
                 "elseif (`$Profile -eq 'CaptivePortalRecoveryQueue')",

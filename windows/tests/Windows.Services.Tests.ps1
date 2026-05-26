@@ -234,6 +234,40 @@ Describe "Services Module" {
             $result.waitMs | Should -Be 14000
         }
 
+        It "returns scheduled task diagnostics when a task wait times out" {
+            $runnerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "TaskRunner.ps1"
+            . $runnerPath
+            $runner = New-OpenPathFakeTaskRunner -RunResults @{
+                "OpenPath-CaptivePortalRecovery" = @{ success = $true; exitCode = 0; elapsedMs = 5; error = "" }
+            } -WaitResults @{
+                "OpenPath-CaptivePortalRecovery" = @{
+                    success = $false
+                    taskName = "OpenPath-CaptivePortalRecovery"
+                    timedOut = $true
+                    elapsedMs = 20000
+                    error = "Timed out waiting for task condition"
+                }
+            } -Diagnostics @{
+                "OpenPath-CaptivePortalRecovery" = @{
+                    taskState = "Running"
+                    taskLastResult = 267009
+                    taskLastResultHex = "0x00041301"
+                }
+            }
+
+            $result = Invoke-OpenPathScheduledTask `
+                -TaskName "OpenPath-CaptivePortalRecovery" `
+                -Runner $runner `
+                -TimeoutSeconds 20 `
+                -WaitCondition { return $false }
+
+            $result.success | Should -BeFalse
+            $result.timedOut | Should -BeTrue
+            $result.taskState | Should -Be "Running"
+            $result.taskLastResult | Should -Be 267009
+            $result.taskLastResultHex | Should -Be "0x00041301"
+        }
+
         It "Accepts SSE as a valid task type" -Skip:(-not (Test-FunctionExists 'Start-OpenPathTask')) {
             # Verify the SSE task type is accepted in the ValidateSet
             { Start-OpenPathTask -TaskType SSE -WhatIf } | Should -Not -Throw

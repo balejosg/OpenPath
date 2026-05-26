@@ -165,9 +165,14 @@ const BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_ARTIFACTS = [
 const CAPTIVE_PORTAL_NAVIGATION_ARTIFACTS = [
   'captive-portal-navigation-result.json',
   'captive-portal-dns-before.json',
+  'captive-portal-dns-during.json',
   'captive-portal-dns-after.json',
   'captive-portal-observation.json',
   'captive-portal-firefox-navigation-result.json',
+  'captive-portal-task-state.json',
+  'captive-portal-recovery-result-manifest.json',
+  'captive-portal-recovery-queue-manifest.json',
+  'captive-portal-recovery-progress-manifest.json',
   'direct-captive-portal-navigation-completion.json',
   'direct-captive-portal-navigation.out.log',
   'direct-captive-portal-navigation.err.log',
@@ -2200,6 +2205,36 @@ function collectGuestArtifact(options, artifactDir, sourcePath, localName, maxBy
   }
 }
 
+function collectCaptivePortalManifestArtifacts(options, artifactDir, manifestName, artifactPrefix) {
+  const manifestPath = `${CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT}\\${manifestName}`;
+  const recoveryManifest = readGuestArtifact(options, manifestPath, 1024 * 1024);
+  if (!recoveryManifest.exists) {
+    return;
+  }
+
+  writeFileSync(resolve(artifactDir, manifestName), recoveryManifest.content);
+  try {
+    const manifest = parseJsonText(recoveryManifest.content.toString('utf8'));
+    const artifactPattern = new RegExp(`^${artifactPrefix}[\\\\/][A-Za-z0-9_.-]+\\.json$`);
+    for (const artifactName of Array.isArray(manifest.files) ? manifest.files : []) {
+      if (!artifactPattern.test(artifactName)) {
+        continue;
+      }
+      collectGuestArtifact(
+        options,
+        artifactDir,
+        `${CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT}\\${artifactName.replace(/\//g, '\\')}`,
+        artifactName.replace(/[\\/]/g, '-'),
+        1024 * 1024
+      );
+    }
+  } catch (error) {
+    console.warn(
+      `warning: failed to parse ${manifestName}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
 function collectArtifacts(options, artifactDir, runnerRoot) {
   const resultsContent = readGuestFile(
     options,
@@ -2312,38 +2347,24 @@ function collectArtifacts(options, artifactDir, runnerRoot) {
     );
   }
 
-  const recoveryManifest = readGuestArtifact(
+  collectCaptivePortalManifestArtifacts(
     options,
-    `${CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT}\\captive-portal-recovery-result-manifest.json`,
-    1024 * 1024
+    artifactDir,
+    'captive-portal-recovery-result-manifest.json',
+    'captive-portal-recovery-result'
   );
-  if (recoveryManifest.exists) {
-    writeFileSync(
-      resolve(artifactDir, 'captive-portal-recovery-result-manifest.json'),
-      recoveryManifest.content
-    );
-    try {
-      const manifest = parseJsonText(recoveryManifest.content.toString('utf8'));
-      for (const artifactName of Array.isArray(manifest.files) ? manifest.files : []) {
-        if (!/^captive-portal-recovery-result[\\\/][A-Za-z0-9_.-]+\.json$/.test(artifactName)) {
-          continue;
-        }
-        collectGuestArtifact(
-          options,
-          artifactDir,
-          `${CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT}\\${artifactName.replace(/\//g, '\\')}`,
-          artifactName.replace(/[\\/]/g, '-'),
-          1024 * 1024
-        );
-      }
-    } catch (error) {
-      console.warn(
-        `warning: failed to parse captive portal recovery artifact manifest: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-  }
+  collectCaptivePortalManifestArtifacts(
+    options,
+    artifactDir,
+    'captive-portal-recovery-queue-manifest.json',
+    'captive-portal-recovery-queue'
+  );
+  collectCaptivePortalManifestArtifacts(
+    options,
+    artifactDir,
+    'captive-portal-recovery-progress-manifest.json',
+    'captive-portal-recovery-progress'
+  );
 }
 
 function runWindowsDirectDiagnosticMode({ mode, options, runnerRepoRoot }) {

@@ -169,6 +169,108 @@ function Get-NativeHostCaptivePortalRecoveryResultPath {
     return (Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult -OpenPathRoot $script:OpenPathRoot)
 }
 
+function Get-NativeHostCaptivePortalRecoveryProgressPath {
+    if ($env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH) {
+        return $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH
+    }
+
+    return (Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryProgress -OpenPathRoot $script:OpenPathRoot)
+}
+
+function Get-NativeHostCaptivePortalRecoveryFileSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$PhaseProperty = ''
+    )
+
+    $files = @()
+    $requestIds = @()
+    $latestPhase = ''
+
+    if (Test-Path $Path -ErrorAction SilentlyContinue) {
+        $files = @(Get-ChildItem -Path $Path -Filter '*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc, Name)
+    }
+
+    foreach ($file in $files) {
+        $requestId = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+        try {
+            $payload = Get-Content -Path $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            if ($payload.PSObject.Properties['requestId'] -and $payload.requestId) {
+                $requestId = [string]$payload.requestId
+            }
+        }
+        catch {
+            $payload = $null
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($requestId)) {
+            $requestIds += $requestId
+        }
+
+        if ($PhaseProperty -and $file -eq $files[-1] -and $payload -and $payload.PSObject.Properties[$PhaseProperty]) {
+            $latestPhase = [string]$payload.$PhaseProperty
+        }
+    }
+
+    return @{
+        count = [int]$files.Count
+        requestIds = @($requestIds | Select-Object -Unique)
+        latestPhase = $latestPhase
+    }
+}
+
+function Get-NativeHostCaptivePortalRecoveryDiagnosticSnapshot {
+    $queuePath = Get-NativeHostCaptivePortalRecoveryQueuePath
+    $resultPath = Get-NativeHostCaptivePortalRecoveryResultPath
+    $progressPath = Get-NativeHostCaptivePortalRecoveryProgressPath
+    $queue = Get-NativeHostCaptivePortalRecoveryFileSnapshot -Path $queuePath
+    $result = Get-NativeHostCaptivePortalRecoveryFileSnapshot -Path $resultPath
+    $progress = Get-NativeHostCaptivePortalRecoveryFileSnapshot -Path $progressPath -PhaseProperty 'phase'
+
+    return @{
+        queuePath = $queuePath
+        resultPath = $resultPath
+        progressPath = $progressPath
+        queueFileCount = [int]$queue.count
+        resultFileCount = [int]$result.count
+        progressFileCount = [int]$progress.count
+        pendingRequestIds = @($queue.requestIds)
+        resultRequestIds = @($result.requestIds)
+        progressRequestIds = @($progress.requestIds)
+        latestProgressPhase = [string]$progress.latestPhase
+    }
+}
+
+function Add-NativeHostCaptivePortalRecoveryDiagnostics {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Response,
+        [AllowNull()][hashtable]$TaskResult = $null
+    )
+
+    if ($TaskResult) {
+        foreach ($key in @(
+                'taskState',
+                'taskLastResult',
+                'taskLastResultHex',
+                'taskLastRunTime',
+                'taskNextRunTime',
+                'taskNumberOfMissedRuns',
+                'taskDiagnosticsError'
+            )) {
+            if ($TaskResult.ContainsKey($key)) {
+                $Response[$key] = $TaskResult[$key]
+            }
+        }
+    }
+
+    $snapshot = Get-NativeHostCaptivePortalRecoveryDiagnosticSnapshot
+    foreach ($key in $snapshot.Keys) {
+        $Response[$key] = $snapshot[$key]
+    }
+
+    return $Response
+}
+
 function Write-NativeHostCaptivePortalRecoveryRequest {
     param(
         [Parameter(Mandatory = $true)][string]$RequestId,
@@ -890,7 +992,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
             }
     }
     catch {
-        return @{
+        $response = @{
             success = $false
             action = $action
             operation = $operation
@@ -903,6 +1005,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
             waitMs = 0
             error = [string]$_
         }
+        return (Add-NativeHostCaptivePortalRecoveryDiagnostics -Response $response)
     }
 
     $taskNameResult = if ($taskResult.ContainsKey('taskName') -and $taskResult.taskName) { [string]$taskResult.taskName } else { $taskName }
@@ -911,7 +1014,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
 
     $result = Read-NativeHostCaptivePortalRecoveryResult -RequestId $requestId
     if (-not $result) {
-        return @{
+        $response = @{
             success = $false
             action = $action
             operation = $operation
@@ -924,6 +1027,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
             waitMs = $waitMs
             error = if ($taskResult.ContainsKey('error') -and $taskResult.error) { [string]$taskResult.error } else { 'Timed out waiting for captive portal recovery result' }
         }
+        return (Add-NativeHostCaptivePortalRecoveryDiagnostics -Response $response -TaskResult $taskResult)
     }
 
     $state = if ($result.PSObject.Properties['state'] -and $result.state) { [string]$result.state } else { 'Unknown' }

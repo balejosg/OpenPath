@@ -26,6 +26,7 @@ function Initialize-OpenPathInstallDirectories {
         "$OpenPathRoot\data\runtime-dependency-queue",
         "$OpenPathRoot\data\captive-portal-recovery-queue",
         "$OpenPathRoot\data\captive-portal-recovery-result",
+        "$OpenPathRoot\data\captive-portal-recovery-progress",
         "$OpenPathRoot\browser-extension\firefox",
         "$OpenPathRoot\browser-extension\firefox-release",
         "$OpenPathRoot\browser-extension\chromium-managed",
@@ -89,6 +90,17 @@ function Initialize-OpenPathInstallDirectories {
         }
         catch {
             Write-InstallerWarning "  WARNING: Could not enable read access for captive-portal-recovery-result: $_"
+        }
+    }
+
+    $captivePortalRecoveryProgressPath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryProgress -OpenPathRoot $OpenPathRoot
+    if (Test-Path $captivePortalRecoveryProgressPath) {
+        try {
+            Set-OpenPathCapabilityStorageAcl -Path $captivePortalRecoveryProgressPath -Profile CaptivePortalRecoveryResultRead
+            Write-InstallerVerbose "  Captive portal recovery progress read access granted for browser users"
+        }
+        catch {
+            Write-InstallerWarning "  WARNING: Could not enable read access for captive-portal-recovery-progress: $_"
         }
     }
 }

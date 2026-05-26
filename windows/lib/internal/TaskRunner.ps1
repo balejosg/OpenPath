@@ -1,3 +1,102 @@
+function ConvertTo-OpenPathTaskResultHex {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) {
+        return ''
+    }
+
+    try {
+        return ('0x{0:X8}' -f ([uint32]([long]$Value -band 0xffffffff)))
+    }
+    catch {
+        return ''
+    }
+}
+
+function Get-OpenPathScheduledTaskDiagnostics {
+    param([Parameter(Mandatory = $true)][string]$TaskName)
+
+    $diagnostics = @{
+        taskState = ''
+        taskLastResult = $null
+        taskLastResultHex = ''
+        taskLastRunTime = ''
+        taskNextRunTime = ''
+        taskNumberOfMissedRuns = $null
+        taskDiagnosticsError = ''
+    }
+
+    try {
+        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        if ($task -and $task.PSObject.Properties['State']) {
+            $diagnostics.taskState = [string]$task.State
+        }
+
+        $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+        if ($taskInfo) {
+            if ($taskInfo.PSObject.Properties['LastTaskResult']) {
+                $diagnostics.taskLastResult = [long]$taskInfo.LastTaskResult
+                $diagnostics.taskLastResultHex = ConvertTo-OpenPathTaskResultHex -Value $taskInfo.LastTaskResult
+            }
+            if ($taskInfo.PSObject.Properties['LastRunTime'] -and $taskInfo.LastRunTime) {
+                $diagnostics.taskLastRunTime = ([DateTime]$taskInfo.LastRunTime).ToString('o')
+            }
+            if ($taskInfo.PSObject.Properties['NextRunTime'] -and $taskInfo.NextRunTime) {
+                $diagnostics.taskNextRunTime = ([DateTime]$taskInfo.NextRunTime).ToString('o')
+            }
+            if ($taskInfo.PSObject.Properties['NumberOfMissedRuns']) {
+                $diagnostics.taskNumberOfMissedRuns = [int]$taskInfo.NumberOfMissedRuns
+            }
+        }
+    }
+    catch {
+        $diagnostics.taskDiagnosticsError = [string]$_
+    }
+
+    return $diagnostics
+}
+
+function Add-OpenPathScheduledTaskDiagnostics {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Result,
+        [AllowNull()][object]$Runner,
+        [Parameter(Mandatory = $true)][string]$TaskName
+    )
+
+    $diagnostics = $null
+    try {
+        if ($Runner -and $Runner.PSObject.Properties['GetDiagnostics']) {
+            $diagnostics = & $Runner.GetDiagnostics $TaskName
+        }
+    }
+    catch {
+        $diagnostics = @{ taskDiagnosticsError = [string]$_ }
+    }
+
+    if (-not $diagnostics) {
+        $diagnostics = Get-OpenPathScheduledTaskDiagnostics -TaskName $TaskName
+    }
+
+    foreach ($key in @(
+            'taskState',
+            'taskLastResult',
+            'taskLastResultHex',
+            'taskLastRunTime',
+            'taskNextRunTime',
+            'taskNumberOfMissedRuns',
+            'taskDiagnosticsError'
+        )) {
+        if ($diagnostics -is [System.Collections.IDictionary] -and $diagnostics.ContainsKey($key)) {
+            $Result[$key] = $diagnostics[$key]
+        }
+        elseif ($diagnostics.PSObject.Properties[$key]) {
+            $Result[$key] = $diagnostics.$key
+        }
+    }
+
+    return $Result
+}
+
 function New-OpenPathSchtasksRunner {
     [PSCustomObject]@{
         RunTask = {
@@ -46,6 +145,10 @@ function New-OpenPathSchtasksRunner {
                 error = 'Timed out waiting for task condition'
             }
         }
+        GetDiagnostics = {
+            param([string]$TaskName)
+            Get-OpenPathScheduledTaskDiagnostics -TaskName $TaskName
+        }
     }
 }
 
@@ -53,6 +156,7 @@ function New-OpenPathFakeTaskRunner {
     param(
         [hashtable]$RunResults = @{},
         [hashtable]$WaitResults = @{},
+        [hashtable]$Diagnostics = @{},
         [scriptblock]$OnRun = $null
     )
 
@@ -82,6 +186,14 @@ function New-OpenPathFakeTaskRunner {
             }
 
             @{ success = $false; taskName = $TaskName; timedOut = $true; elapsedMs = ($TimeoutSeconds * 1000); error = 'Timed out waiting for task condition' }
+        }.GetNewClosure()
+        GetDiagnostics = {
+            param([string]$TaskName)
+            if ($Diagnostics.ContainsKey($TaskName)) {
+                return $Diagnostics[$TaskName]
+            }
+
+            return @{}
         }.GetNewClosure()
     }
 }
@@ -141,7 +253,7 @@ function Invoke-OpenPathScheduledTask {
         $waitResult = & $Runner.WaitFor $selectedTaskName $WaitCondition $TimeoutSeconds $PollMilliseconds
         $waitMs = if ($waitResult.ContainsKey('elapsedMs')) { [int]$waitResult.elapsedMs } else { 0 }
         if ($waitResult.success -ne $true) {
-            return @{
+            $result = @{
                 success = $false
                 taskName = $selectedTaskName
                 fallback = $fallback
@@ -152,6 +264,7 @@ function Invoke-OpenPathScheduledTask {
                 timedOut = if ($waitResult.ContainsKey('timedOut')) { [bool]$waitResult.timedOut } else { $false }
                 error = if ($waitResult.ContainsKey('error') -and $waitResult.error) { [string]$waitResult.error } else { 'Scheduled task wait failed' }
             }
+            return (Add-OpenPathScheduledTaskDiagnostics -Result $result -Runner $Runner -TaskName $selectedTaskName)
         }
 
         return @{

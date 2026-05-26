@@ -982,6 +982,72 @@ Describe "Browser Module - Native Host" {
             }
         }
 
+        It "Returns task and storage diagnostics when captive portal recovery times out" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+
+            $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
+            $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-result-" + [guid]::NewGuid().ToString('N'))
+            $progressPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-progress-" + [guid]::NewGuid().ToString('N'))
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH = $queuePath
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH = $resultPath
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH = $progressPath
+            try {
+                function Invoke-OpenPathScheduledTask {
+                    param(
+                        [string]$TaskName,
+                        [scriptblock]$WaitCondition
+                    )
+                    $request = Get-ChildItem -Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -Filter *.json |
+                        Select-Object -First 1 |
+                        Get-Content -Raw |
+                        ConvertFrom-Json
+                    New-Item -ItemType Directory -Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH -Force | Out-Null
+                    @{
+                        requestId = [string]$request.requestId
+                        phase = 'state-probe'
+                    } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH "$($request.requestId).json")
+                    & $WaitCondition | Should -BeFalse
+                    return @{
+                        success = $false
+                        taskName = $TaskName
+                        triggerMs = 2
+                        waitMs = 20000
+                        timedOut = $true
+                        error = 'Timed out waiting for task condition'
+                        taskState = 'Running'
+                        taskLastResult = 267009
+                        taskLastResultHex = '0x00041301'
+                    }
+                }
+
+                $result = Invoke-NativeHostCaptivePortalRecoveryAction `
+                    -Message ([PSCustomObject]@{ triggerHost = 'portal.example' })
+
+                $result.success | Should -BeFalse
+                $result.state | Should -Be 'Timeout'
+                $result.portalModeActive | Should -BeFalse
+                $result.taskState | Should -Be 'Running'
+                $result.taskLastResult | Should -Be 267009
+                $result.taskLastResultHex | Should -Be '0x00041301'
+                $result.queuePath | Should -Be $queuePath
+                $result.resultPath | Should -Be $resultPath
+                $result.progressPath | Should -Be $progressPath
+                $result.queueFileCount | Should -Be 1
+                $result.resultFileCount | Should -Be 0
+                $result.progressFileCount | Should -Be 1
+                @($result.pendingRequestIds) | Should -Contain $result.requestId
+                @($result.progressRequestIds) | Should -Contain $result.requestId
+                $result.latestProgressPhase | Should -Be 'state-probe'
+            }
+            finally {
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -ErrorAction SilentlyContinue
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -ErrorAction SilentlyContinue
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH -ErrorAction SilentlyContinue
+                Remove-Item $queuePath, $resultPath, $progressPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Returns clean non-portal captive portal recovery fallback" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             . $nativeHostActionsPath

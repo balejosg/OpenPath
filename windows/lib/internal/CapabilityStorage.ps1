@@ -34,6 +34,7 @@ function Get-OpenPathCapabilityStoragePath {
             'RuntimeDependencyQueue',
             'CaptivePortalRecoveryQueue',
             'CaptivePortalRecoveryResult',
+            'CaptivePortalRecoveryProgress',
             'RuntimeDependencyOverlay',
             'RuntimeDependencyOverlayParent',
             'FirefoxNativeHostRoot',
@@ -61,6 +62,12 @@ function Get-OpenPathCapabilityStoragePath {
         }
         'CaptivePortalRecoveryResult' {
             return (Join-OpenPathCapabilityStoragePath -Parent (Get-OpenPathCapabilityStorageRoot -OpenPathRoot $OpenPathRoot) -Child 'captive-portal-recovery-result')
+        }
+        'CaptivePortalRecoveryProgress' {
+            if ($env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH) {
+                return $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH
+            }
+            return (Join-OpenPathCapabilityStoragePath -Parent (Get-OpenPathCapabilityStorageRoot -OpenPathRoot $OpenPathRoot) -Child 'captive-portal-recovery-progress')
         }
         'RuntimeDependencyOverlay' {
             if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH) {

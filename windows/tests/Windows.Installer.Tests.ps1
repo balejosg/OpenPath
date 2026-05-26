@@ -214,8 +214,10 @@ Describe "Installer" {
             Assert-ContentContainsAll -Content $content -Needles @(
                 'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue',
                 'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult',
+                'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryProgress',
                 'Set-OpenPathCapabilityStorageAcl -Path $captivePortalRecoveryQueuePath -Profile CaptivePortalRecoveryQueue',
-                'Set-OpenPathCapabilityStorageAcl -Path $captivePortalRecoveryResultPath -Profile CaptivePortalRecoveryResultRead'
+                'Set-OpenPathCapabilityStorageAcl -Path $captivePortalRecoveryResultPath -Profile CaptivePortalRecoveryResultRead',
+                'Set-OpenPathCapabilityStorageAcl -Path $captivePortalRecoveryProgressPath -Profile CaptivePortalRecoveryResultRead'
             )
         }
 
