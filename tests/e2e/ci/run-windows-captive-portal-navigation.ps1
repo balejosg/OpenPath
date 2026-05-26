@@ -71,6 +71,21 @@ function Save-Json {
     $Value | ConvertTo-Json -Depth $Depth | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+function Convert-ToScheduledTaskResultCode {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    try {
+        return [long]$Value
+    }
+    catch {
+        return $null
+    }
+}
+
 function Test-ProtectedModeBlocksFixtureHost {
     $result = [pscustomobject]@{
         host = $script:FixtureHost
@@ -388,6 +403,8 @@ function Get-PortalConcurrencyObservation {
             -replace '(?m)^(\s*\d{1,3}(?:\.\d{1,3}){3}\s+).+$', '$1<redacted-host>'
     }
 
+    $taskLastResult = if ($taskInfo) { Convert-ToScheduledTaskResultCode $taskInfo.LastTaskResult } else { $null }
+
     return [pscustomobject]@{
         watchdogRecoveryConcurrencyHook = 'Portal watchdog+recovery concurrency observation'
         expectedOneActivePortalMarker = ($activeMarkers.Count -eq 1)
@@ -407,8 +424,8 @@ function Get-PortalConcurrencyObservation {
         upstreamCapturedAt = if ($activeMarker -and $activeMarker.PSObject.Properties['upstreamCapturedAt']) { [string]$activeMarker.upstreamCapturedAt } else { '' }
         passthroughEgress = if ($activeMarker -and $activeMarker.PSObject.Properties['passthroughEgress']) { $activeMarker.passthroughEgress } else { $null }
         acrylicHostsSnapshotRedacted = $hostsSnapshot
-        noFailedTask = if ($taskInfo) { [int]$taskInfo.LastTaskResult -eq 0 } else { $false }
-        taskLastResult = if ($taskInfo) { [int]$taskInfo.LastTaskResult } else { $null }
+        noFailedTask = ($null -ne $taskLastResult) -and ($taskLastResult -eq 0)
+        taskLastResult = $taskLastResult
         noPrematureExit = Test-Path -LiteralPath $activeMarkerPath
     }
 }

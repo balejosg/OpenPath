@@ -617,6 +617,9 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(captiveScript, /postAuthProtectedModeRestored/);
     assert.match(captiveScript, /operation = 'reconcile'/);
     assert.match(captiveScript, /noFailedTask/);
+    assert.match(captiveScript, /Convert-ToScheduledTaskResultCode/);
+    assert.match(captiveScript, /\[long\]\$Value/);
+    assert.doesNotMatch(captiveScript, /\[int\]\$taskInfo\.LastTaskResult/);
     assert.match(captiveScript, /noPrematureExit/);
     assert.match(captiveScript, /blockedByOpenPath/);
   });
