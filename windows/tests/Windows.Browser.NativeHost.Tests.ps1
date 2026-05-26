@@ -766,6 +766,10 @@ Describe "Browser Module - Native Host" {
                     state = 'Portal'
                     success = $true
                     portalModeActive = $true
+                    activeMarkerMode = 'limited'
+                    allowedHosts = @('portal.example')
+                    recoveryHostsApplied = $true
+                    recentSuccessEligible = $true
                 } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $resultPath 'recent-request.json')
 
                 function Invoke-OpenPathScheduledTask {
@@ -793,6 +797,129 @@ Describe "Browser Module - Native Host" {
             }
         }
 
+        It "Does not treat an active passthrough marker as terminal success even for the same trigger host" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-passthrough-" + [guid]::NewGuid().ToString('N'))
+            $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
+            $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-result-" + [guid]::NewGuid().ToString('N'))
+            $script:capturedTaskNames = @()
+            $script:OpenPathRoot = $tempRoot
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH = $queuePath
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH = $resultPath
+            try {
+                New-Item -ItemType Directory -Path (Join-Path $tempRoot 'data') -Force | Out-Null
+                @{
+                    active = $true
+                    state = 'Portal'
+                    mode = 'passthrough'
+                    allowedHosts = @('portal.example')
+                    expiresAt = ([DateTime]::UtcNow.AddMinutes(5)).ToString('o')
+                } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $tempRoot 'data\captive-portal-active.json')
+
+                function Invoke-OpenPathScheduledTask {
+                    param(
+                        [string]$TaskName,
+                        [object]$Runner,
+                        [int]$TimeoutSeconds,
+                        [scriptblock]$WaitCondition,
+                        [int]$PollMilliseconds
+                    )
+                    $script:capturedTaskNames += $TaskName
+                    $request = Get-ChildItem -Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -Filter *.json |
+                        Select-Object -First 1 |
+                        Get-Content -Raw |
+                        ConvertFrom-Json
+                    New-Item -ItemType Directory -Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -Force | Out-Null
+                    @{
+                        requestId = [string]$request.requestId
+                        state = 'Portal'
+                        success = $true
+                        portalModeActive = $true
+                    } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH "$($request.requestId).json")
+                    & $WaitCondition | Out-Null
+                    return @{ success = $true; taskName = $TaskName; triggerMs = 1; waitMs = 2 }
+                }
+
+                $result = Invoke-NativeHostCaptivePortalRecoveryAction `
+                    -Message ([PSCustomObject]@{ triggerHost = 'portal.example'; tabId = 27 })
+
+                $result.success | Should -BeTrue
+                $result.state | Should -Be 'Portal'
+                $result.portalModeActive | Should -BeTrue
+                $result.triggerMs | Should -Be 1
+                $result.waitMs | Should -Be 2
+                @($script:capturedTaskNames) | Should -Be @('OpenPath-CaptivePortalRecovery')
+            }
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -ErrorAction SilentlyContinue
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -ErrorAction SilentlyContinue
+                Remove-Item $tempRoot, $queuePath, $resultPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Does not reuse recent scheduled-task success when Acrylic update evidence is missing" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+
+            $queuePath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-queue-" + [guid]::NewGuid().ToString('N'))
+            $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-captive-result-" + [guid]::NewGuid().ToString('N'))
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH = $queuePath
+            $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH = $resultPath
+            $script:capturedTaskNames = @()
+            try {
+                New-Item -ItemType Directory -Path $resultPath -Force | Out-Null
+                @{
+                    requestId = 'recent-request'
+                    state = 'Portal'
+                    success = $true
+                    portalModeActive = $true
+                    recentSuccessEligible = $false
+                    activeMarkerMode = 'passthrough'
+                } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $resultPath 'recent-request.json')
+
+                function Invoke-OpenPathScheduledTask {
+                    param(
+                        [string]$TaskName,
+                        [object]$Runner,
+                        [int]$TimeoutSeconds,
+                        [scriptblock]$WaitCondition,
+                        [int]$PollMilliseconds
+                    )
+                    $script:capturedTaskNames += $TaskName
+                    $request = Get-ChildItem -Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -Filter *.json |
+                        Select-Object -First 1 |
+                        Get-Content -Raw |
+                        ConvertFrom-Json
+                    @{
+                        requestId = [string]$request.requestId
+                        state = 'Portal'
+                        success = $true
+                        portalModeActive = $true
+                    } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH "$($request.requestId).json")
+                    & $WaitCondition | Out-Null
+                    return @{ success = $true; taskName = $TaskName; triggerMs = 3; waitMs = 4 }
+                }
+
+                $result = Invoke-NativeHostCaptivePortalRecoveryAction `
+                    -Message ([PSCustomObject]@{ triggerHost = 'portal.example'; tabId = 28 })
+
+                $result.success | Should -BeTrue
+                $result.state | Should -Be 'Portal'
+                $result.requestId | Should -Not -Be 'recent-request'
+                @($script:capturedTaskNames) | Should -Be @('OpenPath-CaptivePortalRecovery')
+            }
+            finally {
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -ErrorAction SilentlyContinue
+                Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -ErrorAction SilentlyContinue
+                Remove-Item $queuePath, $resultPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Does not treat a recent passthrough marker as terminal success when a new trigger host arrives" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
             $content = Get-Content $scriptPath -Raw
@@ -806,10 +933,11 @@ Describe "Browser Module - Native Host" {
             )
             Assert-ContentContainsAll -Content $nativeContent -Needles @(
                 'Get-NativeHostCaptivePortalActiveMarker',
-                '$recentSuccess.Source -eq ''active-marker''',
-                '$activeMarker.mode -eq ''passthrough''',
+                'Get-NativeHostCaptivePortalMarkerSummary',
+                'Test-NativeHostRecentCaptivePortalSuccessEligible',
+                'RecentSuccessEligible',
                 'allowedHosts',
-                '$passthroughNeedsExactHost',
+                'recentSuccessEligible',
                 'Invoke-OpenPathScheduledTask'
             )
         }

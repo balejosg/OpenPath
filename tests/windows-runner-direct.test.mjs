@@ -595,13 +595,27 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(nativeRecoveryVerifiedExpression, /nativeResponse\.success/);
     assert.doesNotMatch(nativeRecoveryVerifiedExpression, /dnsRecoveredFromAcrylicOnly/);
     assert.match(captiveScript, /browserNavigationVerified = \$false/);
-    assert.match(captiveScript, /targetPlatformSymptomCleared = \$false/);
+    const targetPlatformSymptomClearedExpression =
+      captiveScript.match(/\$targetPlatformSymptomCleared\s*=\s*\[bool\]\(([^)]*)\)/)?.[1] ?? '';
+    assert.match(targetPlatformSymptomClearedExpression, /browserNavigationVerified/);
+    assert.match(targetPlatformSymptomClearedExpression, /postAuthProtectedModeRestored/);
     assert.match(captiveScript, /nativeStateIsPortal/);
     assert.match(captiveScript, /browserObservationLevel/);
     assert.match(captiveScript, /headless-process-launch-only/);
     assert.match(captiveScript, /target-platform evidence must inspect the real browser/);
     assert.match(captiveScript, /expectedOneActivePortalMarker/);
     assert.match(captiveScript, /watchdogRecoveryConcurrencyHook/);
+    assert.match(captiveScript, /portalExitRoute/);
+    assert.match(captiveScript, /markerBeforeAuth/);
+    assert.match(captiveScript, /markerAfterAuth/);
+    assert.match(captiveScript, /captive-portal-dns-during\.json/);
+    assert.match(captiveScript, /localDnsLoopbackRestored/);
+    assert.match(captiveScript, /acrylicNormalRestored/);
+    assert.match(captiveScript, /blockedDomainStillBlocked/);
+    assert.match(captiveScript, /allowedDomainFunctional/);
+    assert.match(captiveScript, /firewallExpectedActive/);
+    assert.match(captiveScript, /postAuthProtectedModeRestored/);
+    assert.match(captiveScript, /operation = 'reconcile'/);
     assert.match(captiveScript, /noFailedTask/);
     assert.match(captiveScript, /noPrematureExit/);
     assert.match(captiveScript, /blockedByOpenPath/);

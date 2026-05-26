@@ -55,12 +55,23 @@ function Invoke-OpenPathWatchdogPrechecks {
     }
 
     $portalObservation = Update-OpenPathCaptivePortalObservation -DetectedState $captiveState
+    $activeMarker = if ($portalModeActive) { Get-OpenPathCaptivePortalMarker } else { $null }
+    $markerMode = Get-OpenPathCaptivePortalMarkerMode -Marker $activeMarker
 
-    if ($portalObservation.ShouldEnterPortal) {
+    if ($portalModeActive -and $markerMode -eq 'passthrough' -and $captiveState -eq 'Authenticated') {
+        $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
+        if (-not $disabled) {
+            Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN
+        }
+    }
+    elseif ($portalObservation.ShouldEnterPortal) {
         Enable-OpenPathCaptivePortalMode -State $captiveState | Out-Null
     }
     elseif ($portalObservation.ShouldExitPortal -and $portalModeActive) {
-        Disable-OpenPathCaptivePortalMode -Config $Config | Out-Null
+        $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
+        if (-not $disabled) {
+            Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN
+        }
     }
 
     return [PSCustomObject]@{
@@ -104,6 +115,61 @@ function Get-OpenPathActiveIpv4AdaptersMissingLocalDns {
     return @($missingAdapters)
 }
 
+function Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks {
+    param(
+        [AllowNull()]
+        [PSCustomObject]$Config,
+
+        [Parameter(Mandatory = $true)]
+        [bool]$PortalModeActive,
+
+        [string]$CaptiveState = 'Unknown'
+    )
+
+    $issues = @()
+    if (-not $PortalModeActive) {
+        return [PSCustomObject]@{
+            Issues = @()
+            MarkerMode = ''
+            LocalDnsConfigured = $null
+        }
+    }
+
+    $marker = Get-OpenPathCaptivePortalMarker
+    if (-not $marker) {
+        return [PSCustomObject]@{
+            Issues = @('Captive portal marker missing while portal mode is active')
+            MarkerMode = ''
+            LocalDnsConfigured = $null
+        }
+    }
+
+    $markerMode = Get-OpenPathCaptivePortalMarkerMode -Marker $marker
+    if ($markerMode -ne 'passthrough') {
+        return [PSCustomObject]@{
+            Issues = @()
+            MarkerMode = $markerMode
+            LocalDnsConfigured = $null
+        }
+    }
+
+    $adaptersMissingLocalDns = @(Get-OpenPathActiveIpv4AdaptersMissingLocalDns)
+    $localDnsConfigured = ($adaptersMissingLocalDns.Count -eq 0)
+    $shouldAttemptClose = ($localDnsConfigured -or $captiveState -eq 'Authenticated')
+    if ($shouldAttemptClose) {
+        $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
+        if (-not $disabled) {
+            Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN
+        }
+    }
+
+    return [PSCustomObject]@{
+        Issues = @($issues)
+        MarkerMode = $markerMode
+        LocalDnsConfigured = $localDnsConfigured
+    }
+}
+
 function Invoke-OpenPathWatchdogChecks {
     param(
         [AllowNull()]
@@ -111,6 +177,8 @@ function Invoke-OpenPathWatchdogChecks {
 
         [Parameter(Mandatory = $true)]
         [bool]$PortalModeActive,
+
+        [string]$CaptiveState = 'Unknown',
 
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
@@ -139,6 +207,12 @@ function Invoke-OpenPathWatchdogChecks {
     catch {
         Write-OpenPathLog "Watchdog: Error reading local whitelist state: $_" -Level WARN
     }
+
+    $passthroughEmergency = Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks `
+        -Config $Config `
+        -PortalModeActive:$PortalModeActive `
+        -CaptiveState $CaptiveState
+    $issues += @($passthroughEmergency.Issues)
 
     $shouldRunProtectedModeChecks = [bool]$policyState.ProtectedModeEligible
 

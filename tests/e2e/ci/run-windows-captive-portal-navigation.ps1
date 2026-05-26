@@ -10,11 +10,14 @@ $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $script:ArtifactsRoot = [System.IO.Path]::GetFullPath($ArtifactsRoot)
 $script:ResultPath = Join-Path $script:ArtifactsRoot 'captive-portal-navigation-result.json'
 $script:DnsBeforePath = Join-Path $script:ArtifactsRoot 'captive-portal-dns-before.json'
+$script:DnsDuringPath = Join-Path $script:ArtifactsRoot 'captive-portal-dns-during.json'
 $script:DnsAfterPath = Join-Path $script:ArtifactsRoot 'captive-portal-dns-after.json'
 $script:FirefoxNavigationResultPath = Join-Path $script:ArtifactsRoot 'captive-portal-firefox-navigation-result.json'
 $script:CaptivePortalObservationPath = Join-Path $script:ArtifactsRoot 'captive-portal-observation.json'
 $script:RecoveryArtifactRoot = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-result'
 $script:RecoveryManifestPath = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-result-manifest.json'
+$script:MarkerBeforeAuthPath = Join-Path $script:ArtifactsRoot 'captive-portal-marker-before-auth.json'
+$script:MarkerAfterAuthPath = Join-Path $script:ArtifactsRoot 'captive-portal-marker-after-auth.json'
 $script:FixtureStatePath = 'C:\OpenPath\data\captive-portal-recovery-fixture-state.json'
 $script:InstalledOpenPathRoot = 'C:\OpenPath'
 $script:InstalledRecoveryScriptPath = 'C:\OpenPath\scripts\Recover-CaptivePortal.ps1'
@@ -157,17 +160,18 @@ function Invoke-NativeHostAction {
 }
 
 function Copy-RecoveryResultArtifact {
-    param([AllowNull()][object]$NativeResponse)
+    param([AllowNull()][object[]]$NativeResponses)
 
     $files = @()
-    $requestId = if ($NativeResponse -and $NativeResponse.PSObject.Properties['requestId']) {
-        [string]$NativeResponse.requestId
-    }
-    else {
-        ''
-    }
+    $requestIds = @(
+        @($NativeResponses) |
+            Where-Object { $_ -and $_.PSObject.Properties['requestId'] } |
+            ForEach-Object { [string]$_.requestId } |
+            Where-Object { $_ -and $_ -match '^[A-Za-z0-9_.-]+$' } |
+            Select-Object -Unique
+    )
 
-    if ($requestId -and $requestId -match '^[A-Za-z0-9_.-]+$') {
+    foreach ($requestId in $requestIds) {
         $sourcePath = Join-Path 'C:\OpenPath\data\captive-portal-recovery-result' "$requestId.json"
         $targetPath = Join-Path $script:RecoveryArtifactRoot "$requestId.json"
         if (Test-Path -LiteralPath $sourcePath) {
@@ -178,7 +182,7 @@ function Copy-RecoveryResultArtifact {
 
     Save-Json -Value ([pscustomobject]@{
         files = $files
-        requestId = $requestId
+        requestIds = @($requestIds)
         sourceRoot = 'C:\OpenPath\data\captive-portal-recovery-result'
     }) -Path $script:RecoveryManifestPath
 
@@ -296,6 +300,27 @@ function Restore-LocalOnlyCaptivePortalRecoveryFixture {
     }
 }
 
+function Set-LocalOnlyCaptivePortalRecoveryFixtureState {
+    param(
+        [ValidateSet('Portal', 'Authenticated', 'NoNetwork')]
+        [string]$State
+    )
+
+    $payload = if (Test-Path -LiteralPath $script:FixtureStatePath) {
+        Get-Content -LiteralPath $script:FixtureStatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    }
+    else {
+        [pscustomobject]@{
+            purpose = 'direct-runner-captive-portal-navigation'
+            fixtureDoesNotProveRealWeduCaptiveDns = $true
+        }
+    }
+
+    $payload.state = $State
+    $payload.expiresAtUtc = ([DateTime]::UtcNow.AddMinutes(5)).ToString('o')
+    Save-Json -Value $payload -Path $script:FixtureStatePath
+}
+
 function Copy-CaptivePortalObservationArtifact {
     $sourcePath = 'C:\OpenPath\data\captive-portal-observation.json'
     if (Test-Path -LiteralPath $sourcePath) {
@@ -304,6 +329,30 @@ function Copy-CaptivePortalObservationArtifact {
     }
 
     return ''
+}
+
+function Get-PortalMarkerSnapshot {
+    $activeMarkerPath = 'C:\OpenPath\data\captive-portal-active.json'
+    if (-not (Test-Path -LiteralPath $activeMarkerPath)) {
+        return $null
+    }
+
+    try {
+        return (Get-Content -LiteralPath $activeMarkerPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
+    }
+    catch {
+        return [pscustomobject]@{ readError = [string]$_ }
+    }
+}
+
+function Save-PortalMarkerSnapshot {
+    param(
+        [AllowNull()][object]$Marker,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $payload = if ($Marker) { $Marker } else { [pscustomobject]@{ active = $false } }
+    Save-Json -Value $payload -Path $Path
 }
 
 function Get-PortalConcurrencyObservation {
@@ -404,6 +453,45 @@ function Invoke-FirefoxRetryObservation {
     return $navigationResult
 }
 
+function Test-BlockedDomainStillBlocked {
+    $domain = 'this-should-be-blocked-test-12345.com'
+    try {
+        $result = Resolve-DnsName -Name $domain -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue
+        return [pscustomobject]@{
+            domain = $domain
+            blocked = ($null -eq $result)
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            domain = $domain
+            blocked = $true
+            error = [string]$_
+        }
+    }
+}
+
+function Test-AllowedDomainFunctional {
+    $domain = 'www.msftconnecttest.com'
+    try {
+        $answers = @(Resolve-DnsName -Name $domain -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
+        return [pscustomobject]@{
+            domain = $domain
+            functional = ($answers.Count -gt 0)
+            addresses = @($answers | Where-Object { $_.IPAddress } | ForEach-Object { [string]$_.IPAddress })
+            error = ''
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            domain = $domain
+            functional = $false
+            addresses = @()
+            error = [string]$_
+        }
+    }
+}
+
 function Invoke-CaptivePortalNavigationRun {
     Ensure-ArtifactRoot
 
@@ -419,6 +507,7 @@ function Invoke-CaptivePortalNavigationRun {
 
     $protectedBlock = Test-ProtectedModeBlocksFixtureHost
     $nativeResponse = $null
+    $nativeReconcileResponse = $null
     if (-not $protectedBlock.blocked) {
         throw "Protected mode did not block fixture host $script:FixtureHost through 127.0.0.1."
     }
@@ -431,6 +520,17 @@ function Invoke-CaptivePortalNavigationRun {
             triggerHost = $script:FixtureHost
             tabId = 1
         }
+        $dnsDuring = Get-DnsAddressSnapshot
+        Save-Json -Value $dnsDuring -Path $script:DnsDuringPath
+        $markerBeforeAuth = Get-PortalMarkerSnapshot
+        Save-PortalMarkerSnapshot -Marker $markerBeforeAuth -Path $script:MarkerBeforeAuthPath
+        Set-LocalOnlyCaptivePortalRecoveryFixtureState -State Authenticated
+        $nativeReconcileResponse = Invoke-NativeHostAction -Message @{
+            action = 'recover-captive-portal-navigation'
+            operation = 'reconcile'
+            portalState = 'Authenticated'
+            tabId = 1
+        }
     }
     finally {
         Restore-LocalOnlyCaptivePortalRecoveryFixture
@@ -438,8 +538,10 @@ function Invoke-CaptivePortalNavigationRun {
 
     $dnsAfter = Get-DnsAddressSnapshot
     Save-Json -Value $dnsAfter -Path $script:DnsAfterPath
+    $markerAfterAuth = Get-PortalMarkerSnapshot
+    Save-PortalMarkerSnapshot -Marker $markerAfterAuth -Path $script:MarkerAfterAuthPath
     $dnsRecoveredFromAcrylicOnly = Test-DnsSnapshotHasNonAcrylicServer -Snapshot $dnsAfter
-    $recoveryFiles = Copy-RecoveryResultArtifact -NativeResponse $nativeResponse
+    $recoveryFiles = Copy-RecoveryResultArtifact -NativeResponses @($nativeResponse, $nativeReconcileResponse)
     $observationArtifact = Copy-CaptivePortalObservationArtifact
     $firefoxNavigation = Invoke-FirefoxRetryObservation -NativeResponse $nativeResponse
     $concurrency = Get-PortalConcurrencyObservation
@@ -447,24 +549,67 @@ function Invoke-CaptivePortalNavigationRun {
     $portalModeActive = Test-Path -LiteralPath $portalActivePath
     $nativeStateIsPortal = ([string]$nativeResponse.state -eq 'Portal')
     $nativeRecoveryVerified = [bool]($protectedBlock.blocked -and $portalModeActive -and $nativeResponse.success -and $nativeStateIsPortal)
+    $blockedDomainStillBlocked = Test-BlockedDomainStillBlocked
+    $allowedDomainFunctional = Test-AllowedDomainFunctional
+    $limitedPostAuthUnproven = [bool]($markerAfterAuth -and $markerAfterAuth.PSObject.Properties['mode'] -and [string]$markerAfterAuth.mode -eq 'limited')
+    $portalExitRoute = if ($limitedPostAuthUnproven) {
+        'limited-post-auth-unproven'
+    }
+    elseif ($nativeReconcileResponse -and $nativeReconcileResponse.PSObject.Properties['portalExitRoute']) {
+        [string]$nativeReconcileResponse.portalExitRoute
+    }
+    else {
+        ''
+    }
+    $postAuthProtectedModeRestored = [bool](
+        $nativeReconcileResponse.success -and
+        $nativeReconcileResponse.protectedModeRestored -and
+        $nativeReconcileResponse.localDnsLoopbackRestored -and
+        $nativeReconcileResponse.acrylicNormalRestored -and
+        $nativeReconcileResponse.dnsResolutionHealthy -and
+        $nativeReconcileResponse.sinkholeHealthy -and
+        ((-not $nativeReconcileResponse.firewallExpectedActive) -or $nativeReconcileResponse.firewallHealthy) -and
+        $nativeReconcileResponse.markerCleared -and
+        $blockedDomainStillBlocked.blocked -and
+        $allowedDomainFunctional.functional -and
+        (-not $limitedPostAuthUnproven)
+    )
+    $browserNavigationVerified = $false
+    $targetPlatformSymptomCleared = [bool]($browserNavigationVerified -and $postAuthProtectedModeRestored)
 
     $result = [pscustomobject]@{
         profile = 'captive-portal-navigation'
-        success = $nativeRecoveryVerified
-        evidenceLevel = 'native-recovery-direct-runner'
+        success = $postAuthProtectedModeRestored
+        evidenceLevel = 'post-auth-recovery-direct-runner'
         nativeRecoveryVerified = $nativeRecoveryVerified
-        browserNavigationVerified = $false
-        targetPlatformSymptomCleared = $false
+        browserNavigationVerified = $browserNavigationVerified
+        targetPlatformSymptomCleared = $targetPlatformSymptomCleared
         fixture = $fixtureSummary
         protectedModeBlock = $protectedBlock
         nativeAction = $nativeResponse
+        nativeReconcileAction = $nativeReconcileResponse
         portalModeActive = $portalModeActive
         portalActivePath = $portalActivePath
         nativeStateIsPortal = $nativeStateIsPortal
         dnsRecoveredFromAcrylicOnly = $dnsRecoveredFromAcrylicOnly
+        portalExitRoute = $portalExitRoute
+        markerBeforeAuth = if ($markerBeforeAuth) { $markerBeforeAuth } else { [pscustomobject]@{ active = $false } }
+        markerAfterAuth = if ($markerAfterAuth) { $markerAfterAuth } else { [pscustomobject]@{ active = $false } }
+        blockedDomainStillBlocked = $blockedDomainStillBlocked
+        allowedDomainFunctional = $allowedDomainFunctional
+        localDnsLoopbackRestored = if ($nativeReconcileResponse) { [bool]$nativeReconcileResponse.localDnsLoopbackRestored } else { $false }
+        acrylicNormalRestored = if ($nativeReconcileResponse) { [bool]$nativeReconcileResponse.acrylicNormalRestored } else { $false }
+        dnsResolutionHealthy = if ($nativeReconcileResponse) { [bool]$nativeReconcileResponse.dnsResolutionHealthy } else { $false }
+        sinkholeHealthy = if ($nativeReconcileResponse) { [bool]$nativeReconcileResponse.sinkholeHealthy } else { $false }
+        firewallExpectedActive = if ($nativeReconcileResponse) { [bool]$nativeReconcileResponse.firewallExpectedActive } else { $false }
+        firewallHealthy = if ($nativeReconcileResponse) { [bool]$nativeReconcileResponse.firewallHealthy } else { $false }
+        markerCleared = if ($nativeReconcileResponse) { [bool]$nativeReconcileResponse.markerCleared } else { $false }
+        postAuthProtectedModeRestored = $postAuthProtectedModeRestored
+        limitedPostAuthUnproven = $limitedPostAuthUnproven
         recoveryArtifacts = $recoveryFiles
         captivePortalObservationPath = $observationArtifact
         dnsBeforePath = 'captive-portal-dns-before.json'
+        dnsDuringPath = 'captive-portal-dns-during.json'
         dnsAfterPath = 'captive-portal-dns-after.json'
         firefoxNavigationResultPath = 'captive-portal-firefox-navigation-result.json'
         firefoxNavigation = $firefoxNavigation

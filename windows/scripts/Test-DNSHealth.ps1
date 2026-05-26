@@ -84,6 +84,7 @@ if ($portalModeActive) {
 $checkResult = Invoke-OpenPathWatchdogChecks `
     -Config $config `
     -PortalModeActive $portalModeActive `
+    -CaptiveState $precheckResult.CaptiveState `
     -OpenPathRoot $OpenPathRoot `
     -StaleFailsafeStatePath $staleFailsafeStatePath
 $issues += @($checkResult.Issues)

@@ -26,11 +26,18 @@ function Test-OpenPathCaptivePortalModeActive {
         try {
             $expiresAt = ([DateTimeOffset]::Parse([string]$marker.expiresAt)).UtcDateTime
             if ([DateTime]::UtcNow -ge $expiresAt) {
+                if ((Get-OpenPathCaptivePortalMarkerMode -Marker $marker) -eq 'passthrough') {
+                    Write-OpenPathLog 'Watchdog: captive portal passthrough deadline expired; attempting protected-mode restore' -Level WARN
+                }
                 $disabled = Disable-OpenPathCaptivePortalMode
+                if (-not [bool]$disabled) {
+                    Write-OpenPathLog 'Watchdog: failed to close expired captive portal passthrough marker; keeping marker active (details redacted)' -Level WARN
+                }
                 return (-not [bool]$disabled)
             }
         }
         catch {
+            Write-OpenPathLog 'Watchdog: failed to close expired captive portal passthrough marker; keeping marker active (details redacted)' -Level WARN
             return $true
         }
     }
@@ -144,6 +151,184 @@ function Get-OpenPathCaptivePortalMarkerMode {
     }
 
     return 'limited'
+}
+
+function Get-OpenPathCaptivePortalMarkerAllowedHosts {
+    param([object]$Marker)
+
+    if (-not $Marker -or -not $Marker.PSObject.Properties['allowedHosts']) {
+        return @()
+    }
+
+    return @(
+        $Marker.allowedHosts |
+            ForEach-Object { [string]$_ } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+}
+
+function Test-OpenPathCaptivePortalAdaptersUseLocalDns {
+    [CmdletBinding()]
+    param()
+
+    try {
+        $activeAdapters = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })
+    }
+    catch {
+        $activeAdapters = @()
+    }
+
+    if ($activeAdapters.Count -le 0) {
+        return $false
+    }
+
+    $allDnsAddresses = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue)
+
+    foreach ($adapter in $activeAdapters) {
+        $interfaceIndex = if ($adapter.PSObject.Properties['ifIndex']) { $adapter.ifIndex } else { $adapter.InterfaceIndex }
+        if ($null -eq $interfaceIndex) {
+            continue
+        }
+
+        $addressRows = @($allDnsAddresses | Where-Object { [int]$_.InterfaceIndex -eq [int]$interfaceIndex })
+        $serverAddresses = @()
+        foreach ($entry in $addressRows) {
+            $serverAddresses += @($entry.ServerAddresses | ForEach-Object { [string]$_ })
+        }
+
+        if ($serverAddresses -notcontains '127.0.0.1') {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Test-OpenPathCaptivePortalAcrylicNormalState {
+    [CmdletBinding()]
+    param()
+
+    $acrylicPath = $null
+    if (Get-Command -Name 'Get-AcrylicPath' -ErrorAction SilentlyContinue) {
+        $acrylicPath = Get-AcrylicPath
+    }
+    if (-not $acrylicPath) {
+        return $false
+    }
+
+    $hostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
+    $configPath = Join-Path $acrylicPath 'AcrylicConfiguration.ini'
+    if (-not (Test-Path $hostsPath -ErrorAction SilentlyContinue) -or -not (Test-Path $configPath -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    try {
+        $hostsContent = Get-Content $hostsPath -Raw -ErrorAction Stop
+        if ($hostsContent -match 'CAPTIVE PORTAL RECOVERY') {
+            return $false
+        }
+
+        $dnsSettings = [PSCustomObject]@{
+            PrimaryDNS = '8.8.8.8'
+            SecondaryDNS = '8.8.4.4'
+        }
+        if (Get-Command -Name 'Get-OpenPathDnsSettings' -ErrorAction SilentlyContinue) {
+            $dnsSettings = Get-OpenPathDnsSettings
+        }
+
+        $configContent = Get-Content $configPath -Raw -ErrorAction Stop
+        $expectedSettings = [ordered]@{
+            PrimaryServerAddress = [string]$dnsSettings.PrimaryDNS
+            SecondaryServerAddress = [string]$dnsSettings.SecondaryDNS
+        }
+        foreach ($key in $expectedSettings.Keys) {
+            $pattern = "(?m)^$([regex]::Escape($key))=$([regex]::Escape([string]$expectedSettings[$key]))$"
+            if ($configContent -notmatch $pattern) {
+                return $false
+            }
+        }
+    }
+    catch {
+        return $false
+    }
+
+    return $true
+}
+
+function Get-OpenPathCaptivePortalProtectedModeExitEvidence {
+    [CmdletBinding()]
+    param(
+        [PSCustomObject]$Config = $null
+    )
+
+    $firewallExpected = $true
+    if ($Config -and $Config.PSObject.Properties['enableFirewall']) {
+        $firewallExpected = [bool]$Config.enableFirewall
+    }
+
+    $dnsResolutionHealthy = $false
+    $sinkholeHealthy = $false
+    $firewallHealthy = (-not $firewallExpected)
+    $localDnsLoopbackRestored = $false
+    $acrylicNormalRestored = $false
+
+    try {
+        if (Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) {
+            $dnsResolutionHealthy = [bool](Test-DNSResolution)
+        }
+    }
+    catch {
+        $dnsResolutionHealthy = $false
+    }
+
+    try {
+        if (Get-Command -Name 'Test-DNSSinkhole' -ErrorAction SilentlyContinue) {
+            $sinkholeHealthy = [bool](Test-DNSSinkhole -Domain 'this-should-be-blocked-test-12345.com')
+        }
+    }
+    catch {
+        $sinkholeHealthy = $false
+    }
+
+    try {
+        if ($firewallExpected -and (Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue)) {
+            $firewallHealthy = [bool](Test-FirewallActive)
+        }
+    }
+    catch {
+        $firewallHealthy = $false
+    }
+
+    try {
+        $localDnsLoopbackRestored = [bool](Test-OpenPathCaptivePortalAdaptersUseLocalDns)
+    }
+    catch {
+        $localDnsLoopbackRestored = $false
+    }
+
+    try {
+        $acrylicNormalRestored = [bool](Test-OpenPathCaptivePortalAcrylicNormalState)
+    }
+    catch {
+        $acrylicNormalRestored = $false
+    }
+
+    $markerPresent = Test-Path $script:CaptivePortalStatePath -ErrorAction SilentlyContinue
+    $markerCleared = (-not $markerPresent)
+    $enforcementRestored = ($localDnsLoopbackRestored -and $acrylicNormalRestored -and $dnsResolutionHealthy -and $sinkholeHealthy -and ((-not $firewallExpected) -or $firewallHealthy))
+
+    return [PSCustomObject]@{
+        localDnsLoopbackRestored = $localDnsLoopbackRestored
+        acrylicNormalRestored = $acrylicNormalRestored
+        dnsResolutionHealthy = $dnsResolutionHealthy
+        sinkholeHealthy = $sinkholeHealthy
+        firewallExpectedActive = $firewallExpected
+        firewallHealthy = $firewallHealthy
+        markerPresent = $markerPresent
+        markerCleared = $markerCleared
+        enforcementRestored = $enforcementRestored
+        protectedModeRestored = ($enforcementRestored -and $markerCleared)
+    }
 }
 
 function Get-OpenPathCaptivePortalUpstreamFromMarker {
@@ -897,34 +1082,30 @@ function Disable-OpenPathCaptivePortalMode {
         return $false
     }
 
-    $enforcementHealthy = $true
-    $firewallExpected = $true
-    if ($Config -and $Config.PSObject.Properties['enableFirewall']) {
-        $firewallExpected = [bool]$Config.enableFirewall
-    }
-
     try {
-        if ((Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) -and -not (Test-DNSResolution)) {
-            $enforcementHealthy = $false
-        }
-        if ((Get-Command -Name 'Test-DNSSinkhole' -ErrorAction SilentlyContinue) -and -not (Test-DNSSinkhole -Domain 'this-should-be-blocked-test-12345.com')) {
-            $enforcementHealthy = $false
-        }
-        if ($firewallExpected -and (Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue) -and -not (Test-FirewallActive)) {
-            $enforcementHealthy = $false
-        }
+        $preClearEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config
     }
     catch {
         Write-OpenPathLog "Watchdog: protected mode verification failed; keeping captive portal marker active: $_" -Level WARN
         return $false
     }
 
-    if (-not $enforcementHealthy) {
+    if (-not [bool]$preClearEvidence.enforcementRestored) {
         Write-OpenPathLog 'Watchdog: protected mode verification failed; keeping captive portal marker active' -Level WARN
         return $false
     }
 
-    Clear-OpenPathCaptivePortalMarker | Out-Null
+    if (-not (Clear-OpenPathCaptivePortalMarker)) {
+        Write-OpenPathLog 'Watchdog: captive portal marker could not be cleared after protected mode restore' -Level WARN
+        return $false
+    }
+
+    $postClearEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config
+    if (-not [bool]$postClearEvidence.protectedModeRestored) {
+        Write-OpenPathLog 'Watchdog: protected mode verification failed after marker clear; keeping captive portal marker active' -Level WARN
+        return $false
+    }
+
     return $true
 }
 
@@ -932,6 +1113,7 @@ Export-ModuleMember -Function @(
     'Test-OpenPathCaptivePortalModeActive',
     'Get-OpenPathCaptivePortalMarker',
     'Set-OpenPathCaptivePortalMarker',
+    'Get-OpenPathCaptivePortalProtectedModeExitEvidence',
     'Clear-OpenPathCaptivePortalMarker',
     'Get-OpenPathCaptivePortalObservation',
     'Update-OpenPathCaptivePortalObservation',

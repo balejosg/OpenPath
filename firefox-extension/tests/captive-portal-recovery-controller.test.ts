@@ -139,3 +139,41 @@ void test('captive portal recovery reconciles only unlocked portal state changes
     ['firefox-captivePortal:state-changed', 'firefox-captivePortal:connectivity-available']
   );
 });
+
+void test('captive portal recovery uses explicit reconcile operations for Firefox post-login signals', async () => {
+  const operations: CaptivePortalRecoveryInput[] = [];
+  const controller = createCaptivePortalRecoveryController({
+    getPortalState: () => Promise.resolve('not_locked'),
+    recoverCaptivePortalNavigation: (input) => {
+      operations.push(input);
+      return Promise.resolve({ success: true });
+    },
+    retryNavigation: () => Promise.resolve(),
+  });
+
+  await controller.handlePortalStateChanged('unlocked_portal');
+  await controller.handleConnectivityAvailable();
+
+  assert.deepEqual(
+    operations.map((input) => ({
+      operation: input.operation,
+      portalState: input.portalState,
+      source: input.source,
+      triggerHost: input.triggerHost ?? '',
+    })),
+    [
+      {
+        operation: 'reconcile',
+        portalState: 'unlocked_portal',
+        source: 'firefox-captivePortal:state-changed',
+        triggerHost: '',
+      },
+      {
+        operation: 'reconcile',
+        portalState: 'Unknown',
+        source: 'firefox-captivePortal:connectivity-available',
+        triggerHost: '',
+      },
+    ]
+  );
+});

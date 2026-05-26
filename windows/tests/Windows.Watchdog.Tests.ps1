@@ -232,6 +232,59 @@ Describe "Watchdog Script" {
             $moduleContent | Should -Not -Match 'Disable-OpenPathCaptivePortalMode[\\s\\S]*Restore-OpenPathProtectedMode -Config \\$Config -SkipAcrylicRestart'
         }
 
+        It "Closes passthrough immediately on authenticated detection and preserves the marker when restore fails" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $helperContent = Get-Content $helperPath -Raw
+            $moduleContent = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $helperContent -Needles @(
+                '$markerMode -eq ''passthrough''',
+                '$captiveState -eq ''Authenticated''',
+                'Disable-OpenPathCaptivePortalMode -Config $Config',
+                'failed to close authenticated captive portal mode; marker preserved'
+            )
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'keeping captive portal marker active',
+                'protectedModeRestored',
+                'markerCleared'
+            )
+        }
+
+        It "Runs passthrough emergency checks even when protected mode checks are otherwise skipped" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $content = Get-Content $helperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks',
+                'Get-OpenPathCaptivePortalMarker',
+                'Get-OpenPathActiveIpv4AdaptersMissingLocalDns',
+                '$shouldRunProtectedModeChecks = [bool]$policyState.ProtectedModeEligible',
+                'Disable-OpenPathCaptivePortalMode -Config $Config'
+            )
+        }
+
+        It "Treats passthrough expiry as an emergency close and verifies full protected-mode restoration before clearing state" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $content = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'passthrough deadline expired',
+                'failed to close expired captive portal passthrough marker',
+                'Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue',
+                '127.0.0.1',
+                'CAPTIVE PORTAL RECOVERY',
+                'acrylicNormalRestored',
+                'localDnsLoopbackRestored',
+                'markerCleared',
+                'firewallExpectedActive',
+                'firewallHealthy',
+                'protectedModeRestored'
+            )
+            $content | Should -Not -Match 'Disable-OpenPathCaptivePortalMode[\s\S]*Restore-OriginalDNS'
+        }
+
         It "Uses hysteresis before entering or exiting captive portal mode" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"

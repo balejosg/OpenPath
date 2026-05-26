@@ -18,7 +18,10 @@ Initialize-OpenPathScriptSession `
     -RequiredCommands @(
     'Write-OpenPathLog',
     'Get-OpenPathCapabilityStoragePath',
+    'Get-OpenPathCaptivePortalMarker',
+    'Get-OpenPathCaptivePortalProtectedModeExitEvidence',
     'Test-OpenPathCaptivePortalState',
+    'Test-OpenPathCaptivePortalModeActive',
     'Update-OpenPathCaptivePortalObservation',
     'Enable-OpenPathCaptivePortalMode',
     'Disable-OpenPathCaptivePortalMode'
@@ -131,6 +134,7 @@ function Get-OpenPathRecentCaptivePortalRecoverySuccess {
                 Source = 'result'
                 Path = $newestResult.FullName
                 RequestId = $payload.requestId
+                Payload = $payload
             }
         }
     }
@@ -163,6 +167,77 @@ function Get-OpenPathCaptivePortalRecoveryState {
     param([Parameter(Mandatory = $true)][DateTime]$NowUtc)
 
     return (Test-OpenPathCaptivePortalState -TimeoutSec 3)
+}
+
+function Get-OpenPathCaptivePortalRecoveryMarkerSummary {
+    param(
+        [AllowNull()][object]$Marker,
+        [string]$TriggerHost = ''
+    )
+
+    $allowedHosts = if ($Marker -and $Marker.PSObject.Properties['allowedHosts']) {
+        @($Marker.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    else {
+        @()
+    }
+    $mode = if ($Marker -and $Marker.PSObject.Properties['mode'] -and $Marker.mode) { [string]$Marker.mode } else { '' }
+    $recoveryHostsApplied = ($mode -eq 'limited' -and $allowedHosts.Count -gt 0)
+    $recentSuccessEligible = $recoveryHostsApplied
+    if ($recentSuccessEligible -and $TriggerHost) {
+        $recentSuccessEligible = ($allowedHosts -contains $TriggerHost)
+    }
+
+    return [PSCustomObject]@{
+        activeMarkerMode = $mode
+        allowedHosts = @($allowedHosts)
+        recoveryHostsApplied = $recoveryHostsApplied
+        recentSuccessEligible = [bool]$recentSuccessEligible
+    }
+}
+
+function Test-OpenPathRecentCaptivePortalRecoverySuccessEligible {
+    param(
+        [AllowNull()][object]$RecentSuccess,
+        [string]$TriggerHost = ''
+    )
+
+    if (-not $RecentSuccess) {
+        return $false
+    }
+
+    if ($RecentSuccess.Source -eq 'active-marker') {
+        $summary = Get-OpenPathCaptivePortalRecoveryMarkerSummary -Marker $RecentSuccess.Marker -TriggerHost $TriggerHost
+        return [bool]$summary.recentSuccessEligible
+    }
+
+    $payload = if ($RecentSuccess.PSObject.Properties['Payload']) { $RecentSuccess.Payload } else { $null }
+    if (-not $payload) {
+        return $false
+    }
+
+    $eligible = if ($payload.PSObject.Properties['recentSuccessEligible']) { [bool]$payload.recentSuccessEligible } else { $false }
+    if (-not $eligible) {
+        return $false
+    }
+
+    if ($payload.PSObject.Properties['activeMarkerMode'] -and [string]$payload.activeMarkerMode -eq 'passthrough') {
+        return $false
+    }
+
+    if ($TriggerHost) {
+        $allowedHosts = if ($payload.PSObject.Properties['allowedHosts']) {
+            @($payload.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+        else {
+            @()
+        }
+        if ($allowedHosts.Count -le 0 -or $allowedHosts -notcontains $TriggerHost) {
+            return $false
+        }
+    }
+
+    return $true
 }
 
 function Invoke-OpenPathCaptivePortalRecoveryRequest {
@@ -202,66 +277,102 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
             if ($state -eq 'Authenticated') {
                 Update-OpenPathCaptivePortalObservation -DetectedState Authenticated | Out-Null
                 $disabled = [bool](Disable-OpenPathCaptivePortalMode)
+                $postAuthEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence
                 Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
                     success = $disabled
                     operation = $operation
                     state = [string]$state
+                    triggerHost = ''
                     activeMarker = (-not $disabled)
                     portalModeActive = (-not $disabled)
+                    portalExitRoute = if ($disabled) { 'reconcile-authenticated' } else { 'reconcile-authenticated-restore-failed' }
+                    localDnsLoopbackRestored = [bool]$postAuthEvidence.localDnsLoopbackRestored
+                    acrylicNormalRestored = [bool]$postAuthEvidence.acrylicNormalRestored
+                    dnsResolutionHealthy = [bool]$postAuthEvidence.dnsResolutionHealthy
+                    sinkholeHealthy = [bool]$postAuthEvidence.sinkholeHealthy
+                    firewallExpectedActive = [bool]$postAuthEvidence.firewallExpectedActive
+                    firewallHealthy = [bool]$postAuthEvidence.firewallHealthy
+                    markerCleared = [bool]$postAuthEvidence.markerCleared
+                    protectedModeRestored = [bool]$postAuthEvidence.protectedModeRestored
                 } | Out-Null
                 return
             }
 
+            $activeMarker = if (Test-OpenPathCaptivePortalModeActive) { Get-OpenPathCaptivePortalMarker } else { $null }
+            $markerSummary = Get-OpenPathCaptivePortalRecoveryMarkerSummary -Marker $activeMarker
             Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
                 success = $false
                 operation = $operation
                 state = [string]$state
+                triggerHost = ''
                 activeMarker = (Test-OpenPathCaptivePortalModeActive)
                 portalModeActive = (Test-OpenPathCaptivePortalModeActive)
+                portalExitRoute = 'reconcile-not-authenticated'
+                activeMarkerMode = [string]$markerSummary.activeMarkerMode
+                allowedHosts = @($markerSummary.allowedHosts)
+                recoveryHostsApplied = [bool]$markerSummary.recoveryHostsApplied
+                recentSuccessEligible = [bool]$markerSummary.recentSuccessEligible
             } | Out-Null
             return
         }
 
         $recentSuccess = Get-OpenPathRecentCaptivePortalRecoverySuccess -ResultPath $ResultPath -NowUtc $NowUtc
-        if ($recentSuccess) {
-            $activeMarker = if ($recentSuccess.Source -eq 'active-marker') { $recentSuccess.Marker } else { $null }
-            $allowedHosts = if ($activeMarker -and $activeMarker.PSObject.Properties['allowedHosts']) { @($activeMarker.allowedHosts | ForEach-Object { [string]$_ }) } else { @() }
-            $passthroughNeedsExactHost = (
-                $activeMarker -and
-                $activeMarker.mode -eq 'passthrough' -and
-                $triggerHost -and
-                ($allowedHosts -notcontains $triggerHost)
-            )
-            if (-not $passthroughNeedsExactHost) {
+        if ($recentSuccess -and (Test-OpenPathRecentCaptivePortalRecoverySuccessEligible -RecentSuccess $recentSuccess -TriggerHost $triggerHost)) {
+            $recentMarker = if ($recentSuccess.Source -eq 'active-marker') { $recentSuccess.Marker } else { $recentSuccess.Payload }
+            $markerSummary = Get-OpenPathCaptivePortalRecoveryMarkerSummary -Marker $recentMarker -TriggerHost $triggerHost
+            if ($recentSuccess.Source -eq 'result' -and $recentSuccess.PSObject.Properties['Payload']) {
+                $payload = $recentSuccess.Payload
+                $markerSummary = [PSCustomObject]@{
+                    activeMarkerMode = if ($payload.PSObject.Properties['activeMarkerMode']) { [string]$payload.activeMarkerMode } else { '' }
+                    allowedHosts = if ($payload.PSObject.Properties['allowedHosts']) { @($payload.allowedHosts) } else { @() }
+                    recoveryHostsApplied = if ($payload.PSObject.Properties['recoveryHostsApplied']) { [bool]$payload.recoveryHostsApplied } else { $false }
+                    recentSuccessEligible = if ($payload.PSObject.Properties['recentSuccessEligible']) { [bool]$payload.recentSuccessEligible } else { $false }
+                }
+            }
+
                 Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
                     success = $true
                     operation = $operation
                     state = 'RecentSuccess'
                     activeMarker = $true
                     portalModeActive = $true
+                    triggerHost = $triggerHost
+                    activeMarkerMode = [string]$markerSummary.activeMarkerMode
+                    allowedHosts = @($markerSummary.allowedHosts)
+                    recoveryHostsApplied = [bool]$markerSummary.recoveryHostsApplied
+                    recentSuccessEligible = [bool]$markerSummary.recentSuccessEligible
                     recentSuccessSource = $recentSuccess.Source
                     recentSuccessRequestId = $recentSuccess.RequestId
                 } | Out-Null
                 return
-            }
         }
 
         $state = Get-OpenPathCaptivePortalRecoveryState -NowUtc $NowUtc
         $success = $false
-        $activeMarker = $false
+        $activeMarker = $null
 
         if ($state -eq 'Portal') {
             Update-OpenPathCaptivePortalObservation -DetectedState Portal | Out-Null
             $success = [bool](Enable-OpenPathCaptivePortalMode -State Portal -PortalRecoveryDomains @($triggerHost))
-            $activeMarker = $success
+            if ($success) {
+                $activeMarker = Get-OpenPathCaptivePortalMarker
+            }
         }
+
+        $markerSummary = Get-OpenPathCaptivePortalRecoveryMarkerSummary -Marker $activeMarker -TriggerHost $triggerHost
+        $portalModeActive = [bool]$success
 
         Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
             success = $success
             operation = $operation
             state = [string]$state
-            activeMarker = $activeMarker
-            portalModeActive = $activeMarker
+            triggerHost = $triggerHost
+            activeMarker = $portalModeActive
+            portalModeActive = $portalModeActive
+            activeMarkerMode = [string]$markerSummary.activeMarkerMode
+            allowedHosts = @($markerSummary.allowedHosts)
+            recoveryHostsApplied = [bool]$markerSummary.recoveryHostsApplied
+            recentSuccessEligible = [bool]$markerSummary.recentSuccessEligible
         } | Out-Null
     }
     catch {

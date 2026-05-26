@@ -263,6 +263,33 @@ function Get-NativeHostCaptivePortalActiveMarker {
     }
 }
 
+function Get-NativeHostCaptivePortalMarkerSummary {
+    param(
+        [AllowNull()][object]$Marker,
+        [string]$TriggerHost = ''
+    )
+
+    $allowedHosts = if ($Marker -and $Marker.PSObject.Properties['allowedHosts']) {
+        @($Marker.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    else {
+        @()
+    }
+    $mode = if ($Marker -and $Marker.PSObject.Properties['mode'] -and $Marker.mode) { [string]$Marker.mode } else { '' }
+    $recoveryHostsApplied = ($mode -eq 'limited' -and $allowedHosts.Count -gt 0)
+    $recentSuccessEligible = $recoveryHostsApplied
+    if ($recentSuccessEligible -and $TriggerHost) {
+        $recentSuccessEligible = ($allowedHosts -contains $TriggerHost)
+    }
+
+    return [PSCustomObject]@{
+        activeMarkerMode = $mode
+        allowedHosts = @($allowedHosts)
+        recoveryHostsApplied = $recoveryHostsApplied
+        recentSuccessEligible = [bool]$recentSuccessEligible
+    }
+}
+
 function Get-NativeHostRecentCaptivePortalRecoverySuccess {
     param([int]$RecentSuccessSeconds = 30)
 
@@ -270,12 +297,17 @@ function Get-NativeHostRecentCaptivePortalRecoverySuccess {
     if ($activeMarker -and $activeMarker.PSObject.Properties['LastWriteTimeUtc']) {
         $markerAgeSeconds = ([DateTime]::UtcNow - $activeMarker.LastWriteTimeUtc).TotalSeconds
         if ($markerAgeSeconds -le [Math]::Max(1, $RecentSuccessSeconds)) {
+            $markerSummary = Get-NativeHostCaptivePortalMarkerSummary -Marker $activeMarker
             return [PSCustomObject]@{
                 Source = 'active-marker'
                 RequestId = ''
                 State = if ($activeMarker.PSObject.Properties['state']) { [string]$activeMarker.state } else { 'Portal' }
                 PortalModeActive = $true
                 Marker = $activeMarker
+                ActiveMarkerMode = [string]$markerSummary.activeMarkerMode
+                AllowedHosts = @($markerSummary.allowedHosts)
+                RecoveryHostsApplied = [bool]$markerSummary.recoveryHostsApplied
+                RecentSuccessEligible = [bool]$markerSummary.recentSuccessEligible
                 Path = if ($activeMarker.PSObject.Properties['Path']) { [string]$activeMarker.Path } else { '' }
                 LastWriteTimeUtc = $activeMarker.LastWriteTimeUtc
             }
@@ -310,6 +342,11 @@ function Get-NativeHostRecentCaptivePortalRecoverySuccess {
             RequestId = if ($payload.PSObject.Properties['requestId']) { [string]$payload.requestId } else { '' }
             State = $state
             PortalModeActive = $true
+            ActiveMarkerMode = if ($payload.PSObject.Properties['activeMarkerMode']) { [string]$payload.activeMarkerMode } else { '' }
+            AllowedHosts = if ($payload.PSObject.Properties['allowedHosts']) { @($payload.allowedHosts) } else { @() }
+            RecoveryHostsApplied = if ($payload.PSObject.Properties['recoveryHostsApplied']) { [bool]$payload.recoveryHostsApplied } else { $false }
+            RecentSuccessEligible = if ($payload.PSObject.Properties['recentSuccessEligible']) { [bool]$payload.recentSuccessEligible } else { $false }
+            Payload = $payload
             Path = $recentResultFile.FullName
             LastWriteTimeUtc = $recentResultFile.LastWriteTimeUtc
         }
@@ -317,6 +354,40 @@ function Get-NativeHostRecentCaptivePortalRecoverySuccess {
     catch {
         return $null
     }
+}
+
+function Test-NativeHostRecentCaptivePortalSuccessEligible {
+    param(
+        [AllowNull()][object]$RecentSuccess,
+        [string]$TriggerHost = ''
+    )
+
+    if (-not $RecentSuccess) {
+        return $false
+    }
+
+    $eligible = if ($RecentSuccess.PSObject.Properties['RecentSuccessEligible']) { [bool]$RecentSuccess.RecentSuccessEligible } else { $false }
+    if (-not $eligible) {
+        return $false
+    }
+
+    if ($RecentSuccess.PSObject.Properties['ActiveMarkerMode'] -and [string]$RecentSuccess.ActiveMarkerMode -eq 'passthrough') {
+        return $false
+    }
+
+    if ($TriggerHost) {
+        $allowedHosts = if ($RecentSuccess.PSObject.Properties['AllowedHosts']) {
+            @($RecentSuccess.AllowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+        else {
+            @()
+        }
+        if ($allowedHosts.Count -le 0 -or $allowedHosts -notcontains $TriggerHost) {
+            return $false
+        }
+    }
+
+    return $true
 }
 
 function Test-NativeHostBlockedSubdomainMatch {
@@ -768,16 +839,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     }
 
     $recentSuccess = if ($operation -eq 'open') { Get-NativeHostRecentCaptivePortalRecoverySuccess } else { $null }
-    if ($recentSuccess) {
-        $activeMarker = if ($recentSuccess.Source -eq 'active-marker') { $recentSuccess.Marker } else { $null }
-        $allowedHosts = if ($activeMarker -and $activeMarker.PSObject.Properties['allowedHosts']) { @($activeMarker.allowedHosts | ForEach-Object { [string]$_ }) } else { @() }
-        $passthroughNeedsExactHost = (
-            $activeMarker -and
-            $activeMarker.mode -eq 'passthrough' -and
-            $triggerHost -and
-            ($allowedHosts -notcontains $triggerHost)
-        )
-        if (-not $passthroughNeedsExactHost) {
+    if ($recentSuccess -and (Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $recentSuccess -TriggerHost $triggerHost)) {
             return @{
                 success = $true
                 action = $action
@@ -791,8 +853,11 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
                 waitMs = 0
                 recentSuccess = $true
                 recentSuccessSource = [string]$recentSuccess.Source
+                recentSuccessEligible = if ($recentSuccess.PSObject.Properties['RecentSuccessEligible']) { [bool]$recentSuccess.RecentSuccessEligible } else { $false }
+                activeMarkerMode = if ($recentSuccess.PSObject.Properties['ActiveMarkerMode']) { [string]$recentSuccess.ActiveMarkerMode } else { '' }
+                allowedHosts = if ($recentSuccess.PSObject.Properties['AllowedHosts']) { @($recentSuccess.AllowedHosts) } else { @() }
+                recoveryHostsApplied = if ($recentSuccess.PSObject.Properties['RecoveryHostsApplied']) { [bool]$recentSuccess.RecoveryHostsApplied } else { $false }
             }
-        }
     }
 
     $requestId = (New-Guid).Guid
@@ -882,6 +947,19 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         taskName = $taskNameResult
         triggerMs = $triggerMs
         waitMs = $waitMs
+        portalExitRoute = if ($result.PSObject.Properties['portalExitRoute']) { [string]$result.portalExitRoute } else { '' }
+        localDnsLoopbackRestored = if ($result.PSObject.Properties['localDnsLoopbackRestored']) { [bool]$result.localDnsLoopbackRestored } else { $false }
+        acrylicNormalRestored = if ($result.PSObject.Properties['acrylicNormalRestored']) { [bool]$result.acrylicNormalRestored } else { $false }
+        dnsResolutionHealthy = if ($result.PSObject.Properties['dnsResolutionHealthy']) { [bool]$result.dnsResolutionHealthy } else { $false }
+        sinkholeHealthy = if ($result.PSObject.Properties['sinkholeHealthy']) { [bool]$result.sinkholeHealthy } else { $false }
+        firewallExpectedActive = if ($result.PSObject.Properties['firewallExpectedActive']) { [bool]$result.firewallExpectedActive } else { $false }
+        firewallHealthy = if ($result.PSObject.Properties['firewallHealthy']) { [bool]$result.firewallHealthy } else { $false }
+        markerCleared = if ($result.PSObject.Properties['markerCleared']) { [bool]$result.markerCleared } else { $false }
+        protectedModeRestored = if ($result.PSObject.Properties['protectedModeRestored']) { [bool]$result.protectedModeRestored } else { $false }
+        activeMarkerMode = if ($result.PSObject.Properties['activeMarkerMode']) { [string]$result.activeMarkerMode } else { '' }
+        allowedHosts = if ($result.PSObject.Properties['allowedHosts']) { @($result.allowedHosts) } else { @() }
+        recoveryHostsApplied = if ($result.PSObject.Properties['recoveryHostsApplied']) { [bool]$result.recoveryHostsApplied } else { $false }
+        recentSuccessEligible = if ($result.PSObject.Properties['recentSuccessEligible']) { [bool]$result.recentSuccessEligible } else { $false }
     }
 }
 
