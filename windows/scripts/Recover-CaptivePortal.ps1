@@ -7,6 +7,9 @@ param()
 $ErrorActionPreference = 'Stop'
 $MaxRequestAgeSeconds = 60
 $RecentSuccessSeconds = 30
+$RecoveryDnsMaxAttempts = 1
+$RecoveryDnsDelayMilliseconds = 250
+$RecoveryDnsAttemptTimeoutSeconds = 1
 
 . (Join-Path $PSScriptRoot '..\lib\internal\WindowsRoot.ps1')
 $OpenPathRoot = Resolve-OpenPathWindowsRoot
@@ -322,8 +325,8 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
                 Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'disable' -Payload @{
                     state = [string]$state
                 } | Out-Null
-                $disabled = [bool](Disable-OpenPathCaptivePortalMode)
-                $postAuthEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence
+                $disabled = [bool](Disable-OpenPathCaptivePortalMode -DnsMaxAttempts $RecoveryDnsMaxAttempts -DnsDelayMilliseconds $RecoveryDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $RecoveryDnsAttemptTimeoutSeconds)
+                $postAuthEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -DnsMaxAttempts $RecoveryDnsMaxAttempts -DnsDelayMilliseconds $RecoveryDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $RecoveryDnsAttemptTimeoutSeconds
                 Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'write-result' -Payload @{
                     state = [string]$state
                     disabled = [bool]$disabled

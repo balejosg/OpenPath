@@ -262,6 +262,31 @@ Describe "Watchdog Script" {
             $moduleContent | Should -Not -Match 'Disable-OpenPathCaptivePortalMode[\\s\\S]*Restore-OpenPathProtectedMode -Config \\$Config -SkipAcrylicRestart'
         }
 
+        It "Bounds post-auth reconcile protected-mode evidence inside native host budget" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $scriptContent = Get-Content $scriptPath -Raw
+            $moduleContent = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $scriptContent -Needles @(
+                '$RecoveryDnsMaxAttempts',
+                '$RecoveryDnsDelayMilliseconds',
+                '$RecoveryDnsAttemptTimeoutSeconds',
+                'Disable-OpenPathCaptivePortalMode -DnsMaxAttempts $RecoveryDnsMaxAttempts -DnsDelayMilliseconds $RecoveryDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $RecoveryDnsAttemptTimeoutSeconds',
+                'Get-OpenPathCaptivePortalProtectedModeExitEvidence -DnsMaxAttempts $RecoveryDnsMaxAttempts -DnsDelayMilliseconds $RecoveryDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $RecoveryDnsAttemptTimeoutSeconds'
+            )
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'function Get-OpenPathCaptivePortalProtectedModeExitEvidence',
+                '[int]$DnsAttemptTimeoutSeconds = 0',
+                'Test-DNSResolution -MaxAttempts $DnsMaxAttempts -DelayMilliseconds $DnsDelayMilliseconds -AttemptTimeoutSeconds $DnsAttemptTimeoutSeconds',
+                'function Disable-OpenPathCaptivePortalMode',
+                '[int]$DnsMaxAttempts = 12',
+                '[int]$DnsDelayMilliseconds = 1000',
+                '[int]$DnsAttemptTimeoutSeconds = 0'
+            )
+        }
+
         It "Closes passthrough immediately on authenticated detection and preserves the marker when restore fails" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"

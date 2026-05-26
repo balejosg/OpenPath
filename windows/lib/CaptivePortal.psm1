@@ -12,9 +12,9 @@ $script:OpenPathRoot = Resolve-OpenPathWindowsRoot
 $script:CaptivePortalStatePath = "$script:OpenPathRoot\data\captive-portal-active.json"
 $script:CaptivePortalObservationPath = "$script:OpenPathRoot\data\captive-portal-observation.json"
 $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds = 4
-$script:CaptivePortalLimitedModeDnsMaxAttempts = 2
+$script:CaptivePortalLimitedModeDnsMaxAttempts = 1
 $script:CaptivePortalLimitedModeDnsDelayMilliseconds = 250
-$script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds = 2
+$script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds = 1
 
 function Test-OpenPathCaptivePortalModeActive {
     if (-not (Test-Path $script:CaptivePortalStatePath)) {
@@ -262,7 +262,10 @@ function Test-OpenPathCaptivePortalAcrylicNormalState {
 function Get-OpenPathCaptivePortalProtectedModeExitEvidence {
     [CmdletBinding()]
     param(
-        [PSCustomObject]$Config = $null
+        [PSCustomObject]$Config = $null,
+        [int]$DnsMaxAttempts = 12,
+        [int]$DnsDelayMilliseconds = 1000,
+        [int]$DnsAttemptTimeoutSeconds = 0
     )
 
     $firewallExpected = $true
@@ -278,7 +281,7 @@ function Get-OpenPathCaptivePortalProtectedModeExitEvidence {
 
     try {
         if (Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) {
-            $dnsResolutionHealthy = [bool](Test-DNSResolution)
+            $dnsResolutionHealthy = [bool](Test-DNSResolution -MaxAttempts $DnsMaxAttempts -DelayMilliseconds $DnsDelayMilliseconds -AttemptTimeoutSeconds $DnsAttemptTimeoutSeconds)
         }
     }
     catch {
@@ -1056,7 +1059,10 @@ function Enable-OpenPathCaptivePortalMode {
 function Disable-OpenPathCaptivePortalMode {
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [PSCustomObject]$Config = $null
+        [PSCustomObject]$Config = $null,
+        [int]$DnsMaxAttempts = 12,
+        [int]$DnsDelayMilliseconds = 1000,
+        [int]$DnsAttemptTimeoutSeconds = 0
     )
 
     if (-not $PSCmdlet.ShouldProcess('OpenPath', 'Disable captive portal mode')) {
@@ -1096,7 +1102,7 @@ function Disable-OpenPathCaptivePortalMode {
     }
 
     try {
-        $preClearEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config
+        $preClearEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config -DnsMaxAttempts $DnsMaxAttempts -DnsDelayMilliseconds $DnsDelayMilliseconds -DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds
     }
     catch {
         Write-OpenPathLog "Watchdog: protected mode verification failed; keeping captive portal marker active: $_" -Level WARN
@@ -1113,7 +1119,7 @@ function Disable-OpenPathCaptivePortalMode {
         return $false
     }
 
-    $postClearEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config
+    $postClearEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config -DnsMaxAttempts $DnsMaxAttempts -DnsDelayMilliseconds $DnsDelayMilliseconds -DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds
     if (-not [bool]$postClearEvidence.protectedModeRestored) {
         Write-OpenPathLog 'Watchdog: protected mode verification failed after marker clear; keeping captive portal marker active' -Level WARN
         return $false
