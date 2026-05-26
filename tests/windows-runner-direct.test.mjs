@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   extractUsableGuestIPv4,
+  getWindowsDirectArtifactSpecsForModes,
   parseRunnerRepoRootCandidates,
   selectPreferredRunnerRepoRoot,
 } from '../scripts/run-windows-runner-direct.mjs';
@@ -682,6 +683,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       'wedu-lab-native-reconcile.json',
       'wedu-lab-network-after.json',
       'wedu-lab-openpath-protection-after.json',
+      'direct-captive-portal-wedu-lab-result.json',
       'direct-captive-portal-wedu-lab-completion.json',
     ]) {
       assert.match(script, new RegExp(artifactName.replace(/[.]/g, '\\.')));
@@ -696,6 +698,42 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduScript, /gateway-reset/);
     assert.match(weduScript, /recover-captive-portal-navigation/);
     assert.match(weduScript, /operation = 'reconcile'/);
+  });
+
+  test('captive-portal-wedu-lab artifact collection is scoped to WEDU outputs', () => {
+    const specs = getWindowsDirectArtifactSpecsForModes(['captive-portal-wedu-lab'], {
+      runnerRoot: 'C:\\runner\\OpenPath',
+      resultsPath: 'windows-test-results.xml',
+    });
+    const sourcePaths = specs.map((spec) => spec.sourcePath ?? spec.root);
+
+    assert.ok(sourcePaths.length > 0);
+    assert.ok(
+      sourcePaths.every((sourcePath) =>
+        sourcePath.startsWith('C:\\Windows\\Temp\\openpath-captive-portal-wedu-lab')
+      ),
+      sourcePaths.join('\n')
+    );
+    assert.ok(
+      sourcePaths.some((sourcePath) =>
+        sourcePath.endsWith('\\direct-captive-portal-wedu-lab-completion.json')
+      )
+    );
+    assert.ok(
+      sourcePaths.some((sourcePath) =>
+        sourcePath.endsWith('\\direct-captive-portal-wedu-lab-result.json')
+      )
+    );
+    assert.ok(
+      specs.some(
+        (spec) =>
+          spec.kind === 'manifest' &&
+          spec.root === 'C:\\Windows\\Temp\\openpath-captive-portal-wedu-lab'
+      )
+    );
+    assert.doesNotMatch(sourcePaths.join('\n'), /windows-test-results\.xml/);
+    assert.doesNotMatch(sourcePaths.join('\n'), /openpath-captive-portal-navigation/);
+    assert.doesNotMatch(sourcePaths.join('\n'), /dns-evidence|dns-discovery|acrylic-purgecache/);
   });
 
   test('captive-portal-wedu-lab rejects local-overlay source by default', () => {

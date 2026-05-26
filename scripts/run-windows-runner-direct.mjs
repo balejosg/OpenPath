@@ -197,6 +197,7 @@ const CAPTIVE_PORTAL_WEDU_LAB_ARTIFACTS = [
   'captive-portal-recovery-result-manifest.json',
   'captive-portal-recovery-queue-manifest.json',
   'captive-portal-recovery-progress-manifest.json',
+  'direct-captive-portal-wedu-lab-result.json',
   'direct-captive-portal-wedu-lab-completion.json',
   'direct-captive-portal-wedu-lab.out.log',
   'direct-captive-portal-wedu-lab.err.log',
@@ -2352,9 +2353,25 @@ function collectGuestArtifact(options, artifactDir, sourcePath, localName, maxBy
   }
 }
 
-function collectCaptivePortalManifestArtifacts(options, artifactDir, manifestName, artifactPrefix) {
-  const manifestPath = `${CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT}\\${manifestName}`;
-  const recoveryManifest = readGuestArtifact(options, manifestPath, 1024 * 1024);
+function collectCaptivePortalManifestArtifacts(
+  options,
+  artifactDir,
+  artifactRoot,
+  manifestName,
+  artifactPrefix
+) {
+  const manifestPath = `${artifactRoot}\\${manifestName}`;
+  let recoveryManifest;
+  try {
+    recoveryManifest = readGuestArtifact(options, manifestPath, 1024 * 1024);
+  } catch (error) {
+    console.warn(
+      `warning: failed to collect Windows artifact ${manifestPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return;
+  }
   if (!recoveryManifest.exists) {
     return;
   }
@@ -2370,7 +2387,7 @@ function collectCaptivePortalManifestArtifacts(options, artifactDir, manifestNam
       collectGuestArtifact(
         options,
         artifactDir,
-        `${CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT}\\${artifactName.replace(/\//g, '\\')}`,
+        `${artifactRoot}\\${artifactName.replace(/\//g, '\\')}`,
         artifactName.replace(/[\\/]/g, '-'),
         1024 * 1024
       );
@@ -2382,146 +2399,179 @@ function collectCaptivePortalManifestArtifacts(options, artifactDir, manifestNam
   }
 }
 
-function collectArtifacts(options, artifactDir, runnerRoot) {
-  const resultsContent = readGuestFile(
-    options,
-    `${runnerRoot}\\${options.resultsPath.replace(/\//g, '\\')}`
-  );
-  if (resultsContent.trim()) {
-    writeFileSync(resolve(artifactDir, DEFAULT_RESULTS_ARTIFACT_NAME), resultsContent, 'utf8');
+function expandArtifactCollectionModes(modes) {
+  const requestedModes = Array.isArray(modes) && modes.length > 0 ? modes : [DEFAULT_RUN_MODE];
+  if (!requestedModes.includes('all')) {
+    return requestedModes;
   }
 
-  const runnerLog = readGuestFile(
-    options,
-    `${runnerRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\windows-student-policy-trace.log`,
-    120000
-  );
-  if (runnerLog.trim()) {
-    writeFileSync(resolve(artifactDir, DEFAULT_ARTIFACT_LOG_NAME), runnerLog, 'utf8');
-  }
+  return WINDOWS_DIRECT_RUN_MODE_NAMES.filter((mode) => {
+    if (mode === 'all') {
+      return false;
+    }
+    return resolveWindowsDirectDiagnosticMode(mode).includeInAll !== false;
+  });
+}
 
-  for (const artifactName of BROWSER_ENFORCEMENT_ARTIFACTS) {
-    const localArtifactName = artifactName.replace(/\\/g, '-');
-    const content = readGuestFile(
-      options,
-      `${runnerRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\browser-boundary\\${artifactName}`,
-      500000
+function getWindowsDirectArtifactSpecsForModes(
+  modes,
+  {
+    runnerRoot = '',
+    resultsPath = DEFAULT_RESULTS_RELATIVE_PATH,
+    browserEnforcementReport = false,
+  } = {}
+) {
+  const specs = [];
+  const modeSet = new Set(expandArtifactCollectionModes(modes));
+  const addText = (sourcePath, localName, maxChars = 500000) => {
+    specs.push({ kind: 'text', sourcePath, localName, maxChars });
+  };
+  const addArtifact = (artifactRoot, artifactName, maxBytes = 64 * 1024 * 1024) => {
+    specs.push({
+      kind: 'artifact',
+      sourcePath: `${artifactRoot}\\${artifactName}`,
+      localName: artifactName.replace(/\\/g, '-'),
+      maxBytes,
+    });
+  };
+  const addArtifactList = (artifactRoot, artifactNames, maxBytes = 64 * 1024 * 1024) => {
+    for (const artifactName of artifactNames) {
+      addArtifact(artifactRoot, artifactName, maxBytes);
+    }
+  };
+  const addCaptivePortalManifestSpecs = (artifactRoot) => {
+    specs.push(
+      {
+        kind: 'manifest',
+        root: artifactRoot,
+        manifestName: 'captive-portal-recovery-result-manifest.json',
+        artifactPrefix: 'captive-portal-recovery-result',
+      },
+      {
+        kind: 'manifest',
+        root: artifactRoot,
+        manifestName: 'captive-portal-recovery-queue-manifest.json',
+        artifactPrefix: 'captive-portal-recovery-queue',
+      },
+      {
+        kind: 'manifest',
+        root: artifactRoot,
+        manifestName: 'captive-portal-recovery-progress-manifest.json',
+        artifactPrefix: 'captive-portal-recovery-progress',
+      }
     );
-    if (content.trim()) {
-      writeFileSync(resolve(artifactDir, localArtifactName), content, 'utf8');
+  };
+
+  if (modeSet.has('pester')) {
+    addText(`${runnerRoot}\\${resultsPath.replace(/\//g, '\\')}`, DEFAULT_RESULTS_ARTIFACT_NAME);
+  }
+
+  if (modeSet.has('pester') || modeSet.has('browser-boundary')) {
+    addText(
+      `${runnerRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\windows-student-policy-trace.log`,
+      DEFAULT_ARTIFACT_LOG_NAME,
+      120000
+    );
+  }
+
+  if (modeSet.has('browser-boundary')) {
+    for (const artifactName of BROWSER_ENFORCEMENT_ARTIFACTS) {
+      addText(
+        `${runnerRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\browser-boundary\\${artifactName}`,
+        artifactName.replace(/\\/g, '-')
+      );
     }
   }
 
-  for (const artifactName of BROWSER_ENFORCEMENT_REPORT_ARTIFACTS) {
-    const content = readGuestFile(
-      options,
-      `${runnerRoot}\\tests\\e2e\\artifacts\\windows-browser-enforcement\\${artifactName}`,
-      500000
-    );
-    if (content.trim()) {
-      writeFileSync(resolve(artifactDir, artifactName), content, 'utf8');
+  if (browserEnforcementReport) {
+    for (const artifactName of BROWSER_ENFORCEMENT_REPORT_ARTIFACTS) {
+      addText(
+        `${runnerRoot}\\tests\\e2e\\artifacts\\windows-browser-enforcement\\${artifactName}`,
+        artifactName
+      );
     }
   }
 
-  for (const artifactName of DNS_DISCOVERY_SPIKE_ARTIFACTS) {
-    const content = readGuestFile(
-      options,
-      `${DNS_DISCOVERY_SPIKE_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
-      500000
-    );
-    if (content.trim()) {
-      writeFileSync(resolve(artifactDir, artifactName), content, 'utf8');
+  if (modeSet.has('dns-discovery-spike')) {
+    for (const artifactName of DNS_DISCOVERY_SPIKE_ARTIFACTS) {
+      addText(`${DNS_DISCOVERY_SPIKE_GUEST_ARTIFACT_ROOT}\\${artifactName}`, artifactName);
     }
   }
 
-  for (const artifactName of DNS_EVIDENCE_MATRIX_ARTIFACTS) {
-    collectGuestArtifact(
-      options,
-      artifactDir,
-      `${DNS_EVIDENCE_MATRIX_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
-      artifactName.replace(/\\/g, '-'),
-      64 * 1024 * 1024
+  if (modeSet.has('dns-evidence-matrix')) {
+    addArtifactList(DNS_EVIDENCE_MATRIX_GUEST_ARTIFACT_ROOT, DNS_EVIDENCE_MATRIX_ARTIFACTS);
+  }
+
+  if (modeSet.has('dns-evidence-matrix-v2')) {
+    addArtifactList(DNS_EVIDENCE_MATRIX_V2_GUEST_ARTIFACT_ROOT, DNS_EVIDENCE_MATRIX_V2_ARTIFACTS);
+  }
+
+  if (modeSet.has('dns-observability-controls')) {
+    addArtifactList(
+      DNS_OBSERVABILITY_CONTROLS_GUEST_ARTIFACT_ROOT,
+      DNS_OBSERVABILITY_CONTROLS_ARTIFACTS
     );
   }
 
-  for (const artifactName of DNS_EVIDENCE_MATRIX_V2_ARTIFACTS) {
-    collectGuestArtifact(
-      options,
-      artifactDir,
-      `${DNS_EVIDENCE_MATRIX_V2_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
-      artifactName.replace(/\\/g, '-'),
-      64 * 1024 * 1024
+  if (modeSet.has('acrylic-purgecache-spike')) {
+    addArtifactList(
+      ACRYLIC_PURGECACHE_SPIKE_GUEST_ARTIFACT_ROOT,
+      ACRYLIC_PURGECACHE_SPIKE_ARTIFACTS
     );
   }
 
-  for (const artifactName of DNS_OBSERVABILITY_CONTROLS_ARTIFACTS) {
-    collectGuestArtifact(
-      options,
-      artifactDir,
-      `${DNS_OBSERVABILITY_CONTROLS_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
-      artifactName.replace(/\\/g, '-'),
-      64 * 1024 * 1024
+  if (modeSet.has('browser-dependency-observability-spike')) {
+    addArtifactList(
+      BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_GUEST_ARTIFACT_ROOT,
+      BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_ARTIFACTS
     );
   }
 
-  for (const artifactName of ACRYLIC_PURGECACHE_SPIKE_ARTIFACTS) {
-    collectGuestArtifact(
-      options,
-      artifactDir,
-      `${ACRYLIC_PURGECACHE_SPIKE_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
-      artifactName.replace(/\\/g, '-'),
-      64 * 1024 * 1024
+  if (modeSet.has('captive-portal-navigation')) {
+    addArtifactList(
+      CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT,
+      CAPTIVE_PORTAL_NAVIGATION_ARTIFACTS
     );
+    addCaptivePortalManifestSpecs(CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT);
   }
 
-  for (const artifactName of BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_ARTIFACTS) {
-    collectGuestArtifact(
-      options,
-      artifactDir,
-      `${BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
-      artifactName.replace(/\\/g, '-'),
-      64 * 1024 * 1024
-    );
+  if (modeSet.has('captive-portal-wedu-lab')) {
+    addArtifactList(CAPTIVE_PORTAL_WEDU_LAB_GUEST_ARTIFACT_ROOT, CAPTIVE_PORTAL_WEDU_LAB_ARTIFACTS);
+    addCaptivePortalManifestSpecs(CAPTIVE_PORTAL_WEDU_LAB_GUEST_ARTIFACT_ROOT);
   }
 
-  for (const artifactName of CAPTIVE_PORTAL_NAVIGATION_ARTIFACTS) {
-    collectGuestArtifact(
-      options,
-      artifactDir,
-      `${CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
-      artifactName.replace(/\\/g, '-'),
-      64 * 1024 * 1024
-    );
-  }
+  return specs;
+}
 
-  for (const artifactName of CAPTIVE_PORTAL_WEDU_LAB_ARTIFACTS) {
-    collectGuestArtifact(
-      options,
-      artifactDir,
-      `${CAPTIVE_PORTAL_WEDU_LAB_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
-      artifactName.replace(/\\/g, '-'),
-      64 * 1024 * 1024
-    );
-  }
+function collectArtifacts(options, artifactDir, runnerRoot, modesToRun = []) {
+  const specs = getWindowsDirectArtifactSpecsForModes(modesToRun, {
+    runnerRoot,
+    resultsPath: options.resultsPath,
+    browserEnforcementReport: options.browserEnforcementReport,
+  });
 
-  collectCaptivePortalManifestArtifacts(
-    options,
-    artifactDir,
-    'captive-portal-recovery-result-manifest.json',
-    'captive-portal-recovery-result'
-  );
-  collectCaptivePortalManifestArtifacts(
-    options,
-    artifactDir,
-    'captive-portal-recovery-queue-manifest.json',
-    'captive-portal-recovery-queue'
-  );
-  collectCaptivePortalManifestArtifacts(
-    options,
-    artifactDir,
-    'captive-portal-recovery-progress-manifest.json',
-    'captive-portal-recovery-progress'
-  );
+  for (const spec of specs) {
+    if (spec.kind === 'text') {
+      const content = readGuestFile(options, spec.sourcePath, spec.maxChars);
+      if (content.trim()) {
+        writeFileSync(resolve(artifactDir, spec.localName), content, 'utf8');
+      }
+      continue;
+    }
+
+    if (spec.kind === 'manifest') {
+      collectCaptivePortalManifestArtifacts(
+        options,
+        artifactDir,
+        spec.root,
+        spec.manifestName,
+        spec.artifactPrefix
+      );
+      continue;
+    }
+
+    collectGuestArtifact(options, artifactDir, spec.sourcePath, spec.localName, spec.maxBytes);
+  }
 }
 
 function runWindowsDirectDiagnosticMode({ mode, options, runnerRepoRoot }) {
@@ -2618,6 +2668,7 @@ async function main() {
   let overlayServer;
   let windowsOverlayRoot = '';
   let runnerRepoRoot = DRY_RUN ? options.runnerRepoRoot || '' : '';
+  let modesToRun = [];
 
   try {
     if (options.sourceMode === 'local-overlay') {
@@ -2652,7 +2703,7 @@ async function main() {
         : resolveWindowsRunnerRepoRoot(options);
     }
 
-    const modesToRun =
+    modesToRun =
       options.mode === 'all'
         ? WINDOWS_DIRECT_RUN_MODE_NAMES.filter((mode) => {
             if (mode === 'all') {
@@ -2684,7 +2735,7 @@ async function main() {
   } finally {
     if (!DRY_RUN && runnerRepoRoot) {
       try {
-        collectArtifacts(options, artifactDir, runnerRepoRoot);
+        collectArtifacts(options, artifactDir, runnerRepoRoot, modesToRun);
       } catch (error) {
         console.warn(
           `warning: failed to collect Windows direct artifacts: ${
@@ -2724,6 +2775,7 @@ if (isDirectExecution) {
 
 export {
   extractUsableGuestIPv4,
+  getWindowsDirectArtifactSpecsForModes,
   parseRunnerRepoRootCandidates,
   runWindowsDirectDiagnosticMode,
   selectPreferredRunnerRepoRoot,
