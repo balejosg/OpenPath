@@ -962,7 +962,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
             }
     }
 
-    $requestId = (New-Guid).Guid
+    $requestId = [Guid]::NewGuid().ToString('N')
     $tabId = $null
     if ($Message.PSObject.Properties['tabId']) {
         $tabId = $Message.tabId

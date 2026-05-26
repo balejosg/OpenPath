@@ -581,7 +581,7 @@ Describe "Browser Module - Native Host" {
                 'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult',
                 'Global\OpenPathCaptivePortalRecoveryTrigger',
                 'OpenPath-CaptivePortalRecovery',
-                'New-Guid',
+                '[Guid]::NewGuid().ToString(''N'')',
                 'operation',
                 'source',
                 'triggerHost',
@@ -609,6 +609,7 @@ Describe "Browser Module - Native Host" {
             $recoveryFunction | Should -Not -Match 'whitelistUrl'
             $recoveryFunction | Should -Not -Match 'cookies?'
             $recoveryFunction | Should -Not -Match 'query'
+            $recoveryFunction | Should -Not -Match 'New-Guid'
         }
 
         It "Rejects invalid captive portal trigger hosts before queueing or triggering tasks" {
