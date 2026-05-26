@@ -1,0 +1,66 @@
+name: WEDU Captive Portal Lab E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      timeout_seconds:
+        description: Direct Windows diagnostic timeout in seconds.
+        required: false
+        default: '900'
+  schedule:
+    - cron: '17 2 * * *'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: wedu-captive-portal-lab-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  wedu-lab:
+    name: WEDU captive portal lab
+    runs-on: [self-hosted, Linux, X64, proxmox, openpath]
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OPENPATH_WEDU_CI_ARTIFACT_DIR: .opencode/tmp/wedu-captive-portal-lab/${{ github.run_id }}-${{ github.run_attempt }}
+      OPENPATH_WEDU_CI_DIRECT_TIMEOUT_SECONDS: ${{ github.event.inputs.timeout_seconds || '900' }}
+
+    steps:
+      - name: Check controller runner identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "RUNNER_NAME=$RUNNER_NAME"
+          echo "RUNNER_OS=$RUNNER_OS"
+          echo "RUNNER_ARCH=$RUNNER_ARCH"
+
+          if [ "$RUNNER_NAME" != "openpath-linux-102" ]; then
+            echo "::error::Expected openpath-linux-102, got $RUNNER_NAME"
+            exit 1
+          fi
+
+          if [ "$RUNNER_OS" != "Linux" ] || [ "$RUNNER_ARCH" != "X64" ]; then
+            echo "::error::Expected Linux/X64, got $RUNNER_OS/$RUNNER_ARCH"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Run WEDU captive portal lab
+        shell: bash
+        run: bash scripts/run-wedu-captive-portal-lab-ci.sh
+
+      - name: Upload WEDU lab artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wedu-captive-portal-lab-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .opencode/tmp/wedu-captive-portal-lab/${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn

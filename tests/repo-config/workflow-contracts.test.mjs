@@ -570,6 +570,66 @@ test('self-hosted Windows runner smoke workflow is manual and pinned to the Open
   );
 });
 
+test('WEDU captive portal lab workflow is manual or nightly and restores the shared runner', () => {
+  const workflow = readText('.github/workflows/wedu-captive-portal-lab.yml');
+  const script = readText('scripts/run-wedu-captive-portal-lab-ci.sh');
+
+  assert.ok(workflow.includes('workflow_dispatch:'), 'WEDU lab should allow manual dispatch');
+  assert.ok(workflow.includes('schedule:'), 'WEDU lab should run on a nightly schedule');
+  assert.ok(
+    !workflow.includes('pull_request:') && !workflow.includes('push:'),
+    'WEDU lab must not run on pull requests or pushes'
+  );
+  assert.ok(
+    workflow.includes('runs-on: [self-hosted, Linux, X64, proxmox, openpath]'),
+    'WEDU lab should run from the Linux Proxmox controller, not the Windows runner it mutates'
+  );
+  assert.ok(
+    workflow.includes('openpath-linux-102'),
+    'WEDU lab should verify the expected Linux controller runner'
+  );
+  assert.ok(
+    workflow.includes('actions/checkout@v6') && workflow.includes('persist-credentials: false'),
+    'WEDU lab should use checkout without persisted credentials'
+  );
+  assert.ok(
+    workflow.includes('actions/upload-artifact@v7'),
+    'WEDU lab should upload diagnostics even when the run fails'
+  );
+  assert.ok(
+    workflow.includes('scripts/run-wedu-captive-portal-lab-ci.sh'),
+    'WEDU lab workflow should delegate reversible VM operations to the repo script'
+  );
+  assert.ok(
+    workflow.includes('cancel-in-progress: false'),
+    'WEDU lab workflow should not cancel an in-flight VM restore'
+  );
+
+  for (const required of [
+    'trap cleanup EXIT',
+    'acquire_remote_lock',
+    'release_remote_lock',
+    'stop_all_action_runner_services',
+    'start_all_action_runner_services',
+    'qm snapshot',
+    'qm rollback',
+    'bridge=vmbr10',
+    'OPENPATH_WEDU_LAB_GATEWAY_TOKEN',
+    'captive-portal-wedu-lab',
+    'reset_gateway_captive',
+    'wait_for_openpath_runner_online',
+  ]) {
+    assert.ok(script.includes(required), `WEDU lab script should include ${required}`);
+  }
+
+  assert.ok(
+    !workflow.includes('runs-on: [self-hosted, Windows') &&
+      !script.includes('classroompath') &&
+      !script.includes('ClassroomPath'),
+    'OpenPath WEDU lab must avoid downstream runner coupling'
+  );
+});
+
 test('Codecov coverage uploads stay wired to active workflows and the README badge targets the app UI', () => {
   const readme = readText('README.md');
   const reusableTestWorkflow = readText('.github/workflows/reusable-test.yml');
