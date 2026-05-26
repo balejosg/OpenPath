@@ -21,6 +21,9 @@ $script:RecoveryQueueManifestPath = Join-Path $script:ArtifactsRoot 'captive-por
 $script:RecoveryProgressArtifactRoot = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-progress'
 $script:RecoveryProgressManifestPath = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-progress-manifest.json'
 $script:TaskStatePath = Join-Path $script:ArtifactsRoot 'captive-portal-task-state.json'
+$script:ConfigSnapshotPath = Join-Path $script:ArtifactsRoot 'captive-portal-config-snapshot.json'
+$script:AcrylicHostsSnapshotPath = Join-Path $script:ArtifactsRoot 'AcrylicHosts.txt.captive-portal-snapshot'
+$script:AcrylicConfigurationSnapshotPath = Join-Path $script:ArtifactsRoot 'AcrylicConfiguration.ini.captive-portal-snapshot'
 $script:MarkerBeforeAuthPath = Join-Path $script:ArtifactsRoot 'captive-portal-marker-before-auth.json'
 $script:MarkerAfterAuthPath = Join-Path $script:ArtifactsRoot 'captive-portal-marker-after-auth.json'
 $script:FixtureStatePath = 'C:\OpenPath\data\captive-portal-recovery-fixture-state.json'
@@ -74,6 +77,117 @@ function Save-Json {
     )
 
     $Value | ConvertTo-Json -Depth $Depth | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Ensure-ObjectProperty {
+    param(
+        [Parameter(Mandatory = $true)][object]$InputObject,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [AllowNull()][object]$Value
+    )
+
+    if ($InputObject.PSObject.Properties[$Name]) {
+        if ($null -eq $InputObject.$Name -or ([string]$InputObject.$Name).Trim() -eq '') {
+            $InputObject.$Name = $Value
+        }
+    }
+    else {
+        $InputObject | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+    }
+}
+
+function Get-RedactedConfigSnapshot {
+    param([Parameter(Mandatory = $true)][object]$Config)
+
+    $snapshot = [ordered]@{}
+    foreach ($property in @($Config.PSObject.Properties)) {
+        $name = [string]$property.Name
+        if ($name -match '(?i)(token|secret|password|credential|key)' -or $name -eq 'whitelistUrl') {
+            $snapshot[$name] = '<redacted>'
+            continue
+        }
+        $snapshot[$name] = $property.Value
+    }
+    return [pscustomobject]$snapshot
+}
+
+function Ensure-OpenPathDirectRunnerConfig {
+    $configPath = Join-Path (Join-Path $script:InstalledOpenPathRoot 'data') 'config.json'
+    $configDir = Split-Path $configPath -Parent
+    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+
+    if (Test-Path -LiteralPath $configPath) {
+        try {
+            $config = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            throw "OpenPath direct runner config is invalid JSON at ${configPath}: $_"
+        }
+    }
+    else {
+        $config = [pscustomobject]@{}
+    }
+
+    Ensure-ObjectProperty -InputObject $config -Name 'version' -Value 'direct-runner-captive-portal-navigation'
+    Ensure-ObjectProperty -InputObject $config -Name 'apiUrl' -Value ''
+    Ensure-ObjectProperty -InputObject $config -Name 'whitelistUrl' -Value ''
+    Ensure-ObjectProperty -InputObject $config -Name 'classroomId' -Value 'direct-runner'
+    Ensure-ObjectProperty -InputObject $config -Name 'machineName' -Value $env:COMPUTERNAME
+    Ensure-ObjectProperty -InputObject $config -Name 'primaryDNS' -Value '8.8.8.8'
+    Ensure-ObjectProperty -InputObject $config -Name 'secondaryDNS' -Value '8.8.4.4'
+    Ensure-ObjectProperty -InputObject $config -Name 'enableFirewall' -Value $true
+    Ensure-ObjectProperty -InputObject $config -Name 'approvedStudentBrowsers' -Value @('Firefox')
+
+    $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
+    Save-Json -Value (Get-RedactedConfigSnapshot -Config $config) -Path $script:ConfigSnapshotPath
+    return $config
+}
+
+function Copy-CaptivePortalEnvironmentSnapshots {
+    $files = @()
+    $errors = @()
+
+    try {
+        $configPath = Join-Path (Join-Path $script:InstalledOpenPathRoot 'data') 'config.json'
+        if (Test-Path -LiteralPath $configPath) {
+            $config = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            Save-Json -Value (Get-RedactedConfigSnapshot -Config $config) -Path $script:ConfigSnapshotPath
+            $files += 'captive-portal-config-snapshot.json'
+        }
+    }
+    catch {
+        $errors += "config: $_"
+    }
+
+    try {
+        $acrylicPath = $null
+        if (Get-Command -Name 'Get-AcrylicPath' -ErrorAction SilentlyContinue) {
+            $acrylicPath = Get-AcrylicPath
+        }
+        if (-not $acrylicPath) {
+            $acrylicPath = 'C:\Program Files (x86)\Acrylic DNS Proxy'
+        }
+
+        $hostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
+        if (Test-Path -LiteralPath $hostsPath) {
+            Copy-Item -LiteralPath $hostsPath -Destination $script:AcrylicHostsSnapshotPath -Force
+            $files += 'AcrylicHosts.txt.captive-portal-snapshot'
+        }
+
+        $configurationPath = Join-Path $acrylicPath 'AcrylicConfiguration.ini'
+        if (Test-Path -LiteralPath $configurationPath) {
+            Copy-Item -LiteralPath $configurationPath -Destination $script:AcrylicConfigurationSnapshotPath -Force
+            $files += 'AcrylicConfiguration.ini.captive-portal-snapshot'
+        }
+    }
+    catch {
+        $errors += "acrylic: $_"
+    }
+
+    return [pscustomobject]@{
+        files = @($files)
+        errors = @($errors)
+    }
 }
 
 function Convert-ToScheduledTaskResultCode {
@@ -150,7 +264,8 @@ function Invoke-NativeHostAction {
         -PassThru `
         -WindowStyle Hidden
 
-    if (-not $process.WaitForExit(30000)) {
+    $nativeHostTimeoutMs = 90000
+    if (-not $process.WaitForExit($nativeHostTimeoutMs)) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         throw 'Native host recovery action timed out.'
     }
@@ -527,11 +642,200 @@ function Get-PortalConcurrencyObservation {
     }
 }
 
+function Get-FreeTcpPort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse('127.0.0.1'), 0)
+    try {
+        $listener.Start()
+        return $listener.LocalEndpoint.Port
+    }
+    finally {
+        $listener.Stop()
+    }
+}
+
+function Find-GeckoDriverPath {
+    $command = Get-Command geckodriver.exe -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    $candidatePaths = @(
+        "$env:ChocolateyInstall\bin\geckodriver.exe",
+        'C:\ProgramData\chocolatey\bin\geckodriver.exe',
+        (Join-Path $script:RepoRoot 'tests\selenium\node_modules\.bin\geckodriver.cmd')
+    )
+    foreach ($candidatePath in $candidatePaths) {
+        if ($candidatePath -and (Test-Path -LiteralPath $candidatePath)) {
+            return $candidatePath
+        }
+    }
+
+    return ''
+}
+
+function Invoke-WebDriverJson {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [ValidateSet('Get', 'Post', 'Delete')]
+        [string]$Method = 'Get',
+        [AllowNull()][object]$Body = $null
+    )
+
+    $params = @{
+        Uri = $Uri
+        Method = $Method
+        ErrorAction = 'Stop'
+    }
+    if ($null -ne $Body) {
+        $params.ContentType = 'application/json'
+        $params.Body = ($Body | ConvertTo-Json -Depth 12 -Compress)
+    }
+
+    return (Invoke-RestMethod @params)
+}
+
+function Test-FirefoxNavigationBlockedByOpenPath {
+    param(
+        [string]$FinalUrl = '',
+        [string]$Title = '',
+        [string]$PageSource = ''
+    )
+
+    if ($FinalUrl -match '(?i)/blocked/blocked\.html|about:neterror\?e=blockedByPolicy') {
+        return $true
+    }
+    if ($FinalUrl -match '(?i)^moz-extension://') {
+        return $true
+    }
+    if ($Title -match '(?i)OpenPath.*blocked|blocked.*OpenPath') {
+        return $true
+    }
+    if ($PageSource -match '(?i)OpenPath[\s\S]{0,160}(blocked|request access)|blocked[\s\S]{0,160}OpenPath') {
+        return $true
+    }
+
+    return $false
+}
+
+function Invoke-FirefoxNavigationInspection {
+    param(
+        [Parameter(Mandatory = $true)][string]$FirefoxPath,
+        [Parameter(Mandatory = $true)][string]$Url
+    )
+
+    $geckoDriverPath = Find-GeckoDriverPath
+    if (-not $geckoDriverPath) {
+        throw 'geckodriver.exe was not found; cannot inspect Firefox final URL.'
+    }
+
+    $port = Get-FreeTcpPort
+    $geckoOutPath = Join-Path $script:ArtifactsRoot 'captive-portal-geckodriver.out.log'
+    $geckoErrPath = Join-Path $script:ArtifactsRoot 'captive-portal-geckodriver.err.log'
+    $geckoArgs = @('--host', '127.0.0.1', '--port', [string]$port)
+    $geckoProcess = Start-Process -FilePath $geckoDriverPath `
+        -ArgumentList $geckoArgs `
+        -RedirectStandardOutput $geckoOutPath `
+        -RedirectStandardError $geckoErrPath `
+        -PassThru `
+        -WindowStyle Hidden
+
+    $sessionId = ''
+    try {
+        $statusUri = "http://127.0.0.1:$port/status"
+        $ready = $false
+        for ($attempt = 1; $attempt -le 30; $attempt++) {
+            try {
+                Invoke-WebDriverJson -Uri $statusUri | Out-Null
+                $ready = $true
+                break
+            }
+            catch {
+                Start-Sleep -Milliseconds 250
+            }
+        }
+        if (-not $ready) {
+            throw 'geckodriver did not become ready for Firefox navigation inspection.'
+        }
+
+        $session = Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session" -Method Post -Body @{
+            capabilities = @{
+                alwaysMatch = @{
+                    browserName = 'firefox'
+                    pageLoadStrategy = 'eager'
+                    'moz:firefoxOptions' = @{
+                        binary = $FirefoxPath
+                        args = @('-headless')
+                    }
+                }
+            }
+        }
+        $sessionId = if ($session.value -and $session.value.sessionId) { [string]$session.value.sessionId } else { [string]$session.sessionId }
+        if (-not $sessionId) {
+            throw 'geckodriver did not return a session id.'
+        }
+
+        Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/timeouts" -Method Post -Body @{
+            implicit = 0
+            pageLoad = 10000
+            script = 5000
+        } | Out-Null
+
+        $navigationError = ''
+        try {
+            Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/url" -Method Post -Body @{ url = $Url } | Out-Null
+        }
+        catch {
+            $navigationError = [string]$_
+        }
+
+        Start-Sleep -Seconds 2
+        $finalUrlResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/url"
+        $titleResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/title"
+        $sourceResult = $null
+        try {
+            $sourceResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/source"
+        }
+        catch {
+            $sourceResult = [pscustomobject]@{ value = '' }
+        }
+
+        $finalUrl = if ($finalUrlResult -and $finalUrlResult.PSObject.Properties['value']) { [string]$finalUrlResult.value } else { '' }
+        $title = if ($titleResult -and $titleResult.PSObject.Properties['value']) { [string]$titleResult.value } else { '' }
+        $pageSource = if ($sourceResult -and $sourceResult.PSObject.Properties['value']) { [string]$sourceResult.value } else { '' }
+        $blocked = Test-FirefoxNavigationBlockedByOpenPath -FinalUrl $finalUrl -Title $title -PageSource $pageSource
+
+        return [pscustomobject]@{
+            browserObservationLevel = 'webdriver-final-url'
+            geckoDriverPath = $geckoDriverPath
+            inspectedFinalUrl = (-not [string]::IsNullOrWhiteSpace($finalUrl))
+            finalUrl = $finalUrl
+            title = $title
+            navigationError = $navigationError
+            blockedByOpenPath = $blocked
+            didNotLandOnBlockedPage = (-not $blocked -and -not [string]::IsNullOrWhiteSpace($finalUrl))
+            geckoDriverOutPath = 'captive-portal-geckodriver.out.log'
+            geckoDriverErrPath = 'captive-portal-geckodriver.err.log'
+        }
+    }
+    finally {
+        if ($sessionId) {
+            try {
+                Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId" -Method Delete | Out-Null
+            }
+            catch { }
+        }
+        if ($geckoProcess -and -not $geckoProcess.HasExited) {
+            Stop-Process -Id $geckoProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Invoke-FirefoxRetryObservation {
     param([AllowNull()][object]$NativeResponse)
 
     $retryAttempted = $false
     $errorText = ''
+    $inspection = $null
     try {
         $firefoxPath = @(
             "$env:ProgramFiles\Mozilla Firefox\firefox.exe",
@@ -540,27 +844,44 @@ function Invoke-FirefoxRetryObservation {
 
         if ($firefoxPath) {
             $retryAttempted = $true
-            $process = Start-Process -FilePath $firefoxPath -ArgumentList @('-headless', '-url', $script:FixtureUrl) -PassThru -WindowStyle Hidden
-            Start-Sleep -Seconds 5
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            $inspection = Invoke-FirefoxNavigationInspection -FirefoxPath $firefoxPath -Url $script:FixtureUrl
         }
         else {
-            $errorText = 'Firefox executable was not found; native recovery evidence is still recorded.'
+            $errorText = 'Firefox executable was not found; browser navigation could not be inspected.'
         }
     }
     catch {
         $errorText = [string]$_
     }
 
+    if (-not $inspection) {
+        $inspection = [pscustomobject]@{
+            browserObservationLevel = 'webdriver-final-url'
+            inspectedFinalUrl = $false
+            finalUrl = ''
+            title = ''
+            navigationError = ''
+            blockedByOpenPath = $null
+            didNotLandOnBlockedPage = $false
+            geckoDriverOutPath = 'captive-portal-geckodriver.out.log'
+            geckoDriverErrPath = 'captive-portal-geckodriver.err.log'
+        }
+    }
+
     $navigationResult = [pscustomobject]@{
         fixtureUrl = $script:FixtureUrl
         retryAttempted = $retryAttempted
-        browserObservationLevel = 'headless-process-launch-only'
-        blockedByOpenPath = $null
-        didNotLandOnBlockedPage = $null
-        note = 'This runner does not inspect Firefox final URL. Firefox retry suppression is covered by extension tests; target-platform evidence must inspect the real browser.'
+        browserObservationLevel = [string]$inspection.browserObservationLevel
+        inspectedFinalUrl = [bool]$inspection.inspectedFinalUrl
+        finalUrl = [string]$inspection.finalUrl
+        title = [string]$inspection.title
+        navigationError = [string]$inspection.navigationError
+        blockedByOpenPath = $inspection.blockedByOpenPath
+        didNotLandOnBlockedPage = [bool]$inspection.didNotLandOnBlockedPage
         nativeRecoverySuccess = if ($NativeResponse -and $NativeResponse.PSObject.Properties['success']) { [bool]$NativeResponse.success } else { $false }
         nativeRequestId = if ($NativeResponse -and $NativeResponse.PSObject.Properties['requestId']) { [string]$NativeResponse.requestId } else { '' }
+        geckoDriverOutPath = if ($inspection.PSObject.Properties['geckoDriverOutPath']) { [string]$inspection.geckoDriverOutPath } else { '' }
+        geckoDriverErrPath = if ($inspection.PSObject.Properties['geckoDriverErrPath']) { [string]$inspection.geckoDriverErrPath } else { '' }
         error = $errorText
     }
     Save-Json -Value $navigationResult -Path $script:FirefoxNavigationResultPath
@@ -608,6 +929,7 @@ function Test-AllowedDomainFunctional {
 
 function Invoke-CaptivePortalNavigationRun {
     Ensure-ArtifactRoot
+    $directRunnerConfig = Ensure-OpenPathDirectRunnerConfig
 
     $fixtureSummary = [pscustomobject]@{
         fixtureHost = $script:FixtureHost
@@ -622,12 +944,14 @@ function Invoke-CaptivePortalNavigationRun {
     $protectedBlock = Test-ProtectedModeBlocksFixtureHost
     $nativeResponse = $null
     $nativeReconcileResponse = $null
+    $environmentSnapshots = $null
     if (-not $protectedBlock.blocked) {
         throw "Protected mode did not block fixture host $script:FixtureHost through 127.0.0.1."
     }
 
     try {
         Stage-OpenPathRuntimeForDirectRunner
+        $environmentSnapshots = Copy-CaptivePortalEnvironmentSnapshots
         Install-LocalOnlyCaptivePortalRecoveryFixture
         $nativeResponse = Invoke-NativeHostAction -Message @{
             action = 'recover-captive-portal-navigation'
@@ -657,6 +981,7 @@ function Invoke-CaptivePortalNavigationRun {
     $dnsRecoveredFromAcrylicOnly = Test-DnsSnapshotHasNonAcrylicServer -Snapshot $dnsAfter
     Copy-RecoveryResultArtifact -NativeResponses @($nativeResponse, $nativeReconcileResponse) | Out-Null
     $recoveryDiagnostics = Copy-RecoveryDiagnosticArtifacts
+    $environmentSnapshots = Copy-CaptivePortalEnvironmentSnapshots
     $recoveryFiles = @($recoveryDiagnostics.resultFiles)
     $observationArtifact = Copy-CaptivePortalObservationArtifact
     $firefoxNavigation = Invoke-FirefoxRetryObservation -NativeResponse $nativeResponse
@@ -664,7 +989,13 @@ function Invoke-CaptivePortalNavigationRun {
     $portalActivePath = 'C:\OpenPath\data\captive-portal-active.json'
     $portalModeActive = Test-Path -LiteralPath $portalActivePath
     $nativeStateIsPortal = ([string]$nativeResponse.state -eq 'Portal')
-    $nativeRecoveryVerified = [bool]($protectedBlock.blocked -and $portalModeActive -and $nativeResponse.success -and $nativeStateIsPortal)
+    $nativeRecoveryVerified = [bool](
+        $protectedBlock.blocked -and
+        $nativeResponse.success -and
+        $nativeStateIsPortal -and
+        $nativeResponse.portalModeActive -and
+        $nativeResponse.recoveryHostsApplied
+    )
     $blockedDomainStillBlocked = Test-BlockedDomainStillBlocked
     $allowedDomainFunctional = Test-AllowedDomainFunctional
     $limitedPostAuthUnproven = [bool]($markerAfterAuth -and $markerAfterAuth.PSObject.Properties['mode'] -and [string]$markerAfterAuth.mode -eq 'limited')
@@ -690,7 +1021,11 @@ function Invoke-CaptivePortalNavigationRun {
         $allowedDomainFunctional.functional -and
         (-not $limitedPostAuthUnproven)
     )
-    $browserNavigationVerified = $false
+    $browserNavigationVerified = [bool](
+        $firefoxNavigation.inspectedFinalUrl -and
+        $firefoxNavigation.didNotLandOnBlockedPage -and
+        $firefoxNavigation.nativeRecoverySuccess
+    )
     $targetPlatformSymptomCleared = [bool]($browserNavigationVerified -and $postAuthProtectedModeRestored)
 
     $result = [pscustomobject]@{
@@ -724,6 +1059,7 @@ function Invoke-CaptivePortalNavigationRun {
         limitedPostAuthUnproven = $limitedPostAuthUnproven
         recoveryArtifacts = $recoveryFiles
         recoveryDiagnostics = $recoveryDiagnostics
+        environmentSnapshots = $environmentSnapshots
         captivePortalObservationPath = $observationArtifact
         dnsBeforePath = 'captive-portal-dns-before.json'
         dnsDuringPath = 'captive-portal-dns-during.json'
@@ -751,6 +1087,7 @@ catch {
     try {
         Ensure-ArtifactRoot
         $recoveryDiagnostics = Copy-RecoveryDiagnosticArtifacts
+        $environmentSnapshots = Copy-CaptivePortalEnvironmentSnapshots
         if (-not (Test-Path -LiteralPath $script:ResultPath)) {
             Save-Json -Value ([pscustomobject]@{
                 profile = 'captive-portal-navigation'
@@ -759,6 +1096,7 @@ catch {
                 fixtureDoesNotProveRealWeduCaptiveDns = $true
                 error = [string]$_
                 recoveryDiagnostics = $recoveryDiagnostics
+                environmentSnapshots = $environmentSnapshots
                 writtenAt = (Get-Date).ToString('o')
             }) -Path $script:ResultPath
         }

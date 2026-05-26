@@ -11,9 +11,9 @@ Import-Module "$modulePath\lib\Common.psm1" -ErrorAction SilentlyContinue
 $script:OpenPathRoot = Resolve-OpenPathWindowsRoot
 $script:CaptivePortalStatePath = "$script:OpenPathRoot\data\captive-portal-active.json"
 $script:CaptivePortalObservationPath = "$script:OpenPathRoot\data\captive-portal-observation.json"
-$script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds = 4
-$script:CaptivePortalLimitedModeDnsMaxAttempts = 1
-$script:CaptivePortalLimitedModeDnsDelayMilliseconds = 250
+$script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds = 8
+$script:CaptivePortalLimitedModeDnsMaxAttempts = 5
+$script:CaptivePortalLimitedModeDnsDelayMilliseconds = 500
 $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds = 1
 
 function Test-OpenPathCaptivePortalModeActive {
@@ -590,7 +590,7 @@ function Enable-OpenPathCaptivePortalLimitedMode {
         }
     }
 
-    if (-not (Test-OpenPathLimitedCaptivePortalProtection -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds)) {
+    if (-not (Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $mergedHosts -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds)) {
         Write-OpenPathLog 'Watchdog: captive portal limited mode verification failed; staying protected' -Level WARN
         Restore-OpenPathLimitedCaptivePortalAttempt
         return $false
@@ -639,6 +639,45 @@ function New-OpenPathLimitedCaptivePortalHostsDefinition {
     return $definition
 }
 
+function Test-OpenPathLimitedCaptivePortalRecoveryHost {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Domain,
+        [int]$DnsMaxAttempts = 12,
+        [int]$DnsDelayMilliseconds = 1000,
+        [int]$DnsAttemptTimeoutSeconds = 0
+    )
+
+    try {
+        $acrylicPath = Get-AcrylicPath
+        if (-not $acrylicPath) {
+            return $false
+        }
+
+        $hostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
+        if (-not (Test-Path -LiteralPath $hostsPath -ErrorAction SilentlyContinue)) {
+            return $false
+        }
+
+        $expectedRule = Get-AcrylicExactForwardRule -Domain $Domain
+        if (-not $expectedRule) {
+            return $false
+        }
+
+        $content = Get-Content -LiteralPath $hostsPath -Raw -ErrorAction Stop
+        $match = [regex]::Match($content, "(?m)^\s*$([regex]::Escape($expectedRule))\s*$")
+        if (-not $match.Success) {
+            return $false
+        }
+
+        $defaultBlockIndex = $content.IndexOf("NX *")
+        return ($defaultBlockIndex -lt 0 -or $match.Index -lt $defaultBlockIndex)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$UpstreamDns)
@@ -678,6 +717,7 @@ function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
 function Test-OpenPathLimitedCaptivePortalProtection {
     [CmdletBinding()]
     param(
+        [string[]]$PortalRecoveryDomains = @(),
         [int]$DnsMaxAttempts = 12,
         [int]$DnsDelayMilliseconds = 1000,
         [int]$DnsAttemptTimeoutSeconds = 0
@@ -687,10 +727,28 @@ function Test-OpenPathLimitedCaptivePortalProtection {
         if ((Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue) -and -not (Test-FirewallActive)) {
             return $false
         }
-        if ((Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) -and -not (Test-DNSResolution -MaxAttempts $DnsMaxAttempts -DelayMilliseconds $DnsDelayMilliseconds -AttemptTimeoutSeconds $DnsAttemptTimeoutSeconds)) {
+
+        $recoveryHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains)
+        if ($recoveryHosts.Count -le 0) {
             return $false
         }
-        if ((Get-Command -Name 'Test-DNSSinkhole' -ErrorAction SilentlyContinue) -and -not (Test-DNSSinkhole -Domain 'this-should-be-blocked-test-12345.com' -AttemptTimeoutSeconds $DnsAttemptTimeoutSeconds)) {
+
+        foreach ($recoveryHost in $recoveryHosts) {
+            if (-not (Test-OpenPathLimitedCaptivePortalRecoveryHost -Domain $recoveryHost -DnsMaxAttempts $DnsMaxAttempts -DnsDelayMilliseconds $DnsDelayMilliseconds -DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds)) {
+                return $false
+            }
+        }
+
+        $acrylicPath = Get-AcrylicPath
+        if (-not $acrylicPath) {
+            return $false
+        }
+        $hostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
+        if (-not (Test-Path -LiteralPath $hostsPath -ErrorAction SilentlyContinue)) {
+            return $false
+        }
+        $content = Get-Content -LiteralPath $hostsPath -Raw -ErrorAction Stop
+        if ($content -notmatch '(?m)^\s*NX \*\s*$') {
             return $false
         }
         return $true
@@ -1069,11 +1127,13 @@ function Disable-OpenPathCaptivePortalMode {
         return $false
     }
 
-    if (-not (Test-Path $script:CaptivePortalStatePath)) {
-        return $true
+    $markerPresentAtStart = Test-Path $script:CaptivePortalStatePath
+    if ($markerPresentAtStart) {
+        Write-OpenPathLog 'Watchdog: Captive portal resolved - restoring DNS protection' -Level WARN
     }
-
-    Write-OpenPathLog 'Watchdog: Captive portal resolved - restoring DNS protection' -Level WARN
+    else {
+        Write-OpenPathLog 'Watchdog: captive portal marker is absent - verifying protected DNS mode before closing recovery' -Level WARN
+    }
 
     if (-not $Config) {
         try {
@@ -1110,8 +1170,21 @@ function Disable-OpenPathCaptivePortalMode {
     }
 
     if (-not [bool]$preClearEvidence.enforcementRestored) {
-        Write-OpenPathLog 'Watchdog: protected mode verification failed; keeping captive portal marker active' -Level WARN
+        if ($markerPresentAtStart) {
+            Write-OpenPathLog 'Watchdog: protected mode verification failed; keeping captive portal marker active' -Level WARN
+        }
+        else {
+            Write-OpenPathLog 'Watchdog: no captive portal marker exists but protected mode is still not restored' -Level WARN
+        }
         return $false
+    }
+
+    if (-not $markerPresentAtStart) {
+        if (-not [bool]$preClearEvidence.protectedModeRestored) {
+            Write-OpenPathLog 'Watchdog: no captive portal marker exists but protected mode is still not restored' -Level WARN
+            return $false
+        }
+        return $true
     }
 
     if (-not (Clear-OpenPathCaptivePortalMarker)) {

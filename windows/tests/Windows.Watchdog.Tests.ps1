@@ -210,7 +210,7 @@ Describe "Watchdog Script" {
                 '$script:CaptivePortalLimitedModeDnsDelayMilliseconds',
                 '$script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds',
                 'Restart-AcrylicService -TimeoutSeconds $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds -SkipBatchFallback',
-                'Test-OpenPathLimitedCaptivePortalProtection -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds'
+                'Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $mergedHosts -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds'
             )
 
             $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
@@ -218,7 +218,7 @@ Describe "Watchdog Script" {
             $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
 
             $enableBody.IndexOf('Restart-AcrylicService -TimeoutSeconds $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds -SkipBatchFallback') |
-                Should -BeLessThan $enableBody.IndexOf('Test-OpenPathLimitedCaptivePortalProtection -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts')
+                Should -BeLessThan $enableBody.IndexOf('Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $mergedHosts')
             $enableBody | Should -Match '(?s)if \(-not \(\[bool\]\$restartSucceeded\)\).*?Restore-OpenPathLimitedCaptivePortalAttempt.*?return \$false'
         }
 
@@ -262,6 +262,49 @@ Describe "Watchdog Script" {
             $moduleContent | Should -Not -Match 'Disable-OpenPathCaptivePortalMode[\\s\\S]*Restore-OpenPathProtectedMode -Config \\$Config -SkipAcrylicRestart'
         }
 
+        It "Does not treat a missing marker as restored while Acrylic remains in portal recovery mode" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $disableStart = $moduleContent.IndexOf('function Disable-OpenPathCaptivePortalMode')
+            $exportStart = $moduleContent.IndexOf('Export-ModuleMember')
+            $disableBody = $moduleContent.Substring($disableStart, $exportStart - $disableStart)
+
+            $disableBody | Should -Not -Match '(?s)if \(-not \(Test-Path \$script:CaptivePortalStatePath\)\)\s*\{\s*return \$true\s*\}'
+            Assert-ContentContainsAll -Content $disableBody -Needles @(
+                '$markerPresentAtStart = Test-Path $script:CaptivePortalStatePath',
+                'no captive portal marker exists but protected mode is still not restored',
+                'Get-OpenPathCaptivePortalProtectedModeExitEvidence',
+                'Restore-OpenPathCaptivePortalAcrylicHostState',
+                'Restore-OpenPathProtectedMode -Config $Config'
+            )
+        }
+
+        It "Verifies limited portal recovery with exact temporary hosts instead of a generic DNS probe" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $protectionStart = $moduleContent.IndexOf('function Test-OpenPathLimitedCaptivePortalProtection')
+            $restoreStart = $moduleContent.IndexOf('function Restore-OpenPathCaptivePortalAcrylicHostState')
+            $protectionBody = $moduleContent.Substring($protectionStart, $restoreStart - $protectionStart)
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'function Test-OpenPathLimitedCaptivePortalRecoveryHost',
+                'Test-OpenPathLimitedCaptivePortalRecoveryHost -Domain $recoveryHost',
+                'Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $mergedHosts',
+                'Get-AcrylicExactForwardRule -Domain $Domain',
+                '$match.Index -lt $defaultBlockIndex'
+            )
+            Assert-ContentContainsAll -Content $protectionBody -Needles @(
+                '[string[]]$PortalRecoveryDomains = @()',
+                'Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains',
+                '$recoveryHost',
+                'NX \*'
+            )
+            $protectionBody | Should -Not -Match 'Test-DNSResolution'
+            $protectionBody | Should -Not -Match 'Test-DNSSinkhole'
+        }
+
         It "Bounds post-auth reconcile protected-mode evidence inside native host budget" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
@@ -286,6 +329,19 @@ Describe "Watchdog Script" {
                 '[int]$DnsDelayMilliseconds = 1000',
                 '[int]$DnsAttemptTimeoutSeconds = 0'
             )
+        }
+
+        It "Writes post-auth reconcile success only when protected mode is fully restored" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '$reconcileProtectedModeRestored = ([bool]$disabled -and [bool]$postAuthEvidence.protectedModeRestored)',
+                'success = $reconcileProtectedModeRestored',
+                'portalExitRoute = if ($reconcileProtectedModeRestored) { ''reconcile-authenticated'' } else { ''reconcile-authenticated-restore-failed'' }',
+                'protectedModeRestored = [bool]$postAuthEvidence.protectedModeRestored'
+            )
+            $content | Should -Not -Match 'success = \$disabled\s+operation = \$operation'
         }
 
         It "Closes passthrough immediately on authenticated detection and preserves the marker when restore fails" {

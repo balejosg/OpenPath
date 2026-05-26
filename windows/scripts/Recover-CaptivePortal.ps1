@@ -327,18 +327,21 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
                 } | Out-Null
                 $disabled = [bool](Disable-OpenPathCaptivePortalMode -DnsMaxAttempts $RecoveryDnsMaxAttempts -DnsDelayMilliseconds $RecoveryDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $RecoveryDnsAttemptTimeoutSeconds)
                 $postAuthEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -DnsMaxAttempts $RecoveryDnsMaxAttempts -DnsDelayMilliseconds $RecoveryDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $RecoveryDnsAttemptTimeoutSeconds
+                $reconcileProtectedModeRestored = ([bool]$disabled -and [bool]$postAuthEvidence.protectedModeRestored)
+                $portalModeStillActive = Test-OpenPathCaptivePortalModeActive
                 Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'write-result' -Payload @{
                     state = [string]$state
                     disabled = [bool]$disabled
+                    protectedModeRestored = [bool]$postAuthEvidence.protectedModeRestored
                 } | Out-Null
                 Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
-                    success = $disabled
+                    success = $reconcileProtectedModeRestored
                     operation = $operation
                     state = [string]$state
                     triggerHost = ''
-                    activeMarker = (-not $disabled)
-                    portalModeActive = (-not $disabled)
-                    portalExitRoute = if ($disabled) { 'reconcile-authenticated' } else { 'reconcile-authenticated-restore-failed' }
+                    activeMarker = $portalModeStillActive
+                    portalModeActive = $portalModeStillActive
+                    portalExitRoute = if ($reconcileProtectedModeRestored) { 'reconcile-authenticated' } else { 'reconcile-authenticated-restore-failed' }
                     localDnsLoopbackRestored = [bool]$postAuthEvidence.localDnsLoopbackRestored
                     acrylicNormalRestored = [bool]$postAuthEvidence.acrylicNormalRestored
                     dnsResolutionHealthy = [bool]$postAuthEvidence.dnsResolutionHealthy

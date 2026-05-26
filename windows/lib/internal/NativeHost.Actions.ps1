@@ -979,12 +979,12 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     try {
         $taskResult = Invoke-NativeHostMutex `
             -Name 'Global\OpenPathCaptivePortalRecoveryTrigger' `
-            -TimeoutMilliseconds 20000 `
+            -TimeoutMilliseconds 45000 `
             -Action {
                 Invoke-OpenPathScheduledTask `
                     -TaskName $taskName `
                     -Runner (Get-NativeHostTaskRunner) `
-                    -TimeoutSeconds 20 `
+                    -TimeoutSeconds 45 `
                     -PollMilliseconds 250 `
                     -WaitCondition {
                         return ($null -ne (Read-NativeHostCaptivePortalRecoveryResult -RequestId $requestId))
@@ -1032,12 +1032,24 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
 
     $state = if ($result.PSObject.Properties['state'] -and $result.state) { [string]$result.state } else { 'Unknown' }
     $portalModeActive = if ($result.PSObject.Properties['portalModeActive']) { [bool]$result.portalModeActive } else { $false }
-    $success = (($result.PSObject.Properties['success'] -and [bool]$result.success) -or $portalModeActive)
-    $operationSucceeded = if ($operation -eq 'reconcile') {
-        ($success -and $state -eq 'Authenticated' -and -not $portalModeActive)
+    $resultSuccess = if ($result.PSObject.Properties['success']) { [bool]$result.success } else { $false }
+    $protectedModeRestored = if ($result.PSObject.Properties['protectedModeRestored']) { [bool]$result.protectedModeRestored } else { $false }
+    $allowedHosts = if ($result.PSObject.Properties['allowedHosts']) {
+        @($result.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     }
     else {
-        ($success -and ($state -eq 'Portal' -or $portalModeActive))
+        @()
+    }
+    $recoveryHostsApplied = if ($result.PSObject.Properties['recoveryHostsApplied']) { [bool]$result.recoveryHostsApplied } else { $false }
+    $exactRecoveryHostApplied = $recoveryHostsApplied
+    if ($triggerHost) {
+        $exactRecoveryHostApplied = ($exactRecoveryHostApplied -and ($allowedHosts -contains $triggerHost))
+    }
+    $operationSucceeded = if ($operation -eq 'reconcile') {
+        ($resultSuccess -and $state -eq 'Authenticated' -and -not $portalModeActive -and $protectedModeRestored)
+    }
+    else {
+        ($resultSuccess -and $state -eq 'Portal' -and $portalModeActive -and $exactRecoveryHostApplied)
     }
 
     return @{
@@ -1059,10 +1071,10 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         firewallExpectedActive = if ($result.PSObject.Properties['firewallExpectedActive']) { [bool]$result.firewallExpectedActive } else { $false }
         firewallHealthy = if ($result.PSObject.Properties['firewallHealthy']) { [bool]$result.firewallHealthy } else { $false }
         markerCleared = if ($result.PSObject.Properties['markerCleared']) { [bool]$result.markerCleared } else { $false }
-        protectedModeRestored = if ($result.PSObject.Properties['protectedModeRestored']) { [bool]$result.protectedModeRestored } else { $false }
+        protectedModeRestored = $protectedModeRestored
         activeMarkerMode = if ($result.PSObject.Properties['activeMarkerMode']) { [string]$result.activeMarkerMode } else { '' }
-        allowedHosts = if ($result.PSObject.Properties['allowedHosts']) { @($result.allowedHosts) } else { @() }
-        recoveryHostsApplied = if ($result.PSObject.Properties['recoveryHostsApplied']) { [bool]$result.recoveryHostsApplied } else { $false }
+        allowedHosts = @($allowedHosts)
+        recoveryHostsApplied = $recoveryHostsApplied
         recentSuccessEligible = if ($result.PSObject.Properties['recentSuccessEligible']) { [bool]$result.recentSuccessEligible } else { $false }
     }
 }
