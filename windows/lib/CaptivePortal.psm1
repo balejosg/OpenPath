@@ -290,7 +290,7 @@ function Get-OpenPathCaptivePortalProtectedModeExitEvidence {
 
     try {
         if (Get-Command -Name 'Test-DNSSinkhole' -ErrorAction SilentlyContinue) {
-            $sinkholeHealthy = [bool](Test-DNSSinkhole -Domain 'this-should-be-blocked-test-12345.com')
+            $sinkholeHealthy = [bool](Test-DNSSinkhole -Domain 'this-should-be-blocked-test-12345.com' -AttemptTimeoutSeconds $DnsAttemptTimeoutSeconds)
         }
     }
     catch {
@@ -690,7 +690,7 @@ function Test-OpenPathLimitedCaptivePortalProtection {
         if ((Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) -and -not (Test-DNSResolution -MaxAttempts $DnsMaxAttempts -DelayMilliseconds $DnsDelayMilliseconds -AttemptTimeoutSeconds $DnsAttemptTimeoutSeconds)) {
             return $false
         }
-        if ((Get-Command -Name 'Test-DNSSinkhole' -ErrorAction SilentlyContinue) -and -not (Test-DNSSinkhole -Domain 'this-should-be-blocked-test-12345.com')) {
+        if ((Get-Command -Name 'Test-DNSSinkhole' -ErrorAction SilentlyContinue) -and -not (Test-DNSSinkhole -Domain 'this-should-be-blocked-test-12345.com' -AttemptTimeoutSeconds $DnsAttemptTimeoutSeconds)) {
             return $false
         }
         return $true

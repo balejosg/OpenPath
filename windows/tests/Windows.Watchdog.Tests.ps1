@@ -280,6 +280,7 @@ Describe "Watchdog Script" {
                 'function Get-OpenPathCaptivePortalProtectedModeExitEvidence',
                 '[int]$DnsAttemptTimeoutSeconds = 0',
                 'Test-DNSResolution -MaxAttempts $DnsMaxAttempts -DelayMilliseconds $DnsDelayMilliseconds -AttemptTimeoutSeconds $DnsAttemptTimeoutSeconds',
+                'Test-DNSSinkhole -Domain ''this-should-be-blocked-test-12345.com'' -AttemptTimeoutSeconds $DnsAttemptTimeoutSeconds',
                 'function Disable-OpenPathCaptivePortalMode',
                 '[int]$DnsMaxAttempts = 12',
                 '[int]$DnsDelayMilliseconds = 1000',

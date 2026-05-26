@@ -99,6 +99,27 @@ Describe "DNS Module" {
 
             $script:capturedDnsAttemptTimeoutSeconds | Should -Be 2
         }
+
+        It "Passes per-attempt timeouts to sinkhole probes" {
+            $script:capturedSinkholeAttemptTimeoutSeconds = $null
+
+            Mock Invoke-OpenPathDnsResolveNameWithTimeout {
+                param(
+                    [string]$Domain,
+                    [string]$Server,
+                    [int]$AttemptTimeoutSeconds
+                )
+
+                $script:capturedSinkholeAttemptTimeoutSeconds = $AttemptTimeoutSeconds
+                $null
+            } -ModuleName DNS
+
+            InModuleScope DNS {
+                (Test-DNSSinkhole -Domain 'blocked.example' -AttemptTimeoutSeconds 2) | Should -BeTrue
+            }
+
+            $script:capturedSinkholeAttemptTimeoutSeconds | Should -Be 2
+        }
     }
 
     Context "Original DNS snapshot" {

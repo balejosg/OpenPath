@@ -110,9 +110,13 @@ function Test-DNSResolution {
 }
 
 function Test-DNSSinkhole {
-    param([string]$Domain = "should-not-exist-test.com")
+    param(
+        [string]$Domain = "should-not-exist-test.com",
+        [int]$AttemptTimeoutSeconds = 0
+    )
+
     try {
-        $result = Resolve-DnsName -Name $Domain -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue
+        $result = Invoke-OpenPathDnsResolveNameWithTimeout -Domain $Domain -Server 127.0.0.1 -AttemptTimeoutSeconds $AttemptTimeoutSeconds
         return ($null -eq $result)
     }
     catch {
