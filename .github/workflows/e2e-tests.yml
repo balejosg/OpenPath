@@ -48,6 +48,7 @@ on:
           - all
           - e2e
           - student-policy
+          - captive-portal
       student_policy_sse_group:
         description: Windows student-policy SSE scenario group.
         default: auto
@@ -74,6 +75,7 @@ jobs:
       windows_e2e: ${{ steps.filter.outputs.windows_e2e }}
       linux_student_policy: ${{ steps.filter.outputs.linux_student_policy }}
       windows_student_policy: ${{ steps.filter.outputs.windows_student_policy }}
+      windows_captive_portal: ${{ steps.filter.outputs.windows_captive_portal }}
       windows_student_policy_sse_group: ${{ steps.filter.outputs.windows_student_policy_sse_group }}
       windows_student_policy_sse_reason: ${{ steps.filter.outputs.windows_student_policy_sse_reason }}
 
@@ -98,6 +100,7 @@ jobs:
             windows_e2e=false
             linux_student_policy=false
             windows_student_policy=false
+            windows_captive_portal=false
             windows_student_policy_sse_group="$(node scripts/select-windows-student-policy-sse-group.mjs --override "$manual_sse_group")"
             windows_student_policy_sse_reason="$(node scripts/select-windows-student-policy-sse-group.mjs --override "$manual_sse_group" --reason)"
 
@@ -117,12 +120,17 @@ jobs:
                { [ "$manual_suite" = "all" ] || [ "$manual_suite" = "student-policy" ]; }; then
               windows_student_policy=true
             fi
+            if { [ "$manual_platform" = "all" ] || [ "$manual_platform" = "windows" ]; } &&
+               { [ "$manual_suite" = "all" ] || [ "$manual_suite" = "captive-portal" ]; }; then
+              windows_captive_portal=true
+            fi
 
             echo "release_infra_only=false" >> "$GITHUB_OUTPUT"
             echo "linux_e2e=$linux_e2e" >> "$GITHUB_OUTPUT"
             echo "windows_e2e=$windows_e2e" >> "$GITHUB_OUTPUT"
             echo "linux_student_policy=$linux_student_policy" >> "$GITHUB_OUTPUT"
             echo "windows_student_policy=$windows_student_policy" >> "$GITHUB_OUTPUT"
+            echo "windows_captive_portal=$windows_captive_portal" >> "$GITHUB_OUTPUT"
             echo "windows_student_policy_sse_group=$windows_student_policy_sse_group" >> "$GITHUB_OUTPUT"
             echo "windows_student_policy_sse_reason=$windows_student_policy_sse_reason" >> "$GITHUB_OUTPUT"
             {
@@ -130,6 +138,7 @@ jobs:
               echo ""
               echo "- Release infrastructure only: false"
               echo "- Windows Student Policy selected: $windows_student_policy"
+              echo "- Windows Captive Portal selected: $windows_captive_portal"
               echo "- Windows Student Policy SSE group: $windows_student_policy_sse_group"
               echo "- Windows Student Policy SSE routing reason: $windows_student_policy_sse_reason"
             } >> "$GITHUB_STEP_SUMMARY"
@@ -160,15 +169,16 @@ jobs:
           windows_e2e=false
           linux_student_policy=false
           windows_student_policy=false
+          windows_captive_portal=false
           windows_student_policy_sse_group=full
           windows_student_policy_sse_reason="Windows Student Policy not selected; target-platform lane not required for this diff."
           release_infra_only=false
           firefox_runtime_pattern='firefox-extension/(manifest\.json|package\.json|tsconfig(\.build)?\.json|src/|blocked/|popup/|icons/)'
 
-          if [ -n "$changed_files" ] && echo "$changed_files" | grep -Eq '^(.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\.mjs|tests/repo-config/)'; then
+          if [ -n "$changed_files" ] && echo "$changed_files" | grep -Eq '^(.github/workflows/(installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\.mjs|tests/repo-config/)'; then
             non_release_infra_files="$(
               echo "$changed_files" |
-                grep -Ev '^(.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\.mjs|tests/repo-config/)' || true
+                grep -Ev '^(.github/workflows/(installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\.mjs|tests/repo-config/)' || true
             )"
             if [ -z "$non_release_infra_files" ]; then
               release_infra_only=true
@@ -194,11 +204,16 @@ jobs:
             windows_student_policy_sse_reason="$(printf '%s\n' "$changed_files" | node scripts/select-windows-student-policy-sse-group.mjs --from-stdin --reason)"
           fi
 
+          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq '^(windows/|firefox-extension/|tests/e2e/ci/(run-windows-captive-portal-navigation\.ps1|windows-direct-runtime-staging\.ps1)$|scripts/run-windows-runner-direct\.mjs$|scripts/lib/windows-direct-diagnostic-modes\.mjs$|\.github/workflows/e2e-tests\.yml$)'; then
+            windows_captive_portal=true
+          fi
+
           echo "release_infra_only=$release_infra_only" >> "$GITHUB_OUTPUT"
           echo "linux_e2e=$linux_e2e" >> "$GITHUB_OUTPUT"
           echo "windows_e2e=$windows_e2e" >> "$GITHUB_OUTPUT"
           echo "linux_student_policy=$linux_student_policy" >> "$GITHUB_OUTPUT"
           echo "windows_student_policy=$windows_student_policy" >> "$GITHUB_OUTPUT"
+          echo "windows_captive_portal=$windows_captive_portal" >> "$GITHUB_OUTPUT"
           echo "windows_student_policy_sse_group=$windows_student_policy_sse_group" >> "$GITHUB_OUTPUT"
           echo "windows_student_policy_sse_reason=$windows_student_policy_sse_reason" >> "$GITHUB_OUTPUT"
           {
@@ -212,6 +227,7 @@ jobs:
             echo "- Windows E2E selected: $windows_e2e"
             echo "- Linux Student Policy selected: $linux_student_policy"
             echo "- Windows Student Policy selected: $windows_student_policy"
+            echo "- Windows Captive Portal selected: $windows_captive_portal"
             echo "- Windows Student Policy SSE group: $windows_student_policy_sse_group"
             echo "- Windows Student Policy SSE routing reason: $windows_student_policy_sse_reason"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -409,6 +425,62 @@ jobs:
           retention-days: 7
 
   # ============================================
+  # Windows Captive Portal Navigation
+  # ============================================
+  windows-captive-portal-navigation:
+    name: Windows Captive Portal Navigation
+    runs-on: [self-hosted, Windows, X64, proxmox, openpath]
+    timeout-minutes: 45
+    needs: detect-relevant-changes
+    if: needs.detect-relevant-changes.outputs.windows_captive_portal == 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Acquire shared Windows runner lock
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/acquire-shared-windows-runner-lock.ps1
+
+      - name: Prepare self-hosted Windows runner state
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/reset-self-hosted-windows-runner.ps1
+
+      - name: Setup Node.js
+        uses: ./.github/actions/setup-node
+
+      - name: Run Windows captive portal navigation diagnostic
+        shell: pwsh
+        run: |
+          npm run diagnostics:windows:direct -- --mode captive-portal-navigation --source-mode local-overlay --artifact-dir ".opencode/tmp/openpath-windows-direct/${{ github.run_id }}-${{ github.run_attempt }}/captive-portal-navigation"
+
+      - name: Restore self-hosted Windows runner state
+        if: always()
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/reset-self-hosted-windows-runner.ps1
+
+      - name: Release shared Windows runner lock
+        if: always()
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/release-shared-windows-runner-lock.ps1
+
+      - name: Upload Windows captive portal navigation diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-captive-portal-navigation-artifacts-${{ github.run_id }}
+          path: .opencode/tmp/openpath-windows-direct/${{ github.run_id }}-${{ github.run_attempt }}/captive-portal-navigation
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ============================================
   # Summary Job
   # ============================================
   e2e-summary:
@@ -421,6 +493,7 @@ jobs:
         windows-e2e,
         linux-student-policy,
         windows-student-policy,
+        windows-captive-portal-navigation,
       ]
     if: always()
 
@@ -433,6 +506,7 @@ jobs:
           if [[ "${{ needs.detect-relevant-changes.outputs.release_infra_only }}" == "true" ]]; then
             echo "Release-infrastructure-only diff: target-platform lanes skipped by contract."
           fi
+          echo "Windows Captive Portal selected: ${{ needs.detect-relevant-changes.outputs.windows_captive_portal }}"
           echo "Windows Student Policy SSE group: ${{ needs.detect-relevant-changes.outputs.windows_student_policy_sse_group }}"
           echo "Windows Student Policy SSE routing reason: ${{ needs.detect-relevant-changes.outputs.windows_student_policy_sse_reason }}"
           echo ""
@@ -475,6 +549,14 @@ jobs:
             echo "❌ Windows Student Policy: ${{ needs.windows-student-policy.result }}"
           fi
 
+          if [[ "${{ needs.windows-captive-portal-navigation.result }}" == "success" ]]; then
+            echo "✅ Windows Captive Portal Navigation: PASSED"
+          elif [[ "${{ needs.windows-captive-portal-navigation.result }}" == "skipped" ]]; then
+            echo "⏭️ Windows Captive Portal Navigation: SKIPPED"
+          else
+            echo "❌ Windows Captive Portal Navigation: ${{ needs.windows-captive-portal-navigation.result }}"
+          fi
+
           if [[ "${{ needs.detect-relevant-changes.result }}" == "failure" ]] || \
              [[ "${{ needs.detect-relevant-changes.result }}" == "cancelled" ]] || \
              [[ "${{ needs.linux-e2e.result }}" == "failure" ]] || \
@@ -484,6 +566,8 @@ jobs:
              [[ "${{ needs.windows-e2e.result }}" == "failure" ]] || \
              [[ "${{ needs.windows-student-policy.result }}" == "failure" ]] || \
              [[ "${{ needs.windows-student-policy.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.windows-captive-portal-navigation.result }}" == "failure" ]] || \
+             [[ "${{ needs.windows-captive-portal-navigation.result }}" == "cancelled" ]] || \
               [[ "${{ needs.windows-e2e.result }}" == "cancelled" ]]; then
             echo ""
             echo "❌ E2E Tests FAILED"

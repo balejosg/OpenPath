@@ -1387,6 +1387,10 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
   const windowsE2eBlock = extractWorkflowJobBlock(e2eWorkflow, 'windows-e2e');
   const linuxStudentPolicyBlock = extractWorkflowJobBlock(e2eWorkflow, 'linux-student-policy');
   const windowsStudentPolicyBlock = extractWorkflowJobBlock(e2eWorkflow, 'windows-student-policy');
+  const windowsCaptivePortalBlock = extractWorkflowJobBlock(
+    e2eWorkflow,
+    'windows-captive-portal-navigation'
+  );
 
   assert.match(
     e2eWorkflow,
@@ -1397,6 +1401,11 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
     e2eWorkflow,
     /workflow_dispatch:[\s\S]*suite:\s*\n[\s\S]*default: student-policy[\s\S]*options:\s*\n\s+- all\s*\n\s+- e2e\s*\n\s+- student-policy/,
     'manual E2E diagnostics should expose a suite selector defaulting to student-policy'
+  );
+  assert.match(
+    e2eWorkflow,
+    /workflow_dispatch:[\s\S]*suite:\s*\n[\s\S]*options:\s*\n\s+- all\s*\n\s+- e2e\s*\n\s+- student-policy\s*\n\s+- captive-portal/,
+    'manual E2E diagnostics should expose the synthetic captive-portal suite'
   );
   assert.match(
     e2eWorkflow,
@@ -1419,6 +1428,7 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
     'windows_e2e',
     'linux_student_policy',
     'windows_student_policy',
+    'windows_captive_portal',
   ]) {
     const outputExpression = `${outputName}: \${{ steps.filter.outputs.${outputName} }}`;
     assert.ok(
@@ -1442,9 +1452,9 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
   );
   assert.ok(
     e2eWorkflow.includes(
-      '^(.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\\.mjs|tests/repo-config/)'
+      '^(.github/workflows/(installer-contracts|prerelease-deb|release-extension|release-scripts)\\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\\.mjs|tests/repo-config/)'
     ),
-    'release-infrastructure-only classification should stay limited to E2E/release workflows, release gate helpers, route selector, and repo-config contracts'
+    'release-infrastructure-only classification should stay limited to release workflows, release gate helpers, route selector, and repo-config contracts'
   );
   assert.ok(
     e2eWorkflow.includes(
@@ -1457,8 +1467,14 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
     'E2E lane routing should use the shared Firefox runtime path pattern'
   );
   assert.ok(
-    !e2eWorkflow.includes('|firefox-extension/|'),
-    'E2E lane routing should not treat every Firefox extension file as runtime behavior'
+    !e2eWorkflow.includes('^(linux/|runtime/|firefox-extension/|tests/e2e/(Dockerfile|') &&
+      !e2eWorkflow.includes(
+        '^(api/|shared/|linux/|runtime/|firefox-extension/|tests/e2e/(Dockerfile\\.student'
+      ) &&
+      !e2eWorkflow.includes(
+        '^(api/|shared/|windows/|runtime/|firefox-extension/|tests/e2e/(ci/run-windows-student-flow'
+      ),
+    'non-captive E2E lane routing should not treat every Firefox extension file as runtime behavior'
   );
   assert.ok(
     !e2eWorkflow.includes('firefox-extension/sign-firefox-release.mjs'),
@@ -1523,6 +1539,24 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
     'windows-student-policy should run only for Windows student-policy relevant changes'
   );
   assert.ok(
+    windowsCaptivePortalBlock.includes(
+      "needs.detect-relevant-changes.outputs.windows_captive_portal == 'true'"
+    ),
+    'windows-captive-portal-navigation should run only for captive-portal relevant changes'
+  );
+  assert.ok(
+    e2eWorkflow.includes(
+      'windows_captive_portal: ${{ steps.filter.outputs.windows_captive_portal }}'
+    ),
+    'e2e-tests.yml should expose the selected Windows captive-portal lane'
+  );
+  assert.ok(
+    e2eWorkflow.includes(
+      '^(windows/|firefox-extension/|tests/e2e/ci/(run-windows-captive-portal-navigation\\.ps1|windows-direct-runtime-staging\\.ps1)$|scripts/run-windows-runner-direct\\.mjs$|scripts/lib/windows-direct-diagnostic-modes\\.mjs$|\\.github/workflows/e2e-tests\\.yml$)'
+    ),
+    'windows captive-portal routing should cover Windows, Firefox extension, direct-runner harness, and workflow changes'
+  );
+  assert.ok(
     e2eWorkflow.includes(
       'windows_student_policy_sse_group: ${{ steps.filter.outputs.windows_student_policy_sse_group }}'
     ),
@@ -1566,6 +1600,35 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
     'windows-student-policy should run on the pinned OpenPath self-hosted Windows runner'
   );
   assert.ok(
+    windowsCaptivePortalBlock.includes('runs-on: [self-hosted, Windows, X64, proxmox, openpath]'),
+    'windows-captive-portal-navigation should run on the pinned OpenPath self-hosted Windows runner'
+  );
+  assert.ok(
+    windowsCaptivePortalBlock.includes('name: Acquire shared Windows runner lock') &&
+      windowsCaptivePortalBlock.includes('name: Release shared Windows runner lock') &&
+      windowsCaptivePortalBlock.includes('tests/e2e/ci/acquire-shared-windows-runner-lock.ps1') &&
+      windowsCaptivePortalBlock.includes('tests/e2e/ci/release-shared-windows-runner-lock.ps1'),
+    'windows-captive-portal-navigation should acquire and release the shared Windows runner lock'
+  );
+  assert.ok(
+    windowsCaptivePortalBlock.includes('name: Prepare self-hosted Windows runner state') &&
+      windowsCaptivePortalBlock.includes('name: Restore self-hosted Windows runner state') &&
+      windowsCaptivePortalBlock.includes('tests/e2e/ci/reset-self-hosted-windows-runner.ps1'),
+    'windows-captive-portal-navigation should reset persistent self-hosted Windows state before and after the direct diagnostic'
+  );
+  assert.ok(
+    windowsCaptivePortalBlock.includes(
+      'npm run diagnostics:windows:direct -- --mode captive-portal-navigation --source-mode local-overlay'
+    ),
+    'windows-captive-portal-navigation should run the synthetic captive-portal direct diagnostic with a local overlay'
+  );
+  assert.ok(
+    windowsCaptivePortalBlock.includes('actions/upload-artifact@v7') &&
+      windowsCaptivePortalBlock.includes('.opencode/tmp/openpath-windows-direct') &&
+      windowsCaptivePortalBlock.includes('captive-portal-navigation'),
+    'windows-captive-portal-navigation should upload direct diagnostic artifacts'
+  );
+  assert.ok(
     windowsStudentPolicyBlock.includes('name: Prepare self-hosted Windows runner state') &&
       windowsStudentPolicyBlock.includes('name: Restore self-hosted Windows runner state') &&
       windowsStudentPolicyBlock.includes('tests/e2e/ci/reset-self-hosted-windows-runner.ps1'),
@@ -1595,6 +1658,11 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
   assert.ok(
     e2eWorkflow.includes('SKIPPED'),
     'E2E summary should report skipped lanes explicitly instead of printing them as failures'
+  );
+  assert.ok(
+    e2eWorkflow.includes('Windows Captive Portal Navigation') &&
+      e2eWorkflow.includes('needs.windows-captive-portal-navigation.result'),
+    'E2E summary should report and gate the Windows captive-portal lane'
   );
   assert.ok(
     e2eWorkflow.includes('needs.detect-relevant-changes.result'),
