@@ -39,6 +39,8 @@ const BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_GUEST_ARTIFACT_ROOT =
 const CAPTIVE_PORTAL_NAVIGATION_GUEST_ARTIFACT_ROOT = resolveWindowsDirectDiagnosticMode(
   'captive-portal-navigation'
 ).artifactRoot;
+const CAPTIVE_PORTAL_WEDU_LAB_GUEST_ARTIFACT_ROOT =
+  resolveWindowsDirectDiagnosticMode('captive-portal-wedu-lab').artifactRoot;
 const BROWSER_ENFORCEMENT_ARTIFACTS = [
   'browser-boundary-summary.json',
   'student\\windows-browser-enforcement-report.json',
@@ -182,6 +184,23 @@ const CAPTIVE_PORTAL_NAVIGATION_ARTIFACTS = [
   'direct-captive-portal-navigation.out.log',
   'direct-captive-portal-navigation.err.log',
 ];
+const CAPTIVE_PORTAL_WEDU_LAB_ARTIFACTS = [
+  'wedu-lab-network-before.json',
+  'wedu-lab-dns-before.json',
+  'wedu-lab-browser-before.json',
+  'wedu-lab-portal-before-login.png',
+  'wedu-lab-native-recovery.json',
+  'wedu-lab-gateway-authenticated.json',
+  'wedu-lab-native-reconcile.json',
+  'wedu-lab-network-after.json',
+  'wedu-lab-openpath-protection-after.json',
+  'captive-portal-recovery-result-manifest.json',
+  'captive-portal-recovery-queue-manifest.json',
+  'captive-portal-recovery-progress-manifest.json',
+  'direct-captive-portal-wedu-lab-completion.json',
+  'direct-captive-portal-wedu-lab.out.log',
+  'direct-captive-portal-wedu-lab.err.log',
+];
 const DRY_RUN = process.env.OPENPATH_WINDOWS_DIRECT_DRY_RUN === '1';
 
 const currentFilePath = fileURLToPath(import.meta.url);
@@ -199,7 +218,7 @@ Options:
   --results-path <path>       Result file path on the Windows runner relative to the repo root (default: ${DEFAULT_RESULTS_RELATIVE_PATH})
   --runner-repo-root <path>   Explicit OpenPath checkout root on the Windows runner (default: auto-detect under ${DEFAULT_RUNNER_ROOT_GLOB})
   --source-mode <mode>        Source to execute on Windows: runner-checkout or local-overlay (default: ${DEFAULT_SOURCE_MODE})
-  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, browser-dependency-observability-spike, captive-portal-navigation, or all (default: ${DEFAULT_RUN_MODE})
+  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, browser-dependency-observability-spike, captive-portal-navigation, captive-portal-wedu-lab, or all (default: ${DEFAULT_RUN_MODE})
   --overlay-host <ip>         Local host/IP the Windows VM can use to download the local overlay ZIP
   --browser-enforcement-report
                               Run tests/e2e/ci/windows-browser-enforcement.ps1 -Scope Report after Pester
@@ -276,6 +295,12 @@ function parseArgs(argv) {
     throw new Error(
       `Invalid --mode ${JSON.stringify(options.mode)}. Expected one of: ${[...RUN_MODES].join(', ')}`
     );
+  }
+  if (options.mode !== 'all') {
+    const metadata = resolveWindowsDirectDiagnosticMode(options.mode);
+    if (options.sourceMode === 'local-overlay' && metadata.allowLocalOverlay === false) {
+      throw new Error(`${options.mode} requires --source-mode runner-checkout`);
+    }
   }
 
   return options;
@@ -2086,6 +2111,123 @@ if ($exitCode -ne 0) {
   }
 }
 
+function runWindowsCaptivePortalWeduLab(options, runnerRepoRoot) {
+  const weduScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-captive-portal-wedu-lab.ps1`;
+  const artifactsRoot = CAPTIVE_PORTAL_WEDU_LAB_GUEST_ARTIFACT_ROOT;
+  const completionPath = `${artifactsRoot}\\direct-captive-portal-wedu-lab-completion.json`;
+  const timeoutSeconds = Number.parseInt(options.timeoutSeconds, 10);
+  const gatewayToken = process.env.OPENPATH_WEDU_LAB_GATEWAY_TOKEN ?? '';
+  const gatewayUrl = process.env.OPENPATH_WEDU_LAB_GATEWAY_URL ?? 'http://10.77.0.1';
+  const expectedDns = process.env.OPENPATH_WEDU_LAB_EXPECTED_DNS ?? '10.77.0.1';
+  const expectedSubnet = process.env.OPENPATH_WEDU_LAB_EXPECTED_SUBNET ?? '10.77.0.0/24';
+
+  if (!DRY_RUN && !gatewayToken) {
+    throw new Error('OPENPATH_WEDU_LAB_GATEWAY_TOKEN is required for captive-portal-wedu-lab.');
+  }
+
+  const script = `
+$ErrorActionPreference = 'Stop'
+$repoRoot = ${JSON.stringify(runnerRepoRoot)}
+$weduScriptPath = ${JSON.stringify(weduScriptPath)}
+$artifactsRoot = ${JSON.stringify(artifactsRoot)}
+$completionPath = ${JSON.stringify(completionPath)}
+
+if (-not (Test-Path -LiteralPath $weduScriptPath)) {
+  throw 'run-windows-captive-portal-wedu-lab.ps1 is missing on the Windows runner checkout.'
+}
+
+function Invoke-OpenPathDirectChildPowerShell {
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    [string[]]$ExtraArguments = @(),
+    [Parameter(Mandatory = $true)][string]$LogName,
+    [int]$TimeoutSeconds = 1800
+  )
+
+  $outPath = Join-Path $artifactsRoot "$LogName.out.log"
+  $errPath = Join-Path $artifactsRoot "$LogName.err.log"
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $ExtraArguments
+  $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $repoRoot -RedirectStandardOutput $outPath -RedirectStandardError $errPath -PassThru
+
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "$LogName timed out after $TimeoutSeconds seconds"
+  }
+
+  $process.Refresh()
+  $exitCode = $process.ExitCode
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+  if ($exitCode -ne 0) {
+    $maxFailureLogChars = 12000
+    $stdout = if (Test-Path -LiteralPath $outPath) { Get-Content -LiteralPath $outPath -Raw } else { '' }
+    $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -LiteralPath $errPath -Raw } else { '' }
+    if ($stdout.Length -gt $maxFailureLogChars) {
+      $stdout = $stdout.Substring($stdout.Length - $maxFailureLogChars)
+    }
+    if ($stderr.Length -gt $maxFailureLogChars) {
+      $stderr = $stderr.Substring($stderr.Length - $maxFailureLogChars)
+    }
+    throw ($LogName + ' exited with code ' + $exitCode + [Environment]::NewLine + 'STDOUT:' + [Environment]::NewLine + $stdout + [Environment]::NewLine + 'STDERR:' + [Environment]::NewLine + $stderr)
+  }
+}
+
+$primaryFailure = $null
+$exitCode = 0
+$errorText = ''
+try {
+  Remove-Item -LiteralPath $artifactsRoot -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
+  Remove-Item -LiteralPath $completionPath -Force -ErrorAction SilentlyContinue
+  $env:OPENPATH_WEDU_LAB_GATEWAY_TOKEN = ${JSON.stringify(gatewayToken)}
+  $env:OPENPATH_WEDU_LAB_GATEWAY_URL = ${JSON.stringify(gatewayUrl)}
+  $env:OPENPATH_WEDU_LAB_EXPECTED_DNS = ${JSON.stringify(expectedDns)}
+  $env:OPENPATH_WEDU_LAB_EXPECTED_SUBNET = ${JSON.stringify(expectedSubnet)}
+  Set-Location $repoRoot
+  Invoke-OpenPathDirectChildPowerShell -ScriptPath $weduScriptPath -ExtraArguments @('-Mode', 'Run', '-ArtifactsRoot', $artifactsRoot) -LogName 'direct-captive-portal-wedu-lab' -TimeoutSeconds ${timeoutSeconds}
+  $resultPath = Join-Path $artifactsRoot 'direct-captive-portal-wedu-lab-result.json'
+  if (-not (Test-Path -LiteralPath $resultPath)) {
+    throw "WEDU captive portal lab result was not written: $resultPath"
+  }
+  $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+  if (-not ($result.PSObject.Properties['success'] -and [bool]$result.success)) {
+    $resultError = if ($result.PSObject.Properties['error'] -and $result.error) { [string]$result.error } else { 'success=false' }
+    throw "WEDU captive portal lab result was not successful: $resultError"
+  }
+}
+catch {
+  $primaryFailure = $_
+  $exitCode = 1
+  $errorText = [string]$_
+}
+finally {
+  [pscustomobject]@{
+    exitCode = $exitCode
+    error = $errorText
+    artifactsRoot = $artifactsRoot
+    resultPath = (Join-Path $artifactsRoot 'direct-captive-portal-wedu-lab-result.json')
+    timestamp = (Get-Date).ToString('o')
+  } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $completionPath -Encoding UTF8
+}
+
+if ($exitCode -ne 0) {
+  exit $exitCode
+}
+`;
+  runGuestPowerShellDetached(options, script, {
+    label: 'Run Windows WEDU captive portal lab',
+  });
+  const completion = waitForGuestCompletionFile(options, completionPath, {
+    timeoutSeconds: timeoutSeconds + 900,
+  });
+  if (completion.exitCode !== 0) {
+    throw new Error(
+      `Run Windows WEDU captive portal lab failed: ${completion.error ?? 'unknown error'}`
+    );
+  }
+}
+
 function runBrowserBoundaryCi(options, runnerRepoRoot) {
   const boundaryScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-browser-boundary-ci.ps1`;
   const artifactsRoot = `${runnerRepoRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\browser-boundary`;
@@ -2352,6 +2494,16 @@ function collectArtifacts(options, artifactDir, runnerRoot) {
     );
   }
 
+  for (const artifactName of CAPTIVE_PORTAL_WEDU_LAB_ARTIFACTS) {
+    collectGuestArtifact(
+      options,
+      artifactDir,
+      `${CAPTIVE_PORTAL_WEDU_LAB_GUEST_ARTIFACT_ROOT}\\${artifactName}`,
+      artifactName.replace(/\\/g, '-'),
+      64 * 1024 * 1024
+    );
+  }
+
   collectCaptivePortalManifestArtifacts(
     options,
     artifactDir,
@@ -2419,6 +2571,11 @@ function runWindowsDirectDiagnosticMode({ mode, options, runnerRepoRoot }) {
   if (mode === 'captive-portal-navigation') {
     console.log('step=run-windows-captive-portal-navigation');
     runWindowsCaptivePortalNavigation(options, effectiveRunnerRepoRoot);
+    return;
+  }
+  if (mode === 'captive-portal-wedu-lab') {
+    console.log('step=run-windows-captive-portal-wedu-lab');
+    runWindowsCaptivePortalWeduLab(options, effectiveRunnerRepoRoot);
   }
 }
 
@@ -2495,14 +2652,28 @@ async function main() {
         : resolveWindowsRunnerRepoRoot(options);
     }
 
-    console.log('step=check-windows-runner-baseline');
-    ensureWindowsRunnerBaseline(options, runnerRepoRoot || options.runnerRepoRoot);
-    console.log('step=reset-windows-runner');
-    resetWindowsRunner(options, runnerRepoRoot || options.runnerRepoRoot);
     const modesToRun =
       options.mode === 'all'
-        ? WINDOWS_DIRECT_RUN_MODE_NAMES.filter((mode) => mode !== 'all')
+        ? WINDOWS_DIRECT_RUN_MODE_NAMES.filter((mode) => {
+            if (mode === 'all') {
+              return false;
+            }
+            return resolveWindowsDirectDiagnosticMode(mode).includeInAll !== false;
+          })
         : [options.mode];
+    console.log('step=check-windows-runner-baseline');
+    ensureWindowsRunnerBaseline(options, runnerRepoRoot || options.runnerRepoRoot);
+    const resetSkippedByModes = modesToRun.filter(
+      (mode) => resolveWindowsDirectDiagnosticMode(mode).skipPreRunReset === true
+    );
+    if (resetSkippedByModes.length > 0) {
+      console.log(
+        `step=skip-windows-runner-reset modes=${resetSkippedByModes.join(',')} reason=preserve-lab-dns`
+      );
+    } else {
+      console.log('step=reset-windows-runner');
+      resetWindowsRunner(options, runnerRepoRoot || options.runnerRepoRoot);
+    }
     for (const mode of modesToRun) {
       runWindowsDirectDiagnosticMode({ mode, options, runnerRepoRoot });
     }

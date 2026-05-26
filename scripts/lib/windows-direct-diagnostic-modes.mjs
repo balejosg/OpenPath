@@ -64,6 +64,16 @@ const WINDOWS_DIRECT_DIAGNOSTIC_MODES = Object.freeze({
     runnerScriptPath: 'tests\\e2e\\ci\\run-windows-captive-portal-navigation.ps1',
     requiresSharedPowerShellPreamble: true,
   }),
+  'captive-portal-wedu-lab': Object.freeze({
+    mode: 'captive-portal-wedu-lab',
+    artifactRoot: 'C:\\Windows\\Temp\\openpath-captive-portal-wedu-lab',
+    completionFileName: 'direct-captive-portal-wedu-lab-completion.json',
+    runnerScriptPath: 'tests\\e2e\\ci\\run-windows-captive-portal-wedu-lab.ps1',
+    requiresSharedPowerShellPreamble: true,
+    skipPreRunReset: true,
+    includeInAll: false,
+    allowLocalOverlay: false,
+  }),
 });
 
 const WINDOWS_DIRECT_RUN_MODE_NAMES = Object.freeze([

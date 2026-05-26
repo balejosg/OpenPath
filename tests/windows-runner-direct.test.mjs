@@ -116,6 +116,15 @@ describe('direct OpenPath Windows runner diagnostic', () => {
         completionFileName: 'direct-captive-portal-navigation-completion.json',
         runnerScriptPath: 'tests\\e2e\\ci\\run-windows-captive-portal-navigation.ps1',
       },
+      {
+        mode: 'captive-portal-wedu-lab',
+        artifactRoot: 'C:\\Windows\\Temp\\openpath-captive-portal-wedu-lab',
+        completionFileName: 'direct-captive-portal-wedu-lab-completion.json',
+        runnerScriptPath: 'tests\\e2e\\ci\\run-windows-captive-portal-wedu-lab.ps1',
+        skipPreRunReset: true,
+        includeInAll: false,
+        allowLocalOverlay: false,
+      },
     ];
 
     for (const expectation of expectations) {
@@ -132,7 +141,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(
       result.stderr,
-      /pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, browser-dependency-observability-spike, captive-portal-navigation, or all/
+      /pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, browser-dependency-observability-spike, captive-portal-navigation, captive-portal-wedu-lab, or all/
     );
   });
 
@@ -644,6 +653,71 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.doesNotMatch(captiveScript, /\[int\]\$taskInfo\.LastTaskResult/);
     assert.match(captiveScript, /noPrematureExit/);
     assert.match(captiveScript, /blockedByOpenPath/);
+  });
+
+  test('captive-portal-wedu-lab mode is fail-closed and collects WEDU lab artifacts', () => {
+    const result = runDirectDiagnostic(['--mode', 'captive-portal-wedu-lab']);
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+    const weduScript = readText('tests/e2e/ci/run-windows-captive-portal-wedu-lab.ps1');
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /source_mode=runner-checkout/);
+    assert.match(result.stdout, /mode=captive-portal-wedu-lab/);
+    assert.match(result.stdout, /step=check-windows-runner-baseline/);
+    assert.doesNotMatch(result.stdout, /step=reset-windows-runner/);
+    assert.match(result.stdout, /step=run-windows-captive-portal-wedu-lab/);
+    assert.equal(
+      resolveWindowsDirectDiagnosticMode('captive-portal-wedu-lab').artifactRoot,
+      'C:\\Windows\\Temp\\openpath-captive-portal-wedu-lab'
+    );
+    assert.match(script, /run-windows-captive-portal-wedu-lab\.ps1/);
+    assert.match(script, /direct-captive-portal-wedu-lab-completion\.json/);
+    for (const artifactName of [
+      'wedu-lab-network-before.json',
+      'wedu-lab-dns-before.json',
+      'wedu-lab-browser-before.json',
+      'wedu-lab-portal-before-login.png',
+      'wedu-lab-native-recovery.json',
+      'wedu-lab-gateway-authenticated.json',
+      'wedu-lab-native-reconcile.json',
+      'wedu-lab-network-after.json',
+      'wedu-lab-openpath-protection-after.json',
+      'direct-captive-portal-wedu-lab-completion.json',
+    ]) {
+      assert.match(script, new RegExp(artifactName.replace(/[.]/g, '\\.')));
+      assert.match(weduScript, new RegExp(artifactName.replace(/[.]/g, '\\.')));
+    }
+    assert.match(weduScript, /OPENPATH_WEDU_LAB_GATEWAY_TOKEN/);
+    assert.match(weduScript, /OPENPATH_WEDU_LAB_GATEWAY_URL/);
+    assert.match(weduScript, /OPENPATH_WEDU_LAB_EXPECTED_DNS/);
+    assert.match(weduScript, /OPENPATH_WEDU_LAB_EXPECTED_SUBNET/);
+    assert.match(weduScript, /Assert-WeduLabNetwork/);
+    assert.match(weduScript, /gateway-authenticated/);
+    assert.match(weduScript, /gateway-reset/);
+    assert.match(weduScript, /recover-captive-portal-navigation/);
+    assert.match(weduScript, /operation = 'reconcile'/);
+  });
+
+  test('captive-portal-wedu-lab rejects local-overlay source by default', () => {
+    const result = runDirectDiagnostic([
+      '--mode',
+      'captive-portal-wedu-lab',
+      '--source-mode',
+      'local-overlay',
+    ]);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /captive-portal-wedu-lab requires --source-mode runner-checkout/);
+  });
+
+  test('all mode excludes the invasive WEDU captive portal lab', () => {
+    const result = runDirectDiagnostic(['--mode', 'all']);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /mode=all/);
+    assert.match(result.stdout, /step=reset-windows-runner/);
+    assert.match(result.stdout, /step=run-windows-captive-portal-navigation/);
+    assert.doesNotMatch(result.stdout, /step=run-windows-captive-portal-wedu-lab/);
   });
 
   test('acrylic-purgecache-spike mode runs only the runner diagnostic for host reload evidence', () => {
