@@ -1069,6 +1069,50 @@ Describe "DNS Module" {
             $result | Should -BeTrue
             $script:removedAcrylicPaths | Should -Contain 'C:\Program Files (x86)\Acrylic DNS Proxy\AcrylicCache.dat'
         }
+
+        It "Allows captive portal recovery to bound Acrylic restart waits without batch fallback" {
+            $script:acrylicWaitTimeouts = @()
+            $script:acrylicEnsureTimeouts = @()
+
+            Mock Get-AcrylicPath { 'C:\Program Files (x86)\Acrylic DNS Proxy' } -ModuleName DNS
+            Mock Clear-AcrylicCache { $true } -ModuleName DNS
+            Mock Get-Service {
+                [PSCustomObject]@{
+                    Name = 'AcrylicDNSProxySvc'
+                    Status = 'Running'
+                }
+            } -ModuleName DNS
+            Mock Restart-Service { } -ModuleName DNS
+            Mock Wait-AcrylicServiceStatus {
+                param(
+                    [string]$Name,
+                    [string]$Status,
+                    [int]$TimeoutSeconds
+                )
+
+                $script:acrylicWaitTimeouts += $TimeoutSeconds
+                [PSCustomObject]@{
+                    Name = $Name
+                    Status = 'Starting'
+                }
+            } -ModuleName DNS
+            Mock Ensure-AcrylicService {
+                param(
+                    [switch]$Start,
+                    [int]$TimeoutSeconds
+                )
+
+                $script:acrylicEnsureTimeouts += $TimeoutSeconds
+                $false
+            } -ModuleName DNS
+            Mock Start-Sleep { } -ModuleName DNS
+
+            $result = Restart-AcrylicService -TimeoutSeconds 4 -SkipBatchFallback
+
+            $result | Should -BeFalse
+            $script:acrylicWaitTimeouts | Should -Be @(4)
+            $script:acrylicEnsureTimeouts | Should -HaveCount 0
+        }
     }
 
     Context "Protected mode restore" {

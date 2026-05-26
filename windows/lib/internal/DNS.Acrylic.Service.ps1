@@ -315,7 +315,8 @@ function Wait-AcrylicServiceStatus {
 function Ensure-AcrylicService {
     [CmdletBinding()]
     param(
-        [switch]$Start
+        [switch]$Start,
+        [int]$TimeoutSeconds = 20
     )
 
     try {
@@ -336,7 +337,7 @@ function Ensure-AcrylicService {
 
         if ($Start -and $service.Status -ne 'Running') {
             Start-Service -Name $service.Name -ErrorAction Stop
-            $service = Wait-AcrylicServiceStatus -Name $service.Name -Status 'Running' -TimeoutSeconds 20
+            $service = Wait-AcrylicServiceStatus -Name $service.Name -Status 'Running' -TimeoutSeconds $TimeoutSeconds
         }
 
         if ($Start) {
@@ -352,14 +353,19 @@ function Ensure-AcrylicService {
 }
 
 function Restart-AcrylicService {
-    [CmdletBinding(SupportsShouldProcess)] param()
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [int]$TimeoutSeconds = 20,
+        [switch]$SkipBatchFallback
+    )
+
     if (-not $PSCmdlet.ShouldProcess("Acrylic DNS Proxy service", "Restart")) { return $false }
     Write-OpenPathLog "Restarting Acrylic service..."
     try {
         Clear-AcrylicCache | Out-Null
         $service = Get-AcrylicService
         if (-not $service) {
-            Ensure-AcrylicService -Start | Out-Null
+            Ensure-AcrylicService -Start -TimeoutSeconds $TimeoutSeconds | Out-Null
             $service = Get-AcrylicService
         }
         if ($service) {
@@ -369,17 +375,17 @@ function Restart-AcrylicService {
             else {
                 Start-Service -Name $service.Name -ErrorAction Stop
             }
-            $service = Wait-AcrylicServiceStatus -Name $service.Name -Status 'Running' -TimeoutSeconds 20
+            $service = Wait-AcrylicServiceStatus -Name $service.Name -Status 'Running' -TimeoutSeconds $TimeoutSeconds
             if ($service.Status -eq 'Running') {
                 Write-OpenPathLog "Acrylic service restarted successfully"
                 return $true
             }
         }
         $acrylicPath = Get-AcrylicPath
-        if ($acrylicPath -and (Test-Path "$acrylicPath\RestartAcrylicService.bat")) {
+        if (-not $SkipBatchFallback -and $acrylicPath -and (Test-Path "$acrylicPath\RestartAcrylicService.bat")) {
             & cmd /c "$acrylicPath\RestartAcrylicService.bat" 2>$null
             Start-Sleep -Seconds 2
-            if (Ensure-AcrylicService -Start) {
+            if (Ensure-AcrylicService -Start -TimeoutSeconds $TimeoutSeconds) {
                 Write-OpenPathLog "Acrylic service restarted via batch file"
                 return $true
             }

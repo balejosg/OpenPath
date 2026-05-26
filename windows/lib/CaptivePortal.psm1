@@ -11,6 +11,9 @@ Import-Module "$modulePath\lib\Common.psm1" -ErrorAction SilentlyContinue
 $script:OpenPathRoot = Resolve-OpenPathWindowsRoot
 $script:CaptivePortalStatePath = "$script:OpenPathRoot\data\captive-portal-active.json"
 $script:CaptivePortalObservationPath = "$script:OpenPathRoot\data\captive-portal-observation.json"
+$script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds = 4
+$script:CaptivePortalLimitedModeDnsMaxAttempts = 2
+$script:CaptivePortalLimitedModeDnsDelayMilliseconds = 250
 
 function Test-OpenPathCaptivePortalModeActive {
     if (-not (Test-Path $script:CaptivePortalStatePath)) {
@@ -575,10 +578,15 @@ function Enable-OpenPathCaptivePortalLimitedMode {
         Set-LocalDNS | Out-Null
     }
     if (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue) {
-        Restart-AcrylicService | Out-Null
+        $restartSucceeded = Restart-AcrylicService -TimeoutSeconds $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds -SkipBatchFallback
+        if (-not ([bool]$restartSucceeded)) {
+            Write-OpenPathLog 'Watchdog: captive portal limited mode failed because Acrylic service restart did not complete within the native host budget' -Level WARN
+            Restore-OpenPathLimitedCaptivePortalAttempt
+            return $false
+        }
     }
 
-    if (-not (Test-OpenPathLimitedCaptivePortalProtection)) {
+    if (-not (Test-OpenPathLimitedCaptivePortalProtection -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds)) {
         Write-OpenPathLog 'Watchdog: captive portal limited mode verification failed; staying protected' -Level WARN
         Restore-OpenPathLimitedCaptivePortalAttempt
         return $false
@@ -665,13 +673,16 @@ function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
 
 function Test-OpenPathLimitedCaptivePortalProtection {
     [CmdletBinding()]
-    param()
+    param(
+        [int]$DnsMaxAttempts = 12,
+        [int]$DnsDelayMilliseconds = 1000
+    )
 
     try {
         if ((Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue) -and -not (Test-FirewallActive)) {
             return $false
         }
-        if ((Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) -and -not (Test-DNSResolution)) {
+        if ((Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) -and -not (Test-DNSResolution -MaxAttempts $DnsMaxAttempts -DelayMilliseconds $DnsDelayMilliseconds)) {
             return $false
         }
         if ((Get-Command -Name 'Test-DNSSinkhole' -ErrorAction SilentlyContinue) -and -not (Test-DNSSinkhole -Domain 'this-should-be-blocked-test-12345.com')) {
