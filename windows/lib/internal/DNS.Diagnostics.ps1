@@ -1,15 +1,81 @@
+function Invoke-OpenPathDnsResolveName {
+    param(
+        [Parameter(Mandatory = $true)][string]$Domain,
+        [string]$Server = "127.0.0.1",
+        [switch]$QuickTimeout
+    )
+
+    $resolveParams = @{
+        Name = $Domain
+        Server = $Server
+        DnsOnly = $true
+        ErrorAction = 'Stop'
+    }
+    $resolveCommand = Get-Command -Name Resolve-DnsName -ErrorAction SilentlyContinue
+    if ($QuickTimeout -and $resolveCommand -and $resolveCommand.Parameters.ContainsKey('QuickTimeout')) {
+        $resolveParams['QuickTimeout'] = $true
+    }
+
+    return (Resolve-DnsName @resolveParams)
+}
+
+function Invoke-OpenPathDnsResolveNameWithTimeout {
+    param(
+        [Parameter(Mandatory = $true)][string]$Domain,
+        [string]$Server = "127.0.0.1",
+        [int]$AttemptTimeoutSeconds = 0
+    )
+
+    if ($AttemptTimeoutSeconds -le 0 -or -not (Get-Command -Name Start-Job -ErrorAction SilentlyContinue)) {
+        return (Invoke-OpenPathDnsResolveName -Domain $Domain -Server $Server -QuickTimeout:($AttemptTimeoutSeconds -gt 0))
+    }
+
+    $job = Start-Job -ScriptBlock {
+        param(
+            [string]$Domain,
+            [string]$Server
+        )
+
+        $resolveParams = @{
+            Name = $Domain
+            Server = $Server
+            DnsOnly = $true
+            ErrorAction = 'Stop'
+        }
+        $resolveCommand = Get-Command -Name Resolve-DnsName -ErrorAction SilentlyContinue
+        if ($resolveCommand -and $resolveCommand.Parameters.ContainsKey('QuickTimeout')) {
+            $resolveParams['QuickTimeout'] = $true
+        }
+
+        Resolve-DnsName @resolveParams
+    } -ArgumentList $Domain, $Server
+
+    try {
+        $completed = Wait-Job -Job $job -Timeout $AttemptTimeoutSeconds
+        if (-not $completed) {
+            throw "DNS resolution attempt timed out after $AttemptTimeoutSeconds seconds for $Domain via $Server"
+        }
+
+        return (Receive-Job -Job $job -ErrorAction Stop)
+    }
+    finally {
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Resolve-OpenPathDnsWithRetry {
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
         [string]$Server = "127.0.0.1",
         [int]$MaxAttempts = 12,
-        [int]$DelayMilliseconds = 1000
+        [int]$DelayMilliseconds = 1000,
+        [int]$AttemptTimeoutSeconds = 0
     )
 
     $lastError = $null
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         try {
-            $result = Resolve-DnsName -Name $Domain -Server $Server -DnsOnly -ErrorAction Stop
+            $result = Invoke-OpenPathDnsResolveNameWithTimeout -Domain $Domain -Server $Server -AttemptTimeoutSeconds $AttemptTimeoutSeconds
             if ($result) { return $result }
         }
         catch { $lastError = $_ }
@@ -26,7 +92,8 @@ function Test-DNSResolution {
     param(
         [string]$Domain = "",
         [int]$MaxAttempts = 12,
-        [int]$DelayMilliseconds = 1000
+        [int]$DelayMilliseconds = 1000,
+        [int]$AttemptTimeoutSeconds = 0
     )
 
     $probeDomain = ([string]$Domain).Trim()
@@ -38,7 +105,7 @@ function Test-DNSResolution {
         return $false
     }
 
-    $result = Resolve-OpenPathDnsWithRetry -Domain $probeDomain -MaxAttempts $MaxAttempts -DelayMilliseconds $DelayMilliseconds
+    $result = Resolve-OpenPathDnsWithRetry -Domain $probeDomain -MaxAttempts $MaxAttempts -DelayMilliseconds $DelayMilliseconds -AttemptTimeoutSeconds $AttemptTimeoutSeconds
     return ($null -ne $result)
 }
 

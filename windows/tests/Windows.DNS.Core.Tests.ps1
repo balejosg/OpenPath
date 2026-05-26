@@ -76,6 +76,29 @@ Describe "DNS Module" {
                 Assert-MockCalled Resolve-DnsName -ModuleName DNS -Times 1 -Exactly -ParameterFilter { $Name -eq 'safe.example' -and $Server -eq '127.0.0.1' }
             }
         }
+
+        It "Passes per-attempt timeouts to captive portal DNS probes" {
+            $script:capturedDnsAttemptTimeoutSeconds = $null
+
+            Mock Resolve-OpenPathDnsWithRetry {
+                param(
+                    [string]$Domain,
+                    [string]$Server,
+                    [int]$MaxAttempts,
+                    [int]$DelayMilliseconds,
+                    [int]$AttemptTimeoutSeconds
+                )
+
+                $script:capturedDnsAttemptTimeoutSeconds = $AttemptTimeoutSeconds
+                $null
+            } -ModuleName DNS
+
+            InModuleScope DNS {
+                (Test-DNSResolution -Domain 'safe.example' -MaxAttempts 1 -DelayMilliseconds 0 -AttemptTimeoutSeconds 2) | Should -BeFalse
+            }
+
+            $script:capturedDnsAttemptTimeoutSeconds | Should -Be 2
+        }
     }
 
     Context "Original DNS snapshot" {

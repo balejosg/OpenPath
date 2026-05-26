@@ -208,8 +208,9 @@ Describe "Watchdog Script" {
                 '$script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds',
                 '$script:CaptivePortalLimitedModeDnsMaxAttempts',
                 '$script:CaptivePortalLimitedModeDnsDelayMilliseconds',
+                '$script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds',
                 'Restart-AcrylicService -TimeoutSeconds $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds -SkipBatchFallback',
-                'Test-OpenPathLimitedCaptivePortalProtection -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds'
+                'Test-OpenPathLimitedCaptivePortalProtection -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds'
             )
 
             $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')

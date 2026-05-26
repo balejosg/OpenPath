@@ -14,6 +14,7 @@ $script:CaptivePortalObservationPath = "$script:OpenPathRoot\data\captive-portal
 $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds = 4
 $script:CaptivePortalLimitedModeDnsMaxAttempts = 2
 $script:CaptivePortalLimitedModeDnsDelayMilliseconds = 250
+$script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds = 2
 
 function Test-OpenPathCaptivePortalModeActive {
     if (-not (Test-Path $script:CaptivePortalStatePath)) {
@@ -586,7 +587,7 @@ function Enable-OpenPathCaptivePortalLimitedMode {
         }
     }
 
-    if (-not (Test-OpenPathLimitedCaptivePortalProtection -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds)) {
+    if (-not (Test-OpenPathLimitedCaptivePortalProtection -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds)) {
         Write-OpenPathLog 'Watchdog: captive portal limited mode verification failed; staying protected' -Level WARN
         Restore-OpenPathLimitedCaptivePortalAttempt
         return $false
@@ -675,14 +676,15 @@ function Test-OpenPathLimitedCaptivePortalProtection {
     [CmdletBinding()]
     param(
         [int]$DnsMaxAttempts = 12,
-        [int]$DnsDelayMilliseconds = 1000
+        [int]$DnsDelayMilliseconds = 1000,
+        [int]$DnsAttemptTimeoutSeconds = 0
     )
 
     try {
         if ((Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue) -and -not (Test-FirewallActive)) {
             return $false
         }
-        if ((Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) -and -not (Test-DNSResolution -MaxAttempts $DnsMaxAttempts -DelayMilliseconds $DnsDelayMilliseconds)) {
+        if ((Get-Command -Name 'Test-DNSResolution' -ErrorAction SilentlyContinue) -and -not (Test-DNSResolution -MaxAttempts $DnsMaxAttempts -DelayMilliseconds $DnsDelayMilliseconds -AttemptTimeoutSeconds $DnsAttemptTimeoutSeconds)) {
             return $false
         }
         if ((Get-Command -Name 'Test-DNSSinkhole' -ErrorAction SilentlyContinue) -and -not (Test-DNSSinkhole -Domain 'this-should-be-blocked-test-12345.com')) {
