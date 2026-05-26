@@ -450,13 +450,10 @@ jobs:
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/reset-self-hosted-windows-runner.ps1
 
-      - name: Setup Node.js
-        uses: ./.github/actions/setup-node
-
       - name: Run Windows captive portal navigation diagnostic
         shell: pwsh
         run: |
-          npm run diagnostics:windows:direct -- --mode captive-portal-navigation --source-mode local-overlay --artifact-dir ".opencode/tmp/openpath-windows-direct/${{ github.run_id }}-${{ github.run_attempt }}/captive-portal-navigation"
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-captive-portal-navigation.ps1 -Mode Run -ArtifactsRoot tests/e2e/artifacts/windows-captive-portal-navigation
 
       - name: Restore self-hosted Windows runner state
         if: always()
@@ -476,7 +473,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: windows-captive-portal-navigation-artifacts-${{ github.run_id }}
-          path: .opencode/tmp/openpath-windows-direct/${{ github.run_id }}-${{ github.run_attempt }}/captive-portal-navigation
+          path: tests/e2e/artifacts/windows-captive-portal-navigation
           if-no-files-found: ignore
           retention-days: 7
 

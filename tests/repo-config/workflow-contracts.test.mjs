@@ -1618,13 +1618,17 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
   );
   assert.ok(
     windowsCaptivePortalBlock.includes(
-      'npm run diagnostics:windows:direct -- --mode captive-portal-navigation --source-mode local-overlay'
-    ),
-    'windows-captive-portal-navigation should run the synthetic captive-portal direct diagnostic with a local overlay'
+      'pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-captive-portal-navigation.ps1'
+    ) &&
+      windowsCaptivePortalBlock.includes(
+        '-ArtifactsRoot tests/e2e/artifacts/windows-captive-portal-navigation'
+      ) &&
+      !windowsCaptivePortalBlock.includes('npm run diagnostics:windows:direct'),
+    'windows-captive-portal-navigation should run the synthetic captive-portal harness directly on the locked Windows runner'
   );
   assert.ok(
     windowsCaptivePortalBlock.includes('actions/upload-artifact@v7') &&
-      windowsCaptivePortalBlock.includes('.opencode/tmp/openpath-windows-direct') &&
+      windowsCaptivePortalBlock.includes('tests/e2e/artifacts/windows-captive-portal-navigation') &&
       windowsCaptivePortalBlock.includes('captive-portal-navigation'),
     'windows-captive-portal-navigation should upload direct diagnostic artifacts'
   );
