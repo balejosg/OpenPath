@@ -46,8 +46,8 @@
       "nodes": ["node_modules/node-notifier"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.2.0",
-        "isSemVerMajor": false
+        "version": "0.0.1",
+        "isSemVerMajor": true
       }
     },
     "qs": {
@@ -74,6 +74,35 @@
       "range": "6.11.1 - 6.15.1",
       "nodes": ["node_modules/qs"],
       "fixAvailable": true
+    },
+    "tmp": {
+      "name": "tmp",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1119610,
+          "name": "tmp",
+          "dependency": "tmp",
+          "title": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape",
+          "url": "https://github.com/advisories/GHSA-ph9p-34f9-6g65",
+          "severity": "high",
+          "cwe": ["CWE-22"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": "<0.2.6"
+        }
+      ],
+      "effects": ["web-ext"],
+      "range": "<0.2.6",
+      "nodes": ["node_modules/tmp"],
+      "fixAvailable": {
+        "name": "web-ext",
+        "version": "0.0.1",
+        "isSemVerMajor": true
+      }
     },
     "turbo": {
       "name": "turbo",
@@ -142,22 +171,22 @@
       ],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.2.0",
-        "isSemVerMajor": false
+        "version": "0.0.1",
+        "isSemVerMajor": true
       }
     },
     "web-ext": {
       "name": "web-ext",
-      "severity": "moderate",
+      "severity": "high",
       "isDirect": true,
-      "via": ["node-notifier"],
+      "via": ["node-notifier", "tmp"],
       "effects": [],
-      "range": "5.0.0 - 10.1.0",
+      "range": ">=1.0.0",
       "nodes": ["node_modules/web-ext"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.2.0",
-        "isSemVerMajor": false
+        "version": "0.0.1",
+        "isSemVerMajor": true
       }
     },
     "ws": {
@@ -190,10 +219,10 @@
     "vulnerabilities": {
       "info": 0,
       "low": 0,
-      "moderate": 8,
-      "high": 0,
+      "moderate": 7,
+      "high": 2,
       "critical": 0,
-      "total": 8
+      "total": 9
     },
     "dependencies": {
       "prod": 276,
