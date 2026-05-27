@@ -11,7 +11,8 @@ const VALID_MODES = new Set(['lab-direct', 'target-platform']);
 
 function readJson(path) {
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
+    const content = readFileSync(path, 'utf8').replace(/^\uFEFF/, '');
+    return JSON.parse(content);
   } catch (error) {
     throw new Error(`Unable to read JSON artifact ${path}: ${error.message}`);
   }

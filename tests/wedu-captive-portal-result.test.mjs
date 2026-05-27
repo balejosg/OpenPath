@@ -6,10 +6,15 @@ import { describe, test } from 'node:test';
 
 import { assertWeduCaptivePortalResult } from '../scripts/assert-wedu-captive-portal-result.mjs';
 
+function writeJsonFile(artifactDir, name, payload, { bom = false } = {}) {
+  const content = JSON.stringify(payload, null, 2);
+  writeFileSync(join(artifactDir, name), `${bom ? '\uFEFF' : ''}${content}`);
+}
+
 function makeArtifactDir(files = {}) {
   const artifactDir = mkdtempSync(join(tmpdir(), 'wedu-result-'));
   for (const [name, payload] of Object.entries(files)) {
-    writeFileSync(join(artifactDir, name), JSON.stringify(payload, null, 2));
+    writeJsonFile(artifactDir, name, payload);
   }
   return artifactDir;
 }
@@ -126,6 +131,19 @@ describe('WEDU captive portal result validator', () => {
       'wedu-lab-browser-before.json': browserBefore(),
       'wedu-lab-browser-after-auth.json': browserAfter(),
     });
+
+    assert.doesNotThrow(() =>
+      assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' })
+    );
+  });
+
+  test('accepts Windows JSON artifacts with a UTF-8 BOM', () => {
+    const artifactDir = makeArtifactDir();
+    writeJsonFile(artifactDir, 'direct-captive-portal-wedu-lab-result.json', baseResult(), {
+      bom: true,
+    });
+    writeJsonFile(artifactDir, 'wedu-lab-browser-before.json', browserBefore(), { bom: true });
+    writeJsonFile(artifactDir, 'wedu-lab-browser-after-auth.json', browserAfter(), { bom: true });
 
     assert.doesNotThrow(() =>
       assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' })
