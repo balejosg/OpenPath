@@ -885,6 +885,22 @@ async function seedBaselineWhitelist(
   });
 }
 
+async function settleBlockedRequestTarget(
+  driver: StudentPolicyDriver,
+  mode: PolicyMode,
+  targets: StudentPolicyTargets
+): Promise<void> {
+  await settlePolicyChange(
+    driver,
+    mode,
+    async () => {
+      await driver.assertDnsBlocked(targets.hosts.request);
+      await driver.assertHttpBlocked(targets.requestDomainUrl);
+    },
+    { timeoutMs: 45_000 }
+  );
+}
+
 async function runRequestLifecycleScenarioSet(
   client: StudentPolicyServerClient,
   driver: StudentPolicyDriver,
@@ -893,7 +909,7 @@ async function runRequestLifecycleScenarioSet(
 ): Promise<void> {
   logScenarioStep('SP-001 to SP-005 request lifecycle');
 
-  await driver.assertDnsBlocked(targets.hosts.request);
+  await settleBlockedRequestTarget(driver, mode, targets);
   const requestStatusText = await driver.openBlockedScreenAndSubmitRequest(
     targets.requestDomainUrl,
     {
@@ -2786,7 +2802,7 @@ export async function runFallbackPropagationProbe(
   await seedBaselineWhitelist(client, driver, mode, targets);
 
   logScenarioStep('SP-FB-001 fallback request approval propagation');
-  await driver.assertDnsBlocked(targets.hosts.request);
+  await settleBlockedRequestTarget(driver, mode, targets);
   const requestStatusText = await driver.openBlockedScreenAndSubmitRequest(
     targets.requestDomainUrl,
     {

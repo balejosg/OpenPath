@@ -157,6 +157,38 @@ describe('repository verification contract', () => {
     );
   });
 
+  test('student policy request lifecycle settles native blocking before blocked-page submission', () => {
+    const scenarios = readText('tests/selenium/student-policy-scenarios.ts');
+
+    assert.match(
+      scenarios,
+      /async function settleBlockedRequestTarget[\s\S]*await driver\.assertDnsBlocked\(targets\.hosts\.request\);[\s\S]*await driver\.assertHttpBlocked\(targets\.requestDomainUrl\);/,
+      'request lifecycle preflight should wait for both DNS and HTTP blocking before browser submission'
+    );
+
+    const lifecycleStart = scenarios.indexOf('async function runRequestLifecycleScenarioSet');
+    const lifecycleSegment = scenarios.slice(
+      lifecycleStart,
+      scenarios.indexOf('const pending = await client.findPendingRequestByDomain', lifecycleStart)
+    );
+    assert.match(
+      lifecycleSegment,
+      /await settleBlockedRequestTarget\(driver, mode, targets\);[\s\S]*openBlockedScreenAndSubmitRequest/,
+      'SP-001 should settle native blocking before opening the blocked-page request form'
+    );
+
+    const fallbackStart = scenarios.indexOf('export async function runFallbackPropagationProbe');
+    const fallbackSegment = scenarios.slice(
+      fallbackStart,
+      scenarios.indexOf('const pending = await client.findPendingRequestByDomain', fallbackStart)
+    );
+    assert.match(
+      fallbackSegment,
+      /await settleBlockedRequestTarget\(driver, mode, targets\);[\s\S]*openBlockedScreenAndSubmitRequest/,
+      'fallback propagation should settle native blocking before opening the blocked-page request form'
+    );
+  });
+
   test('windows student policy runner packages the Firefox XPI with the canonical build script', () => {
     const windowsRunner = readText('tests/e2e/ci/run-windows-student-flow.ps1');
 
