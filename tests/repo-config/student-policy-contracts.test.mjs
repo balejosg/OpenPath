@@ -789,6 +789,16 @@ describe('repository verification contract', () => {
     );
     assert.match(
       browserBoundaryCi,
+      /Assert-InstalledOpenPathBrowserBoundaryAppControl[\s\S]*Set-OpenPathNonAdminAppControl[\s\S]*OpenPath AppControl boundary is still inactive after reapply/s,
+      'browser-boundary CI should reassert the installed AppControl boundary before creating the temporary student user'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /AppLockerPolicy[\s\S]*S-1-5-32-544[\s\S]*administrator allow-all rule is missing/s,
+      'browser-boundary CI should fail before student probes if the admin AppLocker allow-all rule is missing'
+    );
+    assert.match(
+      browserBoundaryCi,
       /New-LocalUser[\s\S]*Invoke-StudentBoundaryTask[\s\S]*-Scope Admin/s,
       'browser-boundary CI should run student probes through a temporary standard user and admin probes with the current token'
     );
