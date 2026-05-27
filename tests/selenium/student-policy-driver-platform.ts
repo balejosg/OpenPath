@@ -14,8 +14,10 @@ import {
   normalizeWhitelistContents,
   readWhitelistFile,
   runPlatformCommand,
+  runPlatformCommandResult,
   shellEscape,
   getUpdateCommand,
+  type PlatformCommandResult,
 } from './student-policy-env';
 import type { ConvergenceOptions } from './student-policy-types';
 
@@ -47,9 +49,40 @@ export function shouldRetryForceLocalUpdateError(error: unknown, command: string
 }
 
 export function isCompletedWindowsUpdateFailure(error: unknown): boolean {
-  return /=== OpenPath update completed(?: successfully| \(no changes\)) ===/.test(
-    formatForceLocalUpdateError(error)
+  return isCompletedWindowsUpdateOutput(formatForceLocalUpdateError(error));
+}
+
+export function isCompletedWindowsUpdateOutput(output: string): boolean {
+  return /=== OpenPath update completed(?: successfully| \(no changes\)) ===/.test(output);
+}
+
+export function isSkippedWindowsUpdateOutput(output: string): boolean {
+  return /Another OpenPath update is already running - skipping (?:this cycle|runtime dependency fast apply)/i.test(
+    output
   );
+}
+
+function createForceLocalUpdateResultError(command: string, result: PlatformCommandResult): Error {
+  const prefix = result.failed ? 'Command failed' : 'Command did not apply update';
+  return new Error(`${prefix}: ${command}${result.output === '' ? '' : `\n${result.output}`}`);
+}
+
+export function shouldRetryForceLocalUpdateResult(
+  result: PlatformCommandResult,
+  command: string
+): boolean {
+  if (isSkippedWindowsUpdateOutput(result.output)) {
+    return true;
+  }
+
+  if (result.failed) {
+    return shouldRetryForceLocalUpdateError(
+      createForceLocalUpdateResultError(command, result),
+      command
+    );
+  }
+
+  return false;
 }
 
 export async function assertDnsBlocked(hostname: string): Promise<void> {
@@ -101,28 +134,30 @@ export async function forceLocalUpdate(): Promise<void> {
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= FORCE_LOCAL_UPDATE_RETRY_ATTEMPTS; attempt += 1) {
-    try {
-      await runPlatformCommand(command);
+    const result = await runPlatformCommandResult(command);
+
+    if (isWindows() && result.failed && isCompletedWindowsUpdateOutput(result.output)) {
       return;
-    } catch (error) {
-      lastError = error;
-
-      if (isWindows() && isCompletedWindowsUpdateFailure(error)) {
-        return;
-      }
-
-      if (
-        attempt === FORCE_LOCAL_UPDATE_RETRY_ATTEMPTS ||
-        !shouldRetryForceLocalUpdateError(error, command)
-      ) {
-        throw error;
-      }
-
-      console.warn(
-        `Forced OpenPath update failed during attempt ${attempt}; retrying after ${FORCE_LOCAL_UPDATE_RETRY_DELAY_MS}ms`
-      );
-      await delay(FORCE_LOCAL_UPDATE_RETRY_DELAY_MS);
     }
+
+    if (!result.failed && !(isWindows() && isSkippedWindowsUpdateOutput(result.output))) {
+      return;
+    }
+
+    const error = createForceLocalUpdateResultError(command, result);
+    lastError = error;
+
+    if (
+      attempt === FORCE_LOCAL_UPDATE_RETRY_ATTEMPTS ||
+      !shouldRetryForceLocalUpdateResult(result, command)
+    ) {
+      throw error;
+    }
+
+    console.warn(
+      `Forced OpenPath update failed during attempt ${attempt}; retrying after ${FORCE_LOCAL_UPDATE_RETRY_DELAY_MS}ms`
+    );
+    await delay(FORCE_LOCAL_UPDATE_RETRY_DELAY_MS);
   }
 
   throw lastError ?? new Error('Forced OpenPath update failed');

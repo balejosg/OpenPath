@@ -23,6 +23,7 @@ import {
 import { getBlockedPathRulesDebug } from './student-policy-driver-runtime';
 import {
   isCompletedWindowsUpdateFailure,
+  shouldRetryForceLocalUpdateResult,
   shouldRetryForceLocalUpdateError,
 } from './student-policy-driver-platform';
 import { getStudentPolicyPhasePlan } from './student-policy-harness';
@@ -36,6 +37,7 @@ import {
   buildBrowserDependencyObservabilitySpikePlan,
   buildLinuxRuntimeDependencyApplyPlan,
   findResidualWhitelistEntries,
+  addMillisecondsToIsoTimestamp,
 } from './student-policy-scenarios';
 
 function createScenario(): StudentScenario {
@@ -194,6 +196,34 @@ test('forced local updates retry transient OpenPath update contention', () => {
   );
 });
 
+test('forced local updates retry zero-exit Windows update skips', () => {
+  const defaultWindowsUpdateCommand =
+    'powershell -NoLogo -File "C:\\OpenPath\\scripts\\Update-OpenPath.ps1"';
+
+  assert.equal(
+    shouldRetryForceLocalUpdateResult(
+      {
+        output: 'Another OpenPath update is already running - skipping this cycle',
+        exitCode: 0,
+        failed: false,
+      },
+      defaultWindowsUpdateCommand
+    ),
+    true
+  );
+  assert.equal(
+    shouldRetryForceLocalUpdateResult(
+      {
+        output: '=== OpenPath update completed successfully ===',
+        exitCode: 0,
+        failed: false,
+      },
+      defaultWindowsUpdateCommand
+    ),
+    false
+  );
+});
+
 test('forced local updates tolerate nonzero Windows updates after completion', () => {
   assert.equal(
     isCompletedWindowsUpdateFailure(
@@ -218,6 +248,13 @@ test('forced local updates tolerate nonzero Windows updates after completion', (
       )
     ),
     false
+  );
+});
+
+test('schedule end probes evaluate just after the boundary instant', () => {
+  assert.equal(
+    addMillisecondsToIsoTimestamp('2026-05-27T12:30:00.000Z', 1_000),
+    '2026-05-27T12:30:01.000Z'
   );
 });
 

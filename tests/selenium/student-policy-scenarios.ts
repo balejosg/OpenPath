@@ -765,6 +765,12 @@ function finishActiveScenarioTiming(): void {
   activeScenarioTiming = null;
 }
 
+export function addMillisecondsToIsoTimestamp(value: string, milliseconds: number): string {
+  const instant = new Date(value);
+  assert.ok(Number.isFinite(instant.getTime()), `Expected valid ISO timestamp, received ${value}`);
+  return new Date(instant.getTime() + milliseconds).toISOString();
+}
+
 export function writeStudentPolicyScenarioTimings(diagnosticsDir: string): void {
   finishActiveScenarioTiming();
   if (scenarioTimings.length === 0) {
@@ -2654,7 +2660,9 @@ async function runActiveGroupAndScheduleScenarios(
     await driver.assertWhitelistContains(targets.hosts.alternateOnly);
   });
 
-  await client.setTestClock(driver.scenario.schedules.futureAlternate.endAt);
+  await client.setTestClock(
+    addMillisecondsToIsoTimestamp(driver.scenario.schedules.futureAlternate.endAt, 1_000)
+  );
   await client.tickBoundaries(driver.scenario.schedules.futureAlternate.endAt);
   await settlePolicyChange(driver, mode, async () => {
     await driver.assertWhitelistMissing(targets.hosts.alternateOnly);
