@@ -590,6 +590,12 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
     'WEDU lab should verify the expected Linux controller runner'
   );
   assert.ok(
+    workflow.includes(
+      "OPENPATH_WEDU_CI_PROXMOX_HOST: ${{ vars.OPENPATH_WEDU_CI_PROXMOX_HOST || 'whitelist-proxmox' }}"
+    ),
+    'WEDU lab should allow the controller Proxmox SSH target to be configured outside the public repo'
+  );
+  assert.ok(
     workflow.includes('actions/checkout@v6') && workflow.includes('persist-credentials: false'),
     'WEDU lab should use checkout without persisted credentials'
   );
@@ -615,6 +621,7 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
 
   for (const required of [
     'trap cleanup EXIT',
+    'LOCK_ACQUIRED=1',
     'openpath_wedu_acquire_remote_lock',
     'openpath_wedu_release_remote_lock',
     'stop_all_action_runner_services',
@@ -634,6 +641,15 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
       !script.includes('gh api') &&
       !script.includes('for cmd in ssh git python3 npm node iconv base64 gh ip curl; do'),
     'WEDU lab script should query runner state without requiring the GitHub CLI on the controller'
+  );
+  assert.ok(
+    script.includes('LOCK_ACQUIRED=0') &&
+      script.includes('if [ "$LOCK_ACQUIRED" -eq 1 ]; then') &&
+      script.includes('reset_gateway_captive || CLEANUP_FAILED=1') &&
+      script.includes(
+        'openpath_wedu_release_remote_lock "$PROXMOX_HOST" "$REMOTE_LOCK_DIR" "$LOCK_OWNER"'
+      ),
+    'WEDU lab cleanup should only mutate the remote lab after the remote lock was acquired'
   );
 
   for (const required of [

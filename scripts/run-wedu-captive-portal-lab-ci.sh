@@ -26,6 +26,7 @@ HTTP_SERVER_LOG="$ARTIFACT_DIR/overlay-http.log"
 OVERLAY_ARCHIVE_URL=""
 LOCK_OWNER="${GITHUB_RUN_ID:-local}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 LOCK_MODE="full-lab"
+LOCK_ACQUIRED=0
 SNAPSHOT_NAME=""
 SNAPSHOT_CREATED=0
 RUNNER_SERVICES_STOPPED=0
@@ -364,9 +365,11 @@ cleanup() {
   if [ "$SNAPSHOT_CREATED" -eq 1 ] || [ "$RUNNER_SERVICES_STOPPED" -eq 1 ]; then
     restore_windows_vm || CLEANUP_FAILED=1
   fi
-  reset_gateway_captive || CLEANUP_FAILED=1
-  openpath_wedu_release_remote_lock "$PROXMOX_HOST" "$REMOTE_LOCK_DIR" "$LOCK_OWNER" ||
-    warn "Failed to release WEDU lab lock"
+  if [ "$LOCK_ACQUIRED" -eq 1 ]; then
+    reset_gateway_captive || CLEANUP_FAILED=1
+    openpath_wedu_release_remote_lock "$PROXMOX_HOST" "$REMOTE_LOCK_DIR" "$LOCK_OWNER" ||
+      warn "Failed to release WEDU lab lock"
+  fi
   if [ "$CLEANUP_FAILED" -ne 0 ]; then
     exit 1
   fi
@@ -387,6 +390,7 @@ main() {
 
   trap cleanup EXIT
   openpath_wedu_acquire_remote_lock "$PROXMOX_HOST" "$REMOTE_LOCK_DIR" "$LOCK_OWNER" "$LOCK_MODE"
+  LOCK_ACQUIRED=1
   assert_openpath_runner_idle
   wait_windows_qga 12 || fail "QGA is not ready before WEDU lab"
   capture_vm_config
