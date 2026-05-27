@@ -379,7 +379,7 @@ export async function submitBlockedScreenRequest(
   let latestStatus = '';
   let lastError: Error | null = null;
 
-  for (const attempt of [1, 2]) {
+  for (const attempt of [1, 2, 3]) {
     let submitDiagnostics = '';
 
     try {
@@ -408,7 +408,7 @@ export async function submitBlockedScreenRequest(
 
       return latestStatus;
     } catch (error) {
-      if (attempt === 1 && isStaleElementError(error)) {
+      if (attempt < 3 && isStaleElementError(error)) {
         continue;
       }
 
@@ -429,7 +429,7 @@ export async function submitBlockedScreenRequest(
       );
 
       if (
-        attempt === 1 &&
+        attempt < 3 &&
         isEmptyDocumentSwapAfterSubmit(latestStatus, domDiagnostics, submitDiagnostics)
       ) {
         continue;
