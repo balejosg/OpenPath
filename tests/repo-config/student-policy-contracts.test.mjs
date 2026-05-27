@@ -690,6 +690,16 @@ describe('repository verification contract', () => {
       'Fallback propagation cleanup should not fail the proof after deleting the API rule'
     );
     assert.match(
+      seleniumScenarios,
+      /catch \(forceError\) \{[\s\S]*await runAssertion\(\);[\s\S]*forced policy update failed after convergence completed[\s\S]*throw forceError/s,
+      'SSE policy settling should tolerate a failed forced update only when the target policy state has already converged'
+    );
+    assert.match(
+      windowsRunner,
+      /'C:\\OpenPath\\lib\\internal\\Firewall\.State\.ps1'[\s\S]*'C:\\OpenPath\\lib\\Update\.Runtime\.psm1'/,
+      'Windows student-policy diagnostics should capture the installed runtime modules involved in forced policy updates'
+    );
+    assert.match(
       harness,
       /fallback-propagation[\s\S]*runFallbackPropagationProbe/s,
       'Selenium harness should map the fallback-propagation profile to the targeted probe'

@@ -1315,7 +1315,13 @@ function Write-WindowsDiagnostics {
     $acrylicRoots = Get-AcrylicRootCandidates
     $installedRuntimeFiles = @(
         'C:\OpenPath\lib\DNS.psm1',
-        'C:\OpenPath\lib\internal\DNS.Acrylic.Config.ps1'
+        'C:\OpenPath\lib\Firewall.psm1',
+        'C:\OpenPath\lib\internal\DNS.Acrylic.Config.ps1',
+        'C:\OpenPath\lib\internal\Firewall.State.ps1',
+        'C:\OpenPath\lib\internal\Firewall.Policy.ps1',
+        'C:\OpenPath\lib\internal\EndpointStateReconciler.ps1',
+        'C:\OpenPath\lib\internal\Update.Script.Apply.ps1',
+        'C:\OpenPath\lib\Update.Runtime.psm1'
     )
 
     New-Item -ItemType Directory -Path $acrylicArtifactDir -Force | Out-Null

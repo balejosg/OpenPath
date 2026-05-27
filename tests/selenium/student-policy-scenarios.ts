@@ -717,7 +717,21 @@ async function settlePolicyChange(
   try {
     await runAssertion();
   } catch {
-    await forceConvergence();
+    try {
+      await forceConvergence();
+    } catch (forceError) {
+      try {
+        await runAssertion();
+        logScenarioStep(
+          `forced policy update failed after convergence completed: ${
+            forceError instanceof Error ? forceError.message : String(forceError)
+          }`
+        );
+        return;
+      } catch {
+        throw forceError;
+      }
+    }
     await runAssertion();
   }
 }
