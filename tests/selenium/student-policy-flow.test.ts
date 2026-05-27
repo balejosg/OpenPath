@@ -14,7 +14,10 @@ import {
 } from './student-policy-flow.e2e';
 import { matchesRequestDomain } from './student-policy-client';
 import { openAndExpectBlocked, submitBlockedScreenRequest } from './student-policy-driver-browser';
-import { getStudentPolicyCoverageProfile } from './student-policy-env';
+import {
+  getStudentPolicyCoverageProfile,
+  PLATFORM_COMMAND_MAX_BUFFER_BYTES,
+} from './student-policy-env';
 import { getBlockedPathRulesDebug } from './student-policy-driver-runtime';
 import { getStudentPolicyPhasePlan } from './student-policy-harness';
 import {
@@ -136,6 +139,13 @@ test('buildWindowsBlockedDnsCommand treats NXDOMAIN as a blocked result instead 
   assert.match(command, /DNS_ERROR_RCODE_NAME_ERROR/);
   assert.match(command, /\bthrow\b/);
   assert.doesNotMatch(command, /catch \{ exit 0 \}/);
+});
+
+test('platform commands keep enough stdout buffer for Windows diagnostics', () => {
+  assert.ok(
+    PLATFORM_COMMAND_MAX_BUFFER_BYTES >= 64 * 1024 * 1024,
+    'Windows student-policy fallback commands can emit verbose runner diagnostics'
+  );
 });
 
 test('buildWindowsHttpProbeCommand uses a Windows-safe HTTP probe without POSIX redirection', () => {

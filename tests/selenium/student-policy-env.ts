@@ -16,6 +16,7 @@ export const FIREFOX_EXTENSION_ID = 'openpath-block-monitor@openpath';
 export const DEFAULT_TIMEOUT_MS = 15_000;
 export const DEFAULT_BLOCKED_TIMEOUT_MS = 8_000;
 export const DEFAULT_POLL_MS = 250;
+export const PLATFORM_COMMAND_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 export const DEFAULT_DIAGNOSTICS_DIR = path.resolve(__dirname, '../../artifacts/student-policy');
 export const DEFAULT_EXTENSION_PATH = path.resolve(
   __dirname,
@@ -97,7 +98,9 @@ export function buildWindowsHttpProbeCommand(
 }
 
 export async function runPlatformCommand(command: string): Promise<string> {
-  const { stdout, stderr } = await exec(command);
+  const { stdout, stderr } = await exec(command, {
+    maxBuffer: PLATFORM_COMMAND_MAX_BUFFER_BYTES,
+  });
   return `${stdout}${stderr}`.trim();
 }
 
