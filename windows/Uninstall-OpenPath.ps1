@@ -159,6 +159,39 @@ function ConvertTo-OpenPathUninstallNullableInt {
     }
 }
 
+function ConvertTo-OpenPathUninstallFirewallManifestRuleNames {
+    param([object]$Value)
+
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($item in @($Value)) {
+        if ($null -eq $item) { continue }
+
+        $text = [string]$item
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+
+        foreach ($name in @($text -split '\s+' | Where-Object { $_ })) {
+            [void]$names.Add([string]$name)
+        }
+    }
+
+    return @($names | Sort-Object -Unique)
+}
+
+function Get-OpenPathUninstallFirewallManifestRuleNames {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path $Path)) { return @() }
+
+    try {
+        $parsed = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        return ConvertTo-OpenPathUninstallFirewallManifestRuleNames -Value $parsed
+    }
+    catch {
+        Write-Warning "Ignoring unreadable firewall manifest at $Path; falling back to OpenPath firewall rule discovery. $_"
+        return @()
+    }
+}
+
 function Restore-OpenPathOriginalDns {
     $snapshotPath = Join-Path $OpenPathRoot 'data\original-dns.json'
     if ((Test-Path $snapshotPath) -and (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) {
@@ -205,13 +238,9 @@ function Restore-OpenPathOriginalDns {
 
 function Remove-OpenPathFirewallRules {
     $manifestPath = Join-Path $OpenPathRoot 'data\firewall-rules.json'
-    if (Test-Path $manifestPath) {
-        @(Get-Content $manifestPath -Raw | ConvertFrom-Json | ForEach-Object { [string]$_ }) |
-            Where-Object { $_ } |
-            ForEach-Object {
-                Get-NetFirewallRule -DisplayName $_ -ErrorAction SilentlyContinue |
-                    Remove-NetFirewallRule -ErrorAction SilentlyContinue
-            }
+    foreach ($ruleName in @(Get-OpenPathUninstallFirewallManifestRuleNames -Path $manifestPath)) {
+        Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue |
+            Remove-NetFirewallRule -ErrorAction SilentlyContinue
     }
 
     Get-NetFirewallRule -Group 'OpenPath' -ErrorAction SilentlyContinue |

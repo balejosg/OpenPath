@@ -203,18 +203,55 @@ function Remove-OpenPathInstallerAppLockerRules {
     }
 }
 
+function ConvertTo-OpenPathInstallerFirewallManifestRuleNames {
+    param([object]$Value)
+
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($item in @($Value)) {
+        if ($null -eq $item) { continue }
+
+        $text = [string]$item
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+
+        foreach ($name in @($text -split '\s+' | Where-Object { $_ })) {
+            [void]$names.Add([string]$name)
+        }
+    }
+
+    return @($names | Sort-Object -Unique)
+}
+
+function Get-OpenPathInstallerFirewallManifestRuleNames {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path $Path)) { return @() }
+
+    try {
+        $parsed = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        return ConvertTo-OpenPathInstallerFirewallManifestRuleNames -Value $parsed
+    }
+    catch {
+        if (Get-Command -Name Write-InstallerWarning -ErrorAction SilentlyContinue) {
+            Write-InstallerWarning "  WARNING: Ignoring unreadable firewall manifest at $Path; falling back to OpenPath firewall rule discovery. $_"
+        }
+        else {
+            Write-Warning "Ignoring unreadable firewall manifest at $Path; falling back to OpenPath firewall rule discovery. $_"
+        }
+        return @()
+    }
+}
+
 function Remove-OpenPathInstallerFirewallRules {
     if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) { return }
     if (-not (Get-Command -Name Remove-NetFirewallRule -ErrorAction SilentlyContinue)) { return }
 
     $manifestPath = Join-Path 'C:\OpenPath' 'data\firewall-rules.json'
+    foreach ($ruleName in @(Get-OpenPathInstallerFirewallManifestRuleNames -Path $manifestPath)) {
+        Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue |
+            Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    }
+
     if (Test-Path $manifestPath) {
-        @(Get-Content $manifestPath -Raw | ConvertFrom-Json | ForEach-Object { [string]$_ }) |
-            Where-Object { $_ } |
-            ForEach-Object {
-                Get-NetFirewallRule -DisplayName $_ -ErrorAction SilentlyContinue |
-                    Remove-NetFirewallRule -ErrorAction SilentlyContinue
-            }
         Remove-Item $manifestPath -Force -ErrorAction SilentlyContinue
     }
 

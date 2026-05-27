@@ -10,6 +10,7 @@ Describe "Installer cleanup helper" {
             'function Test-OpenPathExistingInstallation',
             'function Copy-OpenPathInstallerSourceForReinstall',
             'function Invoke-OpenPathInstallerExistingInstallCleanup',
+            'function Get-OpenPathInstallerFirewallManifestRuleNames',
             '[switch]$KeepAcrylic',
             '[switch]$KeepLogs',
             'openpath-reinstall-source-',
@@ -158,6 +159,96 @@ Describe "Installer cleanup helper" {
         }
     }
 
+    It "Ignores a corrupt firewall manifest and still removes OpenPath firewall rules" {
+        $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
+        . $cleanupHelperPath
+
+        $script:removedFirewallRules = @()
+        $script:requestedFirewallRules = @()
+        $script:manifestRead = $false
+        $createdCDrive = $false
+        if (-not (Get-PSDrive -Name C -ErrorAction SilentlyContinue)) {
+            New-PSDrive -Name C -PSProvider FileSystem -Root $TestDrive -Scope Global | Out-Null
+            $createdCDrive = $true
+        }
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Stop'
+
+        function global:Get-NetFirewallRule {
+            [CmdletBinding()]
+            param(
+                [string]$DisplayName,
+                [string]$Group
+            )
+
+            if ($DisplayName) {
+                $script:requestedFirewallRules += $DisplayName
+                if ($DisplayName -eq 'OpenPath-DNS-*') {
+                    return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-fallback-rule' }
+                }
+                return [PSCustomObject]@{ DisplayName = $DisplayName }
+            }
+
+            if ($Group -eq 'OpenPath') {
+                $script:requestedFirewallRules += 'group:OpenPath'
+                return [PSCustomObject]@{ DisplayName = 'OpenPath-group-rule' }
+            }
+        }
+
+        function global:Remove-NetFirewallRule {
+            [CmdletBinding()]
+            param([Parameter(ValueFromPipeline = $true)]$InputObject)
+
+            process {
+                if ($InputObject -and $InputObject.DisplayName) {
+                    $script:removedFirewallRules += [string]$InputObject.DisplayName
+                }
+            }
+        }
+
+        function global:Test-Path {
+            param([string]$Path)
+            return ([string]$Path).Replace('/', '\') -eq 'C:\OpenPath\data\firewall-rules.json'
+        }
+
+        function global:Get-Content {
+            param(
+                [string]$Path,
+                [switch]$Raw
+            )
+
+            $script:manifestRead = $true
+            return '[ "OpenPath-DNS-Allow-Loopback-TCP", '
+        }
+
+        function global:Write-InstallerWarning {
+            param([string]$Message)
+        }
+
+        try {
+            { Remove-OpenPathInstallerFirewallRules } | Should -Not -Throw
+            $script:manifestRead | Should -BeTrue
+            $script:requestedFirewallRules | Should -Contain 'group:OpenPath'
+            $script:requestedFirewallRules | Should -Contain 'OpenPath-DNS-*'
+            $script:removedFirewallRules | Should -Contain 'OpenPath-group-rule'
+            $script:removedFirewallRules | Should -Contain 'OpenPath-DNS-fallback-rule'
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+            Microsoft.PowerShell.Management\Remove-Item Function:\Get-NetFirewallRule -ErrorAction SilentlyContinue
+            Microsoft.PowerShell.Management\Remove-Item Function:\Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            Microsoft.PowerShell.Management\Remove-Item Function:\Test-Path -ErrorAction SilentlyContinue
+            Microsoft.PowerShell.Management\Remove-Item Function:\Get-Content -ErrorAction SilentlyContinue
+            Microsoft.PowerShell.Management\Remove-Item Function:\Write-InstallerWarning -ErrorAction SilentlyContinue
+            Remove-Variable -Name removedFirewallRules -Scope Script -ErrorAction SilentlyContinue
+            Remove-Variable -Name requestedFirewallRules -Scope Script -ErrorAction SilentlyContinue
+            Remove-Variable -Name manifestRead -Scope Script -ErrorAction SilentlyContinue
+            if ($createdCDrive) {
+                Microsoft.PowerShell.Management\Remove-PSDrive -Name C -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     It "Makes standalone uninstall independent of installed OpenPath modules" {
         $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
         $content = Get-Content $uninstallPath -Raw
@@ -166,6 +257,7 @@ Describe "Installer cleanup helper" {
             'function Remove-OpenPathFallbackAppLockerRules',
             'function Restore-OpenPathOriginalDns',
             'function Remove-OpenPathFirewallRules',
+            'function Get-OpenPathUninstallFirewallManifestRuleNames',
             'ExtensionInstallForcelist',
             '& "$acrylicPath\AcrylicService.exe" /UNINSTALL',
             '& sc.exe delete AcrylicDNSProxySvc',

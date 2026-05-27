@@ -42,6 +42,80 @@ Describe "Firewall Module" {
                 'Get-NetFirewallRule -DisplayName "$script:RulePrefix-*"'
             )
         }
+
+        It "Writes firewall manifests atomically as JSON arrays and normalizes legacy joined names" {
+            $manifestPath = Join-Path $TestDrive 'firewall-rules.json'
+            Set-Content -Path $manifestPath -Value '["OpenPath-DNS-Allow-Loopback-TCP OpenPath-DNS-Allow-Loopback-UDP"]' -Encoding UTF8
+
+            Mock Get-OpenPathFirewallManifestPath { $manifestPath } -ModuleName Firewall
+            Mock Write-OpenPathLog { } -ModuleName Firewall
+
+            InModuleScope Firewall {
+                Add-OpenPathFirewallManifestRule -Name 'OpenPath-DNS-Allow-Upstream-UDP'
+            }
+
+            $raw = Get-Content $manifestPath -Raw
+            $raw.TrimStart() | Should -Match '^\['
+            $parsed = @($raw | ConvertFrom-Json)
+
+            $parsed.Count | Should -Be 3
+            $parsed | Should -Contain 'OpenPath-DNS-Allow-Loopback-TCP'
+            $parsed | Should -Contain 'OpenPath-DNS-Allow-Loopback-UDP'
+            $parsed | Should -Contain 'OpenPath-DNS-Allow-Upstream-UDP'
+            Get-ChildItem -Path $TestDrive -Filter '*.tmp' | Should -BeNullOrEmpty
+        }
+
+        It "Ignores corrupt firewall manifests and still removes grouped and DNS-prefixed rules" {
+            $manifestPath = Join-Path $TestDrive 'firewall-rules.json'
+            Set-Content -Path $manifestPath -Value '[ "OpenPath-DNS-Allow-Loopback-TCP", ' -Encoding UTF8
+            $script:requestedFirewallRules = @()
+
+            if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) {
+                function global:Get-NetFirewallRule { }
+            }
+            if (-not (Get-Command -Name Remove-NetFirewallRule -ErrorAction SilentlyContinue)) {
+                function global:Remove-NetFirewallRule { }
+            }
+
+            Mock Get-OpenPathFirewallManifestPath { $manifestPath } -ModuleName Firewall
+            Mock Write-OpenPathLog { } -ModuleName Firewall
+            Mock Get-NetFirewallRule {
+                param(
+                    [string]$DisplayName,
+                    [string]$Group
+                )
+
+                if ($DisplayName) {
+                    $script:requestedFirewallRules += $DisplayName
+                    if ($DisplayName -eq 'OpenPath-DNS-*') {
+                        return [PSCustomObject]@{ DisplayName = 'OpenPath-DNS-fallback-rule' }
+                    }
+                    return [PSCustomObject]@{ DisplayName = $DisplayName }
+                }
+
+                if ($Group -eq 'OpenPath') {
+                    $script:requestedFirewallRules += 'group:OpenPath'
+                    return [PSCustomObject]@{ DisplayName = 'OpenPath-group-rule' }
+                }
+            } -ModuleName Firewall
+            Mock Remove-NetFirewallRule {
+            } -ModuleName Firewall
+
+            try {
+                $result = InModuleScope Firewall { Remove-OpenPathFirewall }
+
+                $result | Should -BeTrue
+                $script:requestedFirewallRules | Should -Contain 'group:OpenPath'
+                $script:requestedFirewallRules | Should -Contain 'OpenPath-DNS-*'
+                Should -Invoke -CommandName Remove-NetFirewallRule -ModuleName Firewall -Times 2 -Exactly
+                Test-Path $manifestPath | Should -BeFalse
+            }
+            finally {
+                Remove-Variable -Name requestedFirewallRules -Scope Script -ErrorAction SilentlyContinue
+                Microsoft.PowerShell.Management\Remove-Item Function:\Get-NetFirewallRule -ErrorAction SilentlyContinue
+                Microsoft.PowerShell.Management\Remove-Item Function:\Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     Context "DoH egress blocking" {

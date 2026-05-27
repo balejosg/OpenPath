@@ -2,6 +2,58 @@ function Get-OpenPathFirewallManifestPath {
     return 'C:\OpenPath\data\firewall-rules.json'
 }
 
+function ConvertTo-OpenPathFirewallManifestRuleNames {
+    param([object]$Value)
+
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($item in @($Value)) {
+        if ($null -eq $item) { continue }
+
+        $text = [string]$item
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+
+        foreach ($name in @($text -split '\s+' | Where-Object { $_ })) {
+            [void]$names.Add([string]$name)
+        }
+    }
+
+    return @($names | Sort-Object -Unique)
+}
+
+function Get-OpenPathFirewallManifestRuleNames {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path $Path)) { return @() }
+
+    try {
+        $parsed = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        return ConvertTo-OpenPathFirewallManifestRuleNames -Value $parsed
+    }
+    catch {
+        Write-OpenPathLog "Ignoring unreadable firewall manifest at $Path; falling back to OpenPath firewall rule discovery. $_" -Level WARN
+        return @()
+    }
+}
+
+function Set-OpenPathFirewallManifestRuleNames {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+
+    $normalizedNames = @(ConvertTo-OpenPathFirewallManifestRuleNames -Value $Names)
+    $json = ConvertTo-Json -InputObject $normalizedNames -Depth 3
+    $temporaryPath = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+
+    try {
+        $json | Set-Content -Path $temporaryPath -Encoding UTF8 -Force
+        Move-Item -Path $temporaryPath -Destination $Path -Force
+    }
+    finally {
+        Remove-Item -Path $temporaryPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Add-OpenPathFirewallManifestRule {
     param([Parameter(Mandatory = $true)][string]$Name)
 
@@ -16,10 +68,10 @@ function Add-OpenPathFirewallManifestRule {
         }
         $names = @()
         if (Test-Path $path) {
-            $names = @(Get-Content $path -Raw | ConvertFrom-Json | ForEach-Object { [string]$_ })
+            $names = @(Get-OpenPathFirewallManifestRuleNames -Path $path)
         }
         $names = @($names + $Name | Where-Object { $_ } | Sort-Object -Unique)
-        $names | ConvertTo-Json -Depth 3 | Set-Content -Path $path -Encoding UTF8
+        Set-OpenPathFirewallManifestRuleNames -Path $path -Names $names
     }
     catch {
         Write-OpenPathLog "Failed to update firewall manifest: $_" -Level WARN
@@ -71,13 +123,12 @@ function Remove-OpenPathFirewall {
 
     try {
         $manifestPath = Get-OpenPathFirewallManifestPath
+        foreach ($ruleName in @(Get-OpenPathFirewallManifestRuleNames -Path $manifestPath)) {
+            Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue |
+                Remove-NetFirewallRule -ErrorAction SilentlyContinue
+        }
+
         if (Test-Path $manifestPath) {
-            @(Get-Content $manifestPath -Raw | ConvertFrom-Json | ForEach-Object { [string]$_ }) |
-                Where-Object { $_ } |
-                ForEach-Object {
-                    Get-NetFirewallRule -DisplayName $_ -ErrorAction SilentlyContinue |
-                        Remove-NetFirewallRule -ErrorAction SilentlyContinue
-                }
             Remove-Item $manifestPath -Force -ErrorAction SilentlyContinue
         }
 

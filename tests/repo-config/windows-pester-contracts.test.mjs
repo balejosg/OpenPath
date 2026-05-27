@@ -75,6 +75,16 @@ test('Windows aggregate Pester entrypoint includes installer cleanup regressions
     /Set-AppLockerPolicy should not be called when no OpenPath rules are present/,
     'installer cleanup contracts should prove cleanup skips AppLocker writes when no OpenPath rules exist'
   );
+  assert.match(
+    cleanupSuite,
+    /Ignores a corrupt firewall manifest and still removes OpenPath firewall rules/,
+    'installer cleanup contracts should fail CI when corrupt firewall manifests can abort reinstall cleanup'
+  );
+  assert.match(
+    cleanupSuite,
+    /Get-OpenPathInstallerFirewallManifestRuleNames/,
+    'installer cleanup contracts should keep manifest parsing isolated from cleanup fallback removal'
+  );
 });
 
 test('Windows AppControl Pester suite keeps Appx AppLocker regression coverage', () => {
