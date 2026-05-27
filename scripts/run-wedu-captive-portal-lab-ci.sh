@@ -422,11 +422,22 @@ if (-not (\$dns -contains '$EXPECTED_DNS')) { throw 'Windows runner is not using
 run_wedu_direct_diagnostic() {
   local token
   local native_host_timeout_ms
+  local -a direct_args
   token="$(read_gateway_token)"
   [ -n "$token" ] || fail "Unable to read WEDU lab gateway token"
   native_host_timeout_ms="$((DIRECT_TIMEOUT_SECONDS * 1000 / 2))"
   if [ "$native_host_timeout_ms" -lt 180000 ]; then
     native_host_timeout_ms=180000
+  fi
+  direct_args=(
+    --mode captive-portal-wedu-lab
+    --proxmox-host "$PROXMOX_HOST"
+    --runner-repo-root "$WINDOWS_REPO_ROOT"
+    --artifact-dir "$ARTIFACT_DIR"
+    --timeout-seconds "$DIRECT_TIMEOUT_SECONDS"
+  )
+  if [ -n "${OPENPATH_WEDU_CI_SSH_KEY_PATH:-}" ]; then
+    direct_args+=(--ssh-key-path "$OPENPATH_WEDU_CI_SSH_KEY_PATH")
   fi
   (
     cd "$REPO_ROOT"
@@ -437,11 +448,7 @@ run_wedu_direct_diagnostic() {
       OPENPATH_WEDU_LAB_GATEWAY_URL="$GATEWAY_URL" \
       OPENPATH_WEDU_LAB_EXPECTED_DNS="$EXPECTED_DNS" \
       OPENPATH_WEDU_LAB_EXPECTED_SUBNET="$EXPECTED_SUBNET" \
-      npm run diagnostics:windows:direct -- \
-        --mode captive-portal-wedu-lab \
-        --runner-repo-root "$WINDOWS_REPO_ROOT" \
-        --artifact-dir "$ARTIFACT_DIR" \
-        --timeout-seconds "$DIRECT_TIMEOUT_SECONDS"
+      npm run diagnostics:windows:direct -- "${direct_args[@]}"
   )
   node "$REPO_ROOT/scripts/assert-wedu-captive-portal-result.mjs" "$ARTIFACT_DIR" --evidence-mode target-platform
 }

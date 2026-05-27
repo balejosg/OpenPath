@@ -214,6 +214,7 @@ function printUsage() {
 
 Options:
   --proxmox-host <host>       Proxmox SSH host/alias (default: ${DEFAULT_PROXMOX_HOST})
+  --ssh-key-path <path>       Optional SSH private key for the Proxmox connection
   --vmid <id>                 Windows runner VMID (default: ${DEFAULT_WINDOWS_RUNNER_VMID})
   --timeout-seconds <secs>    Timeout passed to the isolated Pester helper (default: ${DEFAULT_TIMEOUT_SECONDS})
   --results-path <path>       Result file path on the Windows runner relative to the repo root (default: ${DEFAULT_RESULTS_RELATIVE_PATH})
@@ -234,6 +235,8 @@ function parseArgs(argv) {
       process.env.WINDOWS_RUNNER_PROXMOX_HOST ??
       process.env.PROXMOX_SSH_ALIAS ??
       DEFAULT_PROXMOX_HOST,
+    sshKeyPath:
+      process.env.WINDOWS_RUNNER_SSH_KEY_PATH ?? process.env.OPENPATH_WEDU_CI_SSH_KEY_PATH ?? '',
     vmid: process.env.WINDOWS_RUNNER_VMID ?? DEFAULT_WINDOWS_RUNNER_VMID,
     timeoutSeconds: process.env.OPENPATH_WINDOWS_DIRECT_TIMEOUT_SECONDS ?? DEFAULT_TIMEOUT_SECONDS,
     resultsPath: process.env.OPENPATH_WINDOWS_DIRECT_RESULTS_PATH ?? DEFAULT_RESULTS_RELATIVE_PATH,
@@ -259,6 +262,8 @@ function parseArgs(argv) {
 
     if (arg === '--proxmox-host') {
       options.proxmoxHost = next();
+    } else if (arg === '--ssh-key-path') {
+      options.sshKeyPath = next();
     } else if (arg === '--vmid') {
       options.vmid = next();
     } else if (arg === '--timeout-seconds') {
@@ -316,6 +321,24 @@ function renderCommand(args) {
   return args.map((arg) => shellQuote(arg)).join(' ');
 }
 
+function buildSshArgs(options, remoteCommand) {
+  const args = ['ssh'];
+  if (options.sshKeyPath) {
+    args.push('-i', options.sshKeyPath, '-o', 'IdentitiesOnly=yes');
+  }
+  args.push(options.proxmoxHost, remoteCommand);
+  return args;
+}
+
+function renderSshInvocation(options, remoteCommand) {
+  const args = ['ssh'];
+  if (options.sshKeyPath) {
+    args.push('-i', options.sshKeyPath, '-o', 'IdentitiesOnly=yes');
+  }
+  args.push(options.proxmoxHost);
+  return `${renderCommand(args)} ${remoteCommand}`;
+}
+
 function encodePowerShell(script) {
   return Buffer.from(script, 'utf16le').toString('base64');
 }
@@ -339,9 +362,10 @@ function runCommand(args, { cwd = projectRoot, input, capture = false } = {}) {
 }
 
 function runProxmoxCommand(options, proxmoxArgs, { capture = true } = {}) {
-  const args = ['ssh', options.proxmoxHost, renderCommand(proxmoxArgs)];
+  const remoteCommand = renderCommand(proxmoxArgs);
+  const args = buildSshArgs(options, remoteCommand);
   if (DRY_RUN) {
-    console.log(renderCommand(args));
+    console.log(renderSshInvocation(options, remoteCommand));
     return '';
   }
 
@@ -350,7 +374,7 @@ function runProxmoxCommand(options, proxmoxArgs, { capture = true } = {}) {
 
 function runGuestCommand(options, guestArgs, { capture = true } = {}) {
   const remoteCommand = renderCommand(['qm', 'guest', 'exec', options.vmid, ...guestArgs]);
-  const args = ['ssh', options.proxmoxHost, remoteCommand];
+  const args = buildSshArgs(options, remoteCommand);
 
   if (DRY_RUN) {
     const encodedCommandIndex = guestArgs.indexOf('-EncodedCommand');
@@ -359,11 +383,10 @@ function runGuestCommand(options, guestArgs, { capture = true } = {}) {
         ? guestArgs
         : [...guestArgs.slice(0, encodedCommandIndex + 1), '<encoded>'];
     console.log(
-      renderCommand([
-        'ssh',
-        options.proxmoxHost,
-        renderCommand(['qm', 'guest', 'exec', options.vmid, ...previewGuestArgs]),
-      ])
+      renderSshInvocation(
+        options,
+        renderCommand(['qm', 'guest', 'exec', options.vmid, ...previewGuestArgs])
+      )
     );
     return '';
   }
@@ -398,16 +421,15 @@ function runGuestCommandAsync(options, guestArgs, { timeoutSeconds = 600, pollSe
     '0',
     ...guestArgs,
   ]);
-  const args = ['ssh', options.proxmoxHost, remoteCommand];
+  const args = buildSshArgs(options, remoteCommand);
 
   if (DRY_RUN) {
-    console.log(renderCommand(args));
+    console.log(renderSshInvocation(options, remoteCommand));
     console.log(
-      renderCommand([
-        'ssh',
-        options.proxmoxHost,
-        renderCommand(['qm', 'guest', 'exec-status', options.vmid, '<pid>']),
-      ])
+      renderSshInvocation(
+        options,
+        renderCommand(['qm', 'guest', 'exec-status', options.vmid, '<pid>'])
+      )
     );
     return '';
   }
@@ -502,10 +524,10 @@ function runGuestPowerShellDetached(options, script, { label = 'PowerShell' } = 
       '-EncodedCommand',
       encodePowerShell(script),
     ]);
-    const args = ['ssh', options.proxmoxHost, remoteCommand];
+    const args = buildSshArgs(options, remoteCommand);
 
     if (DRY_RUN) {
-      console.log(renderCommand(args));
+      console.log(renderSshInvocation(options, remoteCommand));
       return 0;
     }
 
@@ -2649,7 +2671,10 @@ async function main() {
 
   console.log(`artifact_dir=${artifactDir}`);
   console.log(
-    `proxmox_guest_agent=ssh ${options.proxmoxHost} qm guest exec ${options.vmid} -- powershell.exe`
+    `proxmox_guest_agent=${renderSshInvocation(
+      options,
+      `qm guest exec ${options.vmid} -- powershell.exe`
+    )}`
   );
   console.log(`source_mode=${options.sourceMode}`);
   console.log(`mode=${options.mode}`);

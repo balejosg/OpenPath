@@ -639,6 +639,8 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
     'captive-portal-wedu-lab',
     'reset_gateway_captive',
     'wait_for_openpath_runner_online',
+    '--proxmox-host',
+    '--ssh-key-path',
   ]) {
     assert.ok(script.includes(required), `WEDU lab script should include ${required}`);
   }

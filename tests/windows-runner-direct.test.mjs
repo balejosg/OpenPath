@@ -167,6 +167,21 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(result.stdout, /direct OpenPath Windows runner diagnostic complete/);
   });
 
+  test('plans direct diagnostics with an explicit Proxmox SSH identity', () => {
+    const result = runDirectDiagnostic([
+      '--proxmox-host',
+      'proxmox.example',
+      '--ssh-key-path',
+      '/tmp/openpath-wedu-ci',
+    ]);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /ssh -i \/tmp\/openpath-wedu-ci -o IdentitiesOnly=yes proxmox\.example qm guest exec 103 -- powershell\.exe/
+    );
+  });
+
   test('plans a local overlay source without starting the overlay server in dry-run', () => {
     const result = runDirectDiagnostic(['--source-mode', 'local-overlay']);
 
