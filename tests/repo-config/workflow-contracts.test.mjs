@@ -591,9 +591,9 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
   );
   assert.ok(
     workflow.includes(
-      "OPENPATH_WEDU_CI_PROXMOX_HOST: ${{ vars.OPENPATH_WEDU_CI_PROXMOX_HOST || 'whitelist-proxmox' }}"
+      "OPENPATH_WEDU_CI_PROXMOX_HOST: ${{ secrets.OPENPATH_WEDU_CI_PROXMOX_HOST || vars.OPENPATH_WEDU_CI_PROXMOX_HOST || 'whitelist-proxmox' }}"
     ),
-    'WEDU lab should allow the controller Proxmox SSH target to be configured outside the public repo'
+    'WEDU lab should prefer a masked controller Proxmox SSH target configured outside the public repo'
   );
   assert.ok(
     workflow.includes('actions/checkout@v6') && workflow.includes('persist-credentials: false'),
@@ -686,10 +686,11 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
   );
   assert.ok(
     controller.includes('function openpath_wedu_ssh_proxmox') &&
+      controller.includes('StrictHostKeyChecking=accept-new') &&
       controller.includes('printf -v quoted_arg %q "$arg"') &&
-      controller.includes('ssh "$host" "${quoted_args[*]}"') &&
+      controller.includes('ssh "${ssh_options[@]}" "$host" "${quoted_args[*]}"') &&
       script.includes('openpath_wedu_ssh_proxmox "$PROXMOX_HOST" "$@"'),
-    'WEDU lab should preserve arguments with spaces for qm snapshot descriptions and guest bash scripts'
+    'WEDU lab should preserve arguments with spaces and safely bootstrap first-use SSH host keys'
   );
   assert.ok(
     controller.includes("subprocess.check_output(['git', '-C', root, 'ls-files', '-z'])") &&

@@ -7,11 +7,14 @@ function openpath_wedu_ssh_proxmox {
   local arg
   local quoted_arg
   local quoted_args=()
+  local ssh_options=(
+    -o StrictHostKeyChecking=accept-new
+  )
   for arg in "$@"; do
     printf -v quoted_arg %q "$arg"
     quoted_args+=("$quoted_arg")
   done
-  ssh "$host" "${quoted_args[*]}"
+  ssh "${ssh_options[@]}" "$host" "${quoted_args[*]}"
 }
 
 function openpath_wedu_create_tracked_checkout_archive {
