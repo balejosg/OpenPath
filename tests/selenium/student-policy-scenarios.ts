@@ -2823,7 +2823,13 @@ export async function runFallbackPropagationProbe(
     );
   } finally {
     await client.deleteGroupRule(rule.id, driver.scenario.groups.restricted.id);
-    await driver.forceLocalUpdate();
+    try {
+      await driver.forceLocalUpdate();
+    } catch (error) {
+      logScenarioStep(
+        `fallback blocked-path cleanup update error: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
     try {
       await driver.refreshBlockedPathRules();
     } catch (error) {

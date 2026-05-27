@@ -685,6 +685,11 @@ describe('repository verification contract', () => {
       'Fallback propagation probe should prove main-frame blocked paths through the blocked-page redirect outcome'
     );
     assert.match(
+      seleniumScenarios,
+      /finally \{[\s\S]*deleteGroupRule\(rule\.id, driver\.scenario\.groups\.restricted\.id\);[\s\S]*try \{[\s\S]*driver\.forceLocalUpdate\(\);[\s\S]*fallback blocked-path cleanup update error/s,
+      'Fallback propagation cleanup should not fail the proof after deleting the API rule'
+    );
+    assert.match(
       harness,
       /fallback-propagation[\s\S]*runFallbackPropagationProbe/s,
       'Selenium harness should map the fallback-propagation profile to the targeted probe'

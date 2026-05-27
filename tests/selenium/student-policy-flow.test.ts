@@ -15,8 +15,10 @@ import {
 import { matchesRequestDomain } from './student-policy-client';
 import { openAndExpectBlocked, submitBlockedScreenRequest } from './student-policy-driver-browser';
 import {
+  DEFAULT_TIMEOUT_MS,
   getStudentPolicyCoverageProfile,
   PLATFORM_COMMAND_MAX_BUFFER_BYTES,
+  PLATFORM_COMMAND_TIMEOUT_MS,
 } from './student-policy-env';
 import { getBlockedPathRulesDebug } from './student-policy-driver-runtime';
 import { getStudentPolicyPhasePlan } from './student-policy-harness';
@@ -145,6 +147,17 @@ test('platform commands keep enough stdout buffer for Windows diagnostics', () =
   assert.ok(
     PLATFORM_COMMAND_MAX_BUFFER_BYTES >= 64 * 1024 * 1024,
     'Windows student-policy fallback commands can emit verbose runner diagnostics'
+  );
+});
+
+test('platform commands are bounded below the Selenium suite timeout', () => {
+  assert.ok(
+    PLATFORM_COMMAND_TIMEOUT_MS > DEFAULT_TIMEOUT_MS,
+    'Windows platform update commands need a budget above ordinary Selenium waits'
+  );
+  assert.ok(
+    PLATFORM_COMMAND_TIMEOUT_MS < 15 * 60 * 1000,
+    'A stuck platform update command should not consume the whole fallback Selenium suite timeout'
   );
 });
 
