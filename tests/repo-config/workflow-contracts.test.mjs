@@ -629,6 +629,12 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
   ]) {
     assert.ok(script.includes(required), `WEDU lab script should include ${required}`);
   }
+  assert.ok(
+    script.includes('api.github.com/repos/${repository}/actions/runners') &&
+      !script.includes('gh api') &&
+      !script.includes('for cmd in ssh git python3 npm node iconv base64 gh ip curl; do'),
+    'WEDU lab script should query runner state without requiring the GitHub CLI on the controller'
+  );
 
   for (const required of [
     'OPENPATH_WEDU_CI_LOCK_TTL_SECONDS',

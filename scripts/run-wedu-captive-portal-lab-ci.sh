@@ -107,8 +107,32 @@ wait_windows_qga() {
 }
 
 get_openpath_runner_state() {
-  GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" gh api "repos/${GITHUB_REPOSITORY:-balejosg/Openpath}/actions/runners" \
-    --jq ".runners[] | select(.name == \"$WINDOWS_RUNNER_NAME\") | \"\\(.status)/busy=\\(.busy)\""
+  local repository
+  local response
+  local token
+  repository="${GITHUB_REPOSITORY:-balejosg/OpenPath}"
+  token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  [ -n "$token" ] || return 1
+  response="$(
+    curl -fsS \
+      -H "Authorization: Bearer $token" \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "https://api.github.com/repos/${repository}/actions/runners"
+  )" || return 1
+  OPENPATH_WEDU_TARGET_RUNNER_NAME="$WINDOWS_RUNNER_NAME" python3 -c '
+import json
+import os
+import sys
+
+payload = json.load(sys.stdin)
+target = os.environ["OPENPATH_WEDU_TARGET_RUNNER_NAME"]
+for runner in payload.get("runners", []):
+    if runner.get("name") == target:
+        print(f"{runner.get('status')}/busy={str(runner.get('busy')).lower()}")
+        raise SystemExit(0)
+raise SystemExit(1)
+' <<<"$response"
 }
 
 assert_openpath_runner_idle() {
@@ -355,7 +379,7 @@ main() {
     return 0
   fi
 
-  for cmd in ssh git python3 npm node iconv base64 gh ip curl; do
+  for cmd in ssh git python3 npm node iconv base64 ip curl; do
     require_cmd "$cmd"
   done
   export GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
