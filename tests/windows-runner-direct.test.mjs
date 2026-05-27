@@ -704,6 +704,9 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       'wedu-lab-native-recovery.json',
       'wedu-lab-gateway-authenticated.json',
       'wedu-lab-native-reconcile.json',
+      'wedu-lab-browser-after-auth.json',
+      'wedu-lab-geckodriver-after-auth.out.log',
+      'wedu-lab-geckodriver-after-auth.err.log',
       'wedu-lab-network-after.json',
       'wedu-lab-openpath-protection-after.json',
       'direct-captive-portal-wedu-lab-result.json',
@@ -819,6 +822,19 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.ok(
       sourcePaths.some((sourcePath) =>
         sourcePath.endsWith('\\direct-captive-portal-wedu-lab-result.json')
+      )
+    );
+    assert.ok(
+      sourcePaths.some((sourcePath) => sourcePath.endsWith('\\wedu-lab-browser-after-auth.json'))
+    );
+    assert.ok(
+      sourcePaths.some((sourcePath) =>
+        sourcePath.endsWith('\\wedu-lab-geckodriver-after-auth.out.log')
+      )
+    );
+    assert.ok(
+      sourcePaths.some((sourcePath) =>
+        sourcePath.endsWith('\\wedu-lab-geckodriver-after-auth.err.log')
       )
     );
     assert.ok(
