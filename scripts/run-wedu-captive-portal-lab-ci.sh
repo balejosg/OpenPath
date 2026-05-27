@@ -107,20 +107,38 @@ wait_windows_qga() {
   return 1
 }
 
-get_openpath_runner_state() {
-  local repository
-  local response
+github_api_get() {
+  local path="$1"
+  local response_file
+  local status
   local token
-  repository="${GITHUB_REPOSITORY:-balejosg/OpenPath}"
+
   token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
   [ -n "$token" ] || return 1
-  response="$(
-    curl -fsS \
+  response_file="$(mktemp "$ARTIFACT_DIR/github-api-response.XXXXXX")"
+  status="$(
+    curl -sS -o "$response_file" -w '%{http_code}' \
       -H "Authorization: Bearer $token" \
       -H "Accept: application/vnd.github+json" \
       -H "X-GitHub-Api-Version: 2022-11-28" \
-      "https://api.github.com/repos/${repository}/actions/runners"
-  )" || return 1
+      "https://api.github.com/${path}"
+  )" || {
+    rm -f "$response_file"
+    return 1
+  }
+  if [ "$status" != "200" ]; then
+    rm -f "$response_file"
+    return 1
+  fi
+  cat "$response_file"
+  rm -f "$response_file"
+}
+
+get_openpath_runner_state_from_repository_runners() {
+  local repository
+  local response
+  repository="${GITHUB_REPOSITORY:-balejosg/OpenPath}"
+  response="$(github_api_get "repos/${repository}/actions/runners")" || return 1
   OPENPATH_WEDU_TARGET_RUNNER_NAME="$WINDOWS_RUNNER_NAME" python3 -c '
 import json
 import os
@@ -134,6 +152,99 @@ for runner in payload.get("runners", []):
         raise SystemExit(0)
 raise SystemExit(1)
 ' <<<"$response"
+}
+
+get_openpath_runner_busy_from_current_repo_jobs() {
+  local repository
+  local response
+  local run_ids
+  local run_id
+  local jobs
+  local busy
+  repository="${GITHUB_REPOSITORY:-balejosg/OpenPath}"
+  response="$(github_api_get "repos/${repository}/actions/runs?status=in_progress&per_page=100")" ||
+    return 1
+  run_ids="$(
+    python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+for run in payload.get("workflow_runs", []):
+    run_id = run.get("id")
+    if run_id:
+        print(run_id)
+' <<<"$response"
+  )"
+  for run_id in $run_ids; do
+    jobs="$(github_api_get "repos/${repository}/actions/runs/${run_id}/jobs?per_page=100")" ||
+      return 1
+    busy="$(
+      OPENPATH_WEDU_TARGET_RUNNER_NAME="$WINDOWS_RUNNER_NAME" python3 -c '
+import json
+import os
+import sys
+
+payload = json.load(sys.stdin)
+target = os.environ["OPENPATH_WEDU_TARGET_RUNNER_NAME"]
+for job in payload.get("jobs", []):
+    if job.get("runner_name") == target and job.get("status") != "completed":
+        print("busy=true")
+        raise SystemExit(0)
+print("busy=false")
+' <<<"$jobs"
+    )"
+    if [ "$busy" = "busy=true" ]; then
+      printf '%s\n' "$busy"
+      return 0
+    fi
+  done
+  printf 'busy=false\n'
+}
+
+get_windows_runner_service_state() {
+  local state
+  state="$(
+    run_windows_ps 120 '
+$ErrorActionPreference = "Stop"
+$services = @(Get-Service -Name "actions.runner.*" -ErrorAction SilentlyContinue)
+if ($services.Count -lt 1) {
+  "missing"
+  exit 0
+}
+$notRunning = @($services | Where-Object { $_.Status -ne "Running" })
+if ($notRunning.Count -gt 0) {
+  "offline"
+  exit 0
+}
+"online"
+'
+  )" || return 1
+  state="$(printf '%s' "$state" | tr -d '[:space:]')"
+  case "$state" in
+    online)
+      printf 'online\n'
+      ;;
+    missing | offline)
+      printf 'offline\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+get_openpath_runner_state() {
+  local busy
+  local service_state
+  local state
+  state="$(get_openpath_runner_state_from_repository_runners)" && {
+    printf '%s\n' "$state"
+    return 0
+  }
+  busy="$(get_openpath_runner_busy_from_current_repo_jobs)" || return 1
+  service_state="$(get_windows_runner_service_state)" || return 1
+  printf '%s/%s\n' "$service_state" "$busy"
 }
 
 assert_openpath_runner_idle() {
