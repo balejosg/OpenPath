@@ -1,0 +1,37 @@
+name: WEDU Linux Client Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wedu-captive-portal-lab-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  linux-client-smoke:
+    name: WEDU Linux client smoke
+    runs-on: [self-hosted, Linux, X64, proxmox, openpath]
+    timeout-minutes: 25
+    env:
+      OPENPATH_WEDU_CI_ARTIFACT_DIR: .opencode/tmp/wedu-linux-client-smoke/${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Run WEDU Linux client smoke
+        shell: bash
+        run: bash scripts/run-wedu-captive-portal-gateway-client-smoke.sh
+
+      - name: Upload WEDU Linux client smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wedu-linux-client-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .opencode/tmp/wedu-linux-client-smoke/${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn

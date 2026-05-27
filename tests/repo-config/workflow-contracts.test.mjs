@@ -608,8 +608,8 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
 
   for (const required of [
     'trap cleanup EXIT',
-    'acquire_remote_lock',
-    'release_remote_lock',
+    'openpath_wedu_acquire_remote_lock',
+    'openpath_wedu_release_remote_lock',
     'stop_all_action_runner_services',
     'start_all_action_runner_services',
     'qm snapshot',
@@ -621,6 +621,24 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
     'wait_for_openpath_runner_online',
   ]) {
     assert.ok(script.includes(required), `WEDU lab script should include ${required}`);
+  }
+
+  for (const required of [
+    'OPENPATH_WEDU_CI_LOCK_TTL_SECONDS',
+    'OPENPATH_WEDU_CI_FORCE_STALE_LOCK',
+    'wedu-lock-metadata.json',
+    'host',
+    'pid',
+    'write_lock_metadata',
+    'stale WEDU lab lock',
+    'OPENPATH_WEDU_OVERLAY_START_ATTEMPTS',
+    'openpath_wedu_start_overlay_server',
+    'LOCK_MODE="full-lab"',
+  ]) {
+    assert.ok(
+      controller.includes(required) || script.includes(required),
+      `WEDU lock/overlay contract should include ${required}`
+    );
   }
 
   assert.ok(
@@ -663,6 +681,82 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
       !script.includes('classroompath') &&
       !script.includes('ClassroomPath'),
     'OpenPath WEDU lab must avoid downstream runner coupling'
+  );
+});
+
+test('WEDU cheap captive portal lanes are manual-only and cannot satisfy the full lab check', () => {
+  const healthcheckWorkflow = readText('.github/workflows/wedu-gateway-healthcheck.yml');
+  const smokeWorkflow = readText('.github/workflows/wedu-linux-client-smoke.yml');
+  const fullWorkflow = readText('.github/workflows/wedu-captive-portal-lab.yml');
+  const healthcheckScript = readText('scripts/wedu-captive-portal-gateway-healthcheck.sh');
+  const smokeScript = readText('scripts/run-wedu-captive-portal-gateway-client-smoke.sh');
+  const docs = readText('docs/testing/wedu-captive-portal-lab.md');
+
+  assert.ok(
+    fullWorkflow.includes('name: WEDU captive portal lab'),
+    'full destructive lab check-run name must stay exact'
+  );
+
+  for (const [name, workflow] of [
+    ['healthcheck', healthcheckWorkflow],
+    ['linux-client-smoke', smokeWorkflow],
+  ]) {
+    assert.ok(workflow.includes('workflow_dispatch:'), `${name} should allow manual dispatch`);
+    assert.ok(
+      !workflow.includes('pull_request:') &&
+        !workflow.includes('push:') &&
+        !workflow.includes('schedule:'),
+      `${name} should be manual-only`
+    );
+    assert.ok(
+      !workflow.includes('name: WEDU captive portal lab'),
+      `${name} must not reuse the full lab check-run name`
+    );
+  }
+
+  assert.ok(
+    healthcheckWorkflow.includes('name: WEDU gateway healthcheck') &&
+      smokeWorkflow.includes('name: WEDU Linux client smoke'),
+    'cheap lanes should use distinct check-run names'
+  );
+  assert.ok(
+    healthcheckScript.includes('"healthcheck"') && smokeScript.includes('"linux-client-smoke"'),
+    'cheap lanes should acquire the shared remote WEDU lock with lane-specific modes'
+  );
+  assert.ok(
+    healthcheckScript.includes('systemctl is-active --quiet wedu-captive-portal') &&
+      healthcheckScript.includes('systemctl is-active --quiet dnsmasq') &&
+      healthcheckScript.includes('systemctl is-active --quiet wedu-lab-firewall') &&
+      healthcheckScript.includes('systemctl is-active --quiet wedu-lab-network'),
+    'gateway healthcheck should verify the gateway services through QGA'
+  );
+  assert.ok(
+    healthcheckScript.includes('ip -4 addr show') &&
+      healthcheckScript.includes("grep -q '10\\\\.77\\\\.0\\\\.1/24'"),
+    'gateway healthcheck should verify the gateway lab address through QGA'
+  );
+  assert.ok(
+    healthcheckScript.includes("gateway_exec 'curl -fsS http://10.77.0.1/'") &&
+      !healthcheckScript.includes('portal_body="$(curl -fsS "$GATEWAY_URL/"'),
+    'gateway healthcheck should probe the portal body from inside VM 121 through QGA'
+  );
+  assert.ok(
+    healthcheckScript.includes('CLEANUP_FAILED=0') &&
+      healthcheckScript.includes(
+        'set_gateway_mode /lab/authenticated >/dev/null || CLEANUP_FAILED=1'
+      ) &&
+      healthcheckScript.includes('if [ "$CLEANUP_FAILED" -ne 0 ]; then'),
+    'gateway healthcheck should fail the job when cleanup cannot restore a previously authenticated gateway'
+  );
+  assert.ok(
+    smokeScript.includes('VM 103') &&
+      smokeScript.includes('vmbr10') &&
+      smokeScript.includes('VM 104'),
+    'Linux client smoke should guard the real Windows runner before moving VM 104'
+  );
+  assert.ok(
+    docs.includes('optional preflight only') && docs.includes('do not satisfy the promotion gate'),
+    'docs should state cheap lanes are not release evidence'
   );
 });
 

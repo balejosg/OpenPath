@@ -31,6 +31,7 @@
 - Troubleshooting: [`docs/TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
 - CI/CD runner timing and artifact measurement: [`docs/ci-cd-runner-measurement.md`](ci-cd-runner-measurement.md)
 - Student-policy contract matrix: [`docs/testing/student-policy-contract-matrix.md`](testing/student-policy-contract-matrix.md)
+- WEDU captive portal lab: [`docs/testing/wedu-captive-portal-lab.md`](testing/wedu-captive-portal-lab.md)
 - Shared workspace hypothesis-validation wrapper: `../scripts/validate-hypothesis.sh` from the workspace root when working inside `Whitelist/`
 - Direct Windows runner diagnostic: [`scripts/run-windows-runner-direct.mjs`](../scripts/run-windows-runner-direct.mjs)
 - Migration notes: [`docs/MIGRATION.md`](MIGRATION.md)

@@ -25,6 +25,7 @@ HTTP_SERVER_PID=""
 HTTP_SERVER_LOG="$ARTIFACT_DIR/overlay-http.log"
 OVERLAY_ARCHIVE_URL=""
 LOCK_OWNER="${GITHUB_RUN_ID:-local}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+LOCK_MODE="full-lab"
 SNAPSHOT_NAME=""
 SNAPSHOT_CREATED=0
 RUNNER_SERVICES_STOPPED=0
@@ -103,32 +104,6 @@ wait_windows_qga() {
     sleep 5
   done
   return 1
-}
-
-acquire_remote_lock() {
-  local quoted_owner
-  quoted_owner="$(printf '%q' "$LOCK_OWNER")"
-  ssh_proxmox bash -lc "
-    set -euo pipefail
-    if mkdir '$REMOTE_LOCK_DIR'; then
-      printf '%s\n' $quoted_owner > '$REMOTE_LOCK_DIR/owner'
-      exit 0
-    fi
-    printf 'WEDU lab lock is already held by: ' >&2
-    cat '$REMOTE_LOCK_DIR/owner' >&2 2>/dev/null || true
-    exit 1
-  "
-}
-
-release_remote_lock() {
-  local quoted_owner
-  quoted_owner="$(printf '%q' "$LOCK_OWNER")"
-  ssh_proxmox bash -lc "
-    set -euo pipefail
-    if [ -f '$REMOTE_LOCK_DIR/owner' ] && [ \"\$(cat '$REMOTE_LOCK_DIR/owner')\" = $quoted_owner ]; then
-      rm -rf '$REMOTE_LOCK_DIR'
-    fi
-  " || warn "Failed to release WEDU lab lock"
 }
 
 get_openpath_runner_state() {
@@ -310,10 +285,18 @@ if (-not (\$dns -contains '$EXPECTED_DNS')) { throw 'Windows runner is not using
 
 run_wedu_direct_diagnostic() {
   local token
+  local native_host_timeout_ms
   token="$(read_gateway_token)"
   [ -n "$token" ] || fail "Unable to read WEDU lab gateway token"
+  native_host_timeout_ms="$((DIRECT_TIMEOUT_SECONDS * 1000 / 2))"
+  if [ "$native_host_timeout_ms" -lt 180000 ]; then
+    native_host_timeout_ms=180000
+  fi
   (
     cd "$REPO_ROOT"
+    OPENPATH_WEDU_LAB_NEGATIVE_CONTROLS="${OPENPATH_WEDU_LAB_NEGATIVE_CONTROLS:-gateway-missing-token,pre-auth-external-blocked}" \
+      OPENPATH_WEDU_LAB_POSTCONDITION_ASSERTIONS="${OPENPATH_WEDU_LAB_POSTCONDITION_ASSERTIONS:-portal-detected,post-auth-protection-restored}" \
+      OPENPATH_WEDU_LAB_NATIVE_HOST_TIMEOUT_MS="${OPENPATH_WEDU_LAB_NATIVE_HOST_TIMEOUT_MS:-$native_host_timeout_ms}" \
     OPENPATH_WEDU_LAB_GATEWAY_TOKEN="$token" \
       OPENPATH_WEDU_LAB_GATEWAY_URL="$GATEWAY_URL" \
       OPENPATH_WEDU_LAB_EXPECTED_DNS="$EXPECTED_DNS" \
@@ -324,6 +307,7 @@ run_wedu_direct_diagnostic() {
         --artifact-dir "$ARTIFACT_DIR" \
         --timeout-seconds "$DIRECT_TIMEOUT_SECONDS"
   )
+  node "$REPO_ROOT/scripts/assert-wedu-captive-portal-result.mjs" "$ARTIFACT_DIR" --evidence-mode target-platform
 }
 
 restore_windows_vm() {
@@ -357,7 +341,8 @@ cleanup() {
     restore_windows_vm || CLEANUP_FAILED=1
   fi
   reset_gateway_captive || CLEANUP_FAILED=1
-  release_remote_lock
+  openpath_wedu_release_remote_lock "$PROXMOX_HOST" "$REMOTE_LOCK_DIR" "$LOCK_OWNER" ||
+    warn "Failed to release WEDU lab lock"
   if [ "$CLEANUP_FAILED" -ne 0 ]; then
     exit 1
   fi
@@ -377,7 +362,7 @@ main() {
   [ -n "$GH_TOKEN" ] || fail "GH_TOKEN or GITHUB_TOKEN is required for runner state checks"
 
   trap cleanup EXIT
-  acquire_remote_lock
+  openpath_wedu_acquire_remote_lock "$PROXMOX_HOST" "$REMOTE_LOCK_DIR" "$LOCK_OWNER" "$LOCK_MODE"
   assert_openpath_runner_idle
   wait_windows_qga 12 || fail "QGA is not ready before WEDU lab"
   capture_vm_config

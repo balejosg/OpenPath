@@ -697,10 +697,61 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       assert.match(script, new RegExp(artifactName.replace(/[.]/g, '\\.')));
       assert.match(weduScript, new RegExp(artifactName.replace(/[.]/g, '\\.')));
     }
+    assert.match(weduScript, /wedu-lab-browser-after-auth\.json/);
     assert.match(weduScript, /OPENPATH_WEDU_LAB_GATEWAY_TOKEN/);
     assert.match(weduScript, /OPENPATH_WEDU_LAB_GATEWAY_URL/);
     assert.match(weduScript, /OPENPATH_WEDU_LAB_EXPECTED_DNS/);
     assert.match(weduScript, /OPENPATH_WEDU_LAB_EXPECTED_SUBNET/);
+    assert.match(weduScript, /OPENPATH_WEDU_LAB_NEGATIVE_CONTROLS/);
+    assert.match(weduScript, /gateway-missing-token/);
+    assert.match(weduScript, /pre-auth-external-blocked/);
+    assert.match(weduScript, /OPENPATH_WEDU_LAB_POSTCONDITION_ASSERTIONS/);
+    assert.match(weduScript, /portal-detected/);
+    assert.match(weduScript, /post-auth-protection-restored/);
+    assert.match(weduScript, /browserPortalDetected/);
+    assert.match(weduScript, /weduHostPortalDetected/);
+    assert.match(weduScript, /detectPortalInterceptionObserved/);
+    assert.match(
+      weduScript,
+      /portalDetected = \[bool\]\(\$browserPortalDetected -and \$weduHostPortalDetected\)/
+    );
+    assert.doesNotMatch(
+      weduScript,
+      /portalDetected = \[bool\]\(\$browserPortalDetected -and \$weduHostPortalDetected -and \$detectPortalInterceptionObserved\)/
+    );
+    assert.match(weduScript, /postAuthBrowserNavigationVerified/);
+    assert.match(weduScript, /Invoke-WeduPostAuthBrowserProbeWithRetry/);
+    const postAuthProbeBody =
+      weduScript.match(
+        /function Invoke-WeduPostAuthBrowserProbeWithRetry \{([\s\S]*?)\nfunction Assert-WeduPostconditions/
+      )?.[1] ?? '';
+    assert.match(postAuthProbeBody, /Find-FirefoxPath/);
+    assert.match(postAuthProbeBody, /Find-GeckoDriverPath/);
+    assert.match(weduScript, /function Invoke-WeduWebDriverPageProbe/);
+    assert.match(weduScript, /Invoke-WebDriverJson/);
+    assert.match(weduScript, /\/session\/\$(?:sessionId|SessionId)\/url/);
+    assert.doesNotMatch(postAuthProbeBody, /Invoke-WeduBrowserNavigationProbe/);
+    assert.doesNotMatch(postAuthProbeBody, /Invoke-HttpProbe -Url/);
+    assert.match(weduScript, /postAuthFailureKind/);
+    assert.match(weduScript, /portalMarkerAbsent = \$portalMarkerAbsent/);
+    assert.match(
+      weduScript,
+      /\$verified = \[bool\]\(\$detectPortal\.externalNavigationFunctional -and \$msftConnectTest\.externalNavigationFunctional\)/
+    );
+    assert.doesNotMatch(
+      weduScript,
+      /\$verified = \[bool\]\(\$detectPortal\.externalNavigationFunctional -and \$msftConnectTest\.portalMarkerAbsent\)/
+    );
+    assert.match(weduScript, /externalNavigationFunctional = \$verified/);
+    assert.match(weduScript, /failureKind = \$postAuthFailureKind/);
+    assert.match(weduScript, /OPENPATH_WEDU_LAB_NATIVE_HOST_TIMEOUT_MS/);
+    assert.match(weduScript, /schemaVersion = 2/);
+    assert.match(weduScript, /location/);
+    assert.match(weduScript, /WeduCaptiveHostPattern/);
+    assert.doesNotMatch(weduScript, /\$statusCode -in @\(301, 302, 303, 307, 308\)/);
+    assert.match(weduScript, /targetPlatformSymptomCleared = \[bool\]/);
+    assert.match(weduScript, /success = \$targetPlatformSymptomCleared/);
+    assert.match(weduScript, /success = \$false[\s\S]*targetPlatformSymptomCleared = \$false/);
     assert.match(weduScript, /Assert-WeduLabNetwork/);
     assert.match(weduScript, /gateway-authenticated/);
     assert.match(weduScript, /gateway-reset/);

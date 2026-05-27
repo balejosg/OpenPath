@@ -13,6 +13,7 @@ $script:CompletionPath = Join-Path $script:ArtifactsRoot 'direct-captive-portal-
 $script:NetworkBeforePath = Join-Path $script:ArtifactsRoot 'wedu-lab-network-before.json'
 $script:DnsBeforePath = Join-Path $script:ArtifactsRoot 'wedu-lab-dns-before.json'
 $script:BrowserBeforePath = Join-Path $script:ArtifactsRoot 'wedu-lab-browser-before.json'
+$script:BrowserAfterAuthPath = Join-Path $script:ArtifactsRoot 'wedu-lab-browser-after-auth.json'
 $script:PortalScreenshotPath = Join-Path $script:ArtifactsRoot 'wedu-lab-portal-before-login.png'
 $script:NativeRecoveryPath = Join-Path $script:ArtifactsRoot 'wedu-lab-native-recovery.json'
 $script:GatewayAuthenticatedPath = Join-Path $script:ArtifactsRoot 'wedu-lab-gateway-authenticated.json'
@@ -27,6 +28,8 @@ $script:RecoveryQueueManifestPath = Join-Path $script:ArtifactsRoot 'captive-por
 $script:RecoveryProgressManifestPath = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-progress-manifest.json'
 $script:WeduHost = 'nce.wedu.comunidad.madrid'
 $script:DetectionUrl = 'http://detectportal.firefox.com/success.txt'
+$script:MsftConnectTestUrl = 'http://www.msftconnecttest.com/connecttest.txt'
+$script:WeduCaptiveHostPattern = '10\.77\.0\.1|nce\.wedu\.comunidad\.madrid|WEDU lab captive portal'
 $script:InstalledOpenPathRoot = 'C:\OpenPath'
 $script:InstalledRecoveryScriptPath = Join-Path $script:InstalledOpenPathRoot 'scripts\Recover-CaptivePortal.ps1'
 
@@ -45,6 +48,16 @@ function Save-Json {
     )
 
     $Value | ConvertTo-Json -Depth $Depth | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Split-EnvList {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return @()
+    }
+
+    return @($Value.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
 function Get-WeduLabConfig {
@@ -68,11 +81,19 @@ function Get-WeduLabConfig {
         $expectedSubnet = '10.77.0.0/24'
     }
 
+    $nativeHostTimeoutMs = 180000
+    if (-not [string]::IsNullOrWhiteSpace([string]$env:OPENPATH_WEDU_LAB_NATIVE_HOST_TIMEOUT_MS)) {
+        $nativeHostTimeoutMs = [int]$env:OPENPATH_WEDU_LAB_NATIVE_HOST_TIMEOUT_MS
+    }
+
     return [pscustomobject]@{
         gatewayUrl = $gatewayUrl.TrimEnd('/')
         expectedDns = $expectedDns
         expectedSubnet = $expectedSubnet
         token = $token
+        negativeControls = @(Split-EnvList -Value ([string]$env:OPENPATH_WEDU_LAB_NEGATIVE_CONTROLS))
+        postconditionAssertions = @(Split-EnvList -Value ([string]$env:OPENPATH_WEDU_LAB_POSTCONDITION_ASSERTIONS))
+        nativeHostTimeoutMs = $nativeHostTimeoutMs
     }
 }
 
@@ -205,6 +226,38 @@ function Invoke-GatewayControl {
     }
 }
 
+function Invoke-GatewayMissingTokenControl {
+    param([Parameter(Mandatory = $true)][object]$Config)
+
+    $uri = "$($Config.gatewayUrl)/lab/authenticated"
+    $startedAt = Get-Date
+    try {
+        $response = Invoke-WebRequest -Uri $uri -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+        $statusCode = [int]$response.StatusCode
+        return [pscustomobject]@{
+            control = 'gateway-missing-token'
+            uri = $uri
+            statusCode = $statusCode
+            startedAt = $startedAt.ToString('o')
+            finishedAt = (Get-Date).ToString('o')
+            success = -not ($statusCode -ge 200 -and $statusCode -lt 300)
+        }
+    }
+    catch {
+        $response = $_.Exception.Response
+        $statusCode = if ($response) { [int]$response.StatusCode } else { 0 }
+        return [pscustomobject]@{
+            control = 'gateway-missing-token'
+            uri = $uri
+            statusCode = $statusCode
+            startedAt = $startedAt.ToString('o')
+            finishedAt = (Get-Date).ToString('o')
+            success = $true
+            error = [string]$_
+        }
+    }
+}
+
 function Get-WeduDnsSnapshot {
     $domains = @($script:WeduHost, 'detectportal.firefox.com', 'www.msftconnecttest.com', 'www.msftncsi.com')
     $queries = foreach ($domain in $domains) {
@@ -238,23 +291,95 @@ function Invoke-HttpProbe {
 
     try {
         $response = Invoke-WebRequest -Uri $Url -MaximumRedirection 0 -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+        $location = [string]$response.Headers['Location']
         return [pscustomobject]@{
             url = $Url
             statusCode = [int]$response.StatusCode
             contentType = [string]$response.Headers['Content-Type']
+            location = $location
             bodySample = ([string]$response.Content).Substring(0, [Math]::Min(500, ([string]$response.Content).Length))
             error = ''
         }
     }
     catch {
         $response = $_.Exception.Response
+        $location = if ($response) { [string]$response.Headers['Location'] } else { '' }
+        $bodySample = ''
+        if ($response) {
+            try {
+                $stream = $response.GetResponseStream()
+                if ($stream) {
+                    $reader = [System.IO.StreamReader]::new($stream)
+                    $body = $reader.ReadToEnd()
+                    $bodySample = $body.Substring(0, [Math]::Min(500, $body.Length))
+                }
+            }
+            catch {
+                $bodySample = ''
+            }
+        }
         return [pscustomobject]@{
             url = $Url
             statusCode = if ($response) { [int]$response.StatusCode } else { 0 }
-            contentType = ''
-            bodySample = ''
+            contentType = if ($response) { [string]$response.Headers['Content-Type'] } else { '' }
+            location = $location
+            bodySample = $bodySample
             error = [string]$_
         }
+    }
+}
+
+function Get-HttpFailureKind {
+    param([object]$Probe)
+
+    $errorText = [string]$Probe.error
+    if ($errorText -match 'timed out|timeout') {
+        return 'external-timeout'
+    }
+    if ($errorText -match 'name could not be resolved|No such host|DNS|Resolve') {
+        return 'dns-failure'
+    }
+    return 'unexpected-http-result'
+}
+
+function Test-CaptivePortalEvidence {
+    param([object]$Probe)
+
+    $body = [string]$Probe.bodySample
+    $location = [string]$Probe.location
+    return [bool]($body -match $script:WeduCaptiveHostPattern -or $location -match $script:WeduCaptiveHostPattern)
+}
+
+function Invoke-PreAuthExternalBlockedControl {
+    $probe = Invoke-HttpProbe -Url $script:DetectionUrl
+    $captiveEvidence = Test-CaptivePortalEvidence -Probe $probe
+    $failureKind = if ($captiveEvidence) { 'none' } else { Get-HttpFailureKind -Probe $probe }
+
+    return [pscustomobject]@{
+        control = 'pre-auth-external-blocked'
+        probe = $probe
+        captiveEvidenceObserved = $captiveEvidence
+        preAuthExternalNetworkFailure = [bool](-not $captiveEvidence -and $failureKind -in @('external-timeout', 'dns-failure'))
+        failureKind = $failureKind
+        success = $captiveEvidence
+    }
+}
+
+function Invoke-WeduNegativeControls {
+    param([Parameter(Mandatory = $true)][object]$Config)
+
+    $results = foreach ($control in @($Config.negativeControls)) {
+        switch ($control) {
+            'gateway-missing-token' { Invoke-GatewayMissingTokenControl -Config $Config }
+            'pre-auth-external-blocked' { Invoke-PreAuthExternalBlockedControl }
+            default { throw "Unknown WEDU lab negative control: $control" }
+        }
+    }
+
+    return [pscustomobject]@{
+        requested = @($Config.negativeControls)
+        results = @($results)
+        success = [bool](@($results | Where-Object { -not $_.success }).Count -eq 0)
     }
 }
 
@@ -429,7 +554,10 @@ function Find-NativeHostScriptPath {
 }
 
 function Invoke-NativeHostAction {
-    param([Parameter(Mandatory = $true)][hashtable]$Message)
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Message,
+        [int]$TimeoutMs = 180000
+    )
 
     $nativeHostScriptPath = Find-NativeHostScriptPath
     $requestJson = $Message | ConvertTo-Json -Compress -Depth 6
@@ -450,7 +578,7 @@ function Invoke-NativeHostAction {
         -PassThru `
         -WindowStyle Hidden
 
-    $nativeHostTimeoutMs = 90000
+    $nativeHostTimeoutMs = $TimeoutMs
     if (-not $process.WaitForExit($nativeHostTimeoutMs)) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         throw 'Native host WEDU lab action timed out.'
@@ -478,6 +606,230 @@ function Invoke-NativeHostAction {
 
     $responseJson = [System.Text.Encoding]::UTF8.GetString($responseBytes, 4, $responseLength)
     return ($responseJson | ConvertFrom-Json)
+}
+
+function Invoke-WeduWebDriverPageProbe {
+    param(
+        [Parameter(Mandatory = $true)][int]$Port,
+        [Parameter(Mandatory = $true)][string]$SessionId,
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$ExpectedBody
+    )
+
+    $startedAt = Get-Date
+    $failureKind = 'none'
+    $navigationError = ''
+    try {
+        Invoke-WebDriverJson -Uri "http://127.0.0.1:$Port/session/$SessionId/url" -Method Post -Body @{ url = $Url } | Out-Null
+        Start-Sleep -Seconds 2
+    }
+    catch {
+        $navigationError = [string]$_
+        if ($navigationError -match 'timed out|timeout') {
+            $failureKind = 'external-timeout'
+        }
+        elseif ($navigationError -match 'name could not be resolved|No such host|DNS|Resolve') {
+            $failureKind = 'dns-failure'
+        }
+        else {
+            $failureKind = 'unexpected-http-result'
+        }
+    }
+
+    $finalUrl = ''
+    $title = ''
+    $source = ''
+    try {
+        $finalUrlResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$Port/session/$SessionId/url"
+        $titleResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$Port/session/$SessionId/title"
+        $sourceResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$Port/session/$SessionId/source"
+        $finalUrl = if ($finalUrlResult.value) { [string]$finalUrlResult.value } else { '' }
+        $title = if ($titleResult.value) { [string]$titleResult.value } else { '' }
+        $source = if ($sourceResult.value) { [string]$sourceResult.value } else { '' }
+    }
+    catch {
+        if (-not $navigationError) {
+            $navigationError = [string]$_
+            $failureKind = 'unexpected-http-result'
+        }
+    }
+
+    $bodySample = $source.Substring(0, [Math]::Min(500, $source.Length))
+    $portalMarkerAbsent = -not (($source -match $script:WeduCaptiveHostPattern) -or ($finalUrl -match $script:WeduCaptiveHostPattern))
+    $expectedBodyPresent = $source -match [regex]::Escape($ExpectedBody)
+    if (-not $portalMarkerAbsent) {
+        $failureKind = 'portal-marker-still-present'
+    }
+    elseif ($failureKind -eq 'none' -and -not $expectedBodyPresent) {
+        $failureKind = 'unexpected-http-result'
+    }
+
+    return [pscustomobject]@{
+        targetUrl = $Url
+        finalUrl = $finalUrl
+        title = $title
+        bodySample = $bodySample
+        portalMarkerAbsent = $portalMarkerAbsent
+        externalNavigationFunctional = [bool]($portalMarkerAbsent -and $expectedBodyPresent)
+        failureKind = $failureKind
+        startedAt = $startedAt.ToString('o')
+        finishedAt = (Get-Date).ToString('o')
+        error = $navigationError
+    }
+}
+
+function Invoke-WeduPostAuthBrowserProbeWithRetry {
+    $firefoxPath = Find-FirefoxPath
+    $geckoDriverPath = Find-GeckoDriverPath
+    if (-not $firefoxPath) {
+        throw 'Firefox executable was not found; cannot verify WEDU lab post-auth browser navigation.'
+    }
+    if (-not $geckoDriverPath) {
+        throw 'geckodriver.exe was not found; cannot verify WEDU lab post-auth browser navigation.'
+    }
+
+    $startedAt = Get-Date
+    $attempts = @()
+    $verified = $false
+    $postAuthFailureKind = 'unexpected-http-result'
+    $portalMarkerAbsent = $false
+    $port = Get-FreeTcpPort
+    $geckoOutPath = Join-Path $script:ArtifactsRoot 'wedu-lab-geckodriver-after-auth.out.log'
+    $geckoErrPath = Join-Path $script:ArtifactsRoot 'wedu-lab-geckodriver-after-auth.err.log'
+    $geckoProcess = Start-Process -FilePath $geckoDriverPath `
+        -ArgumentList @('--host', '127.0.0.1', '--port', [string]$port) `
+        -RedirectStandardOutput $geckoOutPath `
+        -RedirectStandardError $geckoErrPath `
+        -PassThru `
+        -WindowStyle Hidden
+
+    $sessionId = ''
+    try {
+        $statusUri = "http://127.0.0.1:$port/status"
+        $ready = $false
+        for ($readyAttempt = 1; $readyAttempt -le 30; $readyAttempt++) {
+            try {
+                Invoke-WebDriverJson -Uri $statusUri | Out-Null
+                $ready = $true
+                break
+            }
+            catch {
+                Start-Sleep -Milliseconds 250
+            }
+        }
+        if (-not $ready) {
+            throw 'geckodriver did not become ready for WEDU lab post-auth browser probe.'
+        }
+
+        $session = Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session" -Method Post -Body @{
+            capabilities = @{
+                alwaysMatch = @{
+                    browserName = 'firefox'
+                    pageLoadStrategy = 'eager'
+                    'moz:firefoxOptions' = @{
+                        binary = $firefoxPath
+                        args = @('-headless')
+                    }
+                }
+            }
+        }
+        $sessionId = if ($session.value -and $session.value.sessionId) { [string]$session.value.sessionId } else { [string]$session.sessionId }
+        if (-not $sessionId) {
+            throw 'geckodriver did not return a session id for WEDU lab post-auth browser probe.'
+        }
+
+        Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/timeouts" -Method Post -Body @{
+            implicit = 0
+            pageLoad = 15000
+            script = 5000
+        } | Out-Null
+
+        foreach ($attempt in 1..3) {
+            $attemptStartedAt = Get-Date
+            $detectPortal = Invoke-WeduWebDriverPageProbe -Port $port -SessionId $sessionId -Url $script:DetectionUrl -ExpectedBody 'success'
+            $msftConnectTest = Invoke-WeduWebDriverPageProbe -Port $port -SessionId $sessionId -Url $script:MsftConnectTestUrl -ExpectedBody 'Microsoft Connect Test'
+            $attemptResult = [pscustomobject]@{
+                attempt = $attempt
+                detectPortal = $detectPortal
+                msftConnectTest = $msftConnectTest
+                startedAt = $attemptStartedAt.ToString('o')
+                finishedAt = (Get-Date).ToString('o')
+            }
+            $attempts += $attemptResult
+
+            $portalMarkerAbsent = [bool]($detectPortal.portalMarkerAbsent -and $msftConnectTest.portalMarkerAbsent)
+            $verified = [bool]($detectPortal.externalNavigationFunctional -and $msftConnectTest.externalNavigationFunctional)
+            if ($verified) {
+                $postAuthFailureKind = 'none'
+                break
+            }
+
+            $postAuthFailureKind = if (-not $detectPortal.portalMarkerAbsent -or -not $msftConnectTest.portalMarkerAbsent) {
+                'portal-marker-still-present'
+            }
+            elseif ($detectPortal.failureKind -eq 'dns-failure' -or $msftConnectTest.failureKind -eq 'dns-failure') {
+                'dns-failure'
+            }
+            elseif ($detectPortal.failureKind -eq 'external-timeout' -or $msftConnectTest.failureKind -eq 'external-timeout') {
+                'external-timeout'
+            }
+            else {
+                'unexpected-http-result'
+            }
+
+            Start-Sleep -Seconds ([Math]::Min(5, $attempt * 2))
+        }
+
+        return [pscustomobject]@{
+            postAuthBrowserNavigationVerified = $verified
+            postAuthFailureKind = $postAuthFailureKind
+            portalMarkerAbsent = $portalMarkerAbsent
+            externalNavigationFunctional = $verified
+            failureKind = $postAuthFailureKind
+            attempts = @($attempts)
+            startedAt = $startedAt.ToString('o')
+            finishedAt = (Get-Date).ToString('o')
+            geckoDriverOutPath = 'wedu-lab-geckodriver-after-auth.out.log'
+            geckoDriverErrPath = 'wedu-lab-geckodriver-after-auth.err.log'
+        }
+    }
+    finally {
+        if ($sessionId) {
+            try {
+                Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId" -Method Delete | Out-Null
+            }
+            catch { }
+        }
+        if ($geckoProcess -and -not $geckoProcess.HasExited) {
+            Stop-Process -Id $geckoProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Assert-WeduPostconditions {
+    param(
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $true)][object]$BrowserPayload,
+        [Parameter(Mandatory = $true)][object]$OpenPathProtectionAfter
+    )
+
+    $results = foreach ($assertion in @($Config.postconditionAssertions)) {
+        switch ($assertion) {
+            'portal-detected' {
+                [pscustomobject]@{ assertion = $assertion; success = [bool]$BrowserPayload.portalDetected }
+            }
+            'post-auth-protection-restored' {
+                [pscustomobject]@{ assertion = $assertion; success = [bool]$OpenPathProtectionAfter.protectedModeRestored }
+            }
+            default { throw "Unknown WEDU lab postcondition assertion: $assertion" }
+        }
+    }
+
+    return [pscustomobject]@{
+        requested = @($Config.postconditionAssertions)
+        results = @($results)
+        success = [bool](@($results | Where-Object { -not $_.success }).Count -eq 0)
+    }
 }
 
 function Copy-RecoveryDirectoryArtifact {
@@ -580,18 +932,29 @@ function Invoke-WeduLabRun {
         throw "Gateway reset failed: $($gatewayReset.error)"
     }
 
+    $negativeControls = Invoke-WeduNegativeControls -Config $config
+    if (-not $negativeControls.success) {
+        throw 'WEDU lab negative controls did not all pass.'
+    }
+
     $dnsBefore = Get-WeduDnsSnapshot
     Save-Json -Value $dnsBefore -Path $script:DnsBeforePath
 
     $successProbe = Invoke-HttpProbe -Url $script:DetectionUrl
     $portalProbe = Invoke-HttpProbe -Url "http://$script:WeduHost/"
     $browserBefore = Invoke-WeduBrowserProbe -Config $config
+    $browserPortalDetected = [bool]$browserBefore.portalDetected
+    $weduHostPortalDetected = [bool]($portalProbe.bodySample -match 'WEDU lab captive portal')
+    $detectPortalInterceptionObserved = [bool]($successProbe.bodySample -match 'WEDU lab captive portal')
     $browserPayload = [pscustomobject]@{
         detectionProbe = $successProbe
         portalProbe = $portalProbe
         browser = $browserBefore
         expectedPortalContent = 'WEDU lab captive portal'
-        portalDetected = [bool]($browserBefore.portalDetected -and ($successProbe.bodySample -match 'WEDU lab captive portal'))
+        browserPortalDetected = $browserPortalDetected
+        weduHostPortalDetected = $weduHostPortalDetected
+        detectPortalInterceptionObserved = $detectPortalInterceptionObserved
+        portalDetected = [bool]($browserPortalDetected -and $weduHostPortalDetected)
     }
     Save-Json -Value $browserPayload -Path $script:BrowserBeforePath
 
@@ -605,7 +968,7 @@ function Invoke-WeduLabRun {
         triggerHost = $script:WeduHost
         tabId = 1
         source = 'wedu-lab-captive'
-    }
+    } -TimeoutMs $config.nativeHostTimeoutMs
     Save-Json -Value $nativeRecovery -Path $script:NativeRecoveryPath
 
     $gatewayAuthenticated = Invoke-GatewayControl -Config $config -Operation 'gateway-authenticated' -Path '/lab/authenticated'
@@ -620,34 +983,46 @@ function Invoke-WeduLabRun {
         portalState = 'Authenticated'
         tabId = 1
         source = 'wedu-lab-authenticated'
-    }
+    } -TimeoutMs $config.nativeHostTimeoutMs
     Save-Json -Value $nativeReconcile -Path $script:NativeReconcilePath
+
+    $browserAfterAuth = Invoke-WeduPostAuthBrowserProbeWithRetry
+    Save-Json -Value $browserAfterAuth -Path $script:BrowserAfterAuthPath
 
     $networkAfter = Get-WeduNetworkSnapshot
     Save-Json -Value $networkAfter -Path $script:NetworkAfterPath
 
     $openPathProtectionAfter = Test-OpenPathProtectionAfter
     Save-Json -Value $openPathProtectionAfter -Path $script:OpenPathProtectionAfterPath
+    $postconditionAssertions = Assert-WeduPostconditions -Config $config -BrowserPayload $browserPayload -OpenPathProtectionAfter $openPathProtectionAfter
+    if (-not $postconditionAssertions.success) {
+        throw 'WEDU lab postcondition assertions did not all pass.'
+    }
     $recoveryArtifacts = Copy-WeduRecoveryArtifacts
 
-    $success = [bool](
+    $targetPlatformSymptomCleared = [bool](
         $labNetwork.labNetworkVerified -and
         $browserPayload.portalDetected -and
         $nativeRecovery.success -and
         $gatewayAuthenticated.success -and
         $nativeReconcile.success -and
-        $openPathProtectionAfter.protectedModeRestored
+        $openPathProtectionAfter.protectedModeRestored -and
+        $browserAfterAuth.postAuthBrowserNavigationVerified
     )
+    $success = $targetPlatformSymptomCleared
 
     return [pscustomobject]@{
+        schemaVersion = 2
         profile = 'captive-portal-wedu-lab'
         success = $success
         evidenceLevel = 'wedu-lab-direct-runner'
-        targetPlatformSymptomCleared = $false
+        targetPlatformSymptomCleared = [bool]$targetPlatformSymptomCleared
         labNetwork = $labNetwork
         gatewayReset = $gatewayReset
+        negativeControls = $negativeControls
         dnsBeforePath = 'wedu-lab-dns-before.json'
         browserBeforePath = 'wedu-lab-browser-before.json'
+        browserAfterAuthPath = 'wedu-lab-browser-after-auth.json'
         portalScreenshotPath = 'wedu-lab-portal-before-login.png'
         nativeRecoveryPath = 'wedu-lab-native-recovery.json'
         gatewayAuthenticatedPath = 'wedu-lab-gateway-authenticated.json'
@@ -657,7 +1032,11 @@ function Invoke-WeduLabRun {
         nativeRecovery = $nativeRecovery
         gatewayAuthenticated = $gatewayAuthenticated
         nativeReconcile = $nativeReconcile
+        browserAfterAuth = $browserAfterAuth
+        postAuthBrowserNavigationVerified = [bool]$browserAfterAuth.postAuthBrowserNavigationVerified
+        postAuthFailureKind = [string]$browserAfterAuth.postAuthFailureKind
         openPathProtectionAfter = $openPathProtectionAfter
+        postconditionAssertions = $postconditionAssertions
         recoveryArtifacts = $recoveryArtifacts
         timestamp = (Get-Date).ToString('o')
     }
@@ -672,6 +1051,7 @@ try {
 }
 catch {
     $errorPayload = [pscustomobject]@{
+        schemaVersion = 2
         profile = 'captive-portal-wedu-lab'
         success = $false
         evidenceLevel = 'wedu-lab-direct-runner'
