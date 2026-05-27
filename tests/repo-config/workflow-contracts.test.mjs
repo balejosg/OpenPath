@@ -594,6 +594,13 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
     'WEDU lab should use checkout without persisted credentials'
   );
   assert.ok(
+    workflow.indexOf('uses: ./.github/actions/setup-node') >
+      workflow.indexOf('actions/checkout@v6') &&
+      workflow.indexOf('scripts/run-wedu-captive-portal-lab-ci.sh') >
+        workflow.indexOf('uses: ./.github/actions/setup-node'),
+    'WEDU lab should install Node dependencies before running the repo script'
+  );
+  assert.ok(
     workflow.includes('actions/upload-artifact@v7'),
     'WEDU lab should upload diagnostics even when the run fails'
   );

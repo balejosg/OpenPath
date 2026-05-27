@@ -53,6 +53,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup Node.js
+        uses: ./.github/actions/setup-node
+        with:
+          node-version: '20'
+          install-deps: 'true'
+
       - name: Run WEDU captive portal lab
         shell: bash
         run: bash scripts/run-wedu-captive-portal-lab-ci.sh
