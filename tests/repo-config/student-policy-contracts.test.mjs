@@ -83,6 +83,21 @@ describe('repository verification contract', () => {
     );
   });
 
+  test('Windows SSE update cycles avoid redundant protected-mode restores', () => {
+    const windowsRuntime = readText('windows/lib/Update.Runtime.psm1');
+
+    assert.match(
+      windowsRuntime,
+      /function Invoke-OpenPathStartupLocalReconcile[\s\S]*\[switch\]\$SkipProtectedModeRestore[\s\S]*Test-OpenPathCaptivePortalModeActive[\s\S]*Invoke-OpenPathCaptivePortalImmediateReconcile[\s\S]*if \(\$SkipProtectedModeRestore\) \{[\s\S]*ProtectedModeRestoreSkipped[\s\S]*Restore-OpenPathProtectedMode -Config \$Config/s,
+      'SSE updates should still reconcile an active captive portal before skipping the protected-mode restore'
+    );
+    assert.match(
+      windowsRuntime,
+      /Invoke-OpenPathStartupLocalReconcile[\s\S]*-SkipProtectedModeRestore:\(\$TriggerSource -eq 'SSE'\)[\s\S]*Get-OpenPathWhitelistDownloadResult/s,
+      'SSE-triggered updates should skip the pre-download protected-mode restore that reconfigures Windows Firewall'
+    );
+  });
+
   test('Windows student-policy SSE selector explains narrow and full routing decisions', () => {
     const narrow = selectWindowsStudentPolicySseGroupWithReason([
       'firefox-extension/src/lib/path-blocking.ts',

@@ -1,5 +1,6 @@
 Describe "Common Module" {
     BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
         $modulePath = Join-Path $PSScriptRoot ".." "lib"
         Import-Module (Join-Path $modulePath "Common.psm1") -Force -Global -ErrorAction Stop
         Import-Module (Join-Path $modulePath "DNS.psm1") -Force -Global -ErrorAction Stop
@@ -221,6 +222,13 @@ Describe "Common Module" {
                 'Set-OpenPathFirewall',
                 'Enable-OpenPathFirewall'
             )
+        }
+
+        It "Avoids full firewall rebuild when protected-mode firewall rules are already active" {
+            $domainsHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Domains.ps1"
+            $content = Get-Content $domainsHelperPath -Raw
+
+            $content | Should -Match '(?s)function Restore-OpenPathProtectedMode.*?Test-FirewallActive.*?return \$true.*?Set-OpenPathFirewall'
         }
 
         It "Reuses Restore-OpenPathProtectedMode during checkpoint restore" {

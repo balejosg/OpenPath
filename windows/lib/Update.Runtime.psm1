@@ -119,7 +119,8 @@ function Invoke-OpenPathStartupLocalReconcile {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$WhitelistPath,
-        [PSCustomObject]$Config = $null
+        [PSCustomObject]$Config = $null,
+        [switch]$SkipProtectedModeRestore
     )
 
     if (-not (Test-Path $WhitelistPath -ErrorAction SilentlyContinue)) {
@@ -133,6 +134,10 @@ function Invoke-OpenPathStartupLocalReconcile {
 
     if (Test-OpenPathCaptivePortalModeActive) {
         return (Invoke-OpenPathCaptivePortalImmediateReconcile -Config $Config)
+    }
+
+    if ($SkipProtectedModeRestore) {
+        return 'ProtectedModeRestoreSkipped'
     }
 
     Restore-OpenPathProtectedMode -Config $Config | Out-Null
@@ -351,7 +356,8 @@ function Invoke-OpenPathUpdateCycle {
             $updateSettings = Get-OpenPathUpdatePolicySettings -Config $config
             $null = Invoke-OpenPathStartupLocalReconcile `
                 -WhitelistPath $whitelistPath `
-                -Config $config
+                -Config $config `
+                -SkipProtectedModeRestore:($TriggerSource -eq 'SSE')
             $null = Backup-OpenPathWhitelistState `
                 -WhitelistPath $whitelistPath `
                 -BackupPath $backupPath `

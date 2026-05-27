@@ -330,6 +330,17 @@ function Restore-OpenPathProtectedMode {
         return $true
     }
 
+    if (Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue) {
+        try {
+            if (Test-FirewallActive) {
+                return $true
+            }
+        }
+        catch {
+            Write-Debug "Firewall active check failed during protected mode restore: $_"
+        }
+    }
+
     $upstream = '8.8.8.8'
     if ($Config -and $Config.PSObject.Properties['primaryDNS'] -and $Config.primaryDNS) {
         $upstream = [string]$Config.primaryDNS

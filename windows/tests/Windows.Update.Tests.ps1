@@ -56,7 +56,9 @@ Describe "Update Script" {
                 'Invoke-OpenPathStartupLocalReconcile',
                 'Test-Path $WhitelistPath',
                 'Get-OpenPathWhitelistSectionsFromFile',
+                '[switch]$SkipProtectedModeRestore',
                 'Test-OpenPathCaptivePortalModeActive',
+                'ProtectedModeRestoreSkipped',
                 'Restore-OpenPathProtectedMode -Config $Config',
                 'Invoke-OpenPathCaptivePortalImmediateReconcile -Config $Config'
             )
@@ -66,6 +68,7 @@ Describe "Update Script" {
             $cycleBody = $runtimeContent.Substring($cycleStart, $cycleEnd - $cycleStart)
             $cycleBody.IndexOf('Invoke-OpenPathStartupLocalReconcile') |
                 Should -BeLessThan $cycleBody.IndexOf('Get-OpenPathWhitelistDownloadResult')
+            $cycleBody | Should -Match "-SkipProtectedModeRestore:\(\`$TriggerSource -eq 'SSE'\)"
         }
     }
 
