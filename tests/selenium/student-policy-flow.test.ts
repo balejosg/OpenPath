@@ -1030,6 +1030,89 @@ test('submitBlockedScreenRequest retries once when Firefox swaps the blocked pag
   assert.match(statusText, /Solicitud enviada/);
 });
 
+test('submitBlockedScreenRequest retries once when the submit button goes stale before click', async () => {
+  const events: string[] = [];
+  let clickAttempts = 0;
+  const staleError = new Error(
+    'The element with the reference stale-button is stale; either its node document is not the active document, or it is no longer connected to the DOM'
+  );
+  const elements = new Map([
+    [
+      '#request-reason',
+      {
+        async clear() {
+          events.push('clear');
+        },
+        async sendKeys(value: string) {
+          events.push(`reason:${value}`);
+        },
+      },
+    ],
+    [
+      '#submit-unblock-request',
+      {
+        async click() {
+          clickAttempts += 1;
+          if (clickAttempts === 1) {
+            throw staleError;
+          }
+          events.push('click');
+        },
+      },
+    ],
+    [
+      '#request-status',
+      {
+        async getText() {
+          return '';
+        },
+      },
+    ],
+  ]);
+
+  const state = {
+    getDriver() {
+      return {
+        async findElement(locator: { value: string }) {
+          const element = elements.get(locator.value);
+          assert.ok(element, `Missing fake element for ${locator.value}`);
+          return element;
+        },
+        async executeScript(script: string, element?: unknown) {
+          if (element === elements.get('#request-status')) {
+            return 'Solicitud enviada. Quedara pendiente hasta que la revisen.';
+          }
+
+          if (script.includes('__openpathBlockedPageSubmitProbe')) {
+            return { installed: true };
+          }
+
+          return {};
+        },
+        async wait(condition: (driver: unknown) => Promise<boolean>) {
+          const result = await condition(this);
+          assert.equal(result, true);
+          return result;
+        },
+      };
+    },
+  };
+
+  const statusText = await submitBlockedScreenRequest(state as never, {
+    reason: 'Necesario para una actividad de clase',
+  });
+
+  assert.deepEqual(events, [
+    'clear',
+    'reason:Necesario para una actividad de clase',
+    'clear',
+    'reason:Necesario para una actividad de clase',
+    'click',
+  ]);
+  assert.equal(clickAttempts, 2);
+  assert.match(statusText, /Solicitud enviada/);
+});
+
 test('submitBlockedScreenRequest includes blocked page status when success wait times out', async () => {
   const elements = new Map([
     [

@@ -380,18 +380,19 @@ export async function submitBlockedScreenRequest(
   let lastError: Error | null = null;
 
   for (const attempt of [1, 2]) {
-    await grantBlockedPageDataCollectionConsentForSelenium(state);
-    let submitDiagnostics = await installBlockedPageSubmitDiagnostics(state);
+    let submitDiagnostics = '';
 
-    const reasonInput = await driver.findElement(By.css('#request-reason'));
-    const submitButton = await driver.findElement(By.css('#submit-unblock-request'));
-
-    await reasonInput.clear();
-    await reasonInput.sendKeys(options.reason);
-    await submitButton.click();
-
-    latestStatus = '';
     try {
+      latestStatus = '';
+      await grantBlockedPageDataCollectionConsentForSelenium(state);
+      submitDiagnostics = await installBlockedPageSubmitDiagnostics(state);
+
+      const reasonInput = await driver.findElement(By.css('#request-reason'));
+      const submitButton = await driver.findElement(By.css('#submit-unblock-request'));
+
+      await reasonInput.clear();
+      await reasonInput.sendKeys(options.reason);
+      await submitButton.click();
       await driver.wait(async () => {
         try {
           const statusElement = await driver.findElement(By.css('#request-status'));
@@ -407,6 +408,10 @@ export async function submitBlockedScreenRequest(
 
       return latestStatus;
     } catch (error) {
+      if (attempt === 1 && isStaleElementError(error)) {
+        continue;
+      }
+
       const currentUrl = await driver.getCurrentUrl().catch(() => '<unavailable>');
       const title = await driver.getTitle().catch(() => '<unavailable>');
       const domDiagnostics = await readBlockedPageDomDiagnostics(state);
