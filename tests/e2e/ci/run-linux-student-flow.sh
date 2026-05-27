@@ -322,7 +322,8 @@ wait_for_postgres() {
     local sleep_seconds=1
 
     for ((i = 1; i <= attempts; i += 1)); do
-        if docker exec openpath-test-db pg_isready -U openpath -d openpath_test >/dev/null 2>&1; then
+        if docker exec openpath-test-db pg_isready -U openpath -d openpath_test >/dev/null 2>&1 &&
+            docker exec openpath-test-db psql -U openpath -d openpath_test -tAc 'SELECT 1' >/dev/null 2>&1; then
             return 0
         fi
         sleep "$sleep_seconds"

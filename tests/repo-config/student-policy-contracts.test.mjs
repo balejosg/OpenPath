@@ -1646,6 +1646,16 @@ describe('repository verification contract', () => {
     );
   });
 
+  test('Linux student-policy runner waits for PostgreSQL query readiness', () => {
+    const linuxRunner = readText('tests/e2e/ci/run-linux-student-flow.sh');
+
+    assert.match(
+      linuxRunner,
+      /pg_isready -U openpath -d openpath_test[\s\S]*psql -U openpath -d openpath_test -tAc 'SELECT 1'/,
+      'Linux student-policy runner should verify PostgreSQL accepts queries before migrations start'
+    );
+  });
+
   test('Linux student-policy runner gates Selenium on dnsmasq and Firefox native-host readiness', () => {
     const linuxRunner = readText('tests/e2e/ci/run-linux-student-flow.sh');
 
