@@ -497,6 +497,34 @@ function Set-LocalOnlyCaptivePortalRecoveryFixtureState {
     Save-Json -Value $payload -Path $script:FixtureStatePath
 }
 
+function Set-LocalOnlyCaptivePortalRecoveryUpstreamMarker {
+    $markerPath = Join-Path (Join-Path $script:InstalledOpenPathRoot 'data') 'captive-portal-active.json'
+    $markerDir = Split-Path $markerPath -Parent
+    New-Item -ItemType Directory -Path $markerDir -Force | Out-Null
+
+    $now = (Get-Date).ToString('o')
+    Save-Json -Value ([pscustomobject]@{
+        active = $true
+        state = 'Portal'
+        mode = 'passthrough'
+        allowedHosts = @()
+        expiresAt = ([DateTime]::UtcNow.AddMinutes(5)).ToString('o')
+        upstreamDns = '8.8.8.8'
+        upstreamDnsSource = 'direct-runner-fixture'
+        upstreamUsableForLimited = $true
+        upstreamVerified = $true
+        dnsResetAt = ''
+        upstreamCapturedAt = $now
+        passthroughEgress = [pscustomobject]@{
+            fixtureOnly = $true
+            reason = 'direct-runner synthetic captive portal navigation'
+        }
+        since = $now
+        updatedAt = $now
+        fixtureDoesNotProveRealWeduCaptiveDns = $true
+    }) -Path $markerPath
+}
+
 function Copy-CaptivePortalObservationArtifact {
     $sourcePath = 'C:\OpenPath\data\captive-portal-observation.json'
     if (Test-Path -LiteralPath $sourcePath) {
@@ -893,6 +921,7 @@ function Invoke-CaptivePortalNavigationRun {
     $protectedBlock = Test-ProtectedModeBlocksFixtureHost
     $nativeResponse = $null
     $nativeReconcileResponse = $null
+    $firefoxNavigation = $null
     $environmentSnapshots = $null
     if (-not $protectedBlock.blocked) {
         throw "Protected mode did not block fixture host $script:FixtureHost through 127.0.0.1."
@@ -905,6 +934,7 @@ function Invoke-CaptivePortalNavigationRun {
             -InstalledRecoveryScriptPath $script:InstalledRecoveryScriptPath
         $environmentSnapshots = Copy-CaptivePortalEnvironmentSnapshots
         Install-LocalOnlyCaptivePortalRecoveryFixture
+        Set-LocalOnlyCaptivePortalRecoveryUpstreamMarker
         $nativeResponse = Invoke-NativeHostAction -Message @{
             action = 'recover-captive-portal-navigation'
             triggerHost = $script:FixtureHost
@@ -914,6 +944,7 @@ function Invoke-CaptivePortalNavigationRun {
         Save-Json -Value $dnsDuring -Path $script:DnsDuringPath
         $markerBeforeAuth = Get-PortalMarkerSnapshot
         Save-PortalMarkerSnapshot -Marker $markerBeforeAuth -Path $script:MarkerBeforeAuthPath
+        $firefoxNavigation = Invoke-FirefoxRetryObservation -NativeResponse $nativeResponse
         Set-LocalOnlyCaptivePortalRecoveryFixtureState -State Authenticated
         $nativeReconcileResponse = Invoke-NativeHostAction -Message @{
             action = 'recover-captive-portal-navigation'
@@ -936,7 +967,6 @@ function Invoke-CaptivePortalNavigationRun {
     $environmentSnapshots = Copy-CaptivePortalEnvironmentSnapshots
     $recoveryFiles = @($recoveryDiagnostics.resultFiles)
     $observationArtifact = Copy-CaptivePortalObservationArtifact
-    $firefoxNavigation = Invoke-FirefoxRetryObservation -NativeResponse $nativeResponse
     $concurrency = Get-PortalConcurrencyObservation
     $portalActivePath = 'C:\OpenPath\data\captive-portal-active.json'
     $portalModeActive = Test-Path -LiteralPath $portalActivePath
@@ -982,7 +1012,7 @@ function Invoke-CaptivePortalNavigationRun {
 
     $result = [pscustomobject]@{
         profile = 'captive-portal-navigation'
-        success = $postAuthProtectedModeRestored
+        success = $targetPlatformSymptomCleared
         evidenceLevel = 'post-auth-recovery-direct-runner'
         nativeRecoveryVerified = $nativeRecoveryVerified
         browserNavigationVerified = $browserNavigationVerified
@@ -1024,7 +1054,7 @@ function Invoke-CaptivePortalNavigationRun {
 
     Save-Json -Value $result -Path $script:ResultPath
     if (-not $result.success) {
-        throw "Captive portal navigation fixture failed. See $script:ResultPath"
+        throw "Captive portal navigation fixture failed before target-platform symptom clearance. See $script:ResultPath"
     }
 }
 

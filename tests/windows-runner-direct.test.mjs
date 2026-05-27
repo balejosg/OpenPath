@@ -641,6 +641,12 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(captiveScript, /markerBeforeAuth/);
     assert.match(captiveScript, /markerAfterAuth/);
     assert.match(captiveScript, /captive-portal-dns-during\.json/);
+    assert.match(captiveScript, /Set-LocalOnlyCaptivePortalRecoveryUpstreamMarker/);
+    assert.match(captiveScript, /upstreamDnsSource = 'direct-runner-fixture'/);
+    assert.match(
+      captiveScript,
+      /Invoke-FirefoxRetryObservation[\s\S]*Set-LocalOnlyCaptivePortalRecoveryFixtureState -State Authenticated/
+    );
     assert.match(captiveScript, /localDnsLoopbackRestored/);
     assert.match(captiveScript, /acrylicNormalRestored/);
     assert.match(captiveScript, /blockedDomainStillBlocked/);
@@ -654,6 +660,8 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.doesNotMatch(captiveScript, /\[int\]\$taskInfo\.LastTaskResult/);
     assert.match(captiveScript, /noPrematureExit/);
     assert.match(captiveScript, /blockedByOpenPath/);
+    assert.match(captiveScript, /success = \$targetPlatformSymptomCleared/);
+    assert.doesNotMatch(captiveScript, /success = \$postAuthProtectedModeRestored/);
   });
 
   test('captive-portal-wedu-lab mode is fail-closed and collects WEDU lab artifacts', () => {
