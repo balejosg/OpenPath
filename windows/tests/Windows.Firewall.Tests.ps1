@@ -38,6 +38,7 @@ Describe "Firewall Module" {
                 "return 'C:\OpenPath\data\firewall-rules.json'",
                 "Group = 'OpenPath'",
                 'Add-OpenPathFirewallManifestRule -Name $DisplayName',
+                'function Remove-OpenPathFirewallRuleObjects',
                 "Get-NetFirewallRule -Group 'OpenPath'",
                 'Get-NetFirewallRule -DisplayName "$script:RulePrefix-*"'
             )
@@ -69,12 +70,10 @@ Describe "Firewall Module" {
             $manifestPath = Join-Path $TestDrive 'firewall-rules.json'
             Set-Content -Path $manifestPath -Value '[ "OpenPath-DNS-Allow-Loopback-TCP", ' -Encoding UTF8
             $script:requestedFirewallRules = @()
+            $script:removedFirewallRules = @()
 
             if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) {
                 function global:Get-NetFirewallRule { }
-            }
-            if (-not (Get-Command -Name Remove-NetFirewallRule -ErrorAction SilentlyContinue)) {
-                function global:Remove-NetFirewallRule { }
             }
 
             Mock Get-OpenPathFirewallManifestPath { $manifestPath } -ModuleName Firewall
@@ -98,7 +97,16 @@ Describe "Firewall Module" {
                     return [PSCustomObject]@{ DisplayName = 'OpenPath-group-rule' }
                 }
             } -ModuleName Firewall
-            Mock Remove-NetFirewallRule {
+            Mock Remove-OpenPathFirewallRuleObjects {
+                param([object[]]$Rules)
+
+                $script:removedFirewallRules += @(
+                    foreach ($rule in @($Rules)) {
+                        if ($null -ne $rule -and $rule.PSObject.Properties['DisplayName']) {
+                            $rule.DisplayName
+                        }
+                    }
+                )
             } -ModuleName Firewall
 
             try {
@@ -107,13 +115,15 @@ Describe "Firewall Module" {
                 $result | Should -BeTrue
                 $script:requestedFirewallRules | Should -Contain 'group:OpenPath'
                 $script:requestedFirewallRules | Should -Contain 'OpenPath-DNS-*'
-                Should -Invoke -CommandName Remove-NetFirewallRule -ModuleName Firewall -Times 2 -Exactly
+                $script:removedFirewallRules | Should -Contain 'OpenPath-group-rule'
+                $script:removedFirewallRules | Should -Contain 'OpenPath-DNS-fallback-rule'
+                Should -Invoke -CommandName Remove-OpenPathFirewallRuleObjects -ModuleName Firewall -Times 2 -Exactly
                 Test-Path $manifestPath | Should -BeFalse
             }
             finally {
                 Remove-Variable -Name requestedFirewallRules -Scope Script -ErrorAction SilentlyContinue
+                Remove-Variable -Name removedFirewallRules -Scope Script -ErrorAction SilentlyContinue
                 Microsoft.PowerShell.Management\Remove-Item Function:\Get-NetFirewallRule -ErrorAction SilentlyContinue
-                Microsoft.PowerShell.Management\Remove-Item Function:\Remove-NetFirewallRule -ErrorAction SilentlyContinue
             }
         }
     }

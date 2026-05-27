@@ -107,6 +107,16 @@ function New-OpenPathFirewallRule {
     return $rule
 }
 
+function Remove-OpenPathFirewallRuleObjects {
+    param([object[]]$Rules)
+
+    foreach ($rule in @($Rules)) {
+        if ($null -eq $rule) { continue }
+
+        $rule | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    }
+}
+
 function Remove-OpenPathFirewall {
     <#
     .SYNOPSIS
@@ -124,19 +134,16 @@ function Remove-OpenPathFirewall {
     try {
         $manifestPath = Get-OpenPathFirewallManifestPath
         foreach ($ruleName in @(Get-OpenPathFirewallManifestRuleNames -Path $manifestPath)) {
-            Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue |
-                Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            Remove-OpenPathFirewallRuleObjects -Rules @(Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)
         }
 
         if (Test-Path $manifestPath) {
             Remove-Item $manifestPath -Force -ErrorAction SilentlyContinue
         }
 
-        Get-NetFirewallRule -Group 'OpenPath' -ErrorAction SilentlyContinue |
-            Remove-NetFirewallRule -ErrorAction SilentlyContinue
+        Remove-OpenPathFirewallRuleObjects -Rules @(Get-NetFirewallRule -Group 'OpenPath' -ErrorAction SilentlyContinue)
 
-        Get-NetFirewallRule -DisplayName "$script:RulePrefix-*" -ErrorAction SilentlyContinue |
-            Remove-NetFirewallRule -ErrorAction SilentlyContinue
+        Remove-OpenPathFirewallRuleObjects -Rules @(Get-NetFirewallRule -DisplayName "$script:RulePrefix-*" -ErrorAction SilentlyContinue)
 
         Write-OpenPathLog 'Firewall rules removed'
         return $true
