@@ -19,6 +19,39 @@ import {
 } from './student-policy-env';
 import type { ConvergenceOptions } from './student-policy-types';
 
+export const FORCE_LOCAL_UPDATE_RETRY_ATTEMPTS = 3;
+export const FORCE_LOCAL_UPDATE_RETRY_DELAY_MS = 5_000;
+
+function formatForceLocalUpdateError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+export function shouldRetryForceLocalUpdateError(error: unknown, command: string): boolean {
+  const message = formatForceLocalUpdateError(error);
+
+  if (
+    /Another OpenPath update is already running|existing OpenPath update to finish|OpenPath update lock/i.test(
+      message
+    )
+  ) {
+    return true;
+  }
+
+  return (
+    /Update-OpenPath\.ps1|openpath-update\.sh/.test(command) && /^Command failed:/i.test(message)
+  );
+}
+
+export function isCompletedWindowsUpdateFailure(error: unknown): boolean {
+  return /=== OpenPath update completed(?: successfully| \(no changes\)) ===/.test(
+    formatForceLocalUpdateError(error)
+  );
+}
+
 export async function assertDnsBlocked(hostname: string): Promise<void> {
   const command = isWindows()
     ? buildWindowsBlockedDnsCommand(hostname)
@@ -64,7 +97,35 @@ export async function assertWhitelistMissing(hostname: string): Promise<void> {
 }
 
 export async function forceLocalUpdate(): Promise<void> {
-  await runPlatformCommand(getUpdateCommand());
+  const command = getUpdateCommand();
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= FORCE_LOCAL_UPDATE_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      await runPlatformCommand(command);
+      return;
+    } catch (error) {
+      lastError = error;
+
+      if (isWindows() && isCompletedWindowsUpdateFailure(error)) {
+        return;
+      }
+
+      if (
+        attempt === FORCE_LOCAL_UPDATE_RETRY_ATTEMPTS ||
+        !shouldRetryForceLocalUpdateError(error, command)
+      ) {
+        throw error;
+      }
+
+      console.warn(
+        `Forced OpenPath update failed during attempt ${attempt}; retrying after ${FORCE_LOCAL_UPDATE_RETRY_DELAY_MS}ms`
+      );
+      await delay(FORCE_LOCAL_UPDATE_RETRY_DELAY_MS);
+    }
+  }
+
+  throw lastError ?? new Error('Forced OpenPath update failed');
 }
 
 export async function withSseDisabled<T>(callback: () => Promise<T>): Promise<T> {

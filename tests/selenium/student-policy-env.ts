@@ -98,12 +98,51 @@ export function buildWindowsHttpProbeCommand(
   return `powershell -NoLogo -EncodedCommand ${encodedScript}`;
 }
 
+export interface PlatformCommandResult {
+  output: string;
+  exitCode: number | null;
+  failed: boolean;
+}
+
+function normalizeCommandOutput(stdout: unknown, stderr: unknown): string {
+  return `${String(stdout ?? '')}${String(stderr ?? '')}`.trim();
+}
+
+export async function runPlatformCommandResult(command: string): Promise<PlatformCommandResult> {
+  try {
+    const { stdout, stderr } = await exec(command, {
+      maxBuffer: PLATFORM_COMMAND_MAX_BUFFER_BYTES,
+      timeout: PLATFORM_COMMAND_TIMEOUT_MS,
+    });
+    return {
+      output: normalizeCommandOutput(stdout, stderr),
+      exitCode: 0,
+      failed: false,
+    };
+  } catch (error) {
+    const commandError = error as {
+      stdout?: unknown;
+      stderr?: unknown;
+      code?: unknown;
+    };
+    return {
+      output: normalizeCommandOutput(commandError.stdout, commandError.stderr),
+      exitCode: typeof commandError.code === 'number' ? commandError.code : null,
+      failed: true,
+    };
+  }
+}
+
 export async function runPlatformCommand(command: string): Promise<string> {
-  const { stdout, stderr } = await exec(command, {
-    maxBuffer: PLATFORM_COMMAND_MAX_BUFFER_BYTES,
-    timeout: PLATFORM_COMMAND_TIMEOUT_MS,
-  });
-  return `${stdout}${stderr}`.trim();
+  const result = await runPlatformCommandResult(command);
+
+  if (result.failed) {
+    throw new Error(
+      `Command failed: ${command}${result.output === '' ? '' : `\n${result.output}`}`
+    );
+  }
+
+  return result.output;
 }
 
 export function isWindows(): boolean {

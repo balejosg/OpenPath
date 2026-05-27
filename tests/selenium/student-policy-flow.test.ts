@@ -21,6 +21,10 @@ import {
   PLATFORM_COMMAND_TIMEOUT_MS,
 } from './student-policy-env';
 import { getBlockedPathRulesDebug } from './student-policy-driver-runtime';
+import {
+  isCompletedWindowsUpdateFailure,
+  shouldRetryForceLocalUpdateError,
+} from './student-policy-driver-platform';
 import { getStudentPolicyPhasePlan } from './student-policy-harness';
 import {
   buildBaselineWhitelistHosts,
@@ -158,6 +162,62 @@ test('platform commands are bounded below the Selenium suite timeout', () => {
   assert.ok(
     PLATFORM_COMMAND_TIMEOUT_MS < 15 * 60 * 1000,
     'A stuck platform update command should not consume the whole fallback Selenium suite timeout'
+  );
+});
+
+test('forced local updates retry transient OpenPath update contention', () => {
+  const defaultWindowsUpdateCommand =
+    'powershell -NoLogo -File "C:\\OpenPath\\scripts\\Update-OpenPath.ps1"';
+
+  assert.equal(
+    shouldRetryForceLocalUpdateError(
+      new Error('Another OpenPath update is already running - skipping this cycle'),
+      defaultWindowsUpdateCommand
+    ),
+    true
+  );
+  assert.equal(
+    shouldRetryForceLocalUpdateError(
+      new Error(
+        'Command failed: powershell -NoLogo -File "C:\\OpenPath\\scripts\\Update-OpenPath.ps1"'
+      ),
+      defaultWindowsUpdateCommand
+    ),
+    true
+  );
+  assert.equal(
+    shouldRetryForceLocalUpdateError(
+      new Error('Command failed: curl -fsS http://127.0.0.1'),
+      'curl -fsS http://127.0.0.1'
+    ),
+    false
+  );
+});
+
+test('forced local updates tolerate nonzero Windows updates after completion', () => {
+  assert.equal(
+    isCompletedWindowsUpdateFailure(
+      new Error(
+        'Command failed: powershell -NoLogo -File "C:\\OpenPath\\scripts\\Update-OpenPath.ps1"\n=== OpenPath update completed (no changes) ==='
+      )
+    ),
+    true
+  );
+  assert.equal(
+    isCompletedWindowsUpdateFailure(
+      new Error(
+        'Command failed: powershell -NoLogo -File "C:\\OpenPath\\scripts\\Update-OpenPath.ps1"\n=== OpenPath update completed successfully ==='
+      )
+    ),
+    true
+  );
+  assert.equal(
+    isCompletedWindowsUpdateFailure(
+      new Error(
+        'Command failed: powershell -NoLogo -File "C:\\OpenPath\\scripts\\Update-OpenPath.ps1"\nAnother OpenPath update is already running - skipping this cycle'
+      )
+    ),
+    false
   );
 });
 
