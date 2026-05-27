@@ -1600,6 +1600,10 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
     'windows-student-policy should run on the pinned OpenPath self-hosted Windows runner'
   );
   assert.ok(
+    windowsStudentPolicyBlock.includes('timeout-minutes: 70'),
+    'windows-student-policy should leave enough job budget for full Windows Selenium, fallback propagation, and browser-boundary probes'
+  );
+  assert.ok(
     windowsCaptivePortalBlock.includes('runs-on: [self-hosted, Windows, X64, proxmox, openpath]'),
     'windows-captive-portal-navigation should run on the pinned OpenPath self-hosted Windows runner'
   );

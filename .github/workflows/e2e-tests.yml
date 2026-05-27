@@ -353,7 +353,7 @@ jobs:
   windows-student-policy:
     name: Windows Student Policy
     runs-on: [self-hosted, Windows, X64, proxmox, openpath]
-    timeout-minutes: 50
+    timeout-minutes: 70
     needs: detect-relevant-changes
     if: needs.detect-relevant-changes.outputs.windows_student_policy == 'true'
 

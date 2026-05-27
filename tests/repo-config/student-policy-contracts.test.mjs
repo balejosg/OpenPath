@@ -666,6 +666,11 @@ describe('repository verification contract', () => {
     );
     assert.match(
       windowsRunner,
+      /\$timeoutMinutes = if \(\(\$Mode -eq 'sse'\) -and \(\$CoverageProfile -eq 'full'\) -and \(\$ScenarioGroup -eq 'full'\)\) \{[\s\S]*35[\s\S]*\$process\.WaitForExit\(\$timeoutMs\)/s,
+      'Windows student-policy full SSE should use an explicit timeout budget larger than the historical 20 minute default'
+    );
+    assert.match(
+      windowsRunner,
       /\$env:OPENPATH_STUDENT_COVERAGE_PROFILE = \$CoverageProfile/,
       'Windows student-policy runner should expose the selected profile to the Selenium harness'
     );

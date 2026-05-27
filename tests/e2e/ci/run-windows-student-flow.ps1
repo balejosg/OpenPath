@@ -1209,6 +1209,17 @@ function Invoke-SeleniumStudentSuite {
 
         $logPath = Join-Path $script:ArtifactsRoot ("windows-student-policy-$Mode.log")
         $errorPath = Join-Path $script:ArtifactsRoot ("windows-student-policy-$Mode.err.log")
+        $timeoutMinutes = if (($Mode -eq 'sse') -and ($CoverageProfile -eq 'full') -and ($ScenarioGroup -eq 'full')) {
+            35
+        }
+        elseif ($Mode -eq 'sse') {
+            25
+        }
+        else {
+            15
+        }
+        $timeoutMs = [int]($timeoutMinutes * 60 * 1000)
+        Write-DiagnosticNote "Selenium student-policy suite timeoutMinutes=$timeoutMinutes mode=$Mode coverageProfile=$CoverageProfile scenarioGroup=$ScenarioGroup"
         $process = Start-Process -FilePath $npmCommand `
             -ArgumentList @('run', 'test:student-policy:ci') `
             -WorkingDirectory (Get-Location).Path `
@@ -1217,7 +1228,7 @@ function Invoke-SeleniumStudentSuite {
             -RedirectStandardError $errorPath `
             -PassThru
 
-        if (-not $process.WaitForExit(1200000)) {
+        if (-not $process.WaitForExit($timeoutMs)) {
             try {
                 $process.Kill($true)
             }
@@ -1227,7 +1238,7 @@ function Invoke-SeleniumStudentSuite {
 
             $tail = if (Test-Path $logPath) { Get-Content $logPath -Raw } else { '' }
             $errorTail = if (Test-Path $errorPath) { Get-Content $errorPath -Raw } else { '' }
-            throw "Windows student-policy Selenium ($Mode) timed out after 20 minutes. STDOUT:`n$tail`nSTDERR:`n$errorTail"
+            throw "Windows student-policy Selenium ($Mode) timed out after $timeoutMinutes minutes. STDOUT:`n$tail`nSTDERR:`n$errorTail"
         }
 
         if (Test-Path $logPath) {
