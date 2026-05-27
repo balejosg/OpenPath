@@ -54,6 +54,24 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Configure Proxmox SSH identity
+        shell: bash
+        env:
+          OPENPATH_WEDU_CI_SSH_PRIVATE_KEY: ${{ secrets.OPENPATH_WEDU_CI_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${OPENPATH_WEDU_CI_SSH_PRIVATE_KEY:-}" ]; then
+            exit 0
+          fi
+
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          key_path="$HOME/.ssh/openpath-wedu-ci"
+          printf '%s\n' "$OPENPATH_WEDU_CI_SSH_PRIVATE_KEY" > "$key_path"
+          chmod 600 "$key_path"
+          echo "OPENPATH_WEDU_CI_SSH_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:

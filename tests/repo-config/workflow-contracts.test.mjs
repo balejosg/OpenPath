@@ -596,6 +596,12 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
     'WEDU lab should prefer a masked controller Proxmox SSH target configured outside the public repo'
   );
   assert.ok(
+    workflow.includes('OPENPATH_WEDU_CI_SSH_PRIVATE_KEY') &&
+      workflow.includes('OPENPATH_WEDU_CI_SSH_KEY_PATH') &&
+      workflow.includes('chmod 600 "$key_path"'),
+    'WEDU lab should install a masked Proxmox SSH identity before running controller mutations'
+  );
+  assert.ok(
     workflow.includes('actions/checkout@v6') && workflow.includes('persist-credentials: false'),
     'WEDU lab should use checkout without persisted credentials'
   );
@@ -687,6 +693,8 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
   assert.ok(
     controller.includes('function openpath_wedu_ssh_proxmox') &&
       controller.includes('StrictHostKeyChecking=accept-new') &&
+      controller.includes('OPENPATH_WEDU_CI_SSH_KEY_PATH') &&
+      controller.includes('IdentitiesOnly=yes') &&
       controller.includes('printf -v quoted_arg %q "$arg"') &&
       controller.includes('ssh "${ssh_options[@]}" "$host" "${quoted_args[*]}"') &&
       script.includes('openpath_wedu_ssh_proxmox "$PROXMOX_HOST" "$@"'),

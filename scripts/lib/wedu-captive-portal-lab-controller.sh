@@ -10,6 +10,12 @@ function openpath_wedu_ssh_proxmox {
   local ssh_options=(
     -o StrictHostKeyChecking=accept-new
   )
+  if [ -n "${OPENPATH_WEDU_CI_SSH_KEY_PATH:-}" ]; then
+    ssh_options+=(
+      -i "$OPENPATH_WEDU_CI_SSH_KEY_PATH"
+      -o IdentitiesOnly=yes
+    )
+  fi
   for arg in "$@"; do
     printf -v quoted_arg %q "$arg"
     quoted_args+=("$quoted_arg")
