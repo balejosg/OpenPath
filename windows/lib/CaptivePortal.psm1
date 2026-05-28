@@ -1070,22 +1070,6 @@ function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
     return $true
 }
 
-function Test-OpenPathCaptivePortalFirewallExpected {
-    try {
-        if (Get-Command -Name 'Get-OpenPathConfig' -ErrorAction SilentlyContinue) {
-            $config = Get-OpenPathConfig
-            if ($config -and $config.PSObject.Properties['enableFirewall']) {
-                return [bool]$config.enableFirewall
-            }
-        }
-    }
-    catch {
-        Write-OpenPathLog 'Watchdog: captive portal limited mode could not read firewall expectation; treating firewall as optional' -Level WARN
-    }
-
-    return $false
-}
-
 function Test-OpenPathLimitedCaptivePortalProtection {
     [CmdletBinding()]
     param(
@@ -1096,11 +1080,6 @@ function Test-OpenPathLimitedCaptivePortalProtection {
     )
 
     try {
-        $firewallExpected = Test-OpenPathCaptivePortalFirewallExpected
-        if ($firewallExpected -and (Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue) -and -not (Test-FirewallActive)) {
-            return $false
-        }
-
         $recoveryHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains)
         if ($recoveryHosts.Count -le 0) {
             return $false

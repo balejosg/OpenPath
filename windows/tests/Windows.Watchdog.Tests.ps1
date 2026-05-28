@@ -386,7 +386,6 @@ Describe "Watchdog Script" {
             $protectionBody = $moduleContent.Substring($protectionStart, $restoreStart - $protectionStart)
 
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
-                'function Test-OpenPathCaptivePortalFirewallExpected',
                 'function Test-OpenPathLimitedCaptivePortalRecoveryHost',
                 'Test-OpenPathLimitedCaptivePortalRecoveryHost -Domain $recoveryHost',
                 'Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $mergedHosts',
@@ -400,12 +399,12 @@ Describe "Watchdog Script" {
                 'NX \*'
             )
             Assert-ContentContainsAll -Content $protectionBody -Needles @(
-                '$firewallExpected = Test-OpenPathCaptivePortalFirewallExpected',
-                '$firewallExpected -and',
-                'Test-FirewallActive'
+                'Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains',
+                'Test-OpenPathLimitedCaptivePortalRecoveryHost -Domain $recoveryHost'
             )
             $protectionBody | Should -Not -Match 'Test-DNSResolution'
             $protectionBody | Should -Not -Match 'Test-DNSSinkhole'
+            $protectionBody | Should -Not -Match 'Test-FirewallActive'
             $protectionBody.Contains("if ((Get-Command -Name 'Test-FirewallActive' -ErrorAction SilentlyContinue) -and -not (Test-FirewallActive))") |
                 Should -BeFalse
         }
