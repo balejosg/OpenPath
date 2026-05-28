@@ -434,6 +434,43 @@ void describe('background listeners blocked-screen routing', () => {
     ]);
   });
 
+  void test('reports captive portal runtime observations through sanitized local dependency overlay', async () => {
+    const nativePayloads: unknown[] = [];
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: (input) => {
+        nativePayloads.push(input);
+        return Promise.resolve({ success: true });
+      },
+    });
+    assert.ok(harness.runtimeMessage);
+
+    const response = harness.runtimeMessage(
+      {
+        action: 'openpathCaptivePortalRuntimeDependency',
+        anchorHost: 'wlogin.wedu-lab.test',
+        dependencyHost: 'assets.wedu-lab.test',
+        requestType: 'stylesheet',
+        pageUrl: 'http://wlogin.wedu-lab.test/login?token=secret',
+        resourceUrl: 'http://assets.wedu-lab.test/app.css?student=demo',
+        cookie: 'session=secret',
+        headers: { authorization: 'Bearer secret' },
+        dom: '<input name="password" value="secret">',
+      },
+      { tab: { id: 9, url: 'http://nce.wedu.comunidad.madrid/' } },
+      () => undefined
+    );
+
+    assert.equal(typeof (response as Promise<unknown>).then, 'function');
+    assert.deepEqual(await response, { success: true });
+    assert.deepEqual(nativePayloads, [
+      {
+        anchorHost: 'wlogin.wedu-lab.test',
+        dependencyHost: 'assets.wedu-lab.test',
+        requestType: 'stylesheet',
+      },
+    ]);
+  });
+
   void test('allows eligible page resources through the local native dependency overlay only', async () => {
     const nativePayloads: unknown[] = [];
     const harness = createListenerHarness({

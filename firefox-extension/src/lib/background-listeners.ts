@@ -155,22 +155,71 @@ function waitForLocalRuntimeDependencySoftTimeout(
 }
 
 function createRuntimeMessageResponder(
-  options: Pick<BackgroundListenersOptions, 'handleRuntimeMessage'>
+  options: Pick<BackgroundListenersOptions, 'allowLocalRuntimeDependency' | 'handleRuntimeMessage'>
 ): (
   message: unknown,
   sender: Runtime.MessageSender,
   sendResponse: (response: unknown) => void
 ) => unknown {
   return (message, sender, sendResponse) => {
-    const responsePromise = Promise.resolve(options.handleRuntimeMessage(message, sender)).catch(
-      (error: unknown) => ({ success: false, error: getErrorMessage(error) })
-    );
+    const captiveRuntimeDependency = parseCaptivePortalRuntimeDependencyMessage(message);
+    const responsePromise =
+      captiveRuntimeDependency && options.allowLocalRuntimeDependency
+        ? Promise.resolve(options.allowLocalRuntimeDependency(captiveRuntimeDependency)).catch(
+            (error: unknown) => ({ success: false, error: getErrorMessage(error) })
+          )
+        : Promise.resolve(options.handleRuntimeMessage(message, sender)).catch(
+            (error: unknown) => ({
+              success: false,
+              error: getErrorMessage(error),
+            })
+          );
 
     void responsePromise.then((response) => {
       sendResponse(response);
     });
 
     return responsePromise;
+  };
+}
+
+function parseCaptivePortalRuntimeDependencyMessage(message: unknown): {
+  anchorHost: string;
+  dependencyHost: string;
+  requestType: string;
+} | null {
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+
+  const candidate = message as {
+    action?: unknown;
+    anchorHost?: unknown;
+    dependencyHost?: unknown;
+    requestType?: unknown;
+  };
+  if (candidate.action !== 'openpathCaptivePortalRuntimeDependency') {
+    return null;
+  }
+  if (
+    typeof candidate.anchorHost !== 'string' ||
+    typeof candidate.dependencyHost !== 'string' ||
+    typeof candidate.requestType !== 'string'
+  ) {
+    return null;
+  }
+
+  const anchorHost = candidate.anchorHost.trim().toLowerCase();
+  const dependencyHost = candidate.dependencyHost.trim().toLowerCase();
+  const requestType = candidate.requestType.trim().toLowerCase();
+  if (!anchorHost || !dependencyHost || !isDependencyRequestType(requestType)) {
+    return null;
+  }
+
+  return {
+    anchorHost,
+    dependencyHost,
+    requestType,
   };
 }
 
@@ -369,6 +418,9 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
 
   options.browser.runtime.onMessage.addListener(
     createRuntimeMessageResponder({
+      ...(options.allowLocalRuntimeDependency
+        ? { allowLocalRuntimeDependency: options.allowLocalRuntimeDependency }
+        : {}),
       handleRuntimeMessage: options.handleRuntimeMessage,
     }) as Parameters<typeof options.browser.runtime.onMessage.addListener>[0]
   );

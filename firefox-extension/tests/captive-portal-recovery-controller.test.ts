@@ -19,6 +19,7 @@ void test('captive portal recovery retries current locked-portal navigations onc
       retries.push({ tabId, url });
       return Promise.resolve();
     },
+    sleep: () => Promise.resolve(),
   });
 
   assert.equal(
@@ -55,12 +56,97 @@ void test('captive portal recovery retries current locked-portal navigations onc
   assert.equal(retries.length, 2);
 });
 
+void test('captive portal recovery waits before retrying and revalidates current navigation', async () => {
+  const events: string[] = [];
+  let currentNavigation = true;
+  let releaseSleep!: () => void;
+  const sleepReleased = new Promise<void>((resolve) => {
+    releaseSleep = resolve;
+  });
+  const controller = createCaptivePortalRecoveryController({
+    getPortalState: () => Promise.resolve('locked_portal'),
+    recoverCaptivePortalNavigation: () => {
+      events.push('native-recovery');
+      return Promise.resolve({ success: true });
+    },
+    retryNavigation: () => {
+      events.push('retry');
+      return Promise.resolve();
+    },
+    sleep: (milliseconds) => {
+      events.push(`sleep:${milliseconds.toString()}`);
+      return sleepReleased;
+    },
+  });
+
+  assert.equal(
+    await controller.recoverNavigation(
+      {
+        tabId: 7,
+        hostname: 'portal.example',
+        url: 'http://portal.example/start',
+      },
+      {
+        isCurrentNavigation: () => currentNavigation,
+      }
+    ),
+    true
+  );
+  assert.deepEqual(events, ['native-recovery', 'sleep:750']);
+  currentNavigation = false;
+  releaseSleep();
+  await sleepReleased;
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  assert.deepEqual(events, ['native-recovery', 'sleep:750']);
+});
+
+void test('captive portal recovery retries only after the configured delay resolves', async () => {
+  const events: string[] = [];
+  let releaseSleep!: () => void;
+  const sleepReleased = new Promise<void>((resolve) => {
+    releaseSleep = resolve;
+  });
+  const controller = createCaptivePortalRecoveryController({
+    getPortalState: () => Promise.resolve('locked_portal'),
+    recoverCaptivePortalNavigation: () => Promise.resolve({ success: true }),
+    retryNavigation: (tabId, url) => {
+      events.push(`retry:${tabId.toString()}:${url}`);
+      return Promise.resolve();
+    },
+    sleep: (milliseconds) => {
+      events.push(`sleep:${milliseconds.toString()}`);
+      return sleepReleased;
+    },
+  });
+
+  assert.equal(
+    await controller.recoverNavigation({
+      tabId: 8,
+      hostname: 'portal.example',
+      url: 'http://portal.example/start',
+    }),
+    true
+  );
+  assert.deepEqual(events, ['sleep:750']);
+
+  releaseSleep();
+  await sleepReleased;
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assert.deepEqual(events, ['sleep:750', 'retry:8:http://portal.example/start']);
+});
+
 void test('captive portal recovery clears per-tab limiter on dispose', async () => {
   const controller = createCaptivePortalRecoveryController({
     getPortalState: () => Promise.resolve('locked_portal'),
     now: () => 5_000,
     recoverCaptivePortalNavigation: () => Promise.resolve({ success: true }),
     retryNavigation: () => Promise.resolve(),
+    sleep: () => Promise.resolve(),
   });
   const navigation = {
     tabId: 9,
@@ -91,6 +177,7 @@ void test('captive portal recovery allows unknown Firefox state only with native
       retries.push({ tabId, url });
       return Promise.resolve();
     },
+    sleep: () => Promise.resolve(),
   } as Parameters<typeof createCaptivePortalRecoveryController>[0] & {
     isNativePortalRecoveryEligible: (context: { hostname: string }) => Promise<boolean>;
   });
@@ -120,6 +207,7 @@ void test('captive portal recovery reconciles only unlocked portal state changes
       return Promise.resolve({ success: true });
     },
     retryNavigation: () => Promise.resolve(),
+    sleep: () => Promise.resolve(),
   });
 
   assert.equal(
@@ -149,6 +237,7 @@ void test('captive portal recovery uses explicit reconcile operations for Firefo
       return Promise.resolve({ success: true });
     },
     retryNavigation: () => Promise.resolve(),
+    sleep: () => Promise.resolve(),
   });
 
   await controller.handlePortalStateChanged('unlocked_portal');

@@ -20,6 +20,12 @@ function waitForAsyncRuntime(): Promise<void> {
   });
 }
 
+function waitForCaptivePortalRecoveryRetry(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 800);
+  });
+}
+
 function createRuntimeHarness(): {
   browser: Browser;
   fetchBodies: unknown[];
@@ -428,6 +434,7 @@ void test('captive portal recovery controller gates native open on locked portal
       tabUpdates.push({ tabId, url });
       return Promise.resolve();
     },
+    sleep: () => Promise.resolve(),
   });
 
   assert.equal(
@@ -615,6 +622,7 @@ void test('background runtime recovers portal-eligible native-confirmed blocks b
       url: 'https://portal.example/login',
     });
     await waitForAsyncRuntime();
+    await waitForCaptivePortalRecoveryRetry();
 
     assert.ok(
       harness.nativeMessages.some(

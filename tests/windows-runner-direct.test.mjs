@@ -30,9 +30,12 @@ function runDirectDiagnostic(args) {
 }
 
 function runWorkspaceWrapper(args) {
-  const wrapperPath = resolve(projectRoot, '..', 'scripts', 'validate-hypothesis.sh');
+  const workspaceRoot = process.env.WHITELIST_WORKSPACE_ROOT
+    ? resolve(process.env.WHITELIST_WORKSPACE_ROOT)
+    : resolve(projectRoot, '..');
+  const wrapperPath = resolve(workspaceRoot, 'scripts', 'validate-hypothesis.sh');
   return spawnSync('bash', [wrapperPath, ...args], {
-    cwd: resolve(projectRoot, '..'),
+    cwd: workspaceRoot,
     encoding: 'utf8',
   });
 }
@@ -699,12 +702,14 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     for (const artifactName of [
       'wedu-lab-network-before.json',
       'wedu-lab-dns-before.json',
+      'wedu-lab-dns-limited.json',
       'wedu-lab-browser-before.json',
-      'wedu-lab-portal-before-login.png',
+      'wedu-lab-browser-limited.json',
+      'wedu-lab-portal-limited-mode.png',
       'wedu-lab-native-recovery.json',
-      'wedu-lab-gateway-authenticated.json',
       'wedu-lab-native-reconcile.json',
-      'wedu-lab-browser-after-auth.json',
+      'wedu-lab-browser-post-auth.json',
+      'wedu-lab-dns-post-auth.json',
       'wedu-lab-geckodriver-after-auth.out.log',
       'wedu-lab-geckodriver-after-auth.err.log',
       'wedu-lab-network-after.json',
@@ -715,7 +720,8 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       assert.match(script, new RegExp(artifactName.replace(/[.]/g, '\\.')));
       assert.match(weduScript, new RegExp(artifactName.replace(/[.]/g, '\\.')));
     }
-    assert.match(weduScript, /wedu-lab-browser-after-auth\.json/);
+    assert.match(weduScript, /wedu-lab-browser-post-auth\.json/);
+    assert.match(weduScript, /wedu-lab-portal-limited-mode\.png/);
     assert.match(weduScript, /OPENPATH_WEDU_LAB_GATEWAY_TOKEN/);
     assert.match(weduScript, /OPENPATH_WEDU_LAB_GATEWAY_URL/);
     assert.match(weduScript, /OPENPATH_WEDU_LAB_EXPECTED_DNS/);
@@ -727,6 +733,24 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduScript, /portal-detected/);
     assert.match(weduScript, /post-auth-protection-restored/);
     assert.match(weduScript, /browserPortalDetected/);
+    assert.match(weduScript, /browserLimited/);
+    assert.match(weduScript, /portalReady/);
+    assert.match(weduScript, /loginSubmitted/);
+    assert.match(weduScript, /\$activeMarkerMode[\s\S]*'limited'/);
+    assert.match(weduScript, /limitedModeReady/);
+    assert.match(weduScript, /bootstrapHosts/);
+    assert.match(weduScript, /observedRuntimeHosts/);
+    assert.match(weduScript, /pendingRuntimeHosts/);
+    assert.match(weduScript, /discoveryTruncated/);
+    assert.match(weduScript, /fallbackMode/);
+    assert.match(weduScript, /nce\.wedu\.comunidad\.madrid/);
+    assert.match(weduScript, /wlogin\.wedu-lab\.test/);
+    assert.match(weduScript, /assets\.wedu-lab\.test/);
+    assert.match(weduScript, /cdn\.wedu-lab\.test/);
+    assert.match(weduScript, /auth\.wedu-lab\.test/);
+    assert.match(weduScript, /window\.__openPathWeduPortalReady/);
+    assert.match(weduScript, /Resolve-DnsName -Name \$host -Server 127\.0\.0\.1/);
+    assert.match(weduScript, /this-should-be-blocked-test-12345\.com/);
     assert.match(weduScript, /weduHostPortalDetected/);
     assert.match(weduScript, /detectPortalInterceptionObserved/);
     assert.match(
@@ -768,10 +792,23 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduScript, /WeduCaptiveHostPattern/);
     assert.doesNotMatch(weduScript, /\$statusCode -in @\(301, 302, 303, 307, 308\)/);
     assert.match(weduScript, /targetPlatformSymptomCleared = \[bool\]/);
-    assert.match(weduScript, /success = \$targetPlatformSymptomCleared/);
+    const successExpression =
+      weduScript.match(/\$success\s*=\s*\[bool\]\(([\s\S]*?)\n\s*\)/)?.[1] ?? '';
+    assert.match(successExpression, /labNetwork\.labNetworkVerified/);
+    assert.match(successExpression, /nativeRecovery\.success/);
+    assert.match(successExpression, /activeMarkerMode -eq 'limited'/);
+    assert.match(successExpression, /limitedModeReady/);
+    assert.match(successExpression, /limitedDns\.success/);
+    assert.match(successExpression, /browserLimited\.portalReady/);
+    assert.match(successExpression, /browserLimited\.finalLoginHost/);
+    assert.match(successExpression, /browserLimited\.loginSubmitted/);
+    assert.match(successExpression, /nativeReconcile\.state/);
+    assert.doesNotMatch(successExpression, /nativeReconcile\.portalState/);
+    assert.match(successExpression, /openPathProtectionAfter\.protectedModeRestored/);
+    assert.match(weduScript, /success = \$success/);
     assert.match(weduScript, /success = \$false[\s\S]*targetPlatformSymptomCleared = \$false/);
     assert.match(weduScript, /Assert-WeduLabNetwork/);
-    assert.match(weduScript, /gateway-authenticated/);
+    assert.doesNotMatch(weduScript, /Invoke-GatewayControl[\s\S]*gateway-authenticated/);
     assert.match(weduScript, /gateway-reset/);
     assert.match(weduScript, /recover-captive-portal-navigation/);
     assert.match(weduScript, /operation = 'reconcile'/);
@@ -781,6 +818,15 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       weduScript,
       /Stage-OpenPathDirectRunnerRuntime[\s\S]*\$nativeRecovery = Invoke-NativeHostAction/
     );
+    assert.match(
+      weduScript,
+      /\$nativeRecovery = Invoke-NativeHostAction[\s\S]*\$limitedDns = Test-WeduLimitedModeDns[\s\S]*\$browserLimited = Invoke-WeduBrowserProbe/
+    );
+    assert.match(
+      weduScript,
+      /\$browserBefore = Invoke-WeduBrowserProbe[\s\S]*Save-Json -Value \$browserBeforePayload[\s\S]*\$nativeRecovery = Invoke-NativeHostAction/
+    );
+    assert.doesNotMatch(weduScript, /\$browserBefore = \$browserLimited/);
   });
 
   test('captive portal lanes share the direct-runner runtime staging helper', () => {
@@ -825,7 +871,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       )
     );
     assert.ok(
-      sourcePaths.some((sourcePath) => sourcePath.endsWith('\\wedu-lab-browser-after-auth.json'))
+      sourcePaths.some((sourcePath) => sourcePath.endsWith('\\wedu-lab-browser-post-auth.json'))
     );
     assert.ok(
       sourcePaths.some((sourcePath) =>

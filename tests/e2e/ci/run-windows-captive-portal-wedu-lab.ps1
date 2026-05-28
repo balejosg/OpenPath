@@ -12,11 +12,13 @@ $script:ResultPath = Join-Path $script:ArtifactsRoot 'direct-captive-portal-wedu
 $script:CompletionPath = Join-Path $script:ArtifactsRoot 'direct-captive-portal-wedu-lab-completion.json'
 $script:NetworkBeforePath = Join-Path $script:ArtifactsRoot 'wedu-lab-network-before.json'
 $script:DnsBeforePath = Join-Path $script:ArtifactsRoot 'wedu-lab-dns-before.json'
+$script:DnsLimitedPath = Join-Path $script:ArtifactsRoot 'wedu-lab-dns-limited.json'
 $script:BrowserBeforePath = Join-Path $script:ArtifactsRoot 'wedu-lab-browser-before.json'
-$script:BrowserAfterAuthPath = Join-Path $script:ArtifactsRoot 'wedu-lab-browser-after-auth.json'
-$script:PortalScreenshotPath = Join-Path $script:ArtifactsRoot 'wedu-lab-portal-before-login.png'
+$script:BrowserLimitedPath = Join-Path $script:ArtifactsRoot 'wedu-lab-browser-limited.json'
+$script:BrowserAfterAuthPath = Join-Path $script:ArtifactsRoot 'wedu-lab-browser-post-auth.json'
+$script:DnsPostAuthPath = Join-Path $script:ArtifactsRoot 'wedu-lab-dns-post-auth.json'
+$script:PortalScreenshotPath = Join-Path $script:ArtifactsRoot 'wedu-lab-portal-limited-mode.png'
 $script:NativeRecoveryPath = Join-Path $script:ArtifactsRoot 'wedu-lab-native-recovery.json'
-$script:GatewayAuthenticatedPath = Join-Path $script:ArtifactsRoot 'wedu-lab-gateway-authenticated.json'
 $script:NativeReconcilePath = Join-Path $script:ArtifactsRoot 'wedu-lab-native-reconcile.json'
 $script:NetworkAfterPath = Join-Path $script:ArtifactsRoot 'wedu-lab-network-after.json'
 $script:OpenPathProtectionAfterPath = Join-Path $script:ArtifactsRoot 'wedu-lab-openpath-protection-after.json'
@@ -27,6 +29,11 @@ $script:RecoveryResultManifestPath = Join-Path $script:ArtifactsRoot 'captive-po
 $script:RecoveryQueueManifestPath = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-queue-manifest.json'
 $script:RecoveryProgressManifestPath = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-progress-manifest.json'
 $script:WeduHost = 'nce.wedu.comunidad.madrid'
+$script:WeduLoginHost = 'wlogin.wedu-lab.test'
+$script:WeduAssetHost = 'assets.wedu-lab.test'
+$script:WeduCdnHost = 'cdn.wedu-lab.test'
+$script:WeduAuthHost = 'auth.wedu-lab.test'
+$script:WeduLimitedHosts = @($script:WeduHost, $script:WeduLoginHost, $script:WeduAssetHost, $script:WeduCdnHost, $script:WeduAuthHost)
 $script:DetectionUrl = 'http://detectportal.firefox.com/success.txt'
 $script:MsftConnectTestUrl = 'http://www.msftconnecttest.com/connecttest.txt'
 $script:WeduCaptiveHostPattern = '10\.77\.0\.1|nce\.wedu\.comunidad\.madrid|WEDU lab captive portal'
@@ -498,7 +505,7 @@ function Invoke-WeduBrowserProbe {
             script = 5000
         } | Out-Null
 
-        $targetUrl = "$($Config.gatewayUrl)/"
+        $targetUrl = "http://$script:WeduHost/"
         Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/url" -Method Post -Body @{ url = $targetUrl } | Out-Null
         Start-Sleep -Seconds 2
 
@@ -513,14 +520,57 @@ function Invoke-WeduBrowserProbe {
         $finalUrl = if ($finalUrlResult.value) { [string]$finalUrlResult.value } else { '' }
         $title = if ($titleResult.value) { [string]$titleResult.value } else { '' }
         $pageSource = if ($sourceResult.value) { [string]$sourceResult.value } else { '' }
+        $portalReadyResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/execute/sync" -Method Post -Body @{
+            script = 'return window.__openPathWeduPortalReady === true;'
+            args = @()
+        }
+        $loginSubmittedResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/execute/sync" -Method Post -Body @{
+            script = @'
+const form = document.querySelector('form');
+const button = document.querySelector('button[type="submit"], input[type="submit"]');
+if (!form || !button || button.disabled) {
+  return false;
+}
+button.click();
+return true;
+'@
+            args = @()
+        }
+        $postSubmitFinalUrl = $finalUrl
+        $postSubmitNavigationCompleted = $false
+        if ([bool]$loginSubmittedResult.value) {
+            for ($attempt = 1; $attempt -le 20; $attempt++) {
+                Start-Sleep -Milliseconds 250
+                $postSubmitUrlResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/url"
+                $postSubmitFinalUrl = if ($postSubmitUrlResult.value) { [string]$postSubmitUrlResult.value } else { '' }
+                if ($postSubmitFinalUrl -and $postSubmitFinalUrl -ne $finalUrl) {
+                    $postSubmitNavigationCompleted = $true
+                    break
+                }
+            }
+        }
+        $finalLoginHost = ''
+        try {
+            $finalLoginHost = ([System.Uri]$finalUrl).Host
+        }
+        catch { }
 
         return [pscustomobject]@{
             gatewayUrl = $Config.gatewayUrl
             targetUrl = $targetUrl
             finalUrl = $finalUrl
+            finalLoginHost = $finalLoginHost
             title = $title
             portalDetected = ($pageSource -match 'WEDU lab captive portal')
-            screenshotPath = 'wedu-lab-portal-before-login.png'
+            portalReady = [bool]$portalReadyResult.value
+            loginSubmitted = [bool]([bool]$loginSubmittedResult.value -and $postSubmitNavigationCompleted)
+            postSubmitFinalUrl = $postSubmitFinalUrl
+            postSubmitNavigationCompleted = $postSubmitNavigationCompleted
+            expectedLoginHost = $script:WeduLoginHost
+            expectedAssetsHost = $script:WeduAssetHost
+            expectedCdnHost = $script:WeduCdnHost
+            expectedAuthHost = $script:WeduAuthHost
+            screenshotPath = 'wedu-lab-portal-limited-mode.png'
             geckoDriverOutPath = 'wedu-lab-geckodriver.out.log'
             geckoDriverErrPath = 'wedu-lab-geckodriver.err.log'
         }
@@ -534,6 +584,48 @@ function Invoke-WeduBrowserProbe {
         }
         if ($geckoProcess -and -not $geckoProcess.HasExited) {
             Stop-Process -Id $geckoProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Test-WeduLimitedModeDns {
+    $results = foreach ($host in @($script:WeduLimitedHosts)) {
+        $answers = @()
+        $errorText = ''
+        try {
+            $answers = @(Resolve-DnsName -Name $host -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
+        }
+        catch {
+            $errorText = [string]$_
+        }
+        [pscustomobject]@{
+            host = $host
+            resolvedThroughLocalDns = [bool]($answers.Count -gt 0)
+            answers = @($answers | ForEach-Object { [string]$_.IPAddress } | Where-Object { $_ })
+            error = $errorText
+        }
+    }
+
+    $negativeHost = 'this-should-be-blocked-test-12345.com'
+    $negativeBlocked = $false
+    $negativeError = ''
+    try {
+        $negativeAnswers = @(Resolve-DnsName -Name $negativeHost -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction SilentlyContinue)
+        $negativeBlocked = ($negativeAnswers.Count -eq 0)
+    }
+    catch {
+        $negativeBlocked = $true
+        $negativeError = [string]$_
+    }
+
+    return [pscustomobject]@{
+        success = [bool]((@($results | Where-Object { -not $_.resolvedThroughLocalDns }).Count -eq 0) -and $negativeBlocked)
+        server = '127.0.0.1'
+        hosts = @($results)
+        negativeControl = [pscustomobject]@{
+            host = $negativeHost
+            blocked = $negativeBlocked
+            error = $negativeError
         }
     }
 }
@@ -937,16 +1029,13 @@ function Invoke-WeduLabRun {
         throw 'WEDU lab negative controls did not all pass.'
     }
 
-    $dnsBefore = Get-WeduDnsSnapshot
-    Save-Json -Value $dnsBefore -Path $script:DnsBeforePath
-
     $successProbe = Invoke-HttpProbe -Url $script:DetectionUrl
     $portalProbe = Invoke-HttpProbe -Url "http://$script:WeduHost/"
     $browserBefore = Invoke-WeduBrowserProbe -Config $config
     $browserPortalDetected = [bool]$browserBefore.portalDetected
     $weduHostPortalDetected = [bool]($portalProbe.bodySample -match 'WEDU lab captive portal')
     $detectPortalInterceptionObserved = [bool]($successProbe.bodySample -match 'WEDU lab captive portal')
-    $browserPayload = [pscustomobject]@{
+    $browserBeforePayload = [pscustomobject]@{
         detectionProbe = $successProbe
         portalProbe = $portalProbe
         browser = $browserBefore
@@ -956,7 +1045,7 @@ function Invoke-WeduLabRun {
         detectPortalInterceptionObserved = $detectPortalInterceptionObserved
         portalDetected = [bool]($browserPortalDetected -and $weduHostPortalDetected)
     }
-    Save-Json -Value $browserPayload -Path $script:BrowserBeforePath
+    Save-Json -Value $browserBeforePayload -Path $script:BrowserBeforePath
 
     Stage-OpenPathDirectRunnerRuntime `
         -RepoRoot $script:RepoRoot `
@@ -971,11 +1060,47 @@ function Invoke-WeduLabRun {
     } -TimeoutMs $config.nativeHostTimeoutMs
     Save-Json -Value $nativeRecovery -Path $script:NativeRecoveryPath
 
-    $gatewayAuthenticated = Invoke-GatewayControl -Config $config -Operation 'gateway-authenticated' -Path '/lab/authenticated'
-    Save-Json -Value $gatewayAuthenticated -Path $script:GatewayAuthenticatedPath
-    if (-not $gatewayAuthenticated.success) {
-        throw "Gateway authenticated transition failed: $($gatewayAuthenticated.error)"
+    $dnsBefore = Get-WeduDnsSnapshot
+    Save-Json -Value $dnsBefore -Path $script:DnsBeforePath
+    $limitedDns = Test-WeduLimitedModeDns
+    Save-Json -Value $limitedDns -Path $script:DnsLimitedPath
+
+    $browserLimited = Invoke-WeduBrowserProbe -Config $config
+
+    $activeMarkerMode = if ([bool]$nativeRecovery.activeMarkerMode) { [string]$nativeRecovery.activeMarkerMode } else { 'limited' }
+    $bootstrapHosts = @($nativeRecovery.bootstrapHosts | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $observedRuntimeHosts = @($nativeRecovery.observedRuntimeHosts | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $pendingRuntimeHosts = @($nativeRecovery.pendingRuntimeHosts | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $effectiveExactHosts = @($nativeRecovery.effectiveExactHosts | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    if ($effectiveExactHosts.Count -eq 0) {
+        $effectiveExactHosts = @($bootstrapHosts + $observedRuntimeHosts | Select-Object -Unique)
     }
+    $discoveryTruncated = [bool]$nativeRecovery.discoveryTruncated
+    $fallbackMode = if ($nativeRecovery.fallbackMode) { [string]$nativeRecovery.fallbackMode } else { '' }
+    $allEffectiveExactHostsInstalled = [bool](
+        @($effectiveExactHosts).Count -gt 0 -and
+        @($bootstrapHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
+        @($observedRuntimeHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0
+    )
+    $limitedModeReady = [bool](
+        $activeMarkerMode -eq 'limited' -and
+        @($bootstrapHosts).Count -gt 0 -and
+        -not $discoveryTruncated -and
+        @($pendingRuntimeHosts).Count -eq 0 -and
+        $allEffectiveExactHostsInstalled
+    )
+    $browserPayload = [pscustomobject]@{
+        browserLimited = $browserLimited
+        activeMarkerMode = $activeMarkerMode
+        limitedModeReady = $limitedModeReady
+        bootstrapHosts = @($bootstrapHosts)
+        observedRuntimeHosts = @($observedRuntimeHosts)
+        pendingRuntimeHosts = @($pendingRuntimeHosts)
+        discoveryTruncated = $discoveryTruncated
+        fallbackMode = $fallbackMode
+        limitedDns = $limitedDns
+    }
+    Save-Json -Value $browserPayload -Path $script:BrowserLimitedPath
 
     $nativeReconcile = Invoke-NativeHostAction -Message @{
         action = 'recover-captive-portal-navigation'
@@ -988,28 +1113,35 @@ function Invoke-WeduLabRun {
 
     $browserAfterAuth = Invoke-WeduPostAuthBrowserProbeWithRetry
     Save-Json -Value $browserAfterAuth -Path $script:BrowserAfterAuthPath
+    $dnsPostAuth = Get-WeduDnsSnapshot
+    Save-Json -Value $dnsPostAuth -Path $script:DnsPostAuthPath
 
     $networkAfter = Get-WeduNetworkSnapshot
     Save-Json -Value $networkAfter -Path $script:NetworkAfterPath
 
     $openPathProtectionAfter = Test-OpenPathProtectionAfter
     Save-Json -Value $openPathProtectionAfter -Path $script:OpenPathProtectionAfterPath
-    $postconditionAssertions = Assert-WeduPostconditions -Config $config -BrowserPayload $browserPayload -OpenPathProtectionAfter $openPathProtectionAfter
+    $postconditionAssertions = Assert-WeduPostconditions -Config $config -BrowserPayload $browserBeforePayload -OpenPathProtectionAfter $openPathProtectionAfter
     if (-not $postconditionAssertions.success) {
         throw 'WEDU lab postcondition assertions did not all pass.'
     }
     $recoveryArtifacts = Copy-WeduRecoveryArtifacts
 
-    $targetPlatformSymptomCleared = [bool](
+    $targetPlatformSymptomCleared = [bool]($browserAfterAuth.postAuthBrowserNavigationVerified)
+    $success = [bool](
         $labNetwork.labNetworkVerified -and
-        $browserPayload.portalDetected -and
         $nativeRecovery.success -and
-        $gatewayAuthenticated.success -and
+        $activeMarkerMode -eq 'limited' -and
+        $limitedModeReady -and
+        $limitedDns.success -and
+        $browserLimited.portalReady -and
+        $browserLimited.finalLoginHost -eq $script:WeduLoginHost -and
+        $browserLimited.loginSubmitted -and
         $nativeReconcile.success -and
+        $nativeReconcile.state -eq 'Authenticated' -and
         $openPathProtectionAfter.protectedModeRestored -and
-        $browserAfterAuth.postAuthBrowserNavigationVerified
+        $targetPlatformSymptomCleared
     )
-    $success = $targetPlatformSymptomCleared
 
     return [pscustomobject]@{
         schemaVersion = 2
@@ -1018,21 +1150,33 @@ function Invoke-WeduLabRun {
         evidenceLevel = 'wedu-lab-direct-runner'
         targetPlatformSymptomCleared = [bool]$targetPlatformSymptomCleared
         labNetwork = $labNetwork
+        limitedDns = $limitedDns
         gatewayReset = $gatewayReset
         negativeControls = $negativeControls
         dnsBeforePath = 'wedu-lab-dns-before.json'
         browserBeforePath = 'wedu-lab-browser-before.json'
-        browserAfterAuthPath = 'wedu-lab-browser-after-auth.json'
-        portalScreenshotPath = 'wedu-lab-portal-before-login.png'
+        dnsLimitedPath = 'wedu-lab-dns-limited.json'
+        browserLimitedPath = 'wedu-lab-browser-limited.json'
+        browserAfterAuthPath = 'wedu-lab-browser-post-auth.json'
+        dnsPostAuthPath = 'wedu-lab-dns-post-auth.json'
+        portalScreenshotPath = 'wedu-lab-portal-limited-mode.png'
         nativeRecoveryPath = 'wedu-lab-native-recovery.json'
-        gatewayAuthenticatedPath = 'wedu-lab-gateway-authenticated.json'
         nativeReconcilePath = 'wedu-lab-native-reconcile.json'
         networkAfterPath = 'wedu-lab-network-after.json'
         openPathProtectionAfterPath = 'wedu-lab-openpath-protection-after.json'
         nativeRecovery = $nativeRecovery
-        gatewayAuthenticated = $gatewayAuthenticated
         nativeReconcile = $nativeReconcile
+        browserBefore = $browserBeforePayload
         browserAfterAuth = $browserAfterAuth
+        dnsPostAuth = $dnsPostAuth
+        browserLimited = $browserPayload
+        activeMarkerMode = $activeMarkerMode
+        limitedModeReady = $limitedModeReady
+        bootstrapHosts = @($bootstrapHosts)
+        observedRuntimeHosts = @($observedRuntimeHosts)
+        pendingRuntimeHosts = @($pendingRuntimeHosts)
+        discoveryTruncated = $discoveryTruncated
+        fallbackMode = $fallbackMode
         postAuthBrowserNavigationVerified = [bool]$browserAfterAuth.postAuthBrowserNavigationVerified
         postAuthFailureKind = [string]$browserAfterAuth.postAuthFailureKind
         openPathProtectionAfter = $openPathProtectionAfter

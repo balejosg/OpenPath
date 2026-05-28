@@ -378,8 +378,14 @@ function Get-NativeHostCaptivePortalMarkerSummary {
         @()
     }
     $mode = if ($Marker -and $Marker.PSObject.Properties['mode'] -and $Marker.mode) { [string]$Marker.mode } else { '' }
+    $bootstrapHosts = if ($Marker -and $Marker.PSObject.Properties['bootstrapHosts']) { @($Marker.bootstrapHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
+    $observedRuntimeHosts = if ($Marker -and $Marker.PSObject.Properties['observedRuntimeHosts']) { @($Marker.observedRuntimeHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
+    $pendingRuntimeHosts = if ($Marker -and $Marker.PSObject.Properties['pendingRuntimeHosts']) { @($Marker.pendingRuntimeHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
+    $discoveryTruncated = if ($Marker -and $Marker.PSObject.Properties['discoveryTruncated']) { [bool]$Marker.discoveryTruncated } else { $false }
+    $fallbackMode = if ($Marker -and $Marker.PSObject.Properties['fallbackMode'] -and $Marker.fallbackMode) { [string]$Marker.fallbackMode } elseif ($mode -eq 'passthrough') { 'passthrough' } else { 'none' }
     $recoveryHostsApplied = ($mode -eq 'limited' -and $allowedHosts.Count -gt 0)
-    $recentSuccessEligible = $recoveryHostsApplied
+    $limitedModeReady = ($mode -eq 'limited' -and $recoveryHostsApplied -and -not $discoveryTruncated -and @($pendingRuntimeHosts).Count -eq 0)
+    $recentSuccessEligible = $limitedModeReady
     if ($recentSuccessEligible -and $TriggerHost) {
         $recentSuccessEligible = ($allowedHosts -contains $TriggerHost)
     }
@@ -387,6 +393,12 @@ function Get-NativeHostCaptivePortalMarkerSummary {
     return [PSCustomObject]@{
         activeMarkerMode = $mode
         allowedHosts = @($allowedHosts)
+        bootstrapHosts = @($bootstrapHosts)
+        observedRuntimeHosts = @($observedRuntimeHosts)
+        pendingRuntimeHosts = @($pendingRuntimeHosts)
+        discoveryTruncated = [bool]$discoveryTruncated
+        fallbackMode = [string]$fallbackMode
+        limitedModeReady = [bool]$limitedModeReady
         recoveryHostsApplied = $recoveryHostsApplied
         recentSuccessEligible = [bool]$recentSuccessEligible
     }
@@ -408,6 +420,12 @@ function Get-NativeHostRecentCaptivePortalRecoverySuccess {
                 Marker = $activeMarker
                 ActiveMarkerMode = [string]$markerSummary.activeMarkerMode
                 AllowedHosts = @($markerSummary.allowedHosts)
+                BootstrapHosts = @($markerSummary.bootstrapHosts)
+                ObservedRuntimeHosts = @($markerSummary.observedRuntimeHosts)
+                PendingRuntimeHosts = @($markerSummary.pendingRuntimeHosts)
+                DiscoveryTruncated = [bool]$markerSummary.discoveryTruncated
+                FallbackMode = [string]$markerSummary.fallbackMode
+                LimitedModeReady = [bool]$markerSummary.limitedModeReady
                 RecoveryHostsApplied = [bool]$markerSummary.recoveryHostsApplied
                 RecentSuccessEligible = [bool]$markerSummary.recentSuccessEligible
                 Path = if ($activeMarker.PSObject.Properties['Path']) { [string]$activeMarker.Path } else { '' }
@@ -446,6 +464,12 @@ function Get-NativeHostRecentCaptivePortalRecoverySuccess {
             PortalModeActive = $true
             ActiveMarkerMode = if ($payload.PSObject.Properties['activeMarkerMode']) { [string]$payload.activeMarkerMode } else { '' }
             AllowedHosts = if ($payload.PSObject.Properties['allowedHosts']) { @($payload.allowedHosts) } else { @() }
+            BootstrapHosts = if ($payload.PSObject.Properties['bootstrapHosts']) { @($payload.bootstrapHosts) } else { @() }
+            ObservedRuntimeHosts = if ($payload.PSObject.Properties['observedRuntimeHosts']) { @($payload.observedRuntimeHosts) } else { @() }
+            PendingRuntimeHosts = if ($payload.PSObject.Properties['pendingRuntimeHosts']) { @($payload.pendingRuntimeHosts) } else { @() }
+            DiscoveryTruncated = if ($payload.PSObject.Properties['discoveryTruncated']) { [bool]$payload.discoveryTruncated } else { $false }
+            FallbackMode = if ($payload.PSObject.Properties['fallbackMode']) { [string]$payload.fallbackMode } else { 'none' }
+            LimitedModeReady = if ($payload.PSObject.Properties['limitedModeReady']) { [bool]$payload.limitedModeReady } else { $false }
             RecoveryHostsApplied = if ($payload.PSObject.Properties['recoveryHostsApplied']) { [bool]$payload.recoveryHostsApplied } else { $false }
             RecentSuccessEligible = if ($payload.PSObject.Properties['recentSuccessEligible']) { [bool]$payload.recentSuccessEligible } else { $false }
             Payload = $payload
@@ -470,6 +494,18 @@ function Test-NativeHostRecentCaptivePortalSuccessEligible {
 
     $eligible = if ($RecentSuccess.PSObject.Properties['RecentSuccessEligible']) { [bool]$RecentSuccess.RecentSuccessEligible } else { $false }
     if (-not $eligible) {
+        return $false
+    }
+
+    if (-not ($RecentSuccess.PSObject.Properties['LimitedModeReady'] -and [bool]$RecentSuccess.LimitedModeReady)) {
+        return $false
+    }
+
+    if ($RecentSuccess.PSObject.Properties['DiscoveryTruncated'] -and [bool]$RecentSuccess.DiscoveryTruncated) {
+        return $false
+    }
+
+    if ($RecentSuccess.PSObject.Properties['FallbackMode'] -and [string]$RecentSuccess.FallbackMode -eq 'passthrough') {
         return $false
     }
 
@@ -958,6 +994,12 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
                 recentSuccessEligible = if ($recentSuccess.PSObject.Properties['RecentSuccessEligible']) { [bool]$recentSuccess.RecentSuccessEligible } else { $false }
                 activeMarkerMode = if ($recentSuccess.PSObject.Properties['ActiveMarkerMode']) { [string]$recentSuccess.ActiveMarkerMode } else { '' }
                 allowedHosts = if ($recentSuccess.PSObject.Properties['AllowedHosts']) { @($recentSuccess.AllowedHosts) } else { @() }
+                bootstrapHosts = if ($recentSuccess.PSObject.Properties['BootstrapHosts']) { @($recentSuccess.BootstrapHosts) } else { @() }
+                observedRuntimeHosts = if ($recentSuccess.PSObject.Properties['ObservedRuntimeHosts']) { @($recentSuccess.ObservedRuntimeHosts) } else { @() }
+                pendingRuntimeHosts = if ($recentSuccess.PSObject.Properties['PendingRuntimeHosts']) { @($recentSuccess.PendingRuntimeHosts) } else { @() }
+                discoveryTruncated = if ($recentSuccess.PSObject.Properties['DiscoveryTruncated']) { [bool]$recentSuccess.DiscoveryTruncated } else { $false }
+                fallbackMode = if ($recentSuccess.PSObject.Properties['FallbackMode']) { [string]$recentSuccess.FallbackMode } else { 'none' }
+                limitedModeReady = if ($recentSuccess.PSObject.Properties['LimitedModeReady']) { [bool]$recentSuccess.LimitedModeReady } else { $false }
                 recoveryHostsApplied = if ($recentSuccess.PSObject.Properties['RecoveryHostsApplied']) { [bool]$recentSuccess.RecoveryHostsApplied } else { $false }
             }
     }
@@ -1041,6 +1083,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         @()
     }
     $recoveryHostsApplied = if ($result.PSObject.Properties['recoveryHostsApplied']) { [bool]$result.recoveryHostsApplied } else { $false }
+    $limitedModeReady = if ($result.PSObject.Properties['limitedModeReady']) { [bool]$result.limitedModeReady } else { $false }
     $exactRecoveryHostApplied = $recoveryHostsApplied
     if ($triggerHost) {
         $exactRecoveryHostApplied = ($exactRecoveryHostApplied -and ($allowedHosts -contains $triggerHost))
@@ -1049,7 +1092,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         ($resultSuccess -and $state -eq 'Authenticated' -and -not $portalModeActive -and $protectedModeRestored)
     }
     else {
-        ($resultSuccess -and $state -eq 'Portal' -and $portalModeActive -and $exactRecoveryHostApplied)
+        ($resultSuccess -and $state -eq 'Portal' -and $portalModeActive -and $exactRecoveryHostApplied -and $limitedModeReady)
     }
 
     return @{
@@ -1074,6 +1117,12 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         protectedModeRestored = $protectedModeRestored
         activeMarkerMode = if ($result.PSObject.Properties['activeMarkerMode']) { [string]$result.activeMarkerMode } else { '' }
         allowedHosts = @($allowedHosts)
+        bootstrapHosts = if ($result.PSObject.Properties['bootstrapHosts']) { @($result.bootstrapHosts) } else { @() }
+        observedRuntimeHosts = if ($result.PSObject.Properties['observedRuntimeHosts']) { @($result.observedRuntimeHosts) } else { @() }
+        pendingRuntimeHosts = if ($result.PSObject.Properties['pendingRuntimeHosts']) { @($result.pendingRuntimeHosts) } else { @() }
+        discoveryTruncated = if ($result.PSObject.Properties['discoveryTruncated']) { [bool]$result.discoveryTruncated } else { $false }
+        fallbackMode = if ($result.PSObject.Properties['fallbackMode']) { [string]$result.fallbackMode } else { 'none' }
+        limitedModeReady = $limitedModeReady
         recoveryHostsApplied = $recoveryHostsApplied
         recentSuccessEligible = if ($result.PSObject.Properties['recentSuccessEligible']) { [bool]$result.recentSuccessEligible } else { $false }
     }

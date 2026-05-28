@@ -139,6 +139,7 @@ get_openpath_runner_state_from_repository_runners() {
   local response
   repository="${GITHUB_REPOSITORY:-balejosg/OpenPath}"
   response="$(github_api_get "repos/${repository}/actions/runners")" || return 1
+  # shellcheck disable=SC2026 # Python f-string quotes are parsed inside the single-quoted program.
   OPENPATH_WEDU_TARGET_RUNNER_NAME="$WINDOWS_RUNNER_NAME" python3 -c '
 import json
 import os
@@ -205,6 +206,7 @@ print("busy=false")
 get_windows_runner_service_state() {
   local state
   state="$(
+    # shellcheck disable=SC2016 # PowerShell variables must expand on the Windows guest.
     run_windows_ps 120 '
 $ErrorActionPreference = "Stop"
 $services = @(Get-Service -Name "actions.runner.*" -ErrorAction SilentlyContinue)
@@ -270,6 +272,7 @@ wait_for_openpath_runner_online() {
 
 stop_all_action_runner_services() {
   local script
+  # shellcheck disable=SC2016 # PowerShell variables must expand on the Windows guest.
   script='
 $ErrorActionPreference = "Stop"
 $services = @(Get-Service -Name "actions.runner.*" -ErrorAction SilentlyContinue)
@@ -288,6 +291,7 @@ $services | Select-Object Name, Status | ConvertTo-Json -Compress
 
 start_all_action_runner_services() {
   local script
+  # shellcheck disable=SC2016 # PowerShell variables must expand on the Windows guest.
   script='
 $ErrorActionPreference = "Stop"
 $services = @(Get-Service -Name "actions.runner.*" -ErrorAction SilentlyContinue)
@@ -316,6 +320,7 @@ Remove-Item -LiteralPath 'C:\Windows\Temp\openpath-wedu-ci.zip' -Force -ErrorAct
 reset_gateway_captive() {
   local mode
   local output
+  # shellcheck disable=SC2016 # Bash variables must expand inside the gateway guest.
   output="$(
     ssh_proxmox qm guest exec "$GATEWAY_VMID" -- bash -lc \
       'TOKEN=$(cat /opt/wedu-captive-portal/control-token); curl -fsS -H "X-Lab-Token: $TOKEN" http://10.77.0.1/lab/reset >/dev/null; cat /run/wedu-lab-firewall-mode'

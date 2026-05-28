@@ -20,6 +20,7 @@ function openpath_wedu_ssh_proxmox {
     printf -v quoted_arg %q "$arg"
     quoted_args+=("$quoted_arg")
   done
+  # shellcheck disable=SC2029 # Arguments are intentionally quoted locally before crossing SSH.
   ssh "${ssh_options[@]}" "$host" "${quoted_args[*]}"
 }
 

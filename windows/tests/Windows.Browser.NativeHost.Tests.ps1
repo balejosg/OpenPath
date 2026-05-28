@@ -665,6 +665,7 @@ Describe "Browser Module - Native Host" {
                         activeMarkerMode = 'limited'
                         allowedHosts = @('portal.example')
                         recoveryHostsApplied = $true
+                        limitedModeReady = $true
                         recentSuccessEligible = $true
                     } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH "$($request.requestId).json")
                     & $WaitCondition | Out-Null
@@ -888,6 +889,7 @@ Describe "Browser Module - Native Host" {
                     activeMarkerMode = 'limited'
                     allowedHosts = @('portal.example')
                     recoveryHostsApplied = $true
+                    limitedModeReady = $true
                     recentSuccessEligible = $true
                 } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $resultPath 'recent-request.json')
 
@@ -960,6 +962,7 @@ Describe "Browser Module - Native Host" {
                         activeMarkerMode = 'limited'
                         allowedHosts = @('portal.example')
                         recoveryHostsApplied = $true
+                        limitedModeReady = $true
                         recentSuccessEligible = $true
                     } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH "$($request.requestId).json")
                     & $WaitCondition | Out-Null
@@ -1026,6 +1029,7 @@ Describe "Browser Module - Native Host" {
                         activeMarkerMode = 'limited'
                         allowedHosts = @('portal.example')
                         recoveryHostsApplied = $true
+                        limitedModeReady = $true
                         recentSuccessEligible = $true
                     } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH "$($request.requestId).json")
                     & $WaitCondition | Out-Null
@@ -1107,6 +1111,96 @@ Describe "Browser Module - Native Host" {
                 Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -ErrorAction SilentlyContinue
                 Remove-Item $queuePath, $resultPath -Recurse -Force -ErrorAction SilentlyContinue
             }
+        }
+
+        It "Surfaces captive portal limited-mode readiness fields through native host responses" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $scriptContent = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
+                'bootstrapHosts',
+                'observedRuntimeHosts',
+                'pendingRuntimeHosts',
+                'discoveryTruncated',
+                'fallbackMode',
+                'limitedModeReady',
+                '$result.PSObject.Properties[''limitedModeReady'']',
+                '$recentSuccess.PSObject.Properties[''LimitedModeReady'']',
+                '$RecentSuccess.PSObject.Properties[''DiscoveryTruncated'']',
+                '$RecentSuccess.PSObject.Properties[''FallbackMode'']'
+            )
+
+            Assert-ContentContainsAll -Content $scriptContent -Needles @(
+                'bootstrapHosts',
+                'observedRuntimeHosts',
+                'pendingRuntimeHosts',
+                'discoveryTruncated',
+                'fallbackMode',
+                'limitedModeReady',
+                '$markerSummary.limitedModeReady',
+                '$payload.limitedModeReady'
+            )
+        }
+
+        It "Requires limitedModeReady for recent captive portal success eligibility" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $scriptContent = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
+                'LimitedModeReady',
+                'DiscoveryTruncated',
+                'FallbackMode',
+                '$RecentSuccess.LimitedModeReady',
+                '$RecentSuccess.DiscoveryTruncated',
+                '$RecentSuccess.FallbackMode -eq ''passthrough'''
+            )
+
+            Assert-ContentContainsAll -Content $scriptContent -Needles @(
+                'limitedModeReady = [bool]$markerSummary.limitedModeReady',
+                'discoveryTruncated = [bool]$markerSummary.discoveryTruncated',
+                'fallbackMode = [string]$markerSummary.fallbackMode',
+                '$payload.limitedModeReady',
+                '$payload.discoveryTruncated',
+                '$payload.fallbackMode -eq ''passthrough'''
+            )
+        }
+
+        It "Behaviorally rejects RecentSuccess when limited mode is not ready or discovery is truncated" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+
+            $notReady = [PSCustomObject]@{
+                RecentSuccessEligible = $true
+                LimitedModeReady = $false
+                DiscoveryTruncated = $false
+                FallbackMode = 'none'
+                ActiveMarkerMode = 'limited'
+                AllowedHosts = @('portal.example')
+            }
+            $truncated = [PSCustomObject]@{
+                RecentSuccessEligible = $true
+                LimitedModeReady = $true
+                DiscoveryTruncated = $true
+                FallbackMode = 'none'
+                ActiveMarkerMode = 'limited'
+                AllowedHosts = @('portal.example')
+            }
+            $ready = [PSCustomObject]@{
+                RecentSuccessEligible = $true
+                LimitedModeReady = $true
+                DiscoveryTruncated = $false
+                FallbackMode = 'none'
+                ActiveMarkerMode = 'limited'
+                AllowedHosts = @('portal.example')
+            }
+
+            Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $notReady -TriggerHost 'portal.example' | Should -BeFalse
+            Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $truncated -TriggerHost 'portal.example' | Should -BeFalse
+            Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $ready -TriggerHost 'portal.example' | Should -BeTrue
         }
 
         It "Returns task and storage diagnostics when captive portal recovery times out" {

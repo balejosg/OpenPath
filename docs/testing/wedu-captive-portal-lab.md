@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: OpenPath WEDU captive portal lab workflows and controller scripts
-> Last verified: 2026-05-27
+> Last verified: 2026-05-28
 > Source of truth: `docs/testing/wedu-captive-portal-lab.md`
 
 The WEDU captive portal lab is the destructive target-platform lane for proving
@@ -69,7 +69,13 @@ portal but is not final target-platform clearance.
 
 - `schemaVersion >= 2`
 - `targetPlatformSymptomCleared: true`
-- `browserAfterAuthPath: wedu-lab-browser-after-auth.json`
+- limited-mode DNS evidence in `wedu-lab-dns-limited.json`
+- limited-mode browser evidence in `wedu-lab-browser-limited.json`
+- exact bootstrap/runtime host evidence from native recovery, with
+  `limitedModeReady: true`, `discoveryTruncated: false`, no pending runtime
+  hosts, and no `passthrough` fallback
+- `browserAfterAuthPath: wedu-lab-browser-post-auth.json`
+- post-auth DNS evidence in `wedu-lab-dns-post-auth.json`
 - post-auth browser evidence with `portalMarkerAbsent: true`
 - post-auth external navigation with `externalNavigationFunctional: true`
 - `failureKind: none`
@@ -77,6 +83,12 @@ portal but is not final target-platform clearance.
 The split portal fields are intentional: pre-auth detection proves the captive
 portal appeared, while post-auth fields prove the marker disappeared and normal
 external navigation recovered.
+
+During the limited-mode phase the Windows recovery code may probe bounded
+HTTP bootstrap redirects and HTML from the trigger host to discover exact
+portal hosts such as login, asset, CDN, or auth hosts. The native marker and
+lab artifacts store only normalized hostnames, never URLs, cookies, headers,
+paths, query strings, or page DOM.
 
 ## Gateway Healthcheck
 

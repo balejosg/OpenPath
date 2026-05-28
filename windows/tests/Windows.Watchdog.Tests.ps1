@@ -200,6 +200,103 @@ Describe "Watchdog Script" {
             $definitionBody | Should -Match '(?s)foreach \(\$domain in @\(\$PortalRecoveryDomains\)\).*?Get-AcrylicExactForwardRule'
         }
 
+        It "Discovers bounded exact captive portal hosts and rejects unsafe host candidates" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'function Get-OpenPathCaptivePortalDynamicHosts',
+                'function Get-OpenPathCaptivePortalBootstrapSeedUrls',
+                'function Invoke-OpenPathCaptivePortalBootstrapProbe',
+                'Get-OpenPathCaptivePortalAllowedHosts -Hosts',
+                'Normalize-OpenPathCaptivePortalDynamicHost',
+                'Extract-OpenPathCaptivePortalHostsFromText',
+                'Reject-OpenPathCaptivePortalDynamicHost',
+                'AllowAutoRedirect = $false',
+                '$request.UserAgent = ''OpenPath captive portal recovery''',
+                'discoveryTruncated',
+                'bootstrapHosts',
+                'observedRuntimeHosts',
+                'pendingRuntimeHosts',
+                'fallbackMode',
+                'limitedModeReady',
+                'RuntimeDependencyOverlay',
+                'Read-OpenPathRuntimeDependencyOverlay',
+                'Test-OpenPathProtectedRuntimeDependencyHost'
+            )
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                '.local',
+                'single-label',
+                'ip-address',
+                'protected-host',
+                'parent-wildcard',
+                'invalid-host'
+            )
+
+            $moduleContent | Should -Not -Match 'cookies?'
+            $moduleContent | Should -Not -Match 'authorization'
+        }
+
+        It "Behaviorally returns only exact safe dynamic hosts" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            Import-Module $modulePath -Force
+
+            $result = Get-OpenPathCaptivePortalDynamicHosts -SeedUrls @(
+                'https://Login.Wedu.Example/start',
+                '<script src="https://cdn.wedu.example/app.js"></script>',
+                '<form action="https://auth.wedu.example/login"></form>',
+                'fetch("https://api.wedu.example/session")',
+                'https://*.wedu.example/path',
+                'https://10.77.0.1/login',
+                'https://printer.local/setup',
+                'https://intranet/',
+                'https://detectportal.firefox.com/success.txt'
+            )
+
+            @($result.bootstrapHosts) | Should -Contain 'login.wedu.example'
+            @($result.bootstrapHosts) | Should -Contain 'cdn.wedu.example'
+            @($result.bootstrapHosts) | Should -Contain 'auth.wedu.example'
+            @($result.bootstrapHosts) | Should -Contain 'api.wedu.example'
+            @($result.bootstrapHosts) | Should -Not -Contain '*.wedu.example'
+            @($result.bootstrapHosts) | Should -Not -Contain '10.77.0.1'
+            @($result.bootstrapHosts) | Should -Not -Contain 'printer.local'
+            @($result.bootstrapHosts) | Should -Not -Contain 'intranet'
+            @($result.bootstrapHosts) | Should -Not -Contain 'detectportal.firefox.com'
+            $result.discoveryTruncated | Should -BeFalse
+        }
+
+        It "Includes bootstrap and runtime overlay hosts in limited Acrylic rendering before NX block" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
+            $definitionStart = $moduleContent.IndexOf('function New-OpenPathLimitedCaptivePortalHostsDefinition')
+            $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
+
+            Assert-ContentContainsAll -Content $enableBody -Needles @(
+                'Get-OpenPathCaptivePortalDynamicHosts',
+                'Get-OpenPathCaptivePortalBootstrapSeedUrls',
+                '$dynamicHosts.bootstrapHosts',
+                '$dynamicHosts.observedRuntimeHosts',
+                '$dynamicHosts.pendingRuntimeHosts',
+                '$dynamicHosts.discoveryTruncated',
+                '$dynamicHosts.limitedModeReady',
+                '-FetchSeedUrls',
+                'Set-OpenPathCaptivePortalMarker -State $State -Mode limited',
+                '-BootstrapHosts',
+                '-ObservedRuntimeHosts',
+                '-PendingRuntimeHosts',
+                '-DiscoveryTruncated',
+                '-FallbackMode'
+            )
+
+            $enableBody.IndexOf('$dynamicHosts.bootstrapHosts') |
+                Should -BeLessThan $enableBody.IndexOf('New-OpenPathLimitedCaptivePortalHostsDefinition')
+            $enableBody.IndexOf('$dynamicHosts.observedRuntimeHosts') |
+                Should -BeLessThan $enableBody.IndexOf('New-OpenPathLimitedCaptivePortalHostsDefinition')
+        }
+
         It "Bounds limited portal Acrylic restart and DNS protection verification inside native host budget" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw

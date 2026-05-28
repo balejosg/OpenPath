@@ -30,11 +30,23 @@ function baseResult(overrides = {}) {
     },
     targetPlatformSymptomCleared: true,
     browserBeforePath: 'wedu-lab-browser-before.json',
-    browserAfterAuthPath: 'wedu-lab-browser-after-auth.json',
+    browserAfterAuthPath: 'wedu-lab-browser-post-auth.json',
+    activeMarkerMode: 'limited',
+    limitedModeReady: true,
+    bootstrapHosts: ['nce.wedu.comunidad.madrid', 'wlogin.wedu-lab.test'],
+    observedRuntimeHosts: ['assets.wedu-lab.test'],
+    pendingRuntimeHosts: [],
+    discoveryTruncated: false,
+    fallbackMode: 'none',
+    limitedDns: {
+      success: true,
+    },
     nativeRecovery: {
       success: true,
       portalModeActive: true,
       recoveryHostsApplied: true,
+      limitedModeReady: true,
+      discoveryTruncated: false,
     },
     gatewayAuthenticated: {
       success: true,
@@ -63,6 +75,61 @@ function browserAfter(overrides = {}) {
     externalNavigationFunctional: true,
     failureKind: 'none',
     ...overrides,
+  };
+}
+
+function limitedDns(overrides = {}) {
+  return {
+    success: true,
+    server: '127.0.0.1',
+    hosts: [
+      {
+        host: 'nce.wedu.comunidad.madrid',
+        resolvedThroughLocalDns: true,
+        answers: ['10.77.0.1'],
+        error: '',
+      },
+    ],
+    negativeControl: {
+      host: 'this-should-be-blocked-test-12345.com',
+      blocked: true,
+      error: '',
+    },
+    ...overrides,
+  };
+}
+
+function browserLimited(overrides = {}) {
+  return {
+    browserLimited: {
+      portalReady: true,
+      loginSubmitted: true,
+      finalLoginHost: 'wlogin.wedu-lab.test',
+    },
+    limitedModeReady: true,
+    bootstrapHosts: ['nce.wedu.comunidad.madrid', 'wlogin.wedu-lab.test'],
+    pendingRuntimeHosts: [],
+    discoveryTruncated: false,
+    fallbackMode: 'none',
+    limitedDns: limitedDns(),
+    ...overrides,
+  };
+}
+
+function postAuthDns(overrides = {}) {
+  return {
+    capturedAt: '2026-05-28T00:00:00.000Z',
+    queries: [],
+    ...overrides,
+  };
+}
+
+function targetPlatformFiles(overrides = {}) {
+  return {
+    'wedu-lab-dns-limited.json': limitedDns(overrides.limitedDns),
+    'wedu-lab-browser-limited.json': browserLimited(overrides.browserLimited),
+    'wedu-lab-browser-post-auth.json': browserAfter(overrides.browserAfter),
+    'wedu-lab-dns-post-auth.json': postAuthDns(overrides.postAuthDns),
   };
 }
 
@@ -129,7 +196,7 @@ describe('WEDU captive portal result validator', () => {
     const artifactDir = makeArtifactDir({
       'direct-captive-portal-wedu-lab-result.json': baseResult(),
       'wedu-lab-browser-before.json': browserBefore(),
-      'wedu-lab-browser-after-auth.json': browserAfter(),
+      ...targetPlatformFiles(),
     });
 
     assert.doesNotThrow(() =>
@@ -143,7 +210,10 @@ describe('WEDU captive portal result validator', () => {
       bom: true,
     });
     writeJsonFile(artifactDir, 'wedu-lab-browser-before.json', browserBefore(), { bom: true });
-    writeJsonFile(artifactDir, 'wedu-lab-browser-after-auth.json', browserAfter(), { bom: true });
+    writeJsonFile(artifactDir, 'wedu-lab-dns-limited.json', limitedDns(), { bom: true });
+    writeJsonFile(artifactDir, 'wedu-lab-browser-limited.json', browserLimited(), { bom: true });
+    writeJsonFile(artifactDir, 'wedu-lab-browser-post-auth.json', browserAfter(), { bom: true });
+    writeJsonFile(artifactDir, 'wedu-lab-dns-post-auth.json', postAuthDns(), { bom: true });
 
     assert.doesNotThrow(() =>
       assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' })
@@ -154,11 +224,13 @@ describe('WEDU captive portal result validator', () => {
     const artifactDir = makeArtifactDir({
       'direct-captive-portal-wedu-lab-result.json': baseResult(),
       'wedu-lab-browser-before.json': browserBefore(),
-      'wedu-lab-browser-after-auth.json': {
-        portalMarkerAbsent: true,
-        postAuthBrowserNavigationVerified: true,
-        postAuthFailureKind: 'none',
-      },
+      ...targetPlatformFiles({
+        browserAfter: {
+          portalMarkerAbsent: true,
+          postAuthBrowserNavigationVerified: true,
+          postAuthFailureKind: 'none',
+        },
+      }),
     });
 
     assert.doesNotThrow(() =>
@@ -170,15 +242,32 @@ describe('WEDU captive portal result validator', () => {
     const artifactDir = makeArtifactDir({
       'direct-captive-portal-wedu-lab-result.json': baseResult(),
       'wedu-lab-browser-before.json': browserBefore(),
-      'wedu-lab-browser-after-auth.json': browserAfter({
-        externalNavigationFunctional: false,
-        failureKind: 'navigation-failed',
+      ...targetPlatformFiles({
+        browserAfter: {
+          externalNavigationFunctional: false,
+          failureKind: 'navigation-failed',
+        },
       }),
     });
 
     assert.throws(
       () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
       /externalNavigationFunctional/
+    );
+  });
+
+  test('rejects target-platform evidence without limited-mode readiness proof', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': baseResult({
+        limitedModeReady: false,
+      }),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles(),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /limitedModeReady/
     );
   });
 });

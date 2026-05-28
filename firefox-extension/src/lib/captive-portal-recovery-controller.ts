@@ -5,6 +5,7 @@ import type {
 } from './native-messaging-client.js';
 
 const CAPTIVE_PORTAL_RECOVERY_RATE_LIMIT_MS = 30_000;
+const CAPTIVE_PORTAL_NATIVE_RECOVERY_RETRY_DELAY_MS = 750;
 
 interface CaptivePortalRecoveryLogger {
   info: (message: string, context?: Record<string, unknown>) => void;
@@ -38,6 +39,7 @@ export interface CaptivePortalRecoveryControllerDeps {
     input: CaptivePortalRecoveryInput
   ) => Promise<CaptivePortalRecoveryResponse>;
   retryNavigation: (tabId: number, url: string) => Promise<void>;
+  sleep?: (milliseconds: number) => Promise<void>;
 }
 
 function buildRecoveryKey(tabId: number, hostname: string): string {
@@ -49,6 +51,12 @@ export function createCaptivePortalRecoveryController(
 ): CaptivePortalRecoveryController {
   const logger = deps.logger ?? defaultLogger;
   const now = deps.now ?? ((): number => Date.now());
+  const sleep =
+    deps.sleep ??
+    ((milliseconds: number): Promise<void> =>
+      new Promise((resolve) => {
+        setTimeout(resolve, milliseconds);
+      }));
   const recoveryAttemptByTabAndHost = new Map<string, number>();
 
   function clearLimiter(): void {
@@ -137,17 +145,24 @@ export function createCaptivePortalRecoveryController(
       return false;
     }
 
-    try {
-      await deps.retryNavigation(context.tabId, context.url);
-      return true;
-    } catch (error) {
-      logger.info('[Monitor] Captive portal recovery retry failed', {
-        tabId: context.tabId,
-        hostname: context.hostname,
-        error: getErrorMessage(error),
-      });
-      return false;
-    }
+    void (async (): Promise<void> => {
+      await sleep(CAPTIVE_PORTAL_NATIVE_RECOVERY_RETRY_DELAY_MS);
+
+      if (options?.isCurrentNavigation?.() === false) {
+        return;
+      }
+
+      try {
+        await deps.retryNavigation(context.tabId, context.url);
+      } catch (error) {
+        logger.info('[Monitor] Captive portal recovery retry failed', {
+          tabId: context.tabId,
+          hostname: context.hostname,
+          error: getErrorMessage(error),
+        });
+      }
+    })();
+    return true;
   }
 
   return {

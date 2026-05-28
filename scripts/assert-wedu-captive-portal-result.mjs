@@ -6,7 +6,10 @@ import { pathToFileURL } from 'node:url';
 
 const RESULT_FILE = 'direct-captive-portal-wedu-lab-result.json';
 const BROWSER_BEFORE_FILE = 'wedu-lab-browser-before.json';
-const TARGET_AFTER_FILE = 'wedu-lab-browser-after-auth.json';
+const LIMITED_DNS_FILE = 'wedu-lab-dns-limited.json';
+const LIMITED_BROWSER_FILE = 'wedu-lab-browser-limited.json';
+const TARGET_AFTER_FILE = 'wedu-lab-browser-post-auth.json';
+const POST_AUTH_DNS_FILE = 'wedu-lab-dns-post-auth.json';
 const VALID_MODES = new Set(['lab-direct', 'target-platform']);
 
 function readJson(path) {
@@ -47,6 +50,18 @@ function browserAfterFailureKind(browserAfter) {
   return browserAfter.failureKind ?? browserAfter.postAuthFailureKind;
 }
 
+function browserLimitedProbe(browserLimited) {
+  return browserLimited.browserLimited ?? browserLimited;
+}
+
+function requireNonEmptyArray(value, field) {
+  requireField(Array.isArray(value) && value.length > 0, field);
+}
+
+function requireEmptyArray(value, field) {
+  requireField(Array.isArray(value) && value.length === 0, field);
+}
+
 export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab-direct' }) {
   if (!artifactDir) {
     fail('artifactDir is required');
@@ -74,7 +89,6 @@ export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab
     ['nativeRecovery.success', true],
     ['nativeRecovery.portalModeActive', true],
     ['nativeRecovery.recoveryHostsApplied', true],
-    ['gatewayAuthenticated.success', true],
     ['nativeReconcile.success', true],
     ['nativeReconcile.protectedModeRestored', true],
     ['openPathProtectionAfter.protectedModeRestored', true],
@@ -92,8 +106,37 @@ export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab
     result.browserAfterAuthPath === TARGET_AFTER_FILE,
     `browserAfterAuthPath == ${TARGET_AFTER_FILE}`
   );
+  requireResultField(result, 'activeMarkerMode', 'limited');
+  requireResultField(result, 'limitedModeReady', true);
+  requireResultField(result, 'discoveryTruncated', false);
+  requireField(result.fallbackMode !== 'passthrough', 'fallbackMode not passthrough');
+  requireEmptyArray(result.pendingRuntimeHosts, 'pendingRuntimeHosts empty');
+  requireNonEmptyArray(result.bootstrapHosts, 'bootstrapHosts non-empty');
+  requireResultField(result, 'limitedDns.success', true);
+  requireResultField(result, 'nativeRecovery.limitedModeReady', true);
+  requireResultField(result, 'nativeRecovery.discoveryTruncated', false);
+
+  const limitedDns = readJson(join(artifactDir, LIMITED_DNS_FILE));
+  requireField(limitedDns.success === true, `${LIMITED_DNS_FILE} success`);
+  requireField(limitedDns.server === '127.0.0.1', `${LIMITED_DNS_FILE} server`);
+  requireField(
+    Array.isArray(limitedDns.hosts) &&
+      limitedDns.hosts.length > 0 &&
+      limitedDns.hosts.every((host) => host?.resolvedThroughLocalDns === true),
+    `${LIMITED_DNS_FILE} hosts resolved through local DNS`
+  );
+
+  const browserLimited = readJson(join(artifactDir, LIMITED_BROWSER_FILE));
+  const limitedProbe = browserLimitedProbe(browserLimited);
+  requireField(limitedProbe.portalReady === true, `${LIMITED_BROWSER_FILE} portalReady`);
+  requireField(limitedProbe.loginSubmitted === true, `${LIMITED_BROWSER_FILE} loginSubmitted`);
+  requireField(
+    browserLimited.limitedModeReady === true || result.limitedModeReady === true,
+    `${LIMITED_BROWSER_FILE} limitedModeReady`
+  );
 
   const browserAfter = readJson(join(artifactDir, TARGET_AFTER_FILE));
+  readJson(join(artifactDir, POST_AUTH_DNS_FILE));
   requireField(browserAfter.portalMarkerAbsent === true, 'portalMarkerAbsent');
   requireField(browserAfterNavigationFunctional(browserAfter), 'externalNavigationFunctional');
   requireField(browserAfterFailureKind(browserAfter) === 'none', 'failureKind none');
