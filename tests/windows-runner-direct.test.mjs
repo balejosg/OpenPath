@@ -753,6 +753,11 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduScript, /cdn\.wedu-lab\.test/);
     assert.match(weduScript, /auth\.wedu-lab\.test/);
     assert.match(weduCiScript, /install_gateway_portal_fixture/);
+    assert.match(weduCiScript, /address=\/wlogin\.wedu-lab\.test\/10\.77\.0\.1/);
+    assert.match(weduCiScript, /address=\/assets\.wedu-lab\.test\/10\.77\.0\.1/);
+    assert.match(weduCiScript, /address=\/cdn\.wedu-lab\.test\/10\.77\.0\.1/);
+    assert.match(weduCiScript, /address=\/auth\.wedu-lab\.test\/10\.77\.0\.1/);
+    assert.match(weduCiScript, /systemctl restart dnsmasq/);
     assert.match(weduCiScript, /http:\/\/\{ASSET_HOST\}\/portal\.css/);
     assert.match(weduCiScript, /http:\/\/\{CDN_HOST\}\/portal\.js/);
     assert.match(weduCiScript, /http:\/\/\{AUTH_HOST\}\/session/);

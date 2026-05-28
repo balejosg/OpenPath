@@ -519,6 +519,14 @@ class Handler(BaseHTTPRequestHandler):
 ThreadingHTTPServer(('10.77.0.1', 80), Handler).serve_forever()
 PY
 chmod 0755 /opt/wedu-captive-portal/server.py
+cat >/etc/dnsmasq.d/openpath-wedu-runtime.conf <<'DNS'
+address=/wlogin.wedu-lab.test/10.77.0.1
+address=/assets.wedu-lab.test/10.77.0.1
+address=/cdn.wedu-lab.test/10.77.0.1
+address=/auth.wedu-lab.test/10.77.0.1
+DNS
+systemctl restart dnsmasq
+systemctl is-active --quiet dnsmasq
 systemctl restart wedu-captive-portal
 systemctl is-active --quiet wedu-captive-portal
 SH
