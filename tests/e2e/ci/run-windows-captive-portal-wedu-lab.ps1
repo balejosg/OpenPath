@@ -67,6 +67,38 @@ function Split-EnvList {
     return @($Value.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
+function ConvertTo-WeduNativeStringArray {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) {
+        return @()
+    }
+
+    $items = @($Value)
+    $normalized = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in $items) {
+        if ($null -eq $item) {
+            continue
+        }
+        if ($item -is [hashtable] -and $item.Count -eq 0) {
+            continue
+        }
+        if ($item -is [pscustomobject] -and @($item.PSObject.Properties).Count -eq 0) {
+            continue
+        }
+
+        $text = ([string]$item).Trim()
+        if ([string]::IsNullOrWhiteSpace($text) -or $text -eq '@{}') {
+            continue
+        }
+        if (-not $normalized.Contains($text)) {
+            $normalized.Add($text)
+        }
+    }
+
+    return @($normalized)
+}
+
 function Get-WeduLabConfig {
     $token = [string]$env:OPENPATH_WEDU_LAB_GATEWAY_TOKEN
     if ([string]::IsNullOrWhiteSpace($token)) {
@@ -1099,21 +1131,30 @@ function Invoke-WeduLabRun {
     $browserLimited = Invoke-WeduBrowserProbe -Config $config
 
     $activeMarkerMode = if ([bool]$nativeRecovery.activeMarkerMode) { [string]$nativeRecovery.activeMarkerMode } else { 'limited' }
-    $bootstrapHosts = @($nativeRecovery.bootstrapHosts | Where-Object { $_ } | ForEach-Object { [string]$_ })
-    $observedRuntimeHosts = @($nativeRecovery.observedRuntimeHosts | Where-Object { $_ } | ForEach-Object { [string]$_ })
-    $pendingRuntimeHosts = @($nativeRecovery.pendingRuntimeHosts | Where-Object { $_ } | ForEach-Object { [string]$_ })
-    $effectiveExactHosts = @($nativeRecovery.effectiveExactHosts | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $allowedHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.allowedHosts)
+    $bootstrapHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.bootstrapHosts)
+    $observedRuntimeHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.observedRuntimeHosts)
+    $pendingRuntimeHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.pendingRuntimeHosts)
+    $effectiveExactHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.effectiveExactHosts)
+    if ($effectiveExactHosts.Count -eq 0) {
+        $effectiveExactHosts = @($allowedHosts)
+    }
     if ($effectiveExactHosts.Count -eq 0) {
         $effectiveExactHosts = @($bootstrapHosts + $observedRuntimeHosts | Select-Object -Unique)
     }
     $discoveryTruncated = [bool]$nativeRecovery.discoveryTruncated
     $fallbackMode = if ($nativeRecovery.fallbackMode) { [string]$nativeRecovery.fallbackMode } else { '' }
+    $nativeLimitedModeReady = [bool]$nativeRecovery.limitedModeReady
+    $nativeRecoveryHostsApplied = [bool]$nativeRecovery.recoveryHostsApplied
     $allEffectiveExactHostsInstalled = [bool](
         @($effectiveExactHosts).Count -gt 0 -and
         @($bootstrapHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
-        @($observedRuntimeHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0
+        @($observedRuntimeHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
+        @($effectiveExactHosts | Where-Object { $_ -notin $allowedHosts }).Count -eq 0
     )
     $limitedModeReady = [bool](
+        $nativeLimitedModeReady -and
+        $nativeRecoveryHostsApplied -and
         $activeMarkerMode -eq 'limited' -and
         @($bootstrapHosts).Count -gt 0 -and
         -not $discoveryTruncated -and

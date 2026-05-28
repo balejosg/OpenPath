@@ -741,6 +741,16 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduScript, /loginSubmitted = \$false/);
     assert.match(weduScript, /\$browserLimited = Invoke-WeduBrowserProbe -Config \$config/);
     assert.match(weduScript, /\$activeMarkerMode[\s\S]*'limited'/);
+    assert.match(weduScript, /function ConvertTo-WeduNativeStringArray/);
+    assert.match(
+      weduScript,
+      /\$allowedHosts = @\(ConvertTo-WeduNativeStringArray -Value \$nativeRecovery\.allowedHosts\)/
+    );
+    assert.match(
+      weduScript,
+      /\$nativeLimitedModeReady = \[bool\]\$nativeRecovery\.limitedModeReady/
+    );
+    assert.doesNotMatch(weduScript, /\$nativeRecovery\.observedRuntimeHosts \| Where-Object/);
     assert.match(weduScript, /limitedModeReady/);
     assert.match(weduScript, /bootstrapHosts/);
     assert.match(weduScript, /observedRuntimeHosts/);
