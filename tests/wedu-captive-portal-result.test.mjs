@@ -63,6 +63,31 @@ function baseResult(overrides = {}) {
   };
 }
 
+function discoveredHostResult(overrides = {}) {
+  const bootstrapHosts = ['nce.wedu.comunidad.madrid'];
+  const redirectHosts = ['wlogin.wedu-lab.test'];
+  const resourceHosts = ['assets.wedu-lab.test', 'cdn.wedu-lab.test', 'auth.wedu-lab.test'];
+  const weduHosts = [...bootstrapHosts, ...redirectHosts, ...resourceHosts];
+
+  return baseResult({
+    bootstrapHosts,
+    redirectHosts,
+    resourceHosts,
+    observedRuntimeHosts: ['assets.wedu-lab.test', 'cdn.wedu-lab.test', 'auth.wedu-lab.test'],
+    nativeRecovery: {
+      ...baseResult().nativeRecovery,
+      triggerHost: 'nce.wedu.comunidad.madrid',
+      portalRecoveryHosts: [],
+      bootstrapHosts,
+      redirectHosts,
+      resourceHosts,
+      effectiveExactHosts: weduHosts,
+      allowedHosts: weduHosts,
+    },
+    ...overrides,
+  });
+}
+
 function browserBefore(overrides = {}) {
   return {
     portalDetected: true,
@@ -195,7 +220,7 @@ describe('WEDU captive portal result validator', () => {
 
   test('accepts target-platform evidence with post-auth browser proof', () => {
     const artifactDir = makeArtifactDir({
-      'direct-captive-portal-wedu-lab-result.json': baseResult(),
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult(),
       'wedu-lab-browser-before.json': browserBefore(),
       ...targetPlatformFiles(),
     });
@@ -205,11 +230,77 @@ describe('WEDU captive portal result validator', () => {
     );
   });
 
+  test('rejects target-platform evidence that preinjects WEDU portal hosts', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
+        nativeRecovery: {
+          ...discoveredHostResult().nativeRecovery,
+          portalRecoveryHosts: [
+            'wlogin.wedu-lab.test',
+            'assets.wedu-lab.test',
+            'cdn.wedu-lab.test',
+            'auth.wedu-lab.test',
+          ],
+        },
+      }),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles(),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /nativeRecovery\.portalRecoveryHosts must not preinject/
+    );
+  });
+
+  test('rejects target-platform evidence missing dynamically discovered WEDU hosts', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
+        nativeRecovery: {
+          ...discoveredHostResult().nativeRecovery,
+          effectiveExactHosts: ['nce.wedu.comunidad.madrid', 'wlogin.wedu-lab.test'],
+          allowedHosts: ['nce.wedu.comunidad.madrid', 'wlogin.wedu-lab.test'],
+        },
+      }),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles(),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /nativeRecovery\.effectiveExactHosts must include assets\.wedu-lab\.test/
+    );
+  });
+
+  test('rejects target-platform evidence that mixes discovered hosts into bootstrapHosts', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
+        bootstrapHosts: [
+          'nce.wedu.comunidad.madrid',
+          'wlogin.wedu-lab.test',
+          'assets.wedu-lab.test',
+        ],
+      }),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles(),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /bootstrapHosts must not include redirect\/resource hosts/
+    );
+  });
+
   test('accepts Windows JSON artifacts with a UTF-8 BOM', () => {
     const artifactDir = makeArtifactDir();
-    writeJsonFile(artifactDir, 'direct-captive-portal-wedu-lab-result.json', baseResult(), {
-      bom: true,
-    });
+    writeJsonFile(
+      artifactDir,
+      'direct-captive-portal-wedu-lab-result.json',
+      discoveredHostResult(),
+      {
+        bom: true,
+      }
+    );
     writeJsonFile(artifactDir, 'wedu-lab-browser-before.json', browserBefore(), { bom: true });
     writeJsonFile(artifactDir, 'wedu-lab-dns-limited.json', limitedDns(), { bom: true });
     writeJsonFile(artifactDir, 'wedu-lab-browser-limited.json', browserLimited(), { bom: true });
@@ -223,7 +314,7 @@ describe('WEDU captive portal result validator', () => {
 
   test('accepts target-platform evidence with harness post-auth field names', () => {
     const artifactDir = makeArtifactDir({
-      'direct-captive-portal-wedu-lab-result.json': baseResult(),
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult(),
       'wedu-lab-browser-before.json': browserBefore(),
       ...targetPlatformFiles({
         browserAfter: {
@@ -241,7 +332,7 @@ describe('WEDU captive portal result validator', () => {
 
   test('rejects target-platform evidence when post-auth navigation failed', () => {
     const artifactDir = makeArtifactDir({
-      'direct-captive-portal-wedu-lab-result.json': baseResult(),
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult(),
       'wedu-lab-browser-before.json': browserBefore(),
       ...targetPlatformFiles({
         browserAfter: {
@@ -261,6 +352,9 @@ describe('WEDU captive portal result validator', () => {
     const artifactDir = makeArtifactDir({
       'direct-captive-portal-wedu-lab-result.json': baseResult({
         limitedModeReady: false,
+        nativeRecovery: discoveredHostResult().nativeRecovery,
+        bootstrapHosts: discoveredHostResult().bootstrapHosts,
+        observedRuntimeHosts: discoveredHostResult().observedRuntimeHosts,
       }),
       'wedu-lab-browser-before.json': browserBefore(),
       ...targetPlatformFiles(),

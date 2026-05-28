@@ -255,15 +255,123 @@ Describe "Watchdog Script" {
             )
 
             @($result.bootstrapHosts) | Should -Contain 'login.wedu.example'
-            @($result.bootstrapHosts) | Should -Contain 'cdn.wedu.example'
-            @($result.bootstrapHosts) | Should -Contain 'auth.wedu.example'
-            @($result.bootstrapHosts) | Should -Contain 'api.wedu.example'
+            @($result.bootstrapHosts) | Should -Not -Contain 'cdn.wedu.example'
+            @($result.bootstrapHosts) | Should -Not -Contain 'auth.wedu.example'
+            @($result.bootstrapHosts) | Should -Not -Contain 'api.wedu.example'
+            @($result.resourceHosts) | Should -Contain 'cdn.wedu.example'
+            @($result.resourceHosts) | Should -Contain 'auth.wedu.example'
+            @($result.resourceHosts) | Should -Contain 'api.wedu.example'
             @($result.bootstrapHosts) | Should -Not -Contain '*.wedu.example'
             @($result.bootstrapHosts) | Should -Not -Contain '10.77.0.1'
             @($result.bootstrapHosts) | Should -Not -Contain 'printer.local'
             @($result.bootstrapHosts) | Should -Not -Contain 'intranet'
             @($result.bootstrapHosts) | Should -Not -Contain 'detectportal.firefox.com'
             $result.discoveryTruncated | Should -BeFalse
+        }
+
+        It "Behaviorally separates bootstrap, redirect, and resource hosts without leaking URLs" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            Import-Module $modulePath -Force
+
+            $result = Get-OpenPathCaptivePortalBootstrapHosts -SeedUrls @(
+                'http://bootstrap.wedu.example/start?token=secret',
+                'https://redirect.wedu.example/login?cookie=session',
+                '<script src="https://static.wedu.example/app.js?auth=secret"></script>',
+                '<form action="https://form.wedu.example/login" method="post"></form>',
+                'https://10.77.0.1/login',
+                'https://printer.local/setup',
+                'https://intranet/',
+                'https://detectportal.firefox.com/success.txt'
+            )
+
+            @($result.bootstrapHosts) | Should -Contain 'bootstrap.wedu.example'
+            @($result.redirectHosts) | Should -Contain 'redirect.wedu.example'
+            @($result.resourceHosts) | Should -Contain 'static.wedu.example'
+            @($result.resourceHosts) | Should -Contain 'form.wedu.example'
+            @($result.bootstrapHosts) | Should -Not -Contain 'redirect.wedu.example'
+            @($result.bootstrapHosts) | Should -Not -Contain 'static.wedu.example'
+            @($result.bootstrapHosts) | Should -Not -Contain 'form.wedu.example'
+            @($result.redirectHosts) | Should -Not -Contain 'static.wedu.example'
+            @($result.redirectHosts) | Should -Not -Contain 'form.wedu.example'
+            @($result.resourceHosts) | Should -Not -Contain 'bootstrap.wedu.example'
+            @($result.resourceHosts) | Should -Not -Contain 'redirect.wedu.example'
+            @($result.bootstrapHosts + $result.redirectHosts + $result.resourceHosts) | Should -Not -Contain '10.77.0.1'
+            @($result.bootstrapHosts + $result.redirectHosts + $result.resourceHosts) | Should -Not -Contain 'printer.local'
+            @($result.bootstrapHosts + $result.redirectHosts + $result.resourceHosts) | Should -Not -Contain 'intranet'
+            @($result.bootstrapHosts + $result.redirectHosts + $result.resourceHosts) | Should -Not -Contain 'detectportal.firefox.com'
+            (($result | ConvertTo-Json -Depth 8) -match 'secret|cookie|/login|/start|/app.js') | Should -BeFalse
+            $result.truncated | Should -BeFalse
+            @($result.errors).Count | Should -BeGreaterThan 0
+        }
+
+        It "Classifies fetched redirect-chain hosts by source bucket" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $module = Import-Module $modulePath -Force -PassThru
+            $requestFactory = {
+                param([System.Uri]$Uri)
+
+                $headers = [System.Net.WebHeaderCollection]::new()
+                $body = ''
+                if ($Uri.Host -eq 'bootstrap.wedu.example') {
+                    $headers['Location'] = 'http://redirect.wedu.example/login?ticket=secret'
+                }
+                elseif ($Uri.Host -eq 'redirect.wedu.example') {
+                    $body = '<script src="https://assets.wedu.example/app.js?token=secret"></script>'
+                }
+
+                $response = [PSCustomObject]@{
+                    Headers = $headers
+                    Stream = [System.IO.MemoryStream]::new([System.Text.Encoding]::UTF8.GetBytes($body))
+                }
+                $response | Add-Member -MemberType ScriptMethod -Name GetResponseStream -Value { return $this.Stream }
+                $response | Add-Member -MemberType ScriptMethod -Name Close -Value {
+                    if ($this.Stream) { $this.Stream.Dispose() }
+                }
+                return $response
+            }
+
+            $result = & $module {
+                param([scriptblock]$RequestFactory)
+                Invoke-OpenPathCaptivePortalBootstrapProbe `
+                    -SeedUrl 'http://bootstrap.wedu.example/start?seed=secret' `
+                    -MaxRedirects 2 `
+                    -RequestFactory $RequestFactory
+            } $requestFactory
+
+            @($result.bootstrapHosts) | Should -Contain 'bootstrap.wedu.example'
+            @($result.bootstrapHosts) | Should -Not -Contain 'redirect.wedu.example'
+            @($result.bootstrapHosts) | Should -Not -Contain 'assets.wedu.example'
+            @($result.redirectHosts) | Should -Contain 'redirect.wedu.example'
+            @($result.redirectHosts) | Should -Not -Contain 'assets.wedu.example'
+            @($result.resourceHosts) | Should -Contain 'assets.wedu.example'
+            (($result | ConvertTo-Json -Depth 8) -match 'secret|/login|/app.js') | Should -BeFalse
+        }
+
+        It "Keeps fetched redirect and resource bootstrap hosts in distinct result fields" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $probeStart = $moduleContent.IndexOf('function Invoke-OpenPathCaptivePortalBootstrapProbe')
+            $runtimeStart = $moduleContent.IndexOf('function Get-OpenPathCaptivePortalRuntimeOverlayHosts')
+            $probeBody = $moduleContent.Substring($probeStart, $runtimeStart - $probeStart)
+            $helperStart = $moduleContent.IndexOf('function Get-OpenPathCaptivePortalBootstrapHosts')
+            $seedStart = $moduleContent.IndexOf('function Get-OpenPathCaptivePortalBootstrapSeedUrls')
+            $helperBody = $moduleContent.Substring($helperStart, $seedStart - $helperStart)
+
+            Assert-ContentContainsAll -Content $probeBody -Needles @(
+                '$redirectHosts = [System.Collections.Generic.List[string]]::new()',
+                '$resourceHosts = [System.Collections.Generic.List[string]]::new()',
+                '$isBootstrapRequest = ($attempt -eq 0)',
+                '$redirectHosts.Add($redirectHost)',
+                '$resourceHosts.Add($textHost)',
+                'redirectHosts = @($redirectHosts)',
+                'resourceHosts = @($resourceHosts)'
+            )
+            Assert-ContentContainsAll -Content $helperBody -Needles @(
+                '$probe.redirectHosts',
+                '$probe.resourceHosts',
+                '-Kind ''resource'''
+            )
         }
 
         It "Includes bootstrap and runtime overlay hosts in limited Acrylic rendering before NX block" {
@@ -278,13 +386,16 @@ Describe "Watchdog Script" {
                 'Get-OpenPathCaptivePortalDynamicHosts',
                 'Get-OpenPathCaptivePortalBootstrapSeedUrls',
                 '$dynamicHosts.bootstrapHosts',
+                '$dynamicHosts.redirectHosts',
+                '$dynamicHosts.resourceHosts',
                 '$dynamicHosts.observedRuntimeHosts',
                 '$dynamicHosts.pendingRuntimeHosts',
                 '$dynamicHosts.discoveryTruncated',
-                '$dynamicHosts.limitedModeReady',
                 '-FetchSeedUrls',
                 'Set-OpenPathCaptivePortalMarker -State $State -Mode limited',
                 '-BootstrapHosts',
+                '-RedirectHosts',
+                '-ResourceHosts',
                 '-ObservedRuntimeHosts',
                 '-PendingRuntimeHosts',
                 '-DiscoveryTruncated',
@@ -297,6 +408,45 @@ Describe "Watchdog Script" {
                 Should -BeLessThan $enableBody.IndexOf('New-OpenPathLimitedCaptivePortalHostsDefinition')
         }
 
+        It "Performs a bounded second limited-mode render after initial Acrylic bootstrap discovery" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
+            $definitionStart = $moduleContent.IndexOf('function New-OpenPathLimitedCaptivePortalHostsDefinition')
+            $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
+
+            Assert-ContentContainsAll -Content $enableBody -Needles @(
+                '$script:CaptivePortalBootstrapMaxIterations',
+                'for ($bootstrapIteration = 0',
+                'Get-OpenPathCaptivePortalBootstrapHosts',
+                '$bootstrapDiscovery.redirectHosts',
+                '$bootstrapDiscovery.resourceHosts',
+                '$bootstrapDiscovery.truncated',
+                '$limitedModeReady = (',
+                '-LimitedModeReady $limitedModeReady'
+            )
+
+            $enableBody | Should -Match '(?s)for \(\$bootstrapIteration = 0.*?New-OpenPathLimitedCaptivePortalHostsDefinition.*?Restart-AcrylicService.*?Get-OpenPathCaptivePortalBootstrapHosts'
+        }
+
+        It "Does not mark limited mode ready when final bootstrap discovery was not rendered" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
+            $definitionStart = $moduleContent.IndexOf('function New-OpenPathLimitedCaptivePortalHostsDefinition')
+            $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
+
+            Assert-ContentContainsAll -Content $enableBody -Needles @(
+                '$renderedHosts = @($mergedHosts)',
+                '$pendingDiscoveredHostsAfterRender',
+                '$hostName -notin $renderedHosts',
+                '$allowedMarkerHosts = @($renderedHosts)',
+                '@($pendingDiscoveredHostsAfterRender).Count -eq 0'
+            )
+        }
+
         It "Bounds limited portal Acrylic restart and DNS protection verification inside native host budget" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
@@ -307,7 +457,7 @@ Describe "Watchdog Script" {
                 '$script:CaptivePortalLimitedModeDnsDelayMilliseconds',
                 '$script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds',
                 'Restart-AcrylicService -TimeoutSeconds $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds -SkipBatchFallback',
-                'Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $mergedHosts -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds'
+                'Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $renderedHosts -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds'
             )
 
             $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
@@ -315,7 +465,7 @@ Describe "Watchdog Script" {
             $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
 
             $enableBody.IndexOf('Restart-AcrylicService -TimeoutSeconds $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds -SkipBatchFallback') |
-                Should -BeLessThan $enableBody.IndexOf('Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $mergedHosts')
+                Should -BeLessThan $enableBody.IndexOf('Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $renderedHosts')
             $enableBody | Should -Match '(?s)if \(-not \(\[bool\]\$restartSucceeded\)\).*?Restore-OpenPathLimitedCaptivePortalAttempt.*?return \$false'
         }
 
@@ -388,7 +538,7 @@ Describe "Watchdog Script" {
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
                 'function Test-OpenPathLimitedCaptivePortalRecoveryHost',
                 'Test-OpenPathLimitedCaptivePortalRecoveryHost -Domain $recoveryHost',
-                'Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $mergedHosts',
+                'Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $renderedHosts',
                 'Get-AcrylicExactForwardRule -Domain $Domain',
                 '$match.Index -lt $defaultBlockIndex'
             )

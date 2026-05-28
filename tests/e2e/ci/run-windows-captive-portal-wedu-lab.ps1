@@ -1118,7 +1118,6 @@ function Invoke-WeduLabRun {
     $nativeRecovery = Invoke-NativeHostAction -Message @{
         action = 'recover-captive-portal-navigation'
         triggerHost = $script:WeduHost
-        portalRecoveryHosts = $script:WeduLimitedHosts
         tabId = 1
         source = 'wedu-lab-captive'
     } -TimeoutMs $config.nativeHostTimeoutMs
@@ -1134,6 +1133,8 @@ function Invoke-WeduLabRun {
     $activeMarkerMode = if ([bool]$nativeRecovery.activeMarkerMode) { [string]$nativeRecovery.activeMarkerMode } else { 'limited' }
     $allowedHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.allowedHosts)
     $bootstrapHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.bootstrapHosts)
+    $redirectHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.redirectHosts)
+    $resourceHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.resourceHosts)
     $observedRuntimeHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.observedRuntimeHosts)
     $pendingRuntimeHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.pendingRuntimeHosts)
     $effectiveExactHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.effectiveExactHosts)
@@ -1150,6 +1151,8 @@ function Invoke-WeduLabRun {
     $allEffectiveExactHostsInstalled = [bool](
         @($effectiveExactHosts).Count -gt 0 -and
         @($bootstrapHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
+        @($redirectHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
+        @($resourceHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
         @($observedRuntimeHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
         @($effectiveExactHosts | Where-Object { $_ -notin $allowedHosts }).Count -eq 0
     )
@@ -1167,6 +1170,9 @@ function Invoke-WeduLabRun {
         activeMarkerMode = $activeMarkerMode
         limitedModeReady = $limitedModeReady
         bootstrapHosts = @($bootstrapHosts)
+        redirectHosts = @($redirectHosts)
+        resourceHosts = @($resourceHosts)
+        effectiveExactHosts = @($effectiveExactHosts)
         observedRuntimeHosts = @($observedRuntimeHosts)
         pendingRuntimeHosts = @($pendingRuntimeHosts)
         discoveryTruncated = $discoveryTruncated
@@ -1246,6 +1252,9 @@ function Invoke-WeduLabRun {
         activeMarkerMode = $activeMarkerMode
         limitedModeReady = $limitedModeReady
         bootstrapHosts = @($bootstrapHosts)
+        redirectHosts = @($redirectHosts)
+        resourceHosts = @($resourceHosts)
+        effectiveExactHosts = @($effectiveExactHosts)
         observedRuntimeHosts = @($observedRuntimeHosts)
         pendingRuntimeHosts = @($pendingRuntimeHosts)
         discoveryTruncated = $discoveryTruncated

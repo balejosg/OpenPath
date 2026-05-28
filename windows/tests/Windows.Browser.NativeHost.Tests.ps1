@@ -1136,7 +1136,10 @@ Describe "Browser Module - Native Host" {
 
             Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
                 'bootstrapHosts',
+                'redirectHosts',
+                'resourceHosts',
                 'observedRuntimeHosts',
+                'effectiveExactHosts',
                 'pendingRuntimeHosts',
                 'discoveryTruncated',
                 'fallbackMode',
@@ -1149,6 +1152,8 @@ Describe "Browser Module - Native Host" {
 
             Assert-ContentContainsAll -Content $scriptContent -Needles @(
                 'bootstrapHosts',
+                'redirectHosts',
+                'resourceHosts',
                 'observedRuntimeHosts',
                 'pendingRuntimeHosts',
                 'discoveryTruncated',
@@ -1188,6 +1193,13 @@ Describe "Browser Module - Native Host" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             . $nativeHostActionsPath
 
+            $missingReady = [PSCustomObject]@{
+                RecentSuccessEligible = $true
+                DiscoveryTruncated = $false
+                FallbackMode = 'none'
+                ActiveMarkerMode = 'limited'
+                AllowedHosts = @('portal.example')
+            }
             $notReady = [PSCustomObject]@{
                 RecentSuccessEligible = $true
                 LimitedModeReady = $false
@@ -1204,6 +1216,23 @@ Describe "Browser Module - Native Host" {
                 ActiveMarkerMode = 'limited'
                 AllowedHosts = @('portal.example')
             }
+            $pending = [PSCustomObject]@{
+                RecentSuccessEligible = $true
+                LimitedModeReady = $true
+                DiscoveryTruncated = $false
+                FallbackMode = 'none'
+                ActiveMarkerMode = 'limited'
+                PendingRuntimeHosts = @('cdn.portal.example')
+                AllowedHosts = @('portal.example')
+            }
+            $passthrough = [PSCustomObject]@{
+                RecentSuccessEligible = $true
+                LimitedModeReady = $true
+                DiscoveryTruncated = $false
+                FallbackMode = 'passthrough'
+                ActiveMarkerMode = 'limited'
+                AllowedHosts = @('portal.example')
+            }
             $ready = [PSCustomObject]@{
                 RecentSuccessEligible = $true
                 LimitedModeReady = $true
@@ -1213,8 +1242,11 @@ Describe "Browser Module - Native Host" {
                 AllowedHosts = @('portal.example')
             }
 
+            Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $missingReady -TriggerHost 'portal.example' | Should -BeFalse
             Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $notReady -TriggerHost 'portal.example' | Should -BeFalse
             Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $truncated -TriggerHost 'portal.example' | Should -BeFalse
+            Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $pending -TriggerHost 'portal.example' | Should -BeFalse
+            Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $passthrough -TriggerHost 'portal.example' | Should -BeFalse
             Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $ready -TriggerHost 'portal.example' | Should -BeTrue
         }
 

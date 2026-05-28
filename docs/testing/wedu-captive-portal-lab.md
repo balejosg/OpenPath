@@ -74,6 +74,10 @@ portal but is not final target-platform clearance.
 - exact bootstrap/runtime host evidence from native recovery, with
   `limitedModeReady: true`, `discoveryTruncated: false`, no pending runtime
   hosts, and no `passthrough` fallback
+- dynamic WEDU portal discovery evidence: `bootstrapHosts`,
+  `nativeRecovery.effectiveExactHosts`, and `nativeRecovery.allowedHosts` must
+  include the login, asset, CDN, and auth hosts; those hosts must not be
+  preinjected through `nativeRecovery.portalRecoveryHosts`
 - `browserAfterAuthPath: wedu-lab-browser-post-auth.json`
 - post-auth DNS evidence in `wedu-lab-dns-post-auth.json`
 - post-auth browser evidence with `portalMarkerAbsent: true`

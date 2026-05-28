@@ -218,12 +218,14 @@ function Get-OpenPathCaptivePortalRecoveryMarkerSummary {
     }
     $mode = if ($Marker -and $Marker.PSObject.Properties['mode'] -and $Marker.mode) { [string]$Marker.mode } else { '' }
     $bootstrapHosts = if ($Marker -and $Marker.PSObject.Properties['bootstrapHosts']) { @($Marker.bootstrapHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
+    $redirectHosts = if ($Marker -and $Marker.PSObject.Properties['redirectHosts']) { @($Marker.redirectHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
+    $resourceHosts = if ($Marker -and $Marker.PSObject.Properties['resourceHosts']) { @($Marker.resourceHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
     $observedRuntimeHosts = if ($Marker -and $Marker.PSObject.Properties['observedRuntimeHosts']) { @($Marker.observedRuntimeHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
     $pendingRuntimeHosts = if ($Marker -and $Marker.PSObject.Properties['pendingRuntimeHosts']) { @($Marker.pendingRuntimeHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
     $discoveryTruncated = if ($Marker -and $Marker.PSObject.Properties['discoveryTruncated']) { [bool]$Marker.discoveryTruncated } else { $false }
     $fallbackMode = if ($Marker -and $Marker.PSObject.Properties['fallbackMode'] -and $Marker.fallbackMode) { [string]$Marker.fallbackMode } elseif ($mode -eq 'passthrough') { 'passthrough' } else { 'none' }
     $recoveryHostsApplied = ($mode -eq 'limited' -and $allowedHosts.Count -gt 0)
-    $effectiveHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($allowedHosts) + @($bootstrapHosts) + @($observedRuntimeHosts)))
+    $effectiveHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($allowedHosts) + @($bootstrapHosts) + @($redirectHosts) + @($resourceHosts) + @($observedRuntimeHosts)))
     $allEffectiveHostsInstalled = $true
     foreach ($hostName in @($effectiveHosts)) {
         if ($allowedHosts -notcontains $hostName) {
@@ -232,6 +234,9 @@ function Get-OpenPathCaptivePortalRecoveryMarkerSummary {
         }
     }
     $limitedModeReady = ($mode -eq 'limited' -and $recoveryHostsApplied -and -not $discoveryTruncated -and @($pendingRuntimeHosts).Count -eq 0 -and $allEffectiveHostsInstalled)
+    if (-not ($Marker -and $Marker.PSObject.Properties['limitedModeReady'] -and [bool]$Marker.limitedModeReady)) {
+        $limitedModeReady = $false
+    }
     $recentSuccessEligible = $limitedModeReady
     if ($recentSuccessEligible -and $TriggerHost) {
         $recentSuccessEligible = ($allowedHosts -contains $TriggerHost)
@@ -240,7 +245,10 @@ function Get-OpenPathCaptivePortalRecoveryMarkerSummary {
     return [PSCustomObject]@{
         activeMarkerMode = $mode
         allowedHosts = @($allowedHosts)
+        effectiveExactHosts = @($effectiveHosts)
         bootstrapHosts = @($bootstrapHosts)
+        redirectHosts = @($redirectHosts)
+        resourceHosts = @($resourceHosts)
         observedRuntimeHosts = @($observedRuntimeHosts)
         pendingRuntimeHosts = @($pendingRuntimeHosts)
         discoveryTruncated = [bool]$discoveryTruncated
@@ -286,6 +294,13 @@ function Test-OpenPathRecentCaptivePortalRecoverySuccessEligible {
 
     if ($payload.PSObject.Properties['fallbackMode'] -and [string]$payload.fallbackMode -eq 'passthrough') {
         return $false
+    }
+
+    if ($payload.PSObject.Properties['pendingRuntimeHosts']) {
+        $pendingRuntimeHosts = @($payload.pendingRuntimeHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($pendingRuntimeHosts.Count -gt 0) {
+            return $false
+        }
     }
 
     if ($payload.PSObject.Properties['activeMarkerMode'] -and [string]$payload.activeMarkerMode -eq 'passthrough') {
@@ -408,7 +423,10 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
                 portalExitRoute = 'reconcile-not-authenticated'
                 activeMarkerMode = [string]$markerSummary.activeMarkerMode
                 allowedHosts = @($markerSummary.allowedHosts)
+                effectiveExactHosts = @($markerSummary.effectiveExactHosts)
                 bootstrapHosts = @($markerSummary.bootstrapHosts)
+                redirectHosts = @($markerSummary.redirectHosts)
+                resourceHosts = @($markerSummary.resourceHosts)
                 observedRuntimeHosts = @($markerSummary.observedRuntimeHosts)
                 pendingRuntimeHosts = @($markerSummary.pendingRuntimeHosts)
                 discoveryTruncated = [bool]$markerSummary.discoveryTruncated
@@ -429,7 +447,10 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
                 $markerSummary = [PSCustomObject]@{
                     activeMarkerMode = if ($payload.PSObject.Properties['activeMarkerMode']) { [string]$payload.activeMarkerMode } else { '' }
                     allowedHosts = if ($payload.PSObject.Properties['allowedHosts']) { @($payload.allowedHosts) } else { @() }
+                    effectiveExactHosts = if ($payload.PSObject.Properties['effectiveExactHosts']) { @($payload.effectiveExactHosts) } elseif ($payload.PSObject.Properties['allowedHosts']) { @($payload.allowedHosts) } else { @() }
                     bootstrapHosts = if ($payload.PSObject.Properties['bootstrapHosts']) { @($payload.bootstrapHosts) } else { @() }
+                    redirectHosts = if ($payload.PSObject.Properties['redirectHosts']) { @($payload.redirectHosts) } else { @() }
+                    resourceHosts = if ($payload.PSObject.Properties['resourceHosts']) { @($payload.resourceHosts) } else { @() }
                     observedRuntimeHosts = if ($payload.PSObject.Properties['observedRuntimeHosts']) { @($payload.observedRuntimeHosts) } else { @() }
                     pendingRuntimeHosts = if ($payload.PSObject.Properties['pendingRuntimeHosts']) { @($payload.pendingRuntimeHosts) } else { @() }
                     discoveryTruncated = if ($payload.PSObject.Properties['discoveryTruncated']) { [bool]$payload.discoveryTruncated } else { $false }
@@ -453,7 +474,10 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
                     triggerHost = $triggerHost
                     activeMarkerMode = [string]$markerSummary.activeMarkerMode
                     allowedHosts = @($markerSummary.allowedHosts)
+                    effectiveExactHosts = @($markerSummary.effectiveExactHosts)
                     bootstrapHosts = @($markerSummary.bootstrapHosts)
+                    redirectHosts = @($markerSummary.redirectHosts)
+                    resourceHosts = @($markerSummary.resourceHosts)
                     observedRuntimeHosts = @($markerSummary.observedRuntimeHosts)
                     pendingRuntimeHosts = @($markerSummary.pendingRuntimeHosts)
                     discoveryTruncated = [bool]$markerSummary.discoveryTruncated
@@ -504,7 +528,10 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
             portalModeActive = $portalModeActive
             activeMarkerMode = [string]$markerSummary.activeMarkerMode
             allowedHosts = @($markerSummary.allowedHosts)
+            effectiveExactHosts = @($markerSummary.effectiveExactHosts)
             bootstrapHosts = @($markerSummary.bootstrapHosts)
+            redirectHosts = @($markerSummary.redirectHosts)
+            resourceHosts = @($markerSummary.resourceHosts)
             observedRuntimeHosts = @($markerSummary.observedRuntimeHosts)
             pendingRuntimeHosts = @($markerSummary.pendingRuntimeHosts)
             discoveryTruncated = [bool]$markerSummary.discoveryTruncated

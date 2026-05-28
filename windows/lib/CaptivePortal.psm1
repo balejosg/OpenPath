@@ -23,6 +23,7 @@ $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds = 8
 $script:CaptivePortalLimitedModeDnsMaxAttempts = 5
 $script:CaptivePortalLimitedModeDnsDelayMilliseconds = 500
 $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds = 1
+$script:CaptivePortalBootstrapMaxIterations = 3
 
 function Test-OpenPathCaptivePortalModeActive {
     if (-not (Test-Path $script:CaptivePortalStatePath)) {
@@ -100,6 +101,10 @@ function Set-OpenPathCaptivePortalMarker {
 
         [string[]]$BootstrapHosts = @(),
 
+        [string[]]$RedirectHosts = @(),
+
+        [string[]]$ResourceHosts = @(),
+
         [string[]]$ObservedRuntimeHosts = @(),
 
         [string[]]$PendingRuntimeHosts = @(),
@@ -108,6 +113,8 @@ function Set-OpenPathCaptivePortalMarker {
 
         [ValidateSet('none', 'passthrough')]
         [string]$FallbackMode = 'none',
+
+        [bool]$LimitedModeReady = $false,
 
         [int]$TtlSeconds = 300
     )
@@ -130,10 +137,13 @@ function Set-OpenPathCaptivePortalMarker {
             mode = [string]$Mode
             allowedHosts = @($AllowedHosts)
             bootstrapHosts = @($BootstrapHosts)
+            redirectHosts = @($RedirectHosts)
+            resourceHosts = @($ResourceHosts)
             observedRuntimeHosts = @($ObservedRuntimeHosts)
             pendingRuntimeHosts = @($PendingRuntimeHosts)
             discoveryTruncated = [bool]$DiscoveryTruncated
             fallbackMode = [string]$FallbackMode
+            limitedModeReady = [bool]$LimitedModeReady
             expiresAt = ([DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TtlSeconds))).ToString('o')
             upstreamDns = [string]$UpstreamDns
             upstreamDnsSource = [string]$UpstreamDnsSource
@@ -230,6 +240,133 @@ function Extract-OpenPathCaptivePortalHostsFromText {
     return @($hosts)
 }
 
+function Add-OpenPathCaptivePortalHostCandidate {
+    param(
+        [System.Collections.Generic.List[string]]$Hosts,
+        [System.Collections.Generic.List[string]]$Errors,
+        [AllowNull()][object]$Value,
+        [string]$Kind = 'host',
+        [System.Collections.Generic.HashSet[string]]$ProtectedHosts = $null,
+        [int]$MaxHosts = 32
+    )
+
+    $raw = if ($null -eq $Value) { '' } else { ([string]$Value).Trim() }
+    $hostName = ''
+    if ($Value -is [System.Uri]) {
+        $hostName = ([System.Uri]$Value).Host
+    }
+    elseif ($raw) {
+        try {
+            if ($raw -match '^[a-z][a-z0-9+.-]*://') {
+                $hostName = ([System.Uri]$raw).Host
+            }
+            else {
+                $hostName = $raw
+            }
+        }
+        catch {
+            $hostName = $raw
+        }
+    }
+
+    $hostName = $hostName.Trim().TrimEnd('.').ToLowerInvariant()
+    $rejection = Reject-OpenPathCaptivePortalDynamicHost -HostName $hostName -ProtectedHosts $ProtectedHosts
+    if ($rejection) {
+        if (-not $Errors.Contains("$Kind`:$rejection")) {
+            $Errors.Add("$Kind`:$rejection")
+        }
+        return
+    }
+
+    if ($Hosts.Count -lt $MaxHosts -and -not $Hosts.Contains($hostName)) {
+        $Hosts.Add($hostName)
+    }
+}
+
+function Get-OpenPathCaptivePortalBootstrapHosts {
+    param(
+        [string[]]$SeedUrls = @(),
+        [System.Collections.Generic.HashSet[string]]$ProtectedHosts = $null,
+        [int]$MaxHosts = 32,
+        [int]$MaxTextBytes = 32768,
+        [int]$HttpTimeoutSeconds = 2,
+        [int]$MaxHttpRedirects = 4,
+        [switch]$FetchSeedUrls
+    )
+
+    $bootstrapHosts = [System.Collections.Generic.List[string]]::new()
+    $redirectHosts = [System.Collections.Generic.List[string]]::new()
+    $resourceHosts = [System.Collections.Generic.List[string]]::new()
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $truncated = $false
+    if (-not $ProtectedHosts -and (Get-Command -Name 'Get-OpenPathRuntimeDependencyProtectedHosts' -ErrorAction SilentlyContinue)) {
+        $ProtectedHosts = Get-OpenPathRuntimeDependencyProtectedHosts
+    }
+
+    foreach ($seed in @($SeedUrls)) {
+        $totalHosts = $bootstrapHosts.Count + $redirectHosts.Count + $resourceHosts.Count
+        if ($totalHosts -ge $MaxHosts) {
+            $truncated = $true
+            break
+        }
+
+        $seedLooksLikeUrl = ([string]$seed -match '^[a-z][a-z0-9+.-]*://')
+        $seedIsRedirect = ($seedLooksLikeUrl -and $bootstrapHosts.Count -gt 0)
+        if ($seedIsRedirect) {
+            Add-OpenPathCaptivePortalHostCandidate -Hosts $redirectHosts -Errors $errors -Value $seed -Kind 'redirect' -ProtectedHosts $ProtectedHosts -MaxHosts $MaxHosts
+        }
+        else {
+            Add-OpenPathCaptivePortalHostCandidate -Hosts $bootstrapHosts -Errors $errors -Value $seed -Kind 'bootstrap' -ProtectedHosts $ProtectedHosts -MaxHosts $MaxHosts
+        }
+        $remaining = [Math]::Max(0, $MaxHosts - ($bootstrapHosts.Count + $redirectHosts.Count + $resourceHosts.Count))
+        if ($remaining -le 0) {
+            $truncated = $true
+            break
+        }
+
+        if ([string]$seed -and -not $seedLooksLikeUrl -and ([string]$seed).Length -le $MaxTextBytes) {
+            foreach ($textHost in @(Extract-OpenPathCaptivePortalHostsFromText -Text ([string]$seed) -ProtectedHosts $ProtectedHosts -MaxHosts $remaining)) {
+                Add-OpenPathCaptivePortalHostCandidate -Hosts $resourceHosts -Errors $errors -Value $textHost -Kind 'resource' -ProtectedHosts $ProtectedHosts -MaxHosts $MaxHosts
+            }
+        }
+        elseif ([string]$seed -and -not $seedLooksLikeUrl) {
+            $truncated = $true
+        }
+
+        if (-not $FetchSeedUrls -or -not $seedLooksLikeUrl) {
+            continue
+        }
+
+        $probe = Invoke-OpenPathCaptivePortalBootstrapProbe `
+            -SeedUrl ([string]$seed) `
+            -ProtectedHosts $ProtectedHosts `
+            -MaxHosts ([Math]::Max(1, $MaxHosts - ($bootstrapHosts.Count + $redirectHosts.Count + $resourceHosts.Count))) `
+            -MaxTextBytes $MaxTextBytes `
+            -TimeoutSeconds $HttpTimeoutSeconds `
+            -MaxRedirects $MaxHttpRedirects
+        foreach ($probeHost in @($probe.bootstrapHosts)) {
+            Add-OpenPathCaptivePortalHostCandidate -Hosts $bootstrapHosts -Errors $errors -Value $probeHost -Kind 'bootstrap' -ProtectedHosts $ProtectedHosts -MaxHosts $MaxHosts
+        }
+        foreach ($probeHost in @($probe.redirectHosts)) {
+            Add-OpenPathCaptivePortalHostCandidate -Hosts $redirectHosts -Errors $errors -Value $probeHost -Kind 'redirect' -ProtectedHosts $ProtectedHosts -MaxHosts $MaxHosts
+        }
+        foreach ($probeHost in @($probe.resourceHosts)) {
+            Add-OpenPathCaptivePortalHostCandidate -Hosts $resourceHosts -Errors $errors -Value $probeHost -Kind 'resource' -ProtectedHosts $ProtectedHosts -MaxHosts $MaxHosts
+        }
+        if ([bool]$probe.truncated) {
+            $truncated = $true
+        }
+    }
+
+    return [PSCustomObject]@{
+        bootstrapHosts = @($bootstrapHosts)
+        redirectHosts = @($redirectHosts)
+        resourceHosts = @($resourceHosts)
+        errors = @($errors)
+        truncated = [bool]$truncated
+    }
+}
+
 function Get-OpenPathCaptivePortalBootstrapSeedUrls {
     param(
         [string[]]$Hosts = @(),
@@ -267,10 +404,14 @@ function Invoke-OpenPathCaptivePortalBootstrapProbe {
         [int]$MaxHosts = 32,
         [int]$MaxTextBytes = 32768,
         [int]$TimeoutSeconds = 2,
-        [int]$MaxRedirects = 4
+        [int]$MaxRedirects = 4,
+        [scriptblock]$RequestFactory = $null
     )
 
     $hosts = [System.Collections.Generic.List[string]]::new()
+    $bootstrapHosts = [System.Collections.Generic.List[string]]::new()
+    $redirectHosts = [System.Collections.Generic.List[string]]::new()
+    $resourceHosts = [System.Collections.Generic.List[string]]::new()
     $truncated = $false
     $currentUrl = $SeedUrl
 
@@ -289,19 +430,31 @@ function Invoke-OpenPathCaptivePortalBootstrapProbe {
         if ($uri.Scheme -notin @('http', 'https')) { break }
 
         $seedHost = Normalize-OpenPathCaptivePortalDynamicHost -Value $uri -ProtectedHosts $ProtectedHosts
+        $isBootstrapRequest = ($attempt -eq 0)
         if ($seedHost -and -not $hosts.Contains($seedHost)) {
             $hosts.Add($seedHost)
+        }
+        if ($seedHost -and $isBootstrapRequest -and -not $bootstrapHosts.Contains($seedHost)) {
+            $bootstrapHosts.Add($seedHost)
+        }
+        elseif ($seedHost -and -not $isBootstrapRequest -and -not $redirectHosts.Contains($seedHost)) {
+            $redirectHosts.Add($seedHost)
         }
 
         $response = $null
         try {
-            $request = [System.Net.HttpWebRequest]::Create($uri)
-            $request.Method = 'GET'
-            $request.AllowAutoRedirect = $false
-            $request.Timeout = [Math]::Max(1, $TimeoutSeconds) * 1000
-            $request.ReadWriteTimeout = [Math]::Max(1, $TimeoutSeconds) * 1000
-            $request.UserAgent = 'OpenPath captive portal recovery'
-            $response = $request.GetResponse()
+            if ($RequestFactory) {
+                $response = & $RequestFactory $uri $TimeoutSeconds
+            }
+            else {
+                $request = [System.Net.HttpWebRequest]::Create($uri)
+                $request.Method = 'GET'
+                $request.AllowAutoRedirect = $false
+                $request.Timeout = [Math]::Max(1, $TimeoutSeconds) * 1000
+                $request.ReadWriteTimeout = [Math]::Max(1, $TimeoutSeconds) * 1000
+                $request.UserAgent = 'OpenPath captive portal recovery'
+                $response = $request.GetResponse()
+            }
         }
         catch [System.Net.WebException] {
             $response = $_.Exception.Response
@@ -319,6 +472,9 @@ function Invoke-OpenPathCaptivePortalBootstrapProbe {
                     $redirectHost = Normalize-OpenPathCaptivePortalDynamicHost -Value $redirectUri -ProtectedHosts $ProtectedHosts
                     if ($redirectHost -and -not $hosts.Contains($redirectHost)) {
                         $hosts.Add($redirectHost)
+                    }
+                    if ($redirectHost -and -not $redirectHosts.Contains($redirectHost)) {
+                        $redirectHosts.Add($redirectHost)
                     }
                     $currentUrl = $redirectUri.AbsoluteUri
                     continue
@@ -339,6 +495,7 @@ function Invoke-OpenPathCaptivePortalBootstrapProbe {
                         $body = [string]::new($buffer, 0, $read)
                         foreach ($textHost in @(Extract-OpenPathCaptivePortalHostsFromText -Text $body -ProtectedHosts $ProtectedHosts -MaxHosts ($MaxHosts - $hosts.Count))) {
                             if ($textHost -and -not $hosts.Contains($textHost)) { $hosts.Add($textHost) }
+                            if ($textHost -and -not $resourceHosts.Contains($textHost)) { $resourceHosts.Add($textHost) }
                             if ($hosts.Count -ge $MaxHosts) {
                                 $truncated = $true
                                 break
@@ -359,6 +516,9 @@ function Invoke-OpenPathCaptivePortalBootstrapProbe {
 
     return [PSCustomObject]@{
         hosts = @($hosts)
+        bootstrapHosts = @($bootstrapHosts)
+        redirectHosts = @($redirectHosts)
+        resourceHosts = @($resourceHosts)
         truncated = [bool]$truncated
     }
 }
@@ -400,49 +560,22 @@ function Get-OpenPathCaptivePortalDynamicHosts {
         $protectedHosts = Get-OpenPathRuntimeDependencyProtectedHosts
     }
 
-    $bootstrapHosts = [System.Collections.Generic.List[string]]::new()
-    $discoveryTruncated = $false
-    foreach ($seed in @($SeedUrls)) {
-        if ($bootstrapHosts.Count -ge $MaxHosts) {
-            $discoveryTruncated = $true
-            break
-        }
-        $seedHost = Normalize-OpenPathCaptivePortalDynamicHost -Value $seed -ProtectedHosts $protectedHosts
-        if ($seedHost -and -not $bootstrapHosts.Contains($seedHost)) {
-            $bootstrapHosts.Add($seedHost)
-        }
-        if ([string]$seed -and ([string]$seed).Length -le $MaxTextBytes) {
-            foreach ($textHost in @(Extract-OpenPathCaptivePortalHostsFromText -Text ([string]$seed) -ProtectedHosts $protectedHosts -MaxHosts ($MaxHosts - $bootstrapHosts.Count))) {
-                if ($textHost -and -not $bootstrapHosts.Contains($textHost)) { $bootstrapHosts.Add($textHost) }
-                if ($bootstrapHosts.Count -ge $MaxHosts) {
-                    $discoveryTruncated = $true
-                    break
-                }
-            }
-        }
-        if ($FetchSeedUrls -and [string]$seed -match '^[a-z][a-z0-9+.-]*://') {
-            $probe = Invoke-OpenPathCaptivePortalBootstrapProbe `
-                -SeedUrl ([string]$seed) `
-                -ProtectedHosts $protectedHosts `
-                -MaxHosts ($MaxHosts - $bootstrapHosts.Count) `
-                -MaxTextBytes $MaxTextBytes `
-                -TimeoutSeconds $HttpTimeoutSeconds `
-                -MaxRedirects $MaxHttpRedirects
-            foreach ($probeHost in @($probe.hosts)) {
-                if ($probeHost -and -not $bootstrapHosts.Contains($probeHost)) { $bootstrapHosts.Add($probeHost) }
-                if ($bootstrapHosts.Count -ge $MaxHosts) {
-                    $discoveryTruncated = $true
-                    break
-                }
-            }
-            if ([bool]$probe.truncated) {
-                $discoveryTruncated = $true
-            }
-        }
-    }
+    $bootstrapDiscovery = Get-OpenPathCaptivePortalBootstrapHosts `
+        -SeedUrls $SeedUrls `
+        -ProtectedHosts $protectedHosts `
+        -MaxHosts $MaxHosts `
+        -MaxTextBytes $MaxTextBytes `
+        -HttpTimeoutSeconds $HttpTimeoutSeconds `
+        -MaxHttpRedirects $MaxHttpRedirects `
+        -FetchSeedUrls:$FetchSeedUrls
+    $bootstrapHosts = @($bootstrapDiscovery.bootstrapHosts) | Select-Object -Unique
+    $redirectHosts = @($bootstrapDiscovery.redirectHosts) | Select-Object -Unique
+    $resourceHosts = @($bootstrapDiscovery.resourceHosts) | Select-Object -Unique
+    $discoveredHosts = @($bootstrapHosts) + @($redirectHosts) + @($resourceHosts) | Select-Object -Unique
+    $discoveryTruncated = [bool]$bootstrapDiscovery.truncated
 
     $observedRuntimeHosts = @(Get-OpenPathCaptivePortalRuntimeOverlayHosts -ProtectedHosts $protectedHosts)
-    $preRenderHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($TriggerHosts) + @($ExistingHosts) + @($bootstrapHosts)))
+    $preRenderHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($TriggerHosts) + @($ExistingHosts) + @($discoveredHosts)))
     $effectiveHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($preRenderHosts) + @($observedRuntimeHosts)))
     $pendingRuntimeHosts = @(
         foreach ($hostName in @($observedRuntimeHosts)) {
@@ -452,6 +585,8 @@ function Get-OpenPathCaptivePortalDynamicHosts {
 
     return [PSCustomObject]@{
         bootstrapHosts = @($bootstrapHosts)
+        redirectHosts = @($redirectHosts)
+        resourceHosts = @($resourceHosts)
         observedRuntimeHosts = @($observedRuntimeHosts)
         pendingRuntimeHosts = @($pendingRuntimeHosts)
         effectiveHosts = @($effectiveHosts)
@@ -875,24 +1010,12 @@ function Enable-OpenPathCaptivePortalLimitedMode {
         $protectedHosts = Get-OpenPathRuntimeDependencyProtectedHosts
     }
     $seedUrls = @(Get-OpenPathCaptivePortalBootstrapSeedUrls -Hosts @($AllowedHosts) -ProtectedHosts $protectedHosts)
-    $dynamicHosts = Get-OpenPathCaptivePortalDynamicHosts -SeedUrls $seedUrls -TriggerHosts @($AllowedHosts) -ExistingHosts @($existingHosts) -FetchSeedUrls
-    $mergedHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($existingHosts) + @($AllowedHosts) + @($dynamicHosts.bootstrapHosts) + @($dynamicHosts.observedRuntimeHosts)))
+    $dynamicHosts = Get-OpenPathCaptivePortalDynamicHosts -SeedUrls $seedUrls -TriggerHosts @($AllowedHosts) -ExistingHosts @($existingHosts)
+    $mergedHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($existingHosts) + @($AllowedHosts) + @($dynamicHosts.bootstrapHosts) + @($dynamicHosts.redirectHosts) + @($dynamicHosts.resourceHosts) + @($dynamicHosts.observedRuntimeHosts)))
+    $initialPendingRuntimeHosts = @($dynamicHosts.pendingRuntimeHosts)
     if ($mergedHosts.Count -le 0) {
         return (Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $Marker)
     }
-    if ([bool]$dynamicHosts.discoveryTruncated) {
-        Write-OpenPathLog 'Watchdog: captive portal limited mode deferred because bootstrap discovery was truncated' -Level WARN
-        return $false
-    }
-    $preRenderLimitedModeReady = [bool]$dynamicHosts.limitedModeReady
-    if (-not $preRenderLimitedModeReady -and @($dynamicHosts.pendingRuntimeHosts).Count -gt 0) {
-        Write-OpenPathLog 'Watchdog: captive portal runtime hosts pending Acrylic refresh; applying them in this limited-mode pass' -Level WARN
-    }
-    $pendingRuntimeHostsAfterRender = @(
-        foreach ($hostName in @($dynamicHosts.observedRuntimeHosts)) {
-            if ($mergedHosts -notcontains $hostName) { $hostName }
-        }
-    )
 
     $upstream = Resolve-OpenPathCaptivePortalUpstreamDns -Marker $Marker
     if (-not $upstream -or -not $upstream.Address) {
@@ -921,39 +1044,113 @@ function Enable-OpenPathCaptivePortalLimitedMode {
     $acrylicPath = Get-AcrylicPath
     if (-not $acrylicPath) { return $false }
     $hostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
-    $definition = New-OpenPathLimitedCaptivePortalHostsDefinition -PortalRecoveryDomains $mergedHosts -UpstreamDns ([string]$upstream.Address)
-    $content = ConvertTo-AcrylicHostsContent -Definition $definition
-    Set-Content -Path $hostsPath -Value $content -Encoding ASCII -Force
-    if (-not (Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns ([string]$upstream.Address))) {
-        Restore-OpenPathLimitedCaptivePortalAttempt
-        return $false
+    $discoveryTruncated = [bool]$dynamicHosts.discoveryTruncated
+    if ($initialPendingRuntimeHosts.Count -gt 0) {
+        Write-OpenPathLog 'Watchdog: captive portal runtime hosts pending Acrylic refresh; applying them during iterative limited-mode bootstrap' -Level WARN
     }
+    $allBootstrapHosts = [System.Collections.Generic.List[string]]::new()
+    foreach ($hostName in @($dynamicHosts.bootstrapHosts)) {
+        if ($hostName -and -not $allBootstrapHosts.Contains($hostName)) { $allBootstrapHosts.Add($hostName) }
+    }
+    $allRedirectHosts = [System.Collections.Generic.List[string]]::new()
+    foreach ($hostName in @($dynamicHosts.redirectHosts)) {
+        if ($hostName -and -not $allRedirectHosts.Contains($hostName)) { $allRedirectHosts.Add($hostName) }
+    }
+    $allResourceHosts = [System.Collections.Generic.List[string]]::new()
+    foreach ($hostName in @($dynamicHosts.resourceHosts)) {
+        if ($hostName -and -not $allResourceHosts.Contains($hostName)) { $allResourceHosts.Add($hostName) }
+    }
+    $observedRuntimeHosts = @($dynamicHosts.observedRuntimeHosts)
+    $renderedHosts = @()
 
-    if (Get-Command -Name 'Set-LocalDNS' -ErrorAction SilentlyContinue) {
-        Set-LocalDNS | Out-Null
-    }
-    if (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue) {
-        $restartSucceeded = Restart-AcrylicService -TimeoutSeconds $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds -SkipBatchFallback
-        if (-not ([bool]$restartSucceeded)) {
-            Write-OpenPathLog 'Watchdog: captive portal limited mode failed because Acrylic service restart did not complete within the native host budget' -Level WARN
+    for ($bootstrapIteration = 0; $bootstrapIteration -lt $script:CaptivePortalBootstrapMaxIterations; $bootstrapIteration++) {
+        $renderedHosts = @($mergedHosts)
+        $definition = New-OpenPathLimitedCaptivePortalHostsDefinition -PortalRecoveryDomains $renderedHosts -UpstreamDns ([string]$upstream.Address)
+        $content = ConvertTo-AcrylicHostsContent -Definition $definition
+        Set-Content -Path $hostsPath -Value $content -Encoding ASCII -Force
+        if (-not (Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns ([string]$upstream.Address))) {
             Restore-OpenPathLimitedCaptivePortalAttempt
             return $false
         }
+
+        if (Get-Command -Name 'Set-LocalDNS' -ErrorAction SilentlyContinue) {
+            Set-LocalDNS | Out-Null
+        }
+        if (Get-Command -Name 'Restart-AcrylicService' -ErrorAction SilentlyContinue) {
+            $restartSucceeded = Restart-AcrylicService -TimeoutSeconds $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds -SkipBatchFallback
+            if (-not ([bool]$restartSucceeded)) {
+                Write-OpenPathLog 'Watchdog: captive portal limited mode failed because Acrylic service restart did not complete within the native host budget' -Level WARN
+                Restore-OpenPathLimitedCaptivePortalAttempt
+                return $false
+            }
+        }
+
+        if (-not (Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $renderedHosts -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds)) {
+            Write-OpenPathLog 'Watchdog: captive portal limited mode verification failed; staying protected' -Level WARN
+            Restore-OpenPathLimitedCaptivePortalAttempt
+            return $false
+        }
+
+        $iterationSeedUrls = @(Get-OpenPathCaptivePortalBootstrapSeedUrls -Hosts $renderedHosts -ProtectedHosts $protectedHosts)
+        $bootstrapDiscovery = Get-OpenPathCaptivePortalBootstrapHosts `
+            -SeedUrls $iterationSeedUrls `
+            -ProtectedHosts $protectedHosts `
+            -FetchSeedUrls `
+            -HttpTimeoutSeconds 1 `
+            -MaxHttpRedirects 2
+        if ([bool]$bootstrapDiscovery.truncated) {
+            $discoveryTruncated = $true
+            break
+        }
+
+        $discoveredHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($bootstrapDiscovery.bootstrapHosts) + @($bootstrapDiscovery.redirectHosts) + @($bootstrapDiscovery.resourceHosts)))
+        $nextMergedHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($mergedHosts) + @($discoveredHosts) + @($observedRuntimeHosts)))
+        foreach ($hostName in @($bootstrapDiscovery.bootstrapHosts)) {
+            if ($hostName -and -not $allBootstrapHosts.Contains($hostName)) { $allBootstrapHosts.Add($hostName) }
+        }
+        foreach ($hostName in @($bootstrapDiscovery.redirectHosts)) {
+            if ($hostName -and -not $allRedirectHosts.Contains($hostName)) { $allRedirectHosts.Add($hostName) }
+        }
+        foreach ($hostName in @($bootstrapDiscovery.resourceHosts)) {
+            if ($hostName -and -not $allResourceHosts.Contains($hostName)) { $allResourceHosts.Add($hostName) }
+        }
+
+        $pendingDiscoveredHosts = @(
+            foreach ($hostName in @($nextMergedHosts)) {
+                if ($hostName -notin $renderedHosts) { $hostName }
+            }
+        )
+        $mergedHosts = @($nextMergedHosts)
+        if ($pendingDiscoveredHosts.Count -eq 0) {
+            break
+        }
     }
 
-    if (-not (Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $mergedHosts -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds)) {
-        Write-OpenPathLog 'Watchdog: captive portal limited mode verification failed; staying protected' -Level WARN
-        Restore-OpenPathLimitedCaptivePortalAttempt
-        return $false
-    }
+    $pendingDiscoveredHostsAfterRender = @(
+        foreach ($hostName in @($mergedHosts)) {
+            if ($hostName -notin $renderedHosts) { $hostName }
+        }
+    )
+    $pendingRuntimeHostsAfterRender = @(
+        Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($pendingDiscoveredHostsAfterRender) + @(
+            foreach ($hostName in @($observedRuntimeHosts)) {
+                if ($hostName -notin $renderedHosts) { $hostName }
+            }
+        ))
+    )
+    $allowedMarkerHosts = @($renderedHosts)
+    $limitedModeReady = ($mergedHosts.Count -gt 0 -and -not $discoveryTruncated -and @($pendingRuntimeHostsAfterRender).Count -eq 0 -and @($pendingDiscoveredHostsAfterRender).Count -eq 0)
 
     Set-OpenPathCaptivePortalMarker -State $State -Mode limited `
-        -AllowedHosts $mergedHosts `
-        -BootstrapHosts @($dynamicHosts.bootstrapHosts) `
-        -ObservedRuntimeHosts @($dynamicHosts.observedRuntimeHosts) `
+        -AllowedHosts $allowedMarkerHosts `
+        -BootstrapHosts @($allBootstrapHosts) `
+        -RedirectHosts @($allRedirectHosts) `
+        -ResourceHosts @($allResourceHosts) `
+        -ObservedRuntimeHosts @($observedRuntimeHosts) `
         -PendingRuntimeHosts @($pendingRuntimeHostsAfterRender) `
-        -DiscoveryTruncated ([bool]$dynamicHosts.discoveryTruncated) `
+        -DiscoveryTruncated ([bool]$discoveryTruncated) `
         -FallbackMode 'none' `
+        -LimitedModeReady $limitedModeReady `
         -UpstreamDns ([string]$upstream.Address) `
         -UpstreamDnsSource ([string]$upstream.Source) `
         -UpstreamUsableForLimited ([bool]$upstream.UsableForLimited) `
@@ -1562,6 +1759,7 @@ Export-ModuleMember -Function @(
     'Clear-OpenPathCaptivePortalMarker',
     'Get-OpenPathCaptivePortalObservation',
     'Update-OpenPathCaptivePortalObservation',
+    'Get-OpenPathCaptivePortalBootstrapHosts',
     'Get-OpenPathCaptivePortalDynamicHosts',
     'Test-OpenPathPotentialCaptiveNetwork',
     'Test-OpenPathCaptivePortalState',
