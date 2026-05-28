@@ -36,7 +36,7 @@ $script:WeduAuthHost = 'auth.wedu-lab.test'
 $script:WeduLimitedHosts = @($script:WeduHost, $script:WeduLoginHost, $script:WeduAssetHost, $script:WeduCdnHost, $script:WeduAuthHost)
 $script:DetectionUrl = 'http://detectportal.firefox.com/success.txt'
 $script:MsftConnectTestUrl = 'http://www.msftconnecttest.com/connecttest.txt'
-$script:WeduCaptiveHostPattern = '10\.77\.0\.1|nce\.wedu\.comunidad\.madrid|WEDU lab captive portal'
+$script:WeduCaptiveHostPattern = '10\.77\.0\.1|nce\.wedu\.comunidad\.madrid|wlogin\.wedu-lab\.test|assets\.wedu-lab\.test|cdn\.wedu-lab\.test|auth\.wedu-lab\.test|WEDU lab captive portal'
 $script:InstalledOpenPathRoot = 'C:\OpenPath'
 $script:InstalledRecoveryScriptPath = Join-Path $script:InstalledOpenPathRoot 'scripts\Recover-CaptivePortal.ps1'
 
@@ -1040,8 +1040,8 @@ function Invoke-WeduLabRun {
     $portalProbe = Invoke-HttpProbe -Url "http://$script:WeduHost/"
     $browserBefore = Invoke-WeduBrowserProbe -Config $config -SubmitLogin:$false
     $browserPortalDetected = [bool]$browserBefore.portalDetected
-    $weduHostPortalDetected = [bool]($portalProbe.bodySample -match 'WEDU lab captive portal')
-    $detectPortalInterceptionObserved = [bool]($successProbe.bodySample -match 'WEDU lab captive portal')
+    $weduHostPortalDetected = Test-CaptivePortalEvidence -Probe $portalProbe
+    $detectPortalInterceptionObserved = Test-CaptivePortalEvidence -Probe $successProbe
     $browserBeforePayload = [pscustomobject]@{
         detectionProbe = $successProbe
         portalProbe = $portalProbe

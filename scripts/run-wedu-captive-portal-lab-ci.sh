@@ -330,6 +330,190 @@ reset_gateway_captive() {
   [ "$mode" = "captive" ] || fail "Gateway reset did not leave firewall in captive mode: $mode"
 }
 
+install_gateway_portal_fixture() {
+  local script
+  script="$(cat <<'SH'
+set -euo pipefail
+install -d -m 0700 /opt/wedu-captive-portal
+cat >/opt/wedu-captive-portal/server.py <<'PY'
+#!/usr/bin/env python3
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, quote
+import json
+import os
+import subprocess
+import tempfile
+import threading
+
+STATE = Path('/opt/wedu-captive-portal/state.json')
+TOKEN = Path('/opt/wedu-captive-portal/control-token')
+LOCK = threading.Lock()
+LOGIN_HOST = 'wlogin.wedu-lab.test'
+ASSET_HOST = 'assets.wedu-lab.test'
+CDN_HOST = 'cdn.wedu-lab.test'
+AUTH_HOST = 'auth.wedu-lab.test'
+
+
+def load_state():
+    with LOCK:
+        if not STATE.exists():
+            return {'authenticated': False}
+        try:
+            return json.loads(STATE.read_text())
+        except json.JSONDecodeError:
+            return {'authenticated': False}
+
+
+def save_state(value):
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    with LOCK:
+        fd, tmp_name = tempfile.mkstemp(prefix='state.', suffix='.json', dir=str(STATE.parent), text=True)
+        with os.fdopen(fd, 'w', encoding='utf-8') as tmp:
+            json.dump(value, tmp, indent=2)
+            tmp.write('\n')
+        os.replace(tmp_name, STATE)
+
+
+def control_token():
+    return TOKEN.read_text().strip()
+
+
+def apply_firewall(mode):
+    subprocess.run(['/usr/local/sbin/wedu-lab-firewall', mode], check=True)
+
+
+def set_lab_mode(authenticated, mode):
+    save_state({'authenticated': authenticated})
+    apply_firewall(mode)
+
+
+def host_without_port(value):
+    return (value or '').split(':', 1)[0].lower()
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, status, body, content_type='text/html'):
+        data = body.encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        if self.command != 'HEAD':
+            self.wfile.write(data)
+
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header('Location', location)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def _authorized(self):
+        return self.headers.get('X-Lab-Token', '') == control_token()
+
+    def _login_url(self):
+        original = f'http://{self.headers.get("Host", "")}{self.path}'
+        return f'http://{LOGIN_HOST}/login?continue={quote(original, safe="")}'
+
+    def _login_page(self):
+        return f'''<html><head>
+<title>WEDU lab login</title>
+<link rel="stylesheet" href="http://{ASSET_HOST}/portal.css">
+<script src="http://{CDN_HOST}/portal.js"></script>
+</head><body>
+<h1>WEDU lab captive portal</h1>
+<form method="POST" action="http://{AUTH_HOST}/session">
+<input name="user" value="alumno">
+<input name="password" type="password" value="lab-only">
+<button type="submit">Entrar</button>
+</form>
+</body></html>'''
+
+    def do_HEAD(self):
+        if load_state().get('authenticated'):
+            if self.path.endswith('/generate_204'):
+                self.send_response(204)
+            else:
+                self.send_response(200)
+        else:
+            self.send_response(302)
+            self.send_header('Location', self._login_url())
+        self.send_header('Content-Type', 'text/html')
+        self.end_headers()
+
+    def do_GET(self):
+        if self.path == '/lab/reset':
+            if not self._authorized():
+                self._send(403, 'forbidden', 'text/plain')
+                return
+            try:
+                set_lab_mode(False, 'captive')
+                self._send(200, 'reset', 'text/plain')
+            except Exception as exc:
+                self._send(500, f'reset failed: {exc}', 'text/plain')
+            return
+        if self.path == '/lab/authenticated':
+            if not self._authorized():
+                self._send(403, 'forbidden', 'text/plain')
+                return
+            try:
+                set_lab_mode(True, 'authenticated')
+                self._send(200, 'authenticated', 'text/plain')
+            except Exception as exc:
+                self._send(500, f'authenticated failed: {exc}', 'text/plain')
+            return
+
+        state = load_state()
+        host = host_without_port(self.headers.get('Host', ''))
+        if state.get('authenticated'):
+            if self.path.endswith('/success.txt'):
+                self._send(200, 'success', 'text/plain')
+                return
+            if self.path.endswith('/generate_204'):
+                self.send_response(204)
+                self.end_headers()
+                return
+            self._send(200, '<html><body><h1>WEDU lab authenticated</h1></body></html>')
+            return
+
+        if host == ASSET_HOST:
+            self._send(200, 'body{font-family:sans-serif}', 'text/css')
+            return
+        if host == CDN_HOST:
+            self._send(200, 'window.__openPathWeduPortalReady = true;', 'application/javascript')
+            return
+        if host == LOGIN_HOST:
+            self._send(200, self._login_page())
+            return
+        self._redirect(self._login_url())
+
+    def do_POST(self):
+        length = int(self.headers.get('Content-Length', '0'))
+        body = self.rfile.read(length).decode('utf-8')
+        fields = parse_qs(body)
+        user = fields.get('user', [''])[0]
+        password = fields.get('password', [''])[0]
+        host = host_without_port(self.headers.get('Host', ''))
+        if host == AUTH_HOST and self.path == '/session' and user == 'alumno' and password == 'lab-only':
+            try:
+                set_lab_mode(True, 'authenticated')
+                self._redirect('http://detectportal.firefox.com/success.txt')
+            except Exception as exc:
+                self._send(500, f'login failed: {exc}', 'text/plain')
+            return
+        self._send(403, 'invalid', 'text/plain')
+
+
+ThreadingHTTPServer(('10.77.0.1', 80), Handler).serve_forever()
+PY
+chmod 0755 /opt/wedu-captive-portal/server.py
+systemctl restart wedu-captive-portal
+systemctl is-active --quiet wedu-captive-portal
+SH
+)"
+  ssh_proxmox qm guest exec "$GATEWAY_VMID" -- bash -lc "$script" | require_guest_exec_success >/dev/null
+}
+
 read_gateway_token() {
   local output
   output="$(ssh_proxmox qm guest exec "$GATEWAY_VMID" -- bash -lc 'cat /opt/wedu-captive-portal/control-token')"
@@ -522,6 +706,7 @@ main() {
   move_windows_vm_to_lab
   configure_windows_lab_network
   stop_all_action_runner_services >/dev/null
+  install_gateway_portal_fixture
   reset_gateway_captive
   run_wedu_direct_diagnostic
 }

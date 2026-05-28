@@ -685,6 +685,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
   test('captive-portal-wedu-lab mode is fail-closed and collects WEDU lab artifacts', () => {
     const result = runDirectDiagnostic(['--mode', 'captive-portal-wedu-lab']);
     const script = readText('scripts/run-windows-runner-direct.mjs');
+    const weduCiScript = readText('scripts/run-wedu-captive-portal-lab-ci.sh');
     const weduScript = readText('tests/e2e/ci/run-windows-captive-portal-wedu-lab.ps1');
 
     assert.equal(result.status, 0, result.stderr);
@@ -750,6 +751,10 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduScript, /assets\.wedu-lab\.test/);
     assert.match(weduScript, /cdn\.wedu-lab\.test/);
     assert.match(weduScript, /auth\.wedu-lab\.test/);
+    assert.match(weduCiScript, /install_gateway_portal_fixture/);
+    assert.match(weduCiScript, /http:\/\/\{ASSET_HOST\}\/portal\.css/);
+    assert.match(weduCiScript, /http:\/\/\{CDN_HOST\}\/portal\.js/);
+    assert.match(weduCiScript, /http:\/\/\{AUTH_HOST\}\/session/);
     assert.match(weduScript, /window\.__openPathWeduPortalReady/);
     assert.match(weduScript, /Resolve-DnsName -Name \$limitedHost -Server 127\.0\.0\.1/);
     assert.doesNotMatch(weduScript, /foreach \(\$host in/i);
