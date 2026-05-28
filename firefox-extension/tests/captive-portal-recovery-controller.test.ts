@@ -56,6 +56,101 @@ void test('captive portal recovery retries current locked-portal navigations onc
   assert.equal(retries.length, 2);
 });
 
+void test('captive portal recovery forwards bounded portal recovery hosts to native open', async () => {
+  const recoveryInputs: CaptivePortalRecoveryInput[] = [];
+  const controller = createCaptivePortalRecoveryController({
+    getPortalState: () => Promise.resolve('locked_portal'),
+    recoverCaptivePortalNavigation: (input) => {
+      recoveryInputs.push(input);
+      return Promise.resolve({ success: true });
+    },
+    retryNavigation: () => Promise.resolve(),
+    sleep: () => Promise.resolve(),
+  });
+
+  assert.equal(
+    await controller.recoverNavigation({
+      tabId: 7,
+      hostname: 'login.wedu.example',
+      portalRecoveryHosts: [
+        'nce.wedu.comunidad.madrid',
+        'login.wedu.example',
+        'assets.wedu.example',
+      ],
+      url: 'https://login.wedu.example/login?token=secret',
+    }),
+    true
+  );
+
+  assert.deepEqual(recoveryInputs, [
+    {
+      portalRecoveryHosts: [
+        'nce.wedu.comunidad.madrid',
+        'login.wedu.example',
+        'assets.wedu.example',
+      ],
+      portalState: 'locked_portal',
+      tabId: 7,
+      triggerHost: 'login.wedu.example',
+    },
+  ]);
+});
+
+void test('captive portal recovery allows enriched portal hosts inside the rate window', async () => {
+  let now = 10_000;
+  const recoveryInputs: CaptivePortalRecoveryInput[] = [];
+  const controller = createCaptivePortalRecoveryController({
+    getPortalState: () => Promise.resolve('locked_portal'),
+    now: () => now,
+    recoverCaptivePortalNavigation: (input) => {
+      recoveryInputs.push(input);
+      return Promise.resolve({ success: true });
+    },
+    retryNavigation: () => Promise.resolve(),
+    sleep: () => Promise.resolve(),
+  });
+  const navigation = {
+    tabId: 7,
+    hostname: 'login.wedu.example',
+    url: 'https://login.wedu.example/login',
+  };
+
+  assert.equal(
+    await controller.recoverNavigation({
+      ...navigation,
+      portalRecoveryHosts: ['login.wedu.example'],
+    }),
+    true
+  );
+  assert.equal(
+    await controller.recoverNavigation({
+      ...navigation,
+      portalRecoveryHosts: ['login.wedu.example'],
+    }),
+    false
+  );
+  assert.equal(
+    await controller.recoverNavigation({
+      ...navigation,
+      portalRecoveryHosts: ['login.wedu.example', 'assets.wedu.example'],
+    }),
+    true
+  );
+  now += 1_000;
+  assert.equal(
+    await controller.recoverNavigation({
+      ...navigation,
+      portalRecoveryHosts: ['login.wedu.example', 'assets.wedu.example'],
+    }),
+    false
+  );
+
+  assert.deepEqual(
+    recoveryInputs.map((input) => input.portalRecoveryHosts),
+    [['login.wedu.example'], ['login.wedu.example', 'assets.wedu.example']]
+  );
+});
+
 void test('captive portal recovery waits before retrying and revalidates current navigation', async () => {
   const events: string[] = [];
   let currentNavigation = true;

@@ -153,6 +153,28 @@ function Normalize-NativeHostCaptivePortalTriggerHost {
     return (Normalize-NativeHostRuntimeDependencyHost -Value $Value)
 }
 
+function Get-NativeHostCaptivePortalRecoveryHosts {
+    param(
+        [string]$TriggerHost = '',
+        [AllowNull()][object]$PortalRecoveryHosts = $null,
+        [int]$MaxHosts = 16
+    )
+
+    $hosts = [System.Collections.Generic.List[string]]::new()
+    foreach ($candidate in (@($TriggerHost) + @($PortalRecoveryHosts))) {
+        $hostName = Normalize-NativeHostCaptivePortalTriggerHost -Value $candidate
+        if (-not $hostName) { continue }
+        if ($hostName -match '^\d{1,3}(?:\.\d{1,3}){3}$' -or $hostName -match '^\[[0-9a-f:]+\]$') { continue }
+        if ($hostName.EndsWith('.local', [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (-not $hostName.Contains('.')) { continue }
+        if ($hosts.Contains($hostName)) { continue }
+        if ($hosts.Count -ge $MaxHosts) { break }
+        $hosts.Add($hostName)
+    }
+
+    return @($hosts)
+}
+
 function Get-NativeHostCaptivePortalRecoveryQueuePath {
     if ($env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH) {
         return $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH
@@ -275,6 +297,7 @@ function Write-NativeHostCaptivePortalRecoveryRequest {
     param(
         [Parameter(Mandatory = $true)][string]$RequestId,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$TriggerHost,
+        [string[]]$PortalRecoveryHosts = @(),
         [ValidateSet('open', 'reconcile')]
         [string]$Operation = 'open',
         [string]$PortalState = 'Unknown',
@@ -289,6 +312,7 @@ function Write-NativeHostCaptivePortalRecoveryRequest {
         requestId = $RequestId
         operation = $Operation
         triggerHost = $TriggerHost
+        portalRecoveryHosts = @($PortalRecoveryHosts)
         portalState = $PortalState
         source = $Source
         createdAtUtc = [DateTime]::UtcNow.ToString('o')
@@ -960,6 +984,10 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     if ($Message.PSObject.Properties['triggerHost'] -and $Message.triggerHost) {
         $triggerHost = Normalize-NativeHostCaptivePortalTriggerHost -Value $Message.triggerHost
     }
+    $requestedPortalRecoveryHosts = if ($Message.PSObject.Properties['portalRecoveryHosts']) { $Message.portalRecoveryHosts } else { @() }
+    $portalRecoveryHosts = Get-NativeHostCaptivePortalRecoveryHosts `
+        -TriggerHost $triggerHost `
+        -PortalRecoveryHosts $requestedPortalRecoveryHosts
 
     if ($operation -eq 'open' -and -not $triggerHost) {
         return @{
@@ -994,6 +1022,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
                 recentSuccessEligible = if ($recentSuccess.PSObject.Properties['RecentSuccessEligible']) { [bool]$recentSuccess.RecentSuccessEligible } else { $false }
                 activeMarkerMode = if ($recentSuccess.PSObject.Properties['ActiveMarkerMode']) { [string]$recentSuccess.ActiveMarkerMode } else { '' }
                 allowedHosts = if ($recentSuccess.PSObject.Properties['AllowedHosts']) { @($recentSuccess.AllowedHosts) } else { @() }
+                portalRecoveryHosts = if ($recentSuccess.PSObject.Properties['PortalRecoveryHosts']) { @($recentSuccess.PortalRecoveryHosts) } else { @($portalRecoveryHosts) }
                 bootstrapHosts = if ($recentSuccess.PSObject.Properties['BootstrapHosts']) { @($recentSuccess.BootstrapHosts) } else { @() }
                 observedRuntimeHosts = if ($recentSuccess.PSObject.Properties['ObservedRuntimeHosts']) { @($recentSuccess.ObservedRuntimeHosts) } else { @() }
                 pendingRuntimeHosts = if ($recentSuccess.PSObject.Properties['PendingRuntimeHosts']) { @($recentSuccess.PendingRuntimeHosts) } else { @() }
@@ -1013,6 +1042,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     $null = Write-NativeHostCaptivePortalRecoveryRequest `
         -RequestId $requestId `
         -TriggerHost $triggerHost `
+        -PortalRecoveryHosts $portalRecoveryHosts `
         -Operation $operation `
         -PortalState $portalState `
         -Source $source `
@@ -1082,6 +1112,12 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     else {
         @()
     }
+    $resultPortalRecoveryHosts = if ($result.PSObject.Properties['portalRecoveryHosts']) {
+        @($result.portalRecoveryHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    else {
+        @($portalRecoveryHosts)
+    }
     $recoveryHostsApplied = if ($result.PSObject.Properties['recoveryHostsApplied']) { [bool]$result.recoveryHostsApplied } else { $false }
     $limitedModeReady = if ($result.PSObject.Properties['limitedModeReady']) { [bool]$result.limitedModeReady } else { $false }
     $exactRecoveryHostApplied = $recoveryHostsApplied
@@ -1117,6 +1153,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         protectedModeRestored = $protectedModeRestored
         activeMarkerMode = if ($result.PSObject.Properties['activeMarkerMode']) { [string]$result.activeMarkerMode } else { '' }
         allowedHosts = @($allowedHosts)
+        portalRecoveryHosts = @($resultPortalRecoveryHosts)
         bootstrapHosts = if ($result.PSObject.Properties['bootstrapHosts']) { @($result.bootstrapHosts) } else { @() }
         observedRuntimeHosts = if ($result.PSObject.Properties['observedRuntimeHosts']) { @($result.observedRuntimeHosts) } else { @() }
         pendingRuntimeHosts = if ($result.PSObject.Properties['pendingRuntimeHosts']) { @($result.pendingRuntimeHosts) } else { @() }

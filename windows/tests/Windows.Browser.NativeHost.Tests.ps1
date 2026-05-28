@@ -585,6 +585,7 @@ Describe "Browser Module - Native Host" {
                 'operation',
                 'source',
                 'triggerHost',
+                'portalRecoveryHosts',
                 'portalState',
                 'tabId',
                 'createdAtUtc',
@@ -664,6 +665,7 @@ Describe "Browser Module - Native Host" {
                         portalModeActive = $true
                         activeMarkerMode = 'limited'
                         allowedHosts = @('portal.example')
+                        portalRecoveryHosts = @($request.portalRecoveryHosts)
                         recoveryHostsApplied = $true
                         limitedModeReady = $true
                         recentSuccessEligible = $true
@@ -673,7 +675,16 @@ Describe "Browser Module - Native Host" {
                 }
 
                 $result = Invoke-NativeHostCaptivePortalRecoveryAction `
-                    -Message ([PSCustomObject]@{ triggerHost = 'Portal.Example.'; tabId = 12 })
+                    -Message ([PSCustomObject]@{
+                        triggerHost = 'Portal.Example.'
+                        portalRecoveryHosts = @(
+                            'Portal.Example.',
+                            'Login.Wedu.Example.',
+                            'https://leak.wedu.example/login?token=secret',
+                            '10.77.0.1'
+                        )
+                        tabId = 12
+                    })
 
                 $result.success | Should -BeTrue
                 $result.state | Should -Be 'Portal'
@@ -682,6 +693,7 @@ Describe "Browser Module - Native Host" {
                 $result.taskName | Should -Be 'OpenPath-CaptivePortalRecovery'
                 $result.triggerMs | Should -Be 3
                 $result.waitMs | Should -Be 4
+                @($result.portalRecoveryHosts) | Should -Be @('portal.example', 'login.wedu.example')
                 @($script:capturedTaskNames) | Should -Be @('OpenPath-CaptivePortalRecovery')
 
                 $queuedRaw = Get-ChildItem -Path $queuePath -Filter *.json | Select-Object -First 1 | Get-Content -Raw
@@ -692,10 +704,12 @@ Describe "Browser Module - Native Host" {
                 [string]$queued.source | Should -Be 'native-host'
                 [string]$queued.portalState | Should -Be 'Unknown'
                 [int]$queued.tabId | Should -Be 12
+                @($queued.portalRecoveryHosts) | Should -Be @('portal.example', 'login.wedu.example')
                 $queuedRaw | Should -Match '"createdAtUtc":\s*"[^"]+Z"'
                 $queued.PSObject.Properties.Name | Should -Not -Contain 'url'
                 $queued.PSObject.Properties.Name | Should -Not -Contain 'cookies'
                 $queued.PSObject.Properties.Name | Should -Not -Contain 'query'
+                $queuedRaw | Should -Not -Match 'token=secret'
             }
             finally {
                 Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH -ErrorAction SilentlyContinue
@@ -1060,7 +1074,8 @@ Describe "Browser Module - Native Host" {
             Assert-ContentContainsAll -Content $content -Needles @(
                 'recentSuccessSource',
                 '$recentSuccess.Source',
-                'Enable-OpenPathCaptivePortalMode -State Portal -PortalRecoveryDomains @($triggerHost)'
+                '$portalRecoveryHosts',
+                'Enable-OpenPathCaptivePortalMode -State Portal -PortalRecoveryDomains $portalRecoveryHosts'
             )
             Assert-ContentContainsAll -Content $nativeContent -Needles @(
                 'Get-NativeHostCaptivePortalActiveMarker',

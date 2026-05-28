@@ -45,6 +45,7 @@ function baseResult(overrides = {}) {
       success: true,
       portalModeActive: true,
       recoveryHostsApplied: true,
+      portalRecoveryHosts: ['nce.wedu.comunidad.madrid', 'wlogin.wedu-lab.test'],
       limitedModeReady: true,
       discoveryTruncated: false,
     },

@@ -112,6 +112,10 @@ export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab
   requireField(result.fallbackMode !== 'passthrough', 'fallbackMode not passthrough');
   requireEmptyArray(result.pendingRuntimeHosts, 'pendingRuntimeHosts empty');
   requireNonEmptyArray(result.bootstrapHosts, 'bootstrapHosts non-empty');
+  requireNonEmptyArray(
+    result.nativeRecovery.portalRecoveryHosts,
+    'nativeRecovery.portalRecoveryHosts'
+  );
   requireResultField(result, 'limitedDns.success', true);
   requireResultField(result, 'nativeRecovery.limitedModeReady', true);
   requireResultField(result, 'nativeRecovery.discoveryTruncated', false);

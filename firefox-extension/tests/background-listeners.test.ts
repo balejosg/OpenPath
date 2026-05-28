@@ -53,7 +53,9 @@ async function hasPromiseResolved(promise: Promise<unknown>): Promise<boolean> {
 
 function createListenerHarness(
   options: {
-    confirmBlockedScreenNavigation?: (context: ConfirmBlockedScreenContext) => Promise<boolean>;
+    confirmBlockedScreenNavigation?: (
+      context: ConfirmBlockedScreenContext
+    ) => Promise<boolean | { blocked: boolean; portalRecoveryEligible?: boolean }>;
     currentTabUrl?: string | null;
     evaluateBlockedPath?: EvaluateBlockedPath;
     evaluateBlockedSubdomain?: EvaluateBlockedSubdomain;
@@ -188,7 +190,9 @@ function createListenerHarness(
       ? { recoverCaptivePortalNavigation: options.recoverCaptivePortalNavigation }
       : {}),
   } as Parameters<typeof registerBackgroundListeners>[0] & {
-    confirmBlockedScreenNavigation: (context: ConfirmBlockedScreenContext) => Promise<boolean>;
+    confirmBlockedScreenNavigation: (
+      context: ConfirmBlockedScreenContext
+    ) => Promise<boolean | { blocked: boolean; portalRecoveryEligible?: boolean }>;
   };
 
   registerBackgroundListeners(listenerOptions);
@@ -777,6 +781,108 @@ void describe('background listeners blocked-screen routing', () => {
       },
     ]);
     assert.deepEqual(harness.redirects, []);
+  });
+
+  void test('passes current observed portal hosts to captive recovery without stale URLs or query strings', async () => {
+    const recoveryCalls: (ConfirmBlockedScreenContext & { portalRecoveryHosts?: string[] })[] = [];
+    const harness = createListenerHarness({
+      confirmBlockedScreenNavigation: () =>
+        Promise.resolve({ blocked: true, portalRecoveryEligible: true }),
+      currentTabUrl: 'https://login.wedu.example/login',
+      recoverCaptivePortalNavigation: (context) => {
+        recoveryCalls.push(
+          context as ConfirmBlockedScreenContext & { portalRecoveryHosts?: string[] }
+        );
+        return Promise.resolve(true);
+      },
+    });
+    assert.ok(harness.webNavigationBefore);
+    assert.ok(harness.webRequestBefore);
+    assert.ok(harness.webRequestError);
+
+    harness.webRequestBefore({
+      documentUrl: 'https://old.example/page',
+      frameId: 0,
+      method: 'GET',
+      parentFrameId: -1,
+      requestId: 'old-main',
+      tabId: 31,
+      type: 'main_frame',
+      url: 'https://old.example/page',
+    } as WebRequest.OnBeforeRequestDetailsType);
+    harness.webRequestBefore({
+      documentUrl: 'https://old.example/page',
+      frameId: 0,
+      method: 'GET',
+      parentFrameId: -1,
+      requestId: 'old-asset',
+      tabId: 31,
+      type: 'script',
+      url: 'https://old-cdn.example/app.js',
+    } as WebRequest.OnBeforeRequestDetailsType);
+    harness.webNavigationBefore({
+      frameId: 0,
+      tabId: 31,
+      url: 'http://nce.wedu.comunidad.madrid/',
+    });
+    harness.webNavigationBefore({
+      frameId: 0,
+      tabId: 31,
+      url: 'https://login.wedu.example/login?token=secret',
+    });
+    harness.webRequestBefore({
+      documentUrl: 'https://login.wedu.example/login?token=secret',
+      frameId: 0,
+      method: 'GET',
+      parentFrameId: -1,
+      requestId: 'asset-1',
+      tabId: 31,
+      type: 'script',
+      url: 'https://assets.wedu.example/app.js?token=secret',
+    } as WebRequest.OnBeforeRequestDetailsType);
+    harness.webRequestError({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      fromCache: false,
+      frameId: 0,
+      method: 'GET',
+      parentFrameId: -1,
+      requestId: 'login-1',
+      tabId: 31,
+      thirdParty: false,
+      timeStamp: 1000,
+      type: 'main_frame',
+      url: 'https://login.wedu.example/login?token=secret',
+    });
+
+    await waitForAsyncListeners();
+
+    assert.equal(recoveryCalls.length, 2);
+    assert.deepEqual(recoveryCalls.at(-1), {
+      tabId: 31,
+      hostname: 'login.wedu.example',
+      error: 'NS_ERROR_NET_TIMEOUT',
+      origin: null,
+      portalRecoveryHosts: ['login.wedu.example', 'assets.wedu.example'],
+      url: 'https://login.wedu.example/login?token=secret',
+    });
+    assert.deepEqual(recoveryCalls[0], {
+      tabId: 31,
+      hostname: 'login.wedu.example',
+      error: 'OPENPATH_NATIVE_POLICY_BLOCKED',
+      origin: null,
+      portalRecoveryHosts: ['login.wedu.example', 'assets.wedu.example'],
+      url: 'https://login.wedu.example/login?token=secret',
+    });
+    assert.deepEqual(harness.redirects, []);
+    const sentRecoveryHosts = recoveryCalls.flatMap((call) => call.portalRecoveryHosts ?? []);
+    assert.equal(
+      sentRecoveryHosts.some((host) => host.includes('token=secret')),
+      false
+    );
+    assert.equal(
+      sentRecoveryHosts.some((host) => host.includes('old')),
+      false
+    );
   });
 
   void test('does not redirect unknown-host main-frame errors when native policy says it is allowed', async () => {

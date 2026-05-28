@@ -14,6 +14,7 @@ interface CaptivePortalRecoveryLogger {
 export interface CaptivePortalRecoveryNavigationContext {
   tabId: number;
   hostname: string;
+  portalRecoveryHosts?: string[];
   url: string;
 }
 
@@ -46,6 +47,26 @@ function buildRecoveryKey(tabId: number, hostname: string): string {
   return `${tabId.toString()}:${hostname.trim().toLowerCase()}`;
 }
 
+function buildRecoveryHostSignature(context: CaptivePortalRecoveryNavigationContext): Set<string> {
+  const hosts = new Set<string>();
+  for (const candidate of [context.hostname, ...(context.portalRecoveryHosts ?? [])]) {
+    const normalized = candidate.trim().toLowerCase();
+    if (normalized) {
+      hosts.add(normalized);
+    }
+  }
+  return hosts;
+}
+
+function hasEnrichedRecoveryHosts(currentHosts: Set<string>, previousHosts: Set<string>): boolean {
+  for (const host of currentHosts) {
+    if (!previousHosts.has(host)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function createCaptivePortalRecoveryController(
   deps: CaptivePortalRecoveryControllerDeps
 ): CaptivePortalRecoveryController {
@@ -57,7 +78,10 @@ export function createCaptivePortalRecoveryController(
       new Promise((resolve) => {
         setTimeout(resolve, milliseconds);
       }));
-  const recoveryAttemptByTabAndHost = new Map<string, number>();
+  const recoveryAttemptByTabAndHost = new Map<
+    string,
+    { attemptedAt: number; hosts: Set<string> }
+  >();
 
   function clearLimiter(): void {
     recoveryAttemptByTabAndHost.clear();
@@ -87,10 +111,12 @@ export function createCaptivePortalRecoveryController(
   ): Promise<boolean> {
     const key = buildRecoveryKey(context.tabId, context.hostname);
     const currentTime = now();
+    const recoveryHosts = buildRecoveryHostSignature(context);
     const lastAttempt = recoveryAttemptByTabAndHost.get(key);
     if (
       lastAttempt !== undefined &&
-      currentTime - lastAttempt < CAPTIVE_PORTAL_RECOVERY_RATE_LIMIT_MS
+      currentTime - lastAttempt.attemptedAt < CAPTIVE_PORTAL_RECOVERY_RATE_LIMIT_MS &&
+      !hasEnrichedRecoveryHosts(recoveryHosts, lastAttempt.hosts)
     ) {
       return false;
     }
@@ -121,9 +147,12 @@ export function createCaptivePortalRecoveryController(
       }
     }
 
-    recoveryAttemptByTabAndHost.set(key, currentTime);
+    recoveryAttemptByTabAndHost.set(key, { attemptedAt: currentTime, hosts: recoveryHosts });
     const response = await deps
       .recoverCaptivePortalNavigation({
+        ...(context.portalRecoveryHosts && context.portalRecoveryHosts.length > 0
+          ? { portalRecoveryHosts: context.portalRecoveryHosts }
+          : {}),
         portalState: portalState ?? 'Unknown',
         triggerHost: context.hostname,
         tabId: context.tabId,

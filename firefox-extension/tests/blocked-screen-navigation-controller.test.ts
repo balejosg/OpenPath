@@ -523,6 +523,44 @@ void describe('blocked screen navigation controller', () => {
     assert.deepEqual(redirects, []);
   });
 
+  void test('native preflight portal eligible block tries captive portal recovery before redirect', async () => {
+    const redirects: BlockedScreenContext[] = [];
+    const recoveryCalls: unknown[] = [];
+    const controller = createBlockedScreenNavigationController({
+      addBlockedDomain: () => undefined,
+      confirmBlockedScreenNavigation: () =>
+        Promise.resolve({ blocked: true, portalRecoveryEligible: true }),
+      getBlockedScreenUrl: () => 'moz-extension://unit-test/blocked/blocked.html',
+      getCurrentTabUrl: () => Promise.resolve('https://login.wedu.example/login'),
+      recoverCaptivePortalNavigation: (context) => {
+        recoveryCalls.push(context);
+        return Promise.resolve(true);
+      },
+      redirectToBlockedScreen: (context) => {
+        redirects.push(context);
+        return Promise.resolve();
+      },
+    });
+
+    controller.handleNativePolicyNavigationPreflight({
+      frameId: 0,
+      tabId: 24,
+      url: 'https://login.wedu.example/login',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(recoveryCalls, [
+      {
+        tabId: 24,
+        hostname: 'login.wedu.example',
+        error: 'OPENPATH_NATIVE_POLICY_BLOCKED',
+        origin: null,
+        url: 'https://login.wedu.example/login',
+      },
+    ]);
+    assert.deepEqual(redirects, []);
+  });
+
   void test('blocked-screen navigation delegates recovery without owning portal state', async () => {
     const recoveryCalls: {
       context: ConfirmBlockedScreenContext;

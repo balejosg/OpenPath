@@ -327,11 +327,17 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
     if ($RequestEnvelope.Request.PSObject.Properties['triggerHost'] -and $RequestEnvelope.Request.triggerHost) {
         $triggerHost = [string]$RequestEnvelope.Request.triggerHost
     }
+    $portalRecoveryHostCandidates = @($triggerHost)
+    if ($RequestEnvelope.Request.PSObject.Properties['portalRecoveryHosts']) {
+        $portalRecoveryHostCandidates += @($RequestEnvelope.Request.portalRecoveryHosts)
+    }
+    $portalRecoveryHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $portalRecoveryHostCandidates)
 
     try {
         Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'request-read' -Payload @{
             operation = $operation
             hasTriggerHost = (-not [string]::IsNullOrWhiteSpace($triggerHost))
+            portalRecoveryHostCount = @($portalRecoveryHosts).Count
         } | Out-Null
 
         if (-not (Test-OpenPathRecoveryRequestFresh -RequestEnvelope $RequestEnvelope -NowUtc $NowUtc)) {
@@ -473,8 +479,9 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
             Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'enable' -Payload @{
                 state = [string]$state
                 triggerHost = $triggerHost
+                portalRecoveryHostCount = @($portalRecoveryHosts).Count
             } | Out-Null
-            $success = [bool](Enable-OpenPathCaptivePortalMode -State Portal -PortalRecoveryDomains @($triggerHost))
+            $success = [bool](Enable-OpenPathCaptivePortalMode -State Portal -PortalRecoveryDomains $portalRecoveryHosts)
             if ($success) {
                 $activeMarker = Get-OpenPathCaptivePortalMarker
             }
@@ -492,6 +499,7 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
             operation = $operation
             state = [string]$state
             triggerHost = $triggerHost
+            portalRecoveryHosts = @($portalRecoveryHosts)
             activeMarker = $portalModeActive
             portalModeActive = $portalModeActive
             activeMarkerMode = [string]$markerSummary.activeMarkerMode

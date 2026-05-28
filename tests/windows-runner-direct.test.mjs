@@ -835,6 +835,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.doesNotMatch(weduScript, /Invoke-GatewayControl[\s\S]*gateway-authenticated/);
     assert.match(weduScript, /gateway-reset/);
     assert.match(weduScript, /recover-captive-portal-navigation/);
+    assert.match(weduScript, /portalRecoveryHosts = \$script:WeduLimitedHosts/);
     assert.match(weduScript, /operation = 'reconcile'/);
     assert.match(weduScript, /windows-direct-runtime-staging\.ps1/);
     assert.match(weduScript, /Stage-OpenPathDirectRunnerRuntime/);

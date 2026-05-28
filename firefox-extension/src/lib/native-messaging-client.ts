@@ -68,6 +68,7 @@ export interface VerifyResponse {
 
 export interface CaptivePortalRecoveryInput {
   operation?: 'open' | 'reconcile';
+  portalRecoveryHosts?: string[];
   portalState?: string;
   source?: string;
   tabId?: number;
@@ -265,6 +266,9 @@ export function createNativeMessagingClient(options: {
       action: 'recover-captive-portal-navigation',
       operation: input.operation ?? 'open',
       ...(input.triggerHost !== undefined ? { triggerHost: input.triggerHost } : {}),
+      ...(input.portalRecoveryHosts && input.portalRecoveryHosts.length > 0
+        ? { portalRecoveryHosts: input.portalRecoveryHosts }
+        : {}),
       ...(input.portalState !== undefined ? { portalState: input.portalState } : {}),
       ...(input.source !== undefined ? { source: input.source } : {}),
       ...(input.tabId !== undefined ? { tabId: input.tabId } : {}),

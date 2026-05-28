@@ -13,6 +13,8 @@ import {
 import { evaluateGoogleGameBlocking, isGoogleGamePolicyOutcome } from './google-game-blocking.js';
 import type { OpenPathDependencyObservationEventInput } from './dependency-observation-diagnostics.js';
 
+const MAX_CAPTIVE_PORTAL_RECOVERY_HOSTS = 16;
+
 interface BackgroundListenersOptions {
   addBlockedDomain: (
     tabId: number,
@@ -38,7 +40,7 @@ interface BackgroundListenersOptions {
     context: ConfirmBlockedScreenContext
   ) => Promise<boolean | NativeBlockedScreenConfirmation>;
   recoverCaptivePortalNavigation?: (
-    context: ConfirmBlockedScreenContext,
+    context: ConfirmBlockedScreenContext & { portalRecoveryHosts?: string[] },
     options?: { isCurrentNavigation?: () => boolean }
   ) => Promise<boolean>;
   handleRuntimeMessage: (message: unknown, sender: Runtime.MessageSender) => Promise<unknown>;
@@ -73,6 +75,71 @@ function extractRequestHostname(url: string | undefined): string | null {
 
 function isDependencyRequestType(type: unknown): type is string {
   return typeof type === 'string' && type.length > 0 && type !== 'main_frame';
+}
+
+function normalizeCaptivePortalRecoveryHost(hostname: string | null): string | null {
+  const normalized = (hostname ?? '').trim().replace(/\.$/, '').toLowerCase();
+  if (!normalized || normalized.length > 253 || normalized.startsWith('*.')) {
+    return null;
+  }
+  if (!normalized.includes('.') || normalized.endsWith('.local')) {
+    return null;
+  }
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalized) || /^\[[0-9a-f:]+\]$/i.test(normalized)) {
+    return null;
+  }
+  if (
+    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(
+      normalized
+    )
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function rememberCaptivePortalRecoveryHost(
+  hostsByTab: Map<number, Set<string>>,
+  tabId: number,
+  hostname: string | null
+): void {
+  if (tabId < 0) {
+    return;
+  }
+  const normalized = normalizeCaptivePortalRecoveryHost(hostname);
+  if (!normalized) {
+    return;
+  }
+  const hosts = hostsByTab.get(tabId) ?? new Set<string>();
+  if (hosts.size < MAX_CAPTIVE_PORTAL_RECOVERY_HOSTS || hosts.has(normalized)) {
+    hosts.add(normalized);
+    hostsByTab.set(tabId, hosts);
+  }
+}
+
+function startCaptivePortalRecoveryNavigation(
+  hostsByTab: Map<number, Set<string>>,
+  tabId: number,
+  hostname: string | null
+): void {
+  if (tabId < 0) {
+    return;
+  }
+  hostsByTab.delete(tabId);
+  rememberCaptivePortalRecoveryHost(hostsByTab, tabId, hostname);
+}
+
+function getCaptivePortalRecoveryHosts(
+  hostsByTab: Map<number, Set<string>>,
+  tabId: number,
+  triggerHost: string
+): string[] {
+  const hosts = new Set<string>(hostsByTab.get(tabId) ?? []);
+  const normalizedTrigger = normalizeCaptivePortalRecoveryHost(triggerHost);
+  if (normalizedTrigger) {
+    hosts.add(normalizedTrigger);
+  }
+  return Array.from(hosts).slice(0, MAX_CAPTIVE_PORTAL_RECOVERY_HOSTS);
 }
 
 function resolveAnchorHost(
@@ -225,14 +292,30 @@ function parseCaptivePortalRuntimeDependencyMessage(message: unknown): {
 
 export function registerBackgroundListeners(options: BackgroundListenersOptions): void {
   const tabAnchorHosts = new Map<number, string>();
+  const captivePortalRecoveryHostsByTab = new Map<number, Set<string>>();
+  const configuredCaptivePortalRecovery = options.recoverCaptivePortalNavigation;
+  const recoverCaptivePortalNavigation = configuredCaptivePortalRecovery
+    ? (
+        context: ConfirmBlockedScreenContext,
+        recoveryOptions?: { isCurrentNavigation?: () => boolean }
+      ): Promise<boolean> => {
+        const portalRecoveryHosts = getCaptivePortalRecoveryHosts(
+          captivePortalRecoveryHostsByTab,
+          context.tabId,
+          context.hostname
+        );
+        return configuredCaptivePortalRecovery(
+          portalRecoveryHosts.length > 1 ? { ...context, portalRecoveryHosts } : context,
+          recoveryOptions
+        );
+      }
+    : undefined;
   const blockedScreenNavigation = createBlockedScreenNavigationController({
     addBlockedDomain: options.addBlockedDomain,
     ...(options.confirmBlockedScreenNavigation
       ? { confirmBlockedScreenNavigation: options.confirmBlockedScreenNavigation }
       : {}),
-    ...(options.recoverCaptivePortalNavigation
-      ? { recoverCaptivePortalNavigation: options.recoverCaptivePortalNavigation }
-      : {}),
+    ...(recoverCaptivePortalNavigation ? { recoverCaptivePortalNavigation } : {}),
     getBlockedScreenUrl: () => options.browser.runtime.getURL(BLOCKED_SCREEN_PATH),
     getCurrentTabUrl: async (tabId) => {
       const tab = await options.browser.tabs.get(tabId);
@@ -265,7 +348,25 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
       if (!result) {
         if (details.type === 'main_frame' && details.tabId >= 0 && dependencyHost) {
           tabAnchorHosts.set(details.tabId, dependencyHost);
+          startCaptivePortalRecoveryNavigation(
+            captivePortalRecoveryHostsByTab,
+            details.tabId,
+            dependencyHost
+          );
           return;
+        }
+
+        if (anchorHost && dependencyHost && anchorHost !== dependencyHost) {
+          rememberCaptivePortalRecoveryHost(
+            captivePortalRecoveryHostsByTab,
+            details.tabId,
+            anchorHost
+          );
+          rememberCaptivePortalRecoveryHost(
+            captivePortalRecoveryHostsByTab,
+            details.tabId,
+            dependencyHost
+          );
         }
 
         if (
@@ -292,6 +393,11 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
 
       if (details.type === 'main_frame' && details.tabId >= 0 && dependencyHost) {
         tabAnchorHosts.set(details.tabId, dependencyHost);
+        startCaptivePortalRecoveryNavigation(
+          captivePortalRecoveryHostsByTab,
+          details.tabId,
+          dependencyHost
+        );
       }
 
       const hostname = extractHostname(details.url) ?? t('blockedUnknownDomain');
@@ -327,6 +433,24 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
     (details: WebRequest.OnErrorOccurredDetailsType) => {
       const anchorHost = resolveAnchorHost(details, tabAnchorHosts);
       const dependencyHost = extractRequestHostname(details.url);
+      if (anchorHost && dependencyHost && anchorHost !== dependencyHost) {
+        rememberCaptivePortalRecoveryHost(
+          captivePortalRecoveryHostsByTab,
+          details.tabId,
+          anchorHost
+        );
+        rememberCaptivePortalRecoveryHost(
+          captivePortalRecoveryHostsByTab,
+          details.tabId,
+          dependencyHost
+        );
+      } else if (details.frameId === 0 && dependencyHost) {
+        rememberCaptivePortalRecoveryHost(
+          captivePortalRecoveryHostsByTab,
+          details.tabId,
+          dependencyHost
+        );
+      }
       options.recordDependencyObservationEvent?.({
         source: 'webRequest.onErrorOccurred',
         tabId: details.tabId,
@@ -356,6 +480,11 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
       const navigationHost = extractRequestHostname(details.url);
       if (details.frameId === 0 && navigationHost) {
         tabAnchorHosts.set(details.tabId, navigationHost);
+        startCaptivePortalRecoveryNavigation(
+          captivePortalRecoveryHostsByTab,
+          details.tabId,
+          navigationHost
+        );
       }
       options.recordDependencyObservationEvent?.({
         source: 'webNavigation.onBeforeNavigate',
@@ -384,6 +513,13 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
   options.browser.webNavigation.onErrorOccurred.addListener(
     (details: WebNavigation.OnErrorOccurredDetailsType) => {
       const navigationHost = extractRequestHostname(details.url);
+      if (details.frameId === 0 && navigationHost) {
+        rememberCaptivePortalRecoveryHost(
+          captivePortalRecoveryHostsByTab,
+          details.tabId,
+          navigationHost
+        );
+      }
       options.recordDependencyObservationEvent?.({
         source: 'webNavigation.onErrorOccurred',
         tabId: details.tabId,
@@ -412,6 +548,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
   options.browser.tabs.onRemoved.addListener((tabId: number) => {
     blockedScreenNavigation.disposeTab(tabId);
     tabAnchorHosts.delete(tabId);
+    captivePortalRecoveryHostsByTab.delete(tabId);
     options.disposeTab(tabId);
     logger.debug(`[Monitor] Tab ${tabId.toString()} cerrada, datos eliminados`);
   });

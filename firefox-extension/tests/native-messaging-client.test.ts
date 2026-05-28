@@ -168,6 +168,39 @@ await describe('native messaging client', async () => {
     assert.equal('requestId' in (messages[0] as Record<string, unknown>), false);
   });
 
+  await test('passes captive portal recovery hosts in the native recovery payload', async () => {
+    const { browser, messages } = createRecordingBrowserStub(() => ({
+      success: true,
+      action: 'recover-captive-portal-navigation',
+      triggerHost: 'login.wedu.example',
+      tabId: 43,
+      requestId: 'native-request-2',
+      portalModeActive: true,
+    }));
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+    });
+
+    const response = await client.recoverCaptivePortalNavigation({
+      triggerHost: 'login.wedu.example',
+      portalRecoveryHosts: ['login.wedu.example', 'assets.wedu.example'],
+      tabId: 43,
+    });
+
+    assert.equal(response.success, true);
+    assert.deepEqual(messages, [
+      {
+        action: 'recover-captive-portal-navigation',
+        operation: 'open',
+        triggerHost: 'login.wedu.example',
+        portalRecoveryHosts: ['login.wedu.example', 'assets.wedu.example'],
+        tabId: 43,
+      },
+    ]);
+    assert.equal('requestId' in (messages[0] as Record<string, unknown>), false);
+  });
+
   await test('batches simultaneous local runtime dependency requests', async () => {
     const { browser, messages } = createRecordingBrowserStub((message) => {
       assert.deepEqual(message, {
