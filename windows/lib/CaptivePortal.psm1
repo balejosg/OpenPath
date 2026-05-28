@@ -291,6 +291,7 @@ function Get-OpenPathCaptivePortalBootstrapHosts {
         [int]$MaxTextBytes = 32768,
         [int]$HttpTimeoutSeconds = 2,
         [int]$MaxHttpRedirects = 4,
+        [scriptblock]$RequestFactory = $null,
         [switch]$FetchSeedUrls
     )
 
@@ -343,9 +344,15 @@ function Get-OpenPathCaptivePortalBootstrapHosts {
             -MaxHosts ([Math]::Max(1, $MaxHosts - ($bootstrapHosts.Count + $redirectHosts.Count + $resourceHosts.Count))) `
             -MaxTextBytes $MaxTextBytes `
             -TimeoutSeconds $HttpTimeoutSeconds `
-            -MaxRedirects $MaxHttpRedirects
+            -MaxRedirects $MaxHttpRedirects `
+            -RequestFactory $RequestFactory
         foreach ($probeHost in @($probe.bootstrapHosts)) {
-            Add-OpenPathCaptivePortalHostCandidate -Hosts $bootstrapHosts -Errors $errors -Value $probeHost -Kind 'bootstrap' -ProtectedHosts $ProtectedHosts -MaxHosts $MaxHosts
+            if ($seedIsRedirect) {
+                Add-OpenPathCaptivePortalHostCandidate -Hosts $redirectHosts -Errors $errors -Value $probeHost -Kind 'redirect' -ProtectedHosts $ProtectedHosts -MaxHosts $MaxHosts
+            }
+            else {
+                Add-OpenPathCaptivePortalHostCandidate -Hosts $bootstrapHosts -Errors $errors -Value $probeHost -Kind 'bootstrap' -ProtectedHosts $ProtectedHosts -MaxHosts $MaxHosts
+            }
         }
         foreach ($probeHost in @($probe.redirectHosts)) {
             Add-OpenPathCaptivePortalHostCandidate -Hosts $redirectHosts -Errors $errors -Value $probeHost -Kind 'redirect' -ProtectedHosts $ProtectedHosts -MaxHosts $MaxHosts

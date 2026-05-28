@@ -347,6 +347,56 @@ Describe "Watchdog Script" {
             (($result | ConvertTo-Json -Depth 8) -match 'secret|/login|/app.js') | Should -BeFalse
         }
 
+        It "Does not promote already-rendered secondary seed probes into bootstrap hosts" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $module = Import-Module $modulePath -Force -PassThru
+            $requestFactory = {
+                param([System.Uri]$Uri)
+
+                $headers = [System.Net.WebHeaderCollection]::new()
+                $body = '<link rel="stylesheet" href="http://assets.wedu-lab.test/portal.css"><script src="http://cdn.wedu-lab.test/portal.js"></script><a href="http://auth.wedu-lab.test/token">Auth</a>'
+                if ($Uri.Host -eq 'nce.wedu.comunidad.madrid') {
+                    $headers['Location'] = 'http://wlogin.wedu-lab.test/login?continue=http%3A%2F%2Fnce.wedu.comunidad.madrid%2F'
+                    $body = ''
+                }
+
+                $response = [PSCustomObject]@{
+                    Headers = $headers
+                    Stream = [System.IO.MemoryStream]::new([System.Text.Encoding]::UTF8.GetBytes($body))
+                }
+                $response | Add-Member -MemberType ScriptMethod -Name GetResponseStream -Value { return $this.Stream }
+                $response | Add-Member -MemberType ScriptMethod -Name Close -Value {
+                    if ($this.Stream) { $this.Stream.Dispose() }
+                }
+                return $response
+            }
+
+            $result = & $module {
+                param([scriptblock]$RequestFactory)
+                Get-OpenPathCaptivePortalBootstrapHosts `
+                    -SeedUrls @(
+                        'http://nce.wedu.comunidad.madrid/',
+                        'http://assets.wedu-lab.test/',
+                        'http://cdn.wedu-lab.test/',
+                        'http://wlogin.wedu-lab.test/',
+                        'http://auth.wedu-lab.test/'
+                    ) `
+                    -FetchSeedUrls `
+                    -MaxHttpRedirects 2 `
+                    -RequestFactory $RequestFactory
+            } $requestFactory
+
+            @($result.bootstrapHosts) | Should -Contain 'nce.wedu.comunidad.madrid'
+            @($result.bootstrapHosts) | Should -Not -Contain 'assets.wedu-lab.test'
+            @($result.bootstrapHosts) | Should -Not -Contain 'cdn.wedu-lab.test'
+            @($result.bootstrapHosts) | Should -Not -Contain 'wlogin.wedu-lab.test'
+            @($result.bootstrapHosts) | Should -Not -Contain 'auth.wedu-lab.test'
+            @($result.redirectHosts) | Should -Contain 'wlogin.wedu-lab.test'
+            @($result.resourceHosts) | Should -Contain 'assets.wedu-lab.test'
+            @($result.resourceHosts) | Should -Contain 'cdn.wedu-lab.test'
+            @($result.resourceHosts) | Should -Contain 'auth.wedu-lab.test'
+        }
+
         It "Keeps fetched redirect and resource bootstrap hosts in distinct result fields" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
