@@ -749,7 +749,8 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduScript, /cdn\.wedu-lab\.test/);
     assert.match(weduScript, /auth\.wedu-lab\.test/);
     assert.match(weduScript, /window\.__openPathWeduPortalReady/);
-    assert.match(weduScript, /Resolve-DnsName -Name \$host -Server 127\.0\.0\.1/);
+    assert.match(weduScript, /Resolve-DnsName -Name \$limitedHost -Server 127\.0\.0\.1/);
+    assert.doesNotMatch(weduScript, /foreach \(\$host in/i);
     assert.match(weduScript, /this-should-be-blocked-test-12345\.com/);
     assert.match(weduScript, /weduHostPortalDetected/);
     assert.match(weduScript, /detectPortalInterceptionObserved/);

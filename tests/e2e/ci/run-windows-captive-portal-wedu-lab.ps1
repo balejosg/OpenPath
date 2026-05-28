@@ -589,17 +589,17 @@ return true;
 }
 
 function Test-WeduLimitedModeDns {
-    $results = foreach ($host in @($script:WeduLimitedHosts)) {
+    $results = foreach ($limitedHost in @($script:WeduLimitedHosts)) {
         $answers = @()
         $errorText = ''
         try {
-            $answers = @(Resolve-DnsName -Name $host -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
+            $answers = @(Resolve-DnsName -Name $limitedHost -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
         }
         catch {
             $errorText = [string]$_
         }
         [pscustomobject]@{
-            host = $host
+            host = $limitedHost
             resolvedThroughLocalDns = [bool]($answers.Count -gt 0)
             answers = @($answers | ForEach-Object { [string]$_.IPAddress } | Where-Object { $_ })
             error = $errorText
