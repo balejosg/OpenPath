@@ -736,6 +736,8 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduScript, /browserLimited/);
     assert.match(weduScript, /portalReady/);
     assert.match(weduScript, /loginSubmitted/);
+    assert.match(weduScript, /Invoke-WeduBrowserProbe -Config \$config -SubmitLogin:\$false/);
+    assert.match(weduScript, /\$browserLimited = Invoke-WeduBrowserProbe -Config \$config/);
     assert.match(weduScript, /\$activeMarkerMode[\s\S]*'limited'/);
     assert.match(weduScript, /limitedModeReady/);
     assert.match(weduScript, /bootstrapHosts/);

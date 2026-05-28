@@ -443,7 +443,10 @@ function Invoke-WebDriverJson {
 }
 
 function Invoke-WeduBrowserProbe {
-    param([Parameter(Mandatory = $true)][object]$Config)
+    param(
+        [Parameter(Mandatory = $true)][object]$Config,
+        [bool]$SubmitLogin = $true
+    )
 
     $firefoxPath = Find-FirefoxPath
     $geckoDriverPath = Find-GeckoDriverPath
@@ -524,8 +527,10 @@ function Invoke-WeduBrowserProbe {
             script = 'return window.__openPathWeduPortalReady === true;'
             args = @()
         }
-        $loginSubmittedResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/execute/sync" -Method Post -Body @{
-            script = @'
+        $loginClicked = $false
+        if ($SubmitLogin) {
+            $loginSubmittedResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/execute/sync" -Method Post -Body @{
+                script = @'
 const form = document.querySelector('form');
 const button = document.querySelector('button[type="submit"], input[type="submit"]');
 if (!form || !button || button.disabled) {
@@ -534,11 +539,13 @@ if (!form || !button || button.disabled) {
 button.click();
 return true;
 '@
-            args = @()
+                args = @()
+            }
+            $loginClicked = [bool]$loginSubmittedResult.value
         }
         $postSubmitFinalUrl = $finalUrl
         $postSubmitNavigationCompleted = $false
-        if ([bool]$loginSubmittedResult.value) {
+        if ($loginClicked) {
             for ($attempt = 1; $attempt -le 20; $attempt++) {
                 Start-Sleep -Milliseconds 250
                 $postSubmitUrlResult = Invoke-WebDriverJson -Uri "http://127.0.0.1:$port/session/$sessionId/url"
@@ -563,7 +570,7 @@ return true;
             title = $title
             portalDetected = ($pageSource -match 'WEDU lab captive portal')
             portalReady = [bool]$portalReadyResult.value
-            loginSubmitted = [bool]([bool]$loginSubmittedResult.value -and $postSubmitNavigationCompleted)
+            loginSubmitted = [bool]($loginClicked -and $postSubmitNavigationCompleted)
             postSubmitFinalUrl = $postSubmitFinalUrl
             postSubmitNavigationCompleted = $postSubmitNavigationCompleted
             expectedLoginHost = $script:WeduLoginHost
@@ -1031,7 +1038,7 @@ function Invoke-WeduLabRun {
 
     $successProbe = Invoke-HttpProbe -Url $script:DetectionUrl
     $portalProbe = Invoke-HttpProbe -Url "http://$script:WeduHost/"
-    $browserBefore = Invoke-WeduBrowserProbe -Config $config
+    $browserBefore = Invoke-WeduBrowserProbe -Config $config -SubmitLogin:$false
     $browserPortalDetected = [bool]$browserBefore.portalDetected
     $weduHostPortalDetected = [bool]($portalProbe.bodySample -match 'WEDU lab captive portal')
     $detectPortalInterceptionObserved = [bool]($successProbe.bodySample -match 'WEDU lab captive portal')
