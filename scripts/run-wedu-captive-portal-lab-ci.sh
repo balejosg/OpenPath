@@ -415,6 +415,19 @@ class Handler(BaseHTTPRequestHandler):
         original = f'http://{self.headers.get("Host", "")}{self.path}'
         return f'http://{LOGIN_HOST}/login?continue={quote(original, safe="")}'
 
+    def _landing_page(self):
+        login_url = self._login_url()
+        return f'''<html><head>
+<title>WEDU lab captive portal</title>
+<link rel="stylesheet" href="http://{ASSET_HOST}/portal.css">
+<script src="http://{CDN_HOST}/portal.js"></script>
+<script>window.location.replace('{login_url}');</script>
+</head><body>
+<h1>WEDU lab captive portal</h1>
+<a href="{login_url}">Continue to WEDU login</a>
+<a href="http://{AUTH_HOST}/session" data-openpath-auth="true">Auth endpoint</a>
+</body></html>'''
+
     def _login_page(self):
         return f'''<html><head>
 <title>WEDU lab login</title>
@@ -436,8 +449,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_response(200)
         else:
-            self.send_response(302)
-            self.send_header('Location', self._login_url())
+            self.send_response(200)
         self.send_header('Content-Type', 'text/html')
         self.end_headers()
 
@@ -485,7 +497,7 @@ class Handler(BaseHTTPRequestHandler):
         if host == LOGIN_HOST:
             self._send(200, self._login_page())
             return
-        self._redirect(self._login_url())
+        self._send(200, self._landing_page())
 
     def do_POST(self):
         length = int(self.headers.get('Content-Length', '0'))

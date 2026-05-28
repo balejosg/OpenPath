@@ -1038,7 +1038,31 @@ function Invoke-WeduLabRun {
 
     $successProbe = Invoke-HttpProbe -Url $script:DetectionUrl
     $portalProbe = Invoke-HttpProbe -Url "http://$script:WeduHost/"
-    $browserBefore = Invoke-WeduBrowserProbe -Config $config -SubmitLogin:$false
+    $passiveFinalUrl = if ($portalProbe.location) { [string]$portalProbe.location } else { "http://$script:WeduHost/" }
+    $passiveFinalHost = ''
+    try {
+        $passiveFinalHost = ([System.Uri]$passiveFinalUrl).Host
+    }
+    catch { }
+    $browserBefore = [pscustomobject]@{
+        gatewayUrl = $config.gatewayUrl
+        targetUrl = "http://$script:WeduHost/"
+        finalUrl = $passiveFinalUrl
+        finalLoginHost = $passiveFinalHost
+        title = ''
+        portalDetected = (Test-CaptivePortalEvidence -Probe $portalProbe)
+        portalReady = $false
+        loginSubmitted = $false
+        postSubmitFinalUrl = $passiveFinalUrl
+        postSubmitNavigationCompleted = $false
+        expectedLoginHost = $script:WeduLoginHost
+        expectedAssetsHost = $script:WeduAssetHost
+        expectedCdnHost = $script:WeduCdnHost
+        expectedAuthHost = $script:WeduAuthHost
+        screenshotPath = ''
+        geckoDriverOutPath = ''
+        geckoDriverErrPath = ''
+    }
     $browserPortalDetected = [bool]$browserBefore.portalDetected
     $weduHostPortalDetected = Test-CaptivePortalEvidence -Probe $portalProbe
     $detectPortalInterceptionObserved = Test-CaptivePortalEvidence -Probe $successProbe
