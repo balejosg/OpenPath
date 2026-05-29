@@ -77,6 +77,7 @@ Describe "Watchdog Script" {
                 'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult',
                 'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryProgress',
                 'Get-OpenPathCaptivePortalRecoveryRequests',
+                'Invoke-OpenPathCaptivePortalAuthenticatedRestore',
                 'Invoke-OpenPathCaptivePortalRecoveryRequest',
                 'Write-OpenPathCaptivePortalRecoveryProgress',
                 '$MaxRequestAgeSeconds = 60',
@@ -657,22 +658,26 @@ Describe "Watchdog Script" {
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                '$reconcileProtectedModeRestored = ([bool]$disabled -and [bool]$postAuthEvidence.protectedModeRestored)',
-                'success = $reconcileProtectedModeRestored',
-                'portalExitRoute = if ($reconcileProtectedModeRestored) { ''reconcile-authenticated'' } else { ''reconcile-authenticated-restore-failed'' }',
-                'protectedModeRestored = [bool]$postAuthEvidence.protectedModeRestored'
+                'function Invoke-OpenPathCaptivePortalAuthenticatedRestore',
+                '$protectedModeRestored = ([bool]$disabled -and [bool]$postAuthEvidence.protectedModeRestored)',
+                'success = $protectedModeRestored',
+                'portalExitRoute = if ($protectedModeRestored) { "$Operation-authenticated" } else { "$Operation-authenticated-restore-failed" }',
+                'protectedModeRestored = [bool]$postAuthEvidence.protectedModeRestored',
+                'Invoke-OpenPathCaptivePortalAuthenticatedRestore -RequestId $requestId -Operation $operation -ResultPath $ResultPath -ProgressPath $ProgressPath',
+                'Invoke-OpenPathCaptivePortalAuthenticatedRestore -RequestId $requestId -Operation $operation -ResultPath $ResultPath -ProgressPath $ProgressPath -TriggerHost $triggerHost'
             )
             $content | Should -Not -Match 'success = \$disabled\s+operation = \$operation'
         }
 
-        It "Closes passthrough immediately on authenticated detection and preserves the marker when restore fails" {
+        It "Closes any active captive portal marker immediately on authenticated detection and preserves the marker when restore fails" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $helperContent = Get-Content $helperPath -Raw
             $moduleContent = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $helperContent -Needles @(
-                '$markerMode -eq ''passthrough''',
+                '$markerMode',
+                '$markerMode -ne ''''',
                 '$captiveState -eq ''Authenticated''',
                 'Disable-OpenPathCaptivePortalMode -Config $Config',
                 'failed to close authenticated captive portal mode; marker preserved'
@@ -728,7 +733,7 @@ Describe "Watchdog Script" {
                 'captive-portal-observation.json',
                 'Update-OpenPathCaptivePortalObservation',
                 '[int]$EnterPortalCount = 2',
-                '[int]$ExitAuthenticatedCount = 3',
+                '[int]$ExitAuthenticatedCount = 1',
                 '$DetectedState -eq ''Portal''',
                 '$DetectedState -eq ''Authenticated''',
                 'portalAgeSeconds',
@@ -753,6 +758,16 @@ Describe "Watchdog Script" {
             $helperContent | Should -Not -Match "\\$captiveState -eq 'NoNetwork'.*Enable-OpenPathCaptivePortalMode"
             $moduleContent | Should -Not -Match 'MinimumPortalSeconds\\s*=\\s*180'
             $moduleContent | Should -Not -Match 'authenticatedCount\\s+-ge\\s+\\$ExitAuthenticatedCount\\s+-and\\s+\\$minimumPortalElapsed'
+        }
+
+        It "Caps limited mode marker TTL to the bounded post-auth backstop" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                '$limitedModeTtlSeconds = [Math]::Min([Math]::Max(1, $TtlSeconds), 120)',
+                '-TtlSeconds $limitedModeTtlSeconds'
+            )
         }
     }
 

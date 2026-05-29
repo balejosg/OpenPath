@@ -58,7 +58,7 @@ function Invoke-OpenPathWatchdogPrechecks {
     $activeMarker = if ($portalModeActive) { Get-OpenPathCaptivePortalMarker } else { $null }
     $markerMode = Get-OpenPathCaptivePortalMarkerMode -Marker $activeMarker
 
-    if ($portalModeActive -and $markerMode -eq 'passthrough' -and $captiveState -eq 'Authenticated') {
+    if ($portalModeActive -and $markerMode -ne '' -and $captiveState -eq 'Authenticated') {
         $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
         if (-not $disabled) {
             Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN

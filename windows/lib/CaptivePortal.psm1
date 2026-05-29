@@ -1003,6 +1003,7 @@ function Enable-OpenPathCaptivePortalLimitedMode {
         [object]$Marker = $null
     )
 
+    $limitedModeTtlSeconds = [Math]::Min([Math]::Max(1, $TtlSeconds), 120)
     $markerMode = Get-OpenPathCaptivePortalMarkerMode -Marker $Marker
     if ($Marker -and $marker.mode -eq 'passthrough') {
         $markerMode = 'passthrough'
@@ -1041,7 +1042,7 @@ function Enable-OpenPathCaptivePortalLimitedMode {
                 -UpstreamDnsSource ([string]$upstream.Source) `
                 -UpstreamUsableForLimited ([bool]$upstream.UsableForLimited) `
                 -UpstreamVerified ([bool]$upstream.Verified) `
-                -TtlSeconds $TtlSeconds | Out-Null
+                -TtlSeconds $limitedModeTtlSeconds | Out-Null
         }
         return $false
     }
@@ -1162,7 +1163,7 @@ function Enable-OpenPathCaptivePortalLimitedMode {
         -UpstreamDnsSource ([string]$upstream.Source) `
         -UpstreamUsableForLimited ([bool]$upstream.UsableForLimited) `
         -UpstreamVerified ([bool]$upstream.Verified) `
-        -TtlSeconds $TtlSeconds | Out-Null
+        -TtlSeconds $limitedModeTtlSeconds | Out-Null
     return $true
 }
 
@@ -1393,7 +1394,7 @@ function Update-OpenPathCaptivePortalObservation {
 
         [int]$EnterPortalCount = 2,
 
-        [int]$ExitAuthenticatedCount = 3
+        [int]$ExitAuthenticatedCount = 1
     )
 
     $now = Get-Date

@@ -322,6 +322,48 @@ function Test-OpenPathRecentCaptivePortalRecoverySuccessEligible {
     return $true
 }
 
+function Invoke-OpenPathCaptivePortalAuthenticatedRestore {
+    param(
+        [Parameter(Mandatory = $true)][string]$RequestId,
+        [Parameter(Mandatory = $true)][string]$Operation,
+        [Parameter(Mandatory = $true)][string]$ResultPath,
+        [Parameter(Mandatory = $true)][string]$ProgressPath,
+        [string]$TriggerHost = ''
+    )
+
+    Update-OpenPathCaptivePortalObservation -DetectedState Authenticated | Out-Null
+    Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $RequestId -Phase 'disable' -Payload @{
+        state = 'Authenticated'
+        operation = $Operation
+    } | Out-Null
+    $disabled = [bool](Disable-OpenPathCaptivePortalMode -DnsMaxAttempts $RecoveryDnsMaxAttempts -DnsDelayMilliseconds $RecoveryDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $RecoveryDnsAttemptTimeoutSeconds)
+    $postAuthEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -DnsMaxAttempts $RecoveryDnsMaxAttempts -DnsDelayMilliseconds $RecoveryDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $RecoveryDnsAttemptTimeoutSeconds
+    $protectedModeRestored = ([bool]$disabled -and [bool]$postAuthEvidence.protectedModeRestored)
+    $portalModeStillActive = Test-OpenPathCaptivePortalModeActive
+    Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $RequestId -Phase 'write-result' -Payload @{
+        state = 'Authenticated'
+        disabled = [bool]$disabled
+        protectedModeRestored = [bool]$postAuthEvidence.protectedModeRestored
+    } | Out-Null
+    Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $RequestId -Payload @{
+        success = $protectedModeRestored
+        operation = $Operation
+        state = 'Authenticated'
+        triggerHost = $TriggerHost
+        activeMarker = $portalModeStillActive
+        portalModeActive = $portalModeStillActive
+        portalExitRoute = if ($protectedModeRestored) { "$Operation-authenticated" } else { "$Operation-authenticated-restore-failed" }
+        localDnsLoopbackRestored = [bool]$postAuthEvidence.localDnsLoopbackRestored
+        acrylicNormalRestored = [bool]$postAuthEvidence.acrylicNormalRestored
+        dnsResolutionHealthy = [bool]$postAuthEvidence.dnsResolutionHealthy
+        sinkholeHealthy = [bool]$postAuthEvidence.sinkholeHealthy
+        firewallExpectedActive = [bool]$postAuthEvidence.firewallExpectedActive
+        firewallHealthy = [bool]$postAuthEvidence.firewallHealthy
+        markerCleared = [bool]$postAuthEvidence.markerCleared
+        protectedModeRestored = [bool]$postAuthEvidence.protectedModeRestored
+    } | Out-Null
+}
+
 function Invoke-OpenPathCaptivePortalRecoveryRequest {
     param(
         [Parameter(Mandatory = $true)][object]$RequestEnvelope,
@@ -375,36 +417,7 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
             } | Out-Null
             $state = Get-OpenPathCaptivePortalRecoveryState -NowUtc $NowUtc
             if ($state -eq 'Authenticated') {
-                Update-OpenPathCaptivePortalObservation -DetectedState Authenticated | Out-Null
-                Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'disable' -Payload @{
-                    state = [string]$state
-                } | Out-Null
-                $disabled = [bool](Disable-OpenPathCaptivePortalMode -DnsMaxAttempts $RecoveryDnsMaxAttempts -DnsDelayMilliseconds $RecoveryDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $RecoveryDnsAttemptTimeoutSeconds)
-                $postAuthEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -DnsMaxAttempts $RecoveryDnsMaxAttempts -DnsDelayMilliseconds $RecoveryDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $RecoveryDnsAttemptTimeoutSeconds
-                $reconcileProtectedModeRestored = ([bool]$disabled -and [bool]$postAuthEvidence.protectedModeRestored)
-                $portalModeStillActive = Test-OpenPathCaptivePortalModeActive
-                Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'write-result' -Payload @{
-                    state = [string]$state
-                    disabled = [bool]$disabled
-                    protectedModeRestored = [bool]$postAuthEvidence.protectedModeRestored
-                } | Out-Null
-                Write-OpenPathCaptivePortalRecoveryResult -ResultPath $ResultPath -RequestId $requestId -Payload @{
-                    success = $reconcileProtectedModeRestored
-                    operation = $operation
-                    state = [string]$state
-                    triggerHost = ''
-                    activeMarker = $portalModeStillActive
-                    portalModeActive = $portalModeStillActive
-                    portalExitRoute = if ($reconcileProtectedModeRestored) { 'reconcile-authenticated' } else { 'reconcile-authenticated-restore-failed' }
-                    localDnsLoopbackRestored = [bool]$postAuthEvidence.localDnsLoopbackRestored
-                    acrylicNormalRestored = [bool]$postAuthEvidence.acrylicNormalRestored
-                    dnsResolutionHealthy = [bool]$postAuthEvidence.dnsResolutionHealthy
-                    sinkholeHealthy = [bool]$postAuthEvidence.sinkholeHealthy
-                    firewallExpectedActive = [bool]$postAuthEvidence.firewallExpectedActive
-                    firewallHealthy = [bool]$postAuthEvidence.firewallHealthy
-                    markerCleared = [bool]$postAuthEvidence.markerCleared
-                    protectedModeRestored = [bool]$postAuthEvidence.protectedModeRestored
-                } | Out-Null
+                Invoke-OpenPathCaptivePortalAuthenticatedRestore -RequestId $requestId -Operation $operation -ResultPath $ResultPath -ProgressPath $ProgressPath
                 return
             }
 
@@ -497,6 +510,11 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
         $state = Get-OpenPathCaptivePortalRecoveryState -NowUtc $NowUtc
         $success = $false
         $activeMarker = $null
+
+        if ($state -eq 'Authenticated' -and (Test-OpenPathCaptivePortalModeActive)) {
+            Invoke-OpenPathCaptivePortalAuthenticatedRestore -RequestId $requestId -Operation $operation -ResultPath $ResultPath -ProgressPath $ProgressPath -TriggerHost $triggerHost
+            return
+        }
 
         if ($state -eq 'Portal') {
             Update-OpenPathCaptivePortalObservation -DetectedState Portal | Out-Null

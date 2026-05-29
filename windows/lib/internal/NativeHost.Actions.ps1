@@ -72,6 +72,34 @@ if (-not (Get-Command -Name 'Invoke-OpenPathScheduledTask' -ErrorAction Silently
     throw 'TaskRunner.ps1 is required for native host scheduled task execution.'
 }
 
+function Import-NativeHostCaptivePortalModule {
+    if (Get-Command -Name 'Test-OpenPathCaptivePortalState' -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    $candidatePaths = @()
+    if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+        $candidatePaths += (Join-Path $script:OpenPathRoot 'lib\CaptivePortal.psm1')
+    }
+    if ($PSScriptRoot) {
+        $candidatePaths += (Join-Path (Split-Path $PSScriptRoot -Parent) 'CaptivePortal.psm1')
+    }
+
+    foreach ($candidatePath in ($candidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
+        if (Test-Path $candidatePath -ErrorAction SilentlyContinue) {
+            Import-Module $candidatePath -Force -ErrorAction Stop
+            return
+        }
+    }
+}
+
+try {
+    Import-NativeHostCaptivePortalModule
+}
+catch {
+    # Keep native messaging available even if the optional portal probe module cannot load.
+}
+
 $nativeHostRuntimeDependencyCandidatePaths = @()
 if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
     $nativeHostRuntimeDependencyCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\CapabilityStorage.ps1')
@@ -985,11 +1013,14 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
 function Invoke-NativeHostCaptivePortalRecoveryAction {
     param(
         [Parameter(Mandatory = $true)]
-        [object]$Message
+        [object]$Message,
+
+        [int]$TimeoutSeconds = 45
     )
 
     $action = 'recover-captive-portal-navigation'
     $taskName = 'OpenPath-CaptivePortalRecovery'
+    $boundedTimeoutSeconds = [Math]::Max(1, [Math]::Min(45, $TimeoutSeconds))
     $operation = 'open'
     if ($Message.PSObject.Properties['operation'] -and $Message.operation) {
         $candidateOperation = ([string]$Message.operation).Trim().ToLowerInvariant()
@@ -1073,12 +1104,12 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     try {
         $taskResult = Invoke-NativeHostMutex `
             -Name 'Global\OpenPathCaptivePortalRecoveryTrigger' `
-            -TimeoutMilliseconds 45000 `
+            -TimeoutMilliseconds ($boundedTimeoutSeconds * 1000) `
             -Action {
                 Invoke-OpenPathScheduledTask `
                     -TaskName $taskName `
                     -Runner (Get-NativeHostTaskRunner) `
-                    -TimeoutSeconds 45 `
+                    -TimeoutSeconds $boundedTimeoutSeconds `
                     -PollMilliseconds 250 `
                     -WaitCondition {
                         return ($null -ne (Read-NativeHostCaptivePortalRecoveryResult -RequestId $requestId))
@@ -1156,7 +1187,10 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         ($resultSuccess -and $state -eq 'Authenticated' -and -not $portalModeActive -and $protectedModeRestored)
     }
     else {
-        ($resultSuccess -and $state -eq 'Portal' -and $portalModeActive -and $exactRecoveryHostApplied -and $limitedModeReady)
+        ($resultSuccess -and (
+            ($state -eq 'Portal' -and $portalModeActive -and $exactRecoveryHostApplied -and $limitedModeReady) -or
+            ($state -eq 'Authenticated' -and -not $portalModeActive -and $protectedModeRestored)
+        ))
     }
 
     return @{
@@ -1719,6 +1753,50 @@ function Get-NativeHostPortalRecoverySignal {
     return 'none'
 }
 
+function Invoke-NativeHostAuthenticatedCaptivePortalRestoreIfNeeded {
+    param([int]$CooldownSeconds = 15)
+
+    $marker = Get-NativeHostCaptivePortalActiveMarker
+    if (-not $marker) {
+        return
+    }
+
+    $now = [DateTime]::UtcNow
+    $cacheKey = 'authenticated-marker-restore'
+    if ($script:NativeHostPortalProbeCache.ContainsKey($cacheKey)) {
+        $cached = $script:NativeHostPortalProbeCache[$cacheKey]
+        if ($cached -and $cached.PSObject.Properties['ProbedAt'] -and (($now - $cached.ProbedAt).TotalSeconds -lt [Math]::Max(1, $CooldownSeconds))) {
+            return
+        }
+    }
+
+    $script:NativeHostPortalProbeCache[$cacheKey] = [PSCustomObject]@{
+        ProbedAt = $now
+        Signal = 'restore-probe'
+    }
+
+    if (-not (Get-Command -Name 'Test-OpenPathCaptivePortalState' -ErrorAction SilentlyContinue)) {
+        return
+    }
+
+    try {
+        if ((Test-OpenPathCaptivePortalState -TimeoutSec 2) -ne 'Authenticated') {
+            return
+        }
+
+        Invoke-NativeHostCaptivePortalRecoveryAction `
+            -Message ([PSCustomObject]@{
+                operation = 'reconcile'
+                portalState = 'authenticated'
+                source = 'native-host-check'
+            }) `
+            -TimeoutSeconds 8 | Out-Null
+    }
+    catch {
+        return
+    }
+}
+
 function Invoke-NativeHostCheckAction {
     param(
         [Parameter(Mandatory = $true)]
@@ -1736,6 +1814,8 @@ function Invoke-NativeHostCheckAction {
             $null = $whitelistSet.Add([string]$domain)
         }
     }
+
+    Invoke-NativeHostAuthenticatedCaptivePortalRestoreIfNeeded
 
     $results = foreach ($domain in $validDomains) {
         $portalRecoverySignal = Get-NativeHostPortalRecoverySignal -Domain $domain -Message $Message
