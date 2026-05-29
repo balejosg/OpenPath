@@ -6,6 +6,7 @@ import type {
 
 const CAPTIVE_PORTAL_RECOVERY_RATE_LIMIT_MS = 30_000;
 const CAPTIVE_PORTAL_NATIVE_RECOVERY_RETRY_DELAY_MS = 750;
+const CAPTIVE_PORTAL_POST_RETRY_RECONCILE_DELAY_MS = 10_000;
 
 interface CaptivePortalRecoveryLogger {
   info: (message: string, context?: Record<string, unknown>) => void;
@@ -82,6 +83,7 @@ export function createCaptivePortalRecoveryController(
     string,
     { attemptedAt: number; hosts: Set<string> }
   >();
+  const delayedReconcileTimeoutByTab = new Map<number, ReturnType<typeof setTimeout>>();
 
   function clearLimiter(): void {
     recoveryAttemptByTabAndHost.clear();
@@ -103,6 +105,27 @@ export function createCaptivePortalRecoveryController(
           error: getErrorMessage(error),
         });
       });
+  }
+
+  function clearDelayedReconcile(tabId: number): void {
+    const timeout = delayedReconcileTimeoutByTab.get(tabId);
+    if (timeout === undefined) {
+      return;
+    }
+    clearTimeout(timeout);
+    delayedReconcileTimeoutByTab.delete(tabId);
+  }
+
+  function scheduleDelayedReconcile(tabId: number): void {
+    if (delayedReconcileTimeoutByTab.has(tabId)) {
+      return;
+    }
+    const timeout = setTimeout(() => {
+      delayedReconcileTimeoutByTab.delete(tabId);
+      void reconcileCaptivePortalRecovery({ reason: 'post-retry-delayed' });
+    }, CAPTIVE_PORTAL_POST_RETRY_RECONCILE_DELAY_MS);
+    (timeout as { unref?: () => void }).unref?.();
+    delayedReconcileTimeoutByTab.set(tabId, timeout);
   }
 
   async function recoverNavigation(
@@ -183,6 +206,7 @@ export function createCaptivePortalRecoveryController(
 
       try {
         await deps.retryNavigation(context.tabId, context.url);
+        scheduleDelayedReconcile(context.tabId);
       } catch (error) {
         logger.info('[Monitor] Captive portal recovery retry failed', {
           tabId: context.tabId,
@@ -202,6 +226,7 @@ export function createCaptivePortalRecoveryController(
           recoveryAttemptByTabAndHost.delete(key);
         }
       }
+      clearDelayedReconcile(tabId);
     },
     handleConnectivityAvailable: async (): Promise<void> => {
       clearLimiter();

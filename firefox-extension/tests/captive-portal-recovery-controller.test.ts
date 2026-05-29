@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 
 import { createCaptivePortalRecoveryController } from '../src/lib/captive-portal-recovery-controller.js';
 import type { CaptivePortalRecoveryInput } from '../src/lib/native-messaging-client.js';
@@ -233,6 +233,102 @@ void test('captive portal recovery retries only after the configured delay resol
   });
 
   assert.deepEqual(events, ['sleep:750', 'retry:8:http://portal.example/start']);
+});
+
+void test('captive portal recovery schedules delayed reconcile after successful retry', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const operations: CaptivePortalRecoveryInput[] = [];
+    const controller = createCaptivePortalRecoveryController({
+      getPortalState: () => Promise.resolve('locked_portal'),
+      recoverCaptivePortalNavigation: (input) => {
+        operations.push(input);
+        return Promise.resolve({ success: true });
+      },
+      retryNavigation: () => Promise.resolve(),
+      sleep: () => Promise.resolve(),
+    });
+
+    assert.equal(
+      await controller.recoverNavigation({
+        tabId: 8,
+        hostname: 'portal.example',
+        url: 'http://portal.example/start',
+      }),
+      true
+    );
+    await Promise.resolve();
+    assert.equal(operations.length, 1);
+
+    mock.timers.tick(9_999);
+    await Promise.resolve();
+    assert.equal(operations.length, 1);
+
+    mock.timers.tick(1);
+    await Promise.resolve();
+
+    assert.deepEqual(
+      operations.map((input) => ({
+        operation: input.operation,
+        portalState: input.portalState,
+        source: input.source,
+        triggerHost: input.triggerHost ?? '',
+      })),
+      [
+        {
+          operation: undefined,
+          portalState: 'locked_portal',
+          source: undefined,
+          triggerHost: 'portal.example',
+        },
+        {
+          operation: 'reconcile',
+          portalState: 'Unknown',
+          source: 'firefox-captivePortal:post-retry-delayed',
+          triggerHost: '',
+        },
+      ]
+    );
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+void test('captive portal recovery cancels delayed reconcile on tab dispose', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const operations: CaptivePortalRecoveryInput[] = [];
+    const controller = createCaptivePortalRecoveryController({
+      getPortalState: () => Promise.resolve('locked_portal'),
+      recoverCaptivePortalNavigation: (input) => {
+        operations.push(input);
+        return Promise.resolve({ success: true });
+      },
+      retryNavigation: () => Promise.resolve(),
+      sleep: () => Promise.resolve(),
+    });
+
+    assert.equal(
+      await controller.recoverNavigation({
+        tabId: 9,
+        hostname: 'portal.example',
+        url: 'http://portal.example/start',
+      }),
+      true
+    );
+    await Promise.resolve();
+    controller.disposeTab(9);
+
+    mock.timers.tick(10_000);
+    await Promise.resolve();
+
+    assert.deepEqual(
+      operations.map((input) => input.operation),
+      [undefined]
+    );
+  } finally {
+    mock.timers.reset();
+  }
 });
 
 void test('captive portal recovery clears per-tab limiter on dispose', async () => {
