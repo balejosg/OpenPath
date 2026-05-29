@@ -893,6 +893,11 @@ describe('repository verification contract', () => {
     );
     assert.match(
       browserProbe,
+      /Add-ProbeResult -Name 'Edge Start Menu Appx launch cannot run as student'[\s\S]*-Status pass[\s\S]*No Microsoft Edge Start Menu\/Appx launch target was found on this image/s,
+      'Windows browser enforcement should not fail images where no Edge Start Menu/Appx launch target exists'
+    );
+    assert.match(
+      browserProbe,
       /Phase 1, Phase 3, and Phase 4 are committed/,
       'Windows browser enforcement report should preserve the prerequisite warning'
     );

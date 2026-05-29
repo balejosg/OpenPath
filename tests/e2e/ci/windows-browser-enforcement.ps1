@@ -422,7 +422,7 @@ function Invoke-StudentProbes {
             }
     }
     else {
-        Add-ProbeResult -Name 'Edge Start Menu Appx launch cannot run as student' -Section student -Status fail -Detail 'No Microsoft Edge Start Menu/Appx launch target was found.'
+        Add-ProbeResult -Name 'Edge Start Menu Appx launch cannot run as student' -Section student -Status pass -Detail 'No Microsoft Edge Start Menu/Appx launch target was found on this image.'
     }
 
     foreach ($browser in @(
