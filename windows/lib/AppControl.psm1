@@ -62,18 +62,11 @@ function Test-OpenPathAppLockerRuleManaged {
     return ($ruleName -like "$script:OpenPathAppControlRulePrefix*")
 }
 
-function New-OpenPathNonAdminAppLockerPolicySpec {
-    [CmdletBinding()]
+function Get-OpenPathApprovedBrowserSet {
     param(
-        [string]$OpenPathRoot = $script:OpenPathRoot,
-
-        [ValidateSet('AuditOnly', 'Enforced')]
-        [string]$Mode = 'Enforced',
-
         [string[]]$ApprovedBrowsers = @('Firefox')
     )
 
-    $openPathRuntimePath = "$($OpenPathRoot.TrimEnd('\'))\*"
     $approvedBrowserSet = @{}
     foreach ($browser in @($ApprovedBrowsers)) {
         $normalized = ([string]$browser).Trim().ToLowerInvariant()
@@ -90,6 +83,48 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
             $approvedBrowserSet.Chrome = $true
         }
     }
+
+    return $approvedBrowserSet
+}
+
+function Get-OpenPathEdgeAppxProductNames {
+    [CmdletBinding()]
+    param()
+
+    $products = @(
+        'Microsoft.MicrosoftEdge',
+        'Microsoft.MicrosoftEdge.Stable'
+    )
+
+    if (Get-Command -Name Get-AppxPackage -ErrorAction SilentlyContinue) {
+        try {
+            $products += @(
+                Get-AppxPackage -Name 'Microsoft.MicrosoftEdge*' -AllUsers -ErrorAction SilentlyContinue |
+                    ForEach-Object { [string]$_.Name } |
+                    Where-Object { $_ }
+            )
+        }
+        catch {
+            # Static product names above keep the policy deterministic when Appx inventory is unavailable.
+        }
+    }
+
+    return @($products | Where-Object { $_ } | Sort-Object -Unique)
+}
+
+function New-OpenPathNonAdminAppLockerPolicySpec {
+    [CmdletBinding()]
+    param(
+        [string]$OpenPathRoot = $script:OpenPathRoot,
+
+        [ValidateSet('AuditOnly', 'Enforced')]
+        [string]$Mode = 'Enforced',
+
+        [string[]]$ApprovedBrowsers = @('Firefox')
+    )
+
+    $openPathRuntimePath = "$($OpenPathRoot.TrimEnd('\'))\*"
+    $approvedBrowserSet = Get-OpenPathApprovedBrowserSet -ApprovedBrowsers $ApprovedBrowsers
 
     $firefoxPaths = @(
         '%PROGRAMFILES%\Mozilla Firefox\firefox.exe',
@@ -218,6 +253,10 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
     }
     $unapprovedBrowserDenyPaths += $chromeUserWritablePaths
     $unapprovedBrowserDenyPaths += $alwaysDeniedBrowserPaths
+    $unapprovedBrowserDenyAppxProducts = @()
+    if (-not $approvedBrowserSet.Edge) {
+        $unapprovedBrowserDenyAppxProducts = @(Get-OpenPathEdgeAppxProductNames)
+    }
 
     return [PSCustomObject]@{
         Mode = $Mode
@@ -228,6 +267,7 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         ApprovedBrowsers = @($approvedBrowserSet.Keys | Sort-Object)
         AllowPaths = @($allowPaths)
         UnapprovedBrowserDenyPaths = @($unapprovedBrowserDenyPaths)
+        UnapprovedBrowserDenyAppxProducts = @($unapprovedBrowserDenyAppxProducts)
         BlockedWindowsTools = @(
             '%WINDIR%\System32\curl.exe',
             '%WINDIR%\SysWOW64\curl.exe',
@@ -372,9 +412,12 @@ function New-OpenPathAppLockerPolicyXml {
         $ruleCollections += "    <RuleCollection Type=`"$collectionType`" EnforcementMode=`"$($Spec.EnforcementMode)`">`n$($rules -join "`n")`n    </RuleCollection>"
     }
 
-    $appxRules = @(
-        New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow signed packaged apps" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName '*' -ProductName '*' -BinaryName '*'
-    )
+    $appxRules = @()
+    foreach ($productName in @($Spec.UnapprovedBrowserDenyAppxProducts)) {
+        $productId = ($productName -replace '[^0-9A-Za-z]+', '-').Trim('-')
+        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users deny $productId" -Sid $Spec.NonAdminSid -Action 'Deny' -PublisherName '*' -ProductName $productName -BinaryName '*'
+    }
+    $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow signed packaged apps" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName '*' -ProductName '*' -BinaryName '*'
     $ruleCollections += "    <RuleCollection Type=`"Appx`" EnforcementMode=`"$($Spec.EnforcementMode)`">`n$($appxRules -join "`n")`n    </RuleCollection>"
 
     return @"
@@ -442,6 +485,158 @@ function Test-OpenPathAppControlAvailable {
     return $true
 }
 
+function Get-OpenPathAppLockerCollection {
+    param(
+        [Parameter(Mandatory = $true)]
+        [xml]$PolicyXml,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Type
+    )
+
+    return @($PolicyXml.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq $Type })[0]
+}
+
+function Test-OpenPathAppLockerCollectionMode {
+    param(
+        [AllowNull()]
+        [object]$Collection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedMode
+    )
+
+    if (-not $Collection) {
+        return $false
+    }
+
+    return ([string]$Collection.GetAttribute('EnforcementMode') -eq $ExpectedMode)
+}
+
+function Test-OpenPathFilePathRulePresent {
+    param(
+        [AllowNull()]
+        [object]$Collection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Action,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Sid,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not $Collection) {
+        return $false
+    }
+
+    return [bool](@($Collection.FilePathRule | Where-Object {
+                $_.GetAttribute('Action') -eq $Action -and
+                $_.GetAttribute('UserOrGroupSid') -eq $Sid -and
+                $_.Conditions.FilePathCondition.GetAttribute('Path') -eq $Path -and
+                (Test-OpenPathAppLockerRuleManaged -Rule $_)
+            }).Count -gt 0)
+}
+
+function Test-OpenPathFilePublisherRulePresent {
+    param(
+        [AllowNull()]
+        [object]$Collection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Action,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Sid,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ProductName
+    )
+
+    if (-not $Collection) {
+        return $false
+    }
+
+    return [bool](@($Collection.FilePublisherRule | Where-Object {
+                $_.GetAttribute('Action') -eq $Action -and
+                $_.GetAttribute('UserOrGroupSid') -eq $Sid -and
+                $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq $ProductName -and
+                $_.Conditions.FilePublisherCondition.GetAttribute('BinaryName') -eq '*' -and
+                (Test-OpenPathAppLockerRuleManaged -Rule $_)
+            }).Count -gt 0)
+}
+
+function Test-OpenPathAppIdentityServiceRunning {
+    [CmdletBinding()]
+    param()
+
+    if (-not (Get-Command -Name Get-Service -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    try {
+        $service = Get-Service -Name AppIDSvc -ErrorAction Stop
+        return ([string]$service.Status -eq 'Running')
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-OpenPathAppLockerBoundaryPolicy {
+    param(
+        [Parameter(Mandatory = $true)]
+        [xml]$PolicyXml,
+
+        [ValidateSet('AuditOnly', 'Enforced')]
+        [string]$Mode = 'Enforced',
+
+        [string[]]$ApprovedBrowsers = @('Firefox')
+    )
+
+    $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $script:OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers
+    $expectedMode = $spec.EnforcementMode
+    $exeCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Exe'
+    $scriptCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Script'
+    $appxCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Appx'
+
+    foreach ($collection in @($exeCollection, $appxCollection)) {
+        if (-not (Test-OpenPathAppLockerCollectionMode -Collection $collection -ExpectedMode $expectedMode)) {
+            return $false
+        }
+    }
+
+    foreach ($collection in @($exeCollection, $scriptCollection)) {
+        foreach ($sid in @($spec.AdminSid, $spec.SystemSid)) {
+            if (-not (Test-OpenPathFilePathRulePresent -Collection $collection -Action 'Allow' -Sid $sid -Path '*')) {
+                return $false
+            }
+        }
+    }
+
+    if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid 'S-1-1-0' -ProductName '*')) {
+        return $false
+    }
+
+    $approvedSet = Get-OpenPathApprovedBrowserSet -ApprovedBrowsers $ApprovedBrowsers
+    if (-not $approvedSet.Edge) {
+        foreach ($path in @($spec.UnapprovedBrowserDenyPaths | Where-Object { $_ -match '\\Microsoft\\Edge\\Application\\msedge\.exe$' })) {
+            if (-not (Test-OpenPathFilePathRulePresent -Collection $exeCollection -Action 'Deny' -Sid $spec.NonAdminSid -Path $path)) {
+                return $false
+            }
+        }
+        foreach ($productName in @($spec.UnapprovedBrowserDenyAppxProducts)) {
+            if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Deny' -Sid $spec.NonAdminSid -ProductName $productName)) {
+                return $false
+            }
+        }
+    }
+
+    return $true
+}
+
 function Set-OpenPathNonAdminAppControl {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -491,7 +686,7 @@ function Set-OpenPathNonAdminAppControl {
             Write-OpenPathLog "AppLocker policy applied but AppIDSvc could not be started: $_" -Level WARN
         }
 
-        if (-not (Test-OpenPathNonAdminAppControlActive)) {
+        if (-not (Test-OpenPathNonAdminAppControlActive -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers)) {
             Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath
             Write-OpenPathLog 'AppLocker validation failed after OpenPath policy apply; restored previous policy backup' -Level WARN
             return $false
@@ -508,16 +703,23 @@ function Set-OpenPathNonAdminAppControl {
 
 function Test-OpenPathNonAdminAppControlActive {
     [CmdletBinding()]
-    param()
+    param(
+        [ValidateSet('AuditOnly', 'Enforced')]
+        [string]$Mode = 'Enforced',
+
+        [string[]]$ApprovedBrowsers = @('Firefox')
+    )
 
     if (-not (Test-OpenPathAppControlAvailable)) {
+        return $false
+    }
+    if (-not (Test-OpenPathAppIdentityServiceRunning)) {
         return $false
     }
 
     try {
         $policyXml = [xml](Get-AppLockerPolicy -Local -Xml)
-        $rules = @($policyXml.AppLockerPolicy.RuleCollection.FilePathRule)
-        return [bool](@($rules | Where-Object { Test-OpenPathAppLockerRuleManaged -Rule $_ }).Count -gt 0)
+        return [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers)
     }
     catch {
         return $false

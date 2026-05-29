@@ -412,20 +412,37 @@ function Get-OpenPathAppControlReadinessFacts {
     [CmdletBinding()]
     param(
         [AllowNull()]
-        [object]$AppControlActive = $null
+        [object]$AppControlActive = $null,
+
+        [string[]]$ApprovedStudentBrowsers = @('Firefox')
     )
 
     if (-not $PSBoundParameters.ContainsKey('AppControlActive')) {
         if (Get-Command -Name 'Test-OpenPathNonAdminAppControlActive' -ErrorAction SilentlyContinue) {
-            $AppControlActive = Test-OpenPathNonAdminAppControlActive
+            $AppControlActive = Test-OpenPathNonAdminAppControlActive -ApprovedBrowsers $ApprovedStudentBrowsers
         }
         else {
             $AppControlActive = $false
         }
     }
 
+    $active = Test-OpenPathReadinessTruthy -Value $AppControlActive
+    if ($AppControlActive -and $AppControlActive -isnot [bool]) {
+        if ($AppControlActive.PSObject.Properties['Active']) {
+            $active = Test-OpenPathReadinessTruthy -Value $AppControlActive.Active
+        }
+        if (
+            $active -and
+            -not (Test-OpenPathStudentBrowserApproved -ApprovedStudentBrowsers $ApprovedStudentBrowsers -Browser Edge) -and
+            $AppControlActive.PSObject.Properties['BlocksUnapprovedEdge'] -and
+            -not (Test-OpenPathReadinessTruthy -Value $AppControlActive.BlocksUnapprovedEdge)
+        ) {
+            $active = $false
+        }
+    }
+
     return [PSCustomObject]@{
-        Active = Test-OpenPathReadinessTruthy -Value $AppControlActive
+        Active = $active
     }
 }
 

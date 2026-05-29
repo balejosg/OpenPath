@@ -100,12 +100,21 @@ Describe "Browser Module - Request Readiness" {
         }
 
         It "Collects AppControl readiness facts through the AppControl probe" {
-            Mock Test-OpenPathNonAdminAppControlActive { $true } -ModuleName Browser.ReadinessFacts
+            Mock Test-OpenPathNonAdminAppControlActive { $ApprovedBrowsers -contains 'Firefox' } -ModuleName Browser.ReadinessFacts
 
-            $facts = Get-OpenPathAppControlReadinessFacts
+            $facts = Get-OpenPathAppControlReadinessFacts -ApprovedStudentBrowsers @('Firefox')
 
             $facts.Active | Should -BeTrue
             Should -Invoke Test-OpenPathNonAdminAppControlActive -ModuleName Browser.ReadinessFacts -Times 1 -Exactly
+        }
+
+        It "Marks AppControl incomplete when unapproved Edge is not explicitly blocked" {
+            $facts = Get-OpenPathAppControlReadinessFacts -AppControlActive ([PSCustomObject]@{
+                    Active = $true
+                    BlocksUnapprovedEdge = $false
+                })
+
+            $facts.Active | Should -BeFalse
         }
     }
 
@@ -167,6 +176,31 @@ Describe "Browser Module - Request Readiness" {
         $result.Facts.edge_approval | Should -Be "not_approved_blocked_by_app_control"
         $result.Facts.edge_managed_extension | Should -Be "not_approved"
         @($result.FailureReasons) | Should -Not -Contain "edge_managed_extension_missing"
+    }
+
+    It "Fails readiness for installed unapproved Edge unless AppControl proves Edge is blocked" {
+        $result = Get-OpenPathBrowserRequestReadiness `
+            -Config (New-ClassroomReadinessConfig) `
+            -ManagedExtensionPolicy (New-FirefoxManagedPolicy) `
+            -NativeHostRegistered $true `
+            -NativeHostStatePresent $true `
+            -FirefoxMachinePolicyApplied $true `
+            -EdgeManagedExtension $false `
+            -EdgeDohMode "automatic" `
+            -EdgeUrlBlocklist @() `
+            -ChromeManagedExtension $false `
+            -ChromeDohMode "automatic" `
+            -ChromeUrlBlocklist @() `
+            -AppControlActive ([PSCustomObject]@{
+                    Active = $true
+                    BlocksUnapprovedEdge = $false
+                }) `
+            -BrowserInventory (New-BrowserInventory)
+
+        $result.Ready | Should -BeFalse
+        $result.Facts.edge_approval | Should -Be "not_approved_app_control_missing"
+        $result.Facts.app_control_active | Should -Be "missing"
+        @($result.FailureReasons) | Should -Contain "edge_not_approved_app_control_missing"
     }
 
     It "Fails strict readiness when approved Edge is installed but not fully managed" {

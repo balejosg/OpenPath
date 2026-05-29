@@ -811,6 +811,8 @@ describe('repository verification contract', () => {
     for (const marker of [
       'Firefox managed path blocks known blocked path',
       'Edge Google game URL cannot run as student',
+      'Edge microsoft-edge protocol cannot run as student',
+      'Edge Start Menu Appx launch cannot run as student',
       'Brave cannot start',
       'Opera cannot start',
       'Vivaldi cannot start',
@@ -881,8 +883,13 @@ describe('repository verification contract', () => {
     );
     assert.match(
       browserBoundaryCi,
-      /Edge Google game URL cannot run as student[\s\S]*browser-boundary-summary\.json/s,
-      'browser-boundary CI should require the Edge Google game URL student probe and summarize artifacts'
+      /RequiredEdgeBrowserBoundaryProbeNames[\s\S]*Edge Google game URL cannot run as student[\s\S]*Edge microsoft-edge protocol cannot run as student[\s\S]*Edge Start Menu Appx launch cannot run as student[\s\S]*edgeProbeStatuses[\s\S]*browser-boundary-summary\.json/s,
+      'browser-boundary CI should require every Edge launch-vector student probe and summarize their statuses'
+    );
+    assert.match(
+      browserProbe,
+      /Invoke-EdgeLaunchDeniedProbe[\s\S]*microsoft-edge:[\s\S]*shell:AppsFolder/s,
+      'Windows browser enforcement should probe Edge through the protocol handler and Start Menu Appx launch vector'
     );
     assert.match(
       browserProbe,

@@ -157,7 +157,9 @@ function Get-OpenPathBrowserRequestReadiness {
     }
     $chromiumFacts = Get-OpenPathChromiumReadinessFacts @chromiumFactParameters
 
-    $appControlFactParameters = @{}
+    $appControlFactParameters = @{
+        ApprovedStudentBrowsers = $approvedStudentBrowsers
+    }
     if ($PSBoundParameters.ContainsKey('AppControlActive')) {
         $appControlFactParameters.AppControlActive = $AppControlActive
     }

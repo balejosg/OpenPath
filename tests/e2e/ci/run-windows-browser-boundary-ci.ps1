@@ -10,6 +10,11 @@ $probeScript = Join-Path $script:RepoRoot 'tests\e2e\ci\windows-browser-enforcem
 if (-not (Test-Path -LiteralPath $probeScript)) {
     throw "Windows browser enforcement probe script not found: $probeScript"
 }
+$script:RequiredEdgeBrowserBoundaryProbeNames = @(
+    'Edge Google game URL cannot run as student',
+    'Edge microsoft-edge protocol cannot run as student',
+    'Edge Start Menu Appx launch cannot run as student'
+)
 
 function New-RandomPassword {
     $bytes = New-Object byte[] 18
@@ -41,6 +46,27 @@ function Invoke-ReportAssertNoFailures {
     }
 
     return $report
+}
+
+function Assert-RequiredStudentProbeStatuses {
+    param(
+        [Parameter(Mandatory = $true)][object]$Report,
+        [Parameter(Mandatory = $true)][string[]]$ProbeNames
+    )
+
+    $statuses = [ordered]@{}
+    foreach ($probeName in $ProbeNames) {
+        $probe = @($Report.results | Where-Object { $_.name -eq $probeName }) | Select-Object -First 1
+        if (-not $probe) {
+            throw "Required student browser-boundary probe is missing: $probeName"
+        }
+        $statuses[$probeName] = [string]$probe.status
+        if ($probe.status -ne 'pass') {
+            throw "Required student browser-boundary probe did not pass: $probeName status=$($probe.status)"
+        }
+    }
+
+    return [pscustomobject]$statuses
 }
 
 function Assert-InstalledOpenPathBrowserBoundaryAppControl {
@@ -75,7 +101,7 @@ function Assert-InstalledOpenPathBrowserBoundaryAppControl {
         $approvedBrowsers = @($config.approvedStudentBrowsers)
     }
 
-    if (-not (Test-OpenPathNonAdminAppControlActive)) {
+    if (-not (Test-OpenPathNonAdminAppControlActive -Mode $mode -ApprovedBrowsers $approvedBrowsers)) {
         Write-Host 'OpenPath AppControl boundary is inactive before browser-boundary probes; reapplying once.'
         $applied = Set-OpenPathNonAdminAppControl `
             -OpenPathRoot $openPathRoot `
@@ -86,7 +112,7 @@ function Assert-InstalledOpenPathBrowserBoundaryAppControl {
         }
     }
 
-    if (-not (Test-OpenPathNonAdminAppControlActive)) {
+    if (-not (Test-OpenPathNonAdminAppControlActive -Mode $mode -ApprovedBrowsers $approvedBrowsers)) {
         throw 'OpenPath AppControl boundary is still inactive after reapply.'
     }
 
@@ -288,17 +314,15 @@ try {
     $studentReport = Invoke-ReportAssertNoFailures -ReportPath (Join-Path $studentArtifacts 'windows-browser-enforcement-report.json') -Scope 'Student'
     $adminReport = Invoke-ReportAssertNoFailures -ReportPath (Join-Path $adminArtifacts 'windows-browser-enforcement-report.json') -Scope 'Admin'
 
-    $edgeProbe = @($studentReport.results | Where-Object { $_.name -eq 'Edge Google game URL cannot run as student' }) | Select-Object -First 1
-    if (-not $edgeProbe -or $edgeProbe.status -ne 'pass') {
-        $status = if ($edgeProbe) { [string]$edgeProbe.status } else { 'missing' }
-        throw "Required Edge Google game URL student probe did not pass; status=$status"
-    }
+    $edgeProbeStatuses = Assert-RequiredStudentProbeStatuses `
+        -Report $studentReport `
+        -ProbeNames $script:RequiredEdgeBrowserBoundaryProbeNames
 
     [pscustomobject]@{
         studentUser = $studentUserName
         studentFailures = 0
         adminFailures = 0
-        edgeGoogleGameProbe = $edgeProbe.status
+        edgeProbeStatuses = $edgeProbeStatuses
         artifactsRoot = $ArtifactsRoot
         timestamp = (Get-Date).ToString('o')
     } | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $ArtifactsRoot 'browser-boundary-summary.json') -Encoding UTF8

@@ -233,6 +233,64 @@ function Invoke-ProcessDeniedProbe {
     }
 }
 
+function Get-RunningEdgeProcesses {
+    $processes = @()
+    foreach ($name in @('msedge', 'MicrosoftEdge')) {
+        $processes += @(Get-Process -Name $name -ErrorAction SilentlyContinue)
+    }
+    return @($processes)
+}
+
+function Invoke-EdgeLaunchDeniedProbe {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][scriptblock]$Launch,
+        [hashtable]$Evidence = @{}
+    )
+
+    if (-not $ExecuteProbes) {
+        Add-ProbeResult -Name $Name -Section student -Status info -Detail 'Dry run: Edge launch vector not attempted.' -Evidence $Evidence
+        return
+    }
+
+    $before = @(Get-RunningEdgeProcesses | ForEach-Object { $_.Id })
+    try {
+        & $Launch
+        $deadline = (Get-Date).AddSeconds($ProbeTimeoutSeconds)
+        $runningAfter = @()
+        while ((Get-Date) -lt $deadline) {
+            $runningAfter = @(Get-RunningEdgeProcesses)
+            if ($runningAfter.Count -gt 0) {
+                break
+            }
+            Start-Sleep -Milliseconds 500
+        }
+
+        if ($runningAfter.Count -gt 0) {
+            foreach ($process in $runningAfter) {
+                try {
+                    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                }
+                catch {
+                    # Best effort cleanup of Edge processes observed during this denied-launch probe.
+                }
+            }
+            $Evidence['beforeProcessIds'] = @($before)
+            $Evidence['afterProcessIds'] = @($runningAfter | ForEach-Object { $_.Id })
+            Add-ProbeResult -Name $Name -Section student -Status fail -Detail 'Edge launched successfully; expected AppLocker/Appx denial.' -Evidence $Evidence
+            return
+        }
+
+        $Evidence['beforeProcessIds'] = @($before)
+        Add-ProbeResult -Name $Name -Section student -Status pass -Detail 'Edge launch vector did not produce a running Edge process.' -Evidence $Evidence
+    }
+    catch {
+        $Evidence['beforeProcessIds'] = @($before)
+        $Evidence['error'] = $_.Exception.Message
+        Add-ProbeResult -Name $Name -Section student -Status pass -Detail "Edge launch failed as expected: $($_.Exception.Message)" -Evidence $Evidence
+    }
+}
+
 function Invoke-CurlFailureProbe {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -334,6 +392,37 @@ function Invoke-StudentProbes {
     }
     else {
         Add-ProbeResult -Name 'Edge Google game URL cannot run as student' -Section student -Status skip -Detail 'Microsoft Edge is not installed on this image.'
+    }
+
+    Invoke-EdgeLaunchDeniedProbe `
+        -Name 'Edge microsoft-edge protocol cannot run as student' `
+        -Evidence @{ uri = "microsoft-edge:$GoogleSearchGameUrl" } `
+        -Launch {
+            Start-Process -FilePath "microsoft-edge:$GoogleSearchGameUrl" -ErrorAction Stop
+        }
+
+    $edgeStartApp = $null
+    if (Get-Command -Name Get-StartApps -ErrorAction SilentlyContinue) {
+        $edgeStartApp = @(
+            Get-StartApps |
+                Where-Object {
+                    $_.AppID -match 'MicrosoftEdge|MSEdge|msedge' -or
+                    $_.Name -match 'Microsoft Edge'
+                } |
+                Select-Object -First 1
+        )[0]
+    }
+    if ($edgeStartApp) {
+        $edgeAppPath = "shell:AppsFolder\$($edgeStartApp.AppID)"
+        Invoke-EdgeLaunchDeniedProbe `
+            -Name 'Edge Start Menu Appx launch cannot run as student' `
+            -Evidence @{ appId = $edgeStartApp.AppID; appName = $edgeStartApp.Name; shellPath = $edgeAppPath } `
+            -Launch {
+                Start-Process -FilePath $edgeAppPath -ErrorAction Stop
+            }
+    }
+    else {
+        Add-ProbeResult -Name 'Edge Start Menu Appx launch cannot run as student' -Section student -Status fail -Detail 'No Microsoft Edge Start Menu/Appx launch target was found.'
     }
 
     foreach ($browser in @(

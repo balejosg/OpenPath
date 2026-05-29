@@ -92,8 +92,20 @@ test('Windows AppControl Pester suite keeps Appx AppLocker regression coverage',
 
   assert.match(
     appControlSuite,
-    /Generates an Appx FilePublisherRule instead of leaving packaged apps NotConfigured/,
+    /Generates Appx FilePublisherRules instead of leaving packaged apps NotConfigured/,
     'Windows.AppControl.Tests.ps1 should keep the Appx AppLocker regression test'
+  );
+
+  assert.match(
+    appControlSuite,
+    /Generates Appx denies for unapproved Edge products[\s\S]*Microsoft\.MicrosoftEdge[\s\S]*Microsoft\.MicrosoftEdge\.Stable/,
+    'Windows.AppControl.Tests.ps1 should keep explicit Appx Edge deny coverage'
+  );
+
+  assert.match(
+    appControlSuite,
+    /Does not treat a partial managed AppLocker policy as an active browser boundary[\s\S]*Requires AppIDSvc to be running/,
+    'Windows.AppControl.Tests.ps1 should prove active detection validates the full enforced boundary'
   );
 
   for (const marker of ['Appx', 'FilePublisherRule', 'NotConfigured']) {

@@ -61,10 +61,12 @@ function Get-OpenPathAppLockerStatus {
         [object]$Config
     )
 
+    $configuredMode = [string](Get-OpenPathBrowserStatusConfigValue -Config $Config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
+    $approvedStudentBrowsers = @(Get-OpenPathApprovedStudentBrowsers -Config $Config)
     $active = $false
     if (Get-Command -Name 'Test-OpenPathNonAdminAppControlActive' -ErrorAction SilentlyContinue) {
         try {
-            $active = [bool](Test-OpenPathNonAdminAppControlActive)
+            $active = [bool](Test-OpenPathNonAdminAppControlActive -Mode $configuredMode -ApprovedBrowsers $approvedStudentBrowsers)
         }
         catch {
             $active = $false
@@ -75,8 +77,6 @@ function Get-OpenPathAppLockerStatus {
         return 'Inactive'
     }
 
-    # AppControl currently exposes active/inactive only; use config mode to label active audit posture.
-    $configuredMode = [string](Get-OpenPathBrowserStatusConfigValue -Config $Config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
     if ($configuredMode -eq 'AuditOnly') {
         return 'AuditOnly'
     }

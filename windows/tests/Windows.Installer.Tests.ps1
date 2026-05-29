@@ -1123,6 +1123,18 @@ Describe "Installer" {
 
             $content | Should -Match '(?s)if \(\$enableNonAdminAppControl\).*?Set-OpenPathNonAdminAppControl.*?else \{.*?Remove-OpenPathNonAdminAppControl -Confirm:\$false.*?Managed browser boundary disabled; AppLocker boundary not applied'
         }
+
+        It "Fails the app-control phase when required AppControl cannot be applied and validated" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            $content | Should -Match "\$phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control'"
+            $content | Should -Not -Match "\$phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'app-control'"
+            $content | Should -Match '(?s)\$appControlApplied = \[bool\]\(Set-OpenPathNonAdminAppControl.*?-ApprovedBrowsers \$approvedStudentBrowsers'
+            $content | Should -Match '(?s)if \(-not \$appControlApplied\) \{.*?throw ''Set-OpenPathNonAdminAppControl did not apply the required AppControl boundary\.'''
+            $content | Should -Match '(?s)Test-OpenPathNonAdminAppControlActive\s+`?\s*-Mode \$nonAdminAppControlMode\s+`?\s*-ApprovedBrowsers \$approvedStudentBrowsers'
+            $content | Should -Match 'Assert-OpenPathInstallPhaseSucceeded -Result \$phaseResult'
+        }
     }
 
     Context "SSE bootstrap" {

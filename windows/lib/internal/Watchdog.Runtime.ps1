@@ -362,12 +362,18 @@ function Invoke-OpenPathWatchdogChecks {
             if ($Config -and $Config.PSObject.Properties['enableNonAdminAppControl']) {
                 $enableNonAdminAppControl = [bool]$Config.enableNonAdminAppControl
             }
-            if ($enableNonAdminAppControl -and -not (Test-OpenPathNonAdminAppControlActive)) {
-                $mode = 'Enforced'
-                if ($Config -and $Config.PSObject.Properties['nonAdminAppControlMode'] -and $Config.nonAdminAppControlMode) {
-                    $mode = [string]$Config.nonAdminAppControlMode
-                }
-                Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $mode | Out-Null
+            $mode = 'Enforced'
+            if ($Config -and $Config.PSObject.Properties['nonAdminAppControlMode'] -and $Config.nonAdminAppControlMode) {
+                $mode = [string]$Config.nonAdminAppControlMode
+            }
+            $approvedStudentBrowsers = @('Firefox')
+            if ($Config -and $Config.PSObject.Properties['approvedStudentBrowsers'] -and $Config.approvedStudentBrowsers) {
+                $approvedStudentBrowsers = @($Config.approvedStudentBrowsers)
+            }
+            if ($enableNonAdminAppControl -and -not (Test-OpenPathNonAdminAppControlActive `
+                        -Mode $mode `
+                        -ApprovedBrowsers $approvedStudentBrowsers)) {
+                Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers | Out-Null
             }
         }
     }

@@ -203,7 +203,7 @@ Describe "AppControl Module" {
             }
         }
 
-        It "Generates an Appx FilePublisherRule instead of leaving packaged apps NotConfigured" {
+        It "Generates Appx FilePublisherRules instead of leaving packaged apps NotConfigured" {
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
             $policyXml = New-OpenPathAppLockerPolicyXml -Spec $spec
             $policyXml | Should -Not -Match '<RuleCollection Type="Appx" EnforcementMode="NotConfigured"'
@@ -216,17 +216,55 @@ Describe "AppControl Module" {
             $appxCollection.GetAttribute('EnforcementMode') | Should -Not -Be 'NotConfigured'
 
             $rules = @($appxCollection.FilePublisherRule)
-            $rules.Count | Should -Be 1
-            $rule = $rules[0]
-            $rule.GetAttribute('Name') | Should -Be 'OpenPath non-admin app control Appx users allow signed packaged apps'
-            $rule.GetAttribute('Action') | Should -Be 'Allow'
-            $rule.GetAttribute('UserOrGroupSid') | Should -Be 'S-1-1-0'
-            $condition = $rule.Conditions.FilePublisherCondition
+            $allowRule = @($rules | Where-Object { $_.GetAttribute('Name') -eq 'OpenPath non-admin app control Appx users allow signed packaged apps' })[0]
+            $allowRule | Should -Not -BeNullOrEmpty
+            $allowRule.GetAttribute('Action') | Should -Be 'Allow'
+            $allowRule.GetAttribute('UserOrGroupSid') | Should -Be 'S-1-1-0'
+            $condition = $allowRule.Conditions.FilePublisherCondition
             $condition.GetAttribute('PublisherName') | Should -Be '*'
             $condition.GetAttribute('ProductName') | Should -Be '*'
             $condition.GetAttribute('BinaryName') | Should -Be '*'
             $condition.BinaryVersionRange.GetAttribute('LowSection') | Should -Be '*'
             $condition.BinaryVersionRange.GetAttribute('HighSection') | Should -Be '*'
+        }
+
+        It "Generates Appx denies for unapproved Edge products while preserving the signed packaged-app allow" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+            [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+            $appxCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+
+            $appxCollection.GetAttribute('EnforcementMode') | Should -Be 'Enabled'
+            $allowRule = @($appxCollection.FilePublisherRule | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Allow' -and
+                    $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
+                })[0]
+            $allowRule | Should -Not -BeNullOrEmpty
+
+            $deniedProducts = @(
+                $appxCollection.FilePublisherRule |
+                    Where-Object {
+                        $_.GetAttribute('Action') -eq 'Deny' -and
+                        $_.GetAttribute('UserOrGroupSid') -eq 'S-1-5-32-545'
+                    } |
+                    ForEach-Object { $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') }
+            )
+            $deniedProducts | Should -Contain 'Microsoft.MicrosoftEdge'
+            $deniedProducts | Should -Contain 'Microsoft.MicrosoftEdge.Stable'
+        }
+
+        It "Omits Edge Appx denies when Edge is explicitly approved" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -ApprovedBrowsers @('Firefox', 'Edge')
+            [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+            $appxCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+
+            $deniedProducts = @(
+                $appxCollection.FilePublisherRule |
+                    Where-Object { $_.GetAttribute('Action') -eq 'Deny' } |
+                    ForEach-Object { $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') }
+            )
+            $deniedProducts | Should -Not -Contain 'Microsoft.MicrosoftEdge'
+            $deniedProducts | Should -Not -Contain 'Microsoft.MicrosoftEdge.Stable'
         }
 
         It "Generates non-admin deny rules for user-writable paths before user allow rules in Exe and Script collections" {
@@ -365,7 +403,9 @@ Describe "AppControl Module" {
         It "Uses AppLocker rule Name attributes for active detection and removal" {
             $moduleContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "AppControl.psm1") -Raw
 
-            $moduleContent | Should -Match '(?s)function Test-OpenPathNonAdminAppControlActive.*?Where-Object \{ Test-OpenPathAppLockerRuleManaged -Rule \$_ \}'
+            $moduleContent | Should -Match '(?s)function Test-OpenPathFilePathRulePresent.*?Test-OpenPathAppLockerRuleManaged -Rule \$_'
+            $moduleContent | Should -Match '(?s)function Test-OpenPathFilePublisherRulePresent.*?Test-OpenPathAppLockerRuleManaged -Rule \$_'
+            $moduleContent | Should -Match '(?s)function Test-OpenPathNonAdminAppControlActive.*?Test-OpenPathAppLockerBoundaryPolicy'
             $moduleContent | Should -Match '(?s)function Remove-OpenPathNonAdminAppControl.*?if \(Test-OpenPathAppLockerRuleManaged -Rule \$rule\)'
             $moduleContent | Should -Not -Match '\$rule\.Name -like "\$script:OpenPathAppControlRulePrefix\*"'
             $moduleContent | Should -Not -Match '\$_\.Name -like "\$script:OpenPathAppControlRulePrefix\*"'
@@ -385,6 +425,54 @@ Describe "AppControl Module" {
                 'Test-OpenPathNonAdminAppControlActive',
                 'Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath'
             )
+        }
+
+        It "Does not treat a partial managed AppLocker policy as an active browser boundary" {
+            function global:Set-AppLockerPolicy {}
+            function global:Get-AppLockerPolicy {
+@'
+<AppLockerPolicy Version="1">
+  <RuleCollection Type="Exe" EnforcementMode="Enabled">
+    <FilePathRule Id="11111111-1111-1111-1111-111111111111" Name="OpenPath non-admin app control Exe users allow C-OpenPath" Description="Managed by OpenPath" UserOrGroupSid="S-1-5-32-545" Action="Allow">
+      <Conditions><FilePathCondition Path="C:\OpenPath\*" /></Conditions>
+    </FilePathRule>
+  </RuleCollection>
+  <RuleCollection Type="Appx" EnforcementMode="NotConfigured" />
+</AppLockerPolicy>
+'@
+            }
+            function global:Get-Service {
+                [PSCustomObject]@{ Name = 'AppIDSvc'; Status = 'Running' }
+            }
+
+            try {
+                Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+            }
+            finally {
+                Remove-Item Function:\Set-AppLockerPolicy -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-AppLockerPolicy -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-Service -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Requires AppIDSvc to be running for an active browser boundary" {
+            function global:Set-AppLockerPolicy {}
+            function global:Get-AppLockerPolicy {
+                $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+                New-OpenPathAppLockerPolicyXml -Spec $spec
+            }
+            function global:Get-Service {
+                [PSCustomObject]@{ Name = 'AppIDSvc'; Status = 'Stopped' }
+            }
+
+            try {
+                Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+            }
+            finally {
+                Remove-Item Function:\Set-AppLockerPolicy -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-AppLockerPolicy -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-Service -ErrorAction SilentlyContinue
+            }
         }
     }
 }

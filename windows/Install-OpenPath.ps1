@@ -611,14 +611,22 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'realtime-updates' -Action {
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
-$phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'app-control' -Action {
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
     try {
         Start-OpenPathInstallTimedStep -Name 'app-control'
         $enableNonAdminAppControl = [bool](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'enableNonAdminAppControl' -DefaultValue $true)
         $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
         $approvedStudentBrowsers = @($config.approvedStudentBrowsers)
         if ($enableNonAdminAppControl) {
-            Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference | Out-Null
+            $appControlApplied = [bool](Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference)
+            if (-not $appControlApplied) {
+                throw 'Set-OpenPathNonAdminAppControl did not apply the required AppControl boundary.'
+            }
+            if (-not (Test-OpenPathNonAdminAppControlActive `
+                        -Mode $nonAdminAppControlMode `
+                        -ApprovedBrowsers $approvedStudentBrowsers)) {
+                throw 'OpenPath AppControl boundary did not validate after installation.'
+            }
         }
         else {
             if (Test-OpenPathNonAdminAppControlActive) {
@@ -630,10 +638,12 @@ $phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'app-control' -Action {
         Complete-OpenPathInstallTimedStep -Name 'app-control'
     }
     catch {
-        Complete-OpenPathInstallTimedStep -Name 'app-control' -Status 'warning' -ErrorMessage ([string]$_)
-        Write-InstallerWarning "  WARNING: Could not configure AppLocker for non-admin users: $_"
+        Complete-OpenPathInstallTimedStep -Name 'app-control' -Status 'failed' -ErrorMessage ([string]$_)
+        Write-InstallerError "ERROR: Could not configure required AppLocker boundary for non-admin users: $_"
+        throw
     }
 }
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
 $phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'browser-inventory' -Action {
     if ($BrowserCleanupMode -eq 'Disabled') {

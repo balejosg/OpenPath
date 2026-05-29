@@ -47,6 +47,23 @@ Describe "Watchdog Script" {
         }
     }
 
+    Context "AppControl repair" {
+        It "Reapplies AppControl with approved student browsers from config" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $content = Get-Content $helperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '$approvedStudentBrowsers = @(''Firefox'')',
+                '$Config.PSObject.Properties[''approvedStudentBrowsers'']',
+                '$approvedStudentBrowsers = @($Config.approvedStudentBrowsers)',
+                'Test-OpenPathNonAdminAppControlActive `',
+                '-Mode $mode `',
+                '-ApprovedBrowsers $approvedStudentBrowsers',
+                'Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers'
+            )
+        }
+    }
+
     Context "Captive portal detection" {
         It "Defines admin-only captive portal recovery script with bounded queue processing" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
