@@ -25,7 +25,7 @@ Describe "Browser Module - Enforcement status" {
             'Get-OpenPathBrowserInventory',
             'Get-OpenPathBrowserRequestReadiness',
             'Test-OpenPathNonAdminAppControlActive',
-            'AppControl currently exposes active/inactive only',
+            'function Get-OpenPathAppLockerStatus',
             "return 'Inactive'",
             "return 'AuditOnly'",
             "return 'Enforced'",

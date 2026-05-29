@@ -1042,6 +1042,9 @@ Describe "Installer" {
                 'Import-Module "$OpenPathRoot\lib\Common.psm1" -Force -Global',
                 'Import-Module "$OpenPathRoot\lib\Firewall.psm1" -Force -Global',
                 'Import-Module "$OpenPathRoot\lib\AppControl.psm1" -Force -Global',
+                "Get-Command -Name 'AppControl\Set-OpenPathNonAdminAppControl' -ErrorAction Stop",
+                "Get-Command -Name 'AppControl\Test-OpenPathNonAdminAppControlActive' -ErrorAction Stop",
+                "Get-Command -Name 'AppControl\Remove-OpenPathNonAdminAppControl' -ErrorAction Stop",
                 'Import-Module "$OpenPathRoot\lib\DNS.psm1" -Force -Global',
                 'Import-Module "$OpenPathRoot\lib\Browser.psm1" -Force -Global',
                 'Import-Module "$OpenPathRoot\lib\Services.psm1" -Force -Global'
@@ -1121,7 +1124,7 @@ Describe "Installer" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw
 
-            $content | Should -Match '(?s)if \(\$enableNonAdminAppControl\).*?Set-OpenPathNonAdminAppControl.*?else \{.*?Remove-OpenPathNonAdminAppControl -Confirm:\$false.*?Managed browser boundary disabled; AppLocker boundary not applied'
+            $content | Should -Match '(?s)if \(\$enableNonAdminAppControl\).*?\$script:OpenPathAppControlCommands\.Set.*?else \{.*?\$script:OpenPathAppControlCommands\.Remove.*?-Confirm:\$false.*?Managed browser boundary disabled; AppLocker boundary not applied'
         }
 
         It "Fails the app-control phase when required AppControl cannot be applied and validated" {
@@ -1130,9 +1133,9 @@ Describe "Installer" {
 
             $content | Should -Match "\$phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control'"
             $content | Should -Not -Match "\$phaseResult = Invoke-OpenPathPlannedWarningPhase -Name 'app-control'"
-            $content | Should -Match '(?s)\$appControlApplied = \[bool\]\(Set-OpenPathNonAdminAppControl.*?-ApprovedBrowsers \$approvedStudentBrowsers'
+            $content | Should -Match '(?s)\$appControlApplied = \[bool\]\(& \$script:OpenPathAppControlCommands\.Set.*?-ApprovedBrowsers \$approvedStudentBrowsers'
             $content | Should -Match '(?s)if \(-not \$appControlApplied\) \{.*?throw ''Set-OpenPathNonAdminAppControl did not apply the required AppControl boundary\.'''
-            $content | Should -Match '(?s)Test-OpenPathNonAdminAppControlActive\s+`?\s*-Mode \$nonAdminAppControlMode\s+`?\s*-ApprovedBrowsers \$approvedStudentBrowsers'
+            $content | Should -Match '(?s)\$script:OpenPathAppControlCommands\.Test\s+`?\s*-Mode \$nonAdminAppControlMode\s+`?\s*-ApprovedBrowsers \$approvedStudentBrowsers'
             $content | Should -Match 'Assert-OpenPathInstallPhaseSucceeded -Result \$phaseResult'
         }
     }

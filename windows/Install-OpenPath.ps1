@@ -387,7 +387,12 @@ Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 Import-Module "$OpenPathRoot\lib\Common.psm1" -Force -Global
 Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force -Global
 Import-Module "$OpenPathRoot\lib\Firewall.psm1" -Force -Global
-Import-Module "$OpenPathRoot\lib\AppControl.psm1" -Force -Global
+Import-Module "$OpenPathRoot\lib\AppControl.psm1" -Force -Global -ErrorAction Stop
+$script:OpenPathAppControlCommands = @{
+    Set = Get-Command -Name 'AppControl\Set-OpenPathNonAdminAppControl' -ErrorAction Stop
+    Test = Get-Command -Name 'AppControl\Test-OpenPathNonAdminAppControlActive' -ErrorAction Stop
+    Remove = Get-Command -Name 'AppControl\Remove-OpenPathNonAdminAppControl' -ErrorAction Stop
+}
 
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'configuration' -Action {
     $primaryDNS = Get-InstallerPrimaryDNS
@@ -618,19 +623,19 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
         $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
         $approvedStudentBrowsers = @($config.approvedStudentBrowsers)
         if ($enableNonAdminAppControl) {
-            $appControlApplied = [bool](Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference)
+            $appControlApplied = [bool](& $script:OpenPathAppControlCommands.Set -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference)
             if (-not $appControlApplied) {
                 throw 'Set-OpenPathNonAdminAppControl did not apply the required AppControl boundary.'
             }
-            if (-not (Test-OpenPathNonAdminAppControlActive `
+            if (-not (& $script:OpenPathAppControlCommands.Test `
                         -Mode $nonAdminAppControlMode `
                         -ApprovedBrowsers $approvedStudentBrowsers)) {
                 throw 'OpenPath AppControl boundary did not validate after installation.'
             }
         }
         else {
-            if (Test-OpenPathNonAdminAppControlActive) {
-                Remove-OpenPathNonAdminAppControl -Confirm:$false -WhatIf:$WhatIfPreference | Out-Null
+            if (& $script:OpenPathAppControlCommands.Test) {
+                & $script:OpenPathAppControlCommands.Remove -Confirm:$false -WhatIf:$WhatIfPreference | Out-Null
                 Write-InstallerVerbose '  Stale OpenPath AppLocker rules removed'
             }
             Write-InstallerVerbose '  Managed browser boundary disabled; AppLocker boundary not applied'
