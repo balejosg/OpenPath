@@ -49,8 +49,9 @@ await describe('classroom storage facade', async () => {
     assert.equal(await classroomStorage.updateMachineStatus(storedMachineKey, 'online'), true);
 
     const machineLookup = await classroomStorage.getMachineByHostname(storedMachineKey);
-    assert.equal(machineLookup?.classroom.id, created.id);
-    assert.equal(machineLookup?.machine.hostname, 'Student-PC');
+    assert.ok(machineLookup);
+    assert.equal(machineLookup.classroom.id, created.id);
+    assert.equal(machineLookup.machine.hostname, 'Student-PC');
 
     assert.equal(await classroomStorage.removeMachine('other-classroom', storedMachineKey), false);
     assert.equal(await classroomStorage.removeMachine(created.id, storedMachineKey), true);

@@ -138,9 +138,7 @@ await describe('classroom command service exports', async () => {
       displayName: 'Duplicate',
     });
     assert.equal(duplicate.ok, false);
-    if (!duplicate.ok) {
-      assert.equal(duplicate.error.code, 'CONFLICT');
-    }
+    assert.equal(duplicate.error.code, 'CONFLICT');
 
     const invalidCreate = await service.createClassroom({
       name: createFixtureId('command-invalid-captive'),
@@ -148,9 +146,7 @@ await describe('classroom command service exports', async () => {
       captivePortalDomains: ['https://portal.example.test'],
     });
     assert.equal(invalidCreate.ok, false);
-    if (!invalidCreate.ok) {
-      assert.equal(invalidCreate.error.code, 'BAD_REQUEST');
-    }
+    assert.equal(invalidCreate.error.code, 'BAD_REQUEST');
 
     const missingUpdate = await service.updateClassroom('missing-classroom', {
       displayName: 'Missing',
@@ -164,9 +160,7 @@ await describe('classroom command service exports', async () => {
       captivePortalDomains: ['*.example.test'],
     });
     assert.equal(invalidUpdate.ok, false);
-    if (!invalidUpdate.ok) {
-      assert.equal(invalidUpdate.error.code, 'BAD_REQUEST');
-    }
+    assert.equal(invalidUpdate.error.code, 'BAD_REQUEST');
 
     const missingDelete = await service.deleteClassroom('missing-classroom');
     assert.deepEqual(missingDelete, {
