@@ -44,6 +44,7 @@ await describe('classroom storage facade', async () => {
 
     const machine = await classroomStorage.addMachine(created.id, 'Student-PC');
     const storedMachineKey = buildMachineKey(created.id, 'Student-PC');
+    assert.ok(machine);
     assert.equal(machine.hostname, 'Student-PC');
     assert.equal(await classroomStorage.updateMachineStatus(storedMachineKey, 'online'), true);
 

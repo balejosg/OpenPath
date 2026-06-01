@@ -119,6 +119,7 @@ await describe('classroom command service exports', async () => {
       assert.fail(updated.error.message);
     }
 
+    assert.ok(updated.data);
     assert.deepEqual(updated.data.captivePortalDomains, ['portal.example.test']);
   });
 
