@@ -92,6 +92,8 @@ export const productI18nCatalogs = {
     'classrooms.detail.noDefaultGroup': 'No default group',
     'classrooms.detail.defaultGroupHelp':
       'Used when there is no active group or active schedule block.',
+    'classrooms.detail.captivePortal.enabled': 'This network uses a captive portal',
+    'classrooms.detail.captivePortal.domains': 'Captive portal domains',
     'classrooms.detail.status': 'Status',
     'classrooms.detail.status.operational': 'Operational',
     'classrooms.detail.status.degraded': 'Degraded',
@@ -472,6 +474,8 @@ export const productI18nCatalogs = {
     'classrooms.detail.noDefaultGroup': 'Sin grupo por defecto',
     'classrooms.detail.defaultGroupHelp':
       'Se usa cuando no hay grupo activo ni bloque de horario activo.',
+    'classrooms.detail.captivePortal.enabled': 'Esta red usa un portal cautivo',
+    'classrooms.detail.captivePortal.domains': 'Dominios del portal cautivo',
     'classrooms.detail.status': 'Estado',
     'classrooms.detail.status.operational': 'Operativo',
     'classrooms.detail.status.degraded': 'Degradado',

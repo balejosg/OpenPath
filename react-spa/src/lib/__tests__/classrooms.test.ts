@@ -37,6 +37,7 @@ describe('classrooms adapter', () => {
       currentGroupSource: 'manual',
       status: 'operational',
       onlineMachineCount: 10,
+      captivePortalDomains: ['login.example.test'],
       machines: [],
     };
 
@@ -60,6 +61,7 @@ describe('classrooms adapter', () => {
       currentGroupSource: 'manual',
       status: 'operational',
       onlineMachineCount: 10,
+      captivePortalDomains: ['login.example.test'],
       machines: [],
     });
 
@@ -80,6 +82,7 @@ describe('classrooms adapter', () => {
       currentGroupSource: 'none',
       status: 'operational',
       onlineMachineCount: 0,
+      captivePortalDomains: [],
       machines: [],
     });
 
@@ -102,6 +105,7 @@ describe('classrooms adapter', () => {
       machineCount: 8,
       status: 'operational',
       onlineMachineCount: 8,
+      captivePortalDomains: ['wifi.example.test'],
       machines: [],
     };
 

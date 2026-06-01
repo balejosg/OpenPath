@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS "classrooms" (
 	"display_name" varchar(255) NOT NULL,
 	"default_group_id" varchar(50),
 	"active_group_id" varchar(50),
+	"captive_portal_domains" text[] DEFAULT '{}'::text[] NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now(),
 	"updated_at" timestamp with time zone DEFAULT now(),
 	CONSTRAINT "classrooms_name_unique" UNIQUE("name")

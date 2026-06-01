@@ -23,6 +23,9 @@ export async function createClassroom(
       name: input.name,
       displayName: input.displayName,
       ...(input.defaultGroupId !== undefined ? { defaultGroupId: input.defaultGroupId } : {}),
+      ...(input.captivePortalDomains !== undefined
+        ? { captivePortalDomains: input.captivePortalDomains }
+        : {}),
     };
     const created = await classroomStorage.createClassroom(createData);
     return { ok: true, data: created };
@@ -33,6 +36,9 @@ export async function createClassroom(
         return { ok: false, error: { code: 'CONFLICT', message: error.message } };
       }
       if (error.message.includes('invalid')) {
+        return { ok: false, error: { code: 'BAD_REQUEST', message: error.message } };
+      }
+      if (error.message.includes('Captive portal domains')) {
         return { ok: false, error: { code: 'BAD_REQUEST', message: error.message } };
       }
     }
@@ -48,18 +54,29 @@ export async function updateClassroom(
   id: string,
   updates: UpdateClassroomData
 ): Promise<ClassroomResult<Awaited<ReturnType<typeof classroomStorage.updateClassroom>>>> {
-  const updated = await DomainEventsService.withQueuedEvents(async (events) => {
-    const refreshed = await classroomStorage.updateClassroom(id, updates);
-    if (refreshed && updates.defaultGroupId !== undefined) {
-      events.publishClassroomChanged(refreshed.id);
+  try {
+    const updated = await DomainEventsService.withQueuedEvents(async (events) => {
+      const refreshed = await classroomStorage.updateClassroom(id, updates);
+      if (refreshed && updates.defaultGroupId !== undefined) {
+        events.publishClassroomChanged(refreshed.id);
+      }
+      return refreshed;
+    });
+    if (!updated) {
+      return { ok: false, error: { code: 'NOT_FOUND', message: 'Classroom not found' } };
     }
-    return refreshed;
-  });
-  if (!updated) {
-    return { ok: false, error: { code: 'NOT_FOUND', message: 'Classroom not found' } };
-  }
 
-  return { ok: true, data: updated };
+    return { ok: true, data: updated };
+  } catch (error) {
+    logger.error('classrooms.update error', { error: formatErrorMessage(error), id, updates });
+    if (error instanceof Error && error.message.includes('Captive portal domains')) {
+      return { ok: false, error: { code: 'BAD_REQUEST', message: error.message } };
+    }
+    return {
+      ok: false,
+      error: { code: 'INTERNAL_SERVER_ERROR', message: 'Failed to update classroom' },
+    };
+  }
 }
 
 export async function setClassroomActiveGroup(

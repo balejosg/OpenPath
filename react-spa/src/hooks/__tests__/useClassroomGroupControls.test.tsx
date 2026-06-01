@@ -3,12 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Classroom } from '../../types';
 import { useClassroomGroupControls } from '../useClassroomGroupControls';
 
-const { mockHandleGroupChange, mockHandleDefaultGroupChange, mockUseClassroomConfigActions } =
-  vi.hoisted(() => ({
-    mockHandleGroupChange: vi.fn(),
-    mockHandleDefaultGroupChange: vi.fn(),
-    mockUseClassroomConfigActions: vi.fn(),
-  }));
+const {
+  mockHandleGroupChange,
+  mockHandleDefaultGroupChange,
+  mockHandleCaptivePortalDomainsChange,
+  mockUseClassroomConfigActions,
+} = vi.hoisted(() => ({
+  mockHandleGroupChange: vi.fn(),
+  mockHandleDefaultGroupChange: vi.fn(),
+  mockHandleCaptivePortalDomainsChange: vi.fn(),
+  mockUseClassroomConfigActions: vi.fn(),
+}));
 
 vi.mock('../useClassroomConfigActions', () => ({
   useClassroomConfigActions: (params: unknown): unknown => mockUseClassroomConfigActions(params),
@@ -40,6 +45,7 @@ describe('useClassroomGroupControls', () => {
       classroomConfigError: '',
       handleGroupChange: mockHandleGroupChange,
       handleDefaultGroupChange: mockHandleDefaultGroupChange,
+      handleCaptivePortalDomainsChange: mockHandleCaptivePortalDomainsChange,
     });
   });
 
@@ -58,6 +64,45 @@ describe('useClassroomGroupControls', () => {
     expect(result.current.activeGroupSelectValue).toBe('');
     expect(result.current.defaultGroupSelectValue).toBe('group-default');
     expect(result.current.resolveGroupName('group-manual')).toBe('Grupo Manual');
+    expect(result.current.handleCaptivePortalDomainsChange).toBe(
+      mockHandleCaptivePortalDomainsChange
+    );
+  });
+
+  it('does not request active group changes without a selected classroom', () => {
+    const { result } = renderHook(() =>
+      useClassroomGroupControls({
+        admin: true,
+        selectedClassroom: null,
+        groupById,
+        refetchClassrooms: vi.fn(),
+        setSelectedClassroom: vi.fn(),
+      })
+    );
+
+    act(() => {
+      result.current.requestActiveGroupChange('group-next');
+    });
+
+    expect(mockHandleGroupChange).not.toHaveBeenCalled();
+  });
+
+  it('normalizes blank active group requests to null', () => {
+    const { result } = renderHook(() =>
+      useClassroomGroupControls({
+        admin: true,
+        selectedClassroom: baseClassroom,
+        groupById,
+        refetchClassrooms: vi.fn(),
+        setSelectedClassroom: vi.fn(),
+      })
+    );
+
+    act(() => {
+      result.current.requestActiveGroupChange('');
+    });
+
+    expect(mockHandleGroupChange).toHaveBeenCalledWith('');
   });
 
   it('changes the active group immediately when there is no manual group to replace', () => {
@@ -139,5 +184,67 @@ describe('useClassroomGroupControls', () => {
     expect(mockHandleGroupChange).toHaveBeenCalledWith('group-next');
     expect(result.current.activeGroupOverwriteConfirm).toBeNull();
     expect(result.current.activeGroupOverwriteLoading).toBe(false);
+  });
+
+  it('closes overwrite confirmation when not loading', () => {
+    const classroom = {
+      ...baseClassroom,
+      activeGroup: 'group-manual',
+      currentGroupId: 'group-manual',
+      currentGroupSource: 'manual' as const,
+    };
+
+    const { result } = renderHook(() =>
+      useClassroomGroupControls({
+        admin: true,
+        selectedClassroom: classroom,
+        groupById,
+        refetchClassrooms: vi.fn(),
+        setSelectedClassroom: vi.fn(),
+      })
+    );
+
+    act(() => {
+      result.current.requestActiveGroupChange('group-next');
+    });
+    act(() => {
+      result.current.closeActiveGroupOverwriteConfirm();
+    });
+
+    expect(result.current.activeGroupOverwriteConfirm).toBeNull();
+  });
+
+  it('drops stale overwrite confirmations when selected classroom changes', async () => {
+    const classroom = {
+      ...baseClassroom,
+      activeGroup: 'group-manual',
+      currentGroupId: 'group-manual',
+      currentGroupSource: 'manual' as const,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ selectedClassroom }) =>
+        useClassroomGroupControls({
+          admin: true,
+          selectedClassroom,
+          groupById,
+          refetchClassrooms: vi.fn(),
+          setSelectedClassroom: vi.fn(),
+        }),
+      { initialProps: { selectedClassroom: classroom } }
+    );
+
+    act(() => {
+      result.current.requestActiveGroupChange('group-next');
+    });
+
+    rerender({ selectedClassroom: { ...classroom, id: 'classroom-2' } });
+
+    await act(async () => {
+      await result.current.confirmActiveGroupOverwrite();
+    });
+
+    expect(mockHandleGroupChange).not.toHaveBeenCalled();
+    expect(result.current.activeGroupOverwriteConfirm).toBeNull();
   });
 });

@@ -111,6 +111,10 @@ export const classrooms = pgTable('classrooms', {
   activeGroupId: varchar('active_group_id', { length: 50 }).references(() => whitelistGroups.id, {
     onDelete: 'set null',
   }),
+  captivePortalDomains: text('captive_portal_domains')
+    .array()
+    .default(sql`'{}'::text[]`)
+    .notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });

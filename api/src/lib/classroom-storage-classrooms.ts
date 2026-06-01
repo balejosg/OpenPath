@@ -1,6 +1,6 @@
 import { count, eq, sql } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { sanitizeSlug } from '@openpath/shared';
+import { normalizeCaptivePortalDomains, sanitizeSlug } from '@openpath/shared';
 import { classrooms, db, machines } from '../db/index.js';
 import { getRowCount } from './utils.js';
 import type { CreateClassroomData, UpdateClassroomData } from '../types/storage.js';
@@ -18,6 +18,7 @@ export async function getAllClassrooms(): Promise<ClassroomWithCount[]> {
       displayName: classrooms.displayName,
       defaultGroupId: classrooms.defaultGroupId,
       activeGroupId: classrooms.activeGroupId,
+      captivePortalDomains: classrooms.captivePortalDomains,
       createdAt: classrooms.createdAt,
       updatedAt: classrooms.updatedAt,
       machineCount: sql<number>`COUNT(${machines.id})::int`.as('machineCount'),
@@ -33,6 +34,7 @@ export async function getAllClassrooms(): Promise<ClassroomWithCount[]> {
     displayName: row.displayName,
     defaultGroupId: row.defaultGroupId,
     activeGroupId: row.activeGroupId,
+    captivePortalDomains: row.captivePortalDomains,
     createdAt: row.createdAt ?? new Date(),
     updatedAt: row.updatedAt ?? new Date(),
     machineCount: row.machineCount,
@@ -77,6 +79,7 @@ export async function createClassroom(
       name: slug,
       displayName: displayName ?? name,
       defaultGroupId: defaultGroupId ?? null,
+      captivePortalDomains: normalizeCaptivePortalDomains(classroomData.captivePortalDomains),
     })
     .returning();
 
@@ -98,6 +101,9 @@ export async function updateClassroom(
   }
   if (updates.defaultGroupId !== undefined) {
     updateValues.defaultGroupId = updates.defaultGroupId;
+  }
+  if (updates.captivePortalDomains !== undefined) {
+    updateValues.captivePortalDomains = normalizeCaptivePortalDomains(updates.captivePortalDomains);
   }
 
   if (Object.keys(updateValues).length === 0) {

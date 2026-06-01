@@ -33,6 +33,7 @@ param(
     [string]$RegistrationToken = "",
     [string]$EnrollmentToken = "",
     [string]$ClassroomId = "",
+    [string[]]$CaptivePortalDomains = @(),
     [string]$MachineName = "",
     [string]$FirefoxExtensionId = "",
     [string]$FirefoxExtensionInstallUrl = "",
@@ -153,6 +154,7 @@ $installerParameters = @{
     RegistrationToken = $RegistrationToken
     EnrollmentToken = $EnrollmentToken
     ClassroomId = $ClassroomId
+    CaptivePortalDomains = @($CaptivePortalDomains)
     MachineName = $MachineName
     FirefoxExtensionId = $FirefoxExtensionId
     FirefoxExtensionInstallUrl = $FirefoxExtensionInstallUrl
@@ -404,6 +406,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'configuration' -Action {
         -ApiBaseUrl $apiBaseUrl `
         -Classroom $Classroom `
         -ClassroomId $ClassroomId `
+        -CaptivePortalDomains $CaptivePortalDomains `
         -HealthApiSecret $HealthApiSecret `
         -FirefoxExtensionId $FirefoxExtensionId `
         -FirefoxExtensionInstallUrl $FirefoxExtensionInstallUrl `
@@ -462,7 +465,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'acrylic-configuration' -Action
         Write-InstallerWarning '  Acrylic configuration skipped by -SkipAcrylic'
     }
     else {
-        $acrylicConfigurationApplied = Set-AcrylicConfiguration -WhatIf:$WhatIfPreference
+        $acrylicConfigurationApplied = Set-AcrylicConfiguration -CaptivePortalDomains $CaptivePortalDomains -WhatIf:$WhatIfPreference
         if (-not ($WhatIfPreference -or $acrylicConfigurationApplied)) {
             throw 'Acrylic configuration failed'
         }

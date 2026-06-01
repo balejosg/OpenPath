@@ -40,6 +40,7 @@ export interface Classroom {
   currentGroupSource?: CurrentGroupSource;
   status: ClassroomStatus;
   onlineMachineCount: number;
+  captivePortalDomains?: string[];
   machines?: {
     id: string;
     hostname: string;

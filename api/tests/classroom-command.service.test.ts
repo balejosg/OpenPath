@@ -94,6 +94,121 @@ await describe('classroom command service exports', async () => {
     assert.equal(typeof service.createOperationalExemptionForClassroom, 'function');
   });
 
+  await test('creates and updates classrooms with captive portal domains', async () => {
+    const groupId = createFixtureId('command-captive-group');
+    await ensureWhitelistGroup(groupId);
+
+    const created = await service.createClassroom({
+      name: createFixtureId('command-captive'),
+      displayName: 'Command Captive',
+      defaultGroupId: groupId,
+      captivePortalDomains: [' Login.EXAMPLE.test ', 'login.example.test'],
+    });
+
+    if (!created.ok) {
+      assert.fail(created.error.message);
+    }
+
+    assert.deepEqual(created.data.captivePortalDomains, ['login.example.test']);
+
+    const updated = await service.updateClassroom(created.data.id, {
+      captivePortalDomains: ['portal.example.test'],
+    });
+
+    if (!updated.ok) {
+      assert.fail(updated.error.message);
+    }
+
+    assert.deepEqual(updated.data.captivePortalDomains, ['portal.example.test']);
+  });
+
+  await test('returns classroom command errors for duplicate, invalid, and missing classrooms', async () => {
+    const classroomName = createFixtureId('command-errors');
+    const created = await service.createClassroom({
+      name: classroomName,
+      displayName: 'Command Errors',
+    });
+    if (!created.ok) {
+      assert.fail(created.error.message);
+    }
+
+    const duplicate = await service.createClassroom({
+      name: classroomName,
+      displayName: 'Duplicate',
+    });
+    assert.equal(duplicate.ok, false);
+    if (!duplicate.ok) {
+      assert.equal(duplicate.error.code, 'CONFLICT');
+    }
+
+    const invalidCreate = await service.createClassroom({
+      name: createFixtureId('command-invalid-captive'),
+      displayName: 'Invalid Captive',
+      captivePortalDomains: ['https://portal.example.test'],
+    });
+    assert.equal(invalidCreate.ok, false);
+    if (!invalidCreate.ok) {
+      assert.equal(invalidCreate.error.code, 'BAD_REQUEST');
+    }
+
+    const missingUpdate = await service.updateClassroom('missing-classroom', {
+      displayName: 'Missing',
+    });
+    assert.deepEqual(missingUpdate, {
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'Classroom not found' },
+    });
+
+    const invalidUpdate = await service.updateClassroom(created.data.id, {
+      captivePortalDomains: ['*.example.test'],
+    });
+    assert.equal(invalidUpdate.ok, false);
+    if (!invalidUpdate.ok) {
+      assert.equal(invalidUpdate.error.code, 'BAD_REQUEST');
+    }
+
+    const missingDelete = await service.deleteClassroom('missing-classroom');
+    assert.deepEqual(missingDelete, {
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'Classroom not found' },
+    });
+  });
+
+  await test('guards active group changes by teacher group scope', async () => {
+    const allowedGroupId = createFixtureId('command-allowed-group');
+    const deniedGroupId = createFixtureId('command-denied-group');
+    await ensureWhitelistGroup(allowedGroupId);
+    await ensureWhitelistGroup(deniedGroupId);
+    const classroom = await classroomStorage.createClassroom({
+      name: createFixtureId('command-scope'),
+      displayName: 'Command Scope',
+      defaultGroupId: allowedGroupId,
+    });
+
+    const forbidden = await service.setClassroomActiveGroup(teacherUser([allowedGroupId]), {
+      id: classroom.id,
+      groupId: deniedGroupId,
+    });
+
+    assert.deepEqual(forbidden, {
+      ok: false,
+      error: {
+        code: 'FORBIDDEN',
+        message: 'You can only set groups within your assigned scope',
+      },
+    });
+
+    const missing = await service.setClassroomActiveGroup(ADMIN_USER, {
+      id: 'missing-classroom',
+      groupId: null,
+    });
+
+    assert.deepEqual(missing, {
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'Classroom not found' },
+    });
+  });
+
   await test('creates, lists, and revokes schedule exemptions for active scheduled classrooms', async () => {
     const groupId = createFixtureId('schedule-group');
     await ensureWhitelistGroup(groupId);

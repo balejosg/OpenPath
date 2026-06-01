@@ -131,6 +131,7 @@ function buildProps(overrides: Partial<React.ComponentProps<typeof ClassroomDeta
     onOpenDeleteDialog: vi.fn(),
     onRequestActiveGroupChange: vi.fn(),
     onDefaultGroupChange: vi.fn(),
+    onCaptivePortalDomainsChange: vi.fn(),
     onOpenEnrollModal: vi.fn(),
     onCreateExemption: vi.fn(),
     onCreateOperationalExemption: vi.fn(),

@@ -82,9 +82,38 @@ export const useClassroomConfigActions = ({
     [selectedClassroom, refetchClassrooms, setSelectedClassroom]
   );
 
+  const handleCaptivePortalDomainsChange = useCallback(
+    async (captivePortalDomains: string[]) => {
+      if (!selectedClassroom) return;
+
+      try {
+        setClassroomConfigError('');
+        await trpc.classrooms.update.mutate({
+          id: selectedClassroom.id,
+          captivePortalDomains,
+        });
+        const updatedClassrooms = await refetchClassrooms();
+        const updated = updatedClassrooms.find((c) => c.id === selectedClassroom.id);
+        if (updated) {
+          setSelectedClassroom(updated);
+        }
+      } catch (err) {
+        reportError('Failed to update captive portal domains:', err);
+        setClassroomConfigError(
+          resolveTrpcErrorMessage(err, {
+            badRequest: 'Enter exact domain names only, separated by commas.',
+            fallback: 'Unable to update captive portal domains. Try again.',
+          })
+        );
+      }
+    },
+    [selectedClassroom, refetchClassrooms, setSelectedClassroom]
+  );
+
   return {
     classroomConfigError,
     handleGroupChange,
     handleDefaultGroupChange,
+    handleCaptivePortalDomainsChange,
   };
 };

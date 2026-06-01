@@ -89,6 +89,7 @@ export async function buildWindowsEnrollmentBootstrap(input: {
         publicUrl: input.publicUrl,
         classroomId: context.data.classroom.id,
         enrollmentToken: context.data.enrollmentToken,
+        captivePortalDomains: context.data.classroom.captivePortalDomains,
         ...(firefoxExtensionInstallUrl ? { firefoxExtensionInstallUrl } : {}),
       }),
     },

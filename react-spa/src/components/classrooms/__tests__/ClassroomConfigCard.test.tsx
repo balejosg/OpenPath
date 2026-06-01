@@ -42,6 +42,7 @@ function buildProps(overrides: Partial<React.ComponentProps<typeof ClassroomConf
     onOpenDeleteDialog: vi.fn(),
     onRequestActiveGroupChange: vi.fn(),
     onDefaultGroupChange: vi.fn(),
+    onCaptivePortalDomainsChange: vi.fn(),
     ...overrides,
   };
 }
@@ -78,5 +79,40 @@ describe('ClassroomConfigCard', () => {
     expect(
       screen.getByText('You cannot leave the classroom without a default group.')
     ).toBeInTheDocument();
+  });
+
+  it('renders and edits captive portal domain settings', () => {
+    const props = buildProps({
+      classroom: buildClassroom({ captivePortalDomains: ['login.example.test'] }),
+    });
+    render(<ClassroomConfigCard {...props} />);
+
+    expect(screen.getByLabelText('This network uses a captive portal')).toBeChecked();
+    fireEvent.change(screen.getByLabelText('Captive portal domains'), {
+      target: { value: 'login.example.test, wifi.example.test' },
+    });
+
+    expect(props.onCaptivePortalDomainsChange).toHaveBeenCalledWith([
+      'login.example.test',
+      'wifi.example.test',
+    ]);
+  });
+
+  it('lets admins enable captive portal editing before domains exist', () => {
+    const props = buildProps({
+      classroom: buildClassroom({ captivePortalDomains: [] }),
+    });
+    render(<ClassroomConfigCard {...props} />);
+
+    const toggle = screen.getByLabelText('This network uses a captive portal');
+    const input = screen.getByLabelText('Captive portal domains');
+
+    expect(toggle).not.toBeChecked();
+    expect(input).toBeDisabled();
+
+    fireEvent.click(toggle);
+
+    expect(input).not.toBeDisabled();
+    expect(props.onCaptivePortalDomainsChange).not.toHaveBeenCalled();
   });
 });

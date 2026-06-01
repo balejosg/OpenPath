@@ -108,6 +108,7 @@ function New-OpenPathInstallPlan {
             ApiUrl = $Parameters.ApiUrl
             Classroom = $Parameters.Classroom
             ClassroomId = $Parameters.ClassroomId
+            CaptivePortalDomains = $Parameters.CaptivePortalDomains
             RegistrationToken = $Parameters.RegistrationToken
             EnrollmentToken = $Parameters.EnrollmentToken
             MachineName = $Parameters.MachineName

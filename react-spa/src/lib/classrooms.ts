@@ -38,6 +38,7 @@ export interface ClassroomListModel {
   currentGroupSource: CurrentGroupSource | null;
   status: Classroom['status'];
   onlineMachineCount: number;
+  captivePortalDomains?: string[];
   machines: Classroom['machines'];
 }
 
@@ -82,6 +83,7 @@ export function toClassroomListModel(item: ClassroomListItem): ClassroomListMode
     currentGroupSource: item.currentGroupSource,
     status: item.status,
     onlineMachineCount: item.onlineMachineCount,
+    captivePortalDomains: item.captivePortalDomains,
     machines: item.machines,
   };
 }
@@ -104,6 +106,7 @@ export function toClassroomFromModel(model: ClassroomListModel): Classroom {
     currentGroupSource: model.currentGroupSource ?? undefined,
     status: model.status,
     onlineMachineCount: model.onlineMachineCount,
+    captivePortalDomains: model.captivePortalDomains ?? [],
     machines: model.machines,
   };
 }

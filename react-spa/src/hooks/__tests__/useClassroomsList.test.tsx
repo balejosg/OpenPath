@@ -79,6 +79,7 @@ describe('useClassroomsList', () => {
         currentGroupSource: 'manual',
         status: 'operational',
         onlineMachineCount: 10,
+        captivePortalDomains: [],
         machines: [],
       },
     ]);

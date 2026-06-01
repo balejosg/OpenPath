@@ -61,6 +61,7 @@ const Classrooms: React.FC<ClassroomsProps> = ({
     confirmActiveGroupOverwrite,
     defaultGroupSelectValue,
     handleDefaultGroupChange,
+    handleCaptivePortalDomainsChange,
     requestActiveGroupChange,
     resolveGroupName,
     selectedClassroomSource,
@@ -164,6 +165,7 @@ const Classrooms: React.FC<ClassroomsProps> = ({
           onOpenDeleteDialog={deleteDialog.open}
           onRequestActiveGroupChange={requestActiveGroupChange}
           onDefaultGroupChange={handleDefaultGroupChange}
+          onCaptivePortalDomainsChange={handleCaptivePortalDomainsChange}
           onOpenEnrollModal={enrollModal.open}
           onCreateExemption={handleCreateExemption}
           onCreateOperationalExemption={handleCreateOperationalExemption}

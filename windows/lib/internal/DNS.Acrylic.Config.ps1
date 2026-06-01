@@ -73,8 +73,18 @@ function Update-AcrylicHost {
     return [bool](Invoke-OpenPathPolicyStateLocked -Action {
         $hostsPath = "$acrylicPath\AcrylicHosts.txt"
         $dnsSettings = Get-OpenPathDnsSettings
+        $captivePortalDomains = @()
+        try {
+            $openPathConfig = Get-OpenPathConfig
+            if ($openPathConfig.PSObject.Properties['captivePortalDomains']) {
+                $captivePortalDomains = @($openPathConfig.captivePortalDomains)
+            }
+        }
+        catch {
+            Write-Debug "OpenPath captive portal domains unavailable, using none: $_"
+        }
         $runtimeDependencyDomains = Get-OpenPathRuntimeDependencyDomains -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains -Prune
-        $definition = New-AcrylicHostsDefinition -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains -RuntimeDependencyDomains $runtimeDependencyDomains -DnsSettings $dnsSettings
+        $definition = New-AcrylicHostsDefinition -WhitelistedDomains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains -RuntimeDependencyDomains $runtimeDependencyDomains -CaptivePortalDomains $captivePortalDomains -DnsSettings $dnsSettings
         if ($definition.WasTruncated) {
             Write-OpenPathLog "Truncating whitelist from $($definition.OriginalWhitelistedDomainCount) to $($dnsSettings.MaxDomains) domains" -Level WARN
         }
@@ -82,7 +92,7 @@ function Update-AcrylicHost {
         $content = ConvertTo-AcrylicHostsContent -Definition $definition
         Write-AcrylicHostsFile -Path $hostsPath -Content $content
 
-        $configurationUpdated = Set-AcrylicConfiguration -WhitelistedDomains $definition.EffectiveWhitelistedDomains -BlockedSubdomains $definition.BlockedSubdomains -RuntimeDependencyDomains $definition.RuntimeDependencyDomains
+        $configurationUpdated = Set-AcrylicConfiguration -WhitelistedDomains $definition.EffectiveWhitelistedDomains -BlockedSubdomains $definition.BlockedSubdomains -RuntimeDependencyDomains $definition.RuntimeDependencyDomains -CaptivePortalDomains $definition.CaptivePortalDomains
         if (-not $configurationUpdated) {
             Write-OpenPathLog "Failed to update AcrylicConfiguration.ini" -Level ERROR
             return $false
@@ -97,7 +107,8 @@ function Set-AcrylicConfiguration {
     param(
         [AllowEmptyCollection()][string[]]$WhitelistedDomains = @(),
         [AllowEmptyCollection()][string[]]$BlockedSubdomains = @(),
-        [AllowEmptyCollection()][string[]]$RuntimeDependencyDomains = @()
+        [AllowEmptyCollection()][string[]]$RuntimeDependencyDomains = @(),
+        [AllowEmptyCollection()][string[]]$CaptivePortalDomains = @()
     )
 
     $acrylicPath = Get-AcrylicPath
@@ -117,6 +128,7 @@ function Set-AcrylicConfiguration {
         Get-AcrylicAffinityMaskEntries -Domains $essentialForwardDomains
         Get-AcrylicAffinityMaskEntries -Domains $WhitelistedDomains -BlockedSubdomains $BlockedSubdomains
         Get-AcrylicExactAffinityMaskEntries -Domains (Get-AcrylicAllowedRuntimeDependencyDomains -Domains $RuntimeDependencyDomains -BlockedSubdomains $BlockedSubdomains)
+        Get-AcrylicExactAffinityMaskEntries -Domains $CaptivePortalDomains
     ) | Select-Object -Unique
     $domainAffinityMask = ($affinityMaskEntries -join ';')
 

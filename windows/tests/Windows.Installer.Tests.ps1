@@ -159,7 +159,7 @@ Describe "Installer" {
             Assert-ContentContainsAll -Content $content -Needles @(
                 'Acrylic is installed but the AcrylicDNSProxySvc service could not be registered or started',
                 'Acrylic installation failed or did not produce a running AcrylicDNSProxySvc service',
-                '$acrylicConfigurationApplied = Set-AcrylicConfiguration -WhatIf:$WhatIfPreference',
+                '$acrylicConfigurationApplied = Set-AcrylicConfiguration -CaptivePortalDomains $CaptivePortalDomains -WhatIf:$WhatIfPreference',
                 "throw 'Acrylic configuration failed'",
                 "Invoke-OpenPathPlannedPhase -Name 'acrylic-configuration'",
                 "Invoke-OpenPathPlannedPhase -Name 'local-dns'"

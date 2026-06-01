@@ -43,6 +43,7 @@ interface ClassroomDetailPaneProps {
   onOpenDeleteDialog: () => void;
   onRequestActiveGroupChange: (next: string) => void;
   onDefaultGroupChange: (next: string) => void | Promise<void>;
+  onCaptivePortalDomainsChange: (domains: string[]) => void | Promise<void>;
   onOpenEnrollModal: () => void | Promise<void>;
   onCreateExemption: (machineId: string) => void | Promise<void>;
   onCreateOperationalExemption: (
@@ -85,6 +86,7 @@ export default function ClassroomDetailPane({
   onOpenDeleteDialog,
   onRequestActiveGroupChange,
   onDefaultGroupChange,
+  onCaptivePortalDomainsChange,
   onOpenEnrollModal,
   onCreateExemption,
   onCreateOperationalExemption,
@@ -173,6 +175,7 @@ export default function ClassroomDetailPane({
             onOpenDeleteDialog={onOpenDeleteDialog}
             onRequestActiveGroupChange={onRequestActiveGroupChange}
             onDefaultGroupChange={onDefaultGroupChange}
+            onCaptivePortalDomainsChange={onCaptivePortalDomainsChange}
           />
         </section>
 

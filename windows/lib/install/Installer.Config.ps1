@@ -36,6 +36,7 @@ function New-OpenPathInstallerConfig {
         [string]$ApiBaseUrl = '',
         [string]$Classroom = '',
         [string]$ClassroomId = '',
+        [string[]]$CaptivePortalDomains = @(),
         [string]$HealthApiSecret = '',
         [string]$FirefoxExtensionId = '',
         [string]$FirefoxExtensionInstallUrl = '',
@@ -83,6 +84,7 @@ function New-OpenPathInstallerConfig {
     if ($ApiBaseUrl) { $config.apiUrl = $ApiBaseUrl }
     if ($Classroom) { $config.classroom = $Classroom }
     if ($ClassroomId) { $config.classroomId = $ClassroomId }
+    $config.captivePortalDomains = @($CaptivePortalDomains | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
     if ($HealthApiSecret) { $config.healthApiSecret = $HealthApiSecret }
     if ($FirefoxExtensionId -and $FirefoxExtensionInstallUrl) {
         $config.firefoxExtensionId = $FirefoxExtensionId

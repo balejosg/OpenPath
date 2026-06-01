@@ -95,6 +95,7 @@ export const Classroom = z.object({
   displayName: z.string(),
   defaultGroupId: z.string().nullable(),
   activeGroupId: z.string().nullable(),
+  captivePortalDomains: z.array(z.string()).default([]),
   currentGroupId: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -291,6 +292,7 @@ export const LoginDTO = z.object({
 export const CreateClassroomDTO = z.object({
   name: z.string().min(1),
   displayName: z.string().optional(),
+  captivePortalDomains: z.array(z.string()).optional(),
 });
 
 export const CreateScheduleDTO = z.object({

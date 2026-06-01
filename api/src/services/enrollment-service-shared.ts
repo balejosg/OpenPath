@@ -40,6 +40,7 @@ export function hasEnrollmentRole(roles: readonly unknown[]): boolean {
 export function buildWindowsEnrollmentScript(params: {
   classroomId: string;
   enrollmentToken: string;
+  captivePortalDomains?: string[] | undefined;
   firefoxExtensionInstallUrl?: string;
   publicUrl: string;
 }): string {
@@ -49,6 +50,9 @@ export function buildWindowsEnrollmentScript(params: {
   const psFirefoxExtensionInstallUrl = quotePowerShellSingle(
     params.firefoxExtensionInstallUrl?.trim() ?? ''
   );
+  const captivePortalDomainEntries = (params.captivePortalDomains ?? [])
+    .map((domain) => `"${domain.replace(/"/g, '`"')}"`)
+    .join(', ');
 
   return `$ErrorActionPreference = 'Stop'
 $WarningPreference = 'SilentlyContinue'
@@ -59,6 +63,7 @@ $ApiUrl = ${psApiUrl}
 $ClassroomId = ${psClassroomId}
 $EnrollmentToken = ${psEnrollmentToken}
 $FirefoxExtensionInstallUrl = ${psFirefoxExtensionInstallUrl}
+$CaptivePortalDomains = @(${captivePortalDomainEntries})
 $Headers = @{ Authorization = "Bearer $EnrollmentToken" }
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -166,6 +171,9 @@ try {
         '-SkipPreflight',
         '-TimingOutputPath', $InstallTimingPath
     )
+    if ($CaptivePortalDomains.Count -gt 0) {
+        $InstallArgs += @('-CaptivePortalDomains', $CaptivePortalDomains)
+    }
 
     if ($FirefoxExtensionInstallUrl) {
         $metadataPath = Join-Path $WindowsRoot 'browser-extension/firefox-release/metadata.json'

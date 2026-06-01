@@ -155,6 +155,7 @@ function New-AcrylicHostsDefinition {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$WhitelistedDomains,
         [string[]]$BlockedSubdomains = @(),
         [string[]]$RuntimeDependencyDomains = @(),
+        [string[]]$CaptivePortalDomains = @(),
         [pscustomobject]$DnsSettings = (Get-OpenPathDnsSettings)
     )
 
@@ -188,6 +189,8 @@ function New-AcrylicHostsDefinition {
     $whitelistLines = @(foreach ($domain in $effectiveWhitelistedDomains) { @(Get-AcrylicForwardRules -Domain $domain -BlockedSubdomains $BlockedSubdomains) })
     $effectiveRuntimeDependencyDomains = @(Get-AcrylicAllowedRuntimeDependencyDomains -Domains $RuntimeDependencyDomains -BlockedSubdomains $BlockedSubdomains)
     $runtimeDependencyLines = @(foreach ($domain in $effectiveRuntimeDependencyDomains) { Get-AcrylicExactForwardRule -Domain $domain })
+    $effectiveCaptivePortalDomains = @($CaptivePortalDomains | ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
+    $captivePortalLines = @(foreach ($domain in $effectiveCaptivePortalDomains) { Get-AcrylicExactForwardRule -Domain $domain })
 
     $sections = @(
         (New-AcrylicHostsSection -Title 'ESSENTIAL DOMAINS (always allowed)' -Description 'Required for system operation' -Lines $essentialLines)
@@ -199,12 +202,16 @@ function New-AcrylicHostsDefinition {
     if ($runtimeDependencyLines.Count -gt 0) {
         $sections += New-AcrylicHostsSection -Title "LOCAL RUNTIME DEPENDENCIES ($($runtimeDependencyLines.Count))" -Lines @($runtimeDependencyLines)
     }
+    if ($captivePortalLines.Count -gt 0) {
+        $sections += New-AcrylicHostsSection -Title 'Captive portal infrastructure (configured)' -Description 'Configured exact-host captive portal access' -Lines @($captivePortalLines)
+    }
     $sections += New-AcrylicHostsSection -Title 'DEFAULT BLOCK (NXDOMAIN for everything else)' -Description 'This MUST come last after FW rules.' -Lines @('NX *')
 
     $affinityMaskEntries = @(
         Get-AcrylicAffinityMaskEntries -Domains @($essentialDomains)
         Get-AcrylicAffinityMaskEntries -Domains @($effectiveWhitelistedDomains) -BlockedSubdomains $BlockedSubdomains
         Get-AcrylicExactAffinityMaskEntries -Domains @($effectiveRuntimeDependencyDomains)
+        Get-AcrylicExactAffinityMaskEntries -Domains @($effectiveCaptivePortalDomains)
     ) | Select-Object -Unique
 
     return [PSCustomObject]@{
@@ -215,6 +222,7 @@ function New-AcrylicHostsDefinition {
         EffectiveWhitelistedDomains = $effectiveWhitelistedDomains
         EssentialDomains = @($essentialDomains)
         RuntimeDependencyDomains = @($effectiveRuntimeDependencyDomains)
+        CaptivePortalDomains = @($effectiveCaptivePortalDomains)
         AffinityMaskEntries = @($affinityMaskEntries)
         DomainAffinityMask = ($affinityMaskEntries -join ';')
         BlockedSubdomains = @($BlockedSubdomains)

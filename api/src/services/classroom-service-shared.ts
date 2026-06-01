@@ -39,6 +39,7 @@ export interface ClassroomWithMachines {
   displayName: string;
   defaultGroupId: string | null;
   activeGroupId: string | null;
+  captivePortalDomains: string[];
   createdAt: string;
   updatedAt: string;
   currentGroupId: string | null;
@@ -64,12 +65,14 @@ export interface UpdateClassroomData {
   displayName?: string;
   defaultGroupId?: string;
   activeGroupId?: string;
+  captivePortalDomains?: string[];
 }
 
 export interface CreateClassroomInput {
   name: string;
   displayName: string;
   defaultGroupId?: string | undefined;
+  captivePortalDomains?: string[] | undefined;
 }
 
 export interface SetActiveGroupInput {
@@ -164,6 +167,7 @@ export function buildClassroomWithMachines(
     displayName: string;
     defaultGroupId: string | null;
     activeGroupId: string | null;
+    captivePortalDomains?: string[] | null;
     createdAt?: Date | null;
     updatedAt?: Date | null;
   },
@@ -187,6 +191,7 @@ export function buildClassroomWithMachines(
     displayName: classroom.displayName,
     defaultGroupId: classroom.defaultGroupId,
     activeGroupId: classroom.activeGroupId,
+    captivePortalDomains: classroom.captivePortalDomains ?? [],
     createdAt: (classroom.createdAt ?? new Date()).toISOString(),
     updatedAt: (classroom.updatedAt ?? new Date()).toISOString(),
     currentGroupId: scope?.currentGroupId ?? null,

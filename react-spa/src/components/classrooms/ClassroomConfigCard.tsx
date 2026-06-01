@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertCircle, Trash2 } from 'lucide-react';
 import type { Classroom, CurrentGroupSource } from '../../types';
 import {
@@ -22,6 +22,7 @@ interface ClassroomConfigCardProps {
   onOpenDeleteDialog: () => void;
   onRequestActiveGroupChange: (next: string) => void;
   onDefaultGroupChange: (next: string) => void | Promise<void>;
+  onCaptivePortalDomainsChange: (domains: string[]) => void | Promise<void>;
 }
 
 function getSourcePhrase(source: CurrentGroupSource, t: ProductT): string {
@@ -70,8 +71,15 @@ export default function ClassroomConfigCard({
   onOpenDeleteDialog,
   onRequestActiveGroupChange,
   onDefaultGroupChange,
+  onCaptivePortalDomainsChange,
 }: ClassroomConfigCardProps) {
   const t = useT();
+  const captivePortalDomains = classroom.captivePortalDomains ?? [];
+  const [captivePortalEnabled, setCaptivePortalEnabled] = useState(captivePortalDomains.length > 0);
+
+  useEffect(() => {
+    setCaptivePortalEnabled(captivePortalDomains.length > 0);
+  }, [captivePortalDomains.length]);
 
   return (
     <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
@@ -201,6 +209,39 @@ export default function ClassroomConfigCard({
             </span>
           )}
         </div>
+      </div>
+
+      <div className="mt-4 bg-slate-50 rounded-lg p-4 border border-slate-200">
+        <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
+          <input
+            type="checkbox"
+            checked={captivePortalEnabled}
+            disabled={!admin}
+            onChange={(event) => {
+              const enabled = event.currentTarget.checked;
+              setCaptivePortalEnabled(enabled);
+              if (!enabled) {
+                void onCaptivePortalDomainsChange([]);
+              }
+            }}
+            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+          />
+          {t('classrooms.detail.captivePortal.enabled')}
+        </label>
+        <input
+          aria-label={t('classrooms.detail.captivePortal.domains')}
+          disabled={!admin || !captivePortalEnabled}
+          value={captivePortalDomains.join(', ')}
+          onChange={(event) => {
+            void onCaptivePortalDomainsChange(
+              event.currentTarget.value
+                .split(',')
+                .map((domain) => domain.trim())
+                .filter(Boolean)
+            );
+          }}
+          className="mt-3 w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:border-blue-500 outline-none shadow-sm disabled:bg-slate-50 disabled:text-slate-500"
+        />
       </div>
     </div>
   );

@@ -197,6 +197,21 @@ Describe "DNS Module" {
     }
 
     Context "Get-OpenPathDnsSettings" {
+        It "Renders configured captive portal exact hosts before the default sinkhole" {
+            InModuleScope DNS {
+                $definition = New-AcrylicHostsDefinition `
+                    -WhitelistedDomains @('allowed.example.test') `
+                    -CaptivePortalDomains @('login.example.test', 'wifi.example.test') `
+                    -DnsSettings ([pscustomobject]@{ PrimaryDNS = '8.8.8.8'; SecondaryDNS = '8.8.4.4'; MaxDomains = 500 })
+                $content = ConvertTo-AcrylicHostsContent -Definition $definition
+
+                $content | Should -Match '# Captive portal infrastructure \(configured\)'
+                $content | Should -Match 'FW login\.example\.test'
+                $content | Should -Match 'FW wifi\.example\.test'
+                $content.IndexOf('# Captive portal infrastructure (configured)') | Should -BeLessThan $content.IndexOf('NX *')
+            }
+        }
+
         It "Returns safe defaults when OpenPath config is unavailable" {
             Mock Get-OpenPathConfig { throw 'config unavailable' } -ModuleName DNS
 

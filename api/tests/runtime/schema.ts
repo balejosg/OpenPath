@@ -90,6 +90,14 @@ async function ensureMachinesSchema(): Promise<void> {
   );
 }
 
+async function ensureClassroomsSchema(): Promise<void> {
+  await db.execute(
+    sql.raw(
+      'ALTER TABLE "classrooms" ADD COLUMN IF NOT EXISTS "captive_portal_domains" text[] DEFAULT \'{}\'::text[] NOT NULL;'
+    )
+  );
+}
+
 async function ensureEmailVerificationSchema(): Promise<void> {
   const statements = [
     'DO $$ BEGIN\n' +
@@ -149,6 +157,7 @@ async function ensureGroupForeignKeyConstraints(): Promise<void> {
 }
 
 export async function ensureTestSchema(): Promise<void> {
+  await ensureClassroomsSchema();
   await ensureSchedulesOneOffSchema();
   await ensureMachineExemptionsSchema();
   await ensureMachinesSchema();

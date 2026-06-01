@@ -7,3 +7,4 @@ export * from './rules-validation.js';
 export * from './roles.js';
 export * from './slug.js';
 export * from './education-domain-recipes.js';
+export * from './captive-portal-domains.js';

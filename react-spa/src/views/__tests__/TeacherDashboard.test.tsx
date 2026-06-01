@@ -227,6 +227,7 @@ function makeClassroom(overrides: Partial<MockClassroomListItem> = {}): MockClas
     machineCount: 12,
     onlineMachineCount: 10,
     status: 'operational',
+    captivePortalDomains: [],
     machines: [],
     ...overrides,
   };

@@ -23,12 +23,16 @@ export function useClassroomGroupControls(params: {
   } | null>(null);
   const [activeGroupOverwriteLoading, setActiveGroupOverwriteLoading] = useState(false);
 
-  const { classroomConfigError, handleGroupChange, handleDefaultGroupChange } =
-    useClassroomConfigActions({
-      selectedClassroom,
-      refetchClassrooms,
-      setSelectedClassroom,
-    });
+  const {
+    classroomConfigError,
+    handleGroupChange,
+    handleDefaultGroupChange,
+    handleCaptivePortalDomainsChange,
+  } = useClassroomConfigActions({
+    selectedClassroom,
+    refetchClassrooms,
+    setSelectedClassroom,
+  });
 
   const {
     source: selectedClassroomSource,
@@ -122,6 +126,7 @@ export function useClassroomGroupControls(params: {
     confirmActiveGroupOverwrite,
     defaultGroupSelectValue,
     handleDefaultGroupChange,
+    handleCaptivePortalDomainsChange,
     requestActiveGroupChange,
     resolveGroupName,
     selectedClassroomSource,

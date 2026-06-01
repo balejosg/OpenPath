@@ -13,6 +13,7 @@ export interface ClassroomWithCount {
   displayName: string;
   defaultGroupId: string | null;
   activeGroupId: string | null;
+  captivePortalDomains: string[];
   createdAt: Date;
   updatedAt: Date;
   machineCount: number;
@@ -158,6 +159,7 @@ export function toClassroomType(classroom: DBClassroom, machineList: DBMachine[]
     id: classroom.id,
     name: classroom.name,
     displayName: classroom.displayName,
+    captivePortalDomains: classroom.captivePortalDomains,
     machines: machineList.map((machine) => ({
       id: machine.id,
       hostname: toMachineDisplayHostname(machine),

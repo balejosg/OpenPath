@@ -23,6 +23,7 @@ const classroomModels: ClassroomListModel[] = [
     currentGroupSource: 'manual',
     status: 'operational',
     onlineMachineCount: 10,
+    captivePortalDomains: [],
     machines: [],
   },
   {
@@ -38,6 +39,7 @@ const classroomModels: ClassroomListModel[] = [
     currentGroupSource: 'default',
     status: 'operational',
     onlineMachineCount: 8,
+    captivePortalDomains: [],
     machines: [],
   },
 ];
@@ -56,6 +58,7 @@ const classrooms: Classroom[] = [
     currentGroupSource: 'manual',
     status: 'operational',
     onlineMachineCount: 10,
+    captivePortalDomains: [],
     machines: [],
   },
   {
@@ -71,6 +74,7 @@ const classrooms: Classroom[] = [
     currentGroupSource: 'default',
     status: 'operational',
     onlineMachineCount: 8,
+    captivePortalDomains: [],
     machines: [],
   },
 ];

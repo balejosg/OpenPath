@@ -10,12 +10,14 @@ export const createClassroomInputSchema = z.object({
   name: z.string().min(1),
   displayName: z.string().optional(),
   defaultGroupId: z.string().optional(),
+  captivePortalDomains: z.array(z.string()).optional(),
 });
 
 export const updateClassroomInputSchema = z.object({
   id: z.string(),
   displayName: z.string().optional(),
   defaultGroupId: z.string().nullable().optional(),
+  captivePortalDomains: z.array(z.string()).optional(),
 });
 
 export const setActiveGroupInputSchema = z.object({
