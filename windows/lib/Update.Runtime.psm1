@@ -133,10 +133,16 @@ function Sync-OpenPathMachineClientConfig {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][PSCustomObject]$Config)
 
-    $apiUrl = if ($Config.PSObject.Properties['apiUrl']) { ([string]$Config.apiUrl).Trim().TrimEnd('/') } else { '' }
-    $machineToken = Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl (
-        if ($Config.PSObject.Properties['whitelistUrl']) { [string]$Config.whitelistUrl } else { '' }
-    )
+    $apiUrl = ''
+    if ($Config.PSObject.Properties['apiUrl']) {
+        $apiUrl = ([string]$Config.apiUrl).Trim().TrimEnd('/')
+    }
+
+    $whitelistUrl = ''
+    if ($Config.PSObject.Properties['whitelistUrl']) {
+        $whitelistUrl = [string]$Config.whitelistUrl
+    }
+    $machineToken = Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl $whitelistUrl
 
     if (-not $apiUrl -or -not $machineToken) {
         return $Config
@@ -154,12 +160,18 @@ function Sync-OpenPathMachineClientConfig {
             return $Config
         }
 
-        $incomingDomains = Normalize-OpenPathMachineClientConfigDomains -Domains (
-            if ($response.PSObject.Properties['captivePortalDomains']) { $response.captivePortalDomains } else { @() }
-        )
-        $currentDomains = Normalize-OpenPathMachineClientConfigDomains -Domains (
-            if ($Config.PSObject.Properties['captivePortalDomains']) { $Config.captivePortalDomains } else { @() }
-        )
+        $responseDomains = @()
+        if ($response.PSObject.Properties['captivePortalDomains']) {
+            $responseDomains = $response.captivePortalDomains
+        }
+
+        $configDomains = @()
+        if ($Config.PSObject.Properties['captivePortalDomains']) {
+            $configDomains = $Config.captivePortalDomains
+        }
+
+        $incomingDomains = Normalize-OpenPathMachineClientConfigDomains -Domains $responseDomains
+        $currentDomains = Normalize-OpenPathMachineClientConfigDomains -Domains $configDomains
 
         if (($incomingDomains -join "`n") -eq ($currentDomains -join "`n")) {
             return $Config

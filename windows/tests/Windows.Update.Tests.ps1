@@ -68,6 +68,49 @@ Describe "Update Script" {
                 Should -BeLessThan $cycleBody.IndexOf('Invoke-OpenPathStartupLocalReconcile')
         }
 
+        It "Fetches and persists changed captive portal domains from the machine client-config endpoint" {
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            Import-Module $runtimePath -Force
+
+            InModuleScope Update.Runtime {
+                $global:OpenPathTestClientConfigUri = ''
+                $global:OpenPathTestClientConfigAuth = ''
+                $global:OpenPathTestPersistedDomains = @()
+
+                function Set-OpenPathConfig { param([PSCustomObject]$Config) }
+                function Write-OpenPathLog { param([string]$Message, [string]$Level = 'INFO') }
+
+                Mock Invoke-RestMethod {
+                    $global:OpenPathTestClientConfigUri = $Uri
+                    $global:OpenPathTestClientConfigAuth = $Headers.Authorization
+
+                    [PSCustomObject]@{
+                        success = $true
+                        captivePortalDomains = @(' NCE.WEDU.COMUNIDAD.MADRID ', 'nce.wedu.comunidad.madrid.')
+                    }
+                }
+
+                Mock Set-OpenPathConfig {
+                    $global:OpenPathTestPersistedDomains = @($Config.captivePortalDomains)
+                }
+
+                Mock Write-OpenPathLog {}
+
+                $config = [PSCustomObject]@{
+                    apiUrl = 'https://classroompath.eu/'
+                    whitelistUrl = 'https://classroompath.eu/api/machines/w/machine-token-123/whitelist.txt'
+                    captivePortalDomains = @()
+                }
+
+                $updated = Sync-OpenPathMachineClientConfig -Config $config
+
+                $global:OpenPathTestClientConfigUri | Should -Be 'https://classroompath.eu/api/machines/client-config'
+                $global:OpenPathTestClientConfigAuth | Should -Be 'Bearer machine-token-123'
+                $global:OpenPathTestPersistedDomains | Should -Be @('nce.wedu.comunidad.madrid')
+                $updated.captivePortalDomains | Should -Be @('nce.wedu.comunidad.madrid')
+            }
+        }
+
         It "Runs local protected-mode or portal reconciliation before remote whitelist download" {
             $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
             $runtimeContent = Get-Content $runtimePath -Raw
