@@ -39,6 +39,10 @@ export interface MachineEventsAccessContext {
   machine: AuthenticatedMachine;
 }
 
+export interface MachineClientConfig {
+  captivePortalDomains: string[];
+}
+
 function failOpenResponse(): MachineWhitelistDelivery {
   return {
     kind: 'content',
@@ -150,6 +154,32 @@ export async function resolveMachineWhitelist(
   };
 }
 
+export async function resolveMachineClientConfig(
+  machine: AuthenticatedMachine
+): Promise<MachinePolicyResult<MachineClientConfig>> {
+  if (!machine.classroomId) {
+    return {
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'No classroom for this machine' },
+    };
+  }
+
+  const classroom = await classroomStorage.getClassroomById(machine.classroomId);
+  if (!classroom) {
+    return {
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'No classroom for this machine' },
+    };
+  }
+
+  return {
+    ok: true,
+    data: {
+      captivePortalDomains: classroom.captivePortalDomains,
+    },
+  };
+}
+
 export async function resolveMachineEventsAccess(params: {
   authorizationHeader?: string | undefined;
   queryToken?: string | string[] | undefined;
@@ -206,6 +236,7 @@ export async function resolveMachineEventsAccess(params: {
 export { FAIL_OPEN_RESPONSE };
 
 export default {
+  resolveMachineClientConfig,
   resolveMachineEventsAccess,
   resolveMachineWhitelist,
 };

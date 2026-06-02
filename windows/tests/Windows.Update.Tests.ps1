@@ -48,6 +48,26 @@ Describe "Update Script" {
     }
 
     Context "Startup captive portal reconciliation" {
+        It "Synchronizes machine client config before local protected-mode reconciliation" {
+            $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
+            $runtimeContent = Get-Content $runtimePath -Raw
+
+            Assert-ContentContainsAll -Content $runtimeContent -Needles @(
+                'function Sync-OpenPathMachineClientConfig',
+                '/api/machines/client-config',
+                'captivePortalDomains',
+                'Set-OpenPathConfig -Config $Config',
+                '$config = Sync-OpenPathMachineClientConfig -Config $config',
+                'Update-AcrylicHost -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist'
+            )
+
+            $cycleStart = $runtimeContent.IndexOf('function Invoke-OpenPathUpdateCycle')
+            $cycleEnd = $runtimeContent.IndexOf('function Write-OpenPathUpdatePortalActiveState')
+            $cycleBody = $runtimeContent.Substring($cycleStart, $cycleEnd - $cycleStart)
+            $cycleBody.IndexOf('Sync-OpenPathMachineClientConfig') |
+                Should -BeLessThan $cycleBody.IndexOf('Invoke-OpenPathStartupLocalReconcile')
+        }
+
         It "Runs local protected-mode or portal reconciliation before remote whitelist download" {
             $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
             $runtimeContent = Get-Content $runtimePath -Raw

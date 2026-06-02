@@ -44,6 +44,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
         -RequiredCommands @(
         'Write-OpenPathLog',
         'Get-OpenPathConfig',
+        'Set-OpenPathConfig',
         'Get-OpenPathFileAgeHours',
         'Get-HostFromUrl',
         'Get-OpenPathFromUrl',
@@ -92,6 +93,93 @@ function Initialize-OpenPathUpdateRuntimeSession {
 
     $script:OpenPathUpdateRuntimeSessionInitialized = $true
     $script:OpenPathUpdateRuntimeRoot = $OpenPathRoot
+}
+
+function Get-OpenPathMachineTokenFromWhitelistUrl {
+    [CmdletBinding()]
+    param([AllowNull()][string]$WhitelistUrl = '')
+
+    $candidate = ([string]$WhitelistUrl).Trim()
+    if (-not $candidate) { return '' }
+
+    try {
+        $uri = [System.Uri]::new($candidate)
+        $path = $uri.AbsolutePath
+        $match = [regex]::Match($path, '/w/([^/]+)/whitelist\.txt$', 'IgnoreCase')
+        if ($match.Success) {
+            return [System.Uri]::UnescapeDataString($match.Groups[1].Value)
+        }
+    }
+    catch {
+        Write-OpenPathLog "Could not parse machine token from whitelist URL: $_" -Level WARN
+    }
+
+    return ''
+}
+
+function Normalize-OpenPathMachineClientConfigDomains {
+    [CmdletBinding()]
+    param([AllowNull()][object]$Domains = $null)
+
+    return @(
+        @($Domains) |
+            ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } |
+            Where-Object { $_ } |
+            Select-Object -Unique
+    )
+}
+
+function Sync-OpenPathMachineClientConfig {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][PSCustomObject]$Config)
+
+    $apiUrl = if ($Config.PSObject.Properties['apiUrl']) { ([string]$Config.apiUrl).Trim().TrimEnd('/') } else { '' }
+    $machineToken = Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl (
+        if ($Config.PSObject.Properties['whitelistUrl']) { [string]$Config.whitelistUrl } else { '' }
+    )
+
+    if (-not $apiUrl -or -not $machineToken) {
+        return $Config
+    }
+
+    try {
+        $headers = @{ Authorization = "Bearer $machineToken" }
+        $response = Invoke-RestMethod `
+            -Uri "$apiUrl/api/machines/client-config" `
+            -Method Get `
+            -Headers $headers `
+            -ErrorAction Stop
+
+        if (-not $response -or ($response.PSObject.Properties['success'] -and -not [bool]$response.success)) {
+            return $Config
+        }
+
+        $incomingDomains = Normalize-OpenPathMachineClientConfigDomains -Domains (
+            if ($response.PSObject.Properties['captivePortalDomains']) { $response.captivePortalDomains } else { @() }
+        )
+        $currentDomains = Normalize-OpenPathMachineClientConfigDomains -Domains (
+            if ($Config.PSObject.Properties['captivePortalDomains']) { $Config.captivePortalDomains } else { @() }
+        )
+
+        if (($incomingDomains -join "`n") -eq ($currentDomains -join "`n")) {
+            return $Config
+        }
+
+        if ($Config.PSObject.Properties['captivePortalDomains']) {
+            $Config.captivePortalDomains = @($incomingDomains)
+        }
+        else {
+            $Config | Add-Member -MemberType NoteProperty -Name 'captivePortalDomains' -Value @($incomingDomains) -Force
+        }
+
+        Set-OpenPathConfig -Config $Config
+        Write-OpenPathLog "Machine client config synchronized: captivePortalDomains=$(@($incomingDomains).Count)"
+    }
+    catch {
+        Write-OpenPathLog "Machine client config sync skipped: $_" -Level WARN
+    }
+
+    return $Config
 }
 
 function Invoke-OpenPathCaptivePortalImmediateReconcile {
@@ -350,6 +438,7 @@ function Invoke-OpenPathUpdateCycle {
             Write-OpenPathLog "=== Starting openpath update ==="
 
             $config = Get-OpenPathConfig
+            $config = Sync-OpenPathMachineClientConfig -Config $config
             $portalActiveState = Write-OpenPathUpdatePortalActiveState `
                 -OpenPathRoot $OpenPathRoot `
                 -TriggerSource $TriggerSource

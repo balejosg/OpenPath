@@ -14,7 +14,10 @@ import {
   getWindowsBootstrapFile,
   getWindowsBootstrapManifest,
 } from '../../services/machine-agent-delivery.service.js';
-import { resolveMachineWhitelist } from '../../services/machine-policy.service.js';
+import {
+  resolveMachineClientConfig,
+  resolveMachineWhitelist,
+} from '../../services/machine-policy.service.js';
 import {
   createRouteHandler,
   getWildcardPathParam,
@@ -212,6 +215,32 @@ export function registerMachineDeliveryRoutes(app: Express, deps: MachineRouteDe
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Content-Disposition', `attachment; filename="${result.data.fileName}"`);
         res.type('application/vnd.debian.binary-package').send(result.data.body);
+      }
+    )
+  );
+
+  app.get(
+    '/api/machines/client-config',
+    createRouteHandler(
+      'Error serving machine client config',
+      sendJsonInternalError,
+      async (req: Request, res: Response): Promise<void> => {
+        const machine = await authenticateMachineToken(req, res);
+        if (!machine) {
+          return;
+        }
+
+        const result = await resolveMachineClientConfig(machine);
+        if (!result.ok) {
+          sendMachineServiceError(res, result.error);
+          return;
+        }
+
+        res.setHeader('Cache-Control', 'private, no-cache');
+        res.json({
+          success: true,
+          captivePortalDomains: result.data.captivePortalDomains,
+        });
       }
     )
   );

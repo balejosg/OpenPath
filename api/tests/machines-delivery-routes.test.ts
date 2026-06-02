@@ -11,6 +11,7 @@ await describe('machine routes - agent delivery', async () => {
       routes.filter(
         (route) =>
           route.startsWith('GET /api/agent') ||
+          route === 'GET /api/machines/client-config' ||
           route === 'GET /w/whitelist.txt' ||
           route === 'GET /w/:machineToken/whitelist.txt'
       ),
@@ -22,6 +23,7 @@ await describe('machine routes - agent delivery', async () => {
         'GET /api/agent/windows/files/*path',
         'GET /api/agent/linux/manifest',
         'GET /api/agent/linux/packages/:version',
+        'GET /api/machines/client-config',
         'GET /w/whitelist.txt',
         'GET /w/:machineToken/whitelist.txt',
       ]

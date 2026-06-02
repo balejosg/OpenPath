@@ -2,6 +2,7 @@ import { sanitizeSlug } from '@openpath/shared/slug';
 import { sql } from 'drizzle-orm';
 
 import { db } from '../src/db/index.js';
+import { classrooms } from '../src/db/schema.js';
 
 export const CANONICAL_GROUP_IDS = {
   default: 'default',
@@ -95,23 +96,28 @@ export async function createFixtureClassroom(options: {
   groupId?: string | null;
   displayName?: string;
   id?: string;
+  captivePortalDomains?: string[];
 }): Promise<string> {
-  const { name, groupId = null, displayName = name, id = createFixtureId('classroom') } = options;
+  const {
+    name,
+    groupId = null,
+    displayName = name,
+    id = createFixtureId('classroom'),
+    captivePortalDomains = [],
+  } = options;
 
   if (groupId !== null) {
     await ensureWhitelistGroup(groupId);
   }
 
-  await db.execute(sql`
-    INSERT INTO classrooms (id, name, display_name, default_group_id, active_group_id)
-    VALUES (
-      ${id},
-      ${sanitizeSlug(name, { maxLength: 100, allowUnderscore: true })},
-      ${displayName},
-      ${groupId},
-      ${groupId}
-    )
-  `);
+  await db.insert(classrooms).values({
+    id,
+    name: sanitizeSlug(name, { maxLength: 100, allowUnderscore: true }),
+    displayName,
+    defaultGroupId: groupId,
+    activeGroupId: groupId,
+    captivePortalDomains,
+  });
 
   return id;
 }

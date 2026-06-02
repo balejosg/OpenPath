@@ -350,6 +350,48 @@ void describe('Token delivery core flows', { timeout: 30000 }, async () => {
     });
   });
 
+  await describe('GET /api/machines/client-config', async () => {
+    let machineToken = '';
+
+    before(async () => {
+      await createFixtureClassroom({
+        name: 'ClientConfigClassroom',
+        groupId: 'client-config-group',
+        captivePortalDomains: ['nce.wedu.comunidad.madrid'],
+      });
+
+      const registerResponse = await fetch(`${harness.apiUrl}/api/machines/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${harness.registrationToken}`,
+        },
+        body: JSON.stringify({
+          hostname: 'client-config-pc-001',
+          classroomName: 'ClientConfigClassroom',
+          version: '1.0.0',
+        }),
+      });
+      assert.strictEqual(registerResponse.status, 200);
+      const registerData = (await registerResponse.json()) as { whitelistUrl: string };
+      machineToken = extractMachineToken(registerData.whitelistUrl);
+    });
+
+    await test('returns classroom captive portal domains for the machine token', async () => {
+      const response = await fetch(`${harness.apiUrl}/api/machines/client-config`, {
+        headers: { Authorization: `Bearer ${machineToken}` },
+      });
+
+      assert.strictEqual(response.status, 200);
+      const data = (await response.json()) as {
+        success?: boolean;
+        captivePortalDomains?: string[];
+      };
+      assert.strictEqual(data.success, true);
+      assert.deepStrictEqual(data.captivePortalDomains, ['nce.wedu.comunidad.madrid']);
+    });
+  });
+
   await describe('GET /export/:name.txt', async () => {
     before(async () => {
       await createFixtureClassroom({ name: 'ExportETagClassroom', groupId: 'etag-export-group' });
