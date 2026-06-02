@@ -181,6 +181,55 @@ function Normalize-NativeHostCaptivePortalTriggerHost {
     return (Normalize-NativeHostRuntimeDependencyHost -Value $Value)
 }
 
+function Get-NativeHostConfiguredCaptivePortalDomains {
+    if (-not (Get-Command -Name 'Get-OpenPathConfiguredCaptivePortalDomains' -ErrorAction SilentlyContinue)) {
+        return @()
+    }
+
+    try {
+        return @(Get-OpenPathConfiguredCaptivePortalDomains)
+    }
+    catch {
+        return @()
+    }
+}
+
+function Get-NativeHostCaptivePortalEffectiveHosts {
+    param([string[]]$Hosts = @())
+
+    if (Get-Command -Name 'Get-OpenPathCaptivePortalAllowedHosts' -ErrorAction SilentlyContinue) {
+        return @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $Hosts)
+    }
+
+    return @(
+        $Hosts |
+            ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } |
+            Where-Object { $_ } |
+            Select-Object -Unique
+    )
+}
+
+function Test-NativeHostConfiguredCaptivePortalDomainsApplied {
+    param(
+        [string[]]$AllowedHosts = @(),
+        [string[]]$ConfiguredCaptivePortalDomains = @()
+    )
+
+    $configuredDomains = @(
+        $ConfiguredCaptivePortalDomains |
+            ForEach-Object { [string]$_ } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+
+    foreach ($configuredDomain in @($configuredDomains)) {
+        if (@($AllowedHosts) -notcontains $configuredDomain) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Get-NativeHostCaptivePortalRecoveryHosts {
     param(
         [string]$TriggerHost = '',
@@ -438,8 +487,18 @@ function Get-NativeHostCaptivePortalMarkerSummary {
     $discoveryTruncated = if ($Marker -and $Marker.PSObject.Properties['discoveryTruncated']) { [bool]$Marker.discoveryTruncated } else { $false }
     $fallbackMode = if ($Marker -and $Marker.PSObject.Properties['fallbackMode'] -and $Marker.fallbackMode) { [string]$Marker.fallbackMode } elseif ($mode -eq 'passthrough') { 'passthrough' } else { 'none' }
     $recoveryHostsApplied = ($mode -eq 'limited' -and $allowedHosts.Count -gt 0)
+    $configuredCaptivePortalDomains = @(Get-NativeHostConfiguredCaptivePortalDomains)
+    $configuredCaptivePortalDomainsApplied = Test-NativeHostConfiguredCaptivePortalDomainsApplied -AllowedHosts $allowedHosts -ConfiguredCaptivePortalDomains $configuredCaptivePortalDomains
+    $effectiveHosts = @(Get-NativeHostCaptivePortalEffectiveHosts -Hosts (@($allowedHosts) + @($bootstrapHosts) + @($redirectHosts) + @($resourceHosts) + @($observedRuntimeHosts) + @($configuredCaptivePortalDomains)))
+    $allEffectiveHostsInstalled = $true
+    foreach ($hostName in @($effectiveHosts)) {
+        if ($allowedHosts -notcontains $hostName) {
+            $allEffectiveHostsInstalled = $false
+            break
+        }
+    }
     $markerLimitedModeReady = ($Marker -and $Marker.PSObject.Properties['limitedModeReady'] -and [bool]$Marker.limitedModeReady)
-    $limitedModeReady = ($mode -eq 'limited' -and $recoveryHostsApplied -and $markerLimitedModeReady -and -not $discoveryTruncated -and @($pendingRuntimeHosts).Count -eq 0)
+    $limitedModeReady = ($mode -eq 'limited' -and $recoveryHostsApplied -and $markerLimitedModeReady -and -not $discoveryTruncated -and @($pendingRuntimeHosts).Count -eq 0 -and $allEffectiveHostsInstalled)
     $recentSuccessEligible = $limitedModeReady
     if ($recentSuccessEligible -and $TriggerHost) {
         $recentSuccessEligible = ($allowedHosts -contains $TriggerHost)
@@ -448,7 +507,9 @@ function Get-NativeHostCaptivePortalMarkerSummary {
     return [PSCustomObject]@{
         activeMarkerMode = $mode
         allowedHosts = @($allowedHosts)
-        effectiveExactHosts = @($allowedHosts)
+        effectiveExactHosts = @($effectiveHosts)
+        configuredCaptivePortalDomains = @($configuredCaptivePortalDomains)
+        configuredCaptivePortalDomainsApplied = [bool]$configuredCaptivePortalDomainsApplied
         bootstrapHosts = @($bootstrapHosts)
         redirectHosts = @($redirectHosts)
         resourceHosts = @($resourceHosts)
@@ -479,6 +540,8 @@ function Get-NativeHostRecentCaptivePortalRecoverySuccess {
                 ActiveMarkerMode = [string]$markerSummary.activeMarkerMode
                 AllowedHosts = @($markerSummary.allowedHosts)
                 EffectiveExactHosts = @($markerSummary.effectiveExactHosts)
+                ConfiguredCaptivePortalDomains = @($markerSummary.configuredCaptivePortalDomains)
+                ConfiguredCaptivePortalDomainsApplied = [bool]$markerSummary.configuredCaptivePortalDomainsApplied
                 BootstrapHosts = @($markerSummary.bootstrapHosts)
                 RedirectHosts = @($markerSummary.redirectHosts)
                 ResourceHosts = @($markerSummary.resourceHosts)
@@ -525,7 +588,9 @@ function Get-NativeHostRecentCaptivePortalRecoverySuccess {
             PortalModeActive = $true
             ActiveMarkerMode = if ($payload.PSObject.Properties['activeMarkerMode']) { [string]$payload.activeMarkerMode } else { '' }
             AllowedHosts = if ($payload.PSObject.Properties['allowedHosts']) { @($payload.allowedHosts) } else { @() }
-            EffectiveExactHosts = if ($payload.PSObject.Properties['effectiveExactHosts']) { @($payload.effectiveExactHosts) } elseif ($payload.PSObject.Properties['allowedHosts']) { @($payload.allowedHosts) } else { @() }
+            EffectiveExactHosts = if ($payload.PSObject.Properties['effectiveExactHosts']) { @($payload.effectiveExactHosts) } elseif ($payload.PSObject.Properties['allowedHosts']) { @(Get-NativeHostCaptivePortalEffectiveHosts -Hosts (@($payload.allowedHosts) + @(Get-NativeHostConfiguredCaptivePortalDomains))) } else { @(Get-NativeHostConfiguredCaptivePortalDomains) }
+            ConfiguredCaptivePortalDomains = if ($payload.PSObject.Properties['configuredCaptivePortalDomains']) { @($payload.configuredCaptivePortalDomains) } else { @(Get-NativeHostConfiguredCaptivePortalDomains) }
+            ConfiguredCaptivePortalDomainsApplied = if ($payload.PSObject.Properties['configuredCaptivePortalDomainsApplied']) { [bool]$payload.configuredCaptivePortalDomainsApplied } else { Test-NativeHostConfiguredCaptivePortalDomainsApplied -AllowedHosts $(if ($payload.PSObject.Properties['allowedHosts']) { @($payload.allowedHosts) } else { @() }) -ConfiguredCaptivePortalDomains @(Get-NativeHostConfiguredCaptivePortalDomains) }
             BootstrapHosts = if ($payload.PSObject.Properties['bootstrapHosts']) { @($payload.bootstrapHosts) } else { @() }
             RedirectHosts = if ($payload.PSObject.Properties['redirectHosts']) { @($payload.redirectHosts) } else { @() }
             ResourceHosts = if ($payload.PSObject.Properties['resourceHosts']) { @($payload.resourceHosts) } else { @() }
@@ -592,6 +657,19 @@ function Test-NativeHostRecentCaptivePortalSuccessEligible {
             @()
         }
         if ($allowedHosts.Count -le 0 -or $allowedHosts -notcontains $TriggerHost) {
+            return $false
+        }
+    }
+
+    $configuredCaptivePortalDomains = @(Get-NativeHostConfiguredCaptivePortalDomains)
+    if ($configuredCaptivePortalDomains.Count -gt 0) {
+        $allowedHosts = if ($RecentSuccess.PSObject.Properties['AllowedHosts']) {
+            @($RecentSuccess.AllowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+        else {
+            @()
+        }
+        if (-not (Test-NativeHostConfiguredCaptivePortalDomainsApplied -AllowedHosts $allowedHosts -ConfiguredCaptivePortalDomains $configuredCaptivePortalDomains)) {
             return $false
         }
     }
@@ -1073,6 +1151,8 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
                 activeMarkerMode = if ($recentSuccess.PSObject.Properties['ActiveMarkerMode']) { [string]$recentSuccess.ActiveMarkerMode } else { '' }
                 allowedHosts = if ($recentSuccess.PSObject.Properties['AllowedHosts']) { @($recentSuccess.AllowedHosts) } else { @() }
                 effectiveExactHosts = if ($recentSuccess.PSObject.Properties['EffectiveExactHosts']) { @($recentSuccess.EffectiveExactHosts) } elseif ($recentSuccess.PSObject.Properties['AllowedHosts']) { @($recentSuccess.AllowedHosts) } else { @() }
+                configuredCaptivePortalDomains = if ($recentSuccess.PSObject.Properties['ConfiguredCaptivePortalDomains']) { @($recentSuccess.ConfiguredCaptivePortalDomains) } else { @(Get-NativeHostConfiguredCaptivePortalDomains) }
+                configuredCaptivePortalDomainsApplied = if ($recentSuccess.PSObject.Properties['ConfiguredCaptivePortalDomainsApplied']) { [bool]$recentSuccess.ConfiguredCaptivePortalDomainsApplied } else { Test-NativeHostConfiguredCaptivePortalDomainsApplied -AllowedHosts $(if ($recentSuccess.PSObject.Properties['AllowedHosts']) { @($recentSuccess.AllowedHosts) } else { @() }) -ConfiguredCaptivePortalDomains @(Get-NativeHostConfiguredCaptivePortalDomains) }
                 portalRecoveryHosts = if ($recentSuccess.PSObject.Properties['PortalRecoveryHosts']) { @($recentSuccess.PortalRecoveryHosts) } else { @($portalRecoveryHosts) }
                 bootstrapHosts = if ($recentSuccess.PSObject.Properties['BootstrapHosts']) { @($recentSuccess.BootstrapHosts) } else { @() }
                 redirectHosts = if ($recentSuccess.PSObject.Properties['RedirectHosts']) { @($recentSuccess.RedirectHosts) } else { @() }
@@ -1175,7 +1255,19 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         @($result.effectiveExactHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     }
     else {
-        @($allowedHosts)
+        @(Get-NativeHostCaptivePortalEffectiveHosts -Hosts (@($allowedHosts) + @(Get-NativeHostConfiguredCaptivePortalDomains)))
+    }
+    $configuredCaptivePortalDomains = if ($result.PSObject.Properties['configuredCaptivePortalDomains']) {
+        @($result.configuredCaptivePortalDomains | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    else {
+        @(Get-NativeHostConfiguredCaptivePortalDomains)
+    }
+    $configuredCaptivePortalDomainsApplied = if ($result.PSObject.Properties['configuredCaptivePortalDomainsApplied']) {
+        [bool]$result.configuredCaptivePortalDomainsApplied
+    }
+    else {
+        Test-NativeHostConfiguredCaptivePortalDomainsApplied -AllowedHosts $allowedHosts -ConfiguredCaptivePortalDomains $configuredCaptivePortalDomains
     }
     $recoveryHostsApplied = if ($result.PSObject.Properties['recoveryHostsApplied']) { [bool]$result.recoveryHostsApplied } else { $false }
     $limitedModeReady = if ($result.PSObject.Properties['limitedModeReady']) { [bool]$result.limitedModeReady } else { $false }
@@ -1188,7 +1280,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     }
     else {
         ($resultSuccess -and (
-            ($state -eq 'Portal' -and $portalModeActive -and $exactRecoveryHostApplied -and $limitedModeReady) -or
+            ($state -eq 'Portal' -and $portalModeActive -and $exactRecoveryHostApplied -and $limitedModeReady -and $configuredCaptivePortalDomainsApplied) -or
             ($state -eq 'Authenticated' -and -not $portalModeActive -and $protectedModeRestored)
         ))
     }
@@ -1216,6 +1308,8 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         activeMarkerMode = if ($result.PSObject.Properties['activeMarkerMode']) { [string]$result.activeMarkerMode } else { '' }
         allowedHosts = @($allowedHosts)
         effectiveExactHosts = @($effectiveExactHosts)
+        configuredCaptivePortalDomains = @($configuredCaptivePortalDomains)
+        configuredCaptivePortalDomainsApplied = [bool]$configuredCaptivePortalDomainsApplied
         portalRecoveryHosts = @($resultPortalRecoveryHosts)
         bootstrapHosts = if ($result.PSObject.Properties['bootstrapHosts']) { @($result.bootstrapHosts) } else { @() }
         redirectHosts = if ($result.PSObject.Properties['redirectHosts']) { @($result.redirectHosts) } else { @() }

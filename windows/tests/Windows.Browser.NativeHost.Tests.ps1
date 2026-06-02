@@ -1302,6 +1302,8 @@ Describe "Browser Module - Native Host" {
                 'discoveryTruncated',
                 'fallbackMode',
                 'limitedModeReady',
+                'configuredCaptivePortalDomains',
+                'configuredCaptivePortalDomainsApplied',
                 '$result.PSObject.Properties[''limitedModeReady'']',
                 '$recentSuccess.PSObject.Properties[''LimitedModeReady'']',
                 '$RecentSuccess.PSObject.Properties[''DiscoveryTruncated'']',
@@ -1317,6 +1319,8 @@ Describe "Browser Module - Native Host" {
                 'discoveryTruncated',
                 'fallbackMode',
                 'limitedModeReady',
+                'configuredCaptivePortalDomains',
+                'configuredCaptivePortalDomainsApplied',
                 '$markerSummary.limitedModeReady',
                 '$payload.limitedModeReady'
             )
@@ -1406,6 +1410,56 @@ Describe "Browser Module - Native Host" {
             Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $pending -TriggerHost 'portal.example' | Should -BeFalse
             Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $passthrough -TriggerHost 'portal.example' | Should -BeFalse
             Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $ready -TriggerHost 'portal.example' | Should -BeTrue
+        }
+
+        It "Behaviorally rejects RecentSuccess unless configured captive portal domains are applied" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+
+            try {
+                function Get-OpenPathConfiguredCaptivePortalDomains {
+                    @('nce.wedu.comunidad.madrid')
+                }
+
+                $missingConfiguredDomain = [PSCustomObject]@{
+                    RecentSuccessEligible = $true
+                    LimitedModeReady = $true
+                    DiscoveryTruncated = $false
+                    FallbackMode = 'none'
+                    ActiveMarkerMode = 'limited'
+                    PendingRuntimeHosts = @()
+                    AllowedHosts = @('detectportal.firefox.com')
+                }
+                $readyWithConfiguredDomain = [PSCustomObject]@{
+                    RecentSuccessEligible = $true
+                    LimitedModeReady = $true
+                    DiscoveryTruncated = $false
+                    FallbackMode = 'none'
+                    ActiveMarkerMode = 'limited'
+                    PendingRuntimeHosts = @()
+                    AllowedHosts = @('detectportal.firefox.com', 'nce.wedu.comunidad.madrid')
+                }
+
+                Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $missingConfiguredDomain -TriggerHost 'detectportal.firefox.com' | Should -BeFalse
+                Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $readyWithConfiguredDomain -TriggerHost 'detectportal.firefox.com' | Should -BeTrue
+
+                $summary = Get-NativeHostCaptivePortalMarkerSummary -Marker ([PSCustomObject]@{
+                        mode = 'limited'
+                        allowedHosts = @('detectportal.firefox.com')
+                        limitedModeReady = $true
+                        discoveryTruncated = $false
+                        fallbackMode = 'none'
+                        pendingRuntimeHosts = @()
+                    }) -TriggerHost 'detectportal.firefox.com'
+
+                @($summary.effectiveExactHosts) | Should -Contain 'nce.wedu.comunidad.madrid'
+                @($summary.configuredCaptivePortalDomains) | Should -Be @('nce.wedu.comunidad.madrid')
+                $summary.configuredCaptivePortalDomainsApplied | Should -BeFalse
+                $summary.recentSuccessEligible | Should -BeFalse
+            }
+            finally {
+                Remove-Item Function:Get-OpenPathConfiguredCaptivePortalDomains -ErrorAction SilentlyContinue
+            }
         }
 
         It "Returns task and storage diagnostics when captive portal recovery times out" {

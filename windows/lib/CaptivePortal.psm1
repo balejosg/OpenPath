@@ -116,6 +116,10 @@ function Set-OpenPathCaptivePortalMarker {
 
         [bool]$LimitedModeReady = $false,
 
+        [string[]]$ConfiguredCaptivePortalDomains = @(),
+
+        [bool]$ConfiguredCaptivePortalDomainsApplied = $false,
+
         [int]$TtlSeconds = 300
     )
 
@@ -131,11 +135,28 @@ function Set-OpenPathCaptivePortalMarker {
             $since = [string]$existing.since
         }
 
+        $configuredDomains = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $ConfiguredCaptivePortalDomains)
+        $configuredDomainsApplied = if ($PSBoundParameters.ContainsKey('ConfiguredCaptivePortalDomainsApplied')) {
+            [bool]$ConfiguredCaptivePortalDomainsApplied
+        }
+        else {
+            $allConfiguredDomainsApplied = $true
+            foreach ($configuredDomain in @($configuredDomains)) {
+                if (@($AllowedHosts) -notcontains $configuredDomain) {
+                    $allConfiguredDomainsApplied = $false
+                    break
+                }
+            }
+            $allConfiguredDomainsApplied
+        }
+
         $payload = @{
             active = $true
             state = [string]$State
             mode = [string]$Mode
             allowedHosts = @($AllowedHosts)
+            configuredCaptivePortalDomains = @($configuredDomains)
+            configuredCaptivePortalDomainsApplied = [bool]$configuredDomainsApplied
             bootstrapHosts = @($BootstrapHosts)
             redirectHosts = @($RedirectHosts)
             resourceHosts = @($ResourceHosts)
@@ -210,6 +231,51 @@ function Normalize-OpenPathCaptivePortalDynamicHost {
     $candidate = $candidate.Trim().TrimEnd('.').ToLowerInvariant()
     if (Reject-OpenPathCaptivePortalDynamicHost -HostName $candidate -ProtectedHosts $ProtectedHosts) { return '' }
     return $candidate
+}
+
+function Get-OpenPathConfiguredCaptivePortalDomains {
+    $domains = [System.Collections.Generic.List[string]]::new()
+
+    try {
+        $configCommand = Get-Command -Name 'Get-OpenPathConfig' -ErrorAction SilentlyContinue
+        if (-not $configCommand) {
+            return @()
+        }
+
+        $localConfigPath = if ($script:OpenPathRoot -match '^[A-Za-z]:\\') {
+            "$($script:OpenPathRoot.TrimEnd('\'))\data\config.json"
+        }
+        else {
+            Join-Path (Join-Path $script:OpenPathRoot 'data') 'config.json'
+        }
+        if ($configCommand.ModuleName -eq 'Common' -and -not (Test-Path $localConfigPath -ErrorAction SilentlyContinue)) {
+            return @()
+        }
+
+        $config = Get-OpenPathConfig
+        if (-not ($config -and $config.PSObject.Properties['captivePortalDomains'])) {
+            return @()
+        }
+
+        foreach ($entry in @($config.captivePortalDomains)) {
+            if ($null -eq $entry) { continue }
+            $raw = ([string]$entry).Trim()
+            if (-not $raw) { continue }
+            if ($raw -match '^[a-z][a-z0-9+.-]*://') { continue }
+            if ($raw -match '[/?#@]') { continue }
+
+            $hostName = $raw.TrimEnd('.').ToLowerInvariant()
+            if (Reject-OpenPathCaptivePortalDynamicHost -HostName $hostName) { continue }
+            if (-not $domains.Contains($hostName)) {
+                $domains.Add($hostName)
+            }
+        }
+    }
+    catch {
+        return @()
+    }
+
+    return @($domains)
 }
 
 function Extract-OpenPathCaptivePortalHostsFromText {
@@ -1013,13 +1079,15 @@ function Enable-OpenPathCaptivePortalLimitedMode {
     if ($Marker -and $Marker.PSObject.Properties['allowedHosts']) {
         $existingHosts = @($Marker.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { $_ })
     }
+    $configuredCaptivePortalDomains = @(Get-OpenPathConfiguredCaptivePortalDomains)
+    $baseRecoveryHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($existingHosts) + @($AllowedHosts) + @($configuredCaptivePortalDomains)))
     $protectedHosts = $null
     if (Get-Command -Name 'Get-OpenPathRuntimeDependencyProtectedHosts' -ErrorAction SilentlyContinue) {
         $protectedHosts = Get-OpenPathRuntimeDependencyProtectedHosts
     }
-    $seedUrls = @(Get-OpenPathCaptivePortalBootstrapSeedUrls -Hosts @($AllowedHosts) -ProtectedHosts $protectedHosts)
-    $dynamicHosts = Get-OpenPathCaptivePortalDynamicHosts -SeedUrls $seedUrls -TriggerHosts @($AllowedHosts) -ExistingHosts @($existingHosts)
-    $mergedHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($existingHosts) + @($AllowedHosts) + @($dynamicHosts.bootstrapHosts) + @($dynamicHosts.redirectHosts) + @($dynamicHosts.resourceHosts) + @($dynamicHosts.observedRuntimeHosts)))
+    $seedUrls = @(Get-OpenPathCaptivePortalBootstrapSeedUrls -Hosts @($baseRecoveryHosts) -ProtectedHosts $protectedHosts)
+    $dynamicHosts = Get-OpenPathCaptivePortalDynamicHosts -SeedUrls $seedUrls -TriggerHosts @($baseRecoveryHosts) -ExistingHosts @()
+    $mergedHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($baseRecoveryHosts) + @($dynamicHosts.bootstrapHosts) + @($dynamicHosts.redirectHosts) + @($dynamicHosts.resourceHosts) + @($dynamicHosts.observedRuntimeHosts)))
     $initialPendingRuntimeHosts = @($dynamicHosts.pendingRuntimeHosts)
     if ($mergedHosts.Count -le 0) {
         return (Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $Marker)
@@ -1147,10 +1215,19 @@ function Enable-OpenPathCaptivePortalLimitedMode {
         ))
     )
     $allowedMarkerHosts = @($renderedHosts)
+    $configuredCaptivePortalDomainsApplied = $true
+    foreach ($configuredDomain in @($configuredCaptivePortalDomains)) {
+        if ($allowedMarkerHosts -notcontains $configuredDomain) {
+            $configuredCaptivePortalDomainsApplied = $false
+            break
+        }
+    }
     $limitedModeReady = ($mergedHosts.Count -gt 0 -and -not $discoveryTruncated -and @($pendingRuntimeHostsAfterRender).Count -eq 0 -and @($pendingDiscoveredHostsAfterRender).Count -eq 0)
 
     Set-OpenPathCaptivePortalMarker -State $State -Mode limited `
         -AllowedHosts $allowedMarkerHosts `
+        -ConfiguredCaptivePortalDomains @($configuredCaptivePortalDomains) `
+        -ConfiguredCaptivePortalDomainsApplied $configuredCaptivePortalDomainsApplied `
         -BootstrapHosts @($allBootstrapHosts) `
         -RedirectHosts @($allRedirectHosts) `
         -ResourceHosts @($allResourceHosts) `
@@ -1762,6 +1839,7 @@ Export-ModuleMember -Function @(
     'Test-OpenPathCaptivePortalModeActive',
     'Get-OpenPathCaptivePortalMarker',
     'Set-OpenPathCaptivePortalMarker',
+    'Get-OpenPathConfiguredCaptivePortalDomains',
     'Get-OpenPathCaptivePortalAllowedHosts',
     'Get-OpenPathCaptivePortalProtectedModeExitEvidence',
     'Clear-OpenPathCaptivePortalMarker',

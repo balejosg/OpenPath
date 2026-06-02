@@ -115,6 +115,61 @@ Describe "Watchdog Script" {
             $content | Should -Not -Match 'Restore-OriginalDNS'
         }
 
+        It "Behaviorally includes configured captive portal domains in recovery results" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $start = $content.IndexOf('function Get-OpenPathRecoveryUtcNow')
+            $end = $content.IndexOf('$queuePath = Get-OpenPathCapabilityStoragePath')
+            . ([scriptblock]::Create($content.Substring($start, $end - $start)))
+
+            $requestPath = Join-Path $TestDrive 'request.json'
+            $resultPath = Join-Path $TestDrive 'result'
+            $progressPath = Join-Path $TestDrive 'progress'
+            @{
+                requestId = 'configured-domain-request'
+                triggerHost = 'detectportal.firefox.com'
+            } | ConvertTo-Json -Depth 4 | Set-Content -Path $requestPath -Encoding UTF8
+            (Get-Item $requestPath).LastWriteTimeUtc = [DateTime]::UtcNow.AddMinutes(5)
+
+            function Get-OpenPathCaptivePortalRecoveryState { return 'Portal' }
+            function Update-OpenPathCaptivePortalObservation { return $true }
+            function Enable-OpenPathCaptivePortalMode { return $true }
+            function Get-OpenPathCaptivePortalMarker {
+                [PSCustomObject]@{
+                    mode = 'limited'
+                    allowedHosts = @('detectportal.firefox.com')
+                    limitedModeReady = $true
+                    discoveryTruncated = $false
+                    fallbackMode = 'none'
+                    pendingRuntimeHosts = @()
+                }
+            }
+            function Get-OpenPathCaptivePortalAllowedHosts {
+                param([string[]]$Hosts = @())
+
+                @($Hosts | ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
+            }
+            function Get-OpenPathConfiguredCaptivePortalDomains {
+                @('nce.wedu.comunidad.madrid')
+            }
+            function Get-OpenPathRecentCaptivePortalRecoverySuccess {
+                return $null
+            }
+
+            $envelope = [PSCustomObject]@{
+                File = Get-Item $requestPath
+                Request = (Get-Content $requestPath -Raw | ConvertFrom-Json)
+            }
+
+            Invoke-OpenPathCaptivePortalRecoveryRequest -RequestEnvelope $envelope -ResultPath $resultPath -ProgressPath $progressPath -NowUtc ([DateTime]::UtcNow)
+
+            $result = Get-Content (Join-Path $resultPath 'configured-domain-request.json') -Raw | ConvertFrom-Json
+            @($result.effectiveExactHosts) | Should -Contain 'detectportal.firefox.com'
+            @($result.effectiveExactHosts) | Should -Contain 'nce.wedu.comunidad.madrid'
+            @($result.configuredCaptivePortalDomains) | Should -Be @('nce.wedu.comunidad.madrid')
+            $result.configuredCaptivePortalDomainsApplied | Should -BeFalse
+        }
+
         It "Detects captive portals and opens only exact recovery hosts without dropping protection" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
@@ -285,6 +340,32 @@ Describe "Watchdog Script" {
             @($result.bootstrapHosts) | Should -Not -Contain 'intranet'
             @($result.bootstrapHosts) | Should -Not -Contain 'detectportal.firefox.com'
             $result.discoveryTruncated | Should -BeFalse
+        }
+
+        It "Behaviorally reads only safe configured captive portal domains from config" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $module = Import-Module $modulePath -Force -PassThru
+
+            $result = & $module {
+                function Get-OpenPathConfig {
+                    [PSCustomObject]@{
+                        captivePortalDomains = @(
+                            ' NCE.WEDU.COMUNIDAD.MADRID. ',
+                            'nce.wedu.comunidad.madrid',
+                            'login.example.test',
+                            'https://portal.example/login',
+                            '*.example.test',
+                            '10.77.0.1',
+                            'printer.local',
+                            'intranet'
+                        )
+                    }
+                }
+
+                Get-OpenPathConfiguredCaptivePortalDomains
+            }
+
+            @($result) | Should -Be @('nce.wedu.comunidad.madrid', 'login.example.test')
         }
 
         It "Behaviorally separates bootstrap, redirect, and resource hosts without leaking URLs" {
@@ -474,6 +555,56 @@ Describe "Watchdog Script" {
                 Should -BeLessThan $enableBody.IndexOf('New-OpenPathLimitedCaptivePortalHostsDefinition')
             $enableBody.IndexOf('$dynamicHosts.observedRuntimeHosts') |
                 Should -BeLessThan $enableBody.IndexOf('New-OpenPathLimitedCaptivePortalHostsDefinition')
+        }
+
+        It "Behaviorally applies configured captive portal domains in limited mode markers" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $module = Import-Module $modulePath -Force -PassThru
+            $statePath = Join-Path $TestDrive "captive-portal-active.json"
+            $acrylicPath = Join-Path $TestDrive "Acrylic"
+            New-Item -ItemType Directory -Path $acrylicPath -Force | Out-Null
+
+            $marker = & $module {
+                param([string]$StatePath, [string]$AcrylicPath)
+
+                $script:CaptivePortalStatePath = $StatePath
+                $script:TestAcrylicPath = $AcrylicPath
+
+                function Get-OpenPathConfig {
+                    [PSCustomObject]@{
+                        captivePortalDomains = @('NCE.WEDU.COMUNIDAD.MADRID')
+                    }
+                }
+                function Get-AcrylicPath { return $script:TestAcrylicPath }
+                function Resolve-OpenPathCaptivePortalUpstreamDns {
+                    [PSCustomObject]@{
+                        Address = '192.0.2.53'
+                        Source = 'test'
+                        UsableForLimited = $true
+                        Verified = $true
+                    }
+                }
+                function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration { return $true }
+                function Set-LocalDNS { return $true }
+                function Restart-AcrylicService { return $true }
+                function Test-OpenPathLimitedCaptivePortalProtection { return $true }
+                function Get-OpenPathCaptivePortalBootstrapHosts {
+                    [PSCustomObject]@{
+                        bootstrapHosts = @()
+                        redirectHosts = @()
+                        resourceHosts = @()
+                        truncated = $false
+                        errors = @()
+                    }
+                }
+
+                Enable-OpenPathCaptivePortalLimitedMode -State Portal -AllowedHosts @('detectportal.firefox.com') -TtlSeconds 60 | Out-Null
+                Get-OpenPathCaptivePortalMarker
+            } $statePath $acrylicPath
+
+            @($marker.allowedHosts) | Should -Be @('detectportal.firefox.com', 'nce.wedu.comunidad.madrid')
+            @($marker.configuredCaptivePortalDomains) | Should -Be @('nce.wedu.comunidad.madrid')
+            $marker.configuredCaptivePortalDomainsApplied | Should -BeTrue
         }
 
         It "Performs a bounded second limited-mode render after initial Acrylic bootstrap discovery" {
