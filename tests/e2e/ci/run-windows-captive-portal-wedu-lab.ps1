@@ -171,6 +171,80 @@ function Test-IPv4InSubnet {
     return ((ConvertTo-IPv4Number -Address $Address) -band $mask) -eq ((ConvertTo-IPv4Number -Address $parts[0]) -band $mask)
 }
 
+function Get-WeduAcrylicIniValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Content,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+
+    $escapedKey = [regex]::Escape($Key)
+    $match = [regex]::Match($Content, "(?m)^\s*$escapedKey\s*=\s*(.*?)\s*$")
+    if (-not $match.Success) {
+        return ''
+    }
+
+    return ([string]$match.Groups[1].Value).Trim()
+}
+
+function Get-WeduAcrylicDnsSnapshot {
+    $configError = ''
+    $candidateConfigPaths = [System.Collections.Generic.List[string]]::new()
+
+    try {
+        $openPathConfigPath = Join-Path $script:InstalledOpenPathRoot 'config.json'
+        if (Test-Path -LiteralPath $openPathConfigPath) {
+            $openPathConfig = Get-Content -LiteralPath $openPathConfigPath -Raw | ConvertFrom-Json
+            if ($openPathConfig.PSObject.Properties['acrylicPath'] -and $openPathConfig.acrylicPath) {
+                $candidateConfigPaths.Add((Join-Path ([string]$openPathConfig.acrylicPath) 'AcrylicConfiguration.ini'))
+            }
+        }
+    }
+    catch {
+        $configError = [string]$_
+    }
+
+    $fallbackPaths = @(
+        (Join-Path ${env:ProgramFiles(x86)} 'Acrylic DNS Proxy\AcrylicConfiguration.ini'),
+        (Join-Path $env:ProgramFiles 'Acrylic DNS Proxy\AcrylicConfiguration.ini')
+    )
+    foreach ($path in $fallbackPaths) {
+        if ($path -and -not $candidateConfigPaths.Contains($path)) {
+            $candidateConfigPaths.Add($path)
+        }
+    }
+
+    $configPath = ''
+    foreach ($path in @($candidateConfigPaths)) {
+        if ($path -and (Test-Path -LiteralPath $path)) {
+            $configPath = $path
+            break
+        }
+    }
+
+    $primaryServerAddress = ''
+    $secondaryServerAddress = ''
+    if ($configPath) {
+        try {
+            $content = Get-Content -LiteralPath $configPath -Raw
+            $primaryServerAddress = Get-WeduAcrylicIniValue -Content $content -Key 'PrimaryServerAddress'
+            $secondaryServerAddress = Get-WeduAcrylicIniValue -Content $content -Key 'SecondaryServerAddress'
+        }
+        catch {
+            $configError = [string]$_
+        }
+    }
+
+    $serverAddresses = @($primaryServerAddress, $secondaryServerAddress) | Where-Object { $_ }
+    return [pscustomobject]@{
+        configPath = $configPath
+        configRead = [bool]($configPath -and -not [string]::IsNullOrWhiteSpace($primaryServerAddress))
+        primaryServerAddress = $primaryServerAddress
+        secondaryServerAddress = $secondaryServerAddress
+        serverAddresses = @($serverAddresses)
+        error = $configError
+    }
+}
+
 function Get-WeduNetworkSnapshot {
     $adapters = @(Get-NetIPConfiguration -ErrorAction SilentlyContinue |
         Where-Object { $_.InterfaceAlias } |
@@ -188,6 +262,7 @@ function Get-WeduNetworkSnapshot {
     return [pscustomobject]@{
         capturedAt = (Get-Date).ToString('o')
         adapters = $adapters
+        acrylic = Get-WeduAcrylicDnsSnapshot
     }
 }
 
@@ -199,7 +274,8 @@ function Assert-WeduLabNetwork {
     )
 
     $addressesInSubnet = @()
-    $dnsMatches = @()
+    $adapterDnsMatches = @()
+    $localResolverAdapters = @()
     foreach ($adapter in @($Snapshot.adapters)) {
         foreach ($address in @($adapter.ipv4Addresses)) {
             if ($address -and (Test-IPv4InSubnet -Address $address -Subnet $ExpectedSubnet)) {
@@ -208,7 +284,20 @@ function Assert-WeduLabNetwork {
         }
         foreach ($server in @($adapter.dnsServers)) {
             if ($server -eq $ExpectedDns) {
-                $dnsMatches += $server
+                $adapterDnsMatches += $server
+            }
+            if ($server -eq '127.0.0.1') {
+                $localResolverAdapters += [string]$adapter.interfaceAlias
+            }
+        }
+    }
+
+    $acrylic = if ($Snapshot.PSObject.Properties['acrylic']) { $Snapshot.acrylic } else { Get-WeduAcrylicDnsSnapshot }
+    $acrylicDnsMatches = @()
+    if ($localResolverAdapters.Count -gt 0) {
+        foreach ($server in @($acrylic.serverAddresses)) {
+            if ($server -eq $ExpectedDns) {
+                $acrylicDnsMatches += $server
             }
         }
     }
@@ -216,14 +305,18 @@ function Assert-WeduLabNetwork {
     if ($addressesInSubnet.Count -eq 0) {
         throw "Fail-closed: this Windows VM is not on WEDU lab subnet $ExpectedSubnet."
     }
-    if ($dnsMatches.Count -eq 0) {
+    if ($adapterDnsMatches.Count -eq 0 -and $acrylicDnsMatches.Count -eq 0) {
         throw "Fail-closed: this Windows VM is not using WEDU lab DNS $ExpectedDns."
     }
 
     return [pscustomobject]@{
         labNetworkVerified = $true
         addressesInSubnet = @($addressesInSubnet)
-        dnsMatches = @($dnsMatches)
+        dnsMatches = @($adapterDnsMatches + $acrylicDnsMatches)
+        adapterDnsMatches = @($adapterDnsMatches)
+        acrylicDnsMatches = @($acrylicDnsMatches)
+        localResolverAdapters = @($localResolverAdapters)
+        acrylic = $acrylic
         expectedSubnet = $ExpectedSubnet
         expectedDns = $ExpectedDns
     }
