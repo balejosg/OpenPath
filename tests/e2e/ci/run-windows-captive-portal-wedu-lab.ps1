@@ -392,9 +392,10 @@ function Invoke-GatewayMissingTokenControl {
 
 function Get-WeduDnsSnapshot {
     $domains = @($script:WeduHost, 'detectportal.firefox.com', 'www.msftconnecttest.com', 'www.msftncsi.com')
+    $network = Get-WeduNetworkSnapshot
     $queries = foreach ($domain in $domains) {
         try {
-            $answers = @(Resolve-DnsName -Name $domain -Type A -ErrorAction Stop)
+            $answers = @(Resolve-DnsName -Name $domain -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
             [pscustomobject]@{
                 domain = $domain
                 success = $true
@@ -414,6 +415,9 @@ function Get-WeduDnsSnapshot {
 
     return [pscustomobject]@{
         capturedAt = (Get-Date).ToString('o')
+        resolverServer = '127.0.0.1'
+        adapters = @($network.adapters)
+        acrylic = $network.acrylic
         queries = @($queries)
     }
 }
@@ -1110,13 +1114,48 @@ function Copy-WeduRecoveryArtifacts {
 function Test-OpenPathProtectionAfter {
     $blockedDomain = 'this-should-be-blocked-test-12345.com'
     $allowedDomain = 'www.msftconnecttest.com'
+    $resolverServer = '127.0.0.1'
+    $network = Get-WeduNetworkSnapshot
+    $adaptersUsingLocalDns = @(
+        @($network.adapters) |
+            Where-Object { @($_.dnsServers) -contains $resolverServer } |
+            ForEach-Object { [string]$_.interfaceAlias } |
+            Where-Object { $_ }
+    )
+    $activeAdapters = @(
+        @($network.adapters) |
+            Where-Object { @($_.ipv4Addresses).Count -gt 0 -or @($_.ipv4DefaultGateway).Count -gt 0 }
+    )
+    $adapterLocalDnsRestored = ($activeAdapters.Count -gt 0 -and $adaptersUsingLocalDns.Count -eq $activeAdapters.Count)
+    $acrylicPrimaryServerAddress = if ($network.acrylic) { [string]$network.acrylic.primaryServerAddress } else { '' }
+    $acrylicSecondaryServerAddress = if ($network.acrylic) { [string]$network.acrylic.secondaryServerAddress } else { '' }
+    $acrylicHostsPath = ''
+    $acrylicHostsReadable = $false
+    $acrylicHostsError = ''
+    $acrylicNxWildcardPresent = $false
+    $acrylicCaptivePortalSectionPresent = $false
     $blocked = $false
     $allowedFunctional = $false
     $blockedError = ''
     $allowedError = ''
 
+    if ($network.acrylic -and $network.acrylic.configPath) {
+        $acrylicHostsPath = Join-Path (Split-Path -Parent ([string]$network.acrylic.configPath)) 'AcrylicHosts.txt'
+        if (Test-Path -LiteralPath $acrylicHostsPath) {
+            try {
+                $acrylicHostsContent = Get-Content -LiteralPath $acrylicHostsPath -Raw -ErrorAction Stop
+                $acrylicHostsReadable = $true
+                $acrylicNxWildcardPresent = [bool]($acrylicHostsContent -match '(?m)^NX \*$')
+                $acrylicCaptivePortalSectionPresent = [bool]($acrylicHostsContent -match 'CAPTIVE PORTAL RECOVERY')
+            }
+            catch {
+                $acrylicHostsError = [string]$_
+            }
+        }
+    }
+
     try {
-        $blockedAnswers = @(Resolve-DnsName -Name $blockedDomain -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue)
+        $blockedAnswers = @(Resolve-DnsName -Name $blockedDomain -Server $resolverServer -DnsOnly -ErrorAction SilentlyContinue)
         $blocked = ($blockedAnswers.Count -eq 0)
     }
     catch {
@@ -1125,7 +1164,7 @@ function Test-OpenPathProtectionAfter {
     }
 
     try {
-        $allowedAnswers = @(Resolve-DnsName -Name $allowedDomain -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
+        $allowedAnswers = @(Resolve-DnsName -Name $allowedDomain -Server $resolverServer -DnsOnly -Type A -ErrorAction Stop)
         $allowedFunctional = ($allowedAnswers.Count -gt 0)
     }
     catch {
@@ -1139,7 +1178,19 @@ function Test-OpenPathProtectionAfter {
         allowedDomain = $allowedDomain
         allowedDomainFunctional = $allowedFunctional
         allowedError = $allowedError
-        protectedModeRestored = ($blocked -and $allowedFunctional)
+        server = $resolverServer
+        resolverServer = $resolverServer
+        adapterLocalDnsRestored = $adapterLocalDnsRestored
+        adaptersUsingLocalDns = @($adaptersUsingLocalDns)
+        networkSnapshot = $network
+        acrylicPrimaryServerAddress = $acrylicPrimaryServerAddress
+        acrylicSecondaryServerAddress = $acrylicSecondaryServerAddress
+        acrylicHostsPath = $acrylicHostsPath
+        acrylicHostsReadable = $acrylicHostsReadable
+        acrylicHostsError = $acrylicHostsError
+        acrylicNxWildcardPresent = $acrylicNxWildcardPresent
+        acrylicCaptivePortalSectionPresent = $acrylicCaptivePortalSectionPresent
+        protectedModeRestored = ($blocked -and $allowedFunctional -and $adapterLocalDnsRestored -and $acrylicNxWildcardPresent -and -not $acrylicCaptivePortalSectionPresent)
     }
 }
 

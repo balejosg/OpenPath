@@ -1778,32 +1778,37 @@ function Disable-OpenPathCaptivePortalMode {
         }
     }
 
-    try {
-        if (-not (Restore-OpenPathCaptivePortalAcrylicHostState)) {
-            Write-OpenPathLog 'Watchdog: Acrylic host restore failed; keeping captive portal marker active' -Level WARN
-            return $false
+    $maxRestoreAttempts = 3
+    $restoreSucceeded = $false
+    $restoreEvidence = $null
+    for ($attempt = 1; $attempt -le $maxRestoreAttempts; $attempt++) {
+        try {
+            if (-not (Restore-OpenPathCaptivePortalAcrylicHostState)) {
+                Write-OpenPathLog "Watchdog: Acrylic host restore failed on attempt $attempt; keeping captive portal marker active" -Level WARN
+                continue
+            }
+
+            $restored = Restore-OpenPathProtectedMode -Config $Config
+            if (-not $restored) {
+                Write-OpenPathLog "Watchdog: protected mode restore failed on attempt $attempt; keeping captive portal marker active" -Level WARN
+                continue
+            }
+
+            $restoreEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config -DnsMaxAttempts $DnsMaxAttempts -DnsDelayMilliseconds $DnsDelayMilliseconds -DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds
+            $restoreSucceeded = [bool]$restoreEvidence.enforcementRestored
+            if ($restoreSucceeded) {
+                break
+            }
+
+            Write-OpenPathLog "Watchdog: protected mode verification failed on attempt $attempt; keeping captive portal marker active" -Level WARN
         }
-
-        $restored = Restore-OpenPathProtectedMode -Config $Config
-        if (-not $restored) {
-            Write-OpenPathLog 'Watchdog: protected mode restore failed; keeping captive portal marker active' -Level WARN
-            return $false
+        catch {
+            Write-OpenPathLog "Watchdog: protected mode restore failed on attempt $attempt; keeping captive portal marker active: $_" -Level WARN
+            $restoreSucceeded = $false
         }
     }
-    catch {
-        Write-OpenPathLog "Watchdog: protected mode restore failed; keeping captive portal marker active: $_" -Level WARN
-        return $false
-    }
 
-    try {
-        $preClearEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config -DnsMaxAttempts $DnsMaxAttempts -DnsDelayMilliseconds $DnsDelayMilliseconds -DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds
-    }
-    catch {
-        Write-OpenPathLog "Watchdog: protected mode verification failed; keeping captive portal marker active: $_" -Level WARN
-        return $false
-    }
-
-    if (-not [bool]$preClearEvidence.enforcementRestored) {
+    if (-not $restoreSucceeded) {
         if ($markerPresentAtStart) {
             Write-OpenPathLog 'Watchdog: protected mode verification failed; keeping captive portal marker active' -Level WARN
         }
@@ -1814,8 +1819,9 @@ function Disable-OpenPathCaptivePortalMode {
     }
 
     if (-not $markerPresentAtStart) {
-        if (-not [bool]$preClearEvidence.protectedModeRestored) {
-            Write-OpenPathLog 'Watchdog: no captive portal marker exists but protected mode is still not restored' -Level WARN
+        $postRestoreEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config -DnsMaxAttempts $DnsMaxAttempts -DnsDelayMilliseconds $DnsDelayMilliseconds -DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds
+        if (-not [bool]$postRestoreEvidence.protectedModeRestored) {
+            Write-OpenPathLog 'Watchdog: protected mode verification failed after marker-absent restore' -Level WARN
             return $false
         }
         return $true

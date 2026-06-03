@@ -19,6 +19,7 @@ LOCK_OWNER="${GITHUB_RUN_ID:-local}-linux-client-smoke-$(date -u +%Y%m%dT%H%M%SZ
 SNAPSHOT_NAME=""
 SNAPSHOT_CREATED=0
 ORIGINAL_NET0=""
+ORIGINAL_IPCONFIG0=""
 ORIGINAL_BOOT=""
 PREVIOUS_GATEWAY_MODE=""
 RUN_STATUS=0
@@ -92,6 +93,7 @@ assert_vm_103_not_attached_to_vmbr10() {
 
 capture_client_config() {
   ORIGINAL_NET0="$(ssh_proxmox qm config "$CLIENT_VMID" | sed -n 's/^net0: //p')"
+  ORIGINAL_IPCONFIG0="$(ssh_proxmox qm config "$CLIENT_VMID" | sed -n 's/^ipconfig0: //p')"
   ORIGINAL_BOOT="$(ssh_proxmox qm config "$CLIENT_VMID" | sed -n 's/^boot: //p')"
   [ -n "$ORIGINAL_NET0" ] || fail "Unable to read VM $CLIENT_VMID net0"
   [ -n "$ORIGINAL_BOOT" ] || ORIGINAL_BOOT='order=sata0'
@@ -99,7 +101,7 @@ capture_client_config() {
 
 move_client_to_lab() {
   local lab_net0
-  SNAPSHOT_NAME="pre-wedu-linux-client-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
+  SNAPSHOT_NAME="wedu104-$(date -u +%Y%m%dT%H%M%SZ)"
   ssh_proxmox qm shutdown "$CLIENT_VMID" --timeout 120 || ssh_proxmox qm stop "$CLIENT_VMID"
   ssh_proxmox qm snapshot "$CLIENT_VMID" "$SNAPSHOT_NAME" --description "Before WEDU Linux client smoke"
   SNAPSHOT_CREATED=1
@@ -108,6 +110,7 @@ move_client_to_lab() {
     lab_net0="$lab_net0,bridge=vmbr10"
   fi
   ssh_proxmox qm set "$CLIENT_VMID" --net0 "$lab_net0"
+  ssh_proxmox qm set "$CLIENT_VMID" --ipconfig0 ip=dhcp
   ssh_proxmox qm set "$CLIENT_VMID" --boot "$ORIGINAL_BOOT"
   ssh_proxmox qm start "$CLIENT_VMID"
   wait_qga "$CLIENT_VMID" || fail "QGA did not become ready after moving VM $CLIENT_VMID to vmbr10"
@@ -116,8 +119,17 @@ move_client_to_lab() {
 assert_client_network() {
   guest_exec "$CLIENT_VMID" "
 set -euo pipefail
-dhclient -r || true
-dhclient || true
+if command -v dhclient >/dev/null 2>&1; then
+  dhclient -r || true
+  dhclient || true
+elif command -v networkctl >/dev/null 2>&1; then
+  networkctl reconfigure eth0 || true
+  networkctl renew eth0 || true
+elif command -v nmcli >/dev/null 2>&1; then
+  nmcli device reapply eth0 || true
+  nmcli connection up id \"\$(nmcli -t -f NAME,DEVICE connection show --active | awk -F: '\$2 == \"eth0\" { print \$1; exit }')\" || true
+fi
+sleep 5
 ip -4 addr
 ip -4 addr | grep -q '10\.77\.0\.'
 grep -R \"nameserver $EXPECTED_DNS\" /etc/resolv.conf /run/systemd/resolve/resolv.conf 2>/dev/null
@@ -165,6 +177,11 @@ restore_client() {
     fi
     ssh_proxmox qm rollback "$CLIENT_VMID" "$SNAPSHOT_NAME"
     ssh_proxmox qm set "$CLIENT_VMID" --net0 "$ORIGINAL_NET0"
+    if [ -n "$ORIGINAL_IPCONFIG0" ]; then
+      ssh_proxmox qm set "$CLIENT_VMID" --ipconfig0 "$ORIGINAL_IPCONFIG0"
+    else
+      ssh_proxmox qm set "$CLIENT_VMID" --delete ipconfig0
+    fi
     ssh_proxmox qm set "$CLIENT_VMID" --boot "$ORIGINAL_BOOT"
     ssh_proxmox qm start "$CLIENT_VMID"
     wait_qga "$CLIENT_VMID" || return 1

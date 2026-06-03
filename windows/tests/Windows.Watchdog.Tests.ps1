@@ -797,7 +797,37 @@ Describe "Watchdog Script" {
                 'Invoke-OpenPathCaptivePortalAuthenticatedRestore -RequestId $requestId -Operation $operation -ResultPath $ResultPath -ProgressPath $ProgressPath',
                 'Invoke-OpenPathCaptivePortalAuthenticatedRestore -RequestId $requestId -Operation $operation -ResultPath $ResultPath -ProgressPath $ProgressPath -TriggerHost $triggerHost'
             )
+            $content | Should -Match 'if \(\$state -eq ''Authenticated''\)\s*\{\s*Invoke-OpenPathCaptivePortalAuthenticatedRestore -RequestId \$requestId -Operation \$operation -ResultPath \$ResultPath -ProgressPath \$ProgressPath -TriggerHost \$triggerHost'
+            $content | Should -Not -Match 'if \(\$state -eq ''Authenticated'' -and \(Test-OpenPathCaptivePortalModeActive\)\)'
             $content | Should -Not -Match 'success = \$disabled\s+operation = \$operation'
+        }
+
+        It "Retries verified protected-mode restoration before clearing captive portal state" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $disableStart = $moduleContent.IndexOf('function Disable-OpenPathCaptivePortalMode')
+            $exportStart = $moduleContent.IndexOf('Export-ModuleMember')
+            $disableBody = $moduleContent.Substring($disableStart, $exportStart - $disableStart)
+
+            Assert-ContentContainsAll -Content $disableBody -Needles @(
+                '$maxRestoreAttempts = 3',
+                'for ($attempt = 1; $attempt -le $maxRestoreAttempts; $attempt++)',
+                'Restore-OpenPathCaptivePortalAcrylicHostState',
+                'Restore-OpenPathProtectedMode -Config $Config',
+                'Get-OpenPathCaptivePortalProtectedModeExitEvidence',
+                '$restoreEvidence',
+                '$restoreSucceeded = [bool]$restoreEvidence.enforcementRestored',
+                '$postRestoreEvidence.protectedModeRestored',
+                'Clear-OpenPathCaptivePortalMarker',
+                '$postClearEvidence.protectedModeRestored'
+            )
+
+            $disableBody.IndexOf('$restoreSucceeded = [bool]$restoreEvidence.enforcementRestored') |
+                Should -BeLessThan ($disableBody.IndexOf('Clear-OpenPathCaptivePortalMarker'))
+            $disableBody.IndexOf('$postRestoreEvidence.protectedModeRestored') |
+                Should -BeLessThan ($disableBody.IndexOf('Clear-OpenPathCaptivePortalMarker'))
+            $disableBody | Should -Match 'if \(-not \$restoreSucceeded\)[\s\S]*return \$false'
         }
 
         It "Closes any active captive portal marker immediately on authenticated detection and preserves the marker when restore fails" {

@@ -145,7 +145,65 @@ function browserLimited(overrides = {}) {
 function postAuthDns(overrides = {}) {
   return {
     capturedAt: '2026-05-28T00:00:00.000Z',
-    queries: [],
+    resolverServer: '127.0.0.1',
+    queries: [
+      {
+        domain: 'www.msftconnecttest.com',
+        success: true,
+        addresses: ['13.107.4.52'],
+        error: '',
+      },
+    ],
+    adapters: [
+      {
+        interfaceAlias: 'Ethernet',
+        dnsServers: ['127.0.0.1'],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function networkAfter(overrides = {}) {
+  return {
+    capturedAt: '2026-05-28T00:00:05.000Z',
+    adapters: [
+      {
+        interfaceAlias: 'Ethernet',
+        interfaceIndex: 8,
+        ipv4Addresses: ['10.77.0.50'],
+        ipv4DefaultGateway: ['10.77.0.1'],
+        dnsServers: ['127.0.0.1'],
+      },
+    ],
+    acrylic: {
+      configPath: 'C:\\Acrylic DNS Proxy\\AcrylicConfiguration.ini',
+      configRead: true,
+      primaryServerAddress: '10.77.0.1',
+      secondaryServerAddress: '1.1.1.1',
+      serverAddresses: ['10.77.0.1', '1.1.1.1'],
+      error: '',
+    },
+    ...overrides,
+  };
+}
+
+function openPathProtectionAfter(overrides = {}) {
+  return {
+    blockedDomain: 'this-should-be-blocked-test-12345.com',
+    blockedByOpenPath: true,
+    blockedError: '',
+    allowedDomain: 'www.msftconnecttest.com',
+    allowedDomainFunctional: true,
+    allowedError: '',
+    protectedModeRestored: true,
+    server: '127.0.0.1',
+    adapterLocalDnsRestored: true,
+    adaptersUsingLocalDns: ['Ethernet'],
+    acrylicPrimaryServerAddress: '10.77.0.1',
+    acrylicSecondaryServerAddress: '1.1.1.1',
+    acrylicNxWildcardPresent: true,
+    acrylicCaptivePortalSectionPresent: false,
     ...overrides,
   };
 }
@@ -156,6 +214,10 @@ function targetPlatformFiles(overrides = {}) {
     'wedu-lab-browser-limited.json': browserLimited(overrides.browserLimited),
     'wedu-lab-browser-post-auth.json': browserAfter(overrides.browserAfter),
     'wedu-lab-dns-post-auth.json': postAuthDns(overrides.postAuthDns),
+    'wedu-lab-network-after.json': networkAfter(overrides.networkAfter),
+    'wedu-lab-openpath-protection-after.json': openPathProtectionAfter(
+      overrides.openPathProtectionAfter
+    ),
   };
 }
 
@@ -306,6 +368,13 @@ describe('WEDU captive portal result validator', () => {
     writeJsonFile(artifactDir, 'wedu-lab-browser-limited.json', browserLimited(), { bom: true });
     writeJsonFile(artifactDir, 'wedu-lab-browser-post-auth.json', browserAfter(), { bom: true });
     writeJsonFile(artifactDir, 'wedu-lab-dns-post-auth.json', postAuthDns(), { bom: true });
+    writeJsonFile(artifactDir, 'wedu-lab-network-after.json', networkAfter(), { bom: true });
+    writeJsonFile(
+      artifactDir,
+      'wedu-lab-openpath-protection-after.json',
+      openPathProtectionAfter(),
+      { bom: true }
+    );
 
     assert.doesNotThrow(() =>
       assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' })
@@ -345,6 +414,144 @@ describe('WEDU captive portal result validator', () => {
     assert.throws(
       () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
       /externalNavigationFunctional/
+    );
+  });
+
+  test('rejects target-platform evidence without standalone protection-after artifact', () => {
+    const files = targetPlatformFiles();
+    delete files['wedu-lab-openpath-protection-after.json'];
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult(),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...files,
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /wedu-lab-openpath-protection-after\.json/
+    );
+  });
+
+  test('rejects target-platform evidence when post-auth protection is not restored', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult(),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles({
+        openPathProtectionAfter: {
+          blockedByOpenPath: false,
+          protectedModeRestored: false,
+        },
+      }),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /wedu-lab-openpath-protection-after\.json blockedByOpenPath/
+    );
+  });
+
+  test('rejects target-platform evidence when the post-auth protection artifact does not prove local loopback DNS', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult(),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles({
+        openPathProtectionAfter: {
+          server: '10.77.0.1',
+          adapterLocalDnsRestored: false,
+          adaptersUsingLocalDns: [],
+        },
+      }),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /wedu-lab-openpath-protection-after\.json server/
+    );
+  });
+
+  test('rejects target-platform evidence when the post-auth protection artifact omits local adapter proof', () => {
+    const protection = openPathProtectionAfter();
+    delete protection.adapterLocalDnsRestored;
+    const files = targetPlatformFiles();
+    files['wedu-lab-openpath-protection-after.json'] = protection;
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult(),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...files,
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /wedu-lab-openpath-protection-after\.json adapterLocalDnsRestored/
+    );
+  });
+
+  test('rejects target-platform evidence when the post-auth Acrylic proof is incomplete', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult(),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles({
+        openPathProtectionAfter: {
+          acrylicNxWildcardPresent: true,
+          acrylicCaptivePortalSectionPresent: true,
+        },
+      }),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /wedu-lab-openpath-protection-after\.json acrylicCaptivePortalSectionPresent/
+    );
+  });
+
+  test('rejects target-platform evidence without useful post-auth DNS queries', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult(),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles({
+        postAuthDns: {
+          queries: [],
+        },
+      }),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /wedu-lab-dns-post-auth\.json queries/
+    );
+  });
+
+  test('rejects target-platform evidence without post-auth local resolver adapter content', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult(),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles({
+        postAuthDns: {
+          adapters: [{ interfaceAlias: 'Ethernet', dnsServers: ['10.77.0.1'] }],
+        },
+      }),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /wedu-lab-dns-post-auth\.json adapters must include local DNS server 127\.0\.0\.1/
+    );
+  });
+
+  test('rejects target-platform evidence without a post-auth network snapshot using local DNS', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult(),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles({
+        networkAfter: {
+          adapters: [{ interfaceAlias: 'Ethernet', dnsServers: ['10.77.0.1'] }],
+        },
+      }),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /wedu-lab-network-after\.json adapters must include local DNS server 127\.0\.0\.1/
     );
   });
 

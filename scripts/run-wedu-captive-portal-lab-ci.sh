@@ -139,7 +139,6 @@ get_openpath_runner_state_from_repository_runners() {
   local response
   repository="${GITHUB_REPOSITORY:-balejosg/OpenPath}"
   response="$(github_api_get "repos/${repository}/actions/runners")" || return 1
-  # shellcheck disable=SC2026 # Python f-string quotes are parsed inside the single-quoted program.
   OPENPATH_WEDU_TARGET_RUNNER_NAME="$WINDOWS_RUNNER_NAME" python3 -c '
 import json
 import os
@@ -149,7 +148,7 @@ payload = json.load(sys.stdin)
 target = os.environ["OPENPATH_WEDU_TARGET_RUNNER_NAME"]
 for runner in payload.get("runners", []):
     if runner.get("name") == target:
-        print(f"{runner.get('status')}/busy={str(runner.get('busy')).lower()}")
+        print("{}/busy={}".format(runner.get("status"), str(runner.get("busy")).lower()))
         raise SystemExit(0)
 raise SystemExit(1)
 ' <<<"$response"
@@ -611,20 +610,47 @@ move_windows_vm_to_lab() {
 configure_windows_lab_network() {
   run_windows_ps 180 "
 \$ErrorActionPreference = 'Stop'
-\$adapter = Get-NetAdapter | Where-Object { \$_.Status -ne 'Disabled' } | Sort-Object ifIndex | Select-Object -First 1
+\$adapter = Get-NetAdapter | Where-Object { \$_.Status -eq 'Up' } | Sort-Object ifIndex | Select-Object -First 1
+\$adapterResetTried = \$false
 if (-not \$adapter) { throw 'No enabled network adapter found.' }
-Set-NetIPInterface -InterfaceIndex \$adapter.ifIndex -AddressFamily IPv4 -Dhcp Enabled -ErrorAction SilentlyContinue
-Set-DnsClientServerAddress -InterfaceIndex \$adapter.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+Set-NetIPInterface -InterfaceIndex \$adapter.ifIndex -AddressFamily IPv4 -Dhcp Enabled -ErrorAction SilentlyContinue | Out-Null
+Set-DnsClientServerAddress -InterfaceIndex \$adapter.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue | Out-Null
 Get-NetIPAddress -InterfaceIndex \$adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
   Where-Object { \$_.PrefixOrigin -ne 'Dhcp' } |
   Remove-NetIPAddress -Confirm:\$false -ErrorAction SilentlyContinue
-ipconfig /release \$adapter.Name | Out-Null
-ipconfig /renew \$adapter.Name | Out-Null
-\$ip = @(Get-NetIPAddress -InterfaceIndex \$adapter.ifIndex -AddressFamily IPv4 | Where-Object { \$_.IPAddress -like '10.77.0.*' })
-\$dns = @(Get-DnsClientServerAddress -InterfaceIndex \$adapter.ifIndex -AddressFamily IPv4).ServerAddresses
-if (\$ip.Count -lt 1) { throw 'Windows runner did not receive a WEDU lab IPv4 address.' }
-if (-not (\$dns -contains '$EXPECTED_DNS')) { throw 'Windows runner is not using WEDU lab DNS $EXPECTED_DNS.' }
-[pscustomobject]@{ adapter = \$adapter.Name; ip = @(\$ip.IPAddress); dns = @(\$dns) } | ConvertTo-Json -Compress
+\$attempts = @()
+for (\$attempt = 1; \$attempt -le 12; \$attempt++) {
+  ipconfig /release \$adapter.Name | Out-Null
+  Start-Sleep -Seconds 2
+  ipconfig /renew \$adapter.Name | Out-Null
+  Start-Sleep -Seconds 5
+  \$currentIps = @(Get-NetIPAddress -InterfaceIndex \$adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty IPAddress)
+  \$currentDns = @((Get-DnsClientServerAddress -InterfaceIndex \$adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses)
+  \$sample = [pscustomobject]@{
+    attempt = \$attempt
+    capturedAt = (Get-Date).ToString('o')
+    status = \$adapter.Status
+    ips = @(\$currentIps)
+    dns = @(\$currentDns)
+  }
+  \$attempts += \$sample
+  if ((@(\$currentIps | Where-Object { \$_ -like '10.77.0.*' }).Count -gt 0) -and (\$currentDns -contains '$EXPECTED_DNS')) {
+    \$sample | ConvertTo-Json -Compress
+    exit 0
+  }
+  if (-not \$adapterResetTried -and \$attempt -eq 6) {
+    Disable-NetAdapter -Name \$adapter.Name -Confirm:\$false -ErrorAction SilentlyContinue | Out-Null
+    Start-Sleep -Seconds 3
+    Enable-NetAdapter -Name \$adapter.Name -Confirm:\$false -ErrorAction SilentlyContinue | Out-Null
+    Start-Sleep -Seconds 10
+    \$adapterResetTried = \$true
+  }
+}
+throw ('Windows runner lab network did not converge: ' + (([pscustomobject]@{
+  adapter = \$adapter.Name
+  interfaceIndex = \$adapter.ifIndex
+  attempts = @(\$attempts)
+}) | ConvertTo-Json -Compress -Depth 6))
 " | tee "$ARTIFACT_DIR/windows-lab-network.json" >/dev/null
 }
 

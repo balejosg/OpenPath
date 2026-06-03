@@ -773,6 +773,9 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduCiScript, /http:\/\/\{AUTH_HOST\}\/session/);
     assert.match(weduScript, /window\.__openPathWeduPortalReady/);
     assert.match(weduScript, /Resolve-DnsName -Name \$limitedHost -Server 127\.0\.0\.1/);
+    assert.match(weduScript, /Resolve-DnsName -Name \$domain -Server 127\.0\.0\.1/);
+    assert.match(weduScript, /resolverServer = '127\.0\.0\.1'/);
+    assert.match(weduScript, /adapters = @\(\$network\.adapters\)/);
     assert.doesNotMatch(weduScript, /foreach \(\$host in/i);
     assert.match(weduScript, /this-should-be-blocked-test-12345\.com/);
     assert.match(weduScript, /weduHostPortalDetected/);
@@ -829,6 +832,10 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(successExpression, /nativeReconcile\.state/);
     assert.doesNotMatch(successExpression, /nativeReconcile\.portalState/);
     assert.match(successExpression, /openPathProtectionAfter\.protectedModeRestored/);
+    assert.match(weduScript, /blockedDomain = \$blockedDomain/);
+    assert.match(weduScript, /blockedByOpenPath = \$blocked/);
+    assert.match(weduScript, /allowedDomain = \$allowedDomain/);
+    assert.match(weduScript, /allowedDomainFunctional = \$allowedFunctional/);
     assert.match(weduScript, /success = \$success/);
     assert.match(weduScript, /success = \$false[\s\S]*targetPlatformSymptomCleared = \$false/);
     assert.match(weduScript, /Assert-WeduLabNetwork/);

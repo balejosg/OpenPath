@@ -79,7 +79,14 @@ portal but is not final target-platform clearance.
   include the login, asset, CDN, and auth hosts; those hosts must not be
   preinjected through `nativeRecovery.portalRecoveryHosts`
 - `browserAfterAuthPath: wedu-lab-browser-post-auth.json`
-- post-auth DNS evidence in `wedu-lab-dns-post-auth.json`
+- post-auth DNS evidence in `wedu-lab-dns-post-auth.json`, including
+  successful queries through `127.0.0.1` and adapter DNS content showing the
+  local resolver
+- post-auth OpenPath protection evidence in
+  `wedu-lab-openpath-protection-after.json`, proving the blocked-domain
+  negative control is still blocked, the allowed-domain positive control still
+  resolves, Acrylic has returned to the normal `NX *` catch-all without the
+  captive-portal recovery section, and `protectedModeRestored: true`
 - post-auth browser evidence with `portalMarkerAbsent: true`
 - post-auth external navigation with `externalNavigationFunctional: true`
 - `failureKind: none`

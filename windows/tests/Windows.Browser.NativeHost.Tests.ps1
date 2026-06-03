@@ -608,7 +608,7 @@ Describe "Browser Module - Native Host" {
             )
             Assert-ContentContainsAll -Content $scriptContent -Needles @(
                 'function Invoke-OpenPathCaptivePortalAuthenticatedRestore',
-                'if ($state -eq ''Authenticated'' -and (Test-OpenPathCaptivePortalModeActive))',
+                'if ($state -eq ''Authenticated'')',
                 'portalExitRoute = if ($protectedModeRestored) { "$Operation-authenticated" } else { "$Operation-authenticated-restore-failed" }'
             )
 

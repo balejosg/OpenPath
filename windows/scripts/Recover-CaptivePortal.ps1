@@ -569,7 +569,7 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
         $success = $false
         $activeMarker = $null
 
-        if ($state -eq 'Authenticated' -and (Test-OpenPathCaptivePortalModeActive)) {
+        if ($state -eq 'Authenticated') {
             Invoke-OpenPathCaptivePortalAuthenticatedRestore -RequestId $requestId -Operation $operation -ResultPath $ResultPath -ProgressPath $ProgressPath -TriggerHost $triggerHost
             return
         }

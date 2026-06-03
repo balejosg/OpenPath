@@ -10,6 +10,8 @@ const LIMITED_DNS_FILE = 'wedu-lab-dns-limited.json';
 const LIMITED_BROWSER_FILE = 'wedu-lab-browser-limited.json';
 const TARGET_AFTER_FILE = 'wedu-lab-browser-post-auth.json';
 const POST_AUTH_DNS_FILE = 'wedu-lab-dns-post-auth.json';
+const NETWORK_AFTER_FILE = 'wedu-lab-network-after.json';
+const OPENPATH_PROTECTION_AFTER_FILE = 'wedu-lab-openpath-protection-after.json';
 const VALID_MODES = new Set(['lab-direct', 'target-platform']);
 
 function readJson(path) {
@@ -68,6 +70,81 @@ function arrayValue(value) {
 
 function requireArrayIncludes(value, host, field) {
   requireField(arrayValue(value).includes(host), `${field} must include ${host}`);
+}
+
+function dnsServersForAdapters(adapters) {
+  return arrayValue(adapters).flatMap((adapter) => arrayValue(adapter?.dnsServers));
+}
+
+function requirePostAuthProtectionAfter(protectionAfter) {
+  requireField(
+    (protectionAfter.server ?? protectionAfter.resolverServer) === '127.0.0.1',
+    `${OPENPATH_PROTECTION_AFTER_FILE} server`
+  );
+  requireField(
+    protectionAfter.blockedDomain === 'this-should-be-blocked-test-12345.com',
+    `${OPENPATH_PROTECTION_AFTER_FILE} blockedDomain`
+  );
+  requireField(
+    protectionAfter.blockedByOpenPath === true,
+    `${OPENPATH_PROTECTION_AFTER_FILE} blockedByOpenPath`
+  );
+  requireField(
+    protectionAfter.allowedDomain === 'www.msftconnecttest.com',
+    `${OPENPATH_PROTECTION_AFTER_FILE} allowedDomain`
+  );
+  requireField(
+    protectionAfter.allowedDomainFunctional === true,
+    `${OPENPATH_PROTECTION_AFTER_FILE} allowedDomainFunctional`
+  );
+  requireField(
+    protectionAfter.protectedModeRestored === true,
+    `${OPENPATH_PROTECTION_AFTER_FILE} protectedModeRestored`
+  );
+  requireField(
+    protectionAfter.adapterLocalDnsRestored === true,
+    `${OPENPATH_PROTECTION_AFTER_FILE} adapterLocalDnsRestored`
+  );
+  requireField(
+    arrayValue(protectionAfter.adaptersUsingLocalDns).length > 0,
+    `${OPENPATH_PROTECTION_AFTER_FILE} adaptersUsingLocalDns`
+  );
+  requireField(
+    protectionAfter.acrylicNxWildcardPresent === true,
+    `${OPENPATH_PROTECTION_AFTER_FILE} acrylicNxWildcardPresent`
+  );
+  requireField(
+    protectionAfter.acrylicCaptivePortalSectionPresent === false,
+    `${OPENPATH_PROTECTION_AFTER_FILE} acrylicCaptivePortalSectionPresent`
+  );
+}
+
+function requirePostAuthDnsEvidence(postAuthDns) {
+  requireField(
+    Array.isArray(postAuthDns.queries) &&
+      postAuthDns.queries.length > 0 &&
+      postAuthDns.queries.some(
+        (query) =>
+          query?.success === true && Array.isArray(query.addresses) && query.addresses.length > 0
+      ),
+    `${POST_AUTH_DNS_FILE} queries`
+  );
+  requireField(postAuthDns.resolverServer === '127.0.0.1', `${POST_AUTH_DNS_FILE} resolverServer`);
+  requireField(
+    dnsServersForAdapters(postAuthDns.adapters).includes('127.0.0.1'),
+    `${POST_AUTH_DNS_FILE} adapters must include local DNS server 127.0.0.1`
+  );
+}
+
+function requirePostAuthNetworkEvidence(networkAfter) {
+  requireField(
+    Array.isArray(networkAfter.adapters) && networkAfter.adapters.length > 0,
+    `${NETWORK_AFTER_FILE} adapters`
+  );
+  requireField(
+    dnsServersForAdapters(networkAfter.adapters).includes('127.0.0.1'),
+    `${NETWORK_AFTER_FILE} adapters must include local DNS server 127.0.0.1`
+  );
 }
 
 function requireDiscoveredWeduHosts(result) {
@@ -199,12 +276,24 @@ export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab
   );
 
   const browserAfter = readJson(join(artifactDir, TARGET_AFTER_FILE));
-  readJson(join(artifactDir, POST_AUTH_DNS_FILE));
+  const postAuthDns = readJson(join(artifactDir, POST_AUTH_DNS_FILE));
+  const networkAfter = readJson(join(artifactDir, NETWORK_AFTER_FILE));
+  const openPathProtectionAfter = readJson(join(artifactDir, OPENPATH_PROTECTION_AFTER_FILE));
   requireField(browserAfter.portalMarkerAbsent === true, 'portalMarkerAbsent');
   requireField(browserAfterNavigationFunctional(browserAfter), 'externalNavigationFunctional');
   requireField(browserAfterFailureKind(browserAfter) === 'none', 'failureKind none');
+  requirePostAuthDnsEvidence(postAuthDns);
+  requirePostAuthNetworkEvidence(networkAfter);
+  requirePostAuthProtectionAfter(openPathProtectionAfter);
 
-  return { result, browserBefore, browserAfter };
+  return {
+    result,
+    browserBefore,
+    browserAfter,
+    postAuthDns,
+    networkAfter,
+    openPathProtectionAfter,
+  };
 }
 
 function parseCli(argv) {
