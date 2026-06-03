@@ -184,7 +184,7 @@ function Get-OpenPathCaptivePortalUpstreamDns {
                     -Address ([string]$gateway) `
                     -Source 'gateway' `
                     -Verified:$verified `
-                    -UsableForLimited:$verified)
+                    -UsableForLimited:$true)
         }
     }
     catch {

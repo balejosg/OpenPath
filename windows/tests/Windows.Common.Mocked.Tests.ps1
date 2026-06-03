@@ -295,7 +295,7 @@ download.mozilla.org/firefox/releases
             $dns.PreReset | Should -BeFalse
         }
 
-        It "Falls back to gateway as unverified when no adapter DNS is visible" {
+        It "Falls back to gateway as unverified but usable for limited mode when no adapter DNS is visible" {
             Mock Get-NetAdapter {
                 @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 })
             } -ModuleName Common
@@ -310,7 +310,7 @@ download.mozilla.org/firefox/releases
             $dns.Address | Should -Be '10.0.0.1'
             $dns.Source | Should -Be 'gateway'
             $dns.Verified | Should -BeFalse
-            $dns.UsableForLimited | Should -BeFalse
+            $dns.UsableForLimited | Should -BeTrue
         }
 
         It "Marks public fallback as diagnostic and not usable for limited mode" {
