@@ -2,15 +2,22 @@ function Resolve-SslipIpv4Address {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Domain)
 
-    $match = [regex]::Match($Domain, '(?i)(?:^|\.)(?<ip>(?:\d{1,3}\.){3}\d{1,3})\.sslip\.io$')
+    $match = [regex]::Match($Domain, '(?i)(?:^|\.)(?<ip>\d{1,3}(?:[.-]\d{1,3}){3})\.sslip\.io$')
     if (-not $match.Success) { return $null }
 
-    $octets = @($match.Groups['ip'].Value.Split('.') | ForEach-Object { [int]$_ })
+    $octets = @($match.Groups['ip'].Value -split '[.-]' | ForEach-Object { [int]$_ })
     foreach ($octet in $octets) {
         if ($octet -lt 0 -or $octet -gt 255) { return $null }
     }
 
     return ($octets -join '.')
+}
+
+function Test-AcrylicStaticAddressDomain {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Domain)
+
+    return ($null -ne (Resolve-SslipIpv4Address -Domain $Domain))
 }
 
 function Get-AcrylicForwardRules {
@@ -23,6 +30,9 @@ function Get-AcrylicForwardRules {
     $normalizedDomain = $Domain.Trim()
     if (-not $normalizedDomain) { return @() }
     $sslipIpv4Address = Resolve-SslipIpv4Address -Domain $normalizedDomain
+    if ($sslipIpv4Address) {
+        return @("$sslipIpv4Address $normalizedDomain", "$sslipIpv4Address >$normalizedDomain")
+    }
 
     $blockedDescendants = @(
         foreach ($subdomain in @($BlockedSubdomains)) {
@@ -35,10 +45,6 @@ function Get-AcrylicForwardRules {
     )
 
     if ($blockedDescendants.Count -eq 0) {
-        if ($sslipIpv4Address) {
-            return @("$sslipIpv4Address $normalizedDomain", "$sslipIpv4Address >$normalizedDomain")
-        }
-
         return @("FW $normalizedDomain", "FW >$normalizedDomain")
     }
 
@@ -80,6 +86,10 @@ function Get-AcrylicAffinityMaskEntries {
             }
         }
 
+        if (Test-AcrylicStaticAddressDomain -Domain $normalizedDomain) {
+            continue
+        }
+
         $domainEntries = if ($hasBlockedDescendant) { @($normalizedDomain) } else { @($normalizedDomain, "*.$normalizedDomain") }
         foreach ($entry in $domainEntries) {
             if ($seenEntries.Add($entry)) { [void]$entries.Add($entry) }
@@ -100,6 +110,7 @@ function Get-AcrylicExactAffinityMaskEntries {
         $normalizedDomain = ([string]$domain).Trim().TrimEnd('.')
         if ($normalizedDomain.StartsWith('*.')) { $normalizedDomain = $normalizedDomain.Substring(2) }
         if (-not $normalizedDomain) { continue }
+        if (Test-AcrylicStaticAddressDomain -Domain $normalizedDomain) { continue }
         if ($seenEntries.Add($normalizedDomain)) { [void]$entries.Add($normalizedDomain) }
     }
 
