@@ -170,6 +170,60 @@ Describe "Watchdog Script" {
             $result.configuredCaptivePortalDomainsApplied | Should -BeFalse
         }
 
+        It "Restores protected mode when reconcile request reports authenticated state" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $start = $content.IndexOf('function Get-OpenPathRecoveryUtcNow')
+            $end = $content.IndexOf('$queuePath = Get-OpenPathCapabilityStoragePath')
+            . ([scriptblock]::Create($content.Substring($start, $end - $start)))
+
+            $requestPath = Join-Path $TestDrive 'request-authenticated.json'
+            $resultPath = Join-Path $TestDrive 'result-authenticated'
+            $progressPath = Join-Path $TestDrive 'progress-authenticated'
+            @{
+                requestId = 'authenticated-reconcile-request'
+                operation = 'reconcile'
+                portalState = 'authenticated'
+            } | ConvertTo-Json -Depth 4 | Set-Content -Path $requestPath -Encoding UTF8
+            (Get-Item $requestPath).LastWriteTimeUtc = [DateTime]::UtcNow.AddMinutes(5)
+
+            function Get-OpenPathCaptivePortalRecoveryState { return 'Portal' }
+            function Update-OpenPathCaptivePortalObservation { return $true }
+            function Disable-OpenPathCaptivePortalMode { return $true }
+            function Test-OpenPathCaptivePortalModeActive { return $false }
+            function Get-OpenPathCaptivePortalAllowedHosts {
+                param([string[]]$Hosts = @())
+
+                @($Hosts | ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
+            }
+            function Get-OpenPathCaptivePortalProtectedModeExitEvidence {
+                [PSCustomObject]@{
+                    protectedModeRestored = $true
+                    localDnsLoopbackRestored = $true
+                    acrylicNormalRestored = $true
+                    dnsResolutionHealthy = $true
+                    sinkholeHealthy = $true
+                    firewallExpectedActive = $false
+                    firewallHealthy = $false
+                    markerCleared = $true
+                }
+            }
+
+            $envelope = [PSCustomObject]@{
+                File = Get-Item $requestPath
+                Request = (Get-Content $requestPath -Raw | ConvertFrom-Json)
+            }
+
+            Invoke-OpenPathCaptivePortalRecoveryRequest -RequestEnvelope $envelope -ResultPath $resultPath -ProgressPath $progressPath -NowUtc ([DateTime]::UtcNow)
+
+            $result = Get-Content (Join-Path $resultPath 'authenticated-reconcile-request.json') -Raw | ConvertFrom-Json
+            $result.success | Should -BeTrue
+            $result.state | Should -Be 'Authenticated'
+            $result.portalModeActive | Should -BeFalse
+            $result.portalExitRoute | Should -Be 'reconcile-authenticated'
+            $result.protectedModeRestored | Should -BeTrue
+        }
+
         It "Detects captive portals and opens only exact recovery hosts without dropping protection" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"

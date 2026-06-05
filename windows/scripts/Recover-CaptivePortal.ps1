@@ -205,6 +205,21 @@ function Get-OpenPathCaptivePortalRecoveryState {
     return (Test-OpenPathCaptivePortalState -TimeoutSec 3)
 }
 
+function Get-OpenPathRequestedCaptivePortalRecoveryState {
+    param([AllowNull()][object]$Request)
+
+    if (-not ($Request -and $Request.PSObject.Properties['portalState'] -and $Request.portalState)) {
+        return ''
+    }
+
+    $candidate = ([string]$Request.portalState).Trim().ToLowerInvariant()
+    if ($candidate -in @('authenticated', 'not_captive', 'not-captive')) {
+        return 'Authenticated'
+    }
+
+    return ''
+}
+
 function Get-OpenPathRecoveryConfiguredCaptivePortalDomains {
     if (-not (Get-Command -Name 'Get-OpenPathConfiguredCaptivePortalDomains' -ErrorAction SilentlyContinue)) {
         return @()
@@ -461,6 +476,10 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
                 operation = $operation
             } | Out-Null
             $state = Get-OpenPathCaptivePortalRecoveryState -NowUtc $NowUtc
+            $requestedState = Get-OpenPathRequestedCaptivePortalRecoveryState -Request $RequestEnvelope.Request
+            if ($requestedState -eq 'Authenticated') {
+                $state = 'Authenticated'
+            }
             if ($state -eq 'Authenticated') {
                 Invoke-OpenPathCaptivePortalAuthenticatedRestore -RequestId $requestId -Operation $operation -ResultPath $ResultPath -ProgressPath $ProgressPath
                 return
