@@ -263,6 +263,7 @@ linux/uninstall.sh|tests/install.bats,tests/linux-e2e.bats
 windows/scripts/Update-OpenPath.ps1|windows/tests/Windows.Tests.ps1
 windows/scripts/Apply-RuntimeDependencyQueue.ps1|windows/tests/Windows.Update.Tests.ps1
 windows/scripts/Recover-CaptivePortal.ps1|windows/tests/Windows.Watchdog.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1,windows/tests/Windows.Services.Tests.ps1
+windows/scripts/Collect-WeduCaptivePortalDiagnostics.ps1|tests/wedu-captive-portal-diagnostics-script.test.mjs
 windows/scripts/OpenPath-NativeHost.ps1|windows/tests/Windows.Tests.ps1
 windows/scripts/Test-DNSHealth.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/Update.Runtime.psm1|windows/tests/Windows.Tests.ps1

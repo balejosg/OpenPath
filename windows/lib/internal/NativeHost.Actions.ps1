@@ -490,15 +490,19 @@ function Get-NativeHostCaptivePortalMarkerSummary {
     $configuredCaptivePortalDomains = @(Get-NativeHostConfiguredCaptivePortalDomains)
     $configuredCaptivePortalDomainsApplied = Test-NativeHostConfiguredCaptivePortalDomainsApplied -AllowedHosts $allowedHosts -ConfiguredCaptivePortalDomains $configuredCaptivePortalDomains
     $effectiveHosts = @(Get-NativeHostCaptivePortalEffectiveHosts -Hosts (@($allowedHosts) + @($bootstrapHosts) + @($redirectHosts) + @($resourceHosts) + @($observedRuntimeHosts) + @($configuredCaptivePortalDomains)))
-    $allEffectiveHostsInstalled = $true
-    foreach ($hostName in @($effectiveHosts)) {
+    $declaredRecoveryHosts = @(Get-NativeHostCaptivePortalEffectiveHosts -Hosts (@($TriggerHost) + @($configuredCaptivePortalDomains)))
+    if ($declaredRecoveryHosts.Count -le 0) {
+        $declaredRecoveryHosts = @($allowedHosts)
+    }
+    $declaredRecoveryHostsApplied = ($declaredRecoveryHosts.Count -gt 0)
+    foreach ($hostName in @($declaredRecoveryHosts)) {
         if ($allowedHosts -notcontains $hostName) {
-            $allEffectiveHostsInstalled = $false
+            $declaredRecoveryHostsApplied = $false
             break
         }
     }
     $markerLimitedModeReady = ($Marker -and $Marker.PSObject.Properties['limitedModeReady'] -and [bool]$Marker.limitedModeReady)
-    $limitedModeReady = ($mode -eq 'limited' -and $recoveryHostsApplied -and $markerLimitedModeReady -and -not $discoveryTruncated -and @($pendingRuntimeHosts).Count -eq 0 -and $allEffectiveHostsInstalled)
+    $limitedModeReady = ($mode -eq 'limited' -and $recoveryHostsApplied -and $markerLimitedModeReady -and $declaredRecoveryHostsApplied -and $configuredCaptivePortalDomainsApplied)
     $recentSuccessEligible = $limitedModeReady
     if ($recentSuccessEligible -and $TriggerHost) {
         $recentSuccessEligible = ($allowedHosts -contains $TriggerHost)
@@ -630,19 +634,8 @@ function Test-NativeHostRecentCaptivePortalSuccessEligible {
         return $false
     }
 
-    if ($RecentSuccess.PSObject.Properties['DiscoveryTruncated'] -and [bool]$RecentSuccess.DiscoveryTruncated) {
-        return $false
-    }
-
     if ($RecentSuccess.PSObject.Properties['FallbackMode'] -and [string]$RecentSuccess.FallbackMode -eq 'passthrough') {
         return $false
-    }
-
-    if ($RecentSuccess.PSObject.Properties['PendingRuntimeHosts']) {
-        $pendingRuntimeHosts = @($RecentSuccess.PendingRuntimeHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if ($pendingRuntimeHosts.Count -gt 0) {
-            return $false
-        }
     }
 
     if ($RecentSuccess.PSObject.Properties['ActiveMarkerMode'] -and [string]$RecentSuccess.ActiveMarkerMode -eq 'passthrough') {
@@ -1275,13 +1268,29 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     if ($triggerHost) {
         $exactRecoveryHostApplied = ($exactRecoveryHostApplied -and ($allowedHosts -contains $triggerHost))
     }
+    $localDnsLoopbackRestored = if ($result.PSObject.Properties['localDnsLoopbackRestored']) { [bool]$result.localDnsLoopbackRestored } else { $false }
+    $acrylicNormalRestored = if ($result.PSObject.Properties['acrylicNormalRestored']) { [bool]$result.acrylicNormalRestored } else { $false }
+    $dnsResolutionHealthy = if ($result.PSObject.Properties['dnsResolutionHealthy']) { [bool]$result.dnsResolutionHealthy } else { $false }
+    $sinkholeHealthy = if ($result.PSObject.Properties['sinkholeHealthy']) { [bool]$result.sinkholeHealthy } else { $false }
+    $firewallExpectedActive = if ($result.PSObject.Properties['firewallExpectedActive']) { [bool]$result.firewallExpectedActive } else { $false }
+    $firewallHealthy = if ($result.PSObject.Properties['firewallHealthy']) { [bool]$result.firewallHealthy } else { $false }
+    $markerCleared = if ($result.PSObject.Properties['markerCleared']) { [bool]$result.markerCleared } else { $false }
+    $postAuthRestored = (
+        $protectedModeRestored -and
+        $localDnsLoopbackRestored -and
+        $acrylicNormalRestored -and
+        $dnsResolutionHealthy -and
+        $sinkholeHealthy -and
+        ((-not $firewallExpectedActive) -or $firewallHealthy) -and
+        $markerCleared
+    )
     $operationSucceeded = if ($operation -eq 'reconcile') {
-        ($resultSuccess -and $state -eq 'Authenticated' -and -not $portalModeActive -and $protectedModeRestored)
+        ($resultSuccess -and $state -eq 'Authenticated' -and -not $portalModeActive -and $postAuthRestored)
     }
     else {
         ($resultSuccess -and (
             ($state -eq 'Portal' -and $portalModeActive -and $exactRecoveryHostApplied -and $limitedModeReady -and $configuredCaptivePortalDomainsApplied) -or
-            ($state -eq 'Authenticated' -and -not $portalModeActive -and $protectedModeRestored)
+            ($state -eq 'Authenticated' -and -not $portalModeActive -and $postAuthRestored)
         ))
     }
 
@@ -1297,13 +1306,13 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         triggerMs = $triggerMs
         waitMs = $waitMs
         portalExitRoute = if ($result.PSObject.Properties['portalExitRoute']) { [string]$result.portalExitRoute } else { '' }
-        localDnsLoopbackRestored = if ($result.PSObject.Properties['localDnsLoopbackRestored']) { [bool]$result.localDnsLoopbackRestored } else { $false }
-        acrylicNormalRestored = if ($result.PSObject.Properties['acrylicNormalRestored']) { [bool]$result.acrylicNormalRestored } else { $false }
-        dnsResolutionHealthy = if ($result.PSObject.Properties['dnsResolutionHealthy']) { [bool]$result.dnsResolutionHealthy } else { $false }
-        sinkholeHealthy = if ($result.PSObject.Properties['sinkholeHealthy']) { [bool]$result.sinkholeHealthy } else { $false }
-        firewallExpectedActive = if ($result.PSObject.Properties['firewallExpectedActive']) { [bool]$result.firewallExpectedActive } else { $false }
-        firewallHealthy = if ($result.PSObject.Properties['firewallHealthy']) { [bool]$result.firewallHealthy } else { $false }
-        markerCleared = if ($result.PSObject.Properties['markerCleared']) { [bool]$result.markerCleared } else { $false }
+        localDnsLoopbackRestored = $localDnsLoopbackRestored
+        acrylicNormalRestored = $acrylicNormalRestored
+        dnsResolutionHealthy = $dnsResolutionHealthy
+        sinkholeHealthy = $sinkholeHealthy
+        firewallExpectedActive = $firewallExpectedActive
+        firewallHealthy = $firewallHealthy
+        markerCleared = $markerCleared
         protectedModeRestored = $protectedModeRestored
         activeMarkerMode = if ($result.PSObject.Properties['activeMarkerMode']) { [string]$result.activeMarkerMode } else { '' }
         allowedHosts = @($allowedHosts)

@@ -45,7 +45,7 @@ function Invoke-OpenPathWatchdogPrechecks {
         [PSCustomObject]$Config
     )
 
-    $portalModeActive = Test-OpenPathCaptivePortalModeActive
+    $portalModeActive = Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore
     $captiveState = 'NoNetwork'
     try {
         $captiveState = Test-OpenPathCaptivePortalState -TimeoutSec 3
@@ -64,6 +64,15 @@ function Invoke-OpenPathWatchdogPrechecks {
             Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN
         }
     }
+    elseif ($portalModeActive -and $markerMode -eq 'limited' -and $captiveState -eq 'Portal') {
+        $portalRecoveryHosts = @()
+        if ($activeMarker -and $activeMarker.PSObject.Properties['allowedHosts']) {
+            $portalRecoveryHosts = @($activeMarker.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+        if ($portalRecoveryHosts.Count -gt 0) {
+            Enable-OpenPathCaptivePortalMode -State $captiveState -PortalRecoveryDomains $portalRecoveryHosts | Out-Null
+        }
+    }
     elseif ($portalObservation.ShouldEnterPortal) {
         Enable-OpenPathCaptivePortalMode -State $captiveState | Out-Null
     }
@@ -75,7 +84,7 @@ function Invoke-OpenPathWatchdogPrechecks {
     }
 
     return [PSCustomObject]@{
-        PortalModeActive = (Test-OpenPathCaptivePortalModeActive)
+        PortalModeActive = (Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore)
         CaptiveState = $captiveState
         PortalSince = $portalObservation.PortalSince
         PortalAgeSeconds = $portalObservation.PortalAgeSeconds

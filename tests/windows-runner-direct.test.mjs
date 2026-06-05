@@ -751,6 +751,13 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       /\$nativeLimitedModeReady = \[bool\]\$nativeRecovery\.limitedModeReady/
     );
     assert.doesNotMatch(weduScript, /\$nativeRecovery\.observedRuntimeHosts \| Where-Object/);
+    const limitedModeReadyExpression =
+      weduScript.match(/\$limitedModeReady\s*=\s*\[bool\]\(([\s\S]*?)\n\s*\)/)?.[1] ?? '';
+    assert.doesNotMatch(limitedModeReadyExpression, /discoveryTruncated/);
+    assert.doesNotMatch(limitedModeReadyExpression, /pendingRuntimeHosts/);
+    assert.doesNotMatch(limitedModeReadyExpression, /redirectHosts/);
+    assert.doesNotMatch(limitedModeReadyExpression, /resourceHosts/);
+    assert.doesNotMatch(limitedModeReadyExpression, /observedRuntimeHosts/);
     assert.match(weduScript, /limitedModeReady/);
     assert.match(weduScript, /bootstrapHosts/);
     assert.match(weduScript, /observedRuntimeHosts/);

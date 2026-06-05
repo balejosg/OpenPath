@@ -369,13 +369,25 @@ function Restart-AcrylicService {
             $service = Get-AcrylicService
         }
         if ($service) {
+            $serviceName = $service.Name
             if ($service.Status -eq 'Running') {
-                Restart-Service -Name $service.Name -Force
+                try {
+                    Restart-Service -Name $serviceName -Force -ErrorAction Stop
+                }
+                catch {
+                    Write-OpenPathLog "Restart-Service failed for Acrylic; retrying stop/start: $_" -Level WARN
+                    if (-not (Stop-AcrylicService -Confirm:$false)) {
+                        throw
+                    }
+                    if (-not (Ensure-AcrylicService -Start -TimeoutSeconds $TimeoutSeconds)) {
+                        throw
+                    }
+                }
             }
             else {
-                Start-Service -Name $service.Name -ErrorAction Stop
+                Start-Service -Name $serviceName -ErrorAction Stop
             }
-            $service = Wait-AcrylicServiceStatus -Name $service.Name -Status 'Running' -TimeoutSeconds $TimeoutSeconds
+            $service = Wait-AcrylicServiceStatus -Name $serviceName -Status 'Running' -TimeoutSeconds $TimeoutSeconds
             if ($service.Status -eq 'Running') {
                 Write-OpenPathLog "Acrylic service restarted successfully"
                 return $true

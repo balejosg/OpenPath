@@ -603,7 +603,12 @@ Describe "Browser Module - Native Host" {
                 '$boundedTimeoutSeconds = [Math]::Max(1, [Math]::Min(45, $TimeoutSeconds))',
                 '-TimeoutMilliseconds ($boundedTimeoutSeconds * 1000)',
                 '-TimeoutSeconds $boundedTimeoutSeconds',
-                '$state -eq ''Authenticated'' -and -not $portalModeActive -and $protectedModeRestored',
+                '$state -eq ''Authenticated'' -and -not $portalModeActive -and $postAuthRestored',
+                '$localDnsLoopbackRestored',
+                '$acrylicNormalRestored',
+                '$dnsResolutionHealthy',
+                '$sinkholeHealthy',
+                '$markerCleared',
                 'state = ''Timeout'''
             )
             Assert-ContentContainsAll -Content $scriptContent -Needles @(
@@ -1306,7 +1311,6 @@ Describe "Browser Module - Native Host" {
                 'configuredCaptivePortalDomainsApplied',
                 '$result.PSObject.Properties[''limitedModeReady'']',
                 '$recentSuccess.PSObject.Properties[''LimitedModeReady'']',
-                '$RecentSuccess.PSObject.Properties[''DiscoveryTruncated'']',
                 '$RecentSuccess.PSObject.Properties[''FallbackMode'']'
             )
 
@@ -1326,7 +1330,7 @@ Describe "Browser Module - Native Host" {
             )
         }
 
-        It "Requires limitedModeReady for recent captive portal success eligibility" {
+        It "Requires limitedModeReady and non-passthrough mode for recent captive portal success eligibility" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
@@ -1337,7 +1341,6 @@ Describe "Browser Module - Native Host" {
                 'DiscoveryTruncated',
                 'FallbackMode',
                 '$RecentSuccess.LimitedModeReady',
-                '$RecentSuccess.DiscoveryTruncated',
                 '$RecentSuccess.FallbackMode -eq ''passthrough'''
             )
 
@@ -1346,12 +1349,11 @@ Describe "Browser Module - Native Host" {
                 'discoveryTruncated = [bool]$markerSummary.discoveryTruncated',
                 'fallbackMode = [string]$markerSummary.fallbackMode',
                 '$payload.limitedModeReady',
-                '$payload.discoveryTruncated',
                 '$payload.fallbackMode -eq ''passthrough'''
             )
         }
 
-        It "Behaviorally rejects RecentSuccess when limited mode is not ready or discovery is truncated" {
+        It "Behaviorally treats dynamic discovery fields as diagnostics for RecentSuccess" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             . $nativeHostActionsPath
 
@@ -1406,8 +1408,8 @@ Describe "Browser Module - Native Host" {
 
             Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $missingReady -TriggerHost 'portal.example' | Should -BeFalse
             Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $notReady -TriggerHost 'portal.example' | Should -BeFalse
-            Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $truncated -TriggerHost 'portal.example' | Should -BeFalse
-            Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $pending -TriggerHost 'portal.example' | Should -BeFalse
+            Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $truncated -TriggerHost 'portal.example' | Should -BeTrue
+            Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $pending -TriggerHost 'portal.example' | Should -BeTrue
             Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $passthrough -TriggerHost 'portal.example' | Should -BeFalse
             Test-NativeHostRecentCaptivePortalSuccessEligible -RecentSuccess $ready -TriggerHost 'portal.example' | Should -BeTrue
         }

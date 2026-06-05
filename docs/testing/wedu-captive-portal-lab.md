@@ -71,13 +71,13 @@ portal but is not final target-platform clearance.
 - `targetPlatformSymptomCleared: true`
 - limited-mode DNS evidence in `wedu-lab-dns-limited.json`
 - limited-mode browser evidence in `wedu-lab-browser-limited.json`
-- exact bootstrap/runtime host evidence from native recovery, with
-  `limitedModeReady: true`, `discoveryTruncated: false`, no pending runtime
-  hosts, and no `passthrough` fallback
-- dynamic WEDU portal discovery evidence: `bootstrapHosts`,
-  `nativeRecovery.effectiveExactHosts`, and `nativeRecovery.allowedHosts` must
-  include the login, asset, CDN, and auth hosts; those hosts must not be
-  preinjected through `nativeRecovery.portalRecoveryHosts`
+- exact declared-domain evidence from native recovery, with
+  `limitedModeReady: true`, `activeMarkerMode: limited`, recovery hosts applied,
+  and no `passthrough` fallback
+- the declared WEDU portal host must be present in the limited-mode exact-host
+  set and must resolve through Acrylic on `127.0.0.1`; dynamic login, asset,
+  CDN, auth, redirect, resource, runtime, pending-host, and truncation fields are
+  diagnostic only
 - `browserAfterAuthPath: wedu-lab-browser-post-auth.json`
 - post-auth DNS evidence in `wedu-lab-dns-post-auth.json`, including
   successful queries through `127.0.0.1` and adapter DNS content showing the

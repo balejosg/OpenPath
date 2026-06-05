@@ -1019,6 +1019,63 @@ Describe "DNS Module" {
             $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*raw\.githubusercontent\.com'
         }
 
+        It "Rebuilds Acrylic configuration when the existing ini file is empty" {
+            $script:capturedAcrylicConfig = $null
+            $temporaryDirectory = Join-Path $TestDrive 'acrylic-empty-existing'
+            New-Item -ItemType Directory -Path $temporaryDirectory -Force | Out-Null
+            $configPath = "$temporaryDirectory\AcrylicConfiguration.ini"
+            '' | Set-Content -Path $configPath -Encoding ASCII
+
+            Mock Get-AcrylicPath { $temporaryDirectory } -ModuleName DNS
+            Mock Get-OpenPathDnsSettings {
+                [PSCustomObject]@{
+                    PrimaryDNS = '10.74.175.78'
+                    SecondaryDNS = '8.8.4.4'
+                    MaxDomains = 10
+                }
+            } -ModuleName DNS
+            Mock Write-AcrylicConfigFile {
+                param(
+                    [string]$Path,
+                    [string]$Content
+                )
+
+                if ($Path -like '*AcrylicConfiguration.ini') {
+                    $script:capturedAcrylicConfig = $Content
+                }
+            } -ModuleName DNS
+
+            $result = Set-AcrylicConfiguration -WhitelistedDomains @('nce.wedu.comunidad.madrid')
+
+            $result | Should -BeTrue
+            $script:capturedAcrylicConfig | Should -Not -BeNullOrEmpty
+            Assert-ContentContainsAll -Content $script:capturedAcrylicConfig -Needles @(
+                '[GlobalSection]',
+                'PrimaryServerAddress=10.74.175.78',
+                'PrimaryServerDomainNameAffinityMask=raw.githubusercontent.com;*.raw.githubusercontent.com',
+                'nce.wedu.comunidad.madrid',
+                '[AllowedAddressesSection]',
+                'IP1=127.*'
+            )
+        }
+
+        It "Refuses to write a blank Acrylic configuration file without truncating the existing file" {
+            $temporaryDirectory = Join-Path $TestDrive 'acrylic-empty-config'
+            New-Item -ItemType Directory -Path $temporaryDirectory -Force | Out-Null
+            $configPath = Join-Path $temporaryDirectory 'AcrylicConfiguration.ini'
+            $originalContent = "[GlobalSection]`nPrimaryServerAddress=10.74.175.78`n"
+            $originalContent | Set-Content -Path $configPath -Encoding ASCII
+            $persistedOriginalContent = Get-Content -Path $configPath -Raw
+
+            InModuleScope DNS -Parameters @{
+                ConfigPath = $configPath
+                PersistedOriginalContent = $persistedOriginalContent
+            } {
+                { Write-AcrylicConfigFile -Path $ConfigPath -Content " `r`n`t " } | Should -Throw
+                (Get-Content -Path $ConfigPath -Raw) | Should -Be $PersistedOriginalContent
+            }
+        }
+
         It "Allows updating Acrylic hosts before any classroom whitelist exists" {
             $script:capturedAcrylicConfig = $null
             $script:capturedHostsContent = $null
@@ -1127,6 +1184,58 @@ Describe "DNS Module" {
 
             $result | Should -BeTrue
             $script:removedAcrylicPaths | Should -Contain 'C:\Program Files (x86)\Acrylic DNS Proxy\AcrylicCache.dat'
+        }
+
+        It "Falls back to stop/start when Restart-Service fails while Acrylic is running" {
+            $script:acrylicEnsureTimeouts = @()
+            $script:acrylicStopFallbackCalls = 0
+
+            Mock Get-AcrylicPath { 'C:\Program Files (x86)\Acrylic DNS Proxy' } -ModuleName DNS
+            Mock Clear-AcrylicCache { $true } -ModuleName DNS
+            Mock Get-Service {
+                [PSCustomObject]@{
+                    Name = 'AcrylicDNSProxySvc'
+                    Status = 'Running'
+                }
+            } -ModuleName DNS
+            Mock Restart-Service {
+                throw 'restart failed'
+            } -ModuleName DNS
+            Mock Stop-AcrylicService {
+                $script:acrylicStopFallbackCalls += 1
+                $true
+            } -ModuleName DNS -ParameterFilter { -not $PSBoundParameters.ContainsKey('WhatIf') }
+            Mock Ensure-AcrylicService {
+                param(
+                    [switch]$Start,
+                    [int]$TimeoutSeconds
+                )
+
+                if ($Start) {
+                    $script:acrylicEnsureTimeouts += $TimeoutSeconds
+                }
+
+                $true
+            } -ModuleName DNS
+            Mock Wait-AcrylicServiceStatus {
+                param(
+                    [string]$Name,
+                    [string]$Status,
+                    [int]$TimeoutSeconds
+                )
+
+                [PSCustomObject]@{
+                    Name = $Name
+                    Status = 'Running'
+                }
+            } -ModuleName DNS
+            Mock Start-Sleep { } -ModuleName DNS
+
+            $result = Restart-AcrylicService
+
+            $result | Should -BeTrue
+            $script:acrylicStopFallbackCalls | Should -Be 1
+            $script:acrylicEnsureTimeouts | Should -Be @(20)
         }
 
         It "Allows captive portal recovery to bound Acrylic restart waits without batch fallback" {

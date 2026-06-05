@@ -31,6 +31,42 @@ function Test-DirectDnsServer {
     }
 }
 
+function Test-OpenPathDnsServerForDomains {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Server,
+
+        [string[]]$ProbeDomains = @()
+    )
+
+    if (-not $Server -or $Server -in @('127.0.0.1', '0.0.0.0')) {
+        return $false
+    }
+
+    if ($Server -notmatch '^\d{1,3}(?:\.\d{1,3}){3}$') {
+        return $false
+    }
+
+    foreach ($domain in @($ProbeDomains)) {
+        $probeDomain = ([string]$domain).Trim().TrimEnd('.').ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($probeDomain)) {
+            continue
+        }
+
+        try {
+            $result = Resolve-DnsName -Name $probeDomain -Server $Server -DnsOnly -ErrorAction Stop
+            if ($null -ne $result) {
+                return $true
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    return $false
+}
+
 function Test-DisfavoredDnsServer {
     <#
     .SYNOPSIS
@@ -46,6 +82,54 @@ function Test-DisfavoredDnsServer {
     return $Server -in @(
         '168.63.129.16'
     )
+}
+
+function Get-OpenPathCaptivePortalOriginalDnsCandidates {
+    try {
+        if ([string]::IsNullOrWhiteSpace([string]$script:OpenPathRoot)) {
+            return @()
+        }
+
+        $path = "$script:OpenPathRoot\data\original-dns.json"
+        if (-not (Test-Path $path -ErrorAction SilentlyContinue)) {
+            return @()
+        }
+
+        $payload = Get-Content $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $entries = if ($payload.PSObject.Properties['adapters']) { @($payload.adapters) } else { @($payload) }
+        return @(
+            foreach ($entry in @($entries)) {
+                foreach ($server in @($entry.ServerAddresses)) {
+                    $candidate = ([string]$server).Trim()
+                    if (
+                        $candidate -and
+                        $candidate -notin @('127.0.0.1', '0.0.0.0') -and
+                        $candidate -match '^\d{1,3}(?:\.\d{1,3}){3}$'
+                    ) {
+                        $candidate
+                    }
+                }
+            }
+        ) | Select-Object -Unique
+    }
+    catch {
+        return @()
+    }
+}
+
+function Get-OpenPathCaptivePortalDhcpServerCandidates {
+    try {
+        return @(
+            foreach ($line in @(ipconfig /all)) {
+                if ($line -match '(?i)(?:DHCP Server|Servidor DHCP)[^:]*:\s*(\d{1,3}(?:\.\d{1,3}){3})') {
+                    $matches[1]
+                }
+            }
+        ) | Select-Object -Unique
+    }
+    catch {
+        return @()
+    }
 }
 
 function Get-PrimaryDNS {
@@ -109,7 +193,8 @@ function Get-OpenPathCaptivePortalUpstreamDns {
     #>
     [CmdletBinding()]
     param(
-        [switch]$AfterAdapterReset
+        [switch]$AfterAdapterReset,
+        [string[]]$ProbeDomains = @()
     )
 
     function New-OpenPathCaptivePortalUpstreamCandidate {
@@ -127,6 +212,23 @@ function Get-OpenPathCaptivePortalUpstreamDns {
             UsableForLimited = [bool]$UsableForLimited
             PreReset = (-not [bool]$AfterAdapterReset)
         }
+    }
+
+    $limitedProbeDomains = @(
+        @($ProbeDomains) |
+            ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -Unique
+    )
+
+    function Test-OpenPathCaptivePortalLimitedUpstream {
+        param([Parameter(Mandatory = $true)][string]$Address)
+
+        if ($limitedProbeDomains.Count -le 0) {
+            return $true
+        }
+
+        return [bool](Test-OpenPathDnsServerForDomains -Server $Address -ProbeDomains $limitedProbeDomains)
     }
 
     $adapterDnsCandidates = @()
@@ -160,11 +262,62 @@ function Get-OpenPathCaptivePortalUpstreamDns {
     }
 
     if ($adapterDnsCandidates.Count -gt 0) {
-        return (New-OpenPathCaptivePortalUpstreamCandidate `
-                -Address $adapterDnsCandidates[0] `
-                -Source 'active-adapter-dns' `
-                -Verified:$false `
-                -UsableForLimited:$true)
+        foreach ($candidate in @($adapterDnsCandidates)) {
+            $usableForLimited = Test-OpenPathCaptivePortalLimitedUpstream -Address ([string]$candidate)
+            if ($usableForLimited) {
+                return (New-OpenPathCaptivePortalUpstreamCandidate `
+                        -Address ([string]$candidate) `
+                        -Source 'active-adapter-dns' `
+                        -Verified:($limitedProbeDomains.Count -gt 0) `
+                        -UsableForLimited:$true)
+            }
+        }
+
+        if ($limitedProbeDomains.Count -le 0) {
+            return (New-OpenPathCaptivePortalUpstreamCandidate `
+                    -Address $adapterDnsCandidates[0] `
+                    -Source 'active-adapter-dns' `
+                    -Verified:$false `
+                    -UsableForLimited:$true)
+        }
+    }
+
+    foreach ($candidate in @(Get-OpenPathCaptivePortalOriginalDnsCandidates)) {
+        $usableForLimited = Test-OpenPathCaptivePortalLimitedUpstream -Address ([string]$candidate)
+        if ($usableForLimited) {
+            return (New-OpenPathCaptivePortalUpstreamCandidate `
+                    -Address ([string]$candidate) `
+                    -Source 'original-dns' `
+                    -Verified:($limitedProbeDomains.Count -gt 0) `
+                    -UsableForLimited:$true)
+        }
+
+        if ($limitedProbeDomains.Count -le 0) {
+            return (New-OpenPathCaptivePortalUpstreamCandidate `
+                    -Address ([string]$candidate) `
+                    -Source 'original-dns' `
+                    -Verified:$false `
+                    -UsableForLimited:$true)
+        }
+    }
+
+    foreach ($candidate in @(Get-OpenPathCaptivePortalDhcpServerCandidates)) {
+        $usableForLimited = Test-OpenPathCaptivePortalLimitedUpstream -Address ([string]$candidate)
+        if ($usableForLimited) {
+            return (New-OpenPathCaptivePortalUpstreamCandidate `
+                    -Address ([string]$candidate) `
+                    -Source 'dhcp-server' `
+                    -Verified:($limitedProbeDomains.Count -gt 0) `
+                    -UsableForLimited:$true)
+        }
+
+        if ($limitedProbeDomains.Count -le 0) {
+            return (New-OpenPathCaptivePortalUpstreamCandidate `
+                    -Address ([string]$candidate) `
+                    -Source 'dhcp-server' `
+                    -Verified:$false `
+                    -UsableForLimited:$true)
+        }
     }
 
     try {
@@ -179,12 +332,23 @@ function Get-OpenPathCaptivePortalUpstreamDns {
                 Select-Object -First 1
         ).NextHop
         if ($gateway) {
+            if ($limitedProbeDomains.Count -gt 0) {
+                $portalVerified = Test-OpenPathCaptivePortalLimitedUpstream -Address ([string]$gateway)
+                if ($portalVerified) {
+                    return (New-OpenPathCaptivePortalUpstreamCandidate `
+                            -Address ([string]$gateway) `
+                            -Source 'gateway' `
+                            -Verified:$true `
+                            -UsableForLimited:$true)
+                }
+            }
+
             $verified = Test-DirectDnsServer -Server ([string]$gateway)
             return (New-OpenPathCaptivePortalUpstreamCandidate `
                     -Address ([string]$gateway) `
                     -Source 'gateway' `
                     -Verified:$verified `
-                    -UsableForLimited:$true)
+                    -UsableForLimited:($limitedProbeDomains.Count -le 0))
         }
     }
     catch {
@@ -195,11 +359,22 @@ function Get-OpenPathCaptivePortalUpstreamDns {
         $primaryDns = [string](Get-PrimaryDNS)
         if ($primaryDns -and $primaryDns -notin @('127.0.0.1', '0.0.0.0')) {
             $isPublicFallback = $primaryDns -in @('8.8.8.8', '1.1.1.1', '9.9.9.9', '8.8.4.4')
+            if ($limitedProbeDomains.Count -gt 0) {
+                $portalVerified = Test-OpenPathCaptivePortalLimitedUpstream -Address $primaryDns
+                if ($portalVerified) {
+                    return (New-OpenPathCaptivePortalUpstreamCandidate `
+                            -Address $primaryDns `
+                            -Source $(if ($isPublicFallback) { 'fallback' } else { 'primary-dns' }) `
+                            -Verified:$true `
+                            -UsableForLimited:$true)
+                }
+            }
+
             return (New-OpenPathCaptivePortalUpstreamCandidate `
                     -Address $primaryDns `
                     -Source $(if ($isPublicFallback) { 'fallback' } else { 'primary-dns' }) `
                     -Verified:(-not $isPublicFallback) `
-                    -UsableForLimited:(-not $isPublicFallback))
+                    -UsableForLimited:(($limitedProbeDomains.Count -le 0) -and (-not $isPublicFallback)))
         }
     }
     catch {

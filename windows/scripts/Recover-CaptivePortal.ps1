@@ -263,14 +263,18 @@ function Get-OpenPathCaptivePortalRecoveryMarkerSummary {
     $configuredCaptivePortalDomains = @(Get-OpenPathRecoveryConfiguredCaptivePortalDomains)
     $configuredCaptivePortalDomainsApplied = Test-OpenPathRecoveryConfiguredCaptivePortalDomainsApplied -AllowedHosts $allowedHosts -ConfiguredCaptivePortalDomains $configuredCaptivePortalDomains
     $effectiveHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($allowedHosts) + @($bootstrapHosts) + @($redirectHosts) + @($resourceHosts) + @($observedRuntimeHosts) + @($configuredCaptivePortalDomains)))
-    $allEffectiveHostsInstalled = $true
-    foreach ($hostName in @($effectiveHosts)) {
+    $declaredRecoveryHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($TriggerHost) + @($configuredCaptivePortalDomains)))
+    if ($declaredRecoveryHosts.Count -le 0) {
+        $declaredRecoveryHosts = @($allowedHosts)
+    }
+    $declaredRecoveryHostsApplied = ($declaredRecoveryHosts.Count -gt 0)
+    foreach ($hostName in @($declaredRecoveryHosts)) {
         if ($allowedHosts -notcontains $hostName) {
-            $allEffectiveHostsInstalled = $false
+            $declaredRecoveryHostsApplied = $false
             break
         }
     }
-    $limitedModeReady = ($mode -eq 'limited' -and $recoveryHostsApplied -and -not $discoveryTruncated -and @($pendingRuntimeHosts).Count -eq 0 -and $allEffectiveHostsInstalled)
+    $limitedModeReady = ($mode -eq 'limited' -and $recoveryHostsApplied -and $declaredRecoveryHostsApplied -and $configuredCaptivePortalDomainsApplied)
     if (-not ($Marker -and $Marker.PSObject.Properties['limitedModeReady'] -and [bool]$Marker.limitedModeReady)) {
         $limitedModeReady = $false
     }
@@ -327,19 +331,8 @@ function Test-OpenPathRecentCaptivePortalRecoverySuccessEligible {
         return $false
     }
 
-    if ($payload.PSObject.Properties['discoveryTruncated'] -and [bool]$payload.discoveryTruncated) {
-        return $false
-    }
-
     if ($payload.PSObject.Properties['fallbackMode'] -and [string]$payload.fallbackMode -eq 'passthrough') {
         return $false
-    }
-
-    if ($payload.PSObject.Properties['pendingRuntimeHosts']) {
-        $pendingRuntimeHosts = @($payload.pendingRuntimeHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if ($pendingRuntimeHosts.Count -gt 0) {
-            return $false
-        }
     }
 
     if ($payload.PSObject.Properties['activeMarkerMode'] -and [string]$payload.activeMarkerMode -eq 'passthrough') {

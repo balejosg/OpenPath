@@ -292,7 +292,50 @@ describe('WEDU captive portal result validator', () => {
     );
   });
 
-  test('rejects target-platform evidence that preinjects WEDU portal hosts', () => {
+  test('accepts target-platform evidence without dynamic discovery diagnostics', () => {
+    const declaredHostResult = baseResult({
+      bootstrapHosts: ['nce.wedu.comunidad.madrid'],
+      redirectHosts: [],
+      resourceHosts: [],
+      observedRuntimeHosts: [],
+      pendingRuntimeHosts: ['assets.wedu-lab.test'],
+      discoveryTruncated: true,
+      nativeRecovery: {
+        ...baseResult().nativeRecovery,
+        triggerHost: 'nce.wedu.comunidad.madrid',
+        portalRecoveryHosts: ['nce.wedu.comunidad.madrid'],
+        bootstrapHosts: ['nce.wedu.comunidad.madrid'],
+        redirectHosts: [],
+        resourceHosts: [],
+        observedRuntimeHosts: [],
+        pendingRuntimeHosts: ['assets.wedu-lab.test'],
+        discoveryTruncated: true,
+        effectiveExactHosts: ['nce.wedu.comunidad.madrid'],
+        allowedHosts: ['nce.wedu.comunidad.madrid'],
+      },
+    });
+
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': declaredHostResult,
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles({
+        browserLimited: {
+          bootstrapHosts: ['nce.wedu.comunidad.madrid'],
+          redirectHosts: [],
+          resourceHosts: [],
+          observedRuntimeHosts: [],
+          pendingRuntimeHosts: ['assets.wedu-lab.test'],
+          discoveryTruncated: true,
+        },
+      }),
+    });
+
+    assert.doesNotThrow(() =>
+      assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' })
+    );
+  });
+
+  test('accepts target-platform evidence with declared WEDU portal hosts', () => {
     const artifactDir = makeArtifactDir({
       'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
         nativeRecovery: {
@@ -309,13 +352,12 @@ describe('WEDU captive portal result validator', () => {
       ...targetPlatformFiles(),
     });
 
-    assert.throws(
-      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
-      /nativeRecovery\.portalRecoveryHosts must not preinject/
+    assert.doesNotThrow(() =>
+      assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' })
     );
   });
 
-  test('rejects target-platform evidence missing dynamically discovered WEDU hosts', () => {
+  test('accepts target-platform evidence missing dynamically discovered WEDU hosts', () => {
     const artifactDir = makeArtifactDir({
       'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
         nativeRecovery: {
@@ -328,13 +370,12 @@ describe('WEDU captive portal result validator', () => {
       ...targetPlatformFiles(),
     });
 
-    assert.throws(
-      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
-      /nativeRecovery\.effectiveExactHosts must include assets\.wedu-lab\.test/
+    assert.doesNotThrow(() =>
+      assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' })
     );
   });
 
-  test('rejects target-platform evidence that mixes discovered hosts into bootstrapHosts', () => {
+  test('accepts target-platform evidence with dynamic hosts retained as diagnostics', () => {
     const artifactDir = makeArtifactDir({
       'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
         bootstrapHosts: [
@@ -347,9 +388,8 @@ describe('WEDU captive portal result validator', () => {
       ...targetPlatformFiles(),
     });
 
-    assert.throws(
-      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
-      /bootstrapHosts must not include redirect\/resource hosts/
+    assert.doesNotThrow(() =>
+      assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' })
     );
   });
 

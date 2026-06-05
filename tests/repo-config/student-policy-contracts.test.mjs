@@ -1445,15 +1445,17 @@ describe('repository verification contract', () => {
         dnsConfigModule.includes("-Key 'IP2' -Value '::1'"),
       'Set-AcrylicConfiguration should explicitly allow local loopback requests in [AllowedAddressesSection]'
     );
-    assert.match(
-      acrylicConfigWriter,
-      /Set-Content -Path \$Path -Value \$Content -Encoding ASCII -Force/,
-      'Update-AcrylicHost should write AcrylicHosts.txt without a UTF-8 BOM so Acrylic can parse it'
+    assert.ok(
+      acrylicConfigWriter.includes('function Write-AcrylicTextFile') &&
+        acrylicConfigWriter.includes(
+          '[System.IO.File]::WriteAllText($tempPath, $Content, [System.Text.Encoding]::ASCII)'
+        ),
+      'Acrylic file writes should use explicit ASCII encoding so Acrylic can parse hosts and [GlobalSection] without a UTF-8 BOM'
     );
-    assert.match(
-      acrylicConfigWriter,
-      /Set-Content -Path \$Path -Value \$Content -Encoding ASCII -Force/,
-      'Set-AcrylicConfiguration should write AcrylicConfiguration.ini without a UTF-8 BOM so Acrylic can parse [GlobalSection]'
+    assert.ok(
+      acrylicConfigWriter.includes('Move-Item -LiteralPath $tempPath -Destination $Path -Force') &&
+        acrylicConfigWriter.includes('Refusing to write blank $Description'),
+      'Acrylic file writes should reject blank content and replace from a temporary file instead of truncating the destination directly'
     );
   });
 

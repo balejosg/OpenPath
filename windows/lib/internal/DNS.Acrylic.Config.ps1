@@ -132,7 +132,23 @@ function Set-AcrylicConfiguration {
     ) | Select-Object -Unique
     $domainAffinityMask = ($affinityMaskEntries -join ';')
 
-    $iniContent = if (Test-Path $configPath) { Get-Content $configPath -Raw } else { "" }
+    $existingIniContent = $null
+    try {
+        if (Test-Path $configPath -ErrorAction SilentlyContinue) {
+            $existingIniContent = Get-Content $configPath -Raw -ErrorAction Stop
+        }
+    }
+    catch {
+        Write-OpenPathLog "AcrylicConfiguration.ini is unreadable; rebuilding required resolver defaults: $_" -Level WARN
+        $existingIniContent = $null
+    }
+
+    $iniContent = if ([string]::IsNullOrWhiteSpace([string]$existingIniContent)) {
+        "[GlobalSection]`n"
+    }
+    else {
+        [string]$existingIniContent
+    }
     if ($iniContent -notmatch '(?m)^\[GlobalSection\]\s*$') {
         $iniContent = "[GlobalSection]`n$iniContent"
     }

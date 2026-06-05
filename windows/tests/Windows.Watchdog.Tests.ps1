@@ -244,7 +244,7 @@ Describe "Watchdog Script" {
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
                 '$marker.mode -eq ''passthrough''',
                 'New-OpenPathLimitedCaptivePortalHostsDefinition',
-                'Set-Content -Path $hostsPath',
+                'Write-AcrylicHostsFile -Path $hostsPath -Content $content',
                 'Set-OpenPathCaptivePortalMarker -State $State -Mode limited',
                 'CAPTIVE PORTAL RECOVERY'
             )
@@ -523,7 +523,7 @@ Describe "Watchdog Script" {
             )
         }
 
-        It "Includes bootstrap and runtime overlay hosts in limited Acrylic rendering before NX block" {
+        It "Renders limited Acrylic from declared captive portal hosts before NX block" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
@@ -532,15 +532,9 @@ Describe "Watchdog Script" {
             $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
 
             Assert-ContentContainsAll -Content $enableBody -Needles @(
-                'Get-OpenPathCaptivePortalDynamicHosts',
-                'Get-OpenPathCaptivePortalBootstrapSeedUrls',
-                '$dynamicHosts.bootstrapHosts',
-                '$dynamicHosts.redirectHosts',
-                '$dynamicHosts.resourceHosts',
-                '$dynamicHosts.observedRuntimeHosts',
-                '$dynamicHosts.pendingRuntimeHosts',
-                '$dynamicHosts.discoveryTruncated',
-                '-FetchSeedUrls',
+                '$baseRecoveryHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($existingHosts) + @($AllowedHosts) + @($configuredCaptivePortalDomains)))',
+                '$renderedHosts = @($baseRecoveryHosts)',
+                'New-OpenPathLimitedCaptivePortalHostsDefinition -PortalRecoveryDomains $renderedHosts',
                 'Set-OpenPathCaptivePortalMarker -State $State -Mode limited',
                 '-BootstrapHosts',
                 '-RedirectHosts',
@@ -551,9 +545,11 @@ Describe "Watchdog Script" {
                 '-FallbackMode'
             )
 
-            $enableBody.IndexOf('$dynamicHosts.bootstrapHosts') |
+            $enableBody | Should -Not -Match 'Get-OpenPathCaptivePortalDynamicHosts'
+            $enableBody | Should -Not -Match 'Get-OpenPathCaptivePortalBootstrapHosts'
+            $enableBody.IndexOf('$baseRecoveryHosts = @(Get-OpenPathCaptivePortalAllowedHosts') |
                 Should -BeLessThan $enableBody.IndexOf('New-OpenPathLimitedCaptivePortalHostsDefinition')
-            $enableBody.IndexOf('$dynamicHosts.observedRuntimeHosts') |
+            $enableBody.IndexOf('$renderedHosts = @($baseRecoveryHosts)') |
                 Should -BeLessThan $enableBody.IndexOf('New-OpenPathLimitedCaptivePortalHostsDefinition')
         }
 
@@ -607,7 +603,7 @@ Describe "Watchdog Script" {
             $marker.configuredCaptivePortalDomainsApplied | Should -BeTrue
         }
 
-        It "Performs a bounded second limited-mode render after initial Acrylic bootstrap discovery" {
+        It "Performs one limited-mode render without bootstrap discovery promotion" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
@@ -616,20 +612,21 @@ Describe "Watchdog Script" {
             $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
 
             Assert-ContentContainsAll -Content $enableBody -Needles @(
-                '$script:CaptivePortalBootstrapMaxIterations',
-                'for ($bootstrapIteration = 0',
-                'Get-OpenPathCaptivePortalBootstrapHosts',
-                '$bootstrapDiscovery.redirectHosts',
-                '$bootstrapDiscovery.resourceHosts',
-                '$bootstrapDiscovery.truncated',
+                '$renderedHosts = @($baseRecoveryHosts)',
+                'New-OpenPathLimitedCaptivePortalHostsDefinition -PortalRecoveryDomains $renderedHosts',
+                'Restart-AcrylicService -TimeoutSeconds $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds -SkipBatchFallback',
+                'Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $renderedHosts',
                 '$limitedModeReady = (',
                 '-LimitedModeReady $limitedModeReady'
             )
 
-            $enableBody | Should -Match '(?s)for \(\$bootstrapIteration = 0.*?New-OpenPathLimitedCaptivePortalHostsDefinition.*?Restart-AcrylicService.*?Get-OpenPathCaptivePortalBootstrapHosts'
+            $enableBody | Should -Not -Match 'for \(\$bootstrapIteration = 0'
+            $enableBody | Should -Not -Match 'Get-OpenPathCaptivePortalBootstrapHosts'
+            $enableBody.IndexOf('New-OpenPathLimitedCaptivePortalHostsDefinition') |
+                Should -BeLessThan $enableBody.IndexOf('Restart-AcrylicService -TimeoutSeconds $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds -SkipBatchFallback')
         }
 
-        It "Does not mark limited mode ready when final bootstrap discovery was not rendered" {
+        It "Marks limited mode ready only when declared recovery hosts are rendered" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
@@ -638,12 +635,12 @@ Describe "Watchdog Script" {
             $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
 
             Assert-ContentContainsAll -Content $enableBody -Needles @(
-                '$renderedHosts = @($mergedHosts)',
-                '$pendingDiscoveredHostsAfterRender',
-                '$hostName -notin $renderedHosts',
+                '$declaredRecoveryHostsApplied = ($baseRecoveryHosts.Count -gt 0)',
+                'foreach ($hostName in @($baseRecoveryHosts))',
                 '$allowedMarkerHosts = @($renderedHosts)',
-                '@($pendingDiscoveredHostsAfterRender).Count -eq 0'
+                '$limitedModeReady = ($declaredRecoveryHostsApplied -and $configuredCaptivePortalDomainsApplied)'
             )
+            $enableBody | Should -Not -Match 'pendingDiscoveredHostsAfterRender'
         }
 
         It "Bounds limited portal Acrylic restart and DNS protection verification inside native host budget" {
@@ -666,6 +663,108 @@ Describe "Watchdog Script" {
             $enableBody.IndexOf('Restart-AcrylicService -TimeoutSeconds $script:CaptivePortalLimitedModeServiceRestartTimeoutSeconds -SkipBatchFallback') |
                 Should -BeLessThan $enableBody.IndexOf('Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $renderedHosts')
             $enableBody | Should -Match '(?s)if \(-not \(\[bool\]\$restartSucceeded\)\).*?Restore-OpenPathLimitedCaptivePortalAttempt.*?return \$false'
+        }
+
+        It "Falls back to bounded passthrough when exact-host limited DNS cannot resolve the portal" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
+            $definitionStart = $moduleContent.IndexOf('function New-OpenPathLimitedCaptivePortalHostsDefinition')
+            $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
+
+            Assert-ContentContainsAll -Content $enableBody -Needles @(
+                'captive portal limited mode verification failed; falling back to bounded passthrough',
+                'Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $Marker -ForcePassthrough'
+            )
+            $limitedVerificationIndex = $enableBody.IndexOf('Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $renderedHosts')
+            $fallbackIndex = $enableBody.LastIndexOf('Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $Marker -ForcePassthrough')
+            $limitedVerificationIndex | Should -BeLessThan $fallbackIndex
+        }
+
+        It "Forces passthrough instead of preserving a failed limited marker after limited DNS verification fails" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $passthroughStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalPassthroughMode')
+            $limitedStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
+            $passthroughBody = $moduleContent.Substring($passthroughStart, $limitedStart - $passthroughStart)
+            $limitedBody = $moduleContent.Substring($limitedStart, $moduleContent.IndexOf('function New-OpenPathLimitedCaptivePortalHostsDefinition') - $limitedStart)
+
+            Assert-ContentContainsAll -Content $passthroughBody -Needles @(
+                '[switch]$ForcePassthrough',
+                'if (-not $ForcePassthrough -and $ExistingMarker -and (Get-OpenPathCaptivePortalMarkerMode -Marker $ExistingMarker) -eq ''limited'')'
+            )
+            Assert-ContentContainsAll -Content $limitedBody -Needles @(
+                'Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $Marker -ForcePassthrough'
+            )
+        }
+
+        It "Routes limited portal Acrylic writes through the shared atomic writer under the policy lock" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+            $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
+            $definitionStart = $moduleContent.IndexOf('function New-OpenPathLimitedCaptivePortalHostsDefinition')
+            $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                "internal\AcrylicConfigWriter.ps1",
+                'Write-AcrylicConfigFile -Path $configPath -Content $iniContent'
+            )
+            Assert-ContentContainsAll -Content $enableBody -Needles @(
+                'Invoke-AcrylicPolicyStateLocked -Action',
+                'Write-AcrylicHostsFile -Path $hostsPath -Content $content',
+                'Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns ([string]$upstream.Address) -SkipPolicyStateLock'
+            )
+            $enableBody | Should -Not -Match 'Set-Content -Path \$hostsPath'
+        }
+
+        It "Falls back when the global Acrylic policy mutex is inaccessible" {
+            $writerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "AcrylicConfigWriter.ps1"
+            $writerContent = Get-Content $writerPath -Raw
+
+            Assert-ContentContainsAll -Content $writerContent -Needles @(
+                'Invoke-AcrylicPolicyStateFallbackLocked',
+                'UnauthorizedAccessException',
+                'OpenPathPolicyStateLock.fallback.lock',
+                'Acrylic policy global mutex unavailable; using fallback file lock'
+            )
+        }
+
+        It "Rebuilds limited mode Acrylic configuration from an empty ini file" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $module = Import-Module $modulePath -Force -PassThru
+            $acrylicPath = Join-Path $TestDrive "Acrylic-limited-empty"
+            New-Item -ItemType Directory -Path $acrylicPath -Force | Out-Null
+            $configPath = Join-Path $acrylicPath 'AcrylicConfiguration.ini'
+            '' | Set-Content -Path $configPath -Encoding ASCII
+
+            $configContent = & $module {
+                param([string]$AcrylicPath)
+
+                function Get-AcrylicPath { return $AcrylicPath }
+                function Write-OpenPathLog { param([string]$Message, [string]$Level = 'INFO') }
+
+                Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns '192.0.2.53' | Should -BeTrue
+                Get-Content -Path (Join-Path $AcrylicPath 'AcrylicConfiguration.ini') -Raw
+            } $acrylicPath
+
+            Assert-ContentContainsAll -Content $configContent -Needles @(
+                '[GlobalSection]',
+                'PrimaryServerAddress=192.0.2.53',
+                'SecondaryServerAddress=192.0.2.53',
+                'PrimaryServerPort=53',
+                'SecondaryServerPort=53',
+                'LocalIPv4BindingAddress=0.0.0.0',
+                'LocalIPv4BindingPort=53',
+                'PrimaryServerDomainNameAffinityMask=',
+                'SecondaryServerDomainNameAffinityMask=',
+                'IgnoreNegativeResponsesFromPrimaryServer=No',
+                'AddressCacheDisabled=No',
+                '[AllowedAddressesSection]',
+                'IP1=127.*',
+                'IP2=::1'
+            )
         }
 
         It "Treats transport failures as captive portal when local IPv4 network evidence exists" {
@@ -735,9 +834,12 @@ Describe "Watchdog Script" {
             $protectionBody = $moduleContent.Substring($protectionStart, $restoreStart - $protectionStart)
 
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'function Test-OpenPathLimitedCaptivePortalDnsResolution',
                 'function Test-OpenPathLimitedCaptivePortalRecoveryHost',
                 'Test-OpenPathLimitedCaptivePortalRecoveryHost -Domain $recoveryHost',
+                'Test-OpenPathLimitedCaptivePortalDnsResolution -Domain $Domain',
                 'Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $renderedHosts',
+                'Resolve-OpenPathDnsWithRetry -Domain $Domain -Server ''127.0.0.1''',
                 'Get-AcrylicExactForwardRule -Domain $Domain',
                 '$match.Index -lt $defaultBlockIndex'
             )
@@ -745,7 +847,9 @@ Describe "Watchdog Script" {
                 '[string[]]$PortalRecoveryDomains = @()',
                 'Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains',
                 '$recoveryHost',
-                'NX \*'
+                'NX \*',
+                '-DnsMaxAttempts $DnsMaxAttempts',
+                '-DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds'
             )
             Assert-ContentContainsAll -Content $protectionBody -Needles @(
                 'Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains',
@@ -849,6 +953,28 @@ Describe "Watchdog Script" {
                 'protectedModeRestored',
                 'markerCleared'
             )
+        }
+
+        It "Refreshes limited portal mode instead of restoring protected mode while the portal is still detected" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $helperContent = Get-Content $helperPath -Raw
+            $moduleContent = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                '[switch]$SkipExpiredRestore',
+                'if ($SkipExpiredRestore) { return $true }'
+            )
+            Assert-ContentContainsAll -Content $helperContent -Needles @(
+                'Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore',
+                '$portalModeActive -and $markerMode -eq ''limited'' -and $captiveState -eq ''Portal''',
+                '$portalRecoveryHosts = @($activeMarker.allowedHosts',
+                'Enable-OpenPathCaptivePortalMode -State $captiveState -PortalRecoveryDomains $portalRecoveryHosts'
+            )
+            $helperContent.IndexOf('Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore') |
+                Should -BeLessThan $helperContent.IndexOf('Test-OpenPathCaptivePortalState -TimeoutSec 3')
+            $helperContent.IndexOf('$portalModeActive -and $markerMode -eq ''limited'' -and $captiveState -eq ''Portal''') |
+                Should -BeLessThan $helperContent.IndexOf('$portalObservation.ShouldEnterPortal')
         }
 
         It "Runs passthrough emergency checks even when protected mode checks are otherwise skipped" {

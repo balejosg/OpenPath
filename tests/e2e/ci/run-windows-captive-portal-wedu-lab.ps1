@@ -1285,29 +1285,21 @@ function Invoke-WeduLabRun {
     if ($effectiveExactHosts.Count -eq 0) {
         $effectiveExactHosts = @($allowedHosts)
     }
-    if ($effectiveExactHosts.Count -eq 0) {
-        $effectiveExactHosts = @($bootstrapHosts + $observedRuntimeHosts | Select-Object -Unique)
-    }
     $discoveryTruncated = [bool]$nativeRecovery.discoveryTruncated
     $fallbackMode = if ($nativeRecovery.fallbackMode) { [string]$nativeRecovery.fallbackMode } else { '' }
     $nativeLimitedModeReady = [bool]$nativeRecovery.limitedModeReady
     $nativeRecoveryHostsApplied = [bool]$nativeRecovery.recoveryHostsApplied
-    $allEffectiveExactHostsInstalled = [bool](
+    $declaredLimitedHostsInstalled = [bool](
+        @($bootstrapHosts).Count -gt 0 -and
         @($effectiveExactHosts).Count -gt 0 -and
         @($bootstrapHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
-        @($redirectHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
-        @($resourceHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
-        @($observedRuntimeHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
         @($effectiveExactHosts | Where-Object { $_ -notin $allowedHosts }).Count -eq 0
     )
     $limitedModeReady = [bool](
         $nativeLimitedModeReady -and
         $nativeRecoveryHostsApplied -and
         $activeMarkerMode -eq 'limited' -and
-        @($bootstrapHosts).Count -gt 0 -and
-        -not $discoveryTruncated -and
-        @($pendingRuntimeHosts).Count -eq 0 -and
-        $allEffectiveExactHostsInstalled
+        $declaredLimitedHostsInstalled
     )
     $browserPayload = [pscustomobject]@{
         browserLimited = $browserLimited

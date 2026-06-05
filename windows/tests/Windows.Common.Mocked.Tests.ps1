@@ -295,6 +295,28 @@ download.mozilla.org/firefox/releases
             $dns.PreReset | Should -BeFalse
         }
 
+        It "Prefers the resolver that can resolve the configured captive portal domain" {
+            Mock Get-NetAdapter {
+                @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 })
+            } -ModuleName Common
+            Mock Get-DnsClientServerAddress {
+                @([PSCustomObject]@{ InterfaceIndex = 7; ServerAddresses = @('10.74.175.78') })
+            } -ModuleName Common
+            Mock Get-NetRoute {
+                @([PSCustomObject]@{ InterfaceIndex = 7; NextHop = '10.112.248.1' })
+            } -ModuleName Common
+            Mock Resolve-DnsName { @([PSCustomObject]@{ IPAddress = '142.250.184.14' }) } -ModuleName Common -ParameterFilter { $Server -eq '10.74.175.78' -and $Name -eq 'google.com' }
+            Mock Resolve-DnsName { throw 'portal not known by static DNS' } -ModuleName Common -ParameterFilter { $Server -eq '10.74.175.78' -and $Name -eq 'nce.wedu.comunidad.madrid' }
+            Mock Resolve-DnsName { @([PSCustomObject]@{ IPAddress = '10.112.248.1' }) } -ModuleName Common -ParameterFilter { $Server -eq '10.112.248.1' -and $Name -eq 'nce.wedu.comunidad.madrid' }
+
+            $dns = Get-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset -ProbeDomains @('nce.wedu.comunidad.madrid')
+
+            $dns.Address | Should -Be '10.112.248.1'
+            $dns.Source | Should -Be 'gateway'
+            $dns.Verified | Should -BeTrue
+            $dns.UsableForLimited | Should -BeTrue
+        }
+
         It "Falls back to gateway as unverified but usable for limited mode when no adapter DNS is visible" {
             Mock Get-NetAdapter {
                 @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 })
@@ -356,20 +378,28 @@ download.mozilla.org/firefox/releases
                 return @{ result = @{ data = @{ json = @{ ok = $true } } } }
             } -ModuleName Common
 
-            $result = Send-OpenPathHealthReport -Status 'DEGRADED' -DnsServiceRunning:$true -DnsResolving:$false -FailCount 2 -Actions 'watchdog_repair' -Version '4.1.0'
-            $result | Should -BeTrue
+            $previousComputerName = $env:COMPUTERNAME
+            try {
+                $env:COMPUTERNAME = 'OPENPATH-TEST'
 
-            $script:capturedUri | Should -Be 'https://api.example.com/trpc/healthReports.submit'
-            $script:capturedHeaders['Authorization'] | Should -Be 'Bearer token123'
+                $result = Send-OpenPathHealthReport -Status 'DEGRADED' -DnsServiceRunning:$true -DnsResolving:$false -FailCount 2 -Actions 'watchdog_repair' -Version '4.1.0'
+                $result | Should -BeTrue
 
-            $payload = $script:capturedBody | ConvertFrom-Json
-            $payload.json.status | Should -Be 'DEGRADED'
-            $payload.json.hostname | Should -Not -BeNullOrEmpty
-            $payload.json.dnsmasqRunning | Should -BeTrue
-            $payload.json.dnsResolving | Should -BeFalse
-            $payload.json.failCount | Should -Be 2
-            $payload.json.actions | Should -Be 'watchdog_repair'
-            $payload.json.version | Should -Be '4.1.0'
+                $script:capturedUri | Should -Be 'https://api.example.com/trpc/healthReports.submit'
+                $script:capturedHeaders['Authorization'] | Should -Be 'Bearer token123'
+
+                $payload = $script:capturedBody | ConvertFrom-Json
+                $payload.json.status | Should -Be 'DEGRADED'
+                $payload.json.hostname | Should -Be 'OPENPATH-TEST'
+                $payload.json.dnsmasqRunning | Should -BeTrue
+                $payload.json.dnsResolving | Should -BeFalse
+                $payload.json.failCount | Should -Be 2
+                $payload.json.actions | Should -Be 'watchdog_repair'
+                $payload.json.version | Should -Be '4.1.0'
+            }
+            finally {
+                $env:COMPUTERNAME = $previousComputerName
+            }
         }
 
         It "Returns false when apiUrl is missing in config" {
@@ -390,7 +420,7 @@ download.mozilla.org/firefox/releases
 
     Context "Restore-OpenPathLatestCheckpoint" {
         It "Restores checkpoint whitelist and reapplies DNS controls" {
-            $tempDir = Join-Path $env:TEMP ("openpath-checkpoint-" + [Guid]::NewGuid().ToString())
+            $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-checkpoint-" + [Guid]::NewGuid().ToString())
             $checkpointDir = Join-Path $tempDir 'checkpoint-001'
             $checkpointWhitelistPath = Join-Path $checkpointDir 'whitelist.txt'
             $targetWhitelistPath = Join-Path $tempDir 'whitelist.txt'
@@ -442,7 +472,7 @@ download.mozilla.org/firefox/releases
         }
 
         It "Returns failure when checkpoint whitelist has no valid domains" {
-            $tempDir = Join-Path $env:TEMP ("openpath-checkpoint-invalid-" + [Guid]::NewGuid().ToString())
+            $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-checkpoint-invalid-" + [Guid]::NewGuid().ToString())
             $checkpointDir = Join-Path $tempDir 'checkpoint-001'
             $checkpointWhitelistPath = Join-Path $checkpointDir 'whitelist.txt'
             $targetWhitelistPath = Join-Path $tempDir 'whitelist.txt'

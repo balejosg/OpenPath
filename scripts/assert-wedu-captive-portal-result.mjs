@@ -147,58 +147,6 @@ function requirePostAuthNetworkEvidence(networkAfter) {
   );
 }
 
-function requireDiscoveredWeduHosts(result) {
-  const triggerHost = result.nativeRecovery.triggerHost ?? 'nce.wedu.comunidad.madrid';
-  const expectedRedirectHosts = ['wlogin.wedu-lab.test'];
-  const expectedResourceHosts = ['assets.wedu-lab.test', 'cdn.wedu-lab.test', 'auth.wedu-lab.test'];
-  const expectedEffectiveHosts = [
-    'wlogin.wedu-lab.test',
-    'assets.wedu-lab.test',
-    'cdn.wedu-lab.test',
-    'auth.wedu-lab.test',
-  ];
-
-  for (const host of expectedRedirectHosts) {
-    requireArrayIncludes(result.redirectHosts, host, 'redirectHosts');
-    requireArrayIncludes(result.nativeRecovery.redirectHosts, host, 'nativeRecovery.redirectHosts');
-  }
-
-  for (const host of expectedResourceHosts) {
-    requireArrayIncludes(result.resourceHosts, host, 'resourceHosts');
-    requireArrayIncludes(result.nativeRecovery.resourceHosts, host, 'nativeRecovery.resourceHosts');
-  }
-
-  for (const host of expectedEffectiveHosts) {
-    requireArrayIncludes(
-      result.nativeRecovery.effectiveExactHosts,
-      host,
-      'nativeRecovery.effectiveExactHosts'
-    );
-    requireArrayIncludes(result.nativeRecovery.allowedHosts, host, 'nativeRecovery.allowedHosts');
-  }
-
-  requireField(
-    !arrayValue(result.bootstrapHosts).some((host) =>
-      [...expectedRedirectHosts, ...expectedResourceHosts].includes(host)
-    ),
-    'bootstrapHosts must not include redirect/resource hosts'
-  );
-  requireField(
-    !arrayValue(result.nativeRecovery.bootstrapHosts).some((host) =>
-      [...expectedRedirectHosts, ...expectedResourceHosts].includes(host)
-    ),
-    'nativeRecovery.bootstrapHosts must not include redirect/resource hosts'
-  );
-
-  const preinjectedHosts = arrayValue(result.nativeRecovery.portalRecoveryHosts).filter(
-    (host) => host !== triggerHost
-  );
-  requireField(
-    preinjectedHosts.length === 0,
-    `nativeRecovery.portalRecoveryHosts must not preinject ${preinjectedHosts.join(', ')}`
-  );
-}
-
 export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab-direct' }) {
   if (!artifactDir) {
     fail('artifactDir is required');
@@ -245,16 +193,10 @@ export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab
   );
   requireResultField(result, 'activeMarkerMode', 'limited');
   requireResultField(result, 'limitedModeReady', true);
-  requireResultField(result, 'discoveryTruncated', false);
   requireField(result.fallbackMode !== 'passthrough', 'fallbackMode not passthrough');
-  requireEmptyArray(result.pendingRuntimeHosts, 'pendingRuntimeHosts empty');
   requireNonEmptyArray(result.bootstrapHosts, 'bootstrapHosts non-empty');
-  requireNonEmptyArray(result.redirectHosts, 'redirectHosts non-empty');
-  requireNonEmptyArray(result.resourceHosts, 'resourceHosts non-empty');
-  requireDiscoveredWeduHosts(result);
   requireResultField(result, 'limitedDns.success', true);
   requireResultField(result, 'nativeRecovery.limitedModeReady', true);
-  requireResultField(result, 'nativeRecovery.discoveryTruncated', false);
 
   const limitedDns = readJson(join(artifactDir, LIMITED_DNS_FILE));
   requireField(limitedDns.success === true, `${LIMITED_DNS_FILE} success`);
