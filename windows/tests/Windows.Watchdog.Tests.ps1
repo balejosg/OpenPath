@@ -714,7 +714,7 @@ Describe "Watchdog Script" {
             Assert-ContentContainsAll -Content $enableBody -Needles @(
                 'Invoke-AcrylicPolicyStateLocked -Action',
                 'Write-AcrylicHostsFile -Path $hostsPath -Content $content',
-                'Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns ([string]$upstream.Address) -SkipPolicyStateLock'
+                'Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns ([string]$upstream.Address) -PortalRecoveryDomains $renderedHosts -SkipPolicyStateLock'
             )
             $enableBody | Should -Not -Match 'Set-Content -Path \$hostsPath'
         }
@@ -745,7 +745,7 @@ Describe "Watchdog Script" {
                 function Get-AcrylicPath { return $AcrylicPath }
                 function Write-OpenPathLog { param([string]$Message, [string]$Level = 'INFO') }
 
-                Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns '192.0.2.53' | Should -BeTrue
+                Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns '192.0.2.53' -PortalRecoveryDomains @('nce.127.0.0.1.sslip.io') | Should -BeTrue
                 Get-Content -Path (Join-Path $AcrylicPath 'AcrylicConfiguration.ini') -Raw
             } $acrylicPath
 
@@ -757,8 +757,8 @@ Describe "Watchdog Script" {
                 'SecondaryServerPort=53',
                 'LocalIPv4BindingAddress=0.0.0.0',
                 'LocalIPv4BindingPort=53',
-                'PrimaryServerDomainNameAffinityMask=',
-                'SecondaryServerDomainNameAffinityMask=',
+                'PrimaryServerDomainNameAffinityMask=nce.127.0.0.1.sslip.io',
+                'SecondaryServerDomainNameAffinityMask=nce.127.0.0.1.sslip.io',
                 'IgnoreNegativeResponsesFromPrimaryServer=No',
                 'AddressCacheDisabled=No',
                 '[AllowedAddressesSection]',

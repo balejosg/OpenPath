@@ -1132,7 +1132,7 @@ function Enable-OpenPathCaptivePortalLimitedMode {
     $content = ConvertTo-AcrylicHostsContent -Definition $definition
     $limitedAcrylicUpdated = [bool](Invoke-AcrylicPolicyStateLocked -Action {
         Write-AcrylicHostsFile -Path $hostsPath -Content $content
-        return (Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns ([string]$upstream.Address) -SkipPolicyStateLock)
+        return (Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns ([string]$upstream.Address) -PortalRecoveryDomains $renderedHosts -SkipPolicyStateLock)
     })
     if (-not $limitedAcrylicUpdated) {
         Restore-OpenPathLimitedCaptivePortalAttempt
@@ -1309,12 +1309,13 @@ function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$UpstreamDns,
+        [string[]]$PortalRecoveryDomains = @(),
         [switch]$SkipPolicyStateLock
     )
 
     if (-not $SkipPolicyStateLock) {
         return [bool](Invoke-AcrylicPolicyStateLocked -Action {
-            return (Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns $UpstreamDns -SkipPolicyStateLock)
+            return (Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns $UpstreamDns -PortalRecoveryDomains $PortalRecoveryDomains -SkipPolicyStateLock)
         })
     }
 
@@ -1343,6 +1344,7 @@ function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
         $iniContent = "[GlobalSection]`n$iniContent"
     }
 
+    $recoveryAffinityMask = (@(Get-AcrylicExactAffinityMaskEntries -Domains $PortalRecoveryDomains) | Select-Object -Unique) -join ';'
     $settings = [ordered]@{
         "PrimaryServerAddress" = $UpstreamDns
         "PrimaryServerPort" = "53"
@@ -1358,8 +1360,8 @@ function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
         "LocalIPv6BindingPort" = "53"
         "LocalIPv6BindingEnabledOnWindowsVersionsPriorToWindowsVistaOrWindowsServer2008" = "No"
         "GeneratedResponseTimeToLive" = "300"
-        "PrimaryServerDomainNameAffinityMask" = ""
-        "SecondaryServerDomainNameAffinityMask" = ""
+        "PrimaryServerDomainNameAffinityMask" = $recoveryAffinityMask
+        "SecondaryServerDomainNameAffinityMask" = $recoveryAffinityMask
         "IgnoreFailureResponsesFromPrimaryServer" = "No"
         "IgnoreNegativeResponsesFromPrimaryServer" = "No"
         "IgnoreFailureResponsesFromSecondaryServer" = "No"

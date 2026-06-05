@@ -93,12 +93,7 @@ function Get-AcrylicAffinityMaskEntries {
             }
         }
 
-        if (Test-AcrylicStaticAddressDomain -Domain $normalizedDomain) {
-            $domainEntries = @("*.$normalizedDomain")
-        }
-        else {
-            $domainEntries = if ($hasBlockedDescendant) { @($normalizedDomain) } else { @($normalizedDomain, "*.$normalizedDomain") }
-        }
+        $domainEntries = if ($hasBlockedDescendant) { @($normalizedDomain) } else { @($normalizedDomain, "*.$normalizedDomain") }
         foreach ($entry in $domainEntries) {
             if ($seenEntries.Add($entry)) { [void]$entries.Add($entry) }
         }
@@ -118,7 +113,6 @@ function Get-AcrylicExactAffinityMaskEntries {
         $normalizedDomain = ([string]$domain).Trim().TrimEnd('.')
         if ($normalizedDomain.StartsWith('*.')) { $normalizedDomain = $normalizedDomain.Substring(2) }
         if (-not $normalizedDomain) { continue }
-        if (Test-AcrylicStaticAddressDomain -Domain $normalizedDomain) { continue }
         if ($seenEntries.Add($normalizedDomain)) { [void]$entries.Add($normalizedDomain) }
     }
 
@@ -148,8 +142,6 @@ function Get-AcrylicExactForwardRule {
 
     $normalizedDomain = $Domain.Trim()
     if (-not $normalizedDomain) { return $null }
-    $sslipIpv4Address = Resolve-SslipIpv4Address -Domain $normalizedDomain
-    if ($sslipIpv4Address) { return "$sslipIpv4Address $normalizedDomain" }
     return "FW $normalizedDomain"
 }
 

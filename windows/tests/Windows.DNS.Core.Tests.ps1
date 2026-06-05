@@ -208,8 +208,8 @@ Describe "DNS Module" {
                 $content | Should -Match '# Captive portal infrastructure \(configured\)'
                 $content | Should -Match 'FW login\.example\.test'
                 $content | Should -Match 'FW wifi\.example\.test'
-                $content | Should -Match '127\.0\.0\.1 portal\.127\.0\.0\.1\.sslip\.io'
-                $definition.DomainAffinityMask | Should -Not -Match 'portal\.127\.0\.0\.1\.sslip\.io'
+                $content | Should -Match 'FW portal\.127\.0\.0\.1\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Match 'portal\.127\.0\.0\.1\.sslip\.io'
                 $content.IndexOf('# Captive portal infrastructure (configured)') | Should -BeLessThan $content.IndexOf('NX *')
             }
         }
@@ -747,16 +747,16 @@ Describe "DNS Module" {
                 $content | Should -Match '10\.20\.30\.40 site\.10\.20\.30\.40\.sslip\.io'
                 $content | Should -Match '192\.168\.56\.103 lan\.192-168-56-103\.sslip\.io'
                 $content | Should -Not -Match 'FW portal\.127\.0\.0\.1\.sslip\.io'
-                $definition.DomainAffinityMask | Should -Not -Match '(?<!\*\.)portal\.127\.0\.0\.1\.sslip\.io'
-                $definition.DomainAffinityMask | Should -Not -Match '(?<!\*\.)site\.10\.20\.30\.40\.sslip\.io'
-                $definition.DomainAffinityMask | Should -Not -Match '(?<!\*\.)lan\.192-168-56-103\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Match '(?<!\*\.)portal\.127\.0\.0\.1\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Match '(?<!\*\.)site\.10\.20\.30\.40\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Match '(?<!\*\.)lan\.192-168-56-103\.sslip\.io'
                 $definition.DomainAffinityMask | Should -Match '\*\.portal\.127\.0\.0\.1\.sslip\.io'
                 $definition.DomainAffinityMask | Should -Match '\*\.site\.10\.20\.30\.40\.sslip\.io'
                 $definition.DomainAffinityMask | Should -Match '\*\.lan\.192-168-56-103\.sslip\.io'
             }
         }
 
-        It "Keeps static sslip fixture hosts out of upstream affinity even with blocked descendants" {
+        It "Keeps static sslip fixture hosts exact-only in upstream affinity when descendants are blocked" {
             InModuleScope DNS {
                 $definition = New-AcrylicHostsDefinition `
                     -WhitelistedDomains @('base-only.127.0.0.1.sslip.io') `
@@ -773,13 +773,13 @@ Describe "DNS Module" {
                 $content | Should -Match '(?m)^127\.0\.0\.1 base-only\.127\.0\.0\.1\.sslip\.io$'
                 $content | Should -Match '(?m)^FW /\^\(\?!\(\?:\.\*\\\.\)\?\(\?:cdn\\.base-only\\.127\\.0\\.0\\.1\\.sslip\\.io\)\$\)\.\*\\.base-only\\.127\\.0\\.0\\.1\\.sslip\\.io\$$'
                 $content | Should -Not -Match '(?m)^FW base-only\.127\.0\.0\.1\.sslip\.io$'
-                $definition.DomainAffinityMask | Should -Not -Match '(?<!\*\.)base-only\.127\.0\.0\.1\.sslip\.io'
-                $definition.DomainAffinityMask | Should -Match '\*\.base-only\.127\.0\.0\.1\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Match '(?<!\*\.)base-only\.127\.0\.0\.1\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Not -Match '\*\.base-only\.127\.0\.0\.1\.sslip\.io'
                 $definition.DomainAffinityMask | Should -Not -Match 'cdn\.base-only\.127\.0\.0\.1\.sslip\.io'
             }
         }
 
-        It "Does not forward static sslip fixture hosts through the Acrylic affinity mask" {
+        It "Includes static sslip fixture hosts in the Acrylic affinity mask" {
             $script:capturedAcrylicConfig = $null
 
             Mock Get-AcrylicPath { 'C:\Program Files (x86)\Acrylic DNS Proxy' } -ModuleName DNS
@@ -808,9 +808,10 @@ Describe "DNS Module" {
 
             $result | Should -BeTrue
             $script:capturedAcrylicConfig | Should -Not -BeNullOrEmpty
-            $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*(?:^|[=;])ajax-auto-allow-origin\.127\.0\.0\.1\.sslip\.io(?:;|$)'
-            $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*(?:^|[=;])ajax-auto-allow-font\.127\.0\.0\.1\.sslip\.io(?:;|$)'
-            $script:capturedAcrylicConfig | Should -Not -Match 'SecondaryServerDomainNameAffinityMask=.*(?:^|[=;])ajax-auto-allow-origin\.127\.0\.0\.1\.sslip\.io(?:;|$)'
+            $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*(?:^|[=;])ajax-auto-allow-origin\.127\.0\.0\.1\.sslip\.io(?:;|$)'
+            $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*\*\.ajax-auto-allow-origin\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*(?:^|[=;])ajax-auto-allow-font\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Match 'SecondaryServerDomainNameAffinityMask=.*(?:^|[=;])ajax-auto-allow-origin\.127\.0\.0\.1\.sslip\.io(?:;|$)'
             $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*example\.com;\*\.example\.com'
         }
 
@@ -1032,7 +1033,7 @@ Describe "DNS Module" {
 
             $definition.RuntimeDependencyDomains | Should -Not -Contain 'cdn.base-only.127.0.0.1.sslip.io'
             $definition.DomainAffinityMask | Should -Not -Match 'cdn\.base-only\.127\.0\.0\.1\.sslip\.io'
-            $definition.DomainAffinityMask | Should -Not -Match 'api\.base-only\.127\.0\.0\.1\.sslip\.io'
+            $definition.DomainAffinityMask | Should -Match 'api\.base-only\.127\.0\.0\.1\.sslip\.io'
 
             $result = Set-AcrylicConfiguration `
                 -WhitelistedDomains @('base-only.127.0.0.1.sslip.io') `
@@ -1042,7 +1043,7 @@ Describe "DNS Module" {
             $result | Should -BeTrue
             $script:capturedAcrylicConfig | Should -Not -BeNullOrEmpty
             $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*cdn\.base-only\.127\.0\.0\.1\.sslip\.io'
-            $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*api\.base-only\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*api\.base-only\.127\.0\.0\.1\.sslip\.io'
         }
 
         It "Allows install-time Acrylic configuration before any classroom whitelist exists" {
