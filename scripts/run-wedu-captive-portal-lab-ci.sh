@@ -240,6 +240,13 @@ get_openpath_runner_state() {
   local service_state
   local state
   state="$(get_openpath_runner_state_from_repository_runners)" && {
+    if [ "$state" = "online/busy=true" ]; then
+      busy="$(get_openpath_runner_busy_from_current_repo_jobs)" || return 1
+      if [ "$busy" = "busy=false" ]; then
+        printf 'online/busy=false\n'
+        return 0
+      fi
+    fi
     printf '%s\n' "$state"
     return 0
   }

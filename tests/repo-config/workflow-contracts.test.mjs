@@ -649,6 +649,8 @@ test('WEDU captive portal lab workflow is manual or nightly and restores the sha
       script.includes('get_openpath_runner_state_from_repository_runners') &&
       script.includes('get_openpath_runner_busy_from_current_repo_jobs') &&
       script.includes('get_windows_runner_service_state') &&
+      script.includes('if [ "$state" = "online/busy=true" ]; then') &&
+      script.includes("printf 'online/busy=false\\n'") &&
       script.includes('actions/runs?status=in_progress&per_page=100') &&
       script.includes('actions/runs/${run_id}/jobs?per_page=100') &&
       !script.includes('gh api') &&
