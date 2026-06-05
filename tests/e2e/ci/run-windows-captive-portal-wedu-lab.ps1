@@ -1262,6 +1262,7 @@ function Invoke-WeduLabRun {
     $nativeRecovery = Invoke-NativeHostAction -Message @{
         action = 'recover-captive-portal-navigation'
         triggerHost = $script:WeduHost
+        portalRecoveryHosts = @($script:WeduLimitedHosts)
         tabId = 1
         source = 'wedu-lab-captive'
     } -TimeoutMs $config.nativeHostTimeoutMs
