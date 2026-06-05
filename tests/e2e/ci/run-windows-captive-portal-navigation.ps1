@@ -139,6 +139,7 @@ function Ensure-OpenPathDirectRunnerConfig {
     Ensure-ObjectProperty -InputObject $config -Name 'secondaryDNS' -Value '8.8.4.4'
     Ensure-ObjectProperty -InputObject $config -Name 'enableFirewall' -Value $true
     Ensure-ObjectProperty -InputObject $config -Name 'approvedStudentBrowsers' -Value @('Firefox')
+    Ensure-ObjectProperty -InputObject $config -Name 'captivePortalDomains' -Value @($script:FixtureHost)
 
     $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
     Save-Json -Value (Get-RedactedConfigSnapshot -Config $config) -Path $script:ConfigSnapshotPath
@@ -266,7 +267,7 @@ function Invoke-NativeHostAction {
         -PassThru `
         -WindowStyle Hidden
 
-    $nativeHostTimeoutMs = 90000
+    $nativeHostTimeoutMs = 150000
     if (-not $process.WaitForExit($nativeHostTimeoutMs)) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         throw 'Native host recovery action timed out.'
@@ -497,32 +498,9 @@ function Set-LocalOnlyCaptivePortalRecoveryFixtureState {
     Save-Json -Value $payload -Path $script:FixtureStatePath
 }
 
-function Set-LocalOnlyCaptivePortalRecoveryUpstreamMarker {
+function Clear-LocalOnlyCaptivePortalRecoveryMarker {
     $markerPath = Join-Path (Join-Path $script:InstalledOpenPathRoot 'data') 'captive-portal-active.json'
-    $markerDir = Split-Path $markerPath -Parent
-    New-Item -ItemType Directory -Path $markerDir -Force | Out-Null
-
-    $now = (Get-Date).ToString('o')
-    Save-Json -Value ([pscustomobject]@{
-        active = $true
-        state = 'Portal'
-        mode = 'passthrough'
-        allowedHosts = @()
-        expiresAt = ([DateTime]::UtcNow.AddMinutes(5)).ToString('o')
-        upstreamDns = '8.8.8.8'
-        upstreamDnsSource = 'direct-runner-fixture'
-        upstreamUsableForLimited = $true
-        upstreamVerified = $true
-        dnsResetAt = ''
-        upstreamCapturedAt = $now
-        passthroughEgress = [pscustomobject]@{
-            fixtureOnly = $true
-            reason = 'direct-runner synthetic captive portal navigation'
-        }
-        since = $now
-        updatedAt = $now
-        fixtureDoesNotProveRealWeduCaptiveDns = $true
-    }) -Path $markerPath
+    Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
 }
 
 function Copy-CaptivePortalObservationArtifact {
@@ -934,7 +912,7 @@ function Invoke-CaptivePortalNavigationRun {
             -InstalledRecoveryScriptPath $script:InstalledRecoveryScriptPath
         $environmentSnapshots = Copy-CaptivePortalEnvironmentSnapshots
         Install-LocalOnlyCaptivePortalRecoveryFixture
-        Set-LocalOnlyCaptivePortalRecoveryUpstreamMarker
+        Clear-LocalOnlyCaptivePortalRecoveryMarker
         $nativeResponse = Invoke-NativeHostAction -Message @{
             action = 'recover-captive-portal-navigation'
             triggerHost = $script:FixtureHost

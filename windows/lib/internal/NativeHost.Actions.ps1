@@ -1086,12 +1086,12 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         [Parameter(Mandatory = $true)]
         [object]$Message,
 
-        [int]$TimeoutSeconds = 45
+        [int]$TimeoutSeconds = 90
     )
 
     $action = 'recover-captive-portal-navigation'
     $taskName = 'OpenPath-CaptivePortalRecovery'
-    $boundedTimeoutSeconds = [Math]::Max(1, [Math]::Min(45, $TimeoutSeconds))
+    $boundedTimeoutSeconds = [Math]::Max(1, [Math]::Min(90, $TimeoutSeconds))
     $operation = 'open'
     if ($Message.PSObject.Properties['operation'] -and $Message.operation) {
         $candidateOperation = ([string]$Message.operation).Trim().ToLowerInvariant()

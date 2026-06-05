@@ -629,8 +629,10 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     );
     assert.match(captiveScript, /direct-runner-captive-portal-navigation/);
     assert.match(captiveScript, /recover-captive-portal-navigation/);
-    assert.match(captiveScript, /\$nativeHostTimeoutMs\s*=\s*90000/);
+    assert.match(captiveScript, /\$nativeHostTimeoutMs\s*=\s*150000/);
     assert.match(captiveScript, /WaitForExit\(\$nativeHostTimeoutMs\)/);
+    assert.match(captiveScript, /captivePortalDomains/);
+    assert.match(captiveScript, /Clear-LocalOnlyCaptivePortalRecoveryMarker/);
     assert.match(captiveScript, /captive-portal-active\.json/);
     assert.match(captiveScript, /dnsRecoveredFromAcrylicOnly/);
     assert.match(captiveScript, /nativeRecoveryVerified/);
@@ -659,8 +661,8 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(captiveScript, /markerBeforeAuth/);
     assert.match(captiveScript, /markerAfterAuth/);
     assert.match(captiveScript, /captive-portal-dns-during\.json/);
-    assert.match(captiveScript, /Set-LocalOnlyCaptivePortalRecoveryUpstreamMarker/);
-    assert.match(captiveScript, /upstreamDnsSource = 'direct-runner-fixture'/);
+    assert.doesNotMatch(captiveScript, /Set-LocalOnlyCaptivePortalRecoveryUpstreamMarker/);
+    assert.doesNotMatch(captiveScript, /upstreamDnsSource = 'direct-runner-fixture'/);
     assert.match(
       captiveScript,
       /Invoke-FirefoxRetryObservation[\s\S]*Set-LocalOnlyCaptivePortalRecoveryFixtureState -State Authenticated/
