@@ -1260,6 +1260,12 @@ describe('repository verification contract', () => {
       'Get-AcrylicForwardRules should emit a regex-based FW rule that excludes blocked descendants when needed'
     );
     assert.ok(
+      acrylicHostsModel.includes(
+        '"FW $normalizedDomain", "FW /^(?!(?:.*\\.)?(?:$escapedBlockedPattern)$).*\\.$escapedDomain$"'
+      ),
+      'Get-AcrylicForwardRules should exact-forward static sslip fixture roots when descendants are blocked'
+    );
+    assert.ok(
       !acrylicHostsModel.includes(
         '"FW /^(?!(?:.*\\.)?(?:$escapedBlockedPattern)$).*\\.$escapedDomain$/"'
       ),

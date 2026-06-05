@@ -756,7 +756,7 @@ Describe "DNS Module" {
             }
         }
 
-        It "Keeps static sslip fixture hosts exact-only in upstream affinity when descendants are blocked" {
+        It "Forwards static sslip fixture hosts exactly when descendants are blocked" {
             InModuleScope DNS {
                 $definition = New-AcrylicHostsDefinition `
                     -WhitelistedDomains @('base-only.127.0.0.1.sslip.io') `
@@ -771,8 +771,8 @@ Describe "DNS Module" {
 
                 $content | Should -Match '(?m)^NX >cdn\.base-only\.127\.0\.0\.1\.sslip\.io$'
                 $content | Should -Match '(?m)^127\.0\.0\.1 base-only\.127\.0\.0\.1\.sslip\.io$'
+                $content | Should -Match '(?m)^FW base-only\.127\.0\.0\.1\.sslip\.io$'
                 $content | Should -Match '(?m)^FW /\^\(\?!\(\?:\.\*\\\.\)\?\(\?:cdn\\.base-only\\.127\\.0\\.0\\.1\\.sslip\\.io\)\$\)\.\*\\.base-only\\.127\\.0\\.0\\.1\\.sslip\\.io\$$'
-                $content | Should -Not -Match '(?m)^FW base-only\.127\.0\.0\.1\.sslip\.io$'
                 $definition.DomainAffinityMask | Should -Match '(?<!\*\.)base-only\.127\.0\.0\.1\.sslip\.io'
                 $definition.DomainAffinityMask | Should -Not -Match '\*\.base-only\.127\.0\.0\.1\.sslip\.io'
                 $definition.DomainAffinityMask | Should -Not -Match 'cdn\.base-only\.127\.0\.0\.1\.sslip\.io'

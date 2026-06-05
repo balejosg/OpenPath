@@ -48,7 +48,7 @@ function Get-AcrylicForwardRules {
 
         $escapedDomain = [regex]::Escape($normalizedDomain)
         $escapedBlockedPattern = ($blockedDescendants -join '|')
-        return @("$sslipIpv4Address $normalizedDomain", "FW /^(?!(?:.*\.)?(?:$escapedBlockedPattern)$).*\.$escapedDomain$")
+        return @("$sslipIpv4Address $normalizedDomain", "FW $normalizedDomain", "FW /^(?!(?:.*\.)?(?:$escapedBlockedPattern)$).*\.$escapedDomain$")
     }
 
     if ($blockedDescendants.Count -eq 0) {
