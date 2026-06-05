@@ -30,9 +30,6 @@ function Get-AcrylicForwardRules {
     $normalizedDomain = $Domain.Trim()
     if (-not $normalizedDomain) { return @() }
     $sslipIpv4Address = Resolve-SslipIpv4Address -Domain $normalizedDomain
-    if ($sslipIpv4Address) {
-        return @("$sslipIpv4Address $normalizedDomain", "$sslipIpv4Address >$normalizedDomain")
-    }
 
     $blockedDescendants = @(
         foreach ($subdomain in @($BlockedSubdomains)) {
@@ -43,6 +40,16 @@ function Get-AcrylicForwardRules {
             [regex]::Escape($normalizedSubdomain)
         }
     )
+
+    if ($sslipIpv4Address) {
+        if ($blockedDescendants.Count -eq 0) {
+            return @("$sslipIpv4Address $normalizedDomain", "FW >$normalizedDomain")
+        }
+
+        $escapedDomain = [regex]::Escape($normalizedDomain)
+        $escapedBlockedPattern = ($blockedDescendants -join '|')
+        return @("$sslipIpv4Address $normalizedDomain", "FW /^(?!(?:.*\.)?(?:$escapedBlockedPattern)$).*\.$escapedDomain$")
+    }
 
     if ($blockedDescendants.Count -eq 0) {
         return @("FW $normalizedDomain", "FW >$normalizedDomain")
@@ -87,10 +94,11 @@ function Get-AcrylicAffinityMaskEntries {
         }
 
         if (Test-AcrylicStaticAddressDomain -Domain $normalizedDomain) {
-            continue
+            $domainEntries = @("*.$normalizedDomain")
         }
-
-        $domainEntries = if ($hasBlockedDescendant) { @($normalizedDomain) } else { @($normalizedDomain, "*.$normalizedDomain") }
+        else {
+            $domainEntries = if ($hasBlockedDescendant) { @($normalizedDomain) } else { @($normalizedDomain, "*.$normalizedDomain") }
+        }
         foreach ($entry in $domainEntries) {
             if ($seenEntries.Add($entry)) { [void]$entries.Add($entry) }
         }

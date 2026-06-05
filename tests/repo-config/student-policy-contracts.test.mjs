@@ -1277,6 +1277,11 @@ describe('repository verification contract', () => {
     );
     assert.match(
       acrylicHostsModel,
+      /if \(Test-AcrylicStaticAddressDomain -Domain \$normalizedDomain\) \{[\s\S]*?\$domainEntries = @\("\*\.\$normalizedDomain"\)[\s\S]*?\}/,
+      'Get-AcrylicAffinityMaskEntries should keep static sslip exact hosts out of upstream affinity while allowing descendants to resolve'
+    );
+    assert.match(
+      acrylicHostsModel,
       /\$domainEntries = if \(\$hasBlockedDescendant\) \{ @\(\$normalizedDomain\) \} else \{ @\(\$normalizedDomain, "\*\.\$normalizedDomain"\) \}/,
       'Get-AcrylicAffinityMaskEntries should omit the parent wildcard when a blocked descendant would otherwise resolve upstream'
     );

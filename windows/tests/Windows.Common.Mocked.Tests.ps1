@@ -278,6 +278,11 @@ download.mozilla.org/firefox/releases
     }
 
     Context "Get-OpenPathCaptivePortalUpstreamDns with mocked network" {
+        BeforeEach {
+            Mock Get-OpenPathCaptivePortalOriginalDnsCandidates { @() } -ModuleName Common
+            Mock Get-OpenPathCaptivePortalDhcpServerCandidates { @() } -ModuleName Common
+        }
+
         It "Prefers visible non-local adapter DNS after captive portal reset without public probes" {
             Mock Get-NetAdapter {
                 @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 })

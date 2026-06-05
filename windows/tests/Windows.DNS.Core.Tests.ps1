@@ -729,7 +729,7 @@ Describe "DNS Module" {
             }
         }
 
-        It "Resolves sslip.io fixture domains locally without relying on upstream DNS" {
+        It "Renders sslip.io fixture exact hosts locally while forwarding descendants" {
             InModuleScope DNS {
                 $definition = New-AcrylicHostsDefinition `
                     -WhitelistedDomains @('portal.127.0.0.1.sslip.io', 'site.10.20.30.40.sslip.io', 'lan.192-168-56-103.sslip.io') `
@@ -742,13 +742,17 @@ Describe "DNS Module" {
                 $content = ConvertTo-AcrylicHostsContent -Definition $definition
 
                 $content | Should -Match '127\.0\.0\.1 portal\.127\.0\.0\.1\.sslip\.io'
-                $content | Should -Match '127\.0\.0\.1 >portal\.127\.0\.0\.1\.sslip\.io'
+                $content | Should -Match '(?m)^FW >portal\.127\.0\.0\.1\.sslip\.io$'
+                $content | Should -Match '(?m)^FW >site\.10\.20\.30\.40\.sslip\.io$'
                 $content | Should -Match '10\.20\.30\.40 site\.10\.20\.30\.40\.sslip\.io'
                 $content | Should -Match '192\.168\.56\.103 lan\.192-168-56-103\.sslip\.io'
                 $content | Should -Not -Match 'FW portal\.127\.0\.0\.1\.sslip\.io'
-                $definition.DomainAffinityMask | Should -Not -Match 'portal\.127\.0\.0\.1\.sslip\.io'
-                $definition.DomainAffinityMask | Should -Not -Match 'site\.10\.20\.30\.40\.sslip\.io'
-                $definition.DomainAffinityMask | Should -Not -Match 'lan\.192-168-56-103\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Not -Match '(?<!\*\.)portal\.127\.0\.0\.1\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Not -Match '(?<!\*\.)site\.10\.20\.30\.40\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Not -Match '(?<!\*\.)lan\.192-168-56-103\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Match '\*\.portal\.127\.0\.0\.1\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Match '\*\.site\.10\.20\.30\.40\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Match '\*\.lan\.192-168-56-103\.sslip\.io'
             }
         }
 
@@ -767,9 +771,10 @@ Describe "DNS Module" {
 
                 $content | Should -Match '(?m)^NX >cdn\.base-only\.127\.0\.0\.1\.sslip\.io$'
                 $content | Should -Match '(?m)^127\.0\.0\.1 base-only\.127\.0\.0\.1\.sslip\.io$'
-                $content | Should -Match '(?m)^127\.0\.0\.1 >base-only\.127\.0\.0\.1\.sslip\.io$'
+                $content | Should -Match '(?m)^FW /\^\(\?!\(\?:\.\*\\\.\)\?\(\?:cdn\\.base-only\\.127\\.0\\.0\\.1\\.sslip\\.io\)\$\)\.\*\\.base-only\\.127\\.0\\.0\\.1\\.sslip\\.io\$$'
                 $content | Should -Not -Match '(?m)^FW base-only\.127\.0\.0\.1\.sslip\.io$'
-                $definition.DomainAffinityMask | Should -Not -Match 'base-only\.127\.0\.0\.1\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Not -Match '(?<!\*\.)base-only\.127\.0\.0\.1\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Match '\*\.base-only\.127\.0\.0\.1\.sslip\.io'
                 $definition.DomainAffinityMask | Should -Not -Match 'cdn\.base-only\.127\.0\.0\.1\.sslip\.io'
             }
         }
@@ -803,9 +808,9 @@ Describe "DNS Module" {
 
             $result | Should -BeTrue
             $script:capturedAcrylicConfig | Should -Not -BeNullOrEmpty
-            $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*ajax-auto-allow-origin\.127\.0\.0\.1\.sslip\.io'
-            $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*ajax-auto-allow-font\.127\.0\.0\.1\.sslip\.io'
-            $script:capturedAcrylicConfig | Should -Not -Match 'SecondaryServerDomainNameAffinityMask=.*ajax-auto-allow-origin\.127\.0\.0\.1\.sslip\.io'
+            $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*(?:^|[=;])ajax-auto-allow-origin\.127\.0\.0\.1\.sslip\.io(?:;|$)'
+            $script:capturedAcrylicConfig | Should -Not -Match 'PrimaryServerDomainNameAffinityMask=.*(?:^|[=;])ajax-auto-allow-font\.127\.0\.0\.1\.sslip\.io(?:;|$)'
+            $script:capturedAcrylicConfig | Should -Not -Match 'SecondaryServerDomainNameAffinityMask=.*(?:^|[=;])ajax-auto-allow-origin\.127\.0\.0\.1\.sslip\.io(?:;|$)'
             $script:capturedAcrylicConfig | Should -Match 'PrimaryServerDomainNameAffinityMask=.*example\.com;\*\.example\.com'
         }
 
