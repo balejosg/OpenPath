@@ -117,6 +117,7 @@ Describe "Watchdog Script" {
 
         It "Behaviorally includes configured captive portal domains in recovery results" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1")
             $content = Get-Content $scriptPath -Raw
             $start = $content.IndexOf('function Get-OpenPathRecoveryUtcNow')
             $end = $content.IndexOf('$queuePath = Get-OpenPathCapabilityStoragePath')
@@ -329,9 +330,22 @@ Describe "Watchdog Script" {
 
         It "Discovers bounded exact captive portal hosts and rejects unsafe host candidates" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $diagnosticsModulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.DiagnosticsDiscovery.ps1"
             $moduleContent = Get-Content $modulePath -Raw
+            $diagnosticsModuleContent = Get-Content $diagnosticsModulePath -Raw
 
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                "internal\CaptivePortal.DiagnosticsDiscovery.ps1",
+                'Get-OpenPathCaptivePortalDynamicHosts',
+                'discoveryTruncated',
+                'bootstrapHosts',
+                'observedRuntimeHosts',
+                'pendingRuntimeHosts',
+                'fallbackMode',
+                'limitedModeReady'
+            )
+
+            Assert-ContentContainsAll -Content $diagnosticsModuleContent -Needles @(
                 'function Get-OpenPathCaptivePortalDynamicHosts',
                 'function Get-OpenPathCaptivePortalBootstrapSeedUrls',
                 'function Invoke-OpenPathCaptivePortalBootstrapProbe',
@@ -352,7 +366,7 @@ Describe "Watchdog Script" {
                 'Test-OpenPathProtectedRuntimeDependencyHost'
             )
 
-            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+            Assert-ContentContainsAll -Content $diagnosticsModuleContent -Needles @(
                 '.local',
                 'single-label',
                 'ip-address',
@@ -551,7 +565,7 @@ Describe "Watchdog Script" {
         }
 
         It "Keeps fetched redirect and resource bootstrap hosts in distinct result fields" {
-            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.DiagnosticsDiscovery.ps1"
             $moduleContent = Get-Content $modulePath -Raw
 
             $probeStart = $moduleContent.IndexOf('function Invoke-OpenPathCaptivePortalBootstrapProbe')
@@ -756,7 +770,9 @@ Describe "Watchdog Script" {
 
         It "Routes limited portal Acrylic writes through the shared atomic writer under the policy lock" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.AcrylicPolicyTransaction.ps1"
             $moduleContent = Get-Content $modulePath -Raw
+            $policyContent = Get-Content $policyPath -Raw
             $enableStart = $moduleContent.IndexOf('function Enable-OpenPathCaptivePortalLimitedMode')
             $definitionStart = $moduleContent.IndexOf('function New-OpenPathLimitedCaptivePortalHostsDefinition')
             $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
@@ -766,11 +782,35 @@ Describe "Watchdog Script" {
                 'Write-AcrylicConfigFile -Path $configPath -Content $iniContent'
             )
             Assert-ContentContainsAll -Content $enableBody -Needles @(
-                'Invoke-AcrylicPolicyStateLocked -Action',
+                'Invoke-OpenPathCaptivePortalAcrylicPolicyTransaction -State limitedRecovery',
                 'Write-AcrylicHostsFile -Path $hostsPath -Content $content',
                 'Set-OpenPathLimitedCaptivePortalAcrylicConfiguration -UpstreamDns ([string]$upstream.Address) -PortalRecoveryDomains $renderedHosts -SkipPolicyStateLock'
             )
+            $policyContent | Should -Match 'Invoke-AcrylicPolicyStateLocked -Action'
             $enableBody | Should -Not -Match 'Set-Content -Path \$hostsPath'
+        }
+
+        It "Routes Acrylic captive portal changes through named policy transactions" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.AcrylicPolicyTransaction.ps1"
+            $moduleContent = Get-Content $modulePath -Raw
+            $policyContent = Get-Content $policyPath -Raw
+
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                "internal\CaptivePortal.AcrylicPolicyTransaction.ps1",
+                'Invoke-OpenPathCaptivePortalAcrylicPolicyTransaction -State limitedRecovery',
+                'Invoke-OpenPathCaptivePortalAcrylicPolicyTransaction -State restoredProtected',
+                'Get-OpenPathCaptivePortalAcrylicPolicyState -State normalProtected'
+            )
+            Assert-ContentContainsAll -Content $policyContent -Needles @(
+                "ValidateSet('normalProtected', 'limitedRecovery', 'restoredProtected')",
+                'function Invoke-OpenPathCaptivePortalAcrylicPolicyTransaction',
+                'Invoke-AcrylicPolicyStateLocked -Action',
+                'function Get-OpenPathCaptivePortalAcrylicPolicyState',
+                'normalProtected',
+                'limitedRecovery',
+                'restoredProtected'
+            )
         }
 
         It "Falls back when the global Acrylic policy mutex is inaccessible" {
@@ -990,16 +1030,22 @@ Describe "Watchdog Script" {
 
         It "Closes any active captive portal marker immediately on authenticated detection and preserves the marker when restore fails" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.CaptivePortalPolicy.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $helperContent = Get-Content $helperPath -Raw
+            $policyContent = Get-Content $policyPath -Raw
             $moduleContent = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $helperContent -Needles @(
                 '$markerMode',
-                '$markerMode -ne ''''',
-                '$captiveState -eq ''Authenticated''',
+                '$captivityOutcome -eq ''closeAuthenticated''',
                 'Disable-OpenPathCaptivePortalMode -Config $Config',
                 'failed to close authenticated captive portal mode; marker preserved'
+            )
+            Assert-ContentContainsAll -Content $policyContent -Needles @(
+                '$MarkerMode -ne ''''',
+                '$CaptiveState -eq ''Authenticated''',
+                'closeAuthenticated'
             )
 
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
@@ -1012,22 +1058,35 @@ Describe "Watchdog Script" {
         It "Refreshes limited portal mode instead of restoring protected mode while the portal is still detected" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.CaptivePortalPolicy.ps1"
             $helperContent = Get-Content $helperPath -Raw
             $moduleContent = Get-Content $modulePath -Raw
+            $policyContent = Get-Content $policyPath -Raw
 
             Assert-ContentContainsAll -Content $moduleContent -Needles @(
                 '[switch]$SkipExpiredRestore',
                 'if ($SkipExpiredRestore) { return $true }'
             )
             Assert-ContentContainsAll -Content $helperContent -Needles @(
+                "Watchdog.CaptivePortalPolicy.ps1",
+                'Get-OpenPathWatchdogCaptivePortalPolicyOutcome',
                 'Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore',
-                '$portalModeActive -and $markerMode -eq ''limited'' -and $captiveState -eq ''Portal''',
+                '$captivityOutcome -eq ''keepLimited''',
                 '$portalRecoveryHosts = @($activeMarker.allowedHosts',
                 'Enable-OpenPathCaptivePortalMode -State $captiveState -PortalRecoveryDomains $portalRecoveryHosts'
             )
+            Assert-ContentContainsAll -Content $policyContent -Needles @(
+                'function Get-OpenPathWatchdogCaptivePortalPolicyOutcome',
+                'noAction',
+                'keepLimited',
+                'restoreProtected',
+                'closeAuthenticated',
+                'emergencyPassthrough',
+                'unsafeMarker'
+            )
             $helperContent.IndexOf('Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore') |
                 Should -BeLessThan $helperContent.IndexOf('Test-OpenPathCaptivePortalState -TimeoutSec 3')
-            $helperContent.IndexOf('$portalModeActive -and $markerMode -eq ''limited'' -and $captiveState -eq ''Portal''') |
+            $helperContent.IndexOf('$captivityOutcome = Get-OpenPathWatchdogCaptivePortalPolicyOutcome') |
                 Should -BeLessThan $helperContent.IndexOf('$portalObservation.ShouldEnterPortal')
         }
 

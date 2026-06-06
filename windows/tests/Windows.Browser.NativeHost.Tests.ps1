@@ -572,16 +572,20 @@ Describe "Browser Module - Native Host" {
         It "Supports captive portal recovery without URL fields or whitelist/runtime overlay mutation" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+            $recoveryQueueAdapterPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.CaptivePortalRecoveryQueue.ps1"
+            $recoveryQueueAdapterContent = Get-Content $recoveryQueueAdapterPath -Raw
+            $nativeHostRecoveryContent = "$nativeHostActionsContent`n$recoveryQueueAdapterContent"
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
             $scriptContent = Get-Content $scriptPath -Raw
 
-            Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
+            Assert-ContentContainsAll -Content $nativeHostRecoveryContent -Needles @(
                 'recover-captive-portal-navigation',
                 'function Normalize-NativeHostCaptivePortalTriggerHost',
                 'function Write-NativeHostCaptivePortalRecoveryRequest',
                 'function Read-NativeHostCaptivePortalRecoveryResult',
                 'function Get-NativeHostRecentCaptivePortalRecoverySuccess',
                 'function Invoke-NativeHostCaptivePortalRecoveryAction',
+                'NativeHost.CaptivePortalRecoveryQueue.ps1',
                 'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue',
                 'Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult',
                 'Global\OpenPathCaptivePortalRecoveryTrigger',
@@ -609,7 +613,8 @@ Describe "Browser Module - Native Host" {
                 '$dnsResolutionHealthy',
                 '$sinkholeHealthy',
                 '$markerCleared',
-                'state = ''Timeout'''
+                'state = ''Timeout''',
+                'recoveryQueueClassification'
             )
             Assert-ContentContainsAll -Content $scriptContent -Needles @(
                 'function Invoke-OpenPathCaptivePortalAuthenticatedRestore',
@@ -629,6 +634,34 @@ Describe "Browser Module - Native Host" {
             $recoveryFunction | Should -Not -Match 'cookies?'
             $recoveryFunction | Should -Not -Match 'query'
             $recoveryFunction | Should -Not -Match 'New-Guid'
+        }
+
+        It "Centralizes captive portal Task Scheduler queue classification in a native host adapter" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $adapterPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.CaptivePortalRecoveryQueue.ps1"
+            $artifactCatalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.ArtifactCatalog.ps1"
+            $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+            $adapterContent = Get-Content $adapterPath -Raw
+            $artifactCatalogContent = Get-Content $artifactCatalogPath -Raw
+
+            Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
+                'NativeHost.CaptivePortalRecoveryQueue.ps1',
+                'Get-NativeHostCaptivePortalRecoveryQueueClassification',
+                'Read-NativeHostCaptivePortalRecoveryResultEnvelope',
+                'Write-NativeHostCaptivePortalRecoveryRequest'
+            )
+            Assert-ContentContainsAll -Content $adapterContent -Needles @(
+                'function Write-NativeHostCaptivePortalRecoveryRequest',
+                'function Read-NativeHostCaptivePortalRecoveryResultEnvelope',
+                'function Get-NativeHostCaptivePortalRecoveryQueueClassification',
+                'missing-result',
+                'stale-result',
+                'task-timeout',
+                'task-disabled',
+                'success',
+                'authenticated-restore-failed'
+            )
+            $artifactCatalogContent | Should -Match 'NativeHost\.CaptivePortalRecoveryQueue\.ps1'
         }
 
         It "Rejects invalid captive portal trigger hosts before queueing or triggering tasks" {
@@ -1294,6 +1327,8 @@ Describe "Browser Module - Native Host" {
         It "Surfaces captive portal limited-mode readiness fields through native host responses" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+            $transitionPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1"
+            $transitionContent = Get-Content $transitionPath -Raw
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
             $scriptContent = Get-Content $scriptPath -Raw
 
@@ -1309,9 +1344,14 @@ Describe "Browser Module - Native Host" {
                 'limitedModeReady',
                 'configuredCaptivePortalDomains',
                 'configuredCaptivePortalDomainsApplied',
-                '$result.PSObject.Properties[''limitedModeReady'']',
-                '$recentSuccess.PSObject.Properties[''LimitedModeReady'']',
-                '$RecentSuccess.PSObject.Properties[''FallbackMode'']'
+                '$result.PSObject.Properties[''limitedModeReady'']'
+            )
+
+            Assert-ContentContainsAll -Content $transitionContent -Needles @(
+                'limitedModeReady',
+                'LimitedModeReady',
+                'fallbackMode',
+                'FallbackMode'
             )
 
             Assert-ContentContainsAll -Content $scriptContent -Needles @(
@@ -1330,9 +1370,41 @@ Describe "Browser Module - Native Host" {
             )
         }
 
+        It "Centralizes captive portal recovery transition decisions in the shared internal helper" {
+            $transitionPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1"
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $transitionContent = Get-Content $transitionPath -Raw
+            $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+            $scriptContent = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $transitionContent -Needles @(
+                'function Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary',
+                'function Test-OpenPathCaptivePortalRecoveryTransitionRecentSuccess',
+                'limitedModeReady',
+                'configuredCaptivePortalDomainsApplied',
+                'fallbackMode',
+                'recentSuccessEligible'
+            )
+
+            Assert-ContentContainsAll -Content $nativeHostActionsContent -Needles @(
+                "CaptivePortal.RecoveryTransition.ps1",
+                'Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary',
+                'Test-OpenPathCaptivePortalRecoveryTransitionRecentSuccess'
+            )
+
+            Assert-ContentContainsAll -Content $scriptContent -Needles @(
+                "CaptivePortal.RecoveryTransition.ps1",
+                'Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary',
+                'Test-OpenPathCaptivePortalRecoveryTransitionRecentSuccess'
+            )
+        }
+
         It "Requires limitedModeReady and non-passthrough mode for recent captive portal success eligibility" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             $nativeHostActionsContent = Get-Content $nativeHostActionsPath -Raw
+            $transitionPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1"
+            $transitionContent = Get-Content $transitionPath -Raw
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
             $scriptContent = Get-Content $scriptPath -Raw
 
@@ -1340,16 +1412,20 @@ Describe "Browser Module - Native Host" {
                 'LimitedModeReady',
                 'DiscoveryTruncated',
                 'FallbackMode',
-                '$RecentSuccess.LimitedModeReady',
-                '$RecentSuccess.FallbackMode -eq ''passthrough'''
+                'Test-OpenPathCaptivePortalRecoveryTransitionRecentSuccess'
+            )
+
+            Assert-ContentContainsAll -Content $transitionContent -Needles @(
+                'limitedModeReady',
+                'LimitedModeReady',
+                '$fallbackMode -eq ''passthrough'''
             )
 
             Assert-ContentContainsAll -Content $scriptContent -Needles @(
                 'limitedModeReady = [bool]$markerSummary.limitedModeReady',
                 'discoveryTruncated = [bool]$markerSummary.discoveryTruncated',
                 'fallbackMode = [string]$markerSummary.fallbackMode',
-                '$payload.limitedModeReady',
-                '$payload.fallbackMode -eq ''passthrough'''
+                'Test-OpenPathCaptivePortalRecoveryTransitionRecentSuccess'
             )
         }
 

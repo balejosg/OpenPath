@@ -38,6 +38,7 @@ function Restore-CheckpointFromWatchdog {
 
 . (Join-Path $PSScriptRoot 'EndpointPolicyState.ps1')
 . (Join-Path $PSScriptRoot 'EndpointStateReconciler.ps1')
+. (Join-Path $PSScriptRoot 'Watchdog.CaptivePortalPolicy.ps1')
 
 function Invoke-OpenPathWatchdogPrechecks {
     param(
@@ -57,14 +58,21 @@ function Invoke-OpenPathWatchdogPrechecks {
     $portalObservation = Update-OpenPathCaptivePortalObservation -DetectedState $captiveState
     $activeMarker = if ($portalModeActive) { Get-OpenPathCaptivePortalMarker } else { $null }
     $markerMode = Get-OpenPathCaptivePortalMarkerMode -Marker $activeMarker
+    $captivityOutcome = Get-OpenPathWatchdogCaptivePortalPolicyOutcome `
+        -PortalModeActive $portalModeActive `
+        -MarkerPresent ($null -ne $activeMarker) `
+        -MarkerMode $markerMode `
+        -CaptiveState $captiveState `
+        -ShouldEnterPortal ([bool]$portalObservation.ShouldEnterPortal) `
+        -ShouldExitPortal ([bool]$portalObservation.ShouldExitPortal)
 
-    if ($portalModeActive -and $markerMode -ne '' -and $captiveState -eq 'Authenticated') {
+    if ($captivityOutcome -eq 'closeAuthenticated') {
         $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
         if (-not $disabled) {
             Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN
         }
     }
-    elseif ($portalModeActive -and $markerMode -eq 'limited' -and $captiveState -eq 'Portal') {
+    elseif ($captivityOutcome -eq 'keepLimited' -and $portalModeActive -and $markerMode -eq 'limited' -and $captiveState -eq 'Portal') {
         $portalRecoveryHosts = @()
         if ($activeMarker -and $activeMarker.PSObject.Properties['allowedHosts']) {
             $portalRecoveryHosts = @($activeMarker.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -73,14 +81,17 @@ function Invoke-OpenPathWatchdogPrechecks {
             Enable-OpenPathCaptivePortalMode -State $captiveState -PortalRecoveryDomains $portalRecoveryHosts | Out-Null
         }
     }
-    elseif ($portalObservation.ShouldEnterPortal) {
+    elseif ($captivityOutcome -eq 'keepLimited') {
         Enable-OpenPathCaptivePortalMode -State $captiveState | Out-Null
     }
-    elseif ($portalObservation.ShouldExitPortal -and $portalModeActive) {
+    elseif ($captivityOutcome -eq 'restoreProtected') {
         $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
         if (-not $disabled) {
             Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN
         }
+    }
+    elseif ($captivityOutcome -eq 'unsafeMarker') {
+        Write-OpenPathLog 'Watchdog: captive portal mode is active without a readable marker; leaving protected-mode state unchanged' -Level WARN
     }
 
     return [PSCustomObject]@{
@@ -164,8 +175,13 @@ function Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks {
 
     $adaptersMissingLocalDns = @(Get-OpenPathActiveIpv4AdaptersMissingLocalDns)
     $localDnsConfigured = ($adaptersMissingLocalDns.Count -eq 0)
-    $shouldAttemptClose = ($localDnsConfigured -or $captiveState -eq 'Authenticated')
-    if ($shouldAttemptClose) {
+    $passthroughOutcome = Get-OpenPathWatchdogCaptivePortalPolicyOutcome `
+        -PortalModeActive $PortalModeActive `
+        -MarkerPresent $true `
+        -MarkerMode $markerMode `
+        -CaptiveState $CaptiveState `
+        -PassthroughLocalDnsConfigured $localDnsConfigured
+    if ($passthroughOutcome -eq 'emergencyPassthrough') {
         $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
         if (-not $disabled) {
             Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN

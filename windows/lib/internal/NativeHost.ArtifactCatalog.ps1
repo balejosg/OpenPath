@@ -9,6 +9,8 @@ function Get-OpenPathNativeHostArtifactNames {
         'RuntimeDependency.Policy.ps1',
         'RuntimeDependency.Queue.ps1',
         'RuntimeDependency.Overlay.ps1',
+        'CaptivePortal.RecoveryTransition.ps1',
+        'NativeHost.CaptivePortalRecoveryQueue.ps1',
         'TaskRunner.ps1',
         'NativeHost.State.ps1',
         'NativeHost.Protocol.ps1',

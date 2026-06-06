@@ -122,6 +122,44 @@ foreach ($nativeHostRuntimeDependencyCandidatePath in ($nativeHostRuntimeDepende
     }
 }
 
+$nativeHostCaptivePortalQueueCandidatePaths = @()
+if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+    $nativeHostCaptivePortalQueueCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\NativeHost.CaptivePortalRecoveryQueue.ps1')
+}
+if ($PSScriptRoot) {
+    $nativeHostCaptivePortalQueueCandidatePaths += (Join-Path $PSScriptRoot 'NativeHost.CaptivePortalRecoveryQueue.ps1')
+}
+
+foreach ($nativeHostCaptivePortalQueueCandidatePath in ($nativeHostCaptivePortalQueueCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
+    if (Test-Path $nativeHostCaptivePortalQueueCandidatePath -ErrorAction SilentlyContinue) {
+        . $nativeHostCaptivePortalQueueCandidatePath
+        break
+    }
+}
+
+if (-not (Get-Command -Name 'Get-NativeHostCaptivePortalRecoveryQueueClassification' -ErrorAction SilentlyContinue)) {
+    throw 'NativeHost.CaptivePortalRecoveryQueue.ps1 is required for native host captive portal recovery queue handling.'
+}
+
+$nativeHostRecoveryTransitionCandidatePaths = @()
+if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+    $nativeHostRecoveryTransitionCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\CaptivePortal.RecoveryTransition.ps1')
+}
+if ($PSScriptRoot) {
+    $nativeHostRecoveryTransitionCandidatePaths += (Join-Path $PSScriptRoot 'CaptivePortal.RecoveryTransition.ps1')
+}
+
+foreach ($nativeHostRecoveryTransitionCandidatePath in ($nativeHostRecoveryTransitionCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
+    if (Test-Path $nativeHostRecoveryTransitionCandidatePath -ErrorAction SilentlyContinue) {
+        . $nativeHostRecoveryTransitionCandidatePath
+        break
+    }
+}
+
+if (-not (Get-Command -Name 'Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary' -ErrorAction SilentlyContinue)) {
+    throw 'CaptivePortal.RecoveryTransition.ps1 is required for native host captive portal recovery transitions.'
+}
+
 if (-not (Get-Command -Name 'Test-OpenPathRuntimeDependencyCandidate' -ErrorAction SilentlyContinue)) {
     throw 'RuntimeDependency.Policy.ps1 is required for native host runtime dependency validation.'
 }
@@ -252,189 +290,6 @@ function Get-NativeHostCaptivePortalRecoveryHosts {
     return @($hosts)
 }
 
-function Get-NativeHostCaptivePortalRecoveryQueuePath {
-    if ($env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH) {
-        return $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH
-    }
-
-    return (Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue -OpenPathRoot $script:OpenPathRoot)
-}
-
-function Get-NativeHostCaptivePortalRecoveryResultPath {
-    if ($env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH) {
-        return $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH
-    }
-
-    return (Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult -OpenPathRoot $script:OpenPathRoot)
-}
-
-function Get-NativeHostCaptivePortalRecoveryProgressPath {
-    if ($env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH) {
-        return $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH
-    }
-
-    return (Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryProgress -OpenPathRoot $script:OpenPathRoot)
-}
-
-function Get-NativeHostCaptivePortalRecoveryFileSnapshot {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [string]$PhaseProperty = ''
-    )
-
-    $files = @()
-    $requestIds = @()
-    $latestPhase = ''
-
-    if (Test-Path $Path -ErrorAction SilentlyContinue) {
-        $files = @(Get-ChildItem -Path $Path -Filter '*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc, Name)
-    }
-
-    foreach ($file in $files) {
-        $requestId = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
-        try {
-            $payload = Get-Content -Path $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-            if ($payload.PSObject.Properties['requestId'] -and $payload.requestId) {
-                $requestId = [string]$payload.requestId
-            }
-        }
-        catch {
-            $payload = $null
-        }
-
-        if (-not [string]::IsNullOrWhiteSpace($requestId)) {
-            $requestIds += $requestId
-        }
-
-        if ($PhaseProperty -and $file -eq $files[-1] -and $payload -and $payload.PSObject.Properties[$PhaseProperty]) {
-            $latestPhase = [string]$payload.$PhaseProperty
-        }
-    }
-
-    return @{
-        count = [int]$files.Count
-        requestIds = @($requestIds | Select-Object -Unique)
-        latestPhase = $latestPhase
-    }
-}
-
-function Get-NativeHostCaptivePortalRecoveryDiagnosticSnapshot {
-    $queuePath = Get-NativeHostCaptivePortalRecoveryQueuePath
-    $resultPath = Get-NativeHostCaptivePortalRecoveryResultPath
-    $progressPath = Get-NativeHostCaptivePortalRecoveryProgressPath
-    $queue = Get-NativeHostCaptivePortalRecoveryFileSnapshot -Path $queuePath
-    $result = Get-NativeHostCaptivePortalRecoveryFileSnapshot -Path $resultPath
-    $progress = Get-NativeHostCaptivePortalRecoveryFileSnapshot -Path $progressPath -PhaseProperty 'phase'
-
-    return @{
-        queuePath = $queuePath
-        resultPath = $resultPath
-        progressPath = $progressPath
-        queueFileCount = [int]$queue.count
-        resultFileCount = [int]$result.count
-        progressFileCount = [int]$progress.count
-        pendingRequestIds = @($queue.requestIds)
-        resultRequestIds = @($result.requestIds)
-        progressRequestIds = @($progress.requestIds)
-        latestProgressPhase = [string]$progress.latestPhase
-    }
-}
-
-function Add-NativeHostCaptivePortalRecoveryDiagnostics {
-    param(
-        [Parameter(Mandatory = $true)][hashtable]$Response,
-        [AllowNull()][hashtable]$TaskResult = $null
-    )
-
-    if ($TaskResult) {
-        foreach ($key in @(
-                'taskState',
-                'taskLastResult',
-                'taskLastResultHex',
-                'taskLastRunTime',
-                'taskNextRunTime',
-                'taskNumberOfMissedRuns',
-                'taskDiagnosticsError'
-            )) {
-            if ($TaskResult.ContainsKey($key)) {
-                $Response[$key] = $TaskResult[$key]
-            }
-        }
-    }
-
-    $snapshot = Get-NativeHostCaptivePortalRecoveryDiagnosticSnapshot
-    foreach ($key in $snapshot.Keys) {
-        $Response[$key] = $snapshot[$key]
-    }
-
-    return $Response
-}
-
-function Write-NativeHostCaptivePortalRecoveryRequest {
-    param(
-        [Parameter(Mandatory = $true)][string]$RequestId,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$TriggerHost,
-        [string[]]$PortalRecoveryHosts = @(),
-        [ValidateSet('open', 'reconcile')]
-        [string]$Operation = 'open',
-        [string]$PortalState = 'Unknown',
-        [string]$Source = 'native-host',
-        [AllowNull()][object]$TabId = $null
-    )
-
-    $queuePath = Get-NativeHostCaptivePortalRecoveryQueuePath
-    New-Item -ItemType Directory -Path $queuePath -Force | Out-Null
-
-    $request = [ordered]@{
-        requestId = $RequestId
-        operation = $Operation
-        triggerHost = $TriggerHost
-        portalRecoveryHosts = @($PortalRecoveryHosts)
-        portalState = $PortalState
-        source = $Source
-        createdAtUtc = [DateTime]::UtcNow.ToString('o')
-    }
-
-    if ($null -ne $TabId) {
-        try {
-            $request['tabId'] = [int]$TabId
-        }
-        catch {
-            $request['tabId'] = [string]$TabId
-        }
-    }
-
-    $requestPath = Join-Path $queuePath "$RequestId.json"
-    $request | ConvertTo-Json -Depth 4 | Set-Content -Path $requestPath -Encoding UTF8
-    return $requestPath
-}
-
-function Read-NativeHostCaptivePortalRecoveryResult {
-    param(
-        [Parameter(Mandatory = $true)][string]$RequestId
-    )
-
-    $resultPath = Join-Path (Get-NativeHostCaptivePortalRecoveryResultPath) "$RequestId.json"
-    if (-not (Test-Path $resultPath -ErrorAction SilentlyContinue)) {
-        return $null
-    }
-
-    try {
-        $result = Get-Content -Path $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        if (-not $result.PSObject.Properties['requestId']) {
-            return $null
-        }
-        if (-not ([string]$result.requestId).Equals($RequestId, [System.StringComparison]::OrdinalIgnoreCase)) {
-            return $null
-        }
-
-        return $result
-    }
-    catch {
-        return $null
-    }
-}
-
 function Get-NativeHostCaptivePortalActiveMarker {
     $markerPath = 'C:\OpenPath\data\captive-portal-active.json'
     if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
@@ -472,59 +327,12 @@ function Get-NativeHostCaptivePortalMarkerSummary {
         [string]$TriggerHost = ''
     )
 
-    $allowedHosts = if ($Marker -and $Marker.PSObject.Properties['allowedHosts']) {
-        @($Marker.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    }
-    else {
-        @()
-    }
-    $mode = if ($Marker -and $Marker.PSObject.Properties['mode'] -and $Marker.mode) { [string]$Marker.mode } else { '' }
-    $bootstrapHosts = if ($Marker -and $Marker.PSObject.Properties['bootstrapHosts']) { @($Marker.bootstrapHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
-    $redirectHosts = if ($Marker -and $Marker.PSObject.Properties['redirectHosts']) { @($Marker.redirectHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
-    $resourceHosts = if ($Marker -and $Marker.PSObject.Properties['resourceHosts']) { @($Marker.resourceHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
-    $observedRuntimeHosts = if ($Marker -and $Marker.PSObject.Properties['observedRuntimeHosts']) { @($Marker.observedRuntimeHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
-    $pendingRuntimeHosts = if ($Marker -and $Marker.PSObject.Properties['pendingRuntimeHosts']) { @($Marker.pendingRuntimeHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
-    $discoveryTruncated = if ($Marker -and $Marker.PSObject.Properties['discoveryTruncated']) { [bool]$Marker.discoveryTruncated } else { $false }
-    $fallbackMode = if ($Marker -and $Marker.PSObject.Properties['fallbackMode'] -and $Marker.fallbackMode) { [string]$Marker.fallbackMode } elseif ($mode -eq 'passthrough') { 'passthrough' } else { 'none' }
-    $recoveryHostsApplied = ($mode -eq 'limited' -and $allowedHosts.Count -gt 0)
-    $configuredCaptivePortalDomains = @(Get-NativeHostConfiguredCaptivePortalDomains)
-    $configuredCaptivePortalDomainsApplied = Test-NativeHostConfiguredCaptivePortalDomainsApplied -AllowedHosts $allowedHosts -ConfiguredCaptivePortalDomains $configuredCaptivePortalDomains
-    $effectiveHosts = @(Get-NativeHostCaptivePortalEffectiveHosts -Hosts (@($allowedHosts) + @($bootstrapHosts) + @($redirectHosts) + @($resourceHosts) + @($observedRuntimeHosts) + @($configuredCaptivePortalDomains)))
-    $declaredRecoveryHosts = @(Get-NativeHostCaptivePortalEffectiveHosts -Hosts (@($TriggerHost) + @($configuredCaptivePortalDomains)))
-    if ($declaredRecoveryHosts.Count -le 0) {
-        $declaredRecoveryHosts = @($allowedHosts)
-    }
-    $declaredRecoveryHostsApplied = ($declaredRecoveryHosts.Count -gt 0)
-    foreach ($hostName in @($declaredRecoveryHosts)) {
-        if ($allowedHosts -notcontains $hostName) {
-            $declaredRecoveryHostsApplied = $false
-            break
-        }
-    }
-    $markerLimitedModeReady = ($Marker -and $Marker.PSObject.Properties['limitedModeReady'] -and [bool]$Marker.limitedModeReady)
-    $limitedModeReady = ($mode -eq 'limited' -and $recoveryHostsApplied -and $markerLimitedModeReady -and $declaredRecoveryHostsApplied -and $configuredCaptivePortalDomainsApplied)
-    $recentSuccessEligible = $limitedModeReady
-    if ($recentSuccessEligible -and $TriggerHost) {
-        $recentSuccessEligible = ($allowedHosts -contains $TriggerHost)
-    }
-
-    return [PSCustomObject]@{
-        activeMarkerMode = $mode
-        allowedHosts = @($allowedHosts)
-        effectiveExactHosts = @($effectiveHosts)
-        configuredCaptivePortalDomains = @($configuredCaptivePortalDomains)
-        configuredCaptivePortalDomainsApplied = [bool]$configuredCaptivePortalDomainsApplied
-        bootstrapHosts = @($bootstrapHosts)
-        redirectHosts = @($redirectHosts)
-        resourceHosts = @($resourceHosts)
-        observedRuntimeHosts = @($observedRuntimeHosts)
-        pendingRuntimeHosts = @($pendingRuntimeHosts)
-        discoveryTruncated = [bool]$discoveryTruncated
-        fallbackMode = [string]$fallbackMode
-        limitedModeReady = [bool]$limitedModeReady
-        recoveryHostsApplied = $recoveryHostsApplied
-        recentSuccessEligible = [bool]$recentSuccessEligible
-    }
+    return (Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary `
+            -Marker $Marker `
+            -TriggerHost $TriggerHost `
+            -ConfiguredCaptivePortalDomains @(Get-NativeHostConfiguredCaptivePortalDomains) `
+            -EffectiveHostResolver { param([string[]]$Hosts) @(Get-NativeHostCaptivePortalEffectiveHosts -Hosts $Hosts) } `
+            -ConfiguredDomainsAppliedTester { param([string[]]$AllowedHosts, [string[]]$ConfiguredCaptivePortalDomains) Test-NativeHostConfiguredCaptivePortalDomainsApplied -AllowedHosts $AllowedHosts -ConfiguredCaptivePortalDomains $ConfiguredCaptivePortalDomains })
 }
 
 function Get-NativeHostRecentCaptivePortalRecoverySuccess {
@@ -625,49 +433,11 @@ function Test-NativeHostRecentCaptivePortalSuccessEligible {
         return $false
     }
 
-    $eligible = if ($RecentSuccess.PSObject.Properties['RecentSuccessEligible']) { [bool]$RecentSuccess.RecentSuccessEligible } else { $false }
-    if (-not $eligible) {
-        return $false
-    }
-
-    if (-not ($RecentSuccess.PSObject.Properties['LimitedModeReady'] -and [bool]$RecentSuccess.LimitedModeReady)) {
-        return $false
-    }
-
-    if ($RecentSuccess.PSObject.Properties['FallbackMode'] -and [string]$RecentSuccess.FallbackMode -eq 'passthrough') {
-        return $false
-    }
-
-    if ($RecentSuccess.PSObject.Properties['ActiveMarkerMode'] -and [string]$RecentSuccess.ActiveMarkerMode -eq 'passthrough') {
-        return $false
-    }
-
-    if ($TriggerHost) {
-        $allowedHosts = if ($RecentSuccess.PSObject.Properties['AllowedHosts']) {
-            @($RecentSuccess.AllowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        }
-        else {
-            @()
-        }
-        if ($allowedHosts.Count -le 0 -or $allowedHosts -notcontains $TriggerHost) {
-            return $false
-        }
-    }
-
-    $configuredCaptivePortalDomains = @(Get-NativeHostConfiguredCaptivePortalDomains)
-    if ($configuredCaptivePortalDomains.Count -gt 0) {
-        $allowedHosts = if ($RecentSuccess.PSObject.Properties['AllowedHosts']) {
-            @($RecentSuccess.AllowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        }
-        else {
-            @()
-        }
-        if (-not (Test-NativeHostConfiguredCaptivePortalDomainsApplied -AllowedHosts $allowedHosts -ConfiguredCaptivePortalDomains $configuredCaptivePortalDomains)) {
-            return $false
-        }
-    }
-
-    return $true
+    return (Test-OpenPathCaptivePortalRecoveryTransitionRecentSuccess `
+            -RecentSuccess $RecentSuccess `
+            -TriggerHost $TriggerHost `
+            -ConfiguredCaptivePortalDomains @(Get-NativeHostConfiguredCaptivePortalDomains) `
+            -ConfiguredDomainsAppliedTester { param([string[]]$AllowedHosts, [string[]]$ConfiguredCaptivePortalDomains) Test-NativeHostConfiguredCaptivePortalDomainsApplied -AllowedHosts $AllowedHosts -ConfiguredCaptivePortalDomains $ConfiguredCaptivePortalDomains })
 }
 
 function Test-NativeHostBlockedSubdomainMatch {
@@ -1185,7 +955,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
                     -TimeoutSeconds $boundedTimeoutSeconds `
                     -PollMilliseconds 250 `
                     -WaitCondition {
-                        return ($null -ne (Read-NativeHostCaptivePortalRecoveryResult -RequestId $requestId))
+                        return ($null -ne (Read-NativeHostCaptivePortalRecoveryResultEnvelope -RequestId $requestId).Result)
                     }
             }
     }
@@ -1210,8 +980,13 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     $triggerMs = if ($taskResult.ContainsKey('triggerMs')) { [int]$taskResult.triggerMs } else { 0 }
     $waitMs = if ($taskResult.ContainsKey('waitMs')) { [int]$taskResult.waitMs } else { 0 }
 
-    $result = Read-NativeHostCaptivePortalRecoveryResult -RequestId $requestId
+    $resultEnvelope = Read-NativeHostCaptivePortalRecoveryResultEnvelope -RequestId $requestId
+    $result = $resultEnvelope.Result
     if (-not $result) {
+        $queueClassification = Get-NativeHostCaptivePortalRecoveryQueueClassification `
+            -ReadClassification ([string]$resultEnvelope.Classification) `
+            -TaskResult $taskResult `
+            -Operation $operation
         $response = @{
             success = $false
             action = $action
@@ -1223,6 +998,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
             taskName = $taskNameResult
             triggerMs = $triggerMs
             waitMs = $waitMs
+            recoveryQueueClassification = $queueClassification
             error = if ($taskResult.ContainsKey('error') -and $taskResult.error) { [string]$taskResult.error } else { 'Timed out waiting for captive portal recovery result' }
         }
         return (Add-NativeHostCaptivePortalRecoveryDiagnostics -Response $response -TaskResult $taskResult)
@@ -1293,6 +1069,12 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
             ($state -eq 'Authenticated' -and -not $portalModeActive -and $postAuthRestored)
         ))
     }
+    $queueClassification = Get-NativeHostCaptivePortalRecoveryQueueClassification `
+        -ReadClassification ([string]$resultEnvelope.Classification) `
+        -TaskResult $taskResult `
+        -Result $result `
+        -Operation $operation `
+        -OperationSucceeded ([bool]$operationSucceeded)
 
     return @{
         success = $operationSucceeded
@@ -1305,6 +1087,7 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
         taskName = $taskNameResult
         triggerMs = $triggerMs
         waitMs = $waitMs
+        recoveryQueueClassification = $queueClassification
         portalExitRoute = if ($result.PSObject.Properties['portalExitRoute']) { [string]$result.portalExitRoute } else { '' }
         localDnsLoopbackRestored = $localDnsLoopbackRestored
         acrylicNormalRestored = $acrylicNormalRestored

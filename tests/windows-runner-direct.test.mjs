@@ -878,6 +878,8 @@ describe('direct OpenPath Windows runner diagnostic', () => {
 
     assert.match(helper, /function Stage-OpenPathDirectRunnerRuntime/);
     assert.match(helper, /function Copy-OpenPathDirectRunnerNativeArtifact/);
+    assert.match(helper, /NativeHost\.ArtifactCatalog\.ps1/);
+    assert.match(helper, /Get-OpenPathNativeHostArtifactNames/);
     assert.match(helper, /Register-OpenPathTask/);
 
     for (const scriptText of [captiveScript, weduScript]) {
@@ -885,6 +887,28 @@ describe('direct OpenPath Windows runner diagnostic', () => {
       assert.doesNotMatch(scriptText, /function Copy-OpenPath(?:DirectRunner|Wedu)NativeArtifact/);
       assert.doesNotMatch(scriptText, /function Stage-OpenPathRuntimeFor(?:DirectRunner|WeduLab)/);
       assert.match(scriptText, /Stage-OpenPathDirectRunnerRuntime/);
+    }
+  });
+
+  test('extracted captive portal modules are tracked for runner archives', () => {
+    const requiredModules = [
+      'windows/lib/internal/CaptivePortal.DiagnosticsDiscovery.ps1',
+      'windows/lib/internal/CaptivePortal.RecoveryTransition.ps1',
+      'windows/lib/internal/CaptivePortal.AcrylicPolicyTransaction.ps1',
+      'windows/lib/internal/NativeHost.CaptivePortalRecoveryQueue.ps1',
+      'windows/lib/internal/Watchdog.CaptivePortalPolicy.ps1',
+    ];
+
+    for (const modulePath of requiredModules) {
+      const result = spawnSync('git', ['ls-files', '--error-unmatch', modulePath], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+      });
+      assert.equal(
+        result.status,
+        0,
+        `${modulePath} must be tracked for git-archive runner staging`
+      );
     }
   });
 

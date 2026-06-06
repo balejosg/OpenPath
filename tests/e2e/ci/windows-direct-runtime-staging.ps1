@@ -46,20 +46,13 @@ function Stage-OpenPathDirectRunnerRuntime {
         -Destination $InstalledRecoveryScriptPath `
         -Force
 
-    foreach ($artifactName in @(
-            'OpenPath-NativeHost.ps1',
-            'OpenPath-NativeHost.cmd',
-            'CapabilityStorage.ps1',
-            'RequestSetup.State.psm1',
-            'Common.Redaction.ps1',
-            'RuntimeDependency.Policy.ps1',
-            'RuntimeDependency.Queue.ps1',
-            'RuntimeDependency.Overlay.ps1',
-            'TaskRunner.ps1',
-            'NativeHost.State.ps1',
-            'NativeHost.Protocol.ps1',
-            'NativeHost.Actions.ps1'
-        )) {
+    $nativeHostArtifactCatalogPath = Join-Path $RepoRoot 'windows\lib\internal\NativeHost.ArtifactCatalog.ps1'
+    if (-not (Test-Path -LiteralPath $nativeHostArtifactCatalogPath)) {
+        throw "Native host artifact catalog was not found in ${MissingArtifactContext}: NativeHost.ArtifactCatalog.ps1"
+    }
+    . $nativeHostArtifactCatalogPath
+
+    foreach ($artifactName in @(Get-OpenPathNativeHostArtifactNames)) {
         Copy-OpenPathDirectRunnerNativeArtifact `
             -RepoRoot $RepoRoot `
             -InstalledOpenPathRoot $InstalledOpenPathRoot `

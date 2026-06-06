@@ -271,12 +271,17 @@ windows/lib/internal/NativeHost.State.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/NativeHost.Protocol.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/NativeHost.Actions.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/NativeHost.ArtifactCatalog.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1,windows/tests/Windows.Installer.Tests.ps1
+windows/lib/internal/NativeHost.CaptivePortalRecoveryQueue.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1,tests/windows-runner-direct.test.mjs
+windows/lib/internal/CaptivePortal.AcrylicPolicyTransaction.ps1|windows/tests/Windows.Watchdog.Tests.ps1
+windows/lib/internal/CaptivePortal.DiagnosticsDiscovery.ps1|windows/tests/Windows.Watchdog.Tests.ps1,tests/wedu-captive-portal-harness-contract.test.mjs
+windows/lib/internal/CaptivePortal.RecoveryTransition.ps1|windows/tests/Windows.Watchdog.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1
 windows/lib/internal/Update.Script.Config.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Update.Script.Apply.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Update.Script.Rollback.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/WindowsRoot.ps1|windows/tests/Windows.Update.Tests.ps1
 windows/lib/internal/Watchdog.FailCount.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Watchdog.Runtime.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/Watchdog.CaptivePortalPolicy.ps1|windows/tests/Windows.Watchdog.Tests.ps1
 windows/lib/internal/EndpointPolicyState.ps1|windows/tests/Windows.Update.Tests.ps1,windows/tests/Windows.Watchdog.Tests.ps1
 windows/lib/internal/EndpointStateReconciler.ps1|windows/tests/Windows.Update.Tests.ps1,windows/tests/Windows.Watchdog.Tests.ps1
 windows/lib/internal/Services.TaskBuilders.ps1|windows/tests/Windows.Tests.ps1

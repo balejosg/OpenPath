@@ -33,6 +33,8 @@ Initialize-OpenPathScriptSession `
 ) `
     -ScriptName 'Recover-CaptivePortal.ps1' | Out-Null
 
+. (Join-Path $OpenPathRoot 'lib\internal\CaptivePortal.RecoveryTransition.ps1')
+
 function Get-OpenPathRecoveryUtcNow {
     return [DateTime]::UtcNow
 }
@@ -260,61 +262,12 @@ function Get-OpenPathCaptivePortalRecoveryMarkerSummary {
         [string]$TriggerHost = ''
     )
 
-    $allowedHosts = if ($Marker -and $Marker.PSObject.Properties['allowedHosts']) {
-        @($Marker.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    }
-    else {
-        @()
-    }
-    $mode = if ($Marker -and $Marker.PSObject.Properties['mode'] -and $Marker.mode) { [string]$Marker.mode } else { '' }
-    $bootstrapHosts = if ($Marker -and $Marker.PSObject.Properties['bootstrapHosts']) { @($Marker.bootstrapHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
-    $redirectHosts = if ($Marker -and $Marker.PSObject.Properties['redirectHosts']) { @($Marker.redirectHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
-    $resourceHosts = if ($Marker -and $Marker.PSObject.Properties['resourceHosts']) { @($Marker.resourceHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
-    $observedRuntimeHosts = if ($Marker -and $Marker.PSObject.Properties['observedRuntimeHosts']) { @($Marker.observedRuntimeHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
-    $pendingRuntimeHosts = if ($Marker -and $Marker.PSObject.Properties['pendingRuntimeHosts']) { @($Marker.pendingRuntimeHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) } else { @() }
-    $discoveryTruncated = if ($Marker -and $Marker.PSObject.Properties['discoveryTruncated']) { [bool]$Marker.discoveryTruncated } else { $false }
-    $fallbackMode = if ($Marker -and $Marker.PSObject.Properties['fallbackMode'] -and $Marker.fallbackMode) { [string]$Marker.fallbackMode } elseif ($mode -eq 'passthrough') { 'passthrough' } else { 'none' }
-    $recoveryHostsApplied = ($mode -eq 'limited' -and $allowedHosts.Count -gt 0)
-    $configuredCaptivePortalDomains = @(Get-OpenPathRecoveryConfiguredCaptivePortalDomains)
-    $configuredCaptivePortalDomainsApplied = Test-OpenPathRecoveryConfiguredCaptivePortalDomainsApplied -AllowedHosts $allowedHosts -ConfiguredCaptivePortalDomains $configuredCaptivePortalDomains
-    $effectiveHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($allowedHosts) + @($bootstrapHosts) + @($redirectHosts) + @($resourceHosts) + @($observedRuntimeHosts) + @($configuredCaptivePortalDomains)))
-    $declaredRecoveryHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($TriggerHost) + @($configuredCaptivePortalDomains)))
-    if ($declaredRecoveryHosts.Count -le 0) {
-        $declaredRecoveryHosts = @($allowedHosts)
-    }
-    $declaredRecoveryHostsApplied = ($declaredRecoveryHosts.Count -gt 0)
-    foreach ($hostName in @($declaredRecoveryHosts)) {
-        if ($allowedHosts -notcontains $hostName) {
-            $declaredRecoveryHostsApplied = $false
-            break
-        }
-    }
-    $limitedModeReady = ($mode -eq 'limited' -and $recoveryHostsApplied -and $declaredRecoveryHostsApplied -and $configuredCaptivePortalDomainsApplied)
-    if (-not ($Marker -and $Marker.PSObject.Properties['limitedModeReady'] -and [bool]$Marker.limitedModeReady)) {
-        $limitedModeReady = $false
-    }
-    $recentSuccessEligible = $limitedModeReady
-    if ($recentSuccessEligible -and $TriggerHost) {
-        $recentSuccessEligible = ($allowedHosts -contains $TriggerHost)
-    }
-
-    return [PSCustomObject]@{
-        activeMarkerMode = $mode
-        allowedHosts = @($allowedHosts)
-        effectiveExactHosts = @($effectiveHosts)
-        configuredCaptivePortalDomains = @($configuredCaptivePortalDomains)
-        configuredCaptivePortalDomainsApplied = [bool]$configuredCaptivePortalDomainsApplied
-        bootstrapHosts = @($bootstrapHosts)
-        redirectHosts = @($redirectHosts)
-        resourceHosts = @($resourceHosts)
-        observedRuntimeHosts = @($observedRuntimeHosts)
-        pendingRuntimeHosts = @($pendingRuntimeHosts)
-        discoveryTruncated = [bool]$discoveryTruncated
-        fallbackMode = [string]$fallbackMode
-        limitedModeReady = [bool]$limitedModeReady
-        recoveryHostsApplied = $recoveryHostsApplied
-        recentSuccessEligible = [bool]$recentSuccessEligible
-    }
+    return (Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary `
+            -Marker $Marker `
+            -TriggerHost $TriggerHost `
+            -ConfiguredCaptivePortalDomains @(Get-OpenPathRecoveryConfiguredCaptivePortalDomains) `
+            -EffectiveHostResolver { param([string[]]$Hosts) @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $Hosts) } `
+            -ConfiguredDomainsAppliedTester { param([string[]]$AllowedHosts, [string[]]$ConfiguredCaptivePortalDomains) Test-OpenPathRecoveryConfiguredCaptivePortalDomainsApplied -AllowedHosts $AllowedHosts -ConfiguredCaptivePortalDomains $ConfiguredCaptivePortalDomains })
 }
 
 function Test-OpenPathRecentCaptivePortalRecoverySuccessEligible {
@@ -337,49 +290,11 @@ function Test-OpenPathRecentCaptivePortalRecoverySuccessEligible {
         return $false
     }
 
-    $eligible = if ($payload.PSObject.Properties['recentSuccessEligible']) { [bool]$payload.recentSuccessEligible } else { $false }
-    if (-not $eligible) {
-        return $false
-    }
-
-    if (-not ($payload.PSObject.Properties['limitedModeReady'] -and [bool]$payload.limitedModeReady)) {
-        return $false
-    }
-
-    if ($payload.PSObject.Properties['fallbackMode'] -and [string]$payload.fallbackMode -eq 'passthrough') {
-        return $false
-    }
-
-    if ($payload.PSObject.Properties['activeMarkerMode'] -and [string]$payload.activeMarkerMode -eq 'passthrough') {
-        return $false
-    }
-
-    if ($TriggerHost) {
-        $allowedHosts = if ($payload.PSObject.Properties['allowedHosts']) {
-            @($payload.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        }
-        else {
-            @()
-        }
-        if ($allowedHosts.Count -le 0 -or $allowedHosts -notcontains $TriggerHost) {
-            return $false
-        }
-    }
-
-    $configuredCaptivePortalDomains = @(Get-OpenPathRecoveryConfiguredCaptivePortalDomains)
-    if ($configuredCaptivePortalDomains.Count -gt 0) {
-        $allowedHosts = if ($payload.PSObject.Properties['allowedHosts']) {
-            @($payload.allowedHosts | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        }
-        else {
-            @()
-        }
-        if (-not (Test-OpenPathRecoveryConfiguredCaptivePortalDomainsApplied -AllowedHosts $allowedHosts -ConfiguredCaptivePortalDomains $configuredCaptivePortalDomains)) {
-            return $false
-        }
-    }
-
-    return $true
+    return (Test-OpenPathCaptivePortalRecoveryTransitionRecentSuccess `
+            -RecentSuccess $payload `
+            -TriggerHost $TriggerHost `
+            -ConfiguredCaptivePortalDomains @(Get-OpenPathRecoveryConfiguredCaptivePortalDomains) `
+            -ConfiguredDomainsAppliedTester { param([string[]]$AllowedHosts, [string[]]$ConfiguredCaptivePortalDomains) Test-OpenPathRecoveryConfiguredCaptivePortalDomainsApplied -AllowedHosts $AllowedHosts -ConfiguredCaptivePortalDomains $ConfiguredCaptivePortalDomains })
 }
 
 function Invoke-OpenPathCaptivePortalAuthenticatedRestore {
