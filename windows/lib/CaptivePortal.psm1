@@ -1379,7 +1379,12 @@ function Enable-OpenPathCaptivePortalMode {
     if (Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore) {
         $marker = Get-OpenPathCaptivePortalMarker
     }
-    $allowedHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains)
+    # Include the admin-declared captive portal domains as recovery hosts so the
+    # autonomous watchdog path (which calls this without -PortalRecoveryDomains) enters
+    # LIMITED mode -- keeping the adapter on 127.0.0.1 and NX * (fail-closed) and
+    # forwarding the declared domains to the network DHCP DNS -- instead of falling back
+    # to passthrough (which resets the adapter DNS and is fail-open).
+    $allowedHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($PortalRecoveryDomains) + @(Get-OpenPathConfiguredCaptivePortalDomains)))
     if ($allowedHosts.Count -le 0) {
         return (Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $marker)
     }
