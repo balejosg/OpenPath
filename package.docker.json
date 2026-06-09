@@ -14,6 +14,7 @@
     "fast-uri": "^3.1.2",
     "qs": "^6.14.2",
     "minimatch": "^10.2.1",
+    "shell-quote": "^1.8.4",
     "router": { "path-to-regexp": "^8.4.0" },
     "swagger-jsdoc": { "glob": "^11.0.0" }
   },
