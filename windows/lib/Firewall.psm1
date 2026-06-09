@@ -17,6 +17,7 @@ Export-ModuleMember -Function @(
     'Get-DefaultVpnBlockRules',
     'Get-DefaultTorBlockPorts',
     'Set-OpenPathFirewall',
+    'Add-OpenPathCaptivePortalUpstreamFirewallAllow',
     'Remove-OpenPathFirewall',
     'Test-FirewallActive',
     'Get-FirewallStatus',

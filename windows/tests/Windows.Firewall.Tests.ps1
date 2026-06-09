@@ -467,4 +467,37 @@ Describe "Firewall Module" {
                 }).Count | Should -Be 0
         }
     }
+
+    Context "Captive portal upstream firewall allow" {
+        BeforeEach {
+            Initialize-FirewallRuleCaptureMocks
+            if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) {
+                function global:Get-NetFirewallRule { }
+            }
+            Mock Get-NetFirewallRule { @() } -ModuleName Firewall
+        }
+
+        It "Adds additive UDP+TCP/53 allow rules for the portal upstream, scoped to Acrylic and prefixed for cleanup" {
+            Set-FirewallAcrylicServicePresent -Present $true
+
+            $result = Add-OpenPathCaptivePortalUpstreamFirewallAllow -Address '172.23.136.5' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            $rules = @(Get-CapturedFirewallRules | Where-Object {
+                    $_.RemoteAddress -eq '172.23.136.5' -and $_.RemotePort -eq '53' -and $_.Action -eq 'Allow'
+                })
+            (@($rules | Where-Object { $_.Protocol -eq 'UDP' })).Count | Should -Be 1
+            (@($rules | Where-Object { $_.Protocol -eq 'TCP' })).Count | Should -Be 1
+            # OpenPath-DNS prefix => removed by the firewall rebuild on protected-mode restore
+            (@($rules | Where-Object { $_.DisplayName -like 'OpenPath-DNS-Allow-PortalUpstream-*' })).Count | Should -Be 2
+            # scoped to the Acrylic program (not a blanket DNS allow)
+            (@($rules | Where-Object { $_.Program -like '*AcrylicService.exe' })).Count | Should -Be 2
+        }
+
+        It "Refuses an invalid upstream address and creates no rules" {
+            $result = Add-OpenPathCaptivePortalUpstreamFirewallAllow -Address 'not-an-ip'
+            $result | Should -BeFalse
+            @(Get-CapturedFirewallRules).Count | Should -Be 0
+        }
+    }
 }

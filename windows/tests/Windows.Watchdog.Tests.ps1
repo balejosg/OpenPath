@@ -671,6 +671,31 @@ Describe "Watchdog Script" {
             $marker.configuredCaptivePortalDomainsApplied | Should -BeTrue
         }
 
+        It "Renders configured captive portal domains with subdomain coverage in limited mode while keeping discovered hosts exact" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $module = Import-Module $modulePath -Force -PassThru
+
+            # 'redirect.example.test' is an auto-discovered recovery host (not admin-configured,
+            # not an essential domain); 'nce.wedu.comunidad.madrid' is the admin-configured portal domain.
+            $content = & $module {
+                function Get-OpenPathConfiguredCaptivePortalDomains { @('nce.wedu.comunidad.madrid') }
+
+                $definition = New-OpenPathLimitedCaptivePortalHostsDefinition `
+                    -PortalRecoveryDomains @('redirect.example.test', 'nce.wedu.comunidad.madrid') `
+                    -UpstreamDns '192.0.2.53'
+                ConvertTo-AcrylicHostsContent -Definition $definition
+            }
+
+            # Admin-configured portal domain: must cover the host AND all subdomains.
+            $content | Should -Match 'FW nce\.wedu\.comunidad\.madrid'
+            $content | Should -Match 'FW >nce\.wedu\.comunidad\.madrid'
+            # Auto-discovered recovery host: stays exact (no descendant forward).
+            $content | Should -Match 'FW redirect\.example\.test'
+            $content | Should -Not -Match 'FW >redirect\.example\.test'
+            # Default block must still come last so everything else is NXDOMAIN'd.
+            $content.IndexOf('FW >nce.wedu.comunidad.madrid') | Should -BeLessThan $content.IndexOf('NX *')
+        }
+
         It "Performs one limited-mode render without bootstrap discovery promotion" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw

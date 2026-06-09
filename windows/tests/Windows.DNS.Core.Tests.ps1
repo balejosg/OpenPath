@@ -197,7 +197,7 @@ Describe "DNS Module" {
     }
 
     Context "Get-OpenPathDnsSettings" {
-        It "Renders configured captive portal exact hosts before the default sinkhole" {
+        It "Renders configured captive portal domains with subdomain coverage before the default sinkhole" {
             InModuleScope DNS {
                 $definition = New-AcrylicHostsDefinition `
                     -WhitelistedDomains @('allowed.example.test') `
@@ -206,10 +206,16 @@ Describe "DNS Module" {
                 $content = ConvertTo-AcrylicHostsContent -Definition $definition
 
                 $content | Should -Match '# Captive portal infrastructure \(configured\)'
+                # Configured portal domains must cover the host AND all subdomains (FW >domain),
+                # exactly like normal whitelist domains, so portal login/asset/redirect subdomains resolve.
                 $content | Should -Match 'FW login\.example\.test'
+                $content | Should -Match 'FW >login\.example\.test'
                 $content | Should -Match 'FW wifi\.example\.test'
-                $content | Should -Match 'FW portal\.127\.0\.0\.1\.sslip\.io'
+                $content | Should -Match 'FW >wifi\.example\.test'
+                $content | Should -Match 'FW >portal\.127\.0\.0\.1\.sslip\.io'
+                # Affinity mask must include the wildcard so subdomains are forwarded upstream too.
                 $definition.DomainAffinityMask | Should -Match 'portal\.127\.0\.0\.1\.sslip\.io'
+                $definition.DomainAffinityMask | Should -Match '\*\.login\.example\.test'
                 $content.IndexOf('# Captive portal infrastructure (configured)') | Should -BeLessThan $content.IndexOf('NX *')
             }
         }

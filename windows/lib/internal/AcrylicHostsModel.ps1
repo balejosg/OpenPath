@@ -201,7 +201,7 @@ function New-AcrylicHostsDefinition {
     $effectiveRuntimeDependencyDomains = @(Get-AcrylicAllowedRuntimeDependencyDomains -Domains $RuntimeDependencyDomains -BlockedSubdomains $BlockedSubdomains)
     $runtimeDependencyLines = @(foreach ($domain in $effectiveRuntimeDependencyDomains) { Get-AcrylicExactForwardRule -Domain $domain })
     $effectiveCaptivePortalDomains = @($CaptivePortalDomains | ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
-    $captivePortalLines = @(foreach ($domain in $effectiveCaptivePortalDomains) { Get-AcrylicExactForwardRule -Domain $domain })
+    $captivePortalLines = @(foreach ($domain in $effectiveCaptivePortalDomains) { @(Get-AcrylicForwardRules -Domain $domain -BlockedSubdomains $BlockedSubdomains) })
 
     $sections = @(
         (New-AcrylicHostsSection -Title 'ESSENTIAL DOMAINS (always allowed)' -Description 'Required for system operation' -Lines $essentialLines)
@@ -214,7 +214,7 @@ function New-AcrylicHostsDefinition {
         $sections += New-AcrylicHostsSection -Title "LOCAL RUNTIME DEPENDENCIES ($($runtimeDependencyLines.Count))" -Lines @($runtimeDependencyLines)
     }
     if ($captivePortalLines.Count -gt 0) {
-        $sections += New-AcrylicHostsSection -Title 'Captive portal infrastructure (configured)' -Description 'Configured exact-host captive portal access' -Lines @($captivePortalLines)
+        $sections += New-AcrylicHostsSection -Title 'Captive portal infrastructure (configured)' -Description 'Configured captive portal access (domain and subdomains)' -Lines @($captivePortalLines)
     }
     $sections += New-AcrylicHostsSection -Title 'DEFAULT BLOCK (NXDOMAIN for everything else)' -Description 'This MUST come last after FW rules.' -Lines @('NX *')
 
@@ -222,7 +222,7 @@ function New-AcrylicHostsDefinition {
         Get-AcrylicAffinityMaskEntries -Domains @($essentialDomains)
         Get-AcrylicAffinityMaskEntries -Domains @($effectiveWhitelistedDomains) -BlockedSubdomains $BlockedSubdomains
         Get-AcrylicExactAffinityMaskEntries -Domains @($effectiveRuntimeDependencyDomains)
-        Get-AcrylicExactAffinityMaskEntries -Domains @($effectiveCaptivePortalDomains)
+        Get-AcrylicAffinityMaskEntries -Domains @($effectiveCaptivePortalDomains) -BlockedSubdomains $BlockedSubdomains
     ) | Select-Object -Unique
 
     return [PSCustomObject]@{

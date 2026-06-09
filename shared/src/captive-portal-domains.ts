@@ -17,6 +17,16 @@ function isExactHostname(value: string): boolean {
   );
 }
 
+/**
+ * Validates and normalizes admin-entered captive portal domains.
+ *
+ * Input is required to be an exact hostname (no wildcards/URLs); admins enter a
+ * base host such as `nce.wedu.comunidad.madrid`. Subdomain coverage is NOT part
+ * of the stored value — it is applied at enforcement time. The Windows agent
+ * forwards each configured domain AND all of its subdomains (Acrylic `FW >domain`
+ * + `*.domain` affinity), so captive portal login/asset/redirect subdomains
+ * resolve. Matching is therefore suffix-based even though the stored value is exact.
+ */
 export function normalizeCaptivePortalDomains(
   values: readonly string[] | null | undefined
 ): string[] {

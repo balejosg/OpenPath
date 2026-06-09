@@ -279,8 +279,26 @@ download.mozilla.org/firefox/releases
 
     Context "Get-OpenPathCaptivePortalUpstreamDns with mocked network" {
         BeforeEach {
+            Mock Get-OpenPathCaptivePortalDhcpNameServerCandidates { @() } -ModuleName Common
             Mock Get-OpenPathCaptivePortalOriginalDnsCandidates { @() } -ModuleName Common
             Mock Get-OpenPathCaptivePortalDhcpServerCandidates { @() } -ModuleName Common
+        }
+
+        It "Prefers the DHCP-offered DNS (registry DhcpNameServer) that resolves the declared portal domain" {
+            # DhcpNameServer survives OpenPath's static 127.0.0.1 override; the adapter DNS is therefore 127.0.0.1.
+            Mock Get-OpenPathCaptivePortalDhcpNameServerCandidates { @('172.23.136.5', '172.23.144.5') } -ModuleName Common
+            Mock Get-NetAdapter { @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 }) } -ModuleName Common
+            Mock Get-DnsClientServerAddress { @([PSCustomObject]@{ InterfaceIndex = 7; ServerAddresses = @('127.0.0.1') }) } -ModuleName Common
+            # Only the primary network resolver knows the internal portal host.
+            Mock Resolve-DnsName { @([PSCustomObject]@{ IPAddress = '172.23.140.138' }) } -ModuleName Common -ParameterFilter { $Server -eq '172.23.136.5' -and $Name -eq 'nce.wedu.comunidad.madrid' }
+            Mock Resolve-DnsName { throw 'portal not known by this resolver' } -ModuleName Common -ParameterFilter { $Server -eq '172.23.144.5' -and $Name -eq 'nce.wedu.comunidad.madrid' }
+
+            $dns = Get-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset -ProbeDomains @('nce.wedu.comunidad.madrid')
+
+            $dns.Address | Should -Be '172.23.136.5'
+            $dns.Source | Should -Be 'dhcp-nameserver'
+            $dns.Verified | Should -BeTrue
+            $dns.UsableForLimited | Should -BeTrue
         }
 
         It "Prefers visible non-local adapter DNS after captive portal reset without public probes" {

@@ -132,6 +132,41 @@ function Get-OpenPathCaptivePortalDhcpServerCandidates {
     }
 }
 
+function Get-OpenPathCaptivePortalDhcpNameServerCandidates {
+    # The DHCP-offered DNS servers are preserved by Windows in the registry
+    # (DhcpNameServer) even after OpenPath pins the adapter DNS to 127.0.0.1.
+    # This is the authoritative source of the network's real resolver -- the only
+    # one that knows internal captive-portal hostnames -- so it must be consulted
+    # before the (overwritten) adapter DNS or the poisoned original-dns snapshot.
+    try {
+        $root = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
+        if (-not (Test-Path $root -ErrorAction SilentlyContinue)) {
+            return @()
+        }
+
+        return @(
+            foreach ($iface in @(Get-ChildItem $root -ErrorAction SilentlyContinue)) {
+                $props = Get-ItemProperty -Path $iface.PSPath -ErrorAction SilentlyContinue
+                $value = [string]$props.DhcpNameServer
+                if ([string]::IsNullOrWhiteSpace($value)) { continue }
+                foreach ($server in @($value -split '[,\s]+')) {
+                    $candidate = ([string]$server).Trim()
+                    if (
+                        $candidate -and
+                        $candidate -notin @('127.0.0.1', '0.0.0.0') -and
+                        $candidate -match '^\d{1,3}(?:\.\d{1,3}){3}$'
+                    ) {
+                        $candidate
+                    }
+                }
+            }
+        ) | Select-Object -Unique
+    }
+    catch {
+        return @()
+    }
+}
+
 function Get-PrimaryDNS {
     <#
     .SYNOPSIS
@@ -229,6 +264,20 @@ function Get-OpenPathCaptivePortalUpstreamDns {
         }
 
         return [bool](Test-OpenPathDnsServerForDomains -Server $Address -ProbeDomains $limitedProbeDomains)
+    }
+
+    # Highest-priority source: the DHCP-offered DNS preserved in the registry.
+    # It survives the static 127.0.0.1 override and is the only resolver that knows
+    # internal captive-portal hostnames. Only returned when it actually resolves the
+    # declared portal probe domains, so it never weakens normal selection.
+    foreach ($candidate in @(Get-OpenPathCaptivePortalDhcpNameServerCandidates)) {
+        if (Test-OpenPathCaptivePortalLimitedUpstream -Address ([string]$candidate)) {
+            return (New-OpenPathCaptivePortalUpstreamCandidate `
+                    -Address ([string]$candidate) `
+                    -Source 'dhcp-nameserver' `
+                    -Verified:($limitedProbeDomains.Count -gt 0) `
+                    -UsableForLimited:$true)
+        }
     }
 
     $adapterDnsCandidates = @()

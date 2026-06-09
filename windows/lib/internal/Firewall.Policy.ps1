@@ -12,6 +12,62 @@ function Test-OpenPathFirewallIpAddress {
     return [System.Net.IPAddress]::TryParse($Address.Trim(), [ref]$parsedAddress)
 }
 
+function Add-OpenPathCaptivePortalUpstreamFirewallAllow {
+    <#
+    .SYNOPSIS
+        Allows Acrylic to reach the captive-portal upstream DNS (the network's DHCP
+        resolver) through the anti-bypass firewall.
+    .DESCRIPTION
+        OpenPath's outbound DNS firewall only permits Acrylic to talk to the
+        configured primary/secondary upstream. When a captive portal requires
+        forwarding the admin-declared portal domains to the network's own resolver,
+        Acrylic's queries to that resolver are otherwise dropped, so the portal never
+        resolves. This adds an additive allow rule (port 53, scoped to Acrylic) for
+        the portal upstream. Rules use the OpenPath-DNS prefix, so the firewall
+        rebuild on protected-mode restore removes them automatically -- the allow is
+        only in effect during the captive-portal window. The adapter stays on
+        127.0.0.1 and the Acrylic NX * default-block is untouched (no fail-open).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory = $true)][string]$Address,
+        [string]$AcrylicPath = "${env:ProgramFiles(x86)}\Acrylic DNS Proxy"
+    )
+
+    if (-not (Test-OpenPathFirewallIpAddress -Address $Address)) {
+        Write-OpenPathLog "Captive portal upstream firewall allow skipped: invalid address '$Address'" -Level WARN
+        return $false
+    }
+    if (-not (Test-AdminPrivileges)) {
+        Write-OpenPathLog 'Administrator privileges required for captive portal upstream firewall allow' -Level WARN
+        return $false
+    }
+    if (-not $PSCmdlet.ShouldProcess('Windows Firewall', "Allow Acrylic to reach captive portal upstream $Address")) {
+        return $false
+    }
+
+    $acrylicExe = "$AcrylicPath\AcrylicService.exe"
+    foreach ($protocol in @('UDP', 'TCP')) {
+        $name = "$script:RulePrefix-Allow-PortalUpstream-$protocol"
+        Remove-OpenPathFirewallRuleObjects -Rules @(Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue)
+
+        $ruleParameters = @{
+            DisplayName   = $name
+            Direction     = 'Outbound'
+            Protocol      = $protocol
+            RemoteAddress = $Address
+            RemotePort    = 53
+            Action        = 'Allow'
+            Profile       = 'Any'
+            Description   = "Allow Acrylic to reach captive portal upstream $Address over $protocol"
+        }
+        if (Test-Path $acrylicExe) { $ruleParameters['Program'] = $acrylicExe }
+        New-OpenPathFirewallRule @ruleParameters | Out-Null
+    }
+    Write-OpenPathLog "Captive portal upstream firewall allow set for $Address"
+    return $true
+}
+
 function Set-OpenPathFirewall {
     <#
     .SYNOPSIS

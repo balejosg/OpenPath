@@ -681,6 +681,14 @@ function Enable-OpenPathCaptivePortalLimitedMode {
 
     Write-OpenPathLog 'Watchdog: Captive portal detected - entering limited portal mode for exact recovery hosts' -Level WARN
 
+    # The anti-bypass firewall only allows Acrylic to reach the configured upstream;
+    # open it for this portal upstream so Acrylic can forward the declared portal
+    # domains to the network resolver. Removed by the firewall rebuild on protected-mode restore.
+    if (Get-Command -Name 'Add-OpenPathCaptivePortalUpstreamFirewallAllow' -ErrorAction SilentlyContinue) {
+        try { Add-OpenPathCaptivePortalUpstreamFirewallAllow -Address ([string]$upstream.Address) | Out-Null }
+        catch { Write-OpenPathLog "Watchdog: captive portal upstream firewall allow failed: $_" -Level WARN }
+    }
+
     $acrylicPath = Get-AcrylicPath
     if (-not $acrylicPath) { return $false }
     $hostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
@@ -773,9 +781,20 @@ function New-OpenPathLimitedCaptivePortalHostsDefinition {
         MaxDomains = 500
     }
     $definition = New-AcrylicHostsDefinition -WhitelistedDomains @() -BlockedSubdomains @() -RuntimeDependencyDomains @() -DnsSettings $dnsSettings
+    $subdomainInclusiveSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($configuredDomain in @(Get-OpenPathConfiguredCaptivePortalDomains)) {
+        $normalizedConfigured = ([string]$configuredDomain).Trim().TrimEnd('.')
+        if ($normalizedConfigured) { [void]$subdomainInclusiveSet.Add($normalizedConfigured) }
+    }
     $portalRecoveryLines = @(
         foreach ($domain in @($PortalRecoveryDomains)) {
-            Get-AcrylicExactForwardRule -Domain $domain
+            $normalizedRecoveryDomain = ([string]$domain).Trim().TrimEnd('.')
+            if ($subdomainInclusiveSet.Contains($normalizedRecoveryDomain)) {
+                @(Get-AcrylicForwardRules -Domain $domain)
+            }
+            else {
+                Get-AcrylicExactForwardRule -Domain $domain
+            }
         }
     )
 
@@ -783,7 +802,7 @@ function New-OpenPathLimitedCaptivePortalHostsDefinition {
     foreach ($section in @($definition.Sections)) {
         if ([string]$section.Title -like 'DEFAULT BLOCK*') {
             if ($portalRecoveryLines.Count -gt 0) {
-                $sections += New-AcrylicHostsSection -Title 'CAPTIVE PORTAL RECOVERY' -Description 'Temporary exact-host recovery access' -Lines @($portalRecoveryLines)
+                $sections += New-AcrylicHostsSection -Title 'CAPTIVE PORTAL RECOVERY' -Description 'Temporary recovery access (configured portal domains cover subdomains; discovered hosts exact)' -Lines @($portalRecoveryLines)
             }
         }
         $sections += $section
@@ -910,7 +929,17 @@ function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
         $iniContent = "[GlobalSection]`n$iniContent"
     }
 
-    $recoveryAffinityMask = (@(Get-AcrylicExactAffinityMaskEntries -Domains $PortalRecoveryDomains) | Select-Object -Unique) -join ';'
+    $subdomainInclusiveSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($configuredDomain in @(Get-OpenPathConfiguredCaptivePortalDomains)) {
+        $normalizedConfigured = ([string]$configuredDomain).Trim().TrimEnd('.')
+        if ($normalizedConfigured) { [void]$subdomainInclusiveSet.Add($normalizedConfigured) }
+    }
+    $exactRecoveryDomains = @($PortalRecoveryDomains | Where-Object { -not $subdomainInclusiveSet.Contains(([string]$_).Trim().TrimEnd('.')) })
+    $inclusiveRecoveryDomains = @($PortalRecoveryDomains | Where-Object { $subdomainInclusiveSet.Contains(([string]$_).Trim().TrimEnd('.')) })
+    $recoveryAffinityMask = (@(
+        @(Get-AcrylicExactAffinityMaskEntries -Domains $exactRecoveryDomains)
+        @(Get-AcrylicAffinityMaskEntries -Domains $inclusiveRecoveryDomains)
+    ) | Select-Object -Unique) -join ';'
     $settings = [ordered]@{
         "PrimaryServerAddress" = $UpstreamDns
         "PrimaryServerPort" = "53"
