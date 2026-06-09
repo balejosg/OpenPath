@@ -41,6 +41,15 @@ function Stage-OpenPathDirectRunnerRuntime {
     New-Item -ItemType Directory -Path $installedLibRoot, $installedScriptRoot -Force | Out-Null
 
     Copy-Item -Path (Join-Path $RepoRoot 'windows\lib\*') -Destination $installedLibRoot -Recurse -Force
+    # Install ALL runtime scripts (Test-DNSHealth.ps1, Recover-CaptivePortal.ps1, etc.),
+    # mirroring the production installer. Previously only Recover-CaptivePortal.ps1 was
+    # staged, so the registered OpenPath-Watchdog task pointed at a missing
+    # scripts\Test-DNSHealth.ps1 and exited 0xFFFD0000 without ever running portal
+    # detection -- which is why autonomous detection never entered limited mode.
+    Get-ChildItem -Path (Join-Path $RepoRoot 'windows\scripts\*.ps1') -ErrorAction SilentlyContinue |
+        Copy-Item -Destination $installedScriptRoot -Force
+    Get-ChildItem -Path (Join-Path $RepoRoot 'windows\scripts\*.cmd') -ErrorAction SilentlyContinue |
+        Copy-Item -Destination $installedScriptRoot -Force
     Copy-Item `
         -LiteralPath (Join-Path $RepoRoot 'windows\scripts\Recover-CaptivePortal.ps1') `
         -Destination $InstalledRecoveryScriptPath `
