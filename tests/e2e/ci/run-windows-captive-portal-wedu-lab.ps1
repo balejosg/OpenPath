@@ -1334,8 +1334,11 @@ function Invoke-WeduWatchdogUntilLimited {
                 Start-Sleep -Milliseconds 500
                 $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
                     Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
-                # 267009 (0x41301) == task is currently running.
-                if ($info -and [int]$info.LastTaskResult -ne 267009) {
+                # 267009 (0x41301) == task is currently running. LastTaskResult is an
+                # unsigned 32-bit code (e.g. 0xFFFD0000 = 4294770688) that overflows
+                # [int]; use [long] so the wait loop does not throw and actually waits
+                # for the watchdog run to finish before we read the observation/marker.
+                if ($info -and [long]$info.LastTaskResult -ne 267009) {
                     break
                 }
             }
