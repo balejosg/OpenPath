@@ -11,7 +11,10 @@ WINDOWS_VMID="${OPENPATH_WEDU_CI_WINDOWS_VMID:-103}"
 GATEWAY_VMID="${OPENPATH_WEDU_CI_GATEWAY_VMID:-121}"
 WINDOWS_RUNNER_NAME="${OPENPATH_WEDU_CI_WINDOWS_RUNNER_NAME:-openpath-windows-103}"
 GATEWAY_URL="${OPENPATH_WEDU_LAB_GATEWAY_URL:-http://10.77.0.1}"
-EXPECTED_DNS="${OPENPATH_WEDU_LAB_EXPECTED_DNS:-10.77.0.1}"
+# Dedicated resolver IP that DHCP advertises (DHCP option 6), separate from the
+# gateway/DHCP-server IP 10.77.0.1. This split (DNS != gateway != dhcp-server)
+# is what reproduces production, where only the DhcpNameServer resolves the portal.
+EXPECTED_DNS="${OPENPATH_WEDU_LAB_EXPECTED_DNS:-10.77.0.53}"
 EXPECTED_SUBNET="${OPENPATH_WEDU_LAB_EXPECTED_SUBNET:-10.77.0.0/24}"
 DIRECT_TIMEOUT_SECONDS="${OPENPATH_WEDU_CI_DIRECT_TIMEOUT_SECONDS:-900}"
 ARTIFACT_DIR="${OPENPATH_WEDU_CI_ARTIFACT_DIR:-.opencode/tmp/wedu-captive-portal-lab-ci/$(date -u +%Y%m%dT%H%M%SZ)}"
