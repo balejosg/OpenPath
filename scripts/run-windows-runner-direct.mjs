@@ -187,6 +187,8 @@ const CAPTIVE_PORTAL_NAVIGATION_ARTIFACTS = [
 const CAPTIVE_PORTAL_WEDU_LAB_ARTIFACTS = [
   'wedu-lab-network-before.json',
   'wedu-lab-dns-before.json',
+  'wedu-lab-configured-upstream-probe.json',
+  'wedu-lab-autonomous-detection.json',
   'wedu-lab-dns-limited.json',
   'wedu-lab-browser-before.json',
   'wedu-lab-browser-limited.json',
