@@ -852,7 +852,16 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduScript, /gateway-reset/);
     assert.match(weduScript, /recover-captive-portal-navigation/);
     assert.match(weduScript, /triggerHost = \$script:WeduHost/);
-    assert.match(weduScript, /portalRecoveryHosts = @\(\$script:WeduLimitedHosts\)/);
+    // Limited mode must be reached by the watchdog's own detection, not by a
+    // pre-injected forced recovery host list.
+    assert.doesNotMatch(weduScript, /portalRecoveryHosts = @\(\$script:WeduLimitedHosts\)/);
+    assert.match(weduScript, /Invoke-WeduWatchdogUntilLimited/);
+    assert.match(weduScript, /Start-ScheduledTask -TaskName \$script:WatchdogTaskName/);
+    assert.match(weduScript, /Ensure-WeduDirectRunnerConfig/);
+    assert.match(weduScript, /captivePortalDomains/);
+    assert.match(weduScript, /limitedModeEnteredVia/);
+    assert.match(weduScript, /configuredUpstreamResolvesPortalHost/);
+    assert.match(weduScript, /upstreamSource/);
     assert.match(weduScript, /operation = 'reconcile'/);
     assert.match(weduScript, /windows-direct-runtime-staging\.ps1/);
     assert.match(weduScript, /Stage-OpenPathDirectRunnerRuntime/);

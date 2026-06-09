@@ -34,6 +34,18 @@ $script:WeduAssetHost = 'assets.wedu-lab.test'
 $script:WeduCdnHost = 'cdn.wedu-lab.test'
 $script:WeduAuthHost = 'auth.wedu-lab.test'
 $script:WeduLimitedHosts = @($script:WeduHost, $script:WeduLoginHost, $script:WeduAssetHost, $script:WeduCdnHost, $script:WeduAuthHost)
+# Captive-portal domains the runner DECLARES in config.json. The autonomous
+# watchdog reads these (Get-OpenPathConfiguredCaptivePortalDomains) to decide it
+# may enter LIMITED mode; the declared portal host must be the lab portal host.
+$script:WeduConfiguredPortalDomains = @($script:WeduHost, $script:WeduLoginHost, $script:WeduAssetHost, $script:WeduCdnHost, $script:WeduAuthHost)
+# Stale/public upstream the runner's Acrylic forwards to (NOT the dedicated
+# network DNS 10.77.0.53). It must NOT resolve the portal host, so protected-mode
+# resolution fails and the watchdog must recover the network resolver itself.
+$script:WeduStalePrimaryDns = '8.8.8.8'
+$script:WeduStaleSecondaryDns = '8.8.4.4'
+$script:WatchdogTaskName = 'OpenPath-Watchdog'
+$script:CaptiveMarkerPath = 'C:\OpenPath\data\captive-portal-active.json'
+$script:CaptiveObservationPath = 'C:\OpenPath\data\captive-portal-observation.json'
 $script:DetectionUrl = 'http://detectportal.firefox.com/success.txt'
 $script:MsftConnectTestUrl = 'http://www.msftconnecttest.com/connecttest.txt'
 $script:WeduCaptiveHostPattern = '10\.77\.0\.1|nce\.wedu\.comunidad\.madrid|wlogin\.wedu-lab\.test|assets\.wedu-lab\.test|cdn\.wedu-lab\.test|auth\.wedu-lab\.test|WEDU lab captive portal'
@@ -725,6 +737,12 @@ return true;
 }
 
 function Test-WeduLimitedModeDns {
+    param(
+        [AllowNull()][string]$UpstreamSource = '',
+        [AllowNull()][string[]]$ConfiguredDomains = @()
+    )
+
+    $configuredSet = @($ConfiguredDomains | ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } | Where-Object { $_ })
     $results = foreach ($limitedHost in @($script:WeduLimitedHosts)) {
         $answers = @()
         $errorText = ''
@@ -734,10 +752,14 @@ function Test-WeduLimitedModeDns {
         catch {
             $errorText = [string]$_
         }
+        $addresses = @($answers | ForEach-Object { [string]$_.IPAddress } | Where-Object { $_ })
         [pscustomobject]@{
             host = $limitedHost
             resolvedThroughLocalDns = [bool]($answers.Count -gt 0)
-            answers = @($answers | ForEach-Object { [string]$_.IPAddress } | Where-Object { $_ })
+            answers = @($addresses)
+            # Contract field: proves the configured portal domain resolved locally.
+            addresses = @($addresses)
+            isConfiguredPortalDomain = [bool]($configuredSet -contains ([string]$limitedHost).Trim().TrimEnd('.').ToLowerInvariant())
             error = $errorText
         }
     }
@@ -757,6 +779,9 @@ function Test-WeduLimitedModeDns {
     return [pscustomobject]@{
         success = [bool]((@($results | Where-Object { -not $_.resolvedThroughLocalDns }).Count -eq 0) -and $negativeBlocked)
         server = '127.0.0.1'
+        # Source the agent used to recover the network resolver during limited mode
+        # (must be 'dhcp-nameserver' for a production-faithful lab).
+        upstreamSource = [string]$UpstreamSource
         hosts = @($results)
         negativeControl = [pscustomobject]@{
             host = $negativeHost
@@ -1194,6 +1219,175 @@ function Test-OpenPathProtectionAfter {
     }
 }
 
+function Set-WeduConfigProperty {
+    param(
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [AllowNull()][object]$Value
+    )
+
+    if ($Config.PSObject.Properties[$Name]) {
+        $Config.$Name = $Value
+    }
+    else {
+        $Config | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+    }
+}
+
+function Ensure-WeduDirectRunnerConfig {
+    # Declare the lab portal host as a captive-portal recovery domain and point
+    # Acrylic at a stale/public upstream. The autonomous watchdog reads
+    # captivePortalDomains to know it may enter LIMITED mode, and the stale
+    # primaryDNS reproduces the production condition where the configured upstream
+    # cannot resolve the portal host.
+    $configPath = Join-Path (Join-Path $script:InstalledOpenPathRoot 'data') 'config.json'
+    New-Item -ItemType Directory -Path (Split-Path $configPath -Parent) -Force | Out-Null
+
+    if (Test-Path -LiteralPath $configPath) {
+        try {
+            $config = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            throw "WEDU runner config is invalid JSON at ${configPath}: $_"
+        }
+    }
+    else {
+        $config = [pscustomobject]@{}
+    }
+
+    Set-WeduConfigProperty -Config $config -Name 'primaryDNS' -Value $script:WeduStalePrimaryDns
+    Set-WeduConfigProperty -Config $config -Name 'secondaryDNS' -Value $script:WeduStaleSecondaryDns
+    Set-WeduConfigProperty -Config $config -Name 'captivePortalDomains' -Value @($script:WeduConfiguredPortalDomains)
+    Set-WeduConfigProperty -Config $config -Name 'enableFirewall' -Value $true
+
+    $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
+    return [pscustomobject]@{
+        path = $configPath
+        primaryDNS = [string]$config.primaryDNS
+        captivePortalDomains = @($config.captivePortalDomains)
+    }
+}
+
+function Test-WeduConfiguredUpstreamPortalResolution {
+    # Probe the portal host against the configured (stale/public) Acrylic upstream.
+    # In a production-faithful lab this must FAIL: the configured upstream does not
+    # know the internal portal host, so the agent has to recover the network DNS.
+    param([AllowNull()][string]$ConfiguredUpstream)
+
+    if ([string]::IsNullOrWhiteSpace($ConfiguredUpstream)) {
+        return [pscustomobject]@{ configuredUpstream = ''; resolves = $false; addresses = @(); error = 'no configured upstream' }
+    }
+
+    $resolves = $false
+    $addresses = @()
+    $errorText = ''
+    try {
+        $answers = @(Resolve-DnsName -Name $script:WeduHost -Server $ConfiguredUpstream -DnsOnly -Type A -ErrorAction Stop)
+        $addresses = @($answers | Where-Object { $_.IPAddress } | ForEach-Object { [string]$_.IPAddress })
+        $resolves = [bool]($addresses.Count -gt 0)
+    }
+    catch {
+        $errorText = [string]$_
+    }
+
+    return [pscustomobject]@{
+        configuredUpstream = $ConfiguredUpstream
+        resolves = $resolves
+        addresses = @($addresses)
+        error = $errorText
+    }
+}
+
+function Get-WeduCaptiveMarker {
+    if (-not (Test-Path -LiteralPath $script:CaptiveMarkerPath)) {
+        return $null
+    }
+    try {
+        return (Get-Content -LiteralPath $script:CaptiveMarkerPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Invoke-WeduWatchdogUntilLimited {
+    # Let the OpenPath watchdog enter limited mode ON ITS OWN. We only run the
+    # OpenPath-Watchdog scheduled task (the same path that runs in production) and
+    # observe the marker; we never call the native recover action here, so a
+    # resulting limited-mode marker proves autonomous detection.
+    param(
+        [int]$MaxCycles = 8,
+        [int]$DelaySeconds = 8
+    )
+
+    # Start clean so any marker we observe is the watchdog's own work this run.
+    Remove-Item -LiteralPath $script:CaptiveMarkerPath, $script:CaptiveObservationPath -Force -ErrorAction SilentlyContinue
+
+    $cycles = @()
+    $marker = $null
+    $enteredLimited = $false
+    for ($cycle = 1; $cycle -le $MaxCycles; $cycle++) {
+        $runError = ''
+        try {
+            Start-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop
+            for ($wait = 1; $wait -le 30; $wait++) {
+                Start-Sleep -Milliseconds 500
+                $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
+                    Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+                # 267009 (0x41301) == task is currently running.
+                if ($info -and [int]$info.LastTaskResult -ne 267009) {
+                    break
+                }
+            }
+        }
+        catch {
+            $runError = [string]$_
+        }
+
+        $observation = $null
+        if (Test-Path -LiteralPath $script:CaptiveObservationPath) {
+            try {
+                $observation = Get-Content -LiteralPath $script:CaptiveObservationPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            }
+            catch {
+                $observation = $null
+            }
+        }
+        $marker = Get-WeduCaptiveMarker
+        $markerMode = if ($marker) { [string]$marker.mode } else { '' }
+        $markerActive = [bool]($marker -and $marker.active)
+        $cycles += [pscustomobject]@{
+            cycle = $cycle
+            runError = $runError
+            detectedState = if ($observation) { [string]$observation.detectedState } else { '' }
+            portalCount = if ($observation) { [int]$observation.portalCount } else { 0 }
+            shouldEnterPortal = if ($observation) { [bool]$observation.shouldEnterPortal } else { $false }
+            markerActive = $markerActive
+            markerMode = $markerMode
+            upstreamDnsSource = if ($marker) { [string]$marker.upstreamDnsSource } else { '' }
+        }
+
+        if ($markerActive -and $markerMode -eq 'limited') {
+            $enteredLimited = $true
+            break
+        }
+        if ($cycle -lt $MaxCycles) {
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+
+    return [pscustomobject]@{
+        enteredLimited = $enteredLimited
+        limitedModeEnteredVia = if ($enteredLimited) { 'autonomous-detection' } else { 'watchdog-timeout' }
+        upstreamSource = if ($marker) { [string]$marker.upstreamDnsSource } else { '' }
+        upstreamDns = if ($marker) { [string]$marker.upstreamDns } else { '' }
+        upstreamVerified = [bool]($marker -and $marker.upstreamVerified)
+        limitedModeReady = [bool]($marker -and $marker.limitedModeReady)
+        marker = $marker
+        cycles = @($cycles)
+    }
+}
+
 function Invoke-WeduLabRun {
     Ensure-ArtifactRoot
     $config = Get-WeduLabConfig
@@ -1259,10 +1453,41 @@ function Invoke-WeduLabRun {
         -InstalledOpenPathRoot $script:InstalledOpenPathRoot `
         -InstalledRecoveryScriptPath $script:InstalledRecoveryScriptPath `
         -MissingArtifactContext 'WEDU direct-runner checkout'
+
+    # Declare the portal host as a recovery domain and force a stale/public Acrylic
+    # upstream so the autonomous watchdog has recovery domains and a configured
+    # upstream that cannot resolve the portal host.
+    $runnerConfig = Ensure-WeduDirectRunnerConfig
+
+    # Negative control: the configured (stale/public) upstream must NOT resolve the
+    # portal host -- otherwise the lab is not reproducing the production condition.
+    $networkForUpstream = Get-WeduNetworkSnapshot
+    $configuredUpstream = ''
+    if ($networkForUpstream.acrylic -and $networkForUpstream.acrylic.primaryServerAddress) {
+        $configuredUpstream = [string]$networkForUpstream.acrylic.primaryServerAddress
+    }
+    if ([string]::IsNullOrWhiteSpace($configuredUpstream)) {
+        $configuredUpstream = [string]$runnerConfig.primaryDNS
+    }
+    $configuredUpstreamProbe = Test-WeduConfiguredUpstreamPortalResolution -ConfiguredUpstream $configuredUpstream
+    $configuredUpstreamResolvesPortalHost = [bool]$configuredUpstreamProbe.resolves
+    Save-Json -Value $configuredUpstreamProbe -Path (Join-Path $script:ArtifactsRoot 'wedu-lab-configured-upstream-probe.json')
+
+    # Let the OpenPath watchdog detect the captive portal and enter LIMITED mode on
+    # its own (no forced native recovery). The resulting marker proves autonomous
+    # detection and records the upstream source the agent recovered.
+    $autonomous = Invoke-WeduWatchdogUntilLimited
+    Save-Json -Value $autonomous -Path (Join-Path $script:ArtifactsRoot 'wedu-lab-autonomous-detection.json')
+    $upstreamSource = [string]$autonomous.upstreamSource
+    $limitedModeEnteredVia = [string]$autonomous.limitedModeEnteredVia
+
+    # Reconcile via the native host (idempotent). Limited mode is ALREADY active
+    # from autonomous detection, so this confirms portalModeActive /
+    # recoveryHostsApplied without being the path that entered limited mode.
+    # Recovery hosts come from the declared config -- no pre-injected portalRecoveryHosts.
     $nativeRecovery = Invoke-NativeHostAction -Message @{
         action = 'recover-captive-portal-navigation'
         triggerHost = $script:WeduHost
-        portalRecoveryHosts = @($script:WeduLimitedHosts)
         tabId = 1
         source = 'wedu-lab-captive'
     } -TimeoutMs $config.nativeHostTimeoutMs
@@ -1270,7 +1495,7 @@ function Invoke-WeduLabRun {
 
     $dnsBefore = Get-WeduDnsSnapshot
     Save-Json -Value $dnsBefore -Path $script:DnsBeforePath
-    $limitedDns = Test-WeduLimitedModeDns
+    $limitedDns = Test-WeduLimitedModeDns -UpstreamSource $upstreamSource -ConfiguredDomains @($script:WeduConfiguredPortalDomains)
     Save-Json -Value $limitedDns -Path $script:DnsLimitedPath
 
     $browserLimited = Invoke-WeduBrowserProbe -Config $config
@@ -1346,6 +1571,13 @@ function Invoke-WeduLabRun {
     $targetPlatformSymptomCleared = [bool]($browserAfterAuth.postAuthBrowserNavigationVerified)
     $success = [bool](
         $labNetwork.labNetworkVerified -and
+        # Production-faithful evidence: the watchdog entered limited mode on its
+        # own, recovered the network resolver via the registry DhcpNameServer, and
+        # the configured upstream could not resolve the portal host.
+        $autonomous.enteredLimited -and
+        $limitedModeEnteredVia -eq 'autonomous-detection' -and
+        $upstreamSource -eq 'dhcp-nameserver' -and
+        (-not $configuredUpstreamResolvesPortalHost) -and
         $nativeRecovery.success -and
         $activeMarkerMode -eq 'limited' -and
         $limitedModeReady -and
@@ -1365,6 +1597,14 @@ function Invoke-WeduLabRun {
         success = $success
         evidenceLevel = 'wedu-lab-direct-runner'
         targetPlatformSymptomCleared = [bool]$targetPlatformSymptomCleared
+        # Production-faithful captive-portal recovery evidence (see assert contract
+        # requireNetworkDnsDiscoveryEvidence).
+        configuredUpstreamResolvesPortalHost = [bool]$configuredUpstreamResolvesPortalHost
+        configuredUpstreamProbe = $configuredUpstreamProbe
+        upstreamSource = [string]$upstreamSource
+        limitedModeEnteredVia = [string]$limitedModeEnteredVia
+        autonomousDetection = $autonomous
+        runnerConfig = $runnerConfig
         labNetwork = $labNetwork
         limitedDns = $limitedDns
         gatewayReset = $gatewayReset

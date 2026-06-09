@@ -29,6 +29,9 @@ function baseResult(overrides = {}) {
       labNetworkVerified: true,
     },
     targetPlatformSymptomCleared: true,
+    configuredUpstreamResolvesPortalHost: false,
+    upstreamSource: 'dhcp-nameserver',
+    limitedModeEnteredVia: 'autonomous-detection',
     browserBeforePath: 'wedu-lab-browser-before.json',
     browserAfterAuthPath: 'wedu-lab-browser-post-auth.json',
     activeMarkerMode: 'limited',
@@ -108,11 +111,14 @@ function limitedDns(overrides = {}) {
   return {
     success: true,
     server: '127.0.0.1',
+    upstreamSource: 'dhcp-nameserver',
     hosts: [
       {
         host: 'nce.wedu.comunidad.madrid',
         resolvedThroughLocalDns: true,
         answers: ['10.77.0.1'],
+        addresses: ['10.77.0.1'],
+        isConfiguredPortalDomain: true,
         error: '',
       },
     ],

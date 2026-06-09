@@ -525,12 +525,30 @@ class Handler(BaseHTTPRequestHandler):
 ThreadingHTTPServer(('10.77.0.1', 80), Handler).serve_forever()
 PY
 chmod 0755 /opt/wedu-captive-portal/server.py
-cat >/etc/dnsmasq.d/openpath-wedu-runtime.conf <<'DNS'
+# Portal/lab hosts must resolve ONLY through the dedicated network resolver
+# (10.77.0.53), never through the gateway/DHCP-server instance (10.77.0.1), so
+# the lab keeps reproducing the production topology where only the DHCP-offered
+# DNS knows the portal host. Write runtime hosts into the network resolver's
+# conf-dir and restart that instance -- do NOT poison the .1 instance.
+if [ -d /etc/dnsmasq-wedu-net.d ]; then
+  cat >/etc/dnsmasq-wedu-net.d/openpath-wedu-runtime.conf <<'DNS'
 address=/wlogin.wedu-lab.test/10.77.0.1
 address=/assets.wedu-lab.test/10.77.0.1
 address=/cdn.wedu-lab.test/10.77.0.1
 address=/auth.wedu-lab.test/10.77.0.1
 DNS
+  rm -f /etc/dnsmasq.d/openpath-wedu-runtime.conf
+  systemctl restart dnsmasq-wedu-net
+  systemctl is-active --quiet dnsmasq-wedu-net
+else
+  # Legacy single-resolver gateway (pre dedicated-DNS topology).
+  cat >/etc/dnsmasq.d/openpath-wedu-runtime.conf <<'DNS'
+address=/wlogin.wedu-lab.test/10.77.0.1
+address=/assets.wedu-lab.test/10.77.0.1
+address=/cdn.wedu-lab.test/10.77.0.1
+address=/auth.wedu-lab.test/10.77.0.1
+DNS
+fi
 systemctl restart dnsmasq
 systemctl is-active --quiet dnsmasq
 systemctl restart wedu-captive-portal

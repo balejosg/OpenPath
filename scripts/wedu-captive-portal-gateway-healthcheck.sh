@@ -8,6 +8,9 @@ source "$REPO_ROOT/scripts/lib/wedu-captive-portal-lab-controller.sh"
 PROXMOX_HOST="${OPENPATH_WEDU_CI_PROXMOX_HOST:-whitelist-proxmox}"
 GATEWAY_VMID="${OPENPATH_WEDU_CI_GATEWAY_VMID:-121}"
 GATEWAY_URL="${OPENPATH_WEDU_LAB_GATEWAY_URL:-http://10.77.0.1}"
+PORTAL_HOST="${OPENPATH_WEDU_LAB_PORTAL_HOST:-nce.wedu.comunidad.madrid}"
+NETWORK_DNS="${OPENPATH_WEDU_LAB_NETWORK_DNS:-10.77.0.53}"
+GATEWAY_DNS="${OPENPATH_WEDU_LAB_GATEWAY_DNS:-10.77.0.1}"
 REMOTE_LOCK_DIR="${OPENPATH_WEDU_CI_LOCK_DIR:-/run/openpath-wedu-captive-portal-lab.lock}"
 ARTIFACT_DIR="${OPENPATH_WEDU_CI_ARTIFACT_DIR:-.opencode/tmp/wedu-gateway-healthcheck/$(date -u +%Y%m%dT%H%M%SZ)}"
 DRY_RUN="${OPENPATH_WEDU_CI_DRY_RUN:-0}"
@@ -95,6 +98,22 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
 }
 
+verify_dedicated_dns_topology() {
+  # Prove the production-faithful split: the captive-portal host resolves ONLY
+  # through the dedicated network DNS the DHCP server hands out (10.77.0.53),
+  # while the gateway/DHCP-server address (10.77.0.1) returns NXDOMAIN. Without
+  # this separation the lab cannot reproduce the production failure mode.
+  local result
+  result="$(gateway_exec "printf 'net=%s gw_nxdomain=%s\\n' \"\$(dig +short @${NETWORK_DNS} ${PORTAL_HOST} A | head -1)\" \"\$(dig @${GATEWAY_DNS} ${PORTAL_HOST} A | grep -c 'status: NXDOMAIN')\"" | tr -d '\r\n')"
+  printf 'dns-topology: %s\n' "$result"
+  [ "${result%% gw_nxdomain=*}" = "net=10.77.0.1" ] ||
+    fail "Dedicated network DNS ${NETWORK_DNS} must resolve ${PORTAL_HOST} to the portal address 10.77.0.1; got: ${result:-empty}"
+  case "$result" in
+    *"gw_nxdomain=1"*) ;;
+    *) fail "Gateway/DHCP DNS ${GATEWAY_DNS} must return NXDOMAIN for ${PORTAL_HOST}; got: ${result:-empty}" ;;
+  esac
+}
+
 cleanup() {
   RUN_STATUS=$?
   set +e
@@ -127,6 +146,7 @@ main() {
   PREVIOUS_GATEWAY_MODE="$(read_gateway_mode)"
   mode_after_reset="$(set_gateway_mode /lab/reset | tr -d '\r\n')"
   [ "$mode_after_reset" = "captive" ] || fail "Gateway reset did not enter captive mode: $mode_after_reset"
+  verify_dedicated_dns_topology
   portal_body="$(gateway_exec 'curl -fsS http://10.77.0.1/' || true)"
   if printf '%s' "$portal_body" | grep -q 'WEDU lab captive portal'; then
     write_healthcheck_artifact ok "$mode_after_reset" true
