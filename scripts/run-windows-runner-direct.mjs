@@ -189,6 +189,7 @@ const CAPTIVE_PORTAL_WEDU_LAB_ARTIFACTS = [
   'wedu-lab-dns-before.json',
   'wedu-lab-configured-upstream-probe.json',
   'wedu-lab-autonomous-detection.json',
+  'wedu-lab-openpath.log',
   'wedu-lab-dns-limited.json',
   'wedu-lab-browser-before.json',
   'wedu-lab-browser-limited.json',

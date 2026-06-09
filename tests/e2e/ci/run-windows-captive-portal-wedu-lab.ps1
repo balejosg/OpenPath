@@ -1368,6 +1368,9 @@ function Invoke-WeduWatchdogUntilLimited {
             markerActive = $markerActive
             markerMode = $markerMode
             upstreamDnsSource = if ($marker) { [string]$marker.upstreamDnsSource } else { '' }
+            taskLastResult = if ($info) { ('0x{0:X8}' -f ([long]$info.LastTaskResult)) } else { '' }
+            taskLastRun = if ($info) { [string]$info.LastRunTime } else { '' }
+            observationExists = [bool](Test-Path -LiteralPath $script:CaptiveObservationPath)
         }
 
         if ($markerActive -and $markerMode -eq 'limited') {
@@ -1481,6 +1484,9 @@ function Invoke-WeduLabRun {
     # detection and records the upstream source the agent recovered.
     $autonomous = Invoke-WeduWatchdogUntilLimited
     Save-Json -Value $autonomous -Path (Join-Path $script:ArtifactsRoot 'wedu-lab-autonomous-detection.json')
+    # Capture the agent log so we can see what the OpenPath-Watchdog run actually did
+    # (whether prechecks/portal detection ran and why limited entry did/didn't happen).
+    Copy-Item -LiteralPath 'C:\OpenPath\data\logs\openpath.log' -Destination (Join-Path $script:ArtifactsRoot 'wedu-lab-openpath.log') -ErrorAction SilentlyContinue
     $upstreamSource = [string]$autonomous.upstreamSource
     $limitedModeEnteredVia = [string]$autonomous.limitedModeEnteredVia
 
