@@ -1482,6 +1482,19 @@ function Invoke-WeduLabRun {
     # Let the OpenPath watchdog detect the captive portal and enter LIMITED mode on
     # its own (no forced native recovery). The resulting marker proves autonomous
     # detection and records the upstream source the agent recovered.
+    # Diagnostic: run the watchdog script directly (elevated, like this harness) and
+    # capture its real exit code + output. This isolates whether the OpenPath-Watchdog
+    # *task* fails (e.g. not elevated -> #Requires -RunAsAdministrator aborts before any
+    # log) versus the watchdog script itself failing to load/detect.
+    try {
+        $watchdogScript = 'C:\OpenPath\scripts\Test-DNSHealth.ps1'
+        $directWatchdog = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $watchdogScript 2>&1 | Out-String
+        Set-Content -LiteralPath (Join-Path $script:ArtifactsRoot 'wedu-lab-watchdog-direct.txt') -Value ("exit=$LASTEXITCODE`n--- output ---`n$directWatchdog") -Encoding UTF8
+    }
+    catch {
+        Set-Content -LiteralPath (Join-Path $script:ArtifactsRoot 'wedu-lab-watchdog-direct.txt') -Value ("threw: $_") -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
+
     $autonomous = Invoke-WeduWatchdogUntilLimited
     Save-Json -Value $autonomous -Path (Join-Path $script:ArtifactsRoot 'wedu-lab-autonomous-detection.json')
     # Capture the agent log so we can see what the OpenPath-Watchdog run actually did
