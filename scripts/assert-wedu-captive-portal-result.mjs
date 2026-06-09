@@ -60,16 +60,8 @@ function requireNonEmptyArray(value, field) {
   requireField(Array.isArray(value) && value.length > 0, field);
 }
 
-function requireEmptyArray(value, field) {
-  requireField(Array.isArray(value) && value.length === 0, field);
-}
-
 function arrayValue(value) {
   return Array.isArray(value) ? value : [];
-}
-
-function requireArrayIncludes(value, host, field) {
-  requireField(arrayValue(value).includes(host), `${field} must include ${host}`);
 }
 
 function dnsServersForAdapters(adapters) {
@@ -133,6 +125,55 @@ function requirePostAuthDnsEvidence(postAuthDns) {
   requireField(
     dnsServersForAdapters(postAuthDns.adapters).includes('127.0.0.1'),
     `${POST_AUTH_DNS_FILE} adapters must include local DNS server 127.0.0.1`
+  );
+}
+
+// Contract that forces the lab to reproduce the ACTUAL production failure mode.
+//
+// The bug shipped despite a green lab because the lab let the captive portal host
+// be resolvable by whatever upstream the old discovery happened to find. In
+// production the portal host (e.g. nce.wedu.comunidad.madrid) is resolvable ONLY
+// by the network's DHCP-offered DNS (preserved in the registry DhcpNameServer),
+// while OpenPath's configured Acrylic upstream is a stale/public server that
+// returns NXDOMAIN. The lab must reproduce that topology and prove the agent
+// discovered the network DNS by itself (Source 'dhcp-nameserver') and entered
+// limited mode via autonomous detection -- not via an externally forced recovery.
+function requireNetworkDnsDiscoveryEvidence(result, limitedDns) {
+  // Negative control: the normal/public upstream must NOT resolve the portal host,
+  // otherwise the lab is not reproducing the production condition at all.
+  requireField(
+    result.configuredUpstreamResolvesPortalHost === false,
+    'configuredUpstreamResolvesPortalHost must be false (portal host must be unresolvable via the configured public/stale upstream, as in production)'
+  );
+  // The agent must have discovered the network DNS itself, via the registry
+  // DhcpNameServer source -- the exact gap that caused the production failure.
+  requireField(
+    result.upstreamSource === 'dhcp-nameserver',
+    "upstreamSource must be 'dhcp-nameserver' (agent recovered the network resolver from the registry, not a lucky adapter/gateway hit)"
+  );
+  requireField(
+    limitedDns.upstreamSource === 'dhcp-nameserver',
+    `${LIMITED_DNS_FILE} upstreamSource must be 'dhcp-nameserver'`
+  );
+  // Limited mode must have been reached by the watchdog's own detection. In
+  // production the watchdog never entered limited mode (it looped on protected-mode
+  // repair); a lab that only triggers recovery via the native host cannot catch that.
+  requireField(
+    result.limitedModeEnteredVia === 'autonomous-detection',
+    "limitedModeEnteredVia must be 'autonomous-detection' (watchdog must enter limited mode on its own, not via forced native recovery)"
+  );
+  // The declared portal host must actually resolve to the internal portal address
+  // through the agent's local resolver during limited mode.
+  requireField(
+    Array.isArray(limitedDns.hosts) &&
+      limitedDns.hosts.some(
+        (host) =>
+          host?.resolvedThroughLocalDns === true &&
+          Array.isArray(host.addresses) &&
+          host.addresses.length > 0 &&
+          host?.isConfiguredPortalDomain === true
+      ),
+    `${LIMITED_DNS_FILE} must prove a configured captive-portal domain resolved to an address through local DNS`
   );
 }
 
@@ -207,6 +248,9 @@ export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab
       limitedDns.hosts.every((host) => host?.resolvedThroughLocalDns === true),
     `${LIMITED_DNS_FILE} hosts resolved through local DNS`
   );
+
+  // Force the lab to reproduce the real production failure mode (see function doc).
+  requireNetworkDnsDiscoveryEvidence(result, limitedDns);
 
   const browserLimited = readJson(join(artifactDir, LIMITED_BROWSER_FILE));
   const limitedProbe = browserLimitedProbe(browserLimited);
