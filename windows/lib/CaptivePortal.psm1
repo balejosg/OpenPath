@@ -1487,6 +1487,7 @@ function Disable-OpenPathCaptivePortalMode {
 Export-ModuleMember -Function @(
     'Test-OpenPathCaptivePortalModeActive',
     'Get-OpenPathCaptivePortalMarker',
+    'Get-OpenPathCaptivePortalMarkerMode',
     'Set-OpenPathCaptivePortalMarker',
     'Get-OpenPathConfiguredCaptivePortalDomains',
     'Get-OpenPathCaptivePortalAllowedHosts',
