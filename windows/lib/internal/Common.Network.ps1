@@ -132,6 +132,31 @@ function Get-OpenPathCaptivePortalDhcpServerCandidates {
     }
 }
 
+function Get-OpenPathCaptivePortalConfiguredUpstreamCandidates {
+    # The configured Acrylic upstream (config primaryDNS/secondaryDNS) is the one
+    # address the OpenPath firewall explicitly allows AcrylicService.exe to reach,
+    # so it remains a viable limited-mode forwarder even when probe traffic from
+    # this PowerShell process is dropped by OpenPath's own anti-bypass DNS rules.
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    try {
+        if (-not (Test-Path $script:ConfigPath -ErrorAction SilentlyContinue)) {
+            return @()
+        }
+        $config = Get-OpenPathConfig
+        foreach ($name in @('primaryDNS', 'secondaryDNS')) {
+            if (-not ($config -and $config.PSObject.Properties[$name] -and $config.$name)) { continue }
+            $address = ([string]$config.$name).Trim()
+            if ($address -notmatch '^\d{1,3}(?:\.\d{1,3}){3}$') { continue }
+            if ($address -in @('127.0.0.1', '0.0.0.0')) { continue }
+            if (-not $candidates.Contains($address)) { $candidates.Add($address) }
+        }
+    }
+    catch {
+        return @()
+    }
+    return $candidates.ToArray()
+}
+
 function Get-OpenPathCaptivePortalDhcpNameServerCandidates {
     # The DHCP-offered DNS servers are preserved by Windows in the registry
     # (DhcpNameServer) even after OpenPath pins the adapter DNS to 127.0.0.1.
@@ -369,6 +394,7 @@ function Get-OpenPathCaptivePortalUpstreamDns {
         }
     }
 
+    $deferredGatewayCandidate = $null
     try {
         $gateway = (
             Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
@@ -393,15 +419,51 @@ function Get-OpenPathCaptivePortalUpstreamDns {
             }
 
             $verified = Test-DirectDnsServer -Server ([string]$gateway)
-            return (New-OpenPathCaptivePortalUpstreamCandidate `
+            $gatewayCandidate = (New-OpenPathCaptivePortalUpstreamCandidate `
                     -Address ([string]$gateway) `
                     -Source 'gateway' `
                     -Verified:$verified `
                     -UsableForLimited:($limitedProbeDomains.Count -le 0))
+            if ($gatewayCandidate.UsableForLimited) {
+                return $gatewayCandidate
+            }
+            # A gateway that cannot resolve the declared portal domains is only a
+            # diagnostic candidate; defer it so the configured upstream below can
+            # still provide a usable limited-mode forwarder.
+            $deferredGatewayCandidate = $gatewayCandidate
         }
     }
     catch {
         # Continue to legacy primary DNS fallback.
+    }
+
+    if ($limitedProbeDomains.Count -gt 0) {
+        $configuredUpstreams = @(Get-OpenPathCaptivePortalConfiguredUpstreamCandidates)
+        foreach ($candidate in $configuredUpstreams) {
+            if (Test-OpenPathCaptivePortalLimitedUpstream -Address ([string]$candidate)) {
+                return (New-OpenPathCaptivePortalUpstreamCandidate `
+                        -Address ([string]$candidate) `
+                        -Source 'configured-upstream' `
+                        -Verified:$true `
+                        -UsableForLimited:$true)
+            }
+        }
+        if ($configuredUpstreams.Count -gt 0) {
+            # A failed probe of the configured upstream is a false negative: OpenPath's
+            # own anti-bypass firewall drops resolver traffic from this PowerShell
+            # process, while AcrylicService.exe holds an explicit allow to this address.
+            # Treat it as usable; limited mode stays fail-closed (adapter on 127.0.0.1,
+            # NX *, TTL-bounded) if the upstream turns out not to resolve the portal.
+            return (New-OpenPathCaptivePortalUpstreamCandidate `
+                    -Address ([string]$configuredUpstreams[0]) `
+                    -Source 'configured-upstream' `
+                    -Verified:$false `
+                    -UsableForLimited:$true)
+        }
+    }
+
+    if ($deferredGatewayCandidate) {
+        return $deferredGatewayCandidate
     }
 
     try {

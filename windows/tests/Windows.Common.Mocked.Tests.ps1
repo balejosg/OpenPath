@@ -282,6 +282,7 @@ download.mozilla.org/firefox/releases
             Mock Get-OpenPathCaptivePortalDhcpNameServerCandidates { @() } -ModuleName Common
             Mock Get-OpenPathCaptivePortalOriginalDnsCandidates { @() } -ModuleName Common
             Mock Get-OpenPathCaptivePortalDhcpServerCandidates { @() } -ModuleName Common
+            Mock Get-OpenPathCaptivePortalConfiguredUpstreamCandidates { @() } -ModuleName Common
         }
 
         It "Prefers the DHCP-offered DNS (registry DhcpNameServer) that resolves the declared portal domain" {
@@ -368,6 +369,54 @@ download.mozilla.org/firefox/releases
 
             $dns.Address | Should -Be '8.8.8.8'
             $dns.Source | Should -Be 'fallback'
+            $dns.UsableForLimited | Should -BeFalse
+        }
+
+        It "Prefers a configured upstream that verifies the declared portal domain" {
+            Mock Get-OpenPathCaptivePortalConfiguredUpstreamCandidates { @('8.8.8.8', '8.8.4.4') } -ModuleName Common
+            Mock Get-NetAdapter { @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 }) } -ModuleName Common
+            Mock Get-DnsClientServerAddress { @() } -ModuleName Common
+            Mock Get-NetRoute { @() } -ModuleName Common
+            Mock Resolve-DnsName { throw 'blocked' } -ModuleName Common
+            Mock Resolve-DnsName { @([PSCustomObject]@{ IPAddress = '127.0.0.1' }) } -ModuleName Common -ParameterFilter { $Server -eq '8.8.4.4' -and $Name -eq 'nce.127.0.0.1.sslip.io' }
+
+            $dns = Get-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset -ProbeDomains @('nce.127.0.0.1.sslip.io')
+
+            $dns.Address | Should -Be '8.8.4.4'
+            $dns.Source | Should -Be 'configured-upstream'
+            $dns.Verified | Should -BeTrue
+            $dns.UsableForLimited | Should -BeTrue
+        }
+
+        It "Falls back to the configured upstream as unverified but usable when probes are blocked by the anti-bypass firewall" {
+            # OpenPath's own firewall drops resolver probes from powershell.exe to public
+            # resolvers, while AcrylicService.exe holds an explicit allow to the configured
+            # upstream -- a failed probe of that address is a false negative and must not
+            # leave limited mode unreachable (the captive portal would stay blocked).
+            Mock Get-OpenPathCaptivePortalConfiguredUpstreamCandidates { @('8.8.8.8', '8.8.4.4') } -ModuleName Common
+            Mock Get-NetAdapter { @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 }) } -ModuleName Common
+            Mock Get-DnsClientServerAddress { @([PSCustomObject]@{ InterfaceIndex = 7; ServerAddresses = @('1.1.1.1') }) } -ModuleName Common
+            Mock Get-NetRoute { @([PSCustomObject]@{ InterfaceIndex = 7; NextHop = '192.168.1.1' }) } -ModuleName Common
+            Mock Resolve-DnsName { throw 'probe blocked or rebind-protected' } -ModuleName Common
+
+            $dns = Get-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset -ProbeDomains @('nce.127.0.0.1.sslip.io')
+
+            $dns.Address | Should -Be '8.8.8.8'
+            $dns.Source | Should -Be 'configured-upstream'
+            $dns.Verified | Should -BeFalse
+            $dns.UsableForLimited | Should -BeTrue
+        }
+
+        It "Keeps the unusable gateway diagnostic when no configured upstream exists" {
+            Mock Get-NetAdapter { @([PSCustomObject]@{ Status = 'Up'; ifIndex = 7 }) } -ModuleName Common
+            Mock Get-DnsClientServerAddress { @() } -ModuleName Common
+            Mock Get-NetRoute { @([PSCustomObject]@{ InterfaceIndex = 7; NextHop = '192.168.1.1' }) } -ModuleName Common
+            Mock Resolve-DnsName { throw 'rebind-protected gateway' } -ModuleName Common
+
+            $dns = Get-OpenPathCaptivePortalUpstreamDns -AfterAdapterReset -ProbeDomains @('nce.127.0.0.1.sslip.io')
+
+            $dns.Address | Should -Be '192.168.1.1'
+            $dns.Source | Should -Be 'gateway'
             $dns.UsableForLimited | Should -BeFalse
         }
     }
