@@ -867,20 +867,37 @@ function Test-OpenPathLimitedCaptivePortalRecoveryHost {
             return $false
         }
 
-        $expectedRule = Get-AcrylicExactForwardRule -Domain $Domain
-        if (-not $expectedRule) {
+        # Mirror New-OpenPathLimitedCaptivePortalHostsDefinition: configured captive
+        # portal domains render subdomain-inclusive rules (for sslip hosts a static
+        # mapping plus "FW >domain", with no exact "FW domain" line), so the
+        # verification must expect the same lines the renderer emits for this domain.
+        $normalizedDomain = ([string]$Domain).Trim().TrimEnd('.')
+        $subdomainInclusive = $false
+        foreach ($configuredDomain in @(Get-OpenPathConfiguredCaptivePortalDomains)) {
+            if (([string]$configuredDomain).Trim().TrimEnd('.') -ieq $normalizedDomain) {
+                $subdomainInclusive = $true
+                break
+            }
+        }
+        $expectedRules = @(
+            if ($subdomainInclusive) { Get-AcrylicForwardRules -Domain $Domain }
+            else { Get-AcrylicExactForwardRule -Domain $Domain }
+        ) | Where-Object { $_ }
+        if ($expectedRules.Count -le 0) {
             return $false
         }
 
         $content = Get-Content -LiteralPath $hostsPath -Raw -ErrorAction Stop
-        $match = [regex]::Match($content, "(?m)^\s*$([regex]::Escape($expectedRule))\s*$")
-        if (-not $match.Success) {
-            return $false
-        }
-
         $defaultBlockIndex = $content.IndexOf("NX *")
-        if (-not ($defaultBlockIndex -lt 0 -or $match.Index -lt $defaultBlockIndex)) {
-            return $false
+        foreach ($expectedRule in $expectedRules) {
+            $match = [regex]::Match($content, "(?m)^\s*$([regex]::Escape($expectedRule))\s*$")
+            if (-not $match.Success) {
+                return $false
+            }
+
+            if (-not ($defaultBlockIndex -lt 0 -or $match.Index -lt $defaultBlockIndex)) {
+                return $false
+            }
         }
 
         return [bool](Test-OpenPathLimitedCaptivePortalDnsResolution -Domain $Domain -DnsMaxAttempts $DnsMaxAttempts -DnsDelayMilliseconds $DnsDelayMilliseconds -DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds)

@@ -981,6 +981,28 @@ Describe "Watchdog Script" {
                 Should -BeFalse
         }
 
+        It "Verifies configured portal domains against the renderer's inclusive rules, not a hardcoded exact FW line" {
+            # Regression: New-OpenPathLimitedCaptivePortalHostsDefinition renders configured
+            # captive portal domains subdomain-inclusively (sslip hosts get a static mapping
+            # plus 'FW >domain' and NO exact 'FW domain' line), so the recovery-host
+            # verification must derive its expected lines from the same rule generator or
+            # limited mode always rolls back for sslip-based portal fixtures.
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $recoveryHostStart = $moduleContent.IndexOf('function Test-OpenPathLimitedCaptivePortalRecoveryHost')
+            $configurationStart = $moduleContent.IndexOf('function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration')
+            $recoveryHostBody = $moduleContent.Substring($recoveryHostStart, $configurationStart - $recoveryHostStart)
+
+            Assert-ContentContainsAll -Content $recoveryHostBody -Needles @(
+                'Get-OpenPathConfiguredCaptivePortalDomains',
+                'Get-AcrylicForwardRules -Domain $Domain',
+                'Get-AcrylicExactForwardRule -Domain $Domain',
+                'foreach ($expectedRule in $expectedRules)',
+                '$match.Index -lt $defaultBlockIndex'
+            )
+        }
+
         It "Bounds post-auth reconcile protected-mode evidence inside native host budget" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
