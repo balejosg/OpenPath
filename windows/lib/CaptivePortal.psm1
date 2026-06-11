@@ -29,6 +29,20 @@ $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds = 1
 $script:CaptivePortalBootstrapMaxIterations = 3
 
 function Test-OpenPathCaptivePortalModeActive {
+    <#
+    .SYNOPSIS
+        Returns true when a captive portal marker file is present and not yet expired.
+    .DESCRIPTION
+        Reads the state file at $script:CaptivePortalStatePath. If the marker has
+        expired and $SkipExpiredRestore is not set, calls Disable-OpenPathCaptivePortalMode
+        to restore protected mode before returning. Writes a WARN log entry on
+        expiry-restore failure.
+    .PARAMETER SkipExpiredRestore
+        When set, skips the automatic restore on an expired marker and simply
+        returns true (the marker is still considered active for caller decisions).
+    .OUTPUTS
+        Boolean
+    #>
     param(
         [switch]$SkipExpiredRestore
     )
@@ -58,6 +72,15 @@ function Test-OpenPathCaptivePortalModeActive {
 }
 
 function Test-OpenPathCaptivePortalMarkerExpired {
+    <#
+    .SYNOPSIS
+        Returns true when the marker's expiresAt timestamp is in the past.
+    .PARAMETER Marker
+        Deserialized marker object from Get-OpenPathCaptivePortalMarker. If null,
+        the marker is fetched from disk automatically.
+    .OUTPUTS
+        Boolean
+    #>
     param([object]$Marker = $null)
 
     if (-not $Marker) {
@@ -76,6 +99,15 @@ function Test-OpenPathCaptivePortalMarkerExpired {
 }
 
 function Get-OpenPathCaptivePortalMarker {
+    <#
+    .SYNOPSIS
+        Reads and deserializes the captive portal state file from disk.
+    .DESCRIPTION
+        Reads $script:CaptivePortalStatePath (C:\OpenPath\data\captive-portal-active.json).
+        Returns null when the file is absent, empty, or unparseable.
+    .OUTPUTS
+        PSCustomObject or $null
+    #>
     if (-not (Test-Path $script:CaptivePortalStatePath)) {
         return $null
     }
@@ -93,6 +125,60 @@ function Get-OpenPathCaptivePortalMarker {
 }
 
 function Set-OpenPathCaptivePortalMarker {
+    <#
+    .SYNOPSIS
+        Writes the captive portal state JSON file to disk, creating its parent directory if needed.
+    .DESCRIPTION
+        Serializes portal state to $script:CaptivePortalStatePath
+        (C:\OpenPath\data\captive-portal-active.json). Preserves the original
+        'since' timestamp from any existing marker. Computes configuredCaptivePortalDomainsApplied
+        automatically when ConfiguredCaptivePortalDomainsApplied is not explicitly supplied.
+    .PARAMETER State
+        Arbitrary state label (e.g. 'Portal', 'Authenticated') stored in the marker.
+    .PARAMETER AllowedHosts
+        Normalized hostnames whose DNS queries are forwarded in limited mode.
+    .PARAMETER UpstreamDns
+        IP address of the temporary upstream DNS resolver used during portal mode.
+    .PARAMETER Mode
+        Portal operating mode: 'limited' (adapter stays on 127.0.0.1, NX * in effect)
+        or 'passthrough' (adapter DNS reset to network resolver, full egress open).
+    .PARAMETER UpstreamDnsSource
+        Label describing how the upstream DNS address was obtained (e.g. 'dhcp', 'marker').
+    .PARAMETER UpstreamUsableForLimited
+        Whether the upstream is safe to use for limited-mode forwarding.
+    .PARAMETER UpstreamVerified
+        Whether the upstream DNS address has been verified reachable.
+    .PARAMETER DnsResetAt
+        ISO-8601 timestamp recorded when the adapter DNS was reset (passthrough entry).
+    .PARAMETER UpstreamCapturedAt
+        ISO-8601 timestamp recorded when the upstream address was captured.
+    .PARAMETER PassthroughEgress
+        Object from Test-OpenPathCaptivePortalPassthroughEgress describing egress connectivity.
+    .PARAMETER BootstrapHosts
+        Hostnames used as the initial set of portal recovery domains.
+    .PARAMETER RedirectHosts
+        Hostnames discovered via redirect following during portal recovery.
+    .PARAMETER ResourceHosts
+        Hostnames discovered as static resources during portal recovery.
+    .PARAMETER ObservedRuntimeHosts
+        Additional hostnames discovered at runtime and already applied.
+    .PARAMETER PendingRuntimeHosts
+        Hostnames discovered but not yet applied to Acrylic.
+    .PARAMETER DiscoveryTruncated
+        True when the discovery phase hit its domain-count limit.
+    .PARAMETER FallbackMode
+        Fallback escalation mode recorded in the marker: 'none' or 'passthrough'.
+    .PARAMETER LimitedModeReady
+        True when all declared recovery hosts are confirmed resolvable.
+    .PARAMETER ConfiguredCaptivePortalDomains
+        Admin-declared captive portal domains from the local config.
+    .PARAMETER ConfiguredCaptivePortalDomainsApplied
+        Override for the computed configuredCaptivePortalDomainsApplied field.
+    .PARAMETER TtlSeconds
+        Seconds until the marker expires; clamped to at least 1 second.
+    .OUTPUTS
+        Boolean — true on success, false on I/O error
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$State,
@@ -203,6 +289,17 @@ function Set-OpenPathCaptivePortalMarker {
 }
 
 function Get-OpenPathConfiguredCaptivePortalDomains {
+    <#
+    .SYNOPSIS
+        Returns admin-declared captive portal domains from the local OpenPath config file.
+    .DESCRIPTION
+        Reads captivePortalDomains from C:\OpenPath\data\config.json via Get-OpenPathConfig.
+        Strips URL-scheme and path characters, normalises to lowercase, and filters
+        out dynamic/invalid hostnames via Reject-OpenPathCaptivePortalDynamicHost.
+        Returns an empty array when the config is absent, unreadable, or has no declared domains.
+    .OUTPUTS
+        String[]
+    #>
     $domains = [System.Collections.Generic.List[string]]::new()
 
     try {
@@ -248,6 +345,14 @@ function Get-OpenPathConfiguredCaptivePortalDomains {
 }
 
 function Get-OpenPathCaptivePortalAllowedHosts {
+    <#
+    .SYNOPSIS
+        Normalises and deduplicates a list of hostnames for use as portal allowed hosts.
+    .PARAMETER Hosts
+        Raw hostname strings to normalise; invalid or empty entries are silently dropped.
+    .OUTPUTS
+        String[] — unique, lowercase, dot-trimmed hostnames matching [a-z0-9.-]+
+    #>
     param([string[]]$Hosts = @())
 
     return @(
@@ -262,6 +367,14 @@ function Get-OpenPathCaptivePortalAllowedHosts {
 }
 
 function Get-OpenPathCaptivePortalMarkerMode {
+    <#
+    .SYNOPSIS
+        Extracts the mode field from a marker object, defaulting to 'limited'.
+    .PARAMETER Marker
+        Deserialized marker object; the 'mode' property must be 'limited' or 'passthrough'.
+    .OUTPUTS
+        String — 'limited' or 'passthrough'
+    #>
     param([object]$Marker)
 
     if ($Marker -and $Marker.PSObject.Properties['mode'] -and $Marker.mode) {
@@ -275,6 +388,14 @@ function Get-OpenPathCaptivePortalMarkerMode {
 }
 
 function Get-OpenPathCaptivePortalMarkerAllowedHosts {
+    <#
+    .SYNOPSIS
+        Returns the allowedHosts array from a marker object as a string array.
+    .PARAMETER Marker
+        Deserialized marker object containing an 'allowedHosts' property.
+    .OUTPUTS
+        String[]
+    #>
     param([object]$Marker)
 
     if (-not $Marker -or -not $Marker.PSObject.Properties['allowedHosts']) {
@@ -289,6 +410,12 @@ function Get-OpenPathCaptivePortalMarkerAllowedHosts {
 }
 
 function Test-OpenPathCaptivePortalAdaptersUseLocalDns {
+    <#
+    .SYNOPSIS
+        Returns true when every active network adapter has 127.0.0.1 as its IPv4 DNS server.
+    .OUTPUTS
+        Boolean
+    #>
     [CmdletBinding()]
     param()
 
@@ -326,6 +453,17 @@ function Test-OpenPathCaptivePortalAdaptersUseLocalDns {
 }
 
 function Test-OpenPathCaptivePortalAcrylicNormalState {
+    <#
+    .SYNOPSIS
+        Returns true when AcrylicHosts.txt has no captive portal recovery section and
+        AcrylicConfiguration.ini matches the expected protected-mode upstream DNS addresses.
+    .DESCRIPTION
+        Reads AcrylicHosts.txt and AcrylicConfiguration.ini from the Acrylic install path.
+        Checks that the hosts file does not contain the string 'CAPTIVE PORTAL RECOVERY' and
+        that PrimaryServerAddress/SecondaryServerAddress match the values from Get-OpenPathDnsSettings.
+    .OUTPUTS
+        Boolean
+    #>
     [CmdletBinding()]
     param()
 
@@ -377,6 +515,31 @@ function Test-OpenPathCaptivePortalAcrylicNormalState {
 }
 
 function Get-OpenPathCaptivePortalProtectedModeExitEvidence {
+    <#
+    .SYNOPSIS
+        Collects evidence that the machine has fully exited captive portal mode and
+        returned to the protected DNS posture.
+    .DESCRIPTION
+        Tests local enforcement signals independently of upstream network health:
+        adapter loopback (127.0.0.1), normal Acrylic policy, DNS sinkhole, and
+        firewall (when enableFirewall is true). Upstream resolution is reported as
+        upstreamHealthy but is intentionally excluded from localPostureRestored so
+        a blocked upstream never pins the machine in portal mode.
+    .PARAMETER Config
+        OpenPath config object used to determine whether a firewall is expected.
+        Fetched automatically when null.
+    .PARAMETER DnsMaxAttempts
+        Maximum retry attempts passed to Test-DNSResolution and Test-DNSSinkhole.
+    .PARAMETER DnsDelayMilliseconds
+        Delay between DNS retry attempts in milliseconds.
+    .PARAMETER DnsAttemptTimeoutSeconds
+        Per-attempt DNS timeout in seconds; 0 means no timeout.
+    .OUTPUTS
+        PSCustomObject with fields: localDnsLoopbackRestored, acrylicNormalRestored,
+        dnsResolutionHealthy, upstreamHealthy, sinkholeHealthy, firewallExpectedActive,
+        firewallHealthy, markerPresent, markerCleared, localPostureRestored,
+        enforcementRestored, protectedModeRestored
+    #>
     [CmdletBinding()]
     param(
         [PSCustomObject]$Config = $null,
@@ -465,6 +628,14 @@ function Get-OpenPathCaptivePortalProtectedModeExitEvidence {
 }
 
 function Get-OpenPathCaptivePortalUpstreamFromMarker {
+    <#
+    .SYNOPSIS
+        Extracts the upstream DNS descriptor from a portal marker object.
+    .PARAMETER Marker
+        Deserialized marker object; must have a non-empty 'upstreamDns' property to return a result.
+    .OUTPUTS
+        PSCustomObject with fields Address, Source, Verified, UsableForLimited, PreReset; or $null
+    #>
     param([object]$Marker)
 
     if (-not $Marker -or -not $Marker.PSObject.Properties['upstreamDns'] -or -not $Marker.upstreamDns) {
@@ -485,6 +656,13 @@ function Get-OpenPathCaptivePortalUpstreamFromMarker {
 }
 
 function New-OpenPathCaptivePortalFallbackUpstream {
+    <#
+    .SYNOPSIS
+        Returns an empty upstream descriptor signalling that no upstream DNS is available.
+    .OUTPUTS
+        PSCustomObject with Address='', Source='unavailable', Verified=$false,
+        UsableForLimited=$false, PreReset=$false
+    #>
     return [PSCustomObject]@{
         Address = ''
         Source = 'unavailable'
@@ -495,6 +673,20 @@ function New-OpenPathCaptivePortalFallbackUpstream {
 }
 
 function Resolve-OpenPathCaptivePortalUpstreamDns {
+    <#
+    .SYNOPSIS
+        Selects the best available upstream DNS for portal mode, falling back through
+        marker, policy helper, primary DNS, and finally an unavailable sentinel.
+    .PARAMETER Marker
+        Existing portal marker whose upstreamDns is preferred when present.
+    .PARAMETER AfterAdapterReset
+        When set, indicates the adapter DNS has already been reset; passed through to
+        Get-OpenPathCaptivePortalUpstreamDns.
+    .PARAMETER ProbeDomains
+        Domains to probe when discovering the upstream via Get-OpenPathCaptivePortalUpstreamDns.
+    .OUTPUTS
+        PSCustomObject with fields Address, Source, Verified, UsableForLimited, PreReset
+    #>
     param(
         [object]$Marker = $null,
         [switch]$AfterAdapterReset,
@@ -535,6 +727,13 @@ function Resolve-OpenPathCaptivePortalUpstreamDns {
 }
 
 function Test-OpenPathCaptivePortalPassthroughEgress {
+    <#
+    .SYNOPSIS
+        Probes DNS (1.1.1.1:53), HTTP (port 80), and HTTPS (port 443) egress to
+        detectportal.firefox.com to confirm that adapter DNS reset has exposed network access.
+    .OUTPUTS
+        PSCustomObject with Boolean fields: dns, http, https
+    #>
     [CmdletBinding()]
     param()
 
@@ -569,6 +768,14 @@ function Test-OpenPathCaptivePortalPassthroughEgress {
 }
 
 function Test-OpenPathCaptivePortalPassthroughEgressUsable {
+    <#
+    .SYNOPSIS
+        Returns true when at least one of the dns/http/https egress probes succeeded.
+    .PARAMETER Egress
+        Object returned by Test-OpenPathCaptivePortalPassthroughEgress.
+    .OUTPUTS
+        Boolean
+    #>
     param([object]$Egress)
 
     if (-not $Egress) { return $false }
@@ -584,6 +791,28 @@ function Test-OpenPathCaptivePortalPassthroughEgressUsable {
 }
 
 function Enable-OpenPathCaptivePortalPassthroughMode {
+    <#
+    .SYNOPSIS
+        Enters passthrough mode by resetting adapter DNS to the network resolver and
+        writing a passthrough portal marker.
+    .DESCRIPTION
+        When an existing limited-mode marker is present and ForcePassthrough is not set,
+        upgrades the marker TTL without changing the DNS posture. Otherwise calls
+        Restore-OpenPathCaptivePortalDNS to reset adapter DNS to the network DHCP resolver,
+        waits 500 ms for DHCP to settle, probes egress via Test-OpenPathCaptivePortalPassthroughEgress,
+        and writes a passthrough marker. Fails closed if adapter reset fails or egress is unusable.
+        Logs WARN entries on failure paths.
+    .PARAMETER State
+        State label to record in the marker (e.g. 'Portal').
+    .PARAMETER TtlSeconds
+        Requested TTL in seconds; clamped to [1, 120].
+    .PARAMETER ExistingMarker
+        Current marker object used to decide limited-vs-passthrough upgrade path.
+    .PARAMETER ForcePassthrough
+        When set, always performs the full adapter DNS reset regardless of existing mode.
+    .OUTPUTS
+        Boolean — true when passthrough mode was successfully entered
+    #>
     [CmdletBinding()]
     param(
         [string]$State = 'Portal',
@@ -650,6 +879,30 @@ function Enable-OpenPathCaptivePortalPassthroughMode {
 }
 
 function Enable-OpenPathCaptivePortalLimitedMode {
+    <#
+    .SYNOPSIS
+        Enters limited mode: keeps adapter DNS on 127.0.0.1 with NX * and forwards
+        only the declared portal recovery domains to the network resolver via Acrylic.
+    .DESCRIPTION
+        Merges AllowedHosts, existing marker hosts, and configured captive portal domains
+        into a recovery set. Calls Resolve-OpenPathCaptivePortalUpstreamDns to pick a
+        temporary upstream. Writes the CAPTIVE PORTAL RECOVERY section to AcrylicHosts.txt
+        and adjusts AcrylicConfiguration.ini upstream/affinity settings, then restarts
+        the Acrylic service. Verifies DNS resolution for every recovery host before
+        committing the marker; fails closed via Restore-OpenPathLimitedCaptivePortalAttempt
+        on any failure. Adds a Windows Firewall allow rule for the upstream DNS IP via
+        Add-OpenPathCaptivePortalUpstreamFirewallAllow.
+    .PARAMETER State
+        State label to record in the marker.
+    .PARAMETER AllowedHosts
+        Caller-supplied recovery hostnames merged with configured and existing hosts.
+    .PARAMETER TtlSeconds
+        Requested TTL in seconds; clamped to [1, 120].
+    .PARAMETER Marker
+        Existing portal marker used to inherit prior upstream and allowed-host state.
+    .OUTPUTS
+        Boolean — true when limited mode was successfully entered and verified
+    #>
     [CmdletBinding()]
     param(
         [string]$State = 'Portal',
@@ -801,6 +1054,22 @@ function Enable-OpenPathCaptivePortalLimitedMode {
 }
 
 function New-OpenPathLimitedCaptivePortalHostsDefinition {
+    <#
+    .SYNOPSIS
+        Builds the AcrylicHosts definition object for limited captive portal mode.
+    .DESCRIPTION
+        Creates a hosts definition with a CAPTIVE PORTAL RECOVERY section inserted
+        before the DEFAULT BLOCK section. Configured captive portal domains receive
+        subdomain-inclusive forward rules (Get-AcrylicForwardRules); all other
+        discovery hosts receive exact forward rules (Get-AcrylicExactForwardRule).
+        Both primary and secondary DNS are set to UpstreamDns.
+    .PARAMETER PortalRecoveryDomains
+        Normalised hostnames to include as forward rules in the recovery section.
+    .PARAMETER UpstreamDns
+        IP address of the temporary upstream DNS resolver to embed in the definition.
+    .OUTPUTS
+        PSCustomObject — Acrylic hosts definition object suitable for ConvertTo-AcrylicHostsContent
+    #>
     [CmdletBinding()]
     param(
         [string[]]$PortalRecoveryDomains = @(),
@@ -845,6 +1114,20 @@ function New-OpenPathLimitedCaptivePortalHostsDefinition {
 }
 
 function Test-OpenPathLimitedCaptivePortalDnsResolution {
+    <#
+    .SYNOPSIS
+        Verifies that a domain resolves via the local Acrylic listener (127.0.0.1) in limited mode.
+    .PARAMETER Domain
+        Hostname to resolve against 127.0.0.1.
+    .PARAMETER DnsMaxAttempts
+        Maximum resolution attempts before giving up.
+    .PARAMETER DnsDelayMilliseconds
+        Delay between resolution attempts in milliseconds.
+    .PARAMETER DnsAttemptTimeoutSeconds
+        Per-attempt DNS timeout in seconds; 0 means no timeout.
+    .OUTPUTS
+        Boolean
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
@@ -880,6 +1163,25 @@ function Test-OpenPathLimitedCaptivePortalDnsResolution {
 }
 
 function Test-OpenPathLimitedCaptivePortalRecoveryHost {
+    <#
+    .SYNOPSIS
+        Verifies that a single recovery host has its expected forward rule in AcrylicHosts.txt
+        before the default-block line, and that the domain resolves via 127.0.0.1.
+    .DESCRIPTION
+        Mirrors the rule-type logic of New-OpenPathLimitedCaptivePortalHostsDefinition:
+        configured captive portal domains expect subdomain-inclusive rules; all others expect
+        exact forward rules. The rule must appear before the 'NX *' default-block entry.
+    .PARAMETER Domain
+        Hostname to verify in AcrylicHosts.txt and via DNS.
+    .PARAMETER DnsMaxAttempts
+        Maximum DNS resolution attempts.
+    .PARAMETER DnsDelayMilliseconds
+        Delay between DNS attempts in milliseconds.
+    .PARAMETER DnsAttemptTimeoutSeconds
+        Per-attempt DNS timeout in seconds; 0 means no timeout.
+    .OUTPUTS
+        Boolean
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
@@ -940,6 +1242,25 @@ function Test-OpenPathLimitedCaptivePortalRecoveryHost {
 }
 
 function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
+    <#
+    .SYNOPSIS
+        Writes AcrylicConfiguration.ini settings for limited captive portal mode.
+    .DESCRIPTION
+        Sets PrimaryServerAddress and SecondaryServerAddress to UpstreamDns, configures
+        domain-name affinity masks so only recovery domains and probe domains are forwarded
+        to the portal upstream, and writes allowed-address entries for 127.0.0.1 and ::1.
+        Wraps itself in an Acrylic policy transaction unless SkipPolicyStateLock is set.
+        Does not restart the Acrylic service; the caller is responsible for that.
+    .PARAMETER UpstreamDns
+        IP address of the temporary portal upstream DNS to configure in Acrylic.
+    .PARAMETER PortalRecoveryDomains
+        Recovery hostnames used to build the domain-name affinity mask.
+    .PARAMETER SkipPolicyStateLock
+        When set, skips the Invoke-OpenPathCaptivePortalAcrylicPolicyTransaction wrapper;
+        used when the caller has already acquired the transaction.
+    .OUTPUTS
+        Boolean
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$UpstreamDns,
@@ -1049,6 +1370,21 @@ function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
 }
 
 function Test-OpenPathLimitedCaptivePortalProtection {
+    <#
+    .SYNOPSIS
+        Verifies that limited captive portal mode is correctly enforced: all recovery hosts
+        resolve, the NX * sinkhole rule is present, and all adapters use 127.0.0.1 for DNS.
+    .PARAMETER PortalRecoveryDomains
+        Hostnames that must be individually verified via Test-OpenPathLimitedCaptivePortalRecoveryHost.
+    .PARAMETER DnsMaxAttempts
+        Maximum DNS resolution attempts per recovery host.
+    .PARAMETER DnsDelayMilliseconds
+        Delay between DNS attempts in milliseconds.
+    .PARAMETER DnsAttemptTimeoutSeconds
+        Per-attempt DNS timeout in seconds; 0 means no timeout.
+    .OUTPUTS
+        Boolean
+    #>
     [CmdletBinding()]
     param(
         [string[]]$PortalRecoveryDomains = @(),
@@ -1092,6 +1428,16 @@ function Test-OpenPathLimitedCaptivePortalProtection {
 }
 
 function Restore-OpenPathCaptivePortalAcrylicHostState {
+    <#
+    .SYNOPSIS
+        Restores AcrylicHosts.txt to the normal protected-mode whitelist content.
+    .DESCRIPTION
+        Reads the current whitelist from C:\OpenPath\data\whitelist.txt and calls
+        Update-AcrylicHost inside an Acrylic policy transaction (state: restoredProtected).
+        Logs a WARN entry and returns false on failure.
+    .OUTPUTS
+        Boolean
+    #>
     [CmdletBinding()]
     param()
 
@@ -1123,6 +1469,16 @@ function Restore-OpenPathCaptivePortalAcrylicHostState {
 }
 
 function Restore-OpenPathLimitedCaptivePortalAttempt {
+    <#
+    .SYNOPSIS
+        Rolls back a failed limited-mode entry attempt by restoring Acrylic host state
+        and calling Restore-OpenPathProtectedMode.
+    .DESCRIPTION
+        Called as the rollback path when Enable-OpenPathCaptivePortalLimitedMode fails.
+        Logs a WARN entry if either restore step throws.
+    .OUTPUTS
+        None
+    #>
     [CmdletBinding()]
     param()
 
@@ -1137,6 +1493,15 @@ function Restore-OpenPathLimitedCaptivePortalAttempt {
 }
 
 function Clear-OpenPathCaptivePortalMarker {
+    <#
+    .SYNOPSIS
+        Deletes the captive portal state file from disk.
+    .DESCRIPTION
+        Removes $script:CaptivePortalStatePath (C:\OpenPath\data\captive-portal-active.json).
+        Returns true on success or when the file was already absent; false on I/O error.
+    .OUTPUTS
+        Boolean
+    #>
     try {
         Remove-Item -Path $script:CaptivePortalStatePath -Force -ErrorAction SilentlyContinue
         return $true
@@ -1147,6 +1512,16 @@ function Clear-OpenPathCaptivePortalMarker {
 }
 
 function Get-OpenPathCaptivePortalObservation {
+    <#
+    .SYNOPSIS
+        Reads and deserializes the captive portal observation file from disk.
+    .DESCRIPTION
+        Reads $script:CaptivePortalObservationPath
+        (C:\OpenPath\data\captive-portal-observation.json).
+        Returns null when the file is absent, empty, or unparseable.
+    .OUTPUTS
+        PSCustomObject or $null
+    #>
     if (-not (Test-Path $script:CaptivePortalObservationPath)) {
         return $null
     }
@@ -1164,6 +1539,26 @@ function Get-OpenPathCaptivePortalObservation {
 }
 
 function Update-OpenPathCaptivePortalObservation {
+    <#
+    .SYNOPSIS
+        Records a captive portal detection result and computes whether portal mode
+        should be entered or exited based on consecutive-observation thresholds.
+    .DESCRIPTION
+        Reads the existing observation file, increments the appropriate consecutive
+        counter (portalCount or authenticatedCount), resets the other, and writes the
+        updated observation to $script:CaptivePortalObservationPath
+        (C:\OpenPath\data\captive-portal-observation.json). Persistence is best-effort;
+        the in-memory decision object is always returned even when the file write fails.
+    .PARAMETER DetectedState
+        Current detection result: 'Authenticated', 'Portal', or 'NoNetwork'.
+    .PARAMETER EnterPortalCount
+        Number of consecutive Portal detections required before ShouldEnterPortal is true.
+    .PARAMETER ExitAuthenticatedCount
+        Number of consecutive Authenticated detections required before ShouldExitPortal is true.
+    .OUTPUTS
+        PSCustomObject with fields ShouldEnterPortal, ShouldExitPortal, DetectedState,
+        PortalCount, AuthenticatedCount, PortalSince, PortalAgeSeconds, MinimumPortalElapsed
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -1420,6 +1815,26 @@ function Test-OpenPathCaptivePortalState {
 }
 
 function Enable-OpenPathCaptivePortalMode {
+    <#
+    .SYNOPSIS
+        Enters captive portal mode by routing to limited mode when recovery hosts are
+        available, or passthrough mode when none are known.
+    .DESCRIPTION
+        Merges PortalRecoveryDomains with admin-configured captive portal domains.
+        When the combined set is non-empty, delegates to Enable-OpenPathCaptivePortalLimitedMode,
+        which keeps the adapter on 127.0.0.1 and forwards only the declared domains.
+        When no recovery hosts are available, delegates to Enable-OpenPathCaptivePortalPassthroughMode,
+        which resets the adapter DNS to the network resolver (fail-open).
+        Supports -WhatIf via SupportsShouldProcess.
+    .PARAMETER State
+        State label to record in the portal marker (e.g. 'Portal').
+    .PARAMETER PortalRecoveryDomains
+        Caller-supplied recovery hostnames merged with configured domains.
+    .PARAMETER TtlSeconds
+        Requested TTL in seconds for the portal marker.
+    .OUTPUTS
+        Boolean — true when portal mode was successfully entered
+    #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$State = 'Portal',
@@ -1455,6 +1870,30 @@ function Enable-OpenPathCaptivePortalMode {
 }
 
 function Disable-OpenPathCaptivePortalMode {
+    <#
+    .SYNOPSIS
+        Exits captive portal mode by restoring the protected DNS posture and clearing
+        the portal marker file.
+    .DESCRIPTION
+        Calls Restore-OpenPathCaptivePortalAcrylicHostState and Restore-OpenPathProtectedMode
+        up to three times, then verifies local enforcement posture via
+        Get-OpenPathCaptivePortalProtectedModeExitEvidence. Closes on localPostureRestored
+        (adapter loopback, normal Acrylic policy, sinkhole, firewall) only — never on
+        upstream DNS health, to avoid pinning the machine in portal mode when the
+        configured upstream is temporarily blocked. Deletes the portal marker file
+        (marker-clear helper) only after posture is confirmed. Supports
+        -WhatIf via SupportsShouldProcess.
+    .PARAMETER Config
+        OpenPath config object used to determine firewall expectation; fetched automatically when null.
+    .PARAMETER DnsMaxAttempts
+        Maximum retry attempts passed to Get-OpenPathCaptivePortalProtectedModeExitEvidence.
+    .PARAMETER DnsDelayMilliseconds
+        Delay between DNS retry attempts in milliseconds.
+    .PARAMETER DnsAttemptTimeoutSeconds
+        Per-attempt DNS timeout in seconds; 0 means no timeout.
+    .OUTPUTS
+        Boolean — true when protected mode was fully restored and the marker was cleared
+    #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [PSCustomObject]$Config = $null,

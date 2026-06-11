@@ -368,6 +368,11 @@ $firefoxNativeHostArtifacts = @(
     "$OpenPathRoot\browser-extension\firefox\native\NativeHost.State.ps1",
     "$OpenPathRoot\browser-extension\firefox\native\NativeHost.Protocol.ps1",
     "$OpenPathRoot\browser-extension\firefox\native\NativeHost.Actions.ps1",
+    "$OpenPathRoot\browser-extension\firefox\native\NativeHost.Actions.Bootstrap.ps1",
+    "$OpenPathRoot\browser-extension\firefox\native\NativeHost.Actions.Shared.ps1",
+    "$OpenPathRoot\browser-extension\firefox\native\NativeHost.Actions.RuntimeDependency.ps1",
+    "$OpenPathRoot\browser-extension\firefox\native\NativeHost.Actions.CaptivePortal.ps1",
+    "$OpenPathRoot\browser-extension\firefox\native\NativeHost.Actions.MessageDispatch.ps1",
     "$OpenPathRoot\browser-extension\firefox\native\whitelist_native_host.json",
     "$OpenPathRoot\browser-extension\firefox\native\native-state.json",
     "$OpenPathRoot\browser-extension\firefox\native\whitelist.txt"

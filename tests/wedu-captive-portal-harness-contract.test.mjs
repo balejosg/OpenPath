@@ -93,7 +93,8 @@ test('captive portal evidence contract keeps discovery diagnostic-only', () => {
   const diagnosticsModule = readSource(
     'windows/lib/internal/CaptivePortal.DiagnosticsDiscovery.ps1'
   );
-  const nativeHostActions = readSource('windows/lib/internal/NativeHost.Actions.ps1');
+  // NativeHost.Actions.ps1 is a thin loader; captive-portal actions live in this sub-file.
+  const nativeHostActions = readSource('windows/lib/internal/NativeHost.Actions.CaptivePortal.ps1');
   const limitedModeBody = sourceBetween(
     module,
     'function Enable-OpenPathCaptivePortalLimitedMode',
@@ -104,7 +105,7 @@ test('captive portal evidence contract keeps discovery diagnostic-only', () => {
   const recentSuccessBody = sourceBetween(
     nativeHostActions,
     'function Test-NativeHostRecentCaptivePortalSuccessEligible',
-    'function Test-NativeHostBlockedSubdomainMatch'
+    'function Invoke-NativeHostCaptivePortalRecoveryAction'
   );
   const successExpression = harness.match(/\$success\s*=\s*\[bool\]\(([\s\S]*?)\n\s*\)/)?.[1] ?? '';
   const exportBody = sourceBetween(module, 'Export-ModuleMember -Function @(', ')');

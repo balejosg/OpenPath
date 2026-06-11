@@ -14,7 +14,12 @@ function Get-OpenPathNativeHostArtifactNames {
         'TaskRunner.ps1',
         'NativeHost.State.ps1',
         'NativeHost.Protocol.ps1',
-        'NativeHost.Actions.ps1'
+        'NativeHost.Actions.ps1',
+        'NativeHost.Actions.Bootstrap.ps1',
+        'NativeHost.Actions.Shared.ps1',
+        'NativeHost.Actions.RuntimeDependency.ps1',
+        'NativeHost.Actions.CaptivePortal.ps1',
+        'NativeHost.Actions.MessageDispatch.ps1'
     )
 }
 
