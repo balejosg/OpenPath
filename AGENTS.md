@@ -213,7 +213,11 @@ GRAPHIFY_OUT=../graphify-out graphify update OpenPath
 
 - **`groupsViewModelActions.ts`** -- 3-file cycle with `groupsViewModelState.ts` and `useGroupsViewModel.ts` (`react-spa/src/hooks/`)
 - **`config-storage.ts`** -- two 3-file cycles with `config-storage-native.ts`/`config-storage-legacy.ts` and `config-storage-shared.ts` (`firefox-extension/src/lib/`)
-- Do not add new edges into these cycles; resolve rather than extend them.
+- **`useGroupedRulesManager.ts`** -- 2-file cycle with `useGroupedRulesData.ts` (`react-spa/src/hooks/`, type-only imports)
+- **`HierarchicalRulesTable.tsx`** -- 2-file cycle with `rules-table/HierarchicalGroupRow.tsx` (`react-spa/src/components/`, type-only imports)
+- **`native-messaging-client.ts`** -- 2-file cycle with `runtime-dependency-protocol.ts` (`firefox-extension/src/lib/`, type-only imports)
+- Do not add new edges into these cycles; resolve rather than extend them. The type-only cycles can be broken by extracting shared types to a dedicated types file.
+- Automated guard (pending): `eslint-plugin-import-x` is not installed; when added, enable `import-x/no-cycle: error` for `react-spa/src` and `firefox-extension/src` in `eslint.config.js`, with inline disables on the cycles above.
 
 ### Key Cross-Community Bridges
 
