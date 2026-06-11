@@ -758,7 +758,7 @@ Describe "Watchdog Script" {
             $enableBody | Should -Match '(?s)if \(-not \(\[bool\]\$restartSucceeded\)\).*?Restore-OpenPathLimitedCaptivePortalAttempt.*?return \$false'
         }
 
-        It "Falls back to bounded passthrough when exact-host limited DNS cannot resolve the portal" {
+        It "Stays fail-closed and retries instead of downgrading to passthrough when limited DNS verification fails" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
@@ -767,15 +767,18 @@ Describe "Watchdog Script" {
             $enableBody = $moduleContent.Substring($enableStart, $definitionStart - $enableStart)
 
             Assert-ContentContainsAll -Content $enableBody -Needles @(
-                'captive portal limited mode verification failed; falling back to bounded passthrough',
-                'Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $Marker -ForcePassthrough'
+                'captive portal limited mode verification failed; staying protected and retrying next cycle',
+                'Restore-OpenPathLimitedCaptivePortalAttempt',
+                '-LimitedModeReady $false'
             )
+            # A failed limited verification must never open the machine: after the
+            # verification call there is no passthrough downgrade left in the body.
             $limitedVerificationIndex = $enableBody.IndexOf('Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $renderedHosts')
-            $fallbackIndex = $enableBody.LastIndexOf('Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $Marker -ForcePassthrough')
-            $limitedVerificationIndex | Should -BeLessThan $fallbackIndex
+            $limitedVerificationIndex | Should -BeGreaterThan 0
+            $enableBody.Substring($limitedVerificationIndex) | Should -Not -Match 'Enable-OpenPathCaptivePortalPassthroughMode'
         }
 
-        It "Forces passthrough instead of preserving a failed limited marker after limited DNS verification fails" {
+        It "Reserves the passthrough fallback for the no-recovery-hosts case only" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $moduleContent = Get-Content $modulePath -Raw
 
@@ -788,9 +791,13 @@ Describe "Watchdog Script" {
                 '[switch]$ForcePassthrough',
                 'if (-not $ForcePassthrough -and $ExistingMarker -and (Get-OpenPathCaptivePortalMarkerMode -Marker $ExistingMarker) -eq ''limited'')'
             )
-            Assert-ContentContainsAll -Content $limitedBody -Needles @(
-                'Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $Marker -ForcePassthrough'
-            )
+            # The only remaining passthrough call in limited mode is the
+            # zero-recovery-hosts guard at the top of the function.
+            $zeroHostsIndex = $limitedBody.IndexOf('if ($baseRecoveryHosts.Count -le 0)')
+            $zeroHostsIndex | Should -BeGreaterThan 0
+            $passthroughCallIndex = $limitedBody.IndexOf('Enable-OpenPathCaptivePortalPassthroughMode')
+            $passthroughCallIndex | Should -BeGreaterThan $zeroHostsIndex
+            $limitedBody.IndexOf('Enable-OpenPathCaptivePortalPassthroughMode', $passthroughCallIndex + 1) | Should -Be -1
         }
 
         It "Routes limited portal Acrylic writes through the shared atomic writer under the policy lock" {
@@ -1062,17 +1069,65 @@ Describe "Watchdog Script" {
                 'Restore-OpenPathProtectedMode -Config $Config',
                 'Get-OpenPathCaptivePortalProtectedModeExitEvidence',
                 '$restoreEvidence',
-                '$restoreSucceeded = [bool]$restoreEvidence.enforcementRestored',
-                '$postRestoreEvidence.protectedModeRestored',
+                '$restoreSucceeded = [bool]$restoreEvidence.localPostureRestored',
+                '$postRestoreEvidence.localPostureRestored',
                 'Clear-OpenPathCaptivePortalMarker',
-                '$postClearEvidence.protectedModeRestored'
+                '$postClearEvidence.localPostureRestored'
             )
 
-            $disableBody.IndexOf('$restoreSucceeded = [bool]$restoreEvidence.enforcementRestored') |
+            $disableBody.IndexOf('$restoreSucceeded = [bool]$restoreEvidence.localPostureRestored') |
                 Should -BeLessThan ($disableBody.IndexOf('Clear-OpenPathCaptivePortalMarker'))
-            $disableBody.IndexOf('$postRestoreEvidence.protectedModeRestored') |
+            $disableBody.IndexOf('$postRestoreEvidence.localPostureRestored') |
                 Should -BeLessThan ($disableBody.IndexOf('Clear-OpenPathCaptivePortalMarker'))
             $disableBody | Should -Match 'if \(-not \$restoreSucceeded\)[\s\S]*return \$false'
+        }
+
+        It "Never keeps a relaxed posture alive over upstream health when closing portal mode" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $disableStart = $moduleContent.IndexOf('function Disable-OpenPathCaptivePortalMode')
+            $exportStart = $moduleContent.IndexOf('Export-ModuleMember')
+            $disableBody = $moduleContent.Substring($disableStart, $exportStart - $disableStart)
+
+            # The exit evidence separates the machine-local posture (loopback DNS,
+            # normal Acrylic policy, sinkhole, firewall) from upstream resolution,
+            # which is a network condition and must never gate the marker close.
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                '$localPostureRestored = ($normalProtected -and $sinkholeHealthy -and ((-not $firewallExpected) -or $firewallHealthy))',
+                'upstreamHealthy = $dnsResolutionHealthy',
+                'localPostureRestored = $localPostureRestored'
+            )
+            Assert-ContentContainsAll -Content $disableBody -Needles @(
+                'portal_closed_upstream_unhealthy'
+            )
+            $disableBody | Should -Not -Match '\$restoreSucceeded = \[bool\]\$restoreEvidence\.enforcementRestored'
+            $disableBody | Should -Not -Match '\$restoreSucceeded = \[bool\]\$restoreEvidence\.dnsResolutionHealthy'
+        }
+
+        It "Closes expired captive portal markers from the per-minute watchdog cycle" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
+            $helperContent = Get-Content $helperPath -Raw
+            $moduleContent = Get-Content $modulePath -Raw
+            $scriptContent = Get-Content $scriptPath -Raw
+
+            # The per-cycle reads use -SkipExpiredRestore on purpose (no side
+            # effects in a state read), so the prechecks must close an expired
+            # marker explicitly instead of leaving it in limbo until a native-host
+            # request or the update runtime happens to run.
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'function Test-OpenPathCaptivePortalMarkerExpired',
+                '''Test-OpenPathCaptivePortalMarkerExpired'','
+            )
+            Assert-ContentContainsAll -Content $helperContent -Needles @(
+                'Test-OpenPathCaptivePortalMarkerExpired -Marker $activeMarker',
+                'failed to close expired captive portal marker; marker preserved'
+            )
+            Assert-ContentContainsAll -Content $scriptContent -Needles @(
+                'Test-OpenPathCaptivePortalMarkerExpired'
+            )
         }
 
         It "Closes any active captive portal marker immediately on authenticated detection and preserves the marker when restore fails" {

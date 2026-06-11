@@ -42,28 +42,37 @@ function Test-OpenPathCaptivePortalModeActive {
         return $true
     }
 
-    if ($marker.PSObject.Properties['expiresAt'] -and $marker.expiresAt) {
-        try {
-            $expiresAt = ([DateTimeOffset]::Parse([string]$marker.expiresAt)).UtcDateTime
-            if ([DateTime]::UtcNow -ge $expiresAt) {
-                if ($SkipExpiredRestore) { return $true }
-                if ((Get-OpenPathCaptivePortalMarkerMode -Marker $marker) -eq 'passthrough') {
-                    Write-OpenPathLog 'Watchdog: captive portal passthrough deadline expired; attempting protected-mode restore' -Level WARN
-                }
-                $disabled = Disable-OpenPathCaptivePortalMode
-                if (-not [bool]$disabled) {
-                    Write-OpenPathLog 'Watchdog: failed to close expired captive portal passthrough marker; keeping marker active (details redacted)' -Level WARN
-                }
-                return (-not [bool]$disabled)
-            }
+    if (Test-OpenPathCaptivePortalMarkerExpired -Marker $marker) {
+        if ($SkipExpiredRestore) { return $true }
+        if ((Get-OpenPathCaptivePortalMarkerMode -Marker $marker) -eq 'passthrough') {
+            Write-OpenPathLog 'Watchdog: captive portal passthrough deadline expired; attempting protected-mode restore' -Level WARN
         }
-        catch {
+        $disabled = Disable-OpenPathCaptivePortalMode
+        if (-not [bool]$disabled) {
             Write-OpenPathLog 'Watchdog: failed to close expired captive portal passthrough marker; keeping marker active (details redacted)' -Level WARN
-            return $true
         }
+        return (-not [bool]$disabled)
     }
 
     return $true
+}
+
+function Test-OpenPathCaptivePortalMarkerExpired {
+    param([object]$Marker = $null)
+
+    if (-not $Marker) {
+        $Marker = Get-OpenPathCaptivePortalMarker
+    }
+    if (-not $Marker -or -not $Marker.PSObject.Properties['expiresAt'] -or -not $Marker.expiresAt) {
+        return $false
+    }
+
+    try {
+        return ([DateTime]::UtcNow -ge ([DateTimeOffset]::Parse([string]$Marker.expiresAt)).UtcDateTime)
+    }
+    catch {
+        return $false
+    }
 }
 
 function Get-OpenPathCaptivePortalMarker {
@@ -431,17 +440,25 @@ function Get-OpenPathCaptivePortalProtectedModeExitEvidence {
     $markerPresent = Test-Path $script:CaptivePortalStatePath -ErrorAction SilentlyContinue
     $markerCleared = (-not $markerPresent)
     $normalProtected = [bool](Get-OpenPathCaptivePortalAcrylicPolicyState -State normalProtected -LocalDnsLoopbackRestored $localDnsLoopbackRestored -AcrylicNormalRestored $acrylicNormalRestored)
-    $enforcementRestored = ($normalProtected -and $dnsResolutionHealthy -and $sinkholeHealthy -and ((-not $firewallExpected) -or $firewallHealthy))
+    # Local enforcement posture: adapter loopback, normal Acrylic policy, sinkhole
+    # and firewall are all decided by this machine alone. Upstream resolution is a
+    # NETWORK health signal: it must never decide whether a portal marker -- and
+    # with it a relaxed DNS posture -- stays alive, or a network whose configured
+    # upstream stays blocked would pin the machine in the relaxed mode forever.
+    $localPostureRestored = ($normalProtected -and $sinkholeHealthy -and ((-not $firewallExpected) -or $firewallHealthy))
+    $enforcementRestored = ($localPostureRestored -and $dnsResolutionHealthy)
 
     return [PSCustomObject]@{
         localDnsLoopbackRestored = $localDnsLoopbackRestored
         acrylicNormalRestored = $acrylicNormalRestored
         dnsResolutionHealthy = $dnsResolutionHealthy
+        upstreamHealthy = $dnsResolutionHealthy
         sinkholeHealthy = $sinkholeHealthy
         firewallExpectedActive = $firewallExpected
         firewallHealthy = $firewallHealthy
         markerPresent = $markerPresent
         markerCleared = $markerCleared
+        localPostureRestored = $localPostureRestored
         enforcementRestored = $enforcementRestored
         protectedModeRestored = ($enforcementRestored -and $markerCleared)
     }
@@ -726,9 +743,24 @@ function Enable-OpenPathCaptivePortalLimitedMode {
     }
 
     if (-not (Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $renderedHosts -DnsMaxAttempts $script:CaptivePortalLimitedModeDnsMaxAttempts -DnsDelayMilliseconds $script:CaptivePortalLimitedModeDnsDelayMilliseconds -DnsAttemptTimeoutSeconds $script:CaptivePortalLimitedModeDnsAttemptTimeoutSeconds)) {
-        Write-OpenPathLog 'Watchdog: captive portal limited mode verification failed; falling back to bounded passthrough' -Level WARN
+        # Fail closed: a failed limited-mode verification must never trade
+        # enforcement for connectivity. Return to the protected posture and leave
+        # a short-lived not-ready marker so the next watchdog cycle retries
+        # limited entry (keepLimited reuses the marker's allowedHosts). The
+        # portal stays unreachable for one cycle instead of the whole machine
+        # opening up, which is what the old bounded-passthrough downgrade did.
+        Write-OpenPathLog 'Watchdog: captive portal limited mode verification failed; staying protected and retrying next cycle' -Level WARN
         Restore-OpenPathLimitedCaptivePortalAttempt
-        return (Enable-OpenPathCaptivePortalPassthroughMode -State $State -TtlSeconds $TtlSeconds -ExistingMarker $Marker -ForcePassthrough)
+        Set-OpenPathCaptivePortalMarker -State $State -Mode limited `
+            -AllowedHosts @($renderedHosts) `
+            -ConfiguredCaptivePortalDomains @($configuredCaptivePortalDomains) `
+            -LimitedModeReady $false `
+            -UpstreamDns ([string]$upstream.Address) `
+            -UpstreamDnsSource ([string]$upstream.Source) `
+            -UpstreamUsableForLimited ([bool]$upstream.UsableForLimited) `
+            -UpstreamVerified ([bool]$upstream.Verified) `
+            -TtlSeconds 60 | Out-Null
+        return $false
     }
 
     $allowedMarkerHosts = @($renderedHosts)
@@ -1460,8 +1492,14 @@ function Disable-OpenPathCaptivePortalMode {
             }
 
             $restoreEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config -DnsMaxAttempts $DnsMaxAttempts -DnsDelayMilliseconds $DnsDelayMilliseconds -DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds
-            $restoreSucceeded = [bool]$restoreEvidence.enforcementRestored
+            # Close on the LOCAL posture only. Upstream resolution is a network
+            # condition; once the marker is gone the normal protected-mode repair
+            # plan owns it (it becomes eligible again as soon as portal mode ends).
+            $restoreSucceeded = [bool]$restoreEvidence.localPostureRestored
             if ($restoreSucceeded) {
+                if (-not [bool]$restoreEvidence.upstreamHealthy) {
+                    Write-OpenPathLog 'Watchdog: captive portal closed with the configured upstream still unhealthy (portal_closed_upstream_unhealthy); protected-mode repair owns upstream recovery' -Level WARN
+                }
                 break
             }
 
@@ -1485,7 +1523,7 @@ function Disable-OpenPathCaptivePortalMode {
 
     if (-not $markerPresentAtStart) {
         $postRestoreEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config -DnsMaxAttempts $DnsMaxAttempts -DnsDelayMilliseconds $DnsDelayMilliseconds -DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds
-        if (-not [bool]$postRestoreEvidence.protectedModeRestored) {
+        if (-not ([bool]$postRestoreEvidence.localPostureRestored -and [bool]$postRestoreEvidence.markerCleared)) {
             Write-OpenPathLog 'Watchdog: protected mode verification failed after marker-absent restore' -Level WARN
             return $false
         }
@@ -1498,7 +1536,7 @@ function Disable-OpenPathCaptivePortalMode {
     }
 
     $postClearEvidence = Get-OpenPathCaptivePortalProtectedModeExitEvidence -Config $Config -DnsMaxAttempts $DnsMaxAttempts -DnsDelayMilliseconds $DnsDelayMilliseconds -DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds
-    if (-not [bool]$postClearEvidence.protectedModeRestored) {
+    if (-not ([bool]$postClearEvidence.localPostureRestored -and [bool]$postClearEvidence.markerCleared)) {
         Write-OpenPathLog 'Watchdog: protected mode verification failed after marker clear; keeping captive portal marker active' -Level WARN
         return $false
     }
@@ -1508,6 +1546,7 @@ function Disable-OpenPathCaptivePortalMode {
 
 Export-ModuleMember -Function @(
     'Test-OpenPathCaptivePortalModeActive',
+    'Test-OpenPathCaptivePortalMarkerExpired',
     'Get-OpenPathCaptivePortalMarker',
     'Get-OpenPathCaptivePortalMarkerMode',
     'Set-OpenPathCaptivePortalMarker',

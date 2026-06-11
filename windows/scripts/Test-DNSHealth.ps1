@@ -44,6 +44,7 @@ Initialize-OpenPathScriptSession `
     'Test-OpenPathIntegrity',
     'Restore-OpenPathIntegrity',
     'Test-OpenPathCaptivePortalModeActive',
+    'Test-OpenPathCaptivePortalMarkerExpired',
     'Test-OpenPathCaptivePortalState',
     'Test-DNSResolution',
     'Test-DNSSinkhole',

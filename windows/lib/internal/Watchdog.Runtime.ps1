@@ -93,6 +93,17 @@ function Invoke-OpenPathWatchdogPrechecks {
     elseif ($captivityOutcome -eq 'unsafeMarker') {
         Write-OpenPathLog 'Watchdog: captive portal mode is active without a readable marker; leaving protected-mode state unchanged' -Level WARN
     }
+    elseif ($captivityOutcome -eq 'noAction' -and $portalModeActive -and (Test-OpenPathCaptivePortalMarkerExpired -Marker $activeMarker)) {
+        # The per-cycle reads above intentionally use -SkipExpiredRestore (a state
+        # read must not have side effects), so without this branch an expired
+        # marker would sit in limbo until a native-host request or the update
+        # runtime happened to run. Disable is gated by local-posture evidence and
+        # is safe to retry every cycle.
+        $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
+        if (-not $disabled) {
+            Write-OpenPathLog 'Watchdog: failed to close expired captive portal marker; marker preserved' -Level WARN
+        }
+    }
 
     return [PSCustomObject]@{
         PortalModeActive = (Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore)
