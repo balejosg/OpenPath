@@ -19,7 +19,8 @@ jobs:
       - name: Verify runner identity
         shell: pwsh
         run: |
-          if ($env:RUNNER_NAME -ne 'openpath-windows-103') {
+          $allowedRunners = @('openpath-windows-103', 'openpath-windows-105')
+          if ($allowedRunners -notcontains $env:RUNNER_NAME) {
             throw "Unexpected runner name: $env:RUNNER_NAME"
           }
           if ($env:RUNNER_OS -ne 'Windows') {
