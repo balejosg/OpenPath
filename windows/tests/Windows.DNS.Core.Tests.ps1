@@ -1377,9 +1377,13 @@ Describe "DNS Module" {
                 '"QuaternaryServerAddress"',
                 '"^$portalDomain"',
                 '"^*.$portalDomain"',
-                'Get-OpenPathCaptivePortalProbeDomains',
                 'function Test-OpenPathSplitDnsTopologyDrift'
             )
+            # Probe domains must stay OFF the network-resolver upstream, or the lab
+            # network DNS (which intercepts NCSI hosts) would answer them with the
+            # portal address even after authentication.
+            $portalUpstreamMaskExpr = [regex]::Match($configContent, '\$portalUpstreamMask = if \(\$splitDnsActive\) \{[\s\S]*?\n    \}').Value
+            $portalUpstreamMaskExpr | Should -Not -Match 'Get-OpenPathCaptivePortalProbeDomains'
             $networkContent | Should -Match 'function Get-OpenPathSplitDnsPortalUpstreams'
             $commonModuleContent | Should -Match "'Get-OpenPathSplitDnsPortalUpstreams',"
             $dnsModuleContent | Should -Match "'Test-OpenPathSplitDnsTopologyDrift',"

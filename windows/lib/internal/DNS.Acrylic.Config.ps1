@@ -136,9 +136,13 @@ function Set-AcrylicConfiguration {
     # internal names only the network's own (DHCP-offered) resolver can answer --
     # the configured upstreams return NXDOMAIN for them, which is exactly the
     # production failure this replaces the stateful limited-mode lifecycle for.
-    # The connectivity-probe endpoints ride BOTH paths so OS/agent portal
-    # detection keeps working on networks that block public DNS pre-auth.
-    # Everything else resolves exclusively through the configured upstreams.
+    # ONLY the declared portal domains ride the network resolver; everything else,
+    # including the connectivity-probe endpoints, resolves exclusively through the
+    # configured upstreams. Probe domains are intentionally NOT routed to the
+    # network DNS: captive detection already works via transport failure
+    # (Test-OpenPathCaptivePortalState returns 'Portal' when every probe fails and
+    # a gateway exists), and routing them to the network resolver would make them
+    # answer with the portal's own address even after authentication.
     $normalizedPortalDomains = @(
         $CaptivePortalDomains |
             ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } |
@@ -162,7 +166,7 @@ function Set-AcrylicConfiguration {
     # whose mask matches it, first response wins, so a portal host left positively
     # on the primary races a fast public NXDOMAIN against the network resolver's
     # real answer. Drop the portal positives (the negations + tertiary placement
-    # do the routing); the probe domains deliberately remain (dual-routed).
+    # do the routing). Probe domains stay on the configured upstreams only.
     $portalPositiveEntries = @(Get-AcrylicExactAffinityMaskEntries -Domains $normalizedPortalDomains)
     $configuredUpstreamMask = if ($splitDnsActive) {
         (@($portalExclusionEntries) + @($affinityMaskEntries | Where-Object { $portalPositiveEntries -notcontains $_ })) -join ';'
@@ -170,15 +174,9 @@ function Set-AcrylicConfiguration {
     else {
         $domainAffinityMask
     }
-    $probeDomains = @()
-    if (Get-Command -Name 'Get-OpenPathCaptivePortalProbeDomains' -ErrorAction SilentlyContinue) {
-        $probeDomains = @(Get-OpenPathCaptivePortalProbeDomains)
-    }
     $portalUpstreamMask = if ($splitDnsActive) {
-        (@(
-            Get-AcrylicAffinityMaskEntries -Domains $normalizedPortalDomains -BlockedSubdomains $BlockedSubdomains
-            Get-AcrylicExactAffinityMaskEntries -Domains $probeDomains
-        ) | Select-Object -Unique) -join ';'
+        (@(Get-AcrylicAffinityMaskEntries -Domains $normalizedPortalDomains -BlockedSubdomains $BlockedSubdomains) |
+            Select-Object -Unique) -join ';'
     }
     else {
         ''
