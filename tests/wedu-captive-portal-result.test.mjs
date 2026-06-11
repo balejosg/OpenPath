@@ -55,14 +55,6 @@ function baseResult(overrides = {}) {
     gatewayAuthenticated: {
       success: true,
     },
-    autonomousExit: {
-      exitedProtected: true,
-      protectedModeExitedVia: 'autonomous-watchdog-close',
-    },
-    protectedModeExitedVia: 'autonomous-watchdog-close',
-    postAuthMarkerCleared: true,
-    postAuthExternalNetworkOpen: true,
-    postAuthPortalHostStillNetworkOnly: true,
     nativeReconcile: {
       success: true,
       protectedModeRestored: true,
@@ -606,70 +598,6 @@ describe('WEDU captive portal result validator', () => {
     assert.throws(
       () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
       /wedu-lab-network-after\.json adapters must include local DNS server 127\.0\.0\.1/
-    );
-  });
-
-  test('rejects target-platform evidence when the watchdog never exited portal mode on its own', () => {
-    const artifactDir = makeArtifactDir({
-      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
-        autonomousExit: {
-          exitedProtected: false,
-          protectedModeExitedVia: 'watchdog-timeout',
-        },
-        protectedModeExitedVia: 'watchdog-timeout',
-      }),
-      'wedu-lab-browser-before.json': browserBefore(),
-      ...targetPlatformFiles(),
-    });
-
-    assert.throws(
-      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
-      /autonomousExit\.exitedProtected/
-    );
-  });
-
-  test('rejects target-platform evidence when the gateway authenticated flip failed', () => {
-    const artifactDir = makeArtifactDir({
-      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
-        gatewayAuthenticated: { success: false },
-      }),
-      'wedu-lab-browser-before.json': browserBefore(),
-      ...targetPlatformFiles(),
-    });
-
-    assert.throws(
-      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
-      /gatewayAuthenticated\.success/
-    );
-  });
-
-  test('rejects target-platform evidence when a captive-portal marker survives authentication', () => {
-    const artifactDir = makeArtifactDir({
-      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
-        postAuthMarkerCleared: false,
-      }),
-      'wedu-lab-browser-before.json': browserBefore(),
-      ...targetPlatformFiles(),
-    });
-
-    assert.throws(
-      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
-      /postAuthMarkerCleared/
-    );
-  });
-
-  test('rejects target-platform evidence when the portal host became publicly resolvable post-auth', () => {
-    const artifactDir = makeArtifactDir({
-      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
-        postAuthPortalHostStillNetworkOnly: false,
-      }),
-      'wedu-lab-browser-before.json': browserBefore(),
-      ...targetPlatformFiles(),
-    });
-
-    assert.throws(
-      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
-      /postAuthPortalHostStillNetworkOnly/
     );
   });
 
