@@ -270,6 +270,11 @@ windows/lib/Update.Runtime.psm1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/NativeHost.State.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/NativeHost.Protocol.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/NativeHost.Actions.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/NativeHost.Actions.Bootstrap.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1
+windows/lib/internal/NativeHost.Actions.CaptivePortal.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1
+windows/lib/internal/NativeHost.Actions.MessageDispatch.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1
+windows/lib/internal/NativeHost.Actions.RuntimeDependency.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1
+windows/lib/internal/NativeHost.Actions.Shared.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1
 windows/lib/internal/NativeHost.ArtifactCatalog.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1,windows/tests/Windows.Installer.Tests.ps1
 windows/lib/internal/NativeHost.CaptivePortalRecoveryQueue.ps1|windows/tests/Windows.Browser.NativeHost.Tests.ps1,tests/windows-runner-direct.test.mjs
 windows/lib/internal/CaptivePortal.AcrylicPolicyTransaction.ps1|windows/tests/Windows.Watchdog.Tests.ps1
