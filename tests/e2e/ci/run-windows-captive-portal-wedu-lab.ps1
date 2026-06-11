@@ -1345,14 +1345,31 @@ function Invoke-WeduSplitDnsProtectedCheck {
         $cyclesRun = $cycle
         Remove-Item -LiteralPath $script:CaptiveObservationPath -Force -ErrorAction SilentlyContinue
         try {
+            # Capture the prior run time so we can confirm the task ACTUALLY ran
+            # this cycle. Start-ScheduledTask is asynchronous: polling the task
+            # info immediately after can still show the PREVIOUS run's result
+            # (not 267009), so a naive "wait until not running" loop returns before
+            # the watchdog -- and its split-DNS drift refresh -- has executed, and
+            # the resolve below would run against stale normal-mode Acrylic.
+            $priorRun = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
+                Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+            $priorRunTime = if ($priorRun) { [datetime]$priorRun.LastRunTime } else { [datetime]::MinValue }
             Start-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop
+            $started = $false
             for ($wait = 1; $wait -le 240; $wait++) {
                 Start-Sleep -Milliseconds 500
                 $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
                     Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+                if (-not $info) { continue }
                 # 267009 (0x41301) == task is currently running; LastTaskResult is an
                 # unsigned 32-bit code that overflows [int], hence the [long] cast.
-                if ($info -and [long]$info.LastTaskResult -ne 267009) {
+                $running = ([long]$info.LastTaskResult -eq 267009)
+                $ranThisCycle = ([datetime]$info.LastRunTime -gt $priorRunTime)
+                if (-not $started) {
+                    if ($running -or $ranThisCycle) { $started = $true }
+                    continue
+                }
+                if (-not $running) {
                     break
                 }
             }

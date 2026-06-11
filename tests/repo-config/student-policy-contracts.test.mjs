@@ -1379,8 +1379,8 @@ describe('repository verification contract', () => {
     );
     assert.match(
       dnsConfigModule,
-      /\$configuredUpstreamMask = if \(\$splitDnsActive\) \{\s*\(@\(\$portalExclusionEntries\) \+ @\(\$affinityMaskEntries\)\) -join ';'/,
-      'Split DNS must keep the configured upstreams on the allowlist mask, with the declared portal domains negated when active'
+      /\$configuredUpstreamMask = if \(\$splitDnsActive\) \{\s*\(@\(\$portalExclusionEntries\) \+ @\(\$affinityMaskEntries \| Where-Object \{ \$portalPositiveEntries -notcontains \$_ \}\)\) -join ';'/,
+      'Split DNS must negate the declared portal domains AND strip their positive entries from the configured upstreams (Acrylic queries every matching server, first answer wins)'
     );
     assert.ok(
       dnsConfigModule.includes('"PrimaryServerDomainNameAffinityMask" = $configuredUpstreamMask') &&

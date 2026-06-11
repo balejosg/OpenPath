@@ -1384,6 +1384,33 @@ Describe "DNS Module" {
             $commonModuleContent | Should -Match "'Get-OpenPathSplitDnsPortalUpstreams',"
             $dnsModuleContent | Should -Match "'Test-OpenPathSplitDnsTopologyDrift',"
         }
+
+        It "Keeps declared portal domains off the configured upstreams when split DNS is active" {
+            $configPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Config.ps1"
+            $configContent = Get-Content $configPath -Raw
+
+            # Acrylic forwards to EVERY server whose mask matches and the first
+            # response wins, so a portal host left positively on the primary races
+            # a fast public NXDOMAIN against the network resolver's real answer.
+            # The configured-upstream mask must therefore strip the portal positives.
+            Assert-ContentContainsAll -Content $configContent -Needles @(
+                '$portalPositiveEntries = @(Get-AcrylicExactAffinityMaskEntries -Domains $normalizedPortalDomains)',
+                '@($affinityMaskEntries | Where-Object { $portalPositiveEntries -notcontains $_ })'
+            )
+        }
+
+        It "Reads the split-DNS upstream drift markers without crossing line endings" {
+            $configPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Config.ps1"
+            $configContent = Get-Content $configPath -Raw
+
+            # \s would swallow the LF that Set-AcrylicGlobalSetting writes after an
+            # empty value, making an empty QuaternaryServerAddress read as the next
+            # line and falsely report drift on every watchdog cycle.
+            Assert-ContentContainsAll -Content $configContent -Needles @(
+                '[regex]::Match($content, "(?m)^[ \t]*$key[ \t]*=[ \t]*([^\r\n]*?)[ \t]*$")'
+            )
+            $configContent | Should -Not -Match '\$key\\s\*=\\s\*\(\\S\+\)'
+        }
     }
 
     Context "Protected mode restore" {

@@ -156,8 +156,16 @@ function Set-AcrylicConfiguration {
         }
     )
     $splitDnsActive = ($portalUpstreams.Count -gt 0)
+    # The captive-portal domains are also rendered as POSITIVE exact entries in
+    # $affinityMaskEntries (line above). When split DNS is active they must NOT
+    # stay on the configured upstreams: Acrylic forwards a query to EVERY server
+    # whose mask matches it, first response wins, so a portal host left positively
+    # on the primary races a fast public NXDOMAIN against the network resolver's
+    # real answer. Drop the portal positives (the negations + tertiary placement
+    # do the routing); the probe domains deliberately remain (dual-routed).
+    $portalPositiveEntries = @(Get-AcrylicExactAffinityMaskEntries -Domains $normalizedPortalDomains)
     $configuredUpstreamMask = if ($splitDnsActive) {
-        (@($portalExclusionEntries) + @($affinityMaskEntries)) -join ';'
+        (@($portalExclusionEntries) + @($affinityMaskEntries | Where-Object { $portalPositiveEntries -notcontains $_ })) -join ';'
     }
     else {
         $domainAffinityMask
@@ -310,8 +318,13 @@ function Test-OpenPathSplitDnsTopologyDrift {
     try {
         $content = Get-Content $configPath -Raw -ErrorAction Stop
         foreach ($key in @('TertiaryServerAddress', 'QuaternaryServerAddress')) {
-            $match = [regex]::Match($content, "(?m)^\s*$key\s*=\s*(\S+)\s*$")
-            if ($match.Success) {
+            # Match only on the key's own line. \s would swallow the LF that
+            # Set-AcrylicGlobalSetting writes after an empty value, letting the
+            # capture grab the NEXT line (e.g. an empty QuaternaryServerAddress
+            # reading as "QuaternaryServerPort=53") and falsely report drift every
+            # cycle -> a perpetual Acrylic rewrite/restart loop.
+            $match = [regex]::Match($content, "(?m)^[ \t]*$key[ \t]*=[ \t]*([^\r\n]*?)[ \t]*$")
+            if ($match.Success -and $match.Groups[1].Value) {
                 $current += [string]$match.Groups[1].Value
             }
         }
