@@ -132,6 +132,58 @@ function Set-AcrylicConfiguration {
     ) | Select-Object -Unique
     $domainAffinityMask = ($affinityMaskEntries -join ';')
 
+    # Permanent split DNS for the admin-declared captive-portal domains: they are
+    # internal names only the network's own (DHCP-offered) resolver can answer --
+    # the configured upstreams return NXDOMAIN for them, which is exactly the
+    # production failure this replaces the stateful limited-mode lifecycle for.
+    # The connectivity-probe endpoints ride BOTH paths so OS/agent portal
+    # detection keeps working on networks that block public DNS pre-auth.
+    # Everything else resolves exclusively through the configured upstreams.
+    $normalizedPortalDomains = @(
+        $CaptivePortalDomains |
+            ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } |
+            Where-Object { $_ } |
+            Select-Object -Unique
+    )
+    $portalUpstreams = @()
+    if ($normalizedPortalDomains.Count -gt 0 -and (Get-Command -Name 'Get-OpenPathSplitDnsPortalUpstreams' -ErrorAction SilentlyContinue)) {
+        $portalUpstreams = @(Get-OpenPathSplitDnsPortalUpstreams -ExcludeAddresses @($dnsSettings.PrimaryDNS, $dnsSettings.SecondaryDNS))
+    }
+    $portalExclusionEntries = @(
+        foreach ($portalDomain in $normalizedPortalDomains) {
+            "^$portalDomain"
+            "^*.$portalDomain"
+        }
+    )
+    $splitDnsActive = ($portalUpstreams.Count -gt 0)
+    $configuredUpstreamMask = if ($splitDnsActive) {
+        (@($portalExclusionEntries) + @($affinityMaskEntries)) -join ';'
+    }
+    else {
+        $domainAffinityMask
+    }
+    $probeDomains = @()
+    if (Get-Command -Name 'Get-OpenPathCaptivePortalProbeDomains' -ErrorAction SilentlyContinue) {
+        $probeDomains = @(Get-OpenPathCaptivePortalProbeDomains)
+    }
+    $portalUpstreamMask = if ($splitDnsActive) {
+        (@(
+            Get-AcrylicAffinityMaskEntries -Domains $normalizedPortalDomains -BlockedSubdomains $BlockedSubdomains
+            Get-AcrylicExactAffinityMaskEntries -Domains $probeDomains
+        ) | Select-Object -Unique) -join ';'
+    }
+    else {
+        ''
+    }
+    $addressCacheBaseMask = '^dns.msftncsi.com;^ipv6.msftncsi.com;^www.msftncsi.com;*'
+    $addressCacheMask = if ($splitDnsActive) {
+        # Network-local portal answers must never be cached across networks.
+        (@($portalExclusionEntries) + @($addressCacheBaseMask)) -join ';'
+    }
+    else {
+        $addressCacheBaseMask
+    }
+
     $existingIniContent = $null
     try {
         if (Test-Path $configPath -ErrorAction SilentlyContinue) {
@@ -161,14 +213,22 @@ function Set-AcrylicConfiguration {
         "SecondaryServerPort" = "53"
         "SecondaryServerProtocol" = "UDP"
         "SecondaryServerQueryTypeAffinityMask" = ""
+        "TertiaryServerAddress" = $(if ($portalUpstreams.Count -ge 1) { [string]$portalUpstreams[0] } else { '' })
+        "TertiaryServerPort" = "53"
+        "TertiaryServerProtocol" = "UDP"
+        "TertiaryServerDomainNameAffinityMask" = $(if ($portalUpstreams.Count -ge 1) { $portalUpstreamMask } else { '' })
+        "QuaternaryServerAddress" = $(if ($portalUpstreams.Count -ge 2) { [string]$portalUpstreams[1] } else { '' })
+        "QuaternaryServerPort" = "53"
+        "QuaternaryServerProtocol" = "UDP"
+        "QuaternaryServerDomainNameAffinityMask" = $(if ($portalUpstreams.Count -ge 2) { $portalUpstreamMask } else { '' })
         "LocalIPv4BindingAddress" = "0.0.0.0"
         "LocalIPv4BindingPort" = "53"
         "LocalIPv6BindingAddress" = ""
         "LocalIPv6BindingPort" = "53"
         "LocalIPv6BindingEnabledOnWindowsVersionsPriorToWindowsVistaOrWindowsServer2008" = "No"
         "GeneratedResponseTimeToLive" = "300"
-        "PrimaryServerDomainNameAffinityMask" = $domainAffinityMask
-        "SecondaryServerDomainNameAffinityMask" = $domainAffinityMask
+        "PrimaryServerDomainNameAffinityMask" = $configuredUpstreamMask
+        "SecondaryServerDomainNameAffinityMask" = $configuredUpstreamMask
         "IgnoreFailureResponsesFromPrimaryServer" = "No"
         "IgnoreNegativeResponsesFromPrimaryServer" = "No"
         "IgnoreFailureResponsesFromSecondaryServer" = "No"
@@ -182,7 +242,7 @@ function Set-AcrylicConfiguration {
         "AddressCacheScavengingTime" = "5760"
         "AddressCacheSilentUpdateTime" = "1440"
         "AddressCachePeriodicPruningTime" = "360"
-        "AddressCacheDomainNameAffinityMask" = "^dns.msftncsi.com;^ipv6.msftncsi.com;^www.msftncsi.com;*"
+        "AddressCacheDomainNameAffinityMask" = $addressCacheMask
         "AddressCacheQueryTypeAffinityMask" = "A;AAAA;CNAME;MX;NS;PTR;SOA;SRV;TXT"
         "CacheSize" = "65536"
         "HitLogFileName" = ""
@@ -204,5 +264,67 @@ function Set-AcrylicConfiguration {
 
     Write-AcrylicConfigFile -Path $configPath -Content $iniContent
     Write-OpenPathLog "Acrylic configuration updated"
+    if ($splitDnsActive) {
+        Write-OpenPathLog "Acrylic split DNS active: $($normalizedPortalDomains -join ', ') -> $($portalUpstreams -join ', ')"
+    }
     return $true
+}
+
+function Get-OpenPathExpectedSplitDnsPortalUpstreams {
+    $declaredPortalDomains = @()
+    try {
+        $config = Get-OpenPathConfig
+        if ($config.PSObject.Properties['captivePortalDomains']) {
+            $declaredPortalDomains = @($config.captivePortalDomains | Where-Object { $_ })
+        }
+    }
+    catch {
+        $declaredPortalDomains = @()
+    }
+    if ($declaredPortalDomains.Count -le 0) {
+        return @()
+    }
+    if (-not (Get-Command -Name 'Get-OpenPathSplitDnsPortalUpstreams' -ErrorAction SilentlyContinue)) {
+        return @()
+    }
+
+    $dnsSettings = Get-OpenPathDnsSettings
+    return @(Get-OpenPathSplitDnsPortalUpstreams -ExcludeAddresses @($dnsSettings.PrimaryDNS, $dnsSettings.SecondaryDNS))
+}
+
+function Test-OpenPathSplitDnsTopologyDrift {
+    <#
+    .SYNOPSIS
+        Detects whether the third/fourth Acrylic upstreams no longer match the
+        network's current DHCP resolvers (e.g. after roaming to another network).
+        The INI itself is the persisted state -- no extra state file.
+    #>
+    $expected = @(Get-OpenPathExpectedSplitDnsPortalUpstreams | Sort-Object -Unique)
+
+    $acrylicPath = Get-AcrylicPath
+    if (-not $acrylicPath) {
+        return [PSCustomObject]@{ Drifted = $false; Reason = 'acrylic-missing'; Expected = $expected; Current = @() }
+    }
+    $configPath = "$acrylicPath\AcrylicConfiguration.ini"
+    $current = @()
+    try {
+        $content = Get-Content $configPath -Raw -ErrorAction Stop
+        foreach ($key in @('TertiaryServerAddress', 'QuaternaryServerAddress')) {
+            $match = [regex]::Match($content, "(?m)^\s*$key\s*=\s*(\S+)\s*$")
+            if ($match.Success) {
+                $current += [string]$match.Groups[1].Value
+            }
+        }
+    }
+    catch {
+        return [PSCustomObject]@{ Drifted = $false; Reason = 'config-unreadable'; Expected = $expected; Current = @() }
+    }
+
+    $currentSet = @($current | Sort-Object -Unique)
+    return [PSCustomObject]@{
+        Drifted = (($expected -join ',') -ne ($currentSet -join ','))
+        Reason = "expected=[$($expected -join ',')] current=[$($currentSet -join ',')]"
+        Expected = $expected
+        Current = $currentSet
+    }
 }

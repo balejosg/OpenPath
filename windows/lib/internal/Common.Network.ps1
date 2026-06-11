@@ -192,6 +192,24 @@ function Get-OpenPathCaptivePortalDhcpNameServerCandidates {
     }
 }
 
+function Get-OpenPathSplitDnsPortalUpstreams {
+    <#
+    .SYNOPSIS
+        Network resolvers that should answer the admin-declared captive-portal
+        domains in normal protected mode (permanent split DNS). The DHCP-offered
+        servers are the only resolvers that know internal portal hostnames; the
+        configured upstreams are excluded so the same address is never routed twice.
+    #>
+    param([string[]]$ExcludeAddresses = @())
+
+    $exclusions = @($ExcludeAddresses | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+    return @(
+        Get-OpenPathCaptivePortalDhcpNameServerCandidates |
+            Where-Object { $_ -notin $exclusions } |
+            Select-Object -First 2
+    )
+}
+
 function Get-PrimaryDNS {
     <#
     .SYNOPSIS

@@ -1416,6 +1416,24 @@ Describe "Watchdog Script" {
         }
     }
 
+    Context "Split DNS topology drift" {
+        It "Refreshes the split-DNS portal topology when the network resolvers drift" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $content = Get-Content $helperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'Test-OpenPathSplitDnsTopologyDrift',
+                'split-DNS portal upstreams drifted',
+                'Update-AcrylicHost -WhitelistedDomains @($localWhitelistSections.Whitelist)',
+                'Set-OpenPathFirewall -UpstreamDNS $splitDnsUpstream'
+            )
+
+            $shouldRunIndex = $content.IndexOf('$shouldRunProtectedModeChecks = [bool]$policyState.ProtectedModeEligible')
+            $driftCallIndex = $content.IndexOf('Test-OpenPathSplitDnsTopologyDrift')
+            $driftCallIndex | Should -BeGreaterThan $shouldRunIndex
+        }
+    }
+
     Context "DNS probe selection" {
         It "Relies on the shared DNS probe instead of a hard-coded public domain" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"

@@ -1359,6 +1359,33 @@ Describe "DNS Module" {
         }
     }
 
+    Context "Split DNS for captive-portal domains" {
+        It "Renders permanent split DNS for declared captive-portal domains" {
+            $configPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Config.ps1"
+            $networkPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Network.ps1"
+            $commonModulePath = Join-Path $PSScriptRoot ".." "lib" "Common.psm1"
+            $dnsModulePath = Join-Path $PSScriptRoot ".." "lib" "DNS.psm1"
+
+            $configContent = Get-Content $configPath -Raw
+            $networkContent = Get-Content $networkPath -Raw
+            $commonModuleContent = Get-Content $commonModulePath -Raw
+            $dnsModuleContent = Get-Content $dnsModulePath -Raw
+
+            Assert-ContentContainsAll -Content $configContent -Needles @(
+                'Get-OpenPathSplitDnsPortalUpstreams',
+                '"TertiaryServerAddress"',
+                '"QuaternaryServerAddress"',
+                '"^$portalDomain"',
+                '"^*.$portalDomain"',
+                'Get-OpenPathCaptivePortalProbeDomains',
+                'function Test-OpenPathSplitDnsTopologyDrift'
+            )
+            $networkContent | Should -Match 'function Get-OpenPathSplitDnsPortalUpstreams'
+            $commonModuleContent | Should -Match "'Get-OpenPathSplitDnsPortalUpstreams',"
+            $dnsModuleContent | Should -Match "'Test-OpenPathSplitDnsTopologyDrift',"
+        }
+    }
+
     Context "Protected mode restore" {
         It "Reasserts local DNS after browser policy work during whitelist apply" {
             $scriptPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Update.Script.Apply.ps1"

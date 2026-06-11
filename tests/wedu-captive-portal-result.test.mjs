@@ -63,6 +63,12 @@ function baseResult(overrides = {}) {
     postAuthMarkerCleared: true,
     postAuthExternalNetworkOpen: true,
     postAuthPortalHostStillNetworkOnly: true,
+    splitDnsProtected: {
+      portalResolvesInProtectedMode: true,
+      markerAbsentDuringSplitCheck: true,
+      blockedDomainStillBlocked: true,
+      tertiaryServerAddress: '10.77.0.53',
+    },
     nativeReconcile: {
       success: true,
       protectedModeRestored: true,
@@ -688,6 +694,42 @@ describe('WEDU captive portal result validator', () => {
     assert.throws(
       () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
       /limitedModeReady/
+    );
+  });
+
+  test('rejects target-platform evidence when the portal does not resolve in protected mode via split DNS', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
+        splitDnsProtected: {
+          ...baseResult().splitDnsProtected,
+          portalResolvesInProtectedMode: false,
+        },
+      }),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles(),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /splitDnsProtected\.portalResolvesInProtectedMode/
+    );
+  });
+
+  test('rejects target-platform evidence when split-DNS resolution depended on a portal marker', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
+        splitDnsProtected: {
+          ...baseResult().splitDnsProtected,
+          markerAbsentDuringSplitCheck: false,
+        },
+      }),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles(),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /splitDnsProtected\.markerAbsentDuringSplitCheck/
     );
   });
 });

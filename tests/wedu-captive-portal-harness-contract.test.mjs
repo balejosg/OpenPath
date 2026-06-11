@@ -72,6 +72,22 @@ test('WEDU network assertion accepts lab DNS through local Acrylic resolver', ()
   );
 });
 
+test('WEDU lab proves split-DNS protected resolution before any portal-mode phase', () => {
+  assert.match(harness, /function Invoke-WeduSplitDnsProtectedCheck/);
+  const splitCallIndex = harness.indexOf('$splitDnsProtected = Invoke-WeduSplitDnsProtectedCheck');
+  const limitedEntryIndex = harness.indexOf('$autonomous = Invoke-WeduWatchdogUntilLimited');
+  assert.ok(splitCallIndex !== -1, 'split-DNS protected check exists');
+  assert.ok(limitedEntryIndex !== -1, 'autonomous limited entry exists');
+  assert.ok(
+    splitCallIndex < limitedEntryIndex,
+    'split-DNS protected resolution must be proven BEFORE the limited-mode lifecycle phases'
+  );
+
+  const successExpression = harness.match(/\$success\s*=\s*\[bool\]\(([\s\S]*?)\n\s*\)/)?.[1] ?? '';
+  assert.match(successExpression, /splitDnsProtected\.portalResolvesInProtectedMode/);
+  assert.match(successExpression, /splitDnsProtected\.markerAbsentDuringSplitCheck/);
+});
+
 test('captive portal evidence contract keeps discovery diagnostic-only', () => {
   const module = readSource('windows/lib/CaptivePortal.psm1');
   const diagnosticsModule = readSource(

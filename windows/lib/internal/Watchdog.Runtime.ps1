@@ -329,6 +329,47 @@ function Invoke-OpenPathWatchdogChecks {
     }
 
     try {
+        # Roaming: when the network's DHCP resolvers change, the third/fourth
+        # Acrylic upstreams that answer the declared captive-portal domains go
+        # stale. The INI is the persisted state; refresh it from the current
+        # network. Skipped while portal mode is active (ProtectedModeEligible
+        # gates it) and when the local whitelist could not be read -- a refresh
+        # must never render from an unknown whitelist.
+        if ($shouldRunProtectedModeChecks -and
+            $null -ne $localWhitelistSections -and
+            -not $localWhitelistSections.IsDisabled -and
+            (Get-Command -Name 'Test-OpenPathSplitDnsTopologyDrift' -ErrorAction SilentlyContinue)) {
+            $splitDnsDrift = Test-OpenPathSplitDnsTopologyDrift
+            if ([bool]$splitDnsDrift.Drifted) {
+                Write-OpenPathLog "Watchdog: split-DNS portal upstreams drifted ($($splitDnsDrift.Reason)); refreshing Acrylic topology" -Level WARN
+                if (Update-AcrylicHost -WhitelistedDomains @($localWhitelistSections.Whitelist) -BlockedSubdomains @($localWhitelistSections.BlockedSubdomains)) {
+                    Restart-AcrylicService | Out-Null
+                    $enableFirewallForSplitDns = $true
+                    if ($Config -and $Config.PSObject.Properties['enableFirewall']) {
+                        $enableFirewallForSplitDns = [bool]$Config.enableFirewall
+                    }
+                    if ($enableFirewallForSplitDns) {
+                        $splitDnsUpstream = '8.8.8.8'
+                        if ($Config -and $Config.PSObject.Properties['primaryDNS'] -and $Config.primaryDNS) {
+                            $splitDnsUpstream = [string]$Config.primaryDNS
+                        }
+                        $acrylicPathForSplitDns = Get-AcrylicPath
+                        if ($acrylicPathForSplitDns) {
+                            Set-OpenPathFirewall -UpstreamDNS $splitDnsUpstream -AcrylicPath $acrylicPathForSplitDns | Out-Null
+                        }
+                    }
+                }
+                else {
+                    Write-OpenPathLog 'Watchdog: split-DNS topology refresh failed to rewrite Acrylic configuration' -Level WARN
+                }
+            }
+        }
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: Error refreshing split-DNS topology: $_" -Level ERROR
+    }
+
+    try {
         $sseTask = Get-ScheduledTask -TaskName "OpenPath-SSE" -ErrorAction SilentlyContinue
         if ($sseTask -and $sseTask.State -ne 'Running') {
             $issues += "SSE listener not running"

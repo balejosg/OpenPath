@@ -468,6 +468,18 @@ Describe "Firewall Module" {
         }
     }
 
+    Context "Split DNS portal upstream firewall allow" {
+        It "Extends the Acrylic allow targets with split-DNS portal upstreams" {
+            $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Policy.ps1"
+            $content = Get-Content $policyPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'PortalUpstream$portalUpstreamIndex',
+                'Get-OpenPathSplitDnsPortalUpstreams'
+            )
+        }
+    }
+
     Context "Captive portal upstream firewall allow" {
         BeforeEach {
             Initialize-FirewallRuleCaptureMocks

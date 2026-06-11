@@ -23,6 +23,7 @@ $script:NativeReconcilePath = Join-Path $script:ArtifactsRoot 'wedu-lab-native-r
 $script:NetworkAfterPath = Join-Path $script:ArtifactsRoot 'wedu-lab-network-after.json'
 $script:AutonomousExitPath = Join-Path $script:ArtifactsRoot 'wedu-lab-autonomous-exit.json'
 $script:PostAuthNetworkFidelityPath = Join-Path $script:ArtifactsRoot 'wedu-lab-post-auth-network-fidelity.json'
+$script:SplitDnsProtectedPath = Join-Path $script:ArtifactsRoot 'wedu-lab-split-dns-protected.json'
 $script:OpenPathProtectionAfterPath = Join-Path $script:ArtifactsRoot 'wedu-lab-openpath-protection-after.json'
 $script:RecoveryResultRoot = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-result'
 $script:RecoveryQueueRoot = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-queue'
@@ -1312,6 +1313,114 @@ function Get-WeduCaptiveMarker {
     }
 }
 
+function Invoke-WeduSplitDnsProtectedCheck {
+    # Permanent split DNS must make the declared portal host resolvable in NORMAL
+    # protected mode -- no captive-portal marker, no mode transition. The first
+    # watchdog cycle applies the topology via drift detection (the agent compares
+    # the Acrylic third/fourth upstreams against the network's DHCP resolvers),
+    # so drive the scheduled task once and then assert resolution while proving
+    # the whitelist default-block still holds.
+    param(
+        # A full watchdog pass on a captive network runs the protected-mode repair
+        # probes first and can take well over a minute before the drift refresh at
+        # the end of the cycle applies the split topology -- wait generously and
+        # allow a second cycle before declaring the resolution missing.
+        [int]$MaxCycles = 2,
+        [int]$ResolveAttempts = 6,
+        [int]$ResolveDelaySeconds = 2
+    )
+
+    # Start clean: a stale marker/observation from a previous run must not decide
+    # this check, and the observation is re-cleared each cycle so two consecutive
+    # 'Portal' detections can never trip the limited-mode ENTRY while we are
+    # proving that protected mode alone resolves the portal.
+    Remove-Item -LiteralPath $script:CaptiveMarkerPath, $script:CaptiveObservationPath -Force -ErrorAction SilentlyContinue
+
+    $runError = ''
+    $cyclesRun = 0
+    $portalAddresses = @()
+    $portalResolveError = ''
+    $markerAbsentDuringSplitCheck = $false
+    for ($cycle = 1; $cycle -le $MaxCycles; $cycle++) {
+        $cyclesRun = $cycle
+        Remove-Item -LiteralPath $script:CaptiveObservationPath -Force -ErrorAction SilentlyContinue
+        try {
+            Start-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop
+            for ($wait = 1; $wait -le 240; $wait++) {
+                Start-Sleep -Milliseconds 500
+                $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
+                    Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+                # 267009 (0x41301) == task is currently running; LastTaskResult is an
+                # unsigned 32-bit code that overflows [int], hence the [long] cast.
+                if ($info -and [long]$info.LastTaskResult -ne 267009) {
+                    break
+                }
+            }
+        }
+        catch {
+            $runError = [string]$_
+        }
+
+        $markerAbsentDuringSplitCheck = [bool](-not (Test-Path -LiteralPath $script:CaptiveMarkerPath))
+
+        for ($attempt = 1; $attempt -le $ResolveAttempts; $attempt++) {
+            try {
+                $answers = @(Resolve-DnsName -Name $script:WeduHost -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
+                $portalAddresses = @($answers | Where-Object { $_.IPAddress } | ForEach-Object { [string]$_.IPAddress })
+                if ($portalAddresses.Count -gt 0) {
+                    $portalResolveError = ''
+                    break
+                }
+            }
+            catch {
+                $portalResolveError = [string]$_
+            }
+            if ($attempt -lt $ResolveAttempts) {
+                Start-Sleep -Seconds $ResolveDelaySeconds
+            }
+        }
+
+        if ($portalAddresses.Count -gt 0) {
+            break
+        }
+    }
+    $portalResolvesInProtectedMode = [bool]($portalAddresses.Count -gt 0)
+
+    $blockedDomainStillBlocked = $false
+    $blockedError = ''
+    try {
+        $blockedAnswers = @(Resolve-DnsName -Name 'this-should-be-blocked-test-12345.com' -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue)
+        $blockedDomainStillBlocked = ($blockedAnswers.Count -eq 0)
+    }
+    catch {
+        $blockedDomainStillBlocked = $true
+        $blockedError = [string]$_
+    }
+
+    $acrylic = Get-WeduAcrylicDnsSnapshot
+    $tertiaryServerAddress = ''
+    if ($acrylic.configPath) {
+        try {
+            $iniContent = Get-Content -LiteralPath $acrylic.configPath -Raw -ErrorAction Stop
+            $tertiaryServerAddress = Get-WeduAcrylicIniValue -Content $iniContent -Key 'TertiaryServerAddress'
+        }
+        catch { }
+    }
+
+    return [pscustomobject]@{
+        portalHost = $script:WeduHost
+        portalResolvesInProtectedMode = $portalResolvesInProtectedMode
+        portalAddresses = @($portalAddresses)
+        portalResolveError = $portalResolveError
+        markerAbsentDuringSplitCheck = $markerAbsentDuringSplitCheck
+        blockedDomainStillBlocked = $blockedDomainStillBlocked
+        blockedError = $blockedError
+        tertiaryServerAddress = $tertiaryServerAddress
+        watchdogCyclesRun = $cyclesRun
+        watchdogRunError = $runError
+    }
+}
+
 function Invoke-WeduWatchdogUntilLimited {
     # Let the OpenPath watchdog enter limited mode ON ITS OWN. We only run the
     # OpenPath-Watchdog scheduled task (the same path that runs in production) and
@@ -1606,6 +1715,12 @@ function Invoke-WeduLabRun {
     $configuredUpstreamResolvesPortalHost = [bool]$configuredUpstreamProbe.resolves
     Save-Json -Value $configuredUpstreamProbe -Path (Join-Path $script:ArtifactsRoot 'wedu-lab-configured-upstream-probe.json')
 
+    # Permanent split DNS: the declared portal host must resolve in NORMAL
+    # protected mode (no marker) once the first watchdog cycle applies the
+    # third-upstream topology -- the stateless replacement for limited mode.
+    $splitDnsProtected = Invoke-WeduSplitDnsProtectedCheck
+    Save-Json -Value $splitDnsProtected -Path $script:SplitDnsProtectedPath
+
     # Let the OpenPath watchdog detect the captive portal and enter LIMITED mode on
     # its own (no forced native recovery). The resulting marker proves autonomous
     # detection and records the upstream source the agent recovered.
@@ -1764,6 +1879,10 @@ function Invoke-WeduLabRun {
         $browserLimited.portalReady -and
         $browserLimited.finalLoginHost -eq $script:WeduLoginHost -and
         $browserLimited.loginSubmitted -and
+        # Permanent split DNS: portal reachable in protected mode, no marker.
+        $splitDnsProtected.portalResolvesInProtectedMode -and
+        $splitDnsProtected.markerAbsentDuringSplitCheck -and
+        $splitDnsProtected.blockedDomainStillBlocked -and
         # Post-auth autonomous exit: the gateway really opened, the network stayed
         # production-faithful, and the watchdog closed portal mode on its own.
         $gatewayAuthenticated.success -and
@@ -1801,6 +1920,8 @@ function Invoke-WeduLabRun {
         postAuthExternalNetworkOpen = [bool]$postAuthNetworkFidelity.postAuthExternalNetworkOpen
         postAuthPortalHostStillNetworkOnly = [bool]$postAuthNetworkFidelity.postAuthPortalHostStillNetworkOnly
         postAuthNetworkFidelity = $postAuthNetworkFidelity
+        splitDnsProtected = $splitDnsProtected
+        splitDnsProtectedPath = 'wedu-lab-split-dns-protected.json'
         runnerConfig = $runnerConfig
         labNetwork = $labNetwork
         limitedDns = $limitedDns

@@ -213,6 +213,31 @@ function requireAutonomousExitEvidence(result) {
   );
 }
 
+// Permanent split DNS: the declared portal host must already resolve through the
+// local resolver in NORMAL protected mode (no captive-portal marker), while the
+// whitelist default-block still holds. This is the stateless replacement for the
+// limited-mode lifecycle; a lab that only proves limited-mode resolution would
+// let the mode machinery regress silently.
+function requireSplitDnsProtectedEvidence(result) {
+  requireField(
+    valueAt(result, 'splitDnsProtected.portalResolvesInProtectedMode') === true,
+    'splitDnsProtected.portalResolvesInProtectedMode (declared portal host must resolve in protected mode via split DNS)'
+  );
+  requireField(
+    valueAt(result, 'splitDnsProtected.markerAbsentDuringSplitCheck') === true,
+    'splitDnsProtected.markerAbsentDuringSplitCheck (split-DNS resolution must not depend on any portal mode)'
+  );
+  requireField(
+    valueAt(result, 'splitDnsProtected.blockedDomainStillBlocked') === true,
+    'splitDnsProtected.blockedDomainStillBlocked (split DNS must not relax the default block)'
+  );
+  requireField(
+    typeof valueAt(result, 'splitDnsProtected.tertiaryServerAddress') === 'string' &&
+      valueAt(result, 'splitDnsProtected.tertiaryServerAddress').length > 0,
+    'splitDnsProtected.tertiaryServerAddress (Acrylic must carry a third upstream for the portal domains)'
+  );
+}
+
 function requirePostAuthNetworkEvidence(networkAfter) {
   requireField(
     Array.isArray(networkAfter.adapters) && networkAfter.adapters.length > 0,
@@ -290,6 +315,7 @@ export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab
 
   // And the post-auth half of it: the autonomous exit back to enforcement.
   requireAutonomousExitEvidence(result);
+  requireSplitDnsProtectedEvidence(result);
 
   const browserLimited = readJson(join(artifactDir, LIMITED_BROWSER_FILE));
   const limitedProbe = browserLimitedProbe(browserLimited);

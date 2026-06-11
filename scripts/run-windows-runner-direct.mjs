@@ -218,6 +218,7 @@ const CAPTIVE_PORTAL_WEDU_LAB_ARTIFACTS = [
   'wedu-lab-openpath-protection-after.json',
   'wedu-lab-autonomous-exit.json',
   'wedu-lab-post-auth-network-fidelity.json',
+  'wedu-lab-split-dns-protected.json',
   'wedu-lab-openpath-post-auth.log',
   'captive-portal-recovery-result-manifest.json',
   'captive-portal-recovery-queue-manifest.json',

@@ -93,6 +93,7 @@ function Set-OpenPathFirewall {
 
     try {
         $secondaryDns = '8.8.4.4'
+        $declaredPortalDomains = @()
         $enableKnownDnsIpBlocking = $true
         $enableDohIpBlocking = $true
         $dohResolvers = Get-DefaultDohResolverIps
@@ -174,8 +175,25 @@ function Set-OpenPathFirewall {
                     $torPorts = @($configuredTorPorts | Sort-Object -Unique)
                 }
             }
+
+            if ($config.PSObject.Properties['captivePortalDomains'] -and $config.captivePortalDomains) {
+                $declaredPortalDomains = @($config.captivePortalDomains | Where-Object { $_ })
+            }
         }
         catch {
+        }
+
+        # Permanent split DNS: Acrylic must be able to reach the network's DHCP
+        # resolvers for the declared captive-portal domains in normal protected
+        # mode, not only during the legacy limited-mode window.
+        $portalUpstreams = @()
+        if ($declaredPortalDomains.Count -gt 0 -and (Get-Command -Name 'Get-OpenPathSplitDnsPortalUpstreams' -ErrorAction SilentlyContinue)) {
+            try {
+                $portalUpstreams = @(Get-OpenPathSplitDnsPortalUpstreams -ExcludeAddresses @($UpstreamDNS, $secondaryDns))
+            }
+            catch {
+                $portalUpstreams = @()
+            }
         }
 
         New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Allow-Loopback-UDP" `
@@ -192,6 +210,11 @@ function Set-OpenPathFirewall {
                 [PSCustomObject]@{ Name = 'Upstream'; Address = $UpstreamDNS },
                 [PSCustomObject]@{ Name = 'Secondary'; Address = $secondaryDns }
             )
+            $portalUpstreamIndex = 0
+            foreach ($portalUpstream in @($portalUpstreams)) {
+                $portalUpstreamIndex++
+                $allowTargets += [PSCustomObject]@{ Name = "PortalUpstream$portalUpstreamIndex"; Address = [string]$portalUpstream }
+            }
 
             foreach ($target in $allowTargets) {
                 if (-not (Test-OpenPathFirewallIpAddress -Address $target.Address)) { continue }
