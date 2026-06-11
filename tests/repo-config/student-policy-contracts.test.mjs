@@ -1377,10 +1377,23 @@ describe('repository verification contract', () => {
       /\$domainAffinityMask = \(\$affinityMaskEntries -join ';'\)/,
       'Set-AcrylicConfiguration should serialize the allowed-domain affinity mask'
     );
+    assert.match(
+      dnsConfigModule,
+      /\$configuredUpstreamMask = if \(\$splitDnsActive\) \{\s*\(@\(\$portalExclusionEntries\) \+ @\(\$affinityMaskEntries\)\) -join ';'/,
+      'Split DNS must keep the configured upstreams on the allowlist mask, with the declared portal domains negated when active'
+    );
     assert.ok(
-      dnsConfigModule.includes('"PrimaryServerDomainNameAffinityMask" = $domainAffinityMask') &&
-        dnsConfigModule.includes('"SecondaryServerDomainNameAffinityMask" = $domainAffinityMask'),
-      'Acrylic upstream resolvers should only forward domains in the allowlist affinity mask'
+      dnsConfigModule.includes('"PrimaryServerDomainNameAffinityMask" = $configuredUpstreamMask') &&
+        dnsConfigModule.includes(
+          '"SecondaryServerDomainNameAffinityMask" = $configuredUpstreamMask'
+        ),
+      'Acrylic upstream resolvers should only forward domains in the allowlist affinity mask (portal domains negated when split DNS is active)'
+    );
+    assert.ok(
+      dnsConfigModule.includes(
+        '"TertiaryServerDomainNameAffinityMask" = $(if ($portalUpstreams.Count -ge 1) { $portalUpstreamMask } else { \'\' })'
+      ),
+      'The split-DNS third upstream may only forward the declared portal domains and connectivity probes'
     );
     assert.ok(
       windowsRunner.includes('PrimaryServerDomainNameAffinityMask=raw.githubusercontent.com') &&
