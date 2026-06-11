@@ -30,6 +30,7 @@ Describe "DNS Module - Install Contracts" {
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 '$installerVersion = "2.2.1"',
+                'https://github.com/balejosg/openpath/releases/download/acrylic-mirror-v$installerVersion/Acrylic-Portable.zip',
                 'https://downloads.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic-Portable.zip',
                 'https://sourceforge.net/projects/acrylic/files/Acrylic/$installerVersion/Acrylic-Portable.zip/download',
                 'https://master.dl.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic-Portable.zip?viasf=1',

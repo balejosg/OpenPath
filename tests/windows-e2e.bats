@@ -261,7 +261,7 @@ load 'test_helper'
     run grep -nF 'Start-Sleep -Milliseconds $DelayMilliseconds' "$PROJECT_DIR/windows/lib/internal/DNS.Diagnostics.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF "Resolve-OpenPathDnsWithRetry -Domain 'google.com' -MaxAttempts 20 -DelayMilliseconds 1500" "$PROJECT_DIR/tests/e2e/ci/run-windows-e2e.ps1"
+    run grep -nF "Resolve-OpenPathDnsWithRetry -Domain 'google.com' -MaxAttempts 20 -DelayMilliseconds 1500 -AttemptTimeoutSeconds 10" "$PROJECT_DIR/tests/e2e/ci/run-windows-e2e.ps1"
     [ "$status" -eq 0 ]
 
     run grep -nF "(Join-Path \$acrylicPath 'AcrylicConfiguration.ini')" "$PROJECT_DIR/tests/e2e/ci/run-windows-e2e.ps1"

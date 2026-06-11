@@ -179,6 +179,7 @@ function Install-AcrylicDNS {
     $installerVersion = "2.2.1"
     $portableZipSha256 = '26a5601c813257c186cd69da617ee1fff254b84f3ecb542483af8f4a5cc520cd'
     $executableInstallerSha256 = 'be60bde686766a889a8878c8b27446ea3584e425583070eeef85b0b31c60adbc'
+    $githubMirrorUrl = "https://github.com/balejosg/openpath/releases/download/acrylic-mirror-v$installerVersion/Acrylic-Portable.zip"
     $installerUrl = "https://downloads.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic-Portable.zip"
     $installerFallbackUrl = "https://sourceforge.net/projects/acrylic/files/Acrylic/$installerVersion/Acrylic-Portable.zip/download"
     $installerMirrorUrl = "https://master.dl.sourceforge.net/project/acrylic/Acrylic/$installerVersion/Acrylic-Portable.zip?viasf=1"
@@ -200,7 +201,7 @@ function Install-AcrylicDNS {
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
         $downloadError = $null
-        foreach ($candidateUrl in @($installerUrl, $installerFallbackUrl, $installerMirrorUrl)) {
+        foreach ($candidateUrl in @($githubMirrorUrl, $installerUrl, $installerFallbackUrl, $installerMirrorUrl)) {
             try {
                 if (Test-Path $zipPath) {
                     Remove-Item $zipPath -Force -ErrorAction SilentlyContinue

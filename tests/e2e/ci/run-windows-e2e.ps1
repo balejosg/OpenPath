@@ -464,7 +464,7 @@ function Test-InstalledDnsProxyResolution {
 
     Set-AcrylicDiagnosticLogging
 
-    $result = Resolve-OpenPathDnsWithRetry -Domain 'google.com' -MaxAttempts 20 -DelayMilliseconds 1500
+    $result = Resolve-OpenPathDnsWithRetry -Domain 'google.com' -MaxAttempts 20 -DelayMilliseconds 1500 -AttemptTimeoutSeconds 10
     if (-not $result) {
         Write-AcrylicDiagnostics
         Fail-Step 'Acrylic proxy validation failed.'
