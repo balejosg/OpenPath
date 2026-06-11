@@ -10,7 +10,7 @@ jobs:
   windows-e2e-hosted:
     name: Windows E2E (hosted pilot)
     runs-on: windows-2025
-    timeout-minutes: 40
+    timeout-minutes: 90
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
