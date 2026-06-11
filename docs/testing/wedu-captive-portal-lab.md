@@ -23,10 +23,16 @@ The healthcheck and Linux client smoke lanes are optional preflight only and do 
 `.github/workflows/wedu-captive-portal-lab.yml` is manual plus nightly. It must
 not run on `push` or `pull_request`.
 
-`.github/workflows/wedu-gateway-healthcheck.yml` and
-`.github/workflows/wedu-linux-client-smoke.yml` are manual-only cheap lanes.
-They share the same remote lock as the full lab so they cannot overlap with VM
-mutation or gateway mode changes.
+`.github/workflows/wedu-gateway-healthcheck.yml` runs hourly (cron `7 * * * *`)
+and on manual dispatch. It is also invoked as a blocking preflight step inside
+`scripts/run-wedu-captive-portal-lab-ci.sh` before the full lab acquires its
+lock, so a broken dedicated resolver fails in seconds rather than burning a
+full lab run.
+
+`.github/workflows/wedu-linux-client-smoke.yml` is manual-only.
+
+Both cheap lanes share the same remote lock as the full lab so they cannot
+overlap with VM mutation or gateway mode changes.
 
 ## Shared Remote Lock
 

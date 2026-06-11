@@ -750,16 +750,23 @@ test('WEDU cheap captive portal lanes are manual-only and cannot satisfy the ful
   ]) {
     assert.ok(workflow.includes('workflow_dispatch:'), `${name} should allow manual dispatch`);
     assert.ok(
-      !workflow.includes('pull_request:') &&
-        !workflow.includes('push:') &&
-        !workflow.includes('schedule:'),
-      `${name} should be manual-only`
+      !workflow.includes('pull_request:') && !workflow.includes('push:'),
+      `${name} must not run on pull requests or pushes`
     );
     assert.ok(
       !workflow.includes('name: WEDU captive portal lab'),
       `${name} must not reuse the full lab check-run name`
     );
   }
+
+  assert.ok(
+    !smokeWorkflow.includes('schedule:'),
+    'linux-client-smoke should be manual-only (no schedule)'
+  );
+  assert.ok(
+    healthcheckWorkflow.includes('schedule:') && healthcheckWorkflow.includes("cron: '7 * * * *'"),
+    'healthcheck should run hourly via cron to catch gateway IP flushes early'
+  );
 
   assert.ok(
     healthcheckWorkflow.includes('name: WEDU gateway healthcheck') &&

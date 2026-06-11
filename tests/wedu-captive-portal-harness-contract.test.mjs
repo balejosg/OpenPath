@@ -16,14 +16,42 @@ function sourceBetween(content, startMarker, endMarker) {
   return content.slice(start, end);
 }
 
-test('WEDU native recovery uses declared exact portal recovery hosts', () => {
+test('WEDU native recovery relies on declared config, not pre-injected recovery hosts', () => {
   const invocation = harness.match(
     /\$nativeRecovery = Invoke-NativeHostAction -Message @\{[\s\S]*?source = 'wedu-lab-captive'[\s\S]*?\}/
   );
 
   assert.ok(invocation, 'wedu-lab-captive native recovery invocation exists');
   assert.match(invocation[0], /triggerHost = \$script:WeduHost/);
-  assert.match(invocation[0], /portalRecoveryHosts = @\(\$script:WeduLimitedHosts\)/);
+  // Recovery hosts must come from the declared captivePortalDomains in the runner
+  // config (the production path), never from a harness-injected host list.
+  assert.doesNotMatch(invocation[0], /portalRecoveryHosts/);
+  assert.match(harness, /captivePortalDomains/);
+});
+
+test('WEDU lab proves the autonomous post-auth exit before the native reconcile confirmation', () => {
+  assert.match(harness, /function Invoke-WeduWatchdogUntilProtectedRestored/);
+  // Authentication must remain the browser login (production-faithful); the
+  // harness must never flip the gateway through the control endpoint.
+  assert.doesNotMatch(harness, /Invoke-GatewayControl[\s\S]*gateway-authenticated/);
+  assert.match(harness, /via = 'browser-login'/);
+
+  const exitCallIndex = harness.indexOf(
+    '$autonomousExit = Invoke-WeduWatchdogUntilProtectedRestored'
+  );
+  const reconcileCallIndex = harness.indexOf('$nativeReconcile = Invoke-NativeHostAction');
+  assert.ok(exitCallIndex !== -1, 'autonomous exit phase exists');
+  assert.ok(reconcileCallIndex !== -1, 'native reconcile confirmation exists');
+  assert.ok(
+    exitCallIndex < reconcileCallIndex,
+    'the watchdog-driven exit must run BEFORE the native reconcile, so the reconcile is confirmation only'
+  );
+
+  const successExpression = harness.match(/\$success\s*=\s*\[bool\]\(([\s\S]*?)\n\s*\)/)?.[1] ?? '';
+  assert.match(successExpression, /\$autonomousExit\.exitedProtected/);
+  assert.match(successExpression, /\$protectedModeExitedVia -eq 'autonomous-watchdog-close'/);
+  assert.match(successExpression, /\$postAuthMarkerCleared/);
+  assert.match(successExpression, /postAuthPortalHostStillNetworkOnly/);
 });
 
 test('WEDU network assertion accepts lab DNS through local Acrylic resolver', () => {

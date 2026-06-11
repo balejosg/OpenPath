@@ -757,6 +757,18 @@ cleanup() {
   exit "$RUN_STATUS"
 }
 
+run_gateway_preflight() {
+  log "preflight: verifying WEDU gateway dedicated resolver before acquiring lab lock"
+  if ! OPENPATH_WEDU_CI_PROXMOX_HOST="$PROXMOX_HOST" \
+       OPENPATH_WEDU_CI_GATEWAY_VMID="$GATEWAY_VMID" \
+       OPENPATH_WEDU_CI_LOCK_DIR="$REMOTE_LOCK_DIR" \
+       OPENPATH_WEDU_CI_ARTIFACT_DIR="$ARTIFACT_DIR/preflight-healthcheck" \
+       bash "$REPO_ROOT/scripts/wedu-captive-portal-gateway-healthcheck.sh"; then
+    fail "dedicated resolver not answering: gateway preflight failed -- run the WEDU Gateway Healthcheck workflow or see docs/testing/wedu-captive-portal-lab-provisioning.md to restore VM 121"
+  fi
+  log "preflight: gateway resolver verified ok"
+}
+
 main() {
   if [ "$DRY_RUN" = "1" ]; then
     log "dry-run: WEDU captive portal lab CI would mutate VM $WINDOWS_VMID through $PROXMOX_HOST"
@@ -769,6 +781,7 @@ main() {
   export GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
   [ -n "$GH_TOKEN" ] || fail "GH_TOKEN or GITHUB_TOKEN is required for runner state checks"
 
+  run_gateway_preflight
   trap cleanup EXIT
   openpath_wedu_acquire_remote_lock "$PROXMOX_HOST" "$REMOTE_LOCK_DIR" "$LOCK_OWNER" "$LOCK_MODE"
   LOCK_ACQUIRED=1
