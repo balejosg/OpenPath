@@ -985,9 +985,18 @@ function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
     }
     $exactRecoveryDomains = @($PortalRecoveryDomains | Where-Object { -not $subdomainInclusiveSet.Contains(([string]$_).Trim().TrimEnd('.')) })
     $inclusiveRecoveryDomains = @($PortalRecoveryDomains | Where-Object { $subdomainInclusiveSet.Contains(([string]$_).Trim().TrimEnd('.')) })
+    # The watchdog's connectivity probes MUST stay resolvable in limited mode or
+    # 'Authenticated' is unobservable: every probe transport-fails against a mask
+    # that only matches the portal domains, the state stays 'Portal', and the
+    # autonomous close never fires -- the portal marker survives authentication.
+    $probeDomains = @()
+    if (Get-Command -Name 'Get-OpenPathCaptivePortalProbeDomains' -ErrorAction SilentlyContinue) {
+        $probeDomains = @(Get-OpenPathCaptivePortalProbeDomains)
+    }
     $recoveryAffinityMask = (@(
         @(Get-AcrylicExactAffinityMaskEntries -Domains $exactRecoveryDomains)
         @(Get-AcrylicAffinityMaskEntries -Domains $inclusiveRecoveryDomains)
+        @(Get-AcrylicExactAffinityMaskEntries -Domains $probeDomains)
     ) | Select-Object -Unique) -join ';'
     $settings = [ordered]@{
         "PrimaryServerAddress" = $UpstreamDns

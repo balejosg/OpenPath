@@ -163,6 +163,24 @@ function Get-OpenPathFirefoxSystemDomains {
     )
 }
 
+function Get-OpenPathCaptivePortalProbeDomains {
+    <#
+    .SYNOPSIS
+        Connectivity-probe endpoints used by Test-OpenPathCaptivePortalState and the
+        OS captive-portal detectors. They must stay resolvable in EVERY DNS mode:
+        in limited portal mode the watchdog can only observe 'Authenticated' (and
+        close portal mode autonomously) if these resolve through the portal upstream.
+    #>
+    return @(
+        'detectportal.firefox.com',
+        'connectivity-check.ubuntu.com',
+        'captive.apple.com',
+        'www.msftconnecttest.com',
+        'msftconnecttest.com',
+        'clients3.google.com'
+    )
+}
+
 function Get-OpenPathAlwaysAllowedDomainGroups {
     <#
     .SYNOPSIS
@@ -170,7 +188,7 @@ function Get-OpenPathAlwaysAllowedDomainGroups {
     #>
     return @(
         [PSCustomObject]@{ Comment = '# Control plane and bootstrap/download'; Domains = @(Get-OpenPathProtectedDomains) },
-        [PSCustomObject]@{ Comment = '# Captive portal detection'; Domains = @('detectportal.firefox.com', 'connectivity-check.ubuntu.com', 'captive.apple.com', 'www.msftconnecttest.com', 'msftconnecttest.com', 'clients3.google.com') },
+        [PSCustomObject]@{ Comment = '# Captive portal detection'; Domains = @(Get-OpenPathCaptivePortalProbeDomains) },
         [PSCustomObject]@{ Comment = '# Microsoft system and component updates'; Domains = @(Get-OpenPathMicrosoftSystemDomains) },
         [PSCustomObject]@{ Comment = '# Firefox system and component updates'; Domains = @(Get-OpenPathFirefoxSystemDomains) },
         [PSCustomObject]@{ Comment = '# NTP'; Domains = @('time.windows.com', 'time.google.com') }

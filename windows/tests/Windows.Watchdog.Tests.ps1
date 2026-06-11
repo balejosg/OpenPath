@@ -800,6 +800,30 @@ Describe "Watchdog Script" {
             $limitedBody.IndexOf('Enable-OpenPathCaptivePortalPassthroughMode', $passthroughCallIndex + 1) | Should -Be -1
         }
 
+        It "Keeps connectivity-probe domains resolvable in the limited-mode affinity mask" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $domainsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Domains.ps1"
+            $commonPath = Join-Path $PSScriptRoot ".." "lib" "Common.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+            $domainsContent = Get-Content $domainsPath -Raw
+            $commonContent = Get-Content $commonPath -Raw
+
+            # Without the probe domains in the limited-mode Acrylic mask the
+            # watchdog can never observe 'Authenticated' (every probe
+            # transport-fails against a portal-domains-only mask), so the
+            # autonomous close after portal login is structurally impossible and
+            # the marker survives authentication.
+            Assert-ContentContainsAll -Content $moduleContent -Needles @(
+                'Get-OpenPathCaptivePortalProbeDomains',
+                '@(Get-AcrylicExactAffinityMaskEntries -Domains $probeDomains)'
+            )
+            Assert-ContentContainsAll -Content $domainsContent -Needles @(
+                'function Get-OpenPathCaptivePortalProbeDomains',
+                'Domains = @(Get-OpenPathCaptivePortalProbeDomains)'
+            )
+            $commonContent | Should -Match "'Get-OpenPathCaptivePortalProbeDomains',"
+        }
+
         It "Routes limited portal Acrylic writes through the shared atomic writer under the policy lock" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $policyPath = Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.AcrylicPolicyTransaction.ps1"

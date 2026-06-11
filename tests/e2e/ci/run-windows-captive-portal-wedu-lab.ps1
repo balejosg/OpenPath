@@ -1843,6 +1843,9 @@ function Invoke-WeduLabRun {
 }
 
 try {
+    # Start from a clean slate so a stale result from a previous run can never be
+    # mistaken for this run's evidence.
+    Remove-Item -LiteralPath $script:ResultPath -Force -ErrorAction SilentlyContinue
     $result = Invoke-WeduLabRun
     Save-Json -Value $result -Path $script:ResultPath
     if (-not $result.success) {
@@ -1850,15 +1853,20 @@ try {
     }
 }
 catch {
-    $errorPayload = [pscustomobject]@{
-        schemaVersion = 2
-        profile = 'captive-portal-wedu-lab'
-        success = $false
-        evidenceLevel = 'wedu-lab-direct-runner'
-        targetPlatformSymptomCleared = $false
-        error = [string]$_
-        timestamp = (Get-Date).ToString('o')
+    # Never clobber a rich result written above: its per-phase evidence is exactly
+    # what a failed run needs for diagnosis. The bare error payload is only for
+    # runs that died before Invoke-WeduLabRun could produce a result.
+    if (-not (Test-Path -LiteralPath $script:ResultPath)) {
+        $errorPayload = [pscustomobject]@{
+            schemaVersion = 2
+            profile = 'captive-portal-wedu-lab'
+            success = $false
+            evidenceLevel = 'wedu-lab-direct-runner'
+            targetPlatformSymptomCleared = $false
+            error = [string]$_
+            timestamp = (Get-Date).ToString('o')
+        }
+        Save-Json -Value $errorPayload -Path $script:ResultPath
     }
-    Save-Json -Value $errorPayload -Path $script:ResultPath
     throw
 }
