@@ -163,29 +163,102 @@ function Get-OpenPathCaptivePortalDhcpNameServerCandidates {
     # This is the authoritative source of the network's real resolver -- the only
     # one that knows internal captive-portal hostnames -- so it must be consulted
     # before the (overwritten) adapter DNS or the poisoned original-dns snapshot.
+    #
+    # On multi-homed machines the registry enumerates interfaces in arbitrary order,
+    # so the DHCP DNS from the wrong network (e.g. a wired uplink) can appear first
+    # and cause the portal's private hostname to NXDOMAIN.  Resolve this by mapping
+    # the active default-route interface(s) to their registry GUID subkey so their
+    # resolvers are emitted first, followed by the rest as lower-priority fallbacks.
     try {
         $root = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
         if (-not (Test-Path $root -ErrorAction SilentlyContinue)) {
             return @()
         }
 
-        return @(
-            foreach ($iface in @(Get-ChildItem $root -ErrorAction SilentlyContinue)) {
-                $props = Get-ItemProperty -Path $iface.PSPath -ErrorAction SilentlyContinue
-                $value = [string]$props.DhcpNameServer
-                if ([string]::IsNullOrWhiteSpace($value)) { continue }
-                foreach ($server in @($value -split '[,\s]+')) {
-                    $candidate = ([string]$server).Trim()
-                    if (
-                        $candidate -and
-                        $candidate -notin @('127.0.0.1', '0.0.0.0') -and
-                        $candidate -match '^\d{1,3}(?:\.\d{1,3}){3}$'
-                    ) {
-                        $candidate
+        # Collect per-interface {Guid, Addresses[]} so ordering can be applied later.
+        $perIface = [System.Collections.Generic.List[hashtable]]::new()
+        foreach ($iface in @(Get-ChildItem $root -ErrorAction SilentlyContinue)) {
+            $props = Get-ItemProperty -Path $iface.PSPath -ErrorAction SilentlyContinue
+            $value = [string]$props.DhcpNameServer
+            if ([string]::IsNullOrWhiteSpace($value)) { continue }
+            $addrs = [System.Collections.Generic.List[string]]::new()
+            foreach ($server in @($value -split '[,\s]+')) {
+                $candidate = ([string]$server).Trim()
+                if (
+                    $candidate -and
+                    $candidate -notin @('127.0.0.1', '0.0.0.0') -and
+                    $candidate -match '^\d{1,3}(?:\.\d{1,3}){3}$'
+                ) {
+                    $addrs.Add($candidate)
+                }
+            }
+            if ($addrs.Count -gt 0) {
+                $perIface.Add(@{ Guid = ([string]$iface.PSChildName).ToUpperInvariant(); Addresses = $addrs })
+            }
+        }
+
+        if ($perIface.Count -eq 0) {
+            return @()
+        }
+
+        # Determine which interface GUIDs own an active default route, ordered by
+        # route metric ascending (lowest metric = most preferred route first).
+        # Every Get-Net* call is guarded so a failure silently skips the ordering
+        # step and falls back to registry-enumeration order (existing behavior).
+        $defaultRouteGuids = [System.Collections.Generic.List[string]]::new()
+        try {
+            $defaultRoutes = @(
+                Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $_.NextHop -and
+                        [string]$_.NextHop -ne '0.0.0.0' -and
+                        [string]$_.NextHop -match '^\d{1,3}(?:\.\d{1,3}){3}$'
+                    } |
+                    Sort-Object RouteMetric
+            )
+            foreach ($route in $defaultRoutes) {
+                $idx = $route.InterfaceIndex
+                if (-not $idx) { continue }
+                $adapter = Get-NetAdapter -InterfaceIndex $idx -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+                if (-not $adapter) { continue }
+                $guid = ([string]$adapter.InterfaceGuid).ToUpperInvariant()
+                if ($guid -and -not $defaultRouteGuids.Contains($guid)) {
+                    $defaultRouteGuids.Add($guid)
+                }
+            }
+        }
+        catch {
+            # Ordering failed; proceed without it -- falls back to registry order.
+            $defaultRouteGuids.Clear()
+        }
+
+        # Emit default-route interfaces first (in route-metric order, preserved by
+        # iterating $defaultRouteGuids which is already metric-sorted), then the
+        # rest in registry order, deduplicating globally so a shared resolver keeps
+        # its highest-priority position.
+        $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $ordered = [System.Collections.Generic.List[string]]::new()
+
+        $defaultBucket = [System.Collections.Generic.List[hashtable]]::new()
+        foreach ($guid in $defaultRouteGuids) {
+            foreach ($entry in @($perIface | Where-Object { $_.Guid -eq $guid })) {
+                $defaultBucket.Add($entry)
+            }
+        }
+        $fallbackBucket = @($perIface | Where-Object { -not $defaultRouteGuids.Contains($_.Guid) })
+
+        foreach ($bucket in @($defaultBucket, $fallbackBucket)) {
+            foreach ($entry in @($bucket)) {
+                foreach ($addr in @($entry.Addresses)) {
+                    if ($seen.Add($addr)) {
+                        $ordered.Add($addr)
                     }
                 }
             }
-        ) | Select-Object -Unique
+        }
+
+        return $ordered.ToArray()
     }
     catch {
         return @()

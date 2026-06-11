@@ -52,7 +52,10 @@ Describe "Common Module - Mocked Tests" {
             }
             if (-not (Get-Command -Name 'Get-NetAdapter' -ErrorAction SilentlyContinue)) {
                 function script:Get-NetAdapter {
-                    param([object]$ErrorAction)
+                    param(
+                        [int]$InterfaceIndex,
+                        [object]$ErrorAction
+                    )
                 }
             }
             if (-not (Get-Command -Name 'Resolve-DnsName' -ErrorAction SilentlyContinue)) {
@@ -418,6 +421,105 @@ download.mozilla.org/firefox/releases
             $dns.Address | Should -Be '192.168.1.1'
             $dns.Source | Should -Be 'gateway'
             $dns.UsableForLimited | Should -BeFalse
+        }
+    }
+
+    Context "Get-OpenPathCaptivePortalDhcpNameServerCandidates default-route ordering" {
+        It "Returns default-route interface resolvers first when Get-NetRoute and Get-NetAdapter succeed" {
+            # Two registry interfaces: WiFi (portal network, default route) and
+            # Ethernet (uplink, no default route).  Without ordering the Ethernet
+            # resolver would appear first in registry-enumeration order; the fix
+            # must put the WiFi resolver (10.77.0.53) at index 0.
+            #
+            # The function is internal (unexported); call it via InModuleScope.
+            # Registry access (Get-ChildItem / Get-ItemProperty) is mocked so
+            # HKLM: does not need to exist on Linux.
+            $wifiGuid  = '{11111111-1111-1111-1111-111111111111}'
+            $etherGuid = '{22222222-2222-2222-2222-222222222222}'
+            $root      = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
+
+            $wifiKey = [PSCustomObject]@{
+                PSChildName = $wifiGuid
+                PSPath      = "$root\$wifiGuid"
+            }
+            $etherKey = [PSCustomObject]@{
+                PSChildName = $etherGuid
+                PSPath      = "$root\$etherGuid"
+            }
+
+            # Ethernet interface appears FIRST in registry order -- the bug scenario.
+            Mock Test-Path { $true } -ModuleName Common -ParameterFilter {
+                $Path -like '*Tcpip*Interfaces*'
+            }
+            Mock Get-ChildItem {
+                @($etherKey, $wifiKey)
+            } -ModuleName Common -ParameterFilter {
+                $Path -like '*Tcpip*Interfaces*'
+            }
+            Mock Get-ItemProperty {
+                param($Path)
+                if ($Path -like "*$wifiGuid*")      { [PSCustomObject]@{ DhcpNameServer = '10.77.0.53' } }
+                elseif ($Path -like "*$etherGuid*") { [PSCustomObject]@{ DhcpNameServer = '8.8.8.8 8.8.4.4' } }
+                else                                { [PSCustomObject]@{} }
+            } -ModuleName Common
+
+            # WiFi interface owns the default route (InterfaceIndex 5, metric 10).
+            Mock Get-NetRoute {
+                @([PSCustomObject]@{
+                    DestinationPrefix = '0.0.0.0/0'
+                    InterfaceIndex    = 5
+                    NextHop           = '10.77.0.1'
+                    RouteMetric       = 10
+                })
+            } -ModuleName Common
+
+            # Map any InterfaceIndex lookup -> WiFi GUID (only one default route in
+            # this scenario, so the adapter call will only ever receive index 5).
+            Mock Get-NetAdapter {
+                @([PSCustomObject]@{ InterfaceGuid = '{11111111-1111-1111-1111-111111111111}' })
+            } -ModuleName Common
+
+            $result = InModuleScope Common { Get-OpenPathCaptivePortalDhcpNameServerCandidates }
+
+            # WiFi portal resolver must be first; Ethernet fallbacks follow.
+            $result[0] | Should -Be '10.77.0.53'
+            $result    | Should -Contain '8.8.8.8'
+            $result    | Should -Contain '8.8.4.4'
+        }
+
+        It "Falls back to registry order when Get-NetRoute returns no default routes" {
+            $guid = '{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}'
+            $root = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
+            $key  = [PSCustomObject]@{
+                PSChildName = $guid
+                PSPath      = "$root\$guid"
+            }
+
+            Mock Test-Path { $true } -ModuleName Common -ParameterFilter {
+                $Path -like '*Tcpip*Interfaces*'
+            }
+            Mock Get-ChildItem { @($key) } -ModuleName Common -ParameterFilter {
+                $Path -like '*Tcpip*Interfaces*'
+            }
+            Mock Get-ItemProperty {
+                [PSCustomObject]@{ DhcpNameServer = '192.168.1.53 192.168.1.54' }
+            } -ModuleName Common
+            Mock Get-NetRoute { @() } -ModuleName Common
+
+            $result = InModuleScope Common { Get-OpenPathCaptivePortalDhcpNameServerCandidates }
+
+            $result | Should -Contain '192.168.1.53'
+            $result | Should -Contain '192.168.1.54'
+        }
+
+        It "References Get-NetRoute with '0.0.0.0/0' and maps to adapter InterfaceGuid for default-route ordering" {
+            # Content pin: verify the implementation uses the required API surface.
+            $networkContent = Get-Content (Join-Path $PSScriptRoot '..' 'lib' 'internal' 'Common.Network.ps1') -Raw
+            $networkContent | Should -Match "Get-NetRoute\s+-DestinationPrefix\s+'0\.0\.0\.0/0'"
+            $networkContent | Should -Match 'Get-NetAdapter\s+-InterfaceIndex'
+            $networkContent | Should -Match 'InterfaceGuid'
+            $networkContent | Should -Match 'RouteMetric'
+            $networkContent | Should -Match 'defaultRouteGuids'
         }
     }
 
