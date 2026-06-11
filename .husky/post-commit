@@ -42,3 +42,13 @@ echo "$msg" | grep -q '^Verified-by: pre-commit$' || {
 echo ""
 echo "[OK] Commit verified: pre-commit hook executed the fast staged guard"
 echo ""
+
+# graphify: refresh the workspace knowledge graph in the background (local tooling).
+# The OpenPath graph lives at the workspace root (../graphify-out), so the update
+# must run from the parent dir with GRAPHIFY_OUT pointing back at it. No-ops when
+# graphify or the workspace-root graph is absent (CI, plain clones, agent worktrees).
+if command -v graphify >/dev/null 2>&1 && [ -f "../graphify-out/.graphify_root" ]; then
+    mkdir -p "$HOME/.cache"
+    ( cd .. && GRAPHIFY_OUT=../graphify-out nohup graphify update OpenPath >> "$HOME/.cache/graphify-rebuild.log" 2>&1 & )
+    echo "[graphify] background graph update launched (log: ~/.cache/graphify-rebuild.log)"
+fi

@@ -165,6 +165,62 @@ Use the smallest relevant test surface first.
 - student-policy flow: `npm run test:student-policy:windows`
 - broader Windows checks run through the Windows test suites under `windows/tests/`
 
+## Knowledge Graph
+
+A pre-built knowledge graph for OpenPath lives at the workspace root:
+
+| File                              | Purpose                                                |
+| --------------------------------- | ------------------------------------------------------ |
+| `../graphify-out/graph.json`      | Raw graph data                                         |
+| `../graphify-out/graph.html`      | Interactive community view -- open in browser          |
+| `../graphify-out/GRAPH_REPORT.md` | Full audit report: god nodes, surprises, import cycles |
+
+**Query with code identifiers (function/file/symbol names), not prose questions** -- start-node
+matching is literal substring matching on node labels, so a prose question collapses to noise.
+Always pass `--graph` explicitly; the default depends on the current working directory.
+
+```bash
+# from the workspace root (Whitelist/)
+graphify query "bearerAuth" --graph graphify-out/graph.json
+graphify query "activate_firewall" --graph graphify-out/graph.json
+graphify path "StudentPolicyDriver" "parseTRPC" --graph graphify-out/graph.json
+```
+
+If results look irrelevant, grep `graph.json` node labels for your term first, then re-query with
+the labels you find. Use `--dfs` to trace a specific path; `--budget 1500` to cap output length.
+
+**Rebuild:** a post-commit hook updates the graph automatically in the background after each
+commit (log: `~/.cache/graphify-rebuild.log`). Manual refresh, from the workspace root only
+(plain `graphify update` inside `OpenPath/` would create a divergent `OpenPath/graphify-out/`):
+
+```bash
+GRAPHIFY_OUT=../graphify-out graphify update OpenPath
+```
+
+### God Nodes (highest cross-community coupling -- change with care)
+
+| Symbol                    | Edges | Location                                 |
+| ------------------------- | ----- | ---------------------------------------- |
+| `parseTRPC()`             | 61    | `api/src/`                               |
+| `Write-OpenPathLog()`     | 57    | `windows/lib/internal/Common.System.ps1` |
+| `useT()`                  | 48    | `react-spa/src/`                         |
+| `StudentPolicyDriver`     | 47    | `windows/`                               |
+| `db`                      | 45    | `api/src/db/`                            |
+| `bearerAuth()`            | 43    | `api/src/`                               |
+| `ScheduleWithPermissions` | 39    | `windows/`                               |
+
+### Known Import Cycles
+
+- **`groupsViewModelActions.ts`** -- 3-file cycle with `groupsViewModelState.ts` and `useGroupsViewModel.ts` (`react-spa/src/hooks/`)
+- **`config-storage.ts`** -- two 3-file cycles with `config-storage-native.ts`/`config-storage-legacy.ts` and `config-storage-shared.ts` (`firefox-extension/src/lib/`)
+- Do not add new edges into these cycles; resolve rather than extend them.
+
+### Key Cross-Community Bridges
+
+- `normalizeUserRoleString()` -- bridges Role Storage <-> Header/User Context <-> Services; role-normalization changes ripple across all three.
+- `getRootDomain()` -- bridges Groups/Whitelist Rules <-> SPA Components.
+- `useRulesManagerViewModel()` -- bridges Rules hooks <-> Test utilities.
+
 ## Documentation Rules
 
 - Maintained and process docs are English-only.
