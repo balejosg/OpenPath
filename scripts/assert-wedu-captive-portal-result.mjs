@@ -177,6 +177,42 @@ function requireNetworkDnsDiscoveryEvidence(result, limitedDns) {
   );
 }
 
+// Contract for the post-auth side of the production escape.
+//
+// In production, once the user authenticated at the captive portal, the agent
+// stayed in its relaxed posture (the watchdog never closed portal mode), leaving
+// navigation fully unrestricted until logoff/reboot. The lab must therefore prove:
+// the gateway really switched to authenticated mode, the network stayed
+// production-faithful (open egress, portal host still resolvable only via the
+// network DNS), and the watchdog closed portal mode ON ITS OWN -- not via the
+// forced native reconcile, which runs afterwards as idempotent confirmation only.
+function requireAutonomousExitEvidence(result) {
+  requireField(
+    valueAt(result, 'gatewayAuthenticated.success') === true,
+    'gatewayAuthenticated.success (the browser login must have really opened the gateway)'
+  );
+  requireField(
+    result.postAuthExternalNetworkOpen === true,
+    'postAuthExternalNetworkOpen (post-auth the network must be open, as observed in production)'
+  );
+  requireField(
+    result.postAuthPortalHostStillNetworkOnly === true,
+    'postAuthPortalHostStillNetworkOnly (the portal host must remain resolvable only via the network DNS post-auth)'
+  );
+  requireField(
+    valueAt(result, 'autonomousExit.exitedProtected') === true,
+    'autonomousExit.exitedProtected (the watchdog must close portal mode on its own after authentication)'
+  );
+  requireField(
+    result.protectedModeExitedVia === 'autonomous-watchdog-close',
+    "protectedModeExitedVia must be 'autonomous-watchdog-close' (exit must not depend on a forced native reconcile)"
+  );
+  requireField(
+    result.postAuthMarkerCleared === true,
+    'postAuthMarkerCleared (no captive-portal marker may survive the authenticated exit)'
+  );
+}
+
 function requirePostAuthNetworkEvidence(networkAfter) {
   requireField(
     Array.isArray(networkAfter.adapters) && networkAfter.adapters.length > 0,
@@ -251,6 +287,9 @@ export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab
 
   // Force the lab to reproduce the real production failure mode (see function doc).
   requireNetworkDnsDiscoveryEvidence(result, limitedDns);
+
+  // And the post-auth half of it: the autonomous exit back to enforcement.
+  requireAutonomousExitEvidence(result);
 
   const browserLimited = readJson(join(artifactDir, LIMITED_BROWSER_FILE));
   const limitedProbe = browserLimitedProbe(browserLimited);

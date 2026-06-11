@@ -21,6 +21,8 @@ $script:PortalScreenshotPath = Join-Path $script:ArtifactsRoot 'wedu-lab-portal-
 $script:NativeRecoveryPath = Join-Path $script:ArtifactsRoot 'wedu-lab-native-recovery.json'
 $script:NativeReconcilePath = Join-Path $script:ArtifactsRoot 'wedu-lab-native-reconcile.json'
 $script:NetworkAfterPath = Join-Path $script:ArtifactsRoot 'wedu-lab-network-after.json'
+$script:AutonomousExitPath = Join-Path $script:ArtifactsRoot 'wedu-lab-autonomous-exit.json'
+$script:PostAuthNetworkFidelityPath = Join-Path $script:ArtifactsRoot 'wedu-lab-post-auth-network-fidelity.json'
 $script:OpenPathProtectionAfterPath = Join-Path $script:ArtifactsRoot 'wedu-lab-openpath-protection-after.json'
 $script:RecoveryResultRoot = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-result'
 $script:RecoveryQueueRoot = Join-Path $script:ArtifactsRoot 'captive-portal-recovery-queue'
@@ -1394,6 +1396,131 @@ function Invoke-WeduWatchdogUntilLimited {
     }
 }
 
+function Test-WeduPostAuthNetworkFidelity {
+    # Production-faithful post-auth posture: once the user authenticates, the
+    # network is OPEN (general egress works -- that is exactly why a stuck relaxed
+    # mode shows up as fully unrestricted navigation in production), while the
+    # portal host REMAINS resolvable only through the network's own DNS. Both must
+    # hold or the exit phase would be proving the wrong thing (e.g. the portal host
+    # suddenly becoming publicly resolvable would let the exit pass for the wrong
+    # reason).
+    $publicProbeDomain = 'www.msftconnecttest.com'
+    $publicResolver = $script:WeduStalePrimaryDns
+
+    $publicDnsResolves = $false
+    $publicDnsError = ''
+    try {
+        $answers = @(Resolve-DnsName -Name $publicProbeDomain -Server $publicResolver -DnsOnly -Type A -ErrorAction Stop)
+        $publicDnsResolves = (@($answers | Where-Object { $_.IPAddress }).Count -gt 0)
+    }
+    catch {
+        $publicDnsError = [string]$_
+    }
+
+    # Fallback "network open" signal that does not depend on the local OpenPath
+    # firewall allowing direct client DNS to the public resolver: the NCSI-style
+    # probe must return its REAL content (no portal interception) post-auth.
+    $detectionProbe = Invoke-HttpProbe -Url $script:DetectionUrl
+    $externalHttpFunctional = [bool](
+        $detectionProbe.statusCode -eq 200 -and
+        -not (Test-CaptivePortalEvidence -Probe $detectionProbe)
+    )
+    $postAuthExternalNetworkOpen = [bool]($publicDnsResolves -or $externalHttpFunctional)
+
+    $portalHostProbe = Test-WeduConfiguredUpstreamPortalResolution -ConfiguredUpstream $publicResolver
+    $postAuthPortalHostStillNetworkOnly = [bool](
+        $postAuthExternalNetworkOpen -and
+        -not $portalHostProbe.resolves
+    )
+
+    return [pscustomobject]@{
+        publicResolver = $publicResolver
+        publicProbeDomain = $publicProbeDomain
+        publicDnsResolves = $publicDnsResolves
+        publicDnsError = $publicDnsError
+        externalHttpFunctional = $externalHttpFunctional
+        detectionProbe = $detectionProbe
+        portalHostProbe = $portalHostProbe
+        postAuthExternalNetworkOpen = $postAuthExternalNetworkOpen
+        postAuthPortalHostStillNetworkOnly = $postAuthPortalHostStillNetworkOnly
+    }
+}
+
+function Invoke-WeduWatchdogUntilProtectedRestored {
+    # Symmetric counterpart of Invoke-WeduWatchdogUntilLimited for the EXIT side of
+    # the production bug: after the gateway authenticates, the OpenPath watchdog
+    # must detect 'Authenticated' and close portal mode ON ITS OWN
+    # (closeAuthenticated -> Disable-OpenPathCaptivePortalMode). We only run the
+    # OpenPath-Watchdog scheduled task and observe the marker disappear; the native
+    # reconcile is NOT involved, so a cleared marker proves the autonomous exit.
+    param(
+        [int]$MaxCycles = 10,
+        [int]$DelaySeconds = 8
+    )
+
+    $markerPresentAtStart = [bool](Test-Path -LiteralPath $script:CaptiveMarkerPath)
+    $cycles = @()
+    $exitedProtected = $false
+    for ($cycle = 1; $cycle -le $MaxCycles; $cycle++) {
+        $runError = ''
+        try {
+            Start-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop
+            for ($wait = 1; $wait -le 30; $wait++) {
+                Start-Sleep -Milliseconds 500
+                $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
+                    Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+                # 267009 (0x41301) == task is currently running; LastTaskResult is an
+                # unsigned 32-bit code that overflows [int], hence the [long] cast.
+                if ($info -and [long]$info.LastTaskResult -ne 267009) {
+                    break
+                }
+            }
+        }
+        catch {
+            $runError = [string]$_
+        }
+
+        $observation = $null
+        if (Test-Path -LiteralPath $script:CaptiveObservationPath) {
+            try {
+                $observation = Get-Content -LiteralPath $script:CaptiveObservationPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            }
+            catch {
+                $observation = $null
+            }
+        }
+        $marker = Get-WeduCaptiveMarker
+        $markerFilePresent = [bool](Test-Path -LiteralPath $script:CaptiveMarkerPath)
+        $cycles += [pscustomobject]@{
+            cycle = $cycle
+            runError = $runError
+            detectedState = if ($observation) { [string]$observation.detectedState } else { '' }
+            authenticatedCount = if ($observation) { [int]$observation.authenticatedCount } else { 0 }
+            shouldExitPortal = if ($observation) { [bool]$observation.shouldExitPortal } else { $false }
+            markerFilePresent = $markerFilePresent
+            markerMode = if ($marker) { [string]$marker.mode } else { '' }
+            taskLastResult = if ($info) { ('0x{0:X8}' -f ([long]$info.LastTaskResult)) } else { '' }
+            taskLastRun = if ($info) { [string]$info.LastRunTime } else { '' }
+        }
+
+        if (-not $markerFilePresent) {
+            $exitedProtected = $true
+            break
+        }
+        if ($cycle -lt $MaxCycles) {
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+
+    return [pscustomobject]@{
+        exitedProtected = $exitedProtected
+        protectedModeExitedVia = if ($exitedProtected) { 'autonomous-watchdog-close' } else { 'watchdog-timeout' }
+        markerPresentAtStart = $markerPresentAtStart
+        residualMarker = Get-WeduCaptiveMarker
+        cycles = @($cycles)
+    }
+}
+
 function Invoke-WeduLabRun {
     Ensure-ArtifactRoot
     $config = Get-WeduLabConfig
@@ -1565,6 +1692,36 @@ function Invoke-WeduLabRun {
     }
     Save-Json -Value $browserPayload -Path $script:BrowserLimitedPath
 
+    # The browser login is the ONLY authentication act: the portal's /session
+    # handler flips the gateway firewall to authenticated mode, exactly as a real
+    # user sign-in does. The harness must NEVER flip the gateway through the
+    # control endpoint (that would let the exit phase pass without the login flow
+    # working), so the authenticated transition is verified BEHAVIORALLY: the
+    # login was submitted and external egress actually opened.
+    $postAuthNetworkFidelity = Test-WeduPostAuthNetworkFidelity
+    Save-Json -Value $postAuthNetworkFidelity -Path $script:PostAuthNetworkFidelityPath
+    $gatewayAuthenticated = [pscustomobject]@{
+        via = 'browser-login'
+        loginSubmitted = [bool]$browserLimited.loginSubmitted
+        externalNetworkOpen = [bool]$postAuthNetworkFidelity.postAuthExternalNetworkOpen
+        success = [bool]($browserLimited.loginSubmitted -and $postAuthNetworkFidelity.postAuthExternalNetworkOpen)
+    }
+
+    # THE PRODUCTION ESCAPE THIS PHASE EXISTS TO CATCH: after authentication the
+    # watchdog must close portal mode and restore whitelist enforcement on its own.
+    # In the escaped build the watchdog prechecks crashed every cycle (unexported
+    # Get-OpenPathCaptivePortalMarkerMode), so the relaxed posture persisted until
+    # logoff/reboot. Drive the real scheduled task and require the marker to clear
+    # WITHOUT any native reconcile.
+    $autonomousExit = Invoke-WeduWatchdogUntilProtectedRestored
+    Save-Json -Value $autonomousExit -Path $script:AutonomousExitPath
+    Copy-Item -LiteralPath 'C:\OpenPath\data\logs\openpath.log' -Destination (Join-Path $script:ArtifactsRoot 'wedu-lab-openpath-post-auth.log') -ErrorAction SilentlyContinue
+    $protectedModeExitedVia = [string]$autonomousExit.protectedModeExitedVia
+    $postAuthMarkerCleared = [bool](-not (Test-Path -LiteralPath $script:CaptiveMarkerPath))
+
+    # Idempotent confirmation only: the autonomous exit above already restored
+    # protected mode, so this reconcile must find an authenticated, marker-free
+    # state and report protectedModeRestored without doing the work itself.
     $nativeReconcile = Invoke-NativeHostAction -Message @{
         action = 'recover-captive-portal-navigation'
         operation = 'reconcile'
@@ -1607,6 +1764,14 @@ function Invoke-WeduLabRun {
         $browserLimited.portalReady -and
         $browserLimited.finalLoginHost -eq $script:WeduLoginHost -and
         $browserLimited.loginSubmitted -and
+        # Post-auth autonomous exit: the gateway really opened, the network stayed
+        # production-faithful, and the watchdog closed portal mode on its own.
+        $gatewayAuthenticated.success -and
+        $postAuthNetworkFidelity.postAuthExternalNetworkOpen -and
+        $postAuthNetworkFidelity.postAuthPortalHostStillNetworkOnly -and
+        $autonomousExit.exitedProtected -and
+        $protectedModeExitedVia -eq 'autonomous-watchdog-close' -and
+        $postAuthMarkerCleared -and
         $nativeReconcile.success -and
         $nativeReconcile.state -eq 'Authenticated' -and
         $openPathProtectionAfter.protectedModeRestored -and
@@ -1626,6 +1791,16 @@ function Invoke-WeduLabRun {
         upstreamSource = [string]$upstreamSource
         limitedModeEnteredVia = [string]$limitedModeEnteredVia
         autonomousDetection = $autonomous
+        # Post-auth autonomous-exit evidence (see assert contract
+        # requireAutonomousExitEvidence).
+        gatewayAuthenticated = $gatewayAuthenticated
+        autonomousExit = $autonomousExit
+        autonomousExitPath = 'wedu-lab-autonomous-exit.json'
+        protectedModeExitedVia = [string]$protectedModeExitedVia
+        postAuthMarkerCleared = [bool]$postAuthMarkerCleared
+        postAuthExternalNetworkOpen = [bool]$postAuthNetworkFidelity.postAuthExternalNetworkOpen
+        postAuthPortalHostStillNetworkOnly = [bool]$postAuthNetworkFidelity.postAuthPortalHostStillNetworkOnly
+        postAuthNetworkFidelity = $postAuthNetworkFidelity
         runnerConfig = $runnerConfig
         labNetwork = $labNetwork
         limitedDns = $limitedDns
