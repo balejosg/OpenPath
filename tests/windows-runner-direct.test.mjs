@@ -109,6 +109,12 @@ describe('direct OpenPath Windows runner diagnostic', () => {
         runnerScriptPath: 'tests\\e2e\\ci\\run-windows-acrylic-purgecache-spike.ps1',
       },
       {
+        mode: 'acrylic-split-dns-spike',
+        artifactRoot: 'C:\\Windows\\Temp\\openpath-acrylic-split-dns-spike',
+        completionFileName: 'direct-acrylic-split-dns-spike-completion.json',
+        runnerScriptPath: 'tests\\e2e\\ci\\run-windows-acrylic-split-dns-spike.ps1',
+      },
+      {
         mode: 'browser-dependency-observability-spike',
         artifactRoot: 'C:\\Windows\\Temp\\openpath-browser-dependency-observability-spike',
         completionFileName: 'direct-browser-dependency-observability-spike-completion.json',
@@ -145,7 +151,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(
       result.stderr,
-      /pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, browser-dependency-observability-spike, captive-portal-navigation, captive-portal-wedu-lab, or all/
+      /pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, acrylic-split-dns-spike, browser-dependency-observability-spike, captive-portal-navigation, captive-portal-wedu-lab, or all/
     );
   });
 
@@ -967,7 +973,10 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     );
     assert.doesNotMatch(sourcePaths.join('\n'), /windows-test-results\.xml/);
     assert.doesNotMatch(sourcePaths.join('\n'), /openpath-captive-portal-navigation/);
-    assert.doesNotMatch(sourcePaths.join('\n'), /dns-evidence|dns-discovery|acrylic-purgecache/);
+    assert.doesNotMatch(
+      sourcePaths.join('\n'),
+      /dns-evidence|dns-discovery|acrylic-purgecache|acrylic-split-dns/
+    );
   });
 
   test('captive-portal-wedu-lab rejects local-overlay source by default', () => {
@@ -1019,6 +1028,50 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(spikeScript, /Resolve-DnsName -Name \$Hostname -Server 127\.0\.0\.1/);
     assert.match(spikeScript, /officialAcrylicHostsContract/);
     for (const decision of ['purgeCacheReloadsHosts', 'restartRequired', 'inconclusive']) {
+      assert.match(spikeScript, new RegExp(decision));
+    }
+  });
+
+  test('acrylic-split-dns-spike mode proves per-server affinity-mask exclusivity', () => {
+    const result = runDirectDiagnostic([
+      '--mode',
+      'acrylic-split-dns-spike',
+      '--source-mode',
+      'local-overlay',
+    ]);
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+    const spikeScript = readText('tests/e2e/ci/run-windows-acrylic-split-dns-spike.ps1');
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /mode=acrylic-split-dns-spike/);
+    assert.match(result.stdout, /step=run-windows-acrylic-split-dns-spike/);
+    assert.equal(
+      resolveWindowsDirectDiagnosticMode('acrylic-split-dns-spike').artifactRoot,
+      'C:\\Windows\\Temp\\openpath-acrylic-split-dns-spike'
+    );
+    assert.match(script, /run-windows-acrylic-split-dns-spike\.ps1/);
+    assert.match(script, /acrylic-split-dns-spike-result\.json/);
+    assert.match(script, /direct-acrylic-split-dns-spike-completion\.json/);
+
+    // The spike must drive a real per-server topology: a third upstream with a
+    // mask DISJOINT from primary/secondary, proven with alive vs TEST-NET-dead
+    // servers, while keeping the machine restorable (backups + watchdog resume).
+    assert.match(spikeScript, /TertiaryServerAddress/);
+    assert.match(spikeScript, /TertiaryServerDomainNameAffinityMask/);
+    assert.match(spikeScript, /192\.0\.2\.1/);
+    assert.match(spikeScript, /\^\$\(\$script:SplitDomain\);\^\*\.\$\(\$script:SplitDomain\);\*/);
+    assert.match(spikeScript, /AcrylicConfiguration\.ini\.before-split-dns-spike/);
+    assert.match(spikeScript, /AcrylicHosts\.txt\.before-split-dns-spike/);
+    assert.match(spikeScript, /AcrylicCache\.dat/);
+    assert.match(spikeScript, /Disable-ScheduledTask -TaskName \$script:WatchdogTaskName/);
+    assert.match(spikeScript, /Enable-ScheduledTask -TaskName \$script:WatchdogTaskName/);
+    assert.match(spikeScript, /\[System\.Text\.Encoding\]::ASCII/);
+    for (const decision of [
+      'tertiary-split-dns-viable',
+      'masks-leaked-to-tertiary',
+      'tertiary-not-honored',
+      'inconclusive',
+    ]) {
       assert.match(spikeScript, new RegExp(decision));
     }
   });

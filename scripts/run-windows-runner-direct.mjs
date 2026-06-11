@@ -31,6 +31,8 @@ const DNS_EVIDENCE_MATRIX_V2_GUEST_ARTIFACT_ROOT =
 const DNS_OBSERVABILITY_CONTROLS_GUEST_ARTIFACT_ROOT = resolveWindowsDirectDiagnosticMode(
   'dns-observability-controls'
 ).artifactRoot;
+const ACRYLIC_SPLIT_DNS_SPIKE_GUEST_ARTIFACT_ROOT =
+  resolveWindowsDirectDiagnosticMode('acrylic-split-dns-spike').artifactRoot;
 const ACRYLIC_PURGECACHE_SPIKE_GUEST_ARTIFACT_ROOT = resolveWindowsDirectDiagnosticMode(
   'acrylic-purgecache-spike'
 ).artifactRoot;
@@ -143,6 +145,17 @@ const DNS_OBSERVABILITY_CONTROLS_ARTIFACTS = [
   'resolve-nx-control.json',
   'resolve-nx-control.err.log',
 ];
+const ACRYLIC_SPLIT_DNS_SPIKE_ARTIFACTS = [
+  'acrylic-split-dns-spike-result.json',
+  'acrylic-split-dns-spike-hashes.json',
+  'direct-acrylic-split-dns-spike-completion.json',
+  'direct-acrylic-split-dns-spike.out.log',
+  'direct-acrylic-split-dns-spike.err.log',
+  'AcrylicConfiguration.ini.before-split-dns-spike',
+  'AcrylicConfiguration.ini.split-dns-phase1',
+  'AcrylicConfiguration.ini.split-dns-phase2',
+  'AcrylicHosts.txt.before-split-dns-spike',
+];
 const ACRYLIC_PURGECACHE_SPIKE_ARTIFACTS = [
   'acrylic-purgecache-spike-result.json',
   'acrylic-purgecache-spike-hashes.json',
@@ -229,7 +242,7 @@ Options:
   --results-path <path>       Result file path on the Windows runner relative to the repo root (default: ${DEFAULT_RESULTS_RELATIVE_PATH})
   --runner-repo-root <path>   Explicit OpenPath checkout root on the Windows runner (default: auto-detect under ${DEFAULT_RUNNER_ROOT_GLOB})
   --source-mode <mode>        Source to execute on Windows: runner-checkout or local-overlay (default: ${DEFAULT_SOURCE_MODE})
-  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, browser-dependency-observability-spike, captive-portal-navigation, captive-portal-wedu-lab, or all (default: ${DEFAULT_RUN_MODE})
+  --mode <mode>               What to run: pester, browser-boundary, dns-discovery-spike, dns-evidence-matrix, dns-evidence-matrix-v2, dns-observability-controls, acrylic-purgecache-spike, acrylic-split-dns-spike, browser-dependency-observability-spike, captive-portal-navigation, captive-portal-wedu-lab, or all (default: ${DEFAULT_RUN_MODE})
   --overlay-host <ip>         Local host/IP the Windows VM can use to download the local overlay ZIP
   --browser-enforcement-report
                               Run tests/e2e/ci/windows-browser-enforcement.ps1 -Scope Report after Pester
@@ -1879,6 +1892,103 @@ if ($exitCode -ne 0) {
   }
 }
 
+function runWindowsAcrylicSplitDnsSpike(options, runnerRepoRoot) {
+  const spikeScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-acrylic-split-dns-spike.ps1`;
+  const artifactsRoot = ACRYLIC_SPLIT_DNS_SPIKE_GUEST_ARTIFACT_ROOT;
+  const completionPath = `${artifactsRoot}\\direct-acrylic-split-dns-spike-completion.json`;
+  const timeoutSeconds = Number.parseInt(options.timeoutSeconds, 10);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$repoRoot = ${JSON.stringify(runnerRepoRoot)}
+$spikeScriptPath = ${JSON.stringify(spikeScriptPath)}
+$artifactsRoot = ${JSON.stringify(artifactsRoot)}
+$completionPath = ${JSON.stringify(completionPath)}
+
+if (-not (Test-Path -LiteralPath $spikeScriptPath)) {
+  throw 'run-windows-acrylic-split-dns-spike.ps1 is missing on the Windows runner checkout.'
+}
+
+function Invoke-OpenPathDirectChildPowerShell {
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    [string[]]$ExtraArguments = @(),
+    [Parameter(Mandatory = $true)][string]$LogName,
+    [int]$TimeoutSeconds = 1800
+  )
+
+  $outPath = Join-Path $artifactsRoot "$LogName.out.log"
+  $errPath = Join-Path $artifactsRoot "$LogName.err.log"
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $ExtraArguments
+  $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $repoRoot -RedirectStandardOutput $outPath -RedirectStandardError $errPath -PassThru
+
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "$LogName timed out after $TimeoutSeconds seconds"
+  }
+
+  $process.Refresh()
+  $exitCode = $process.ExitCode
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+  if ($exitCode -ne 0) {
+    $maxFailureLogChars = 12000
+    $stdout = if (Test-Path -LiteralPath $outPath) { Get-Content -LiteralPath $outPath -Raw } else { '' }
+    $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -LiteralPath $errPath -Raw } else { '' }
+    if ($stdout.Length -gt $maxFailureLogChars) {
+      $stdout = $stdout.Substring($stdout.Length - $maxFailureLogChars)
+    }
+    if ($stderr.Length -gt $maxFailureLogChars) {
+      $stderr = $stderr.Substring($stderr.Length - $maxFailureLogChars)
+    }
+    throw ($LogName + ' exited with code ' + $exitCode + [Environment]::NewLine + 'STDOUT:' + [Environment]::NewLine + $stdout + [Environment]::NewLine + 'STDERR:' + [Environment]::NewLine + $stderr)
+  }
+}
+
+$exitCode = 0
+$errorText = ''
+try {
+  Remove-Item -LiteralPath $artifactsRoot -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
+  Remove-Item -LiteralPath $completionPath -Force -ErrorAction SilentlyContinue
+  Set-Location $repoRoot
+  Invoke-OpenPathDirectChildPowerShell -ScriptPath $spikeScriptPath -ExtraArguments @('-Mode', 'Run', '-ArtifactsRoot', $artifactsRoot) -LogName 'direct-acrylic-split-dns-spike' -TimeoutSeconds ${timeoutSeconds}
+  $resultPath = Join-Path $artifactsRoot 'acrylic-split-dns-spike-result.json'
+  if (-not (Test-Path -LiteralPath $resultPath)) {
+    throw "Acrylic split-DNS spike result was not written: $resultPath"
+  }
+}
+catch {
+  $exitCode = 1
+  $errorText = [string]$_
+}
+finally {
+  [pscustomobject]@{
+    exitCode = $exitCode
+    error = $errorText
+    artifactsRoot = $artifactsRoot
+    resultPath = (Join-Path $artifactsRoot 'acrylic-split-dns-spike-result.json')
+    timestamp = (Get-Date).ToString('o')
+  } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $completionPath -Encoding UTF8
+}
+
+if ($exitCode -ne 0) {
+  exit $exitCode
+}
+`;
+  runGuestPowerShellDetached(options, script, {
+    label: 'Run Windows Acrylic split-DNS spike',
+  });
+  const completion = waitForGuestCompletionFile(options, completionPath, {
+    timeoutSeconds: timeoutSeconds + 900,
+  });
+  if (completion.exitCode !== 0) {
+    throw new Error(
+      `Run Windows Acrylic split-DNS spike failed: ${completion.error ?? 'unknown error'}`
+    );
+  }
+}
+
 function runWindowsBrowserDependencyObservabilitySpike(options, runnerRepoRoot) {
   const spikeScriptPath = `${runnerRepoRoot}\\tests\\e2e\\ci\\run-windows-browser-dependency-observability-spike.ps1`;
   const artifactsRoot = BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_GUEST_ARTIFACT_ROOT;
@@ -2551,6 +2661,10 @@ function getWindowsDirectArtifactSpecsForModes(
     );
   }
 
+  if (modeSet.has('acrylic-split-dns-spike')) {
+    addArtifactList(ACRYLIC_SPLIT_DNS_SPIKE_GUEST_ARTIFACT_ROOT, ACRYLIC_SPLIT_DNS_SPIKE_ARTIFACTS);
+  }
+
   if (modeSet.has('browser-dependency-observability-spike')) {
     addArtifactList(
       BROWSER_DEPENDENCY_OBSERVABILITY_SPIKE_GUEST_ARTIFACT_ROOT,
@@ -2642,6 +2756,11 @@ function runWindowsDirectDiagnosticMode({ mode, options, runnerRepoRoot }) {
   if (mode === 'acrylic-purgecache-spike') {
     console.log('step=run-windows-acrylic-purgecache-spike');
     runWindowsAcrylicPurgeCacheSpike(options, effectiveRunnerRepoRoot);
+    return;
+  }
+  if (mode === 'acrylic-split-dns-spike') {
+    console.log('step=run-windows-acrylic-split-dns-spike');
+    runWindowsAcrylicSplitDnsSpike(options, effectiveRunnerRepoRoot);
     return;
   }
   if (mode === 'browser-dependency-observability-spike') {

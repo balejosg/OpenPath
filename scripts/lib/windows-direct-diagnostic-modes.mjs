@@ -50,6 +50,13 @@ const WINDOWS_DIRECT_DIAGNOSTIC_MODES = Object.freeze({
     runnerScriptPath: 'tests\\e2e\\ci\\run-windows-acrylic-purgecache-spike.ps1',
     requiresSharedPowerShellPreamble: true,
   }),
+  'acrylic-split-dns-spike': Object.freeze({
+    mode: 'acrylic-split-dns-spike',
+    artifactRoot: 'C:\\Windows\\Temp\\openpath-acrylic-split-dns-spike',
+    completionFileName: 'direct-acrylic-split-dns-spike-completion.json',
+    runnerScriptPath: 'tests\\e2e\\ci\\run-windows-acrylic-split-dns-spike.ps1',
+    requiresSharedPowerShellPreamble: true,
+  }),
   'browser-dependency-observability-spike': Object.freeze({
     mode: 'browser-dependency-observability-spike',
     artifactRoot: 'C:\\Windows\\Temp\\openpath-browser-dependency-observability-spike',
