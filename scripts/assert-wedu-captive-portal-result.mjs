@@ -232,9 +232,8 @@ function requireSplitDnsProtectedEvidence(result) {
     'splitDnsProtected.blockedDomainStillBlocked (split DNS must not relax the default block)'
   );
   requireField(
-    typeof valueAt(result, 'splitDnsProtected.tertiaryServerAddress') === 'string' &&
-      valueAt(result, 'splitDnsProtected.tertiaryServerAddress').length > 0,
-    'splitDnsProtected.tertiaryServerAddress (Acrylic must carry a third upstream for the portal domains)'
+    valueAt(result, 'splitDnsProtected.splitTopologyActive') === true,
+    'splitDnsProtected.splitTopologyActive (network DNS on the third upstream, public resolver still primary -- proves split DNS, not limited mode)'
   );
 }
 

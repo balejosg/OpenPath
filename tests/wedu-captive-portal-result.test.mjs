@@ -67,6 +67,8 @@ function baseResult(overrides = {}) {
       portalResolvesInProtectedMode: true,
       markerAbsentDuringSplitCheck: true,
       blockedDomainStillBlocked: true,
+      splitTopologyActive: true,
+      primaryServerAddress: '8.8.8.8',
       tertiaryServerAddress: '10.77.0.53',
     },
     nativeReconcile: {
@@ -730,6 +732,25 @@ describe('WEDU captive portal result validator', () => {
     assert.throws(
       () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
       /splitDnsProtected\.markerAbsentDuringSplitCheck/
+    );
+  });
+
+  test('rejects target-platform evidence when the split topology is not active (limited mode, not split DNS)', () => {
+    const artifactDir = makeArtifactDir({
+      'direct-captive-portal-wedu-lab-result.json': discoveredHostResult({
+        splitDnsProtected: {
+          ...baseResult().splitDnsProtected,
+          splitTopologyActive: false,
+          primaryServerAddress: '10.77.0.53',
+        },
+      }),
+      'wedu-lab-browser-before.json': browserBefore(),
+      ...targetPlatformFiles(),
+    });
+
+    assert.throws(
+      () => assertWeduCaptivePortalResult({ artifactDir, evidenceMode: 'target-platform' }),
+      /splitDnsProtected\.splitTopologyActive/
     );
   });
 });

@@ -46,6 +46,10 @@ $script:WeduConfiguredPortalDomains = @($script:WeduHost, $script:WeduLoginHost,
 # resolution fails and the watchdog must recover the network resolver itself.
 $script:WeduStalePrimaryDns = '8.8.8.8'
 $script:WeduStaleSecondaryDns = '8.8.4.4'
+# The lab network's dedicated DNS (DHCP-offered) -- the ONLY resolver that knows
+# the internal portal host. Permanent split DNS must place this on Acrylic's
+# third upstream while the stale public primary above stays first.
+$script:WeduExpectedNetworkDns = [string]$(if ($env:OPENPATH_WEDU_LAB_NETWORK_DNS) { $env:OPENPATH_WEDU_LAB_NETWORK_DNS } else { '10.77.0.53' })
 $script:WatchdogTaskName = 'OpenPath-Watchdog'
 $script:CaptiveMarkerPath = 'C:\OpenPath\data\captive-portal-active.json'
 $script:CaptiveObservationPath = 'C:\OpenPath\data\captive-portal-observation.json'
@@ -193,7 +197,10 @@ function Get-WeduAcrylicIniValue {
     )
 
     $escapedKey = [regex]::Escape($Key)
-    $match = [regex]::Match($Content, "(?m)^\s*$escapedKey\s*=\s*(.*?)\s*$")
+    # Match only on the key's own line. \s would swallow the LF that the agent's
+    # Set-AcrylicGlobalSetting writes after an empty value, so an empty
+    # TertiaryServerAddress= would capture the next line ("TertiaryServerPort=53").
+    $match = [regex]::Match($Content, "(?m)^[ \t]*$escapedKey[ \t]*=[ \t]*([^\r\n]*?)[ \t]*$")
     if (-not $match.Success) {
         return ''
     }
@@ -1315,72 +1322,68 @@ function Get-WeduCaptiveMarker {
 
 function Invoke-WeduSplitDnsProtectedCheck {
     # Permanent split DNS must make the declared portal host resolvable in NORMAL
-    # protected mode -- no captive-portal marker, no mode transition. The first
-    # watchdog cycle applies the topology via drift detection (the agent compares
-    # the Acrylic third/fourth upstreams against the network's DHCP resolvers),
-    # so drive the scheduled task once and then assert resolution while proving
-    # the whitelist default-block still holds.
+    # protected mode -- no captive-portal marker, no mode transition. Stage C1 is
+    # ADDITIVE: the legacy watchdog still autonomously enters limited mode on a
+    # captive network (every minute), which overwrites Acrylic's upstreams and
+    # races this check. So to observe split DNS deterministically we DISABLE the
+    # OpenPath-Watchdog task, apply the protected-mode topology through the real
+    # product path (Update-AcrylicHost -> Set-AcrylicConfiguration, the same call
+    # the watchdog's drift refresh makes), then assert the DISTINGUISHING split
+    # signal: the portal resolves while the THIRD upstream is the network DNS and
+    # the PRIMARY upstream stays the configured public resolver (limited mode
+    # would instead put the network DNS on Primary/Secondary). The watchdog is
+    # always re-enabled in the finally block.
     param(
-        # A full watchdog pass on a captive network runs the protected-mode repair
-        # probes first and can take well over a minute before the drift refresh at
-        # the end of the cycle applies the split topology -- wait generously and
-        # allow a second cycle before declaring the resolution missing.
-        [int]$MaxCycles = 2,
-        [int]$ResolveAttempts = 6,
-        [int]$ResolveDelaySeconds = 2
+        [int]$ResolveAttempts = 8,
+        [int]$ResolveDelaySeconds = 3
     )
 
-    # Start clean: a stale marker/observation from a previous run must not decide
-    # this check, and the observation is re-cleared each cycle so two consecutive
-    # 'Portal' detections can never trip the limited-mode ENTRY while we are
-    # proving that protected mode alone resolves the portal.
-    Remove-Item -LiteralPath $script:CaptiveMarkerPath, $script:CaptiveObservationPath -Force -ErrorAction SilentlyContinue
-
+    $installedRoot = $script:InstalledOpenPathRoot
     $runError = ''
-    $cyclesRun = 0
+    $watchdogDisabled = $false
+    $applied = $false
+    $primaryServerAddress = ''
+    $tertiaryServerAddress = ''
     $portalAddresses = @()
     $portalResolveError = ''
-    $markerAbsentDuringSplitCheck = $false
-    for ($cycle = 1; $cycle -le $MaxCycles; $cycle++) {
-        $cyclesRun = $cycle
-        Remove-Item -LiteralPath $script:CaptiveObservationPath -Force -ErrorAction SilentlyContinue
+    $blockedDomainStillBlocked = $false
+    $blockedError = ''
+
+    try {
         try {
-            # Capture the prior run time so we can confirm the task ACTUALLY ran
-            # this cycle. Start-ScheduledTask is asynchronous: polling the task
-            # info immediately after can still show the PREVIOUS run's result
-            # (not 267009), so a naive "wait until not running" loop returns before
-            # the watchdog -- and its split-DNS drift refresh -- has executed, and
-            # the resolve below would run against stale normal-mode Acrylic.
-            $priorRun = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
-                Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
-            $priorRunTime = if ($priorRun) { [datetime]$priorRun.LastRunTime } else { [datetime]::MinValue }
-            Start-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop
-            $started = $false
-            for ($wait = 1; $wait -le 240; $wait++) {
-                Start-Sleep -Milliseconds 500
-                $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
-                    Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
-                if (-not $info) { continue }
-                # 267009 (0x41301) == task is currently running; LastTaskResult is an
-                # unsigned 32-bit code that overflows [int], hence the [long] cast.
-                $running = ([long]$info.LastTaskResult -eq 267009)
-                $ranThisCycle = ([datetime]$info.LastRunTime -gt $priorRunTime)
-                if (-not $started) {
-                    if ($running -or $ranThisCycle) { $started = $true }
-                    continue
-                }
-                if (-not $running) {
-                    break
-                }
-            }
+            Disable-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop | Out-Null
+            $watchdogDisabled = $true
         }
         catch {
-            $runError = [string]$_
+            $runError = "disable watchdog: $_"
         }
-
-        $markerAbsentDuringSplitCheck = [bool](-not (Test-Path -LiteralPath $script:CaptiveMarkerPath))
-
+        # Apply split DNS through the REAL product path with full bootstrap: run
+        # the installed watchdog script once per attempt. Its drift refresh renders
+        # the third upstream and opens the firewall exactly as in production. We
+        # clear the observation before EACH run so portalCount never reaches the
+        # entry threshold (2) -- a single Portal detection applies split DNS without
+        # tripping limited mode, keeping this a pure protected-mode proof.
+        $watchdogScript = Join-Path $installedRoot 'scripts\Test-DNSHealth.ps1'
+        $markerAbsentDuringSplitCheck = $true
         for ($attempt = 1; $attempt -le $ResolveAttempts; $attempt++) {
+            Remove-Item -LiteralPath $script:CaptiveMarkerPath, $script:CaptiveObservationPath -Force -ErrorAction SilentlyContinue
+            try {
+                if (Test-Path -LiteralPath $watchdogScript) {
+                    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $watchdogScript 2>&1 | Out-Null
+                    $applied = $true
+                }
+                else {
+                    $runError = "watchdog script missing: $watchdogScript"
+                }
+            }
+            catch {
+                $runError = ($runError + " | apply: $_").Trim(' |')
+            }
+
+            if (Test-Path -LiteralPath $script:CaptiveMarkerPath) {
+                $markerAbsentDuringSplitCheck = $false
+            }
+
             try {
                 $answers = @(Resolve-DnsName -Name $script:WeduHost -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
                 $portalAddresses = @($answers | Where-Object { $_.IPAddress } | ForEach-Object { [string]$_.IPAddress })
@@ -1397,32 +1400,40 @@ function Invoke-WeduSplitDnsProtectedCheck {
             }
         }
 
-        if ($portalAddresses.Count -gt 0) {
-            break
-        }
-    }
-    $portalResolvesInProtectedMode = [bool]($portalAddresses.Count -gt 0)
-
-    $blockedDomainStillBlocked = $false
-    $blockedError = ''
-    try {
-        $blockedAnswers = @(Resolve-DnsName -Name 'this-should-be-blocked-test-12345.com' -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue)
-        $blockedDomainStillBlocked = ($blockedAnswers.Count -eq 0)
-    }
-    catch {
-        $blockedDomainStillBlocked = $true
-        $blockedError = [string]$_
-    }
-
-    $acrylic = Get-WeduAcrylicDnsSnapshot
-    $tertiaryServerAddress = ''
-    if ($acrylic.configPath) {
         try {
-            $iniContent = Get-Content -LiteralPath $acrylic.configPath -Raw -ErrorAction Stop
-            $tertiaryServerAddress = Get-WeduAcrylicIniValue -Content $iniContent -Key 'TertiaryServerAddress'
+            $blockedAnswers = @(Resolve-DnsName -Name 'this-should-be-blocked-test-12345.com' -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue)
+            $blockedDomainStillBlocked = ($blockedAnswers.Count -eq 0)
         }
-        catch { }
+        catch {
+            $blockedDomainStillBlocked = $true
+            $blockedError = [string]$_
+        }
+
+        $acrylic = Get-WeduAcrylicDnsSnapshot
+        if ($acrylic.configPath) {
+            try {
+                $iniContent = Get-Content -LiteralPath $acrylic.configPath -Raw -ErrorAction Stop
+                $primaryServerAddress = Get-WeduAcrylicIniValue -Content $iniContent -Key 'PrimaryServerAddress'
+                $tertiaryServerAddress = Get-WeduAcrylicIniValue -Content $iniContent -Key 'TertiaryServerAddress'
+            }
+            catch { }
+        }
     }
+    finally {
+        if ($watchdogDisabled) {
+            try { Enable-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop | Out-Null }
+            catch { $runError = ($runError + " | re-enable watchdog: $_").Trim(' |') }
+        }
+    }
+
+    $portalResolvesInProtectedMode = [bool]($portalAddresses.Count -gt 0)
+    # The split-DNS signal that distinguishes it from limited mode: the network
+    # resolver is the THIRD upstream while the configured public resolver stays
+    # PRIMARY. Limited mode would put the network resolver on Primary/Secondary.
+    $splitTopologyActive = [bool](
+        $tertiaryServerAddress -eq $script:WeduExpectedNetworkDns -and
+        $primaryServerAddress -eq $script:WeduStalePrimaryDns
+    )
 
     return [pscustomobject]@{
         portalHost = $script:WeduHost
@@ -1432,8 +1443,10 @@ function Invoke-WeduSplitDnsProtectedCheck {
         markerAbsentDuringSplitCheck = $markerAbsentDuringSplitCheck
         blockedDomainStillBlocked = $blockedDomainStillBlocked
         blockedError = $blockedError
+        splitTopologyActive = $splitTopologyActive
+        primaryServerAddress = $primaryServerAddress
         tertiaryServerAddress = $tertiaryServerAddress
-        watchdogCyclesRun = $cyclesRun
+        appliedViaProductPath = $applied
         watchdogRunError = $runError
     }
 }
@@ -1896,10 +1909,13 @@ function Invoke-WeduLabRun {
         $browserLimited.portalReady -and
         $browserLimited.finalLoginHost -eq $script:WeduLoginHost -and
         $browserLimited.loginSubmitted -and
-        # Permanent split DNS: portal reachable in protected mode, no marker.
+        # Permanent split DNS: portal reachable in protected mode (no marker) via
+        # the third upstream while the public primary stays configured -- the
+        # signal that distinguishes split DNS from the legacy limited mode.
         $splitDnsProtected.portalResolvesInProtectedMode -and
         $splitDnsProtected.markerAbsentDuringSplitCheck -and
         $splitDnsProtected.blockedDomainStillBlocked -and
+        $splitDnsProtected.splitTopologyActive -and
         # Post-auth autonomous exit: the gateway really opened, the network stayed
         # production-faithful, and the watchdog closed portal mode on its own.
         $gatewayAuthenticated.success -and
