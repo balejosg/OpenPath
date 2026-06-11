@@ -1,0 +1,74 @@
+name: E2E Hosted Pilot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-e2e-hosted:
+    name: Windows E2E (hosted pilot)
+    runs-on: windows-2025
+    timeout-minutes: 40
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Run Windows E2E
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-e2e.ps1
+
+      - name: Upload diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: hosted-pilot-windows-e2e-${{ github.run_id }}
+          path: tests/e2e/artifacts
+          if-no-files-found: ignore
+          retention-days: 7
+
+  windows-student-policy-hosted:
+    name: Windows Student Policy (hosted pilot)
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: ./.github/actions/setup-node
+        with:
+          cache-dependency-path: |
+            package-lock.json
+            tests/selenium/package-lock.json
+
+      - name: Run Windows student-policy flow
+        shell: pwsh
+        env:
+          OPENPATH_WINDOWS_STUDENT_SSE_GROUP: full
+          OPENPATH_WINDOWS_STUDENT_SSE_REASON: hosted-pilot (full coverage forced)
+          OPENPATH_KEEP_CLIENT_FOR_BROWSER_BOUNDARY: '1'
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-student-flow.ps1
+
+      - name: Run Windows browser boundary probes
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-browser-boundary-ci.ps1
+
+      - name: Upload diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: hosted-pilot-windows-student-policy-${{ github.run_id }}
+          path: tests/e2e/artifacts/windows-student-policy
+          if-no-files-found: ignore
+          retention-days: 7
