@@ -1186,11 +1186,13 @@ function Invoke-WeduSplitDnsProtectedCheck {
     # the third Acrylic upstream (the network DHCP DNS). The distinguishing split
     # signal: network DNS on TERTIARY, configured public resolver stays PRIMARY.
     param(
-        # Run a FIXED number of cycles (never break early): the legacy entry
-        # threshold is two consecutive 'Portal' detections, so we must drive the
-        # watchdog past it to prove the would-enter is actually suppressed. The
-        # marker is checked after EVERY cycle.
-        [int]$MaxCycles = 4,
+        # Drive the watchdog past the legacy entry threshold (two consecutive
+        # 'Portal' detections) so the would-enter is actually suppressed -- the
+        # marker is checked after EVERY cycle. Then keep cycling until split DNS
+        # has settled (tertiary applied AND the portal resolves), because in the
+        # lab several tasks contend over the Acrylic config and the drift refresh
+        # may land a cycle or two in.
+        [int]$MaxCycles = 6,
         [int]$DelaySeconds = 2
     )
 
@@ -1204,70 +1206,103 @@ function Invoke-WeduSplitDnsProtectedCheck {
     $blockedDomainStillBlocked = $false
     $blockedError = ''
     $markerNeverPresent = $true
-
-    for ($cycle = 1; $cycle -le $MaxCycles; $cycle++) {
-        try {
-            # Start-ScheduledTask is async; a captive-network watchdog pass runs the
-            # protected-mode repair probes first and can take 60-90s. Wait for the
-            # task to actually START (running, or LastRunTime advanced) and then to
-            # FINISH (up to ~120s) before reading the marker, so we never sample
-            # mid-run.
-            $priorRun = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
-                Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
-            $priorRunTime = if ($priorRun) { [datetime]$priorRun.LastRunTime } else { [datetime]::MinValue }
-            Start-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop
-            $applied = $true
-            $started = $false
-            for ($wait = 1; $wait -le 280; $wait++) {
-                Start-Sleep -Milliseconds 500
-                $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
-                    Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
-                if (-not $info) { continue }
-                # 267009 (0x41301) == task is currently running; LastTaskResult is an
-                # unsigned 32-bit code that overflows [int], hence the [long] cast.
-                $running = ([long]$info.LastTaskResult -eq 267009)
-                $ranThisCycle = ([datetime]$info.LastRunTime -gt $priorRunTime)
-                if (-not $started) {
-                    if ($running -or $ranThisCycle) { $started = $true }
-                    continue
-                }
-                if (-not $running) { break }
-            }
-        }
-        catch {
-            $runError = ($runError + " | cycle ${cycle}: $_").Trim(' |')
-        }
-
-        # The C2 keystone: the marker must NEVER appear after a watchdog run while
-        # split DNS is active -- not on this cycle, not on any cycle.
-        if (Test-Path -LiteralPath $script:CaptiveMarkerPath) {
-            $markerNeverPresent = $false
-        }
-
-        try {
-            $answers = @(Resolve-DnsName -Name $script:WeduHost -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
-            $cycleAddresses = @($answers | Where-Object { $_.IPAddress } | ForEach-Object { [string]$_.IPAddress })
-            if ($cycleAddresses.Count -gt 0) {
-                $portalAddresses = $cycleAddresses
-                $resolvedAtLeastOnce = $true
-                $portalResolveError = ''
-            }
-        }
-        catch {
-            $portalResolveError = [string]$_
-        }
-        if ($cycle -lt $MaxCycles) {
-            Start-Sleep -Seconds $DelaySeconds
-        }
-    }
+    $updateTaskDisabled = $false
 
     try {
-        $blockedAnswers = @(Resolve-DnsName -Name 'this-should-be-blocked-test-12345.com' -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue)
-        $blockedDomainStillBlocked = ($blockedAnswers.Count -eq 0)
+        # In the lab the OpenPath-Update task ALWAYS fails (no whitelist URL in the
+        # runner config) and rewrites the Acrylic config mid-check, racing the
+        # split-DNS drift refresh and blanking the third upstream. Disable it for
+        # the duration; the OpenPath-Watchdog task stays ENABLED so we still prove
+        # the watchdog suppresses portal-mode entry on its own.
+        try { Disable-ScheduledTask -TaskName 'OpenPath-Update' -ErrorAction Stop | Out-Null; $updateTaskDisabled = $true }
+        catch { $runError = "disable update: $_" }
+
+        for ($cycle = 1; $cycle -le $MaxCycles; $cycle++) {
+            try {
+                # Start-ScheduledTask is async; a captive-network watchdog pass runs
+                # the protected-mode repair probes first and can take 60-90s. Wait
+                # for the task to actually START (running, or LastRunTime advanced)
+                # and then to FINISH (up to ~120s) before reading state.
+                $priorRun = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
+                    Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+                $priorRunTime = if ($priorRun) { [datetime]$priorRun.LastRunTime } else { [datetime]::MinValue }
+                Start-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop
+                $applied = $true
+                $started = $false
+                for ($wait = 1; $wait -le 280; $wait++) {
+                    Start-Sleep -Milliseconds 500
+                    $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
+                        Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+                    if (-not $info) { continue }
+                    # 267009 (0x41301) == task is currently running; LastTaskResult is
+                    # an unsigned 32-bit code that overflows [int], hence the [long].
+                    $running = ([long]$info.LastTaskResult -eq 267009)
+                    $ranThisCycle = ([datetime]$info.LastRunTime -gt $priorRunTime)
+                    if (-not $started) {
+                        if ($running -or $ranThisCycle) { $started = $true }
+                        continue
+                    }
+                    if (-not $running) { break }
+                }
+            }
+            catch {
+                $runError = ($runError + " | cycle ${cycle}: $_").Trim(' |')
+            }
+
+            # The C2 keystone: the marker must NEVER appear after a watchdog run
+            # while split DNS is active -- not on this cycle, not on any cycle.
+            if (Test-Path -LiteralPath $script:CaptiveMarkerPath) {
+                $markerNeverPresent = $false
+            }
+
+            # Read the applied topology this cycle (the drift refresh may land late).
+            $acrylic = Get-WeduAcrylicDnsSnapshot
+            if ($acrylic.configPath) {
+                try {
+                    $iniContent = Get-Content -LiteralPath $acrylic.configPath -Raw -ErrorAction Stop
+                    $primaryServerAddress = Get-WeduAcrylicIniValue -Content $iniContent -Key 'PrimaryServerAddress'
+                    $tertiaryServerAddress = Get-WeduAcrylicIniValue -Content $iniContent -Key 'TertiaryServerAddress'
+                }
+                catch { }
+            }
+
+            try {
+                $answers = @(Resolve-DnsName -Name $script:WeduHost -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
+                $cycleAddresses = @($answers | Where-Object { $_.IPAddress } | ForEach-Object { [string]$_.IPAddress })
+                if ($cycleAddresses.Count -gt 0) {
+                    $portalAddresses = $cycleAddresses
+                    $resolvedAtLeastOnce = $true
+                    $portalResolveError = ''
+                }
+            }
+            catch {
+                $portalResolveError = [string]$_
+            }
+
+            # Stop once split DNS has settled: tertiary is the network DNS AND the
+            # portal resolves. (We have already crossed the entry threshold by now.)
+            if ($tertiaryServerAddress -eq $script:WeduExpectedNetworkDns -and $resolvedAtLeastOnce) {
+                break
+            }
+            if ($cycle -lt $MaxCycles) {
+                Start-Sleep -Seconds $DelaySeconds
+            }
+        }
+
+        try {
+            $blockedAnswers = @(Resolve-DnsName -Name 'this-should-be-blocked-test-12345.com' -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue)
+            $blockedDomainStillBlocked = ($blockedAnswers.Count -eq 0)
+        }
+        catch {
+            $blockedDomainStillBlocked = $true
+            $blockedError = [string]$_
+        }
     }
-    catch {
-        $blockedDomainStillBlocked = $true
-        $blockedError = [string]$_
+    finally {
+        if ($updateTaskDisabled) {
+            try { Enable-ScheduledTask -TaskName 'OpenPath-Update' -ErrorAction Stop | Out-Null }
+            catch { $runError = ($runError + " | re-enable update: $_").Trim(' |') }
+        }
     }
 
     $acrylic = Get-WeduAcrylicDnsSnapshot
