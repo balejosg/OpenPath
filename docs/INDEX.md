@@ -44,6 +44,8 @@
 - Linux runtime library load order: [`docs/linux-load-order.md`](linux-load-order.md)
 - Linux deployment notes: [`linux/DEPLOYMENT.md`](../linux/DEPLOYMENT.md)
 - Linux troubleshooting: [`linux/TROUBLESHOOTING.md`](../linux/TROUBLESHOOTING.md)
+- Windows deployment notes: [`windows/DEPLOYMENT.md`](../windows/DEPLOYMENT.md)
+- Windows troubleshooting: [`windows/TROUBLESHOOTING.md`](../windows/TROUBLESHOOTING.md)
 
 ## Evaluation
 
