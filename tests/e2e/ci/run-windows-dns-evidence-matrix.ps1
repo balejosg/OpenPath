@@ -30,17 +30,6 @@ $script:MatrixPhases = @(
 
 . (Join-Path $PSScriptRoot 'acrylic-dns-spike-helpers.ps1')
 
-function Ensure-ArtifactRoot {
-    New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
-    New-Item -ItemType Directory -Path (Split-Path -Parent $script:HitLogPath) -Force | Out-Null
-}
-function Get-AcrylicConfigurationPath {
-    return (Join-Path (Get-AcrylicRoot) 'AcrylicConfiguration.ini')
-}
-
-function Get-AcrylicHostsPath {
-    return (Join-Path (Get-AcrylicRoot) 'AcrylicHosts.txt')
-}
 function Get-NonNullItems {
     param([AllowNull()][object]$Value)
 
@@ -54,44 +43,6 @@ function Get-NonNullItems {
         }
     }
 }
-function Set-IniValue {
-    param(
-        [AllowEmptyString()][string[]]$Lines,
-        [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][string]$Value
-    )
-
-    $pattern = '^\s*' + [regex]::Escape($Key) + '\s*='
-    $updated = New-Object System.Collections.Generic.List[string]
-    $found = $false
-
-    foreach ($line in $Lines) {
-        if ($line -match $pattern) {
-            $updated.Add("$Key=$Value")
-            $found = $true
-        }
-        else {
-            $updated.Add($line)
-        }
-    }
-
-    if (-not $found) {
-        $updated.Add("$Key=$Value")
-    }
-
-    return $updated.ToArray()
-}
-
-function Restart-AcrylicServiceIfPresent {
-    $service = Get-Service -Name $script:AcrylicServiceName -ErrorAction SilentlyContinue
-    if ($null -eq $service) {
-        throw "Acrylic service $($script:AcrylicServiceName) was not found."
-    }
-
-    Restart-Service -Name $script:AcrylicServiceName -Force -ErrorAction Stop
-    Start-Sleep -Seconds 2
-}
-
 function Write-State {
     param([Parameter(Mandatory = $true)][hashtable]$State)
 

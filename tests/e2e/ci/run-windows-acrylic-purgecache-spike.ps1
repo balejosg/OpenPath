@@ -15,16 +15,15 @@ $script:AcrylicServiceName = 'AcrylicDNSProxySvc'
 
 . (Join-Path $PSScriptRoot 'acrylic-dns-spike-helpers.ps1')
 
+# Intentionally shadows the shared helper in acrylic-dns-spike-helpers.ps1 (divergent behavior; do not replace with the shared version).
 function Ensure-ArtifactRoot {
     New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
-}
-function Get-AcrylicHostsPath {
-    return (Join-Path (Get-AcrylicRoot) 'AcrylicHosts.txt')
 }
 
 function Get-AcrylicControllerPath {
     return (Join-Path (Get-AcrylicRoot) 'AcrylicController.exe')
 }
+# Intentionally shadows the shared helper in acrylic-dns-spike-helpers.ps1 (divergent behavior; do not replace with the shared version).
 function Restart-AcrylicServiceIfPresent {
     $service = Get-AcrylicRegisteredService
     if ($null -eq $service) {

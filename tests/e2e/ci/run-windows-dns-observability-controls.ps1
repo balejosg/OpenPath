@@ -22,45 +22,6 @@ $script:AcrylicServiceNameUsed = ''
 
 . (Join-Path $PSScriptRoot 'acrylic-dns-spike-helpers.ps1')
 
-function Ensure-ArtifactRoot {
-    New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
-    New-Item -ItemType Directory -Path (Split-Path -Parent $script:HitLogPath) -Force | Out-Null
-}
-function Get-AcrylicConfigurationPath {
-    return (Join-Path (Get-AcrylicRoot) 'AcrylicConfiguration.ini')
-}
-
-function Get-AcrylicHostsPath {
-    return (Join-Path (Get-AcrylicRoot) 'AcrylicHosts.txt')
-}
-function Set-IniValue {
-    param(
-        [AllowEmptyString()][string[]]$Lines,
-        [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][string]$Value
-    )
-
-    $pattern = '^\s*' + [regex]::Escape($Key) + '\s*='
-    $updated = New-Object System.Collections.Generic.List[string]
-    $found = $false
-
-    foreach ($line in $Lines) {
-        if ($line -match $pattern) {
-            $updated.Add("$Key=$Value")
-            $found = $true
-        }
-        else {
-            $updated.Add($line)
-        }
-    }
-
-    if (-not $found) {
-        $updated.Add("$Key=$Value")
-    }
-
-    return $updated.ToArray()
-}
-
 function Set-HitLogConfiguration {
     param([Parameter(Mandatory = $true)][string]$ConfigPath)
 
@@ -80,6 +41,7 @@ function Set-HitLogConfiguration {
     [System.IO.File]::WriteAllText($ConfigPath, ($lines -join "`r`n"), [System.Text.Encoding]::ASCII)
 }
 
+# Intentionally shadows the shared helper in acrylic-dns-spike-helpers.ps1 (divergent behavior; do not replace with the shared version).
 function Restart-AcrylicServiceIfPresent {
     $service = Get-AcrylicRegisteredService
     if ($null -eq $service) {

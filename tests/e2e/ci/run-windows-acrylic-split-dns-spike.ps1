@@ -34,6 +34,7 @@ $script:DeadServerB = '192.0.2.2'
 
 . (Join-Path $PSScriptRoot 'acrylic-dns-spike-helpers.ps1')
 
+# Intentionally shadows the shared helper in acrylic-dns-spike-helpers.ps1 (divergent behavior; do not replace with the shared version).
 function Ensure-ArtifactRoot {
     New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
 }
