@@ -1,3 +1,6 @@
+# This workflow's text is read by tests/repo-config/workflow-contracts.test.mjs.
+# If you rename jobs, steps, output variables, script paths, or env keys here, update that test in the same change.
+# See docs/contract-tests.md for the full inventory of guarded files and needle kinds.
 name: CI
 
 on:

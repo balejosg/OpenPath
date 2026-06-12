@@ -1,3 +1,6 @@
+// This test reads and asserts over the source text of workflow files.
+// Guarded files: .github/workflows/ci.yml, .github/workflows/e2e-tests.yml, and many others listed in docs/contract-tests.md.
+// Before renaming jobs, steps, script paths, or env keys in those files, update the matching assertions here.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';

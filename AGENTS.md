@@ -125,6 +125,8 @@ Common root commands:
 
 ## Testing Guide
 
+Before renaming files or functions, check [`docs/contract-tests.md`](docs/contract-tests.md) to see which tests read those sources as raw text and will break on a rename.
+
 Use the smallest relevant test surface first.
 
 ### API

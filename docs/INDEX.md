@@ -32,6 +32,7 @@
 - How-to guide: [`docs/HOWTO.md`](HOWTO.md)
 - Troubleshooting: [`docs/TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
 - CI/CD runner timing and artifact measurement: [`docs/ci-cd-runner-measurement.md`](ci-cd-runner-measurement.md)
+- Source-text contract test inventory: [`docs/contract-tests.md`](contract-tests.md)
 - Student-policy contract matrix: [`docs/testing/student-policy-contract-matrix.md`](testing/student-policy-contract-matrix.md)
 - WEDU captive portal lab: [`docs/testing/wedu-captive-portal-lab.md`](testing/wedu-captive-portal-lab.md)
 - WEDU gateway VM provisioning: [`docs/testing/wedu-captive-portal-lab-provisioning.md`](testing/wedu-captive-portal-lab-provisioning.md)
