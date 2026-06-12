@@ -48,7 +48,7 @@ runner health instead of relying on informal timing notes.
 
 ## Branch And Git Policy
 
-OpenPath uses a trunk-based workflow.
+OpenPath uses a trunk-based workflow. (canonical: workspace root AGENTS.md "Workspace Rules > Trunk-Based Only")
 
 - Work on `main`.
 - Do not create feature branches or PR branches.
