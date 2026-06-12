@@ -1280,6 +1280,30 @@ function Invoke-WeduSplitDnsProtectedCheck {
         catch { }
     }
 
+    # Diagnostic: if the SCHEDULED watchdog task did not apply split DNS (empty
+    # tertiary), run the watchdog script DIRECTLY once and re-read the INI. If the
+    # direct run applies it but the scheduled task did not, the drift refresh has a
+    # scheduled-task-context problem; if neither applies it, the drift block itself
+    # is broken. Purely diagnostic -- not part of the pass/fail decision.
+    $directRunTertiary = ''
+    if (-not $tertiaryServerAddress) {
+        try {
+            $watchdogScript = Join-Path $script:InstalledOpenPathRoot 'scripts\Test-DNSHealth.ps1'
+            if (Test-Path -LiteralPath $watchdogScript) {
+                $directOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $watchdogScript 2>&1 | Out-String
+                Set-Content -LiteralPath (Join-Path $script:ArtifactsRoot 'wedu-lab-watchdog-direct.txt') -Value ("exit=$LASTEXITCODE`n--- output ---`n$directOut") -Encoding UTF8 -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 2
+                if ($acrylic.configPath -and (Test-Path -LiteralPath $acrylic.configPath)) {
+                    $iniAfter = Get-Content -LiteralPath $acrylic.configPath -Raw -ErrorAction SilentlyContinue
+                    # Diagnostic only -- do NOT overwrite the scheduled-task result
+                    # fields ($tertiaryServerAddress stays the scheduled task's value).
+                    $directRunTertiary = Get-WeduAcrylicIniValue -Content $iniAfter -Key 'TertiaryServerAddress'
+                }
+            }
+        }
+        catch { }
+    }
+
     $portalResolvesInProtectedMode = [bool]$resolvedAtLeastOnce
     # The split-DNS signal that distinguishes it from limited mode: the network
     # resolver is the THIRD upstream while the configured public resolver stays
@@ -1300,6 +1324,7 @@ function Invoke-WeduSplitDnsProtectedCheck {
         splitTopologyActive = $splitTopologyActive
         primaryServerAddress = $primaryServerAddress
         tertiaryServerAddress = $tertiaryServerAddress
+        directRunTertiary = $directRunTertiary
         appliedViaProductPath = $applied
         watchdogRunError = $runError
     }
@@ -1445,6 +1470,9 @@ function Invoke-WeduLabRun {
     # the marker NEVER appears while the portal host resolves via the third upstream.
     $splitDnsProtected = Invoke-WeduSplitDnsProtectedCheck
     Save-Json -Value $splitDnsProtected -Path $script:SplitDnsProtectedPath
+    # Capture the agent log so a failure here (e.g. the drift refresh not applying
+    # the third upstream via the scheduled watchdog task) is diagnosable.
+    Copy-Item -LiteralPath 'C:\OpenPath\data\logs\openpath.log' -Destination (Join-Path $script:ArtifactsRoot 'wedu-lab-openpath.log') -ErrorAction SilentlyContinue
 
     $dnsBefore = Get-WeduDnsSnapshot
     Save-Json -Value $dnsBefore -Path $script:DnsBeforePath
