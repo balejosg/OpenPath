@@ -1,4 +1,8 @@
 function Clear-AcrylicCache {
+    <#
+    .SYNOPSIS
+    Removes the Acrylic address cache file so the proxy starts fresh on its next lookup.
+    #>
     [CmdletBinding()] param()
     $acrylicPath = Get-AcrylicPath
     if (-not $acrylicPath) { return $false }
@@ -16,6 +20,13 @@ function Clear-AcrylicCache {
 }
 
 function Set-LocalDNS {
+    <#
+    .SYNOPSIS
+    Points all active network adapters at the local Acrylic proxy and flushes the DNS client cache.
+    .DESCRIPTION
+    Saves the current adapter DNS configuration before redirecting each active adapter to 127.0.0.1,
+    so the original settings can be recovered during uninstall.
+    #>
     [CmdletBinding(SupportsShouldProcess)] param()
     if (-not $PSCmdlet.ShouldProcess("Network adapters", "Set DNS to 127.0.0.1")) { return }
     Write-OpenPathLog "Configuring local DNS..."
@@ -35,10 +46,18 @@ function Set-LocalDNS {
 }
 
 function Get-OpenPathOriginalDnsSnapshotPath {
+    <#
+    .SYNOPSIS
+    Returns the fixed path where the pre-installation DNS adapter snapshot is stored on disk.
+    #>
     return 'C:\OpenPath\data\original-dns.json'
 }
 
 function Select-OpenPathDnsScalarValue {
+    <#
+    .SYNOPSIS
+    Returns the first non-null item from a value that may be an array or a scalar.
+    #>
     param([object]$Value)
 
     foreach ($item in @($Value)) {
@@ -51,6 +70,10 @@ function Select-OpenPathDnsScalarValue {
 }
 
 function ConvertTo-OpenPathDnsNullableInt {
+    <#
+    .SYNOPSIS
+    Converts a DNS adapter value to an integer, returning null when the value is absent or unparseable.
+    #>
     param([object]$Value)
 
     $scalarValue = Select-OpenPathDnsScalarValue -Value $Value
@@ -68,6 +91,10 @@ function ConvertTo-OpenPathDnsNullableInt {
 }
 
 function Get-OpenPathDnsNetworkFingerprint {
+    <#
+    .SYNOPSIS
+    Builds a stable string fingerprint from adapter identity and gateway fields for snapshot change detection.
+    #>
     param([object[]]$Entries = @())
 
     $parts = @(
@@ -86,6 +113,10 @@ function Get-OpenPathDnsNetworkFingerprint {
 }
 
 function Get-OpenPathCurrentDnsSnapshotEntries {
+    <#
+    .SYNOPSIS
+    Reads the current adapter list and returns a snapshot object per active adapter including its IPv4 DNS and gateway.
+    #>
     if (-not (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return @() }
     if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) { return @() }
 
@@ -115,6 +146,13 @@ function Get-OpenPathCurrentDnsSnapshotEntries {
 }
 
 function Save-OpenPathOriginalDnsSnapshot {
+    <#
+    .SYNOPSIS
+    Captures the current adapter DNS configuration to a JSON snapshot file for later restoration.
+    .DESCRIPTION
+    Skips writing when the snapshot already exists and Force is not set. Returns true on success
+    and false when the required DNS commands are unavailable on this platform.
+    #>
     [CmdletBinding()]
     param(
         [string]$Path = (Get-OpenPathOriginalDnsSnapshotPath),
@@ -149,6 +187,13 @@ function Save-OpenPathOriginalDnsSnapshot {
 }
 
 function Update-OpenPathOriginalDnsSnapshotForCurrentNetwork {
+    <#
+    .SYNOPSIS
+    Refreshes the adapter DNS snapshot when the network topology has changed since the last save.
+    .DESCRIPTION
+    Computes the current network fingerprint and compares it against the stored one. Only overwrites
+    the snapshot when the topology differs and at least one non-loopback DNS address is visible.
+    #>
     [CmdletBinding()]
     param([string]$Path = (Get-OpenPathOriginalDnsSnapshotPath))
 
@@ -200,6 +245,13 @@ function Update-OpenPathOriginalDnsSnapshotForCurrentNetwork {
 }
 
 function Restore-OriginalDNS {
+    <#
+    .SYNOPSIS
+    Restores each adapter to its pre-installation DNS addresses using the saved snapshot, falling back to a full reset.
+    .DESCRIPTION
+    Matches adapters by GUID first, then by index, then by alias. Adapters with an empty saved address list
+    are reset to DHCP-assigned DNS rather than set to a specific address.
+    #>
     [CmdletBinding(SupportsShouldProcess)] param()
     if (-not $PSCmdlet.ShouldProcess("Network adapters", "Restore original DNS settings")) { return }
     Write-OpenPathLog "Restoring original DNS settings..."
@@ -252,6 +304,10 @@ function Restore-OriginalDNS {
 }
 
 function Restore-OpenPathCaptivePortalDNS {
+    <#
+    .SYNOPSIS
+    Resets each active adapter to DHCP-assigned DNS so a captive portal can be reached.
+    #>
     [CmdletBinding(SupportsShouldProcess)] param()
     if (-not $PSCmdlet.ShouldProcess("Network adapters", "Reset DNS server addresses for captive portal access")) { return $false }
     Write-OpenPathLog "Resetting DNS settings for captive portal access..."
@@ -273,6 +329,10 @@ function Restore-OpenPathCaptivePortalDNS {
 }
 
 function Get-AcrylicService {
+    <#
+    .SYNOPSIS
+    Returns the Acrylic DNS proxy service object, trying both the canonical name and a display-name wildcard.
+    #>
     $service = Get-Service -Name 'AcrylicDNSProxySvc' -ErrorAction SilentlyContinue
     if ($service) { return $service }
 
@@ -280,6 +340,13 @@ function Get-AcrylicService {
 }
 
 function Wait-AcrylicServiceStatus {
+    <#
+    .SYNOPSIS
+    Polls the Acrylic service until it reaches the requested status or the timeout expires.
+    .DESCRIPTION
+    Uses the ServiceController wait method when available, then falls back to a polling loop
+    at 500 ms intervals until the deadline.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -313,6 +380,10 @@ function Wait-AcrylicServiceStatus {
 }
 
 function Ensure-AcrylicService {
+    <#
+    .SYNOPSIS
+    Verifies that the Acrylic service is registered and optionally starts it, registering from disk if needed.
+    #>
     [CmdletBinding()]
     param(
         [switch]$Start,
@@ -353,6 +424,10 @@ function Ensure-AcrylicService {
 }
 
 function Restart-AcrylicService {
+    <#
+    .SYNOPSIS
+    Clears the Acrylic cache and restarts the service, falling back to the batch file when the service cmdlet fails.
+    #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [int]$TimeoutSeconds = 20,
@@ -412,6 +487,10 @@ function Restart-AcrylicService {
 }
 
 function Start-AcrylicService {
+    <#
+    .SYNOPSIS
+    Starts the Acrylic service, using the batch file helper when the service cmdlet is unavailable.
+    #>
     [CmdletBinding(SupportsShouldProcess)] param()
     if (-not $PSCmdlet.ShouldProcess("Acrylic DNS Proxy service", "Start")) { return $false }
     $acrylicPath = Get-AcrylicPath
@@ -434,6 +513,10 @@ function Start-AcrylicService {
 }
 
 function Stop-AcrylicService {
+    <#
+    .SYNOPSIS
+    Stops the Acrylic DNS proxy service if it is currently running.
+    #>
     [CmdletBinding(SupportsShouldProcess)] param()
     if (-not $PSCmdlet.ShouldProcess("Acrylic DNS Proxy service", "Stop")) { return $false }
     try {
