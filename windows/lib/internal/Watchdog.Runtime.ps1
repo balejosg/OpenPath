@@ -66,7 +66,31 @@ function Invoke-OpenPathWatchdogPrechecks {
         -ShouldEnterPortal ([bool]$portalObservation.ShouldEnterPortal) `
         -ShouldExitPortal ([bool]$portalObservation.ShouldExitPortal)
 
-    if ($captivityOutcome -eq 'closeAuthenticated') {
+    $splitDnsActive = $false
+    if (Get-Command -Name 'Test-OpenPathSplitDnsActive' -ErrorAction SilentlyContinue) {
+        try { $splitDnsActive = [bool](Test-OpenPathSplitDnsActive) }
+        catch { $splitDnsActive = $false }
+    }
+
+    if ($splitDnsActive -and $captivityOutcome -eq 'keepLimited') {
+        # Stage C2: permanent split DNS already resolves the declared portal
+        # domains in protected mode, so autonomous entry into the legacy
+        # limited/passthrough lifecycle is redundant (and was the source of the
+        # post-auth "stuck unrestricted navigation" bug). Do NOT enter portal
+        # mode. If a legacy marker is somehow still active, close it so split DNS
+        # owns the portal -- the drift refresh in Invoke-OpenPathWatchdogChecks
+        # keeps the third upstream applied.
+        if ($portalModeActive) {
+            $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
+            if (-not $disabled) {
+                Write-OpenPathLog 'Watchdog: split DNS active; failed to close a legacy captive portal marker' -Level WARN
+            }
+        }
+        else {
+            Write-OpenPathLog 'Watchdog: split DNS active; not entering captive portal mode (declared domains resolve in protected mode)'
+        }
+    }
+    elseif ($captivityOutcome -eq 'closeAuthenticated') {
         $disabled = [bool](Disable-OpenPathCaptivePortalMode -Config $Config)
         if (-not $disabled) {
             Write-OpenPathLog 'Watchdog: failed to close authenticated captive portal mode; marker preserved' -Level WARN

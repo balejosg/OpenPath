@@ -298,6 +298,18 @@ function Get-OpenPathExpectedSplitDnsPortalUpstreams {
     return @(Get-OpenPathSplitDnsPortalUpstreams -ExcludeAddresses @($dnsSettings.PrimaryDNS, $dnsSettings.SecondaryDNS))
 }
 
+function Test-OpenPathSplitDnsActive {
+    <#
+    .SYNOPSIS
+        True when permanent split DNS is the active mechanism for the current
+        network: admin-declared captive-portal domains exist AND a usable network
+        (DHCP-offered) resolver was found to serve them on Acrylic's third upstream.
+        When true, the legacy limited/passthrough captive-portal lifecycle is
+        redundant -- the declared portal hosts already resolve in protected mode.
+    #>
+    return [bool](@(Get-OpenPathExpectedSplitDnsPortalUpstreams).Count -gt 0)
+}
+
 function Test-OpenPathSplitDnsTopologyDrift {
     <#
     .SYNOPSIS

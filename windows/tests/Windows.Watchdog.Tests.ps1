@@ -1295,6 +1295,40 @@ Describe "Watchdog Script" {
                 '-TtlSeconds $limitedModeTtlSeconds'
             )
         }
+
+        It "Suppresses autonomous captive-portal entry when split DNS is active" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $content = Get-Content $helperPath -Raw
+
+            # Extract just the Invoke-OpenPathWatchdogPrechecks function body for precise assertions.
+            $prechecksStart = $content.IndexOf('function Invoke-OpenPathWatchdogPrechecks')
+            $prechecksEnd = $content.IndexOf("`nfunction ", $prechecksStart + 1)
+            $prechecksBody = $content.Substring($prechecksStart, $prechecksEnd - $prechecksStart)
+
+            Assert-ContentContainsAll -Content $prechecksBody -Needles @(
+                'if ($splitDnsActive -and $captivityOutcome -eq ''keepLimited'')',
+                'Test-OpenPathSplitDnsActive',
+                'split DNS active; not entering captive portal mode'
+            )
+
+            # The split-DNS guard must appear before the first Enable-OpenPathCaptivePortalMode call
+            # in the prechecks body, so autonomous entry is suppressed before it can happen.
+            $guardIndex = $prechecksBody.IndexOf('if ($splitDnsActive -and $captivityOutcome -eq ''keepLimited'')')
+            $firstEnableIndex = $prechecksBody.IndexOf('Enable-OpenPathCaptivePortalMode')
+            $guardIndex | Should -BeGreaterThan -1
+            $firstEnableIndex | Should -BeGreaterThan -1
+            $guardIndex | Should -BeLessThan $firstEnableIndex
+        }
+
+        It "Emits a health event when a captive portal is detected with no declared domains" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'captive_portal_detected_no_declared_domains',
+                'Get-OpenPathConfiguredCaptivePortalDomains'
+            )
+        }
     }
 
     Context "Integrity checks" {

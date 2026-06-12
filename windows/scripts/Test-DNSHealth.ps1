@@ -81,6 +81,15 @@ $portalModeActive = $precheckResult.PortalModeActive
 if ($portalModeActive) {
     $issues += 'Captive portal mode active'
 }
+if ($precheckResult.CaptiveState -eq 'Portal') {
+    $declaredCount = 0
+    if (Get-Command -Name 'Get-OpenPathConfiguredCaptivePortalDomains' -ErrorAction SilentlyContinue) {
+        try { $declaredCount = @(Get-OpenPathConfiguredCaptivePortalDomains).Count } catch { $declaredCount = 0 }
+    }
+    if ($declaredCount -le 0) {
+        $issues += 'captive_portal_detected_no_declared_domains'
+    }
+}
 
 $checkResult = Invoke-OpenPathWatchdogChecks `
     -Config $config `

@@ -1403,6 +1403,16 @@ Describe "DNS Module" {
             )
         }
 
+        It "Exposes Test-OpenPathSplitDnsActive as the split-DNS gate" {
+            $configPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Config.ps1"
+            $dnsModulePath = Join-Path $PSScriptRoot ".." "lib" "DNS.psm1"
+            $configContent = Get-Content $configPath -Raw
+            $dnsModuleContent = Get-Content $dnsModulePath -Raw
+
+            $configContent | Should -Match 'function Test-OpenPathSplitDnsActive'
+            $dnsModuleContent | Should -Match "'Test-OpenPathSplitDnsActive',"
+        }
+
         It "Reads the split-DNS upstream drift markers without crossing line endings" {
             $configPath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Config.ps1"
             $configContent = Get-Content $configPath -Raw
