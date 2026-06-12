@@ -123,6 +123,26 @@ Common root commands:
 - `npm run verify:agent`
 - `npm run verify:quick`
 
+### Script Semantics
+
+Script names here do NOT mean the same thing as in ClassroomPath -- do not assume cross-repo symmetry.
+
+| Script                       | What it actually runs                                                                                                                                     | When to use                                                                                               |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `verify:quick`               | typecheck + lint + format:check -- **no tests**                                                                                                           | fast feedback on TS/lint changes                                                                          |
+| `verify:checks`              | lint:shell, format:check, verify:docs, security:files, test:repo-config, test:repo-test-files, verify:migrations:metadata, check:ps-culture (in parallel) | catch repo-structure and shell issues                                                                     |
+| `verify:staged`              | lint-staged (runs on staged files only)                                                                                                                   | manual staged check outside pre-commit hook                                                               |
+| `verify:full`                | bash scripts/verify-full.sh -- full suite: static, checks, security, coverage, unit, e2e                                                                  | runs automatically as the pre-push hook; [do not run manually before every push](AGENTS.md#hook-behavior) |
+| `verify:docs`                | node scripts/verify-docs.mjs -- dead links, non-ASCII, INDEX.md coverage                                                                                  | after editing any markdown doc                                                                            |
+| `verify:agent`               | node scripts/agent-verify.js -- picks fastest lane based on what changed                                                                                  | default agent self-check; used by pre-commit hook                                                         |
+| `verify:affected`            | verify:quick + tests for workspaces affected by current changes                                                                                           | broader than verify:quick, cheaper than verify:full                                                       |
+| `verify:migrations:metadata` | api workspace verify:migrations (tsx scripts/verify-migrations.ts + drizzle-kit check)                                                                    | after editing DB migration files                                                                          |
+| `test:repo-config`           | node --test tests/repo-config.test.mjs tests/generate-docker-manifests.test.mjs tests/check-ps-datetime-culture.test.mjs                                  | validates repo-level config contracts                                                                     |
+| `test:repo-test-files`       | bash scripts/check-test-files.sh -- enforces every source file has a test file                                                                            | after adding or removing source files                                                                     |
+| `docker:manifests`           | node scripts/generate-docker-manifests.mjs -- writes package.docker.json manifests                                                                        | after changing workspace deps or versions                                                                 |
+| `docker:manifests:check`     | node scripts/generate-docker-manifests.mjs --check -- verifies manifests are up to date                                                                   | CI or pre-push manifest drift check                                                                       |
+| `check:ps-culture`           | node scripts/check-ps-datetime-culture.mjs -- flags unsafe [DateTime]::Parse calls in .ps1 files                                                          | after editing any PowerShell file                                                                         |
+
 ## Testing Guide
 
 Before renaming files or functions, check [`docs/contract-tests.md`](docs/contract-tests.md) to see which tests read those sources as raw text and will break on a rename.
