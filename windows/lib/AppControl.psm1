@@ -11,6 +11,10 @@ $script:OpenPathAppControlRulePrefix = 'OpenPath non-admin app control'
 $script:OpenPathAppLockerBackupPath = "$script:OpenPathRoot\data\applocker-backup.xml"
 
 function ConvertTo-OpenPathXmlAttribute {
+    <#
+    .SYNOPSIS
+    Escapes a value for safe embedding in an XML attribute.
+    #>
     param(
         [AllowNull()]
         [string]$Value
@@ -20,6 +24,10 @@ function ConvertTo-OpenPathXmlAttribute {
 }
 
 function Get-OpenPathAppLockerRuleName {
+    <#
+    .SYNOPSIS
+    Extracts the Name attribute from an AppLocker rule object regardless of its underlying type.
+    #>
     param(
         [AllowNull()]
         [object]$Rule
@@ -53,6 +61,10 @@ function Get-OpenPathAppLockerRuleName {
 }
 
 function Test-OpenPathAppLockerRuleManaged {
+    <#
+    .SYNOPSIS
+    Returns true when an AppLocker rule was created by OpenPath, based on its name prefix.
+    #>
     param(
         [AllowNull()]
         [object]$Rule
@@ -63,6 +75,10 @@ function Test-OpenPathAppLockerRuleManaged {
 }
 
 function Get-OpenPathApprovedBrowserSet {
+    <#
+    .SYNOPSIS
+    Converts a list of browser name strings into a normalized lookup table keyed by browser family.
+    #>
     param(
         [string[]]$ApprovedBrowsers = @('Firefox')
     )
@@ -88,6 +104,10 @@ function Get-OpenPathApprovedBrowserSet {
 }
 
 function Get-OpenPathEdgeAppxProductNames {
+    <#
+    .SYNOPSIS
+    Returns the set of Microsoft Edge Appx package product names, supplemented by live inventory when available.
+    #>
     [CmdletBinding()]
     param()
 
@@ -113,6 +133,14 @@ function Get-OpenPathEdgeAppxProductNames {
 }
 
 function New-OpenPathNonAdminAppLockerPolicySpec {
+    <#
+    .SYNOPSIS
+    Builds the full allow/deny path and publisher specification for the non-admin AppLocker policy.
+    .DESCRIPTION
+    Returns a PSCustomObject describing all allow paths, user-writable deny paths, unapproved browser
+    deny paths, and blocked system tools based on the approved browser set and enforcement mode.
+    The returned spec is the input for the XML generator and the boundary-policy validator.
+    #>
     [CmdletBinding()]
     param(
         [string]$OpenPathRoot = $script:OpenPathRoot,
@@ -298,6 +326,10 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
 }
 
 function New-OpenPathFilePathRuleXml {
+    <#
+    .SYNOPSIS
+    Generates an AppLocker FilePathRule XML fragment for a single path with optional exceptions.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$CollectionType,
@@ -339,6 +371,10 @@ function New-OpenPathFilePathRuleXml {
 }
 
 function New-OpenPathFilePublisherRuleXml {
+    <#
+    .SYNOPSIS
+    Generates an AppLocker FilePublisherRule XML fragment for a publisher/product/binary triple.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$Name,
@@ -377,6 +413,10 @@ function New-OpenPathFilePublisherRuleXml {
 }
 
 function New-OpenPathAppLockerPolicyXml {
+    <#
+    .SYNOPSIS
+    Renders a complete AppLocker policy XML document from a policy specification object.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -430,6 +470,14 @@ $($ruleCollections -join "`n")
 }
 
 function Merge-OpenPathAppLockerPolicyXml {
+    <#
+    .SYNOPSIS
+    Merges an OpenPath AppLocker policy into an existing policy, replacing any previously managed rules.
+    .DESCRIPTION
+    For each rule collection type present in the OpenPath policy, existing managed rules are removed
+    from the current policy and replaced with the incoming rules. The enforcement mode is also updated.
+    Unmanaged rules in the current policy are preserved unchanged.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -472,6 +520,10 @@ function Merge-OpenPathAppLockerPolicyXml {
 }
 
 function Test-OpenPathAppControlAvailable {
+    <#
+    .SYNOPSIS
+    Returns true when the required AppLocker management commands are present on this host.
+    #>
     [CmdletBinding()]
     param()
 
@@ -486,6 +538,10 @@ function Test-OpenPathAppControlAvailable {
 }
 
 function Get-OpenPathAppLockerCollection {
+    <#
+    .SYNOPSIS
+    Returns the first rule collection of the specified type from a parsed AppLocker policy document.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [xml]$PolicyXml,
@@ -498,6 +554,10 @@ function Get-OpenPathAppLockerCollection {
 }
 
 function Test-OpenPathAppLockerCollectionMode {
+    <#
+    .SYNOPSIS
+    Returns true when the given rule collection has the expected enforcement mode attribute value.
+    #>
     param(
         [AllowNull()]
         [object]$Collection,
@@ -514,6 +574,10 @@ function Test-OpenPathAppLockerCollectionMode {
 }
 
 function Test-OpenPathFilePathRulePresent {
+    <#
+    .SYNOPSIS
+    Returns true when a managed file-path rule with the given action, SID, and path exists in the collection.
+    #>
     param(
         [AllowNull()]
         [object]$Collection,
@@ -541,6 +605,10 @@ function Test-OpenPathFilePathRulePresent {
 }
 
 function Test-OpenPathFilePublisherRulePresent {
+    <#
+    .SYNOPSIS
+    Returns true when a managed publisher rule with the given action, SID, and product name exists in the collection.
+    #>
     param(
         [AllowNull()]
         [object]$Collection,
@@ -569,6 +637,10 @@ function Test-OpenPathFilePublisherRulePresent {
 }
 
 function Test-OpenPathAppIdentityServiceRunning {
+    <#
+    .SYNOPSIS
+    Returns true when the Application Identity service is present and currently running.
+    #>
     [CmdletBinding()]
     param()
 
@@ -586,6 +658,10 @@ function Test-OpenPathAppIdentityServiceRunning {
 }
 
 function Test-OpenPathAppLockerBoundaryPolicy {
+    <#
+    .SYNOPSIS
+    Validates that a parsed AppLocker policy contains all required OpenPath boundary rules in the expected mode.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [xml]$PolicyXml,
@@ -638,6 +714,14 @@ function Test-OpenPathAppLockerBoundaryPolicy {
 }
 
 function Set-OpenPathNonAdminAppControl {
+    <#
+    .SYNOPSIS
+    Applies the OpenPath non-admin AppLocker policy, backing up the current policy first and restoring it on validation failure.
+    .DESCRIPTION
+    Requires administrator privileges. Backs up the current AppLocker policy to disk, builds the
+    merged OpenPath policy, applies it, then validates the result. If validation fails the backup
+    is restored. Also ensures the Application Identity service is running after a successful apply.
+    #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$OpenPathRoot = $script:OpenPathRoot,
@@ -702,6 +786,10 @@ function Set-OpenPathNonAdminAppControl {
 }
 
 function Test-OpenPathNonAdminAppControlActive {
+    <#
+    .SYNOPSIS
+    Returns true when the live AppLocker policy matches the expected OpenPath boundary policy for the given mode.
+    #>
     [CmdletBinding()]
     param(
         [ValidateSet('AuditOnly', 'Enforced')]
@@ -727,6 +815,10 @@ function Test-OpenPathNonAdminAppControlActive {
 }
 
 function Remove-OpenPathNonAdminAppControl {
+    <#
+    .SYNOPSIS
+    Removes all OpenPath-managed AppLocker rules from the live policy and saves the cleaned policy.
+    #>
     [CmdletBinding(SupportsShouldProcess)]
     param()
 
