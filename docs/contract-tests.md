@@ -164,6 +164,16 @@ Guards a large number of runner scripts, Selenium sources, workflow files, and d
 
 ---
 
+### tests/windows-runner-reset-contract.test.mjs
+
+Guards the ordering and presence of process-kill commands in the self-hosted Windows runner reset script.
+
+| Source files read                                   | Needle kinds                                                                                                        | Before renaming or editing                                                              |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `tests/e2e/ci/reset-self-hosted-windows-runner.ps1` | Presence of two script path string literals, ordering assertion (`Get-CimInstance Win32_Process` before state path) | Renaming either script path or reordering the kill/cleanup blocks requires test update. |
+
+---
+
 ### tests/windows-runner-direct.test.mjs
 
 Mostly behavioral (spawns the script with `--dry-run`). Also reads:
@@ -308,6 +318,111 @@ input is a fixed numeric ISO format) and have a test that proves it.
 - `npm run check:ps-culture` -- on-demand, full-repo scan
 - `verify:checks` -- runs in parallel alongside the other policy checks
 - `lint-staged` (`*.{ps1,psm1}`) -- guards every commit that touches PowerShell files
+
+---
+
+### react-spa/src/i18n/**tests**/product-i18n.test.tsx
+
+Guards product i18n catalogs and ~16 SPA component files for migrated UI literal absence.
+
+| Source files read                                                     | Needle kinds                                                            | Before renaming or editing                                            |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `react-spa/src/views/Dashboard.tsx`                                   | Forbidden literal strings (migrated UI text must be absent from source) | Keep migrated literals out of this file; update test if list changes. |
+| `react-spa/src/views/Classrooms.tsx`                                  | Forbidden literal strings                                               | Same as above.                                                        |
+| `react-spa/src/components/classrooms/ClassroomListPane.tsx`           | Forbidden literal strings                                               | Same as above.                                                        |
+| `react-spa/src/components/classrooms/ClassroomDetailPane.tsx`         | Forbidden literal strings                                               | Same as above.                                                        |
+| `react-spa/src/components/classrooms/NewClassroomModal.tsx`           | Forbidden literal strings                                               | Same as above.                                                        |
+| `react-spa/src/components/teacher/TeacherTodayFocusPanel.tsx`         | Forbidden literal strings, forbidden locale string (`'es-ES'`)          | Same as above.                                                        |
+| `react-spa/src/components/teacher/TeacherDashboardCalendar.tsx`       | Forbidden literal strings, forbidden locale string                      | Same as above.                                                        |
+| `react-spa/src/components/teacher/TeacherScheduleDetailPanel.tsx`     | Forbidden literal strings, forbidden locale string                      | Same as above.                                                        |
+| `react-spa/src/components/domain-requests/DomainRequestsFilters.tsx`  | Forbidden literal strings, forbidden locale string                      | Same as above.                                                        |
+| `react-spa/src/components/domain-requests/DomainRequestsTable.tsx`    | Forbidden literal strings, forbidden locale string                      | Same as above.                                                        |
+| `react-spa/src/components/domain-requests/DomainRequestsDialogs.tsx`  | Forbidden literal strings, forbidden locale string                      | Same as above.                                                        |
+| `react-spa/src/components/classrooms/ClassroomScheduleCard.tsx`       | Forbidden literal strings, forbidden locale string                      | Same as above.                                                        |
+| `react-spa/src/components/classrooms/ClassroomMachinesCard.tsx`       | Forbidden literal strings, forbidden locale string                      | Same as above.                                                        |
+| `react-spa/src/components/RulesTable.tsx`                             | Forbidden literal strings, forbidden locale string                      | Same as above.                                                        |
+| `react-spa/src/components/weekly-calendar/useWeeklyCalendarLayout.ts` | Forbidden literal strings, forbidden locale string                      | Same as above.                                                        |
+| `react-spa/src/views/Settings.tsx`                                    | Forbidden literal strings, forbidden locale string                      | Same as above.                                                        |
+
+**Dangerous needle kinds in this test:**
+
+- **Forbidden literal assertions**: each migrated UI string is asserted absent from the concatenated source of all guarded files. Adding or restoring one of the migrated strings (even in a comment) will fail the test.
+- **Locale string assertion**: `'es-ES'` and `"es-ES"` must not appear in the audited files; the product i18n layer handles locale normalization.
+
+---
+
+### react-spa/src/public/**tests**/i18n.test.ts
+
+Guards the react-spa `package.json` exports map for the public-i18n surface.
+
+| Source files read        | Needle kinds                                                           | Before renaming or editing                                                        |
+| ------------------------ | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `react-spa/package.json` | Exact exports map key `./public-i18n` and its value `./public-i18n.ts` | Renaming the public-i18n entry point requires updating both the file and the map. |
+
+---
+
+### firefox-extension/tests/native-host-contract.test.ts
+
+Guards the native host manifest name and allowed extension ID against the value declared in the background script.
+
+| Source files read                                     | Needle kinds                                                                                                     | Before renaming or editing                                                                                           |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `firefox-extension/native/whitelist_native_host.json` | Manifest `name` field, `allowed_extensions` array -- both compared against values extracted from `background.ts` | Renaming the host name requires updating both the manifest filename, the manifest `name` field, and `background.ts`. |
+| `firefox-extension/src/background.ts`                 | Regex extraction of `NATIVE_HOST_NAME` constant; manifest filename derived from that constant                    | Same as above.                                                                                                       |
+
+---
+
+### firefox-extension/tests/manifest-policy.test.ts
+
+Guards `manifest.json`, `_locales/en/messages.json`, `_locales/es/messages.json`, `PRIVACY.md`, and `AMO.md` for permission parity and policy correctness.
+
+| Source files read                             | Needle kinds                                                                                                                                  | Before renaming or editing                                                                                    |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `firefox-extension/manifest.json`             | Exact `permissions` array, exact `host_permissions`, exact `browser_specific_settings`, exact `content_scripts`, `action` fields, CSP pattern | Changing any permission or manifest field requires coordinated test and doc update.                           |
+| `firefox-extension/_locales/en/messages.json` | `appName`, `appDescription`, `actionTitle` key presence; `appDescription` length bound (<= 132 chars); locale message key parity with Spanish | Adding or removing a message key requires updating both locale files; description must stay within the limit. |
+| `firefox-extension/_locales/es/messages.json` | Key parity with English; `appName` and `appDescription` English-only assertion; `actionTitle` must differ from English                        | Same as above.                                                                                                |
+| `firefox-extension/PRIVACY.md`                | Each permission in the manifest must appear as a backtick-quoted string in this file                                                          | Adding a permission requires a matching PRIVACY.md entry.                                                     |
+| `firefox-extension/AMO.md`                    | Same backtick-quoted permission parity check                                                                                                  | Same as above.                                                                                                |
+
+**Dangerous needle kinds in this test:**
+
+- **Exact array deep-equal**: `permissions`, `host_permissions`, `content_scripts`, and `browser_specific_settings` are compared with `assert.deepEqual`. Adding, removing, or reordering any element breaks the test.
+- **Permission-in-docs parity**: every permission must be backtick-quoted in both PRIVACY.md and AMO.md. Adding a permission without updating the docs fails the test.
+
+---
+
+### firefox-extension/tests/i18n.test.ts
+
+Guards locale key parity between the English and Spanish Firefox extension catalogs.
+
+| Source files read                             | Needle kinds                                              | Before renaming or editing                                    |
+| --------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------- |
+| `firefox-extension/_locales/en/messages.json` | Sorted key list compared against Spanish for exact parity | Adding or removing a key requires updating both locale files. |
+| `firefox-extension/_locales/es/messages.json` | Same sorted key list parity check                         | Same as above.                                                |
+
+---
+
+### firefox-extension/tests/native-host-command-contract.test.ts
+
+Guards string literal presence, ordering, and forbidden patterns in the native host Python script.
+
+| Source files read                                  | Needle kinds                                                                                                                                                                                                                                   | Before renaming or editing                                                                                  |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `firefox-extension/native/openpath-native-host.py` | Presence of two command path literals; ordering assertion (`/usr/local/bin/openpath` before `/usr/local/bin/whitelist`); forbidden pattern (`WHITELIST_CMD = ...` as a top-level assignment); absent conditional in `policy_active` expression | Reordering the command probes or changing the assignment form breaks both presence and ordering assertions. |
+
+**Ordering assertion in this test:** `source.indexOf('/usr/local/bin/openpath') < source.indexOf('/usr/local/bin/whitelist')` -- the openpath CLI must be probed first. Swapping the probe order fails the test silently until CI runs it.
+
+---
+
+### tests/repo-config/oss-boundary-contracts.test.mjs
+
+Guards the OSS independence rule: no tracked source file in the source dirs listed below may contain the forbidden downstream-wrapper term (constructed at runtime as `['class','room','path'].join('')`).
+
+| Source dirs scanned                                                                                                                | Needle kinds                                                                                       | Before renaming or editing                                                                                              |
+| ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `api/`, `react-spa/src/`, `linux/`, `windows/lib/`, `windows/libexec/`, `firefox-extension/src/`, `scripts/` (test paths excluded) | Case-insensitive substring match of the forbidden wrapper term against each tracked file's content | Do not introduce references to the SaaS wrapper in source dirs; wrapper-specific references belong in the wrapper repo. |
+
+See root AGENTS.md "OpenPath Independence" for the boundary rule. The test itself must not contain the literal forbidden term -- it is constructed at runtime to keep the source scan clean.
 
 ---
 
