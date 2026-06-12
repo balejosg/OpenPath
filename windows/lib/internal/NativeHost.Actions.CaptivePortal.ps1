@@ -1,4 +1,8 @@
 function Get-NativeHostConfiguredCaptivePortalDomains {
+    <#
+    .SYNOPSIS
+    Returns the configured captive portal domains from OpenPath config, or an empty array when unavailable.
+    #>
     if (-not (Get-Command -Name 'Get-OpenPathConfiguredCaptivePortalDomains' -ErrorAction SilentlyContinue)) {
         return @()
     }
@@ -12,6 +16,10 @@ function Get-NativeHostConfiguredCaptivePortalDomains {
 }
 
 function Get-NativeHostCaptivePortalEffectiveHosts {
+    <#
+    .SYNOPSIS
+    Returns the effective allowed captive portal hostnames after normalization and deduplication.
+    #>
     param([string[]]$Hosts = @())
 
     if (Get-Command -Name 'Get-OpenPathCaptivePortalAllowedHosts' -ErrorAction SilentlyContinue) {
@@ -27,6 +35,10 @@ function Get-NativeHostCaptivePortalEffectiveHosts {
 }
 
 function Test-NativeHostConfiguredCaptivePortalDomainsApplied {
+    <#
+    .SYNOPSIS
+    Returns true when all configured captive portal domains appear in the allowed hosts list.
+    #>
     param(
         [string[]]$AllowedHosts = @(),
         [string[]]$ConfiguredCaptivePortalDomains = @()
@@ -48,6 +60,13 @@ function Test-NativeHostConfiguredCaptivePortalDomainsApplied {
 }
 
 function Get-NativeHostCaptivePortalRecoveryHosts {
+    <#
+    .SYNOPSIS
+    Builds a deduplicated list of valid captive portal recovery hostnames from the trigger host and hint list.
+    .DESCRIPTION
+    Filters out IP addresses, IPv6 literals, .local hostnames, bare labels without dots, and duplicates.
+    The list is capped at MaxHosts entries.
+    #>
     param(
         [string]$TriggerHost = '',
         [AllowNull()][object]$PortalRecoveryHosts = $null,
@@ -70,6 +89,10 @@ function Get-NativeHostCaptivePortalRecoveryHosts {
 }
 
 function Get-NativeHostCaptivePortalActiveMarker {
+    <#
+    .SYNOPSIS
+    Reads the captive portal active marker file and returns its payload when the marker is valid and unexpired.
+    #>
     $markerPath = 'C:\OpenPath\data\captive-portal-active.json'
     if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
         $markerPath = Join-Path (Join-Path $script:OpenPathRoot 'data') 'captive-portal-active.json'
@@ -106,6 +129,10 @@ function Get-NativeHostCaptivePortalActiveMarker {
 }
 
 function Get-NativeHostCaptivePortalMarkerSummary {
+    <#
+    .SYNOPSIS
+    Builds a summary of the active captive portal marker using the shared transition marker helper.
+    #>
     param(
         [AllowNull()][object]$Marker,
         [string]$TriggerHost = ''
@@ -120,6 +147,14 @@ function Get-NativeHostCaptivePortalMarkerSummary {
 }
 
 function Get-NativeHostRecentCaptivePortalRecoverySuccess {
+    <#
+    .SYNOPSIS
+    Returns a recent captive portal recovery success record from either an active marker or a result file.
+    .DESCRIPTION
+    First checks whether the active marker was written within the recency window and returns a summary
+    built from it. If no active marker qualifies, scans the recovery result directory for a result file
+    written within the window. Returns null when neither source provides a qualifying record.
+    #>
     param([int]$RecentSuccessSeconds = 30)
 
     $activeMarker = Get-NativeHostCaptivePortalActiveMarker
@@ -208,6 +243,10 @@ function Get-NativeHostRecentCaptivePortalRecoverySuccess {
 }
 
 function Test-NativeHostRecentCaptivePortalSuccessEligible {
+    <#
+    .SYNOPSIS
+    Returns true when a recent captive portal success record qualifies for reuse with the given trigger host.
+    #>
     param(
         [AllowNull()][object]$RecentSuccess,
         [string]$TriggerHost = ''
@@ -225,6 +264,15 @@ function Test-NativeHostRecentCaptivePortalSuccessEligible {
 }
 
 function Invoke-NativeHostCaptivePortalRecoveryAction {
+    <#
+    .SYNOPSIS
+    Orchestrates a captive portal recovery or reconcile operation via the scheduled recovery task.
+    .DESCRIPTION
+    Dispatches an open or reconcile operation. For open operations with a qualifying recent success,
+    returns immediately without triggering the task. Otherwise writes a recovery request, triggers
+    the scheduled task, and waits for the result envelope. Returns a structured response with
+    portal state, timing, and health diagnostics.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [object]$Message,
@@ -490,6 +538,10 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
 }
 
 function Get-NativeHostCaptivePortalObservation {
+    <#
+    .SYNOPSIS
+    Reads the captive portal observation JSON file, returning null when absent or unparseable.
+    #>
     $observationPath = 'C:\OpenPath\data\captive-portal-observation.json'
     if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
         $observationPath = Join-Path (Join-Path $script:OpenPathRoot 'data') 'captive-portal-observation.json'
@@ -508,6 +560,10 @@ function Get-NativeHostCaptivePortalObservation {
 }
 
 function Test-NativeHostCaptivePortalObservationRecent {
+    <#
+    .SYNOPSIS
+    Returns true when the observation record shows a Portal state detected within the maximum age window.
+    #>
     param(
         [object]$Observation,
         [int]$MaxAgeSeconds = 120
@@ -544,6 +600,10 @@ function Test-NativeHostCaptivePortalObservationRecent {
 }
 
 function Test-NativeHostRecoverablePortalError {
+    <#
+    .SYNOPSIS
+    Returns true when the error name is a known recoverable captive portal network error code.
+    #>
     param([string]$ErrorName)
 
     return $ErrorName -in @(
@@ -554,6 +614,10 @@ function Test-NativeHostRecoverablePortalError {
 }
 
 function Invoke-NativeHostCaptivePortalSyncProbe {
+    <#
+    .SYNOPSIS
+    Probes the current portal state and returns a signal string, with per-domain cooldown to limit probe frequency.
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
         [int]$CooldownSeconds = 15
@@ -586,6 +650,10 @@ function Invoke-NativeHostCaptivePortalSyncProbe {
 }
 
 function Get-NativeHostPortalRecoverySignal {
+    <#
+    .SYNOPSIS
+    Returns the strongest available portal signal for a domain from the marker, observation, or a live probe.
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
         [Parameter(Mandatory = $true)][object]$Message
@@ -619,6 +687,13 @@ function Get-NativeHostPortalRecoverySignal {
 }
 
 function Invoke-NativeHostAuthenticatedCaptivePortalRestoreIfNeeded {
+    <#
+    .SYNOPSIS
+    Triggers a reconcile recovery operation when an active marker and authenticated portal state are detected.
+    .DESCRIPTION
+    Runs at most once per cooldown window per process lifetime. Exits silently when no marker is active,
+    when the probe command is unavailable, or when the portal state is not authenticated.
+    #>
     param([int]$CooldownSeconds = 15)
 
     $marker = Get-NativeHostCaptivePortalActiveMarker
