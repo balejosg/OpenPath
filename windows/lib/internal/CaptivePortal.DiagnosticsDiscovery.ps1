@@ -57,6 +57,8 @@ function Get-OpenPathCaptivePortalEvidenceContract {
 }
 
 function Reject-OpenPathCaptivePortalDynamicHost {
+    # returns a non-empty rejection reason string when the host is not safe to use as a recovery host
+    # accepted: multi-label public hostnames that are not ip addresses, .local names, wildcards, or protected hosts
     param(
         [string]$HostName,
         [System.Collections.Generic.HashSet[string]]$ProtectedHosts = $null
@@ -74,6 +76,8 @@ function Reject-OpenPathCaptivePortalDynamicHost {
 }
 
 function Normalize-OpenPathCaptivePortalDynamicHost {
+    # extracts a hostname from a uri object or string, lowercases it, and rejects unsafe candidates
+    # returns an empty string when the value is absent or rejected
     param(
         [AllowNull()][object]$Value,
         [System.Collections.Generic.HashSet[string]]$ProtectedHosts = $null
@@ -105,6 +109,8 @@ function Normalize-OpenPathCaptivePortalDynamicHost {
 }
 
 function Extract-OpenPathCaptivePortalHostsFromText {
+    # scans html or plaintext for https/http host references using regex patterns
+    # stops collecting once the host count reaches the limit and returns only safe, normalized hosts
     param(
         [AllowNull()][string]$Text = '',
         [System.Collections.Generic.HashSet[string]]$ProtectedHosts = $null,
@@ -133,6 +139,8 @@ function Extract-OpenPathCaptivePortalHostsFromText {
 }
 
 function Add-OpenPathCaptivePortalHostCandidate {
+    # normalizes a single host candidate and appends it to the provided list when it passes validation
+    # records a rejection reason in errors when the candidate is unsafe; no-ops when the list is full
     param(
         [System.Collections.Generic.List[string]]$Hosts,
         [System.Collections.Generic.List[string]]$Errors,
@@ -176,6 +184,9 @@ function Add-OpenPathCaptivePortalHostCandidate {
 }
 
 function Get-OpenPathCaptivePortalBootstrapHosts {
+    # classifies each seed url or text snippet into bootstrap, redirect, and resource host buckets
+    # optionally fetches each seed url to follow redirect chains and extract resource hosts from html
+    # returns a result object with truncated flag when the host limit is reached
     param(
         [string[]]$SeedUrls = @(),
         [System.Collections.Generic.HashSet[string]]$ProtectedHosts = $null,
@@ -267,6 +278,8 @@ function Get-OpenPathCaptivePortalBootstrapHosts {
 }
 
 function Get-OpenPathCaptivePortalBootstrapSeedUrls {
+    # converts a list of host names into http seed urls for use as bootstrap probe targets
+    # skips any host that does not pass normalization
     param(
         [string[]]$Hosts = @(),
         [System.Collections.Generic.HashSet[string]]$ProtectedHosts = $null
@@ -282,6 +295,8 @@ function Get-OpenPathCaptivePortalBootstrapSeedUrls {
 }
 
 function Resolve-OpenPathCaptivePortalRedirectUri {
+    # resolves a location header value relative to the base uri used in the request
+    # returns null when the location string is absent or the uri cannot be constructed
     param(
         [Parameter(Mandatory = $true)][System.Uri]$BaseUri,
         [AllowNull()][string]$Location = ''
@@ -297,6 +312,9 @@ function Resolve-OpenPathCaptivePortalRedirectUri {
 }
 
 function Invoke-OpenPathCaptivePortalBootstrapProbe {
+    # fetches a single seed url and follows its redirect chain up to the redirect limit
+    # classifies the initial request host as bootstrap, each redirect as redirect, and body urls as resource
+    # does not send credentials or cookies; uses a bounded read to avoid large response handling
     param(
         [Parameter(Mandatory = $true)][string]$SeedUrl,
         [System.Collections.Generic.HashSet[string]]$ProtectedHosts = $null,
@@ -423,6 +441,8 @@ function Invoke-OpenPathCaptivePortalBootstrapProbe {
 }
 
 function Get-OpenPathCaptivePortalRuntimeOverlayHosts {
+    # reads the runtime dependency overlay and returns the safe host names it contains
+    # returns an empty array when the overlay reader function is not available
     param(
         [System.Collections.Generic.HashSet[string]]$ProtectedHosts = $null
     )
@@ -443,6 +463,9 @@ function Get-OpenPathCaptivePortalRuntimeOverlayHosts {
 }
 
 function Get-OpenPathCaptivePortalDynamicHosts {
+    # diagnostic-only discovery entry point; results are retained for operator evidence
+    # combines bootstrap discovery, runtime overlay, trigger hosts, and existing hosts
+    # the limitedModeReady and fallbackMode fields are fixed at false/none for diagnostic use
     param(
         [string[]]$SeedUrls = @(),
         [string[]]$TriggerHosts = @(),

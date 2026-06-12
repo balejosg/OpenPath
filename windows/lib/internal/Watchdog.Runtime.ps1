@@ -1,4 +1,7 @@
 function Restore-CheckpointFromWatchdog {
+    # rolls back to the most recent stored checkpoint when dns verification fails
+    # after rollback: waits for acrylic to settle, then re-verifies resolution and sinkhole
+    # returns true only when both checks pass after the rollback
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Config,
@@ -41,6 +44,9 @@ function Restore-CheckpointFromWatchdog {
 . (Join-Path $PSScriptRoot 'Watchdog.CaptivePortalPolicy.ps1')
 
 function Invoke-OpenPathWatchdogPrechecks {
+    # runs before every main watchdog cycle
+    # probes the captive portal state and decides whether to enter, refresh, or exit portal mode
+    # returns a summary of the current portal observation for use by the caller
     param(
         [AllowNull()]
         [PSCustomObject]$Config
@@ -141,6 +147,8 @@ function Invoke-OpenPathWatchdogPrechecks {
 }
 
 function Get-OpenPathActiveIpv4AdaptersMissingLocalDns {
+    # returns a list of active ipv4 adapters whose dns server addresses do not include 127.0.0.1
+    # used to detect adapters that bypass the local acrylic proxy
     [CmdletBinding()]
     param()
 
@@ -171,6 +179,9 @@ function Get-OpenPathActiveIpv4AdaptersMissingLocalDns {
 }
 
 function Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks {
+    # runs every cycle regardless of whether protected-mode checks are skipped
+    # when portal mode is active in passthrough, verifies that local dns is still configured
+    # closes passthrough automatically when the emergency policy outcome requires it
     param(
         [AllowNull()]
         [PSCustomObject]$Config,
@@ -231,6 +242,10 @@ function Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks {
 }
 
 function Invoke-OpenPathWatchdogChecks {
+    # main body of the per-minute watchdog cycle
+    # checks acrylic, dns resolution, sinkhole, firewall, local dns adapters, split-dns drift,
+    # sse listener, integrity, firefox extension policy, and applocker app control
+    # protected-mode checks are gated on the policy state so portal mode and fail-open are respected
     param(
         [AllowNull()]
         [PSCustomObject]$Config,
@@ -492,6 +507,9 @@ function Invoke-OpenPathWatchdogChecks {
 }
 
 function Get-OpenPathWatchdogOutcome {
+    # combines the issues from the cycle into a status string and a fail-count decision
+    # promotes degraded to critical after three consecutive recovery-eligible failures
+    # triggers checkpoint rollback at critical and resets the counter on success
     param(
         [AllowNull()]
         [PSCustomObject]$Config,

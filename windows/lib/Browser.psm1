@@ -15,10 +15,13 @@ Import-Module "$PSScriptRoot\Browser.Diagnostics.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.EnforcementStatus.psm1" -Force -ErrorAction Stop
 
 function Get-OpenPathChromiumManagedMetadataPath {
+    # returns the path to the chromium managed extension metadata file
     return "$script:OpenPathRoot\browser-extension\chromium-managed\metadata.json"
 }
 
 function Get-OpenPathChromiumManagedPolicy {
+    # reads the chromium managed extension metadata and builds the policy object
+    # returns null when the metadata file is absent or the api url is not configured
     param(
         [AllowNull()]
         [object]$Config = $null
@@ -60,6 +63,7 @@ function Get-OpenPathChromiumManagedPolicy {
 }
 
 function Sync-OpenPathFirefoxNativeHostArtifacts {
+    # delegates to the firefox native host module to copy staged native artifacts
     [CmdletBinding()]
     param(
         [string]$SourceRoot = "$script:OpenPathRoot\scripts"
@@ -69,6 +73,7 @@ function Sync-OpenPathFirefoxNativeHostArtifacts {
 }
 
 function Sync-OpenPathFirefoxNativeHostState {
+    # delegates to the firefox native host module to write the native state file
     [CmdletBinding()]
     param(
         [AllowNull()]
@@ -83,6 +88,7 @@ function Sync-OpenPathFirefoxNativeHostState {
 }
 
 function Register-OpenPathFirefoxNativeHost {
+    # delegates to the firefox native host module to register the native messaging host manifest
     [CmdletBinding()]
     param(
         [AllowNull()]
@@ -95,6 +101,7 @@ function Register-OpenPathFirefoxNativeHost {
 }
 
 function Unregister-OpenPathFirefoxNativeHost {
+    # delegates to the firefox native host module to remove the native messaging host manifest
     [CmdletBinding()]
     param()
 
@@ -102,6 +109,7 @@ function Unregister-OpenPathFirefoxNativeHost {
 }
 
 function Get-OpenPathBrowserDoctorReport {
+    # delegates to the browser diagnostics module to collect the full browser doctor report
     [CmdletBinding()]
     param()
 
@@ -109,6 +117,7 @@ function Get-OpenPathBrowserDoctorReport {
 }
 
 function Get-OpenPathBrowserRequestReadiness {
+    # delegates to the request readiness module to assess whether a browser request can proceed
     [CmdletBinding()]
     param(
         [AllowNull()]
@@ -119,6 +128,7 @@ function Get-OpenPathBrowserRequestReadiness {
 }
 
 function Get-OpenPathBrowserInventory {
+    # delegates to the browser inventory module to detect installed browsers and optional cleanup
     [CmdletBinding()]
     param(
         [ValidateSet('ReportOnly', 'RemoveKnownInstallers')]
@@ -145,6 +155,7 @@ function Get-OpenPathBrowserInventory {
 }
 
 function Get-OpenPathBrowserInventoryUninstallEntries {
+    # delegates to the browser inventory module to return the uninstall registry entries
     [CmdletBinding()]
     param()
 
@@ -152,6 +163,7 @@ function Get-OpenPathBrowserInventoryUninstallEntries {
 }
 
 function Get-OpenPathBrowserInventoryFileCandidates {
+    # delegates to the browser inventory module to return filesystem candidates for installed browsers
     [CmdletBinding()]
     param()
 
@@ -159,6 +171,7 @@ function Get-OpenPathBrowserInventoryFileCandidates {
 }
 
 function Get-OpenPathBrowserEnforcementStatus {
+    # delegates to the enforcement status module to summarize per-browser policy enforcement state
     [CmdletBinding()]
     param(
         [AllowNull()]
@@ -174,6 +187,7 @@ function Get-OpenPathBrowserEnforcementStatus {
 }
 
 function Sync-OpenPathFirefoxManagedExtensionPolicy {
+    # delegates to the firefox policy module to write the managed extension policy file
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [AllowNull()]
@@ -189,6 +203,7 @@ function Sync-OpenPathFirefoxManagedExtensionPolicy {
 }
 
 function Test-OpenPathFirefoxManagedExtensionReady {
+    # delegates to the firefox policy module to check whether the managed extension is ready
     [CmdletBinding()]
     param(
         [AllowNull()]
@@ -209,6 +224,7 @@ function Test-OpenPathFirefoxManagedExtensionReady {
 }
 
 function Sync-OpenPathFirefoxNetworkAutoconfig {
+    # delegates to the firefox config module to write the network autoconfig file
     [CmdletBinding(SupportsShouldProcess)]
     param()
 
@@ -216,6 +232,8 @@ function Sync-OpenPathFirefoxNetworkAutoconfig {
 }
 
 function Set-ChromePolicy {
+    # writes chromium url blocklist and search provider policy registry keys for chrome and edge
+    # also installs the managed extension force-list entry when metadata is present
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string[]]$BlockedPaths = @(),
@@ -296,6 +314,8 @@ function Set-ChromePolicy {
 }
 
 function Remove-BrowserPolicy {
+    # removes all browser policy registry keys and policy files
+    # when preserve flag is set, keeps the firefox managed extension policy instead of deleting it
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [switch]$PreserveFirefoxManagedExtension
@@ -349,6 +369,7 @@ function Remove-BrowserPolicy {
 }
 
 function Set-AllBrowserPolicy {
+    # applies policy to all supported browsers: firefox extension, network autoconfig, and chromium
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string[]]$BlockedPaths = @(),
