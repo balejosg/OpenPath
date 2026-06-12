@@ -23,6 +23,7 @@
 - Unified failure semantics (protected mode): [`docs/adr/0011-unified-failure-semantics.md`](adr/0011-unified-failure-semantics.md)
 - Group role join table plan: [`docs/group-role-join-table-plan.md`](group-role-join-table-plan.md)
 - Environment variable registry: [`docs/ENVIRONMENT_VARIABLES.md`](ENVIRONMENT_VARIABLES.md)
+- Agent config parity (cross-platform key mapping): [`docs/agent-config-parity.md`](agent-config-parity.md)
 - Extension <-> native host message contract: [`docs/extension-native-host-contract.md`](extension-native-host-contract.md)
 - API package guide: [`api/README.md`](../api/README.md)
 - Shared package guide: [`shared/README.md`](../shared/README.md)

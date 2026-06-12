@@ -54,7 +54,7 @@ function New-OpenPathInstallerConfig {
     $config = @{
         whitelistUrl = $WhitelistUrl
         version = $AgentVersion
-        updateIntervalMinutes = 15
+        updateIntervalMinutes = 5
         watchdogIntervalMinutes = 1
         primaryDNS = $PrimaryDNS
         acrylicPath = "${env:ProgramFiles(x86)}\Acrylic DNS Proxy"

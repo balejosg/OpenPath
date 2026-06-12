@@ -144,7 +144,7 @@ Get-ScheduledTaskInfo -TaskName "OpenPath-SSE"
 Get-ScheduledTask -TaskName "OpenPath-SSE"
 ```
 
-The `OpenPath-SSE` task maintains a persistent SSE connection to the API. If it is not in the `Running` state, rule changes will only be applied on the 15-minute `OpenPath-Update` schedule. Restart it:
+The `OpenPath-SSE` task maintains a persistent SSE connection to the API. If it is not in the `Running` state, rule changes will only be applied on the 5-minute `OpenPath-Update` schedule. Restart it:
 
 ```powershell
 Start-ScheduledTask -TaskName "OpenPath-SSE"

@@ -1148,7 +1148,7 @@ Describe "Installer" {
             $runtimeHelper = Get-Content $runtimeHelperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                'Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1',
+                'Register-OpenPathTask -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1',
                 'Invoke-OpenPathInstallerFirstUpdate',
                 'Start-OpenPathInstallerRealtimeUpdates'
             )
@@ -1159,8 +1159,8 @@ Describe "Installer" {
                 'Start-OpenPathTask -TaskType SSE'
             )
 
-            $content | Should -Match '(?s)Invoke-OpenPathInstallerEnrollment.*Invoke-OpenPathInstallerFirstUpdate.*Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1.*Start-OpenPathInstallerRealtimeUpdates'
-            $content | Should -Not -Match '(?s)Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1.*Start-OpenPathTask -TaskType SSE.*Invoke-OpenPathInstallerEnrollment'
+            $content | Should -Match '(?s)Invoke-OpenPathInstallerEnrollment.*Invoke-OpenPathInstallerFirstUpdate.*Register-OpenPathTask -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1.*Start-OpenPathInstallerRealtimeUpdates'
+            $content | Should -Not -Match '(?s)Register-OpenPathTask -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1.*Start-OpenPathTask -TaskType SSE.*Invoke-OpenPathInstallerEnrollment'
         }
     }
 

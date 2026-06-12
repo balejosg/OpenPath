@@ -205,7 +205,7 @@ function Write-OpenPathInstallerSummary {
     Write-Host "  - Whitelist: $WhitelistUrl"
     Write-Host "  - Agent version: $AgentVersion"
     Write-Host "  - DNS upstream: $PrimaryDNS"
-    Write-Host '  - Actualizacion: SSE real-time + cada 15 min (fallback)'
+    Write-Host '  - Actualizacion: SSE real-time + cada 5 min (fallback)'
     Write-Host ''
 
     $dnsProbeDomain = '<allowed-domain>'

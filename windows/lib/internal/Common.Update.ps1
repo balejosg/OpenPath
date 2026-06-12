@@ -278,7 +278,7 @@ function Invoke-OpenPathAgentSelfUpdate {
 
         Set-OpenPathConfig -Config $config | Out-Null
 
-        $updateInterval = 15
+        $updateInterval = 5
         if ($config.PSObject.Properties['updateIntervalMinutes']) {
             try {
                 $candidate = [int]$config.updateIntervalMinutes

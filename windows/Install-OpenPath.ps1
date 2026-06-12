@@ -604,7 +604,7 @@ Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'scheduled-tasks' -Action {
     Start-OpenPathInstallTimedStep -Name 'scheduled-tasks'
-    Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 1 -WhatIf:$WhatIfPreference
+    Register-OpenPathTask -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1 -WhatIf:$WhatIfPreference
     Write-InstallerVerbose '  Tareas registradas'
     Complete-OpenPathInstallTimedStep -Name 'scheduled-tasks'
 }

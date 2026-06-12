@@ -302,7 +302,7 @@ windows/lib/internal/Common.Http.ps1|windows/tests/Windows.Tests.ps1,tests/windo
 windows/lib/internal/Common.Http.Assembly.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/Common.Http.Whitelist.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Http.Version.ps1|windows/tests/Windows.Tests.ps1
-windows/Install-OpenPath.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
+windows/Install-OpenPath.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats,tests/repo-config/agent-config-parity-contracts.test.mjs
 windows/OpenPath.ps1|windows/tests/Windows.Tests.ps1
 windows/Rotate-Token.ps1|windows/tests/Windows.Tests.ps1
 windows/Uninstall-OpenPath.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
@@ -310,7 +310,7 @@ windows/lib/Browser.ReadinessFacts.psm1|windows/tests/Windows.Browser.RequestRea
 windows/lib/install/Installer.ChromiumGuidance.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Progress.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Plan.ps1|windows/tests/Windows.Installer.Tests.ps1
-windows/lib/install/Installer.Config.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/install/Installer.Config.ps1|windows/tests/Windows.Tests.ps1,tests/repo-config/agent-config-parity-contracts.test.mjs
 windows/lib/install/Installer.Dns.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Enrollment.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/install/Installer.Runtime.ps1|windows/tests/Windows.Tests.ps1
@@ -318,11 +318,11 @@ windows/lib/install/Installer.Staging.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Config.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Redaction.ps1|windows/tests/Windows.Config.Redaction.Tests.ps1
 windows/lib/internal/Common.Domains.ps1|windows/tests/Windows.Tests.ps1
-windows/lib/internal/OpenPathConfig.Model.ps1|windows/tests/Windows.Config.Redaction.Tests.ps1,windows/tests/Windows.SSE.Coalescer.Tests.ps1
+windows/lib/internal/OpenPathConfig.Model.ps1|windows/tests/Windows.Config.Redaction.Tests.ps1,windows/tests/Windows.SSE.Coalescer.Tests.ps1,tests/repo-config/agent-config-parity-contracts.test.mjs
 windows/lib/internal/Common.Integrity.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Network.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.System.ps1|windows/tests/Windows.Tests.ps1
-windows/lib/internal/Common.Update.ps1|windows/tests/Windows.Tests.ps1
+windows/lib/internal/Common.Update.ps1|windows/tests/Windows.Tests.ps1,tests/repo-config/agent-config-parity-contracts.test.mjs
 windows/lib/internal/Common.Whitelist.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/CapabilityStorage.ps1|windows/tests/Windows.Common.Core.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1,windows/tests/Windows.Installer.Tests.ps1
 windows/lib/internal/RuntimeDependency.Policy.ps1|windows/tests/Windows.Tests.ps1
@@ -342,3 +342,5 @@ windows/scripts/Enroll-Machine.ps1|windows/tests/Windows.Tests.ps1
 windows/scripts/Pre-Install-Validation.ps1|windows/tests/Windows.Tests.ps1
 windows/scripts/Start-SSEListener.ps1|windows/tests/Windows.Tests.ps1,windows/tests/Windows.SSE.Coalescer.Tests.ps1
 windows/lib/internal/Sse.Coalescer.ps1|windows/tests/Windows.SSE.Coalescer.Tests.ps1
+linux/lib/defaults.conf|tests/repo-config/agent-config-parity-contracts.test.mjs
+docs/agent-config-parity.md|tests/repo-config/agent-config-parity-contracts.test.mjs
