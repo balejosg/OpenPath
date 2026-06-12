@@ -121,11 +121,11 @@ describe('T9: health report cross-platform field-parity contracts', () => {
     );
   });
 
-  test('shared schema HealthReportSubmitInput uses passthrough for telemetry leniency', () => {
+  test('shared schema HealthReportSubmitInput uses a loose object for telemetry leniency', () => {
     const src = readText('shared/src/schemas/index.ts');
     assert.ok(
-      src.includes('.passthrough()'),
-      'shared/src/schemas/index.ts HealthReportSubmitInput must use .passthrough() so unknown future agent fields do not hard-fail'
+      src.includes('HealthReportSubmitInput = z.looseObject({'),
+      'shared/src/schemas/index.ts HealthReportSubmitInput must use z.looseObject so unknown future agent fields do not hard-fail'
     );
   });
 

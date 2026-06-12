@@ -190,45 +190,43 @@ export const WindowsHealthExtension = z.object({
  * legacy `version` field and uses it when `agentVersion` is absent.
  * Both `dnsmasqRunning` and `dnsResolving` are kept alongside the new
  * `dnsState` to preserve backward-compatibility with deployed agents.
- * Unknown extra fields are passed through (.passthrough()) so future agent
+ * Unknown extra fields are passed through (z.looseObject) so future agent
  * additions never cause a hard API rejection on this telemetry endpoint.
  */
-export const HealthReportSubmitInput = z
-  .object({
-    // ── required base ────────────────────────────────────────────────────────
-    hostname: z.string().min(1),
-    status: z.string().min(1),
+export const HealthReportSubmitInput = z.looseObject({
+  // ── required base ────────────────────────────────────────────────────────
+  hostname: z.string().min(1),
+  status: z.string().min(1),
 
-    // ── canonical fields (new in v1.3) ───────────────────────────────────────
-    /** True when the DNS pipeline (daemon running + resolving) is healthy. */
-    dnsState: z.boolean().optional(),
-    /** True when outbound-DNS firewall rules are in place. */
-    firewallState: z.boolean().optional(),
-    /** Hours since the whitelist was last successfully fetched (fractional ok). */
-    whitelistAgeHours: z.number().nonnegative().optional(),
-    /** True when captive-portal bypass mode is currently active. */
-    captivePortalMode: z.boolean().optional(),
-    /** Canonical agent version string (alias for legacy `version`). */
-    agentVersion: z.string().optional(),
-    /** Originating platform – allows server-side fanout without field guessing. */
-    platform: z.enum(['linux', 'windows']).optional(),
+  // ── canonical fields (new in v1.3) ───────────────────────────────────────
+  /** True when the DNS pipeline (daemon running + resolving) is healthy. */
+  dnsState: z.boolean().optional(),
+  /** True when outbound-DNS firewall rules are in place. */
+  firewallState: z.boolean().optional(),
+  /** Hours since the whitelist was last successfully fetched (fractional ok). */
+  whitelistAgeHours: z.number().nonnegative().optional(),
+  /** True when captive-portal bypass mode is currently active. */
+  captivePortalMode: z.boolean().optional(),
+  /** Canonical agent version string (alias for legacy `version`). */
+  agentVersion: z.string().optional(),
+  /** Originating platform – allows server-side fanout without field guessing. */
+  platform: z.enum(['linux', 'windows']).optional(),
 
-    // ── legacy fields kept for backward-compat with deployed agents ──────────
-    // Both Linux and Windows already send these exact names; do NOT remove.
-    /** @deprecated use dnsState; kept for deployed-agent compatibility */
-    dnsmasqRunning: z.boolean().optional(),
-    /** @deprecated use dnsState; kept for deployed-agent compatibility */
-    dnsResolving: z.boolean().optional(),
-    failCount: z.number().int().nonnegative().optional(),
-    actions: z.string().optional(),
-    /** @deprecated use agentVersion; kept for deployed-agent compatibility */
-    version: z.string().optional(),
+  // ── legacy fields kept for backward-compat with deployed agents ──────────
+  // Both Linux and Windows already send these exact names; do NOT remove.
+  /** Legacy wire alias (prefer dnsState in new code); kept for deployed-agent compatibility. */
+  dnsmasqRunning: z.boolean().optional(),
+  /** Legacy wire alias (prefer dnsState in new code); kept for deployed-agent compatibility. */
+  dnsResolving: z.boolean().optional(),
+  failCount: z.number().int().nonnegative().optional(),
+  actions: z.string().optional(),
+  /** Legacy wire alias (prefer agentVersion in new code); kept for deployed-agent compatibility. */
+  version: z.string().optional(),
 
-    // ── Windows platform extension block ────────────────────────────────────
-    // Sent only by the Windows agent; ignored by Linux consumers.
-    windows: WindowsHealthExtension.optional(),
-  })
-  .passthrough(); // unknown future fields must not hard-fail telemetry ingestion
+  // ── Windows platform extension block ────────────────────────────────────
+  // Sent only by the Windows agent; ignored by Linux consumers.
+  windows: WindowsHealthExtension.optional(),
+});
 
 export type HealthReportSubmitInput = z.infer<typeof HealthReportSubmitInput>;
 export type WindowsHealthExtension = z.infer<typeof WindowsHealthExtension>;
