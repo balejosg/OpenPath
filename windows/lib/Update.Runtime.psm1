@@ -5,6 +5,10 @@ $script:OpenPathUpdateRuntimeRoot = ''
 . (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')
 
 function Import-OpenPathUpdateRuntimeHelper {
+    <#
+    .SYNOPSIS
+    Dot-sources a helper file and promotes the specified functions into script scope.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -23,6 +27,13 @@ function Import-OpenPathUpdateRuntimeHelper {
 }
 
 function Initialize-OpenPathUpdateRuntimeSession {
+    <#
+    .SYNOPSIS
+    Loads all modules and helper functions required for an update runtime session, skipping the load when already initialized for the same root.
+    .DESCRIPTION
+    Idempotent per OpenPathRoot value. On first call, bootstraps the script session, imports dependent
+    modules, and dot-sources internal helper files to expose their functions in script scope.
+    #>
     [CmdletBinding()]
     param(
         [string]$OpenPathRoot = (Resolve-OpenPathWindowsRoot)
@@ -96,6 +107,10 @@ function Initialize-OpenPathUpdateRuntimeSession {
 }
 
 function Get-OpenPathMachineTokenFromWhitelistUrl {
+    <#
+    .SYNOPSIS
+    Extracts the machine token path segment from a whitelist URL, returning an empty string when not present.
+    #>
     [CmdletBinding()]
     param([AllowNull()][string]$WhitelistUrl = '')
 
@@ -118,6 +133,10 @@ function Get-OpenPathMachineTokenFromWhitelistUrl {
 }
 
 function Normalize-OpenPathMachineClientConfigDomains {
+    <#
+    .SYNOPSIS
+    Normalizes a list of domain strings to trimmed, deduplicated, lowercase values.
+    #>
     [CmdletBinding()]
     param([AllowNull()][object]$Domains = $null)
 
@@ -130,6 +149,14 @@ function Normalize-OpenPathMachineClientConfigDomains {
 }
 
 function Sync-OpenPathMachineClientConfig {
+    <#
+    .SYNOPSIS
+    Fetches machine client config from the API and updates the local config when captive portal domains have changed.
+    .DESCRIPTION
+    Requires both apiUrl and a machine token in the whitelist URL. When the remote captivePortalDomains list
+    differs from the locally persisted list, the local config is updated on disk. Silently skips on network
+    or API errors to avoid blocking the update cycle.
+    #>
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][PSCustomObject]$Config)
 
@@ -195,6 +222,10 @@ function Sync-OpenPathMachineClientConfig {
 }
 
 function Invoke-OpenPathCaptivePortalImmediateReconcile {
+    <#
+    .SYNOPSIS
+    Probes the current captive portal state and immediately updates the local observation record.
+    #>
     [CmdletBinding()]
     param([PSCustomObject]$Config = $null)
 
@@ -216,6 +247,16 @@ function Invoke-OpenPathCaptivePortalImmediateReconcile {
 }
 
 function Invoke-OpenPathStartupLocalReconcile {
+    <#
+    .SYNOPSIS
+    Reconciles local state at update startup using the cached whitelist, respecting captive portal mode and the skip-restore flag.
+    .DESCRIPTION
+    Returns early when no cached whitelist exists or the whitelist marks the agent as disabled.
+    When captive portal mode is active, performs an immediate portal reconcile instead of restoring
+    protected mode. When SkipProtectedModeRestore is set, returns without touching the firewall
+    or protected-mode configuration; this is used by SSE-triggered update cycles to avoid redundant
+    firewall reconfiguration before the whitelist download.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$WhitelistPath,
@@ -245,6 +286,10 @@ function Invoke-OpenPathStartupLocalReconcile {
 }
 
 function Invoke-OpenPathRuntimeDependencyQueueApply {
+    <#
+    .SYNOPSIS
+    Processes the runtime dependency queue and updates the Acrylic hosts file from the current whitelist.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -296,6 +341,14 @@ function Invoke-OpenPathRuntimeDependencyQueueApply {
 }
 
 function Invoke-OpenPathRuntimeDependencyFastApply {
+    <#
+    .SYNOPSIS
+    Acquires the update mutex and applies only the runtime dependency queue without a full whitelist download.
+    .DESCRIPTION
+    Intended for rapid in-session runtime dependency propagation triggered by the native host.
+    Skips the whitelist download and post-download processing steps. Restarts the Acrylic service
+    only when the queue produced changes.
+    #>
     [CmdletBinding()]
     param(
         [string]$OpenPathRoot = (Resolve-OpenPathWindowsRoot),
@@ -399,6 +452,15 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
 }
 
 function Invoke-OpenPathUpdateCycle {
+    <#
+    .SYNOPSIS
+    Runs a complete OpenPath update cycle: startup reconcile, whitelist download, and policy apply.
+    .DESCRIPTION
+    Acquires the update mutex, synchronizes machine client config, performs startup local reconcile,
+    downloads the whitelist, and dispatches to the appropriate apply or failure handler. Rolls back
+    to the backup whitelist on unhandled errors and reports failure health. The TriggerSource parameter
+    controls whether protected-mode restore is skipped before the download (SSE path).
+    #>
     [CmdletBinding()]
     param(
         [string]$OpenPathRoot = (Resolve-OpenPathWindowsRoot),
@@ -531,6 +593,10 @@ function Invoke-OpenPathUpdateCycle {
 }
 
 function Write-OpenPathUpdatePortalActiveState {
+    <#
+    .SYNOPSIS
+    Records a JSON state file when an update cycle starts while captive portal mode is active.
+    #>
     [CmdletBinding()]
     param(
         [string]$OpenPathRoot = (Resolve-OpenPathWindowsRoot),
@@ -582,6 +648,10 @@ function Write-OpenPathUpdatePortalActiveState {
 }
 
 function Clear-StaleFailsafeState {
+    <#
+    .SYNOPSIS
+    Removes the stale fail-safe marker file when it exists.
+    #>
     [CmdletBinding()]
     param(
         [string]$StaleFailsafeStatePath = 'C:\OpenPath\data\stale-failsafe-state.json'
@@ -594,6 +664,14 @@ function Clear-StaleFailsafeState {
 }
 
 function Enter-StaleWhitelistFailsafe {
+    <#
+    .SYNOPSIS
+    Activates stale-whitelist fail-safe mode by narrowing Acrylic to control domains and persisting a state marker.
+    .DESCRIPTION
+    Derives control domains from the config whitelist and API URLs, then updates the Acrylic host
+    configuration to allow only those domains. Writes a fail-safe state file with the entry timestamp
+    and whitelist age so downstream logic can detect and exit the fail-safe state.
+    #>
     [CmdletBinding()]
     param(
         [AllowNull()]
@@ -634,6 +712,10 @@ function Enter-StaleWhitelistFailsafe {
 }
 
 function Restore-OpenPathCheckpoint {
+    <#
+    .SYNOPSIS
+    Restores the latest whitelist checkpoint and clears the stale fail-safe marker on success.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -671,6 +753,10 @@ function Restore-OpenPathCheckpoint {
 }
 
 function Write-UpdateCatchLog {
+    <#
+    .SYNOPSIS
+    Writes a log message using the shared logger when available, or falls back to host output streams.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -694,6 +780,10 @@ function Write-UpdateCatchLog {
 }
 
 function Sync-FirefoxNativeHostMirror {
+    <#
+    .SYNOPSIS
+    Synchronizes the Firefox native host whitelist mirror, suppressing errors to avoid blocking the update cycle.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
