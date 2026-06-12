@@ -1,0 +1,11 @@
+{
+  "json": {
+    "hostname": "lab-machine-legacy-01",
+    "status": "DEGRADED",
+    "dnsmasqRunning": false,
+    "dnsResolving": false,
+    "failCount": 2,
+    "actions": "dnsmasq_restart",
+    "version": "1.0.2"
+  }
+}

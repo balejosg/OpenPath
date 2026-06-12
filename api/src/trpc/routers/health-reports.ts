@@ -11,45 +11,42 @@ import * as healthReports from '../../lib/health-reports.js';
 import { HealthReport } from '../../lib/health-reports.js';
 import { PROBLEM_HEALTH_STATUSES } from '../../lib/health-status.js';
 import { stripUndefined } from '../../lib/utils.js';
+import { HealthReportSubmitInput } from '@openpath/shared';
 
 export const healthReportsRouter = router({
-  submit: publicProcedure
-    .input(
-      z
-        .object({
-          hostname: z.string().min(1),
-          status: z.string().min(1),
-          dnsmasqRunning: z.boolean().optional(),
-          dnsResolving: z.boolean().optional(),
-          failCount: z.number().optional(),
-          actions: z.string().optional(),
-          version: z.string().optional(),
-        })
-        .strict()
-    )
-    .mutation(async ({ input, ctx }) => {
-      const machine = await requireMachineTokenAccess(ctx.req);
-      if (!machineMatchesHostname(machine, input.hostname)) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Machine token is not valid for this hostname',
-        });
-      }
+  submit: publicProcedure.input(HealthReportSubmitInput).mutation(async ({ input, ctx }) => {
+    const machine = await requireMachineTokenAccess(ctx.req);
+    if (!machineMatchesHostname(machine, input.hostname)) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Machine token is not valid for this hostname',
+      });
+    }
 
-      await healthReports.saveHealthReport(
-        machine.hostname,
-        stripUndefined({
-          status: input.status,
-          dnsmasqRunning: input.dnsmasqRunning ?? null,
-          dnsResolving: input.dnsResolving ?? null,
-          failCount: input.failCount ?? 0,
-          actions: input.actions ?? '',
-          version: input.version ?? 'unknown',
-        }) as Omit<HealthReport, 'timestamp'>
-      );
+    // Resolve canonical `agentVersion` — new agents send `agentVersion`;
+    // deployed agents send legacy `version`.  Accept both; canonical wins.
+    const resolvedVersion = input.agentVersion ?? input.version ?? 'unknown';
 
-      return { success: true, message: 'Health report received' };
-    }),
+    // Resolve DNS fields — the specific legacy fields win when present
+    // (agents that send both keep the daemon-vs-resolution distinction);
+    // canonical `dnsState` is the fallback for agents that send only it.
+    const resolvedDnsResolving = input.dnsResolving ?? input.dnsState ?? null;
+    const resolvedDnsmasqRunning = input.dnsmasqRunning ?? input.dnsState ?? null;
+
+    await healthReports.saveHealthReport(
+      machine.hostname,
+      stripUndefined({
+        status: input.status,
+        dnsmasqRunning: resolvedDnsmasqRunning,
+        dnsResolving: resolvedDnsResolving,
+        failCount: input.failCount ?? 0,
+        actions: input.actions ?? '',
+        version: resolvedVersion,
+      }) as Omit<HealthReport, 'timestamp'>
+    );
+
+    return { success: true, message: 'Health report received' };
+  }),
 
   list: adminProcedure.query(async () => {
     const data = await healthReports.getAllReports();

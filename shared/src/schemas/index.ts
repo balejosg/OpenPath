@@ -16,6 +16,7 @@ export const HealthStatus = z.enum([
   'FAIL_OPEN',
   'STALE_FAILSAFE',
   'TAMPERED',
+  'PROTECTED',
 ]);
 
 // =============================================================================
@@ -151,6 +152,86 @@ export const HealthReport = z.object({
   version: z.string().nullable().optional(),
   reportedAt: z.string(),
 });
+
+// =============================================================================
+// Health Report Submit Input (agent wire format → API)
+// =============================================================================
+
+/**
+ * Windows-only platform extension block (optional).
+ * Sent by the Windows agent when AppLocker / browser-enforcement state is known.
+ */
+export const WindowsHealthExtension = z.object({
+  // AppLocker / non-admin app-control policy state
+  appLockerState: z.string().optional(),
+  // Browser enforcement policy state (e.g. Firefox managed extension active)
+  browserEnforcement: z.string().optional(),
+});
+
+/**
+ * Canonical health-report payload that agents POST to
+ * POST /trpc/healthReports.submit.
+ *
+ * Canonical fields (new, v1.3+):
+ *   dnsState          – boolean: DNS resolution is working
+ *   firewallState     – boolean: outbound-DNS firewall rules are active
+ *   whitelistAgeHours – number:  hours since whitelist was last fetched
+ *   captivePortalMode – boolean: captive-portal bypass mode is active
+ *   agentVersion      – string:  canonical alias for `version`
+ *   platform          – "linux" | "windows"
+ *
+ * Legacy fields (present since v1.0, both platforms already send these
+ * names — no rename needed):
+ *   dnsmasqRunning    – boolean: DNS daemon is running  (≈ dnsState on Linux)
+ *   dnsResolving      – boolean: DNS query succeeded    (≈ dnsState)
+ *   version           – string:  agent version          (≈ agentVersion)
+ *
+ * Alias policy: `agentVersion` is the canonical name; the API accepts the
+ * legacy `version` field and uses it when `agentVersion` is absent.
+ * Both `dnsmasqRunning` and `dnsResolving` are kept alongside the new
+ * `dnsState` to preserve backward-compatibility with deployed agents.
+ * Unknown extra fields are passed through (.passthrough()) so future agent
+ * additions never cause a hard API rejection on this telemetry endpoint.
+ */
+export const HealthReportSubmitInput = z
+  .object({
+    // ── required base ────────────────────────────────────────────────────────
+    hostname: z.string().min(1),
+    status: z.string().min(1),
+
+    // ── canonical fields (new in v1.3) ───────────────────────────────────────
+    /** True when the DNS pipeline (daemon running + resolving) is healthy. */
+    dnsState: z.boolean().optional(),
+    /** True when outbound-DNS firewall rules are in place. */
+    firewallState: z.boolean().optional(),
+    /** Hours since the whitelist was last successfully fetched (fractional ok). */
+    whitelistAgeHours: z.number().nonnegative().optional(),
+    /** True when captive-portal bypass mode is currently active. */
+    captivePortalMode: z.boolean().optional(),
+    /** Canonical agent version string (alias for legacy `version`). */
+    agentVersion: z.string().optional(),
+    /** Originating platform – allows server-side fanout without field guessing. */
+    platform: z.enum(['linux', 'windows']).optional(),
+
+    // ── legacy fields kept for backward-compat with deployed agents ──────────
+    // Both Linux and Windows already send these exact names; do NOT remove.
+    /** @deprecated use dnsState; kept for deployed-agent compatibility */
+    dnsmasqRunning: z.boolean().optional(),
+    /** @deprecated use dnsState; kept for deployed-agent compatibility */
+    dnsResolving: z.boolean().optional(),
+    failCount: z.number().int().nonnegative().optional(),
+    actions: z.string().optional(),
+    /** @deprecated use agentVersion; kept for deployed-agent compatibility */
+    version: z.string().optional(),
+
+    // ── Windows platform extension block ────────────────────────────────────
+    // Sent only by the Windows agent; ignored by Linux consumers.
+    windows: WindowsHealthExtension.optional(),
+  })
+  .passthrough(); // unknown future fields must not hard-fail telemetry ingestion
+
+export type HealthReportSubmitInput = z.infer<typeof HealthReportSubmitInput>;
+export type WindowsHealthExtension = z.infer<typeof WindowsHealthExtension>;
 
 export const PushSubscription = z.object({
   id: z.string(),

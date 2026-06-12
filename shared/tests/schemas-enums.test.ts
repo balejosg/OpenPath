@@ -79,6 +79,7 @@ describe('Enum Schemas', () => {
       assert.doesNotThrow(() => HealthStatus.parse('FAIL_OPEN'));
       assert.doesNotThrow(() => HealthStatus.parse('STALE_FAILSAFE'));
       assert.doesNotThrow(() => HealthStatus.parse('TAMPERED'));
+      assert.doesNotThrow(() => HealthStatus.parse('PROTECTED'));
     });
 
     it('rejects invalid values', () => {

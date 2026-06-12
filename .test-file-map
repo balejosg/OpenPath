@@ -35,6 +35,10 @@ api/src/trpc/routers/classrooms/queries.ts|api/tests/classrooms-crud.test.ts,api
 api/src/trpc/routers/classrooms/mutations.ts|api/tests/classrooms-crud.test.ts,api/tests/classrooms-machines.test.ts,api/tests/classrooms-cleanup.test.ts
 api/src/trpc/routers/api-tokens.ts|api/tests/api-tokens-auth-guards.test.ts,api/tests/api-tokens-removed-procedures.test.ts
 api/src/lib/health-status.ts|api/tests/health-status-normalization.test.ts,api/tests/health-status-actions.test.ts,api/tests/health-status-contract.test.ts
+api/src/trpc/routers/health-reports.ts|api/tests/health-status-normalization.test.ts,api/tests/health-status-contract.test.ts
+shared/src/schemas/index.ts|shared/tests/schemas-entities.test.ts,shared/tests/schemas-enums.test.ts,shared/tests/schemas-dto.test.ts,shared/tests/schemas-health-report-submit.test.ts
+windows/lib/internal/Common.Http.Health.ps1|windows/tests/Windows.Tests.ps1,tests/repo-config/health-report-parity-contracts.test.mjs
+linux/lib/common-registration.sh|tests/install.bats,tests/openpath-update.bats,tests/repo-config/health-report-parity-contracts.test.mjs
 api/src/lib/auth.ts|api/tests/auth-registration.test.ts,api/tests/auth-google-login.test.ts,api/tests/auth-session.test.ts,api/tests/auth-password.test.ts,api/tests/auth-admin-guards.test.ts,api/tests/session-cookies.test.ts,api/tests/email-verification.test.ts
 api/src/lib/auth-config.ts|api/tests/jwt-config.test.ts,api/tests/token-expiry-config.test.ts
 api/src/lib/auth-tokens.ts|api/tests/auth.service.test.ts,api/tests/session-cookies.test.ts
@@ -217,7 +221,6 @@ linux/lib/runtime-cli.sh|tests/install.bats
 linux/lib/runtime-cli-compat.sh|tests/install.bats
 linux/lib/runtime-cli-system.sh|tests/install.bats
 linux/lib/common-connectivity.sh|tests/install.bats,tests/captive-portal.bats
-linux/lib/common-registration.sh|tests/install.bats,tests/openpath-update.bats
 linux/lib/openpath-update-whitelist.sh|tests/openpath-update.bats,tests/linux-e2e.bats
 linux/lib/openpath-update-runtime.sh|tests/openpath-update.bats,tests/linux-e2e.bats
 linux/lib/sse-update-coalescer.sh|tests/openpath-update.bats,tests/linux-e2e.bats
@@ -298,7 +301,6 @@ windows/lib/internal/Firewall.State.ps1|windows/tests/Windows.Tests.ps1,tests/wi
 windows/lib/internal/Common.Http.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/Common.Http.Assembly.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/Common.Http.Whitelist.ps1|windows/tests/Windows.Tests.ps1
-windows/lib/internal/Common.Http.Health.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Common.Http.Version.ps1|windows/tests/Windows.Tests.ps1
 windows/Install-OpenPath.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/OpenPath.ps1|windows/tests/Windows.Tests.ps1

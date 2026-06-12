@@ -5,6 +5,7 @@ export const CANONICAL_HEALTH_STATUSES = [
   'FAIL_OPEN',
   'STALE_FAILSAFE',
   'TAMPERED',
+  'PROTECTED',
 ] as const;
 
 export type CanonicalHealthStatus = (typeof CANONICAL_HEALTH_STATUSES)[number];

@@ -8,4 +8,5 @@ import './repo-config/windows-student-policy-sse-group.test.mjs';
 import './repo-config/windows-pester-contracts.test.mjs';
 import './repo-config/failure-semantics-contracts.test.mjs';
 import './repo-config/cli-surface-parity-contracts.test.mjs';
+import './repo-config/health-report-parity-contracts.test.mjs';
 import './openpath-promotion-contract.test.mjs';

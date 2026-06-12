@@ -148,17 +148,24 @@ send_health_report_to_api() {
     hostname=$(get_registered_machine_name)
 
     local payload
+    # Canonical field names (v1.3+): agentVersion and platform are added alongside
+    # the legacy version field so old API versions also accept the payload.
     payload=$(HN="$hostname" ST="$status" DR="$dnsmasq_running" DRE="$dns_resolving" \
         FC="$fail_count" AC="$actions" VER="$version" python3 -c '
 import json, os
+dr = os.environ["DR"] == "true"
+dre = os.environ["DRE"] == "true"
 print(json.dumps({"json": {
     "hostname": os.environ["HN"],
     "status": os.environ["ST"],
-    "dnsmasqRunning": os.environ["DR"] == "true",
-    "dnsResolving": os.environ["DRE"] == "true",
+    "dnsmasqRunning": dr,
+    "dnsResolving": dre,
+    "dnsState": dre,
     "failCount": int(os.environ["FC"]),
     "actions": os.environ["AC"],
-    "version": os.environ["VER"]
+    "version": os.environ["VER"],
+    "agentVersion": os.environ["VER"],
+    "platform": "linux"
 }}))')
 
     if [ -n "$auth_token" ]; then

@@ -62,15 +62,21 @@ function Send-OpenPathHealthReport {
         $authToken = [string]$env:OPENPATH_HEALTH_API_SECRET
     }
 
+    # Canonical field names (v1.3+): agentVersion and platform are added alongside
+    # the legacy version field so old API versions also accept the payload.
+    # dnsState mirrors dnsResolving for the canonical schema.
     $payload = @{
         json = @{
             hostname       = Get-OpenPathMachineName
             status         = $Status
             dnsmasqRunning = [bool]$DnsServiceRunning
             dnsResolving   = [bool]$DnsResolving
+            dnsState       = [bool]$DnsResolving
             failCount      = [int]$FailCount
             actions        = [string]$Actions
             version        = [string]$versionToSend
+            agentVersion   = [string]$versionToSend
+            platform       = 'windows'
         }
     } | ConvertTo-Json -Depth 8
 

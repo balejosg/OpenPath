@@ -1,0 +1,14 @@
+{
+  "json": {
+    "hostname": "lab-machine-linux-01",
+    "status": "HEALTHY",
+    "dnsmasqRunning": true,
+    "dnsResolving": true,
+    "dnsState": true,
+    "failCount": 0,
+    "actions": "",
+    "version": "1.0.4",
+    "agentVersion": "1.0.4",
+    "platform": "linux"
+  }
+}
