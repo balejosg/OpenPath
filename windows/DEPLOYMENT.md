@@ -31,6 +31,38 @@ cd windows
 .\Install-OpenPath.ps1 -WhitelistUrl "https://api.example.com/w/<token>/whitelist.txt"
 ```
 
+**Verify the download:**
+
+Each release publishes a companion `windows-v<version>.zip.sha256` asset containing the SHA256
+checksum in standard `sha256sum` format. Verify before extracting:
+
+PowerShell (compare Get-FileHash output against the published checksum):
+
+```powershell
+# Download the checksum file
+Invoke-WebRequest -Uri "https://github.com/<owner>/openpath/releases/download/<tag>/windows-v<version>.zip.sha256" -OutFile "windows.zip.sha256"
+
+# Read the expected hash from the checksum file (first token on the line)
+$expected = (Get-Content "windows.zip.sha256" -Raw).Trim().Split()[0].ToUpper()
+
+# Compute the actual hash of the downloaded zip
+$actual = (Get-FileHash "windows.zip" -Algorithm SHA256).Hash
+
+if ($actual -eq $expected) { Write-Host "Checksum OK" } else { Write-Error "Checksum mismatch: expected $expected, got $actual" }
+```
+
+Linux / macOS (using sha256sum):
+
+```bash
+sha256sum -c windows-v<version>.zip.sha256
+```
+
+**Note on code signing:** Release zips are currently unsigned. The PowerShell scripts inside the
+zip are not Authenticode-signed because an operator-procured code-signing certificate is still
+pending. As a result, `-ExecutionPolicy Bypass` (or an equivalent execution-policy override) is
+still required when running the installer. Authenticode signing and winget distribution will be
+enabled once the certificate is provisioned.
+
 ### 2. Source Install (Development / Direct)
 
 For direct source installs from a repository checkout, run as Administrator from the `windows/` directory:

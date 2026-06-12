@@ -125,7 +125,7 @@ jobs:
           if [ -f "$PACKAGE_NAME" ]; then
             SIZE=$(du -h "$PACKAGE_NAME" | cut -f1)
             echo "  ✓ Windows package created: ${PACKAGE_NAME} (${SIZE})"
-            
+
             # List contents for verification
             echo "  → Package contents:"
             unzip -l "$PACKAGE_NAME" | head -20
@@ -133,6 +133,20 @@ jobs:
             echo "  ✗ Error: Windows package not created"
             exit 1
           fi
+
+      - name: Generate release checksums
+        run: |
+          echo "🔐 Generating SHA256 checksums for release artifacts..."
+
+          VERSION="${{ steps.vars.outputs.version }}"
+          WIN_PKG="windows-v${VERSION}.zip"
+          LIN_PKG="openpath-linux-v${VERSION}.tar.gz"
+
+          sha256sum "$WIN_PKG" > "${WIN_PKG}.sha256"
+          sha256sum "$LIN_PKG" > "${LIN_PKG}.sha256"
+
+          echo "  ✓ ${WIN_PKG}.sha256: $(cat ${WIN_PKG}.sha256)"
+          echo "  ✓ ${LIN_PKG}.sha256: $(cat ${LIN_PKG}.sha256)"
 
       - name: Create and push tag
         continue-on-error: true
@@ -150,7 +164,9 @@ jobs:
           generate_release_notes: true
           files: |
             openpath-linux-v${{ steps.vars.outputs.version }}.tar.gz
+            openpath-linux-v${{ steps.vars.outputs.version }}.tar.gz.sha256
             windows-v${{ steps.vars.outputs.version }}.zip
+            windows-v${{ steps.vars.outputs.version }}.zip.sha256
           body: |
             ## 🚀 Installation Scripts Release
 
@@ -160,7 +176,9 @@ jobs:
             ### 📦 Assets
 
             - **`openpath-linux-v${{ steps.vars.outputs.version }}.tar.gz`** - Linux installation scripts
+            - **`openpath-linux-v${{ steps.vars.outputs.version }}.tar.gz.sha256`** - SHA256 checksum (sha256sum -c format)
             - **`windows-v${{ steps.vars.outputs.version }}.zip`** - Windows installation scripts
+            - **`windows-v${{ steps.vars.outputs.version }}.zip.sha256`** - SHA256 checksum (sha256sum -c format)
 
             ### 📝 Installation
 
@@ -218,6 +236,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Released Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "- openpath-linux-v${{ steps.vars.outputs.version }}.tar.gz" >> $GITHUB_STEP_SUMMARY
+          echo "- openpath-linux-v${{ steps.vars.outputs.version }}.tar.gz.sha256" >> $GITHUB_STEP_SUMMARY
           echo "- windows-v${{ steps.vars.outputs.version }}.zip" >> $GITHUB_STEP_SUMMARY
+          echo "- windows-v${{ steps.vars.outputs.version }}.zip.sha256" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🔗 [View Release](https://github.com/${{ github.repository }}/releases/tag/${{ steps.vars.outputs.tag }})" >> $GITHUB_STEP_SUMMARY
