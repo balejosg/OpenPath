@@ -35,7 +35,7 @@ api/src/trpc/routers/classrooms/queries.ts|api/tests/classrooms-crud.test.ts,api
 api/src/trpc/routers/classrooms/mutations.ts|api/tests/classrooms-crud.test.ts,api/tests/classrooms-machines.test.ts,api/tests/classrooms-cleanup.test.ts
 api/src/trpc/routers/api-tokens.ts|api/tests/api-tokens-auth-guards.test.ts,api/tests/api-tokens-removed-procedures.test.ts
 api/src/lib/health-status.ts|api/tests/health-status-normalization.test.ts,api/tests/health-status-actions.test.ts,api/tests/health-status-contract.test.ts
-api/src/trpc/routers/health-reports.ts|api/tests/health-status-normalization.test.ts,api/tests/health-status-contract.test.ts
+api/src/trpc/routers/health-reports.ts|api/tests/health-status-normalization.test.ts,api/tests/health-status-contract.test.ts,api/tests/integration-health-report.test.ts,api/tests/health-reports-admin.test.ts
 shared/src/schemas/index.ts|shared/tests/schemas-entities.test.ts,shared/tests/schemas-enums.test.ts,shared/tests/schemas-dto.test.ts,shared/tests/schemas-health-report-submit.test.ts
 windows/lib/internal/Common.Http.Health.ps1|windows/tests/Windows.Tests.ps1,tests/repo-config/health-report-parity-contracts.test.mjs
 linux/lib/common-registration.sh|tests/install.bats,tests/openpath-update.bats,tests/repo-config/health-report-parity-contracts.test.mjs
