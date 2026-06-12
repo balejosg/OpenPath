@@ -1,6 +1,7 @@
 import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import noOnlyTests from 'eslint-plugin-no-only-tests';
+import importX from 'eslint-plugin-import-x';
 
 export default tseslint.config(
   {
@@ -57,6 +58,29 @@ export default tseslint.config(
     files: ['react-spa/src/lib/reportError.ts'],
     rules: {
       'no-console': ['error', { allow: ['error'] }],
+    },
+  },
+  // Import-cycle guard: error on runtime import cycles in SPA and extension.
+  // Type-only imports (import type …) are automatically skipped by the rule.
+  // Tolerated runtime cycles carry inline disable comments referencing AGENTS.md.
+  {
+    files: ['react-spa/src/**/*.{ts,tsx}', 'firefox-extension/src/**/*.{ts,tsx}'],
+    plugins: {
+      'import-x': importX,
+    },
+    settings: {
+      'import-x/extensions': ['.ts', '.tsx', '.js', '.jsx'],
+      'import-x/parsers': {
+        '@typescript-eslint/parser': ['.ts', '.tsx'],
+      },
+      'import-x/resolver': {
+        node: {
+          extensions: ['.ts', '.tsx', '.js', '.jsx'],
+        },
+      },
+    },
+    rules: {
+      'import-x/no-cycle': ['error', { maxDepth: 6 }],
     },
   },
   {
