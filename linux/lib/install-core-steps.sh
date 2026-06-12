@@ -4,6 +4,8 @@
 # install-core-steps.sh - Core installer workflow steps
 ################################################################################
 
+# Validate system prerequisites before installation begins; exits with an error
+# if any required condition (root, systemd, disk space) is not met.
 run_pre_install_validation() {
     local errors=0
     local warnings=0
@@ -83,6 +85,8 @@ run_pre_install_validation() {
     fi
 }
 
+# Copy all library modules and runtime helpers to the install directory, then
+# source them so subsequent installer steps have access to every helper function.
 step_install_libraries() {
     echo "[1/13] Installing libraries..."
     mkdir -p "$INSTALL_DIR/lib"
@@ -105,6 +109,8 @@ step_install_libraries() {
     load_libraries
 }
 
+# Install required system packages (iptables, ipset, dnsmasq, etc.) using the
+# resilient APT wrapper; leaves the system ready for DNS and firewall configuration.
 step_install_dependencies() {
     echo ""
     echo "[2/13] Installing dependencies..."
@@ -135,6 +141,8 @@ step_free_port_53() {
     echo "✓ Port 53 released"
 }
 
+# Detect the network's upstream DNS resolver and persist it so that dnsmasq can
+# forward non-blocked queries to the correct server after installation.
 step_detect_dns() {
     echo ""
     echo "[4/13] Detecting primary DNS..."
@@ -144,6 +152,9 @@ step_detect_dns() {
     echo "✓ DNS primario: $PRIMARY_DNS"
 }
 
+# Deploy all runtime scripts to their target paths, set permissions, persist
+# operator configuration (whitelist URL, health API, classroom settings), and
+# generate the boot-time DNS initialisation script from the current DNS state.
 step_install_scripts() {
     echo ""
     echo "[5/13] Instalando scripts..."
@@ -219,6 +230,8 @@ step_install_scripts() {
     echo "✓ Scripts installed"
 }
 
+# Write a sudoers drop-in that grants passwordless access to read-only status
+# commands while keeping all privileged operations password-protected.
 step_configure_sudoers() {
     echo ""
     echo "[6/13] Configuring sudo permissions..."
@@ -254,6 +267,8 @@ EOF
     echo "✓ Sudo permissions configured"
 }
 
+# Install all systemd unit files, logrotate config, and tmpfiles rules; create
+# runtime state directories with correct permissions and ownership.
 step_create_services() {
     echo ""
     echo "[7/13] Creating systemd services..."
@@ -271,6 +286,8 @@ step_create_services() {
     echo "✓ Services created"
 }
 
+# Point the upstream resolver to the detected DNS server and rewrite
+# /etc/resolv.conf so the local dnsmasq instance handles all queries.
 step_configure_dns() {
     echo ""
     echo "[8/13] Configuring DNS..."
@@ -281,6 +298,8 @@ step_configure_dns() {
     echo "✓ DNS configured"
 }
 
+# Write the initial dnsmasq configuration, start the service, and verify it
+# becomes active; leaves dnsmasq listening on 127.0.0.1:53 with the detected upstream.
 step_configure_dnsmasq() {
     echo ""
     echo "[9/13] Configuring dnsmasq..."

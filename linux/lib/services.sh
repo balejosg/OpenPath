@@ -334,7 +334,8 @@ create_logrotate_config() {
 EOF
 }
 
-# Configure tmpfiles (to create directory in /run)
+# Write tmpfiles.d rules for /run/dnsmasq and the runtime-dependency queue directories.
+# A narrower variant that only covers /run/dnsmasq lives in linux/lib/dns-runtime.sh.
 create_tmpfiles_config() {
     mkdir -p /etc/tmpfiles.d
     cat > /etc/tmpfiles.d/openpath-dnsmasq.conf << 'EOF'

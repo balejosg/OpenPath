@@ -4,15 +4,20 @@
 # openpath-self-update-package.sh - Package caching, install, and rollback
 ################################################################################
 
+# Remove the temporary download and backup directories used during an update run.
 cleanup_update_workspace() {
     rm -rf "$DOWNLOAD_DIR" "$BACKUP_DIR"
 }
 
+# Confirm that the given file is a structurally valid Debian package; returns
+# non-zero without output if the check fails.
 verify_deb_package() {
     local deb_file="$1"
     dpkg-deb --info "$deb_file" >/dev/null 2>&1
 }
 
+# Fetch a URL to a local file path, optionally including an authentication header;
+# verifies the result is a valid package and removes the file if the check fails.
 download_url_to_file() {
     local source_url="$1"
     local destination_file="$2"
@@ -40,6 +45,8 @@ download_url_to_file() {
     return 0
 }
 
+# Return the local path to the package for the requested version, downloading it
+# if the cache is absent or corrupt; prints the path to stdout on success.
 ensure_cached_package_for_version() {
     local version="$1"
     local cached_file=""
@@ -68,6 +75,8 @@ ensure_cached_package_for_version() {
     printf '%s\n' "$cached_file"
 }
 
+# Install a local .deb file and run a repair pass if dpkg reports issues; verifies
+# the package is fully installed before returning.
 install_deb_package_file() {
     local deb_file="$1"
     local target_version="$2"
@@ -92,6 +101,8 @@ install_deb_package_file() {
     return 0
 }
 
+# Reload the systemd unit database and restart all OpenPath-managed services
+# so the freshly installed version begins handling traffic.
 restart_updated_services() {
     log "Restarting services..."
     systemctl daemon-reload
@@ -102,6 +113,8 @@ restart_updated_services() {
     systemctl restart captive-portal-detector.service 2>/dev/null || true
 }
 
+# Confirm that the installed package version matches the expected version and that
+# dnsmasq becomes active within a bounded retry window.
 verify_updated_installation() {
     local expected_version="$1"
     local installed_version=""
@@ -128,6 +141,8 @@ verify_updated_installation() {
     return 1
 }
 
+# Copy each file listed in PRESERVE_FILES to a temporary backup directory so it
+# can be restored if the update fails.
 backup_config() {
     log "Backing up configuration..."
     mkdir -p "$BACKUP_DIR"
@@ -142,6 +157,8 @@ backup_config() {
     done
 }
 
+# Write each previously backed-up file back to its original path, creating
+# intermediate directories if needed.
 restore_config() {
     log "Restoring configuration..."
 
@@ -156,6 +173,8 @@ restore_config() {
     done
 }
 
+# Stop all OpenPath-managed services and release port 53 before replacing the
+# package files, so that dpkg does not race with live processes.
 stop_active_services_for_update() {
     log "Stopping active services before update..."
 
@@ -177,6 +196,8 @@ stop_active_services_for_update() {
     sleep 1
 }
 
+# Restore configuration files, trigger a whitelist refresh, restart services, and
+# verify the expected version is healthy; leaves the system ready for normal operation.
 finalize_updated_package() {
     local target_version="$1"
 
@@ -200,6 +221,8 @@ finalize_updated_package() {
     verify_updated_installation "$target_version"
 }
 
+# Retrieve the cached package for the previous version and reinstall it;
+# used as a recovery path when a forward update fails health checks.
 attempt_agent_package_rollback() {
     local previous_version="$1"
     local rollback_package=""
@@ -226,6 +249,9 @@ attempt_agent_package_rollback() {
     return 0
 }
 
+# Orchestrate the full update sequence: cache packages for both the target and
+# rollback versions, stop services, install the new package, finalize, and clean
+# up; automatically attempts a rollback if installation or health checks fail.
 install_update() {
     local new_version="$1"
     local previous_version="$2"

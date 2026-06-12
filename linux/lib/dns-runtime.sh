@@ -213,7 +213,10 @@ select_usable_upstream_dns() {
     printf '%s\n' "8.8.8.8"
 }
 
-# Create DNS upstream initialization script
+# Generate the boot-time DNS initialisation script and write it to disk.
+# Everything between the heredoc markers below is a script template that will be
+# evaluated at boot, not at install time. Escaped dollar signs (\$) are intentional:
+# they defer variable expansion to the generated script's runtime environment.
 create_dns_init_script() {
     local fallback_primary="${FALLBACK_DNS_PRIMARY:-8.8.8.8}"
     local fallback_secondary="${FALLBACK_DNS_SECONDARY:-8.8.4.4}"
@@ -298,8 +301,10 @@ EOF
     chmod +x "$SCRIPTS_DIR/dnsmasq-init-resolv.sh"
 }
 
-# Create tmpfiles.d config for /run/dnsmasq
-create_tmpfiles_config() {
+# Write a minimal tmpfiles.d rule that ensures /run/dnsmasq exists at boot.
+# A broader variant covering additional runtime state directories lives in
+# linux/lib/services.sh and supersedes this one in all standard sourcing contexts.
+create_dnsmasq_runtime_tmpfiles_config() {
     cat > /etc/tmpfiles.d/openpath-dnsmasq.conf << 'EOF'
 # Create /run/dnsmasq directory on each boot
 d /run/dnsmasq 0755 root root -
