@@ -284,6 +284,33 @@ Uses `Get-Content -Raw` on many internal native-host files.
 
 ---
 
+### scripts/check-ps-datetime-culture.mjs (PS DateTime culture guard)
+
+This is a static source-text check, not a contract test. It scans every tracked `.ps1` and `.psm1`
+file for `[DateTime]::Parse(` or `[DateTime]::ParseExact(` calls (case-insensitive) that do **not**
+also include `InvariantCulture` on the same line.
+
+**Why it exists:** `[DateTime]::Parse` without an explicit `InvariantCulture` argument silently swaps
+day and month on d/M locales such as es-ES. On a Spanish-locale Windows host a date string like
+`06/12/2026` is parsed as 12 June instead of 6 December, causing silent data corruption in
+captive-portal expiry handling and any other date-aware logic.
+
+**What it flags:** any line matching `[datetime]::(parse|parseexact)(` (case-insensitive) that
+lacks `InvariantCulture` on the same line, unless the line or the line directly above it carries a
+`# ps-culture-allow: <justification>` comment.
+
+**Escape hatch:** add `# ps-culture-allow: <justification>` on the violating line or the line
+immediately above it. Use this only when you have verified the call is locale-safe (for example the
+input is a fixed numeric ISO format) and have a test that proves it.
+
+**Where it runs:**
+
+- `npm run check:ps-culture` -- on-demand, full-repo scan
+- `verify:checks` -- runs in parallel alongside the other policy checks
+- `lint-staged` (`*.{ps1,psm1}`) -- guards every commit that touches PowerShell files
+
+---
+
 ## Summary checklist before editing a guarded file
 
 1. From the repo root, run `grep -r 'MyFunctionOrStepName' tests/ windows/tests/` to find all literal needles.
