@@ -397,9 +397,9 @@ Describe "SSE Listener" {
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                '$script:DelayedUpdateDueAt = [datetime]::MinValue',
+                'New-SseCoalescerState',
                 'function Start-OpenPathSseUpdateProcess',
-                '-DelaySeconds $delaySeconds',
+                'Start-OpenPathSseUpdateProcess -DelaySeconds',
                 'Start-Sleep -Seconds',
                 'SSE: Queuing delayed update'
             )

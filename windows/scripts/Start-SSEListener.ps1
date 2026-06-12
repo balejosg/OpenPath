@@ -43,12 +43,14 @@ Initialize-OpenPathScriptSession `
 Import-Module "$OpenPathRoot\lib\Update.Runtime.psm1" -Force
 Initialize-OpenPathUpdateRuntimeSession -OpenPathRoot $OpenPathRoot
 
+# Load the SSE coalescer helper (pure, testable debounce logic).
+. (Join-Path $OpenPathRoot 'lib\internal\Sse.Coalescer.ps1')
+
 # =============================================================================
 # Configuration
 # =============================================================================
 
-$script:LastUpdateTime = [datetime]::MinValue
-$script:DelayedUpdateDueAt = [datetime]::MinValue
+$script:SseCoalescerState = New-SseCoalescerState
 
 function Get-SSEConfig {
     <#
@@ -61,7 +63,7 @@ function Get-SSEConfig {
         WhitelistUrl    = $config.whitelistUrl
         ReconnectMin    = if ($config.PSObject.Properties['sseReconnectMin']) { $config.sseReconnectMin } else { 5 }
         ReconnectMax    = if ($config.PSObject.Properties['sseReconnectMax']) { $config.sseReconnectMax } else { 60 }
-        UpdateCooldown  = if ($config.PSObject.Properties['sseUpdateCooldown']) { $config.sseUpdateCooldown } else { 10 }
+        UpdateCooldown  = Get-SseUpdateCooldownFromConfig -Config $config
     }
 }
 
@@ -107,42 +109,41 @@ function Get-SSEUrl {
 }
 
 # =============================================================================
-# Update Trigger (with debounce)
+# Update Trigger (delegates to Sse.Coalescer.ps1)
 # =============================================================================
 
 function Invoke-DebouncedUpdate {
     <#
     .SYNOPSIS
-        Triggers an OpenPath update with cooldown debounce
+        Triggers an OpenPath update with cooldown debounce.
+        Delegates to Invoke-SseCoalescerUpdate from Sse.Coalescer.ps1.
     #>
     param(
         [int]$CooldownSeconds = 10
     )
 
-    $now = Get-Date
-    $elapsed = ($now - $script:LastUpdateTime).TotalSeconds
-
-    if ($elapsed -lt $CooldownSeconds) {
-        $delaySeconds = [Math]::Max(1, [int][Math]::Ceiling($CooldownSeconds - $elapsed))
-        if ($script:DelayedUpdateDueAt -gt $now) {
-            Write-OpenPathLog "SSE: Delayed update already queued for $($script:DelayedUpdateDueAt.ToString('o'))"
-            return
-        }
-
-        $script:DelayedUpdateDueAt = $now.AddSeconds($delaySeconds)
-        Write-OpenPathLog "SSE: Queuing delayed update in ${delaySeconds}s (last update ${elapsed}s ago, cooldown ${CooldownSeconds}s)"
-        Start-OpenPathSseUpdateProcess -DelaySeconds $delaySeconds
-        return
+    # DeferAction: in-process deferred update - sleep the remaining cooldown
+    # window then run the update cycle inline. This blocks the listener loop
+    # for the remainder of the cooldown window, which is intentional: it
+    # absorbs any burst of events without spawning detached processes.
+    $deferAction = {
+        param([int]$DelaySeconds, [scriptblock]$UpdateAction)
+        Write-OpenPathLog "SSE: Queuing delayed update in ${DelaySeconds}s"
+        Start-OpenPathSseUpdateProcess -DelaySeconds $DelaySeconds
     }
 
-    Write-OpenPathLog "SSE: Whitelist change detected - triggering immediate update"
-    $script:LastUpdateTime = $now
-    $script:DelayedUpdateDueAt = [datetime]::MinValue
-
-    Start-OpenPathSseUpdateProcess
+    $script:SseCoalescerState = Invoke-SseCoalescerUpdate `
+        -State $script:SseCoalescerState `
+        -UpdateAction { Start-OpenPathSseUpdateProcess } `
+        -CooldownSeconds $CooldownSeconds `
+        -DeferAction $deferAction
 }
 
 function Start-OpenPathSseUpdateProcess {
+    <#
+    .SYNOPSIS
+        Runs an in-process OpenPath update cycle, optionally after a delay.
+    #>
     param(
         [int]$DelaySeconds = 0
     )

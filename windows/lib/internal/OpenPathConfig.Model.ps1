@@ -83,6 +83,12 @@ function ConvertTo-OpenPathNormalizedConfig {
     if ($logKeepFiles -lt 1) { $logKeepFiles = 3 }
     Set-OpenPathConfigValue -Config $normalized -Name 'logKeepFiles' -Value $logKeepFiles
 
+    # SSE update cooldown default: 10 seconds (mirrors Linux SSE_UPDATE_COOLDOWN=10)
+    $sseUpdateCooldown = Get-OpenPathConfigValue -Config $normalized -Name 'sseUpdateCooldown' -DefaultValue 10
+    $sseUpdateCooldown = try { [int]$sseUpdateCooldown } catch { 10 }
+    if ($sseUpdateCooldown -lt 1) { $sseUpdateCooldown = 10 }
+    Set-OpenPathConfigValue -Config $normalized -Name 'sseUpdateCooldown' -Value $sseUpdateCooldown
+
     return $normalized
 }
 
