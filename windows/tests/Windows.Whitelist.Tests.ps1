@@ -19,9 +19,9 @@ Describe "Log Rotation" {
             $content = Get-Content $modulePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                'MaxLogSizeBytes',
-                'Move-Item $script:LogPath $archivePath',
-                'Select-Object -Skip 5'
+                'Invoke-OpenPathLogRotation',
+                'logMaxSizeMb',
+                'Move-Item $LogPath "$LogPath.1"'
             )
         }
     }

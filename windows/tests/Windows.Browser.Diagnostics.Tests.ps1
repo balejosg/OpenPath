@@ -24,7 +24,7 @@ Describe "Browser Module - Diagnostics" {
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                "Write-Host '  doctor        Print focused diagnostics (for example: browser)'",
+                "Write-Host '  doctor           Print focused diagnostics (for example: browser)'",
                 "Write-Host '  .\OpenPath.ps1 doctor browser'",
                 "'doctor' {",
                 "'browser' {",
