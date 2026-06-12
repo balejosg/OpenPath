@@ -87,7 +87,12 @@ function Get-NativeHostCaptivePortalActiveMarker {
         if (-not $payload.PSObject.Properties['expiresAt'] -or -not $payload.expiresAt) {
             return $null
         }
-        $expiresAt = [DateTime]::Parse([string]$payload.expiresAt).ToUniversalTime()
+        $expiresAtRaw = $payload.expiresAt
+        $expiresAt = if ($expiresAtRaw -is [DateTime]) {
+            $expiresAtRaw.ToUniversalTime()
+        } else {
+            [DateTime]::Parse([string]$expiresAtRaw, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+        }
         if ([DateTime]::UtcNow -ge $expiresAt) {
             return $null
         }
@@ -517,7 +522,12 @@ function Test-NativeHostCaptivePortalObservationRecent {
         $property = $Observation.PSObject.Properties[$propertyName]
         if ($property -and $property.Value) {
             try {
-                $timestamp = [DateTime]::Parse([string]$property.Value).ToUniversalTime()
+                $tsRaw = $property.Value
+                $timestamp = if ($tsRaw -is [DateTime]) {
+                    $tsRaw.ToUniversalTime()
+                } else {
+                    [DateTime]::Parse([string]$tsRaw, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                }
                 break
             }
             catch {
