@@ -252,10 +252,10 @@ load 'test_helper'
     run grep -nF '"AddressCacheDisabled" = "No"' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF '"PrimaryServerDomainNameAffinityMask" = $domainAffinityMask' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
+    run grep -nF '"PrimaryServerDomainNameAffinityMask" = $configuredUpstreamMask' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
     [ "$status" -eq 0 ]
 
-    run grep -nF '"SecondaryServerDomainNameAffinityMask" = $domainAffinityMask' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
+    run grep -nF '"SecondaryServerDomainNameAffinityMask" = $configuredUpstreamMask' "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Config.ps1"
     [ "$status" -eq 0 ]
 
     run grep -nF 'Start-Sleep -Milliseconds $DelayMilliseconds' "$PROJECT_DIR/windows/lib/internal/DNS.Diagnostics.ps1"
