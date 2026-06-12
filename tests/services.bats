@@ -22,19 +22,11 @@ setup() {
     # Copy libs
     cp "$PROJECT_DIR/linux/lib/"*.sh "$INSTALL_DIR/lib/" 2>/dev/null || true
     
-    # Mock log function
-    log() { echo "$1"; }
-    export -f log
-    
+    setup_mock_log
+
     # Mock systemctl
     systemctl() { return 0; }
     export -f systemctl
-}
-
-teardown() {
-    if [ -n "$TEST_TMP_DIR" ] && [ -d "$TEST_TMP_DIR" ]; then
-        rm -rf "$TEST_TMP_DIR"
-    fi
 }
 
 # ============== Tests de create_whitelist_service ==============

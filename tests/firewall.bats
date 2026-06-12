@@ -49,12 +49,6 @@ setup() {
     export OPENPATH_IPSET_STATE_FILE="$TEST_TMP_DIR/openpath-ipsets.v4"
 }
 
-teardown() {
-    if [ -n "$TEST_TMP_DIR" ] && [ -d "$TEST_TMP_DIR" ]; then
-        rm -rf "$TEST_TMP_DIR"
-    fi
-}
-
 # ============== validate_ip tests ==============
 
 @test "validate_ip accepts valid IP" {

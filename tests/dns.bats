@@ -6,21 +6,7 @@
 load 'test_helper'
 
 setup() {
-    # Create temp directory for tests
-    TEST_TMP_DIR=$(mktemp -d)
-    export CONFIG_DIR="$TEST_TMP_DIR/config"
-    export INSTALL_DIR="$TEST_TMP_DIR/install"
-    mkdir -p "$CONFIG_DIR"
-    mkdir -p "$INSTALL_DIR/lib"
-    
-    # Copy libs
-    cp "$PROJECT_DIR/linux/lib/"*.sh "$INSTALL_DIR/lib/" 2>/dev/null || true
-}
-
-teardown() {
-    if [ -n "$TEST_TMP_DIR" ] && [ -d "$TEST_TMP_DIR" ]; then
-        rm -rf "$TEST_TMP_DIR"
-    fi
+    setup_std_lib_layout
 }
 
 # ============== Configuration generation tests ==============

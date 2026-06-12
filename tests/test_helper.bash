@@ -98,3 +98,23 @@ csv_to_lines() {
         [ -n "$entry" ] && printf '%s\n' "$entry"
     done
 }
+
+# Helper: create the standard tmp dir layout used by most linux agent tests.
+# Sets TEST_TMP_DIR, CONFIG_DIR, INSTALL_DIR and copies linux/lib/*.sh into
+# INSTALL_DIR/lib. Call from within a local setup() before any file-specific work.
+setup_std_lib_layout() {
+    TEST_TMP_DIR=$(mktemp -d)
+    export CONFIG_DIR="$TEST_TMP_DIR/config"
+    export INSTALL_DIR="$TEST_TMP_DIR/install"
+    mkdir -p "$CONFIG_DIR"
+    mkdir -p "$INSTALL_DIR/lib"
+    cp "$PROJECT_DIR/linux/lib/"*.sh "$INSTALL_DIR/lib/" 2>/dev/null || true
+}
+
+# Helper: install a minimal log() mock into the current shell and export it so
+# subprocesses see it. Echoes the message to stdout so tests can still capture
+# it, without the timestamps and file writes of the real logger.
+setup_mock_log() {
+    log() { echo "$1"; }
+    export -f log
+}

@@ -9,12 +9,6 @@ setup() {
     TEST_TMP_DIR=$(mktemp -d)
 }
 
-teardown() {
-    if [ -n "$TEST_TMP_DIR" ] && [ -d "$TEST_TMP_DIR" ]; then
-        rm -rf "$TEST_TMP_DIR"
-    fi
-}
-
 @test "check_integrity matches exact file paths when command names share a prefix" {
     local helper_script="$TEST_TMP_DIR/run-watchdog-integrity.sh"
     local bin_dir="$TEST_TMP_DIR/usr/local/bin"

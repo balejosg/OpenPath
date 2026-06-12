@@ -51,12 +51,6 @@ setup() {
     export -f ip
 }
 
-teardown() {
-    if [ -n "$TEST_TMP_DIR" ] && [ -d "$TEST_TMP_DIR" ]; then
-        rm -rf "$TEST_TMP_DIR"
-    fi
-}
-
 source_firewall() {
     source "$PROJECT_DIR/linux/lib/firewall.sh"
     save_firewall_rules() { return 0; }

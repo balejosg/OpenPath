@@ -6,19 +6,9 @@
 load 'test_helper'
 
 setup() {
-    # Create temp directory for tests
     TEST_TMP_DIR=$(mktemp -d)
     export LOCK_FILE="$TEST_TMP_DIR/test.lock"
-
-    # Mock log function
-    log() { echo "$1"; }
-    export -f log
-}
-
-teardown() {
-    if [ -n "$TEST_TMP_DIR" ] && [ -d "$TEST_TMP_DIR" ]; then
-        rm -rf "$TEST_TMP_DIR"
-    fi
+    setup_mock_log
 }
 
 # ============== Lock acquisition tests ==============
