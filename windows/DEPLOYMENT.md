@@ -18,9 +18,9 @@ The Windows agent is packaged as part of the `release-scripts` workflow (`.githu
 
 The release asset is named `windows-v<version>.zip`. It contains:
 
-- `windows/` — all PowerShell scripts, library modules, and helper scripts
-- `runtime/` — shared runtime assets
-- `VERSION` — version string
+- `windows/` - all PowerShell scripts, library modules, and helper scripts
+- `runtime/` - shared runtime assets
+- `VERSION` - version string
 
 **Install from the release zip (Administrator PowerShell):**
 
@@ -56,7 +56,7 @@ Additional supported flags are documented in `windows/Install-OpenPath.ps1` head
 
 Two enrollment flows are supported. Both are initiated through `Install-OpenPath.ps1` (or post-install via `scripts/Enroll-Machine.ps1` / `.\OpenPath.ps1 enroll`).
 
-**Registration-token mode** — long-lived token, requires a classroom name:
+**Registration-token mode** - long-lived token, requires a classroom name:
 
 ```powershell
 .\Install-OpenPath.ps1 `
@@ -65,7 +65,7 @@ Two enrollment flows are supported. Both are initiated through `Install-OpenPath
   -RegistrationToken "<long-lived-token>"
 ```
 
-**Enrollment-token mode** — short-lived token, classroom identified by ID:
+**Enrollment-token mode** - short-lived token, classroom identified by ID:
 
 ```powershell
 .\Install-OpenPath.ps1 `
@@ -79,8 +79,8 @@ When `-Unattended` is set alongside a classroom-mode install, the managed browse
 
 Tokens can also be supplied via environment variables:
 
-- `OPENPATH_ENROLLMENT_TOKEN` — used when `-EnrollmentToken` is omitted
-- `OPENPATH_TOKEN` — used when `-RegistrationToken` is omitted
+- `OPENPATH_ENROLLMENT_TOKEN` - used when `-EnrollmentToken` is omitted
+- `OPENPATH_TOKEN` - used when `-RegistrationToken` is omitted
 
 Post-install re-enrollment:
 
@@ -102,20 +102,20 @@ Before deploying to real student machines, validate the AppLocker policy on a pi
 
 After installation the agent occupies `C:\OpenPath\` with the following layout:
 
-- `OpenPath.ps1` — operator CLI
-- `Install-OpenPath.ps1` — installer
-- `Uninstall-OpenPath.ps1` — uninstaller
-- `Rotate-Token.ps1` — token rotation helper
-- `lib\*.psm1` — runtime library modules
-- `scripts\Update-OpenPath.ps1` — whitelist fetch and apply
-- `scripts\Test-DNSHealth.ps1` — watchdog health check
-- `scripts\Start-SSEListener.ps1` — SSE push listener
-- `scripts\Enroll-Machine.ps1` — enrollment helper
-- `scripts\Apply-RuntimeDependencyQueue.ps1` — fast-apply runtime dependency queue
-- `scripts\Recover-CaptivePortal.ps1` — captive portal recovery task
-- `data\config.json` — persisted runtime configuration
-- `data\logs\openpath.log` — agent log
-- `browser-extension\firefox\`, `browser-extension\firefox-release\`, `browser-extension\chromium-managed\`, `browser-extension\chromium-unmanaged\` — staged extension artifacts
+- `OpenPath.ps1` - operator CLI
+- `Install-OpenPath.ps1` - installer
+- `Uninstall-OpenPath.ps1` - uninstaller
+- `Rotate-Token.ps1` - token rotation helper
+- `lib\*.psm1` - runtime library modules
+- `scripts\Update-OpenPath.ps1` - whitelist fetch and apply
+- `scripts\Test-DNSHealth.ps1` - watchdog health check
+- `scripts\Start-SSEListener.ps1` - SSE push listener
+- `scripts\Enroll-Machine.ps1` - enrollment helper
+- `scripts\Apply-RuntimeDependencyQueue.ps1` - fast-apply runtime dependency queue
+- `scripts\Recover-CaptivePortal.ps1` - captive portal recovery task
+- `data\config.json` - persisted runtime configuration
+- `data\logs\openpath.log` - agent log
+- `browser-extension\firefox\`, `browser-extension\firefox-release\`, `browser-extension\chromium-managed\`, `browser-extension\chromium-unmanaged\` - staged extension artifacts
 
 Acrylic DNS Proxy is installed to `C:\Program Files (x86)\Acrylic DNS Proxy\`. Its configuration and host overrides live at:
 
@@ -132,7 +132,7 @@ The installer registers the following Task Scheduler tasks under the `OpenPath` 
 | `OpenPath-Watchdog`               | `scripts\Test-DNSHealth.ps1`               | DNS health check and auto-recovery            |
 | `OpenPath-Startup`                | `scripts\Update-OpenPath.ps1`              | Apply whitelist at machine startup            |
 | `OpenPath-SSE`                    | `scripts\Start-SSEListener.ps1`            | Push listener for instant rule changes        |
-| `OpenPath-AgentUpdate`            | `OpenPath.ps1 self-update --silent`        | Daily agent self-update (3 am ± 45 min)       |
+| `OpenPath-AgentUpdate`            | `OpenPath.ps1 self-update --silent`        | Daily agent self-update (3 am +/- 45 min)     |
 | `OpenPath-RuntimeDependencyApply` | `scripts\Apply-RuntimeDependencyQueue.ps1` | Fast-apply browser-requested dependency hosts |
 | `OpenPath-CaptivePortalRecovery`  | `scripts\Recover-CaptivePortal.ps1`        | Captive portal detection and recovery         |
 
