@@ -35,6 +35,7 @@ fi
 HEALTH_FILE="$CONFIG_DIR/health-status"
 FAIL_COUNT_FILE="$CONFIG_DIR/watchdog-fails"
 INTEGRITY_HASH_FILE="$CONFIG_DIR/integrity.sha256"
+WATCHDOG_PROTECTED_FLAG="${WATCHDOG_PROTECTED_FLAG:-$CONFIG_DIR/watchdog-protected.flag}"
 MAX_CONSECUTIVE_FAILS=3
 
 # Obtener/incrementar contador de fallos
@@ -203,6 +204,51 @@ EOF
     chattr +i /etc/resolv.conf 2>/dev/null || true
 }
 
+################################################################################
+# Protected-mode helpers (ADR 0011)
+################################################################################
+
+# Returns 0 if the operator has explicitly requested fail-open behaviour.
+# Any value other than "open" is treated as "protected" (the default).
+_watchdog_failure_mode_is_open() {
+    [ "${FAILURE_MODE:-protected}" = "open" ]
+}
+
+# Switch dnsmasq to a restricted critical-domains config without deactivating
+# the firewall, then write the protected-mode state marker.
+enter_protected_mode() {
+    log "[WATCHDOG] Entering protected mode (critical-domains only)"
+
+    local upstream_dns
+    upstream_dns=$(select_usable_upstream_dns "${PRIMARY_DNS:-}" 2>/dev/null || echo "8.8.8.8")
+
+    if write_dnsmasq_protected_mode_config "$upstream_dns" "$DNSMASQ_CONF"; then
+        if systemctl restart dnsmasq 2>/dev/null; then
+            log "[WATCHDOG] dnsmasq restarted with protected-mode config"
+        else
+            log_warn "[WATCHDOG] dnsmasq restart failed after protected-mode config write"
+        fi
+    else
+        log_warn "[WATCHDOG] write_dnsmasq_protected_mode_config failed; dnsmasq config unchanged"
+    fi
+
+    cat > "$WATCHDOG_PROTECTED_FLAG" << EOF
+{
+    "enteredAt": "$(date -Iseconds)",
+    "failCount": $(get_fail_count)
+}
+EOF
+    report_health_to_api "PROTECTED" "protected_mode_activated"
+}
+
+# Remove the protected-mode state marker.  Called on recovery.
+exit_protected_mode() {
+    if [ -f "$WATCHDOG_PROTECTED_FLAG" ]; then
+        rm -f "$WATCHDOG_PROTECTED_FLAG"
+        log "[WATCHDOG] Protected mode cleared"
+    fi
+}
+
 # Principal
 main() {
     local status="HEALTHY"
@@ -222,23 +268,38 @@ main() {
             recovered_cycle=true
             # Don't enter fail-open, rollback succeeded
         else
-            # Rollback failed, enter fail-open mode
-            log "[WATCHDOG] Entrando en modo fail-open"
-            deactivate_firewall
-            
-            # Guardar estado
-            status="FAIL_OPEN"
-            cat > "$HEALTH_FILE" << EOF
+            # Rollback failed — use failure mode from config.
+            if _watchdog_failure_mode_is_open; then
+                # Legacy escape hatch: operator has explicitly opted into fail-open.
+                log "[WATCHDOG] Entrando en modo fail-open (OPENPATH_FAILURE_MODE=open)"
+                deactivate_firewall
+
+                status="FAIL_OPEN"
+                cat > "$HEALTH_FILE" << EOF
 {
     "timestamp": "$(date -Iseconds)",
     "status": "FAIL_OPEN",
-    "message": "Demasiados fallos consecutivos - sistema en modo permisivo",
+    "message": "Demasiados fallos consecutivos - sistema en modo permisivo (escape hatch activo)",
     "fail_count": $fail_count
 }
 EOF
-            # Report fail-open to central API immediately
-            report_health_to_api "FAIL_OPEN" "fail_open_activated"
-            
+                # Report fail-open to central API immediately
+                report_health_to_api "FAIL_OPEN" "fail_open_activated"
+            else
+                # Default: protected mode — keep firewall, restrict dnsmasq to critical domains.
+                enter_protected_mode
+
+                status="PROTECTED"
+                cat > "$HEALTH_FILE" << EOF
+{
+    "timestamp": "$(date -Iseconds)",
+    "status": "PROTECTED",
+    "message": "Demasiados fallos consecutivos - modo protegido activo (solo dominios criticos)",
+    "fail_count": $fail_count
+}
+EOF
+            fi
+
             # No resetear contador - requiere intervención manual
             return 1
         fi
@@ -318,9 +379,10 @@ EOF
         done
     fi
     
-    # Si está sano o recuperado en este ciclo, resetear contador de fallos
+    # Si está sano o recuperado en este ciclo, resetear contador de fallos y salir del modo protegido
     if [ "$status" = "HEALTHY" ] || [ "$recovered_cycle" = true ]; then
         reset_fail_count
+        exit_protected_mode
     fi
     
     # Guardar estado local

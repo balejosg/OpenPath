@@ -45,6 +45,27 @@ append_unique_openpath_domain() {
     OPENPATH_PROTECTED_DOMAINS+=("$normalized")
 }
 
+get_openpath_captive_portal_probe_domains() {
+    cat <<'EOF'
+detectportal.firefox.com
+connectivity-check.ubuntu.com
+captive.apple.com
+www.msftconnecttest.com
+clients3.google.com
+EOF
+}
+
+get_openpath_os_system_domains() {
+    cat <<'EOF'
+ntp.ubuntu.com
+time.google.com
+pool.ntp.org
+security.ubuntu.com
+archive.ubuntu.com
+changelogs.ubuntu.com
+EOF
+}
+
 refresh_openpath_protected_domains() {
     OPENPATH_PROTECTED_DOMAINS=()
     OPENPATH_PROTECTED_DOMAINS_READY=0
@@ -61,6 +82,14 @@ refresh_openpath_protected_domains() {
         downloads.sourceforge.net; do
         append_unique_openpath_domain "$domain"
     done
+
+    while IFS= read -r domain; do
+        append_unique_openpath_domain "$domain"
+    done < <(get_openpath_captive_portal_probe_domains)
+
+    while IFS= read -r domain; do
+        append_unique_openpath_domain "$domain"
+    done < <(get_openpath_os_system_domains)
 
     while IFS= read -r domain; do
         append_unique_openpath_domain "$domain"

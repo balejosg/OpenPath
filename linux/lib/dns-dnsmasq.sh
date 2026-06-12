@@ -27,6 +27,49 @@ EOF
     return 0
 }
 
+# Write a restricted dnsmasq config that only forwards critical domains upstream.
+# All other queries remain sinkholed. Used by the watchdog protected-mode path.
+# Args:
+#   1) upstream DNS IP (required)
+#   2) output path (optional; defaults to $DNSMASQ_CONF)
+write_dnsmasq_protected_mode_config() {
+    local upstream_dns="$1"
+    local conf_path="${2:-$DNSMASQ_CONF}"
+    local sinkhole_ipv4="${OPENPATH_DNS_SINKHOLE_IPV4:-192.0.2.1}"
+    local sinkhole_ipv6="${OPENPATH_DNS_SINKHOLE_IPV6:-100::}"
+
+    if [ -z "${upstream_dns:-}" ]; then
+        log_warn "write_dnsmasq_protected_mode_config: upstream DNS is empty"
+        return 1
+    fi
+
+    local temp_conf="${conf_path}.protected-mode.tmp"
+
+    cat > "$temp_conf" << EOF
+# OPENPATH PROTECTED MODE - critical-domains only (watchdog threshold reached)
+no-resolv
+resolv-file=/run/dnsmasq/resolv.conf
+listen-address=127.0.0.1
+bind-interfaces
+cache-size=1000
+
+# DEFAULT BLOCK — everything not in the critical list is sinkholed
+address=/#/${sinkhole_ipv4}
+address=/#/${sinkhole_ipv6}
+
+# CRITICAL DOMAINS — control plane, captive portal probes, OS/system
+EOF
+
+    local protected_domain
+    while IFS= read -r protected_domain; do
+        [ -z "$protected_domain" ] && continue
+        printf 'server=/%s/%s\n' "$protected_domain" "$upstream_dns" >> "$temp_conf"
+    done < <(get_openpath_protected_domains)
+
+    mv "$temp_conf" "$conf_path"
+    return 0
+}
+
 write_dnsmasq_default_sinkhole_rules() {
     local conf_path="$1"
     local sinkhole_ipv4="${OPENPATH_DNS_SINKHOLE_IPV4:-192.0.2.1}"

@@ -202,7 +202,7 @@ linux/install.sh|tests/install.bats,tests/linux-e2e.bats
 linux/lib/common.sh|tests/install.bats,tests/captive-portal.bats,tests/openpath-update.bats
 linux/lib/dns-validation.sh|tests/dns.bats,tests/common.bats,tests/captive-portal.bats
 linux/lib/dns-runtime.sh|tests/dns.bats,tests/common.bats,tests/captive-portal.bats,tests/openpath-update.bats
-linux/lib/dns-dnsmasq.sh|tests/dns.bats,tests/common.bats,tests/captive-portal.bats
+linux/lib/dns-dnsmasq.sh|tests/dns.bats,tests/common.bats,tests/captive-portal.bats,tests/repo-config/failure-semantics-contracts.test.mjs
 linux/lib/browser.sh|tests/browser_policy.bats,tests/browser_firefox_extension.bats,tests/browser_native_host.bats,tests/browser_chromium.bats,tests/linux-e2e.bats
 linux/lib/browser-request-readiness.sh|tests/browser_setup.bats,tests/linux-e2e.bats
 linux/lib/browser-process.sh|tests/browser_policy.bats,tests/browser_firefox_extension.bats,tests/browser_native_host.bats,tests/browser_chromium.bats,tests/linux-e2e.bats
@@ -234,7 +234,7 @@ linux/lib/captive-portal.sh|tests/captive-portal.bats,tests/linux-e2e.bats
 linux/lib/chromium-managed-extension.sh|tests/browser_chromium.bats,tests/linux-e2e.bats
 linux/lib/common-config-persistence.sh|tests/install.bats,tests/openpath-update.bats
 linux/lib/common-locking.sh|tests/common.bats,tests/install.bats
-linux/lib/common-protected-domains.sh|tests/common.bats,tests/captive-portal.bats
+linux/lib/common-protected-domains.sh|tests/common.bats,tests/captive-portal.bats,tests/repo-config/failure-semantics-contracts.test.mjs
 linux/lib/dns.sh|tests/dns.bats,tests/common.bats,tests/linux-e2e.bats
 linux/lib/firefox-extension-assets.sh|tests/browser_firefox_extension.bats,tests/linux-e2e.bats
 linux/lib/firefox-managed-extension.sh|tests/browser_firefox_extension.bats,tests/browser_policy.bats,tests/linux-e2e.bats
@@ -253,7 +253,7 @@ linux/scripts/build/build-deb.sh|tests/install.bats,tests/linux-e2e.bats
 linux/scripts/dev/lint.sh|tests/common.bats
 linux/scripts/dev/setup-repo.sh|tests/install.bats
 linux/scripts/runtime/captive-portal-detector.sh|tests/captive-portal.bats,tests/linux-e2e.bats
-linux/scripts/runtime/dnsmasq-watchdog.sh|tests/dns.bats,tests/linux-e2e.bats
+linux/scripts/runtime/dnsmasq-watchdog.sh|tests/dns.bats,tests/linux-e2e.bats,tests/watchdog.bats,tests/repo-config/failure-semantics-contracts.test.mjs
 linux/scripts/runtime/openpath-agent-update.sh|tests/openpath-update.bats,tests/linux-e2e.bats
 linux/scripts/runtime/openpath-browser-setup.sh|tests/browser_policy.bats,tests/browser_firefox_extension.bats,tests/linux-e2e.bats
 linux/scripts/runtime/openpath-cmd.sh|tests/install.bats,tests/openpath-update.bats
