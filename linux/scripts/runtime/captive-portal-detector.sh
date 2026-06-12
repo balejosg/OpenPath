@@ -63,13 +63,18 @@ main() {
     log "[CAPTIVE] Starting captive portal detector"
 
     if is_portal_mode_active; then
-        log "[CAPTIVE] Portal mode marker detected at startup - keeping fail-open mode until AUTHENTICATED" "WARN"
-        CAPTIVE_PORTAL_DETECTED=true
+        if close_expired_portal_mode; then
+            log "[CAPTIVE] Expired portal mode marker closed at startup" "WARN"
+        else
+            log "[CAPTIVE] Portal mode marker detected at startup - keeping fail-open mode until AUTHENTICATED" "WARN"
+            CAPTIVE_PORTAL_DETECTED=true
+        fi
     fi
 
     while true; do
         local state
         state=$(get_captive_portal_state)
+        update_captive_portal_observation "$state"
 
         if [ "$state" != "$LAST_STATE" ]; then
             local ssid gw
@@ -81,16 +86,33 @@ main() {
 
         if [ "$state" = "AUTHENTICATED" ]; then
             if [ "$CAPTIVE_PORTAL_DETECTED" = true ] || is_portal_mode_active; then
-                if with_openpath_lock exit_portal_mode_locked; then
-                    CAPTIVE_PORTAL_DETECTED=false
+                # Anti-oscillation: require CAPTIVE_PORTAL_EXIT_THRESHOLD
+                # consecutive AUTHENTICATED observations before restoring.
+                if should_exit_portal_mode; then
+                    if with_openpath_lock exit_portal_mode_locked; then
+                        CAPTIVE_PORTAL_DETECTED=false
+                    fi
                 fi
             fi
         elif [ "$state" = "PORTAL" ]; then
             if [ "$CAPTIVE_PORTAL_DETECTED" = false ] && ! is_portal_mode_active; then
-                if with_openpath_lock enter_portal_mode_locked; then
-                    CAPTIVE_PORTAL_DETECTED=true
+                # Anti-oscillation: require CAPTIVE_PORTAL_ENTER_THRESHOLD
+                # consecutive PORTAL observations before going fail-open.
+                if should_enter_portal_mode; then
+                    if with_openpath_lock enter_portal_mode_locked; then
+                        CAPTIVE_PORTAL_DETECTED=true
+                    fi
                 fi
+            elif is_portal_mode_active; then
+                # Portal still observed: keep the passthrough deadline alive.
+                refresh_portal_mode_expiry || true
             fi
+        fi
+
+        # Passthrough must not persist if the portal flow never completes:
+        # close an expired marker whenever the portal is no longer observed.
+        if [ "$state" != "PORTAL" ] && close_expired_portal_mode; then
+            CAPTIVE_PORTAL_DETECTED=false
         fi
 
         local interval

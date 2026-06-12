@@ -32,6 +32,11 @@ if ! load_libraries; then
     exit 1
 fi
 
+# Captive-portal helpers: the watchdog auto-closes an expired portal-mode
+# passthrough marker so fail-open never outlives its deadline (WEDU lesson).
+# shellcheck source=../../lib/captive-portal.sh
+source "$INSTALL_DIR/lib/captive-portal.sh"
+
 HEALTH_FILE="$CONFIG_DIR/health-status"
 FAIL_COUNT_FILE="$CONFIG_DIR/watchdog-fails"
 INTEGRITY_HASH_FILE="$CONFIG_DIR/integrity.sha256"
@@ -256,6 +261,11 @@ main() {
     local recovered_cycle=false
     local fail_count
     fail_count=$(get_fail_count)
+
+    # Auto-close an expired captive-portal passthrough marker (the detector
+    # refreshes the deadline while the portal is still observed, so an expired
+    # marker means the portal flow never completed or the detector is gone).
+    close_expired_portal_mode || true
     
     # Protección contra loop infinito de reinicios
     if [ "$fail_count" -ge "$MAX_CONSECUTIVE_FAILS" ]; then

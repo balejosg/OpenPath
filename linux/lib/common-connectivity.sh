@@ -108,6 +108,65 @@ validate_ip() {
     [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]
 }
 
+# Discover the DHCP-provided DNS servers for the current network.
+# Linux analogue of the Windows DhcpNameServer registry lookup
+# (Get-OpenPathCaptivePortalDhcpNameServerCandidates): the DHCP-offered
+# resolver is the only one that knows internal captive-portal hostnames,
+# so split-DNS detection needs it even after OpenPath pins /etc/resolv.conf
+# to 127.0.0.1.
+#
+# Tries, in order:
+#   1. systemd-resolved's upstream list (/run/systemd/resolve/resolv.conf)
+#   2. dhclient lease files (/var/lib/dhcp/dhclient*.lease*)
+#   3. NetworkManager per-device DNS (nmcli dev show IP4.DNS)
+#
+# Prints one usable IPv4 address per line (deduplicated, source order kept).
+# Returns 1 when no DHCP DNS could be determined; callers must degrade
+# gracefully and skip split-DNS detection in that case.
+get_dhcp_dns_servers() {
+    local candidates candidate emitted=""
+    local resolved_conf="${OPENPATH_SYSTEMD_RESOLV_CONF:-/run/systemd/resolve/resolv.conf}"
+    local lease_dir="${OPENPATH_DHCLIENT_LEASE_DIR:-/var/lib/dhcp}"
+
+    candidates=$(
+        {
+            # 1. systemd-resolved upstream list (DHCP-provided on most setups)
+            if [ -f "$resolved_conf" ]; then
+                awk '$1 == "nameserver" { print $2 }' "$resolved_conf"
+            fi
+
+            # 2. dhclient leases: take the most recent domain-name-servers
+            #    declaration from each lease file
+            local lease
+            for lease in "$lease_dir"/dhclient*.lease*; do
+                [ -f "$lease" ] || continue
+                sed -n 's/.*option domain-name-servers \([^;]*\);.*/\1/p' "$lease" \
+                    | tail -1 | tr ',' '\n'
+            done
+
+            # 3. NetworkManager: per-device DNS still reflects the DHCP offer
+            #    even after /etc/resolv.conf is pinned to 127.0.0.1
+            if command -v nmcli >/dev/null 2>&1; then
+                nmcli dev show 2>/dev/null \
+                    | awk 'toupper($1) ~ /^IP4\.DNS/ { print $2 }'
+            fi
+        } 2>/dev/null
+    )
+
+    while IFS= read -r candidate; do
+        candidate="${candidate//[[:space:]]/}"
+        [ -n "$candidate" ] || continue
+        is_usable_upstream_dns "$candidate" || continue
+        case "$emitted" in
+            *"|$candidate|"*) continue ;;
+        esac
+        emitted="${emitted}|$candidate|"
+        echo "$candidate"
+    done <<< "$candidates"
+
+    [ -n "$emitted" ]
+}
+
 check_internet() {
     if timeout 10 curl -s http://detectportal.firefox.com/success.txt 2>/dev/null | grep -q "success"; then
         return 0
