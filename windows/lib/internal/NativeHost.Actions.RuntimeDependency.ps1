@@ -1,8 +1,16 @@
 function Get-NativeHostRuntimeDependencyQueuePath {
+    <#
+    .SYNOPSIS
+    Returns the file system path to the runtime dependency queue storage location.
+    #>
     return (Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue -OpenPathRoot $script:OpenPathRoot)
 }
 
 function Get-NativeHostRuntimeDependencySettings {
+    <#
+    .SYNOPSIS
+    Returns runtime dependency overlay settings, reading TTL and capacity from environment variables when present.
+    #>
     $ttlDays = 7
     $capacity = 300
     if ($env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_TTL_DAYS) {
@@ -19,6 +27,10 @@ function Get-NativeHostRuntimeDependencySettings {
 }
 
 function Get-NativeHostMicrosoftSystemRuntimeDependencyRoots {
+    <#
+    .SYNOPSIS
+    Returns the fixed list of Microsoft system hostnames that are always treated as protected runtime dependency roots.
+    #>
     return @(
         'windowsupdate.com',
         'windowsupdate.microsoft.com',
@@ -61,6 +73,10 @@ function Get-NativeHostMicrosoftSystemRuntimeDependencyRoots {
 }
 
 function Get-NativeHostProtectedRuntimeDependencyHosts {
+    <#
+    .SYNOPSIS
+    Builds the set of protected runtime dependency hostnames from system roots and config API/whitelist URLs.
+    #>
     param([Parameter(Mandatory = $true)][PSCustomObject]$State)
 
     $hosts = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -100,6 +116,10 @@ function Get-NativeHostProtectedRuntimeDependencyHosts {
 }
 
 function Test-NativeHostProtectedRuntimeDependencyHost {
+    <#
+    .SYNOPSIS
+    Returns true when a hostname is in the protected runtime dependency set.
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$Hostname,
         [System.Collections.Generic.HashSet[string]]$ProtectedHosts
@@ -109,12 +129,20 @@ function Test-NativeHostProtectedRuntimeDependencyHost {
 }
 
 function Test-NativeHostSensitiveRuntimeDependencyField {
+    <#
+    .SYNOPSIS
+    Returns true when the message contains a field that should not be forwarded as a runtime dependency.
+    #>
     param([Parameter(Mandatory = $true)][object]$Message)
 
     return (Test-OpenPathRuntimeDependencySensitiveField -Message $Message)
 }
 
 function Find-NativeHostRuntimeDependencyQueueRequest {
+    <#
+    .SYNOPSIS
+    Looks up an existing queue request for the given anchor/dependency host pair via the shared queue helper.
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$AnchorHost,
         [Parameter(Mandatory = $true)][string]$DependencyHost,
@@ -130,6 +158,10 @@ function Find-NativeHostRuntimeDependencyQueueRequest {
 }
 
 function Write-NativeHostRuntimeDependencyQueueRequest {
+    <#
+    .SYNOPSIS
+    Writes a new runtime dependency queue request entry to the native host queue path.
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$AnchorHost,
         [Parameter(Mandatory = $true)][string]$DependencyHost,
@@ -145,6 +177,10 @@ function Write-NativeHostRuntimeDependencyQueueRequest {
 }
 
 function Test-NativeHostRuntimeDependencyOverlayContainsDomains {
+    <#
+    .SYNOPSIS
+    Returns true when all supplied domains appear as dependency hosts in the runtime dependency overlay file.
+    #>
     param([string[]]$Domains = @())
 
     if (@($Domains).Count -eq 0) {
@@ -182,6 +218,10 @@ function Test-NativeHostRuntimeDependencyOverlayContainsDomains {
 }
 
 function Test-NativeHostRuntimeDependencyQueueRequestProcessed {
+    <#
+    .SYNOPSIS
+    Returns true when the given queue request file no longer exists, indicating the request was processed.
+    #>
     param([AllowNull()][string]$RequestPath = '')
 
     if ([string]::IsNullOrWhiteSpace($RequestPath)) {
@@ -192,6 +232,10 @@ function Test-NativeHostRuntimeDependencyQueueRequestProcessed {
 }
 
 function Resolve-NativeHostLocalRuntimeDependencyCandidate {
+    <#
+    .SYNOPSIS
+    Evaluates a dependency candidate message against the current whitelist and state to determine its validity.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [object]$Message,
@@ -211,6 +255,10 @@ function Resolve-NativeHostLocalRuntimeDependencyCandidate {
 }
 
 function Invoke-NativeHostLocalRuntimeDependencyAction {
+    <#
+    .SYNOPSIS
+    Queues a single runtime dependency request and triggers the update task, waiting for the dependency to be applied.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [object]$Message,
@@ -278,6 +326,10 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
 }
 
 function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
+    <#
+    .SYNOPSIS
+    Queues multiple runtime dependency requests from a batch message and triggers a single update task for all of them.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [object]$Message,
@@ -371,6 +423,13 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
 }
 
 function Invoke-NativeHostSharedUpdateTrigger {
+    <#
+    .SYNOPSIS
+    Coordinates update triggering so only one caller triggers the task while others wait on the same result.
+    .DESCRIPTION
+    Acquires a non-blocking mutex to elect one caller as the trigger. The elected caller runs TriggerAction;
+    all other concurrent callers run WaitAction instead.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [scriptblock]$TriggerAction,
@@ -419,6 +478,13 @@ function Invoke-NativeHostSharedUpdateTrigger {
 }
 
 function Invoke-UpdateTask {
+    <#
+    .SYNOPSIS
+    Triggers the appropriate scheduled update task and waits for the expected domains and overlay entries to appear.
+    .DESCRIPTION
+    When RuntimeDependencyDomains are provided, prefers the runtime dependency fast-apply task.
+    Uses shared update trigger coordination to avoid duplicate task triggers from concurrent callers.
+    #>
     param(
         [string[]]$Domains = @(),
         [string[]]$RuntimeDependencyDomains = @(),
