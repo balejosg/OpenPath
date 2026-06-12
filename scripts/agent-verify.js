@@ -134,10 +134,17 @@ const rule = VERIFICATION_RULES.find((candidate) => candidate.when(category));
 let success = true;
 let level = 'NONE';
 
+let failedCommand = '';
+let failedLevel = '';
+
 if (rule) {
   level = rule.level;
   console.log(`\nLevel: ${rule.level} (${rule.description})`);
   success = run(rule.command, rule.runDescription);
+  if (!success) {
+    failedCommand = rule.command;
+    failedLevel = rule.level;
+  }
 }
 
 console.log('\n=======================');
@@ -146,5 +153,7 @@ if (success) {
   process.exit(0);
 } else {
   console.log(`Agent verification (${level}) FAILED`);
+  console.log(`  Failing step : ${failedLevel} -- ${failedCommand}`);
+  console.log(`  Rerun just this step : ${failedCommand}`);
   process.exit(1);
 }

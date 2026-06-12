@@ -125,7 +125,22 @@ for (const relativeFile of markdownFiles) {
   }
 
   if (shouldBeAsciiOnly(relativeFile) && /[^\x00-\x7F]/.test(content)) {
-    failures.push(`${relativeFile}: expected ASCII-only English documentation`);
+    const lines = content.split('\n');
+    let firstLineNum = 0;
+    let firstCodePoint = 0;
+    outer: for (let li = 0; li < lines.length; li++) {
+      for (const ch of lines[li]) {
+        if (ch.codePointAt(0) > 0x7f) {
+          firstLineNum = li + 1;
+          firstCodePoint = ch.codePointAt(0);
+          break outer;
+        }
+      }
+    }
+    const cpHex = firstCodePoint.toString(16).toUpperCase().padStart(4, '0');
+    failures.push(
+      `${relativeFile}:${firstLineNum}: non-ASCII character U+${cpHex} (expected ASCII-only English documentation)`
+    );
   }
 
   for (const match of content.matchAll(markdownLinkPattern)) {

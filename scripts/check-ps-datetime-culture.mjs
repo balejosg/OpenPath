@@ -141,12 +141,14 @@ function runSelfCheck() {
   ];
 
   let allPassed = true;
+  const failed = [];
   for (const fixture of fixtures) {
     const got = isViolation(fixture.line, fixture.prev);
     const pass = got === fixture.expectViolation;
     const status = pass ? 'PASS' : 'FAIL';
     if (!pass) {
       allPassed = false;
+      failed.push(fixture.label);
     }
     console.log(
       `  [${status}] ${fixture.label}: expected ${fixture.expectViolation ? 'violation' : 'clean'}, got ${got ? 'violation' : 'clean'}`
@@ -157,7 +159,9 @@ function runSelfCheck() {
     console.log('\nSelf-check passed: all fixtures classified correctly.');
     process.exit(0);
   } else {
-    console.error('\nSelf-check FAILED: one or more fixtures misclassified.');
+    console.error(
+      `\nSelf-check FAILED: ${failed.length} fixture(s) misclassified: ${failed.map((l) => `"${l}"`).join(', ')}`
+    );
     process.exit(1);
   }
 }
@@ -213,6 +217,17 @@ if (allViolations.length > 0) {
   for (const v of allViolations) {
     process.stdout.write(v + '\n');
   }
+  process.stdout.write(
+    '\n' +
+      'HOW TO FIX:\n' +
+      '  Pass [System.Globalization.CultureInfo]::InvariantCulture (and, for ParseExact,\n' +
+      '  [System.Globalization.DateTimeStyles]::RoundtripKind) as the 2nd/3rd arguments:\n' +
+      '    [DateTime]::Parse($str, [CultureInfo]::InvariantCulture)\n' +
+      '    [DateTime]::ParseExact($str, $fmt, [CultureInfo]::InvariantCulture,\n' +
+      '        [System.Globalization.DateTimeStyles]::RoundtripKind)\n' +
+      '  ESCAPE HATCH: add "# ps-culture-allow: <justification>" on the flagged line OR\n' +
+      '  on the line directly above it (both positions are honored).\n'
+  );
   process.exit(1);
 }
 
