@@ -13,23 +13,11 @@ $script:HostsBackupPath = Join-Path $script:ArtifactsRoot 'AcrylicHosts.txt.befo
 $script:HostsAfterPath = Join-Path $script:ArtifactsRoot 'AcrylicHosts.txt.after-purgecache-spike'
 $script:AcrylicServiceName = 'AcrylicDNSProxySvc'
 
+. (Join-Path $PSScriptRoot 'acrylic-dns-spike-helpers.ps1')
+
 function Ensure-ArtifactRoot {
     New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
 }
-
-function Get-AcrylicRoot {
-    foreach ($candidate in @(
-        (Join-Path ${env:ProgramFiles(x86)} 'Acrylic DNS Proxy'),
-        (Join-Path $env:ProgramFiles 'Acrylic DNS Proxy')
-    )) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            return $candidate
-        }
-    }
-
-    throw 'Acrylic DNS Proxy root was not found.'
-}
-
 function Get-AcrylicHostsPath {
     return (Join-Path (Get-AcrylicRoot) 'AcrylicHosts.txt')
 }
@@ -37,26 +25,6 @@ function Get-AcrylicHostsPath {
 function Get-AcrylicControllerPath {
     return (Join-Path (Get-AcrylicRoot) 'AcrylicController.exe')
 }
-
-function Get-AcrylicRegisteredService {
-    $service = Get-Service -Name $script:AcrylicServiceName -ErrorAction SilentlyContinue
-    if ($null -ne $service) {
-        return $service
-    }
-
-    return Get-Service -DisplayName '*Acrylic*' -ErrorAction SilentlyContinue | Select-Object -First 1
-}
-
-function Get-FileSha256 {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return $null
-    }
-
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
-}
-
 function Restart-AcrylicServiceIfPresent {
     $service = Get-AcrylicRegisteredService
     if ($null -eq $service) {

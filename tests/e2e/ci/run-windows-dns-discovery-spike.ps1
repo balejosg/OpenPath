@@ -15,24 +15,12 @@ $script:ResultPath = Join-Path $script:ArtifactsRoot 'dns-discovery-spike-result
 $script:HitLogPath = 'C:\OpenPath\data\logs\acrylic-dns-discovery-spike.log'
 $script:AcrylicServiceName = 'AcrylicDNSProxySvc'
 
+. (Join-Path $PSScriptRoot 'acrylic-dns-spike-helpers.ps1')
+
 function Ensure-ArtifactRoot {
     New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
     New-Item -ItemType Directory -Path (Split-Path -Parent $script:HitLogPath) -Force | Out-Null
 }
-
-function Get-AcrylicRoot {
-    foreach ($candidate in @(
-        (Join-Path ${env:ProgramFiles(x86)} 'Acrylic DNS Proxy'),
-        (Join-Path $env:ProgramFiles 'Acrylic DNS Proxy')
-    )) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            return $candidate
-        }
-    }
-
-    throw 'Acrylic DNS Proxy root was not found.'
-}
-
 function Get-AcrylicConfigurationPath {
     return (Join-Path (Get-AcrylicRoot) 'AcrylicConfiguration.ini')
 }
@@ -40,59 +28,6 @@ function Get-AcrylicConfigurationPath {
 function Get-AcrylicHostsPath {
     return (Join-Path (Get-AcrylicRoot) 'AcrylicHosts.txt')
 }
-
-function Get-FileSha256 {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return $null
-    }
-
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
-}
-
-function Read-TextShared {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return ''
-    }
-
-    $stream = [System.IO.File]::Open(
-        $Path,
-        [System.IO.FileMode]::Open,
-        [System.IO.FileAccess]::Read,
-        [System.IO.FileShare]::ReadWrite
-    )
-    try {
-        $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true)
-        try {
-            return $reader.ReadToEnd()
-        }
-        finally {
-            $reader.Dispose()
-        }
-    }
-    finally {
-        $stream.Dispose()
-    }
-}
-
-function Clear-HitLogFile {
-    $stream = [System.IO.File]::Open(
-        $script:HitLogPath,
-        [System.IO.FileMode]::OpenOrCreate,
-        [System.IO.FileAccess]::ReadWrite,
-        [System.IO.FileShare]::ReadWrite
-    )
-    try {
-        $stream.SetLength(0)
-    }
-    finally {
-        $stream.Dispose()
-    }
-}
-
 function Set-IniValue {
     param(
         [AllowEmptyString()][string[]]$Lines,
@@ -155,31 +90,6 @@ function Restart-AcrylicServiceIfPresent {
     Restart-Service -Name $script:AcrylicServiceName -Force -ErrorAction Stop
     Start-Sleep -Seconds 2
 }
-
-function Test-HitLogReadableWhileRunning {
-    try {
-        $stream = [System.IO.File]::Open(
-            $script:HitLogPath,
-            [System.IO.FileMode]::OpenOrCreate,
-            [System.IO.FileAccess]::ReadWrite,
-            [System.IO.FileShare]::ReadWrite
-        )
-        $stream.Dispose()
-        return $true
-    }
-    catch {
-        return $false
-    }
-}
-
-function Read-State {
-    if (-not (Test-Path -LiteralPath $script:StatePath)) {
-        return [pscustomobject]@{}
-    }
-
-    return (Get-Content -LiteralPath $script:StatePath -Raw | ConvertFrom-Json)
-}
-
 function Write-State {
     param([Parameter(Mandatory = $true)][hashtable]$State)
 

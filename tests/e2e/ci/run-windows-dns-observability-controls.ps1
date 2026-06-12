@@ -20,24 +20,12 @@ $script:NxControlHost = ('openpath-hitlog-nx-' + [guid]::NewGuid().ToString('N')
 $script:RegisteredAcrylicServiceForDiagnostic = $false
 $script:AcrylicServiceNameUsed = ''
 
+. (Join-Path $PSScriptRoot 'acrylic-dns-spike-helpers.ps1')
+
 function Ensure-ArtifactRoot {
     New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
     New-Item -ItemType Directory -Path (Split-Path -Parent $script:HitLogPath) -Force | Out-Null
 }
-
-function Get-AcrylicRoot {
-    foreach ($candidate in @(
-        (Join-Path ${env:ProgramFiles(x86)} 'Acrylic DNS Proxy'),
-        (Join-Path $env:ProgramFiles 'Acrylic DNS Proxy')
-    )) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            return $candidate
-        }
-    }
-
-    throw 'Acrylic DNS Proxy root was not found.'
-}
-
 function Get-AcrylicConfigurationPath {
     return (Join-Path (Get-AcrylicRoot) 'AcrylicConfiguration.ini')
 }
@@ -45,88 +33,6 @@ function Get-AcrylicConfigurationPath {
 function Get-AcrylicHostsPath {
     return (Join-Path (Get-AcrylicRoot) 'AcrylicHosts.txt')
 }
-
-function Get-AcrylicServicePath {
-    return (Join-Path (Get-AcrylicRoot) 'AcrylicService.exe')
-}
-
-function Get-AcrylicRegisteredService {
-    $service = Get-Service -Name $script:AcrylicServiceName -ErrorAction SilentlyContinue
-    if ($null -ne $service) {
-        return $service
-    }
-
-    return Get-Service -DisplayName '*Acrylic*' -ErrorAction SilentlyContinue | Select-Object -First 1
-}
-
-function Get-FileSha256 {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return $null
-    }
-
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
-}
-
-function Read-TextShared {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return ''
-    }
-
-    $stream = [System.IO.File]::Open(
-        $Path,
-        [System.IO.FileMode]::Open,
-        [System.IO.FileAccess]::Read,
-        [System.IO.FileShare]::ReadWrite
-    )
-    try {
-        $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true)
-        try {
-            return $reader.ReadToEnd()
-        }
-        finally {
-            $reader.Dispose()
-        }
-    }
-    finally {
-        $stream.Dispose()
-    }
-}
-
-function Clear-HitLogFile {
-    $stream = [System.IO.File]::Open(
-        $script:HitLogPath,
-        [System.IO.FileMode]::OpenOrCreate,
-        [System.IO.FileAccess]::ReadWrite,
-        [System.IO.FileShare]::ReadWrite
-    )
-    try {
-        $stream.SetLength(0)
-    }
-    finally {
-        $stream.Dispose()
-    }
-}
-
-function Test-HitLogReadableWhileRunning {
-    try {
-        $stream = [System.IO.File]::Open(
-            $script:HitLogPath,
-            [System.IO.FileMode]::OpenOrCreate,
-            [System.IO.FileAccess]::ReadWrite,
-            [System.IO.FileShare]::ReadWrite
-        )
-        $stream.Dispose()
-        return $true
-    }
-    catch {
-        return $false
-    }
-}
-
 function Set-IniValue {
     param(
         [AllowEmptyString()][string[]]$Lines,
@@ -214,32 +120,6 @@ function Restart-AcrylicServiceIfPresent {
     }
     Start-Sleep -Seconds 2
 }
-
-function Remove-DiagnosticAcrylicServiceIfCreated {
-    if (-not $script:RegisteredAcrylicServiceForDiagnostic) {
-        return
-    }
-
-    $service = Get-AcrylicRegisteredService
-    if ($null -ne $service) {
-        Stop-Service -Name $service.Name -Force -ErrorAction SilentlyContinue
-    }
-
-    $servicePath = Get-AcrylicServicePath
-    if (Test-Path -LiteralPath $servicePath) {
-        $uninstallProcess = Start-Process -FilePath $servicePath -ArgumentList '/UNINSTALL' -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
-        if ($uninstallProcess -and -not $uninstallProcess.WaitForExit(15000)) {
-            Stop-Process -Id $uninstallProcess.Id -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    $service = Get-AcrylicRegisteredService
-    if ($null -ne $service) {
-        & sc.exe delete $service.Name | Out-Null
-        Start-Sleep -Seconds 1
-    }
-}
-
 function Get-SafeName {
     param([Parameter(Mandatory = $true)][string]$Name)
     return ($Name -replace '[^a-zA-Z0-9_-]', '-')

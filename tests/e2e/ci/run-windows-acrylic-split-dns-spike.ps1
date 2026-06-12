@@ -32,42 +32,11 @@ $script:ControlDomain = 'www.msftconnecttest.com'
 $script:DeadServerA = '192.0.2.1'
 $script:DeadServerB = '192.0.2.2'
 
+. (Join-Path $PSScriptRoot 'acrylic-dns-spike-helpers.ps1')
+
 function Ensure-ArtifactRoot {
     New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
 }
-
-function Get-AcrylicRoot {
-    foreach ($candidate in @(
-        (Join-Path ${env:ProgramFiles(x86)} 'Acrylic DNS Proxy'),
-        (Join-Path $env:ProgramFiles 'Acrylic DNS Proxy')
-    )) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            return $candidate
-        }
-    }
-
-    throw 'Acrylic DNS Proxy root was not found.'
-}
-
-function Get-AcrylicRegisteredService {
-    $service = Get-Service -Name $script:AcrylicServiceName -ErrorAction SilentlyContinue
-    if ($null -ne $service) {
-        return $service
-    }
-
-    return Get-Service -DisplayName '*Acrylic*' -ErrorAction SilentlyContinue | Select-Object -First 1
-}
-
-function Get-FileSha256 {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return $null
-    }
-
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
-}
-
 function Get-AcrylicIniValue {
     param(
         [Parameter(Mandatory = $true)][string]$Content,

@@ -28,24 +28,12 @@ $script:MatrixPhases = @(
     'sinkhole-capture'
 )
 
+. (Join-Path $PSScriptRoot 'acrylic-dns-spike-helpers.ps1')
+
 function Ensure-ArtifactRoot {
     New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
     New-Item -ItemType Directory -Path (Split-Path -Parent $script:HitLogPath) -Force | Out-Null
 }
-
-function Get-AcrylicRoot {
-    foreach ($candidate in @(
-        (Join-Path ${env:ProgramFiles(x86)} 'Acrylic DNS Proxy'),
-        (Join-Path $env:ProgramFiles 'Acrylic DNS Proxy')
-    )) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            return $candidate
-        }
-    }
-
-    throw 'Acrylic DNS Proxy root was not found.'
-}
-
 function Get-AcrylicConfigurationPath {
     return (Join-Path (Get-AcrylicRoot) 'AcrylicConfiguration.ini')
 }
@@ -53,44 +41,6 @@ function Get-AcrylicConfigurationPath {
 function Get-AcrylicHostsPath {
     return (Join-Path (Get-AcrylicRoot) 'AcrylicHosts.txt')
 }
-
-function Get-FileSha256 {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return $null
-    }
-
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
-}
-
-function Read-TextShared {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return ''
-    }
-
-    $stream = [System.IO.File]::Open(
-        $Path,
-        [System.IO.FileMode]::Open,
-        [System.IO.FileAccess]::Read,
-        [System.IO.FileShare]::ReadWrite
-    )
-    try {
-        $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true)
-        try {
-            return $reader.ReadToEnd()
-        }
-        finally {
-            $reader.Dispose()
-        }
-    }
-    finally {
-        $stream.Dispose()
-    }
-}
-
 function Get-NonNullItems {
     param([AllowNull()][object]$Value)
 
@@ -104,22 +54,6 @@ function Get-NonNullItems {
         }
     }
 }
-
-function Clear-HitLogFile {
-    $stream = [System.IO.File]::Open(
-        $script:HitLogPath,
-        [System.IO.FileMode]::OpenOrCreate,
-        [System.IO.FileAccess]::ReadWrite,
-        [System.IO.FileShare]::ReadWrite
-    )
-    try {
-        $stream.SetLength(0)
-    }
-    finally {
-        $stream.Dispose()
-    }
-}
-
 function Set-IniValue {
     param(
         [AllowEmptyString()][string[]]$Lines,
@@ -162,33 +96,7 @@ function Write-State {
     param([Parameter(Mandatory = $true)][hashtable]$State)
 
     $State | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $script:StatePath -Encoding UTF8
-}
-
-function Read-State {
-    if (-not (Test-Path -LiteralPath $script:StatePath)) {
-        return [pscustomobject]@{}
-    }
-
-    return (Get-Content -LiteralPath $script:StatePath -Raw | ConvertFrom-Json)
-}
-
-function Test-HitLogReadableWhileRunning {
-    try {
-        $stream = [System.IO.File]::Open(
-            $script:HitLogPath,
-            [System.IO.FileMode]::OpenOrCreate,
-            [System.IO.FileAccess]::ReadWrite,
-            [System.IO.FileShare]::ReadWrite
-        )
-        $stream.Dispose()
-        return $true
-    }
-    catch {
-        return $false
-    }
-}
-
-function Set-HitLogConfiguration {
+}function Set-HitLogConfiguration {
     param([Parameter(Mandatory = $true)][string]$ConfigPath)
 
     $content = if (Test-Path -LiteralPath $ConfigPath) {
@@ -216,36 +124,6 @@ function Get-PhaseSafeName {
     param([Parameter(Mandatory = $true)][string]$Name)
     return ($Name -replace '[^a-zA-Z0-9_-]', '-')
 }
-
-function Invoke-PktmonCommand {
-    param([Parameter(Mandatory = $true)][string[]]$Arguments)
-
-    if (-not (Get-Command pktmon.exe -ErrorAction SilentlyContinue)) {
-        return @{
-            available = $false
-            exitCode = $null
-            output = 'pktmon.exe not available'
-        }
-    }
-
-    $output = ''
-    $exitCode = $null
-    try {
-        $output = & pktmon.exe @Arguments 2>&1 | Out-String
-        $exitCode = $LASTEXITCODE
-    }
-    catch {
-        $output = $_.Exception.Message
-        $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 }
-    }
-
-    return @{
-        available = $true
-        exitCode = $exitCode
-        output = $output
-    }
-}
-
 function Start-PktmonPhase {
     param([Parameter(Mandatory = $true)][string]$PhaseName)
 

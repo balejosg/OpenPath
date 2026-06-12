@@ -1014,7 +1014,7 @@ test('required Windows CI runs Pester in an untracked child host without success
   );
   assert.ok(
     ciWorkflow.includes(
-      "grep -Eq '^(windows/|tests/e2e/Windows-E2E\\.Tests\\.ps1|tests/e2e/ci/run-windows-pester-isolated\\.ps1|tests/e2e/ci/run-windows-[^/]+\\.ps1|\\.github/workflows/ci\\.yml$)'"
+      "grep -Eq '^(windows/|tests/e2e/Windows-E2E\\.Tests\\.ps1|tests/e2e/ci/run-windows-pester-isolated\\.ps1|tests/e2e/ci/run-windows-[^/]+\\.ps1|tests/e2e/ci/acrylic-dns-spike-helpers\\.ps1|\\.github/workflows/ci\\.yml$)'"
     ),
     'ci.yml should route Windows code and Windows CI helpers to the Windows lane'
   );
@@ -1700,7 +1700,7 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
   );
   assert.ok(
     e2eWorkflow.includes(
-      '^(windows/|firefox-extension/|tests/e2e/ci/(run-windows-captive-portal-navigation\\.ps1|windows-direct-runtime-staging\\.ps1)$|scripts/run-windows-runner-direct\\.mjs$|scripts/lib/windows-direct-diagnostic-modes\\.mjs$|\\.github/workflows/e2e-tests\\.yml$)'
+      '^(windows/|firefox-extension/|tests/e2e/ci/(run-windows-captive-portal-navigation\\.ps1|windows-direct-runtime-staging\\.ps1|acrylic-dns-spike-helpers\\.ps1)$|scripts/run-windows-runner-direct\\.mjs$|scripts/lib/windows-direct-diagnostic-modes\\.mjs$|\\.github/workflows/e2e-tests\\.yml$)'
     ),
     'windows captive-portal routing should cover Windows, Firefox extension, direct-runner harness, and workflow changes'
   );

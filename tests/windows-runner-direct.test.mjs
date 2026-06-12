@@ -368,6 +368,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     ]);
     const script = readText('scripts/run-windows-runner-direct.mjs');
     const spikeScript = readText('tests/e2e/ci/run-windows-dns-discovery-spike.ps1');
+    const spikeHelpers = readText('tests/e2e/ci/acrylic-dns-spike-helpers.ps1');
 
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /source_mode=local-overlay/);
@@ -381,7 +382,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(spikeScript, /C:\\OpenPath\\data\\logs\\acrylic-dns-discovery-spike\.log/);
     assert.match(spikeScript, /HitLogFileWhat=XHCFRU/);
     assert.match(spikeScript, /HitLogMaxPendingHits=512/);
-    assert.match(spikeScript, /FileShare\]::ReadWrite/);
+    assert.match(spikeHelpers, /FileShare\]::ReadWrite/);
     assert.match(spikeScript, /cold-origin/);
     assert.match(spikeScript, /warm-approved-origin/);
     assert.match(spikeScript, /dnsOnlyViable/);

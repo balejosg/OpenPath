@@ -204,7 +204,7 @@ jobs:
             windows_student_policy_sse_reason="$(printf '%s\n' "$changed_files" | node scripts/select-windows-student-policy-sse-group.mjs --from-stdin --reason)"
           fi
 
-          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq '^(windows/|firefox-extension/|tests/e2e/ci/(run-windows-captive-portal-navigation\.ps1|windows-direct-runtime-staging\.ps1)$|scripts/run-windows-runner-direct\.mjs$|scripts/lib/windows-direct-diagnostic-modes\.mjs$|\.github/workflows/e2e-tests\.yml$)'; then
+          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq '^(windows/|firefox-extension/|tests/e2e/ci/(run-windows-captive-portal-navigation\.ps1|windows-direct-runtime-staging\.ps1|acrylic-dns-spike-helpers\.ps1)$|scripts/run-windows-runner-direct\.mjs$|scripts/lib/windows-direct-diagnostic-modes\.mjs$|\.github/workflows/e2e-tests\.yml$)'; then
             windows_captive_portal=true
           fi
 
