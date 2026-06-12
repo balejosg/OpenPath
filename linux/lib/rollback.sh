@@ -35,7 +35,10 @@ fi
 
 # Checkpoint directory - uses VAR_STATE_DIR from common.sh
 CHECKPOINT_DIR="${VAR_STATE_DIR:-/var/lib/openpath}/checkpoints"
-MAX_CHECKPOINTS=3
+# Maximum checkpoints to retain.  Configurable via OPENPATH_MAX_CHECKPOINTS
+# (defaults.conf) or the environment.  Mirrors the Windows MaxCheckpoints=3
+# default in Save-OpenPathWhitelistCheckpoint.
+MAX_CHECKPOINTS="${OPENPATH_MAX_CHECKPOINTS:-${MAX_CHECKPOINTS:-3}}"
 
 # Files to checkpoint - uses variables from common.sh for consistency
 CHECKPOINT_FILES=(
@@ -202,9 +205,10 @@ list_checkpoints() {
 # Check if any checkpoint exists
 has_checkpoint() {
     init_checkpoints
-    [ -d "$CHECKPOINT_DIR/checkpoint-0" ] && return 0
-    [ -d "$CHECKPOINT_DIR/checkpoint-1" ] && return 0
-    [ -d "$CHECKPOINT_DIR/checkpoint-2" ] && return 0
+    local i
+    for i in $(seq 0 $((MAX_CHECKPOINTS - 1))); do
+        [ -d "$CHECKPOINT_DIR/checkpoint-$i" ] && return 0
+    done
     return 1
 }
 
