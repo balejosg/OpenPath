@@ -1,5 +1,23 @@
 #!/usr/bin/env node
 
+// --mode routing table
+// Each --mode value dispatches through `runWindowsDirectDiagnosticMode` (~line 2721).
+//
+// mode                                  handler function                                        purpose
+// ------------------------------------  ------------------------------------------------------  -------------------------------------------------------
+// pester (default)                      `runDirectPester`                                       runs the full isolated Pester suite on the Windows runner
+// browser-boundary                      `runWindowsStudentPolicyFlowForBoundary`                runs the student flow then the browser-boundary CI script
+// dns-discovery-spike                   `runWindowsDnsDiscoverySpike`                           spike: measures Acrylic HitLog DNS observability
+// dns-evidence-matrix                   `runWindowsDnsEvidenceMatrix`                           matrix: cross-phases DNS + pktmon evidence collection
+// dns-evidence-matrix-v2                `runWindowsDnsEvidenceMatrixV2`                         controlled DNS evidence harness with sslip.io fixtures
+// dns-observability-controls            `runWindowsDnsObservabilityControls`                    positive HitLog controls that prove forward vs nx detection
+// acrylic-purgecache-spike              `runWindowsAcrylicPurgeCacheSpike`                      spike: verifies PurgeCache reloads Acrylic hosts without restart
+// acrylic-split-dns-spike               `runWindowsAcrylicSplitDnsSpike`                        spike: proves per-server affinity-mask exclusivity
+// browser-dependency-observability-spike `runWindowsBrowserDependencyObservabilitySpike`        spike: browser/native dependency observation without HitLog
+// captive-portal-navigation             `runWindowsCaptivePortalNavigation`                     full captive portal recovery and Firefox navigation fixture
+// captive-portal-wedu-lab               `runWindowsCaptivePortalWeduLab`                        live WEDU lab captive portal; fail-closed, no local-overlay
+// all                                   iterates all modes where `includeInAll !== false`        runs every non-invasive mode sequentially
+
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';

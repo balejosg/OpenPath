@@ -3,6 +3,16 @@
 Import-Module "$PSScriptRoot\Browser.EnforcementDecision.psm1" -Force -ErrorAction Stop
 
 function Get-OpenPathBrowserInventoryUninstallEntries {
+    <#
+    .SYNOPSIS
+    Reads browser-related uninstall entries from the Windows registry and returns them as structured objects.
+
+    .DESCRIPTION
+    Scans both the 64-bit and 32-bit uninstall registry hives, filtering entries whose display name
+    matches a known set of browser keywords.  Each entry is returned with its display name, version,
+    install location, uninstall string, and quiet uninstall string so that the inventory can classify
+    and optionally remove the software.
+    #>
     [CmdletBinding()]
     param(
         [string[]]$RegistryPaths = @(
@@ -42,6 +52,17 @@ function Get-OpenPathBrowserInventoryUninstallEntries {
 }
 
 function Get-OpenPathBrowserInventoryFileCandidates {
+    <#
+    .SYNOPSIS
+    Searches well-known filesystem locations for browser executable files and returns matching candidates.
+
+    .DESCRIPTION
+    Scans Program Files, local app data, Downloads, and Desktop by default.  For system-writable
+    roots, candidates are matched against a fixed list of relative paths.  For user-writable roots,
+    a recursive search for portable browser executables is also performed.  Each candidate carries
+    the full path, its source root name, and whether the root is user-writable, so that the
+    inventory can flag portable or user-installed browser risks.
+    #>
     [CmdletBinding()]
     param(
         [AllowNull()]
@@ -150,6 +171,15 @@ function Get-OpenPathBrowserInventoryFileCandidates {
 }
 
 function New-OpenPathBrowserInventoryFinding {
+    <#
+    .SYNOPSIS
+    Constructs a standardized browser inventory finding object with all classification and metadata fields.
+
+    .NOTES
+    The returned object is a value type used throughout the inventory and enforcement pipeline.
+    Defaults are chosen so that callers only need to supply the fields that differ from the safe
+    report-only baseline.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$Name,
@@ -192,6 +222,15 @@ function New-OpenPathBrowserInventoryFinding {
 }
 
 function Resolve-OpenPathBrowserInventoryName {
+    <#
+    .SYNOPSIS
+    Maps a raw display name or file path to a canonical browser name used throughout the inventory.
+
+    .DESCRIPTION
+    Matching is done against a priority-ordered set of patterns so that ambiguous executables such
+    as firefox.exe under a Tor Browser path are resolved to the correct family.  Returns an empty
+    string when no known browser is recognized.
+    #>
     param(
         [string]$Text,
         [string]$Path = ''
@@ -214,6 +253,11 @@ function Resolve-OpenPathBrowserInventoryName {
 }
 
 function Add-OpenPathBrowserInventoryFinding {
+    <#
+    .SYNOPSIS
+    Inserts a finding into a deduplication hashtable keyed by category, name, path, display name,
+    and install location so that the same browser entry is not counted more than once.
+    #>
     param(
         [hashtable]$Target,
         [object]$Finding
@@ -227,6 +271,18 @@ function Add-OpenPathBrowserInventoryFinding {
 }
 
 function Get-OpenPathBrowserInventory {
+    <#
+    .SYNOPSIS
+    Scans registry uninstall entries and filesystem candidates to produce a full browser inventory
+    with approved, unmanaged, portable-risk, web-rendering-surface, and removal-candidate lists.
+
+    .DESCRIPTION
+    In ReportOnly mode no software is removed; findings are classified and returned for operator
+    review.  In RemoveKnownInstallers mode unmanaged browsers that have a quiet uninstall string
+    and are not WebView2 are marked automatically removable, though removal itself must be
+    triggered separately.  The inventory delegates the ready/exit-code decision to the pure
+    enforcement decision layer so that the readiness contract stays consistent across callers.
+    #>
     [CmdletBinding()]
     param(
         [ValidateSet('ReportOnly', 'RemoveKnownInstallers')]

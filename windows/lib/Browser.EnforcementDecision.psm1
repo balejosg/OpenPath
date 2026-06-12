@@ -1,6 +1,14 @@
 # OpenPath pure browser enforcement decisions for Windows
 
 function Test-OpenPathBrowserDecisionTruthy {
+    <#
+    .SYNOPSIS
+    Coerces an arbitrary value to a boolean for use in enforcement decision logic, treating null as false.
+
+    .NOTES
+    This module contains no probes; all functions are pure and accept only pre-collected values
+    so they can be tested without access to the registry or filesystem.
+    #>
     param(
         [AllowNull()]
         [object]$Value = $null
@@ -17,6 +25,11 @@ function Test-OpenPathBrowserDecisionTruthy {
 }
 
 function Get-OpenPathBrowserDecisionProperty {
+    <#
+    .SYNOPSIS
+    Safely reads a named property from an object, returning a supplied default when the object is
+    null or the property is absent.
+    #>
     param(
         [AllowNull()]
         [object]$InputObject = $null,
@@ -36,6 +49,11 @@ function Get-OpenPathBrowserDecisionProperty {
 }
 
 function Get-OpenPathApprovedStudentBrowsersDecision {
+    <#
+    .SYNOPSIS
+    Extracts the list of approved student browser families from a configuration object, normalizing
+    display names to canonical short names and defaulting to Firefox when none are configured.
+    #>
     param(
         [AllowNull()]
         [object]$Config
@@ -74,6 +92,11 @@ function Get-OpenPathApprovedStudentBrowsersDecision {
 }
 
 function Test-OpenPathStudentBrowserApprovedDecision {
+    <#
+    .SYNOPSIS
+    Returns true when the given browser family name appears in the approved student browsers list,
+    using case-insensitive comparison.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string[]]$ApprovedStudentBrowsers,
@@ -89,6 +112,11 @@ function Test-OpenPathStudentBrowserApprovedDecision {
 }
 
 function Test-OpenPathChromiumDohModeDecision {
+    <#
+    .SYNOPSIS
+    Returns true when the DNS-over-HTTPS mode value is exactly "off", which satisfies the
+    Chromium policy requirement for this deployment.
+    #>
     param(
         [AllowNull()]
         [object]$DohMode = $null
@@ -98,6 +126,11 @@ function Test-OpenPathChromiumDohModeDecision {
 }
 
 function Test-OpenPathChromiumUrlBlocklistDecision {
+    <#
+    .SYNOPSIS
+    Returns true when every required pattern is present in the supplied URL blocklist, using
+    case-insensitive string comparison.
+    #>
     param(
         [AllowNull()]
         [object[]]$UrlBlocklist = $null,
@@ -120,6 +153,11 @@ function Test-OpenPathChromiumUrlBlocklistDecision {
 }
 
 function Test-OpenPathApprovedBrowserInstalledDecision {
+    <#
+    .SYNOPSIS
+    Returns true when a browser with the given name appears in the approved-browsers list of the
+    supplied inventory object.
+    #>
     param(
         [AllowNull()]
         [object]$BrowserInventory = $null,
@@ -138,6 +176,10 @@ function Test-OpenPathApprovedBrowserInstalledDecision {
 }
 
 function Test-OpenPathUnmanagedBrowserFindingsPresentDecision {
+    <#
+    .SYNOPSIS
+    Returns true when the inventory contains at least one unmanaged browser or portable browser risk.
+    #>
     param(
         [AllowNull()]
         [object]$BrowserInventory = $null
@@ -164,6 +206,19 @@ function Test-OpenPathUnmanagedBrowserFindingsPresentDecision {
 }
 
 function Add-OpenPathChromiumReadinessDecision {
+    <#
+    .SYNOPSIS
+    Appends readiness fact entries and failure reasons for a single Chromium-based browser to the
+    shared output collections used by the overall request-readiness decision.
+
+    .DESCRIPTION
+    When the browser is not installed all four fact keys are set to "not_installed" and the
+    function returns early.  When it is installed but not approved the approval key reflects
+    whether app control is active to block it; an unapproved browser without app control adds
+    a failure reason in strict mode.  When the browser is both installed and approved, each of
+    the three managed-policy dimensions is evaluated and a failure reason is added for each
+    missing dimension in strict mode.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [System.Collections.Specialized.OrderedDictionary]$OutputFacts,
@@ -232,6 +287,20 @@ function Add-OpenPathChromiumReadinessDecision {
 }
 
 function Get-OpenPathBrowserRequestReadinessDecision {
+    <#
+    .SYNOPSIS
+    Evaluates a pre-collected facts object and returns a structured readiness decision including
+    per-dimension status strings, failure reasons, and an overall ready flag.
+
+    .DESCRIPTION
+    The facts object must carry StrictMode, RequestSetupReady, FirefoxManagedExtensionReady,
+    FirefoxMachinePolicyApplied, FirefoxNativeHostReady, AppControlActive, Chromium (with Edge
+    and Chrome sub-objects), and UnmanagedBrowserFindingsPresent properties.  In strict mode
+    every missing dimension adds a failure reason and the ready flag is false.  Outside strict
+    mode only critical Firefox and request-setup dimensions are required; Chromium and
+    app-control dimensions are advisory.  The returned object always includes a Platform field
+    set to "windows".
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [object]$Facts
@@ -322,6 +391,15 @@ function Get-OpenPathBrowserRequestReadinessDecision {
 }
 
 function Get-OpenPathBrowserInventoryDecision {
+    <#
+    .SYNOPSIS
+    Returns a readiness decision and exit code based on whether any unmanaged browsers or
+    portable browser risks were found in the inventory.
+
+    .NOTES
+    An empty unmanaged list and an empty portable-risk list both being true yields ready with
+    exit code 0; any finding yields not-ready with exit code 1.
+    #>
     param(
         [AllowNull()]
         [object[]]$UnmanagedBrowsers = @(),
@@ -338,6 +416,16 @@ function Get-OpenPathBrowserInventoryDecision {
 }
 
 function Get-OpenPathBrowserEnforcementOverallDecision {
+    <#
+    .SYNOPSIS
+    Combines four enforcement signals into a single operator-facing health label: Healthy, Partial,
+    or Unhealthy.
+
+    .DESCRIPTION
+    Healthy requires all four signals to be positive: AppLocker must not be Inactive, the
+    inventory must be ready, request readiness must be ready, and the firewall must be active.
+    A mix of passing and failing signals yields Partial; all failing yields Unhealthy.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$AppLocker,

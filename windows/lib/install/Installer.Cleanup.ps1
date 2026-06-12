@@ -1,4 +1,10 @@
 function ConvertTo-OpenPathInstallerRegistryProviderPath {
+    <#
+    .SYNOPSIS
+        Converts an HKLM registry path string to the PowerShell Registry:: provider form accepted by path and item cmdlets
+    .PARAMETER RegistryPath
+        Registry path beginning with HKLM:\ or HKLM\
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$RegistryPath
@@ -15,6 +21,12 @@ function ConvertTo-OpenPathInstallerRegistryProviderPath {
 }
 
 function Test-OpenPathInstallerRegistryPath {
+    <#
+    .SYNOPSIS
+        Returns true when the given registry path exists, converting it to the provider form first
+    .PARAMETER RegistryPath
+        Registry path to test
+    #>
     param([Parameter(Mandatory = $true)][string]$RegistryPath)
 
     try {
@@ -26,6 +38,12 @@ function Test-OpenPathInstallerRegistryPath {
 }
 
 function Remove-OpenPathInstallerRegistryKeyIfPresent {
+    <#
+    .SYNOPSIS
+        Deletes a registry key and all subkeys if it exists; silently succeeds when the key is already absent
+    .PARAMETER RegistryPath
+        Registry path to remove
+    #>
     param([Parameter(Mandatory = $true)][string]$RegistryPath)
 
     $providerPath = ConvertTo-OpenPathInstallerRegistryProviderPath -RegistryPath $RegistryPath
@@ -35,6 +53,12 @@ function Remove-OpenPathInstallerRegistryKeyIfPresent {
 }
 
 function Test-OpenPathExistingInstallation {
+    <#
+    .SYNOPSIS
+        Returns true when evidence of a previous OpenPath installation is found, including scheduled tasks, firewall rules, AppLocker rules, browser policies, or registry keys
+    .PARAMETER OpenPathRoot
+        Root directory to check for an existing installation
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot
@@ -94,6 +118,14 @@ function Test-OpenPathExistingInstallation {
 }
 
 function Copy-OpenPathInstallerSourceForReinstall {
+    <#
+    .SYNOPSIS
+        Copies the installer source to a temporary directory when it lives inside the install root, so the reinstall can proceed after the root is removed
+    .PARAMETER ScriptDir
+        Directory containing the running installer package
+    .PARAMETER OpenPathRoot
+        Root installation directory; if ScriptDir is beneath this, a snapshot is created
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$ScriptDir,
@@ -137,6 +169,10 @@ function Copy-OpenPathInstallerSourceForReinstall {
 }
 
 function Stop-OpenPathInstallerScheduledTasks {
+    <#
+    .SYNOPSIS
+        Stops and unregisters all OpenPath scheduled tasks matching the OpenPath-* pattern
+    #>
     if (-not (Get-Command -Name Get-ScheduledTask -ErrorAction SilentlyContinue)) { return }
     $tasks = @(Get-ScheduledTask -TaskName 'OpenPath-*' -ErrorAction SilentlyContinue)
     foreach ($task in $tasks) {
@@ -146,6 +182,12 @@ function Stop-OpenPathInstallerScheduledTasks {
 }
 
 function Stop-OpenPathInstallerRootedProcess {
+    <#
+    .SYNOPSIS
+        Forcibly terminates any running process whose executable path starts with OpenPathRoot
+    .PARAMETER OpenPathRoot
+        Root directory; processes running from within it are stopped
+    #>
     param([Parameter(Mandatory = $true)][string]$OpenPathRoot)
 
     $processIds = @()
@@ -175,6 +217,10 @@ function Stop-OpenPathInstallerRootedProcess {
 }
 
 function Remove-OpenPathInstallerAppLockerRules {
+    <#
+    .SYNOPSIS
+        Removes AppLocker rules whose Name attribute begins with 'OpenPath non-admin app control' from the local policy
+    #>
     if (-not (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue)) { return }
     if (-not (Get-Command -Name Set-AppLockerPolicy -ErrorAction SilentlyContinue)) { return }
 
@@ -204,6 +250,12 @@ function Remove-OpenPathInstallerAppLockerRules {
 }
 
 function ConvertTo-OpenPathInstallerFirewallManifestRuleNames {
+    <#
+    .SYNOPSIS
+        Normalises a firewall manifest value (string, array, or JSON array) into a sorted, unique list of rule name strings
+    .PARAMETER Value
+        Raw value read from the firewall-rules.json manifest
+    #>
     param([object]$Value)
 
     $names = New-Object System.Collections.Generic.List[string]
@@ -222,6 +274,12 @@ function ConvertTo-OpenPathInstallerFirewallManifestRuleNames {
 }
 
 function Get-OpenPathInstallerFirewallManifestRuleNames {
+    <#
+    .SYNOPSIS
+        Reads the firewall-rules.json manifest at Path and returns the list of rule names; returns an empty array when the file is absent or corrupt
+    .PARAMETER Path
+        Absolute path to the firewall manifest JSON file
+    #>
     param([Parameter(Mandatory = $true)][string]$Path)
 
     if (-not (Test-Path $Path)) { return @() }
@@ -242,6 +300,10 @@ function Get-OpenPathInstallerFirewallManifestRuleNames {
 }
 
 function Remove-OpenPathInstallerFirewallRules {
+    <#
+    .SYNOPSIS
+        Removes all OpenPath firewall rules using the manifest file, the OpenPath group, and the OpenPath-DNS-* wildcard as fallback sources
+    #>
     if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) { return }
     if (-not (Get-Command -Name Remove-NetFirewallRule -ErrorAction SilentlyContinue)) { return }
 
@@ -263,6 +325,12 @@ function Remove-OpenPathInstallerFirewallRules {
 }
 
 function Select-OpenPathInstallerScalarValue {
+    <#
+    .SYNOPSIS
+        Returns the first non-null item from Value, which may be a scalar or an array; returns null when all items are null
+    .PARAMETER Value
+        Scalar or array value from which to extract the first non-null element
+    #>
     param([object]$Value)
 
     foreach ($item in @($Value)) {
@@ -275,6 +343,12 @@ function Select-OpenPathInstallerScalarValue {
 }
 
 function ConvertTo-OpenPathInstallerNullableInt {
+    <#
+    .SYNOPSIS
+        Converts Value to an integer or returns null when Value is absent, empty, or non-numeric; tolerates legacy array-wrapped interface indexes
+    .PARAMETER Value
+        Scalar or array value to convert to a nullable integer
+    #>
     param([object]$Value)
 
     $scalarValue = Select-OpenPathInstallerScalarValue -Value $Value
@@ -292,6 +366,10 @@ function ConvertTo-OpenPathInstallerNullableInt {
 }
 
 function Restore-OpenPathInstallerDnsSettings {
+    <#
+    .SYNOPSIS
+        Restores adapter DNS settings from the original-dns.json snapshot, matching adapters by GUID then index then alias; resets to DHCP when no snapshot exists
+    #>
     if (-not (Get-Command -Name Get-NetAdapter -ErrorAction SilentlyContinue)) { return }
     if (-not (Get-Command -Name Set-DnsClientServerAddress -ErrorAction SilentlyContinue)) { return }
 
@@ -335,6 +413,10 @@ function Restore-OpenPathInstallerDnsSettings {
 }
 
 function Remove-OpenPathInstallerBrowserArtifacts {
+    <#
+    .SYNOPSIS
+        Removes Firefox distribution policy files and all OpenPath-related browser registry keys
+    #>
     $firefoxPolicies = @(
         "$env:ProgramFiles\Mozilla Firefox\distribution\policies.json",
         "${env:ProgramFiles(x86)}\Mozilla Firefox\distribution\policies.json"
@@ -359,6 +441,12 @@ function Remove-OpenPathInstallerBrowserArtifacts {
 }
 
 function Stop-OpenPathInstallerAcrylicService {
+    <#
+    .SYNOPSIS
+        Stops the Acrylic DNS proxy service; does not uninstall Acrylic regardless of the KeepAcrylic flag (removal is intentionally omitted from reinstall cleanup)
+    .PARAMETER KeepAcrylic
+        When set, suppresses the informational warning about intentional Acrylic preservation
+    #>
     param([switch]$KeepAcrylic)
 
     if (-not (Get-Command -Name Get-Service -ErrorAction SilentlyContinue)) { return }
@@ -375,6 +463,14 @@ function Stop-OpenPathInstallerAcrylicService {
 }
 
 function Remove-OpenPathInstallerInstallRoot {
+    <#
+    .SYNOPSIS
+        Removes the OpenPath install root directory, retrying up to five times; when KeepLogs is set, preserves the data\logs subtree
+    .PARAMETER OpenPathRoot
+        Root directory to remove
+    .PARAMETER KeepLogs
+        When set, removes all content except data\logs
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
@@ -411,6 +507,16 @@ function Remove-OpenPathInstallerInstallRoot {
 }
 
 function Invoke-OpenPathInstallerExistingInstallCleanup {
+    <#
+    .SYNOPSIS
+        Orchestrates a full pre-reinstall cleanup: stops tasks and the Acrylic service, restores DNS, removes firewall and AppLocker rules, strips browser artifacts, and deletes the install root
+    .PARAMETER OpenPathRoot
+        Root directory of the existing installation to clean up
+    .PARAMETER KeepAcrylic
+        When set, preserves the Acrylic DNS proxy installation
+    .PARAMETER KeepLogs
+        When set, preserves the data\logs directory during install root removal
+    #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory = $true)]

@@ -12,6 +12,12 @@ if (-not (Get-Command -Name 'Get-OpenPathNativeHostArtifactNames' -ErrorAction S
 }
 
 function Initialize-OpenPathInstallDirectories {
+    <#
+    .SYNOPSIS
+        Creates the OpenPath runtime directory tree and applies restrictive ACLs, including browser-extension and captive-portal subdirectories
+    .PARAMETER OpenPathRoot
+        Root installation directory, typically C:\OpenPath
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot
@@ -106,6 +112,16 @@ function Initialize-OpenPathInstallDirectories {
 }
 
 function Copy-OpenPathInstallerRuntime {
+    <#
+    .SYNOPSIS
+        Stages all runtime modules, scripts, and browser-extension artifacts from the installer package into the OpenPath install root
+    .PARAMETER OpenPathRoot
+        Root installation directory, typically C:\OpenPath
+    .PARAMETER ScriptDir
+        Directory containing the installer package layout
+    .PARAMETER Unattended
+        Skips interactive prompts during optional browser guidance steps
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,

@@ -9,6 +9,17 @@ Import-Module "$PSScriptRoot\Browser.RequestReadiness.psm1" -Force -ErrorAction 
 Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction Stop
 
 function Get-OpenPathBrowserDoctorScheduledTaskDiagnostic {
+    <#
+    .SYNOPSIS
+    Probes a scheduled task for presence and user-access permissions, with a hard timeout to
+    prevent the browser doctor report from hanging indefinitely.
+
+    .DESCRIPTION
+    The check runs in a subprocess using an encoded command so that COM-based task-scheduler
+    access does not block the caller.  If the subprocess does not complete within
+    TimeoutMilliseconds the process is killed and a timeout result is returned.  The returned
+    object always has Present, UserAccess, and Status fields regardless of the outcome.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$TaskName,
@@ -113,6 +124,17 @@ catch {
 }
 
 function Get-OpenPathBrowserDoctorEvidence {
+    <#
+    .SYNOPSIS
+    Gathers all browser diagnostic evidence into a structured object for use by the doctor report.
+
+    .DESCRIPTION
+    Probes the Firefox metadata file, XPI artifact, native host manifest, registry entries, state
+    file, whitelist file, and Firefox machine policy.  Also queries the browser inventory for
+    approved, unmanaged, and portable-risk findings, and evaluates request readiness from the
+    native host state.  The returned structured object is consumed by the report formatter; it is
+    not intended for direct operator use.
+    #>
     $browserInventory = Get-OpenPathBrowserInventory
     $approvedBrowserSummary = if (@($browserInventory.ApprovedBrowsers).Count -gt 0) {
         @($browserInventory.ApprovedBrowsers | ForEach-Object { $_.Name } | Select-Object -Unique) -join ', '
@@ -497,6 +519,10 @@ function Get-OpenPathBrowserDoctorEvidence {
 }
 
 function ConvertTo-OpenPathBrowserDoctorReport {
+    <#
+    .SYNOPSIS
+    Formats a structured evidence object as a human-readable multi-line diagnostics report string.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [object]$Evidence
@@ -558,6 +584,10 @@ function ConvertTo-OpenPathBrowserDoctorReport {
 }
 
 function Get-OpenPathBrowserDoctorReport {
+    <#
+    .SYNOPSIS
+    Collects live browser diagnostic evidence and returns it as a formatted operator-facing report string.
+    #>
     return ConvertTo-OpenPathBrowserDoctorReport -Evidence (Get-OpenPathBrowserDoctorEvidence)
 }
 

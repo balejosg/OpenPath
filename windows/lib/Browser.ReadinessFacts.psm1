@@ -9,6 +9,15 @@ Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\AppControl.psm1" -Force -ErrorAction SilentlyContinue
 
 function Test-OpenPathFirefoxNativeHostRegistrationProof {
+    <#
+    .SYNOPSIS
+    Checks whether the Firefox native host is fully registered on this machine.
+
+    .DESCRIPTION
+    Verifies that the manifest file, wrapper script, and state file are all present on disk, and
+    that at least one of the expected registry entries reports a default value via reg.exe.
+    All four conditions must hold; a missing registry entry alone is treated as unregistered.
+    #>
     $manifestPath = Get-OpenPathFirefoxNativeHostManifestPath
     $wrapperPath = Get-OpenPathFirefoxNativeHostWrapperPath
     $statePath = Get-OpenPathFirefoxNativeStatePath
@@ -40,6 +49,10 @@ function Test-OpenPathFirefoxNativeHostRegistrationProof {
 }
 
 function Get-OpenPathChromiumPolicyRegistryPath {
+    <#
+    .SYNOPSIS
+    Returns the registry path where managed policy values are stored for a given Chromium-based browser.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet('Edge', 'Chrome')]
@@ -54,6 +67,10 @@ function Get-OpenPathChromiumPolicyRegistryPath {
 }
 
 function Get-OpenPathRegistryPropertyValue {
+    <#
+    .SYNOPSIS
+    Reads a single named value from a registry key, returning null if the key or property is absent.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$Path,
@@ -76,6 +93,15 @@ function Get-OpenPathRegistryPropertyValue {
 }
 
 function Get-OpenPathRegistryListValues {
+    <#
+    .SYNOPSIS
+    Reads all numerically named registry value entries from a key and returns them as an array of strings.
+
+    .DESCRIPTION
+    Chromium-family browsers store policy lists (extension forcelists, URL blocklists) as numbered
+    entries under a sub-key.  This helper collects those entries in an order-independent way so
+    callers can check for required values without concern for the index assigned by the OS.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$Path
@@ -99,6 +125,10 @@ function Get-OpenPathRegistryListValues {
 }
 
 function Test-OpenPathChromiumExtensionForcelistReady {
+    <#
+    .SYNOPSIS
+    Returns true when the managed extension update URL is present in the Chromium browser's force-install extension list.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet('Edge', 'Chrome')]
@@ -116,6 +146,14 @@ function Test-OpenPathChromiumExtensionForcelistReady {
 }
 
 function Get-OpenPathChromiumDohMode {
+    <#
+    .SYNOPSIS
+    Reads the DnsOverHttpsMode policy value for a Chromium-based browser from the registry.
+
+    .NOTES
+    Returns an empty string when the value is absent.  The caller compares the result against
+    "off" to determine whether DNS-over-HTTPS is disabled as required by the enforcement policy.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet('Edge', 'Chrome')]
@@ -132,6 +170,10 @@ function Get-OpenPathChromiumDohMode {
 }
 
 function Get-OpenPathChromiumUrlBlocklist {
+    <#
+    .SYNOPSIS
+    Returns the URL blocklist entries currently applied to a Chromium-based browser via registry policy.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet('Edge', 'Chrome')]
@@ -143,6 +185,14 @@ function Get-OpenPathChromiumUrlBlocklist {
 }
 
 function Get-OpenPathGoogleSearchBlockPattern {
+    <#
+    .SYNOPSIS
+    Returns the URL pattern used to block Google Search in the Chromium URL blocklist policy.
+
+    .NOTES
+    The pattern is read from the browser policy spec when available; otherwise the maintained
+    contract default is returned.
+    #>
     try {
         $policySpec = Get-OpenPathBrowserPolicySpec
         if ($policySpec -and $policySpec.chromium -and $policySpec.chromium.googleSearchBlock) {
@@ -157,6 +207,14 @@ function Get-OpenPathGoogleSearchBlockPattern {
 }
 
 function Get-OpenPathGoogleGameBlockPatterns {
+    <#
+    .SYNOPSIS
+    Returns the list of URL patterns used to block Google Doodle games and distracting Google pages in the Chromium URL blocklist policy.
+
+    .NOTES
+    Patterns are read from the browser policy spec when available; otherwise the maintained
+    contract defaults covering snake arcade, Doodle subdomains, and logos are returned.
+    #>
     try {
         $policySpec = Get-OpenPathBrowserPolicySpec
         if ($policySpec -and $policySpec.chromium -and $policySpec.chromium.googleGameBlocks) {
@@ -176,6 +234,15 @@ function Get-OpenPathGoogleGameBlockPatterns {
 }
 
 function Test-OpenPathChromiumUrlBlocklistReady {
+    <#
+    .SYNOPSIS
+    Returns true when the supplied URL blocklist contains all patterns required by the current policy spec.
+
+    .NOTES
+    Required patterns are assembled by combining the Google Search block pattern and the Google game
+    block patterns sourced from the policy spec.  The check delegates the actual comparison to the
+    pure decision layer.
+    #>
     param(
         [AllowNull()]
         [object[]]$UrlBlocklist = $null
@@ -192,6 +259,10 @@ function Test-OpenPathChromiumUrlBlocklistReady {
 }
 
 function Test-OpenPathChromiumDohModeReady {
+    <#
+    .SYNOPSIS
+    Returns true when the given DNS-over-HTTPS mode value satisfies the enforcement policy requirement.
+    #>
     param(
         [AllowNull()]
         [object]$DohMode = $null
@@ -201,6 +272,10 @@ function Test-OpenPathChromiumDohModeReady {
 }
 
 function Test-OpenPathReadinessTruthy {
+    <#
+    .SYNOPSIS
+    Coerces an arbitrary probe result to a boolean, treating null as false.
+    #>
     param(
         [AllowNull()]
         [object]$Value = $null
@@ -210,6 +285,10 @@ function Test-OpenPathReadinessTruthy {
 }
 
 function Test-OpenPathStudentBrowserApproved {
+    <#
+    .SYNOPSIS
+    Returns true when the given browser family appears in the list of browsers approved for students.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string[]]$ApprovedStudentBrowsers,
@@ -225,6 +304,14 @@ function Test-OpenPathStudentBrowserApproved {
 }
 
 function Get-OpenPathReadinessBrowserInventory {
+    <#
+    .SYNOPSIS
+    Collects the live browser inventory and returns a safe fallback with empty lists on error.
+
+    .NOTES
+    Used by readiness collectors that must tolerate missing or inaccessible inventory data without
+    failing the entire readiness evaluation.
+    #>
     try {
         return Get-OpenPathBrowserInventory
     }
@@ -238,6 +325,10 @@ function Get-OpenPathReadinessBrowserInventory {
 }
 
 function Test-OpenPathApprovedBrowserInstalled {
+    <#
+    .SYNOPSIS
+    Returns true when the named browser appears in the approved-browsers list of the supplied inventory.
+    #>
     param(
         [AllowNull()]
         [object]$BrowserInventory = $null,
@@ -252,6 +343,10 @@ function Test-OpenPathApprovedBrowserInstalled {
 }
 
 function Test-OpenPathUnmanagedBrowserFindingsPresent {
+    <#
+    .SYNOPSIS
+    Returns true when the inventory contains at least one unmanaged browser or portable browser risk.
+    #>
     param(
         [AllowNull()]
         [object]$BrowserInventory = $null
@@ -261,6 +356,17 @@ function Test-OpenPathUnmanagedBrowserFindingsPresent {
 }
 
 function Get-OpenPathFirefoxReadinessFacts {
+    <#
+    .SYNOPSIS
+    Collects all Firefox readiness facts by probing the managed extension policy, native host
+    registration, native host state file, and machine policy application.
+
+    .DESCRIPTION
+    Each probe is performed live unless the caller supplies a pre-collected value for the
+    corresponding parameter, which allows tests to inject mocked results without touching the
+    registry or filesystem.  The returned object includes individual readiness flags and is consumed
+    by the request-readiness evaluation layer.
+    #>
     [CmdletBinding()]
     param(
         [AllowNull()]
@@ -303,6 +409,16 @@ function Get-OpenPathFirefoxReadinessFacts {
 }
 
 function Get-OpenPathChromiumBrowserReadinessFacts {
+    <#
+    .SYNOPSIS
+    Collects the managed-extension, DNS-over-HTTPS mode, and URL blocklist readiness facts for a
+    single Chromium-based browser by probing registry policy values.
+
+    .DESCRIPTION
+    Callers may supply pre-collected probe values for any of the three policy dimensions to allow
+    test injection.  The result also includes whether the browser is installed in the approved
+    inventory and whether the student configuration approves that browser family.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet('Edge', 'Chrome')]
@@ -349,6 +465,17 @@ function Get-OpenPathChromiumBrowserReadinessFacts {
 }
 
 function Get-OpenPathChromiumReadinessFacts {
+    <#
+    .SYNOPSIS
+    Collects readiness facts for both Edge and Chrome by running per-browser registry probes and
+    returning a combined object with an Edge entry and a Chrome entry.
+
+    .DESCRIPTION
+    Callers may supply pre-collected probe values for any per-browser dimension.  The parameter
+    names use an Edge or Chrome prefix; those prefixes are stripped and the values are forwarded
+    to the per-browser fact collector.  Omitting a prefixed parameter causes the fact collector to
+    perform the live registry probe for that dimension.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -409,6 +536,16 @@ function Get-OpenPathChromiumReadinessFacts {
 }
 
 function Get-OpenPathAppControlReadinessFacts {
+    <#
+    .SYNOPSIS
+    Determines whether application control is active and correctly configured for the approved browser set.
+
+    .DESCRIPTION
+    When no pre-collected value is supplied the function calls the app control probe if it is
+    available; otherwise it defaults to inactive.  A structured active object is supported: if the
+    object carries a BlocksUnapprovedEdge property and Edge is not in the approved list, the active
+    flag is downgraded to false to prevent false-positive readiness when Edge is not actually blocked.
+    #>
     [CmdletBinding()]
     param(
         [AllowNull()]

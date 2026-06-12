@@ -32,6 +32,14 @@ function Test-DirectDnsServer {
 }
 
 function Test-OpenPathDnsServerForDomains {
+    <#
+    .SYNOPSIS
+        Probes a DNS server to verify it can resolve at least one of the supplied domains
+    .PARAMETER Server
+        IPv4 DNS server to probe
+    .PARAMETER ProbeDomains
+        Domains to try in order; returns true on the first successful resolution
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$Server,
@@ -85,6 +93,10 @@ function Test-DisfavoredDnsServer {
 }
 
 function Get-OpenPathCaptivePortalOriginalDnsCandidates {
+    <#
+    .SYNOPSIS
+        Returns DNS server addresses recorded in the original-dns snapshot before OpenPath pinned 127.0.0.1
+    #>
     try {
         if ([string]::IsNullOrWhiteSpace([string]$script:OpenPathRoot)) {
             return @()
@@ -118,6 +130,10 @@ function Get-OpenPathCaptivePortalOriginalDnsCandidates {
 }
 
 function Get-OpenPathCaptivePortalDhcpServerCandidates {
+    <#
+    .SYNOPSIS
+        Returns the DHCP server addresses reported by ipconfig, as a fallback upstream candidate list
+    #>
     try {
         return @(
             foreach ($line in @(ipconfig /all)) {
@@ -133,6 +149,10 @@ function Get-OpenPathCaptivePortalDhcpServerCandidates {
 }
 
 function Get-OpenPathCaptivePortalConfiguredUpstreamCandidates {
+    <#
+    .SYNOPSIS
+        Returns the primaryDNS and secondaryDNS addresses from the OpenPath config as limited-mode upstream candidates
+    #>
     # The configured Acrylic upstream (config primaryDNS/secondaryDNS) is the one
     # address the OpenPath firewall explicitly allows AcrylicService.exe to reach,
     # so it remains a viable limited-mode forwarder even when probe traffic from
@@ -158,6 +178,10 @@ function Get-OpenPathCaptivePortalConfiguredUpstreamCandidates {
 }
 
 function Get-OpenPathCaptivePortalDhcpNameServerCandidates {
+    <#
+    .SYNOPSIS
+        Returns DHCP-offered DNS server addresses from the registry, ordered so the default-route interface resolvers appear first
+    #>
     # The DHCP-offered DNS servers are preserved by Windows in the registry
     # (DhcpNameServer) even after OpenPath pins the adapter DNS to 127.0.0.1.
     # This is the authoritative source of the network's real resolver -- the only

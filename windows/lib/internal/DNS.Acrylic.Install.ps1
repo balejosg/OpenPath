@@ -1,4 +1,8 @@
 function Get-AcrylicPath {
+    <#
+    .SYNOPSIS
+        Returns the directory where AcrylicService.exe is installed, or null if Acrylic is not found
+    #>
     $defaultPath = "${env:ProgramFiles(x86)}\Acrylic DNS Proxy"
     try {
         $config = Get-OpenPathConfig
@@ -45,11 +49,19 @@ function Get-AcrylicPath {
 }
 
 function Test-AcrylicInstalled {
+    <#
+    .SYNOPSIS
+        Returns true when AcrylicService.exe exists at the detected Acrylic installation path
+    #>
     $path = Get-AcrylicPath
     return ($null -ne $path -and (Test-Path "$path\AcrylicService.exe"))
 }
 
 function Get-AcrylicRegisteredService {
+    <#
+    .SYNOPSIS
+        Returns the Windows service object for the Acrylic DNS proxy, or null if not registered
+    #>
     $service = Get-Service -Name 'AcrylicDNSProxySvc' -ErrorAction SilentlyContinue
     if ($service) { return $service }
 
@@ -57,6 +69,12 @@ function Get-AcrylicRegisteredService {
 }
 
 function Register-AcrylicServiceFromPath {
+    <#
+    .SYNOPSIS
+        Registers the Acrylic Windows service from an existing installation directory
+    .PARAMETER AcrylicPath
+        Directory that contains AcrylicService.exe
+    #>
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$AcrylicPath)
 
@@ -99,6 +117,14 @@ function Register-AcrylicServiceFromPath {
 }
 
 function Invoke-AcrylicPortableDownload {
+    <#
+    .SYNOPSIS
+        Downloads a file from the given URL to the destination path, using curl when available and WebClient otherwise
+    .PARAMETER Url
+        Source URL to download
+    .PARAMETER DestinationPath
+        Local file path to write the downloaded content
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$Url,
         [Parameter(Mandatory = $true)][string]$DestinationPath
@@ -127,6 +153,12 @@ function Invoke-AcrylicPortableDownload {
 }
 
 function Test-AcrylicPortableArchive {
+    <#
+    .SYNOPSIS
+        Returns true when the ZIP at the given path contains AcrylicService.exe, confirming it is a valid portable release
+    .PARAMETER Path
+        Path to the downloaded ZIP file to inspect
+    #>
     param([Parameter(Mandatory = $true)][string]$Path)
 
     if (-not (Test-Path $Path)) { return $false }
@@ -148,6 +180,16 @@ function Test-AcrylicPortableArchive {
 }
 
 function Assert-AcrylicDownloadHash {
+    <#
+    .SYNOPSIS
+        Throws if the SHA256 of the file at Path does not match ExpectedSha256
+    .PARAMETER Path
+        Local file to hash
+    .PARAMETER ExpectedSha256
+        Hex string of the expected SHA256 digest
+    .PARAMETER ArtifactName
+        Display name included in the error message on mismatch
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$ExpectedSha256,
@@ -161,6 +203,12 @@ function Assert-AcrylicDownloadHash {
 }
 
 function Install-AcrylicDNS {
+    <#
+    .SYNOPSIS
+        Downloads and installs Acrylic DNS Proxy, falling back to Chocolatey when the direct download fails
+    .PARAMETER Force
+        Reinstalls even when Acrylic is already present
+    #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [switch]$Force
