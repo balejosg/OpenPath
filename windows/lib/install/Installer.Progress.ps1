@@ -1,4 +1,6 @@
 function Write-InstallerNotice {
+    # emits an operator-facing message to the console; silently does nothing when not
+    # running in verbose mode.
     param(
         [Parameter(Mandatory = $true)]
         [string]$Message,
@@ -17,6 +19,7 @@ function Write-InstallerNotice {
 }
 
 function Write-InstallerWarning {
+    # emits a yellow warning message; silently does nothing when not in verbose mode.
     param(
         [Parameter(Mandatory = $true)]
         [string]$Message
@@ -28,6 +31,7 @@ function Write-InstallerWarning {
 }
 
 function Write-InstallerError {
+    # emits a red error message unconditionally (not gated on verbose mode).
     param(
         [Parameter(Mandatory = $true)]
         [string]$Message
@@ -37,6 +41,7 @@ function Write-InstallerError {
 }
 
 function Write-InstallerVerbose {
+    # forwards message to the powershell verbose stream.
     param(
         [Parameter(Mandatory = $true)]
         [string]$Message
@@ -46,6 +51,8 @@ function Write-InstallerVerbose {
 }
 
 function Show-InstallerProgress {
+    # updates the powershell progress bar and, in verbose mode, also emits a step log line;
+    # skips the progress bar when console output is redirected.
     param(
         [Parameter(Mandatory = $true)]
         [int]$Step,
@@ -70,6 +77,8 @@ function Show-InstallerProgress {
 }
 
 function Invoke-OpenPathInstallTimedStep {
+    # runs scriptblock, records name/status/duration in the script-scoped timing list,
+    # and re-throws any error after recording it.
     param(
         [Parameter(Mandatory = $true)]
         [string]$Name,
@@ -110,6 +119,7 @@ function Invoke-OpenPathInstallTimedStep {
 }
 
 function Start-OpenPathInstallTimedStep {
+    # begins a named timer; pair with the corresponding complete function for open-ended phases.
     param(
         [Parameter(Mandatory = $true)]
         [string]$Name
@@ -125,6 +135,8 @@ function Start-OpenPathInstallTimedStep {
 }
 
 function Complete-OpenPathInstallTimedStep {
+    # stops the timer started by the corresponding start function and appends the record
+    # with final status and optional error message to the timing list.
     param(
         [Parameter(Mandatory = $true)]
         [string]$Name,
@@ -155,6 +167,7 @@ function Complete-OpenPathInstallTimedStep {
 }
 
 function Save-OpenPathInstallTiming {
+    # serializes the accumulated timing records to a json file at path; no-op when path is empty.
     param(
         [string]$Path = ''
     )

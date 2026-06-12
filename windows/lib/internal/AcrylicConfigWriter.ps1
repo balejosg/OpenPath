@@ -1,4 +1,5 @@
 function Set-AcrylicGlobalSetting {
+    # updates or inserts a key=value pair in the [GlobalSection] of an acrylic ini content string; returns the modified string.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
@@ -18,6 +19,7 @@ function Set-AcrylicGlobalSetting {
 }
 
 function Set-AcrylicAllowedAddress {
+    # ensures [AllowedAddressesSection] exists, then sets or inserts a key=value entry; returns the modified string.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
@@ -41,6 +43,7 @@ function Set-AcrylicAllowedAddress {
 }
 
 function Write-AcrylicPolicyLockFallbackWarning {
+    # emits a warning log entry when the global policy mutex is unavailable and a file lock fallback is used instead.
     param([string]$Reason = '')
 
     $message = 'Acrylic policy global mutex unavailable; using fallback file lock'
@@ -57,10 +60,12 @@ function Write-AcrylicPolicyLockFallbackWarning {
 }
 
 function Invoke-AcrylicPolicyStateFallbackLocked {
+    # acquires an exclusive file lock in ProgramData or TEMP, then runs $Action; used when the global mutex is denied.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [scriptblock]$Action,
+        # bounds the wait for an exclusive file lock on the fallback policy lock file before throwing.
         [int]$TimeoutMilliseconds = 15000,
         [string]$Reason = ''
     )
@@ -123,11 +128,13 @@ function Invoke-AcrylicPolicyStateFallbackLocked {
 }
 
 function Invoke-AcrylicPolicyStateLocked {
+    # acquires the named system mutex then runs $Action; falls back to a file lock on access-denied errors.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [scriptblock]$Action,
         [string]$MutexName = 'Global\OpenPathPolicyStateLock',
+        # bounds the wait for the named system mutex before throwing a timeout error.
         [int]$TimeoutMilliseconds = 15000
     )
 
@@ -173,6 +180,7 @@ function Invoke-AcrylicPolicyStateLocked {
 }
 
 function Write-AcrylicTextFile {
+    # writes $Content atomically via a temp-then-rename to $Path; refuses to write blank or zero-byte output.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -215,6 +223,7 @@ function Write-AcrylicTextFile {
 }
 
 function Write-AcrylicConfigFile {
+    # atomically writes an acrylic ini content string to the given path via the shared atomic text writer.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -225,6 +234,7 @@ function Write-AcrylicConfigFile {
 }
 
 function Write-AcrylicHostsFile {
+    # atomically writes an acrylic hosts content string to the given path via the shared atomic text writer.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,

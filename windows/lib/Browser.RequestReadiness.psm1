@@ -7,6 +7,7 @@ Import-Module "$PSScriptRoot\Browser.EnforcementDecision.psm1" -Force -ErrorActi
 Import-Module "$PSScriptRoot\Browser.ReadinessFacts.psm1" -Force -ErrorAction Stop
 
 function Test-OpenPathBrowserRequestSetupReady {
+    # returns true when the config contains a complete, valid request setup; delegates to the shared state projection
     param(
         [AllowNull()]
         [object]$Config = $null
@@ -17,6 +18,7 @@ function Test-OpenPathBrowserRequestSetupReady {
 }
 
 function Get-OpenPathReadinessBooleanConfigValue {
+    # coerces a config property to bool; accepts common truthy/falsy string representations and returns DefaultValue when the property is absent or unrecognized
     param(
         [AllowNull()]
         [object]$Config,

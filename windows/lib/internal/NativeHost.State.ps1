@@ -1,4 +1,5 @@
 function Read-NativeState {
+    # reads and parses the native host state json file; returns an empty object when the file is missing or unreadable.
     if (-not (Test-Path $script:StatePath)) {
         return [PSCustomObject]@{}
     }
@@ -13,6 +14,7 @@ function Read-NativeState {
 }
 
 function Get-WhitelistSections {
+    # parses the whitelist file into Whitelist, BlockedSubdomains, and BlockedPaths sections; returns empty section arrays when the file is absent.
     $result = [ordered]@{
         Whitelist = @()
         BlockedSubdomains = @()
@@ -52,6 +54,7 @@ function Get-WhitelistSections {
 }
 
 function Resolve-DomainIp {
+    # returns the first IP address string from a DNS lookup of $Domain, or $null when resolution fails or returns no A record.
     param(
         [string]$Domain
     )

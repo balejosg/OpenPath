@@ -6,6 +6,7 @@ if (-not (Get-Variable -Name OpenPathRuntimeDependencyActionAllowLocal -Scope Sc
 }
 
 function Normalize-OpenPathRuntimeDependencyHost {
+    # trims, lowercases, and validates a host string; returns empty string for .local hosts, single-label names, or format violations
     [CmdletBinding()]
     param([AllowNull()][object]$Value)
 
@@ -19,6 +20,7 @@ function Normalize-OpenPathRuntimeDependencyHost {
 }
 
 function Test-OpenPathBlockedSubdomainMatch {
+    # returns true when $Domain equals or is a subdomain of any entry in $BlockedSubdomains
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
@@ -36,6 +38,7 @@ function Test-OpenPathBlockedSubdomainMatch {
 }
 
 function Test-OpenPathWhitelistCoversHost {
+    # returns true when $Hostname is present in $WhitelistSet directly or as a subdomain of a set entry
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Hostname,
@@ -56,6 +59,7 @@ function Test-OpenPathWhitelistCoversHost {
 }
 
 function Get-OpenPathRuntimeDependencyProtectedHosts {
+    # builds the set of hosts that may never appear as runtime dependency candidates; includes os/browser infrastructure and api/whitelist urls from $State
     [CmdletBinding()]
     param([AllowNull()][PSCustomObject]$State = $null)
 
@@ -149,6 +153,7 @@ function Get-OpenPathRuntimeDependencyProtectedHosts {
 }
 
 function Test-OpenPathProtectedRuntimeDependencyHost {
+    # returns true when $Hostname is in $ProtectedHosts or is a subdomain of any entry in that set
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Hostname,
@@ -169,6 +174,7 @@ function Test-OpenPathProtectedRuntimeDependencyHost {
 }
 
 function Test-OpenPathRuntimeDependencySensitiveField {
+    # returns true when $Message contains any field that could carry url, header, body, or credential data
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][object]$Message)
 
@@ -199,6 +205,7 @@ function Test-OpenPathRuntimeDependencySensitiveField {
 }
 
 function New-OpenPathRuntimeDependencyWhitelistSet {
+    # builds a case-insensitive hashset of normalized domain strings from $WhitelistedDomains for fast host coverage checks
     [CmdletBinding()]
     param([string[]]$WhitelistedDomains = @())
 
@@ -211,6 +218,7 @@ function New-OpenPathRuntimeDependencyWhitelistSet {
 }
 
 function Test-OpenPathRuntimeDependencyCandidate {
+    # validates a dependency message against whitelist, protected host, and blocked subdomain rules; returns Valid flag plus resolved host/type or a failure result
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][object]$Message,

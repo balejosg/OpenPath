@@ -1,4 +1,5 @@
 function Set-OpenPathConfigValue {
+    # sets or adds a named property on a pscustomobject config, using add-member when the property is absent
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Config,
@@ -21,6 +22,7 @@ function Set-OpenPathConfigValue {
 }
 
 function Get-OpenPathConfigValue {
+    # returns the named property from config, or $DefaultValue when the config is null/missing/the property is absent
     param(
         [AllowNull()]
         [object]$Config = $null,
@@ -40,6 +42,7 @@ function Get-OpenPathConfigValue {
 }
 
 function ConvertTo-OpenPathNormalizedConfig {
+    # converts a hashtable or pscustomobject config into a normalized pscustomobject with trimmed urls and validated numeric defaults
     param(
         [AllowNull()]
         [object]$Config = $null
@@ -93,6 +96,7 @@ function ConvertTo-OpenPathNormalizedConfig {
 }
 
 function Test-OpenPathConfig {
+    # validates that a config object has a reachable apiUrl, whitelistUrl, and at least one of classroom/classroomId; returns Valid, MissingFields, Config
     param(
         [AllowNull()]
         [object]$Config = $null

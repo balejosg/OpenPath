@@ -1,4 +1,5 @@
 function Get-WatchdogFailCount {
+    # reads the integer fail count from $WatchdogFailCountPath; returns 0 when the file is absent or unreadable.
     param(
         [Parameter(Mandatory = $true)]
         [string]$WatchdogFailCountPath
@@ -18,6 +19,7 @@ function Get-WatchdogFailCount {
 }
 
 function Set-WatchdogFailCount {
+    # writes $Count (floored at 0) to $WatchdogFailCountPath as a UTF-8 encoded integer.
     param(
         [Parameter(Mandatory = $true)]
         [string]$WatchdogFailCountPath,
@@ -30,6 +32,7 @@ function Set-WatchdogFailCount {
 }
 
 function Increment-WatchdogFailCount {
+    # increments the stored fail count by one and returns the new value.
     param(
         [Parameter(Mandatory = $true)]
         [string]$WatchdogFailCountPath
@@ -41,6 +44,7 @@ function Increment-WatchdogFailCount {
 }
 
 function Reset-WatchdogFailCount {
+    # resets the stored fail count to zero.
     param(
         [Parameter(Mandatory = $true)]
         [string]$WatchdogFailCountPath

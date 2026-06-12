@@ -1,4 +1,5 @@
 function Get-OpenPathNativeHostArtifactNames {
+    # returns the ordered list of all ps1/psm1/cmd files that must be staged in the native host directory before the host can run.
     return @(
         'OpenPath-NativeHost.ps1',
         'OpenPath-NativeHost.cmd',
@@ -24,6 +25,7 @@ function Get-OpenPathNativeHostArtifactNames {
 }
 
 function Get-OpenPathNativeHostArtifactCandidateRoots {
+    # builds a deduplicated list of directory paths to search for artifacts, including $SourceRoot siblings and $NativeRoot.
     param(
         [AllowNull()]
         [string]$SourceRoot = $null,
@@ -51,6 +53,7 @@ function Get-OpenPathNativeHostArtifactCandidateRoots {
 }
 
 function Resolve-OpenPathNativeHostArtifactSources {
+    # maps each artifact name to the first candidate root directory that contains it; collects names with no match in Missing.
     param(
         [Parameter(Mandatory = $true)]
         [string[]]$ArtifactNames,

@@ -1,3 +1,12 @@
+# windows student-policy end-to-end runner.
+# sets up a local api, postgres, and selenium environment on the windows runner, installs
+# the agent, then drives the full student-policy scenario suite with both sse and fallback
+# coverage profiles. firefox binary resolution and unsigned-addon support are configured
+# automatically. timing evidence is collected per phase and written to the artifacts directory.
+# browser enforcement probes run only when explicitly opted in.
+# the runner tears down the installed agent and restores firefox state in a finally block.
+# invoke through npm run diagnostics:windows:direct -- --mode browser-boundary for the
+# combined student-policy plus boundary check flow.
 param(
     [switch]$RunBrowserEnforcementProbes,
     [ValidateSet('full', 'fallback-propagation', 'dns-discovery-spike', 'dns-evidence-matrix', 'dns-evidence-matrix-v2', 'browser-dependency-observability-spike')][string]$CoverageProfile = 'full'

@@ -1,4 +1,5 @@
 function Get-OpenPathScheduledTaskCatalog {
+    # returns the full catalog of known scheduled task descriptors keyed by type, including prefix, acl string, and ordered task list
     $prefix = 'OpenPath'
     $tasks = [ordered]@{
         Update = [PSCustomObject]@{
@@ -55,6 +56,7 @@ function Get-OpenPathScheduledTaskCatalog {
 }
 
 function Get-OpenPathScheduledTaskSpec {
+    # returns the descriptor for a single task type by looking up $TaskType in the catalog
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet('Update', 'RuntimeDependencyApply', 'CaptivePortalRecovery', 'Watchdog', 'Startup', 'SSE', 'AgentUpdate')]

@@ -1,4 +1,5 @@
 function Invoke-OpenPathUpdateRollback {
+    # attempts a checkpoint rollback first; falls back to restoring $BackupPath when checkpoint rollback is disabled or fails; returns the rollback method and success flag.
     param(
         [AllowNull()]
         [PSCustomObject]$Config,
@@ -59,6 +60,7 @@ function Invoke-OpenPathUpdateRollback {
 }
 
 function Send-OpenPathUpdateFailureHealth {
+    # submits a health report reflecting the update failure; uses DEGRADED status when rollback succeeded and CRITICAL when it did not.
     param(
         [Parameter(Mandatory = $true)]
         [bool]$RollbackSucceeded,

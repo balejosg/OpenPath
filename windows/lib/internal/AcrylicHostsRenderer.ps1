@@ -1,4 +1,5 @@
 function ConvertTo-AcrylicHostsContent {
+    # serializes a hosts definition object into a complete acrylic hosts text file with section headers and a trailing newline.
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][pscustomobject]$Definition)
 

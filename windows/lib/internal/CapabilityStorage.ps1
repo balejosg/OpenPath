@@ -1,4 +1,5 @@
 function Get-OpenPathCapabilityStorageRoot {
+    # returns the data subdirectory under $OpenPathRoot, using the script-level root or C:\OpenPath as a fallback.
     [CmdletBinding()]
     param([string]$OpenPathRoot = '')
 
@@ -14,6 +15,7 @@ function Get-OpenPathCapabilityStorageRoot {
 }
 
 function Join-OpenPathCapabilityStoragePath {
+    # joins two path segments; uses string concatenation when $Parent is on a drive root that does not exist on the current host.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Parent,
@@ -28,6 +30,7 @@ function Join-OpenPathCapabilityStoragePath {
 }
 
 function Get-OpenPathCapabilityStoragePath {
+    # resolves the canonical filesystem path for the named capability store slot; env overrides take precedence for testability.
     [CmdletBinding()]
     param(
         [ValidateSet(
@@ -91,6 +94,7 @@ function Get-OpenPathCapabilityStoragePath {
 }
 
 function New-OpenPathCapabilityStorageAccessRule {
+    # constructs a FileSystemAccessRule granting $Rights to $Identity with full container and object inheritance.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Identity,

@@ -1,4 +1,6 @@
 function Get-OpenPathInstallerAgentVersion {
+    # returns the agent version string from OPENPATH_VERSION env var, the VERSION file
+    # adjacent to scriptdir, or '0.0.0' as a fallback.
     param(
         [Parameter(Mandatory = $true)]
         [string]$ScriptDir
@@ -24,6 +26,9 @@ function Get-OpenPathInstallerAgentVersion {
 }
 
 function New-OpenPathInstallerConfig {
+    # builds and returns the full config hashtable for a fresh installation; optional fields
+    # (api url, classroom, captive portal domains, browser extension ids, etc.) are included
+    # only when non-empty.
     param(
         [string]$WhitelistUrl = '',
 

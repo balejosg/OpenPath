@@ -8,6 +8,8 @@ if (-not (Get-Command -Name 'ConvertTo-OpenPathNormalizedConfig' -ErrorAction Si
 }
 
 function Get-OpenPathRequestSetupStringValue {
+    # walks propertynames in order and returns the first non-empty trimmed string value
+    # found on config; returns empty string if config is null or no property has a value.
     param(
         [AllowNull()]
         [object]$Config = $null,
@@ -36,6 +38,8 @@ function Get-OpenPathRequestSetupStringValue {
 }
 
 function Get-OpenPathRequestSetupMachineToken {
+    # extracts the machine token segment from a whitelist url of the form /w/<token>/;
+    # returns empty string if the url is blank or does not match the expected pattern.
     param(
         [AllowNull()]
         [string]$WhitelistUrl = ''
@@ -53,6 +57,8 @@ function Get-OpenPathRequestSetupMachineToken {
 }
 
 function Get-OpenPathRequestSetupDiagnosticMessage {
+    # returns a human-readable string describing why setup is not ready; empty when status
+    # is 'ready', a listing of missing fields otherwise.
     param(
         [string]$Status = '',
         [string[]]$MissingFields = @()
@@ -77,6 +83,8 @@ function Get-OpenPathRequestSetupDiagnosticMessage {
 }
 
 function Get-OpenPathRequestSetupState {
+    # evaluates config fields and returns a state object describing readiness, token state,
+    # and which required fields are missing; normalizes config first if the helper is available.
     param(
         [AllowNull()]
         [object]$Config = $null
@@ -168,6 +176,8 @@ function Get-OpenPathRequestSetupState {
 }
 
 function Test-OpenPathRequestSetupReady {
+    # returns $true only when the request setup state object reports ready; convenience
+    # wrapper for callers that only need a boolean answer.
     param(
         [AllowNull()]
         [object]$Config = $null
@@ -178,6 +188,8 @@ function Test-OpenPathRequestSetupReady {
 }
 
 function New-OpenPathRequestSetupNativeHostState {
+    # builds the ordered hashtable expected by the native host from a validated config;
+    # throws the diagnostic message if request setup is not ready.
     param(
         [AllowNull()]
         [object]$Config = $null,

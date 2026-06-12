@@ -1,4 +1,5 @@
 function New-OpenPathEndpointStateRepairPlan {
+    # builds an ordered list of repair action names for the given $Mode and $PolicyState; used by the watchdog to drive endpoint remediation without calling actions directly.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -42,6 +43,7 @@ function New-OpenPathEndpointStateRepairPlan {
 }
 
 function New-OpenPathWatchdogProtectedModeRepairPlan {
+    # inspects Acrylic, DNS, firewall, and local-DNS health flags and returns an action list and issue list needed to restore protected mode; returns empty actions when $PolicyState.ProtectedModeEligible is false.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -113,6 +115,7 @@ function New-OpenPathWatchdogProtectedModeRepairPlan {
 }
 
 function Invoke-OpenPathEndpointStateRepairPlan {
+    # executes each action in $Plan.Actions in order, dispatching to the appropriate subsystem function; returns the list of actions that were applied.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]

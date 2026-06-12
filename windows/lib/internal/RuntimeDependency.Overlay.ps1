@@ -13,6 +13,7 @@ if (-not (Get-Variable -Name OpenPathRuntimeDependencyOverlayVersion -Scope Scri
 }
 
 function Get-OpenPathRuntimeDependencyOverlayPath {
+    # returns the capability storage path for the runtime dependency overlay json file
     [CmdletBinding()]
     param()
 
@@ -20,6 +21,7 @@ function Get-OpenPathRuntimeDependencyOverlayPath {
 }
 
 function Get-OpenPathRuntimeDependencyOverlaySettings {
+    # returns ttl and capacity for the overlay, reading env overrides OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_TTL_DAYS and _CAPACITY
     [CmdletBinding()]
     param()
 
@@ -39,6 +41,7 @@ function Get-OpenPathRuntimeDependencyOverlaySettings {
 }
 
 function Read-OpenPathRuntimeDependencyOverlay {
+    # deserializes the overlay json from disk and returns the entries array; returns an empty array when the file is absent or unreadable
     [CmdletBinding()]
     param([string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath))
 
@@ -57,6 +60,7 @@ function Read-OpenPathRuntimeDependencyOverlay {
 }
 
 function Write-OpenPathRuntimeDependencyOverlay {
+    # serializes entries with version and updatedAt to the overlay json file, creating the directory if needed
     [CmdletBinding()]
     param(
         [object[]]$Entries = @(),
@@ -76,6 +80,7 @@ function Write-OpenPathRuntimeDependencyOverlay {
 }
 
 function Clear-OpenPathRuntimeDependencyOverlay {
+    # removes the overlay file from disk if it exists; silently does nothing when absent
     [CmdletBinding()]
     param([string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath))
 
@@ -85,6 +90,7 @@ function Clear-OpenPathRuntimeDependencyOverlay {
 }
 
 function Update-OpenPathRuntimeDependencyOverlay {
+    # merges new requests into existing entries, evicts expired/invalid/protected/blocked entries, bounds to Capacity; returns Entries, Processed, Rejected, Changed
     [CmdletBinding()]
     param(
         [object[]]$Entries = @(),
@@ -183,6 +189,7 @@ function Update-OpenPathRuntimeDependencyOverlay {
 }
 
 function Test-OpenPathRuntimeDependencyOverlayContainsDomains {
+    # returns true only when every domain in $Domains is present as a dependencyHost in the on-disk overlay
     [CmdletBinding()]
     param([string[]]$Domains = @())
 
@@ -203,6 +210,7 @@ function Test-OpenPathRuntimeDependencyOverlayContainsDomains {
 }
 
 function Get-OpenPathRuntimeDependencyDomains {
+    # returns unique dependency host strings from valid non-expired overlay entries; prunes the file when $Prune is set and stale entries were dropped
     [CmdletBinding()]
     param(
         [string[]]$WhitelistedDomains = @(),

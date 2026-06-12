@@ -76,6 +76,7 @@ function Invoke-NativeHostMutex {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][scriptblock]$Action,
+        # bounds the wait for the named system mutex before throwing a timeout error.
         [int]$TimeoutMilliseconds = 15000
     )
 

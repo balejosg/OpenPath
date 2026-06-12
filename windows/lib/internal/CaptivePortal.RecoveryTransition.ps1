@@ -1,4 +1,5 @@
 function Get-OpenPathCaptivePortalRecoveryTransitionStringList {
+    # coerces $Value to a flat array of non-blank trimmed strings; returns an empty array when $Value is null.
     param([AllowNull()][object]$Value)
 
     if ($null -eq $Value) { return @() }
@@ -14,6 +15,7 @@ function Get-OpenPathCaptivePortalRecoveryTransitionStringList {
 }
 
 function Get-OpenPathCaptivePortalRecoveryTransitionProperty {
+    # reads the first matching property name from $Names on $InputObject; returns $Default when none is found.
     param(
         [AllowNull()][object]$InputObject,
         [string[]]$Names = @(),
@@ -30,6 +32,7 @@ function Get-OpenPathCaptivePortalRecoveryTransitionProperty {
 }
 
 function Test-OpenPathCaptivePortalRecoveryTransitionConfiguredDomainsApplied {
+    # returns $true when every domain in $ConfiguredCaptivePortalDomains is present in $AllowedHosts, or via $ConfiguredDomainsAppliedTester if supplied.
     param(
         [string[]]$AllowedHosts = @(),
         [string[]]$ConfiguredCaptivePortalDomains = @(),
@@ -49,6 +52,7 @@ function Test-OpenPathCaptivePortalRecoveryTransitionConfiguredDomainsApplied {
 }
 
 function Get-OpenPathCaptivePortalRecoveryTransitionEffectiveHosts {
+    # returns a deduplicated lowercase list of trimmed host names from $Hosts, or delegates to $EffectiveHostResolver when supplied.
     param(
         [string[]]$Hosts = @(),
         [scriptblock]$EffectiveHostResolver = $null
@@ -67,6 +71,7 @@ function Get-OpenPathCaptivePortalRecoveryTransitionEffectiveHosts {
 }
 
 function Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary {
+    # builds a summary object from the recovery marker capturing host lists, mode flags, and readiness booleans used by the portal transition logic.
     param(
         [AllowNull()][object]$Marker,
         [string]$TriggerHost = '',
@@ -139,6 +144,7 @@ function Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary {
 }
 
 function Test-OpenPathCaptivePortalRecoveryTransitionRecentSuccess {
+    # returns $true when $RecentSuccess carries a valid limited-mode marker that is eligible and not in passthrough; validates $TriggerHost and configured domains when provided.
     param(
         [AllowNull()][object]$RecentSuccess,
         [string]$TriggerHost = '',

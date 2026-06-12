@@ -27,6 +27,7 @@ function Invoke-OpenPathPolicyStateLocked {
         [Parameter(Mandatory = $true)]
         [scriptblock]$Action,
         [string]$MutexName = 'Global\OpenPathPolicyStateLock',
+        # bounds the wait for the named system mutex before throwing a timeout error.
         [int]$TimeoutMilliseconds = 15000
     )
 

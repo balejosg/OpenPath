@@ -1,4 +1,5 @@
 function ConvertTo-OpenPathTaskResultHex {
+    # formats a task last-result code as a zero-padded 8-digit hex string (e.g. 0x00000000); returns empty string for null or conversion failures
     param([AllowNull()]$Value)
 
     if ($null -eq $Value) {
@@ -14,6 +15,7 @@ function ConvertTo-OpenPathTaskResultHex {
 }
 
 function Get-OpenPathScheduledTaskDiagnostics {
+    # queries task scheduler for state, last result, last/next run times, and missed-run count; captures errors into taskDiagnosticsError
     param([Parameter(Mandatory = $true)][string]$TaskName)
 
     $diagnostics = @{
@@ -57,6 +59,7 @@ function Get-OpenPathScheduledTaskDiagnostics {
 }
 
 function Add-OpenPathScheduledTaskDiagnostics {
+    # merges diagnostics fields from $Runner.GetDiagnostics or the fallback helper into $Result; modifies the hashtable in place and returns it
     param(
         [Parameter(Mandatory = $true)][hashtable]$Result,
         [AllowNull()][object]$Runner,
@@ -98,6 +101,7 @@ function Add-OpenPathScheduledTaskDiagnostics {
 }
 
 function New-OpenPathSchtasksRunner {
+    # returns a runner object with RunTask (schtasks.exe /Run), WaitFor (poll-until-condition), and GetDiagnostics scriptblocks
     [PSCustomObject]@{
         RunTask = {
             param([string]$TaskName)
@@ -153,6 +157,7 @@ function New-OpenPathSchtasksRunner {
 }
 
 function New-OpenPathFakeTaskRunner {
+    # returns a test-double runner whose RunTask, WaitFor, and GetDiagnostics scriptblocks resolve from caller-supplied result tables
     param(
         [hashtable]$RunResults = @{},
         [hashtable]$WaitResults = @{},
@@ -199,6 +204,7 @@ function New-OpenPathFakeTaskRunner {
 }
 
 function Invoke-OpenPathScheduledTask {
+    # triggers a scheduled task via the runner, optionally falls back to $FallbackTaskName, then waits on $WaitCondition; returns timing and success fields
     param(
         [Parameter(Mandatory = $true)]
         [string]$TaskName,

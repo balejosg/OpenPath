@@ -1,4 +1,5 @@
 function Resolve-SslipIpv4Address {
+    # extracts and validates the embedded ipv4 octets from a sslip.io domain; returns the dotted-decimal string or $null.
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Domain)
 
@@ -14,6 +15,7 @@ function Resolve-SslipIpv4Address {
 }
 
 function Test-AcrylicStaticAddressDomain {
+    # returns $true when $Domain encodes a static ipv4 address via sslip.io and needs a static host entry instead of a forward rule.
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Domain)
 
@@ -21,6 +23,7 @@ function Test-AcrylicStaticAddressDomain {
 }
 
 function Get-AcrylicForwardRules {
+    # returns the acrylic hosts lines needed to forward a domain and its subdomains; handles sslip.io static addresses and blocked-subdomain exclusions.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
@@ -61,6 +64,7 @@ function Get-AcrylicForwardRules {
 }
 
 function Get-AcrylicEssentialDomainGroups {
+    # returns the always-allowed domain groups required for system operation regardless of whitelist state.
     [CmdletBinding()]
     param()
 
@@ -68,6 +72,7 @@ function Get-AcrylicEssentialDomainGroups {
 }
 
 function Get-AcrylicAffinityMaskEntries {
+    # returns deduplicated bare and wildcard mask entries for each domain, used to build the upstream dns affinity mask string.
     [CmdletBinding()]
     param(
         [string[]]$Domains = @(),
@@ -103,6 +108,7 @@ function Get-AcrylicAffinityMaskEntries {
 }
 
 function Get-AcrylicExactAffinityMaskEntries {
+    # returns deduplicated bare-domain mask entries without wildcard expansion, for use with exact-match dependencies.
     [CmdletBinding()]
     param([string[]]$Domains = @())
 
@@ -120,6 +126,7 @@ function Get-AcrylicExactAffinityMaskEntries {
 }
 
 function Get-AcrylicAllowedRuntimeDependencyDomains {
+    # filters the runtime-dependency domain list, removing entries that are themselves blocked subdomains.
     [CmdletBinding()]
     param(
         [string[]]$Domains = @(),
@@ -137,6 +144,7 @@ function Get-AcrylicAllowedRuntimeDependencyDomains {
 }
 
 function Get-AcrylicExactForwardRule {
+    # returns a single exact-match forward line for $Domain without wildcard subdomain coverage; returns $null for blank input.
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Domain)
 
@@ -146,6 +154,7 @@ function Get-AcrylicExactForwardRule {
 }
 
 function New-AcrylicHostsSection {
+    # creates a hosts-file section object with a title, optional description, and deduplicated non-blank lines.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Title,
@@ -161,6 +170,7 @@ function New-AcrylicHostsSection {
 }
 
 function New-AcrylicHostsDefinition {
+    # builds the full hosts definition object from the whitelisted, blocked, runtime-dependency, and captive-portal domain sets.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$WhitelistedDomains,

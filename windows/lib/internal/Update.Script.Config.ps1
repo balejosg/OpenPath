@@ -1,4 +1,5 @@
 function Get-OpenPathUpdatePolicySettings {
+    # reads stale-whitelist age, failsafe, checkpoint rollback, and max-checkpoint settings from $Config, applying defaults for any missing or invalid values.
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Config
@@ -47,6 +48,7 @@ function Get-OpenPathUpdatePolicySettings {
 }
 
 function Backup-OpenPathWhitelistState {
+    # copies $WhitelistPath to $BackupPath and, when checkpoint rollback is enabled, saves a pre-update checkpoint capped at $MaxCheckpoints.
     param(
         [Parameter(Mandatory = $true)]
         [string]$WhitelistPath,

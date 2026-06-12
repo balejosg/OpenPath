@@ -1,3 +1,12 @@
+# wedu lab captive-portal evidence harness.
+# runs against a physical lab network where only the dhcp-offered dns server
+# resolves the portal host. the runner configures acrylic split-dns so the dedicated
+# network resolver is placed as a third upstream while a stale public server stays first.
+# it then exercises the watchdog and asserts that protected-mode resolution succeeds and
+# that autonomous limited-mode entry never occurs under split dns.
+# authentication is verified through the browser login path only; no gateway control endpoint.
+# artifacts are written to the artifacts root for upload as ci evidence.
+# invoke through npm run diagnostics:windows:direct -- --mode captive-portal-wedu-lab.
 param(
     [ValidateSet('Run')]
     [string]$Mode = 'Run',

@@ -1,4 +1,6 @@
 function ConvertTo-OpenPathInstallPhaseInput {
+    # copies inputs to a safe ordered object, redacting any property whose name contains
+    # a secret-adjacent keyword (token, secret, etc.).
     param(
         [AllowNull()]
         [object]$Inputs
@@ -50,6 +52,8 @@ function ConvertTo-OpenPathInstallPhaseInput {
 }
 
 function New-OpenPathInstallPhase {
+    # creates a typed phase descriptor used by the install plan; action is a scriptblock
+    # executed when the phase runs.
     param(
         [Parameter(Mandatory = $true)]
         [string]$Name,
@@ -81,6 +85,8 @@ function New-OpenPathInstallPhase {
 }
 
 function New-OpenPathInstallPlan {
+    # builds the ordered list of all install phases with their names, progress steps, and
+    # recovery hints; returns a plan object containing the phase list and a shared context.
     param(
         [hashtable]$Parameters = @{},
 
@@ -134,6 +140,8 @@ function New-OpenPathInstallPlan {
 }
 
 function Invoke-OpenPathInstallPhase {
+    # executes one phase action, measures elapsed time, and appends a result record to
+    # context.results; catches errors into the result rather than propagating them.
     param(
         [Parameter(Mandatory = $true)]
         [object]$Phase,

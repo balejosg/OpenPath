@@ -1,4 +1,5 @@
 function Get-NativeHostCaptivePortalRecoveryQueuePath {
+    # returns the recovery request queue directory path; uses the env override when set, otherwise derives it from capability storage.
     if ($env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH) {
         return $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_QUEUE_PATH
     }
@@ -7,6 +8,7 @@ function Get-NativeHostCaptivePortalRecoveryQueuePath {
 }
 
 function Get-NativeHostCaptivePortalRecoveryResultPath {
+    # returns the recovery result directory path; uses the env override when set, otherwise derives it from capability storage.
     if ($env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH) {
         return $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH
     }
@@ -15,6 +17,7 @@ function Get-NativeHostCaptivePortalRecoveryResultPath {
 }
 
 function Get-NativeHostCaptivePortalRecoveryProgressPath {
+    # returns the recovery progress directory path; uses the env override when set, otherwise derives it from capability storage.
     if ($env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH) {
         return $env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_PROGRESS_PATH
     }
@@ -23,6 +26,7 @@ function Get-NativeHostCaptivePortalRecoveryProgressPath {
 }
 
 function Get-NativeHostCaptivePortalRecoveryFileSnapshot {
+    # reads all json files in $Path sorted by write time, extracts request ids, and optionally reads the latest phase value from the last file.
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [string]$PhaseProperty = ''
@@ -65,6 +69,7 @@ function Get-NativeHostCaptivePortalRecoveryFileSnapshot {
 }
 
 function Get-NativeHostCaptivePortalRecoveryDiagnosticSnapshot {
+    # collects file counts, request ids, and the latest progress phase from the queue, result, and progress directories into a single diagnostic hashtable.
     $queuePath = Get-NativeHostCaptivePortalRecoveryQueuePath
     $resultPath = Get-NativeHostCaptivePortalRecoveryResultPath
     $progressPath = Get-NativeHostCaptivePortalRecoveryProgressPath
@@ -87,6 +92,7 @@ function Get-NativeHostCaptivePortalRecoveryDiagnosticSnapshot {
 }
 
 function Add-NativeHostCaptivePortalRecoveryDiagnostics {
+    # merges task scheduler result fields and the directory snapshot into $Response in place; returns the augmented hashtable.
     param(
         [Parameter(Mandatory = $true)][hashtable]$Response,
         [AllowNull()][hashtable]$TaskResult = $null
@@ -117,6 +123,7 @@ function Add-NativeHostCaptivePortalRecoveryDiagnostics {
 }
 
 function Write-NativeHostCaptivePortalRecoveryRequest {
+    # serializes a recovery request with operation, trigger host, portal hosts, and metadata to a json file named by $RequestId in the queue directory.
     param(
         [Parameter(Mandatory = $true)][string]$RequestId,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$TriggerHost,
@@ -156,6 +163,7 @@ function Write-NativeHostCaptivePortalRecoveryRequest {
 }
 
 function Read-NativeHostCaptivePortalRecoveryResultEnvelope {
+    # reads and validates the json result file for $RequestId; returns a classification of success, stale-result, or missing-result along with the parsed payload.
     param(
         [Parameter(Mandatory = $true)][string]$RequestId
     )
@@ -195,6 +203,7 @@ function Read-NativeHostCaptivePortalRecoveryResultEnvelope {
 }
 
 function Read-NativeHostCaptivePortalRecoveryResult {
+    # unwraps the result envelope for $RequestId and returns only the parsed payload, or $null when the result is missing or stale.
     param(
         [Parameter(Mandatory = $true)][string]$RequestId
     )
@@ -204,6 +213,7 @@ function Read-NativeHostCaptivePortalRecoveryResult {
 }
 
 function Get-NativeHostCaptivePortalRecoveryQueueClassification {
+    # maps the combination of $Result, $TaskResult, $ReadClassification, and $OperationSucceeded to a single outcome string such as success, authenticated-restore-failed, task-timeout, task-disabled, stale-result, or missing-result.
     param(
         [string]$ReadClassification = 'missing-result',
         [AllowNull()][hashtable]$TaskResult = $null,

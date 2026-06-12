@@ -1,3 +1,9 @@
+# end-to-end installation test runner for the windows platform.
+# installs the agent from the local repo onto the self-hosted windows runner, provisions
+# a local whitelist http server, runs pester checks against the live installation, and
+# then uninstalls. on self-hosted runners acrylic is kept between runs.
+# artifacts are written to tests/e2e/artifacts/windows-e2e.
+# invoke through npm run diagnostics:windows:direct -- --mode pester (default mode).
 $ErrorActionPreference = 'Stop'
 
 function Write-Step {

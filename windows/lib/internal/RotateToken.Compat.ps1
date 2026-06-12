@@ -1,4 +1,5 @@
 function Get-LegacyRotationAuthToken {
+    # returns the shared-secret override when provided, or an empty string; serves as the legacy fallback before machine tokens
     param(
         [Parameter(Mandatory = $true)][string]$SecretOverride
     )
@@ -11,6 +12,7 @@ function Get-LegacyRotationAuthToken {
 }
 
 function Resolve-OpenPathRotationAuth {
+    # prefers the machine token derived from whitelistUrl; falls back to the legacy shared secret; returns Token and Source
     param(
         [Parameter(Mandatory = $true)][psobject]$Config,
         [Parameter(Mandatory = $true)][string]$SecretOverride

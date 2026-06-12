@@ -8,6 +8,7 @@ Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 $script:OpenPathFirefoxConfigMarker = '// OpenPath managed Firefox network hardening'
 
 function New-OpenPathFirefoxNetworkAutoconfigContent {
+    # returns an object with AutoconfigJs and MozillaCfg strings that lock Firefox DNS settings to native resolution
     [CmdletBinding()]
     param()
 
@@ -29,6 +30,7 @@ lockPref("network.dnsCacheExpirationGracePeriod", 0);
 }
 
 function Get-OpenPathFirefoxInstallDirectories {
+    # returns all existing Firefox install directories from the standard 64-bit and 32-bit program files locations
     [CmdletBinding()]
     param()
 
@@ -39,6 +41,7 @@ function Get-OpenPathFirefoxInstallDirectories {
 }
 
 function Sync-OpenPathFirefoxNetworkAutoconfig {
+    # writes autoconfig.js and mozilla.cfg into each Firefox install directory; skips files not already OpenPath-managed; returns true if at least one directory was updated
     [CmdletBinding(SupportsShouldProcess)]
     param()
 
@@ -83,6 +86,7 @@ function Sync-OpenPathFirefoxNetworkAutoconfig {
 }
 
 function Remove-OpenPathFirefoxNetworkAutoconfig {
+    # removes OpenPath-managed autoconfig files from each Firefox install directory; silently skips files not bearing the OpenPath marker
     [CmdletBinding(SupportsShouldProcess)]
     param()
 

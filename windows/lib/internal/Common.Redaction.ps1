@@ -1,4 +1,5 @@
 function ConvertTo-OpenPathRedactedValue {
+    # redacts machine-token path segments and token query parameters from string values; passes non-string values through unchanged.
     param(
         [AllowNull()]
         [object]$Value
@@ -19,6 +20,7 @@ function ConvertTo-OpenPathRedactedValue {
 }
 
 function ConvertTo-OpenPathRedactedObject {
+    # recursively redacts all string leaves of $InputObject whether it is a string, dictionary, enumerable, or psobject.
     param(
         [AllowNull()]
         [object]$InputObject

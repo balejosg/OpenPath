@@ -1,4 +1,5 @@
 function Get-OpenPathEndpointPolicyState {
+    # derives the current endpoint policy flags from $WhitelistSections and the portal/stale-failsafe boolean inputs; returns a psobject with IsDisabled, PortalModeActive, StaleFailsafeActive, and ProtectedModeEligible.
     [CmdletBinding()]
     param(
         [AllowNull()]

@@ -1,4 +1,5 @@
 function Import-NativeHostRequestSetupStateModule {
+    # loads RequestSetup.State.psm1 from the staged native root, the OpenPath lib path, or $PSScriptRoot; throws if the module cannot be found.
     if (Get-Command -Name 'Get-OpenPathRequestSetupState' -ErrorAction SilentlyContinue) {
         return
     }
@@ -73,6 +74,7 @@ if (-not (Get-Command -Name 'Invoke-OpenPathScheduledTask' -ErrorAction Silently
 }
 
 function Import-NativeHostCaptivePortalModule {
+    # attempts to load CaptivePortal.psm1 from the OpenPath lib path or the parent of $PSScriptRoot; silently skips when neither path exists.
     if (Get-Command -Name 'Test-OpenPathCaptivePortalState' -ErrorAction SilentlyContinue) {
         return
     }

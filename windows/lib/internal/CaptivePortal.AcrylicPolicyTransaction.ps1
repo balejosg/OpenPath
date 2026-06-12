@@ -1,4 +1,5 @@
 function Invoke-OpenPathCaptivePortalAcrylicPolicyTransaction {
+    # runs $Action inside the acrylic policy state lock for the given $State label; executes $Rollback on failure, then re-throws.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -38,6 +39,7 @@ function Invoke-OpenPathCaptivePortalAcrylicPolicyTransaction {
 }
 
 function Get-OpenPathCaptivePortalAcrylicPolicyState {
+    # returns $true when the combination of boolean flags satisfies the readiness criteria for the requested $State label.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]

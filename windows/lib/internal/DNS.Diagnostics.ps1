@@ -1,4 +1,5 @@
 function Invoke-OpenPathDnsResolveName {
+    # performs a DNS lookup of $Domain against $Server using dns-only mode; enables the quick-timeout flag when the parameter exists on the cmdlet and $QuickTimeout is set.
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
         [string]$Server = "127.0.0.1",
@@ -20,6 +21,7 @@ function Invoke-OpenPathDnsResolveName {
 }
 
 function Invoke-OpenPathDnsResolveNameWithTimeout {
+    # runs a DNS lookup in a background job bounded by $AttemptTimeoutSeconds seconds; falls back to direct inline resolution when background jobs are unavailable or the timeout is zero.
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
         [string]$Server = "127.0.0.1",
@@ -64,6 +66,7 @@ function Invoke-OpenPathDnsResolveNameWithTimeout {
 }
 
 function Resolve-OpenPathDnsWithRetry {
+    # retries DNS resolution up to $MaxAttempts times with $DelayMilliseconds between attempts; returns $null and logs a warning when all attempts fail.
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
         [string]$Server = "127.0.0.1",
@@ -89,6 +92,7 @@ function Resolve-OpenPathDnsWithRetry {
 }
 
 function Test-DNSResolution {
+    # returns $true when at least one DNS probe domain resolves successfully; uses the first configured probe domain when $Domain is empty.
     param(
         [string]$Domain = "",
         [int]$MaxAttempts = 12,
@@ -110,6 +114,7 @@ function Test-DNSResolution {
 }
 
 function Test-DNSSinkhole {
+    # returns $true when resolving $Domain via the local DNS proxy fails or returns no result, confirming the sinkhole is active.
     param(
         [string]$Domain = "should-not-exist-test.com",
         [int]$AttemptTimeoutSeconds = 0

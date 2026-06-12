@@ -1,4 +1,5 @@
 function New-OpenPathInternetShortcut {
+    # writes a windows .url internet shortcut file at path pointing to url.
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Url
@@ -9,6 +10,8 @@ function New-OpenPathInternetShortcut {
 }
 
 function Get-OpenPathChromiumBrowserTargets {
+    # returns a list of browser target objects (name, executable path, store url, shortcut name)
+    # for each chromium browser whose store url was provided; empty if none found.
     param(
         [string]$ChromeStoreUrl = '',
         [string]$EdgeStoreUrl = ''
@@ -49,6 +52,9 @@ function Get-OpenPathChromiumBrowserTargets {
 }
 
 function Install-OpenPathChromiumUnmanagedGuidance {
+    # stages internet shortcut files under browser-extension\chromium-unmanaged and, when
+    # not unattended, opens each detected browser to its extension store page; returns $true
+    # if any browser targets were found.
     param(
         [string]$ChromeStoreUrl = '',
         [string]$EdgeStoreUrl = '',

@@ -1,4 +1,6 @@
 function Invoke-OpenPathInstallerFirstUpdate {
+    # runs the update script in a child powershell process; skips if classroom mode was
+    # requested but registration did not complete.
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
@@ -36,6 +38,8 @@ function Invoke-OpenPathInstallerFirstUpdate {
 }
 
 function Restore-OpenPathInstallerConfigIfMissing {
+    # rewrites config.json from the in-memory config object when the file is absent after
+    # a failed first update; no-op if the file already exists.
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
@@ -59,6 +63,8 @@ function Restore-OpenPathInstallerConfigIfMissing {
 }
 
 function Start-OpenPathInstallerRealtimeUpdates {
+    # starts the sse listener scheduled task after verifying request configuration is complete;
+    # returns $false and logs a warning if prerequisites are not met.
     param(
         [Parameter(Mandatory = $true)]
         [bool]$ClassroomModeRequested,
@@ -95,6 +101,7 @@ function Start-OpenPathInstallerRealtimeUpdates {
 }
 
 function Initialize-OpenPathInstallerIntegrity {
+    # creates the integrity backup and baseline; logs a warning on failure without throwing.
     try {
         if (Save-OpenPathIntegrityBackup) {
             if (New-OpenPathIntegrityBaseline) {
@@ -108,6 +115,7 @@ function Initialize-OpenPathInstallerIntegrity {
 }
 
 function Get-OpenPathInstallerChecks {
+    # returns an array of name/status pairs probing acrylic, dns, firewall, and scheduled tasks.
     $checks = @()
 
     if ((Get-Command -Name 'Test-AcrylicInstalled' -ErrorAction SilentlyContinue) -and (Test-AcrylicInstalled)) {
@@ -146,6 +154,8 @@ function Get-OpenPathInstallerChecks {
 }
 
 function Write-OpenPathInstallerSummary {
+    # prints the post-install verification table and useful operator commands; silently
+    # dismisses the progress bar when not in verbose mode.
     param(
         [Parameter(Mandatory = $true)]
         [bool]$ClassroomModeRequested,

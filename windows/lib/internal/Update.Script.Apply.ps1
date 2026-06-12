@@ -1,4 +1,5 @@
 function Get-OpenPathWhitelistDownloadResult {
+    # fetches the whitelist from whitelistUrl and returns DownloadFailed and Whitelist fields; sets DownloadFailed on any exception
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Config
@@ -21,6 +22,7 @@ function Get-OpenPathWhitelistDownloadResult {
 }
 
 function Join-OpenPathUpdateHealthActions {
+    # concatenates a primary action string with an optional suffix using a semicolon separator; returns the action alone when suffix is empty
     param(
         [Parameter(Mandatory = $true)]
         [string]$Action,
@@ -36,6 +38,7 @@ function Join-OpenPathUpdateHealthActions {
 }
 
 function Handle-OpenPathDownloadFailure {
+    # applies the cached whitelist when a download fails; triggers stale-failsafe when age exceeds the threshold; always sends a health report
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Config,
@@ -93,6 +96,7 @@ function Handle-OpenPathDownloadFailure {
 }
 
 function Handle-OpenPathNotModified {
+    # applies cached whitelist policy when the server returns not-modified; enters fail-open path if the local marker is active
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Config,
@@ -152,6 +156,7 @@ function Handle-OpenPathNotModified {
 }
 
 function Handle-OpenPathDisabledWhitelist {
+    # writes the deactivation marker to disk and transitions the endpoint to fail-open mode, clearing any stale-failsafe state
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Config,
@@ -186,6 +191,7 @@ function Handle-OpenPathDisabledWhitelist {
 }
 
 function Handle-OpenPathWhitelistApply {
+    # persists the new whitelist, syncs the firefox mirror, drains the runtime dependency queue, repairs endpoint state, and sends a health report
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Config,

@@ -7,6 +7,7 @@ Import-Module "$PSScriptRoot\AppControl.psm1" -Force -ErrorAction SilentlyContin
 Import-Module "$PSScriptRoot\Firewall.psm1" -Force -ErrorAction SilentlyContinue
 
 function Get-OpenPathBrowserStatusConfigValue {
+    # reads a named property from the config object, returning a default when the property is absent
     param(
         [AllowNull()]
         [object]$Config,
@@ -26,6 +27,7 @@ function Get-OpenPathBrowserStatusConfigValue {
 }
 
 function Join-OpenPathBrowserStatusSummary {
+    # produces a sorted, deduplicated display string from a list of browser findings; returns EmptySummary when the list is empty
     param(
         [AllowNull()]
         [object[]]$Findings = @(),
@@ -56,6 +58,7 @@ function Join-OpenPathBrowserStatusSummary {
 }
 
 function Get-OpenPathAppLockerStatus {
+    # returns 'Enforced', 'AuditOnly', or 'Inactive' based on whether the non-admin app control boundary is currently active
     param(
         [AllowNull()]
         [object]$Config
@@ -85,6 +88,7 @@ function Get-OpenPathAppLockerStatus {
 }
 
 function Get-OpenPathFirewallStatusSummary {
+    # returns a normalized object with Active and rule count fields; returns zeroed defaults when the firewall module is unavailable
     $status = $null
     if (Get-Command -Name 'Get-FirewallStatus' -ErrorAction SilentlyContinue) {
         try {
@@ -115,6 +119,7 @@ function Get-OpenPathFirewallStatusSummary {
 }
 
 function Get-OpenPathBrowserEnforcementStatus {
+    # assembles app control, inventory, request readiness, and firewall facts into a single enforcement status object
     [CmdletBinding()]
     param(
         [AllowNull()]

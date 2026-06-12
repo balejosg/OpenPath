@@ -1,4 +1,6 @@
 function Test-InstallerDirectDnsServer {
+    # returns $true if server is a reachable ipv4 dns server that can resolve probedomain;
+    # loopback and all-zeros addresses always return $false.
     param(
         [Parameter(Mandatory = $true)][string]$Server,
         [string]$ProbeDomain = 'google.com'
@@ -17,11 +19,15 @@ function Test-InstallerDirectDnsServer {
 }
 
 function Test-InstallerDisfavoredDnsServer {
+    # returns $true for known problematic dns servers (e.g. azure wire server 168.63.129.16)
+    # that should be used only as last resort.
     param([Parameter(Mandatory = $true)][string]$Server)
     return $Server -in @('168.63.129.16')
 }
 
 function Get-InstallerPrimaryDNS {
+    # selects the best available upstream dns server from adapter addresses, default gateway,
+    # and well-known fallbacks; disfavored servers (azure wire) are tried last.
     $preferredCandidates = @(
         Get-DnsClientServerAddress -AddressFamily IPv4 |
             ForEach-Object { @($_.ServerAddresses) } |
@@ -54,6 +60,8 @@ function Get-InstallerPrimaryDNS {
 }
 
 function Ensure-InstallerRemoteBootstrapDns {
+    # if the api host cannot be resolved via default dns, temporarily sets all adapters
+    # to primarydns and retries; throws if resolution still fails after the override.
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$ApiBaseUrl = '',
@@ -104,11 +112,14 @@ function Ensure-InstallerRemoteBootstrapDns {
 }
 
 function Get-OpenPathInstallerOriginalDnsSnapshotPath {
+    # returns the full path to the original-dns.json snapshot file under data\.
     param([Parameter(Mandatory = $true)][string]$OpenPathRoot)
     return "$($OpenPathRoot.TrimEnd('\'))\data\original-dns.json"
 }
 
 function Save-OpenPathInstallerOriginalDnsSnapshot {
+    # captures current per-adapter ipv4 dns addresses to original-dns.json; skips silently
+    # if the snapshot already exists or the required net cmdlets are unavailable.
     param([Parameter(Mandatory = $true)][string]$OpenPathRoot)
 
     $snapshotPath = Get-OpenPathInstallerOriginalDnsSnapshotPath -OpenPathRoot $OpenPathRoot

@@ -1,4 +1,5 @@
 function Resolve-OpenPathWindowsRoot {
+    # returns the OpenPath installation root, preferring the explicit $OpenPathRoot argument, then OPENPATH_WINDOWS_ROOT, then OPENPATH_ROOT env vars, defaulting to C:\OpenPath.
     [CmdletBinding()]
     param(
         [AllowNull()]

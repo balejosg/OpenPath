@@ -1,4 +1,6 @@
 function Resolve-OpenPathInstallerEnrollmentContext {
+    # validates token/classroom parameter combinations, reads fallback tokens from env vars,
+    # and optionally prompts interactively; returns a context object with resolved token values.
     param(
         [string]$ApiBaseUrl = "",
         [string]$Classroom = "",
@@ -93,6 +95,8 @@ function Resolve-OpenPathInstallerEnrollmentContext {
 }
 
 function Invoke-OpenPathInstallerEnrollment {
+    # runs the enrollment script and returns a result object with registration status and
+    # the whitelist url obtained from the api; failures are captured rather than thrown.
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,

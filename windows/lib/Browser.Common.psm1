@@ -5,6 +5,7 @@ $script:OpenPathRoot = Resolve-OpenPathWindowsRoot
 Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
 
 function Get-OpenPathBrowserPolicySpecPath {
+    # returns the resolved path to the browser policy spec json; checks env override first, then installed path, then source tree
     if ($env:OPENPATH_BROWSER_POLICY_SPEC -and (Test-Path $env:OPENPATH_BROWSER_POLICY_SPEC)) {
         return [string]$env:OPENPATH_BROWSER_POLICY_SPEC
     }
@@ -23,11 +24,13 @@ function Get-OpenPathBrowserPolicySpecPath {
 }
 
 function Get-OpenPathBrowserPolicySpec {
+    # loads and deserializes the browser policy spec from its resolved path
     $specPath = Get-OpenPathBrowserPolicySpecPath
     return Get-Content $specPath -Raw | ConvertFrom-Json -ErrorAction Stop
 }
 
 function ConvertTo-OpenPathFileUrl {
+    # converts a local or UNC filesystem path into an absolute file:// URI string
     param(
         [Parameter(Mandatory = $true)]
         [string]$Path
@@ -60,6 +63,7 @@ function ConvertTo-OpenPathFileUrl {
 }
 
 function Write-OpenPathUtf8NoBomFile {
+    # writes text to a file with utf-8 encoding and no BOM; creates parent directories if absent
     param(
         [Parameter(Mandatory = $true)]
         [string]$Path,
@@ -77,6 +81,7 @@ function Write-OpenPathUtf8NoBomFile {
 }
 
 function Get-OpenPathConfigTrimmedValue {
+    # returns the trimmed string value of a named config property, or empty string when absent or null
     param(
         [AllowNull()]
         [object]$Config,
@@ -97,6 +102,7 @@ function Get-OpenPathConfigTrimmedValue {
 }
 
 function ConvertTo-OpenPathRegistryProviderPath {
+    # converts an HKLM\ registry path string into the PowerShell Registry:: provider path form
     param(
         [Parameter(Mandatory = $true)]
         [string]$RegistryPath
@@ -110,6 +116,7 @@ function ConvertTo-OpenPathRegistryProviderPath {
 }
 
 function Remove-OpenPathRegistryKeyIfPresent {
+    # silently removes a registry key and all its children; does nothing if the key does not exist
     param(
         [Parameter(Mandatory = $true)]
         [string]$RegistryPath
@@ -122,6 +129,7 @@ function Remove-OpenPathRegistryKeyIfPresent {
 }
 
 function Get-OpenPathScheduledTaskSecurityDescriptor {
+    # returns the SDDL security descriptor string for a named scheduled task, or null on any error
     param(
         [Parameter(Mandatory = $true)]
         [string]$TaskName

@@ -1,4 +1,5 @@
 function Read-NativeMessage {
+    # reads a length-prefixed native messaging frame from stdin and returns the deserialized json object, or $null when the frame is truncated or exceeds the size limit.
     $stdin = [Console]::OpenStandardInput()
     $lengthBuffer = New-Object byte[] 4
     $read = $stdin.Read($lengthBuffer, 0, 4)
@@ -26,6 +27,7 @@ function Read-NativeMessage {
 }
 
 function Write-NativeMessage {
+    # serializes $Message to compressed json, prepends a 4-byte little-endian length, and writes the frame to stdout.
     param(
         [Parameter(Mandatory = $true)]
         [object]$Message

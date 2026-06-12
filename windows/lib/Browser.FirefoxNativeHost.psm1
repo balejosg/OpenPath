@@ -8,38 +8,47 @@ Import-Module "$PSScriptRoot\RequestSetup.State.psm1" -Force -ErrorAction Stop
 . (Join-Path $PSScriptRoot 'internal\NativeHost.ArtifactCatalog.ps1')
 
 function Get-OpenPathFirefoxNativeHostName {
+    # returns the fixed native messaging host identifier registered with Firefox
     return 'whitelist_native_host'
 }
 
 function Get-OpenPathFirefoxNativeHostRoot {
+    # returns the capability storage directory where native host artifacts and state are staged
     return (Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostRoot -OpenPathRoot $script:OpenPathRoot)
 }
 
 function Get-OpenPathFirefoxNativeHostManifestPath {
+    # returns the full path to the native messaging manifest json file
     return "$(Get-OpenPathFirefoxNativeHostRoot)\whitelist_native_host.json"
 }
 
 function Get-OpenPathFirefoxNativeHostScriptPath {
+    # returns the full path to the staged native host powershell script
     return "$(Get-OpenPathFirefoxNativeHostRoot)\OpenPath-NativeHost.ps1"
 }
 
 function Get-OpenPathFirefoxNativeHostWrapperPath {
+    # returns the full path to the cmd wrapper that Firefox uses to launch the native host script
     return "$(Get-OpenPathFirefoxNativeHostRoot)\OpenPath-NativeHost.cmd"
 }
 
 function Get-OpenPathFirefoxNativeStatePath {
+    # returns the path to the json file that stores the synced native host state for the browser extension
     return (Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostState -OpenPathRoot $script:OpenPathRoot)
 }
 
 function Get-OpenPathFirefoxNativeWhitelistMirrorPath {
+    # returns the path to the whitelist mirror file staged for the native host to serve to the extension
     return (Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostWhitelistMirror -OpenPathRoot $script:OpenPathRoot)
 }
 
 function Get-OpenPathFirefoxNativeHostUpdateTaskName {
+    # returns the scheduled task name the native host triggers to apply whitelist updates
     return 'OpenPath-Update'
 }
 
 function Get-OpenPathFirefoxNativeHostRegistryPaths {
+    # returns both 64-bit and 32-bit HKLM registry paths for the Firefox native messaging host entry
     return @(
         'HKLM\SOFTWARE\Mozilla\NativeMessagingHosts\whitelist_native_host',
         'HKLM\SOFTWARE\WOW6432Node\Mozilla\NativeMessagingHosts\whitelist_native_host'
@@ -47,6 +56,7 @@ function Get-OpenPathFirefoxNativeHostRegistryPaths {
 }
 
 function Get-OpenPathFirefoxNativeHostRequestSetupState {
+    # resolves config if not supplied, then delegates to the shared request setup state projection
     param(
         [AllowNull()]
         [object]$Config = $null
@@ -65,6 +75,7 @@ function Get-OpenPathFirefoxNativeHostRequestSetupState {
 }
 
 function Test-OpenPathFirefoxNativeHostRequestSetupComplete {
+    # returns true only when request setup is fully configured and the native host may be registered
     param(
         [AllowNull()]
         [object]$Config = $null
@@ -75,6 +86,7 @@ function Test-OpenPathFirefoxNativeHostRequestSetupComplete {
 }
 
 function Sync-OpenPathFirefoxNativeHostArtifacts {
+    # copies native host support files from source roots into the capability storage directory; throws if any artifact is missing
     param(
         [string]$SourceRoot = "$script:OpenPathRoot\scripts"
     )
@@ -104,6 +116,7 @@ function Sync-OpenPathFirefoxNativeHostArtifacts {
 }
 
 function Sync-OpenPathFirefoxNativeHostState {
+    # writes the native state json and optionally copies or clears the whitelist mirror; returns false and cleans up when request setup is incomplete
     param(
         [AllowNull()]
         [object]$Config = $null,
@@ -170,6 +183,7 @@ function Sync-OpenPathFirefoxNativeHostState {
 }
 
 function Register-OpenPathFirefoxNativeHost {
+    # stages artifacts, writes the manifest, and sets both registry entries; skips registration entirely when request setup is incomplete
     param(
         [AllowNull()]
         [object]$Config = $null,
@@ -215,6 +229,7 @@ function Register-OpenPathFirefoxNativeHost {
 }
 
 function Unregister-OpenPathFirefoxNativeHost {
+    # removes registry entries, manifest, staged artifacts, state file, and whitelist mirror; always returns true
     foreach ($registryPath in Get-OpenPathFirefoxNativeHostRegistryPaths) {
         Remove-OpenPathRegistryKeyIfPresent -RegistryPath $registryPath
     }

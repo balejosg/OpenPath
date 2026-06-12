@@ -1,4 +1,5 @@
 function Get-OpenPathWatchdogCaptivePortalPolicyOutcome {
+    # maps the combination of portal mode, marker state, captive state, and entry/exit signals to a single action label such as unsafeMarker, keepLimited, closeAuthenticated, restoreProtected, or noAction.
     [CmdletBinding()]
     param(
         [bool]$PortalModeActive = $false,

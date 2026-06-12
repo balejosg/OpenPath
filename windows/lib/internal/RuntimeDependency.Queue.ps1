@@ -13,6 +13,7 @@ if (-not (Get-Variable -Name OpenPathRuntimeDependencyQueueVersion -Scope Script
 }
 
 function Get-OpenPathRuntimeDependencyQueuePath {
+    # returns the capability storage directory used to hold per-request queue json files
     [CmdletBinding()]
     param()
 
@@ -20,6 +21,7 @@ function Get-OpenPathRuntimeDependencyQueuePath {
 }
 
 function Find-OpenPathRuntimeDependencyQueueRequest {
+    # scans queue json files for an existing entry matching the anchor/dependency/requestType triple; returns the file path or empty string
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$AnchorHost,
@@ -49,6 +51,7 @@ function Find-OpenPathRuntimeDependencyQueueRequest {
 }
 
 function Write-OpenPathRuntimeDependencyQueueRequest {
+    # validates and normalizes the triple, deduplicates against existing queue files, then writes a new guid-named json request file; returns the path
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$AnchorHost,
@@ -88,6 +91,7 @@ function Write-OpenPathRuntimeDependencyQueueRequest {
 }
 
 function Read-OpenPathRuntimeDependencyQueueRequests {
+    # reads all json files from the queue directory sorted by write time; returns an array of File/Request pairs
     [CmdletBinding()]
     param([string]$QueuePath = (Get-OpenPathRuntimeDependencyQueuePath))
 
@@ -104,6 +108,7 @@ function Read-OpenPathRuntimeDependencyQueueRequests {
 }
 
 function Remove-OpenPathRuntimeDependencyQueueRequest {
+    # deletes the queue json file at $Path; silently ignores errors
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -111,6 +116,7 @@ function Remove-OpenPathRuntimeDependencyQueueRequest {
 }
 
 function Invoke-OpenPathRuntimeDependencyQueue {
+    # drains all queue files, merges them into the overlay via update, and persists the overlay when changed; returns Changed, Processed, Rejected, OverlayWriteMs
     [CmdletBinding()]
     param(
         [string[]]$WhitelistedDomains = @(),

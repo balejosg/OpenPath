@@ -1,4 +1,5 @@
 function Invoke-NativeHostCheckAction {
+    # validates each domain in the message, checks whitelist membership, resolves its IP, and evaluates captive-portal recovery eligibility; returns a per-domain results array.
     param(
         [Parameter(Mandatory = $true)]
         [object]$Message,
@@ -37,6 +38,7 @@ function Invoke-NativeHostCheckAction {
 }
 
 function Invoke-NativeHostMessageAction {
+    # dispatches $Action to the appropriate handler and returns a response hashtable; handles ping, config retrieval, domain checks, whitelist updates, runtime-dependency actions, and captive-portal recovery.
     param(
         [Parameter(Mandatory = $true)]
         [object]$Message,
@@ -149,6 +151,7 @@ function Invoke-NativeHostMessageAction {
 }
 
 function Handle-Message {
+    # reads native state and whitelist sections, dispatches the message to the action handler, logs the outcome with elapsed time, and returns the response.
     param(
         [AllowNull()]
         [object]$Message
