@@ -3,6 +3,10 @@ if (-not (Get-Command -Name 'Get-OpenPathScheduledTaskCatalog' -ErrorAction Sile
 }
 
 function New-OpenPathTaskAction {
+    <#
+    .SYNOPSIS
+    Creates a scheduled task action that runs a PowerShell script with bypass execution policy.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$Target
@@ -13,6 +17,10 @@ function New-OpenPathTaskAction {
 }
 
 function New-OpenPathTaskDefinition {
+    <#
+    .SYNOPSIS
+    Packages a task name, action, trigger, principal, and settings into a single definition object.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$TaskName,
@@ -40,6 +48,10 @@ function New-OpenPathTaskDefinition {
 }
 
 function Register-OpenPathTaskDefinition {
+    <#
+    .SYNOPSIS
+    Registers a task definition with the Windows task scheduler, replacing any existing task with the same name.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Definition
@@ -54,6 +66,10 @@ function Register-OpenPathTaskDefinition {
 }
 
 function Join-OpenPathTaskScriptPath {
+    <#
+    .SYNOPSIS
+    Joins an OpenPath root and a relative script path, using backslash joining for absolute Windows paths.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
@@ -70,6 +86,10 @@ function Join-OpenPathTaskScriptPath {
 }
 
 function New-OpenPathUpdateTaskDefinition {
+    <#
+    .SYNOPSIS
+    Builds the recurring whitelist update task definition with the given interval and principal.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
@@ -100,6 +120,10 @@ function New-OpenPathUpdateTaskDefinition {
 }
 
 function New-OpenPathRuntimeDependencyApplyTaskDefinition {
+    <#
+    .SYNOPSIS
+    Builds the on-demand runtime dependency apply task definition with a far-future trigger and short execution limit.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
@@ -130,6 +154,10 @@ function New-OpenPathRuntimeDependencyApplyTaskDefinition {
 }
 
 function New-OpenPathWatchdogTaskDefinition {
+    <#
+    .SYNOPSIS
+    Builds the recurring watchdog task definition with the given interval and principal.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
@@ -160,6 +188,10 @@ function New-OpenPathWatchdogTaskDefinition {
 }
 
 function New-OpenPathStartupTaskDefinition {
+    <#
+    .SYNOPSIS
+    Builds the at-startup task definition that runs the startup reconcile script.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
@@ -185,6 +217,10 @@ function New-OpenPathStartupTaskDefinition {
 }
 
 function New-OpenPathSseTaskDefinition {
+    <#
+    .SYNOPSIS
+    Builds the SSE listener task definition that runs at startup with unlimited duration and auto-restart.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
@@ -214,6 +250,10 @@ function New-OpenPathSseTaskDefinition {
 }
 
 function New-OpenPathAgentUpdateTaskDefinition {
+    <#
+    .SYNOPSIS
+    Builds the daily silent agent self-update task definition with a randomized start delay.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$OpenPathRoot,
