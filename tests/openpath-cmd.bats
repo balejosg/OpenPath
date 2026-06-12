@@ -347,6 +347,9 @@ dig() {
 check_firewall_status() { return 0; }
 has_firewall_loopback_rule() { return 0; }
 verify_firewall_rules() { return 0; }
+check_doh_block_status() { echo "active"; return 0; }
+check_vpn_block_status() { echo "active"; return 0; }
+check_tor_block_status() { echo "active"; return 0; }
 
 systemctl() {
     [ "$1" = "is-active" ] && return 0
@@ -426,6 +429,9 @@ dig() {
 check_firewall_status() { return 0; }
 has_firewall_loopback_rule() { return 0; }
 verify_firewall_rules() { return 0; }
+check_doh_block_status() { echo "active"; return 0; }
+check_vpn_block_status() { echo "active"; return 0; }
+check_tor_block_status() { echo "active"; return 0; }
 
 systemctl() {
     [ "$1" = "is-active" ] && return 0
@@ -515,6 +521,9 @@ dig() {
 check_firewall_status() { return 0; }
 has_firewall_loopback_rule() { return 0; }
 verify_firewall_rules() { return 0; }
+check_doh_block_status() { echo "active"; return 0; }
+check_vpn_block_status() { echo "active"; return 0; }
+check_tor_block_status() { echo "active"; return 0; }
 
 systemctl() {
     [ "$1" = "is-active" ] && return 0
@@ -611,6 +620,9 @@ dig() {
 check_firewall_status() { return 0; }
 has_firewall_loopback_rule() { return 0; }
 verify_firewall_rules() { return 0; }
+check_doh_block_status() { echo "active"; return 0; }
+check_vpn_block_status() { echo "active"; return 0; }
+check_tor_block_status() { echo "active"; return 0; }
 
 systemctl() {
     [ "$1" = "is-active" ] && return 0
@@ -709,6 +721,9 @@ dig() {
 check_firewall_status() { return 0; }
 has_firewall_loopback_rule() { return 0; }
 verify_firewall_rules() { return 0; }
+check_doh_block_status() { echo "active"; return 0; }
+check_vpn_block_status() { echo "active"; return 0; }
+check_tor_block_status() { echo "active"; return 0; }
 
 systemctl() {
     [ "$1" = "is-active" ] && return 0
@@ -886,6 +901,21 @@ verify_firewall_rules() {
     return 0
 }
 
+check_doh_block_status() {
+    echo "active"
+    return 0
+}
+
+check_vpn_block_status() {
+    echo "active"
+    return 0
+}
+
+check_tor_block_status() {
+    echo "active"
+    return 0
+}
+
 systemctl() {
     [ "$1" = "is-active" ] && return 0
     return 1
@@ -909,6 +939,9 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"DNS blocking rules: ✓ active"* ]]
     [[ "$output" == *"Loopback rule: ✓ present"* ]]
+    [[ "$output" == *"DoH bypass block: ✓ active"* ]]
+    [[ "$output" == *"VPN bypass block: ✓ active"* ]]
+    [[ "$output" == *"Tor bypass block: ✓ active"* ]]
     [[ "$output" != *"ISSUES DETECTED"* ]]
 }
 
@@ -987,6 +1020,81 @@ EOF
     [[ "$output" == *"Resolution: ● working"* ]]
     grep -qx "google.es" "$probe_log"
     ! grep -qx "google.com" "$probe_log"
+}
+
+@test "cmd_status reflects the DoH/VPN/Tor bypass-block state" {
+    local whitelist_file="$TEST_TMP_DIR/bypass-status-whitelist.txt"
+    local helper_script="$TEST_TMP_DIR/run-cmd-status-bypass.sh"
+
+    cat > "$whitelist_file" <<'EOF'
+## WHITELIST
+google.es
+EOF
+
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+project_dir="$1"
+state_dir="$2"
+whitelist_file="$3"
+extracted_script="$state_dir/cmd-status.sh"
+
+export VERSION="test"
+export WHITELIST_FILE="$whitelist_file"
+export VAR_STATE_DIR="$state_dir"
+export ETC_CONFIG_DIR="$state_dir/etc/openpath"
+export WHITELIST_URL_CONF="$ETC_CONFIG_DIR/whitelist-url.conf"
+export RED=""
+export GREEN=""
+export YELLOW=""
+export BLUE=""
+export NC=""
+mkdir -p "$ETC_CONFIG_DIR"
+
+timeout() {
+    shift
+    "$@"
+}
+
+dig() {
+    case "$2" in
+        google.es)
+            echo "216.58.204.163"
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+systemctl() {
+    [ "$1" = "is-active" ] && return 0
+    return 1
+}
+
+check_doh_block_status() { echo "active"; return 0; }
+check_vpn_block_status() { echo "disabled"; return 0; }
+check_tor_block_status() { echo "inactive"; return 1; }
+
+source "$project_dir/linux/lib/common.sh"
+source "$project_dir/linux/lib/dns.sh"
+awk '/^cmd_status\(\) \{/,/^}/' \
+    "$project_dir/linux/lib/runtime-cli-system.sh" > "$extracted_script"
+source "$extracted_script"
+
+cmd_status
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR" "$TEST_TMP_DIR" "$whitelist_file"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Bypass blocks:"* ]]
+    [[ "$output" == *"DoH block: ● active"* ]]
+    [[ "$output" == *"VPN block: ● disabled"* ]]
+    [[ "$output" == *"Tor block: ● inactive"* ]]
 }
 
 @test "cmd_status reports runtime dependency overlay counts without sensitive host details" {

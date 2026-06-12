@@ -76,6 +76,8 @@ EOF
         echo "Restoring firewall..."
         iptables -F OUTPUT 2>/dev/null || true
         iptables -P OUTPUT ACCEPT 2>/dev/null || true
+        ipset destroy openpath-doh-block 2>/dev/null || true
+        rm -f /etc/iptables/openpath-ipsets.v4 2>/dev/null || true
         iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
         
         # Clean browser policies

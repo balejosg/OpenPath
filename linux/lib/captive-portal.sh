@@ -83,6 +83,10 @@ enter_portal_mode_locked() {
         fi
     fi
 
+    # deactivate_firewall also relaxes the bypass blocks (DoH ipset rules,
+    # VPN interface/port blocks, Tor port blocks) and destroys the
+    # openpath-doh-block ipset so portal login pages on HTTPS resolver
+    # infrastructure are reachable during the passthrough window.
     deactivate_firewall
     flush_connections 2>/dev/null || true
 

@@ -38,6 +38,15 @@ setup() {
         fi
     }
     export -f validate_ip
+
+    # Mock ipset so the DoH bypass-block path is deterministic regardless of
+    # whether the host has the real binary installed
+    ipset() {
+        echo "$*" >> "$TEST_TMP_DIR/ipset.log"
+        return 0
+    }
+    export -f ipset
+    export OPENPATH_IPSET_STATE_FILE="$TEST_TMP_DIR/openpath-ipsets.v4"
 }
 
 teardown() {
@@ -392,10 +401,10 @@ EOF
 
     activate_firewall
 
-    grep -q "\-d 4.4.4.4 \-p tcp \-\-dport 443 \-j DROP" "$iptables_log"
-    grep -q "\-d 4.4.4.4 \-p udp \-\-dport 443 \-j DROP" "$iptables_log"
-    grep -q "\-d 5.5.5.5 \-p tcp \-\-dport 443 \-j DROP" "$iptables_log"
-    grep -q "\-d 5.5.5.5 \-p udp \-\-dport 443 \-j DROP" "$iptables_log"
+    grep -q "add openpath-doh-block 4.4.4.4 -exist" "$TEST_TMP_DIR/ipset.log"
+    grep -q "add openpath-doh-block 5.5.5.5 -exist" "$TEST_TMP_DIR/ipset.log"
+    grep -q "\-A OUTPUT \-p tcp \-\-dport 443 \-m set \-\-match\-set openpath-doh-block dst \-j DROP" "$iptables_log"
+    grep -q "\-A OUTPUT \-p udp \-\-dport 443 \-m set \-\-match\-set openpath-doh-block dst \-j DROP" "$iptables_log"
 }
 
 @test "activate_firewall adds VPN blocking rules" {

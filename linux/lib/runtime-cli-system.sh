@@ -36,6 +36,24 @@ cmd_status() {
         echo "  DNS upstream: $upstream"
     fi
 
+    if declare -F check_doh_block_status >/dev/null 2>&1; then
+        echo ""
+        echo -e "${YELLOW}Bypass blocks:${NC}"
+        local status_block_label status_block_state
+        for status_block_label in DoH VPN Tor; do
+            case "$status_block_label" in
+                DoH) status_block_state=$(check_doh_block_status 2>/dev/null) || true ;;
+                VPN) status_block_state=$(check_vpn_block_status 2>/dev/null) || true ;;
+                Tor) status_block_state=$(check_tor_block_status 2>/dev/null) || true ;;
+            esac
+            case "$status_block_state" in
+                active) echo -e "  $status_block_label block: ${GREEN}● active${NC}" ;;
+                disabled) echo -e "  $status_block_label block: ${YELLOW}● disabled${NC}" ;;
+                *) echo -e "  $status_block_label block: ${RED}● inactive${NC}" ;;
+            esac
+        done
+    fi
+
     echo ""
     echo -e "${YELLOW}Whitelist:${NC}"
     if [ -f "$WHITELIST_FILE" ]; then
@@ -366,6 +384,38 @@ cmd_health() {
             echo -e "  Critical firewall rules: ${RED}✗ incomplete${NC}"
             failed=1
         fi
+
+        local doh_block_state vpn_block_state tor_block_state
+        doh_block_state=$(check_doh_block_status 2>/dev/null) || true
+        vpn_block_state=$(check_vpn_block_status 2>/dev/null) || true
+        tor_block_state=$(check_tor_block_status 2>/dev/null) || true
+
+        case "$doh_block_state" in
+            active) echo -e "  DoH bypass block: ${GREEN}✓ active${NC}" ;;
+            disabled) echo -e "  DoH bypass block: ${YELLOW}⚠ disabled by configuration${NC}" ;;
+            *)
+                echo -e "  DoH bypass block: ${RED}✗ MISSING${NC}"
+                failed=1
+                ;;
+        esac
+
+        case "$vpn_block_state" in
+            active) echo -e "  VPN bypass block: ${GREEN}✓ active${NC}" ;;
+            disabled) echo -e "  VPN bypass block: ${YELLOW}⚠ disabled by configuration${NC}" ;;
+            *)
+                echo -e "  VPN bypass block: ${RED}✗ MISSING${NC}"
+                failed=1
+                ;;
+        esac
+
+        case "$tor_block_state" in
+            active) echo -e "  Tor bypass block: ${GREEN}✓ active${NC}" ;;
+            disabled) echo -e "  Tor bypass block: ${YELLOW}⚠ disabled by configuration${NC}" ;;
+            *)
+                echo -e "  Tor bypass block: ${RED}✗ MISSING${NC}"
+                failed=1
+                ;;
+        esac
     fi
     echo ""
 

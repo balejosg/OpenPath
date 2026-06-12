@@ -21,6 +21,11 @@ activate_firewall() {
 
     add_critical_rule "Allow loopback traffic" \
         iptables -A OUTPUT -o lo -j ACCEPT || critical_failed=1
+
+    # VPN tunnel interfaces are dropped before the ESTABLISHED,RELATED accept
+    # so that an already-connected tunnel cannot keep flowing.
+    apply_vpn_interface_block_rules
+
     add_critical_rule "Allow established connections" \
         iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT || critical_failed=1
     add_critical_rule "Allow DNS to localhost (UDP)" \
@@ -46,77 +51,11 @@ activate_firewall() {
     add_important_rule "Block DNS-over-TLS (port 853)" \
         iptables -A OUTPUT -p tcp --dport 853 -j DROP
 
-    local doh_resolvers_raw="${DOH_RESOLVERS:-8.8.8.8,8.8.4.4,1.1.1.1,1.0.0.1,9.9.9.9,149.112.112.112,208.67.222.222,208.67.220.220,45.90.28.0,45.90.30.0,194.242.2.2,194.242.2.3,94.140.14.14,94.140.15.15,76.76.2.0,76.76.10.0}"
-    local doh_resolvers=()
-    IFS=',' read -r -a doh_resolvers <<< "$doh_resolvers_raw"
-
-    for resolver_ip in "${doh_resolvers[@]}"; do
-        resolver_ip="${resolver_ip//[[:space:]]/}"
-        [ -z "$resolver_ip" ] && continue
-
-        if ! validate_ip "$resolver_ip"; then
-            log_warn "Skipping invalid DoH resolver IP: $resolver_ip"
-            continue
-        fi
-
-        if [ "$resolver_ip" = "$PRIMARY_DNS" ]; then
-            log_debug "Skipping DoH block for $resolver_ip (is upstream DNS)"
-            continue
-        fi
-
-        add_important_rule "Block DoH resolver $resolver_ip (TCP/443)" \
-            iptables -A OUTPUT -d "$resolver_ip" -p tcp --dport 443 -j DROP
-        add_important_rule "Block DoH resolver $resolver_ip (UDP/443)" \
-            iptables -A OUTPUT -d "$resolver_ip" -p udp --dport 443 -j DROP
-    done
-
-    local vpn_block_rules_raw="${VPN_BLOCK_RULES:-udp:1194:OpenVPN,tcp:1194:OpenVPN-TCP,udp:51820:WireGuard,tcp:1723:PPTP,udp:500:IKE,udp:4500:IPSec-NAT}"
-    local vpn_block_rules=()
-    IFS=',' read -r -a vpn_block_rules <<< "$vpn_block_rules_raw"
-
-    for vpn_rule in "${vpn_block_rules[@]}"; do
-        vpn_rule="${vpn_rule//[[:space:]]/}"
-        [ -z "$vpn_rule" ] && continue
-
-        local vpn_protocol=""
-        local vpn_port=""
-        local vpn_name="VPN"
-
-        IFS=':' read -r vpn_protocol vpn_port vpn_name <<< "$vpn_rule"
-        vpn_protocol="$(printf '%s' "$vpn_protocol" | tr '[:upper:]' '[:lower:]')"
-
-        if [ "$vpn_protocol" != "tcp" ] && [ "$vpn_protocol" != "udp" ]; then
-            log_warn "Skipping invalid VPN rule protocol: $vpn_rule"
-            continue
-        fi
-
-        if ! [[ "$vpn_port" =~ ^[0-9]+$ ]] || [ "$vpn_port" -lt 1 ] || [ "$vpn_port" -gt 65535 ]; then
-            log_warn "Skipping invalid VPN rule port: $vpn_rule"
-            continue
-        fi
-
-        [ -z "$vpn_name" ] && vpn_name="VPN-$vpn_port"
-
-        add_important_rule "Block $vpn_name (port $vpn_port/$vpn_protocol)" \
-            iptables -A OUTPUT -p "$vpn_protocol" --dport "$vpn_port" -j DROP
-    done
-
-    local tor_ports_raw="${TOR_BLOCK_PORTS:-9001,9030,9050,9051,9150}"
-    local tor_ports=()
-    IFS=',' read -r -a tor_ports <<< "$tor_ports_raw"
-
-    for tor_port in "${tor_ports[@]}"; do
-        tor_port="${tor_port//[[:space:]]/}"
-        [ -z "$tor_port" ] && continue
-
-        if ! [[ "$tor_port" =~ ^[0-9]+$ ]] || [ "$tor_port" -lt 1 ] || [ "$tor_port" -gt 65535 ]; then
-            log_warn "Skipping invalid Tor port: $tor_port"
-            continue
-        fi
-
-        add_important_rule "Block Tor (port $tor_port)" \
-            iptables -A OUTPUT -p tcp --dport "$tor_port" -j DROP
-    done
+    # Bypass-vector blocking (DoH ipset, VPN port catalog, Tor port catalog).
+    # These DROP rules must precede the generic HTTP/HTTPS ACCEPT rules below.
+    apply_doh_block_rules
+    apply_vpn_port_block_rules
+    apply_tor_block_rules
 
     add_optional_rule "Allow ICMP (ping)" \
         iptables -A OUTPUT -p icmp -j ACCEPT
@@ -166,6 +105,12 @@ deactivate_firewall() {
         log_warn "Could not set OUTPUT policy to ACCEPT"
     fi
 
+    # Bypass-block cleanup: the OUTPUT flush above removed every rule that
+    # referenced the DoH ipset, so the set itself can be destroyed now.
+    # Captive-portal passthrough, `openpath disable`, and uninstall all relax
+    # the bypass blocks through this path.
+    destroy_doh_block_ipset
+
     save_firewall_rules
     log "Firewall deactivated (permissive mode)"
 }
@@ -178,6 +123,7 @@ save_firewall_rules() {
         else
             log_warn "Could not save firewall rules (iptables-save failed)"
         fi
+        save_doh_block_ipset_state
     else
         log_debug "iptables-save not available, rules not persisted"
     fi
