@@ -45,7 +45,7 @@ NC='\033[0m'
 
 # Comandos de solo lectura que necesitan leer estado protegido y se permiten
 # sin contraseña via sudoers.
-READ_ONLY_ROOT_COMMANDS="status test check health domains log logs"
+READ_ONLY_ROOT_COMMANDS="status test check health domains log logs doctor"
 
 # Comandos de escritura que requieren root (estos pedirán contraseña si no es root).
 ROOT_COMMANDS="update force enable disable restart rotate-token enroll setup self-update"
@@ -84,6 +84,7 @@ case "${1:-status}" in
     domains)    cmd_domains "$2" ;;
     check)      cmd_check "$2" ;;
     health)     cmd_health ;;
+    doctor)     shift; cmd_doctor "$@" ;;
     force)      cmd_force ;;
     enable)     cmd_enable ;;
     disable)    cmd_disable ;;

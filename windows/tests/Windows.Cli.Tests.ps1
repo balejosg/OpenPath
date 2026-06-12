@@ -77,4 +77,68 @@ Describe "Operational Command Script" {
             )
         }
     }
+
+    Context "New verb: domains" {
+        It "OpenPath.ps1 handles the 'domains' command using Get-OpenPathWhitelistSectionsFromFile" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                "'domains'",
+                'Get-OpenPathWhitelistSectionsFromFile',
+                'whitelist.txt'
+            )
+        }
+    }
+
+    Context "New verb: check" {
+        It "OpenPath.ps1 handles the 'check' command using Test-DNSSinkhole and Test-DNSResolution" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                "'check'",
+                'Test-DNSSinkhole',
+                'Test-DNSResolution'
+            )
+        }
+    }
+
+    Context "New verb: enable" {
+        It "OpenPath.ps1 handles 'enable' by re-enabling the firewall and Acrylic service" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                "'enable'",
+                'Enable-OpenPathFirewall',
+                'Start-AcrylicService'
+            )
+        }
+    }
+
+    Context "New verb: disable" {
+        It "OpenPath.ps1 handles 'disable' by suspending the firewall and stopping Acrylic" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                "'disable'",
+                'Disable-OpenPathFirewall',
+                'Stop-AcrylicService',
+                'Restore-OriginalDNS'
+            )
+        }
+    }
+
+    Context "Help text completeness" {
+        It "Show-OpenPathHelp documents all canonical verbs including the new parity additions" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            foreach ($verb in @('domains', 'check', 'enable', 'disable')) {
+                $content.Contains("'  $verb") | Should -BeTrue -Because "Show-OpenPathHelp must document '$verb'"
+            }
+        }
+    }
 }

@@ -1761,3 +1761,71 @@ EOF
     [[ "$output" == *"whitelist_url=https://control.example/w/token123/whitelist.txt"* ]]
     [[ "$output" == *"machine_name=max12-scoped"* ]]
 }
+
+# ============== Tests para doctor browser ==============
+
+@test "cmd_doctor is defined in runtime-cli-system.sh" {
+    run grep -n "cmd_doctor()" "$PROJECT_DIR/linux/lib/runtime-cli-system.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "cmd_doctor_browser is defined in runtime-cli-system.sh" {
+    run grep -n "cmd_doctor_browser()" "$PROJECT_DIR/linux/lib/runtime-cli-system.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "openpath-cmd.sh dispatches doctor verb to cmd_doctor" {
+    run grep -n "cmd_doctor" "$PROJECT_DIR/linux/scripts/runtime/openpath-cmd.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "cmd_doctor exits non-zero for unknown sub-target" {
+    local helper_script="$TEST_TMP_DIR/doctor-unknown.sh"
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+project_dir="$1"
+export INSTALL_DIR="$project_dir/linux"
+
+# Minimal stubs for sourced libraries
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+VERSION="test"
+ETC_CONFIG_DIR="/nonexistent"
+WHITELIST_URL_CONF="/nonexistent"
+VAR_STATE_DIR="/nonexistent"
+
+# Extract only cmd_doctor and cmd_doctor_browser
+awk '/^cmd_doctor_browser\(\) \{/,/^}/' \
+    "$project_dir/linux/lib/runtime-cli-system.sh" > /tmp/doctor-fns.sh
+awk '/^cmd_doctor\(\) \{/,/^}/' \
+    "$project_dir/linux/lib/runtime-cli-system.sh" >> /tmp/doctor-fns.sh
+
+source /tmp/doctor-fns.sh
+set +e
+cmd_doctor "unknown-target" 2>&1
+echo "exit_code=$?"
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR"
+    [[ "$output" == *"exit_code=1"* ]] || [[ "$output" == *"Unknown doctor target"* ]]
+}
+
+@test "cmd_doctor_browser emits fact.request_setup key" {
+    run grep -n "fact.request_setup" "$PROJECT_DIR/linux/lib/runtime-cli-system.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "cmd_doctor_browser emits fact.firefox_registration key" {
+    run grep -n "fact.firefox_registration" "$PROJECT_DIR/linux/lib/runtime-cli-system.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "cmd_doctor_browser emits fact.firefox_native_host key" {
+    run grep -n "fact.firefox_native_host" "$PROJECT_DIR/linux/lib/runtime-cli-system.sh"
+    [ "$status" -eq 0 ]
+}

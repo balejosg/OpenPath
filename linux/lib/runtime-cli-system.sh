@@ -569,6 +569,136 @@ cmd_restart() {
     cmd_status
 }
 
+cmd_doctor_browser() {
+    echo -e "${BLUE}OpenPath Browser Doctor${NC}"
+    echo ""
+
+    local api_url=""
+    local whitelist_url=""
+    local classroom=""
+    local classroom_id=""
+    api_url="$(tr -d '\r\n' < "${ETC_CONFIG_DIR}/api-url.conf" 2>/dev/null || true)"
+    whitelist_url="$(tr -d '\r\n' < "${WHITELIST_URL_CONF:-$ETC_CONFIG_DIR/whitelist-url.conf}" 2>/dev/null || true)"
+    classroom="$(tr -d '\r\n' < "${ETC_CONFIG_DIR}/classroom.conf" 2>/dev/null || true)"
+    classroom_id="$(tr -d '\r\n' < "${ETC_CONFIG_DIR}/classroom-id.conf" 2>/dev/null || true)"
+
+    local request_setup_ready="false"
+    if [[ "$api_url" =~ ^https?://[^[:space:]]+$ ]] \
+        && [[ "$whitelist_url" =~ /w/[^/]+/whitelist\.txt($|[?#].*) ]] \
+        && { [ -n "$classroom" ] || [ -n "$classroom_id" ]; }; then
+        request_setup_ready="true"
+    fi
+
+    echo -e "${YELLOW}Request Setup:${NC}"
+    if [ "$request_setup_ready" = "true" ]; then
+        echo -e "  fact.request_setup: ${GREEN}ready${NC}"
+    else
+        echo -e "  fact.request_setup: ${RED}missing${NC}"
+        [ -z "$api_url" ] && echo "  failure_reason: api_url_missing"
+        [ -z "$whitelist_url" ] && echo "  failure_reason: whitelist_url_missing"
+        { [ -z "$classroom" ] && [ -z "$classroom_id" ]; } && echo "  failure_reason: classroom_missing"
+    fi
+
+    echo ""
+    echo -e "${YELLOW}Firefox Extension:${NC}"
+
+    local firefox_ready_file="${FIREFOX_EXTENSION_READY_FILE:-$VAR_STATE_DIR/firefox-extension-ready}"
+    local firefox_native_manifest="${FIREFOX_NATIVE_HOST_DIR:-/usr/lib/mozilla/native-messaging-hosts}/${OPENPATH_FIREFOX_NATIVE_HOST_FILENAME:-whitelist_native_host.json}"
+    local firefox_native_script="${OPENPATH_NATIVE_HOST_INSTALL_DIR:-/usr/local/lib/openpath}/${OPENPATH_NATIVE_HOST_SCRIPT_NAME:-openpath-native-host.py}"
+    local firefox_policies="${FIREFOX_POLICIES:-/etc/firefox/policies/policies.json}"
+
+    if [ -f "$firefox_ready_file" ]; then
+        echo -e "  fact.firefox_registration: ${GREEN}ready${NC}"
+        echo "  Firefox ready file: $firefox_ready_file"
+    else
+        echo -e "  fact.firefox_registration: ${RED}missing${NC}"
+        echo "  failure_reason: firefox_registration_missing"
+    fi
+
+    if [ -r "$firefox_native_manifest" ] && [ -x "$firefox_native_script" ]; then
+        echo -e "  fact.firefox_native_host: ${GREEN}ready${NC}"
+    else
+        echo -e "  fact.firefox_native_host: ${RED}missing${NC}"
+        echo "  failure_reason: firefox_native_host_missing"
+    fi
+    echo "  Native host manifest: $firefox_native_manifest"
+    echo "  Native host script: $firefox_native_script"
+
+    echo ""
+    echo -e "${YELLOW}Firefox Policy:${NC}"
+    if [ -f "$firefox_policies" ]; then
+        echo -e "  Policy file: ${GREEN}present${NC} ($firefox_policies)"
+        local ext_id="${FIREFOX_EXTENSION_ID:-${FIREFOX_MANAGED_EXTENSION_ID:-openpath-block-monitor@openpath}}"
+        if grep -q "ExtensionSettings" "$firefox_policies" 2>/dev/null \
+                && grep -q "$ext_id" "$firefox_policies" 2>/dev/null; then
+            echo -e "  Extension policy entry: ${GREEN}present${NC}"
+        else
+            echo -e "  Extension policy entry: ${RED}missing${NC}"
+        fi
+    else
+        echo -e "  Policy file: ${RED}missing${NC} ($firefox_policies)"
+    fi
+
+    echo ""
+    echo -e "${YELLOW}Browser Inventory:${NC}"
+    local firefox_bin
+    firefox_bin="$(command -v firefox 2>/dev/null || true)"
+    if [ -n "$firefox_bin" ]; then
+        echo -e "  Firefox: ${GREEN}found${NC} ($firefox_bin)"
+    else
+        echo -e "  Firefox: ${YELLOW}not found in PATH${NC}"
+    fi
+
+    local chromium_bin
+    chromium_bin="$(command -v chromium-browser 2>/dev/null || command -v chromium 2>/dev/null || true)"
+    if [ -n "$chromium_bin" ]; then
+        echo -e "  Chromium: ${GREEN}found${NC} ($chromium_bin)"
+    else
+        echo -e "  Chromium: ${YELLOW}not found in PATH${NC}"
+    fi
+
+    if find /etc/chromium/policies/managed/openpath.json \
+            /etc/chromium-browser/policies/managed/openpath.json \
+            /etc/google-chrome/policies/managed/openpath.json \
+            -maxdepth 0 2>/dev/null | head -1 | grep -q .; then
+        echo -e "  Chromium policies: ${GREEN}present${NC}"
+    else
+        echo -e "  Chromium policies: ${YELLOW}not found${NC}"
+    fi
+
+    echo ""
+    local overall_ready="true"
+    [ "$request_setup_ready" != "true" ] && overall_ready="false"
+    [ ! -r "$firefox_native_manifest" ] && overall_ready="false"
+    [ ! -x "$firefox_native_script" ] && overall_ready="false"
+
+    if [ "$overall_ready" = "true" ]; then
+        echo -e "  Browser request readiness: ${GREEN}ready${NC}"
+    else
+        echo -e "  Browser request readiness: ${RED}not ready${NC}"
+    fi
+}
+
+cmd_doctor() {
+    local doctor_target="${1:-}"
+
+    case "${doctor_target}" in
+        browser)
+            cmd_doctor_browser
+            ;;
+        "")
+            echo -e "${RED}Usage: openpath doctor <target>${NC}"
+            echo "  Supported targets: browser"
+            exit 1
+            ;;
+        *)
+            echo -e "${RED}Unknown doctor target: $doctor_target${NC}"
+            echo "  Supported targets: browser"
+            exit 1
+            ;;
+    esac
+}
+
 cmd_help() {
     echo -e "${BLUE}openpath - OpenPath DNS system management v$VERSION${NC}"
     echo ""
@@ -583,6 +713,7 @@ cmd_help() {
     echo "  domains [texto] List domains (optional filter)"
     echo "  check <domain>  Check whether a domain is allowed"
     echo "  health          Check system health"
+    echo "  doctor <target> Print focused diagnostics (e.g. browser)"
     echo "  force           Force change application"
     echo "  enable          Enable system"
     echo "  disable         Disable system"
