@@ -3,6 +3,8 @@
 # runtime-cli-system.sh - Non-enrollment runtime commands for openpath CLI
 ################################################################################
 
+# Print a multi-section status summary: active services, DNS resolution state,
+# bypass-block states, whitelist domain count, enrollment info, and update history.
 cmd_status() {
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
     echo -e "${BLUE}  Sistema dnsmasq URL Whitelist v$VERSION${NC}"
@@ -158,11 +160,14 @@ cmd_status() {
     echo ""
 }
 
+# Trigger an immediate whitelist refresh by running the background update script.
 cmd_update() {
     echo -e "${BLUE}Actualizando whitelist...${NC}"
     /usr/local/bin/openpath-update.sh
 }
 
+# Resolve one whitelisted and one blocked domain against the local DNS and
+# report whether each result matches the expected outcome.
 cmd_test() {
     echo -e "${BLUE}Probando DNS...${NC}"
     echo ""
@@ -193,10 +198,12 @@ cmd_test() {
     echo ""
 }
 
+# Stream the agent log file in real time (equivalent to following the tail).
 cmd_logs() {
     tail -f "$LOG_FILE"
 }
 
+# Print the last N lines of the agent log (default 50); reject non-numeric arguments.
 cmd_log() {
     local lines="${1:-50}"
     if ! [[ "$lines" =~ ^[0-9]+$ ]]; then
@@ -207,6 +214,7 @@ cmd_log() {
     tail -n "$lines" "$LOG_FILE"
 }
 
+# List domains from the whitelist file, optionally filtered by a substring.
 cmd_domains() {
     local filter="${1:-}"
 
@@ -222,6 +230,8 @@ cmd_domains() {
     fi
 }
 
+# Strip scheme, query string, fragment, and trailing slashes from a URL or
+# domain, then lowercase and collapse repeated slashes to a canonical form.
 normalize_check_target() {
     local target="$1"
 
@@ -234,12 +244,16 @@ normalize_check_target() {
     printf '%s\n' "$target"
 }
 
+# Extract the host portion from a normalized target by dropping everything
+# after the first slash.
 check_target_host() {
     local target="$1"
     target="${target%%/*}"
     printf '%s\n' "$target"
 }
 
+# Return 0 if any element in the remaining arguments normalizes to the same
+# value as the first argument, 1 otherwise.
 array_contains_exact() {
     local needle="$1"
     shift
@@ -254,6 +268,8 @@ array_contains_exact() {
     return 1
 }
 
+# Look up a domain or URL in the whitelist, blocked-subdomain, and blocked-path
+# sets, then perform a live DNS resolution and print the combined result.
 cmd_check() {
     local domain="$1"
     local normalized_target=""
@@ -310,6 +326,9 @@ cmd_check() {
     echo ""
 }
 
+# Run a comprehensive health check across DNS resolution, firewall rules,
+# bypass-block states, services, whitelist freshness, and browser integrations;
+# exit non-zero if any critical check fails.
 cmd_health() {
     local failed=0
     local remote_disabled=false
@@ -516,6 +535,8 @@ cmd_health() {
     return $failed
 }
 
+# Flush active connections, clear the local DNS cache, and close open browser
+# windows so pending whitelist changes take effect immediately.
 cmd_force() {
     echo -e "${BLUE}Forcing change application...${NC}"
     echo -e "${YELLOW}Browsers will be closed${NC}"
@@ -528,6 +549,8 @@ cmd_force() {
     echo -e "${GREEN}✓ Cambios aplicados${NC}"
 }
 
+# Re-enable the system after a disable: start services, trigger a whitelist
+# update, flush connections, and close browsers to restore enforcement.
 cmd_enable() {
     echo -e "${BLUE}Enabling system...${NC}"
     enable_services
@@ -539,6 +562,8 @@ cmd_enable() {
     echo -e "${GREEN}✓ Sistema habilitado${NC}"
 }
 
+# Stop the update and watchdog timers and switch the system into disabled mode,
+# restoring normal DNS forwarding without the whitelist sinkhole.
 cmd_disable() {
     echo -e "${YELLOW}Disabling system...${NC}"
 
@@ -550,6 +575,8 @@ cmd_disable() {
     echo -e "${GREEN}✓ Sistema deshabilitado${NC}"
 }
 
+# Restart the DNS daemon and associated timers, wait briefly for the daemon to
+# become active, then print a fresh status summary.
 cmd_restart() {
     echo -e "${BLUE}Restarting services...${NC}"
 
@@ -569,6 +596,9 @@ cmd_restart() {
     cmd_status
 }
 
+# Print a structured browser-readiness diagnostic: request-setup facts,
+# Firefox extension and native-host registration state, policy file presence,
+# and detected browser binaries.
 cmd_doctor_browser() {
     echo -e "${BLUE}OpenPath Browser Doctor${NC}"
     echo ""
@@ -679,6 +709,8 @@ cmd_doctor_browser() {
     fi
 }
 
+# Route to a focused diagnostics sub-command identified by the first argument.
+# Prints usage and exits non-zero for unknown or missing targets.
 cmd_doctor() {
     local doctor_target="${1:-}"
 
@@ -699,6 +731,7 @@ cmd_doctor() {
     esac
 }
 
+# Print the full command reference with a one-line description for each subcommand.
 cmd_help() {
     echo -e "${BLUE}openpath - OpenPath DNS system management v$VERSION${NC}"
     echo ""
