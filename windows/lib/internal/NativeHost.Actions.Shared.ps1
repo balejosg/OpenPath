@@ -1,4 +1,8 @@
 function Get-NativeHostValidDomains {
+    <#
+    .SYNOPSIS
+    Filters a domain list to lowercase ASCII-safe hostnames, capped at a configurable maximum count.
+    #>
     param(
         [AllowNull()]
         [object[]]$Domains = @()
@@ -16,16 +20,28 @@ function Get-NativeHostValidDomains {
         Select-Object -First $maxDomains
 }
 function Normalize-NativeHostRuntimeDependencyHost {
+    <#
+    .SYNOPSIS
+    Normalizes a runtime dependency host value using the shared OpenPath normalization helper.
+    #>
     param([AllowNull()][object]$Value)
 
     return (Normalize-OpenPathRuntimeDependencyHost -Value $Value)
 }
 function Normalize-NativeHostCaptivePortalTriggerHost {
+    <#
+    .SYNOPSIS
+    Normalizes a captive portal trigger host value using the runtime dependency host normalizer.
+    #>
     param([AllowNull()][object]$Value)
 
     return (Normalize-NativeHostRuntimeDependencyHost -Value $Value)
 }
 function Test-NativeHostBlockedSubdomainMatch {
+    <#
+    .SYNOPSIS
+    Returns true when a domain matches any entry in the blocked subdomains list.
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$Domain,
         [string[]]$BlockedSubdomains = @()
@@ -38,6 +54,10 @@ function Test-NativeHostBlockedSubdomainMatch {
     return $false
 }
 function Test-NativeHostWhitelistCoversHost {
+    <#
+    .SYNOPSIS
+    Returns true when the whitelist set covers the specified hostname via the shared coverage helper.
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$Hostname,
         [System.Collections.Generic.HashSet[string]]$WhitelistSet
@@ -46,6 +66,13 @@ function Test-NativeHostWhitelistCoversHost {
     return (Test-OpenPathWhitelistCoversHost -Hostname $Hostname -WhitelistSet $WhitelistSet)
 }
 function Invoke-NativeHostMutex {
+    <#
+    .SYNOPSIS
+    Acquires a named mutex, executes an action block, and releases the mutex in a finally block.
+    .DESCRIPTION
+    Throws when the mutex cannot be acquired within the timeout. Handles abandoned mutex exceptions
+    by treating them as a successful acquisition.
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][scriptblock]$Action,
@@ -71,15 +98,27 @@ function Invoke-NativeHostMutex {
     }
 }
 function Import-NativeHostDnsModule {
+    <#
+    .SYNOPSIS
+    Loads the DNS module from the OpenPath root when it is present on disk.
+    #>
     $dnsModulePath = Join-Path $script:OpenPathRoot 'lib\DNS.psm1'
     if (Test-Path $dnsModulePath -ErrorAction SilentlyContinue) {
         Import-Module $dnsModulePath -Force -ErrorAction Stop
     }
 }
 function Get-NativeHostTaskRunner {
+    <#
+    .SYNOPSIS
+    Returns a schtasks runner object used to trigger and wait on scheduled tasks.
+    #>
     return (New-OpenPathSchtasksRunner)
 }
 function Test-NativeWhitelistContainsDomains {
+    <#
+    .SYNOPSIS
+    Returns true when all supplied domains are present in the current native whitelist mirror.
+    #>
     param(
         [string[]]$Domains = @()
     )
@@ -105,6 +144,10 @@ function Test-NativeWhitelistContainsDomains {
     return $true
 }
 function Format-NativeHostActionLogValue {
+    <#
+    .SYNOPSIS
+    Sanitizes and truncates a value for safe inclusion in a native host action log entry.
+    #>
     param(
         [AllowNull()]
         [object]$Value
@@ -120,6 +163,10 @@ function Format-NativeHostActionLogValue {
     return $text
 }
 function Write-NativeHostActionLog {
+    <#
+    .SYNOPSIS
+    Writes a structured native host action log line when the native host logger is available.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$Action,
@@ -165,6 +212,10 @@ function Write-NativeHostActionLog {
     }
 }
 function Get-NativeHostMachineName {
+    <#
+    .SYNOPSIS
+    Returns the machine name from the native host state, falling back to the environment computer name.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$State
@@ -177,6 +228,10 @@ function Get-NativeHostMachineName {
     return [string]$env:COMPUTERNAME
 }
 function Get-NativeHostApiUrl {
+    <#
+    .SYNOPSIS
+    Resolves the API URL from the native host state via the request setup state helper.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$State
@@ -186,6 +241,10 @@ function Get-NativeHostApiUrl {
     return [string]$requestSetupState.RequestApiUrl
 }
 function Get-NativeHostMachineToken {
+    <#
+    .SYNOPSIS
+    Resolves the machine bearer token from the native host state via the request setup state helper.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$State
@@ -195,6 +254,10 @@ function Get-NativeHostMachineToken {
     return [string]$requestSetupState.MachineToken
 }
 function Get-NativeHostBlockedPathResponse {
+    <#
+    .SYNOPSIS
+    Builds the native host response payload for a get-blocked-paths action from the current whitelist sections.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Sections
@@ -230,6 +293,10 @@ function Get-NativeHostBlockedPathResponse {
     }
 }
 function Get-NativeHostBlockedSubdomainResponse {
+    <#
+    .SYNOPSIS
+    Builds the native host response payload for a get-blocked-subdomains action from the current whitelist sections.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [PSCustomObject]$Sections
