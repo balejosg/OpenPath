@@ -47,7 +47,7 @@ while ((Get-Date) -lt $deadline) {
             try {
                 $existingOwner = Get-Content -Path $ownerPath -Raw | ConvertFrom-Json
                 $ownerSummary = "$($existingOwner.repository) run $($existingOwner.runId) job $($existingOwner.job)"
-                $createdAt = [datetime]::Parse([string]$existingOwner.createdAt).ToUniversalTime()
+                $createdAt = [datetime]::Parse([string]$existingOwner.createdAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
                 $stale = ((Get-Date).ToUniversalTime() - $createdAt).TotalMinutes -gt $StaleAfterMinutes
             }
             catch {

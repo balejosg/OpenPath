@@ -1580,7 +1580,7 @@ function Update-OpenPathCaptivePortalObservation {
         if ($existing.PSObject.Properties['portalCount']) { $portalCount = [int]$existing.portalCount }
         if ($existing.PSObject.Properties['authenticatedCount']) { $authenticatedCount = [int]$existing.authenticatedCount }
         if ($existing.PSObject.Properties['portalSince'] -and $existing.portalSince) {
-            try { $portalSince = [datetime]::Parse([string]$existing.portalSince) } catch { $portalSince = $null }
+            try { $portalSince = [datetime]::Parse([string]$existing.portalSince, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch { $portalSince = $null }
         }
     }
 
@@ -1590,7 +1590,7 @@ function Update-OpenPathCaptivePortalObservation {
     elseif (-not $portalSince) {
         $marker = Get-OpenPathCaptivePortalMarker
         if ($marker -and $marker.PSObject.Properties['since'] -and $marker.since) {
-            try { $portalSince = [datetime]::Parse([string]$marker.since) } catch { $portalSince = $now }
+            try { $portalSince = [datetime]::Parse([string]$marker.since, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch { $portalSince = $now }
         }
         else {
             $portalSince = $now
