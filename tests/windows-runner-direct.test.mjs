@@ -712,12 +712,8 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     for (const artifactName of [
       'wedu-lab-network-before.json',
       'wedu-lab-dns-before.json',
-      'wedu-lab-dns-limited.json',
       'wedu-lab-browser-before.json',
-      'wedu-lab-browser-limited.json',
       'wedu-lab-portal-limited-mode.png',
-      'wedu-lab-native-recovery.json',
-      'wedu-lab-native-reconcile.json',
       'wedu-lab-browser-post-auth.json',
       'wedu-lab-dns-post-auth.json',
       'wedu-lab-geckodriver-after-auth.out.log',
@@ -749,25 +745,8 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.doesNotMatch(weduScript, /\$browserBefore = Invoke-WeduBrowserProbe/);
     assert.match(weduScript, /loginSubmitted = \$false/);
     assert.match(weduScript, /\$browserLimited = Invoke-WeduBrowserProbe -Config \$config/);
-    assert.match(weduScript, /\$activeMarkerMode[\s\S]*'limited'/);
     assert.match(weduScript, /function ConvertTo-WeduNativeStringArray/);
-    assert.match(
-      weduScript,
-      /\$allowedHosts = @\(ConvertTo-WeduNativeStringArray -Value \$nativeRecovery\.allowedHosts\)/
-    );
-    assert.match(
-      weduScript,
-      /\$nativeLimitedModeReady = \[bool\]\$nativeRecovery\.limitedModeReady/
-    );
     assert.doesNotMatch(weduScript, /\$nativeRecovery\.observedRuntimeHosts \| Where-Object/);
-    const limitedModeReadyExpression =
-      weduScript.match(/\$limitedModeReady\s*=\s*\[bool\]\(([\s\S]*?)\n\s*\)/)?.[1] ?? '';
-    assert.doesNotMatch(limitedModeReadyExpression, /discoveryTruncated/);
-    assert.doesNotMatch(limitedModeReadyExpression, /pendingRuntimeHosts/);
-    assert.doesNotMatch(limitedModeReadyExpression, /redirectHosts/);
-    assert.doesNotMatch(limitedModeReadyExpression, /resourceHosts/);
-    assert.doesNotMatch(limitedModeReadyExpression, /observedRuntimeHosts/);
-    assert.match(weduScript, /limitedModeReady/);
     assert.match(weduScript, /bootstrapHosts/);
     assert.match(weduScript, /observedRuntimeHosts/);
     assert.match(weduScript, /pendingRuntimeHosts/);
@@ -788,7 +767,6 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduCiScript, /http:\/\/\{CDN_HOST\}\/portal\.js/);
     assert.match(weduCiScript, /http:\/\/\{AUTH_HOST\}\/session/);
     assert.match(weduScript, /window\.__openPathWeduPortalReady/);
-    assert.match(weduScript, /Resolve-DnsName -Name \$limitedHost -Server 127\.0\.0\.1/);
     assert.match(weduScript, /Resolve-DnsName -Name \$domain -Server 127\.0\.0\.1/);
     assert.match(weduScript, /resolverServer = '127\.0\.0\.1'/);
     assert.match(weduScript, /adapters = @\(\$network\.adapters\)/);
@@ -838,15 +816,15 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     const successExpression =
       weduScript.match(/\$success\s*=\s*\[bool\]\(([\s\S]*?)\n\s*\)/)?.[1] ?? '';
     assert.match(successExpression, /labNetwork\.labNetworkVerified/);
-    assert.match(successExpression, /nativeRecovery\.success/);
-    assert.match(successExpression, /activeMarkerMode -eq 'limited'/);
-    assert.match(successExpression, /limitedModeReady/);
-    assert.match(successExpression, /limitedDns\.success/);
+    assert.match(successExpression, /splitDnsProtected\.markerNeverPresent/);
+    assert.match(successExpression, /postAuthMarkerNeverPresent/);
     assert.match(successExpression, /browserLimited\.portalReady/);
     assert.match(successExpression, /browserLimited\.finalLoginHost/);
     assert.match(successExpression, /browserLimited\.loginSubmitted/);
-    assert.match(successExpression, /nativeReconcile\.state/);
-    assert.doesNotMatch(successExpression, /nativeReconcile\.portalState/);
+    assert.doesNotMatch(successExpression, /nativeRecovery\.success/);
+    assert.doesNotMatch(successExpression, /activeMarkerMode -eq 'limited'/);
+    assert.doesNotMatch(successExpression, /limitedDns\.success/);
+    assert.doesNotMatch(successExpression, /nativeReconcile\.state/);
     assert.match(successExpression, /openPathProtectionAfter\.protectedModeRestored/);
     assert.match(weduScript, /blockedDomain = \$blockedDomain/);
     assert.match(weduScript, /blockedByOpenPath = \$blocked/);
@@ -857,33 +835,21 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(weduScript, /Assert-WeduLabNetwork/);
     assert.doesNotMatch(weduScript, /Invoke-GatewayControl[\s\S]*gateway-authenticated/);
     assert.match(weduScript, /gateway-reset/);
-    assert.match(weduScript, /recover-captive-portal-navigation/);
-    assert.match(weduScript, /triggerHost = \$script:WeduHost/);
-    // Limited mode must be reached by the watchdog's own detection, not by a
-    // pre-injected forced recovery host list.
+    // C2 invariant: with split DNS active, the watchdog never enters limited mode.
+    // recover-captive-portal-navigation, triggerHost, nativeRecovery, and
+    // nativeReconcile phases are all removed; markerNeverPresent proves suppression.
+    assert.doesNotMatch(weduScript, /recover-captive-portal-navigation/);
+    assert.doesNotMatch(weduScript, /Invoke-WeduWatchdogUntilLimited/);
+    assert.doesNotMatch(weduScript, /Invoke-WeduWatchdogUntilProtectedRestored/);
     assert.doesNotMatch(weduScript, /portalRecoveryHosts = @\(\$script:WeduLimitedHosts\)/);
-    assert.match(weduScript, /Invoke-WeduWatchdogUntilLimited/);
+    assert.match(weduScript, /markerNeverPresent/);
+    assert.match(weduScript, /postAuthMarkerNeverPresent/);
     assert.match(weduScript, /Start-ScheduledTask -TaskName \$script:WatchdogTaskName/);
     assert.match(weduScript, /Ensure-WeduDirectRunnerConfig/);
     assert.match(weduScript, /captivePortalDomains/);
-    assert.match(weduScript, /limitedModeEnteredVia/);
     assert.match(weduScript, /configuredUpstreamResolvesPortalHost/);
-    assert.match(weduScript, /upstreamSource/);
-    assert.match(weduScript, /operation = 'reconcile'/);
     assert.match(weduScript, /windows-direct-runtime-staging\.ps1/);
     assert.match(weduScript, /Stage-OpenPathDirectRunnerRuntime/);
-    assert.match(
-      weduScript,
-      /Stage-OpenPathDirectRunnerRuntime[\s\S]*\$nativeRecovery = Invoke-NativeHostAction/
-    );
-    assert.match(
-      weduScript,
-      /\$nativeRecovery = Invoke-NativeHostAction[\s\S]*\$limitedDns = Test-WeduLimitedModeDns[\s\S]*\$browserLimited = Invoke-WeduBrowserProbe/
-    );
-    assert.match(
-      weduScript,
-      /\$browserBefore = \[pscustomobject\]@{[\s\S]*loginSubmitted = \$false[\s\S]*Save-Json -Value \$browserBeforePayload[\s\S]*\$nativeRecovery = Invoke-NativeHostAction/
-    );
     assert.doesNotMatch(weduScript, /\$browserBefore = \$browserLimited/);
   });
 

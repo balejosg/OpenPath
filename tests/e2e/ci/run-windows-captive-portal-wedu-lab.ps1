@@ -12,16 +12,11 @@ $script:ResultPath = Join-Path $script:ArtifactsRoot 'direct-captive-portal-wedu
 $script:CompletionPath = Join-Path $script:ArtifactsRoot 'direct-captive-portal-wedu-lab-completion.json'
 $script:NetworkBeforePath = Join-Path $script:ArtifactsRoot 'wedu-lab-network-before.json'
 $script:DnsBeforePath = Join-Path $script:ArtifactsRoot 'wedu-lab-dns-before.json'
-$script:DnsLimitedPath = Join-Path $script:ArtifactsRoot 'wedu-lab-dns-limited.json'
 $script:BrowserBeforePath = Join-Path $script:ArtifactsRoot 'wedu-lab-browser-before.json'
-$script:BrowserLimitedPath = Join-Path $script:ArtifactsRoot 'wedu-lab-browser-limited.json'
 $script:BrowserAfterAuthPath = Join-Path $script:ArtifactsRoot 'wedu-lab-browser-post-auth.json'
 $script:DnsPostAuthPath = Join-Path $script:ArtifactsRoot 'wedu-lab-dns-post-auth.json'
 $script:PortalScreenshotPath = Join-Path $script:ArtifactsRoot 'wedu-lab-portal-limited-mode.png'
-$script:NativeRecoveryPath = Join-Path $script:ArtifactsRoot 'wedu-lab-native-recovery.json'
-$script:NativeReconcilePath = Join-Path $script:ArtifactsRoot 'wedu-lab-native-reconcile.json'
 $script:NetworkAfterPath = Join-Path $script:ArtifactsRoot 'wedu-lab-network-after.json'
-$script:AutonomousExitPath = Join-Path $script:ArtifactsRoot 'wedu-lab-autonomous-exit.json'
 $script:PostAuthNetworkFidelityPath = Join-Path $script:ArtifactsRoot 'wedu-lab-post-auth-network-fidelity.json'
 $script:SplitDnsProtectedPath = Join-Path $script:ArtifactsRoot 'wedu-lab-split-dns-protected.json'
 $script:OpenPathProtectionAfterPath = Join-Path $script:ArtifactsRoot 'wedu-lab-openpath-protection-after.json'
@@ -746,131 +741,6 @@ return true;
     }
 }
 
-function Test-WeduLimitedModeDns {
-    param(
-        [AllowNull()][string]$UpstreamSource = '',
-        [AllowNull()][string[]]$ConfiguredDomains = @()
-    )
-
-    $configuredSet = @($ConfiguredDomains | ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } | Where-Object { $_ })
-    $results = foreach ($limitedHost in @($script:WeduLimitedHosts)) {
-        $answers = @()
-        $errorText = ''
-        try {
-            $answers = @(Resolve-DnsName -Name $limitedHost -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
-        }
-        catch {
-            $errorText = [string]$_
-        }
-        $addresses = @($answers | ForEach-Object { [string]$_.IPAddress } | Where-Object { $_ })
-        [pscustomobject]@{
-            host = $limitedHost
-            resolvedThroughLocalDns = [bool]($answers.Count -gt 0)
-            answers = @($addresses)
-            # Contract field: proves the configured portal domain resolved locally.
-            addresses = @($addresses)
-            isConfiguredPortalDomain = [bool]($configuredSet -contains ([string]$limitedHost).Trim().TrimEnd('.').ToLowerInvariant())
-            error = $errorText
-        }
-    }
-
-    $negativeHost = 'this-should-be-blocked-test-12345.com'
-    $negativeBlocked = $false
-    $negativeError = ''
-    try {
-        $negativeAnswers = @(Resolve-DnsName -Name $negativeHost -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction SilentlyContinue)
-        $negativeBlocked = ($negativeAnswers.Count -eq 0)
-    }
-    catch {
-        $negativeBlocked = $true
-        $negativeError = [string]$_
-    }
-
-    return [pscustomobject]@{
-        success = [bool]((@($results | Where-Object { -not $_.resolvedThroughLocalDns }).Count -eq 0) -and $negativeBlocked)
-        server = '127.0.0.1'
-        # Source the agent used to recover the network resolver during limited mode
-        # (must be 'dhcp-nameserver' for a production-faithful lab).
-        upstreamSource = [string]$UpstreamSource
-        hosts = @($results)
-        negativeControl = [pscustomobject]@{
-            host = $negativeHost
-            blocked = $negativeBlocked
-            error = $negativeError
-        }
-    }
-}
-
-function Find-NativeHostScriptPath {
-    $candidatePaths = @(
-        'C:\OpenPath\browser-extension\firefox\native\OpenPath-NativeHost.ps1',
-        (Join-Path $script:RepoRoot 'windows\scripts\OpenPath-NativeHost.ps1')
-    )
-
-    foreach ($candidatePath in $candidatePaths) {
-        if (Test-Path -LiteralPath $candidatePath) {
-            return $candidatePath
-        }
-    }
-
-    throw 'OpenPath native host script was not found.'
-}
-
-function Invoke-NativeHostAction {
-    param(
-        [Parameter(Mandatory = $true)][hashtable]$Message,
-        [int]$TimeoutMs = 180000
-    )
-
-    $nativeHostScriptPath = Find-NativeHostScriptPath
-    $requestJson = $Message | ConvertTo-Json -Compress -Depth 6
-    $requestBytes = [System.Text.Encoding]::UTF8.GetBytes($requestJson)
-    $lengthBytes = [System.BitConverter]::GetBytes([int]$requestBytes.Length)
-    $inputPath = Join-Path $script:ArtifactsRoot 'wedu-lab-native-host-request.bin'
-    $outputPath = Join-Path $script:ArtifactsRoot 'wedu-lab-native-host-response.bin'
-    $errorPath = Join-Path $script:ArtifactsRoot 'wedu-lab-native-host-response.err.log'
-
-    [System.IO.File]::WriteAllBytes($inputPath, [byte[]]($lengthBytes + $requestBytes))
-    Remove-Item -LiteralPath $outputPath, $errorPath -Force -ErrorAction SilentlyContinue
-
-    $process = Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $nativeHostScriptPath) `
-        -RedirectStandardInput $inputPath `
-        -RedirectStandardOutput $outputPath `
-        -RedirectStandardError $errorPath `
-        -PassThru `
-        -WindowStyle Hidden
-
-    $nativeHostTimeoutMs = $TimeoutMs
-    if (-not $process.WaitForExit($nativeHostTimeoutMs)) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        throw 'Native host WEDU lab action timed out.'
-    }
-
-    $stderr = if (Test-Path -LiteralPath $errorPath) { Get-Content -LiteralPath $errorPath -Raw } else { '' }
-    $process.Refresh()
-    $exitCode = $process.ExitCode
-    if ($null -eq $exitCode) {
-        $exitCode = 0
-    }
-    if ($exitCode -ne 0) {
-        throw "Native host WEDU lab action exited with $($exitCode): $stderr"
-    }
-
-    $responseBytes = [System.IO.File]::ReadAllBytes($outputPath)
-    if ($responseBytes.Length -lt 4) {
-        throw 'Native host WEDU lab action did not return a framed response.'
-    }
-
-    $responseLength = [System.BitConverter]::ToInt32($responseBytes, 0)
-    if ($responseLength -le 0 -or $responseBytes.Length -lt (4 + $responseLength)) {
-        throw 'Native host WEDU lab action returned an invalid response frame.'
-    }
-
-    $responseJson = [System.Text.Encoding]::UTF8.GetString($responseBytes, 4, $responseLength)
-    return ($responseJson | ConvertFrom-Json)
-}
-
 function Invoke-WeduWebDriverPageProbe {
     param(
         [Parameter(Mandatory = $true)][int]$Port,
@@ -1308,125 +1178,109 @@ function Test-WeduConfiguredUpstreamPortalResolution {
     }
 }
 
-function Get-WeduCaptiveMarker {
-    if (-not (Test-Path -LiteralPath $script:CaptiveMarkerPath)) {
-        return $null
-    }
-    try {
-        return (Get-Content -LiteralPath $script:CaptiveMarkerPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
-    }
-    catch {
-        return $null
-    }
-}
-
 function Invoke-WeduSplitDnsProtectedCheck {
-    # Permanent split DNS must make the declared portal host resolvable in NORMAL
-    # protected mode -- no captive-portal marker, no mode transition. Stage C1 is
-    # ADDITIVE: the legacy watchdog still autonomously enters limited mode on a
-    # captive network (every minute), which overwrites Acrylic's upstreams and
-    # races this check. So to observe split DNS deterministically we DISABLE the
-    # OpenPath-Watchdog task, apply the protected-mode topology through the real
-    # product path (Update-AcrylicHost -> Set-AcrylicConfiguration, the same call
-    # the watchdog's drift refresh makes), then assert the DISTINGUISHING split
-    # signal: the portal resolves while the THIRD upstream is the network DNS and
-    # the PRIMARY upstream stays the configured public resolver (limited mode
-    # would instead put the network DNS on Primary/Secondary). The watchdog is
-    # always re-enabled in the finally block.
+    # Stage C2: the agent SUPPRESSES autonomous captive-portal-mode entry when
+    # permanent split DNS is active. With the watchdog ENABLED and running normally
+    # the captive-portal marker must NEVER appear across multiple watchdog cycles
+    # (markerNeverPresent), while the portal host resolves in protected mode via
+    # the third Acrylic upstream (the network DHCP DNS). The distinguishing split
+    # signal: network DNS on TERTIARY, configured public resolver stays PRIMARY.
     param(
-        [int]$ResolveAttempts = 8,
-        [int]$ResolveDelaySeconds = 3
+        # Run a FIXED number of cycles (never break early): the legacy entry
+        # threshold is two consecutive 'Portal' detections, so we must drive the
+        # watchdog past it to prove the would-enter is actually suppressed. The
+        # marker is checked after EVERY cycle.
+        [int]$MaxCycles = 4,
+        [int]$DelaySeconds = 2
     )
 
-    $installedRoot = $script:InstalledOpenPathRoot
     $runError = ''
-    $watchdogDisabled = $false
     $applied = $false
     $primaryServerAddress = ''
     $tertiaryServerAddress = ''
     $portalAddresses = @()
     $portalResolveError = ''
+    $resolvedAtLeastOnce = $false
     $blockedDomainStillBlocked = $false
     $blockedError = ''
+    $markerNeverPresent = $true
+
+    for ($cycle = 1; $cycle -le $MaxCycles; $cycle++) {
+        try {
+            # Start-ScheduledTask is async; a captive-network watchdog pass runs the
+            # protected-mode repair probes first and can take 60-90s. Wait for the
+            # task to actually START (running, or LastRunTime advanced) and then to
+            # FINISH (up to ~120s) before reading the marker, so we never sample
+            # mid-run.
+            $priorRun = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
+                Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+            $priorRunTime = if ($priorRun) { [datetime]$priorRun.LastRunTime } else { [datetime]::MinValue }
+            Start-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop
+            $applied = $true
+            $started = $false
+            for ($wait = 1; $wait -le 280; $wait++) {
+                Start-Sleep -Milliseconds 500
+                $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
+                    Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+                if (-not $info) { continue }
+                # 267009 (0x41301) == task is currently running; LastTaskResult is an
+                # unsigned 32-bit code that overflows [int], hence the [long] cast.
+                $running = ([long]$info.LastTaskResult -eq 267009)
+                $ranThisCycle = ([datetime]$info.LastRunTime -gt $priorRunTime)
+                if (-not $started) {
+                    if ($running -or $ranThisCycle) { $started = $true }
+                    continue
+                }
+                if (-not $running) { break }
+            }
+        }
+        catch {
+            $runError = ($runError + " | cycle ${cycle}: $_").Trim(' |')
+        }
+
+        # The C2 keystone: the marker must NEVER appear after a watchdog run while
+        # split DNS is active -- not on this cycle, not on any cycle.
+        if (Test-Path -LiteralPath $script:CaptiveMarkerPath) {
+            $markerNeverPresent = $false
+        }
+
+        try {
+            $answers = @(Resolve-DnsName -Name $script:WeduHost -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
+            $cycleAddresses = @($answers | Where-Object { $_.IPAddress } | ForEach-Object { [string]$_.IPAddress })
+            if ($cycleAddresses.Count -gt 0) {
+                $portalAddresses = $cycleAddresses
+                $resolvedAtLeastOnce = $true
+                $portalResolveError = ''
+            }
+        }
+        catch {
+            $portalResolveError = [string]$_
+        }
+        if ($cycle -lt $MaxCycles) {
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
 
     try {
-        try {
-            Disable-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop | Out-Null
-            $watchdogDisabled = $true
-        }
-        catch {
-            $runError = "disable watchdog: $_"
-        }
-        # Apply split DNS through the REAL product path with full bootstrap: run
-        # the installed watchdog script once per attempt. Its drift refresh renders
-        # the third upstream and opens the firewall exactly as in production. We
-        # clear the observation before EACH run so portalCount never reaches the
-        # entry threshold (2) -- a single Portal detection applies split DNS without
-        # tripping limited mode, keeping this a pure protected-mode proof.
-        $watchdogScript = Join-Path $installedRoot 'scripts\Test-DNSHealth.ps1'
-        $markerAbsentDuringSplitCheck = $true
-        for ($attempt = 1; $attempt -le $ResolveAttempts; $attempt++) {
-            Remove-Item -LiteralPath $script:CaptiveMarkerPath, $script:CaptiveObservationPath -Force -ErrorAction SilentlyContinue
-            try {
-                if (Test-Path -LiteralPath $watchdogScript) {
-                    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $watchdogScript 2>&1 | Out-Null
-                    $applied = $true
-                }
-                else {
-                    $runError = "watchdog script missing: $watchdogScript"
-                }
-            }
-            catch {
-                $runError = ($runError + " | apply: $_").Trim(' |')
-            }
-
-            if (Test-Path -LiteralPath $script:CaptiveMarkerPath) {
-                $markerAbsentDuringSplitCheck = $false
-            }
-
-            try {
-                $answers = @(Resolve-DnsName -Name $script:WeduHost -Server 127.0.0.1 -DnsOnly -Type A -ErrorAction Stop)
-                $portalAddresses = @($answers | Where-Object { $_.IPAddress } | ForEach-Object { [string]$_.IPAddress })
-                if ($portalAddresses.Count -gt 0) {
-                    $portalResolveError = ''
-                    break
-                }
-            }
-            catch {
-                $portalResolveError = [string]$_
-            }
-            if ($attempt -lt $ResolveAttempts) {
-                Start-Sleep -Seconds $ResolveDelaySeconds
-            }
-        }
-
-        try {
-            $blockedAnswers = @(Resolve-DnsName -Name 'this-should-be-blocked-test-12345.com' -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue)
-            $blockedDomainStillBlocked = ($blockedAnswers.Count -eq 0)
-        }
-        catch {
-            $blockedDomainStillBlocked = $true
-            $blockedError = [string]$_
-        }
-
-        $acrylic = Get-WeduAcrylicDnsSnapshot
-        if ($acrylic.configPath) {
-            try {
-                $iniContent = Get-Content -LiteralPath $acrylic.configPath -Raw -ErrorAction Stop
-                $primaryServerAddress = Get-WeduAcrylicIniValue -Content $iniContent -Key 'PrimaryServerAddress'
-                $tertiaryServerAddress = Get-WeduAcrylicIniValue -Content $iniContent -Key 'TertiaryServerAddress'
-            }
-            catch { }
-        }
+        $blockedAnswers = @(Resolve-DnsName -Name 'this-should-be-blocked-test-12345.com' -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue)
+        $blockedDomainStillBlocked = ($blockedAnswers.Count -eq 0)
     }
-    finally {
-        if ($watchdogDisabled) {
-            try { Enable-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop | Out-Null }
-            catch { $runError = ($runError + " | re-enable watchdog: $_").Trim(' |') }
-        }
+    catch {
+        $blockedDomainStillBlocked = $true
+        $blockedError = [string]$_
     }
 
-    $portalResolvesInProtectedMode = [bool]($portalAddresses.Count -gt 0)
+    $acrylic = Get-WeduAcrylicDnsSnapshot
+    if ($acrylic.configPath) {
+        try {
+            $iniContent = Get-Content -LiteralPath $acrylic.configPath -Raw -ErrorAction Stop
+            $primaryServerAddress = Get-WeduAcrylicIniValue -Content $iniContent -Key 'PrimaryServerAddress'
+            $tertiaryServerAddress = Get-WeduAcrylicIniValue -Content $iniContent -Key 'TertiaryServerAddress'
+        }
+        catch { }
+    }
+
+    $portalResolvesInProtectedMode = [bool]$resolvedAtLeastOnce
     # The split-DNS signal that distinguishes it from limited mode: the network
     # resolver is the THIRD upstream while the configured public resolver stays
     # PRIMARY. Limited mode would put the network resolver on Primary/Secondary.
@@ -1440,7 +1294,7 @@ function Invoke-WeduSplitDnsProtectedCheck {
         portalResolvesInProtectedMode = $portalResolvesInProtectedMode
         portalAddresses = @($portalAddresses)
         portalResolveError = $portalResolveError
-        markerAbsentDuringSplitCheck = $markerAbsentDuringSplitCheck
+        markerNeverPresent = $markerNeverPresent
         blockedDomainStillBlocked = $blockedDomainStillBlocked
         blockedError = $blockedError
         splitTopologyActive = $splitTopologyActive
@@ -1448,90 +1302,6 @@ function Invoke-WeduSplitDnsProtectedCheck {
         tertiaryServerAddress = $tertiaryServerAddress
         appliedViaProductPath = $applied
         watchdogRunError = $runError
-    }
-}
-
-function Invoke-WeduWatchdogUntilLimited {
-    # Let the OpenPath watchdog enter limited mode ON ITS OWN. We only run the
-    # OpenPath-Watchdog scheduled task (the same path that runs in production) and
-    # observe the marker; we never call the native recover action here, so a
-    # resulting limited-mode marker proves autonomous detection.
-    param(
-        [int]$MaxCycles = 8,
-        [int]$DelaySeconds = 8
-    )
-
-    # Start clean so any marker we observe is the watchdog's own work this run.
-    Remove-Item -LiteralPath $script:CaptiveMarkerPath, $script:CaptiveObservationPath -Force -ErrorAction SilentlyContinue
-
-    $cycles = @()
-    $marker = $null
-    $enteredLimited = $false
-    for ($cycle = 1; $cycle -le $MaxCycles; $cycle++) {
-        $runError = ''
-        try {
-            Start-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop
-            for ($wait = 1; $wait -le 30; $wait++) {
-                Start-Sleep -Milliseconds 500
-                $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
-                    Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
-                # 267009 (0x41301) == task is currently running. LastTaskResult is an
-                # unsigned 32-bit code (e.g. 0xFFFD0000 = 4294770688) that overflows
-                # [int]; use [long] so the wait loop does not throw and actually waits
-                # for the watchdog run to finish before we read the observation/marker.
-                if ($info -and [long]$info.LastTaskResult -ne 267009) {
-                    break
-                }
-            }
-        }
-        catch {
-            $runError = [string]$_
-        }
-
-        $observation = $null
-        if (Test-Path -LiteralPath $script:CaptiveObservationPath) {
-            try {
-                $observation = Get-Content -LiteralPath $script:CaptiveObservationPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-            }
-            catch {
-                $observation = $null
-            }
-        }
-        $marker = Get-WeduCaptiveMarker
-        $markerMode = if ($marker) { [string]$marker.mode } else { '' }
-        $markerActive = [bool]($marker -and $marker.active)
-        $cycles += [pscustomobject]@{
-            cycle = $cycle
-            runError = $runError
-            detectedState = if ($observation) { [string]$observation.detectedState } else { '' }
-            portalCount = if ($observation) { [int]$observation.portalCount } else { 0 }
-            shouldEnterPortal = if ($observation) { [bool]$observation.shouldEnterPortal } else { $false }
-            markerActive = $markerActive
-            markerMode = $markerMode
-            upstreamDnsSource = if ($marker) { [string]$marker.upstreamDnsSource } else { '' }
-            taskLastResult = if ($info) { ('0x{0:X8}' -f ([long]$info.LastTaskResult)) } else { '' }
-            taskLastRun = if ($info) { [string]$info.LastRunTime } else { '' }
-            observationExists = [bool](Test-Path -LiteralPath $script:CaptiveObservationPath)
-        }
-
-        if ($markerActive -and $markerMode -eq 'limited') {
-            $enteredLimited = $true
-            break
-        }
-        if ($cycle -lt $MaxCycles) {
-            Start-Sleep -Seconds $DelaySeconds
-        }
-    }
-
-    return [pscustomobject]@{
-        enteredLimited = $enteredLimited
-        limitedModeEnteredVia = if ($enteredLimited) { 'autonomous-detection' } else { 'watchdog-timeout' }
-        upstreamSource = if ($marker) { [string]$marker.upstreamDnsSource } else { '' }
-        upstreamDns = if ($marker) { [string]$marker.upstreamDns } else { '' }
-        upstreamVerified = [bool]($marker -and $marker.upstreamVerified)
-        limitedModeReady = [bool]($marker -and $marker.limitedModeReady)
-        marker = $marker
-        cycles = @($cycles)
     }
 }
 
@@ -1582,81 +1352,6 @@ function Test-WeduPostAuthNetworkFidelity {
         portalHostProbe = $portalHostProbe
         postAuthExternalNetworkOpen = $postAuthExternalNetworkOpen
         postAuthPortalHostStillNetworkOnly = $postAuthPortalHostStillNetworkOnly
-    }
-}
-
-function Invoke-WeduWatchdogUntilProtectedRestored {
-    # Symmetric counterpart of Invoke-WeduWatchdogUntilLimited for the EXIT side of
-    # the production bug: after the gateway authenticates, the OpenPath watchdog
-    # must detect 'Authenticated' and close portal mode ON ITS OWN
-    # (closeAuthenticated -> Disable-OpenPathCaptivePortalMode). We only run the
-    # OpenPath-Watchdog scheduled task and observe the marker disappear; the native
-    # reconcile is NOT involved, so a cleared marker proves the autonomous exit.
-    param(
-        [int]$MaxCycles = 10,
-        [int]$DelaySeconds = 8
-    )
-
-    $markerPresentAtStart = [bool](Test-Path -LiteralPath $script:CaptiveMarkerPath)
-    $cycles = @()
-    $exitedProtected = $false
-    for ($cycle = 1; $cycle -le $MaxCycles; $cycle++) {
-        $runError = ''
-        try {
-            Start-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop
-            for ($wait = 1; $wait -le 30; $wait++) {
-                Start-Sleep -Milliseconds 500
-                $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
-                    Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
-                # 267009 (0x41301) == task is currently running; LastTaskResult is an
-                # unsigned 32-bit code that overflows [int], hence the [long] cast.
-                if ($info -and [long]$info.LastTaskResult -ne 267009) {
-                    break
-                }
-            }
-        }
-        catch {
-            $runError = [string]$_
-        }
-
-        $observation = $null
-        if (Test-Path -LiteralPath $script:CaptiveObservationPath) {
-            try {
-                $observation = Get-Content -LiteralPath $script:CaptiveObservationPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-            }
-            catch {
-                $observation = $null
-            }
-        }
-        $marker = Get-WeduCaptiveMarker
-        $markerFilePresent = [bool](Test-Path -LiteralPath $script:CaptiveMarkerPath)
-        $cycles += [pscustomobject]@{
-            cycle = $cycle
-            runError = $runError
-            detectedState = if ($observation) { [string]$observation.detectedState } else { '' }
-            authenticatedCount = if ($observation) { [int]$observation.authenticatedCount } else { 0 }
-            shouldExitPortal = if ($observation) { [bool]$observation.shouldExitPortal } else { $false }
-            markerFilePresent = $markerFilePresent
-            markerMode = if ($marker) { [string]$marker.mode } else { '' }
-            taskLastResult = if ($info) { ('0x{0:X8}' -f ([long]$info.LastTaskResult)) } else { '' }
-            taskLastRun = if ($info) { [string]$info.LastRunTime } else { '' }
-        }
-
-        if (-not $markerFilePresent) {
-            $exitedProtected = $true
-            break
-        }
-        if ($cycle -lt $MaxCycles) {
-            Start-Sleep -Seconds $DelaySeconds
-        }
-    }
-
-    return [pscustomobject]@{
-        exitedProtected = $exitedProtected
-        protectedModeExitedVia = if ($exitedProtected) { 'autonomous-watchdog-close' } else { 'watchdog-timeout' }
-        markerPresentAtStart = $markerPresentAtStart
-        residualMarker = Get-WeduCaptiveMarker
-        cycles = @($cycles)
     }
 }
 
@@ -1727,7 +1422,7 @@ function Invoke-WeduLabRun {
         -MissingArtifactContext 'WEDU direct-runner checkout'
 
     # Declare the portal host as a recovery domain and force a stale/public Acrylic
-    # upstream so the autonomous watchdog has recovery domains and a configured
+    # upstream so the watchdog has captivePortalDomains declared and a configured
     # upstream that cannot resolve the portal host.
     $runnerConfig = Ensure-WeduDirectRunnerConfig
 
@@ -1745,104 +1440,32 @@ function Invoke-WeduLabRun {
     $configuredUpstreamResolvesPortalHost = [bool]$configuredUpstreamProbe.resolves
     Save-Json -Value $configuredUpstreamProbe -Path (Join-Path $script:ArtifactsRoot 'wedu-lab-configured-upstream-probe.json')
 
-    # Permanent split DNS: the declared portal host must resolve in NORMAL
-    # protected mode (no marker) once the first watchdog cycle applies the
-    # third-upstream topology -- the stateless replacement for limited mode.
+    # Stage C2 invariant: with split DNS active the watchdog SUPPRESSES autonomous
+    # captive-portal-mode entry. Drive the real scheduled task N cycles and assert
+    # the marker NEVER appears while the portal host resolves via the third upstream.
     $splitDnsProtected = Invoke-WeduSplitDnsProtectedCheck
     Save-Json -Value $splitDnsProtected -Path $script:SplitDnsProtectedPath
 
-    # Let the OpenPath watchdog detect the captive portal and enter LIMITED mode on
-    # its own (no forced native recovery). The resulting marker proves autonomous
-    # detection and records the upstream source the agent recovered.
-    # Diagnostic: run the watchdog script directly (elevated, like this harness) and
-    # capture its real exit code + output. This isolates whether the OpenPath-Watchdog
-    # *task* fails (e.g. not elevated -> #Requires -RunAsAdministrator aborts before any
-    # log) versus the watchdog script itself failing to load/detect.
-    try {
-        $watchdogScript = 'C:\OpenPath\scripts\Test-DNSHealth.ps1'
-        $directWatchdog = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $watchdogScript 2>&1 | Out-String
-        Set-Content -LiteralPath (Join-Path $script:ArtifactsRoot 'wedu-lab-watchdog-direct.txt') -Value ("exit=$LASTEXITCODE`n--- output ---`n$directWatchdog") -Encoding UTF8
-    }
-    catch {
-        Set-Content -LiteralPath (Join-Path $script:ArtifactsRoot 'wedu-lab-watchdog-direct.txt') -Value ("threw: $_") -Encoding UTF8 -ErrorAction SilentlyContinue
-    }
-
-    $autonomous = Invoke-WeduWatchdogUntilLimited
-    Save-Json -Value $autonomous -Path (Join-Path $script:ArtifactsRoot 'wedu-lab-autonomous-detection.json')
-    # Capture the agent log so we can see what the OpenPath-Watchdog run actually did
-    # (whether prechecks/portal detection ran and why limited entry did/didn't happen).
-    Copy-Item -LiteralPath 'C:\OpenPath\data\logs\openpath.log' -Destination (Join-Path $script:ArtifactsRoot 'wedu-lab-openpath.log') -ErrorAction SilentlyContinue
-    $upstreamSource = [string]$autonomous.upstreamSource
-    $limitedModeEnteredVia = [string]$autonomous.limitedModeEnteredVia
-
-    # Reconcile via the native host (idempotent). Limited mode is ALREADY active
-    # from autonomous detection, so this confirms portalModeActive /
-    # recoveryHostsApplied without being the path that entered limited mode.
-    # Recovery hosts come from the declared config -- no pre-injected portalRecoveryHosts.
-    $nativeRecovery = Invoke-NativeHostAction -Message @{
-        action = 'recover-captive-portal-navigation'
-        triggerHost = $script:WeduHost
-        tabId = 1
-        source = 'wedu-lab-captive'
-    } -TimeoutMs $config.nativeHostTimeoutMs
-    Save-Json -Value $nativeRecovery -Path $script:NativeRecoveryPath
-
     $dnsBefore = Get-WeduDnsSnapshot
     Save-Json -Value $dnsBefore -Path $script:DnsBeforePath
-    $limitedDns = Test-WeduLimitedModeDns -UpstreamSource $upstreamSource -ConfiguredDomains @($script:WeduConfiguredPortalDomains)
-    Save-Json -Value $limitedDns -Path $script:DnsLimitedPath
-
-    $browserLimited = Invoke-WeduBrowserProbe -Config $config
-
-    $activeMarkerMode = if ([bool]$nativeRecovery.activeMarkerMode) { [string]$nativeRecovery.activeMarkerMode } else { 'limited' }
-    $allowedHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.allowedHosts)
-    $bootstrapHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.bootstrapHosts)
-    $redirectHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.redirectHosts)
-    $resourceHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.resourceHosts)
-    $observedRuntimeHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.observedRuntimeHosts)
-    $pendingRuntimeHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.pendingRuntimeHosts)
-    $effectiveExactHosts = @(ConvertTo-WeduNativeStringArray -Value $nativeRecovery.effectiveExactHosts)
-    if ($effectiveExactHosts.Count -eq 0) {
-        $effectiveExactHosts = @($allowedHosts)
-    }
-    $discoveryTruncated = [bool]$nativeRecovery.discoveryTruncated
-    $fallbackMode = if ($nativeRecovery.fallbackMode) { [string]$nativeRecovery.fallbackMode } else { '' }
-    $nativeLimitedModeReady = [bool]$nativeRecovery.limitedModeReady
-    $nativeRecoveryHostsApplied = [bool]$nativeRecovery.recoveryHostsApplied
-    $declaredLimitedHostsInstalled = [bool](
-        @($bootstrapHosts).Count -gt 0 -and
-        @($effectiveExactHosts).Count -gt 0 -and
-        @($bootstrapHosts | Where-Object { $_ -notin $effectiveExactHosts }).Count -eq 0 -and
-        @($effectiveExactHosts | Where-Object { $_ -notin $allowedHosts }).Count -eq 0
-    )
-    $limitedModeReady = [bool](
-        $nativeLimitedModeReady -and
-        $nativeRecoveryHostsApplied -and
-        $activeMarkerMode -eq 'limited' -and
-        $declaredLimitedHostsInstalled
-    )
-    $browserPayload = [pscustomobject]@{
-        browserLimited = $browserLimited
-        activeMarkerMode = $activeMarkerMode
-        limitedModeReady = $limitedModeReady
-        bootstrapHosts = @($bootstrapHosts)
-        redirectHosts = @($redirectHosts)
-        resourceHosts = @($resourceHosts)
-        effectiveExactHosts = @($effectiveExactHosts)
-        observedRuntimeHosts = @($observedRuntimeHosts)
-        pendingRuntimeHosts = @($pendingRuntimeHosts)
-        discoveryTruncated = $discoveryTruncated
-        fallbackMode = $fallbackMode
-        limitedDns = $limitedDns
-    }
-    Save-Json -Value $browserPayload -Path $script:BrowserLimitedPath
 
     # The browser login is the ONLY authentication act: the portal's /session
     # handler flips the gateway firewall to authenticated mode, exactly as a real
     # user sign-in does. The harness must NEVER flip the gateway through the
-    # control endpoint (that would let the exit phase pass without the login flow
-    # working), so the authenticated transition is verified BEHAVIORALLY: the
-    # login was submitted and external egress actually opened.
+    # control endpoint. With split DNS active the portal resolves in protected mode
+    # (no limited-mode entry), so the browser reaches it via Acrylic's third upstream.
+    $browserLimited = Invoke-WeduBrowserProbe -Config $config
+
+    # Diagnostic fields retained for the evidence contract (diagnostic-only,
+    # not used in $success): split DNS replaces limited-mode host plumbing.
+    $bootstrapHosts = @()
+    $redirectHosts = @()
+    $resourceHosts = @()
+    $observedRuntimeHosts = @()
+    $pendingRuntimeHosts = @()
+    $discoveryTruncated = $false
+    $fallbackMode = ''
+
     $postAuthNetworkFidelity = Test-WeduPostAuthNetworkFidelity
     Save-Json -Value $postAuthNetworkFidelity -Path $script:PostAuthNetworkFidelityPath
     $gatewayAuthenticated = [pscustomobject]@{
@@ -1852,29 +1475,9 @@ function Invoke-WeduLabRun {
         success = [bool]($browserLimited.loginSubmitted -and $postAuthNetworkFidelity.postAuthExternalNetworkOpen)
     }
 
-    # THE PRODUCTION ESCAPE THIS PHASE EXISTS TO CATCH: after authentication the
-    # watchdog must close portal mode and restore whitelist enforcement on its own.
-    # In the escaped build the watchdog prechecks crashed every cycle (unexported
-    # Get-OpenPathCaptivePortalMarkerMode), so the relaxed posture persisted until
-    # logoff/reboot. Drive the real scheduled task and require the marker to clear
-    # WITHOUT any native reconcile.
-    $autonomousExit = Invoke-WeduWatchdogUntilProtectedRestored
-    Save-Json -Value $autonomousExit -Path $script:AutonomousExitPath
-    Copy-Item -LiteralPath 'C:\OpenPath\data\logs\openpath.log' -Destination (Join-Path $script:ArtifactsRoot 'wedu-lab-openpath-post-auth.log') -ErrorAction SilentlyContinue
-    $protectedModeExitedVia = [string]$autonomousExit.protectedModeExitedVia
-    $postAuthMarkerCleared = [bool](-not (Test-Path -LiteralPath $script:CaptiveMarkerPath))
-
-    # Idempotent confirmation only: the autonomous exit above already restored
-    # protected mode, so this reconcile must find an authenticated, marker-free
-    # state and report protectedModeRestored without doing the work itself.
-    $nativeReconcile = Invoke-NativeHostAction -Message @{
-        action = 'recover-captive-portal-navigation'
-        operation = 'reconcile'
-        portalState = 'Authenticated'
-        tabId = 1
-        source = 'wedu-lab-authenticated'
-    } -TimeoutMs $config.nativeHostTimeoutMs
-    Save-Json -Value $nativeReconcile -Path $script:NativeReconcilePath
+    # Post-auth marker check: with split DNS suppression the marker must STILL never
+    # have appeared -- not before auth, not after. Capture the live state.
+    $postAuthMarkerNeverPresent = (-not (Test-Path -LiteralPath $script:CaptiveMarkerPath))
 
     $browserAfterAuth = Invoke-WeduPostAuthBrowserProbeWithRetry
     Save-Json -Value $browserAfterAuth -Path $script:BrowserAfterAuthPath
@@ -1895,37 +1498,18 @@ function Invoke-WeduLabRun {
     $targetPlatformSymptomCleared = [bool]($browserAfterAuth.postAuthBrowserNavigationVerified)
     $success = [bool](
         $labNetwork.labNetworkVerified -and
-        # Production-faithful evidence: the watchdog entered limited mode on its
-        # own, recovered the network resolver via the registry DhcpNameServer, and
-        # the configured upstream could not resolve the portal host.
-        $autonomous.enteredLimited -and
-        $limitedModeEnteredVia -eq 'autonomous-detection' -and
-        $upstreamSource -eq 'dhcp-nameserver' -and
         (-not $configuredUpstreamResolvesPortalHost) -and
-        $nativeRecovery.success -and
-        $activeMarkerMode -eq 'limited' -and
-        $limitedModeReady -and
-        $limitedDns.success -and
+        $splitDnsProtected.portalResolvesInProtectedMode -and
+        $splitDnsProtected.markerNeverPresent -and
+        $splitDnsProtected.splitTopologyActive -and
+        $splitDnsProtected.blockedDomainStillBlocked -and
         $browserLimited.portalReady -and
         $browserLimited.finalLoginHost -eq $script:WeduLoginHost -and
         $browserLimited.loginSubmitted -and
-        # Permanent split DNS: portal reachable in protected mode (no marker) via
-        # the third upstream while the public primary stays configured -- the
-        # signal that distinguishes split DNS from the legacy limited mode.
-        $splitDnsProtected.portalResolvesInProtectedMode -and
-        $splitDnsProtected.markerAbsentDuringSplitCheck -and
-        $splitDnsProtected.blockedDomainStillBlocked -and
-        $splitDnsProtected.splitTopologyActive -and
-        # Post-auth autonomous exit: the gateway really opened, the network stayed
-        # production-faithful, and the watchdog closed portal mode on its own.
         $gatewayAuthenticated.success -and
         $postAuthNetworkFidelity.postAuthExternalNetworkOpen -and
         $postAuthNetworkFidelity.postAuthPortalHostStillNetworkOnly -and
-        $autonomousExit.exitedProtected -and
-        $protectedModeExitedVia -eq 'autonomous-watchdog-close' -and
-        $postAuthMarkerCleared -and
-        $nativeReconcile.success -and
-        $nativeReconcile.state -eq 'Authenticated' -and
+        $postAuthMarkerNeverPresent -and
         $openPathProtectionAfter.protectedModeRestored -and
         $targetPlatformSymptomCleared
     )
@@ -1936,20 +1520,10 @@ function Invoke-WeduLabRun {
         success = $success
         evidenceLevel = 'wedu-lab-direct-runner'
         targetPlatformSymptomCleared = [bool]$targetPlatformSymptomCleared
-        # Production-faithful captive-portal recovery evidence (see assert contract
-        # requireNetworkDnsDiscoveryEvidence).
         configuredUpstreamResolvesPortalHost = [bool]$configuredUpstreamResolvesPortalHost
         configuredUpstreamProbe = $configuredUpstreamProbe
-        upstreamSource = [string]$upstreamSource
-        limitedModeEnteredVia = [string]$limitedModeEnteredVia
-        autonomousDetection = $autonomous
-        # Post-auth autonomous-exit evidence (see assert contract
-        # requireAutonomousExitEvidence).
         gatewayAuthenticated = $gatewayAuthenticated
-        autonomousExit = $autonomousExit
-        autonomousExitPath = 'wedu-lab-autonomous-exit.json'
-        protectedModeExitedVia = [string]$protectedModeExitedVia
-        postAuthMarkerCleared = [bool]$postAuthMarkerCleared
+        postAuthMarkerNeverPresent = [bool]$postAuthMarkerNeverPresent
         postAuthExternalNetworkOpen = [bool]$postAuthNetworkFidelity.postAuthExternalNetworkOpen
         postAuthPortalHostStillNetworkOnly = [bool]$postAuthNetworkFidelity.postAuthPortalHostStillNetworkOnly
         postAuthNetworkFidelity = $postAuthNetworkFidelity
@@ -1957,32 +1531,22 @@ function Invoke-WeduLabRun {
         splitDnsProtectedPath = 'wedu-lab-split-dns-protected.json'
         runnerConfig = $runnerConfig
         labNetwork = $labNetwork
-        limitedDns = $limitedDns
         gatewayReset = $gatewayReset
         negativeControls = $negativeControls
         dnsBeforePath = 'wedu-lab-dns-before.json'
         browserBeforePath = 'wedu-lab-browser-before.json'
-        dnsLimitedPath = 'wedu-lab-dns-limited.json'
-        browserLimitedPath = 'wedu-lab-browser-limited.json'
         browserAfterAuthPath = 'wedu-lab-browser-post-auth.json'
         dnsPostAuthPath = 'wedu-lab-dns-post-auth.json'
         portalScreenshotPath = 'wedu-lab-portal-limited-mode.png'
-        nativeRecoveryPath = 'wedu-lab-native-recovery.json'
-        nativeReconcilePath = 'wedu-lab-native-reconcile.json'
         networkAfterPath = 'wedu-lab-network-after.json'
         openPathProtectionAfterPath = 'wedu-lab-openpath-protection-after.json'
-        nativeRecovery = $nativeRecovery
-        nativeReconcile = $nativeReconcile
         browserBefore = $browserBeforePayload
         browserAfterAuth = $browserAfterAuth
         dnsPostAuth = $dnsPostAuth
-        browserLimited = $browserPayload
-        activeMarkerMode = $activeMarkerMode
-        limitedModeReady = $limitedModeReady
+        # Diagnostic-only fields retained for the evidence contract.
         bootstrapHosts = @($bootstrapHosts)
         redirectHosts = @($redirectHosts)
         resourceHosts = @($resourceHosts)
-        effectiveExactHosts = @($effectiveExactHosts)
         observedRuntimeHosts = @($observedRuntimeHosts)
         pendingRuntimeHosts = @($pendingRuntimeHosts)
         discoveryTruncated = $discoveryTruncated

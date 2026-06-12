@@ -6,8 +6,6 @@ import { pathToFileURL } from 'node:url';
 
 const RESULT_FILE = 'direct-captive-portal-wedu-lab-result.json';
 const BROWSER_BEFORE_FILE = 'wedu-lab-browser-before.json';
-const LIMITED_DNS_FILE = 'wedu-lab-dns-limited.json';
-const LIMITED_BROWSER_FILE = 'wedu-lab-browser-limited.json';
 const TARGET_AFTER_FILE = 'wedu-lab-browser-post-auth.json';
 const POST_AUTH_DNS_FILE = 'wedu-lab-dns-post-auth.json';
 const NETWORK_AFTER_FILE = 'wedu-lab-network-after.json';
@@ -50,14 +48,6 @@ function browserAfterNavigationFunctional(browserAfter) {
 
 function browserAfterFailureKind(browserAfter) {
   return browserAfter.failureKind ?? browserAfter.postAuthFailureKind;
-}
-
-function browserLimitedProbe(browserLimited) {
-  return browserLimited.browserLimited ?? browserLimited;
-}
-
-function requireNonEmptyArray(value, field) {
-  requireField(Array.isArray(value) && value.length > 0, field);
 }
 
 function arrayValue(value) {
@@ -128,104 +118,18 @@ function requirePostAuthDnsEvidence(postAuthDns) {
   );
 }
 
-// Contract that forces the lab to reproduce the ACTUAL production failure mode.
-//
-// The bug shipped despite a green lab because the lab let the captive portal host
-// be resolvable by whatever upstream the old discovery happened to find. In
-// production the portal host (e.g. nce.wedu.comunidad.madrid) is resolvable ONLY
-// by the network's DHCP-offered DNS (preserved in the registry DhcpNameServer),
-// while OpenPath's configured Acrylic upstream is a stale/public server that
-// returns NXDOMAIN. The lab must reproduce that topology and prove the agent
-// discovered the network DNS by itself (Source 'dhcp-nameserver') and entered
-// limited mode via autonomous detection -- not via an externally forced recovery.
-function requireNetworkDnsDiscoveryEvidence(result, limitedDns) {
-  // Negative control: the normal/public upstream must NOT resolve the portal host,
-  // otherwise the lab is not reproducing the production condition at all.
-  requireField(
-    result.configuredUpstreamResolvesPortalHost === false,
-    'configuredUpstreamResolvesPortalHost must be false (portal host must be unresolvable via the configured public/stale upstream, as in production)'
-  );
-  // The agent must have discovered the network DNS itself, via the registry
-  // DhcpNameServer source -- the exact gap that caused the production failure.
-  requireField(
-    result.upstreamSource === 'dhcp-nameserver',
-    "upstreamSource must be 'dhcp-nameserver' (agent recovered the network resolver from the registry, not a lucky adapter/gateway hit)"
-  );
-  requireField(
-    limitedDns.upstreamSource === 'dhcp-nameserver',
-    `${LIMITED_DNS_FILE} upstreamSource must be 'dhcp-nameserver'`
-  );
-  // Limited mode must have been reached by the watchdog's own detection. In
-  // production the watchdog never entered limited mode (it looped on protected-mode
-  // repair); a lab that only triggers recovery via the native host cannot catch that.
-  requireField(
-    result.limitedModeEnteredVia === 'autonomous-detection',
-    "limitedModeEnteredVia must be 'autonomous-detection' (watchdog must enter limited mode on its own, not via forced native recovery)"
-  );
-  // The declared portal host must actually resolve to the internal portal address
-  // through the agent's local resolver during limited mode.
-  requireField(
-    Array.isArray(limitedDns.hosts) &&
-      limitedDns.hosts.some(
-        (host) =>
-          host?.resolvedThroughLocalDns === true &&
-          Array.isArray(host.addresses) &&
-          host.addresses.length > 0 &&
-          host?.isConfiguredPortalDomain === true
-      ),
-    `${LIMITED_DNS_FILE} must prove a configured captive-portal domain resolved to an address through local DNS`
-  );
-}
-
-// Contract for the post-auth side of the production escape.
-//
-// In production, once the user authenticated at the captive portal, the agent
-// stayed in its relaxed posture (the watchdog never closed portal mode), leaving
-// navigation fully unrestricted until logoff/reboot. The lab must therefore prove:
-// the gateway really switched to authenticated mode, the network stayed
-// production-faithful (open egress, portal host still resolvable only via the
-// network DNS), and the watchdog closed portal mode ON ITS OWN -- not via the
-// forced native reconcile, which runs afterwards as idempotent confirmation only.
-function requireAutonomousExitEvidence(result) {
-  requireField(
-    valueAt(result, 'gatewayAuthenticated.success') === true,
-    'gatewayAuthenticated.success (the browser login must have really opened the gateway)'
-  );
-  requireField(
-    result.postAuthExternalNetworkOpen === true,
-    'postAuthExternalNetworkOpen (post-auth the network must be open, as observed in production)'
-  );
-  requireField(
-    result.postAuthPortalHostStillNetworkOnly === true,
-    'postAuthPortalHostStillNetworkOnly (the portal host must remain resolvable only via the network DNS post-auth)'
-  );
-  requireField(
-    valueAt(result, 'autonomousExit.exitedProtected') === true,
-    'autonomousExit.exitedProtected (the watchdog must close portal mode on its own after authentication)'
-  );
-  requireField(
-    result.protectedModeExitedVia === 'autonomous-watchdog-close',
-    "protectedModeExitedVia must be 'autonomous-watchdog-close' (exit must not depend on a forced native reconcile)"
-  );
-  requireField(
-    result.postAuthMarkerCleared === true,
-    'postAuthMarkerCleared (no captive-portal marker may survive the authenticated exit)'
-  );
-}
-
-// Permanent split DNS: the declared portal host must already resolve through the
-// local resolver in NORMAL protected mode (no captive-portal marker), while the
-// whitelist default-block still holds. This is the stateless replacement for the
-// limited-mode lifecycle; a lab that only proves limited-mode resolution would
-// let the mode machinery regress silently.
+// Permanent split DNS (Stage C2): the declared portal host must already resolve
+// through the local resolver in NORMAL protected mode with the watchdog ENABLED
+// and the captive-portal marker NEVER appearing across N watchdog cycles, while
+// the whitelist default-block still holds.
 function requireSplitDnsProtectedEvidence(result) {
   requireField(
     valueAt(result, 'splitDnsProtected.portalResolvesInProtectedMode') === true,
     'splitDnsProtected.portalResolvesInProtectedMode (declared portal host must resolve in protected mode via split DNS)'
   );
   requireField(
-    valueAt(result, 'splitDnsProtected.markerAbsentDuringSplitCheck') === true,
-    'splitDnsProtected.markerAbsentDuringSplitCheck (split-DNS resolution must not depend on any portal mode)'
+    valueAt(result, 'splitDnsProtected.markerNeverPresent') === true,
+    'splitDnsProtected.markerNeverPresent (split-DNS suppression must prevent the marker from appearing across all watchdog cycles)'
   );
   requireField(
     valueAt(result, 'splitDnsProtected.blockedDomainStillBlocked') === true,
@@ -234,6 +138,10 @@ function requireSplitDnsProtectedEvidence(result) {
   requireField(
     valueAt(result, 'splitDnsProtected.splitTopologyActive') === true,
     'splitDnsProtected.splitTopologyActive (network DNS on the third upstream, public resolver still primary -- proves split DNS, not limited mode)'
+  );
+  requireField(
+    result.postAuthMarkerNeverPresent === true,
+    'postAuthMarkerNeverPresent (no captive-portal marker may appear at any point during the captive->authenticate->post cycle)'
   );
 }
 
@@ -272,11 +180,6 @@ export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab
     ['success', true],
     ['evidenceLevel', 'wedu-lab-direct-runner'],
     ['labNetwork.labNetworkVerified', true],
-    ['nativeRecovery.success', true],
-    ['nativeRecovery.portalModeActive', true],
-    ['nativeRecovery.recoveryHostsApplied', true],
-    ['nativeReconcile.success', true],
-    ['nativeReconcile.protectedModeRestored', true],
     ['openPathProtectionAfter.protectedModeRestored', true],
   ]) {
     requireResultField(result, path, expected);
@@ -292,38 +195,10 @@ export function assertWeduCaptivePortalResult({ artifactDir, evidenceMode = 'lab
     result.browserAfterAuthPath === TARGET_AFTER_FILE,
     `browserAfterAuthPath == ${TARGET_AFTER_FILE}`
   );
-  requireResultField(result, 'activeMarkerMode', 'limited');
-  requireResultField(result, 'limitedModeReady', true);
   requireField(result.fallbackMode !== 'passthrough', 'fallbackMode not passthrough');
-  requireNonEmptyArray(result.bootstrapHosts, 'bootstrapHosts non-empty');
-  requireResultField(result, 'limitedDns.success', true);
-  requireResultField(result, 'nativeRecovery.limitedModeReady', true);
 
-  const limitedDns = readJson(join(artifactDir, LIMITED_DNS_FILE));
-  requireField(limitedDns.success === true, `${LIMITED_DNS_FILE} success`);
-  requireField(limitedDns.server === '127.0.0.1', `${LIMITED_DNS_FILE} server`);
-  requireField(
-    Array.isArray(limitedDns.hosts) &&
-      limitedDns.hosts.length > 0 &&
-      limitedDns.hosts.every((host) => host?.resolvedThroughLocalDns === true),
-    `${LIMITED_DNS_FILE} hosts resolved through local DNS`
-  );
-
-  // Force the lab to reproduce the real production failure mode (see function doc).
-  requireNetworkDnsDiscoveryEvidence(result, limitedDns);
-
-  // And the post-auth half of it: the autonomous exit back to enforcement.
-  requireAutonomousExitEvidence(result);
+  // Stage C2: split DNS suppresses autonomous portal-mode entry.
   requireSplitDnsProtectedEvidence(result);
-
-  const browserLimited = readJson(join(artifactDir, LIMITED_BROWSER_FILE));
-  const limitedProbe = browserLimitedProbe(browserLimited);
-  requireField(limitedProbe.portalReady === true, `${LIMITED_BROWSER_FILE} portalReady`);
-  requireField(limitedProbe.loginSubmitted === true, `${LIMITED_BROWSER_FILE} loginSubmitted`);
-  requireField(
-    browserLimited.limitedModeReady === true || result.limitedModeReady === true,
-    `${LIMITED_BROWSER_FILE} limitedModeReady`
-  );
 
   const browserAfter = readJson(join(artifactDir, TARGET_AFTER_FILE));
   const postAuthDns = readJson(join(artifactDir, POST_AUTH_DNS_FILE));

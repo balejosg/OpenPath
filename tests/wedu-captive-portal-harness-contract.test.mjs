@@ -16,42 +16,26 @@ function sourceBetween(content, startMarker, endMarker) {
   return content.slice(start, end);
 }
 
-test('WEDU native recovery relies on declared config, not pre-injected recovery hosts', () => {
-  const invocation = harness.match(
-    /\$nativeRecovery = Invoke-NativeHostAction -Message @\{[\s\S]*?source = 'wedu-lab-captive'[\s\S]*?\}/
-  );
-
-  assert.ok(invocation, 'wedu-lab-captive native recovery invocation exists');
-  assert.match(invocation[0], /triggerHost = \$script:WeduHost/);
-  // Recovery hosts must come from the declared captivePortalDomains in the runner
-  // config (the production path), never from a harness-injected host list.
-  assert.doesNotMatch(invocation[0], /portalRecoveryHosts/);
-  assert.match(harness, /captivePortalDomains/);
-});
-
-test('WEDU lab proves the autonomous post-auth exit before the native reconcile confirmation', () => {
-  assert.match(harness, /function Invoke-WeduWatchdogUntilProtectedRestored/);
+test('WEDU lab proves the watchdog never enters captive-portal mode under split DNS', () => {
+  // Stage C2: the agent suppresses autonomous limited/passthrough entry when
+  // permanent split DNS is active. The harness must prove this by running the
+  // watchdog N times and asserting the marker never appears.
+  assert.match(harness, /function Invoke-WeduSplitDnsProtectedCheck/);
   // Authentication must remain the browser login (production-faithful); the
   // harness must never flip the gateway through the control endpoint.
   assert.doesNotMatch(harness, /Invoke-GatewayControl[\s\S]*gateway-authenticated/);
   assert.match(harness, /via = 'browser-login'/);
 
-  const exitCallIndex = harness.indexOf(
-    '$autonomousExit = Invoke-WeduWatchdogUntilProtectedRestored'
-  );
-  const reconcileCallIndex = harness.indexOf('$nativeReconcile = Invoke-NativeHostAction');
-  assert.ok(exitCallIndex !== -1, 'autonomous exit phase exists');
-  assert.ok(reconcileCallIndex !== -1, 'native reconcile confirmation exists');
-  assert.ok(
-    exitCallIndex < reconcileCallIndex,
-    'the watchdog-driven exit must run BEFORE the native reconcile, so the reconcile is confirmation only'
-  );
+  // Obsolete functions must not be present.
+  assert.doesNotMatch(harness, /function Invoke-WeduWatchdogUntilLimited/);
+  assert.doesNotMatch(harness, /function Invoke-WeduWatchdogUntilProtectedRestored/);
 
   const successExpression = harness.match(/\$success\s*=\s*\[bool\]\(([\s\S]*?)\n\s*\)/)?.[1] ?? '';
-  assert.match(successExpression, /\$autonomousExit\.exitedProtected/);
-  assert.match(successExpression, /\$protectedModeExitedVia -eq 'autonomous-watchdog-close'/);
-  assert.match(successExpression, /\$postAuthMarkerCleared/);
-  assert.match(successExpression, /postAuthPortalHostStillNetworkOnly/);
+  assert.match(successExpression, /splitDnsProtected\.markerNeverPresent/);
+  assert.match(successExpression, /postAuthMarkerNeverPresent/);
+  assert.doesNotMatch(successExpression, /autonomousExit/);
+  assert.doesNotMatch(successExpression, /limitedModeReady/);
+  assert.doesNotMatch(successExpression, /activeMarkerMode/);
 });
 
 test('WEDU network assertion accepts lab DNS through local Acrylic resolver', () => {
@@ -75,17 +59,11 @@ test('WEDU network assertion accepts lab DNS through local Acrylic resolver', ()
 test('WEDU lab proves split-DNS protected resolution before any portal-mode phase', () => {
   assert.match(harness, /function Invoke-WeduSplitDnsProtectedCheck/);
   const splitCallIndex = harness.indexOf('$splitDnsProtected = Invoke-WeduSplitDnsProtectedCheck');
-  const limitedEntryIndex = harness.indexOf('$autonomous = Invoke-WeduWatchdogUntilLimited');
   assert.ok(splitCallIndex !== -1, 'split-DNS protected check exists');
-  assert.ok(limitedEntryIndex !== -1, 'autonomous limited entry exists');
-  assert.ok(
-    splitCallIndex < limitedEntryIndex,
-    'split-DNS protected resolution must be proven BEFORE the limited-mode lifecycle phases'
-  );
 
   const successExpression = harness.match(/\$success\s*=\s*\[bool\]\(([\s\S]*?)\n\s*\)/)?.[1] ?? '';
   assert.match(successExpression, /splitDnsProtected\.portalResolvesInProtectedMode/);
-  assert.match(successExpression, /splitDnsProtected\.markerAbsentDuringSplitCheck/);
+  assert.match(successExpression, /splitDnsProtected\.markerNeverPresent/);
 });
 
 test('captive portal evidence contract keeps discovery diagnostic-only', () => {
