@@ -8,6 +8,58 @@ function Test-AdminPrivileges {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Invoke-OpenPathLogRotation {
+    <#
+    .SYNOPSIS
+        Rotates openpath.log when it exceeds the configured size threshold.
+        Shifts existing numbered archives up and drops any beyond the keep count.
+        Rotation failure is non-fatal: the caller falls back to appending.
+    .PARAMETER LogPath
+        Full path to the active log file (e.g. C:\OpenPath\data\logs\openpath.log).
+    .PARAMETER MaxSizeBytes
+        Rotate when the log file exceeds this size in bytes.
+    .PARAMETER KeepFiles
+        Number of rotated archives to retain (oldest are deleted).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LogPath,
+
+        [Parameter(Mandatory = $true)]
+        [long]$MaxSizeBytes,
+
+        [Parameter(Mandatory = $true)]
+        [int]$KeepFiles
+    )
+
+    if (-not (Test-Path $LogPath)) {
+        return
+    }
+
+    $fileInfo = Get-Item $LogPath -ErrorAction SilentlyContinue
+    if (-not $fileInfo -or $fileInfo.Length -le $MaxSizeBytes) {
+        return
+    }
+
+    # Shift archives: openpath.log.N -> openpath.log.N+1 (the move onto .KeepFiles overwrites the oldest)
+    for ($i = $KeepFiles - 1; $i -ge 1; $i--) {
+        $src = "$LogPath.$i"
+        $dst = "$LogPath.$($i + 1)"
+        if (Test-Path $src) {
+            Move-Item $src $dst -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Remove the overflow archive if it slipped through
+    $overflow = "$LogPath.$($KeepFiles + 1)"
+    if (Test-Path $overflow) {
+        Remove-Item $overflow -Force -ErrorAction SilentlyContinue
+    }
+
+    # Rotate active log to .1
+    Move-Item $LogPath "$LogPath.1" -Force -ErrorAction SilentlyContinue
+}
+
 function Write-OpenPathLog {
     <#
     .SYNOPSIS
@@ -44,14 +96,20 @@ function Write-OpenPathLog {
         New-Item -ItemType Directory -Path $logDir -Force | Out-Null
     }
 
-    # Rotate log if it exceeds 5 MB
-    $script:MaxLogSizeBytes = 5MB
-    if ((Test-Path $script:LogPath) -and (Get-Item $script:LogPath -ErrorAction SilentlyContinue).Length -gt $script:MaxLogSizeBytes) {
-        $archivePath = $script:LogPath -replace '\.log$', ".$(Get-Date -Format 'yyyyMMddHHmmss').log"
-        Move-Item $script:LogPath $archivePath -Force -ErrorAction SilentlyContinue
-        Get-ChildItem (Split-Path $script:LogPath) -Filter "openpath.*.log" -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 |
-            Remove-Item -Force -ErrorAction SilentlyContinue
+    # Rotate log if it exceeds the configured size threshold (non-fatal)
+    try {
+        $config = $null
+        if (Test-Path $script:ConfigPath) {
+            $config = Get-Content $script:ConfigPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+        }
+        $maxSizeMb = [int](Get-OpenPathConfigValue -Config $config -Name 'logMaxSizeMb' -DefaultValue 5)
+        $keepFiles = [int](Get-OpenPathConfigValue -Config $config -Name 'logKeepFiles' -DefaultValue 3)
+        if ($maxSizeMb -lt 1) { $maxSizeMb = 5 }
+        if ($keepFiles -lt 1) { $keepFiles = 3 }
+        Invoke-OpenPathLogRotation -LogPath $script:LogPath -MaxSizeBytes ($maxSizeMb * 1MB) -KeepFiles $keepFiles
+    }
+    catch {
+        # Rotation failure must never break logging.
     }
 
     $logBytes = [System.Text.Encoding]::UTF8.GetBytes("$logEntry$([Environment]::NewLine)")

@@ -175,6 +175,129 @@ Describe "Common Module" {
         }
     }
 
+    Context "Write-OpenPathLog rotation" {
+        # Each test gets an isolated temp directory to avoid cross-test interference.
+
+        It "Rotates the log when it exceeds the size threshold" {
+            $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("op-log-rot-" + [Guid]::NewGuid())
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+            try {
+                InModuleScope Common -Parameters @{ TempDir = $tempDir } {
+                    $script:LogPath = Join-Path $TempDir 'openpath.log'
+                    $script:ConfigPath = Join-Path $TempDir 'config.json'
+
+                    # Write a log file that already exceeds 1 MB threshold
+                    $bigContent = 'x' * (2 * 1024 * 1024)   # 2 MB
+                    [System.IO.File]::WriteAllText($script:LogPath, $bigContent)
+
+                    # Config: 1 MB threshold, keep 3
+                    @{ logMaxSizeMb = 1; logKeepFiles = 3 } | ConvertTo-Json | Set-Content $script:ConfigPath -Encoding UTF8
+
+                    Write-OpenPathLog -Message 'rotation trigger' -Level INFO
+
+                    # The active log should now be smaller than the big pre-rotation content
+                    (Get-Item $script:LogPath).Length | Should -BeLessThan (2 * 1024 * 1024)
+                    # The first archive must exist
+                    Test-Path "$($script:LogPath).1" | Should -BeTrue
+                }
+            }
+            finally {
+                Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Respects keep-count: drops archives beyond the configured limit" {
+            $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("op-log-keep-" + [Guid]::NewGuid())
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+            try {
+                InModuleScope Common -Parameters @{ TempDir = $tempDir } {
+                    $script:LogPath = Join-Path $TempDir 'openpath.log'
+                    $script:ConfigPath = Join-Path $TempDir 'config.json'
+
+                    # Pre-seed archives .1 .2 .3 (at the keep limit of 3)
+                    @(1, 2, 3) | ForEach-Object {
+                        [System.IO.File]::WriteAllText("$($script:LogPath).$_", "archive $_")
+                    }
+
+                    # Trigger rotation: write a 2 MB log, threshold is 1 MB
+                    $bigContent = 'x' * (2 * 1024 * 1024)
+                    [System.IO.File]::WriteAllText($script:LogPath, $bigContent)
+                    @{ logMaxSizeMb = 1; logKeepFiles = 3 } | ConvertTo-Json | Set-Content $script:ConfigPath -Encoding UTF8
+
+                    Write-OpenPathLog -Message 'keep-count test' -Level INFO
+
+                    # .1 must exist (the just-rotated log)
+                    Test-Path "$($script:LogPath).1" | Should -BeTrue
+                    # Archives beyond keep-count must not exist
+                    Test-Path "$($script:LogPath).4" | Should -BeFalse
+                }
+            }
+            finally {
+                Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Does not lose the log line when rotation fails mid-race" {
+            $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("op-log-race-" + [Guid]::NewGuid())
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+            try {
+                InModuleScope Common -Parameters @{ TempDir = $tempDir } {
+                    $script:LogPath = Join-Path $TempDir 'openpath.log'
+                    $script:ConfigPath = Join-Path $TempDir 'config.json'
+
+                    # Simulate rotation already happened (active log gone) before our call.
+                    # Invoke-OpenPathLogRotation with a missing file is a no-op; the write
+                    # must still create and populate the active log.
+                    @{ logMaxSizeMb = 1; logKeepFiles = 3 } | ConvertTo-Json | Set-Content $script:ConfigPath -Encoding UTF8
+                    # Do NOT create $script:LogPath -- simulates post-rotation state.
+
+                    Write-OpenPathLog -Message 'race-tolerance check' -Level INFO
+
+                    Test-Path $script:LogPath | Should -BeTrue
+                    $written = Get-Content $script:LogPath -Raw
+                    $written | Should -Match 'race-tolerance check'
+                }
+            }
+            finally {
+                Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Invoke-OpenPathLogRotation helper shifts archives in numbered order" {
+            $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("op-log-shift-" + [Guid]::NewGuid())
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+            try {
+                InModuleScope Common -Parameters @{ TempDir = $tempDir } {
+                    $logPath = Join-Path $TempDir 'openpath.log'
+
+                    # Write a 2 MB log and seed .1 and .2 archives
+                    $bigContent = 'x' * (2 * 1024 * 1024)
+                    [System.IO.File]::WriteAllText($logPath, $bigContent)
+                    [System.IO.File]::WriteAllText("$logPath.1", 'old-1')
+                    [System.IO.File]::WriteAllText("$logPath.2", 'old-2')
+
+                    Invoke-OpenPathLogRotation -LogPath $logPath -MaxSizeBytes (1MB) -KeepFiles 3
+
+                    # Active log moved to .1, old .1 -> .2, old .2 -> .3
+                    Test-Path $logPath      | Should -BeFalse
+                    Test-Path "$logPath.1"  | Should -BeTrue
+                    Test-Path "$logPath.2"  | Should -BeTrue
+                    Test-Path "$logPath.3"  | Should -BeTrue
+                    # Content of new .2 is what was in .1
+                    Get-Content "$logPath.2" -Raw | Should -Be 'old-1'
+                    Get-Content "$logPath.3" -Raw | Should -Be 'old-2'
+                }
+            }
+            finally {
+                Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     Context "Get-PrimaryDNS" {
         It "Returns a valid IP address string" {
             $dns = InModuleScope Common {

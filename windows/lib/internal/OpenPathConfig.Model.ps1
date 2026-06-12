@@ -72,6 +72,17 @@ function ConvertTo-OpenPathNormalizedConfig {
         Set-OpenPathConfigValue -Config $normalized -Name $stringProperty -Value $value.Trim()
     }
 
+    # Log rotation defaults: 5 MB threshold, keep 3 archives
+    $logMaxSizeMb = Get-OpenPathConfigValue -Config $normalized -Name 'logMaxSizeMb' -DefaultValue 5
+    $logMaxSizeMb = try { [int]$logMaxSizeMb } catch { 5 }
+    if ($logMaxSizeMb -lt 1) { $logMaxSizeMb = 5 }
+    Set-OpenPathConfigValue -Config $normalized -Name 'logMaxSizeMb' -Value $logMaxSizeMb
+
+    $logKeepFiles = Get-OpenPathConfigValue -Config $normalized -Name 'logKeepFiles' -DefaultValue 3
+    $logKeepFiles = try { [int]$logKeepFiles } catch { 3 }
+    if ($logKeepFiles -lt 1) { $logKeepFiles = 3 }
+    Set-OpenPathConfigValue -Config $normalized -Name 'logKeepFiles' -Value $logKeepFiles
+
     return $normalized
 }
 
