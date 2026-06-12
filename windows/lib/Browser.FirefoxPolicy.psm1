@@ -6,26 +6,50 @@ Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Common.psm1" -Force -ErrorAction Stop
 
 function Get-OpenPathFirefoxExtensionRoot {
+    <#
+    .SYNOPSIS
+    Returns the local path where the unsigned Firefox extension bundle is stored.
+    #>
     return "$script:OpenPathRoot\browser-extension\firefox"
 }
 
 function Get-OpenPathFirefoxReleaseMetadataPath {
+    <#
+    .SYNOPSIS
+    Returns the local path to the staged Firefox release extension metadata file.
+    #>
     return "$script:OpenPathRoot\browser-extension\firefox-release\metadata.json"
 }
 
 function Get-OpenPathFirefoxReleaseXpiPath {
+    <#
+    .SYNOPSIS
+    Returns the local path to the staged signed Firefox extension XPI file.
+    #>
     return "$script:OpenPathRoot\browser-extension\firefox-release\openpath-firefox-extension.xpi"
 }
 
 function Get-OpenPathDefaultFirefoxExtensionId {
+    <#
+    .SYNOPSIS
+    Returns the well-known fallback extension ID used when no metadata is available.
+    #>
     return 'openpath-block-monitor@openpath'
 }
 
 function Get-OpenPathFirefoxMachinePolicyRegistryPath {
+    <#
+    .SYNOPSIS
+    Returns the registry path where Firefox machine-level managed policies are stored.
+    #>
     return 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
 }
 
 function ConvertFrom-OpenPathFirefoxMachineExtensionSettings {
+    <#
+    .SYNOPSIS
+    Parses the Firefox machine ExtensionSettings registry multi-string value into an ordered dictionary.
+    #>
     param(
         [AllowNull()]
         [object]$Value
@@ -52,6 +76,10 @@ function ConvertFrom-OpenPathFirefoxMachineExtensionSettings {
 }
 
 function Get-OpenPathFirefoxMachineExtensionSettings {
+    <#
+    .SYNOPSIS
+    Reads and parses the Firefox machine ExtensionSettings registry value, returning an empty dictionary when absent.
+    #>
     $registryPath = Get-OpenPathFirefoxMachinePolicyRegistryPath
     try {
         $registryValue = Get-ItemProperty -Path $registryPath -Name 'ExtensionSettings' -ErrorAction Stop
@@ -63,6 +91,10 @@ function Get-OpenPathFirefoxMachineExtensionSettings {
 }
 
 function ConvertTo-OpenPathFirefoxMachineExtensionSettingsValue {
+    <#
+    .SYNOPSIS
+    Serializes an extension settings dictionary to the multi-string format expected by the registry.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [System.Collections.IDictionary]$Settings
@@ -77,6 +109,10 @@ function ConvertTo-OpenPathFirefoxMachineExtensionSettingsValue {
 }
 
 function Get-OpenPathConfiguredFirefoxManagedExtensionPolicy {
+    <#
+    .SYNOPSIS
+    Returns a managed extension policy from explicit config properties, or null when config is incomplete.
+    #>
     param(
         [AllowNull()]
         [object]$Config,
@@ -106,6 +142,10 @@ function Get-OpenPathConfiguredFirefoxManagedExtensionPolicy {
 }
 
 function Get-OpenPathFirefoxReleaseMetadata {
+    <#
+    .SYNOPSIS
+    Reads and parses the staged Firefox release extension metadata JSON file, returning null when absent or invalid.
+    #>
     $metadataPath = Get-OpenPathFirefoxReleaseMetadataPath
     if (-not (Test-Path $metadataPath)) {
         return $null
@@ -121,6 +161,10 @@ function Get-OpenPathFirefoxReleaseMetadata {
 }
 
 function Get-OpenPathFirefoxReleaseExtensionId {
+    <#
+    .SYNOPSIS
+    Extracts the extension ID string from a release metadata object, returning an empty string when absent.
+    #>
     param(
         [AllowNull()]
         [object]$Metadata
@@ -134,6 +178,10 @@ function Get-OpenPathFirefoxReleaseExtensionId {
 }
 
 function Get-OpenPathFirefoxReleaseMetadataVersion {
+    <#
+    .SYNOPSIS
+    Extracts the version string from a release metadata object, returning an empty string when absent.
+    #>
     param(
         [AllowNull()]
         [object]$Metadata
@@ -147,6 +195,13 @@ function Get-OpenPathFirefoxReleaseMetadataVersion {
 }
 
 function Add-OpenPathFirefoxManagedApiInstallUrlVersion {
+    <#
+    .SYNOPSIS
+    Appends or replaces the openpath_version query parameter on a managed API install URL using the metadata version.
+    .DESCRIPTION
+    Only modifies URLs that match the managed API path pattern. Non-matching URLs are returned unchanged.
+    If either the URL or version is empty the original URL is returned unchanged.
+    #>
     param(
         [AllowNull()]
         [string]$InstallUrl,
@@ -183,6 +238,14 @@ function Add-OpenPathFirefoxManagedApiInstallUrlVersion {
 }
 
 function Resolve-OpenPathFirefoxReleaseInstallSpec {
+    <#
+    .SYNOPSIS
+    Resolves the best available Firefox extension install source from config and local staged artifacts.
+    .DESCRIPTION
+    Prefers the managed API URL when both an API base URL and a local signed XPI are present.
+    Falls back to a local file URL if the XPI exists without an API base URL, then to the metadata
+    install URL. Returns null when no valid source can be resolved.
+    #>
     param(
         [AllowNull()]
         [object]$Config,
@@ -224,6 +287,10 @@ function Resolve-OpenPathFirefoxReleaseInstallSpec {
 }
 
 function Get-OpenPathFirefoxManagedExtensionPolicy {
+    <#
+    .SYNOPSIS
+    Resolves the effective Firefox managed extension policy from config and staged release artifacts.
+    #>
     param(
         [AllowNull()]
         [object]$Config = $null
@@ -270,6 +337,10 @@ function Get-OpenPathFirefoxManagedExtensionPolicy {
 }
 
 function Set-OpenPathFirefoxMachineExtensionPolicy {
+    <#
+    .SYNOPSIS
+    Writes or updates the Firefox machine ExtensionSettings registry entry for the managed extension.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -304,6 +375,10 @@ function Set-OpenPathFirefoxMachineExtensionPolicy {
 }
 
 function Test-OpenPathFirefoxMachineExtensionPolicy {
+    <#
+    .SYNOPSIS
+    Returns true when the live registry entry matches the expected extension ID, mode, and install URL.
+    #>
     param(
         [AllowNull()]
         [object]$ManagedExtensionPolicy = $null
@@ -334,6 +409,10 @@ function Test-OpenPathFirefoxMachineExtensionPolicy {
 }
 
 function New-OpenPathFirefoxManagedExtensionReadyResult {
+    <#
+    .SYNOPSIS
+    Constructs a standardized readiness result object for Firefox managed extension checks.
+    #>
     param(
         [bool]$Ready,
 
@@ -371,6 +450,10 @@ function New-OpenPathFirefoxManagedExtensionReadyResult {
 }
 
 function Resolve-OpenPathFirefoxReleaseExecutable {
+    <#
+    .SYNOPSIS
+    Returns the path to the installed Firefox Release executable, or an empty string when not found.
+    #>
     $candidates = @(
         "$env:ProgramFiles\Mozilla Firefox\firefox.exe",
         "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe"
@@ -386,6 +469,10 @@ function Resolve-OpenPathFirefoxReleaseExecutable {
 }
 
 function Get-OpenPathFirefoxProfileExtensionEvidence {
+    <#
+    .SYNOPSIS
+    Inspects a Firefox profile directory for evidence that the managed extension is installed and active.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$ProfilePath,
@@ -428,6 +515,14 @@ function Get-OpenPathFirefoxProfileExtensionEvidence {
 }
 
 function Invoke-OpenPathFirefoxManagedExtensionRuntimeProbe {
+    <#
+    .SYNOPSIS
+    Launches Firefox headless with a temporary profile and waits to confirm the managed extension is registered.
+    .DESCRIPTION
+    Creates an isolated temporary profile, starts Firefox headless, and polls for extension evidence up to
+    the specified timeout. The temporary profile and process are cleaned up in the finally block regardless
+    of the outcome.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$FirefoxPath,
@@ -501,6 +596,13 @@ function Invoke-OpenPathFirefoxManagedExtensionRuntimeProbe {
 }
 
 function Test-OpenPathFirefoxManagedExtensionReady {
+    <#
+    .SYNOPSIS
+    Checks whether the Firefox managed extension policy is fully configured and optionally verified at runtime.
+    .DESCRIPTION
+    Validates the machine registry policy and Firefox installation. When RequireRuntimeRegistration is set,
+    also launches a headless Firefox probe to confirm the extension is registered in a live profile.
+    #>
     param(
         [AllowNull()]
         [object]$Config = $null,
@@ -601,6 +703,12 @@ function Test-OpenPathFirefoxManagedExtensionReady {
 }
 
 function Remove-OpenPathFirefoxMachineExtensionPolicy {
+    <#
+    .SYNOPSIS
+    Removes the OpenPath extension entry from the Firefox machine ExtensionSettings registry value.
+    .DESCRIPTION
+    When the entry being removed was the last one, the entire ExtensionSettings registry value is deleted.
+    #>
     [CmdletBinding()]
     param(
         [AllowNull()]
@@ -644,6 +752,14 @@ function Remove-OpenPathFirefoxMachineExtensionPolicy {
 }
 
 function Sync-OpenPathFirefoxManagedExtensionPolicy {
+    <#
+    .SYNOPSIS
+    Writes the Firefox managed extension policy to both the machine registry and the distribution policies.json file.
+    .DESCRIPTION
+    Iterates over known Firefox installation directories. When a managed extension policy is resolved,
+    writes the force-install entry to each valid Firefox distribution directory and to the machine registry.
+    When no policy is resolved, removes stale policy files and logs a warning.
+    #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [AllowNull()]
