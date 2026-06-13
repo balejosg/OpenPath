@@ -36,18 +36,20 @@ activate_firewall() {
         iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT || critical_failed=1
     add_critical_rule "Allow DNS to localhost (TCP)" \
         iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 53 -j ACCEPT || critical_failed=1
-    add_critical_rule "Allow DNS to upstream $PRIMARY_DNS (UDP)" \
-        iptables -A OUTPUT -p udp -d "$PRIMARY_DNS" --dport 53 -j ACCEPT || critical_failed=1
-    add_critical_rule "Allow DNS to upstream $PRIMARY_DNS (TCP)" \
-        iptables -A OUTPUT -p tcp -d "$PRIMARY_DNS" --dport 53 -j ACCEPT || critical_failed=1
-
-    if [ -n "$gateway" ] && [ "$gateway" != "$PRIMARY_DNS" ]; then
-        add_optional_rule "Allow DNS to gateway $gateway (UDP)" \
-            iptables -A OUTPUT -p udp -d "$gateway" --dport 53 -j ACCEPT
-        add_optional_rule "Allow DNS to gateway $gateway (TCP)" \
-            iptables -A OUTPUT -p tcp -d "$gateway" --dport 53 -j ACCEPT
+    # Confine upstream :53 to the dnsmasq process so a student cannot query the
+    # upstream resolver directly (dig @<upstream>). The gateway:53 allow is
+    # intentionally gone (it let `dig @<gateway>` resolve unfiltered). Fall back
+    # to an unconfined allow if owner-match is unavailable so dnsmasq's own
+    # forwarding never breaks.
+    if ! apply_upstream_dns_owner_rule "$PRIMARY_DNS"; then
+        add_critical_rule "Allow DNS to upstream $PRIMARY_DNS (UDP)" \
+            iptables -A OUTPUT -p udp -d "$PRIMARY_DNS" --dport 53 -j ACCEPT || critical_failed=1
+        add_critical_rule "Allow DNS to upstream $PRIMARY_DNS (TCP)" \
+            iptables -A OUTPUT -p tcp -d "$PRIMARY_DNS" --dport 53 -j ACCEPT || critical_failed=1
     fi
 
+    add_important_rule "Log blocked external DNS attempts" \
+        iptables -A OUTPUT -p udp --dport 53 -m limit --limit 5/min -j LOG --log-prefix "OPENPATH-DNS-DROP "
     add_important_rule "Block external DNS (UDP)" \
         iptables -A OUTPUT -p udp --dport 53 -j DROP
     add_important_rule "Block external DNS (TCP)" \

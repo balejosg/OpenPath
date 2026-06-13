@@ -204,6 +204,44 @@ restore_forward_chain() {
     iptables -D FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
 }
 
+# Resolve the uid dnsmasq drops to, so upstream :53 can be confined to it.
+# Honors OPENPATH_DNSMASQ_UID (tests/operators), then a user= directive in the
+# generated config, then the conventional 'dnsmasq' account. Empty when it
+# cannot be resolved (caller leaves upstream :53 unconfined).
+resolve_dnsmasq_uid() {
+    if [ -n "${OPENPATH_DNSMASQ_UID:-}" ]; then
+        printf '%s' "$OPENPATH_DNSMASQ_UID"
+        return 0
+    fi
+    local user="dnsmasq" cfg_user=""
+    if [ -f "${DNSMASQ_CONF:-}" ]; then
+        cfg_user=$(grep -E '^[[:space:]]*user=' "$DNSMASQ_CONF" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '[:space:]')
+        [ -n "$cfg_user" ] && user="$cfg_user"
+    fi
+    id -u "$user" 2>/dev/null || true
+}
+
+# Allow upstream DNS :53 only from the dnsmasq process, so a student cannot query
+# the upstream resolver directly (dig @<upstream>) to get unfiltered answers; all
+# other :53 to the upstream falls through to the DROP rules. Returns 0 when the
+# owner-scoped rules were applied, 1 when owner-match is unavailable (caller must
+# fall back to an unconfined allow so dnsmasq's own forwarding never breaks).
+apply_upstream_dns_owner_rule() {
+    local upstream="$1"
+    local uid
+    uid=$(resolve_dnsmasq_uid)
+    [ -n "$uid" ] || { log_warn "dnsmasq uid unresolved - upstream :53 left unconfined"; return 1; }
+
+    if iptables -A OUTPUT -p udp -d "$upstream" --dport 53 -m owner --uid-owner "$uid" -j ACCEPT 2>/dev/null; then
+        iptables -A OUTPUT -p tcp -d "$upstream" --dport 53 -m owner --uid-owner "$uid" -j ACCEPT 2>/dev/null || true
+        log_debug "Upstream DNS :53 confined to dnsmasq uid $uid"
+        return 0
+    fi
+
+    log_warn "owner-match unavailable - upstream :53 left unconfined"
+    return 1
+}
+
 # DoH egress blocking: DROP tcp/udp :443 to known resolver IPs through an
 # ipset. Rules are port-scoped to 443, so dnsmasq's own upstream queries on
 # :53 (e.g. 8.8.8.8:53) stay reachable even though the upstream IP is in the

@@ -19,6 +19,9 @@ setup() {
     export OPENPATH_IPSET_STATE_FILE="$TEST_TMP_DIR/openpath-ipsets.v4"
     export OPENPATH_SYSCTL_D_DIR="$TEST_TMP_DIR/sysctl.d"
     mkdir -p "$OPENPATH_SYSCTL_D_DIR"
+    # Deterministic dnsmasq uid so upstream :53 owner-match is testable without
+    # depending on whether a 'dnsmasq' account exists on the test host.
+    export OPENPATH_DNSMASQ_UID="498"
 
     source "$PROJECT_DIR/linux/lib/common.sh"
 
@@ -271,17 +274,45 @@ source_firewall() {
 
 # ============== activate_firewall integration ==============
 
-@test "activate_firewall keeps dnsmasq upstream :53 reachable while blocking its :443" {
+@test "activate_firewall confines dnsmasq upstream :53 to the dnsmasq uid (owner-match)" {
     export PRIMARY_DNS="8.8.8.8"
     source_firewall
 
     activate_firewall
 
-    # Upstream DNS allow on :53 stays in place
-    grep -q "\-A OUTPUT \-p udp \-d 8.8.8.8 \-\-dport 53 \-j ACCEPT" "$IPTABLES_LOG"
-    grep -q "\-A OUTPUT \-p tcp \-d 8.8.8.8 \-\-dport 53 \-j ACCEPT" "$IPTABLES_LOG"
+    # Upstream :53 is reachable only from the dnsmasq process, not any user.
+    grep -q -- "-A OUTPUT -p udp -d 8.8.8.8 --dport 53 -m owner --uid-owner 498 -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -p tcp -d 8.8.8.8 --dport 53 -m owner --uid-owner 498 -j ACCEPT" "$IPTABLES_LOG"
+    # No unconfined upstream allow (a student could otherwise dig @8.8.8.8).
+    ! grep -q -- "-A OUTPUT -p udp -d 8.8.8.8 --dport 53 -j ACCEPT" "$IPTABLES_LOG"
     # The upstream IP still lands in the DoH block set (443-only)
     grep -q "add openpath-doh-block 8.8.8.8 -exist" "$IPSET_LOG"
+}
+
+@test "activate_firewall no longer allows DNS to the gateway and logs blocked DNS" {
+    export PRIMARY_DNS="8.8.8.8"
+    source_firewall
+
+    activate_firewall
+
+    # gateway is 192.168.1.1 (from the ip mock); its :53 allow must be gone.
+    ! grep -q -- "-A OUTPUT -p udp -d 192.168.1.1 --dport 53 -j ACCEPT" "$IPTABLES_LOG"
+    ! grep -q -- "-A OUTPUT -p tcp -d 192.168.1.1 --dport 53 -j ACCEPT" "$IPTABLES_LOG"
+    # Blocked DNS attempts are logged (rate-limited) before the DROP.
+    grep -q -- "-A OUTPUT -p udp --dport 53 -m limit --limit 5/min -j LOG --log-prefix OPENPATH-DNS-DROP " "$IPTABLES_LOG"
+}
+
+@test "apply_upstream_dns_owner_rule falls back to an unconfined allow when uid unresolved" {
+    unset OPENPATH_DNSMASQ_UID
+    id() { return 1; }
+    export -f id
+    source_firewall
+
+    run apply_upstream_dns_owner_rule "8.8.8.8"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"unconfined"* ]]
+    # No owner rule emitted; caller is expected to add the plain allow.
+    ! grep -q -- "--uid-owner" "$IPTABLES_LOG"
 }
 
 @test "activate_firewall places the DoH 443 DROP before the name-aware 443 ACCEPT" {

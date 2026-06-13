@@ -17,6 +17,8 @@ setup() {
     # Keep bridge-enforcement sysctl writes out of the real /etc/sysctl.d.
     export OPENPATH_SYSCTL_D_DIR="$TEST_TMP_DIR/sysctl.d"
     mkdir -p "$OPENPATH_SYSCTL_D_DIR"
+    # Deterministic dnsmasq uid for the upstream :53 owner-match.
+    export OPENPATH_DNSMASQ_UID="498"
 
     # Copy libs
     cp "$PROJECT_DIR/linux/lib/"*.sh "$INSTALL_DIR/lib/" 2>/dev/null || true
@@ -579,8 +581,8 @@ EOF
 
     activate_firewall
 
-    # Check upstream DNS is allowed
-    grep -q "\-d 8.8.8.8 \-\-dport 53 \-j ACCEPT" "$iptables_log"
+    # Upstream DNS is allowed only from the dnsmasq process (owner-match).
+    grep -q -- "-d 8.8.8.8 --dport 53 -m owner --uid-owner 498 -j ACCEPT" "$iptables_log"
 }
 
 @test "activate_firewall scopes HTTP/HTTPS to the name-aware allow set" {
@@ -679,8 +681,8 @@ EOF
 
     activate_firewall
 
-    # Should use fallback DNS
-    grep -q "\-d 1.1.1.1 \-\-dport 53 \-j ACCEPT" "$iptables_log"
+    # Should use fallback DNS (owner-confined upstream :53).
+    grep -q -- "-d 1.1.1.1 --dport 53 -m owner --uid-owner 498 -j ACCEPT" "$iptables_log"
 }
 
 # ============== Tests de deactivate_firewall ==============
