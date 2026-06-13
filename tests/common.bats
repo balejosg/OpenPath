@@ -541,3 +541,56 @@ EOF
     grep -q "/trpc/healthReports.submit" "$curl_log"
     grep -q "Authorization: Bearer token123" "$curl_log"
 }
+
+@test "send_health_report_to_api includes enforcement fields when firewall/whitelist age provided" {
+    local etc_dir="$TEST_TMP_DIR/etc/openpath"
+    local bin_dir="$TEST_TMP_DIR/bin"
+    local curl_log="$TEST_TMP_DIR/curl-enforce.log"
+
+    mkdir -p "$etc_dir" "$bin_dir"
+    HEALTH_API_URL_CONF="$etc_dir/health-api-url.conf"
+    echo "https://api.example.test" > "$HEALTH_API_URL_CONF"
+
+    cat > "$bin_dir/curl" << EOF
+#!/bin/bash
+echo "\$*" >> "$curl_log"
+exit 0
+EOF
+    chmod +x "$bin_dir/curl"
+    PATH="$bin_dir:$PATH"
+
+    run send_health_report_to_api "HEALTHY" "watchdog_ok" "true" "true" "0" "4.1.0" "active" "5"
+    [ "$status" -eq 0 ]
+
+    for _ in $(seq 1 20); do [ -f "$curl_log" ] && break; sleep 0.1; done
+    [ -f "$curl_log" ]
+    grep -q '"firewallState": true' "$curl_log"
+    grep -q '"whitelistAgeHours": 5' "$curl_log"
+}
+
+@test "send_health_report_to_api omits enforcement fields on a legacy 6-arg call" {
+    local etc_dir="$TEST_TMP_DIR/etc/openpath"
+    local bin_dir="$TEST_TMP_DIR/bin"
+    local curl_log="$TEST_TMP_DIR/curl-legacy.log"
+
+    mkdir -p "$etc_dir" "$bin_dir"
+    HEALTH_API_URL_CONF="$etc_dir/health-api-url.conf"
+    echo "https://api.example.test" > "$HEALTH_API_URL_CONF"
+
+    cat > "$bin_dir/curl" << EOF
+#!/bin/bash
+echo "\$*" >> "$curl_log"
+exit 0
+EOF
+    chmod +x "$bin_dir/curl"
+    PATH="$bin_dir:$PATH"
+
+    run send_health_report_to_api "HEALTHY" "watchdog_ok" "true" "true" "0" "4.1.0"
+    [ "$status" -eq 0 ]
+
+    for _ in $(seq 1 20); do [ -f "$curl_log" ] && break; sleep 0.1; done
+    [ -f "$curl_log" ]
+    # Unknown enforcement state must be omitted (server stores null, never false).
+    ! grep -q "firewallState" "$curl_log"
+    ! grep -q "whitelistAgeHours" "$curl_log"
+}

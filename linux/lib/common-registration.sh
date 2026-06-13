@@ -125,6 +125,12 @@ send_health_report_to_api() {
     local dns_resolving="${4:-false}"
     local fail_count="${5:-0}"
     local version="${6:-${VERSION:-unknown}}"
+    # Optional enforcement telemetry (positional so deployed 6-arg callers still
+    # work). firewall_state: active|inactive|"" (unknown). whitelist_age_hours:
+    # number or "" (unknown). Empty values are omitted from the payload so the
+    # server records null ("not reported"), never a false enforcement-down.
+    local firewall_state="${7:-}"
+    local whitelist_age_hours="${8:-}"
 
     if [ ! -f "$HEALTH_API_URL_CONF" ]; then
         log_debug "[HEALTH] No health API configured (create $HEALTH_API_URL_CONF)"
@@ -151,11 +157,11 @@ send_health_report_to_api() {
     # Canonical field names (v1.3+): agentVersion and platform are added alongside
     # the legacy version field so old API versions also accept the payload.
     payload=$(HN="$hostname" ST="$status" DR="$dnsmasq_running" DRE="$dns_resolving" \
-        FC="$fail_count" AC="$actions" VER="$version" python3 -c '
+        FC="$fail_count" AC="$actions" VER="$version" FW="$firewall_state" WA="$whitelist_age_hours" python3 -c '
 import json, os
 dr = os.environ["DR"] == "true"
 dre = os.environ["DRE"] == "true"
-print(json.dumps({"json": {
+report = {
     "hostname": os.environ["HN"],
     "status": os.environ["ST"],
     "dnsmasqRunning": dr,
@@ -165,8 +171,18 @@ print(json.dumps({"json": {
     "actions": os.environ["AC"],
     "version": os.environ["VER"],
     "agentVersion": os.environ["VER"],
-    "platform": "linux"
-}}))')
+    "platform": "linux",
+}
+fw = os.environ.get("FW", "")
+if fw in ("active", "inactive"):
+    report["firewallState"] = fw == "active"
+wa = os.environ.get("WA", "")
+if wa != "":
+    try:
+        report["whitelistAgeHours"] = float(wa)
+    except ValueError:
+        pass
+print(json.dumps({"json": report}))')
 
     if [ -n "$auth_token" ]; then
         timeout 5 curl -s -X POST "$api_url/trpc/healthReports.submit" \

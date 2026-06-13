@@ -413,16 +413,35 @@ EOF
     [ "$status" = "HEALTHY" ] || [ "$recovered_cycle" = true ]
 }
 
+# Whole hours since the whitelist cache was last written (empty when unknown),
+# so the server can flag a stale/never-applied whitelist.
+compute_whitelist_age_hours() {
+    local wl="${WHITELIST_FILE:-/var/lib/openpath/whitelist.txt}"
+    [ -f "$wl" ] || { echo ""; return 0; }
+    local mtime now
+    mtime=$(stat -c %Y "$wl" 2>/dev/null) || { echo ""; return 0; }
+    now=$(date +%s)
+    echo $(( (now - mtime) / 3600 ))
+}
+
 # Report health status to central monitoring API (using tRPC)
 report_health_to_api() {
     local status="$1"
     local actions="$2"
-    local dnsmasq_running dns_resolving fail_count
+    local dnsmasq_running dns_resolving fail_count firewall_state whitelist_age_hours
     dnsmasq_running=$(check_dnsmasq_running && echo "true" || echo "false")
     dns_resolving=$(check_dns_resolving && echo "true" || echo "false")
     fail_count=$(get_fail_count)
+    # Enforcement telemetry: firewall active|inactive (empty if unavailable so the
+    # server records null rather than a false enforcement-down), and whitelist age.
+    firewall_state=""
+    if declare -F check_firewall_status >/dev/null 2>&1; then
+        firewall_state=$(check_firewall_status 2>/dev/null || true)
+    fi
+    whitelist_age_hours=$(compute_whitelist_age_hours)
 
-    send_health_report_to_api "$status" "$actions" "$dnsmasq_running" "$dns_resolving" "$fail_count" "${VERSION:-1.0.4}"
+    send_health_report_to_api "$status" "$actions" "$dnsmasq_running" "$dns_resolving" \
+        "$fail_count" "${VERSION:-1.0.4}" "$firewall_state" "$whitelist_age_hours"
 }
 
 # Attempt rollback before entering fail-open mode
