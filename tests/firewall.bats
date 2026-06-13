@@ -651,7 +651,9 @@ EOF
 
     activate_firewall
 
-    # Check private network ranges allowed
+    # Check private network ranges allowed (default RFC1918_EGRESS_MODE=all emits
+    # the legacy blanket all-ports ACCEPT; restricted mode is covered in
+    # firewall-bypass.bats).
     grep -q "\-d 10.0.0.0/8 \-j ACCEPT" "$iptables_log"
     grep -q "\-d 172.16.0.0/12 \-j ACCEPT" "$iptables_log"
     grep -q "\-d 192.168.0.0/16 \-j ACCEPT" "$iptables_log"

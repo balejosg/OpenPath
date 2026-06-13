@@ -589,6 +589,7 @@ source_firewall() {
 # ============== RFC1918 knob + egress logging ==============
 
 @test "apply_rfc1918_egress_rules honors a custom RFC1918_ALLOW list" {
+    export RFC1918_EGRESS_MODE="all"
     export RFC1918_ALLOW="192.168.10.0/24, 10.1.2.0/24"
     source_firewall
 
@@ -600,12 +601,13 @@ source_firewall() {
     ! grep -q -- "-A OUTPUT -d 10.0.0.0/8 -j ACCEPT" "$IPTABLES_LOG"
 }
 
-@test "apply_rfc1918_egress_rules emits a blanket all-ports ACCEPT in default (all) mode" {
+@test "apply_rfc1918_egress_rules emits a blanket all-ports ACCEPT in all mode" {
+    export RFC1918_EGRESS_MODE="all"
     source_firewall
 
     apply_rfc1918_egress_rules
 
-    # Legacy default: every RFC1918 CIDR is ACCEPTed on all ports.
+    # all mode (legacy, opt-in): every RFC1918 CIDR is ACCEPTed on all ports.
     grep -q -- "-A OUTPUT -d 10.0.0.0/8 -j ACCEPT" "$IPTABLES_LOG"
     grep -q -- "-A OUTPUT -d 172.16.0.0/12 -j ACCEPT" "$IPTABLES_LOG"
     grep -q -- "-A OUTPUT -d 192.168.0.0/16 -j ACCEPT" "$IPTABLES_LOG"

@@ -184,13 +184,13 @@ apply_ntp_egress_rules() {
 # Intranet egress mode. "all" (default, legacy) ACCEPTs every RFC1918 CIDR on
 # ALL ports; that is a full tunnel through any LAN/USB-tethered box running a
 # proxy (a tethered phone presents a fresh RFC1918 interface). "restricted"
-# scopes the intranet ACCEPT to RFC1918_ALLOW_PORTS only (the minimal set a
-# local gateway/captive-portal flow legitimately needs), so a LAN proxy on an
-# arbitrary high port is no longer a tunnel. The secure mode is opt-in because
-# some deployments rely on broad LAN reachability (printers, file shares,
-# admin services); flip it on with OPENPATH_RFC1918_EGRESS_MODE=restricted once
-# the deployment's LAN needs are known. SECURITY: leaving this at "all" keeps
-# the tethered-proxy full-tunnel hole open -- prefer "restricted".
+# (RECOMMENDED, opt-in via defaults.conf / OPENPATH_RFC1918_EGRESS_MODE) scopes
+# the intranet ACCEPT to RFC1918_ALLOW_PORTS only (the minimal set a local
+# gateway/captive-portal flow legitimately needs), so a LAN proxy on an arbitrary
+# high port is no longer a tunnel. It is not the default because some deployments
+# reach services over RFC1918 on non-standard ports; widen RFC1918_ALLOW_PORTS to
+# fit, then enable. SECURITY: "all" leaves the tethered-proxy full-tunnel hole
+# open -- prefer "restricted" once the deployment's RFC1918 port needs are known.
 rfc1918_egress_mode() {
     printf '%s' "${RFC1918_EGRESS_MODE:-all}" | tr '[:upper:]' '[:lower:]'
 }
