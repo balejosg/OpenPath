@@ -1,5 +1,20 @@
 #!/bin/bash
 
+# Forward a domain to the upstream resolver and, when name-aware egress is
+# enabled, register its resolved IPs into the firewall allow ipset
+# (openpath-allow-dst) via dnsmasq's ipset= directive, so the host can actually
+# connect to them on 80/443. Mirrors apply_http_egress_rules
+# (firewall-rule-helpers.sh). Self-contained: falls back to the default set name
+# when firewall-rule-helpers.sh is not sourced.
+emit_dnsmasq_allow_domain() {
+    local domain="$1" upstream="$2" conf="$3"
+    printf 'server=/%s/%s\n' "$domain" "$upstream" >> "$conf"
+    case "$(printf '%s' "${ALLOW_SET_EGRESS_ENABLED:-1}" | tr '[:upper:]' '[:lower:]')" in
+        0 | false | no | off | disabled) ;;
+        *) printf 'ipset=/%s/%s\n' "$domain" "${OPENPATH_ALLOW_DST_IPSET:-openpath-allow-dst}" >> "$conf" ;;
+    esac
+}
+
 # Write a temporary dnsmasq config that forwards all queries upstream.
 # Used for captive portal authentication (fail-open DNS passthrough).
 # Args:
@@ -63,7 +78,7 @@ EOF
     local protected_domain
     while IFS= read -r protected_domain; do
         [ -z "$protected_domain" ] && continue
-        printf 'server=/%s/%s\n' "$protected_domain" "$upstream_dns" >> "$temp_conf"
+        emit_dnsmasq_allow_domain "$protected_domain" "$upstream_dns" "$temp_conf"
     done < <(get_openpath_protected_domains)
 
     mv "$temp_conf" "$conf_path"
@@ -128,23 +143,30 @@ EOF
     local protected_domain
     while IFS= read -r protected_domain; do
         [ -z "$protected_domain" ] && continue
-        echo "server=/${protected_domain}/${upstream_dns}" >> "$temp_conf"
+        emit_dnsmasq_allow_domain "$protected_domain" "$upstream_dns" "$temp_conf"
     done < <(get_openpath_protected_domains)
 
-    cat >> "$temp_conf" << EOF
+    # Captive portal probes are reached over HTTP/80, so they must land in the
+    # egress allow set too (emit_dnsmasq_allow_domain adds the ipset= directive).
+    echo "" >> "$temp_conf"
+    echo "# Captive portal detection" >> "$temp_conf"
+    local captive_probe_domain
+    for captive_probe_domain in \
+        detectportal.firefox.com \
+        connectivity-check.ubuntu.com \
+        captive.apple.com \
+        www.msftconnecttest.com \
+        clients3.google.com; do
+        emit_dnsmasq_allow_domain "$captive_probe_domain" "$upstream_dns" "$temp_conf"
+    done
 
-# Captive portal detection
-server=/detectportal.firefox.com/${upstream_dns}
-server=/connectivity-check.ubuntu.com/${upstream_dns}
-server=/captive.apple.com/${upstream_dns}
-server=/www.msftconnecttest.com/${upstream_dns}
-server=/clients3.google.com/${upstream_dns}
-
-# NTP (time synchronization)
-server=/ntp.ubuntu.com/${upstream_dns}
-server=/time.google.com/${upstream_dns}
-
-EOF
+    echo "" >> "$temp_conf"
+    echo "# NTP (time synchronization)" >> "$temp_conf"
+    local ntp_domain
+    for ntp_domain in ntp.ubuntu.com time.google.com; do
+        emit_dnsmasq_allow_domain "$ntp_domain" "$upstream_dns" "$temp_conf"
+    done
+    echo "" >> "$temp_conf"
 
     {
         echo "# ============================================="
@@ -157,7 +179,7 @@ EOF
         if validate_domain "$domain"; then
             local safe_domain
             safe_domain=$(sanitize_domain "$domain")
-            echo "server=/${safe_domain}/${upstream_dns}" >> "$temp_conf"
+            emit_dnsmasq_allow_domain "$safe_domain" "$upstream_dns" "$temp_conf"
         else
             log_warn "Skipping invalid domain: $domain"
             invalid_count=$((invalid_count + 1))
@@ -185,7 +207,7 @@ EOF
             if validate_domain "$runtime_dependency_domain"; then
                 local safe_runtime_dependency_domain
                 safe_runtime_dependency_domain="$(sanitize_domain "$runtime_dependency_domain")"
-                echo "server=/${safe_runtime_dependency_domain}/${upstream_dns}" >> "$temp_conf"
+                emit_dnsmasq_allow_domain "$safe_runtime_dependency_domain" "$upstream_dns" "$temp_conf"
             else
                 log_warn "Skipping invalid runtime dependency domain: $runtime_dependency_domain"
             fi

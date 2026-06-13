@@ -574,14 +574,23 @@ EOF
     grep -q "\-d 8.8.8.8 \-\-dport 53 \-j ACCEPT" "$iptables_log"
 }
 
-@test "activate_firewall allows HTTP/HTTPS" {
+@test "activate_firewall scopes HTTP/HTTPS to the name-aware allow set" {
     local iptables_log="$TEST_TMP_DIR/iptables.log"
+    local ipset_log="$TEST_TMP_DIR/ipset.log"
 
     iptables() {
         echo "$*" >> "$iptables_log"
         return 0
     }
     export -f iptables
+
+    # Mock ipset so name-aware egress is active deterministically (command -v
+    # finds the function), instead of depending on whether the host has ipset.
+    ipset() {
+        echo "$*" >> "$ipset_log"
+        return 0
+    }
+    export -f ipset
 
     ip() {
         echo "default via 192.168.1.1 dev eth0"
@@ -598,9 +607,11 @@ EOF
 
     activate_firewall
 
-    # Check HTTP/HTTPS allowed
-    grep -q "\-\-dport 80 \-j ACCEPT" "$iptables_log"
-    grep -q "\-\-dport 443 \-j ACCEPT" "$iptables_log"
+    # HTTP/HTTPS are ACCEPTed only to resolved-whitelist IPs (openpath-allow-dst),
+    # not to any destination — the legacy broad ACCEPT was the name-blind hole.
+    grep -q -- "--dport 80 -m set --match-set openpath-allow-dst dst -j ACCEPT" "$iptables_log"
+    grep -q -- "--dport 443 -m set --match-set openpath-allow-dst dst -j ACCEPT" "$iptables_log"
+    ! grep -q -- "--dport 443 -j ACCEPT" "$iptables_log"
 }
 
 @test "activate_firewall allows private networks" {

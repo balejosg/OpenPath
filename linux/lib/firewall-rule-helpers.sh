@@ -59,6 +59,13 @@ add_optional_rule() {
 OPENPATH_DOH_BLOCK_IPSET="${OPENPATH_DOH_BLOCK_IPSET:-openpath-doh-block}"
 OPENPATH_IPSET_STATE_FILE="${OPENPATH_IPSET_STATE_FILE:-/etc/iptables/openpath-ipsets.v4}"
 
+# Name-aware egress allow set: dnsmasq adds the resolved IPs of whitelisted and
+# essential domains here (via ipset= directives in the generated config), and
+# the firewall scopes the 80/443 ACCEPT to this set instead of any destination.
+# See apply_http_egress_rules and emit_dnsmasq_allow_domain (dns-dnsmasq.sh).
+OPENPATH_ALLOW_DST_IPSET="${OPENPATH_ALLOW_DST_IPSET:-openpath-allow-dst}"
+OPENPATH_ALLOW_SET_TIMEOUT="${OPENPATH_ALLOW_SET_TIMEOUT:-600}"
+
 # IPv4 subset of the Windows Get-DefaultDohResolverIps catalog (the Linux
 # agent enforces IPv4 only; dnsmasq sinkholes IPv6 via address=/#/100::).
 openpath_default_doh_resolvers() {
@@ -89,6 +96,49 @@ vpn_block_enabled() { openpath_flag_enabled "${VPN_BLOCK_ENABLED:-1}"; }
 tor_block_enabled() { openpath_flag_enabled "${TOR_BLOCK_ENABLED:-1}"; }
 
 openpath_ipset_available() { command -v ipset >/dev/null 2>&1; }
+
+allow_set_egress_enabled() { openpath_flag_enabled "${ALLOW_SET_EGRESS_ENABLED:-1}"; }
+
+# Name-aware egress is in force only when enabled AND ipset is usable; callers
+# fall back to a broad 80/443 ACCEPT otherwise so connectivity is never lost on
+# kernels without ipset.
+allow_set_egress_active() {
+    allow_set_egress_enabled && openpath_ipset_available
+}
+
+# Create (idempotent) the egress allow ipset that dnsmasq populates with the
+# resolved IPs of whitelisted/essential domains. It must exist both before
+# dnsmasq loads its config (the ipset= directive does not create the set) and
+# before the match-set ACCEPT rule is inserted (iptables rejects a rule that
+# references a missing set). The timeout lets a recycled CDN IP that stops
+# resolving expire out of the set; -exist keeps live entries across re-activation.
+ensure_allow_dst_ipset() {
+    allow_set_egress_active || return 0
+    add_important_rule "Create egress allow ipset $OPENPATH_ALLOW_DST_IPSET" \
+        ipset create "$OPENPATH_ALLOW_DST_IPSET" hash:ip timeout "$OPENPATH_ALLOW_SET_TIMEOUT" -exist
+    return 0
+}
+
+# HTTP/HTTPS egress. When name-aware egress is active, scope the 80/443 ACCEPT to
+# the resolved-whitelist allow set so only IPs dnsmasq resolved for an allowed
+# domain are reachable (closes direct-IP, --resolve, self-hosted-DoH and
+# domain-fronting bypasses). Falls back to a broad ACCEPT when ipset is
+# unavailable or the feature is disabled.
+apply_http_egress_rules() {
+    if allow_set_egress_active; then
+        add_important_rule "Allow HTTP to resolved-whitelist IPs (port 80)" \
+            iptables -A OUTPUT -p tcp --dport 80 -m set --match-set "$OPENPATH_ALLOW_DST_IPSET" dst -j ACCEPT
+        add_important_rule "Allow HTTPS to resolved-whitelist IPs (port 443)" \
+            iptables -A OUTPUT -p tcp --dport 443 -m set --match-set "$OPENPATH_ALLOW_DST_IPSET" dst -j ACCEPT
+        return 0
+    fi
+
+    log_warn "Name-aware egress inactive (ipset unavailable or disabled) - allowing broad HTTP/HTTPS"
+    add_optional_rule "Allow HTTP (port 80)" \
+        iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
+    add_optional_rule "Allow HTTPS (port 443)" \
+        iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+}
 
 # DoH egress blocking: DROP tcp/udp :443 to known resolver IPs through an
 # ipset. Rules are port-scoped to 443, so dnsmasq's own upstream queries on

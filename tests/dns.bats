@@ -473,9 +473,62 @@ JSON
     BLOCKED_PATHS=()
     
     generate_dnsmasq_config
-    
+
     grep -q "server=/example.org/8.8.8.8" "$DNSMASQ_CONF"
     grep -q "server=/test.com/8.8.8.8" "$DNSMASQ_CONF"
+}
+
+@test "generate_dnsmasq_config emits ipset= allow directives for whitelist and captive probes" {
+    export DNSMASQ_CONF="$TEST_TMP_DIR/dnsmasq.d/url-whitelist.conf"
+    export PRIMARY_DNS="8.8.8.8"
+    export VERSION="3.5"
+    export LOG_FILE="$TEST_TMP_DIR/openpath.log"
+
+    mkdir -p "$(dirname "$DNSMASQ_CONF")"
+
+    log() { echo "$1"; }
+    export -f log
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    WHITELIST_DOMAINS=("example.org")
+    BLOCKED_SUBDOMAINS=()
+    BLOCKED_PATHS=()
+
+    generate_dnsmasq_config
+
+    # Whitelisted domain: both the upstream forward and the allow-set directive.
+    grep -q "server=/example.org/8.8.8.8" "$DNSMASQ_CONF"
+    grep -q "ipset=/example.org/openpath-allow-dst" "$DNSMASQ_CONF"
+    # Captive portal probes are reached over HTTP/80 and must also be in the set.
+    grep -q "ipset=/detectportal.firefox.com/openpath-allow-dst" "$DNSMASQ_CONF"
+}
+
+@test "generate_dnsmasq_config omits ipset= directives when name-aware egress disabled" {
+    export DNSMASQ_CONF="$TEST_TMP_DIR/dnsmasq.d/url-whitelist.conf"
+    export PRIMARY_DNS="8.8.8.8"
+    export VERSION="3.5"
+    export LOG_FILE="$TEST_TMP_DIR/openpath.log"
+    # Public override knob (defaults.conf maps OPENPATH_* -> internal var).
+    export OPENPATH_ALLOW_SET_EGRESS_ENABLED="0"
+
+    mkdir -p "$(dirname "$DNSMASQ_CONF")"
+
+    log() { echo "$1"; }
+    export -f log
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    WHITELIST_DOMAINS=("example.org")
+    BLOCKED_SUBDOMAINS=()
+    BLOCKED_PATHS=()
+
+    generate_dnsmasq_config
+
+    grep -q "server=/example.org/8.8.8.8" "$DNSMASQ_CONF"
+    ! grep -q "ipset=" "$DNSMASQ_CONF"
 }
 
 @test "generate_dnsmasq_config includes protected control-plane, Firefox, and bootstrap domains" {

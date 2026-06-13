@@ -266,14 +266,14 @@ source_firewall() {
     grep -q "add openpath-doh-block 8.8.8.8 -exist" "$IPSET_LOG"
 }
 
-@test "activate_firewall places the DoH 443 DROP before the generic 443 ACCEPT" {
+@test "activate_firewall places the DoH 443 DROP before the name-aware 443 ACCEPT" {
     source_firewall
 
     activate_firewall
 
     local drop_line accept_line
     drop_line=$(grep -n -- "--dport 443 -m set --match-set openpath-doh-block dst -j DROP" "$IPTABLES_LOG" | head -1 | cut -d: -f1)
-    accept_line=$(grep -n -- "--dport 443 -j ACCEPT" "$IPTABLES_LOG" | head -1 | cut -d: -f1)
+    accept_line=$(grep -n -- "--dport 443 -m set --match-set openpath-allow-dst dst -j ACCEPT" "$IPTABLES_LOG" | head -1 | cut -d: -f1)
 
     [ -n "$drop_line" ]
     [ -n "$accept_line" ]
@@ -311,6 +311,9 @@ source_firewall() {
     export DOH_BLOCK_ENABLED="0"
     export VPN_BLOCK_ENABLED="false"
     export TOR_BLOCK_ENABLED="no"
+    # Name-aware egress is a separate mechanism; disable it too so this test
+    # isolates the DoH/VPN/Tor switches (and keeps the no-ipset assertion below).
+    export ALLOW_SET_EGRESS_ENABLED="0"
     source_firewall
 
     activate_firewall
@@ -323,6 +326,77 @@ source_firewall() {
     # Core DNS enforcement is unaffected by the bypass switches
     grep -q "\-A OUTPUT \-p udp \-\-dport 53 \-j DROP" "$IPTABLES_LOG"
     grep -q "\-A OUTPUT \-j DROP" "$IPTABLES_LOG"
+}
+
+# ============== name-aware egress allow set ==============
+
+@test "ensure_allow_dst_ipset creates the allow set idempotently with a timeout" {
+    source_firewall
+
+    ensure_allow_dst_ipset
+    ensure_allow_dst_ipset
+
+    [ "$(grep -c "create openpath-allow-dst hash:ip timeout 600 -exist" "$IPSET_LOG")" -eq 2 ]
+}
+
+@test "ensure_allow_dst_ipset is a no-op when name-aware egress is disabled" {
+    export ALLOW_SET_EGRESS_ENABLED="0"
+    source_firewall
+
+    ensure_allow_dst_ipset
+
+    [ ! -f "$IPSET_LOG" ]
+}
+
+@test "apply_http_egress_rules scopes 80/443 to the allow set and omits the broad ACCEPT" {
+    source_firewall
+
+    apply_http_egress_rules
+
+    grep -q -- "-A OUTPUT -p tcp --dport 80 -m set --match-set openpath-allow-dst dst -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -p tcp --dport 443 -m set --match-set openpath-allow-dst dst -j ACCEPT" "$IPTABLES_LOG"
+    ! grep -q -- "-A OUTPUT -p tcp --dport 443 -j ACCEPT" "$IPTABLES_LOG"
+    ! grep -q -- "-A OUTPUT -p tcp --dport 80 -j ACCEPT" "$IPTABLES_LOG"
+}
+
+@test "activate_firewall scopes HTTP/HTTPS to the openpath-allow-dst set by default" {
+    source_firewall
+
+    activate_firewall
+
+    grep -q "create openpath-allow-dst hash:ip timeout 600 -exist" "$IPSET_LOG"
+    grep -q -- "-A OUTPUT -p tcp --dport 443 -m set --match-set openpath-allow-dst dst -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -p tcp --dport 80 -m set --match-set openpath-allow-dst dst -j ACCEPT" "$IPTABLES_LOG"
+    # The legacy broad HTTPS ACCEPT must be gone (that was the name-blind hole).
+    ! grep -q -- "-A OUTPUT -p tcp --dport 443 -j ACCEPT" "$IPTABLES_LOG"
+}
+
+@test "activate_firewall falls back to broad 80/443 ACCEPT when name-aware egress disabled" {
+    export ALLOW_SET_EGRESS_ENABLED="0"
+    source_firewall
+
+    activate_firewall
+
+    grep -q -- "-A OUTPUT -p tcp --dport 443 -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -p tcp --dport 80 -j ACCEPT" "$IPTABLES_LOG"
+    ! grep -q -- "--match-set openpath-allow-dst" "$IPTABLES_LOG"
+    ! grep -q "create openpath-allow-dst" "$IPSET_LOG"
+}
+
+@test "firewall_snapshot_has_allow_set_rule detects the name-aware ACCEPT and rejects the broad one" {
+    source_firewall
+
+    local with_set="-P OUTPUT ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 443 -m set --match-set openpath-allow-dst dst -j ACCEPT
+-A OUTPUT -j DROP"
+    firewall_snapshot_has_allow_set_rule "$with_set"
+
+    local broad_only="-P OUTPUT ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 443 -j ACCEPT
+-A OUTPUT -j DROP"
+    ! firewall_snapshot_has_allow_set_rule "$broad_only"
 }
 
 # ============== deactivate_firewall cleanup ==============

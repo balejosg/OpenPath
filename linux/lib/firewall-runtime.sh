@@ -57,14 +57,17 @@ activate_firewall() {
     apply_vpn_port_block_rules
     apply_tor_block_rules
 
+    # Name-aware egress: the allow set must exist before the match-set ACCEPT
+    # rule (iptables rejects a rule that references a missing set) and before
+    # dnsmasq loads its ipset= directives.
+    ensure_allow_dst_ipset
+
     add_optional_rule "Allow ICMP (ping)" \
         iptables -A OUTPUT -p icmp -j ACCEPT
     add_optional_rule "Allow DHCP (ports 67-68)" \
         iptables -A OUTPUT -p udp --dport 67:68 -j ACCEPT
-    add_optional_rule "Allow HTTP (port 80)" \
-        iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
-    add_optional_rule "Allow HTTPS (port 443)" \
-        iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+    # HTTP/HTTPS scoped to resolved-whitelist IPs (or broad ACCEPT as fallback).
+    apply_http_egress_rules
     add_optional_rule "Allow NTP (port 123)" \
         iptables -A OUTPUT -p udp --dport 123 -j ACCEPT
     add_optional_rule "Allow private network 10.0.0.0/8" \

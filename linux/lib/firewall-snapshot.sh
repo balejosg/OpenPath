@@ -96,6 +96,24 @@ firewall_snapshot_has_doh_block_rule() {
     printf '%s\n' "$snapshot" | grep -Eq -- 'DROP.*(match-set|dpt:443)'
 }
 
+# True when name-aware egress is active: a 443 ACCEPT scoped to the
+# openpath-allow-dst set (match-set ... dst). Distinguishes the name-aware rule
+# from the legacy broad "--dport 443 -j ACCEPT" fallback.
+firewall_snapshot_has_allow_set_rule() {
+    local snapshot="$1"
+    local allow_set="${OPENPATH_ALLOW_DST_IPSET:-openpath-allow-dst}"
+
+    if firewall_snapshot_is_canonical "$snapshot"; then
+        printf '%s\n' "$snapshot" \
+            | grep -E -- '^-A OUTPUT[[:space:]].*-j ACCEPT$' \
+            | grep -E -- '--dport 443([[:space:]]|$)' \
+            | grep -Eq -- "--match-set[[:space:]]+${allow_set}[[:space:]]+dst"
+        return $?
+    fi
+
+    printf '%s\n' "$snapshot" | grep -Eq -- "match-set ${allow_set} dst.*ACCEPT|ACCEPT.*match-set ${allow_set} dst"
+}
+
 # True when an interface-scoped VPN block rule (-o tun+/tap+/...) is present.
 # Only detectable from canonical `iptables -S` output; `iptables -L` without
 # -v omits interfaces.
