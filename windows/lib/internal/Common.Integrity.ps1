@@ -36,12 +36,30 @@ function Get-OpenPathCriticalFiles {
         "$script:OpenPathRoot\lib\internal\NativeHost.Actions.CaptivePortal.ps1",
         "$script:OpenPathRoot\lib\internal\NativeHost.Actions.MessageDispatch.ps1",
         "$script:OpenPathRoot\lib\internal\Watchdog.Runtime.ps1",
+        # W-5: WindowsRoot.ps1 is dot-sourced first by every SYSTEM-run script and module
+        # to resolve $OpenPathRoot. The native-messaging host and the install/bootstrap
+        # helpers are likewise dot-sourced under SYSTEM. Replacing any of them yields SYSTEM
+        # code execution, so they belong in the integrity baseline alongside the other
+        # SYSTEM-reachable scripts.
+        "$script:OpenPathRoot\lib\internal\WindowsRoot.ps1",
+        "$script:OpenPathRoot\scripts\OpenPath-NativeHost.ps1",
         "$script:OpenPathRoot\scripts\Update-OpenPath.ps1",
         "$script:OpenPathRoot\scripts\Test-DNSHealth.ps1",
         "$script:OpenPathRoot\scripts\Start-SSEListener.ps1",
         "$script:OpenPathRoot\scripts\Apply-RuntimeDependencyQueue.ps1",
         "$script:OpenPathRoot\scripts\Recover-CaptivePortal.ps1"
     )
+
+    # W-5: include the install/bootstrap helpers under lib\install (all dot-sourced by the
+    # SYSTEM-run installer). Enumerated dynamically so new install helpers are covered
+    # automatically; missing files are dropped by the Test-Path filter below.
+    $installDir = "$script:OpenPathRoot\lib\install"
+    if (Test-Path $installDir) {
+        $files += @(
+            Get-ChildItem -Path $installDir -Filter '*.ps1' -File -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.FullName }
+        )
+    }
 
     return $files | Where-Object { Test-Path $_ }
 }

@@ -63,6 +63,44 @@ describe('PS DateTime culture guard', () => {
     });
   });
 
+  // W-4: bare [DateTimeOffset]::Parse is just as locale-sensitive as [DateTime]::Parse.
+  test('bare [DateTimeOffset]::Parse without InvariantCulture is flagged (exit 1)', () => {
+    withTempDir((dir) => {
+      const ps1 = join(dir, 'bad-offset.ps1');
+      writeFileSync(
+        ps1,
+        ['    $x = ([DateTimeOffset]::Parse([string]$marker.expiresAt)).UtcDateTime'].join('\n'),
+        'utf8'
+      );
+
+      const result = runChecker([ps1]);
+      assert.equal(result.status, 1, `expected exit 1, stdout: ${result.stdout}`);
+      const combined = result.stdout + result.stderr;
+      assert.ok(
+        combined.includes('bad-offset.ps1'),
+        `output should name the offset file; got: ${combined}`
+      );
+    });
+  });
+
+  test('[DateTimeOffset]::Parse with InvariantCulture passes (exit 0)', () => {
+    withTempDir((dir) => {
+      const ps1 = join(dir, 'good-offset.ps1');
+      writeFileSync(
+        ps1,
+        [
+          '    $x = ([DateTimeOffset]::Parse([string]$marker.expiresAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)).UtcDateTime',
+          "    $y = [DateTimeOffset]::ParseExact($s, 'o', [CultureInfo]::InvariantCulture)",
+        ].join('\n'),
+        'utf8'
+      );
+
+      const result = runChecker([ps1]);
+      assert.equal(result.status, 0, `expected exit 0, stderr: ${result.stderr}`);
+      assert.match(result.stdout, /passed/i);
+    });
+  });
+
   test('ps-culture-allow exempted file passes (exit 0)', () => {
     withTempDir((dir) => {
       const ps1 = join(dir, 'allowed.ps1');

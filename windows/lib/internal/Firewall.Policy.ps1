@@ -107,6 +107,128 @@ function Get-OpenPathDnsEgressBlockRanges {
     return @($ranges)
 }
 
+function Get-OpenPathOutboundEgressFloorRules {
+    <#
+    .SYNOPSIS
+        W-1(b) SCAFFOLD (default-OFF): builds the rule shapes for a transport-level
+        outbound egress floor that denies arbitrary outbound 443 traffic except to a
+        supplied allow-list of resolved whitelist IPs and the system service set.
+    .DESCRIPTION
+        OpenPath enforcement is name-based (Acrylic + DNS firewall). With no transport
+        floor, any process that can open a socket (powershell, ftp, an Appx with its own
+        resolver, etc.) can connect to an arbitrary IP literal and spoof the Host header
+        to bypass the whitelist. The Linux agent already has a name-aware egress floor;
+        this is the Windows twin.
+
+        This helper is PURE: it returns rule descriptor objects (it does NOT call
+        New-NetFirewallRule), so the rule SHAPE is unit-testable here without a live
+        Windows firewall or a working dynamic IP-sync feed.
+
+        It deliberately does NOT set a machine-wide DefaultOutboundAction Block. Instead
+        it expresses default-deny as explicit Block rules over the IPv4 ranges NOT in the
+        allow-list (reusing Get-OpenPathDnsEgressBlockRanges range math) plus a wholesale
+        IPv6 :443 block, scoped to remote port 443. System service programs in
+        -SystemServicePrograms are emitted as higher-priority Allow rules so OS/agent
+        update, API, and time-sync paths keep working.
+
+        ENABLING THIS BY DEFAULT REQUIRES WEDU-LAB VALIDATION: the allow-IP set must be
+        kept in lock-step with the live Acrylic-resolved whitelist IPs, and the system
+        service allow-list must be proven complete, or the device loses its ability to
+        reach whitelisted sites and its own update/API/time-sync. Until that validation
+        exists, callers gate this behind the default-$false OutboundEgressFloorEnabled flag.
+    .PARAMETER AllowIps
+        IPv4 literals (each a /32) that outbound 443 is permitted to reach -- the
+        Acrylic-resolved whitelist IP set. IPv6 and non-IPv4 entries are ignored.
+    .PARAMETER SystemServicePrograms
+        Absolute program paths (e.g. the OpenPath agent, Windows Update, w32tm) that
+        must always be allowed outbound 443 regardless of the IP allow-list.
+    .PARAMETER RulePrefix
+        Display-name prefix for emitted rules; defaults to the module rule prefix.
+    .OUTPUTS
+        PSCustomObject[] -- rule descriptors with fields:
+        DisplayName, Direction, Protocol, RemoteAddress, RemotePort, Action, Profile,
+        Program (Allow rules only), Description.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string[]]$AllowIps = @(),
+        [AllowNull()]
+        [string[]]$SystemServicePrograms = @(),
+        [string]$RulePrefix = $script:RulePrefix
+    )
+
+    $rules = @()
+
+    # Higher-priority allow rules for trusted system/agent programs so update, API,
+    # and time-sync egress is never collateral-damaged by the floor.
+    foreach ($program in @($SystemServicePrograms | Where-Object { $_ })) {
+        $programId = ([System.IO.Path]::GetFileNameWithoutExtension([string]$program)) -replace '[^0-9A-Za-z]', '-'
+        $rules += [PSCustomObject]@{
+            DisplayName   = "$RulePrefix-Allow-EgressFloor-System-$programId-TCP443"
+            Direction     = 'Outbound'
+            Protocol      = 'TCP'
+            RemoteAddress = 'Any'
+            RemotePort    = 443
+            Action        = 'Allow'
+            Profile       = 'Any'
+            Program       = [string]$program
+            Description   = "Outbound egress floor: allow system/agent program $program to reach HTTPS for update/API/time-sync"
+        }
+    }
+
+    # Allow rules for each resolved whitelist IP (the name-aware allow-list).
+    $normalizedAllowIps = @(
+        $AllowIps |
+            ForEach-Object { ([string]$_).Trim() } |
+            Where-Object { (ConvertTo-OpenPathIPv4UInt32 -Address $_) -ne $null } |
+            Sort-Object -Unique
+    )
+    foreach ($allowIp in $normalizedAllowIps) {
+        $allowId = $allowIp -replace '[^0-9A-Za-z]', '-'
+        $rules += [PSCustomObject]@{
+            DisplayName   = "$RulePrefix-Allow-EgressFloor-Whitelist-$allowId-TCP443"
+            Direction     = 'Outbound'
+            Protocol      = 'TCP'
+            RemoteAddress = $allowIp
+            RemotePort    = 443
+            Action        = 'Allow'
+            Profile       = 'Any'
+            Description   = "Outbound egress floor: allow HTTPS to resolved whitelist IP $allowIp"
+        }
+    }
+
+    # Default-deny everything else on 443 (IPv4), expressed as Block over the ranges
+    # NOT in the allow-list. No machine-wide DefaultOutboundAction Block is set.
+    $blockRanges = @(Get-OpenPathDnsEgressBlockRanges -AllowIps $normalizedAllowIps)
+    if ($blockRanges.Count -gt 0) {
+        $rules += [PSCustomObject]@{
+            DisplayName   = "$RulePrefix-Block-EgressFloor-DefaultDeny-TCP443"
+            Direction     = 'Outbound'
+            Protocol      = 'TCP'
+            RemoteAddress = $blockRanges
+            RemotePort    = 443
+            Action        = 'Block'
+            Profile       = 'Any'
+            Description   = 'Outbound egress floor: default-deny HTTPS except resolved whitelist IPs and system services'
+        }
+    }
+
+    # IPv6 has no name-aware allow-list path here, so block 443 wholesale.
+    $rules += [PSCustomObject]@{
+        DisplayName   = "$RulePrefix-Block-EgressFloor-DefaultDeny6-TCP443"
+        Direction     = 'Outbound'
+        Protocol      = 'TCP'
+        RemoteAddress = '::/0'
+        RemotePort    = 443
+        Action        = 'Block'
+        Profile       = 'Any'
+        Description   = 'Outbound egress floor: default-deny IPv6 HTTPS'
+    }
+
+    return @($rules)
+}
+
 function Add-OpenPathCaptivePortalUpstreamFirewallAllow {
     <#
     .SYNOPSIS
@@ -193,6 +315,12 @@ function Set-OpenPathFirewall {
         $enableDohIpBlocking = $true
         $dnsEgressDefaultDeny = $true
         $blockInboundDns = $true
+        # W-1(b): transport-level outbound 443 egress floor. DEFAULT OFF. Enabling
+        # by default requires WEDU-lab validation of dynamic whitelist-IP sync and a
+        # proven-complete system-service allow-list; see Get-OpenPathOutboundEgressFloorRules.
+        $outboundEgressFloorEnabled = $false
+        $outboundEgressFloorAllowIps = @()
+        $outboundEgressFloorSystemPrograms = @()
         $dohResolvers = Get-DefaultDohResolverIps
         $resolverBypassClients = Get-DefaultResolverBypassClientPrograms
         $vpnPorts = Get-DefaultVpnBlockRules
@@ -211,6 +339,15 @@ function Set-OpenPathFirewall {
             }
             if ($config.PSObject.Properties['blockInboundDns']) {
                 $blockInboundDns = [bool]$config.blockInboundDns
+            }
+            if ($config.PSObject.Properties['outboundEgressFloorEnabled']) {
+                $outboundEgressFloorEnabled = [bool]$config.outboundEgressFloorEnabled
+            }
+            if ($config.PSObject.Properties['outboundEgressFloorAllowIps'] -and $config.outboundEgressFloorAllowIps) {
+                $outboundEgressFloorAllowIps = @($config.outboundEgressFloorAllowIps | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
+            }
+            if ($config.PSObject.Properties['outboundEgressFloorSystemPrograms'] -and $config.outboundEgressFloorSystemPrograms) {
+                $outboundEgressFloorSystemPrograms = @($config.outboundEgressFloorSystemPrograms | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
             }
             if ($config.PSObject.Properties['dohResolverIps'] -and $config.dohResolverIps) {
                 $configuredResolvers = @($config.dohResolverIps | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
@@ -404,6 +541,36 @@ function Set-OpenPathFirewall {
                     -Direction Inbound -Protocol $protocol -LocalPort 53 -Action Block -Profile Any `
                     -Description "Block inbound DNS over $protocol/53 so the host never answers LAN or guest-VM queries" | Out-Null
             }
+        }
+
+        if ($outboundEgressFloorEnabled) {
+            # W-1(b): default-OFF transport floor. Only reached when an operator has
+            # explicitly opted in AND supplied a synced whitelist-IP allow-list plus a
+            # system-service allow-list. Never enables a machine-wide
+            # DefaultOutboundAction Block. Not validated locally -- WEDU-lab gated.
+            $egressFloorRules = @(Get-OpenPathOutboundEgressFloorRules `
+                    -AllowIps $outboundEgressFloorAllowIps `
+                    -SystemServicePrograms $outboundEgressFloorSystemPrograms)
+            foreach ($egressRule in $egressFloorRules) {
+                $egressRuleParameters = @{
+                    DisplayName   = $egressRule.DisplayName
+                    Direction     = $egressRule.Direction
+                    Protocol      = $egressRule.Protocol
+                    RemoteAddress = $egressRule.RemoteAddress
+                    RemotePort    = $egressRule.RemotePort
+                    Action        = $egressRule.Action
+                    Profile       = $egressRule.Profile
+                    Description   = $egressRule.Description
+                }
+                if ($egressRule.PSObject.Properties['Program'] -and $egressRule.Program) {
+                    $egressRuleParameters['Program'] = $egressRule.Program
+                }
+                New-OpenPathFirewallRule @egressRuleParameters | Out-Null
+            }
+            Write-OpenPathLog "Outbound egress floor active ($($egressFloorRules.Count) rules; $(@($outboundEgressFloorAllowIps).Count) allow IPs)" -Level WARN
+        }
+        else {
+            Write-OpenPathLog 'Outbound egress floor disabled by configuration (default; requires WEDU-lab validation to enable)'
         }
 
         New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DoT" `

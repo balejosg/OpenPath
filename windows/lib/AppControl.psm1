@@ -132,6 +132,38 @@ function Get-OpenPathEdgeAppxProductNames {
     return @($products | Where-Object { $_ } | Sort-Object -Unique)
 }
 
+function Get-OpenPathAlwaysDeniedAppxProductNames {
+    <#
+    .SYNOPSIS
+    Returns the Appx package product names that must always be denied to non-admins
+    regardless of approved-browser configuration.
+    .DESCRIPTION
+    W-2: the blanket Microsoft-signed Appx allow (PublisherName='O=MICROSOFT CORPORATION*',
+    ProductName='*') is intentionally kept so OS inbox and Store-distributed Microsoft
+    packages keep working. But several Microsoft-signed packages ship parallel,
+    unfiltered network stacks that bypass the name-based DNS whitelist: WSL (full Linux
+    userspace with its own resolver), Windows Terminal (a launcher that hosts arbitrary
+    consoles), and the OpenSSH/Telnet Appx clients. AppLocker evaluates Deny over Allow,
+    so listing these as explicit per-product denies neutralises them while leaving the
+    rest of the Microsoft-signed surface allowed. Product names are matched as AppLocker
+    publisher ProductName globs.
+    #>
+    [CmdletBinding()]
+    param()
+
+    return @(
+        'Microsoft.WSL',
+        'WindowsSubsystemForLinux',
+        'MicrosoftCorporationII.WindowsSubsystemForLinux',
+        'Microsoft.WindowsTerminal',
+        'Microsoft.WindowsTerminalPreview',
+        'Microsoft.OpenSSHClient',
+        'Microsoft.OpenSSHServer',
+        'Microsoft.TelnetClient',
+        'Microsoft.PowerShell'
+    )
+}
+
 function New-OpenPathNonAdminAppLockerPolicySpec {
     <#
     .SYNOPSIS
@@ -296,6 +328,7 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         AllowPaths = @($allowPaths)
         UnapprovedBrowserDenyPaths = @($unapprovedBrowserDenyPaths)
         UnapprovedBrowserDenyAppxProducts = @($unapprovedBrowserDenyAppxProducts)
+        AlwaysDeniedAppxProducts = @(Get-OpenPathAlwaysDeniedAppxProductNames)
         BlockedWindowsTools = @(
             '%WINDIR%\System32\curl.exe',
             '%WINDIR%\SysWOW64\curl.exe',
@@ -314,7 +347,22 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
             '%WINDIR%\System32\wscript.exe',
             '%WINDIR%\SysWOW64\wscript.exe',
             '%WINDIR%\System32\cscript.exe',
-            '%WINDIR%\SysWOW64\cscript.exe'
+            '%WINDIR%\SysWOW64\cscript.exe',
+            # W-1(a) IP-literal egress: with no transport-level egress floor, any
+            # interpreter that can open a socket reaches an arbitrary IP and spoofs
+            # the Host header to bypass the name-based whitelist. Block the inbox
+            # scripting hosts that a standard user can launch from the protected
+            # %WINDIR% allow path. Windows PowerShell lives under WindowsPowerShell\v1.0,
+            # not directly in System32, so the full real path is required for the
+            # AppLocker FilePathCondition exception to match.
+            '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe',
+            '%WINDIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe',
+            '%PROGRAMFILES%\PowerShell\7\pwsh.exe',
+            '%PROGRAMFILES(X86)%\PowerShell\7\pwsh.exe',
+            '%WINDIR%\System32\ftp.exe',
+            '%WINDIR%\SysWOW64\ftp.exe',
+            '%WINDIR%\System32\tftp.exe',
+            '%WINDIR%\SysWOW64\tftp.exe'
         )
         UserWritableDenyPaths = @(
             '%USERPROFILE%\Downloads\*',
@@ -429,6 +477,13 @@ function New-OpenPathAppLockerPolicyXml {
         $denyPaths = @($Spec.UserWritableDenyPaths)
         if ($collectionType -eq 'Exe') {
             $denyPaths += @($Spec.UnapprovedBrowserDenyPaths)
+            # W-1(a): emit BlockedWindowsTools as explicit non-admin DENY rules too, not
+            # only as exceptions to the %WINDIR%\* allow. Tools such as pwsh.exe live under
+            # %PROGRAMFILES%\PowerShell\7\ -- covered by the %PROGRAMFILES%\* allow, which
+            # does NOT receive the %WINDIR% exception list -- so without an explicit deny
+            # they would still run. AppLocker evaluates Deny over Allow, so these denies
+            # block the tools wherever their allow path lives.
+            $denyPaths += @($Spec.BlockedWindowsTools)
         }
 
         foreach ($path in $denyPaths) {
@@ -456,6 +511,14 @@ function New-OpenPathAppLockerPolicyXml {
     foreach ($productName in @($Spec.UnapprovedBrowserDenyAppxProducts)) {
         $productId = ($productName -replace '[^0-9A-Za-z]+', '-').Trim('-')
         $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users deny $productId" -Sid $Spec.NonAdminSid -Action 'Deny' -PublisherName '*' -ProductName $productName -BinaryName '*'
+    }
+    # W-2: deny the parallel-network-stack Microsoft Appx packages (WSL, Windows
+    # Terminal, OpenSSH/Telnet) ahead of the Microsoft-signed allow. AppLocker
+    # evaluates Deny over Allow, so these stay blocked even though the broad
+    # Microsoft-signed allow below keeps the rest of the inbox/Store surface usable.
+    foreach ($productName in @($Spec.AlwaysDeniedAppxProducts)) {
+        $productId = ($productName -replace '[^0-9A-Za-z]+', '-').Trim('-')
+        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users deny parallel network stack $productId" -Sid $Spec.NonAdminSid -Action 'Deny' -PublisherName '*' -ProductName $productName -BinaryName '*'
     }
     # Allow only Microsoft-signed packaged apps (OS inbox and Store-distributed Microsoft apps).
     # A global ProductName='*' allow lets any publisher's Appx run, including sideloaded alternate
@@ -706,6 +769,12 @@ function Test-OpenPathAppLockerBoundaryPolicy {
         return $false
     }
 
+    foreach ($productName in @($spec.AlwaysDeniedAppxProducts)) {
+        if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Deny' -Sid $spec.NonAdminSid -ProductName $productName)) {
+            return $false
+        }
+    }
+
     $approvedSet = Get-OpenPathApprovedBrowserSet -ApprovedBrowsers $ApprovedBrowsers
     if (-not $approvedSet.Edge) {
         foreach ($path in @($spec.UnapprovedBrowserDenyPaths | Where-Object { $_ -match '\\Microsoft\\Edge\\Application\\msedge\.exe$' })) {
@@ -863,6 +932,7 @@ function Remove-OpenPathNonAdminAppControl {
 }
 
 Export-ModuleMember -Function @(
+    'Get-OpenPathAlwaysDeniedAppxProductNames',
     'New-OpenPathNonAdminAppLockerPolicySpec',
     'New-OpenPathAppLockerPolicyXml',
     'Merge-OpenPathAppLockerPolicyXml',

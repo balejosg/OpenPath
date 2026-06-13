@@ -18,6 +18,7 @@ Export-ModuleMember -Function @(
     'Get-DefaultTorBlockPorts',
     'Set-OpenPathFirewall',
     'Get-OpenPathDnsEgressBlockRanges',
+    'Get-OpenPathOutboundEgressFloorRules',
     'Add-OpenPathCaptivePortalUpstreamFirewallAllow',
     'Remove-OpenPathFirewall',
     'Test-FirewallActive',

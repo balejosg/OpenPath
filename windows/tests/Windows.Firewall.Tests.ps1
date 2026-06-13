@@ -636,4 +636,88 @@ Describe "Firewall Module" {
             foreach ($range in $ranges) { $range | Should -Match '^\d+\.\d+\.\d+\.\d+-\d+\.\d+\.\d+\.\d+$' }
         }
     }
+
+    Context "Outbound egress floor (W-1(b), default-OFF scaffold)" {
+        It "Builds default-deny outbound 443 rule shapes that allow only whitelist IPs and system programs" {
+            $rules = @(Get-OpenPathOutboundEgressFloorRules `
+                    -AllowIps @('203.0.113.10', '203.0.113.20') `
+                    -SystemServicePrograms @('C:\OpenPath\bin\OpenPathAgent.exe') `
+                    -RulePrefix 'OpenPath-DNS')
+
+            # System-program allow rule (Any remote, 443) so update/API/time-sync survives.
+            $systemAllow = @($rules | Where-Object {
+                    $_.Action -eq 'Allow' -and $_.Program -eq 'C:\OpenPath\bin\OpenPathAgent.exe' -and $_.RemotePort -eq 443
+                })
+            $systemAllow.Count | Should -Be 1
+            $systemAllow[0].RemoteAddress | Should -Be 'Any'
+
+            # Per-whitelist-IP allow rules.
+            foreach ($ip in @('203.0.113.10', '203.0.113.20')) {
+                $allow = @($rules | Where-Object {
+                        $_.Action -eq 'Allow' -and $_.RemoteAddress -eq $ip -and $_.RemotePort -eq 443
+                    })
+                $allow.Count | Should -Be 1
+            }
+
+            # IPv4 default-deny block that carves out loopback and the allow IPs.
+            $ipv4Block = @($rules | Where-Object {
+                    $_.Action -eq 'Block' -and $_.Protocol -eq 'TCP' -and $_.RemotePort -eq 443 -and $_.RemoteAddress -ne '::/0'
+                })
+            $ipv4Block.Count | Should -Be 1
+            # Loopback and both allow IPs are carved out of the blocked space.
+            $ipv4Block[0].RemoteAddress | Should -Contain '0.0.0.0-126.255.255.255'
+            $ipv4Block[0].RemoteAddress | Should -Contain '128.0.0.0-203.0.113.9'
+            $ipv4Block[0].RemoteAddress | Should -Contain '203.0.113.21-255.255.255.255'
+            ($ipv4Block[0].RemoteAddress -join ' ') | Should -Not -Match '127\.0\.0\.0-'
+            ($ipv4Block[0].RemoteAddress -join ' ') | Should -Not -Match '-203\.0\.113\.10$'
+
+            # Wholesale IPv6 443 block.
+            $ipv6Block = @($rules | Where-Object { $_.Action -eq 'Block' -and $_.RemoteAddress -eq '::/0' -and $_.RemotePort -eq 443 })
+            $ipv6Block.Count | Should -Be 1
+        }
+
+        It "Never expresses the floor as a machine-wide DefaultOutboundAction block" {
+            $rules = @(Get-OpenPathOutboundEgressFloorRules -AllowIps @('203.0.113.10'))
+            foreach ($rule in $rules) {
+                $rule.PSObject.Properties.Name | Should -Not -Contain 'DefaultOutboundAction'
+                # Every block rule is scoped to remote port 443, never a blanket all-port deny.
+                if ($rule.Action -eq 'Block') {
+                    $rule.RemotePort | Should -Be 443
+                }
+            }
+        }
+
+        It "Set-OpenPathFirewall does not emit egress-floor rules by default" {
+            Initialize-FirewallRuleCaptureMocks
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{ enableKnownDnsIpBlocking = $true }
+            } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor*' })).Count | Should -Be 0
+        }
+
+        It "Set-OpenPathFirewall emits egress-floor rules only when explicitly enabled" {
+            Initialize-FirewallRuleCaptureMocks
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    outboundEgressFloorEnabled = $true
+                    outboundEgressFloorAllowIps = @('203.0.113.10')
+                    outboundEgressFloorSystemPrograms = @('C:\OpenPath\bin\OpenPathAgent.exe')
+                }
+            } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            (@(Get-CapturedFirewallRules | Where-Object {
+                        $_.DisplayName -eq 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-10-TCP443' -and $_.Action -eq 'Allow'
+                    })).Count | Should -Be 1
+            (@(Get-CapturedFirewallRules | Where-Object {
+                        $_.DisplayName -eq 'OpenPath-DNS-Block-EgressFloor-DefaultDeny-TCP443' -and $_.Action -eq 'Block'
+                    })).Count | Should -Be 1
+        }
+    }
 }

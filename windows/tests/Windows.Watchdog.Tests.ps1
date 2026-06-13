@@ -153,6 +153,11 @@ Describe "Watchdog Script" {
             function Get-OpenPathConfiguredCaptivePortalDomains {
                 @('nce.wedu.comunidad.madrid')
             }
+            function Select-OpenPathCaptivePortalAllowedRecoveryHosts {
+                param([string[]]$RequestedHosts = @(), [string[]]$Allowlist = @())
+
+                @($RequestedHosts | ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
+            }
             function Get-OpenPathRecentCaptivePortalRecoverySuccess {
                 return $null
             }
@@ -169,6 +174,85 @@ Describe "Watchdog Script" {
             @($result.effectiveExactHosts) | Should -Contain 'nce.wedu.comunidad.madrid'
             @($result.configuredCaptivePortalDomains) | Should -Be @('nce.wedu.comunidad.madrid')
             $result.configuredCaptivePortalDomainsApplied | Should -BeFalse
+        }
+
+        It "W-3: drops attacker-supplied recovery hosts not on the configured/detection allowlist" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryTransition.ps1")
+            $scriptContent = Get-Content $scriptPath -Raw
+            $moduleContent = Get-Content $modulePath -Raw
+
+            # Load the recovery-request handler function block.
+            $start = $scriptContent.IndexOf('function Get-OpenPathRecoveryUtcNow')
+            $end = $scriptContent.IndexOf('$queuePath = Get-OpenPathCapabilityStoragePath')
+            . ([scriptblock]::Create($scriptContent.Substring($start, $end - $start)))
+
+            # Load the REAL allowlist filter + its helpers from the module (not a mock).
+            foreach ($fnName in @(
+                    'function Get-OpenPathCaptivePortalDetectionHosts',
+                    'function Get-OpenPathCaptivePortalRecoveryHostAllowlist',
+                    'function Select-OpenPathCaptivePortalAllowedRecoveryHosts'
+                )) {
+                $fnStart = $moduleContent.IndexOf($fnName)
+                $fnEnd = $moduleContent.IndexOf("`nfunction ", $fnStart + 1)
+                . ([scriptblock]::Create($moduleContent.Substring($fnStart, $fnEnd - $fnStart)))
+            }
+
+            $requestPath = Join-Path $TestDrive 'request-attacker.json'
+            $resultPath = Join-Path $TestDrive 'result-attacker'
+            $progressPath = Join-Path $TestDrive 'progress-attacker'
+            @{
+                requestId = 'attacker-host-request'
+                triggerHost = 'detectportal.firefox.com'
+                portalRecoveryHosts = @('attacker-exfil.example.com', 'nce.wedu.comunidad.madrid', 'login.nce.wedu.comunidad.madrid')
+            } | ConvertTo-Json -Depth 4 | Set-Content -Path $requestPath -Encoding UTF8
+            (Get-Item $requestPath).LastWriteTimeUtc = [DateTime]::UtcNow.AddMinutes(5)
+
+            $script:CapturedRecoveryDomains = $null
+            function Get-OpenPathCaptivePortalRecoveryState { return 'Portal' }
+            function Update-OpenPathCaptivePortalObservation { return $true }
+            function Enable-OpenPathCaptivePortalMode {
+                param([string]$State, [string[]]$PortalRecoveryDomains = @(), [int]$TtlSeconds = 300)
+                $script:CapturedRecoveryDomains = @($PortalRecoveryDomains)
+                return $true
+            }
+            function Get-OpenPathCaptivePortalMarker {
+                [PSCustomObject]@{ mode = 'limited'; allowedHosts = @('detectportal.firefox.com'); limitedModeReady = $true; discoveryTruncated = $false; fallbackMode = 'none'; pendingRuntimeHosts = @() }
+            }
+            function Get-OpenPathCaptivePortalAllowedHosts {
+                param([string[]]$Hosts = @())
+                @($Hosts | ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } |
+                        Where-Object { $_ -and $_ -match '^[a-z0-9.-]+$' } | Select-Object -Unique)
+            }
+            function Get-OpenPathConfiguredCaptivePortalDomains { @('nce.wedu.comunidad.madrid') }
+            function Get-OpenPathRecentCaptivePortalRecoverySuccess { return $null }
+            function Write-OpenPathLog { param([Parameter(ValueFromPipeline = $true)]$Message, $Level) }
+
+            $envelope = [PSCustomObject]@{
+                File = Get-Item $requestPath
+                Request = (Get-Content $requestPath -Raw | ConvertFrom-Json)
+            }
+
+            Invoke-OpenPathCaptivePortalRecoveryRequest -RequestEnvelope $envelope -ResultPath $resultPath -ProgressPath $progressPath -NowUtc ([DateTime]::UtcNow)
+
+            # The attacker host is dropped; the detection host, the configured domain, and
+            # a subdomain of the configured domain are kept.
+            @($script:CapturedRecoveryDomains) | Should -Not -Contain 'attacker-exfil.example.com'
+            @($script:CapturedRecoveryDomains) | Should -Contain 'detectportal.firefox.com'
+            @($script:CapturedRecoveryDomains) | Should -Contain 'nce.wedu.comunidad.madrid'
+            @($script:CapturedRecoveryDomains) | Should -Contain 'login.nce.wedu.comunidad.madrid'
+        }
+
+        It "W-3: recovery script intersects requested hosts with the allowlist before enabling portal mode" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'Select-OpenPathCaptivePortalAllowedRecoveryHosts -RequestedHosts $portalRecoveryHostCandidates'
+            )
+            # The unfiltered normalisation must not be what feeds Enable-OpenPathCaptivePortalMode.
+            $content | Should -Not -Match '\$portalRecoveryHosts = @\(Get-OpenPathCaptivePortalAllowedHosts -Hosts \$portalRecoveryHostCandidates\)'
         }
 
         It "Restores protected mode when reconcile request reports authenticated state" {
@@ -196,6 +280,11 @@ Describe "Watchdog Script" {
                 param([string[]]$Hosts = @())
 
                 @($Hosts | ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
+            }
+            function Select-OpenPathCaptivePortalAllowedRecoveryHosts {
+                param([string[]]$RequestedHosts = @(), [string[]]$Allowlist = @())
+
+                @($RequestedHosts | ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
             }
             function Get-OpenPathCaptivePortalProtectedModeExitEvidence {
                 [PSCustomObject]@{
@@ -1487,6 +1576,21 @@ Describe "Watchdog Script" {
             Assert-ContentContainsAll -Content $content -Needles @(
                 '$script:OpenPathRoot\scripts\Apply-RuntimeDependencyQueue.ps1',
                 '$script:OpenPathRoot\scripts\Recover-CaptivePortal.ps1'
+            )
+        }
+
+        It "W-5: baselines the SYSTEM dot-sourced bootstrap, native-host, and install helpers" {
+            # WindowsRoot.ps1 (resolves $OpenPathRoot for every SYSTEM script), the
+            # native-messaging host, and the lib\install\*.ps1 helpers are all dot-sourced
+            # under SYSTEM. Replacing any yields SYSTEM execution, so they must be in the
+            # integrity baseline.
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Integrity.ps1"
+            $content = Get-Content $helperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '$script:OpenPathRoot\lib\internal\WindowsRoot.ps1',
+                '$script:OpenPathRoot\scripts\OpenPath-NativeHost.ps1',
+                '$script:OpenPathRoot\lib\install'
             )
         }
     }

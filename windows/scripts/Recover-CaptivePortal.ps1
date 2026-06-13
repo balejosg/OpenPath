@@ -23,6 +23,7 @@ Initialize-OpenPathScriptSession `
     'Get-OpenPathCapabilityStoragePath',
     'Get-OpenPathCaptivePortalMarker',
     'Get-OpenPathCaptivePortalAllowedHosts',
+    'Select-OpenPathCaptivePortalAllowedRecoveryHosts',
     'Get-OpenPathConfiguredCaptivePortalDomains',
     'Get-OpenPathCaptivePortalProtectedModeExitEvidence',
     'Test-OpenPathCaptivePortalState',
@@ -83,7 +84,7 @@ function Test-OpenPathRecoveryRequestFresh {
     $createdAtUtc = $RequestEnvelope.File.LastWriteTimeUtc
     if ($RequestEnvelope.Request.PSObject.Properties['createdAtUtc'] -and $RequestEnvelope.Request.createdAtUtc) {
         try {
-            $createdAtUtc = ([DateTimeOffset]::Parse([string]$RequestEnvelope.Request.createdAtUtc)).UtcDateTime
+            $createdAtUtc = ([DateTimeOffset]::Parse([string]$RequestEnvelope.Request.createdAtUtc, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)).UtcDateTime
         }
         catch {
             $createdAtUtc = $RequestEnvelope.File.LastWriteTimeUtc
@@ -91,7 +92,7 @@ function Test-OpenPathRecoveryRequestFresh {
     }
     elseif ($RequestEnvelope.Request.PSObject.Properties['createdAt'] -and $RequestEnvelope.Request.createdAt) {
         try {
-            $createdAtUtc = ([DateTimeOffset]::Parse([string]$RequestEnvelope.Request.createdAt)).UtcDateTime
+            $createdAtUtc = ([DateTimeOffset]::Parse([string]$RequestEnvelope.Request.createdAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)).UtcDateTime
         }
         catch {
             $createdAtUtc = $RequestEnvelope.File.LastWriteTimeUtc
@@ -363,7 +364,11 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
     if ($RequestEnvelope.Request.PSObject.Properties['portalRecoveryHosts']) {
         $portalRecoveryHostCandidates += @($RequestEnvelope.Request.portalRecoveryHosts)
     }
-    $portalRecoveryHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $portalRecoveryHostCandidates)
+    # W-3: the CaptivePortalRecoveryQueue grants BUILTIN\Users Modify, so triggerHost and
+    # portalRecoveryHosts are attacker-controllable. Syntax-normalising them is not enough;
+    # intersect with the admin-configured captive-portal domains + built-in detection hosts
+    # so SYSTEM never opens an arbitrary requested host. Anything off the allowlist is dropped.
+    $portalRecoveryHosts = @(Select-OpenPathCaptivePortalAllowedRecoveryHosts -RequestedHosts $portalRecoveryHostCandidates)
 
     try {
         Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $ProgressPath -RequestId $requestId -Phase 'request-read' -Payload @{

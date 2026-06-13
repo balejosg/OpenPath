@@ -113,7 +113,7 @@ function Update-OpenPathRuntimeDependencyOverlay {
         $entryExpiresAt = if ($entry.PSObject.Properties['expiresAt']) { [string]$entry.expiresAt } else { '' }
         $isExpired = $false
         if ($entryExpiresAt) {
-            try { $isExpired = ([DateTimeOffset]::Parse($entryExpiresAt).UtcDateTime -le $now) }
+            try { $isExpired = ([DateTimeOffset]::Parse($entryExpiresAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).UtcDateTime -le $now) }
             catch { $isExpired = $true }
         }
 
@@ -232,7 +232,7 @@ function Get-OpenPathRuntimeDependencyDomains {
         $expiresAt = if ($entry.PSObject.Properties['expiresAt']) { [string]$entry.expiresAt } else { '' }
         $isExpired = $false
         if ($expiresAt) {
-            try { $isExpired = ([DateTimeOffset]::Parse($expiresAt).UtcDateTime -le $now.ToUniversalTime()) }
+            try { $isExpired = ([DateTimeOffset]::Parse($expiresAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).UtcDateTime -le $now.ToUniversalTime()) }
             catch { $isExpired = $true }
         }
 

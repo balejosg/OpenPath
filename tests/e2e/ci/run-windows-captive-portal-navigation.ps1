@@ -441,7 +441,7 @@ if (Test-Path $fixturePath -ErrorAction SilentlyContinue) {
     $fixture = Get-Content $fixturePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     if ([string]$fixture.purpose -eq 'direct-runner-captive-portal-navigation') {
         if ($fixture.PSObject.Properties['expiresAtUtc'] -and $fixture.expiresAtUtc) {
-            $expiresAtUtc = ([DateTimeOffset]::Parse([string]$fixture.expiresAtUtc)).UtcDateTime
+            $expiresAtUtc = ([DateTimeOffset]::Parse([string]$fixture.expiresAtUtc, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)).UtcDateTime
             if ($expiresAtUtc -lt [DateTime]::UtcNow) {
                 return (Test-OpenPathCaptivePortalState -TimeoutSec 3)
             }

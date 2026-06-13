@@ -104,7 +104,7 @@ function Test-OpenPathCaptivePortalMarkerExpired {
     }
 
     try {
-        return ([DateTime]::UtcNow -ge ([DateTimeOffset]::Parse([string]$Marker.expiresAt)).UtcDateTime)
+        return ([DateTime]::UtcNow -ge ([DateTimeOffset]::Parse([string]$Marker.expiresAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)).UtcDateTime)
     }
     catch {
         return $false
@@ -1851,6 +1851,115 @@ function Test-OpenPathCaptivePortalState {
     return 'Portal'
 }
 
+function Get-OpenPathCaptivePortalDetectionHosts {
+    <#
+    .SYNOPSIS
+        Returns the built-in captive-portal detection hostnames used by
+        Test-OpenPathCaptivePortalState.
+    .DESCRIPTION
+        W-3: these are the only non-configured hosts that recovery may legitimately open.
+        They are kept in lock-step with the probe URLs in Test-OpenPathCaptivePortalState.
+        Returned normalised via Get-OpenPathCaptivePortalAllowedHosts.
+    .OUTPUTS
+        String[]
+    #>
+    [CmdletBinding()]
+    param()
+
+    return @(Get-OpenPathCaptivePortalAllowedHosts -Hosts @(
+            'www.msftconnecttest.com',
+            'msftconnecttest.com',
+            'detectportal.firefox.com',
+            'clients3.google.com'
+        ))
+}
+
+function Get-OpenPathCaptivePortalRecoveryHostAllowlist {
+    <#
+    .SYNOPSIS
+        Returns the full set of hosts that captive-portal recovery is permitted to open:
+        the admin-configured captive-portal domains plus the built-in detection hosts.
+    .DESCRIPTION
+        W-3: the CaptivePortalRecoveryQueue grants BUILTIN\Users Modify by design, so any
+        standard user can enqueue a recovery request naming arbitrary portalRecoveryHosts.
+        Before those hosts are opened with SYSTEM privileges they must be intersected with
+        this allowlist; see Select-OpenPathCaptivePortalAllowedRecoveryHosts.
+    .OUTPUTS
+        String[]
+    #>
+    [CmdletBinding()]
+    param()
+
+    return @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (
+            @(Get-OpenPathConfiguredCaptivePortalDomains) + @(Get-OpenPathCaptivePortalDetectionHosts)
+        ))
+}
+
+function Select-OpenPathCaptivePortalAllowedRecoveryHosts {
+    <#
+    .SYNOPSIS
+        Filters caller-requested recovery hosts down to the admin-configured + built-in
+        detection allowlist, dropping anything not explicitly permitted.
+    .DESCRIPTION
+        W-3: enforces that a queue-supplied portalRecoveryHosts list (writable by any
+        standard user) can never cause SYSTEM to open an arbitrary host. A configured
+        captive-portal domain also covers its subdomains, mirroring the subdomain-inclusive
+        forward rules in New-OpenPathLimitedCaptivePortalHostsDefinition. Detection hosts
+        are matched exactly. Rejected hosts are logged at WARN.
+    .PARAMETER RequestedHosts
+        Caller/queue-supplied hostnames (already syntax-normalised or raw).
+    .PARAMETER Allowlist
+        Optional override of the allowlist; defaults to Get-OpenPathCaptivePortalRecoveryHostAllowlist.
+    .OUTPUTS
+        String[] -- the subset of RequestedHosts that is on the allowlist.
+    #>
+    [CmdletBinding()]
+    param(
+        [string[]]$RequestedHosts = @(),
+        [string[]]$Allowlist = @()
+    )
+
+    if (-not $PSBoundParameters.ContainsKey('Allowlist')) {
+        $Allowlist = @(Get-OpenPathCaptivePortalRecoveryHostAllowlist)
+    }
+
+    $normalizedRequested = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $RequestedHosts)
+    $normalizedAllowlist = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $Allowlist)
+    $allowSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($allowed in $normalizedAllowlist) { [void]$allowSet.Add($allowed) }
+
+    $accepted = [System.Collections.Generic.List[string]]::new()
+    $rejected = [System.Collections.Generic.List[string]]::new()
+    foreach ($requested in $normalizedRequested) {
+        $isAllowed = $false
+        if ($allowSet.Contains($requested)) {
+            $isAllowed = $true
+        }
+        else {
+            # A configured domain covers its subdomains (suffix match on a dot boundary).
+            foreach ($allowed in $normalizedAllowlist) {
+                if ($requested.EndsWith(".$allowed", [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $isAllowed = $true
+                    break
+                }
+            }
+        }
+
+        if ($isAllowed) {
+            $accepted.Add($requested)
+        }
+        else {
+            $rejected.Add($requested)
+        }
+    }
+
+    if ($rejected.Count -gt 0) {
+        Write-OpenPathLog "Captive portal recovery: dropped $($rejected.Count) requested host(s) not on the configured/detection allowlist: $($rejected -join ', ')" -Level WARN
+    }
+
+    return @($accepted | Select-Object -Unique)
+}
+
 function Enable-OpenPathCaptivePortalMode {
     <#
     .SYNOPSIS
@@ -2045,6 +2154,9 @@ Export-ModuleMember -Function @(
     'Get-OpenPathCaptivePortalDynamicHosts',
     'Test-OpenPathPotentialCaptiveNetwork',
     'Test-OpenPathCaptivePortalState',
+    'Get-OpenPathCaptivePortalDetectionHosts',
+    'Get-OpenPathCaptivePortalRecoveryHostAllowlist',
+    'Select-OpenPathCaptivePortalAllowedRecoveryHosts',
     'Enable-OpenPathCaptivePortalMode',
     'Disable-OpenPathCaptivePortalMode'
 )

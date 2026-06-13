@@ -106,7 +106,20 @@ Describe "AppControl Module" {
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\nslookup.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\ssh.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe'
+            # W-1(a): the inbox scripting/transfer hosts that can open a raw socket to an
+            # IP literal must be blocked because enforcement is name-only with no transport
+            # floor by default. Windows PowerShell lives under WindowsPowerShell\v1.0, so
+            # the bare System32\powershell.exe path is intentionally NOT used (it would
+            # never match the real binary).
             @($spec.BlockedWindowsTools) | Should -Not -Contain '%WINDIR%\System32\powershell.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%PROGRAMFILES%\PowerShell\7\pwsh.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%PROGRAMFILES(X86)%\PowerShell\7\pwsh.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\ftp.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\SysWOW64\ftp.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\tftp.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\SysWOW64\tftp.exe'
             foreach ($path in $expectedDenyPaths) {
                 @($spec.UserWritableDenyPaths) | Should -Contain $path
             }
@@ -290,6 +303,119 @@ Describe "AppControl Module" {
             )
             $deniedProducts | Should -Not -Contain 'Microsoft.MicrosoftEdge'
             $deniedProducts | Should -Not -Contain 'Microsoft.MicrosoftEdge.Stable'
+        }
+
+        It "W-1(a): blocks socket-capable inbox interpreters wherever their allow path lives, including pwsh under Program Files" {
+            # The bypass: powershell.exe -c Invoke-WebRequest -Uri https://<IP>/ reaches any
+            # IP and spoofs the Host header, because enforcement is name-only with no
+            # transport floor by default. pwsh.exe lives under %PROGRAMFILES%\PowerShell\7,
+            # which is covered by the %PROGRAMFILES%\* allow -- that allow does NOT carry the
+            # %WINDIR% exception list -- so an explicit non-admin Deny is required.
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+            [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+            $exeCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Exe' })[0]
+
+            $nonAdminDenyPaths = @(
+                $exeCollection.FilePathRule |
+                    Where-Object {
+                        $_.GetAttribute('Action') -eq 'Deny' -and
+                        $_.GetAttribute('UserOrGroupSid') -eq 'S-1-5-32-545'
+                    } |
+                    ForEach-Object { $_.Conditions.FilePathCondition.GetAttribute('Path') }
+            )
+
+            foreach ($blockedTool in @(
+                    '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe',
+                    '%WINDIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe',
+                    '%PROGRAMFILES%\PowerShell\7\pwsh.exe',
+                    '%PROGRAMFILES(X86)%\PowerShell\7\pwsh.exe',
+                    '%WINDIR%\System32\ftp.exe',
+                    '%WINDIR%\System32\tftp.exe',
+                    '%WINDIR%\System32\curl.exe'
+                )) {
+                $nonAdminDenyPaths | Should -Contain $blockedTool
+            }
+
+            # The %WINDIR%\* allow exception mechanism for the WINDIR tools is preserved.
+            $windirAllowRule = @($exeCollection.FilePathRule | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Allow' -and
+                    $_.GetAttribute('UserOrGroupSid') -eq 'S-1-5-32-545' -and
+                    $_.Conditions.FilePathCondition.GetAttribute('Path') -eq '%WINDIR%\*'
+                })[0]
+            $windirAllowRule | Should -Not -BeNullOrEmpty
+            $windirExceptionPaths = @($windirAllowRule.Exceptions.FilePathCondition | ForEach-Object { $_.GetAttribute('Path') })
+            $windirExceptionPaths | Should -Contain '%WINDIR%\System32\curl.exe'
+            $windirExceptionPaths | Should -Contain '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe'
+        }
+
+        It "W-2: denies the parallel-network-stack Microsoft Appx packages while preserving the signed allow" {
+            # The blanket O=MICROSOFT CORPORATION* / ProductName='*' allow lets WSL, Windows
+            # Terminal, and the OpenSSH/Telnet Appx run -- each a parallel unfiltered network
+            # stack. Deny beats Allow in AppLocker, so explicit per-product denies neutralise
+            # them without removing the broad allow that keeps inbox/Store apps usable.
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+            $spec.AlwaysDeniedAppxProducts | Should -Contain 'Microsoft.WSL'
+            $spec.AlwaysDeniedAppxProducts | Should -Contain 'Microsoft.WindowsTerminal'
+            $spec.AlwaysDeniedAppxProducts | Should -Contain 'Microsoft.OpenSSHClient'
+
+            [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+            $appxCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+
+            $deniedProducts = @(
+                $appxCollection.FilePublisherRule |
+                    Where-Object {
+                        $_.GetAttribute('Action') -eq 'Deny' -and
+                        $_.GetAttribute('UserOrGroupSid') -eq 'S-1-5-32-545'
+                    } |
+                    ForEach-Object { $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') }
+            )
+            foreach ($product in @($spec.AlwaysDeniedAppxProducts)) {
+                $deniedProducts | Should -Contain $product
+            }
+
+            # The Microsoft-signed allow is still present in its place.
+            $microsoftAllowRule = @($appxCollection.FilePublisherRule | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Allow' -and
+                    $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq 'O=MICROSOFT CORPORATION*' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
+                })
+            $microsoftAllowRule.Count | Should -Be 1
+        }
+
+        It "W-2: keeps the parallel-network-stack Appx denies even when Edge is approved" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -ApprovedBrowsers @('Firefox', 'Edge')
+            [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+            $appxCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+
+            $deniedProducts = @(
+                $appxCollection.FilePublisherRule |
+                    Where-Object { $_.GetAttribute('Action') -eq 'Deny' } |
+                    ForEach-Object { $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') }
+            )
+            # Edge denies are dropped (Edge approved) but the parallel-stack denies remain.
+            $deniedProducts | Should -Not -Contain 'Microsoft.MicrosoftEdge'
+            $deniedProducts | Should -Contain 'Microsoft.WSL'
+            $deniedProducts | Should -Contain 'Microsoft.OpenSSHClient'
+        }
+
+        It "W-2: boundary policy validator requires the parallel-network-stack Appx denies" {
+            InModuleScope AppControl {
+                $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+                [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+
+                # A correct policy passes the boundary validator.
+                Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Mode 'Enforced' | Should -BeTrue
+
+                # Stripping the WSL deny must make the boundary validator fail.
+                $appxCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+                $wslDeny = @($appxCollection.FilePublisherRule | Where-Object {
+                        $_.GetAttribute('Action') -eq 'Deny' -and
+                        $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq 'Microsoft.WSL'
+                    })[0]
+                [void]$appxCollection.RemoveChild($wslDeny)
+                Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Mode 'Enforced' | Should -BeFalse
+            }
         }
 
         It "Generates non-admin deny rules for user-writable paths before user allow rules in Exe and Script collections" {

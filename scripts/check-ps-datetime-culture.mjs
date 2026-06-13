@@ -30,7 +30,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ALLOW_MARKER = '# ps-culture-allow:';
-const PARSE_PATTERN = /\[datetime\]::(parse\(|parseexact\()/i;
+// W-4: also match [DateTimeOffset]::Parse / ParseExact. A bare
+// [DateTimeOffset]::Parse(str) is just as locale-sensitive as [DateTime]::Parse and
+// silently swaps day/month on d/M locales (e.g. es-ES) when parsing external timestamps.
+const PARSE_PATTERN = /\[datetime(offset)?\]::(parse\(|parseexact\()/i;
 const INVARIANT_PATTERN = /invariantculture/i;
 
 /**
@@ -116,6 +119,20 @@ function runSelfCheck() {
       line: "    [datetime]::parseexact($s, 'dd/MM/yyyy', $null)",
       prev: '',
       expectViolation: true,
+    },
+    // W-4 violation: bare [DateTimeOffset]::Parse without InvariantCulture -> must flag
+    {
+      label: 'violating DateTimeOffset Parse without InvariantCulture',
+      line: '    ([DateTimeOffset]::Parse([string]$marker.expiresAt)).UtcDateTime',
+      prev: '',
+      expectViolation: true,
+    },
+    // W-4 compliant: [DateTimeOffset]::Parse with InvariantCulture -> must NOT flag
+    {
+      label: 'compliant DateTimeOffset Parse with InvariantCulture',
+      line: '    ([DateTimeOffset]::Parse([string]$x, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)).UtcDateTime',
+      prev: '',
+      expectViolation: false,
     },
     // exempt by inline comment -> must NOT flag
     {
