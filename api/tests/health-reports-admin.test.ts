@@ -295,6 +295,219 @@ await describe('health-reports admin procedures', async () => {
     );
   });
 
+  await test('getAlerts flags enforcement-unknown when a capable agent omits firewallState', async () => {
+    const suffix = `enf-unknown-${Date.now().toString()}`;
+
+    // Capable agent: reports a real agentVersion at/above the enforcement-telemetry
+    // baseline but OMITS firewallState. This is the self-attestation gap: it must
+    // not be a free pass, so a distinct enforcement-unknown alert should fire.
+    const capable = await provisionMachineAccess({
+      classroomName: `enf-unknown-cap-room-${suffix}`,
+      groupName: `enf-unknown-cap-group-${suffix}`,
+      hostname: `enf-unknown-cap-host-${suffix}`,
+    });
+    await trpcMutate(
+      'healthReports.submit',
+      {
+        hostname: capable.machineHostname,
+        status: 'HEALTHY',
+        agentVersion: '1.3.0',
+        // firewallState intentionally omitted
+      },
+      { Authorization: `Bearer ${capable.machineToken}` }
+    );
+
+    // Legacy agent: no version reported -> not known to report enforcement -> no alert.
+    const legacy = await provisionMachineAccess({
+      classroomName: `enf-unknown-legacy-room-${suffix}`,
+      groupName: `enf-unknown-legacy-group-${suffix}`,
+      hostname: `enf-unknown-legacy-host-${suffix}`,
+    });
+    await trpcMutate(
+      'healthReports.submit',
+      { hostname: legacy.machineHostname, status: 'HEALTHY' },
+      { Authorization: `Bearer ${legacy.machineToken}` }
+    );
+
+    const response = await trpcQuery(
+      'healthReports.getAlerts',
+      { staleThreshold: 999999 },
+      getAdminBearerAuth()
+    );
+    assert.equal(response.status, 200, 'getAlerts should return 200');
+
+    const result = (await parseTRPC(response)).data as {
+      alerts: { hostname: string; type: string; message: string }[];
+    };
+
+    const capableAlert = result.alerts.find(
+      (a) => a.hostname === capable.machineHostname && a.type === 'enforcement-unknown'
+    );
+    assert.ok(
+      capableAlert,
+      'a capable agent that omits firewallState must raise an enforcement-unknown alert'
+    );
+
+    const legacyAlert = result.alerts.find(
+      (a) => a.hostname === legacy.machineHostname && a.type === 'enforcement-unknown'
+    );
+    assert.equal(
+      legacyAlert,
+      undefined,
+      'a legacy agent with no version must NOT raise enforcement-unknown'
+    );
+
+    // A capable agent that omits firewallState must never be treated as enforcement-down.
+    const wrongType = result.alerts.find(
+      (a) => a.hostname === capable.machineHostname && a.type === 'enforcement-down'
+    );
+    assert.equal(wrongType, undefined, 'unknown enforcement is not enforcement-down');
+  });
+
+  await test('getAlerts does not flag enforcement-unknown when a capable agent reports firewallState=true', async () => {
+    const suffix = `enf-ok-${Date.now().toString()}`;
+    const capable = await provisionMachineAccess({
+      classroomName: `enf-ok-room-${suffix}`,
+      groupName: `enf-ok-group-${suffix}`,
+      hostname: `enf-ok-host-${suffix}`,
+    });
+    await trpcMutate(
+      'healthReports.submit',
+      {
+        hostname: capable.machineHostname,
+        status: 'HEALTHY',
+        agentVersion: '1.4.2',
+        firewallState: true,
+      },
+      { Authorization: `Bearer ${capable.machineToken}` }
+    );
+
+    const response = await trpcQuery(
+      'healthReports.getAlerts',
+      { staleThreshold: 999999 },
+      getAdminBearerAuth()
+    );
+    assert.equal(response.status, 200);
+
+    const result = (await parseTRPC(response)).data as {
+      alerts: { hostname: string; type: string }[];
+    };
+    const alert = result.alerts.find(
+      (a) =>
+        a.hostname === capable.machineHostname &&
+        (a.type === 'enforcement-unknown' || a.type === 'enforcement-down')
+    );
+    assert.equal(alert, undefined, 'a capable agent reporting firewallState=true is healthy');
+  });
+
+  await test('getAlerts flags whitelist-stale when whitelistAgeHours exceeds the max', async () => {
+    const suffix = `wl-stale-${Date.now().toString()}`;
+    const machine = await provisionMachineAccess({
+      classroomName: `wl-stale-room-${suffix}`,
+      groupName: `wl-stale-group-${suffix}`,
+      hostname: `wl-stale-host-${suffix}`,
+    });
+    await trpcMutate(
+      'healthReports.submit',
+      {
+        hostname: machine.machineHostname,
+        status: 'HEALTHY',
+        agentVersion: '1.4.0',
+        firewallState: true,
+        // 1000h is far beyond any sane whitelist freshness window
+        whitelistAgeHours: 1000,
+      },
+      { Authorization: `Bearer ${machine.machineToken}` }
+    );
+
+    const response = await trpcQuery(
+      'healthReports.getAlerts',
+      { staleThreshold: 999999 },
+      getAdminBearerAuth()
+    );
+    assert.equal(response.status, 200);
+
+    const result = (await parseTRPC(response)).data as {
+      alerts: { hostname: string; type: string; message: string }[];
+    };
+    const staleAlert = result.alerts.find(
+      (a) => a.hostname === machine.machineHostname && a.type === 'whitelist-stale'
+    );
+    assert.ok(staleAlert, 'a far-stale whitelist must raise a whitelist-stale alert');
+    assert.match(staleAlert.message, /whitelist/i, 'message should mention the whitelist');
+  });
+
+  await test('getAlerts does not flag whitelist-stale for a fresh whitelist', async () => {
+    const suffix = `wl-fresh-${Date.now().toString()}`;
+    const machine = await provisionMachineAccess({
+      classroomName: `wl-fresh-room-${suffix}`,
+      groupName: `wl-fresh-group-${suffix}`,
+      hostname: `wl-fresh-host-${suffix}`,
+    });
+    await trpcMutate(
+      'healthReports.submit',
+      {
+        hostname: machine.machineHostname,
+        status: 'HEALTHY',
+        agentVersion: '1.4.0',
+        firewallState: true,
+        whitelistAgeHours: 1,
+      },
+      { Authorization: `Bearer ${machine.machineToken}` }
+    );
+
+    const response = await trpcQuery(
+      'healthReports.getAlerts',
+      { staleThreshold: 999999 },
+      getAdminBearerAuth()
+    );
+    assert.equal(response.status, 200);
+
+    const result = (await parseTRPC(response)).data as {
+      alerts: { hostname: string; type: string }[];
+    };
+    const staleAlert = result.alerts.find(
+      (a) => a.hostname === machine.machineHostname && a.type === 'whitelist-stale'
+    );
+    assert.equal(staleAlert, undefined, 'a fresh whitelist must not raise whitelist-stale');
+  });
+
+  await test('getAlerts surfaces captive-portal mode when active', async () => {
+    const suffix = `captive-${Date.now().toString()}`;
+    const machine = await provisionMachineAccess({
+      classroomName: `captive-room-${suffix}`,
+      groupName: `captive-group-${suffix}`,
+      hostname: `captive-host-${suffix}`,
+    });
+    await trpcMutate(
+      'healthReports.submit',
+      {
+        hostname: machine.machineHostname,
+        status: 'HEALTHY',
+        agentVersion: '1.4.0',
+        firewallState: true,
+        captivePortalMode: true,
+      },
+      { Authorization: `Bearer ${machine.machineToken}` }
+    );
+
+    const response = await trpcQuery(
+      'healthReports.getAlerts',
+      { staleThreshold: 999999 },
+      getAdminBearerAuth()
+    );
+    assert.equal(response.status, 200);
+
+    const result = (await parseTRPC(response)).data as {
+      alerts: { hostname: string; type: string; message: string }[];
+    };
+    const captiveAlert = result.alerts.find(
+      (a) => a.hostname === machine.machineHostname && a.type === 'captive-portal'
+    );
+    assert.ok(captiveAlert, 'an active captive-portal mode must be surfaced as an alert');
+    assert.match(captiveAlert.message, /captive/i, 'message should mention captive portal');
+  });
+
   await test('getAlerts returns stale alert for host exceeding threshold', async () => {
     const suffix = `alerts-stale-${Date.now().toString()}`;
     const machine = await provisionMachineAccess({

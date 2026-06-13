@@ -11,6 +11,26 @@ import { TRPCError } from '@trpc/server';
 import { CreateRequestData } from '../../types/storage.js';
 import { stripUndefined } from '../../lib/utils.js';
 import RequestService from '../../services/request.service.js';
+import * as auth from '../../lib/auth.js';
+
+/**
+ * Source values a PUBLIC (unauthenticated) caller may declare on requests.create.
+ * Crucially this excludes `auto_extension`: that value selects the
+ * skip-normalization branch in the request command service and is reserved for
+ * the machine-authenticated REST request flow. Allowing it on the public tRPC
+ * surface would let a caller bypass manual-domain normalization. Any source the
+ * public caller supplies that is not in this allowlist is coerced to `manual` so
+ * the normalization branch always runs for public submissions.
+ */
+const PUBLIC_REQUEST_SOURCES = new Set(['manual', 'firefox-extension', 'web']);
+const DEFAULT_PUBLIC_REQUEST_SOURCE = 'manual';
+
+function resolvePublicRequestSource(source: string | undefined): string {
+  if (source !== undefined && PUBLIC_REQUEST_SOURCES.has(source)) {
+    return source;
+  }
+  return DEFAULT_PUBLIC_REQUEST_SOURCE;
+}
 
 export const requestsRouter = router({
   /**
@@ -24,7 +44,9 @@ export const requestsRouter = router({
         reason: input.reason ?? 'No reason provided',
         requesterEmail: input.requesterEmail,
         groupId: input.groupId,
-        source: input.source,
+        // Server-assigned: a public caller cannot select `auto_extension` (the
+        // skip-normalization branch). Unknown sources collapse to `manual`.
+        source: resolvePublicRequestSource(input.source),
         machineHostname: input.machineHostname,
         originHost: input.originHost,
         originPage: input.originPage,
@@ -128,7 +150,17 @@ export const requestsRouter = router({
   // Protected: Check if domain is blocked in a group
   check: protectedProcedure
     .input(z.object({ domain: z.string(), groupId: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      // Scope to the caller's approval groups, matching `list`/`get`. Without this
+      // any authenticated user could enumerate another group's blocked rules by
+      // passing an arbitrary groupId. Admins (canApproveGroup -> true) may check
+      // any group.
+      if (!auth.canApproveGroup(ctx.user, input.groupId)) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have access to this group',
+        });
+      }
       return await RequestService.checkDomainBlocked(input.groupId, input.domain);
     }),
 });

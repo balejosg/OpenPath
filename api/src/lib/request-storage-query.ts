@@ -71,11 +71,23 @@ export async function getRequestById(id: string): Promise<DomainRequest | null> 
   return result[0] ? toStorageType(result[0]) : null;
 }
 
-export async function hasPendingRequest(domain: string): Promise<boolean> {
+export async function hasPendingRequest(domain: string, groupId?: string): Promise<boolean> {
+  // Dedupe is scoped per group: a pending request in one group must not suppress
+  // (or be discoverable via CONFLICT from) another group's request for the same
+  // domain. Callers that already resolved the request-eligible group pass it in;
+  // a missing groupId falls back to the legacy global check.
+  const conditions = [
+    eq(requests.domain, normalizeRequestDomain(domain)),
+    eq(requests.status, 'pending'),
+  ];
+  if (groupId !== undefined && groupId !== '') {
+    conditions.push(eq(requests.groupId, groupId));
+  }
+
   const result = await db
     .select({ id: requests.id })
     .from(requests)
-    .where(and(eq(requests.domain, normalizeRequestDomain(domain)), eq(requests.status, 'pending')))
+    .where(and(...conditions))
     .limit(1);
 
   return result.length > 0;

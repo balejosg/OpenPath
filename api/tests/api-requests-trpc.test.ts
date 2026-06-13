@@ -2,6 +2,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 
 import {
+  insertWhitelistGroup,
   parseTRPC,
   registerRequestApiLifecycle,
   trpcMutate,
@@ -127,6 +128,137 @@ void describe('Request API tests - tRPC request procedures', async () => {
       });
 
       assert.strictEqual(response.status, 200);
+    });
+  });
+
+  await describe('tRPC requests.create - group scoping and source hardening', async () => {
+    await test('same domain in two groups both create (no cross-tenant suppression)', async () => {
+      const suffix = Date.now().toString();
+      const groupA = `scope-a-${suffix}`;
+      const groupB = `scope-b-${suffix}`;
+      await insertWhitelistGroup(groupA);
+      await insertWhitelistGroup(groupB);
+
+      const domain = `cross-tenant-${suffix}.example.com`;
+
+      const responseA = await trpcMutate('requests.create', {
+        domain,
+        reason: 'Group A request',
+        requesterEmail: 'a@example.com',
+        groupId: groupA,
+      });
+      assert.strictEqual(responseA.status, 200, 'first group request should succeed');
+      const dataA = (await parseTRPC(responseA)).data as { id?: string; groupId?: string };
+      assert.ok(dataA.id, 'group A request should return an id');
+
+      // Same domain, different group: must NOT be suppressed by group A's pending request.
+      const responseB = await trpcMutate('requests.create', {
+        domain,
+        reason: 'Group B request',
+        requesterEmail: 'b@example.com',
+        groupId: groupB,
+      });
+      assert.strictEqual(
+        responseB.status,
+        200,
+        'second group request for the same domain must not be suppressed'
+      );
+      const dataB = (await parseTRPC(responseB)).data as { id?: string };
+      assert.ok(dataB.id, 'group B request should return an id');
+      assert.notStrictEqual(dataA.id, dataB.id, 'the two groups should get distinct requests');
+    });
+
+    await test('duplicate pending request within the same group still conflicts', async () => {
+      const suffix = Date.now().toString();
+      const group = `scope-dup-${suffix}`;
+      await insertWhitelistGroup(group);
+      const domain = `dup-within-group-${suffix}.example.com`;
+
+      const first = await trpcMutate('requests.create', {
+        domain,
+        reason: 'first',
+        requesterEmail: 'dup@example.com',
+        groupId: group,
+      });
+      assert.strictEqual(first.status, 200, 'first request should succeed');
+
+      const second = await trpcMutate('requests.create', {
+        domain,
+        reason: 'second',
+        requesterEmail: 'dup@example.com',
+        groupId: group,
+      });
+      const secondPayload = await parseTRPC(second);
+      assert.ok(
+        secondPayload.code === 'CONFLICT' || second.status === 409,
+        `expected CONFLICT for duplicate within a group, got ${String(second.status)} ${String(secondPayload.code)}`
+      );
+    });
+
+    await test('unknown groupId is rejected', async () => {
+      const response = await trpcMutate('requests.create', {
+        domain: `unknown-group-${Date.now().toString()}.example.com`,
+        reason: 'poisoning attempt',
+        requesterEmail: 'attacker@example.com',
+        groupId: `definitely-not-a-real-group-${Date.now().toString()}`,
+      });
+      const payload = (await response.json()) as {
+        error?: { data?: { code?: string }; message?: string };
+      };
+      assert.strictEqual(
+        response.status,
+        400,
+        'an unknown groupId must be rejected before the request is created'
+      );
+      const error = payload.error;
+      assert.ok(error, 'expected a tRPC error payload');
+      assert.strictEqual(
+        error.data?.code,
+        'BAD_REQUEST',
+        `expected BAD_REQUEST for unknown groupId, got ${String(error.data?.code)}`
+      );
+      assert.match(
+        error.message ?? '',
+        /does not exist/i,
+        'rejection should explain the group does not exist'
+      );
+    });
+
+    await test('public source=auto_extension cannot select the no-normalization branch', async () => {
+      const suffix = Date.now().toString();
+      const group = `scope-src-${suffix}`;
+      await insertWhitelistGroup(group);
+
+      // Submit a multi-label subdomain with a spoofed auto_extension source. The
+      // public path must coerce the source so manual normalization still runs and
+      // the stored domain is collapsed (not the verbatim subdomain that the
+      // skip-normalization auto_extension branch would have preserved).
+      const submitted = `deep.sub.srcnorm-${suffix}.example.com`;
+      const response = await trpcMutate('requests.create', {
+        domain: submitted,
+        reason: 'source spoof attempt',
+        requesterEmail: 'spoof@example.com',
+        groupId: group,
+        source: 'auto_extension',
+      });
+
+      assert.strictEqual(response.status, 200, 'a valid manual-style request should succeed');
+      const data = (await parseTRPC(response)).data as { domain?: string; source?: string };
+      assert.notStrictEqual(
+        data.domain,
+        submitted,
+        'public requests.create must normalize the domain despite a spoofed auto_extension source'
+      );
+      assert.match(
+        data.domain ?? '',
+        /^[^.]+\.[^.]+$/,
+        'normalized domain should collapse to a registrable root'
+      );
+      assert.notStrictEqual(
+        data.source,
+        'auto_extension',
+        'public callers must not be able to persist source=auto_extension'
+      );
     });
   });
 });
