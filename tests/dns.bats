@@ -498,11 +498,12 @@ JSON
 
     generate_dnsmasq_config
 
-    # Whitelisted domain: both the upstream forward and the allow-set directive.
+    # Whitelisted domain: the upstream forward plus the allow-set directive
+    # carrying both the v4 and (IPv6-firewall-enabled) v6 sets.
     grep -q "server=/example.org/8.8.8.8" "$DNSMASQ_CONF"
-    grep -q "ipset=/example.org/openpath-allow-dst" "$DNSMASQ_CONF"
+    grep -q "ipset=/example.org/openpath-allow-dst,openpath-allow-dst6" "$DNSMASQ_CONF"
     # Captive portal probes are reached over HTTP/80 and must also be in the set.
-    grep -q "ipset=/detectportal.firefox.com/openpath-allow-dst" "$DNSMASQ_CONF"
+    grep -q "ipset=/detectportal.firefox.com/openpath-allow-dst,openpath-allow-dst6" "$DNSMASQ_CONF"
 }
 
 @test "generate_dnsmasq_config omits ipset= directives when name-aware egress disabled" {

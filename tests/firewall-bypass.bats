@@ -14,8 +14,9 @@ setup() {
     mkdir -p "$CONFIG_DIR" "$INSTALL_DIR/lib"
 
     IPTABLES_LOG="$TEST_TMP_DIR/iptables.log"
+    IP6TABLES_LOG="$TEST_TMP_DIR/ip6tables.log"
     IPSET_LOG="$TEST_TMP_DIR/ipset.log"
-    export IPTABLES_LOG IPSET_LOG
+    export IPTABLES_LOG IP6TABLES_LOG IPSET_LOG
     export OPENPATH_IPSET_STATE_FILE="$TEST_TMP_DIR/openpath-ipsets.v4"
     export OPENPATH_SYSCTL_D_DIR="$TEST_TMP_DIR/sysctl.d"
     mkdir -p "$OPENPATH_SYSCTL_D_DIR"
@@ -49,6 +50,12 @@ setup() {
         return 0
     }
     export -f ipset
+
+    ip6tables() {
+        echo "$*" >> "$IP6TABLES_LOG"
+        return 0
+    }
+    export -f ip6tables
 
     ip() {
         echo "default via 192.168.1.1 dev eth0"
@@ -509,6 +516,59 @@ source_firewall() {
 
     grep -q "br_netfilter" "$MODPROBE_LOG"
     grep -q -- "-P FORWARD DROP" "$IPTABLES_LOG"
+}
+
+# ============== IPv6 egress firewall ==============
+
+@test "ensure_allow_dst_ipset creates the inet6 allow set when IPv6 firewall is active" {
+    source_firewall
+
+    ensure_allow_dst_ipset
+
+    grep -q "create openpath-allow-dst hash:ip timeout 600 -exist" "$IPSET_LOG"
+    grep -q "create openpath-allow-dst6 hash:ip family inet6 timeout 600 -exist" "$IPSET_LOG"
+}
+
+@test "apply_ipv6_firewall mirrors the v4 policy with ICMPv6 allowed and v6 DNS dropped" {
+    source_firewall
+
+    apply_ipv6_firewall
+
+    grep -q -- "-A OUTPUT -o lo -j ACCEPT" "$IP6TABLES_LOG"
+    grep -q -- "-A OUTPUT -p ipv6-icmp -j ACCEPT" "$IP6TABLES_LOG"
+    grep -q -- "-A OUTPUT -p udp --dport 53 -j DROP" "$IP6TABLES_LOG"
+    grep -q -- "-A OUTPUT -p tcp --dport 53 -j DROP" "$IP6TABLES_LOG"
+    grep -q -- "-A OUTPUT -j DROP" "$IP6TABLES_LOG"
+    # v4 OUTPUT chain is untouched by the v6 builder.
+    [ ! -f "$IPTABLES_LOG" ]
+}
+
+@test "apply_ipv6_firewall scopes 80/443 to the inet6 allow set and applies FORWARD deny" {
+    source_firewall
+
+    apply_ipv6_firewall
+
+    grep -q -- "-A OUTPUT -p tcp --dport 443 -m set --match-set openpath-allow-dst6 dst -j ACCEPT" "$IP6TABLES_LOG"
+    grep -q -- "-A OUTPUT -p tcp --dport 80 -m set --match-set openpath-allow-dst6 dst -j ACCEPT" "$IP6TABLES_LOG"
+    grep -q -- "-P FORWARD DROP" "$IP6TABLES_LOG"
+}
+
+@test "apply_ipv6_firewall is a no-op when IPV6_FIREWALL_ENABLED=0" {
+    export IPV6_FIREWALL_ENABLED="0"
+    source_firewall
+
+    apply_ipv6_firewall
+
+    [ ! -f "$IP6TABLES_LOG" ]
+}
+
+@test "activate_firewall applies the IPv6 firewall by default" {
+    source_firewall
+
+    activate_firewall
+
+    grep -q -- "-A OUTPUT -j DROP" "$IP6TABLES_LOG"
+    grep -q -- "-A OUTPUT -p udp --dport 53 -j DROP" "$IP6TABLES_LOG"
 }
 
 # ============== deactivate_firewall cleanup ==============

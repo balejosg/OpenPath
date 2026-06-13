@@ -10,9 +10,16 @@ emit_dnsmasq_allow_domain() {
     local domain="$1" upstream="$2" conf="$3"
     printf 'server=/%s/%s\n' "$domain" "$upstream" >> "$conf"
     case "$(printf '%s' "${ALLOW_SET_EGRESS_ENABLED:-1}" | tr '[:upper:]' '[:lower:]')" in
-        0 | false | no | off | disabled) ;;
-        *) printf 'ipset=/%s/%s\n' "$domain" "${OPENPATH_ALLOW_DST_IPSET:-openpath-allow-dst}" >> "$conf" ;;
+        0 | false | no | off | disabled) return 0 ;;
     esac
+    # Add resolved IPv4 to the v4 allow set, and AAAA to the v6 set when the IPv6
+    # firewall is enabled (dnsmasq routes each address to the matching family).
+    local sets="${OPENPATH_ALLOW_DST_IPSET:-openpath-allow-dst}"
+    case "$(printf '%s' "${IPV6_FIREWALL_ENABLED:-1}" | tr '[:upper:]' '[:lower:]')" in
+        0 | false | no | off | disabled) ;;
+        *) sets="${sets},${OPENPATH_ALLOW_DST_IPSET6:-openpath-allow-dst6}" ;;
+    esac
+    printf 'ipset=/%s/%s\n' "$domain" "$sets" >> "$conf"
 }
 
 # Write a temporary dnsmasq config that forwards all queries upstream.

@@ -89,6 +89,10 @@ activate_firewall() {
     # the host policy (forces hosted VMs onto host-routed NAT).
     apply_forward_default_deny
 
+    # IPv6 egress firewall mirroring the v4 policy (closes the unfiltered-IPv6
+    # bypass on dual-stack networks).
+    apply_ipv6_firewall
+
     save_firewall_rules
 
     if [ "$critical_failed" -ne 0 ]; then
@@ -119,6 +123,9 @@ deactivate_firewall() {
 
     # Restore a permissive FORWARD chain (paired with apply_forward_default_deny).
     restore_forward_chain
+
+    # Restore permissive IPv6 (paired with apply_ipv6_firewall).
+    deactivate_ipv6_firewall
 
     # Bypass-block cleanup: the OUTPUT flush above removed every rule that
     # referenced the DoH ipset, so the set itself can be destroyed now.

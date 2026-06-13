@@ -27,10 +27,12 @@ setup() {
     source "$PROJECT_DIR/linux/lib/common.sh"
 
     # Mock kernel-module / sysctl helpers so bridged-VM enforcement is inert and
-    # has no side effects during tests.
+    # has no side effects during tests. ip6tables is a no-op here; the IPv6
+    # firewall is exercised directly in firewall-bypass.bats.
     modprobe() { return 0; }
     sysctl() { return 0; }
-    export -f modprobe sysctl
+    ip6tables() { return 0; }
+    export -f modprobe sysctl ip6tables
 
     # Mock log functions
     log() { echo "$1"; }

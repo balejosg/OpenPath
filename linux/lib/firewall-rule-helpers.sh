@@ -64,7 +64,21 @@ OPENPATH_IPSET_STATE_FILE="${OPENPATH_IPSET_STATE_FILE:-/etc/iptables/openpath-i
 # the firewall scopes the 80/443 ACCEPT to this set instead of any destination.
 # See apply_http_egress_rules and emit_dnsmasq_allow_domain (dns-dnsmasq.sh).
 OPENPATH_ALLOW_DST_IPSET="${OPENPATH_ALLOW_DST_IPSET:-openpath-allow-dst}"
+OPENPATH_ALLOW_DST_IPSET6="${OPENPATH_ALLOW_DST_IPSET6:-openpath-allow-dst6}"
 OPENPATH_ALLOW_SET_TIMEOUT="${OPENPATH_ALLOW_SET_TIMEOUT:-600}"
+
+ipv6_firewall_enabled() { openpath_flag_enabled "${IPV6_FIREWALL_ENABLED:-1}"; }
+ip6tables_available() { command -v ip6tables >/dev/null 2>&1; }
+
+# IPv6 egress is filtered only when enabled AND ip6tables is usable; otherwise
+# IPv6 is left to the (inert) dnsmasq v6 sinkhole, which is the pre-existing gap.
+ipv6_firewall_active() { ipv6_firewall_enabled && ip6tables_available; }
+
+# True when the IPv6 name-aware allow set can be used (v6 firewall active, the
+# allow-set feature enabled, and ipset available to populate it).
+ipv6_allow_set_active() {
+    ipv6_firewall_active && allow_set_egress_enabled && openpath_ipset_available
+}
 
 # IPv4 subset of the Windows Get-DefaultDohResolverIps catalog (the Linux
 # agent enforces IPv4 only; dnsmasq sinkholes IPv6 via address=/#/100::).
@@ -116,6 +130,10 @@ ensure_allow_dst_ipset() {
     allow_set_egress_active || return 0
     add_important_rule "Create egress allow ipset $OPENPATH_ALLOW_DST_IPSET" \
         ipset create "$OPENPATH_ALLOW_DST_IPSET" hash:ip timeout "$OPENPATH_ALLOW_SET_TIMEOUT" -exist
+    if ipv6_firewall_active; then
+        add_important_rule "Create egress allow ipset $OPENPATH_ALLOW_DST_IPSET6 (inet6)" \
+            ipset create "$OPENPATH_ALLOW_DST_IPSET6" hash:ip family inet6 timeout "$OPENPATH_ALLOW_SET_TIMEOUT" -exist
+    fi
     return 0
 }
 
@@ -240,6 +258,73 @@ apply_upstream_dns_owner_rule() {
 
     log_warn "owner-match unavailable - upstream :53 left unconfined"
     return 1
+}
+
+# IPv6 egress firewall mirroring the v4 OUTPUT/FORWARD policy. Without this,
+# IPv6 was completely unfiltered (no ip6tables rules) while the dnsmasq v6
+# sinkhole was inert, so a student on a dual-stack network could resolve via a
+# public v6 resolver or use a v6 literal and reach anything. Clients resolve
+# over the v4 localhost sinkhole (which returns AAAA records added to the v6
+# allow set), so all v6 :53 is dropped here. ICMPv6 (NDP/RA) must stay allowed.
+apply_ipv6_firewall() {
+    if ! ipv6_firewall_active; then
+        ipv6_firewall_enabled && log_warn "ip6tables unavailable - IPv6 egress NOT filtered"
+        return 0
+    fi
+
+    add_optional_rule "Flush IPv6 OUTPUT chain" ip6tables -F OUTPUT
+    add_critical_rule "IPv6 allow loopback" \
+        ip6tables -A OUTPUT -o lo -j ACCEPT
+    add_critical_rule "IPv6 allow established" \
+        ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    add_critical_rule "IPv6 allow ICMPv6 (NDP/RA)" \
+        ip6tables -A OUTPUT -p ipv6-icmp -j ACCEPT
+    add_optional_rule "IPv6 allow DHCPv6" \
+        ip6tables -A OUTPUT -p udp --dport 546:547 -j ACCEPT
+
+    # No local v6 resolver (dnsmasq listens on 127.0.0.1 only): drop all v6 DNS
+    # so clients fall back to the v4 localhost sinkhole.
+    add_important_rule "IPv6 block DNS (UDP)" \
+        ip6tables -A OUTPUT -p udp --dport 53 -j DROP
+    add_important_rule "IPv6 block DNS (TCP)" \
+        ip6tables -A OUTPUT -p tcp --dport 53 -j DROP
+    add_important_rule "IPv6 block DNS-over-TLS" \
+        ip6tables -A OUTPUT -p tcp --dport 853 -j DROP
+
+    if ipv6_allow_set_active; then
+        add_important_rule "IPv6 allow HTTP to resolved-whitelist (80)" \
+            ip6tables -A OUTPUT -p tcp --dport 80 -m set --match-set "$OPENPATH_ALLOW_DST_IPSET6" dst -j ACCEPT
+        add_important_rule "IPv6 allow HTTPS to resolved-whitelist (443)" \
+            ip6tables -A OUTPUT -p tcp --dport 443 -m set --match-set "$OPENPATH_ALLOW_DST_IPSET6" dst -j ACCEPT
+        add_important_rule "IPv6 allow NTP to resolved-whitelist (123)" \
+            ip6tables -A OUTPUT -p udp --dport 123 -m set --match-set "$OPENPATH_ALLOW_DST_IPSET6" dst -j ACCEPT
+    else
+        log_warn "IPv6 name-aware egress unavailable (ipset) - allowing broad IPv6 HTTP/HTTPS"
+        add_optional_rule "IPv6 allow HTTP (80)" ip6tables -A OUTPUT -p tcp --dport 80 -j ACCEPT
+        add_optional_rule "IPv6 allow HTTPS (443)" ip6tables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+    fi
+
+    add_critical_rule "IPv6 default deny (DROP all)" \
+        ip6tables -A OUTPUT -j DROP
+
+    # FORWARD mirror so a bridged guest VM cannot route v6 around the host.
+    if bridge_enforcement_enabled; then
+        ip6tables -D FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+        add_important_rule "IPv6 FORWARD allow established" \
+            ip6tables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
+        add_critical_rule "IPv6 FORWARD default deny" \
+            ip6tables -P FORWARD DROP
+    fi
+    return 0
+}
+
+# Restore a permissive IPv6 firewall on deactivation/uninstall.
+deactivate_ipv6_firewall() {
+    ip6tables_available || return 0
+    ip6tables -F OUTPUT 2>/dev/null || true
+    ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
+    ip6tables -P FORWARD ACCEPT 2>/dev/null || true
+    ip6tables -D FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
 }
 
 # DoH egress blocking: DROP tcp/udp :443 to known resolver IPs through an
