@@ -16,6 +16,41 @@ verify_deb_package() {
     dpkg-deb --info "$deb_file" >/dev/null 2>&1
 }
 
+# Verify a downloaded file against an expected sha256 digest. When MANIFEST_SHA256
+# is empty (the manifest did not provide one) this is a NO-OP success: the digest
+# is forward-compatible and not hard-required yet. When present, a mismatch fails
+# closed. NOTE: a manifest-provided digest only proves the file matches what the
+# (already-trusted, origin-checked) manifest claims; full supply-chain provenance
+# still needs a server-provided SIGNED digest (the structural dpkg-deb check and
+# the origin guard remain the other layers).
+verify_downloaded_sha256() {
+    local file="$1"
+    local expected="${MANIFEST_SHA256:-}"
+
+    [ -n "$expected" ] || return 0
+
+    if ! command -v sha256sum >/dev/null 2>&1; then
+        log_error "Manifest supplied a sha256 but sha256sum is unavailable to verify it" >&2
+        return 1
+    fi
+
+    local actual
+    actual=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
+    if [ -z "$actual" ]; then
+        log_error "Could not compute sha256 of downloaded file" >&2
+        return 1
+    fi
+
+    # Case-insensitive hex compare.
+    if [ "$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')" ]; then
+        log_error "Downloaded package sha256 mismatch: expected ${expected}, got ${actual}" >&2
+        return 1
+    fi
+
+    log_debug "Downloaded package sha256 verified"
+    return 0
+}
+
 # Fetch a URL to a local file path, optionally including an authentication header;
 # verifies the result is a valid package and removes the file if the check fails.
 download_url_to_file() {
@@ -38,6 +73,11 @@ download_url_to_file() {
 
     if ! verify_deb_package "$destination_file"; then
         log_error "Downloaded file is not a valid .deb package" >&2
+        rm -f "$destination_file"
+        return 1
+    fi
+
+    if ! verify_downloaded_sha256 "$destination_file"; then
         rm -f "$destination_file"
         return 1
     fi

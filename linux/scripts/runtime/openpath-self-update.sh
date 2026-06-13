@@ -57,10 +57,35 @@ fi
 
 # shellcheck disable=SC2034  # Consumed by sourced helper modules.
 GITHUB_REPO="${OPENPATH_GITHUB_REPO:-balejosg/openpath}"
+# Scratch directories. Use mktemp -d (root-owned, 0700) instead of fixed,
+# predictable /tmp paths: a fixed /tmp/openpath-update[-backup] is an
+# attacker-influenceable path (symlink/pre-create races) that root then copies
+# into. mktemp gives an unguessable per-run directory owned by root with mode
+# 0700. Created lazily by ensure_update_workspace_dirs() so sourcing the script
+# (tests, --check before any install) does not litter /tmp; the package helper
+# cleans them up via cleanup_update_workspace, and an EXIT trap is a backstop.
 # shellcheck disable=SC2034  # Consumed by sourced helper modules.
-DOWNLOAD_DIR="/tmp/openpath-update"
+DOWNLOAD_DIR=""
 # shellcheck disable=SC2034  # Consumed by sourced helper modules.
-BACKUP_DIR="/tmp/openpath-update-backup"
+BACKUP_DIR=""
+
+# Allocate the per-run scratch directories on first use. Idempotent.
+ensure_update_workspace_dirs() {
+    if [ -z "$DOWNLOAD_DIR" ] || [ ! -d "$DOWNLOAD_DIR" ]; then
+        DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openpath-update.XXXXXX")" || return 1
+    fi
+    if [ -z "$BACKUP_DIR" ] || [ ! -d "$BACKUP_DIR" ]; then
+        BACKUP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openpath-update-backup.XXXXXX")" || return 1
+    fi
+    return 0
+}
+
+# Backstop cleanup so an unguessable scratch dir is never left behind on an
+# unexpected exit (the normal path is cleanup_update_workspace).
+_openpath_self_update_cleanup_trap() {
+    [ -n "$DOWNLOAD_DIR" ] && rm -rf "$DOWNLOAD_DIR" 2>/dev/null || true
+    [ -n "$BACKUP_DIR" ] && rm -rf "$BACKUP_DIR" 2>/dev/null || true
+}
 # shellcheck disable=SC2034  # Consumed by sourced helper modules.
 CURRENT_VERSION="${VERSION:-0.0.0}"
 # shellcheck disable=SC2034  # Consumed by sourced helper modules.
@@ -72,11 +97,22 @@ PACKAGE_CACHE_DIR="${OPENPATH_AGENT_PACKAGE_CACHE_DIR:-$VAR_STATE_DIR/packages}"
 LATEST_VERSION=""
 # shellcheck disable=SC2034  # Consumed by sourced helper modules.
 DOWNLOAD_URL=""
+# Compiled-in absolute floor for self-update/rollback targets. MIN_SUPPORTED_VERSION
+# below comes from the (attacker-influenceable) manifest and defaults to 0.0.0,
+# which would let a downgrade to a pre-hardening, name-blind build slip through.
+# This readonly constant is the trust anchor: the effective minimum is the MAX of
+# this and the manifest value, and no target below it is ever installed,
+# regardless of what the manifest claims. Bump it when a release removes a
+# bypass that must never be reintroduced via downgrade.
+# Override only for tests via OPENPATH_COMPILED_MIN_SUPPORTED_VERSION.
+readonly OPENPATH_COMPILED_MIN_SUPPORTED_VERSION="${OPENPATH_COMPILED_MIN_SUPPORTED_VERSION:-0.0.0}"
 MIN_SUPPORTED_VERSION="0.0.0"
 MIN_DIRECT_UPGRADE_VERSION="0.0.0"
 UPDATE_SOURCE="github-release"
 # shellcheck disable=SC2034  # Consumed by sourced helper modules.
 DOWNLOAD_AUTH_HEADER=""
+# shellcheck disable=SC2034  # Set by refresh_update_metadata, consumed by the package helper.
+MANIFEST_SHA256=""
 # shellcheck disable=SC2034  # Consumed by sourced helper modules.
 UPDATE_API_BASE_URL=""
 # shellcheck disable=SC2034  # Consumed by sourced helper modules.
@@ -150,6 +186,27 @@ main() {
     echo "  Latest version:  v${LATEST_VERSION}"
     echo ""
 
+    # Downgrade floor: the manifest's minSupportedVersion is attacker-influenceable,
+    # so clamp the effective minimum UP to the compiled-in constant. A manifest
+    # min lower than what is installed is suspect (a downgrade lure) - keep the
+    # higher floor. The effective floor is also enforced per install target below.
+    local effective_min="$MIN_SUPPORTED_VERSION"
+    local floor_cmp=0
+    compare_versions "$OPENPATH_COMPILED_MIN_SUPPORTED_VERSION" "$effective_min" || floor_cmp=$?
+    if [ "$floor_cmp" -eq 1 ]; then
+        effective_min="$OPENPATH_COMPILED_MIN_SUPPORTED_VERSION"
+    fi
+    MIN_SUPPORTED_VERSION="$effective_min"
+
+    # The advertised latest must itself be at or above the compiled-in floor;
+    # otherwise the manifest is steering us toward a pre-hardening build.
+    local latest_floor_cmp=0
+    compare_versions "$LATEST_VERSION" "$OPENPATH_COMPILED_MIN_SUPPORTED_VERSION" || latest_floor_cmp=$?
+    if [ "$latest_floor_cmp" -eq 2 ]; then
+        echo "✗ Advertised version v${LATEST_VERSION} is below the compiled-in minimum v${OPENPATH_COMPILED_MIN_SUPPORTED_VERSION}; refusing (possible downgrade attack)"
+        exit 1
+    fi
+
     local cmp_result=0
     compare_versions "$LATEST_VERSION" "$current_version" || cmp_result=$?
 
@@ -207,9 +264,26 @@ main() {
         exit 0
     fi
 
+    # Allocate the unguessable root-owned scratch dirs now that an install will
+    # actually happen, and arm the cleanup backstop.
+    ensure_update_workspace_dirs || {
+        echo "✗ Could not create a secure temporary workspace"
+        exit 1
+    }
+    trap _openpath_self_update_cleanup_trap EXIT
+
     local target_version=""
     for target_version in "${UPDATE_SEQUENCE[@]}"; do
         local sequence_cmp=0
+
+        # Never install/rollback below the compiled-in floor, regardless of what
+        # the manifest's bridge/sequence claims.
+        local target_floor_cmp=0
+        compare_versions "$target_version" "$OPENPATH_COMPILED_MIN_SUPPORTED_VERSION" || target_floor_cmp=$?
+        if [ "$target_floor_cmp" -eq 2 ]; then
+            echo "✗ Refusing to install v${target_version}: below compiled-in minimum v${OPENPATH_COMPILED_MIN_SUPPORTED_VERSION}"
+            exit 1
+        fi
 
         if [ "$mode" = "force" ] && [ "$target_version" = "$LATEST_VERSION" ]; then
             install_update "$target_version" "$current_version"

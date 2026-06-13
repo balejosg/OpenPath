@@ -202,7 +202,7 @@ setup() {
     [ "$output" = "none" ]
 }
 
-@test "request runtime config is readable by the Firefox native host user" {
+@test "tokenized whitelist-url.conf is not world-readable (token confidentiality)" {
     local etc_dir="$TEST_TMP_DIR/etc/openpath"
 
     export ETC_CONFIG_DIR="$etc_dir"
@@ -219,7 +219,9 @@ setup() {
 
     [ "$(stat -c '%a' "$etc_dir")" = "755" ]
     [ "$(stat -c '%a' "$etc_dir/api-url.conf")" = "644" ]
-    [ "$(stat -c '%a' "$WHITELIST_URL_CONF")" = "644" ]
+    # whitelist-url.conf embeds the machine bearer token in the path, so it must
+    # be 640 (root:root, no world bit), not 644. Only root-run scripts read it.
+    [ "$(stat -c '%a' "$WHITELIST_URL_CONF")" = "640" ]
 }
 
 @test "parse_whitelist_sections preserves protected always-allowed domains and strips their block rules" {

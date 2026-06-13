@@ -392,7 +392,7 @@ source_firewall() {
     ensure_allow_dst_ipset
     ensure_allow_dst_ipset
 
-    [ "$(grep -c "create openpath-allow-dst hash:ip timeout 600 -exist" "$IPSET_LOG")" -eq 2 ]
+    [ "$(grep -c "create openpath-allow-dst hash:ip timeout 300 -exist" "$IPSET_LOG")" -eq 2 ]
 }
 
 @test "ensure_allow_dst_ipset is a no-op when name-aware egress is disabled" {
@@ -420,7 +420,7 @@ source_firewall() {
 
     activate_firewall
 
-    grep -q "create openpath-allow-dst hash:ip timeout 600 -exist" "$IPSET_LOG"
+    grep -q "create openpath-allow-dst hash:ip timeout 300 -exist" "$IPSET_LOG"
     grep -q -- "-A OUTPUT -p tcp --dport 443 -m set --match-set openpath-allow-dst dst -j ACCEPT" "$IPTABLES_LOG"
     grep -q -- "-A OUTPUT -p tcp --dport 80 -m set --match-set openpath-allow-dst dst -j ACCEPT" "$IPTABLES_LOG"
     # The legacy broad HTTPS ACCEPT must be gone (that was the name-blind hole).
@@ -525,22 +525,37 @@ source_firewall() {
 
     ensure_allow_dst_ipset
 
-    grep -q "create openpath-allow-dst hash:ip timeout 600 -exist" "$IPSET_LOG"
-    grep -q "create openpath-allow-dst6 hash:ip family inet6 timeout 600 -exist" "$IPSET_LOG"
+    grep -q "create openpath-allow-dst hash:ip timeout 300 -exist" "$IPSET_LOG"
+    grep -q "create openpath-allow-dst6 hash:ip family inet6 timeout 300 -exist" "$IPSET_LOG"
 }
 
-@test "apply_ipv6_firewall mirrors the v4 policy with ICMPv6 allowed and v6 DNS dropped" {
+@test "apply_ipv6_firewall mirrors the v4 policy with ICMPv6 NDP/RA allowed and v6 DNS dropped" {
     source_firewall
 
     apply_ipv6_firewall
 
     grep -q -- "-A OUTPUT -o lo -j ACCEPT" "$IP6TABLES_LOG"
-    grep -q -- "-A OUTPUT -p ipv6-icmp -j ACCEPT" "$IP6TABLES_LOG"
+    # NDP/RA control messages stay (v6 is non-functional without them)...
+    grep -q -- "-A OUTPUT -p ipv6-icmp --icmpv6-type router-advertisement -j ACCEPT" "$IP6TABLES_LOG"
+    grep -q -- "-A OUTPUT -p ipv6-icmp --icmpv6-type neighbour-solicitation -j ACCEPT" "$IP6TABLES_LOG"
+    grep -q -- "-A OUTPUT -p ipv6-icmp --icmpv6-type destination-unreachable -j ACCEPT" "$IP6TABLES_LOG"
+    # ...but the blanket ipv6-icmp ACCEPT (which permitted a v6 ping-tunnel) is gone.
+    ! grep -q -- "-A OUTPUT -p ipv6-icmp -j ACCEPT" "$IP6TABLES_LOG"
     grep -q -- "-A OUTPUT -p udp --dport 53 -j DROP" "$IP6TABLES_LOG"
     grep -q -- "-A OUTPUT -p tcp --dport 53 -j DROP" "$IP6TABLES_LOG"
     grep -q -- "-A OUTPUT -j DROP" "$IP6TABLES_LOG"
     # v4 OUTPUT chain is untouched by the v6 builder.
     [ ! -f "$IPTABLES_LOG" ]
+}
+
+@test "apply_ipv6_firewall scopes ICMPv6 echo-request to the inet6 allow set" {
+    source_firewall
+
+    apply_ipv6_firewall
+
+    grep -q -- "-A OUTPUT -p ipv6-icmp --icmpv6-type echo-request -m set --match-set openpath-allow-dst6 dst -j ACCEPT" "$IP6TABLES_LOG"
+    # No blanket echo-request to any v6 destination.
+    ! grep -q -- "-A OUTPUT -p ipv6-icmp --icmpv6-type echo-request -j ACCEPT" "$IP6TABLES_LOG"
 }
 
 @test "apply_ipv6_firewall scopes 80/443 to the inet6 allow set and applies FORWARD deny" {
@@ -583,6 +598,89 @@ source_firewall() {
     grep -q -- "-A OUTPUT -d 10.1.2.0/24 -j ACCEPT" "$IPTABLES_LOG"
     # The broad default ranges are not emitted when a narrower list is set.
     ! grep -q -- "-A OUTPUT -d 10.0.0.0/8 -j ACCEPT" "$IPTABLES_LOG"
+}
+
+@test "apply_rfc1918_egress_rules emits a blanket all-ports ACCEPT in default (all) mode" {
+    source_firewall
+
+    apply_rfc1918_egress_rules
+
+    # Legacy default: every RFC1918 CIDR is ACCEPTed on all ports.
+    grep -q -- "-A OUTPUT -d 10.0.0.0/8 -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -d 172.16.0.0/12 -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -d 192.168.0.0/16 -j ACCEPT" "$IPTABLES_LOG"
+}
+
+@test "apply_rfc1918_egress_rules restricted mode does NOT emit a blanket all-ports ACCEPT" {
+    export RFC1918_EGRESS_MODE="restricted"
+    source_firewall
+
+    apply_rfc1918_egress_rules
+
+    # No CIDR is ACCEPTed without a protocol+port scope (the tethered-proxy hole).
+    ! grep -qE -- "-A OUTPUT -d [0-9./]+ -j ACCEPT" "$IPTABLES_LOG"
+    # Instead each CIDR is scoped to the minimal port set (tcp+udp 53/80/443).
+    grep -q -- "-A OUTPUT -d 10.0.0.0/8 -p tcp --dport 443 -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -d 192.168.0.0/16 -p udp --dport 53 -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -d 172.16.0.0/12 -p tcp --dport 80 -j ACCEPT" "$IPTABLES_LOG"
+}
+
+@test "apply_rfc1918_egress_rules restricted mode honors a custom RFC1918_ALLOW_PORTS" {
+    export RFC1918_EGRESS_MODE="restricted"
+    export RFC1918_ALLOW_PORTS="8080"
+    export RFC1918_ALLOW="192.168.0.0/16"
+    source_firewall
+
+    apply_rfc1918_egress_rules
+
+    grep -q -- "-A OUTPUT -d 192.168.0.0/16 -p tcp --dport 8080 -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -d 192.168.0.0/16 -p udp --dport 8080 -j ACCEPT" "$IPTABLES_LOG"
+    ! grep -q -- "--dport 443" "$IPTABLES_LOG"
+}
+
+# ============== ipset timeout alignment (F-C) ==============
+
+@test "ensure_allow_dst_ipset uses a timeout aligned to the DNS cache TTL (300s)" {
+    source_firewall
+
+    ensure_allow_dst_ipset
+
+    # Default allow-set timeout is now 300 (<= dnsmasq max-cache-ttl), not 600.
+    grep -q "create openpath-allow-dst hash:ip timeout 300 -exist" "$IPSET_LOG"
+    ! grep -q "timeout 600" "$IPSET_LOG"
+}
+
+# ============== ICMP egress scoping (F-D) ==============
+
+@test "apply_icmp_egress_rules scopes echo-request to the allow set and keeps PMTUD types" {
+    source_firewall
+
+    apply_icmp_egress_rules
+
+    grep -q -- "-A OUTPUT -p icmp --icmp-type echo-request -m set --match-set openpath-allow-dst dst -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -p icmp --icmp-type destination-unreachable -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -p icmp --icmp-type time-exceeded -j ACCEPT" "$IPTABLES_LOG"
+    # The blanket all-ICMP ACCEPT (ping-tunnel covert channel) is gone.
+    ! grep -q -- "-A OUTPUT -p icmp -j ACCEPT" "$IPTABLES_LOG"
+}
+
+@test "apply_icmp_egress_rules falls back to broad ICMP when name-aware egress disabled" {
+    export ALLOW_SET_EGRESS_ENABLED="0"
+    source_firewall
+
+    apply_icmp_egress_rules
+
+    grep -q -- "-A OUTPUT -p icmp -j ACCEPT" "$IPTABLES_LOG"
+    ! grep -q -- "--icmp-type echo-request -m set" "$IPTABLES_LOG"
+}
+
+@test "activate_firewall scopes ICMP echo-request to the allow set by default" {
+    source_firewall
+
+    activate_firewall
+
+    grep -q -- "-A OUTPUT -p icmp --icmp-type echo-request -m set --match-set openpath-allow-dst dst -j ACCEPT" "$IPTABLES_LOG"
+    ! grep -q -- "-A OUTPUT -p icmp -j ACCEPT" "$IPTABLES_LOG"
 }
 
 @test "activate_firewall logs dropped egress before the default deny (v4 and v6)" {

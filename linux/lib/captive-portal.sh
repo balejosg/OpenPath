@@ -31,6 +31,9 @@ set -o pipefail
 CAPTIVE_PORTAL_STATE_FILE="${CAPTIVE_PORTAL_STATE_FILE:-$VAR_STATE_DIR/captive-portal-active.state}"
 CAPTIVE_PORTAL_OBSERVATION_FILE="${CAPTIVE_PORTAL_OBSERVATION_FILE:-$VAR_STATE_DIR/captive-portal-observation.state}"
 CAPTIVE_DNSMASQ_BACKUP_FILE="${CAPTIVE_DNSMASQ_BACKUP_FILE:-$VAR_STATE_DIR/openpath.conf.pre-portal}"
+# Records the epoch of the last forced/expired portal-mode close, used to gate
+# re-entry for CAPTIVE_PORTAL_REENTRY_COOLDOWN_SECONDS (anti-flap, F-F).
+CAPTIVE_PORTAL_COOLDOWN_FILE="${CAPTIVE_PORTAL_COOLDOWN_FILE:-$VAR_STATE_DIR/captive-portal-cooldown.state}"
 
 is_portal_mode_active() {
     [ -f "$CAPTIVE_PORTAL_STATE_FILE" ]
@@ -60,6 +63,38 @@ get_portal_mode_start_ts() {
 # expiresAt.
 ################################################################################
 
+# Read a CLOCK_MONOTONIC reference (integer seconds of system uptime). Unlike
+# the wall clock this never jumps backward on NTP step / manual clock change, so
+# it is the trustworthy elapsed-time source for the absolute lifetime cap.
+read_monotonic_seconds() {
+    local uptime_raw
+    if [ -r /proc/uptime ]; then
+        uptime_raw=$(awk '{print int($1)}' /proc/uptime 2>/dev/null)
+        if [[ "$uptime_raw" =~ ^[0-9]+$ ]]; then
+            echo "$uptime_raw"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Print the marker's stored CLOCK_MONOTONIC reference (mono_start= line).
+# Returns 1 when absent/invalid (e.g. a legacy marker, or a host without
+# /proc/uptime when the marker was written).
+get_portal_mode_mono_start_ts() {
+    if [ ! -f "$CAPTIVE_PORTAL_STATE_FILE" ]; then
+        return 1
+    fi
+
+    local mono
+    mono=$(sed -n 's/^mono_start=//p' "$CAPTIVE_PORTAL_STATE_FILE" 2>/dev/null | head -1)
+    if [[ "$mono" =~ ^[0-9]+$ ]]; then
+        echo "$mono"
+        return 0
+    fi
+    return 1
+}
+
 # Print the marker's expiry epoch. Returns 1 when the marker is absent or
 # carries no (valid) expiry.
 get_portal_mode_expiry_ts() {
@@ -85,9 +120,14 @@ is_portal_mode_expired() {
 
 # Write the portal-mode marker with a fresh expiry deadline.
 # Args: 1) start epoch (preserved across refreshes)
+#       2) optional CLOCK_MONOTONIC start reference (preserved across refreshes;
+#          defaults to the current monotonic reading on first write)
 # The new expires value is clamped so it never exceeds start_ts + MAX_LIFETIME.
+# The monotonic reference is persisted so the lifetime cap can be enforced even
+# when the wall clock jumps backward.
 write_portal_mode_marker() {
     local start_ts="$1"
+    local mono_start="${2:-}"
     local ttl="${CAPTIVE_PORTAL_TTL_SECONDS:-120}"
     local max_lifetime="${CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS:-1800}"
 
@@ -96,6 +136,10 @@ write_portal_mode_marker() {
     fi
     if ! [[ "$max_lifetime" =~ ^[0-9]+$ ]] || [ "$max_lifetime" -lt 1 ]; then
         max_lifetime=1800
+    fi
+
+    if [ -z "$mono_start" ]; then
+        mono_start=$(read_monotonic_seconds || true)
     fi
 
     local now hard_deadline expires
@@ -110,6 +154,9 @@ write_portal_mode_marker() {
     {
         echo "$start_ts"
         echo "expires=$expires"
+        if [[ "$mono_start" =~ ^[0-9]+$ ]]; then
+            echo "mono_start=$mono_start"
+        fi
     } > "$CAPTIVE_PORTAL_STATE_FILE" 2>/dev/null || true
 }
 
@@ -121,7 +168,7 @@ write_portal_mode_marker() {
 refresh_portal_mode_expiry() {
     is_portal_mode_active || return 1
 
-    local start_ts now max_lifetime elapsed
+    local start_ts now max_lifetime wall_elapsed mono_start mono_now mono_elapsed effective_elapsed
     if ! start_ts=$(get_portal_mode_start_ts); then
         start_ts=$(date +%s)
     fi
@@ -132,14 +179,43 @@ refresh_portal_mode_expiry() {
         max_lifetime=1800
     fi
 
-    elapsed=$(( now - start_ts ))
-    if [ "$elapsed" -ge "$max_lifetime" ]; then
-        log "[CAPTIVE] Portal passthrough absolute lifetime cap reached (${elapsed}s >= ${max_lifetime}s) - forcing close" "WARN"
+    # Wall-clock elapsed. A backward clock jump (NTP step, manual change) makes
+    # this negative; treating it as "cap reached" fails CLOSED so the portal
+    # passthrough cannot be held open indefinitely by moving the clock back.
+    wall_elapsed=$(( now - start_ts ))
+    if [ "$wall_elapsed" -lt 0 ]; then
+        log "[CAPTIVE] Portal passthrough negative wall-clock elapsed (${wall_elapsed}s) - clock jumped backward; forcing close (fail-closed)" "WARN"
+        record_portal_reentry_cooldown
         with_openpath_lock exit_portal_mode_locked
         return 0
     fi
 
-    write_portal_mode_marker "$start_ts"
+    # Monotonic elapsed (immune to wall-clock jumps). Cap on whichever source
+    # shows MORE elapsed time, so neither a backward jump nor a missing
+    # reference can extend the passthrough past the cap.
+    effective_elapsed="$wall_elapsed"
+    if mono_start=$(get_portal_mode_mono_start_ts) && mono_now=$(read_monotonic_seconds); then
+        mono_elapsed=$(( mono_now - mono_start ))
+        if [ "$mono_elapsed" -lt 0 ]; then
+            # Monotonic went backward (uptime reset / impossible) - fail closed.
+            log "[CAPTIVE] Portal passthrough negative monotonic elapsed (${mono_elapsed}s) - forcing close (fail-closed)" "WARN"
+            record_portal_reentry_cooldown
+            with_openpath_lock exit_portal_mode_locked
+            return 0
+        fi
+        if [ "$mono_elapsed" -gt "$effective_elapsed" ]; then
+            effective_elapsed="$mono_elapsed"
+        fi
+    fi
+
+    if [ "$effective_elapsed" -ge "$max_lifetime" ]; then
+        log "[CAPTIVE] Portal passthrough absolute lifetime cap reached (${effective_elapsed}s >= ${max_lifetime}s) - forcing close" "WARN"
+        record_portal_reentry_cooldown
+        with_openpath_lock exit_portal_mode_locked
+        return 0
+    fi
+
+    write_portal_mode_marker "$start_ts" "$mono_start"
 }
 
 # Watchdog/detector auto-close hook: restore protections when the passthrough
@@ -150,6 +226,7 @@ close_expired_portal_mode() {
     is_portal_mode_expired || return 1
 
     log "[CAPTIVE] Portal passthrough deadline expired - restoring protections" "WARN"
+    record_portal_reentry_cooldown
     with_openpath_lock exit_portal_mode_locked
 }
 
@@ -207,9 +284,69 @@ update_captive_portal_observation() {
     return 0
 }
 
-# Returns 0 once enough consecutive PORTAL observations have accumulated.
-# The caller still gates on "not already in portal mode".
+# Reset the consecutive-observation counters to zero. Called on portal-mode
+# exit so a stale PORTAL count from the just-closed session cannot immediately
+# re-trip entry (a toggling portal would otherwise re-grant passthrough).
+reset_captive_portal_observation() {
+    mkdir -p "$(dirname "$CAPTIVE_PORTAL_OBSERVATION_FILE")" 2>/dev/null || true
+    {
+        echo "portal_count=0"
+        echo "authenticated_count=0"
+        echo "detected_state=RESET"
+        echo "updated_at=$(date +%s)"
+    } > "$CAPTIVE_PORTAL_OBSERVATION_FILE" 2>/dev/null || true
+    return 0
+}
+
+# Record the epoch of a forced/expired portal-mode close so re-entry can be
+# refused during the cooldown window.
+record_portal_reentry_cooldown() {
+    mkdir -p "$(dirname "$CAPTIVE_PORTAL_COOLDOWN_FILE")" 2>/dev/null || true
+    date +%s > "$CAPTIVE_PORTAL_COOLDOWN_FILE" 2>/dev/null || true
+    return 0
+}
+
+# Clear any recorded cooldown (e.g. on a clean authenticated exit where flapping
+# is not a concern, or on uninstall).
+clear_portal_reentry_cooldown() {
+    rm -f "$CAPTIVE_PORTAL_COOLDOWN_FILE" 2>/dev/null || true
+    return 0
+}
+
+# Returns 0 (cooldown active) when a forced/expired close happened within the
+# last CAPTIVE_PORTAL_REENTRY_COOLDOWN_SECONDS. A backward clock jump (negative
+# elapsed) is treated as cooldown-active (fail-closed: do not re-open). Returns
+# 1 when no cooldown is recorded, the window has elapsed, or the feature is
+# disabled (cooldown seconds = 0).
+portal_reentry_cooldown_active() {
+    local cooldown="${CAPTIVE_PORTAL_REENTRY_COOLDOWN_SECONDS:-300}"
+    if ! [[ "$cooldown" =~ ^[0-9]+$ ]]; then
+        cooldown=300
+    fi
+    [ "$cooldown" -eq 0 ] && return 1
+
+    [ -f "$CAPTIVE_PORTAL_COOLDOWN_FILE" ] || return 1
+
+    local capped_at now elapsed
+    capped_at=$(head -1 "$CAPTIVE_PORTAL_COOLDOWN_FILE" 2>/dev/null)
+    [[ "$capped_at" =~ ^[0-9]+$ ]] || return 1
+
+    now=$(date +%s)
+    elapsed=$(( now - capped_at ))
+    if [ "$elapsed" -lt 0 ]; then
+        # Clock jumped backward since the close - keep the cooldown closed.
+        return 0
+    fi
+    [ "$elapsed" -lt "$cooldown" ]
+}
+
+# Returns 0 once enough consecutive PORTAL observations have accumulated AND no
+# re-entry cooldown is in force. The caller still gates on "not already in
+# portal mode".
 should_enter_portal_mode() {
+    if portal_reentry_cooldown_active; then
+        return 1
+    fi
     local threshold="${CAPTIVE_PORTAL_ENTER_THRESHOLD:-2}"
     [ "$(get_captive_portal_observation_count portal)" -ge "$threshold" ]
 }
@@ -311,6 +448,40 @@ get_active_ssid() {
         | awk -F: '$1=="yes" {print $2; exit}'
 }
 
+# Whether captive-portal passthrough is scoped to portal/recovery hosts rather
+# than opening all egress. Default off (see CAPTIVE_PORTAL_SCOPED_PASSTHROUGH_ENABLED
+# in defaults.conf): scoped passthrough can break unpredictable portal login
+# flows and cannot be validated here without a real portal.
+captive_portal_scoped_passthrough_enabled() {
+    case "$(printf '%s' "${CAPTIVE_PORTAL_SCOPED_PASSTHROUGH_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+        0 | false | no | off | disabled | "") return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# Relax the firewall for the portal-login window. When scoped passthrough is
+# enabled (opt-in), the restrictive firewall is kept active and only the
+# resolved-whitelist allow set (which the passthrough DNS config populates with
+# the declared portal/recovery hosts) is reachable, instead of opening all
+# egress. When disabled (default), fall back to the legacy full deactivate so
+# arbitrary portal-login assets remain reachable.
+apply_captive_portal_passthrough_firewall() {
+    if captive_portal_scoped_passthrough_enabled; then
+        log "[CAPTIVE] Scoped passthrough enabled - keeping restrictive firewall (portal hosts only)" "WARN"
+        # Re-apply the restrictive firewall so 80/443 stay scoped to the allow
+        # set; the passthrough dnsmasq config resolves the declared portal hosts
+        # into that set. Bypass blocks (DoH/VPN/Tor) stay in force.
+        activate_firewall
+        return 0
+    fi
+
+    # deactivate_firewall also relaxes the bypass blocks (DoH ipset rules,
+    # VPN interface/port blocks, Tor port blocks) and destroys the
+    # openpath-doh-block ipset so portal login pages on HTTPS resolver
+    # infrastructure are reachable during the passthrough window.
+    deactivate_firewall
+}
+
 enter_portal_mode_locked() {
     mkdir -p "$VAR_STATE_DIR" 2>/dev/null || true
 
@@ -345,11 +516,9 @@ enter_portal_mode_locked() {
         fi
     fi
 
-    # deactivate_firewall also relaxes the bypass blocks (DoH ipset rules,
-    # VPN interface/port blocks, Tor port blocks) and destroys the
-    # openpath-doh-block ipset so portal login pages on HTTPS resolver
-    # infrastructure are reachable during the passthrough window.
-    deactivate_firewall
+    # Relax the firewall for the login window. Default: full deactivate (legacy);
+    # opt-in scoped mode keeps the restrictive firewall (CAPTIVE_PORTAL_SCOPED_PASSTHROUGH_ENABLED).
+    apply_captive_portal_passthrough_firewall
     flush_connections 2>/dev/null || true
 
     write_portal_mode_marker "$(date +%s)"
@@ -380,6 +549,10 @@ exit_portal_mode_locked() {
 
     rm -f "$CAPTIVE_DNSMASQ_BACKUP_FILE" 2>/dev/null || true
     rm -f "$CAPTIVE_PORTAL_STATE_FILE" 2>/dev/null || true
+
+    # Reset the consecutive-observation counters so a stale PORTAL count from the
+    # session that just closed cannot immediately re-trip entry (anti-flap, F-F).
+    reset_captive_portal_observation
 
     activate_firewall
     flush_connections 2>/dev/null || true

@@ -115,10 +115,17 @@ EOF
         create_tmpfiles_config
         install_nm_dispatcher
         
+        # Step 9b: Ensure the early-boot firewall-restore unit is present (boot
+        # fail-open fix). Regenerate it via services.sh so the script and .deb
+        # installer paths produce an identical unit. The ExecStart script is
+        # staged into /usr/local/bin by the package build.
+        create_firewall_restore_service
+
         # Step 10: Reload systemd and enable services
         echo "  Enabling services..."
         systemctl daemon-reload
-        
+
+        systemctl enable openpath-firewall-restore.service
         systemctl enable dnsmasq
         systemctl enable openpath-dnsmasq.timer
         systemctl enable openpath-agent-update.timer

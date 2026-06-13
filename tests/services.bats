@@ -329,6 +329,101 @@ EOF
     grep -q "newhash" "$DNSMASQ_CONF_HASH"
 }
 
+# ============== Early-boot firewall restore (boot fail-open fix, F-A) ==============
+
+@test "create_firewall_restore_service defines an early-boot fail-closed unit" {
+    run grep -nF 'create_firewall_restore_service()' "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+
+    # Runs before the network is configured so OUTPUT is never ACCEPT at boot.
+    run grep -nF 'DefaultDependencies=no' "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+    run grep -nF 'Before=network-pre.target' "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+    run grep -nF 'ExecStart=/usr/local/bin/openpath-firewall-restore.sh' "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "create_systemd_services wires the firewall-restore service first" {
+    run grep -nF 'create_firewall_restore_service' "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "enable_services enables the firewall-restore service" {
+    run grep -nF 'systemctl enable openpath-firewall-restore.service' "$PROJECT_DIR/linux/lib/services.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "openpath-firewall-restore.sh seeds a fail-closed ruleset when no saved rules exist" {
+    local script="$PROJECT_DIR/linux/scripts/runtime/openpath-firewall-restore.sh"
+    local iptables_log="$TEST_TMP_DIR/iptables.log"
+    local ip6tables_log="$TEST_TMP_DIR/ip6tables.log"
+
+    cat > "$TEST_TMP_DIR/iptables" <<EOF
+#!/bin/bash
+echo "\$*" >> "$iptables_log"
+exit 0
+EOF
+    cat > "$TEST_TMP_DIR/ip6tables" <<EOF
+#!/bin/bash
+echo "\$*" >> "$ip6tables_log"
+exit 0
+EOF
+    # ipset present so the script still recreates the empty allow sets.
+    cat > "$TEST_TMP_DIR/ipset" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$TEST_TMP_DIR/iptables" "$TEST_TMP_DIR/ip6tables" "$TEST_TMP_DIR/ipset"
+
+    export OPENPATH_IPTABLES_RULES_V4="$TEST_TMP_DIR/missing-rules.v4"
+    export OPENPATH_IPTABLES_RULES_V6="$TEST_TMP_DIR/missing-rules.v6"
+    export OPENPATH_IPSET_STATE_FILE="$TEST_TMP_DIR/missing-ipsets.v4"
+    export PATH="$TEST_TMP_DIR:$PATH"
+
+    run "$script"
+    [ "$status" -eq 0 ]
+
+    # Default-deny OUTPUT with only loopback / established / localhost DNS / DHCP.
+    grep -q -- "-A OUTPUT -o lo -j ACCEPT" "$iptables_log"
+    grep -q -- "-A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT" "$iptables_log"
+    grep -q -- "-A OUTPUT -j DROP" "$iptables_log"
+    grep -q -- "-P OUTPUT DROP" "$iptables_log"
+}
+
+@test "openpath-firewall-restore.sh recreates allow ipsets then restores saved rules" {
+    local script="$PROJECT_DIR/linux/scripts/runtime/openpath-firewall-restore.sh"
+    local ipset_log="$TEST_TMP_DIR/ipset.log"
+    local restore_log="$TEST_TMP_DIR/restore.log"
+
+    printf '*filter\n:OUTPUT DROP [0:0]\nCOMMIT\n' > "$TEST_TMP_DIR/rules.v4"
+
+    cat > "$TEST_TMP_DIR/ipset" <<EOF
+#!/bin/bash
+echo "\$*" >> "$ipset_log"
+exit 0
+EOF
+    cat > "$TEST_TMP_DIR/iptables-restore" <<EOF
+#!/bin/bash
+cat >> "$restore_log"
+exit 0
+EOF
+    chmod +x "$TEST_TMP_DIR/ipset" "$TEST_TMP_DIR/iptables-restore"
+
+    export OPENPATH_IPTABLES_RULES_V4="$TEST_TMP_DIR/rules.v4"
+    export OPENPATH_IPTABLES_RULES_V6="$TEST_TMP_DIR/missing-rules.v6"
+    export OPENPATH_IPSET_STATE_FILE="$TEST_TMP_DIR/missing-ipsets.v4"
+    export PATH="$TEST_TMP_DIR:$PATH"
+
+    run "$script"
+    [ "$status" -eq 0 ]
+
+    # Allow sets are recreated BEFORE restore (rules.v4 references them).
+    grep -q "create openpath-allow-dst hash:ip timeout 300 -exist" "$ipset_log"
+    # Saved ruleset was fed to iptables-restore.
+    grep -q "OUTPUT DROP" "$restore_log"
+}
+
 # ============== Tests de enable_services / disable_services ==============
 
 @test "enable_services runs without errors" {

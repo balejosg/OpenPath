@@ -25,6 +25,7 @@
 create_systemd_services() {
     log "Creating systemd services..."
     
+    create_firewall_restore_service
     create_whitelist_service
     create_whitelist_timer
     create_agent_update_service
@@ -42,6 +43,35 @@ create_systemd_services() {
     systemctl daemon-reload
     
     log "✓ Systemd services created"
+}
+
+# Early-boot firewall restore (boot fail-open fix). Runs before the network is
+# configured (DefaultDependencies=no, Before/Wants=network-pre.target) so the
+# saved OUTPUT default-deny is in force from the first moment an interface could
+# carry traffic, instead of leaving OUTPUT policy ACCEPT for the ~2 min until the
+# dnsmasq timer first fires openpath-update.sh. The script recreates the
+# referenced ipsets first, restores rules.v4/.v6, and seeds a fail-closed ruleset
+# if none is saved.
+create_firewall_restore_service() {
+    cat > /etc/systemd/system/openpath-firewall-restore.service << 'EOF'
+[Unit]
+Description=OpenPath Early-Boot Firewall Restore (fail-closed)
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/openpath-firewall-restore.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
 }
 
 # Whitelist update service
@@ -251,6 +281,7 @@ EOF
 enable_services() {
     log "Enabling services..."
     
+    systemctl enable openpath-firewall-restore.service
     systemctl enable dnsmasq
     systemctl enable openpath-dnsmasq.timer
     systemctl enable openpath-agent-update.timer
@@ -258,7 +289,7 @@ enable_services() {
     systemctl enable captive-portal-detector.service
     systemctl enable openpath-sse-listener.service 2>/dev/null || true
     systemctl enable openpath-runtime-dependency-apply.path
-    
+
     systemctl start openpath-dnsmasq.timer
     systemctl start openpath-agent-update.timer
     systemctl start dnsmasq-watchdog.timer
@@ -287,7 +318,8 @@ disable_services() {
     systemctl disable dnsmasq-watchdog.timer 2>/dev/null || true
     systemctl disable captive-portal-detector.service 2>/dev/null || true
     systemctl disable openpath-runtime-dependency-apply.path 2>/dev/null || true
-    
+    systemctl disable openpath-firewall-restore.service 2>/dev/null || true
+
     log "✓ Services disabled"
 }
 
@@ -297,6 +329,7 @@ remove_services() {
     
     disable_services
     
+    rm -f /etc/systemd/system/openpath-firewall-restore.service
     rm -f /etc/systemd/system/openpath-dnsmasq.service
     rm -f /etc/systemd/system/openpath-dnsmasq.timer
     rm -f /etc/systemd/system/openpath-agent-update.service

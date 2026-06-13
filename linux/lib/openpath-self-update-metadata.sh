@@ -30,6 +30,23 @@ extract_url_origin() {
     printf '%s\n' "$url" | sed -nE 's#^(https?://[^/]+).*$#\1#p'
 }
 
+# Returns 0 when the download URL's origin (scheme://host[:port]) equals the
+# configured API origin. Used to reject a manifest downloadPath that points at a
+# different origin than the API we authenticated to (the direct .deb fetch is
+# not gpg-verified, unlike APT installs).
+download_url_matches_configured_origin() {
+    local download_url="$1"
+    local configured_origin="$2"
+
+    [ -n "$configured_origin" ] || return 1
+
+    local download_origin
+    download_origin=$(extract_url_origin "$download_url")
+    [ -n "$download_origin" ] || return 1
+
+    [ "${download_origin%/}" = "${configured_origin%/}" ]
+}
+
 get_configured_api_base_url() {
     if [ ! -r "$API_URL_CONF" ]; then
         return 1
@@ -119,6 +136,20 @@ refresh_update_metadata() {
             log_error "Cannot resolve Linux agent download URL from API manifest"
             return 1
         }
+
+        # Cross-origin guard: the manifest's downloadPath may be an absolute URL
+        # to ANY origin. The .deb fetched here is NOT gpg-verified (only APT
+        # installs are), so following a download to an attacker-chosen origin
+        # would install an unverified package. Require the resolved download
+        # origin to match the configured API origin; reject otherwise. Full
+        # provenance still needs a server-provided signed digest (see sha256
+        # verification in download_url_to_file).
+        if ! download_url_matches_configured_origin "$DOWNLOAD_URL" "$origin"; then
+            log_error "Refusing cross-origin agent download: $(extract_url_origin "$DOWNLOAD_URL") != ${origin}"
+            return 1
+        fi
+
+        MANIFEST_SHA256=$(parse_json_string_field "$response" "sha256")
         MIN_SUPPORTED_VERSION=$(parse_json_string_field "$response" "minSupportedVersion")
         MIN_DIRECT_UPGRADE_VERSION=$(parse_json_string_field "$response" "minDirectUpgradeVersion")
         mapfile -t BRIDGE_VERSIONS < <(parse_json_string_array_field "$response" "bridgeVersions" | sort -uV)
@@ -161,6 +192,7 @@ refresh_update_metadata() {
     DOWNLOAD_AUTH_HEADER=""
     UPDATE_API_BASE_URL=""
     BRIDGE_VERSIONS=()
+    MANIFEST_SHA256=""
     MIN_SUPPORTED_VERSION="0.0.0"
     MIN_DIRECT_UPGRADE_VERSION="0.0.0"
 }

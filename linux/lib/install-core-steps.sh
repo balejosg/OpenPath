@@ -186,6 +186,11 @@ step_install_scripts() {
     cp "$INSTALLER_SOURCE_DIR/scripts/runtime/openpath-agent-update.sh" "$SCRIPTS_DIR/"
     chmod +x "$SCRIPTS_DIR/openpath-agent-update.sh"
 
+    # Early-boot firewall restore (boot fail-open fix): ExecStart of the
+    # openpath-firewall-restore.service unit created by create_systemd_services.
+    cp "$INSTALLER_SOURCE_DIR/scripts/runtime/openpath-firewall-restore.sh" "$SCRIPTS_DIR/"
+    chmod +x "$SCRIPTS_DIR/openpath-firewall-restore.sh"
+
     create_dns_init_script
 
     mkdir -p "$ETC_CONFIG_DIR"
@@ -258,6 +263,17 @@ ALL ALL=(root) NOPASSWD: /usr/local/bin/openpath help
 # System commands (internal only, not exposed to users)
 ALL ALL=(root) NOPASSWD: /usr/local/bin/openpath-update.sh
 ALL ALL=(root) NOPASSWD: /usr/local/bin/dnsmasq-watchdog.sh
+
+# Harden the passwordless system commands against environment tampering. Both
+# scripts source defaults.conf, which honors OPENPATH_*/path environment
+# overrides; without env_reset a caller could pass OPENPATH_* to relax an
+# enforcement knob (or hijack PATH) through the NOPASSWD grant regardless of the
+# host's global sudoers posture. env_reset strips the caller environment and
+# secure_path pins a trusted command search path for these two commands only.
+Defaults!/usr/local/bin/openpath-update.sh env_reset
+Defaults!/usr/local/bin/openpath-update.sh secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Defaults!/usr/local/bin/dnsmasq-watchdog.sh env_reset
+Defaults!/usr/local/bin/dnsmasq-watchdog.sh secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # NOTE: The following commands REQUIRE the root password:
 # openpath update, enable, disable, force, restart, rotate-token, enroll, setup

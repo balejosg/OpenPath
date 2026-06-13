@@ -237,7 +237,11 @@ persist_openpath_whitelist_url() {
         return 1
     fi
 
-    write_openpath_config_file "$WHITELIST_URL_CONF" "$whitelist_url" 644
+    # 640, not 644: the tokenized whitelist URL embeds the machine bearer token
+    # (/w/<token>/whitelist.txt), so it must not be world-readable. Only
+    # root-run scripts read it (config persistence helpers run as root, and
+    # read_single_line_file falls back to `sudo -n cat` for non-root callers).
+    write_openpath_config_file "$WHITELIST_URL_CONF" "$whitelist_url" 640
 }
 
 persist_openpath_health_api_config() {

@@ -68,8 +68,10 @@ activate_firewall() {
     # dnsmasq loads its ipset= directives.
     ensure_allow_dst_ipset
 
-    add_optional_rule "Allow ICMP (ping)" \
-        iptables -A OUTPUT -p icmp -j ACCEPT
+    # ICMP echo-request scoped to the allow set (anti ping-tunnel); error types
+    # (PMTUD/diagnostics) kept. Must follow ensure_allow_dst_ipset so the set
+    # exists before the match-set rule references it.
+    apply_icmp_egress_rules
     add_optional_rule "Allow DHCP (ports 67-68)" \
         iptables -A OUTPUT -p udp --dport 67:68 -j ACCEPT
     # HTTP/HTTPS and NTP scoped to resolved-whitelist IPs (or broad as fallback).

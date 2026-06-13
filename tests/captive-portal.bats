@@ -900,3 +900,186 @@ EOF
     new_expiry=$(get_portal_mode_expiry_ts)
     [ "$new_expiry" -le "$hard_deadline" ]
 }
+
+# ============== Clock-jump / monotonic lifetime cap (F-E) ==============
+
+@test "write_portal_mode_marker persists a monotonic reference" {
+    _source_portal_lib
+
+    write_portal_mode_marker "$(date +%s)"
+
+    # mono_start= is written from /proc/uptime on hosts that have it.
+    if [ -r /proc/uptime ]; then
+        run get_portal_mode_mono_start_ts
+        [ "$status" -eq 0 ]
+        [[ "$output" =~ ^[0-9]+$ ]]
+    fi
+}
+
+@test "refresh_portal_mode_expiry forces close on a backward wall-clock jump (fail-closed)" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS=1800
+
+    # start_ts in the FUTURE simulates the wall clock having jumped backward
+    # since the marker was written (now - start_ts < 0).
+    local start_ts
+    start_ts=$(( $(date +%s) + 600 ))
+    printf '%s\nexpires=%s\n' "$start_ts" "$(($(date +%s) + 300))" \
+        > "$CAPTIVE_PORTAL_STATE_FILE"
+
+    with_openpath_lock() { "$@"; }
+    exit_portal_mode_locked() {
+        rm -f "$CAPTIVE_PORTAL_STATE_FILE"
+        echo "EXIT_PORTAL_MODE_CALLED"
+    }
+
+    run refresh_portal_mode_expiry
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"EXIT_PORTAL_MODE_CALLED"* ]]
+    [[ "$output" == *"clock jumped backward"* ]]
+    [ ! -f "$CAPTIVE_PORTAL_STATE_FILE" ]
+}
+
+@test "refresh_portal_mode_expiry caps on monotonic elapsed even when wall clock looks fresh" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS=60
+
+    # Wall clock says only 1s elapsed (start_ts = now-1), but the stored
+    # monotonic reference is far in the past, so monotonic elapsed > cap. The
+    # cap must fire on the monotonic source.
+    local start_ts now
+    now=$(date +%s)
+    start_ts=$(( now - 1 ))
+
+    # Mock the monotonic source: pretend uptime advanced 1000s past mono_start=5.
+    read_monotonic_seconds() { echo 1005; }
+    export -f read_monotonic_seconds
+
+    printf '%s\nexpires=%s\nmono_start=5\n' "$start_ts" "$(( now + 300 ))" \
+        > "$CAPTIVE_PORTAL_STATE_FILE"
+
+    with_openpath_lock() { "$@"; }
+    exit_portal_mode_locked() {
+        rm -f "$CAPTIVE_PORTAL_STATE_FILE"
+        echo "EXIT_PORTAL_MODE_CALLED"
+    }
+
+    run refresh_portal_mode_expiry
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"EXIT_PORTAL_MODE_CALLED"* ]]
+    [[ "$output" == *"absolute lifetime cap reached"* ]]
+}
+
+# ============== Re-entry cooldown + observation reset (F-F) ==============
+
+@test "should_enter_portal_mode refuses re-entry during the cooldown window" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_REENTRY_COOLDOWN_SECONDS=300
+    export CAPTIVE_PORTAL_ENTER_THRESHOLD=1
+
+    # Enough PORTAL observations to normally enter...
+    update_captive_portal_observation "PORTAL"
+    run should_enter_portal_mode
+    [ "$status" -eq 0 ]
+
+    # ...but a recent forced close records a cooldown that blocks re-entry.
+    record_portal_reentry_cooldown
+    run should_enter_portal_mode
+    [ "$status" -eq 1 ]
+}
+
+@test "portal_reentry_cooldown_active expires after the cooldown window" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_REENTRY_COOLDOWN_SECONDS=60
+
+    # Cooldown recorded 120s ago -> window elapsed.
+    printf '%s\n' "$(( $(date +%s) - 120 ))" > "$CAPTIVE_PORTAL_COOLDOWN_FILE"
+    run portal_reentry_cooldown_active
+    [ "$status" -eq 1 ]
+
+    # Cooldown recorded 10s ago -> still active.
+    printf '%s\n' "$(( $(date +%s) - 10 ))" > "$CAPTIVE_PORTAL_COOLDOWN_FILE"
+    run portal_reentry_cooldown_active
+    [ "$status" -eq 0 ]
+}
+
+@test "portal_reentry_cooldown_active treats a backward clock jump as active (fail-closed)" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_REENTRY_COOLDOWN_SECONDS=60
+
+    # Cooldown timestamp in the future (clock jumped back since the close).
+    printf '%s\n' "$(( $(date +%s) + 120 ))" > "$CAPTIVE_PORTAL_COOLDOWN_FILE"
+    run portal_reentry_cooldown_active
+    [ "$status" -eq 0 ]
+}
+
+@test "cooldown is disabled when CAPTIVE_PORTAL_REENTRY_COOLDOWN_SECONDS=0" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_REENTRY_COOLDOWN_SECONDS=0
+
+    record_portal_reentry_cooldown
+    run portal_reentry_cooldown_active
+    [ "$status" -eq 1 ]
+}
+
+@test "reset_captive_portal_observation zeroes both counters" {
+    _source_portal_lib
+
+    update_captive_portal_observation "PORTAL"
+    update_captive_portal_observation "PORTAL"
+    [ "$(get_captive_portal_observation_count portal)" -eq 2 ]
+
+    reset_captive_portal_observation
+    [ "$(get_captive_portal_observation_count portal)" -eq 0 ]
+    [ "$(get_captive_portal_observation_count authenticated)" -eq 0 ]
+}
+
+@test "refresh_portal_mode_expiry records a re-entry cooldown when it force-closes on the cap" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS=60
+
+    local start_ts
+    start_ts=$(( $(date +%s) - 61 ))
+    printf '%s\nexpires=%s\n' "$start_ts" "$(($(date +%s) + 60))" \
+        > "$CAPTIVE_PORTAL_STATE_FILE"
+
+    with_openpath_lock() { "$@"; }
+    exit_portal_mode_locked() { rm -f "$CAPTIVE_PORTAL_STATE_FILE"; }
+
+    run refresh_portal_mode_expiry
+    [ "$status" -eq 0 ]
+    [ -f "$CAPTIVE_PORTAL_COOLDOWN_FILE" ]
+}
+
+# ============== Scoped passthrough flag (F-G, default off) ==============
+
+@test "defaults.conf ships scoped passthrough OFF by default" {
+    source "$PROJECT_DIR/linux/lib/defaults.conf"
+    [ "$CAPTIVE_PORTAL_SCOPED_PASSTHROUGH_ENABLED" = "0" ]
+}
+
+@test "apply_captive_portal_passthrough_firewall deactivates the firewall when scoped passthrough is off (default)" {
+    _source_portal_lib
+    unset CAPTIVE_PORTAL_SCOPED_PASSTHROUGH_ENABLED
+
+    deactivate_firewall() { echo "MOCK_DEACTIVATE"; }
+    activate_firewall() { echo "MOCK_ACTIVATE"; }
+
+    run apply_captive_portal_passthrough_firewall
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"MOCK_DEACTIVATE"* ]]
+    [[ "$output" != *"MOCK_ACTIVATE"* ]]
+}
+
+@test "apply_captive_portal_passthrough_firewall keeps the firewall active when scoped passthrough is enabled" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_SCOPED_PASSTHROUGH_ENABLED=1
+
+    deactivate_firewall() { echo "MOCK_DEACTIVATE"; }
+    activate_firewall() { echo "MOCK_ACTIVATE"; }
+
+    run apply_captive_portal_passthrough_firewall
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"MOCK_ACTIVATE"* ]]
+    [[ "$output" != *"MOCK_DEACTIVATE"* ]]
+}

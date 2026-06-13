@@ -65,7 +65,15 @@ OPENPATH_IPSET_STATE_FILE="${OPENPATH_IPSET_STATE_FILE:-/etc/iptables/openpath-i
 # See apply_http_egress_rules and emit_dnsmasq_allow_domain (dns-dnsmasq.sh).
 OPENPATH_ALLOW_DST_IPSET="${OPENPATH_ALLOW_DST_IPSET:-openpath-allow-dst}"
 OPENPATH_ALLOW_DST_IPSET6="${OPENPATH_ALLOW_DST_IPSET6:-openpath-allow-dst6}"
-OPENPATH_ALLOW_SET_TIMEOUT="${OPENPATH_ALLOW_SET_TIMEOUT:-600}"
+# Entries in the egress allow set must not outlive the DNS answer that put a
+# shared CDN IP there: dnsmasq caps cached answers at max-cache-ttl=300s
+# (dns-dnsmasq.sh), so the allow-set timeout is aligned to <= that value. A
+# longer timeout (the previous 600s default) widened the window in which a
+# recycled/shared IP that has stopped resolving for an allowed domain stays
+# reachable for whatever now answers on it. Residual: IP-layer scoping cannot
+# distinguish two names that share one IP (domain-fronting on a shared front),
+# so timeout-alignment only shrinks the reuse window, it does not close it.
+OPENPATH_ALLOW_SET_TIMEOUT="${OPENPATH_ALLOW_SET_TIMEOUT:-300}"
 
 ipv6_firewall_enabled() { openpath_flag_enabled "${IPV6_FIREWALL_ENABLED:-1}"; }
 ip6tables_available() { command -v ip6tables >/dev/null 2>&1; }
@@ -173,21 +181,96 @@ apply_ntp_egress_rules() {
         iptables -A OUTPUT -p udp --dport 123 -j ACCEPT
 }
 
+# Intranet egress mode. "all" (default, legacy) ACCEPTs every RFC1918 CIDR on
+# ALL ports; that is a full tunnel through any LAN/USB-tethered box running a
+# proxy (a tethered phone presents a fresh RFC1918 interface). "restricted"
+# scopes the intranet ACCEPT to RFC1918_ALLOW_PORTS only (the minimal set a
+# local gateway/captive-portal flow legitimately needs), so a LAN proxy on an
+# arbitrary high port is no longer a tunnel. The secure mode is opt-in because
+# some deployments rely on broad LAN reachability (printers, file shares,
+# admin services); flip it on with OPENPATH_RFC1918_EGRESS_MODE=restricted once
+# the deployment's LAN needs are known. SECURITY: leaving this at "all" keeps
+# the tethered-proxy full-tunnel hole open -- prefer "restricted".
+rfc1918_egress_mode() {
+    printf '%s' "${RFC1918_EGRESS_MODE:-all}" | tr '[:upper:]' '[:lower:]'
+}
+
 # Intranet egress. Allow a configurable list of private/intranet CIDRs (default:
 # all RFC1918). Operators can narrow RFC1918_ALLOW to the specific ranges their
-# deployment needs, shrinking the LAN/USB-tethered-proxy blast radius.
+# deployment needs, shrinking the LAN/USB-tethered-proxy blast radius. In
+# "restricted" mode the per-CIDR ACCEPT is further port-scoped to
+# RFC1918_ALLOW_PORTS so a LAN/tethered proxy on an arbitrary port is not a
+# full tunnel.
 apply_rfc1918_egress_rules() {
     local ranges_raw="${RFC1918_ALLOW:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
     local ranges=()
     IFS=',' read -r -a ranges <<< "$ranges_raw"
 
+    local mode
+    mode="$(rfc1918_egress_mode)"
+
+    local -a ports=()
+    if [ "$mode" = "restricted" ]; then
+        # Minimal set a local gateway / captive-portal flow needs: DNS to a LAN
+        # resolver (53), local web/portal (80/443), DHCP is already handled
+        # globally elsewhere. NTP/other LAN services can be added via
+        # RFC1918_ALLOW_PORTS if a deployment requires them.
+        local ports_raw="${RFC1918_ALLOW_PORTS:-53,80,443}"
+        IFS=',' read -r -a ports <<< "$ports_raw"
+    fi
+
     local cidr
     for cidr in "${ranges[@]}"; do
         cidr="${cidr//[[:space:]]/}"
         [ -z "$cidr" ] && continue
-        add_optional_rule "Allow intranet $cidr" \
-            iptables -A OUTPUT -d "$cidr" -j ACCEPT
+
+        if [ "$mode" = "restricted" ]; then
+            local port proto
+            for port in "${ports[@]}"; do
+                port="${port//[[:space:]]/}"
+                [ -z "$port" ] && continue
+                if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+                    log_warn "Skipping invalid RFC1918 allow port: $port"
+                    continue
+                fi
+                for proto in tcp udp; do
+                    add_optional_rule "Allow intranet $cidr ($proto/$port)" \
+                        iptables -A OUTPUT -d "$cidr" -p "$proto" --dport "$port" -j ACCEPT
+                done
+            done
+        else
+            add_optional_rule "Allow intranet $cidr" \
+                iptables -A OUTPUT -d "$cidr" -j ACCEPT
+        fi
     done
+}
+
+# ICMP egress. The previous rule ACCEPTed all ICMP to any destination, which is
+# a covert channel (ping-tunnel: data smuggled in echo-request payloads to an
+# arbitrary host). Scope echo-request to the resolved-whitelist allow set when
+# name-aware egress is active, so a student can only ping IPs an allowed domain
+# resolved to; keep the error types that path MTU discovery and connectivity
+# diagnostics depend on (destination-unreachable carries the PMTUD "frag needed"
+# message; time-exceeded is traceroute/TTL). Falls back to a broad ICMP ACCEPT
+# when name-aware egress is unavailable so connectivity is never lost on kernels
+# without ipset.
+apply_icmp_egress_rules() {
+    if allow_set_egress_active; then
+        add_optional_rule "Allow ICMP echo-request to resolved-whitelist IPs" \
+            iptables -A OUTPUT -p icmp --icmp-type echo-request -m set --match-set "$OPENPATH_ALLOW_DST_IPSET" dst -j ACCEPT
+        # PMTUD and diagnostics: keep the error/reply types regardless of dest.
+        add_optional_rule "Allow ICMP destination-unreachable (PMTUD)" \
+            iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j ACCEPT
+        add_optional_rule "Allow ICMP time-exceeded" \
+            iptables -A OUTPUT -p icmp --icmp-type time-exceeded -j ACCEPT
+        add_optional_rule "Allow ICMP echo-reply" \
+            iptables -A OUTPUT -p icmp --icmp-type echo-reply -j ACCEPT
+        return 0
+    fi
+
+    log_warn "Name-aware egress inactive (ipset unavailable or disabled) - allowing broad ICMP"
+    add_optional_rule "Allow ICMP (ping)" \
+        iptables -A OUTPUT -p icmp -j ACCEPT
 }
 
 bridge_enforcement_enabled() { openpath_flag_enabled "${BRIDGE_ENFORCEMENT_ENABLED:-1}"; }
@@ -294,8 +377,27 @@ apply_ipv6_firewall() {
         ip6tables -A OUTPUT -o lo -j ACCEPT
     add_critical_rule "IPv6 allow established" \
         ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-    add_critical_rule "IPv6 allow ICMPv6 (NDP/RA)" \
-        ip6tables -A OUTPUT -p ipv6-icmp -j ACCEPT
+    # NDP/RA/MLD control messages must stay (v6 is non-functional without them):
+    # neighbour/router solicit+advert and redirect. echo-request (covert
+    # ping-tunnel) is handled separately below so it can be scoped to the allow
+    # set rather than blanket-accepted.
+    local icmp6_type
+    for icmp6_type in destination-unreachable packet-too-big time-exceeded parameter-problem \
+        router-solicitation router-advertisement neighbour-solicitation neighbour-advertisement redirect; do
+        add_optional_rule "IPv6 allow ICMPv6 ${icmp6_type} (NDP/RA/PMTUD)" \
+            ip6tables -A OUTPUT -p ipv6-icmp --icmpv6-type "$icmp6_type" -j ACCEPT
+    done
+    if ipv6_allow_set_active; then
+        add_optional_rule "IPv6 allow ICMPv6 echo-request to resolved-whitelist" \
+            ip6tables -A OUTPUT -p ipv6-icmp --icmpv6-type echo-request -m set --match-set "$OPENPATH_ALLOW_DST_IPSET6" dst -j ACCEPT
+        add_optional_rule "IPv6 allow ICMPv6 echo-reply" \
+            ip6tables -A OUTPUT -p ipv6-icmp --icmpv6-type echo-reply -j ACCEPT
+    else
+        # No allow set to scope against: keep echo open so connectivity checks
+        # still work in the degraded path.
+        add_optional_rule "IPv6 allow ICMPv6 echo-request (broad fallback)" \
+            ip6tables -A OUTPUT -p ipv6-icmp --icmpv6-type echo-request -j ACCEPT
+    fi
     add_optional_rule "IPv6 allow DHCPv6" \
         ip6tables -A OUTPUT -p udp --dport 546:547 -j ACCEPT
 
