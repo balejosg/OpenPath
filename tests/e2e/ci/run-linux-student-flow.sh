@@ -88,7 +88,10 @@ finish_timing_phase() {
     ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     ended_ns="$(date +%s%N)"
     duration_ms=$(((ended_ns - started_ns) / 1000000))
-    duration_seconds="$(awk -v ms="$duration_ms" 'BEGIN { printf "%.3f", ms / 1000 }')"
+    # Force C locale so awk's printf uses a '.' decimal separator regardless of
+    # the host locale; otherwise a comma-decimal locale (e.g. es_ES) yields
+    # "3,319", which the timings aggregator's float() parse rejects.
+    duration_seconds="$(LC_ALL=C awk -v ms="$duration_ms" 'BEGIN { printf "%.3f", ms / 1000 }')"
     error_message="${error_message//$'\t'/ }"
     error_message="${error_message//$'\n'/ }"
 
@@ -914,6 +917,10 @@ main() {
     require_command python3
 
     mkdir -p "$ARTIFACTS_DIR"
+    # Start each run with fresh timing evidence; the TSV is append-only, so stale
+    # rows from a prior run (e.g. one written under a different locale) would
+    # otherwise be re-parsed by write_timing_evidence and break the aggregation.
+    rm -f "$TIMINGS_TSV" "$TIMINGS_JSON"
 
     reserve_runtime_ports
     run_timed_step "Build workspaces" prepare_workspace
