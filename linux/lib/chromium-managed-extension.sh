@@ -10,6 +10,24 @@ generate_chromium_policies() {
         "/etc/opt/chrome/policies/managed"
     )
 
+    # The managed extension id is persisted at install time. When present we
+    # emit a non-removable ExtensionInstallForcelist entry so the extension
+    # cannot be disabled from chrome://extensions.
+    local managed_ext_id=""
+    local ext_id_file
+    ext_id_file="$(get_chromium_extension_id_file)"
+    if [ -f "$ext_id_file" ]; then
+        managed_ext_id="$(tr -d '\r\n' < "$ext_id_file" 2>/dev/null || true)"
+    fi
+
+    local forcelist_args=()
+    if [ -n "$managed_ext_id" ]; then
+        forcelist_args=(--extension-id "$managed_ext_id")
+        if [ -n "${CHROMIUM_EXTENSION_UPDATE_URL:-}" ]; then
+            forcelist_args+=(--extension-update-url "$CHROMIUM_EXTENSION_UPDATE_URL")
+        fi
+    fi
+
     for dir in "${dirs[@]}"; do
         mkdir -p "$dir"
 
@@ -17,7 +35,8 @@ generate_chromium_policies() {
         OPENPATH_BLOCKED_PATHS="$(printf '%s\n' "${BLOCKED_PATHS[@]}")" \
         run_browser_json_helper \
             write-chromium-policy \
-            --output "$dir/openpath.json"
+            --output "$dir/openpath.json" \
+            "${forcelist_args[@]}"
     done
 
     log "✓ Chromium policies generated"

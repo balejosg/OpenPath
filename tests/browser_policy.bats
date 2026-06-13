@@ -221,6 +221,87 @@ PYEOF
     run grep -nF '"stagedReleaseInstallUrl"' "$PROJECT_DIR/tests/contracts/browser-firefox-managed-extension.json"
     [ "$status" -eq 0 ]
 }
+
+@test "add_extension_to_policies emits Firefox DNS/SafeMode/aboutConfig hardening" {
+    source "$PROJECT_DIR/linux/lib/browser.sh"
+
+    run add_extension_to_policies "openpath-block-monitor@openpath" "$TEST_TMP_DIR/ext"
+    [ "$status" -eq 0 ]
+
+    python3 - <<PYEOF
+import json
+
+with open("$FIREFOX_POLICIES", "r", encoding="utf-8") as fh:
+    policies = json.load(fh)
+
+policy_root = policies["policies"]
+
+assert policy_root["DNSOverHTTPS"] == {"Enabled": False, "Locked": True}, policy_root.get("DNSOverHTTPS")
+assert policy_root["DisableSafeMode"] is True, policy_root.get("DisableSafeMode")
+assert policy_root["BlockAboutConfig"] is True, policy_root.get("BlockAboutConfig")
+PYEOF
+}
+
+@test "add_extension_to_policies blocks other add-ons while keeping managed extension installed" {
+    source "$PROJECT_DIR/linux/lib/browser.sh"
+
+    run add_extension_to_policies "openpath-block-monitor@openpath" "$TEST_TMP_DIR/ext"
+    [ "$status" -eq 0 ]
+
+    python3 - <<PYEOF
+import json
+
+with open("$FIREFOX_POLICIES", "r", encoding="utf-8") as fh:
+    policies = json.load(fh)
+
+settings = policies["policies"]["ExtensionSettings"]
+assert settings["*"]["installation_mode"] == "blocked", settings
+assert settings["openpath-block-monitor@openpath"]["installation_mode"] == "force_installed", settings
+PYEOF
+}
+
+@test "add_extension_to_policies locks network.trr/proxy/prefetch Preferences" {
+    source "$PROJECT_DIR/linux/lib/browser.sh"
+
+    run add_extension_to_policies "openpath-block-monitor@openpath" "$TEST_TMP_DIR/ext"
+    [ "$status" -eq 0 ]
+
+    python3 - <<PYEOF
+import json
+
+with open("$FIREFOX_POLICIES", "r", encoding="utf-8") as fh:
+    policies = json.load(fh)
+
+prefs = policies["policies"]["Preferences"]
+assert prefs["network.trr.mode"] == {"Value": 5, "Status": "locked"}, prefs.get("network.trr.mode")
+assert prefs["network.proxy.type"]["Status"] == "locked", prefs.get("network.proxy.type")
+assert prefs["network.dns.disablePrefetch"] == {"Value": True, "Status": "locked"}, prefs.get("network.dns.disablePrefetch")
+PYEOF
+}
+
+@test "remove_firefox_extension clears Firefox hardening and add-on block" {
+    source "$PROJECT_DIR/linux/lib/browser.sh"
+
+    run add_extension_to_policies "openpath-block-monitor@openpath" "$TEST_TMP_DIR/ext"
+    [ "$status" -eq 0 ]
+
+    run remove_firefox_extension
+    [ "$status" -eq 0 ]
+
+    python3 - <<PYEOF
+import json
+
+with open("$FIREFOX_POLICIES", "r", encoding="utf-8") as fh:
+    policies = json.load(fh)
+
+policy_root = policies["policies"]
+assert "DNSOverHTTPS" not in policy_root, policy_root
+assert "DisableSafeMode" not in policy_root, policy_root
+assert "BlockAboutConfig" not in policy_root, policy_root
+assert "Preferences" not in policy_root, policy_root
+assert "*" not in policy_root.get("ExtensionSettings", {}), policy_root.get("ExtensionSettings")
+PYEOF
+}
 #!/usr/bin/env bats
 ################################################################################
 # browser_policy.bats - Firefox policy and shared browser policy tests

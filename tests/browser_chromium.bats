@@ -146,6 +146,77 @@ EOF
     [ "$status" -eq 0 ]
     [ "$output" = "DuckDuckGo" ]
 }
+
+@test "generate_chromium_policies emits DnsOverHttpsMode and pinned default search" {
+    BLOCKED_PATHS=("example.com/ads")
+
+    source "$PROJECT_DIR/linux/lib/browser.sh"
+
+    run generate_chromium_policies
+    [ "$status" -eq 0 ]
+
+    python3 - <<PYEOF
+import json
+
+with open("$CHROMIUM_POLICIES_BASE/openpath.json", "r", encoding="utf-8") as fh:
+    policy = json.load(fh)
+
+assert policy["DnsOverHttpsMode"] == "off", policy
+assert policy["DnsOverHttpsTemplates"] == "", policy
+assert policy["DefaultSearchProviderEnabled"] is True, policy
+assert policy["DefaultSearchProviderName"] == "DuckDuckGo", policy
+assert "URLBlocklist" in policy, policy
+PYEOF
+}
+
+@test "generate_chromium_policies force-installs managed extension when id is known" {
+    export OPENPATH_CHROMIUM_EXTENSION_DIR="$TEST_TMP_DIR/browser-extension"
+    mkdir -p "$OPENPATH_CHROMIUM_EXTENSION_DIR"
+    BLOCKED_PATHS=("example.com/ads")
+
+    source "$PROJECT_DIR/linux/lib/browser.sh"
+
+    printf '%s\n' "abcdefghijklmnopabcdefghijklmnop" > "$(get_chromium_extension_id_file)"
+
+    run generate_chromium_policies
+    [ "$status" -eq 0 ]
+
+    python3 - <<PYEOF
+import json
+
+with open("$CHROMIUM_POLICIES_BASE/openpath.json", "r", encoding="utf-8") as fh:
+    policy = json.load(fh)
+
+forcelist = policy["ExtensionInstallForcelist"]
+assert len(forcelist) == 1, forcelist
+assert forcelist[0].startswith("abcdefghijklmnopabcdefghijklmnop;"), forcelist
+PYEOF
+}
+
+@test "generate_chromium_policies honours CHROMIUM_EXTENSION_UPDATE_URL override" {
+    export OPENPATH_CHROMIUM_EXTENSION_DIR="$TEST_TMP_DIR/browser-extension"
+    mkdir -p "$OPENPATH_CHROMIUM_EXTENSION_DIR"
+    export CHROMIUM_EXTENSION_UPDATE_URL="https://school.example/api/extensions/chromium/updates.xml"
+    BLOCKED_PATHS=()
+
+    source "$PROJECT_DIR/linux/lib/browser.sh"
+
+    printf '%s\n' "abcdefghijklmnopabcdefghijklmnop" > "$(get_chromium_extension_id_file)"
+
+    run generate_chromium_policies
+    [ "$status" -eq 0 ]
+
+    python3 - <<PYEOF
+import json
+
+with open("$CHROMIUM_POLICIES_BASE/openpath.json", "r", encoding="utf-8") as fh:
+    policy = json.load(fh)
+
+assert policy["ExtensionInstallForcelist"] == [
+    "abcdefghijklmnopabcdefghijklmnop;https://school.example/api/extensions/chromium/updates.xml"
+], policy
+PYEOF
+}
 #!/usr/bin/env bats
 ################################################################################
 # browser_chromium.bats - Chromium browser integration tests

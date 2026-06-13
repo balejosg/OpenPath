@@ -198,6 +198,54 @@ def cmd_resolve_firefox_release_policy(args: argparse.Namespace) -> int:
     return 3
 
 
+def apply_firefox_hardening(policy_root: dict, ext_id: str) -> None:
+    """Emit the spec-declared Firefox enterprise hardening into policy_root.
+
+    Locks DNS-over-HTTPS off, disables Safe Mode and about:config (which would
+    otherwise let a user disable the managed extension or override DNS/proxy),
+    pins proxy/TRR/prefetch preferences, and blocks all non-managed add-ons via
+    the ExtensionSettings wildcard while keeping the managed extension allowed.
+
+    Unrelated existing keys are preserved; managed-extension force-install and
+    lock are applied separately by the caller.
+    """
+    spec = load_browser_policy_spec()
+    firefox_spec = spec.get("firefox", {}) if isinstance(spec, dict) else {}
+    if not isinstance(firefox_spec, dict):
+        firefox_spec = {}
+
+    doh_spec = firefox_spec.get("dnsOverHttps", {})
+    if not isinstance(doh_spec, dict):
+        doh_spec = {}
+    policy_root["DNSOverHTTPS"] = {
+        "Enabled": bool(doh_spec.get("Enabled", False)),
+        "Locked": bool(doh_spec.get("Locked", True)),
+    }
+
+    policy_root["DisableSafeMode"] = True
+    policy_root["BlockAboutConfig"] = True
+
+    # Block every add-on except the managed extension. A specific id entry
+    # overrides the "*" catch-all, so the managed extension stays installable.
+    extension_settings = policy_root.setdefault("ExtensionSettings", {})
+    if isinstance(extension_settings, dict):
+        extension_settings["*"] = {"installation_mode": "blocked"}
+
+    # Lock the DNS/proxy/prefetch surface so it cannot be re-pointed at an
+    # unfiltered resolver via policy. network.trr.mode=5 == TRR off (DoH off).
+    preferences = policy_root.setdefault("Preferences", {})
+    if isinstance(preferences, dict):
+        locked_prefs = {
+            "network.trr.mode": 5,
+            "network.trr.uri": "",
+            "network.proxy.type": 0,
+            "network.proxy.no_proxies_on": "",
+            "network.dns.disablePrefetch": True,
+        }
+        for pref_name, pref_value in locked_prefs.items():
+            preferences[pref_name] = {"Value": pref_value, "Status": "locked"}
+
+
 def cmd_mutate_firefox_policies(args: argparse.Namespace) -> int:
     policies_file = Path(args.policies_file)
     action = args.action
@@ -225,6 +273,8 @@ def cmd_mutate_firefox_policies(args: argparse.Namespace) -> int:
             "installation_mode": "force_installed",
             "install_url": install_url,
         }
+
+        apply_firefox_hardening(policy_root, ext_id)
 
         extensions = policy_root.setdefault("Extensions", {})
         installs = extensions.setdefault("Install", [])
@@ -259,6 +309,13 @@ def cmd_mutate_firefox_policies(args: argparse.Namespace) -> int:
     elif action == "remove_managed_extension":
         extension_settings = policy_root.get("ExtensionSettings", {})
         managed_entry = extension_settings.pop(ext_id, None)
+        # Drop the catch-all add-on block and the hardening keys the managed
+        # extension installed, so removing OpenPath does not leave a policy that
+        # blocks every add-on with no managed extension to allow.
+        if isinstance(extension_settings, dict):
+            extension_settings.pop("*", None)
+        for hardening_key in ("DNSOverHTTPS", "DisableSafeMode", "BlockAboutConfig", "Preferences"):
+            policy_root.pop(hardening_key, None)
         if not extension_settings:
             policy_root.pop("ExtensionSettings", None)
 
@@ -295,6 +352,11 @@ def cmd_mutate_firefox_policies(args: argparse.Namespace) -> int:
     return 0
 
 
+CHROMIUM_DEFAULT_EXTENSION_UPDATE_URL = (
+    "https://clients2.google.com/service/update2/crx"
+)
+
+
 def cmd_write_chromium_policy(args: argparse.Namespace) -> int:
     output_path = Path(args.output)
     blocked_paths = env_blocked_paths()
@@ -317,6 +379,37 @@ def cmd_write_chromium_policy(args: argparse.Namespace) -> int:
             *[str(path) for path in google_game_blocks if str(path).strip()],
         ]
     }
+
+    # Force-install the managed extension as a non-removable enterprise policy
+    # so it cannot be disabled from chrome://extensions. The external_crx
+    # descriptor only delivers the binary; ExtensionInstallForcelist is the
+    # durable, user-proof mechanism.
+    extension_id = str(getattr(args, "extension_id", "") or "").strip()
+    if extension_id:
+        update_url = (
+            str(getattr(args, "extension_update_url", "") or "").strip()
+            or CHROMIUM_DEFAULT_EXTENSION_UPDATE_URL
+        )
+        policy["ExtensionInstallForcelist"] = [f"{extension_id};{update_url}"]
+
+    # Lock DNS-over-HTTPS off (OpenPath enforces DNS at the resolver) and clear
+    # any user-supplied DoH templates so it cannot be re-enabled via policy gaps.
+    dns_over_https_mode = str(chromium_spec.get("dnsOverHttpsMode", "off")).strip() or "off"
+    policy["DnsOverHttpsMode"] = dns_over_https_mode
+    policy["DnsOverHttpsTemplates"] = ""
+
+    # Pin the default search provider (declared in the spec) so search cannot be
+    # silently redirected to an unfiltered engine.
+    search_enabled = chromium_spec.get("defaultSearchProviderEnabled")
+    search_name = chromium_spec.get("defaultSearchProviderName")
+    search_url = chromium_spec.get("defaultSearchProviderSearchURL")
+    if search_enabled is not None:
+        policy["DefaultSearchProviderEnabled"] = bool(int(search_enabled))
+    if search_name:
+        policy["DefaultSearchProviderName"] = str(search_name)
+    if search_url:
+        policy["DefaultSearchProviderSearchURL"] = str(search_url)
+
     save_json_file(output_path, policy)
     return 0
 
@@ -379,6 +472,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     chromium_policy = subparsers.add_parser("write-chromium-policy")
     chromium_policy.add_argument("--output", required=True)
+    chromium_policy.add_argument("--extension-id")
+    chromium_policy.add_argument("--extension-update-url")
     chromium_policy.set_defaults(func=cmd_write_chromium_policy)
 
     rewrite_manifest = subparsers.add_parser("rewrite-chromium-manifest")
