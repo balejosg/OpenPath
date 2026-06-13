@@ -90,6 +90,18 @@ async function ensureMachinesSchema(): Promise<void> {
   );
 }
 
+async function ensureHealthReportsSchema(): Promise<void> {
+  const statements = [
+    'ALTER TABLE "health_reports" ADD COLUMN IF NOT EXISTS "firewall_active" integer;',
+    'ALTER TABLE "health_reports" ADD COLUMN IF NOT EXISTS "whitelist_age_hours" integer;',
+    'ALTER TABLE "health_reports" ADD COLUMN IF NOT EXISTS "captive_portal_mode" integer;',
+  ];
+
+  for (const stmt of statements) {
+    await db.execute(sql.raw(stmt));
+  }
+}
+
 async function ensureClassroomsSchema(): Promise<void> {
   await db.execute(
     sql.raw(
@@ -161,6 +173,7 @@ export async function ensureTestSchema(): Promise<void> {
   await ensureSchedulesOneOffSchema();
   await ensureMachineExemptionsSchema();
   await ensureMachinesSchema();
+  await ensureHealthReportsSchema();
   await ensureEmailVerificationSchema();
   await ensureGroupForeignKeyConstraints();
   await seedBaselineWhitelistGroups();

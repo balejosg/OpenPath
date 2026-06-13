@@ -21,6 +21,9 @@ export interface HealthReport {
   status: string;
   dnsmasqRunning: boolean | null;
   dnsResolving: boolean | null;
+  firewallActive: boolean | null;
+  whitelistAgeHours: number | null;
+  captivePortalMode: boolean | null;
   failCount: number;
   actions: string;
   version: string;
@@ -62,6 +65,10 @@ export async function saveHealthReport(
     status: normalized.status,
     dnsmasqRunning: reportData.dnsmasqRunning === null ? null : reportData.dnsmasqRunning ? 1 : 0,
     dnsResolving: reportData.dnsResolving === null ? null : reportData.dnsResolving ? 1 : 0,
+    firewallActive: reportData.firewallActive === null ? null : reportData.firewallActive ? 1 : 0,
+    whitelistAgeHours: reportData.whitelistAgeHours ?? null,
+    captivePortalMode:
+      reportData.captivePortalMode === null ? null : reportData.captivePortalMode ? 1 : 0,
     failCount: reportData.failCount,
     actions: normalizedActions,
     version: reportData.version,
@@ -135,6 +142,9 @@ export async function getAllReports(): Promise<ReportsData> {
       status: normalizeHealthStatus(report.status).status,
       dnsmasqRunning: report.dnsmasqRunning === null ? null : report.dnsmasqRunning === 1,
       dnsResolving: report.dnsResolving === null ? null : report.dnsResolving === 1,
+      firewallActive: report.firewallActive === null ? null : report.firewallActive === 1,
+      whitelistAgeHours: report.whitelistAgeHours ?? null,
+      captivePortalMode: report.captivePortalMode === null ? null : report.captivePortalMode === 1,
       failCount: report.failCount ?? 0,
       actions: report.actions ?? '',
       version: report.version ?? '',
@@ -172,6 +182,9 @@ export async function getHostReports(hostname: string): Promise<HostData | null>
       status: normalizeHealthStatus(report.status).status,
       dnsmasqRunning: report.dnsmasqRunning === null ? null : report.dnsmasqRunning === 1,
       dnsResolving: report.dnsResolving === null ? null : report.dnsResolving === 1,
+      firewallActive: report.firewallActive === null ? null : report.firewallActive === 1,
+      whitelistAgeHours: report.whitelistAgeHours ?? null,
+      captivePortalMode: report.captivePortalMode === null ? null : report.captivePortalMode === 1,
       failCount: report.failCount ?? 0,
       actions: report.actions ?? '',
       version: report.version ?? '',

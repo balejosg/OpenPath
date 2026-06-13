@@ -315,6 +315,9 @@ export const healthReports = pgTable(
     status: varchar('status', { length: 50 }).notNull(),
     dnsmasqRunning: integer('dnsmasq_running'), // 1=true, 0=false, null=unknown
     dnsResolving: integer('dns_resolving'), // 1=true, 0=false, null=unknown
+    firewallActive: integer('firewall_active'), // 1=true, 0=false, null=unknown
+    whitelistAgeHours: integer('whitelist_age_hours'), // null=unknown
+    captivePortalMode: integer('captive_portal_mode'), // 1=true, 0=false, null=unknown
     failCount: integer('fail_count').default(0),
     actions: text('actions'),
     version: varchar('version', { length: 50 }),

@@ -33,12 +33,21 @@ export const healthReportsRouter = router({
     const resolvedDnsResolving = input.dnsResolving ?? input.dnsState ?? null;
     const resolvedDnsmasqRunning = input.dnsmasqRunning ?? input.dnsState ?? null;
 
+    // Enforcement telemetry (canonical-only; null = the agent did not report it).
+    const resolvedFirewallActive = input.firewallState ?? null;
+    const resolvedWhitelistAgeHours =
+      input.whitelistAgeHours === undefined ? null : Math.round(input.whitelistAgeHours);
+    const resolvedCaptivePortalMode = input.captivePortalMode ?? null;
+
     await healthReports.saveHealthReport(
       machine.hostname,
       stripUndefined({
         status: input.status,
         dnsmasqRunning: resolvedDnsmasqRunning,
         dnsResolving: resolvedDnsResolving,
+        firewallActive: resolvedFirewallActive,
+        whitelistAgeHours: resolvedWhitelistAgeHours,
+        captivePortalMode: resolvedCaptivePortalMode,
         failCount: input.failCount ?? 0,
         actions: input.actions ?? '',
         version: resolvedVersion,
@@ -123,6 +132,27 @@ export const healthReportsRouter = router({
             status: 'STALE',
             lastSeen: host.lastSeen,
             message: `Host hasn't reported in ${String(Math.round(minutesSinceLastSeen))} minutes`,
+          });
+        }
+
+        // Enforcement down: the newest report explicitly says the firewall or DNS
+        // resolution is off. Only an explicit false alarms — null means the agent
+        // did not report the field (old agent / pre-migration), which must NOT
+        // false-alarm the fleet.
+        const latest = host.reports[0];
+        if (latest && (latest.firewallActive === false || latest.dnsResolving === false)) {
+          const down = [
+            latest.firewallActive === false ? 'firewall' : null,
+            latest.dnsResolving === false ? 'dns' : null,
+          ]
+            .filter(Boolean)
+            .join('+');
+          alerts.push({
+            hostname,
+            type: 'enforcement-down',
+            status: host.currentStatus ?? 'UNKNOWN',
+            lastSeen: host.lastSeen,
+            message: `Host reports enforcement DOWN (${down})`,
           });
         }
       }

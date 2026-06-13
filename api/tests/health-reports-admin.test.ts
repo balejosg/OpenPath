@@ -240,6 +240,61 @@ await describe('health-reports admin procedures', async () => {
     );
   });
 
+  await test('getAlerts flags enforcement-down only when a field is explicitly false', async () => {
+    const suffix = `enf-${Date.now().toString()}`;
+
+    // Host A: firewall reported explicitly DOWN -> should alert.
+    const down = await provisionMachineAccess({
+      classroomName: `enf-down-room-${suffix}`,
+      groupName: `enf-down-group-${suffix}`,
+      hostname: `enf-down-host-${suffix}`,
+    });
+    await trpcMutate(
+      'healthReports.submit',
+      { hostname: down.machineHostname, status: 'HEALTHY', firewallState: false, dnsState: true },
+      { Authorization: `Bearer ${down.machineToken}` }
+    );
+
+    // Host B: old agent that does not report enforcement fields (null) -> must NOT alert.
+    const unknown = await provisionMachineAccess({
+      classroomName: `enf-unknown-room-${suffix}`,
+      groupName: `enf-unknown-group-${suffix}`,
+      hostname: `enf-unknown-host-${suffix}`,
+    });
+    await trpcMutate(
+      'healthReports.submit',
+      { hostname: unknown.machineHostname, status: 'HEALTHY' },
+      { Authorization: `Bearer ${unknown.machineToken}` }
+    );
+
+    // Large staleThreshold so only enforcement/status alerts fire, not stale.
+    const response = await trpcQuery(
+      'healthReports.getAlerts',
+      { staleThreshold: 999999 },
+      getAdminBearerAuth()
+    );
+    assert.equal(response.status, 200, 'getAlerts should return 200');
+
+    const result = (await parseTRPC(response)).data as {
+      alerts: { hostname: string; type: string; message: string }[];
+    };
+
+    const downAlert = result.alerts.find(
+      (a) => a.hostname === down.machineHostname && a.type === 'enforcement-down'
+    );
+    assert.ok(downAlert, 'host reporting firewallState=false must raise an enforcement-down alert');
+    assert.match(downAlert.message, /firewall/, 'message should name the down component');
+
+    const unknownAlert = result.alerts.find(
+      (a) => a.hostname === unknown.machineHostname && a.type === 'enforcement-down'
+    );
+    assert.equal(
+      unknownAlert,
+      undefined,
+      'a host with unknown (null) enforcement fields must NOT raise enforcement-down'
+    );
+  });
+
   await test('getAlerts returns stale alert for host exceeding threshold', async () => {
     const suffix = `alerts-stale-${Date.now().toString()}`;
     const machine = await provisionMachineAccess({
