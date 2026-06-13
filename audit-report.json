@@ -1,6 +1,26 @@
 {
   "auditReportVersion": 2,
   "vulnerabilities": {
+    "@esbuild-kit/core-utils": {
+      "name": "@esbuild-kit/core-utils",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["esbuild"],
+      "effects": ["@esbuild-kit/esm-loader"],
+      "range": ">=3.1.0",
+      "nodes": ["node_modules/@esbuild-kit/core-utils"],
+      "fixAvailable": true
+    },
+    "@esbuild-kit/esm-loader": {
+      "name": "@esbuild-kit/esm-loader",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["@esbuild-kit/core-utils"],
+      "effects": [],
+      "range": ">=2.6.0",
+      "nodes": ["node_modules/@esbuild-kit/esm-loader"],
+      "fixAvailable": true
+    },
     "brace-expansion": {
       "name": "brace-expansion",
       "severity": "moderate",
@@ -26,6 +46,73 @@
       "nodes": ["node_modules/brace-expansion"],
       "fixAvailable": true
     },
+    "drizzle-kit": {
+      "name": "drizzle-kit",
+      "severity": "high",
+      "isDirect": true,
+      "via": ["esbuild"],
+      "effects": [],
+      "range": ">=0.19.2-9340465",
+      "nodes": ["node_modules/drizzle-kit"],
+      "fixAvailable": {
+        "name": "drizzle-kit",
+        "version": "0.19.1",
+        "isSemVerMajor": true
+      }
+    },
+    "esbuild": {
+      "name": "esbuild",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1120679,
+          "name": "esbuild",
+          "dependency": "esbuild",
+          "title": "esbuild: Missing binary integrity verification in Deno module enables remote code execution via NPM_CONFIG_REGISTRY",
+          "url": "https://github.com/advisories/GHSA-gv7w-rqvm-qjhr",
+          "severity": "high",
+          "cwe": ["CWE-426", "CWE-494"],
+          "cvss": {
+            "score": 8.1,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+          },
+          "range": ">=0.17.0 <0.28.1"
+        },
+        {
+          "source": 1120680,
+          "name": "esbuild",
+          "dependency": "esbuild",
+          "title": "esbuild allows arbitrary file read when running the development server on Windows",
+          "url": "https://github.com/advisories/GHSA-g7r4-m6w7-qqqr",
+          "severity": "low",
+          "cwe": ["CWE-22"],
+          "cvss": {
+            "score": 2.5,
+            "vectorString": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": ">=0.27.3 <0.28.1"
+        }
+      ],
+      "effects": ["@esbuild-kit/core-utils", "drizzle-kit", "esbuild-register", "tsx", "vite"],
+      "range": "0.17.0 - 0.28.0",
+      "nodes": ["node_modules/esbuild", "node_modules/vite/node_modules/esbuild"],
+      "fixAvailable": {
+        "name": "drizzle-kit",
+        "version": "0.19.1",
+        "isSemVerMajor": true
+      }
+    },
+    "esbuild-register": {
+      "name": "esbuild-register",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["esbuild"],
+      "effects": [],
+      "range": "",
+      "nodes": ["node_modules/esbuild-register"],
+      "fixAvailable": true
+    },
     "gaxios": {
       "name": "gaxios",
       "severity": "moderate",
@@ -46,7 +133,7 @@
       "nodes": ["node_modules/node-notifier"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.3.0",
+        "version": "10.4.0",
         "isSemVerMajor": false
       }
     },
@@ -81,7 +168,7 @@
       "isDirect": false,
       "via": [
         {
-          "source": 1119610,
+          "source": 1120654,
           "name": "tmp",
           "dependency": "tmp",
           "title": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape",
@@ -100,9 +187,19 @@
       "nodes": ["node_modules/tmp"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.3.0",
+        "version": "10.4.0",
         "isSemVerMajor": false
       }
+    },
+    "tsx": {
+      "name": "tsx",
+      "severity": "high",
+      "isDirect": true,
+      "via": ["esbuild"],
+      "effects": [],
+      "range": "3.13.0 - 4.21.1",
+      "nodes": ["node_modules/tsx"],
+      "fixAvailable": true
     },
     "turbo": {
       "name": "turbo",
@@ -171,8 +268,22 @@
       ],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.3.0",
+        "version": "10.4.0",
         "isSemVerMajor": false
+      }
+    },
+    "vite": {
+      "name": "vite",
+      "severity": "high",
+      "isDirect": true,
+      "via": ["esbuild"],
+      "effects": [],
+      "range": "4.2.0-beta.0 - 8.0.3",
+      "nodes": ["node_modules/vite"],
+      "fixAvailable": {
+        "name": "vite",
+        "version": "8.0.16",
+        "isSemVerMajor": true
       }
     },
     "web-ext": {
@@ -185,7 +296,7 @@
       "nodes": ["node_modules/web-ext"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.3.0",
+        "version": "10.4.0",
         "isSemVerMajor": false
       }
     },
@@ -220,9 +331,9 @@
       "info": 0,
       "low": 0,
       "moderate": 7,
-      "high": 2,
+      "high": 9,
       "critical": 0,
-      "total": 9
+      "total": 16
     },
     "dependencies": {
       "prod": 276,

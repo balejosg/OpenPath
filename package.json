@@ -53,7 +53,7 @@
     "format:check": "prettier --check .",
     "format:fix": "prettier --write .",
     "security:secrets": "secretlint '**/*.{js,ts,tsx,json,yml,yaml,env,env.*}' '!coverage/**' '!api/coverage/**' '!react-spa/e2e/test-results/**' '!react-spa/test-results/**' '!react-spa/playwright-report/**'",
-    "security:audit": "tmp=\"$(mktemp \"${TMPDIR:-/tmp}/openpath-audit-report.XXXXXX.json\")\"; npm audit --audit-level=high --json > \"$tmp\" || true; npx prettier --parser json --write \"$tmp\" >/dev/null && mv \"$tmp\" audit-report.json && node scripts/check-npm-audit-critical.mjs audit-report.json",
+    "security:audit": "tmp=\"$(mktemp \"${TMPDIR:-/tmp}/openpath-audit-report.XXXXXX.json\")\"; npm audit --audit-level=high --json > \"$tmp\" || true; mv \"$tmp\" audit-report.json && npx prettier --write audit-report.json >/dev/null && node scripts/check-npm-audit-critical.mjs audit-report.json",
     "security:files": "bash scripts/check-sensitive-files.sh",
     "size:check": "test -d react-spa/dist && npm run size --workspace=@openpath/react-spa || echo 'SKIP: react-spa/dist not built, skipping size check'",
     "docker:manifests": "node scripts/generate-docker-manifests.mjs",
