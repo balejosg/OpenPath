@@ -14,12 +14,21 @@ setup() {
     mkdir -p "$CONFIG_DIR"
     mkdir -p "$INSTALL_DIR/lib"
     mkdir -p "$TEST_TMP_DIR/iptables"
+    # Keep bridge-enforcement sysctl writes out of the real /etc/sysctl.d.
+    export OPENPATH_SYSCTL_D_DIR="$TEST_TMP_DIR/sysctl.d"
+    mkdir -p "$OPENPATH_SYSCTL_D_DIR"
 
     # Copy libs
     cp "$PROJECT_DIR/linux/lib/"*.sh "$INSTALL_DIR/lib/" 2>/dev/null || true
 
     # Source the library (with mocked dependencies)
     source "$PROJECT_DIR/linux/lib/common.sh"
+
+    # Mock kernel-module / sysctl helpers so bridged-VM enforcement is inert and
+    # has no side effects during tests.
+    modprobe() { return 0; }
+    sysctl() { return 0; }
+    export -f modprobe sysctl
 
     # Mock log functions
     log() { echo "$1"; }

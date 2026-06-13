@@ -140,6 +140,70 @@ apply_http_egress_rules() {
         iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 }
 
+# NTP egress. When name-aware egress is active, scope udp/123 to the same
+# resolved-whitelist allow set (the NTP domains ntp.ubuntu.com/time.google.com
+# are populated into it), so a student cannot run an NTP-shaped tunnel to an
+# arbitrary endpoint. Falls back to a broad ACCEPT otherwise.
+apply_ntp_egress_rules() {
+    if allow_set_egress_active; then
+        add_important_rule "Allow NTP to resolved-whitelist IPs (port 123)" \
+            iptables -A OUTPUT -p udp --dport 123 -m set --match-set "$OPENPATH_ALLOW_DST_IPSET" dst -j ACCEPT
+        return 0
+    fi
+
+    add_optional_rule "Allow NTP (port 123)" \
+        iptables -A OUTPUT -p udp --dport 123 -j ACCEPT
+}
+
+bridge_enforcement_enabled() { openpath_flag_enabled "${BRIDGE_ENFORCEMENT_ENABLED:-1}"; }
+
+# Subject bridged/forwarded guest-VM traffic to netfilter. Loading br_netfilter
+# and enabling bridge-nf-call-ip(6)tables makes frames crossing a Linux bridge
+# traverse the iptables FORWARD chain, so a hosted VM cannot bridge onto the LAN
+# below the host firewall. Persisted across reboots; non-fatal when the module
+# is unavailable (e.g. inside a restricted container).
+apply_bridge_enforcement() {
+    bridge_enforcement_enabled || return 0
+
+    local sysctl_d_dir="${OPENPATH_SYSCTL_D_DIR:-/etc/sysctl.d}"
+    if modprobe br_netfilter 2>/dev/null; then
+        sysctl -w net.bridge.bridge-nf-call-iptables=1 >/dev/null 2>&1 || true
+        sysctl -w net.bridge.bridge-nf-call-ip6tables=1 >/dev/null 2>&1 || true
+        if [ -d "$sysctl_d_dir" ]; then
+            {
+                echo "# OpenPath: subject bridged guest-VM frames to netfilter"
+                echo "net.bridge.bridge-nf-call-iptables=1"
+                echo "net.bridge.bridge-nf-call-ip6tables=1"
+            } > "$sysctl_d_dir/99-openpath-bridge.conf" 2>/dev/null || true
+        fi
+        log_debug "br_netfilter enabled; bridged frames traverse iptables"
+    else
+        log_warn "br_netfilter unavailable - bridged VM traffic may not be fully constrained"
+    fi
+}
+
+# FORWARD default-deny so a classroom endpoint does not route guest/bridged
+# traffic around the host policy; a hosted VM is thereby forced onto host-routed
+# NAT (where the OUTPUT policy applies). Established/related is allowed so
+# legitimate NAT return traffic still flows. Idempotent (deletes the prior
+# established rule before re-adding). Gated so operators that legitimately route
+# (Docker/libvirt) can disable it via OPENPATH_BRIDGE_ENFORCEMENT_ENABLED=0.
+apply_forward_default_deny() {
+    bridge_enforcement_enabled || return 0
+
+    iptables -D FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+    add_important_rule "FORWARD allow established (NAT return)" \
+        iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
+    add_critical_rule "FORWARD default deny (bridged/guest VM)" \
+        iptables -P FORWARD DROP
+}
+
+# Restore a permissive FORWARD chain on deactivation/uninstall.
+restore_forward_chain() {
+    iptables -P FORWARD ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+}
+
 # DoH egress blocking: DROP tcp/udp :443 to known resolver IPs through an
 # ipset. Rules are port-scoped to 443, so dnsmasq's own upstream queries on
 # :53 (e.g. 8.8.8.8:53) stay reachable even though the upstream IP is in the

@@ -17,6 +17,8 @@ setup() {
     IPSET_LOG="$TEST_TMP_DIR/ipset.log"
     export IPTABLES_LOG IPSET_LOG
     export OPENPATH_IPSET_STATE_FILE="$TEST_TMP_DIR/openpath-ipsets.v4"
+    export OPENPATH_SYSCTL_D_DIR="$TEST_TMP_DIR/sysctl.d"
+    mkdir -p "$OPENPATH_SYSCTL_D_DIR"
 
     source "$PROJECT_DIR/linux/lib/common.sh"
 
@@ -49,6 +51,22 @@ setup() {
         echo "default via 192.168.1.1 dev eth0"
     }
     export -f ip
+
+    MODPROBE_LOG="$TEST_TMP_DIR/modprobe.log"
+    SYSCTL_LOG="$TEST_TMP_DIR/sysctl.log"
+    export MODPROBE_LOG SYSCTL_LOG
+
+    modprobe() {
+        echo "$*" >> "$MODPROBE_LOG"
+        return 0
+    }
+    export -f modprobe
+
+    sysctl() {
+        echo "$*" >> "$SYSCTL_LOG"
+        return 0
+    }
+    export -f sysctl
 }
 
 source_firewall() {
@@ -397,6 +415,69 @@ source_firewall() {
 -A OUTPUT -p tcp -m tcp --dport 443 -j ACCEPT
 -A OUTPUT -j DROP"
     ! firewall_snapshot_has_allow_set_rule "$broad_only"
+}
+
+# ============== NTP scoping ==============
+
+@test "apply_ntp_egress_rules scopes udp/123 to the allow set when name-aware egress is active" {
+    source_firewall
+
+    apply_ntp_egress_rules
+
+    grep -q -- "-A OUTPUT -p udp --dport 123 -m set --match-set openpath-allow-dst dst -j ACCEPT" "$IPTABLES_LOG"
+    ! grep -q -- "-A OUTPUT -p udp --dport 123 -j ACCEPT" "$IPTABLES_LOG"
+}
+
+@test "apply_ntp_egress_rules falls back to broad NTP when name-aware egress disabled" {
+    export ALLOW_SET_EGRESS_ENABLED="0"
+    source_firewall
+
+    apply_ntp_egress_rules
+
+    grep -q -- "-A OUTPUT -p udp --dport 123 -j ACCEPT" "$IPTABLES_LOG"
+    ! grep -q -- "--match-set openpath-allow-dst" "$IPTABLES_LOG"
+}
+
+# ============== bridged-VM enforcement ==============
+
+@test "apply_bridge_enforcement loads br_netfilter and persists the bridge sysctls" {
+    source_firewall
+
+    apply_bridge_enforcement
+
+    grep -q "br_netfilter" "$MODPROBE_LOG"
+    grep -q "net.bridge.bridge-nf-call-iptables=1" "$SYSCTL_LOG"
+    grep -q "net.bridge.bridge-nf-call-ip6tables=1" "$SYSCTL_LOG"
+    grep -q "net.bridge.bridge-nf-call-iptables=1" "$OPENPATH_SYSCTL_D_DIR/99-openpath-bridge.conf"
+}
+
+@test "apply_forward_default_deny sets FORWARD policy DROP with an established allow" {
+    source_firewall
+
+    apply_forward_default_deny
+
+    grep -q -- "-A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-P FORWARD DROP" "$IPTABLES_LOG"
+}
+
+@test "bridge enforcement is disabled via BRIDGE_ENFORCEMENT_ENABLED=0" {
+    export BRIDGE_ENFORCEMENT_ENABLED="0"
+    source_firewall
+
+    apply_bridge_enforcement
+    apply_forward_default_deny
+
+    [ ! -f "$MODPROBE_LOG" ]
+    [ ! -f "$IPTABLES_LOG" ]
+}
+
+@test "activate_firewall applies bridge enforcement and FORWARD default-deny by default" {
+    source_firewall
+
+    activate_firewall
+
+    grep -q "br_netfilter" "$MODPROBE_LOG"
+    grep -q -- "-P FORWARD DROP" "$IPTABLES_LOG"
 }
 
 # ============== deactivate_firewall cleanup ==============

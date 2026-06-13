@@ -19,6 +19,10 @@ activate_firewall() {
 
     add_optional_rule "Flush OUTPUT chain" iptables -F OUTPUT
 
+    # Make bridged guest-VM frames traverse netfilter so they cannot bypass the
+    # host policy by bridging onto the LAN.
+    apply_bridge_enforcement
+
     add_critical_rule "Allow loopback traffic" \
         iptables -A OUTPUT -o lo -j ACCEPT || critical_failed=1
 
@@ -66,10 +70,9 @@ activate_firewall() {
         iptables -A OUTPUT -p icmp -j ACCEPT
     add_optional_rule "Allow DHCP (ports 67-68)" \
         iptables -A OUTPUT -p udp --dport 67:68 -j ACCEPT
-    # HTTP/HTTPS scoped to resolved-whitelist IPs (or broad ACCEPT as fallback).
+    # HTTP/HTTPS and NTP scoped to resolved-whitelist IPs (or broad as fallback).
     apply_http_egress_rules
-    add_optional_rule "Allow NTP (port 123)" \
-        iptables -A OUTPUT -p udp --dport 123 -j ACCEPT
+    apply_ntp_egress_rules
     add_optional_rule "Allow private network 10.0.0.0/8" \
         iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT
     add_optional_rule "Allow private network 172.16.0.0/12" \
@@ -79,6 +82,10 @@ activate_firewall() {
 
     add_critical_rule "Default deny (DROP all)" \
         iptables -A OUTPUT -j DROP || critical_failed=1
+
+    # FORWARD default-deny: block bridged/guest-VM traffic from routing around
+    # the host policy (forces hosted VMs onto host-routed NAT).
+    apply_forward_default_deny
 
     save_firewall_rules
 
@@ -107,6 +114,9 @@ deactivate_firewall() {
     if ! iptables -P OUTPUT ACCEPT 2>/dev/null; then
         log_warn "Could not set OUTPUT policy to ACCEPT"
     fi
+
+    # Restore a permissive FORWARD chain (paired with apply_forward_default_deny).
+    restore_forward_chain
 
     # Bypass-block cleanup: the OUTPUT flush above removed every rule that
     # referenced the DoH ipset, so the set itself can be destroyed now.
