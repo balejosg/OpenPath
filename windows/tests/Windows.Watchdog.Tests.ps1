@@ -12,7 +12,7 @@ Describe "Watchdog Script" {
                 'Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force',
                 'Initialize-OpenPathScriptSession `',
                 '-OpenPathRoot $OpenPathRoot',
-                '-DependentModules @(''DNS'', ''Firewall'', ''Browser'', ''CaptivePortal'', ''AppControl'')',
+                '-DependentModules @(''DNS'', ''Network'', ''Firewall'', ''Browser'', ''CaptivePortal'', ''AppControl'')',
                 '-RequiredCommands @(',
                 '-ScriptName ''Test-DNSHealth.ps1''',
                 '''Sync-OpenPathFirefoxManagedExtensionPolicy''',
@@ -905,7 +905,7 @@ Describe "Watchdog Script" {
                 'SecondaryServerAddress=192.0.2.53',
                 'PrimaryServerPort=53',
                 'SecondaryServerPort=53',
-                'LocalIPv4BindingAddress=0.0.0.0',
+                'LocalIPv4BindingAddress=127.0.0.1',
                 'LocalIPv4BindingPort=53',
                 'PrimaryServerDomainNameAffinityMask=nce.127.0.0.1.sslip.io',
                 'SecondaryServerDomainNameAffinityMask=nce.127.0.0.1.sslip.io',
@@ -1513,5 +1513,30 @@ Describe "Watchdog Script" {
             )
             $content.Contains('$recoveryEligibleIssues += "SSE listener not running"') | Should -BeFalse
         }
+    }
+}
+
+Describe "Bridged VM networking neutralization wiring" {
+    It "Watchdog detects bridged adapters and routes them through the repair plan when blockBridgedAdapters is set" {
+        $watchdogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+        $content = Get-Content $watchdogPath -Raw
+
+        Assert-ContentContainsAll -Content $content -Needles @(
+            'blockBridgedAdapters',
+            'Get-OpenPathAdaptersWithBridgeFilters',
+            '-BridgeFiltersDetected:$true',
+            'bridged VM networking detected on adapters'
+        )
+    }
+
+    It "Reconciler maps the bridge-filter detection to the DisableBridgeFilters action and dispatch" {
+        $reconcilerPath = Join-Path $PSScriptRoot ".." "lib" "internal" "EndpointStateReconciler.ps1"
+        $content = Get-Content $reconcilerPath -Raw
+
+        Assert-ContentContainsAll -Content $content -Needles @(
+            '$BridgeFiltersDetected',
+            'DisableBridgeFilters',
+            'Disable-OpenPathBridgeFilters'
+        )
     }
 }

@@ -122,7 +122,7 @@ Describe "Common Module" {
     }
 
     Context "Test-AdminPrivileges" {
-        It "Returns a boolean value" {
+        It "Returns a boolean value" -Skip:(-not $IsWindows) {
             $result = InModuleScope Common {
                 Test-AdminPrivileges
             }
@@ -299,7 +299,7 @@ Describe "Common Module" {
     }
 
     Context "Get-PrimaryDNS" {
-        It "Returns a valid IP address string" {
+        It "Returns a valid IP address string" -Skip:(-not $IsWindows) {
             $dns = InModuleScope Common {
                 Get-PrimaryDNS
             }
@@ -363,7 +363,7 @@ Describe "Common Module" {
     }
 
     Context "Get-OpenPathDnsProbeDomains" {
-        It "Prefers cached whitelist domains before protected fallbacks" {
+        It "Prefers cached whitelist domains before protected fallbacks" -Skip:(-not $IsWindows) {
             $expectedWhitelistPath = 'C:\OpenPath\data\whitelist.txt'
 
             Mock Test-Path { $true } -ModuleName Common -ParameterFilter { $Path -eq $expectedWhitelistPath }
@@ -513,7 +513,7 @@ Describe "Common Module" {
 
     Context "Get-ValidWhitelistDomainsFromFile" {
         It "Returns valid domains and ignores invalid entries" {
-            $tempFile = Join-Path $env:TEMP ("openpath-domains-" + [Guid]::NewGuid().ToString() + ".txt")
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-domains-" + [Guid]::NewGuid().ToString() + ".txt")
 
             try {
                 @(
@@ -542,7 +542,7 @@ Describe "Common Module" {
         }
 
         It "Returns an empty array when file does not exist" {
-            $missingPath = Join-Path $env:TEMP ([Guid]::NewGuid().ToString() + '.txt')
+            $missingPath = Join-Path ([System.IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString() + '.txt')
             $domains = InModuleScope Common -Parameters @{
                 MissingPath = $missingPath
             } {
@@ -554,7 +554,7 @@ Describe "Common Module" {
 
     Context "Get-OpenPathWhitelistSectionsFromFile" {
         It "Parses whitelist sections from a local whitelist file" {
-            $tempFile = Join-Path $env:TEMP ("openpath-whitelist-sections-" + [Guid]::NewGuid().ToString() + ".txt")
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-whitelist-sections-" + [Guid]::NewGuid().ToString() + ".txt")
 
             try {
                 @'
@@ -586,7 +586,7 @@ allowed.example/private
         }
 
         It "Returns empty sections when file does not exist" {
-            $missingPath = Join-Path $env:TEMP ([Guid]::NewGuid().ToString() + '.txt')
+            $missingPath = Join-Path ([System.IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString() + '.txt')
             $sections = InModuleScope Common -Parameters @{
                 MissingPath = $missingPath
             } {

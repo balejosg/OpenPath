@@ -1328,7 +1328,7 @@ function Set-OpenPathLimitedCaptivePortalAcrylicConfiguration {
         "SecondaryServerPort" = "53"
         "SecondaryServerProtocol" = "UDP"
         "SecondaryServerQueryTypeAffinityMask" = ""
-        "LocalIPv4BindingAddress" = "0.0.0.0"
+        "LocalIPv4BindingAddress" = "127.0.0.1"
         "LocalIPv4BindingPort" = "53"
         "LocalIPv6BindingAddress" = ""
         "LocalIPv6BindingPort" = "53"

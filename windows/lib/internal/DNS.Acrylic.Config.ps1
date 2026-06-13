@@ -228,7 +228,7 @@ function Set-AcrylicConfiguration {
         "QuaternaryServerPort" = "53"
         "QuaternaryServerProtocol" = "UDP"
         "QuaternaryServerDomainNameAffinityMask" = $(if ($portalUpstreams.Count -ge 2) { $portalUpstreamMask } else { '' })
-        "LocalIPv4BindingAddress" = "0.0.0.0"
+        "LocalIPv4BindingAddress" = "127.0.0.1"
         "LocalIPv4BindingPort" = "53"
         "LocalIPv6BindingAddress" = ""
         "LocalIPv6BindingPort" = "53"

@@ -368,6 +368,40 @@ function Invoke-OpenPathWatchdogChecks {
     }
 
     try {
+        $blockBridgedAdapters = $false
+        if ($Config -and $Config.PSObject.Properties['blockBridgedAdapters']) {
+            $blockBridgedAdapters = [bool]$Config.blockBridgedAdapters
+        }
+
+        if ($shouldRunProtectedModeChecks -and $blockBridgedAdapters) {
+            $bridgeExtraComponentIds = @()
+            $bridgeAllowlist = @()
+            if ($Config -and $Config.PSObject.Properties['bridgeFilterComponentIds']) {
+                $bridgeExtraComponentIds = @($Config.bridgeFilterComponentIds)
+            }
+            if ($Config -and $Config.PSObject.Properties['bridgeFilterAllowlist']) {
+                $bridgeAllowlist = @($Config.bridgeFilterAllowlist)
+            }
+
+            $adaptersWithBridgeFilters = @(Get-OpenPathAdaptersWithBridgeFilters -ExtraComponentIds $bridgeExtraComponentIds -Allowlist $bridgeAllowlist)
+            if ($adaptersWithBridgeFilters.Count -gt 0) {
+                $affectedBridgeAdapterNames = @($adaptersWithBridgeFilters | ForEach-Object { $_.Name })
+                Write-OpenPathLog "Watchdog: bridged VM networking detected on adapters: $($affectedBridgeAdapterNames -join ', ')" -Level WARN
+                $repairPlan = New-OpenPathWatchdogProtectedModeRepairPlan `
+                    -PolicyState $policyState `
+                    -BridgeFiltersDetected:$true `
+                    -AffectedBridgeFilterAdapterNames $affectedBridgeAdapterNames
+                $issues += @($repairPlan.Issues)
+                $recoveryEligibleIssues += @($repairPlan.RecoveryEligibleIssues)
+                Invoke-OpenPathEndpointStateRepairPlan -Plan $repairPlan -Config $Config | Out-Null
+            }
+        }
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: Error checking bridged adapter filters: $_" -Level ERROR
+    }
+
+    try {
         # Roaming: when the network's DHCP resolvers change, the third/fourth
         # Acrylic upstreams that answer the declared captive-portal domains go
         # stale. The INI is the persisted state; refresh it from the current

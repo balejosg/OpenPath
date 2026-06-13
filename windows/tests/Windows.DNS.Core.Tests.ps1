@@ -375,7 +375,7 @@ Describe "DNS Module" {
             }
         }
 
-        It "Dedupe, prunes expired runtime dependency overlay entries, and enforces capacity" {
+        It "Dedupe, prunes expired runtime dependency overlay entries, and enforces capacity" -Skip:(-not $IsWindows) {
             InModuleScope DNS {
                 $overlayPath = Join-Path $TestDrive "runtime-dependency-overlay.json"
                 $now = [DateTimeOffset]::UtcNow
@@ -610,7 +610,7 @@ Describe "DNS Module" {
             }
         }
 
-        It "Keeps runtime dependency overlays for anchors covered by a whitelisted parent domain" {
+        It "Keeps runtime dependency overlays for anchors covered by a whitelisted parent domain" -Skip:(-not $IsWindows) {
             $previousOverlayPath = $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
             $overlayPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-runtime-overlay-" + [Guid]::NewGuid().ToString("N") + ".json")
 
@@ -652,7 +652,7 @@ Describe "DNS Module" {
             }
         }
 
-        It "Processes queued reddit runtime dependencies into exact FW rules before the default block" {
+        It "Processes queued reddit runtime dependencies into exact FW rules before the default block" -Skip:(-not $IsWindows) {
             $previousOverlayPath = $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
             $previousQueuePath = $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH
             $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-runtime-queue-" + [Guid]::NewGuid().ToString("N"))
@@ -950,7 +950,7 @@ Describe "DNS Module" {
                 'PrimaryServerProtocol=UDP',
                 'SecondaryServerPort=53',
                 'SecondaryServerProtocol=UDP',
-                'LocalIPv4BindingAddress=0.0.0.0',
+                'LocalIPv4BindingAddress=127.0.0.1',
                 'LocalIPv6BindingAddress=',
                 '[AllowedAddressesSection]',
                 'IP1=127.*',
@@ -1084,7 +1084,7 @@ Describe "DNS Module" {
                 'PrimaryServerDomainNameAffinityMask=raw.githubusercontent.com;*.raw.githubusercontent.com',
                 'PrimaryServerPort=53',
                 'PrimaryServerProtocol=UDP',
-                'LocalIPv4BindingAddress=0.0.0.0',
+                'LocalIPv4BindingAddress=127.0.0.1',
                 '[AllowedAddressesSection]',
                 'IP1=127.*',
                 'IP2=::1',

@@ -7,14 +7,14 @@ Describe "Firewall Module" {
     }
 
     Context "Test-FirewallActive" {
-        It "Returns a boolean value" -Skip:(-not (Test-FunctionExists 'Test-FirewallActive')) {
+        It "Returns a boolean value" -Skip:(-not $IsWindows) {
             $result = Test-FirewallActive
             $result | Should -BeOfType [bool]
         }
     }
 
     Context "Get-FirewallStatus" {
-        It "Returns a hashtable with expected keys" -Skip:(-not (Test-FunctionExists 'Get-FirewallStatus')) {
+        It "Returns a hashtable with expected keys" -Skip:(-not $IsWindows) {
             $status = Get-FirewallStatus
             $status | Should -Not -BeNullOrEmpty
             $status.TotalRules | Should -Not -BeNullOrEmpty
@@ -510,6 +510,130 @@ Describe "Firewall Module" {
             $result = Add-OpenPathCaptivePortalUpstreamFirewallAllow -Address 'not-an-ip'
             $result | Should -BeFalse
             @(Get-CapturedFirewallRules).Count | Should -Be 0
+        }
+    }
+
+    Context "Default-deny DNS egress" {
+        BeforeEach {
+            Initialize-FirewallRuleCaptureMocks
+        }
+
+        It "Blocks outbound DNS to everything except loopback and configured upstreams" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    enableKnownDnsIpBlocking = $true
+                    enableDohIpBlocking = $true
+                    dnsEgressDefaultDeny = $true
+                }
+            } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            foreach ($protocol in @('UDP', 'TCP')) {
+                $blocks = @(Get-CapturedFirewallRules | Where-Object {
+                        $_.DisplayName -eq "OpenPath-DNS-Block-DefaultDeny-DNS-$protocol-53" -and
+                        $_.RemotePort -eq '53' -and $_.Direction -eq 'Outbound' -and $_.Action -eq 'Block'
+                    })
+                $blocks.Count | Should -Be 1
+                # Wide block that still carves out loopback and the configured upstreams.
+                $blocks[0].RemoteAddress | Should -Match '128\.0\.0\.0-255\.255\.255\.255'
+                $blocks[0].RemoteAddress | Should -Not -Match '127\.0\.0\.0'
+                $blocks[0].RemoteAddress | Should -Not -Match '8\.8\.8\.8'
+                $blocks[0].RemoteAddress | Should -Not -Match '8\.8\.4\.4'
+            }
+        }
+
+        It "Blocks IPv6 DNS wholesale since there is no local IPv6 Acrylic listener" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{ dnsEgressDefaultDeny = $true }
+            } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            foreach ($protocol in @('UDP', 'TCP')) {
+                (@(Get-CapturedFirewallRules | Where-Object {
+                            $_.DisplayName -eq "OpenPath-DNS-Block-DefaultDeny-DNS6-$protocol-53" -and
+                            $_.RemoteAddress -eq '::/0' -and $_.Action -eq 'Block'
+                        })).Count | Should -Be 1
+            }
+        }
+
+        It "Does not create default-deny rules when disabled by configuration" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{ dnsEgressDefaultDeny = $false }
+            } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*DefaultDeny*' })).Count | Should -Be 0
+        }
+    }
+
+    Context "Inbound DNS blocking" {
+        BeforeEach {
+            Initialize-FirewallRuleCaptureMocks
+        }
+
+        It "Blocks inbound DNS on local port 53 so the host never answers LAN or guest queries" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{ blockInboundDns = $true }
+            } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            foreach ($protocol in @('UDP', 'TCP')) {
+                (@(Get-CapturedFirewallRules | Where-Object {
+                            $_.DisplayName -eq "OpenPath-DNS-Block-Inbound-DNS-$protocol-53" -and
+                            $_.Direction -eq 'Inbound' -and $_.LocalPort -eq '53' -and $_.Action -eq 'Block'
+                        })).Count | Should -Be 1
+            }
+        }
+
+        It "Does not create inbound DNS blocks when disabled by configuration" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{ blockInboundDns = $false }
+            } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*Block-Inbound-DNS*' })).Count | Should -Be 0
+        }
+    }
+
+    Context "Get-OpenPathDnsEgressBlockRanges" {
+        It "Returns the full non-loopback IPv4 space when no allow IPs are supplied" {
+            $ranges = @(Get-OpenPathDnsEgressBlockRanges -AllowIps @())
+            $ranges.Count | Should -Be 2
+            $ranges | Should -Contain '0.0.0.0-126.255.255.255'
+            $ranges | Should -Contain '128.0.0.0-255.255.255.255'
+        }
+
+        It "Carves out loopback and each supplied allow IP" {
+            $ranges = @(Get-OpenPathDnsEgressBlockRanges -AllowIps @('8.8.8.8', '8.8.4.4'))
+            $ranges.Count | Should -Be 4
+            $ranges | Should -Contain '0.0.0.0-8.8.4.3'
+            $ranges | Should -Contain '8.8.4.5-8.8.8.7'
+            $ranges | Should -Contain '8.8.8.9-126.255.255.255'
+            $ranges | Should -Contain '128.0.0.0-255.255.255.255'
+        }
+
+        It "Ignores IPv6 and unparseable allow entries" {
+            $ranges = @(Get-OpenPathDnsEgressBlockRanges -AllowIps @('::1', 'not-an-ip', '9.9.9.9'))
+            $ranges | Should -Contain '0.0.0.0-9.9.9.8'
+            $ranges | Should -Contain '9.9.9.10-126.255.255.255'
+            $ranges | Should -Contain '128.0.0.0-255.255.255.255'
+        }
+
+        It "Merges duplicate and adjacent allow IPs without emitting empty ranges" {
+            $ranges = @(Get-OpenPathDnsEgressBlockRanges -AllowIps @('1.1.1.1', '1.1.1.1', '1.1.1.2'))
+            $ranges | Should -Contain '0.0.0.0-1.1.1.0'
+            $ranges | Should -Contain '1.1.1.3-126.255.255.255'
+            foreach ($range in $ranges) { $range | Should -Match '^\d+\.\d+\.\d+\.\d+-\d+\.\d+\.\d+\.\d+$' }
         }
     }
 }

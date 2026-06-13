@@ -305,6 +305,9 @@ if (Test-Path "$OpenPathRoot\lib\Common.psm1") {
 if (Test-Path "$OpenPathRoot\lib\DNS.psm1") {
     Import-Module "$OpenPathRoot\lib\DNS.psm1" -Force -ErrorAction SilentlyContinue
 }
+if (Test-Path "$OpenPathRoot\lib\Network.psm1") {
+    Import-Module "$OpenPathRoot\lib\Network.psm1" -Force -ErrorAction SilentlyContinue
+}
 if (Test-Path "$OpenPathRoot\lib\Firewall.psm1") {
     Import-Module "$OpenPathRoot\lib\Firewall.psm1" -Force -ErrorAction SilentlyContinue
 }
@@ -327,6 +330,10 @@ Write-Host "  Scheduled tasks removed" -ForegroundColor Green
 Write-Host "[2/6] Restoring DNS configuration..." -ForegroundColor Yellow
 Restore-OpenPathOriginalDns
 Write-Host "  DNS restored" -ForegroundColor Green
+if (Get-Command -Name Restore-OpenPathOriginalBridgeFilters -ErrorAction SilentlyContinue) {
+    Restore-OpenPathOriginalBridgeFilters
+    Write-Host "  Bridged-adapter filters restored" -ForegroundColor Green
+}
 
 # Step 3: Remove firewall rules
 Write-Host "[3/6] Removing firewall rules..." -ForegroundColor Yellow

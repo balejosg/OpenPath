@@ -12,6 +12,101 @@ function Test-OpenPathFirewallIpAddress {
     return [System.Net.IPAddress]::TryParse($Address.Trim(), [ref]$parsedAddress)
 }
 
+function ConvertTo-OpenPathIPv4UInt32 {
+    # converts a dotted IPv4 string to its [int64] numeric value (0..4294967295);
+    # returns $null for blank, non-IPv4, or unparseable input.
+    param(
+        [AllowNull()]
+        [string]$Address
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Address)) { return $null }
+
+    $parsed = $null
+    if (-not [System.Net.IPAddress]::TryParse($Address.Trim(), [ref]$parsed)) { return $null }
+    if ($parsed.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { return $null }
+
+    $bytes = $parsed.GetAddressBytes()
+    return ([int64]$bytes[0] -shl 24) -bor ([int64]$bytes[1] -shl 16) -bor ([int64]$bytes[2] -shl 8) -bor [int64]$bytes[3]
+}
+
+function ConvertFrom-OpenPathIPv4UInt32 {
+    # converts an [int64] numeric IPv4 value (0..4294967295) back to dotted notation.
+    param(
+        [Parameter(Mandatory = $true)]
+        [int64]$Value
+    )
+
+    $b0 = ($Value -shr 24) -band 0xFF
+    $b1 = ($Value -shr 16) -band 0xFF
+    $b2 = ($Value -shr 8) -band 0xFF
+    $b3 = $Value -band 0xFF
+    return "$b0.$b1.$b2.$b3"
+}
+
+function Get-OpenPathDnsEgressBlockRanges {
+    <#
+    .SYNOPSIS
+        Returns the minimal set of IPv4 "start-end" ranges that cover the whole IPv4
+        space EXCEPT loopback (127.0.0.0/8) and the supplied allow IPs.
+    .DESCRIPTION
+        Used to express a default-deny outbound DNS policy on a single port without
+        also blocking the local Acrylic proxy or its configured upstreams. Windows
+        Firewall evaluates Block over Allow, so a blanket "block all :53" would also
+        kill Acrylic's upstream queries; instead we block everything except the
+        loopback range and the explicit allow IPs (each a /32). IPv6 and non-IPv4
+        entries in -AllowIps are ignored (IPv6 DNS is blocked wholesale elsewhere).
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string[]]$AllowIps = @()
+    )
+
+    $min = [int64]0
+    $max = [int64]4294967295
+
+    $excluded = New-Object 'System.Collections.Generic.List[object]'
+    # Loopback 127.0.0.0 - 127.255.255.255
+    $excluded.Add([PSCustomObject]@{ Start = [int64]2130706432; End = [int64]2147483647 })
+
+    foreach ($ip in @($AllowIps)) {
+        $value = ConvertTo-OpenPathIPv4UInt32 -Address ([string]$ip)
+        if ($null -ne $value) {
+            $excluded.Add([PSCustomObject]@{ Start = [int64]$value; End = [int64]$value })
+        }
+    }
+
+    $sorted = @($excluded | Sort-Object -Property Start)
+    $merged = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($interval in $sorted) {
+        if ($merged.Count -gt 0 -and $interval.Start -le ($merged[$merged.Count - 1].End + 1)) {
+            if ($interval.End -gt $merged[$merged.Count - 1].End) {
+                $merged[$merged.Count - 1].End = $interval.End
+            }
+        }
+        else {
+            $merged.Add([PSCustomObject]@{ Start = [int64]$interval.Start; End = [int64]$interval.End })
+        }
+    }
+
+    $ranges = @()
+    $cursor = $min
+    foreach ($interval in $merged) {
+        if ($interval.Start -gt $cursor) {
+            $ranges += ('{0}-{1}' -f (ConvertFrom-OpenPathIPv4UInt32 -Value $cursor), (ConvertFrom-OpenPathIPv4UInt32 -Value ($interval.Start - 1)))
+        }
+        if (($interval.End + 1) -gt $cursor) {
+            $cursor = $interval.End + 1
+        }
+    }
+    if ($cursor -le $max) {
+        $ranges += ('{0}-{1}' -f (ConvertFrom-OpenPathIPv4UInt32 -Value $cursor), (ConvertFrom-OpenPathIPv4UInt32 -Value $max))
+    }
+
+    return @($ranges)
+}
+
 function Add-OpenPathCaptivePortalUpstreamFirewallAllow {
     <#
     .SYNOPSIS
@@ -96,6 +191,8 @@ function Set-OpenPathFirewall {
         $declaredPortalDomains = @()
         $enableKnownDnsIpBlocking = $true
         $enableDohIpBlocking = $true
+        $dnsEgressDefaultDeny = $true
+        $blockInboundDns = $true
         $dohResolvers = Get-DefaultDohResolverIps
         $resolverBypassClients = Get-DefaultResolverBypassClientPrograms
         $vpnPorts = Get-DefaultVpnBlockRules
@@ -108,6 +205,12 @@ function Set-OpenPathFirewall {
             }
             if ($config.PSObject.Properties['enableDohIpBlocking']) {
                 $enableDohIpBlocking = [bool]$config.enableDohIpBlocking
+            }
+            if ($config.PSObject.Properties['dnsEgressDefaultDeny']) {
+                $dnsEgressDefaultDeny = [bool]$config.dnsEgressDefaultDeny
+            }
+            if ($config.PSObject.Properties['blockInboundDns']) {
+                $blockInboundDns = [bool]$config.blockInboundDns
             }
             if ($config.PSObject.Properties['dohResolverIps'] -and $config.dohResolverIps) {
                 $configuredResolvers = @($config.dohResolverIps | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
@@ -264,6 +367,43 @@ function Set-OpenPathFirewall {
         }
         else {
             Write-OpenPathLog 'Known DNS IP blocking disabled by configuration' -Level WARN
+        }
+
+        if ($dnsEgressDefaultDeny) {
+            $egressAllowIps = @('127.0.0.1', $UpstreamDNS, $secondaryDns)
+            foreach ($portalUpstream in @($portalUpstreams)) { $egressAllowIps += [string]$portalUpstream }
+            $egressAllowIps = @($egressAllowIps | Where-Object { Test-OpenPathFirewallIpAddress -Address $_ } | Sort-Object -Unique)
+            $egressBlockRanges = @(Get-OpenPathDnsEgressBlockRanges -AllowIps $egressAllowIps)
+
+            if ($egressBlockRanges.Count -gt 0) {
+                foreach ($protocol in @('UDP', 'TCP')) {
+                    New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DefaultDeny-DNS-$protocol-53" `
+                        -Direction Outbound -Protocol $protocol -RemoteAddress $egressBlockRanges -RemotePort 53 `
+                        -Action Block -Profile Any `
+                        -Description "Default-deny outbound DNS over $protocol/53 except local Acrylic and configured upstreams" | Out-Null
+                }
+            }
+
+            # IPv6 DNS has no local Acrylic listener (IPv6 binding disabled), so block it wholesale.
+            foreach ($protocol in @('UDP', 'TCP')) {
+                New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DefaultDeny-DNS6-$protocol-53" `
+                    -Direction Outbound -Protocol $protocol -RemoteAddress '::/0' -RemotePort 53 `
+                    -Action Block -Profile Any `
+                    -Description "Default-deny outbound IPv6 DNS over $protocol/53" | Out-Null
+            }
+
+            Write-OpenPathLog "Default-deny DNS egress active ($($egressBlockRanges.Count) IPv4 block ranges)"
+        }
+        else {
+            Write-OpenPathLog 'Default-deny DNS egress disabled by configuration' -Level WARN
+        }
+
+        if ($blockInboundDns) {
+            foreach ($protocol in @('UDP', 'TCP')) {
+                New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-Inbound-DNS-$protocol-53" `
+                    -Direction Inbound -Protocol $protocol -LocalPort 53 -Action Block -Profile Any `
+                    -Description "Block inbound DNS over $protocol/53 so the host never answers LAN or guest-VM queries" | Out-Null
+            }
         }
 
         New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DoT" `

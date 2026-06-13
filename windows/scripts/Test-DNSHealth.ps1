@@ -33,7 +33,7 @@ $OpenPathRoot = Resolve-OpenPathWindowsRoot
 Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force
 Initialize-OpenPathScriptSession `
     -OpenPathRoot $OpenPathRoot `
-    -DependentModules @('DNS', 'Firewall', 'Browser', 'CaptivePortal', 'AppControl') `
+    -DependentModules @('DNS', 'Network', 'Firewall', 'Browser', 'CaptivePortal', 'AppControl') `
     -RequiredCommands @(
     'Write-OpenPathLog',
     'Get-OpenPathConfig',

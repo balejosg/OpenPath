@@ -65,6 +65,8 @@ function Initialize-FirewallRuleCaptureMocks {
             [string]$Protocol,
             [object]$RemoteAddress,
             [object]$RemotePort,
+            [object]$LocalAddress,
+            [object]$LocalPort,
             [string]$Action,
             [string]$Profile,
             [string]$Description,
@@ -77,6 +79,8 @@ function Initialize-FirewallRuleCaptureMocks {
             Protocol = $Protocol
             RemoteAddress = [string]$RemoteAddress
             RemotePort = [string]$RemotePort
+            LocalAddress = [string]$LocalAddress
+            LocalPort = [string]$LocalPort
             Action = $Action
             Program = $Program
         }

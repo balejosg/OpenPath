@@ -295,6 +295,8 @@ windows/lib/internal/EndpointStateReconciler.ps1|windows/tests/Windows.Update.Te
 windows/lib/internal/Services.TaskBuilders.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/RotateToken.Compat.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/Firewall.psm1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
+windows/lib/Network.psm1|windows/tests/Windows.Network.Tests.ps1
+windows/lib/internal/Network.BridgeFilters.ps1|windows/tests/Windows.Network.Tests.ps1
 windows/lib/internal/Firewall.Catalog.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/Firewall.Policy.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats
 windows/lib/internal/Firewall.State.ps1|windows/tests/Windows.Tests.ps1,tests/windows-e2e.bats

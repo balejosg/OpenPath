@@ -7,7 +7,7 @@ BeforeAll {
 
 Describe "Firefox network autoconfig" {
     Context "New-OpenPathFirefoxNetworkAutoconfigContent" {
-        It "Locks DoH and DNS prefetch without using Firefox enterprise DNSOverHTTPS policy" {
+        It "Locks DoH and DNS prefetch without using Firefox enterprise DNSOverHTTPS policy" -Skip:(-not $IsWindows) {
             $content = Browser.FirefoxConfig\New-OpenPathFirefoxNetworkAutoconfigContent
 
             $content.AutoconfigJs | Should -Match 'general\.config\.filename'

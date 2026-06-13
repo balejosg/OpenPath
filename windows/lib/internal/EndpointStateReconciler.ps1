@@ -59,7 +59,11 @@ function New-OpenPathWatchdogProtectedModeRepairPlan {
 
         [bool]$LocalDnsConfigured = $true,
 
-        [string[]]$AffectedLocalDnsAdapterNames = @()
+        [string[]]$AffectedLocalDnsAdapterNames = @(),
+
+        [bool]$BridgeFiltersDetected = $false,
+
+        [string[]]$AffectedBridgeFilterAdapterNames = @()
     )
 
     $issues = @()
@@ -105,6 +109,16 @@ function New-OpenPathWatchdogProtectedModeRepairPlan {
         $issues += "Local DNS not configured$adapterSuffix"
         $recoveryEligibleIssues += "Local DNS not configured$adapterSuffix"
         $actions += 'SetLocalDns'
+    }
+
+    if ($BridgeFiltersDetected) {
+        $adapterSuffix = ''
+        if (@($AffectedBridgeFilterAdapterNames).Count -gt 0) {
+            $adapterSuffix = ": $(@($AffectedBridgeFilterAdapterNames) -join ', ')"
+        }
+        $issues += "Bridged VM networking detected$adapterSuffix"
+        $recoveryEligibleIssues += "Bridged VM networking detected$adapterSuffix"
+        $actions += 'DisableBridgeFilters'
     }
 
     return [PSCustomObject]@{
@@ -174,6 +188,18 @@ function Invoke-OpenPathEndpointStateRepairPlan {
             'SetLocalDns' {
                 Write-OpenPathLog "Watchdog: Local DNS not configured, fixing..." -Level WARN
                 Set-LocalDNS
+            }
+            'DisableBridgeFilters' {
+                Write-OpenPathLog "Watchdog: bridged VM networking detected, neutralizing bridge filters..." -Level WARN
+                $bridgeExtraComponentIds = @()
+                $bridgeAllowlist = @()
+                if ($Config -and $Config.PSObject.Properties['bridgeFilterComponentIds']) {
+                    $bridgeExtraComponentIds = @($Config.bridgeFilterComponentIds)
+                }
+                if ($Config -and $Config.PSObject.Properties['bridgeFilterAllowlist']) {
+                    $bridgeAllowlist = @($Config.bridgeFilterAllowlist)
+                }
+                Disable-OpenPathBridgeFilters -ExtraComponentIds $bridgeExtraComponentIds -Allowlist $bridgeAllowlist
             }
         }
 

@@ -64,6 +64,20 @@ surface is still maturing:
   treated as equivalent full-browser support for every deployment. Use Firefox
   as the supported browser path unless the target environment has explicitly
   validated a managed Chromium or Edge flow.
+- Enforcement is applied at the host operating-system layer (local resolver,
+  host firewall, and AppLocker). A virtual machine running on a managed host is a
+  separate operating system with its own network stack and is not automatically
+  subject to the host policy. A VM in NAT mode egresses through the host stack and
+  is covered by the host's default-deny DNS firewall; a bridged VM is a peer on the
+  physical LAN and is not visible to the host at all. On Windows the agent can
+  optionally neutralize bridged networking for VirtualBox/VMware by unbinding their
+  bridge filter drivers (`blockBridgedAdapters`), which leaves the VM working in NAT
+  while preventing the unfiltered bridged path. Hyper-V external switches are out of
+  scope for this control and must be restricted by policy (do not grant Hyper-V
+  Administrators or pre-create an external switch). For deployments where students
+  can run VMs, pair the endpoint agent with network-layer enforcement (a sanctioned
+  resolver pinned by DHCP, gateway egress filtering, and switch port-security or
+  802.1X) so that any device on the LAN (host or guest) is filtered uniformly.
 
 ## Privacy First, Not as a Feature, but as Architecture
 

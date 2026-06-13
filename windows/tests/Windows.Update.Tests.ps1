@@ -36,7 +36,7 @@ Describe "Update Script" {
                 'Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force',
                 'Initialize-OpenPathScriptSession `',
                 '-OpenPathRoot $OpenPathRoot',
-                '-DependentModules @(''DNS'', ''Firewall'', ''Browser'', ''CaptivePortal'')',
+                '-DependentModules @(''DNS'', ''Network'', ''Firewall'', ''Browser'', ''CaptivePortal'')',
                 '-RequiredCommands @(',
                 'Get-OpenPathCapabilityStoragePath',
                 'Test-OpenPathCaptivePortalModeActive',
