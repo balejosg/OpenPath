@@ -457,7 +457,14 @@ function New-OpenPathAppLockerPolicyXml {
         $productId = ($productName -replace '[^0-9A-Za-z]+', '-').Trim('-')
         $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users deny $productId" -Sid $Spec.NonAdminSid -Action 'Deny' -PublisherName '*' -ProductName $productName -BinaryName '*'
     }
-    $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow signed packaged apps" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName '*' -ProductName '*' -BinaryName '*'
+    # Allow only Microsoft-signed packaged apps (OS inbox and Store-distributed Microsoft apps).
+    # A global ProductName='*' allow lets any publisher's Appx run, including sideloaded alternate
+    # browsers with non-Edge ProductNames that would bypass the per-product Edge denies above.
+    # Scoping to PublisherName='O=MICROSOFT CORPORATION*' covers all Microsoft-signed packages
+    # (Windows inbox, Store-distributed Edge, Teams, etc.) without opening the door to third-party
+    # sideloaded packages.  SID S-1-1-0 (Everyone) is kept so the rule applies to all users
+    # including non-admins, matching the original intent.
+    $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow Microsoft signed packaged apps" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION*' -ProductName '*' -BinaryName '*'
     $ruleCollections += "    <RuleCollection Type=`"Appx`" EnforcementMode=`"$($Spec.EnforcementMode)`">`n$($appxRules -join "`n")`n    </RuleCollection>"
 
     return @"
@@ -607,7 +614,7 @@ function Test-OpenPathFilePathRulePresent {
 function Test-OpenPathFilePublisherRulePresent {
     <#
     .SYNOPSIS
-    Returns true when a managed publisher rule with the given action, SID, and product name exists in the collection.
+    Returns true when a managed publisher rule with the given action, SID, publisher name, and product name exists in the collection.
     #>
     param(
         [AllowNull()]
@@ -620,7 +627,9 @@ function Test-OpenPathFilePublisherRulePresent {
         [string]$Sid,
 
         [Parameter(Mandatory = $true)]
-        [string]$ProductName
+        [string]$ProductName,
+
+        [string]$PublisherName = $null
     )
 
     if (-not $Collection) {
@@ -632,6 +641,7 @@ function Test-OpenPathFilePublisherRulePresent {
                 $_.GetAttribute('UserOrGroupSid') -eq $Sid -and
                 $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq $ProductName -and
                 $_.Conditions.FilePublisherCondition.GetAttribute('BinaryName') -eq '*' -and
+                (-not $PublisherName -or $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq $PublisherName) -and
                 (Test-OpenPathAppLockerRuleManaged -Rule $_)
             }).Count -gt 0)
 }
@@ -692,7 +702,7 @@ function Test-OpenPathAppLockerBoundaryPolicy {
         }
     }
 
-    if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid 'S-1-1-0' -ProductName '*')) {
+    if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid 'S-1-1-0' -ProductName '*' -PublisherName 'O=MICROSOFT CORPORATION*')) {
         return $false
     }
 

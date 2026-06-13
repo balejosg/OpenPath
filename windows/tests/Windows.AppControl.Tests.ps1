@@ -216,16 +216,41 @@ Describe "AppControl Module" {
             $appxCollection.GetAttribute('EnforcementMode') | Should -Not -Be 'NotConfigured'
 
             $rules = @($appxCollection.FilePublisherRule)
-            $allowRule = @($rules | Where-Object { $_.GetAttribute('Name') -eq 'OpenPath non-admin app control Appx users allow signed packaged apps' })[0]
+            $allowRule = @($rules | Where-Object { $_.GetAttribute('Name') -eq 'OpenPath non-admin app control Appx users allow Microsoft signed packaged apps' })[0]
             $allowRule | Should -Not -BeNullOrEmpty
             $allowRule.GetAttribute('Action') | Should -Be 'Allow'
             $allowRule.GetAttribute('UserOrGroupSid') | Should -Be 'S-1-1-0'
             $condition = $allowRule.Conditions.FilePublisherCondition
-            $condition.GetAttribute('PublisherName') | Should -Be '*'
+            # Scoped to Microsoft-signed packages only — not a global wildcard publisher.
+            $condition.GetAttribute('PublisherName') | Should -Be 'O=MICROSOFT CORPORATION*'
             $condition.GetAttribute('ProductName') | Should -Be '*'
             $condition.GetAttribute('BinaryName') | Should -Be '*'
             $condition.BinaryVersionRange.GetAttribute('LowSection') | Should -Be '*'
             $condition.BinaryVersionRange.GetAttribute('HighSection') | Should -Be '*'
+        }
+
+        It "Does not emit a global Appx allow with PublisherName wildcard and ProductName wildcard" {
+            # Finding #10: a ProductName='*' allow under PublisherName='*' lets a standard user run
+            # any sideloaded packaged app, bypassing the per-product Edge denies.
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+            [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+            $appxCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+
+            $globalWildcardAllowRules = @($appxCollection.FilePublisherRule | Where-Object {
+                $_.GetAttribute('Action') -eq 'Allow' -and
+                $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq '*' -and
+                $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
+            })
+            $globalWildcardAllowRules.Count | Should -Be 0
+
+            # The scoped Microsoft-publisher allow must be present in its place.
+            $microsoftAllowRule = @($appxCollection.FilePublisherRule | Where-Object {
+                $_.GetAttribute('Action') -eq 'Allow' -and
+                $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq 'O=MICROSOFT CORPORATION*' -and
+                $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
+            })
+            $microsoftAllowRule.Count | Should -Be 1
         }
 
         It "Generates Appx denies for unapproved Edge products while preserving the signed packaged-app allow" {
@@ -366,11 +391,12 @@ Describe "AppControl Module" {
             $appxCollection.GetAttribute('EnforcementMode') | Should -Be 'Enabled'
             $appxRuleNames = @($appxCollection.FilePublisherRule | ForEach-Object { $_.GetAttribute('Name') })
             $appxRuleNames | Should -Contain 'Vendor packaged allow'
-            $appxRuleNames | Should -Contain 'OpenPath non-admin app control Appx users allow signed packaged apps'
-            $openPathAppxRule = @($appxCollection.FilePublisherRule | Where-Object { $_.GetAttribute('Name') -eq 'OpenPath non-admin app control Appx users allow signed packaged apps' })[0]
+            $appxRuleNames | Should -Contain 'OpenPath non-admin app control Appx users allow Microsoft signed packaged apps'
+            $openPathAppxRule = @($appxCollection.FilePublisherRule | Where-Object { $_.GetAttribute('Name') -eq 'OpenPath non-admin app control Appx users allow Microsoft signed packaged apps' })[0]
             $openPathAppxRule.GetAttribute('Action') | Should -Be 'Allow'
             $openPathAppxRule.GetAttribute('UserOrGroupSid') | Should -Be 'S-1-1-0'
-            $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('PublisherName') | Should -Be '*'
+            # Scoped to Microsoft-signed packages only — not a global wildcard publisher.
+            $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('PublisherName') | Should -Be 'O=MICROSOFT CORPORATION*'
             $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('ProductName') | Should -Be '*'
             $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('BinaryName') | Should -Be '*'
             $openPathAppxRule.Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('LowSection') | Should -Be '*'

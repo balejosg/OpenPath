@@ -72,7 +72,7 @@ function New-OpenPathInstallerConfig {
         enableDohIpBlocking = $true
         dnsEgressDefaultDeny = $true
         blockInboundDns = $true
-        blockBridgedAdapters = $false
+        blockBridgedAdapters = $true
         bridgeFilterComponentIds = @()
         bridgeFilterAllowlist = @()
         enableNonAdminAppControl = $EnforceManagedBrowserBoundary

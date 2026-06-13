@@ -1249,6 +1249,24 @@ Describe "Watchdog Script" {
             $content | Should -Not -Match 'Disable-OpenPathCaptivePortalMode[\s\S]*Restore-OriginalDNS'
         }
 
+        It "Fails closed when expired marker restore fails: forces DNS to 127.0.0.1 and returns false" {
+            # When Disable-OpenPathCaptivePortalMode fails on an expired marker,
+            # Test-OpenPathCaptivePortalModeActive must NOT return true (which would
+            # leave enforcement bypassed). It must force DNS back to 127.0.0.1 via
+            # Set-LocalDNS and return false so the next cycle retries the full disable.
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $content = Get-Content $modulePath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'fail closed',
+                'forcing DNS to 127.0.0.1',
+                'Set-LocalDNS',
+                'return $false'
+            )
+            # The fail-closed path must NOT return true when the disable fails
+            $content | Should -Not -Match "failed to close expired captive portal passthrough marker[^`n]*`n[^`n]*return \`$true"
+        }
+
         It "Uses hysteresis before entering or exiting captive portal mode" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
@@ -1294,6 +1312,108 @@ Describe "Watchdog Script" {
                 '$limitedModeTtlSeconds = [Math]::Min([Math]::Max(1, $TtlSeconds), 120)',
                 '-TtlSeconds $limitedModeTtlSeconds'
             )
+        }
+
+        It "Clamps expiresAt to since + MaxLifetimeSeconds on re-arm and preserves normal TTL on first creation" {
+            # Content assertions: the clamp logic and culture-safe parse must be present.
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
+            $moduleContent = Get-Content $modulePath -Raw
+
+            $markerFnStart = $moduleContent.IndexOf('function Set-OpenPathCaptivePortalMarker')
+            $markerFnEnd = $moduleContent.IndexOf("`nfunction ", $markerFnStart + 1)
+            $markerFnBody = $moduleContent.Substring($markerFnStart, $markerFnEnd - $markerFnStart)
+
+            Assert-ContentContainsAll -Content $markerFnBody -Needles @(
+                '[int]$MaxLifetimeSeconds = 1800',
+                '[DateTime]::Parse([string]$since, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()',
+                '$hardDeadlineUtc = $sinceUtc.AddSeconds([Math]::Max(1, $MaxLifetimeSeconds))',
+                '$expiresUtc = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TtlSeconds))',
+                'if ($expiresUtc -gt $hardDeadlineUtc)',
+                '$expiresUtc = $hardDeadlineUtc',
+                'expiresAt = $expiresUtc.ToString(''o'')'
+            )
+
+            # The clamp must come before the payload hashtable to avoid using the uncapped value.
+            $markerFnBody.IndexOf('$hardDeadlineUtc = $sinceUtc.AddSeconds') |
+                Should -BeLessThan $markerFnBody.IndexOf('expiresAt = $expiresUtc.ToString')
+
+            # Behavioral assertion: re-arm with since far in the past is capped at the hard deadline.
+            $module = Import-Module $modulePath -Force -PassThru
+            $statePath = Join-Path $TestDrive "captive-portal-active-cap.json"
+
+            $result = & $module {
+                param([string]$StatePath)
+                $script:CaptivePortalStatePath = $StatePath
+
+                # Seed: write an initial marker whose 'since' is 31 minutes in the past,
+                # simulating a marker that has been re-arming for longer than MaxLifetimeSeconds.
+                $farPast = [DateTime]::UtcNow.AddSeconds(-1860).ToString('o')
+                $initialJson = [ordered]@{
+                    active = $true
+                    state = 'Portal'
+                    mode = 'limited'
+                    allowedHosts = @()
+                    configuredCaptivePortalDomains = @()
+                    configuredCaptivePortalDomainsApplied = $false
+                    bootstrapHosts = @()
+                    redirectHosts = @()
+                    resourceHosts = @()
+                    observedRuntimeHosts = @()
+                    pendingRuntimeHosts = @()
+                    discoveryTruncated = $false
+                    fallbackMode = 'none'
+                    limitedModeReady = $false
+                    expiresAt = [DateTime]::UtcNow.AddSeconds(300).ToString('o')
+                    upstreamDns = ''
+                    upstreamDnsSource = ''
+                    upstreamUsableForLimited = $false
+                    upstreamVerified = $false
+                    dnsResetAt = ''
+                    upstreamCapturedAt = ''
+                    passthroughEgress = $null
+                    since = $farPast
+                    updatedAt = $farPast
+                } | ConvertTo-Json -Depth 8
+                $initialJson | Set-Content -Path $StatePath -Encoding UTF8 -Force
+
+                # Re-arm with a normal TtlSeconds of 300 s.
+                Set-OpenPathCaptivePortalMarker -State 'Portal' -TtlSeconds 300 -MaxLifetimeSeconds 1800 | Out-Null
+
+                Get-OpenPathCaptivePortalMarker
+            } $statePath
+
+            # since must be preserved as the far-past timestamp.
+            # ConvertFrom-Json deserializes ISO-8601 strings into [DateTime] objects with the
+            # correct Kind (Utc for Z-suffix, Local for +offset). Use .ToUniversalTime() directly.
+            $reArmedMarker = Get-Content $statePath -Raw | ConvertFrom-Json
+            $reArmedMarker.since | Should -Not -BeNullOrEmpty
+            $sinceBack = ([DateTime]$reArmedMarker.since).ToUniversalTime()
+            $sinceBack | Should -BeLessThan ([DateTime]::UtcNow.AddSeconds(-1800))
+
+            # expiresAt must be <= since + MaxLifetimeSeconds (hard deadline already passed).
+            $expiresBack = ([DateTime]$reArmedMarker.expiresAt).ToUniversalTime()
+            $hardDeadline = $sinceBack.AddSeconds(1800)
+            $expiresBack | Should -BeLessOrEqual $hardDeadline
+
+            # Separate check: a fresh marker (no existing state) with a normal TTL is NOT clamped.
+            # Use a distinct state-path so there is no residual marker from the re-arm phase.
+            $freshStatePath = Join-Path $TestDrive "captive-portal-active-fresh.json"
+
+            $beforeFreshUtc = [DateTime]::UtcNow
+            & $module {
+                param([string]$StatePath)
+                $script:CaptivePortalStatePath = $StatePath
+                Set-OpenPathCaptivePortalMarker -State 'Portal' -TtlSeconds 300 -MaxLifetimeSeconds 1800 | Out-Null
+            } $freshStatePath
+
+            # ConvertFrom-Json preserves Kind from the ISO-8601 suffix; use ToUniversalTime() directly.
+            $freshRaw = Get-Content $freshStatePath -Raw | ConvertFrom-Json
+            $freshExpires = ([DateTime]$freshRaw.expiresAt).ToUniversalTime()
+            $freshSince = ([DateTime]$freshRaw.since).ToUniversalTime()
+            # For a fresh marker: expiresAt should be approximately since + 300 s (ttl),
+            # well under the since + 1800 s hard deadline, so the clamp must NOT trigger.
+            $freshExpires | Should -BeGreaterThan ($beforeFreshUtc.AddSeconds(290))
+            $freshExpires | Should -BeLessOrEqual ($freshSince.AddSeconds(1800))
         }
 
         It "Suppresses autonomous captive-portal entry when split DNS is active" {
@@ -1353,6 +1473,20 @@ Describe "Watchdog Script" {
                 '$script:OpenPathRoot\lib\internal\NativeHost.Actions.ps1',
                 '$script:OpenPathRoot\lib\internal\EndpointStateReconciler.ps1',
                 '$script:OpenPathRoot\lib\internal\Watchdog.Runtime.ps1'
+            )
+        }
+
+        It "Includes SYSTEM-task scripts in the integrity baseline to detect script tampering before execution" {
+            # Finding #12: standard users have GRGX on the scheduled-task scripts
+            # OpenPath-RuntimeDependencyApply and OpenPath-CaptivePortalRecovery.
+            # Replacing either script yields SYSTEM execution. Both must be in the
+            # integrity baseline so tampering is detected at the next watchdog cycle.
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Integrity.ps1"
+            $content = Get-Content $helperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '$script:OpenPathRoot\scripts\Apply-RuntimeDependencyQueue.ps1',
+                '$script:OpenPathRoot\scripts\Recover-CaptivePortal.ps1'
             )
         }
     }
@@ -1538,5 +1672,18 @@ Describe "Bridged VM networking neutralization wiring" {
             'DisableBridgeFilters',
             'Disable-OpenPathBridgeFilters'
         )
+    }
+
+    It "Default installer config enables blockBridgedAdapters so bridge enforcement is active out of the box" {
+        $firewallCatalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Catalog.ps1"
+        $configHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Config.ps1"
+        . $firewallCatalogPath
+        . $configHelperPath
+
+        $config = New-OpenPathInstallerConfig `
+            -AgentVersion 'test-version' `
+            -PrimaryDNS '8.8.8.8'
+
+        $config.blockBridgedAdapters | Should -BeTrue
     }
 }

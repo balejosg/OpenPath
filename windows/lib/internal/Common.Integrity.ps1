@@ -38,7 +38,9 @@ function Get-OpenPathCriticalFiles {
         "$script:OpenPathRoot\lib\internal\Watchdog.Runtime.ps1",
         "$script:OpenPathRoot\scripts\Update-OpenPath.ps1",
         "$script:OpenPathRoot\scripts\Test-DNSHealth.ps1",
-        "$script:OpenPathRoot\scripts\Start-SSEListener.ps1"
+        "$script:OpenPathRoot\scripts\Start-SSEListener.ps1",
+        "$script:OpenPathRoot\scripts\Apply-RuntimeDependencyQueue.ps1",
+        "$script:OpenPathRoot\scripts\Recover-CaptivePortal.ps1"
     )
 
     return $files | Where-Object { Test-Path $_ }
