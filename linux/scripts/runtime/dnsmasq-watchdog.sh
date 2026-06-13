@@ -443,11 +443,19 @@ attempt_rollback_recovery() {
                 sleep 1
             done
             
-            # Check if rollback fixed the issue
+            # Check if rollback fixed the issue, then re-validate the restored
+            # runtime state. A restore that brings dnsmasq back but leaves the
+            # config/firewall/resolv.conf non-canonical (corrupt or tampered
+            # checkpoint) must NOT be treated as recovered: keep the fail count
+            # so the next cycle retries, and do not re-enter protected mode here.
             if check_dnsmasq_running && check_dns_resolving; then
-                log "[WATCHDOG] ✓ Rollback exitoso - sistema recuperado"
-                reset_fail_count
-                return 0
+                if validate_restored_checkpoint; then
+                    log "[WATCHDOG] ✓ Rollback exitoso - sistema recuperado"
+                    reset_fail_count
+                    return 0
+                fi
+                log "[WATCHDOG] ⚠ Rollback restauró pero la validación post-restore falló - se mantiene el estado degradado"
+                return 1
             fi
         fi
     fi

@@ -103,3 +103,39 @@ EOF
     done
     [ "$found" = "true" ]
 }
+
+@test "rollback: validate_restored_checkpoint passes on canonical restored state" {
+    export RESOLV_CONF="$TEST_TMP_DIR/resolv.conf"
+    echo "nameserver 127.0.0.1" > "$RESOLV_CONF"
+    validate_dnsmasq_config() { return 0; }
+    verify_dns() { return 0; }
+    verify_firewall_rules() { return 0; }
+
+    run validate_restored_checkpoint
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[ROLLBACK-VALIDATE]"* ]]
+}
+
+@test "rollback: validate_restored_checkpoint fails when firewall rules are missing" {
+    export RESOLV_CONF="$TEST_TMP_DIR/resolv.conf"
+    echo "nameserver 127.0.0.1" > "$RESOLV_CONF"
+    validate_dnsmasq_config() { return 0; }
+    verify_dns() { return 0; }
+    verify_firewall_rules() { return 1; }
+
+    run validate_restored_checkpoint
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"firewall critical rules missing"* ]]
+}
+
+@test "rollback: validate_restored_checkpoint fails when resolv.conf is not pinned to localhost" {
+    export RESOLV_CONF="$TEST_TMP_DIR/resolv.conf"
+    echo "nameserver 8.8.8.8" > "$RESOLV_CONF"
+    validate_dnsmasq_config() { return 0; }
+    verify_dns() { return 0; }
+    verify_firewall_rules() { return 0; }
+
+    run validate_restored_checkpoint
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"resolv.conf is not pinned"* ]]
+}

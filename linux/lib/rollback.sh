@@ -181,6 +181,51 @@ restore_checkpoint() {
     return 0
 }
 
+# Re-validate runtime state after a checkpoint restore so a corrupt or tampered
+# restore is detected in the same watchdog cycle instead of the next one. This is
+# read-only/observational: it does NOT restore again, restart services, or enter
+# protected mode (the watchdog caller owns escalation). Composes existing
+# predicates; returns 0 when all checks pass, 1 when any fail.
+validate_restored_checkpoint() {
+    local resolv_conf="${RESOLV_CONF:-/etc/resolv.conf}"
+    local failures=0
+
+    if grep -q 'nameserver 127.0.0.1' "$resolv_conf" 2>/dev/null; then
+        log_debug "[ROLLBACK-VALIDATE] resolv.conf points to the local sinkhole"
+    else
+        log_error "[ROLLBACK-VALIDATE] resolv.conf is not pinned to 127.0.0.1"
+        failures=$((failures + 1))
+    fi
+
+    if validate_dnsmasq_config; then
+        log_debug "[ROLLBACK-VALIDATE] restored dnsmasq config parses"
+    else
+        log_error "[ROLLBACK-VALIDATE] restored dnsmasq config is invalid"
+        failures=$((failures + 1))
+    fi
+
+    if verify_dns; then
+        log_debug "[ROLLBACK-VALIDATE] DNS resolves a whitelisted domain"
+    else
+        log_error "[ROLLBACK-VALIDATE] DNS does not resolve after restore"
+        failures=$((failures + 1))
+    fi
+
+    if verify_firewall_rules; then
+        log_debug "[ROLLBACK-VALIDATE] firewall critical rules intact"
+    else
+        log_error "[ROLLBACK-VALIDATE] firewall critical rules missing after restore"
+        failures=$((failures + 1))
+    fi
+
+    if [ "$failures" -ne 0 ]; then
+        log_error "[ROLLBACK-VALIDATE] $failures post-restore check(s) failed"
+        return 1
+    fi
+    log_info "[ROLLBACK-VALIDATE] restored runtime state is canonical"
+    return 0
+}
+
 # List available checkpoints
 list_checkpoints() {
     init_checkpoints

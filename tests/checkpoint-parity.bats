@@ -332,6 +332,8 @@ awk '
 check_dnsmasq_running() { return 0; }
 check_dns_resolving()   { return 0; }
 reset_fail_count()      { echo "0" > "$FAIL_COUNT_FILE"; }
+# Post-restore validation passes (its own logic is unit-tested in rollback.bats).
+validate_restored_checkpoint() { return 0; }
 
 source "$extracted"
 
@@ -350,4 +352,52 @@ HARNESS
     [ "$status" -eq 0 ]
     [[ "$output" == *"status=0"* ]]
     [[ "$output" == *"whitelist=good-whitelist-content"* ]]
+}
+
+@test "checkpoint: rollback recovery keeps fail count when post-restore validation fails" {
+    local harness="$TEST_TMP_DIR/rollback-validate-fail.sh"
+    cat > "$harness" << 'HARNESS'
+#!/bin/bash
+set -uo pipefail
+
+project_dir="$1"
+state_dir="$2"
+export FAIL_COUNT_FILE="$state_dir/watchdog-fails"
+mkdir -p "$state_dir"
+echo "3" > "$FAIL_COUNT_FILE"
+
+log() { :; }
+
+# Stub the watchdog deps so only the post-restore validation gate is exercised.
+has_checkpoint()          { return 0; }
+get_previous_checkpoint() { echo "1"; }
+restore_checkpoint()      { return 0; }
+check_dnsmasq_running()   { return 0; }
+check_dns_resolving()     { return 0; }
+# A corrupt/tampered restore: dnsmasq is back but the state is not canonical.
+validate_restored_checkpoint() { return 1; }
+reset_fail_count()        { echo "RESET_CALLED" > "$state_dir/reset-marker"; }
+
+extracted="$state_dir/rollback-recovery.sh"
+awk '
+    /^attempt_rollback_recovery\(\) \{/ { cap=1; depth=0 }
+    cap && /\{/ { depth++ }
+    cap && /\}/ { depth--; if (depth==0) { print; cap=0; next } }
+    cap { print }
+' "$project_dir/linux/scripts/runtime/dnsmasq-watchdog.sh" > "$extracted"
+source "$extracted"
+
+attempt_rollback_recovery
+printf 'status=%s\n' "$?"
+printf 'reset=%s\n' "$( [ -f "$state_dir/reset-marker" ] && echo yes || echo no )"
+printf 'failcount=%s\n' "$(cat "$FAIL_COUNT_FILE")"
+HARNESS
+    chmod +x "$harness"
+
+    run "$harness" "$PROJECT_DIR" "$TEST_TMP_DIR/state"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"status=1"* ]]    # recovery reports failure, not success
+    [[ "$output" == *"reset=no"* ]]    # fail count must NOT be reset
+    [[ "$output" == *"failcount=3"* ]] # preserved so the next cycle retries
 }
