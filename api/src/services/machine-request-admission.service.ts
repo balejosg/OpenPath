@@ -16,7 +16,6 @@ import type { RequestResult, RequestServiceError } from './request-service-share
 import { createAutomaticWhitelistRule } from './whitelist-rule-command.service.js';
 import type { EffectivePolicyContext } from '../lib/classroom-storage.js';
 import {
-  admissionOriginMatchesWhitelist,
   admissionTargetMatchesBlockedPath,
   ruleValues,
 } from './machine-request-admission-policy.js';
@@ -155,15 +154,6 @@ function resolveDeps(deps?: Partial<MachineRequestAdmissionDeps>): MachineReques
   return { ...defaultDeps, autoApproveMachineRequests: config.autoApproveMachineRequests, ...deps };
 }
 
-async function isOriginWhitelisted(
-  groupId: string,
-  originPage: string | undefined,
-  deps: MachineRequestAdmissionDeps
-): Promise<boolean> {
-  const rules = await deps.getRulesByGroup(groupId, 'whitelist');
-  return admissionOriginMatchesWhitelist(originPage, ruleValues(rules));
-}
-
 async function isTargetBlockedPath(
   groupId: string,
   targetUrl: string | undefined,
@@ -197,8 +187,7 @@ async function decideAutoMachineAdmission(
     };
   }
 
-  const originWhitelisted = await isOriginWhitelisted(context.groupId, input.originPage, deps);
-  if (!deps.autoApproveMachineRequests && !originWhitelisted) {
+  if (!deps.autoApproveMachineRequests) {
     return { kind: 'pending', context };
   }
 

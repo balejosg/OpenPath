@@ -125,7 +125,7 @@ void describe('Request API tests - public submit routes', async () => {
       assert.match(duplicateData.error ?? '', /pending request exists/i);
     });
 
-    await test('should auto-approve ajax targets when the origin domain is already whitelisted', async () => {
+    await test('should NOT auto-approve an ajax target on a whitelisted origin when global auto-approval is off', async () => {
       const suffix = `${Date.now().toString()}-origin-allowed`;
       const groupId = `grp-${suffix}`;
       const classroomId = `cls-${suffix}`;
@@ -173,14 +173,16 @@ void describe('Request API tests - public submit routes', async () => {
         success: boolean;
       };
 
+      // Security: a whitelisted origin must NOT auto-approve the target when
+      // global machine auto-approval is off (attacker-controlled origin_page is
+      // not a grant). The request becomes pending for human review.
       assert.strictEqual(data.success, true);
-      assert.strictEqual(data.approved, true);
-      assert.strictEqual(data.autoApproved, true);
-      assert.strictEqual(data.status, 'approved');
+      assert.strictEqual(data.approved, false);
+      assert.strictEqual(data.autoApproved, false);
+      assert.strictEqual(data.status, 'pending');
       assert.strictEqual(data.groupId, groupId);
-      assert.strictEqual(data.source, 'auto_extension');
-      assert.strictEqual(data.duplicate, false);
 
+      // No whitelist rule is auto-created for the target...
       assert.strictEqual(
         getRows(
           await db.execute(
@@ -189,19 +191,20 @@ void describe('Request API tests - public submit routes', async () => {
             )
           )
         ).length,
-        1
+        0
       );
+      // ...and a pending request is recorded instead.
       assert.strictEqual(
         getRows(
           await db.execute(
             sql.raw(`SELECT id FROM requests WHERE domain='${domain}' AND group_id='${groupId}'`)
           )
         ).length,
-        0
+        1
       );
     });
 
-    await test('should auto-approve font targets when the top-level origin page is whitelisted', async () => {
+    await test('should NOT auto-approve a font target on a whitelisted origin when global auto-approval is off', async () => {
       const suffix = `${Date.now().toString()}-font-origin`;
       const groupId = `grp-${suffix}`;
       const classroomId = `cls-${suffix}`;
@@ -255,33 +258,30 @@ void describe('Request API tests - public submit routes', async () => {
         success: boolean;
       };
 
+      // Security: same as ajax — a whitelisted top-level origin does not
+      // auto-approve a font subresource target while global auto-approval is off.
       assert.strictEqual(data.success, true);
-      assert.strictEqual(data.approved, true);
-      assert.strictEqual(data.autoApproved, true);
-      assert.strictEqual(data.status, 'approved');
+      assert.strictEqual(data.approved, false);
+      assert.strictEqual(data.autoApproved, false);
+      assert.strictEqual(data.status, 'pending');
       assert.strictEqual(data.groupId, groupId);
-      assert.strictEqual(data.source, 'auto_extension');
-      assert.strictEqual(data.duplicate, false);
 
-      const diagnosticRuleRows = getRows<{ id: string; comment: string | null }>(
-        await db.execute(
-          sql.raw(
-            `SELECT id, comment FROM whitelist_rules WHERE group_id='${groupId}' AND type='whitelist' AND value='${domain}'`
-          )
-        )
-      );
-      assert.strictEqual(
-        diagnosticRuleRows[0]?.comment?.includes(
-          `diagnostic (correlation_id=corr-${suffix}; probe_id=font-subresource; request_type=font; target_hostname=${domain})`
-        ),
-        true
-      );
+      // No whitelist rule is auto-created for the target...
       assert.strictEqual(
         getRows(
           await db.execute(
             sql.raw(
               `SELECT id FROM whitelist_rules WHERE group_id='${groupId}' AND type='whitelist' AND value='${domain}'`
             )
+          )
+        ).length,
+        0
+      );
+      // ...and a pending request is recorded instead.
+      assert.strictEqual(
+        getRows(
+          await db.execute(
+            sql.raw(`SELECT id FROM requests WHERE domain='${domain}' AND group_id='${groupId}'`)
           )
         ).length,
         1

@@ -376,24 +376,9 @@ await describe('machine request admission service', async () => {
     assert.equal(createdRules.length, 0);
   });
 
-  await test('auto request preserves exact subresource domain when origin is trusted', async () => {
+  await test('auto request preserves exact subresource domain when global auto approval is enabled', async () => {
     const { deps, createdRules } = createDeps({
-      getRulesByGroup: (_groupId, type) =>
-        Promise.resolve(
-          type === 'whitelist'
-            ? [
-                {
-                  id: 'rule-origin',
-                  groupId: 'group-1',
-                  type: 'whitelist',
-                  value: 'school.example',
-                  source: 'manual',
-                  comment: null,
-                  createdAt: new Date().toISOString(),
-                },
-              ]
-            : []
-        ) as Promise<Rule[]>,
+      autoApproveMachineRequests: true,
     });
 
     const result = await decideAutoMachineRequest(
@@ -412,24 +397,9 @@ await describe('machine request admission service', async () => {
     assert.equal(createdRules[0]?.value, 'video.cdn.example.com');
   });
 
-  await test('whitelisted origin auto approves and publishes whitelist event after commit', async () => {
+  await test('whitelisted origin auto approves and publishes whitelist event when global auto approval is enabled', async () => {
     const { deps, events, createdRules } = createDeps({
-      getRulesByGroup: (_groupId, type) =>
-        Promise.resolve(
-          type === 'whitelist'
-            ? [
-                {
-                  id: 'rule-origin',
-                  groupId: 'group-1',
-                  type: 'whitelist',
-                  value: '*.school.example',
-                  source: 'manual',
-                  comment: null,
-                  createdAt: new Date().toISOString(),
-                },
-              ]
-            : []
-        ) as Promise<Rule[]>,
+      autoApproveMachineRequests: true,
     });
 
     const result = await decideAutoMachineRequest(
@@ -457,6 +427,88 @@ await describe('machine request admission service', async () => {
     assert.ok(createdRules[0]);
     assert.equal(createdRules[0].source, 'auto_extension');
     assert.match(String(createdRules[0].comment), /diagnostic \(xmlhttprequest\)/);
+  });
+
+  // Regression tests for CVE: attacker-controlled originPage must not bypass
+  // manual-approval gate when autoApproveMachineRequests=false.
+  await test('[security] whitelisted origin does NOT auto-approve when global auto approval is disabled', async () => {
+    const { deps, createdRequests, createdRules } = createDeps({
+      autoApproveMachineRequests: false,
+      getRulesByGroup: (_groupId, type) =>
+        Promise.resolve(
+          type === 'whitelist'
+            ? [
+                {
+                  id: 'rule-origin',
+                  groupId: 'group-1',
+                  type: 'whitelist',
+                  value: '*.github.io',
+                  source: 'manual',
+                  comment: null,
+                  createdAt: new Date().toISOString(),
+                },
+              ]
+            : []
+        ) as Promise<Rule[]>,
+    });
+
+    // Attacker supplies an originPage whose hostname matches the whitelisted wildcard.
+    const result = await decideAutoMachineRequest(
+      {
+        domainRaw: 'evil-target.com',
+        hostnameRaw: 'lab-host-01',
+        originPage: 'https://attacker.github.io/page',
+        token: 'token',
+      },
+      deps
+    );
+
+    // Must be pending (human approval required), NOT auto-approved.
+    assert.ok(result.ok);
+    assert.equal(result.data.autoApproved, false);
+    assert.equal(result.data.domain, 'evil-target.com');
+    // A pending request must have been created for human review.
+    assert.equal(createdRequests.length, 1);
+    // No automatic whitelist rule must have been created for the target.
+    assert.equal(createdRules.length, 0);
+  });
+
+  await test('[security] wildcard-user-content origin does NOT self-whitelist arbitrary target when auto approval is disabled', async () => {
+    const { deps, createdRequests, createdRules } = createDeps({
+      autoApproveMachineRequests: false,
+      getRulesByGroup: (_groupId, type) =>
+        Promise.resolve(
+          type === 'whitelist'
+            ? [
+                {
+                  id: 'rule-cdn',
+                  groupId: 'group-1',
+                  type: 'whitelist',
+                  value: 'github.io',
+                  source: 'manual',
+                  comment: null,
+                  createdAt: new Date().toISOString(),
+                },
+              ]
+            : []
+        ) as Promise<Rule[]>,
+    });
+
+    const result = await decideAutoMachineRequest(
+      {
+        domainRaw: 'blocked-by-teacher.example',
+        hostnameRaw: 'lab-host-01',
+        originPage: 'https://student-project.github.io/index.html',
+        token: 'token',
+      },
+      deps
+    );
+
+    assert.ok(result.ok);
+    assert.equal(result.data.autoApproved, false);
+    // Pending request created for human review, no rule auto-created.
+    assert.equal(createdRequests.length, 1);
+    assert.equal(createdRules.length, 0);
   });
 
   await test('automatic whitelist event is published only after transaction commit', async () => {
