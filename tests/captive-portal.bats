@@ -806,3 +806,97 @@ EOF
     [ "$CAPTIVE_PORTAL_EXIT_THRESHOLD" = "1" ]
     [ "${CAPTIVE_PORTAL_SPLIT_DNS_HOSTS}" = "" ]
 }
+
+# ============== Absolute lifetime cap tests ==============
+
+@test "defaults.conf exposes CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS with default 1800" {
+    source "$PROJECT_DIR/linux/lib/defaults.conf"
+
+    [ "$CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS" = "1800" ]
+}
+
+@test "write_portal_mode_marker clamps expires to start_ts + MAX_LIFETIME" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_TTL_SECONDS=120
+    export CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS=60
+
+    # start_ts 70 seconds ago -> hard_deadline = start_ts + 60 = 10 seconds ago
+    local start_ts
+    start_ts=$(( $(date +%s) - 70 ))
+    write_portal_mode_marker "$start_ts"
+
+    local expiry hard_deadline now
+    now=$(date +%s)
+    expiry=$(get_portal_mode_expiry_ts)
+    hard_deadline=$(( start_ts + 60 ))
+
+    # expires must equal hard_deadline (clamped), not now+ttl
+    [ "$expiry" -eq "$hard_deadline" ]
+}
+
+@test "refresh_portal_mode_expiry does NOT re-arm when elapsed >= MAX_LIFETIME and forces close" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS=60
+
+    # Marker started 61 seconds ago (past the cap)
+    local start_ts
+    start_ts=$(( $(date +%s) - 61 ))
+    printf '%s\nexpires=%s\n' "$start_ts" "$(($(date +%s) + 60))" \
+        > "$CAPTIVE_PORTAL_STATE_FILE"
+
+    with_openpath_lock() { "$@"; }
+    exit_portal_mode_locked() {
+        rm -f "$CAPTIVE_PORTAL_STATE_FILE"
+        echo "EXIT_PORTAL_MODE_CALLED"
+    }
+
+    run refresh_portal_mode_expiry
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"EXIT_PORTAL_MODE_CALLED"* ]]
+    # Marker must be gone after the forced close
+    [ ! -f "$CAPTIVE_PORTAL_STATE_FILE" ]
+}
+
+@test "refresh_portal_mode_expiry extends expiry when elapsed < MAX_LIFETIME" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_TTL_SECONDS=120
+    export CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS=1800
+
+    local start_ts old_expiry new_expiry
+    start_ts=$(( $(date +%s) - 60 ))
+    printf '%s\nexpires=%s\n' "$start_ts" "$(($(date +%s) + 1))" \
+        > "$CAPTIVE_PORTAL_STATE_FILE"
+    old_expiry=$(get_portal_mode_expiry_ts)
+
+    # refresh should succeed and extend the deadline (60s elapsed < 1800s cap)
+    with_openpath_lock() { "$@"; }
+    exit_portal_mode_locked() { echo "EXIT_PORTAL_MODE_CALLED"; }
+
+    run refresh_portal_mode_expiry
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"EXIT_PORTAL_MODE_CALLED"* ]]
+    new_expiry=$(get_portal_mode_expiry_ts)
+    [ "$new_expiry" -gt "$old_expiry" ]
+}
+
+@test "refresh_portal_mode_expiry new expiry never exceeds hard deadline" {
+    _source_portal_lib
+    export CAPTIVE_PORTAL_TTL_SECONDS=120
+    export CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS=90
+
+    # started 30 seconds ago -> 60 seconds until deadline; ttl=120 would overshoot
+    local start_ts hard_deadline new_expiry
+    start_ts=$(( $(date +%s) - 30 ))
+    hard_deadline=$(( start_ts + 90 ))
+    printf '%s\nexpires=%s\n' "$start_ts" "$(($(date +%s) + 1))" \
+        > "$CAPTIVE_PORTAL_STATE_FILE"
+
+    with_openpath_lock() { "$@"; }
+    exit_portal_mode_locked() { echo "EXIT_PORTAL_MODE_CALLED"; }
+
+    run refresh_portal_mode_expiry
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"EXIT_PORTAL_MODE_CALLED"* ]]
+    new_expiry=$(get_portal_mode_expiry_ts)
+    [ "$new_expiry" -le "$hard_deadline" ]
+}

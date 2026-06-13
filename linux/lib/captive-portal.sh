@@ -85,31 +85,60 @@ is_portal_mode_expired() {
 
 # Write the portal-mode marker with a fresh expiry deadline.
 # Args: 1) start epoch (preserved across refreshes)
+# The new expires value is clamped so it never exceeds start_ts + MAX_LIFETIME.
 write_portal_mode_marker() {
     local start_ts="$1"
     local ttl="${CAPTIVE_PORTAL_TTL_SECONDS:-120}"
+    local max_lifetime="${CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS:-1800}"
 
     if ! [[ "$ttl" =~ ^[0-9]+$ ]] || [ "$ttl" -lt 1 ]; then
         ttl=120
+    fi
+    if ! [[ "$max_lifetime" =~ ^[0-9]+$ ]] || [ "$max_lifetime" -lt 1 ]; then
+        max_lifetime=1800
+    fi
+
+    local now hard_deadline expires
+    now=$(date +%s)
+    hard_deadline=$(( start_ts + max_lifetime ))
+    expires=$(( now + ttl ))
+    if [ "$expires" -gt "$hard_deadline" ]; then
+        expires="$hard_deadline"
     fi
 
     mkdir -p "$(dirname "$CAPTIVE_PORTAL_STATE_FILE")" 2>/dev/null || true
     {
         echo "$start_ts"
-        echo "expires=$(( $(date +%s) + ttl ))"
+        echo "expires=$expires"
     } > "$CAPTIVE_PORTAL_STATE_FILE" 2>/dev/null || true
 }
 
 # Extend the marker's expiry while the portal is still being observed
 # (mirrors the Windows watchdog re-arming the marker TTL each cycle).
 # Preserves the original start timestamp. Returns 1 when no marker exists.
+# When the absolute lifetime cap (CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS) has
+# been reached, the refresh is refused and portal mode is force-closed instead.
 refresh_portal_mode_expiry() {
     is_portal_mode_active || return 1
 
-    local start_ts
+    local start_ts now max_lifetime elapsed
     if ! start_ts=$(get_portal_mode_start_ts); then
         start_ts=$(date +%s)
     fi
+
+    now=$(date +%s)
+    max_lifetime="${CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS:-1800}"
+    if ! [[ "$max_lifetime" =~ ^[0-9]+$ ]] || [ "$max_lifetime" -lt 1 ]; then
+        max_lifetime=1800
+    fi
+
+    elapsed=$(( now - start_ts ))
+    if [ "$elapsed" -ge "$max_lifetime" ]; then
+        log "[CAPTIVE] Portal passthrough absolute lifetime cap reached (${elapsed}s >= ${max_lifetime}s) - forcing close" "WARN"
+        with_openpath_lock exit_portal_mode_locked
+        return 0
+    fi
+
     write_portal_mode_marker "$start_ts"
 }
 

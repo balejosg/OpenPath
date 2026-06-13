@@ -63,9 +63,22 @@ function Test-OpenPathCaptivePortalModeActive {
         }
         $disabled = Disable-OpenPathCaptivePortalMode
         if (-not [bool]$disabled) {
-            Write-OpenPathLog 'Watchdog: failed to close expired captive portal passthrough marker; keeping marker active (details redacted)' -Level WARN
+            # Fail closed: the restore did not complete. Force DNS back to the local
+            # resolver (127.0.0.1) so enforcement is not bypassed while the marker
+            # file exists. The marker is treated as needing-restore (return $false)
+            # so the next watchdog cycle retries the full disable path.
+            Write-OpenPathLog 'Watchdog: failed to close expired captive portal passthrough marker; forcing DNS to 127.0.0.1 and treating mode as inactive (fail closed)' -Level WARN
+            try {
+                if (Get-Command -Name 'Set-LocalDNS' -ErrorAction SilentlyContinue) {
+                    Set-LocalDNS | Out-Null
+                }
+            }
+            catch {
+                Write-OpenPathLog "Watchdog: fail-closed DNS reset to 127.0.0.1 also failed: $_" -Level WARN
+            }
+            return $false
         }
-        return (-not [bool]$disabled)
+        return $false
     }
 
     return $true
@@ -176,6 +189,11 @@ function Set-OpenPathCaptivePortalMarker {
         Override for the computed configuredCaptivePortalDomainsApplied field.
     .PARAMETER TtlSeconds
         Seconds until the marker expires; clamped to at least 1 second.
+    .PARAMETER MaxLifetimeSeconds
+        Absolute lifetime cap in seconds measured from 'since'. Regardless of how
+        many times the marker is re-armed via TtlSeconds, expiresAt will never exceed
+        since + MaxLifetimeSeconds. Mirrors the Linux CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS
+        cap (default 1800 s / 30 min).
     .OUTPUTS
         Boolean — true on success, false on I/O error
     #>
@@ -223,7 +241,9 @@ function Set-OpenPathCaptivePortalMarker {
 
         [bool]$ConfiguredCaptivePortalDomainsApplied = $false,
 
-        [int]$TtlSeconds = 300
+        [int]$TtlSeconds = 300,
+
+        [int]$MaxLifetimeSeconds = 1800
     )
 
     try {
@@ -236,6 +256,23 @@ function Set-OpenPathCaptivePortalMarker {
         $since = (Get-Date).ToString('o')
         if ($existing -and $existing.PSObject.Properties['since'] -and $existing.since) {
             $since = [string]$existing.since
+        }
+
+        # Absolute lifetime cap: expiresAt must never exceed since + MaxLifetimeSeconds,
+        # no matter how many times the marker is re-armed. This closes the re-arm bypass
+        # gap that is the Windows twin of the Linux CAPTIVE_PORTAL_MAX_LIFETIME_SECONDS cap.
+        $sinceUtc = $null
+        try {
+            $sinceUtc = [DateTime]::Parse([string]$since, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+        }
+        catch {
+            # Fallback: anchor the hard deadline at UtcNow if the since timestamp is unparseable.
+            $sinceUtc = [DateTime]::UtcNow
+        }
+        $hardDeadlineUtc = $sinceUtc.AddSeconds([Math]::Max(1, $MaxLifetimeSeconds))
+        $expiresUtc = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TtlSeconds))
+        if ($expiresUtc -gt $hardDeadlineUtc) {
+            $expiresUtc = $hardDeadlineUtc
         }
 
         $configuredDomains = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts $ConfiguredCaptivePortalDomains)
@@ -268,7 +305,7 @@ function Set-OpenPathCaptivePortalMarker {
             discoveryTruncated = [bool]$DiscoveryTruncated
             fallbackMode = [string]$FallbackMode
             limitedModeReady = [bool]$LimitedModeReady
-            expiresAt = ([DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TtlSeconds))).ToString('o')
+            expiresAt = $expiresUtc.ToString('o')
             upstreamDns = [string]$UpstreamDns
             upstreamDnsSource = [string]$UpstreamDnsSource
             upstreamUsableForLimited = [bool]$UpstreamUsableForLimited
