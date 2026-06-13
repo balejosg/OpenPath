@@ -173,6 +173,23 @@ apply_ntp_egress_rules() {
         iptables -A OUTPUT -p udp --dport 123 -j ACCEPT
 }
 
+# Intranet egress. Allow a configurable list of private/intranet CIDRs (default:
+# all RFC1918). Operators can narrow RFC1918_ALLOW to the specific ranges their
+# deployment needs, shrinking the LAN/USB-tethered-proxy blast radius.
+apply_rfc1918_egress_rules() {
+    local ranges_raw="${RFC1918_ALLOW:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+    local ranges=()
+    IFS=',' read -r -a ranges <<< "$ranges_raw"
+
+    local cidr
+    for cidr in "${ranges[@]}"; do
+        cidr="${cidr//[[:space:]]/}"
+        [ -z "$cidr" ] && continue
+        add_optional_rule "Allow intranet $cidr" \
+            iptables -A OUTPUT -d "$cidr" -j ACCEPT
+    done
+}
+
 bridge_enforcement_enabled() { openpath_flag_enabled "${BRIDGE_ENFORCEMENT_ENABLED:-1}"; }
 
 # Subject bridged/forwarded guest-VM traffic to netfilter. Loading br_netfilter
@@ -304,6 +321,8 @@ apply_ipv6_firewall() {
         add_optional_rule "IPv6 allow HTTPS (443)" ip6tables -A OUTPUT -p tcp --dport 443 -j ACCEPT
     fi
 
+    add_optional_rule "IPv6 log dropped egress (detectability)" \
+        ip6tables -A OUTPUT -m limit --limit 5/min -j LOG --log-prefix "OPENPATH-EGRESS6-DROP "
     add_critical_rule "IPv6 default deny (DROP all)" \
         ip6tables -A OUTPUT -j DROP
 

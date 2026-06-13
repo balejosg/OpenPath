@@ -75,13 +75,12 @@ activate_firewall() {
     # HTTP/HTTPS and NTP scoped to resolved-whitelist IPs (or broad as fallback).
     apply_http_egress_rules
     apply_ntp_egress_rules
-    add_optional_rule "Allow private network 10.0.0.0/8" \
-        iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT
-    add_optional_rule "Allow private network 172.16.0.0/12" \
-        iptables -A OUTPUT -d 172.16.0.0/12 -j ACCEPT
-    add_optional_rule "Allow private network 192.168.0.0/16" \
-        iptables -A OUTPUT -d 192.168.0.0/16 -j ACCEPT
+    # Intranet ranges (configurable allow-list; default = all RFC1918). Operators
+    # can narrow RFC1918_ALLOW to shrink the LAN/tethered-proxy blast radius.
+    apply_rfc1918_egress_rules
 
+    add_optional_rule "Log dropped egress (detectability)" \
+        iptables -A OUTPUT -m limit --limit 5/min -j LOG --log-prefix "OPENPATH-EGRESS-DROP "
     add_critical_rule "Default deny (DROP all)" \
         iptables -A OUTPUT -j DROP || critical_failed=1
 

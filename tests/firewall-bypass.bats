@@ -571,6 +571,29 @@ source_firewall() {
     grep -q -- "-A OUTPUT -p udp --dport 53 -j DROP" "$IP6TABLES_LOG"
 }
 
+# ============== RFC1918 knob + egress logging ==============
+
+@test "apply_rfc1918_egress_rules honors a custom RFC1918_ALLOW list" {
+    export RFC1918_ALLOW="192.168.10.0/24, 10.1.2.0/24"
+    source_firewall
+
+    apply_rfc1918_egress_rules
+
+    grep -q -- "-A OUTPUT -d 192.168.10.0/24 -j ACCEPT" "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -d 10.1.2.0/24 -j ACCEPT" "$IPTABLES_LOG"
+    # The broad default ranges are not emitted when a narrower list is set.
+    ! grep -q -- "-A OUTPUT -d 10.0.0.0/8 -j ACCEPT" "$IPTABLES_LOG"
+}
+
+@test "activate_firewall logs dropped egress before the default deny (v4 and v6)" {
+    source_firewall
+
+    activate_firewall
+
+    grep -q -- "-A OUTPUT -m limit --limit 5/min -j LOG --log-prefix OPENPATH-EGRESS-DROP " "$IPTABLES_LOG"
+    grep -q -- "-A OUTPUT -m limit --limit 5/min -j LOG --log-prefix OPENPATH-EGRESS6-DROP " "$IP6TABLES_LOG"
+}
+
 # ============== deactivate_firewall cleanup ==============
 
 @test "deactivate_firewall destroys the DoH ipset after flushing rules" {
