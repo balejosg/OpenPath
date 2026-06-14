@@ -29,6 +29,10 @@
 - run installers as Administrator only from trusted sources
 - verify scheduled tasks and firewall rules after bootstrap
 - protect `C:\OpenPath\data\config.json` and staged browser-extension artifacts
+- the AppLocker tool-blocks and Appx denies (IP-literal egress mitigation) are on
+  by default; for stricter lockdown, the optional outbound egress floor is
+  default-off -- enable it per the canary runbook in
+  [`windows-egress-floor.md`](windows-egress-floor.md)
 
 ## Repo Checks
 

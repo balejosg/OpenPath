@@ -48,6 +48,7 @@
 - Linux troubleshooting: [`linux/TROUBLESHOOTING.md`](../linux/TROUBLESHOOTING.md)
 - Windows deployment notes: [`windows/DEPLOYMENT.md`](../windows/DEPLOYMENT.md)
 - Windows troubleshooting: [`windows/TROUBLESHOOTING.md`](../windows/TROUBLESHOOTING.md)
+- Windows outbound egress floor (opt-in + canary): [`docs/windows-egress-floor.md`](windows-egress-floor.md)
 
 ## Evaluation
 
