@@ -134,6 +134,15 @@ function Remove-OpenPathFirewall {
     Write-OpenPathLog 'Removing openpath firewall rules...'
 
     try {
+        # Brick-guard: if the outbound egress floor previously flipped each profile's
+        # DefaultOutboundAction to Block, a full firewall teardown that only deletes rules
+        # would leave the default at Block with no Allow exceptions == all egress bricked.
+        # Restore the persisted pre-floor outbound default (fallback Allow) FIRST. No-op
+        # when the floor was never enabled (no state file -> restores to Allow harmlessly).
+        if (Get-Command -Name 'Restore-OpenPathEgressFloorPreviousOutbound' -ErrorAction SilentlyContinue) {
+            Restore-OpenPathEgressFloorPreviousOutbound
+        }
+
         $manifestPath = Get-OpenPathFirewallManifestPath
         foreach ($ruleName in @(Get-OpenPathFirewallManifestRuleNames -Path $manifestPath)) {
             Remove-OpenPathFirewallRuleObjects -Rules @(Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)

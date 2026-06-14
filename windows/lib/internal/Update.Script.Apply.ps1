@@ -228,12 +228,14 @@ function Handle-OpenPathWhitelistApply {
         -BlockedPaths $Whitelist.BlockedPaths | Out-Null
 
     # W-1(b): on a whitelist change, immediately re-resolve and re-apply the outbound
-    # egress floor so its per-IP 443 allow-set tracks the new domains (the protected-mode
-    # restore above short-circuits when the firewall is already active, so it would not
-    # rebuild the floor on its own). DEFAULT OFF: gated on outboundEgressFloorEnabled, a
-    # no-op until WEDU-lab validation flips it on. The apply path fails open on an empty
-    # resolution, so a transient resolver outage here never bricks HTTPS. The per-minute
-    # watchdog drift check is the backstop for CDN rotation between whitelist updates.
+    # egress floor so its per-IP HTTP/HTTPS allow-set tracks the new domains (the
+    # protected-mode restore above short-circuits when the firewall is already active, so
+    # it would not rebuild the floor on its own). DEFAULT OFF: gated on
+    # outboundEgressFloorEnabled, a no-op until WEDU-lab validation flips it on. The
+    # DefaultOutboundAction-Block apply path fails open on an empty resolution (it restores
+    # the pre-floor outbound default instead of leaving the default at Block), so a
+    # transient resolver outage here never bricks egress. The per-minute watchdog drift
+    # check is the backstop for CDN rotation between whitelist updates.
     $egressFloorEnabledOnApply = $false
     if ($Config -and $Config.PSObject.Properties['outboundEgressFloorEnabled']) {
         $egressFloorEnabledOnApply = [bool]$Config.outboundEgressFloorEnabled
