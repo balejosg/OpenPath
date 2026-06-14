@@ -1011,12 +1011,29 @@ function Set-OpenPathFirewall {
 
         if ($outboundEgressFloorEnabled) {
             # W-1(b): transport floor. DEFAULT OFF (outboundEgressFloorEnabled = $false
-            # above). This branch is only reached when an operator has explicitly opted
-            # in. Enabling by default REQUIRES WEDU-lab validation on a real Windows
-            # runner of (a) live whitelist-IP resolution staying in lock-step with the
-            # CDN-rotated allow set, and (b) the system-service allow-list being proven
-            # complete -- otherwise the device loses update/time-sync/control-plane. Never
-            # sets a machine-wide DefaultOutboundAction Block.
+            # above). This branch is only reached when an operator has explicitly opted in.
+            #
+            # !!! VALIDATED NON-FUNCTIONAL ON A REAL WINDOWS RUNNER (2026-06-14) -- DO NOT
+            # ENABLE AS-IS. This approach builds explicit Block rules over the non-allow
+            # IPv4 ranges plus program-scoped Allow rules for the system services. A live
+            # test on the self-hosted runner (VM103) proved that on Windows Filtering
+            # Platform an explicit Block rule WINS over a program-scoped Allow (block
+            # precedence is the documented WFP order). So the system-service Allow rules do
+            # NOT override the range Block: svchost/w32tm/the agent would be blocked from
+            # reaching any non-whitelisted 443 IP, killing OS update, time-sync, and the
+            # control plane -- i.e. enabling this would brick the device. A working default
+            # -deny on Windows needs Set-NetFirewallProfile -DefaultOutboundAction Block
+            # (per profile) plus Allow exceptions (which override the DEFAULT block rather
+            # than competing explicit Block rules), with a proven-complete allow set --
+            # exactly the machine-wide default-block the original scaffold avoided. Until
+            # the floor is reworked that way and re-validated, the IP-literal P0 mitigation
+            # is the AppLocker tool-blocks + Appx denies (active by default), not this floor.
+            # The drift detector also over-triggers: Windows stores a /32 RemoteAddress in
+            # netmask form (x.x.x.x/255.255.255.255), not the bare literal it compares.
+            #
+            # (Original notes:) Enabling REQUIRES real-Windows validation of (a) live
+            # whitelist-IP resolution staying in lock-step with the CDN-rotated allow set,
+            # and (b) the system-service allow-list being proven complete.
             #
             # Allow-IP source: prefer an explicit operator/config static list when one is
             # supplied; otherwise resolve the live whitelist + always-allowed domains
