@@ -124,4 +124,75 @@ void describe('Push Notifications API - subscription flows', { timeout: 45_000 }
       );
     }
   });
+
+  void test('push.subscribe falls back to the teacher own groups when none are supplied', async () => {
+    const response = await trpcMutate(
+      'push.subscribe',
+      { subscription: createMockSubscription('teacher-fallback') },
+      { Authorization: `Bearer ${getPushScenario().teacherToken}` }
+    );
+
+    assert.equal(response.status, 200);
+    const data = (await parseTRPC(response)).data as PushResult;
+    assert.ok(data.subscriptionId);
+    assert.ok(
+      (data.groupIds ?? []).length > 0,
+      'no explicit groups should fall back to the teacher assignments'
+    );
+  });
+
+  void test('push.subscribe lets an admin target an explicit group list', async () => {
+    const response = await trpcMutate(
+      'push.subscribe',
+      {
+        subscription: createMockSubscription('admin-explicit'),
+        groupIds: ['ciencias-3eso', 'fisica-4eso'],
+      },
+      { Authorization: `Bearer ${getPushScenario().adminToken}` }
+    );
+
+    assert.equal(response.status, 200);
+    const data = (await parseTRPC(response)).data as PushResult;
+    assert.equal(
+      data.groupIds?.includes('fisica-4eso'),
+      true,
+      'an admin may subscribe to any group, not only assigned ones'
+    );
+  });
+
+  void test('push.subscribe gives an admin the wildcard scope when no groups are supplied', async () => {
+    const response = await trpcMutate(
+      'push.subscribe',
+      { subscription: createMockSubscription('admin-no-groups') },
+      { Authorization: `Bearer ${getPushScenario().adminToken}` }
+    );
+
+    assert.equal(response.status, 200);
+    const data = (await parseTRPC(response)).data as PushResult;
+    assert.equal(
+      data.groupIds?.includes('*'),
+      true,
+      'an admin with no explicit groups should get the wildcard scope'
+    );
+  });
+
+  void test('push.subscribe maps an unknown target group to a 400 (save-time validation)', async () => {
+    // An admin bypasses the own-group intersection, so an unknown group id reaches
+    // saveSubscription, which throws "Unknown group IDs:" -- the subscribe catch
+    // block maps that to BAD_REQUEST rather than a 500.
+    const response = await trpcMutate(
+      'push.subscribe',
+      {
+        subscription: createMockSubscription('admin-unknown-group'),
+        groupIds: ['definitely-not-a-real-group-xyz'],
+      },
+      { Authorization: `Bearer ${getPushScenario().adminToken}` }
+    );
+
+    assert.equal(
+      response.status,
+      400,
+      `an unknown target group must be a bad request, got ${String(response.status)}`
+    );
+  });
 });

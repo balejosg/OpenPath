@@ -155,6 +155,11 @@ void describe('coverage regressions - storage helpers', () => {
     assert.ok((await storage.getRequestById(request.id)) !== null);
     assert.strictEqual((await storage.getAllRequests()).length > 0, true);
     assert.strictEqual((await storage.getRequestsByGroup('default')).length > 0, true);
+    // request-storage-query: aggregate stats + per-group pending dedupe (scoped
+    // and global branches of hasPendingRequest).
+    assert.ok((await storage.getStats()).total >= 1);
+    assert.strictEqual(await storage.hasPendingRequest(request.domain, 'default'), true);
+    assert.strictEqual(await storage.hasPendingRequest(uniqueDomain('never-pending')), false);
     assert.strictEqual(await storage.deleteRequest(request.id), true);
 
     await settingsStorage.setSetting('coverage-flag', 'enabled');

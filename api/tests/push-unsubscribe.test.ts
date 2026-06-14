@@ -126,4 +126,17 @@ void describe('Push Notifications API - unsubscribe flows', { timeout: 45_000 },
       'the victim subscription must survive a cross-user unsubscribe-by-id attempt'
     );
   });
+
+  void test('push.unsubscribe rejects a request with neither endpoint nor subscriptionId', async () => {
+    const response = await trpcMutate(
+      'push.unsubscribe',
+      {},
+      { Authorization: `Bearer ${getPushScenario().teacherToken}` }
+    );
+    assert.equal(
+      response.status,
+      400,
+      `unsubscribe with no endpoint and no subscriptionId must be a bad request, got ${String(response.status)}`
+    );
+  });
 });
