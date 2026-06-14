@@ -720,4 +720,177 @@ Describe "Firewall Module" {
                     })).Count | Should -Be 1
         }
     }
+
+    Context "Egress floor system-service allow-list (W-1(b))" {
+        It "Includes svchost, w32tm, both PowerShell hosts, and Acrylic so OS/agent egress survives" {
+            $programs = InModuleScope Firewall {
+                Get-OpenPathEgressFloorSystemServicePrograms -OpenPathRoot 'C:\OpenPath' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            }
+
+            # svchost.exe hosts wuauserv / BITS / DoSvc / W32Time -- must be present.
+            ($programs | Where-Object { $_ -like '*\System32\svchost.exe' }).Count | Should -BeGreaterThan 0
+            ($programs | Where-Object { $_ -like '*\System32\w32tm.exe' }).Count | Should -BeGreaterThan 0
+            ($programs | Where-Object { $_ -like '*\WindowsPowerShell\v1.0\powershell.exe' }).Count | Should -BeGreaterThan 0
+            ($programs | Where-Object { $_ -like '*\PowerShell\7\pwsh.exe' }).Count | Should -BeGreaterThan 0
+            ($programs | Where-Object { $_ -like '*Acrylic DNS Proxy\AcrylicService.exe' }).Count | Should -Be 1
+        }
+
+        It "De-duplicates and merges operator-supplied extra programs" {
+            $programs = InModuleScope Firewall {
+                Get-OpenPathEgressFloorSystemServicePrograms -OpenPathRoot 'C:\OpenPath' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy' -ExtraPrograms @('C:\Site\agent.exe', 'C:\Site\agent.exe')
+            }
+            ($programs | Where-Object { $_ -eq 'C:\Site\agent.exe' }).Count | Should -Be 1
+            # No duplicate svchost entries despite being added twice in the builder.
+            ($programs | Where-Object { $_ -like '*\System32\svchost.exe' }).Count | Should -Be 1
+        }
+    }
+
+    Context "Egress floor live resolver (W-1(b))" {
+        It "Resolves whitelist + always-allowed domains through Acrylic and returns deduped valid IPv4 literals" {
+            $resolved = InModuleScope Firewall {
+                Mock Write-OpenPathLog { } -ModuleName Firewall
+                Mock Get-ValidWhitelistDomainsFromFile { @('example.edu') } -ModuleName Firewall
+                Mock Get-OpenPathAlwaysAllowedDomains { @('api.example.org') } -ModuleName Firewall
+                if (-not (Get-Command -Name Resolve-OpenPathDnsWithRetry -ErrorAction SilentlyContinue)) {
+                    function script:Resolve-OpenPathDnsWithRetry { }
+                }
+                Mock Resolve-OpenPathDnsWithRetry {
+                    param($Domain)
+                    if ($Domain -eq 'example.edu') {
+                        return @(
+                            [PSCustomObject]@{ IPAddress = '203.0.113.5' },
+                            [PSCustomObject]@{ IPAddress = '203.0.113.6' },
+                            [PSCustomObject]@{ IPAddress = '203.0.113.5' }
+                        )
+                    }
+                    return @([PSCustomObject]@{ IPAddress = '198.51.100.9' })
+                } -ModuleName Firewall
+
+                Get-OpenPathEgressFloorAllowIps -WhitelistPath 'C:\OpenPath\data\whitelist.txt'
+            }
+
+            @($resolved) | Should -Contain '203.0.113.5'
+            @($resolved) | Should -Contain '203.0.113.6'
+            @($resolved) | Should -Contain '198.51.100.9'
+            (@($resolved) | Where-Object { $_ -eq '203.0.113.5' }).Count | Should -Be 1
+        }
+
+        It "Returns an empty set (fail-open signal) when no domains resolve" {
+            $resolved = InModuleScope Firewall {
+                Mock Write-OpenPathLog { } -ModuleName Firewall
+                Mock Get-ValidWhitelistDomainsFromFile { @('example.edu') } -ModuleName Firewall
+                Mock Get-OpenPathAlwaysAllowedDomains { @() } -ModuleName Firewall
+                if (-not (Get-Command -Name Resolve-OpenPathDnsWithRetry -ErrorAction SilentlyContinue)) {
+                    function script:Resolve-OpenPathDnsWithRetry { }
+                }
+                Mock Resolve-OpenPathDnsWithRetry { $null } -ModuleName Firewall
+
+                Get-OpenPathEgressFloorAllowIps -WhitelistPath 'C:\OpenPath\data\whitelist.txt'
+            }
+            @($resolved).Count | Should -Be 0
+        }
+    }
+
+    Context "Egress floor apply fail-open guard (W-1(b))" {
+        It "Builds NO default-deny block rule when the resolved allow-IP set is empty" {
+            Initialize-FirewallRuleCaptureMocks
+            $count = InModuleScope Firewall {
+                Set-OpenPathEgressFloorRules -AllowIps @() -SystemServicePrograms @('C:\OpenPath\bin\agent.exe')
+            }
+            $count | Should -Be 0
+            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor*' })).Count | Should -Be 0
+        }
+
+        It "Builds the floor when at least one valid allow IP is present" {
+            Initialize-FirewallRuleCaptureMocks
+            $count = InModuleScope Firewall {
+                Set-OpenPathEgressFloorRules -AllowIps @('203.0.113.10') -SystemServicePrograms @('C:\OpenPath\bin\agent.exe')
+            }
+            $count | Should -BeGreaterThan 0
+            (@(Get-CapturedFirewallRules | Where-Object {
+                        $_.DisplayName -eq 'OpenPath-DNS-Block-EgressFloor-DefaultDeny-TCP443' -and $_.Action -eq 'Block'
+                    })).Count | Should -Be 1
+            (@(Get-CapturedFirewallRules | Where-Object {
+                        $_.DisplayName -eq 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-10-TCP443' -and $_.Action -eq 'Allow'
+                    })).Count | Should -Be 1
+        }
+    }
+
+    Context "Egress floor refresh and drift (W-1(b))" {
+        It "Update-OpenPathEgressFloor resolves live and applies a floor when no static IPs are supplied" {
+            Initialize-FirewallRuleCaptureMocks
+            $count = InModuleScope Firewall {
+                Mock Get-OpenPathEgressFloorAllowIps { @('203.0.113.10', '203.0.113.20') } -ModuleName Firewall
+                Update-OpenPathEgressFloor -StaticAllowIps @() -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            }
+            $count | Should -BeGreaterThan 0
+            (@(Get-CapturedFirewallRules | Where-Object {
+                        $_.DisplayName -eq 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-20-TCP443'
+                    })).Count | Should -Be 1
+        }
+
+        It "Update-OpenPathEgressFloor fails open (0 rules) when live resolution is empty" {
+            Initialize-FirewallRuleCaptureMocks
+            $count = InModuleScope Firewall {
+                Mock Get-OpenPathEgressFloorAllowIps { @() } -ModuleName Firewall
+                Update-OpenPathEgressFloor -StaticAllowIps @() -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            }
+            $count | Should -Be 0
+            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor*' })).Count | Should -Be 0
+        }
+
+        It "Test-OpenPathEgressFloorDrift reports no drift when resolution is empty (never tears down a working floor)" {
+            $drift = InModuleScope Firewall {
+                Mock Get-OpenPathEgressFloorAllowIps { @() } -ModuleName Firewall
+                Test-OpenPathEgressFloorDrift -StaticAllowIps @()
+            }
+            $drift.Drifted | Should -BeFalse
+            $drift.Reason | Should -Be 'empty-resolution-fail-open'
+        }
+
+        It "Test-OpenPathEgressFloorDrift reports drift when resolved IPs differ from installed allow rules" {
+            $drift = InModuleScope Firewall {
+                if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) {
+                    function script:Get-NetFirewallRule { }
+                }
+                if (-not (Get-Command -Name Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue)) {
+                    function script:Get-NetFirewallAddressFilter { }
+                }
+                Mock Get-NetFirewallRule { @([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-10-TCP443' }) } -ModuleName Firewall
+                Mock Get-NetFirewallAddressFilter { [PSCustomObject]@{ RemoteAddress = @('203.0.113.10') } } -ModuleName Firewall
+                Test-OpenPathEgressFloorDrift -StaticAllowIps @('203.0.113.10', '203.0.113.99')
+            }
+            $drift.Drifted | Should -BeTrue
+            @($drift.ResolvedIps) | Should -Contain '203.0.113.99'
+        }
+    }
+
+    Context "Egress floor live resolution in Set-OpenPathFirewall (W-1(b))" {
+        It "Resolves the floor live when enabled with no static allow-IP set, and fails open on empty resolution" {
+            Initialize-FirewallRuleCaptureMocks
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{ outboundEgressFloorEnabled = $true }
+            } -ModuleName Firewall
+            Mock Get-OpenPathEgressFloorAllowIps { @() } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+            # Fail-open: no EgressFloor block rules emitted on empty resolution.
+            (@(Get-CapturedFirewallRules | Where-Object { $_.DisplayName -like '*EgressFloor*Block*' -or $_.DisplayName -like '*Block-EgressFloor*' })).Count | Should -Be 0
+        }
+
+        It "Resolves the floor live when enabled with no static allow-IP set and applies rules when resolution yields IPs" {
+            Initialize-FirewallRuleCaptureMocks
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{ outboundEgressFloorEnabled = $true }
+            } -ModuleName Firewall
+            Mock Get-OpenPathEgressFloorAllowIps { @('203.0.113.10') } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+            (@(Get-CapturedFirewallRules | Where-Object {
+                        $_.DisplayName -eq 'OpenPath-DNS-Block-EgressFloor-DefaultDeny-TCP443' -and $_.Action -eq 'Block'
+                    })).Count | Should -Be 1
+        }
+    }
 }

@@ -227,6 +227,39 @@ function Handle-OpenPathWhitelistApply {
         -Config $Config `
         -BlockedPaths $Whitelist.BlockedPaths | Out-Null
 
+    # W-1(b): on a whitelist change, immediately re-resolve and re-apply the outbound
+    # egress floor so its per-IP 443 allow-set tracks the new domains (the protected-mode
+    # restore above short-circuits when the firewall is already active, so it would not
+    # rebuild the floor on its own). DEFAULT OFF: gated on outboundEgressFloorEnabled, a
+    # no-op until WEDU-lab validation flips it on. The apply path fails open on an empty
+    # resolution, so a transient resolver outage here never bricks HTTPS. The per-minute
+    # watchdog drift check is the backstop for CDN rotation between whitelist updates.
+    $egressFloorEnabledOnApply = $false
+    if ($Config -and $Config.PSObject.Properties['outboundEgressFloorEnabled']) {
+        $egressFloorEnabledOnApply = [bool]$Config.outboundEgressFloorEnabled
+    }
+    if ($egressFloorEnabledOnApply -and (Get-Command -Name 'Update-OpenPathEgressFloor' -ErrorAction SilentlyContinue)) {
+        try {
+            $egressApplyStaticIps = @()
+            if ($Config.PSObject.Properties['outboundEgressFloorAllowIps'] -and $Config.outboundEgressFloorAllowIps) {
+                $egressApplyStaticIps = @($Config.outboundEgressFloorAllowIps | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
+            }
+            $egressApplyPrograms = @()
+            if ($Config.PSObject.Properties['outboundEgressFloorSystemPrograms'] -and $Config.outboundEgressFloorSystemPrograms) {
+                $egressApplyPrograms = @($Config.outboundEgressFloorSystemPrograms | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
+            }
+            $acrylicPathOnApply = if (Get-Command -Name 'Get-AcrylicPath' -ErrorAction SilentlyContinue) { Get-AcrylicPath } else { $null }
+            Update-OpenPathEgressFloor `
+                -StaticAllowIps $egressApplyStaticIps `
+                -SystemServicePrograms $egressApplyPrograms `
+                -AcrylicPath $acrylicPathOnApply `
+                -WhitelistPath $WhitelistPath | Out-Null
+        }
+        catch {
+            Write-OpenPathLog "Egress floor refresh on whitelist apply failed: $_" -Level WARN
+        }
+    }
+
     Clear-StaleFailsafeState -StaleFailsafeStatePath $StaleFailsafeStatePath
 
     $runtimeHealth = Get-OpenPathRuntimeHealth

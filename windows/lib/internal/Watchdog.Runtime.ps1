@@ -443,6 +443,47 @@ function Invoke-OpenPathWatchdogChecks {
     }
 
     try {
+        # W-1(b): outbound egress floor refresh. CDN IPs behind whitelisted domains
+        # rotate, so a static per-IP allow set goes stale and starts blocking legit
+        # whitelisted sites. When the floor is enabled in config, re-resolve the
+        # whitelist through Acrylic and, only when the allow-IP set drifts, re-apply.
+        # DEFAULT OFF: the config flag stays $false until WEDU-lab validation, so this
+        # block is normally a no-op. Gated on the same protected-mode/whitelist-readable
+        # conditions as the split-DNS refresh: never refresh from an unknown whitelist,
+        # and the apply path fails open on an empty resolution (never bricks HTTPS).
+        $egressFloorEnabled = $false
+        if ($Config -and $Config.PSObject.Properties['outboundEgressFloorEnabled']) {
+            $egressFloorEnabled = [bool]$Config.outboundEgressFloorEnabled
+        }
+        if ($egressFloorEnabled -and
+            $shouldRunProtectedModeChecks -and
+            $null -ne $localWhitelistSections -and
+            -not $localWhitelistSections.IsDisabled -and
+            (Get-Command -Name 'Test-OpenPathEgressFloorDrift' -ErrorAction SilentlyContinue)) {
+            $egressStaticAllowIps = @()
+            if ($Config.PSObject.Properties['outboundEgressFloorAllowIps'] -and $Config.outboundEgressFloorAllowIps) {
+                $egressStaticAllowIps = @($Config.outboundEgressFloorAllowIps | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
+            }
+            $egressFloorDrift = Test-OpenPathEgressFloorDrift -StaticAllowIps $egressStaticAllowIps
+            if ([bool]$egressFloorDrift.Drifted) {
+                Write-OpenPathLog "Watchdog: egress-floor allow IPs drifted ($($egressFloorDrift.Reason)); refreshing floor" -Level WARN
+                $egressFloorSystemPrograms = @()
+                if ($Config.PSObject.Properties['outboundEgressFloorSystemPrograms'] -and $Config.outboundEgressFloorSystemPrograms) {
+                    $egressFloorSystemPrograms = @($Config.outboundEgressFloorSystemPrograms | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
+                }
+                $acrylicPathForEgress = Get-AcrylicPath
+                Update-OpenPathEgressFloor `
+                    -StaticAllowIps $egressStaticAllowIps `
+                    -SystemServicePrograms $egressFloorSystemPrograms `
+                    -AcrylicPath $acrylicPathForEgress | Out-Null
+            }
+        }
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: Error refreshing outbound egress floor: $_" -Level ERROR
+    }
+
+    try {
         $sseTask = Get-ScheduledTask -TaskName "OpenPath-SSE" -ErrorAction SilentlyContinue
         if ($sseTask -and $sseTask.State -ne 'Running') {
             $issues += "SSE listener not running"

@@ -51,6 +51,8 @@ Initialize-OpenPathScriptSession `
     'Test-FirewallActive',
     'Get-AcrylicPath',
     'Set-OpenPathFirewall',
+    'Test-OpenPathEgressFloorDrift',
+    'Update-OpenPathEgressFloor',
     'Sync-OpenPathFirefoxManagedExtensionPolicy',
     'Set-LocalDNS',
     'Start-AcrylicService',
