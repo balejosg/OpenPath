@@ -37,6 +37,7 @@ import {
   recordOpenPathDependencyObservationEvent,
 } from './dependency-observation-diagnostics.js';
 import { t } from './i18n.js';
+import { createBlockedScreenConfirmer } from './blocked-screen-confirmer.js';
 
 interface BlockedScreenContext {
   tabId: number;
@@ -60,14 +61,6 @@ interface CaptivePortalBrowserApi {
 }
 
 const NATIVE_HOST_NAME = 'whitelist_native_host';
-const BLOCKED_DNS_SENTINELS = new Set(['0.0.0.0', '::', '192.0.2.1', '100::']);
-// How long a confirmed "blocked" decision stays usable without re-asking the native host. Keeps
-// repeat navigations to the same blocked domain instant while bounding staleness.
-const BLOCKED_SCREEN_DECISION_TTL_MS = 5_000;
-// Upper bound on how long the blocked-screen confirmation waits for the native host. A slow or hung
-// host must not stall the decision; on timeout we treat it as "not confirmed" and fall back to the
-// reactive navigation-error path instead of blocking the preflight.
-const BLOCKED_SCREEN_NATIVE_CONFIRM_TIMEOUT_MS = 1_500;
 interface BackgroundRuntimeOptions {
   hostName?: string;
   now?: () => number;
@@ -75,59 +68,6 @@ interface BackgroundRuntimeOptions {
 
 interface BackgroundRuntime {
   init: () => Promise<void>;
-}
-
-export function isNativePolicyBlockedResult(
-  result: VerifyResponse['results'][number] | undefined
-): boolean {
-  if (!result || result.policyActive === false || result.error) {
-    return false;
-  }
-
-  const resolvedIp =
-    typeof result.resolvedIp === 'string' && result.resolvedIp.length > 0
-      ? result.resolvedIp
-      : null;
-  const resolves =
-    result.resolves ?? (resolvedIp !== null && !BLOCKED_DNS_SENTINELS.has(resolvedIp));
-  return !result.inWhitelist && !resolves;
-}
-
-// Resolve to `fallback` if `promise` has not settled within `timeoutMs`. Never rejects: a rejected
-// input promise also resolves to `fallback`. Used to bound the native blocked-screen confirmation.
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
-  if (timeoutMs <= 0) {
-    return promise.catch(() => fallback);
-  }
-
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(fallback);
-    }, timeoutMs);
-
-    promise
-      .then((value) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        resolve(value);
-      })
-      .catch(() => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        resolve(fallback);
-      });
-  });
 }
 
 export function createBackgroundRuntime(
@@ -145,13 +85,6 @@ export function createBackgroundRuntime(
   >();
   const portalRecoveryEligibleByHost = new Map<string, boolean>();
   const now = options.now ?? ((): number => Date.now());
-  // Short-TTL cache of confirmed "blocked" decisions, keyed by normalized hostname. Lets repeat
-  // navigations to the same blocked domain show the blocked screen instantly without another native
-  // round-trip. Only positive (confirmed blocked) decisions are cached; cleared on whitelist updates.
-  const blockedScreenDecisionCache = new Map<
-    string,
-    { blocked: boolean; portalRecoveryEligible?: boolean; expiresAt: number }
-  >();
   const blockedMonitorState = createBlockedMonitorState(
     {
       setBadgeText: (options) => browser.action.setBadgeText(options),
@@ -277,65 +210,18 @@ export function createBackgroundRuntime(
     return (browser as unknown as { captivePortal?: CaptivePortalBrowserApi }).captivePortal;
   }
 
-  async function confirmBlockedScreenNavigation(context: ConfirmBlockedScreenContext): Promise<{
-    blocked: boolean;
-    portalRecoveryEligible?: boolean;
-  }> {
-    const cacheKey = context.hostname.trim().toLowerCase();
-    const cached = blockedScreenDecisionCache.get(cacheKey);
-    if (cached && cached.expiresAt > now()) {
-      return {
-        blocked: cached.blocked,
-        ...(cached.portalRecoveryEligible !== undefined
-          ? { portalRecoveryEligible: cached.portalRecoveryEligible }
-          : {}),
-      };
-    }
-
-    // Bound the native check so a slow/hung host cannot stall the blocked-screen decision. A
-    // timeout (or any failure) is not a confirmation: return not-blocked and let the reactive
-    // navigation-error path retry, never cache it.
-    const response = await withTimeout(
-      checkDomainsWithNative([context.hostname], {
-        error: context.error,
-        source: 'blocked-screen-navigation',
-      }),
-      BLOCKED_SCREEN_NATIVE_CONFIRM_TIMEOUT_MS,
-      { success: false, results: [] }
-    );
-    if (!response.success) {
-      return { blocked: false };
-    }
-
-    const result = response.results.find((item) => item.domain === context.hostname);
-    if (result?.portalRecoveryEligible !== undefined) {
-      if (portalRecoveryEligibleByHost.get(cacheKey) !== result.portalRecoveryEligible) {
-        portalRecoveryEligibleByHost.set(cacheKey, result.portalRecoveryEligible);
+  const blockedScreenConfirmer = createBlockedScreenConfirmer({
+    checkDomains: checkDomainsWithNative,
+    now,
+    // The runtime owns the shared eligibility map (also read by the captive-portal controller) and
+    // the recovery limiter, so it decides what an eligibility change means.
+    recordPortalRecoveryEligibility: (hostname, eligible) => {
+      if (portalRecoveryEligibleByHost.get(hostname) !== eligible) {
+        portalRecoveryEligibleByHost.set(hostname, eligible);
         captivePortalRecoveryController.clearLimiter();
       }
-    }
-
-    const decision = {
-      blocked: isNativePolicyBlockedResult(result),
-      ...(result?.portalRecoveryEligible !== undefined
-        ? { portalRecoveryEligible: result.portalRecoveryEligible }
-        : {}),
-    };
-
-    // Cache only confirmed blocks. Allowed/unknown verdicts are never cached, so a domain that
-    // later becomes blocked is re-evaluated immediately; a stale "blocked" is bounded by the TTL
-    // and invalidated on whitelist updates (see triggerWhitelistUpdate).
-    if (decision.blocked) {
-      blockedScreenDecisionCache.set(cacheKey, {
-        ...decision,
-        expiresAt: now() + BLOCKED_SCREEN_DECISION_TTL_MS,
-      });
-    } else {
-      blockedScreenDecisionCache.delete(cacheKey);
-    }
-
-    return decision;
-  }
+    },
+  });
 
   async function recoverCaptivePortalNavigation(
     context: ConfirmBlockedScreenContext,
@@ -522,7 +408,7 @@ export function createBackgroundRuntime(
       if (response.success) {
         // Policy just changed: drop cached block decisions so a freshly-allowed domain is not held
         // on the blocked screen by a stale "blocked" verdict.
-        blockedScreenDecisionCache.clear();
+        blockedScreenConfirmer.clearCache();
         await Promise.all([
           blockedPathRulesController.refresh(true),
           blockedSubdomainRulesController.refresh(true),
@@ -556,7 +442,7 @@ export function createBackgroundRuntime(
       },
       evaluateBlockedPath: blockedPathRulesController.evaluateRequest,
       evaluateBlockedSubdomain: blockedSubdomainRulesController.evaluateRequest,
-      confirmBlockedScreenNavigation,
+      confirmBlockedScreenNavigation: blockedScreenConfirmer.confirm,
       recoverCaptivePortalNavigation,
       handleRuntimeMessage,
       recordDependencyObservationEvent: recordOpenPathDependencyObservationEvent,

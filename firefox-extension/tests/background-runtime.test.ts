@@ -2,10 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Browser } from 'webextension-polyfill';
 
-import {
-  createBackgroundRuntime,
-  isNativePolicyBlockedResult,
-} from '../src/lib/background-runtime.js';
+import { createBackgroundRuntime } from '../src/lib/background-runtime.js';
 import { createCaptivePortalRecoveryController } from '../src/lib/captive-portal-recovery-controller.js';
 
 type RuntimeMessageListener = (
@@ -270,75 +267,6 @@ function createRuntimeHarnessWithOptions(options: {
     },
   };
 }
-
-void test('native policy confirmation ignores fail-open or inactive policy results', () => {
-  assert.equal(
-    isNativePolicyBlockedResult({
-      domain: 'portal.fixture.test',
-      inWhitelist: false,
-      policyActive: false,
-      resolves: false,
-    }),
-    false
-  );
-});
-
-void test('native policy confirmation treats missing policy state as unknown, not inactive', () => {
-  assert.equal(
-    isNativePolicyBlockedResult({
-      domain: 'legacy-native-host.example',
-      inWhitelist: false,
-      resolves: false,
-    }),
-    true
-  );
-});
-
-void test('native policy confirmation ignores errored native check results', () => {
-  assert.equal(
-    isNativePolicyBlockedResult({
-      domain: 'broken-native-host.example',
-      error: 'OpenPath whitelist command not found',
-      inWhitelist: false,
-      policyActive: true,
-      resolves: false,
-    }),
-    false
-  );
-});
-
-void test('native policy confirmation requires a denied domain that does not resolve publicly', () => {
-  assert.equal(
-    isNativePolicyBlockedResult({
-      domain: 'blocked.example',
-      inWhitelist: false,
-      policyActive: true,
-      resolves: false,
-    }),
-    true
-  );
-  assert.equal(
-    isNativePolicyBlockedResult({
-      domain: 'allowed.example',
-      inWhitelist: false,
-      policyActive: true,
-      resolves: true,
-    }),
-    false
-  );
-});
-
-void test('native policy confirmation treats null resolvedIp as unresolved', () => {
-  assert.equal(
-    isNativePolicyBlockedResult({
-      domain: 'legacy-null-ip.example',
-      inWhitelist: false,
-      policyActive: true,
-      resolvedIp: null,
-    } as unknown as Parameters<typeof isNativePolicyBlockedResult>[0]),
-    true
-  );
-});
 
 void test('background runtime skips captive portal retry when recovery resolves after a newer navigation error', async () => {
   let resolveOldRecovery!: (value: unknown) => void;
