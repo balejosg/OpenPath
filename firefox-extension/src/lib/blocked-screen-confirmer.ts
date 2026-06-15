@@ -22,6 +22,10 @@ const BLOCKED_SCREEN_NATIVE_CONFIRM_TIMEOUT_MS = 1_500;
 export function isNativePolicyBlockedResult(
   result: VerifyResponse['results'][number] | undefined
 ): boolean {
+  // Fail open on anything that is not an affirmative policy decision: a missing result, an
+  // explicitly inactive policy (policyActive === false), or an errored native check are all
+  // "not a policy block", so a transport failure never shows the blocked screen on its own. A
+  // missing policyActive is left as unknown (we do NOT fail open for it) and falls through.
   if (!result || result.policyActive === false || result.error) {
     return false;
   }
@@ -30,8 +34,10 @@ export function isNativePolicyBlockedResult(
     typeof result.resolvedIp === 'string' && result.resolvedIp.length > 0
       ? result.resolvedIp
       : null;
-  const resolves =
-    result.resolves ?? (resolvedIp !== null && !BLOCKED_DNS_SENTINELS.has(resolvedIp));
+  // A domain that only resolves to a sinkhole sentinel is not actually reachable, so it does not
+  // count as resolving to a real IP. Trust the native host's explicit `resolves` when present.
+  const resolvesToRealIp = resolvedIp !== null && !BLOCKED_DNS_SENTINELS.has(resolvedIp);
+  const resolves = result.resolves ?? resolvesToRealIp;
   return !result.inWhitelist && !resolves;
 }
 
