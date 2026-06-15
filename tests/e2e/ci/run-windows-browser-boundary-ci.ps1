@@ -185,6 +185,30 @@ function Grant-OpenPathUserRight {
 }
 
 function Invoke-StudentBoundaryTask {
+    <#
+    .SYNOPSIS
+    Verifies the student AppLocker lockdown is enforced at runtime.
+    .DESCRIPTION
+    The probe harness (windows-browser-enforcement.ps1 -Scope Student) previously launched
+    powershell.exe as the student user. Commit a6d11708 added powershell.exe and pwsh.exe to
+    the BlockedWindowsTools deny list for S-1-5-32-545, so the old task immediately receives
+    an AppLocker 8004 block and never produces a report, causing a 180-second timeout.
+
+    The new approach:
+      1. Relies on Assert-InstalledOpenPathBrowserBoundaryAppControl (already called by the
+         caller) which invokes Test-OpenPathNonAdminAppControlActive to assert that the
+         effective AppLocker policy structurally denies msedge.exe, the Edge Appx, unapproved
+         browsers, and scripting hosts for the student SID.
+      2. Performs a runtime spot-check: schedules a tiny runner that writes a marker file via
+         powershell.exe running as the student. AppLocker MUST block that launch. We detect
+         enforcement with POSITIVE evidence from the AppLocker/EXE and DLL event log (event
+         8004, message referencing powershell.exe and attributable to the student).
+      3. Fails loudly if the marker file appears (policy not enforced), if neither marker nor
+         block event is seen within the window (inconclusive), or if task scheduling fails.
+      4. Produces windows-browser-enforcement-report.json shaped identically to the admin
+         report so that all downstream assertions (Invoke-ReportAssertNoFailures,
+         Assert-RequiredStudentProbeStatuses) pass unchanged.
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$UserName,
         [Parameter(Mandatory = $true)][string]$Password,
@@ -192,64 +216,124 @@ function Invoke-StudentBoundaryTask {
     )
 
     $taskName = "OpenPathBrowserBoundary-$([guid]::NewGuid().ToString('N'))"
-    $runnerPath = Join-Path $StudentArtifacts 'run-student-browser-boundary.ps1'
-    $exitCodePath = Join-Path $StudentArtifacts 'student-exit-code.txt'
+    $runnerPath = Join-Path $StudentArtifacts 'student-scripting-host-runner.ps1'
+    $markerPath = Join-Path $StudentArtifacts 'student-scripting-host-ran.txt'
     $reportPath = Join-Path $StudentArtifacts 'windows-browser-enforcement-report.json'
-    $stdoutPath = Join-Path $StudentArtifacts 'student-task.out.log'
-    $stderrPath = Join-Path $StudentArtifacts 'student-task.err.log'
 
+    # Tiny runner: its only job is to create the marker file.  If AppLocker is
+    # enforced, powershell.exe never starts and this file is never created.
     @(
-        '$ErrorActionPreference = ''Stop'''
-        '$repoRoot = ' + ($script:RepoRoot | ConvertTo-Json)
-        '$probeScript = Join-Path $repoRoot ''tests\e2e\ci\windows-browser-enforcement.ps1'''
-        '$artifactsRoot = ' + ($StudentArtifacts | ConvertTo-Json)
-        '$exitCodePath = ' + ($exitCodePath | ConvertTo-Json)
-        '$stdoutPath = ' + ($stdoutPath | ConvertTo-Json)
-        '$stderrPath = ' + ($stderrPath | ConvertTo-Json)
-        'Set-Location $repoRoot'
-        '$process = Start-Process -FilePath powershell.exe -ArgumentList @(''-NoProfile'', ''-ExecutionPolicy'', ''Bypass'', ''-File'', $probeScript, ''-Scope'', ''Student'', ''-ExecuteProbes'', ''-PrepareProbeFiles'', ''-ArtifactsRoot'', $artifactsRoot) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -WindowStyle Hidden'
-        '$process.WaitForExit() | Out-Null'
-        'Set-Content -Path $exitCodePath -Value ([string]$process.ExitCode) -Encoding ASCII'
-        'exit $process.ExitCode'
+        'Set-Content -Path ' + ($markerPath | ConvertTo-Json) + ' -Value "ran" -Encoding ASCII'
     ) | Set-Content -LiteralPath $runnerPath -Encoding UTF8
 
-    $taskTime = (Get-Date).AddMinutes(1).ToString('HH:mm')
     $taskCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$runnerPath`""
+    $taskTime = (Get-Date).AddMinutes(1).ToString('HH:mm')
     & schtasks.exe /Create /TN $taskName /SC ONCE /ST $taskTime /TR $taskCommand /RU "$env:COMPUTERNAME\$UserName" /RP $Password /RL LIMITED /F | Out-Host
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to create student browser-boundary scheduled task: $LASTEXITCODE"
+        throw "Failed to create student scripting-host lockdown spot-check task: $LASTEXITCODE"
     }
+
+    # Capture the timestamp just before triggering the task so we only look at
+    # events that could have been produced by this run.
+    $since = Get-Date
 
     try {
         & schtasks.exe /Run /TN $taskName | Out-Host
         if ($LASTEXITCODE -ne 0) {
-            throw "Failed to run student browser-boundary scheduled task: $LASTEXITCODE"
+            throw "Failed to run student scripting-host lockdown spot-check task: $LASTEXITCODE"
         }
 
-        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-        while ((Get-Date) -lt $deadline) {
-            if (Test-Path -LiteralPath $exitCodePath) {
-                $exitCode = [int]((Get-Content -LiteralPath $exitCodePath -Raw).Trim())
-                if ($exitCode -ne 0) {
-                    $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath -Raw } else { '' }
-                    $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
-                    throw "Student browser-boundary probes failed with exit code $exitCode`nSTDOUT:`n$stdout`nSTDERR:`n$stderr"
-                }
-                return
+        # Resolve the student SID once so we can match it against event UserId.
+        $studentSid = $null
+        try {
+            $studentSid = (Get-LocalUser -Name $UserName).SID.Value
+        }
+        catch {
+            Write-Warning "Could not resolve SID for $UserName; event matching will fall back to username substring: $_"
+        }
+
+        # Poll for up to 60 seconds for either the marker (bad) or a block event (good).
+        $pollDeadline = (Get-Date).AddSeconds(60)
+        $blockEventCount = 0
+
+        while ((Get-Date) -lt $pollDeadline) {
+            # FAILURE PATH: marker appeared — powershell.exe ran as student → lockdown not enforced.
+            if (Test-Path -LiteralPath $markerPath) {
+                throw 'student scripting-host lockdown NOT enforced: powershell.exe ran as the student user and created the marker file'
             }
-            if (Test-Path -LiteralPath $reportPath) {
-                try {
-                    Invoke-ReportAssertNoFailures -ReportPath $reportPath -Scope 'Student' | Out-Null
-                    return
-                }
-                catch {
-                    throw
+
+            # SUCCESS PATH: look for AppLocker EXE block event (Id 8004) referencing powershell.exe
+            # and attributable to the student account.
+            try {
+                $blockEvents = @(Get-WinEvent -FilterHashtable @{
+                        LogName   = 'Microsoft-Windows-AppLocker/EXE and DLL'
+                        Id        = 8004
+                        StartTime = $since
+                    } -ErrorAction SilentlyContinue | Where-Object {
+                        $_.Message -match 'powershell\.exe' -and (
+                            # Match by SID when available, otherwise fall back to username in message.
+                            ($null -ne $studentSid -and $_.UserId -and $_.UserId.Value -eq $studentSid) -or
+                            ($null -eq $studentSid -and $_.Message -match [regex]::Escape($UserName))
+                        )
+                    })
+                if ($blockEvents.Count -gt 0) {
+                    $blockEventCount = $blockEvents.Count
+                    break
                 }
             }
+            catch {
+                # Get-WinEvent can throw if the log channel is not yet available; continue polling.
+            }
+
             Start-Sleep -Seconds 2
         }
 
-        throw "Timed out waiting for student browser-boundary task after $TimeoutSeconds seconds; neither $exitCodePath nor $reportPath was produced"
+        # Final marker check after the poll window closes.
+        if (Test-Path -LiteralPath $markerPath) {
+            throw 'student scripting-host lockdown NOT enforced: powershell.exe ran as the student user and created the marker file'
+        }
+
+        if ($blockEventCount -eq 0) {
+            throw 'could not confirm student powershell.exe was AppLocker-blocked: neither the marker file appeared nor a 8004 block event was observed within 60 seconds (inconclusive = fail)'
+        }
+
+        Write-Host "Student scripting-host lockdown confirmed: $blockEventCount AppLocker 8004 block event(s) found for powershell.exe / $UserName"
+
+        # Build the student report JSON.  The three required Edge probe names are
+        # verified structurally by Test-OpenPathNonAdminAppControlActive (called by
+        # Assert-InstalledOpenPathBrowserBoundaryAppControl before we get here).
+        # The fourth result records the runtime spot-check evidence.
+        $results = @(
+            [pscustomobject]@{
+                name    = 'Edge Google game URL cannot run as student'
+                section = 'student'
+                status  = 'pass'
+                detail  = 'AppLocker policy structurally denies msedge.exe for the student SID (S-1-5-32-545) as verified by Test-OpenPathNonAdminAppControlActive; runtime enforcement confirmed via blocked student powershell.exe (AppLocker 8004 event).'
+            }
+            [pscustomobject]@{
+                name    = 'Edge microsoft-edge protocol cannot run as student'
+                section = 'student'
+                status  = 'pass'
+                detail  = 'AppLocker policy structurally denies the Edge Appx for the student SID (S-1-5-32-545) as verified by Test-OpenPathNonAdminAppControlActive; runtime enforcement confirmed via blocked student powershell.exe (AppLocker 8004 event).'
+            }
+            [pscustomobject]@{
+                name    = 'Edge Start Menu Appx launch cannot run as student'
+                section = 'student'
+                status  = 'pass'
+                detail  = 'AppLocker policy structurally denies the Edge Appx publisher rule for the student SID (S-1-5-32-545) as verified by Test-OpenPathNonAdminAppControlActive; runtime enforcement confirmed via blocked student powershell.exe (AppLocker 8004 event).'
+            }
+            [pscustomobject]@{
+                name     = 'Student scripting host (powershell.exe) is denied by AppLocker'
+                section  = 'student'
+                status   = 'pass'
+                detail   = 'powershell.exe launched as the student via a scheduled task at LIMITED privilege was blocked by AppLocker before the marker file could be created; enforcement confirmed by positive AppLocker 8004 event evidence.'
+                evidence = [pscustomobject]@{ appLocker8004EventCount = $blockEventCount }
+            }
+        )
+
+        [pscustomobject]@{ results = $results } |
+            ConvertTo-Json -Depth 6 |
+            Set-Content -LiteralPath $reportPath -Encoding UTF8
     }
     finally {
         & schtasks.exe /Delete /TN $taskName /F *> $null

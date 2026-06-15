@@ -869,17 +869,37 @@ describe('repository verification contract', () => {
     assert.match(
       browserBoundaryCi,
       /New-LocalUser[\s\S]*Invoke-StudentBoundaryTask[\s\S]*-Scope Admin/s,
-      'browser-boundary CI should run student probes through a temporary standard user and admin probes with the current token'
+      'browser-boundary CI should create a temporary standard student user for the lockdown spot-check and run admin probes with the current token'
+    );
+    // The student scripting-host lockdown (a6d11708) blocks powershell.exe for the
+    // student SID, so the boundary probe can no longer be run as the student. The
+    // student-scope boundary is now verified by Test-OpenPathNonAdminAppControlActive
+    // (policy structure) plus a runtime spot-check that the student powershell.exe
+    // launch is actually AppLocker-blocked.
+    assert.match(
+      browserBoundaryCi,
+      /\$taskCommand = "powershell\.exe[\s\S]*schtasks\.exe \/Create[\s\S]*\/RU "\$env:COMPUTERNAME\\\$UserName"[\s\S]*\/RL LIMITED/s,
+      'browser-boundary CI should spot-check the lockdown by scheduling powershell.exe as the limited student user'
     );
     assert.match(
       browserBoundaryCi,
-      /-Scope'', ''Student''/,
-      'browser-boundary CI scheduled task should run the student probe scope'
+      /Test-Path -LiteralPath \$markerPath[\s\S]*throw 'student scripting-host lockdown NOT enforced/s,
+      'browser-boundary CI must fail loudly if the student powershell.exe launch is not AppLocker-blocked (marker file created)'
     );
     assert.match(
       browserBoundaryCi,
-      /student-exit-code\.txt[\s\S]*windows-browser-enforcement-report\.json[\s\S]*Invoke-ReportAssertNoFailures/s,
-      'browser-boundary CI should accept a validated student report as completion evidence when the scheduled-task exit marker is missing'
+      /Microsoft-Windows-AppLocker\/EXE and DLL[\s\S]*Id\s*=\s*8004[\s\S]*could not confirm student powershell\.exe was AppLocker-blocked/s,
+      'browser-boundary CI should confirm the lockdown with positive AppLocker 8004 block evidence and fail when inconclusive'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /\$reportPath = Join-Path \$StudentArtifacts 'windows-browser-enforcement-report\.json'/,
+      'browser-boundary CI should write student completion evidence to the browser-enforcement report consumed by Invoke-ReportAssertNoFailures'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /Student scripting host \(powershell\.exe\) is denied by AppLocker[\s\S]*ConvertTo-Json[\s\S]*Set-Content -LiteralPath \$reportPath/s,
+      'browser-boundary CI should record the scripting-host lockdown result in the serialized student report'
     );
     assert.match(
       browserBoundaryCi,
