@@ -2,6 +2,7 @@ import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import noOnlyTests from 'eslint-plugin-no-only-tests';
 import importX from 'eslint-plugin-import-x';
+import globals from 'globals';
 
 export default tseslint.config(
   {
@@ -86,6 +87,17 @@ export default tseslint.config(
   {
     files: ['tests/**/*.mjs'],
     ...tseslint.configs.disableTypeChecked,
+  },
+  // Node test scripts run on the Node runtime: declare its globals (URL, process, etc.) so
+  // no-undef does not flag them. Kept as a separate block so it merges with (rather than
+  // overwrites) the languageOptions that disableTypeChecked sets above.
+  {
+    files: ['tests/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
   },
   // Test anti-pattern rules for all test files
   {
