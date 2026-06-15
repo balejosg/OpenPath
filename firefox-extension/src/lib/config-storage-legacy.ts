@@ -1,6 +1,6 @@
 import { getErrorMessage, logger } from './logger.js';
 import { normalizeApiUrl, normalizeApiUrlList } from './config-storage-shared.js';
-import type { RequestConfig } from './config-storage.js';
+import type { RequestConfig } from './config-storage.types.js';
 
 function readStoredConfig(source: unknown): {
   config?: Partial<RequestConfig>;

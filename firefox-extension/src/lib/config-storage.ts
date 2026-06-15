@@ -2,19 +2,9 @@ import { getErrorMessage, logger } from './logger.js';
 import { loadLegacyStoredRequestConfig } from './config-storage-legacy.js';
 import { loadNativeRequestConfig } from './config-storage-native.js';
 import { DEFAULT_REQUEST_CONFIG, sanitizeRequestConfigForSave } from './config-storage-shared.js';
+import type { RequestConfig } from './config-storage.types.js';
 
-export interface RequestConfig {
-  requestApiUrl: string;
-  fallbackApiUrls: string[];
-  requestTimeout: number;
-  enableRequests: boolean;
-  // Deprecated legacy fallback; requests now authenticate with the machine token from the host.
-  sharedSecret: string;
-  debugMode: boolean;
-
-  // Deprecated: the server now resolves group by calendar/default group.
-  defaultGroup?: string;
-}
+export type { RequestConfig } from './config-storage.types.js';
 
 export { DEFAULT_REQUEST_CONFIG };
 

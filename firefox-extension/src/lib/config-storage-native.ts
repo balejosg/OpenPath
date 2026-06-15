@@ -1,6 +1,6 @@
 import { getErrorMessage, logger } from './logger.js';
 import { normalizeApiUrl, normalizeApiUrlList } from './config-storage-shared.js';
-import type { RequestConfig } from './config-storage.js';
+import type { RequestConfig } from './config-storage.types.js';
 
 const NATIVE_HOST_NAME = 'whitelist_native_host';
 

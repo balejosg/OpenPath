@@ -1,4 +1,4 @@
-import type { RequestConfig } from './config-storage.js';
+import type { RequestConfig } from './config-storage.types.js';
 
 export const DEFAULT_REQUEST_CONFIG: RequestConfig = {
   requestApiUrl: '',
