@@ -946,9 +946,13 @@ Describe "Firewall Module" {
                 if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) {
                     function script:Get-NetFirewallRule { }
                 }
-                if (-not (Get-Command -Name Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue)) {
-                    function script:Get-NetFirewallAddressFilter { }
-                }
+                # Define the stub unconditionally so its permissive (no-param) signature
+                # shadows the real Windows Get-NetFirewallAddressFilter cmdlet too. Otherwise
+                # on Windows Pester mocks the real cmdlet's strict CimInstance pipeline
+                # metadata, the `$rule | Get-NetFirewallAddressFilter` call (a PSCustomObject)
+                # fails to bind, the address filter comes back empty, and drift detection
+                # falsely fires -- the test passed on Linux (cmdlet absent) but failed on Windows.
+                function script:Get-NetFirewallAddressFilter { }
                 Mock Get-NetFirewallRule { @([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-10-TCP' }) } -ModuleName Firewall
                 # Installed form is netmask, resolved form is bare -- must be treated equal.
                 Mock Get-NetFirewallAddressFilter { [PSCustomObject]@{ RemoteAddress = @('203.0.113.10/255.255.255.255') } } -ModuleName Firewall
@@ -964,9 +968,13 @@ Describe "Firewall Module" {
                 if (-not (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue)) {
                     function script:Get-NetFirewallRule { }
                 }
-                if (-not (Get-Command -Name Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue)) {
-                    function script:Get-NetFirewallAddressFilter { }
-                }
+                # Define the stub unconditionally so its permissive (no-param) signature
+                # shadows the real Windows Get-NetFirewallAddressFilter cmdlet too. Otherwise
+                # on Windows Pester mocks the real cmdlet's strict CimInstance pipeline
+                # metadata, the `$rule | Get-NetFirewallAddressFilter` call (a PSCustomObject)
+                # fails to bind, the address filter comes back empty, and drift detection
+                # falsely fires -- the test passed on Linux (cmdlet absent) but failed on Windows.
+                function script:Get-NetFirewallAddressFilter { }
                 Mock Get-NetFirewallRule { @([PSCustomObject]@{ DisplayName = 'OpenPath-DNS-Allow-EgressFloor-Whitelist-203-0-113-10-TCP' }) } -ModuleName Firewall
                 Mock Get-NetFirewallAddressFilter { [PSCustomObject]@{ RemoteAddress = @('203.0.113.10/255.255.255.255') } } -ModuleName Firewall
                 Test-OpenPathEgressFloorDrift -StaticAllowIps @('203.0.113.10', '203.0.113.99')
