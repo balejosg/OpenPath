@@ -3,6 +3,7 @@ import type {
   NativeBlockedScreenConfirmation,
 } from './blocked-screen-navigation-controller.js';
 import type { VerifyResponse } from './native-messaging-client.js';
+import { withTimeoutOrFallback } from './async-timeout.js';
 
 // Black-hole IPs the endpoint agents sinkhole blocked domains to (RFC 5737 TEST-NET-1 and the IPv6
 // discard prefix). A domain that "resolves" only to one of these is not actually reachable, so it
@@ -32,43 +33,6 @@ export function isNativePolicyBlockedResult(
   const resolves =
     result.resolves ?? (resolvedIp !== null && !BLOCKED_DNS_SENTINELS.has(resolvedIp));
   return !result.inWhitelist && !resolves;
-}
-
-// Resolve to `fallback` if `promise` has not settled within `timeoutMs`. Never rejects: a rejected
-// input promise also resolves to `fallback`. Used to bound the native blocked-screen confirmation.
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
-  if (timeoutMs <= 0) {
-    return promise.catch(() => fallback);
-  }
-
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(fallback);
-    }, timeoutMs);
-
-    promise
-      .then((value) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        resolve(value);
-      })
-      .catch(() => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        resolve(fallback);
-      });
-  });
 }
 
 export interface BlockedScreenConfirmerDeps {
@@ -130,7 +94,7 @@ export function createBlockedScreenConfirmer(
     // Bound the native check so a slow/hung host cannot stall the blocked-screen decision. A
     // timeout (or any failure) is not a confirmation: return not-blocked and let the reactive
     // navigation-error path retry, never cache it.
-    const response = await withTimeout(
+    const response = await withTimeoutOrFallback(
       checkDomains([context.hostname], {
         error: context.error,
         source: 'blocked-screen-navigation',

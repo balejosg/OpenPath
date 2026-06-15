@@ -1,5 +1,6 @@
 import type { Browser, Runtime, WebNavigation, WebRequest } from 'webextension-polyfill';
 import { getErrorMessage, logger } from './logger.js';
+import { withTimeoutOrFallback } from './async-timeout.js';
 import { t } from './i18n.js';
 import { shouldClearBlockedMonitorStateOnNavigate } from './blocked-screen-contract.js';
 import { BLOCKED_SCREEN_PATH, ROUTE_BLOCK_REASON, extractHostname } from './path-blocking.js';
@@ -153,42 +154,6 @@ function resolveAnchorHost(
   );
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
-  if (timeoutMs <= 0) {
-    return promise.catch(() => fallback);
-  }
-
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(fallback);
-    }, timeoutMs);
-
-    void promise.then(
-      (value) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        resolve(value);
-      },
-      () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        resolve(fallback);
-      }
-    );
-  });
-}
-
 function resolveLocalRuntimeDependencySoftTimeoutMs(
   requestType: string,
   overrideTimeoutMs?: number
@@ -214,7 +179,7 @@ function waitForLocalRuntimeDependencySoftTimeout(
     });
   });
 
-  return withTimeout(
+  return withTimeoutOrFallback(
     promise,
     resolveLocalRuntimeDependencySoftTimeoutMs(requestType, overrideTimeoutMs),
     {}

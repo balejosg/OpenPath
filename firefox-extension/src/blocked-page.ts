@@ -17,6 +17,7 @@ import {
 import { submitBlockedDomainRequest as submitBlockedDomainRequestViaApi } from './lib/request-api.js';
 import { fetchWithFallback } from './lib/request-api.js';
 import { localizeDocument, t } from './lib/i18n.js';
+import { withTimeoutOrThrow } from './lib/async-timeout.js';
 
 interface BlockedPageRuntime {
   sendMessage(message: unknown): Promise<unknown>;
@@ -246,21 +247,6 @@ function formatUnknownError(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error(message));
-    }, timeoutMs);
-  });
-
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    if (timeoutId !== null) {
-      clearTimeout(timeoutId);
-    }
-  });
-}
-
 async function submitUnblockRequest(input: {
   domain: string;
   reason: string;
@@ -269,7 +255,7 @@ async function submitUnblockRequest(input: {
 }): Promise<unknown> {
   const nativeRuntime = getNativeRuntime();
   if (nativeRuntime?.sendNativeMessage) {
-    return withTimeout(
+    return withTimeoutOrThrow(
       submitUnblockRequestWithNativeRuntime(input, nativeRuntime),
       SUBMIT_REQUEST_TIMEOUT_MS,
       t('blockedRequestTimeout')
@@ -278,7 +264,7 @@ async function submitUnblockRequest(input: {
 
   const runtime = getBrowserRuntime();
   if (runtime) {
-    return withTimeout(
+    return withTimeoutOrThrow(
       runtime.sendMessage(buildSubmitBlockedDomainRequestMessage(input)),
       SUBMIT_REQUEST_TIMEOUT_MS,
       t('blockedExtensionTimeout')
