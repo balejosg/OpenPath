@@ -1,4 +1,4 @@
-import type { NativeResponse } from './native-messaging-client.js';
+import type { NativeResponse } from './native-response.types.js';
 
 export interface LocalRuntimeDependencyInput {
   anchorHost: string;

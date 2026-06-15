@@ -2,6 +2,7 @@ import type { Browser, Runtime } from 'webextension-polyfill';
 
 import { t } from './i18n.js';
 import { getErrorMessage, logger as defaultLogger } from './logger.js';
+import type { NativeResponse } from './native-response.types.js';
 import {
   LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS,
   LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES,
@@ -15,12 +16,9 @@ import {
   type LocalRuntimeDependencyInput,
 } from './runtime-dependency-protocol.js';
 
-declare const browser: Browser;
+export type { NativeResponse } from './native-response.types.js';
 
-export interface NativeResponse {
-  success: boolean;
-  [key: string]: unknown;
-}
+declare const browser: Browser;
 
 export interface NativeBlockedSubdomainsResponse extends NativeResponse {
   action?: 'get-blocked-subdomains';

@@ -247,12 +247,11 @@ GRAPHIFY_OUT=../graphify-out graphify update OpenPath
 ### Known Import Cycles
 
 - **`groupsViewModelActions.ts`** -- 3-file cycle with `groupsViewModelState.ts` and `useGroupsViewModel.ts` (`react-spa/src/hooks/`)
-- **`config-storage.ts`** -- two 3-file cycles with `config-storage-native.ts`/`config-storage-legacy.ts` and `config-storage-shared.ts` (`firefox-extension/src/lib/`)
 - **`useGroupedRulesManager.ts`** -- 2-file cycle with `useGroupedRulesData.ts` (`react-spa/src/hooks/`, type-only imports)
 - **`HierarchicalRulesTable.tsx`** -- 2-file cycle with `rules-table/HierarchicalGroupRow.tsx` (`react-spa/src/components/`, type-only imports)
-- **`native-messaging-client.ts`** -- 2-file cycle with `runtime-dependency-protocol.ts` (`firefox-extension/src/lib/`, type-only imports)
 - Do not add new edges into these cycles; resolve rather than extend them. The type-only cycles can be broken by extracting shared types to a dedicated types file.
-- Automated guard (ACTIVE): `eslint-plugin-import-x@4.16.2` is installed; `import-x/no-cycle` is enabled at error level for `react-spa/src/**/*.{ts,tsx}` and `firefox-extension/src/**/*.{ts,tsx}` in `eslint.config.js`. `import type` declarations are automatically skipped by the rule (no `ignoreTypeImports` option needed -- it is built-in behaviour in this version). All five known cycles listed above produce no lint errors without inline disables, because every back-edge in each cycle is an `import type` statement that the rule skips. If a new runtime (non-type) import is added that closes a cycle, the rule will fire and block `npm run lint`.
+- Resolved by type extraction (worked examples of the pattern above): the two `firefox-extension/src/lib/config-storage.ts` cycles were broken by moving `RequestConfig` into `config-storage.types.ts`, and the `native-messaging-client.ts` <-> `runtime-dependency-protocol.ts` cycle by moving `NativeResponse` into `native-response.types.ts`. Each original module keeps a type re-export, so consumers are unchanged.
+- Automated guard (ACTIVE): `eslint-plugin-import-x@4.16.2` is installed; `import-x/no-cycle` is enabled at error level for `react-spa/src/**/*.{ts,tsx}` and `firefox-extension/src/**/*.{ts,tsx}` in `eslint.config.js`. `import type` declarations are automatically skipped by the rule (no `ignoreTypeImports` option needed -- it is built-in behaviour in this version). All three remaining cycles listed above produce no lint errors without inline disables, because every back-edge in each cycle is an `import type` statement that the rule skips. If a new runtime (non-type) import is added that closes a cycle, the rule will fire and block `npm run lint`.
 
 ### Key Cross-Community Bridges
 
