@@ -9,11 +9,15 @@ const BLOCKING_ERRORS = [
   'NS_ERROR_PROXY_CONNECTION_REFUSED',
 ];
 const IGNORED_ERRORS = ['NS_BINDING_ABORTED', 'NS_ERROR_ABORT'];
-const IMMEDIATE_BLOCKED_SCREEN_ERRORS = new Set(['NS_ERROR_PROXY_CONNECTION_REFUSED']);
+// Every blocking error must be confirmed by the native host before the blocked screen is shown.
+// A transport/proxy failure on its own (agent down, restarting, boot window) is not a policy
+// block, so we never display the blocked screen without native confirmation that the domain is
+// actually blocked by policy.
 const NATIVE_CONFIRMED_BLOCKED_SCREEN_ERRORS = new Set([
   'NS_ERROR_UNKNOWN_HOST',
   'NS_ERROR_CONNECTION_REFUSED',
   'NS_ERROR_NET_TIMEOUT',
+  'NS_ERROR_PROXY_CONNECTION_REFUSED',
 ]);
 const NATIVE_POLICY_BLOCKED_ERROR = 'OPENPATH_NATIVE_POLICY_BLOCKED';
 const CAPTIVE_PORTAL_RECOVERY_ERRORS = new Set([
@@ -106,19 +110,6 @@ function isTopFrameNavigation(details: { frameId?: number; type?: string }): boo
   }
 
   return details.frameId === 0;
-}
-
-function shouldDisplayBlockedScreenImmediately(details: {
-  error: string;
-  frameId?: number;
-  type?: string;
-  url: string;
-}): boolean {
-  return (
-    isTopFrameNavigation(details) &&
-    IMMEDIATE_BLOCKED_SCREEN_ERRORS.has(details.error) &&
-    !isExtensionUrl(details.url)
-  );
 }
 
 function shouldConfirmBlockedScreenNavigation(details: {
@@ -381,15 +372,7 @@ export function createBlockedScreenNavigationController(
       );
     }
 
-    if (shouldDisplayBlockedScreenImmediately(details)) {
-      latestBlockedScreenNavigationByTab.set(context.tabId, context.url);
-      void redirectToBlockedScreenOnce(context, {
-        isCurrentNavigation: () =>
-          latestBlockedScreenNavigationByTab.get(context.tabId) === context.url,
-        recordBlockedDomain: optionsForError.recordBlockedDomain,
-        requireNativeConfirmation: false,
-      });
-    } else if (shouldConfirmBlockedScreenNavigation(details)) {
+    if (shouldConfirmBlockedScreenNavigation(details)) {
       latestBlockedScreenNavigationByTab.set(context.tabId, context.url);
       void redirectToBlockedScreenOnce(context, {
         isCurrentNavigation: () =>

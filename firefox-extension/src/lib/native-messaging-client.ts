@@ -109,6 +109,7 @@ export interface NativeMessagingClient {
   ) => Promise<CaptivePortalRecoveryResponse>;
   requestLocalWhitelistUpdate: (domains?: string[]) => Promise<boolean>;
   sendMessage: (message: unknown) => Promise<unknown>;
+  warmUp: () => Promise<void>;
 }
 
 export function createNativeMessagingClient(options: {
@@ -140,6 +141,9 @@ export function createNativeMessagingClient(options: {
             lastError: browserApi.runtime.lastError,
           });
           nativePort = null;
+          // Do NOT auto-reconnect here: a host that is absent disconnects immediately on every
+          // connectNative, which would turn this into a 1/sec reconnect-and-log storm. sendMessage
+          // reconnects lazily when a check is actually needed, and warmUp() re-warms on demand.
         });
 
         logger.info('[Monitor] Native host connected');
@@ -494,6 +498,17 @@ export function createNativeMessagingClient(options: {
     return pendingRequest;
   }
 
+  async function warmUp(): Promise<void> {
+    if (nativePort !== null) {
+      return;
+    }
+    try {
+      await connect();
+    } catch {
+      // best-effort pre-warm; errors are intentionally swallowed
+    }
+  }
+
   return {
     allowLocalRuntimeDependency,
     checkDomains,
@@ -502,5 +517,6 @@ export function createNativeMessagingClient(options: {
     recoverCaptivePortalNavigation,
     requestLocalWhitelistUpdate,
     sendMessage,
+    warmUp,
   };
 }

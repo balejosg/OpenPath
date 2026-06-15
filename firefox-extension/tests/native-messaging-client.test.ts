@@ -571,4 +571,77 @@ await describe('native messaging client', async () => {
     );
     assert.equal(messages.length, 4);
   });
+
+  await test('warmUp calls connectNative once and resolves without throwing', async () => {
+    let connectNativeCalls = 0;
+    const browser: Browser = {
+      runtime: {
+        connectNative: () => {
+          connectNativeCalls++;
+          return {
+            onDisconnect: {
+              addListener: () => undefined,
+            },
+          } as never;
+        },
+        lastError: undefined,
+        sendNativeMessage: () => Promise.resolve(undefined as never),
+      },
+    } as unknown as Browser;
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+    });
+
+    await assert.doesNotReject(async () => {
+      await client.warmUp();
+    });
+    assert.equal(connectNativeCalls, 1);
+  });
+
+  await test('warmUp resolves without throwing even when connectNative throws', async () => {
+    const browser: Browser = {
+      runtime: {
+        connectNative: (): never => {
+          throw new Error('native host not found');
+        },
+        lastError: undefined,
+        sendNativeMessage: () => Promise.resolve(undefined as never),
+      },
+    } as unknown as Browser;
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+    });
+
+    await assert.doesNotReject(async () => {
+      await client.warmUp();
+    });
+  });
+
+  await test('warmUp does not open a second connection when already connected', async () => {
+    let connectNativeCalls = 0;
+    const browser: Browser = {
+      runtime: {
+        connectNative: () => {
+          connectNativeCalls++;
+          return {
+            onDisconnect: {
+              addListener: () => undefined,
+            },
+          } as never;
+        },
+        lastError: undefined,
+        sendNativeMessage: () => Promise.resolve(undefined as never),
+      },
+    } as unknown as Browser;
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+    });
+
+    await client.warmUp();
+    await client.warmUp();
+    assert.equal(connectNativeCalls, 1);
+  });
 });

@@ -314,11 +314,12 @@ void describe('blocked screen navigation controller', () => {
     ]);
   });
 
-  void test('stale immediate blocked-screen navigation only handles the latest tab URL', async () => {
+  void test('stale proxy-refused blocked-screen navigation only handles the latest tab URL', async () => {
     const redirects: BlockedScreenContext[] = [];
     const recoveryCalls: unknown[] = [];
     const controller = createBlockedScreenNavigationController({
       addBlockedDomain: () => undefined,
+      confirmBlockedScreenNavigation: () => Promise.resolve(true),
       getBlockedScreenUrl: () => 'moz-extension://unit-test/blocked/blocked.html',
       getCurrentTabUrl: () => Promise.resolve('https://allowed.example/next'),
       recoverCaptivePortalNavigation: (context) => {
@@ -360,6 +361,33 @@ void describe('blocked screen navigation controller', () => {
         origin: null,
       },
     ]);
+  });
+
+  void test('unconfirmed proxy-refused errors do not show the blocked screen', async () => {
+    const redirects: BlockedScreenContext[] = [];
+    const controller = createBlockedScreenNavigationController({
+      addBlockedDomain: () => undefined,
+      confirmBlockedScreenNavigation: () => Promise.resolve(false),
+      getBlockedScreenUrl: () => 'moz-extension://unit-test/blocked/blocked.html',
+      getCurrentTabUrl: () => Promise.resolve('https://allowed.example/next'),
+      redirectToBlockedScreen: (context) => {
+        redirects.push(context);
+        return Promise.resolve();
+      },
+    });
+
+    controller.handleBlockedScreenNavigationError(
+      {
+        error: 'NS_ERROR_PROXY_CONNECTION_REFUSED',
+        tabId: 18,
+        type: 'main_frame',
+        url: 'https://allowed.example/next',
+      } as WebRequest.OnErrorOccurredDetailsType,
+      { recordBlockedDomain: true, requestType: 'main_frame' }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(redirects, []);
   });
 
   void test('stale native preflight does not redirect', async () => {

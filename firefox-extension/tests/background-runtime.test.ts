@@ -961,3 +961,157 @@ void test('background runtime preserves blocked original URLs in background stat
     harness.restoreGlobals();
   }
 });
+
+// A native responder that confirms `blocked.example` (and any checked domain) as a policy block:
+// not whitelisted, policy active, does not resolve to a real IP.
+function respondWithConfirmedBlock(message: unknown): unknown {
+  if ((message as { action?: string }).action !== 'check') {
+    return undefined;
+  }
+  return {
+    success: true,
+    results: ((message as { domains?: string[] }).domains ?? []).map((domain) => ({
+      domain,
+      in_whitelist: false,
+      policy_active: true,
+      resolves: false,
+    })),
+  };
+}
+
+function countNativeChecks(nativeMessages: unknown[], domain: string): number {
+  return nativeMessages.filter(
+    (message) =>
+      (message as { action?: string }).action === 'check' &&
+      ((message as { domains?: string[] }).domains ?? []).includes(domain)
+  ).length;
+}
+
+void test('background runtime serves a repeat blocked navigation from the decision cache without a second native check', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    captivePortalState: 'not_captive_portal',
+    nativeMessageResponder: respondWithConfirmedBlock,
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.webRequestErrorListener);
+
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      frameId: 0,
+      requestId: 'first',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://blocked.example/a',
+    });
+    await waitForAsyncRuntime();
+
+    assert.equal(countNativeChecks(harness.nativeMessages, 'blocked.example'), 1);
+    assert.equal(harness.tabUpdates.length, 1);
+
+    // Different tab and URL (so the per-tab redirect dedup does not apply), same host.
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      frameId: 0,
+      requestId: 'second',
+      tabId: 6,
+      type: 'main_frame',
+      url: 'https://blocked.example/b',
+    });
+    await waitForAsyncRuntime();
+
+    // Still redirects to the blocked screen, but reuses the cached decision — no extra native check.
+    assert.equal(countNativeChecks(harness.nativeMessages, 'blocked.example'), 1);
+    assert.equal(harness.tabUpdates.length, 2);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime re-checks a blocked host after the decision cache TTL expires', async () => {
+  let currentNow = 1000;
+  const harness = createRuntimeHarnessWithOptions({
+    captivePortalState: 'not_captive_portal',
+    nativeMessageResponder: respondWithConfirmedBlock,
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser, { now: () => currentNow });
+    await runtime.init();
+    assert.ok(harness.webRequestErrorListener);
+
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      frameId: 0,
+      requestId: 'first',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://blocked.example/a',
+    });
+    await waitForAsyncRuntime();
+    assert.equal(countNativeChecks(harness.nativeMessages, 'blocked.example'), 1);
+
+    // Advance past the 5s decision TTL.
+    currentNow = 1000 + 6000;
+
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      frameId: 0,
+      requestId: 'second',
+      tabId: 6,
+      type: 'main_frame',
+      url: 'https://blocked.example/b',
+    });
+    await waitForAsyncRuntime();
+    assert.equal(countNativeChecks(harness.nativeMessages, 'blocked.example'), 2);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime drops cached block decisions after a whitelist update', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    captivePortalState: 'not_captive_portal',
+    nativeMessageResponder: respondWithConfirmedBlock,
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    assert.ok(harness.webRequestErrorListener);
+    assert.ok(harness.runtimeMessage);
+
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      frameId: 0,
+      requestId: 'first',
+      tabId: 5,
+      type: 'main_frame',
+      url: 'https://blocked.example/a',
+    });
+    await waitForAsyncRuntime();
+    assert.equal(countNativeChecks(harness.nativeMessages, 'blocked.example'), 1);
+
+    harness.runtimeMessage(
+      { action: 'triggerWhitelistUpdate', domains: ['blocked.example'] },
+      { tab: { id: 5 } },
+      (response) => {
+        harness.responses.push(response);
+      }
+    );
+    await waitForAsyncRuntime();
+
+    // The cache was invalidated by the whitelist update, so the host is confirmed again.
+    harness.webRequestErrorListener({
+      error: 'NS_ERROR_NET_TIMEOUT',
+      frameId: 0,
+      requestId: 'second',
+      tabId: 6,
+      type: 'main_frame',
+      url: 'https://blocked.example/b',
+    });
+    await waitForAsyncRuntime();
+    assert.equal(countNativeChecks(harness.nativeMessages, 'blocked.example'), 2);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
