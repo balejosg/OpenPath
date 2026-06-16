@@ -113,6 +113,23 @@ openpath_flag_enabled() {
     esac
 }
 
+# Surface (but do not "fix") a security-relevant enum env var set to an
+# unrecognized value, so a typo such as RFC1918_EGRESS_MODE=restrict does not
+# silently no-op an intended hardening and leave the operator believing it took
+# effect. Deliberately does NOT change the value or the caller's fail direction
+# -- the existing default semantics still apply; this only logs the mismatch.
+# $1=var name (for the message), $2=raw value, $3=comma-separated allowed values.
+openpath_warn_unknown_enum() {
+    local name="$1" value="$2" allowed="$3" lowered
+    [ -z "$value" ] && return 0
+    lowered="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+    case ",$allowed," in
+        *",$lowered,"*) return 0 ;;
+    esac
+    log_warn "Unknown value '$value' for $name; expected one of: ${allowed//,/, }. Using default behaviour."
+    return 0
+}
+
 doh_block_enabled() { openpath_flag_enabled "${DOH_BLOCK_ENABLED:-1}"; }
 vpn_block_enabled() { openpath_flag_enabled "${VPN_BLOCK_ENABLED:-1}"; }
 tor_block_enabled() { openpath_flag_enabled "${TOR_BLOCK_ENABLED:-1}"; }
@@ -192,7 +209,9 @@ apply_ntp_egress_rules() {
 # fit, then enable. SECURITY: "all" leaves the tethered-proxy full-tunnel hole
 # open -- prefer "restricted" once the deployment's RFC1918 port needs are known.
 rfc1918_egress_mode() {
-    printf '%s' "${RFC1918_EGRESS_MODE:-all}" | tr '[:upper:]' '[:lower:]'
+    local raw="${RFC1918_EGRESS_MODE:-all}"
+    openpath_warn_unknown_enum "RFC1918_EGRESS_MODE" "$raw" "all,restricted"
+    printf '%s' "$raw" | tr '[:upper:]' '[:lower:]'
 }
 
 # Intranet egress. Allow a configurable list of private/intranet CIDRs (default:

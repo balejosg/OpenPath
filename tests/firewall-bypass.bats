@@ -987,3 +987,45 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" != *"Bypass-block rule missing"* ]]
 }
+
+# ============== RFC1918 egress mode validation ==============
+
+@test "rfc1918_egress_mode warns on an unrecognized value so a typo'd hardening intent is not silently dropped" {
+    source_firewall
+    log_warn() { echo "[WARN] $1"; }
+    export -f log_warn
+
+    export RFC1918_EGRESS_MODE="restrict"
+    run rfc1918_egress_mode
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[WARN]"* ]]
+    [[ "$output" == *"Unknown value 'restrict' for RFC1918_EGRESS_MODE"* ]]
+    # Fail direction is unchanged: an unrecognized value still resolves downstream
+    # to the legacy 'all' default (the [ "$mode" = "restricted" ] check fails).
+    [[ "$output" == *"restrict"* ]]
+}
+
+@test "rfc1918_egress_mode is silent for recognized values and when unset" {
+    source_firewall
+    log_warn() { echo "[WARN] $1"; }
+    export -f log_warn
+
+    export RFC1918_EGRESS_MODE="restricted"
+    run rfc1918_egress_mode
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"[WARN]"* ]]
+    [ "$output" = "restricted" ]
+
+    export RFC1918_EGRESS_MODE="ALL"
+    run rfc1918_egress_mode
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"[WARN]"* ]]
+    [ "$output" = "all" ]
+
+    unset RFC1918_EGRESS_MODE
+    run rfc1918_egress_mode
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"[WARN]"* ]]
+    [ "$output" = "all" ]
+}
