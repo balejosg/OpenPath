@@ -408,7 +408,12 @@ assert "https://downloads.example/openpath-managed.xpi" not in policy_root.get("
 assert "openpath-block-monitor@openpath" in policy_root.get("Extensions", {}).get("Locked", [])
 assert "WebsiteFilter" not in policy_root
 assert "SearchEngines" not in policy_root
-assert "DNSOverHTTPS" not in policy_root
+# Fail-open relaxes OpenPath's own firewall/dnsmasq enforcement but deliberately
+# leaves the Firefox managed-extension policy intact: cleanup_browser_policies only
+# clears Chromium policy files, so the managed extension and its DNS/SafeMode
+# hardening baseline persist (the locked DoH-off is benign once dnsmasq is in
+# passthrough, and prevents the browser from bypassing system DNS).
+assert policy_root.get("DNSOverHTTPS", {}).get("Locked") is True, policy_root.get("DNSOverHTTPS")
 PYEOF
 EOF
     chmod +x "$helper_script"
