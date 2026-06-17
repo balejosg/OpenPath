@@ -269,6 +269,30 @@ def cmd_mutate_firefox_policies(args: argparse.Namespace) -> int:
 
         extension_settings = policy_root.setdefault("ExtensionSettings", {})
         previous_entry = extension_settings.get(ext_id)
+
+        # Purge a stale OpenPath-managed entry left under a different id (for
+        # example a legacy extension id from before a rename). Any other
+        # force_installed entry that points at the same install_url is the same
+        # managed extension under an old id: Firefox can only match the XPI's
+        # gecko id to one key, so a leftover sibling becomes a permanently
+        # failing force-install. Match on install_url so unrelated
+        # admin-managed extensions are never touched.
+        stale_ids = [
+            other_id
+            for other_id, other_entry in list(extension_settings.items())
+            if other_id not in (ext_id, "*")
+            and isinstance(other_entry, dict)
+            and other_entry.get("installation_mode") == "force_installed"
+            and other_entry.get("install_url") == install_url
+        ]
+        stale_install_targets: set[str] = set()
+        for stale_id in stale_ids:
+            stale_entry = extension_settings.pop(stale_id, None)
+            if isinstance(stale_entry, dict):
+                stale_url = stale_entry.get("install_url")
+                if isinstance(stale_url, str) and stale_url:
+                    stale_install_targets.add(stale_url)
+
         extension_settings[ext_id] = {
             "installation_mode": "force_installed",
             "install_url": install_url,
@@ -278,7 +302,7 @@ def cmd_mutate_firefox_policies(args: argparse.Namespace) -> int:
 
         extensions = policy_root.setdefault("Extensions", {})
         installs = extensions.setdefault("Install", [])
-        install_targets: set[str] = set()
+        install_targets: set[str] = set(stale_install_targets)
         if isinstance(previous_entry, dict):
             previous_install_url = previous_entry.get("install_url")
             if isinstance(previous_install_url, str) and previous_install_url:
@@ -294,7 +318,10 @@ def cmd_mutate_firefox_policies(args: argparse.Namespace) -> int:
             installs = [
                 item
                 for item in installs
-                if item not in install_targets and item != ext_id and ext_id not in str(item)
+                if item not in install_targets
+                and item != ext_id
+                and ext_id not in str(item)
+                and item not in stale_ids
             ]
             if installs:
                 extensions["Install"] = installs
@@ -302,6 +329,8 @@ def cmd_mutate_firefox_policies(args: argparse.Namespace) -> int:
                 extensions.pop("Install", None)
 
         locked = extensions.setdefault("Locked", [])
+        if isinstance(locked, list) and stale_ids:
+            locked[:] = [item for item in locked if item not in stale_ids]
         if ext_id not in locked:
             locked.append(ext_id)
 

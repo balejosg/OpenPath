@@ -191,7 +191,7 @@ export function writeFirefoxReleaseArtifacts(version: string, payload: string): 
   writeFileSync(
     firefoxReleaseMetadataPath(),
     JSON.stringify({
-      extensionId: 'monitor-bloqueos@openpath',
+      extensionId: 'openpath-block-monitor@openpath',
       version,
     })
   );
