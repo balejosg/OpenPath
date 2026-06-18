@@ -450,10 +450,25 @@ EOF
     run grep -n 'dpkg-scanpackages --arch amd64 --multiversion' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
     [ "$status" -eq 0 ]
 
-    run grep -n 'apt-ftparchive release "dists/\$suite"' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
+    run grep -F 'release "dists/$suite" > "dists/$suite/Release"' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
     [ "$status" -eq 0 ]
 
     run grep -n 'gpg --batch --yes --default-key "\$GPG_KEY_ID" --clearsign' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
+    [ "$status" -eq 0 ]
+}
+
+@test "deb publish workflow signs Release with the suite identity apt requires" {
+    # Regression guard for the fleet-freeze bug: bare `apt-ftparchive release` emits a Release with
+    # only Date+hashes, so apt rejects the repo ("Conflicting distribution: expected <suite>, got
+    # <empty>") and every client silently stops updating. These -o options put Suite/Codename into
+    # the signed InRelease, and the fail-closed check refuses to publish a Release without them.
+    run grep -F 'APT::FTPArchive::Release::Suite="$suite"' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -F 'APT::FTPArchive::Release::Codename="$suite"' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -F 'APT Release missing suite identity' "$PROJECT_DIR/.github/workflows/reusable-deb-publish.yml"
     [ "$status" -eq 0 ]
 }
 
