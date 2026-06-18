@@ -219,7 +219,27 @@ jobs:
                 dpkg-scanpackages --arch amd64 --multiversion "$retained_dir" /dev/null > "dists/$suite/main/binary-amd64/Packages"
                 gzip -kf "dists/$suite/main/binary-amd64/Packages"
               fi
-              apt-ftparchive release "dists/$suite" > "dists/$suite/Release"
+              # apt-ftparchive emits Suite/Codename ONLY when given these -o options. Bare
+              # `apt-ftparchive release` produces a Release with just Date+hashes, so apt rejects
+              # the repo ("Conflicting distribution: expected $suite, got <empty>") and every client
+              # silently stops updating. (reprepro export above writes them, but this step
+              # regenerates Release to match the retained Packages and would otherwise drop them.)
+              apt-ftparchive \
+                -o APT::FTPArchive::Release::Origin="OpenPath System" \
+                -o APT::FTPArchive::Release::Label="OpenPath System" \
+                -o APT::FTPArchive::Release::Suite="$suite" \
+                -o APT::FTPArchive::Release::Codename="$suite" \
+                -o APT::FTPArchive::Release::Architectures="amd64" \
+                -o APT::FTPArchive::Release::Components="main" \
+                release "dists/$suite" > "dists/$suite/Release"
+              # Fail closed: never publish/sign a Release that lacks the suite identity apt needs.
+              for required in "Suite: $suite" "Codename: $suite"; do
+                if ! grep -qx "$required" "dists/$suite/Release"; then
+                  echo "::error title=APT Release missing suite identity::dists/$suite/Release lacks '$required'; apt clients would reject the repo and stop updating."
+                  cat "dists/$suite/Release"
+                  exit 1
+                fi
+              done
               gpg --batch --yes --default-key "$GPG_KEY_ID" --clearsign \
                 -o "dists/$suite/InRelease" "dists/$suite/Release"
               gpg --batch --yes --default-key "$GPG_KEY_ID" -abs \
