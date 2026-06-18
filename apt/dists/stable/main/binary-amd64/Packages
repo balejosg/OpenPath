@@ -1,16 +1,17 @@
 Package: openpath-dnsmasq
 Version: 4.1.25-1
 Architecture: all
+Maintainer: Las Encinas IT <it@lasencinas.edu>
 Depends: dnsmasq, iptables, ipset, iproute2, curl, libcap2-bin, dnsutils, conntrack, python3
 Recommends: firefox-esr, unattended-upgrades
-Maintainer: Las Encinas IT <it@lasencinas.edu>
-Priority: optional
-Section: net
-Filename: pool/main/o/openpath-dnsmasq/openpath-dnsmasq_4.1.25-1_all.deb
+Filename: pool/stable/main/openpath-dnsmasq_4.1.25-1_all.deb
 Size: 588544
-SHA256: 05367575c6ca6a013387892257ea0e205b8d2d0685807bb855d4f12dc1d36424
-SHA1: 4c4c0a6df28ed39783b032a042a2464d94201183
 MD5sum: c5e3096349fa498955d9d8064bfe6838
+SHA1: 4c4c0a6df28ed39783b032a042a2464d94201183
+SHA256: 05367575c6ca6a013387892257ea0e205b8d2d0685807bb855d4f12dc1d36424
+Section: net
+Priority: optional
+Homepage: https://github.com/balejosg/openpath
 Description: DNS Whitelist System for Educational Environments
  A multi-layer internet access control system using DNS sinkhole,
  iptables firewall, and browser policies. Blocks all domains by
@@ -23,5 +24,31 @@ Description: DNS Whitelist System for Educational Environments
   - Automatic whitelist updates
   - Health monitoring
   - Captive portal detection
+
+Package: openpath-dnsmasq
+Version: 4.1.26-1
+Architecture: all
+Maintainer: Las Encinas IT <it@lasencinas.edu>
+Depends: dnsmasq, iptables, ipset, iproute2, curl, libcap2-bin, dnsutils, conntrack, python3
+Recommends: firefox-esr, unattended-upgrades
+Filename: pool/stable/main/openpath-dnsmasq_4.1.26-1_amd64.deb
+Size: 338220
+MD5sum: f1070bac859cec7628cefe9784c9acff
+SHA1: 501ba71d0c556a1e9e74699d8d274df669354410
+SHA256: 0a540aae1124fb26296168bf7637ac5067b17eeb030878e0916fd6f5c4743b83
+Section: net
+Priority: optional
 Homepage: https://github.com/balejosg/openpath
+Description: DNS Whitelist System for Educational Environments
+ A multi-layer internet access control system using DNS sinkhole,
+ iptables firewall, and browser policies. Blocks all domains by
+ default, allowing only whitelisted domains.
+ .
+ Features:
+  - DNS sinkhole (dnsmasq)
+  - Firewall rules (iptables)
+  - Browser policies (Firefox/Chromium)
+  - Automatic whitelist updates
+  - Health monitoring
+  - Captive portal detection
 
