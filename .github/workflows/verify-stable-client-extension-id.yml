@@ -1,0 +1,44 @@
+name: Verify Stable Client Extension Id
+
+# Fails when the published `stable` openpath-dnsmasq .deb (what manual installs and fresh
+# enrollments receive via `apt-setup.sh --stable` / `quick-install.sh`) ships a managed-extension
+# id that no longer matches firefox-extension/manifest.json. This is the guard for the failure that
+# broke machine `max12`: the stable suite stayed frozen across the 2026-05-10 extension-id rename, so
+# fresh installs kept getting a .deb whose id Firefox rejects (firefox_registration_missing loop).
+# Goes red after any id rename and stays red until a stable release republishes a matching .deb.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firefox-extension/manifest.json'
+      - 'linux/lib/firefox-policy.sh'
+      - 'scripts/verify-stable-client-extension-id.mjs'
+      - '.github/workflows/verify-stable-client-extension-id.yml'
+  schedule:
+    # Daily: catches the stable suite drifting stale even without a commit touching the paths above.
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-stable-client-extension-id-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-stable-client-extension-id:
+    name: Stable client extension id matches manifest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: ./.github/actions/setup-node
+        with:
+          install-deps: 'false'
+
+      - name: Verify stable client managed-extension id
+        run: node scripts/verify-stable-client-extension-id.mjs
