@@ -63,3 +63,6 @@ blob-report/
 
 # AMO signing state
 firefox-extension/.amo-upload-uuid
+
+# E2E test artifacts (selenium diagnostics, screenshots, etc.)
+tests/e2e/artifacts/

@@ -1,24 +1,29 @@
 {
   "auditReportVersion": 2,
   "vulnerabilities": {
-    "@esbuild-kit/core-utils": {
-      "name": "@esbuild-kit/core-utils",
-      "severity": "high",
+    "@babel/core": {
+      "name": "@babel/core",
+      "severity": "low",
       "isDirect": false,
-      "via": ["esbuild"],
-      "effects": ["@esbuild-kit/esm-loader"],
-      "range": ">=3.1.0",
-      "nodes": ["node_modules/@esbuild-kit/core-utils"],
-      "fixAvailable": true
-    },
-    "@esbuild-kit/esm-loader": {
-      "name": "@esbuild-kit/esm-loader",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["@esbuild-kit/core-utils"],
+      "via": [
+        {
+          "source": 1120793,
+          "name": "@babel/core",
+          "dependency": "@babel/core",
+          "title": "@babel/core: Arbitrary File Read via sourceMappingURL Comment",
+          "url": "https://github.com/advisories/GHSA-4x5r-pxfx-6jf8",
+          "severity": "low",
+          "cwe": ["CWE-22", "CWE-200"],
+          "cvss": {
+            "score": 3.2,
+            "vectorString": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:C/C:L/I:N/A:N"
+          },
+          "range": "<=7.29.0"
+        }
+      ],
       "effects": [],
-      "range": ">=2.6.0",
-      "nodes": ["node_modules/@esbuild-kit/esm-loader"],
+      "range": "<=7.29.0",
+      "nodes": ["node_modules/@babel/core"],
       "fixAvailable": true
     },
     "brace-expansion": {
@@ -46,39 +51,11 @@
       "nodes": ["node_modules/brace-expansion"],
       "fixAvailable": true
     },
-    "drizzle-kit": {
-      "name": "drizzle-kit",
-      "severity": "high",
-      "isDirect": true,
-      "via": ["esbuild"],
-      "effects": [],
-      "range": ">=0.19.2-9340465",
-      "nodes": ["node_modules/drizzle-kit"],
-      "fixAvailable": {
-        "name": "drizzle-kit",
-        "version": "0.19.1",
-        "isSemVerMajor": true
-      }
-    },
     "esbuild": {
       "name": "esbuild",
-      "severity": "high",
+      "severity": "low",
       "isDirect": false,
       "via": [
-        {
-          "source": 1120679,
-          "name": "esbuild",
-          "dependency": "esbuild",
-          "title": "esbuild: Missing binary integrity verification in Deno module enables remote code execution via NPM_CONFIG_REGISTRY",
-          "url": "https://github.com/advisories/GHSA-gv7w-rqvm-qjhr",
-          "severity": "high",
-          "cwe": ["CWE-426", "CWE-494"],
-          "cvss": {
-            "score": 8.1,
-            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-          },
-          "range": ">=0.17.0 <0.28.1"
-        },
         {
           "source": 1120680,
           "name": "esbuild",
@@ -94,23 +71,34 @@
           "range": ">=0.27.3 <0.28.1"
         }
       ],
-      "effects": ["@esbuild-kit/core-utils", "drizzle-kit", "esbuild-register", "tsx", "vite"],
-      "range": "0.17.0 - 0.28.0",
-      "nodes": ["node_modules/esbuild", "node_modules/vite/node_modules/esbuild"],
-      "fixAvailable": {
-        "name": "drizzle-kit",
-        "version": "0.19.1",
-        "isSemVerMajor": true
-      }
+      "effects": [],
+      "range": "0.27.3 - 0.28.0",
+      "nodes": ["node_modules/vite/node_modules/esbuild"],
+      "fixAvailable": true
     },
-    "esbuild-register": {
-      "name": "esbuild-register",
+    "form-data": {
+      "name": "form-data",
       "severity": "high",
       "isDirect": false,
-      "via": ["esbuild"],
+      "via": [
+        {
+          "source": 1120743,
+          "name": "form-data",
+          "dependency": "form-data",
+          "title": "form-data: CRLF injection in form-data via unescaped multipart field names and filenames",
+          "url": "https://github.com/advisories/GHSA-hmw2-7cc7-3qxx",
+          "severity": "high",
+          "cwe": ["CWE-93"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": ">=4.0.0 <4.0.6"
+        }
+      ],
       "effects": [],
-      "range": "",
-      "nodes": ["node_modules/esbuild-register"],
+      "range": "4.0.0 - 4.0.5",
+      "nodes": ["node_modules/form-data"],
       "fixAvailable": true
     },
     "gaxios": {
@@ -121,6 +109,31 @@
       "effects": [],
       "range": "6.4.0 - 6.7.1",
       "nodes": ["node_modules/gaxios"],
+      "fixAvailable": true
+    },
+    "js-yaml": {
+      "name": "js-yaml",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1120792,
+          "name": "js-yaml",
+          "dependency": "js-yaml",
+          "title": "JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases",
+          "url": "https://github.com/advisories/GHSA-h67p-54hq-rp68",
+          "severity": "moderate",
+          "cwe": ["CWE-407"],
+          "cvss": {
+            "score": 5.3,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          "range": "<=4.1.1"
+        }
+      ],
+      "effects": [],
+      "range": "<=4.1.1",
+      "nodes": ["node_modules/js-yaml"],
       "fixAvailable": true
     },
     "node-notifier": {
@@ -191,16 +204,6 @@
         "isSemVerMajor": false
       }
     },
-    "tsx": {
-      "name": "tsx",
-      "severity": "high",
-      "isDirect": true,
-      "via": ["esbuild"],
-      "effects": [],
-      "range": "3.13.0 - 4.21.1",
-      "nodes": ["node_modules/tsx"],
-      "fixAvailable": true
-    },
     "turbo": {
       "name": "turbo",
       "severity": "moderate",
@@ -240,6 +243,115 @@
       "nodes": ["node_modules/turbo"],
       "fixAvailable": true
     },
+    "undici": {
+      "name": "undici",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1121187,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to TLS certificate validation bypass via dropped requestTls in SOCKS5 ProxyAgent",
+          "url": "https://github.com/advisories/GHSA-vmh5-mc38-953g",
+          "severity": "high",
+          "cwe": ["CWE-295"],
+          "cvss": {
+            "score": 7.4,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+          },
+          "range": ">=7.23.0 <7.28.0"
+        },
+        {
+          "source": 1121189,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to cross-user information disclosure via shared cache whitespace bypass",
+          "url": "https://github.com/advisories/GHSA-pr7r-676h-xcf6",
+          "severity": "moderate",
+          "cwe": ["CWE-524"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          },
+          "range": ">=7.0.0 <7.28.0"
+        },
+        {
+          "source": 1121241,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to HTTP header injection via Set-Cookie percent-decoding",
+          "url": "https://github.com/advisories/GHSA-p88m-4jfj-68fv",
+          "severity": "moderate",
+          "cwe": ["CWE-93"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": ">=7.0.0 <7.28.0"
+        },
+        {
+          "source": 1121244,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici WebSocket client vulnerable to denial of service via fragment count bypass",
+          "url": "https://github.com/advisories/GHSA-vxpw-j846-p89q",
+          "severity": "high",
+          "cwe": ["CWE-400", "CWE-770"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": ">=7.0.0 <7.28.0"
+        },
+        {
+          "source": 1121247,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to cross-origin request routing via SOCKS5 proxy pool reuse",
+          "url": "https://github.com/advisories/GHSA-hm92-r4w5-c3mj",
+          "severity": "high",
+          "cwe": ["CWE-346"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
+          },
+          "range": ">=7.23.0 <7.28.0"
+        },
+        {
+          "source": 1121249,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to HTTP response queue poisoning via keep-alive socket reuse",
+          "url": "https://github.com/advisories/GHSA-35p6-xmwp-9g52",
+          "severity": "low",
+          "cwe": ["CWE-367"],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": ">=7.0.0 <7.28.0"
+        },
+        {
+          "source": 1121254,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to Set-Cookie SameSite attribute downgrade via permissive substring matching",
+          "url": "https://github.com/advisories/GHSA-g8m3-5g58-fq7m",
+          "severity": "low",
+          "cwe": ["CWE-183"],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": ">=7.0.0 <7.28.0"
+        }
+      ],
+      "effects": [],
+      "range": "7.0.0 - 7.27.2",
+      "nodes": ["node_modules/undici"],
+      "fixAvailable": true
+    },
     "uuid": {
       "name": "uuid",
       "severity": "moderate",
@@ -276,15 +388,40 @@
       "name": "vite",
       "severity": "high",
       "isDirect": true,
-      "via": ["esbuild"],
+      "via": [
+        {
+          "source": 1120785,
+          "name": "vite",
+          "dependency": "vite",
+          "title": "launch-editor: NTLMv2 hash disclosure via UNC path handling on Windows",
+          "url": "https://github.com/advisories/GHSA-v6wh-96g9-6wx3",
+          "severity": "moderate",
+          "cwe": ["CWE-73", "CWE-522"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": ">=7.0.0 <=7.3.4"
+        },
+        {
+          "source": 1120790,
+          "name": "vite",
+          "dependency": "vite",
+          "title": "vite: `server.fs.deny` bypass on Windows alternate paths",
+          "url": "https://github.com/advisories/GHSA-fx2h-pf6j-xcff",
+          "severity": "high",
+          "cwe": ["CWE-22", "CWE-200"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": ">=7.0.0 <=7.3.4"
+        }
+      ],
       "effects": [],
-      "range": "4.2.0-beta.0 - 8.0.3",
+      "range": "7.0.0 - 7.3.3",
       "nodes": ["node_modules/vite"],
-      "fixAvailable": {
-        "name": "vite",
-        "version": "8.0.16",
-        "isSemVerMajor": true
-      }
+      "fixAvailable": true
     },
     "web-ext": {
       "name": "web-ext",
@@ -302,7 +439,7 @@
     },
     "ws": {
       "name": "ws",
-      "severity": "moderate",
+      "severity": "high",
       "isDirect": false,
       "via": [
         {
@@ -318,10 +455,24 @@
             "vectorString": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:N/A:N"
           },
           "range": ">=8.0.0 <8.20.1"
+        },
+        {
+          "source": 1120730,
+          "name": "ws",
+          "dependency": "ws",
+          "title": "ws: Memory exhaustion DoS from tiny fragments and data chunks",
+          "url": "https://github.com/advisories/GHSA-96hv-2xvq-fx4p",
+          "severity": "high",
+          "cwe": ["CWE-400", "CWE-770"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": ">=8.0.0 <8.21.0"
         }
       ],
       "effects": [],
-      "range": "8.0.0 - 8.20.0",
+      "range": "8.0.0 - 8.20.1",
       "nodes": ["node_modules/ws"],
       "fixAvailable": true
     }
@@ -329,11 +480,11 @@
   "metadata": {
     "vulnerabilities": {
       "info": 0,
-      "low": 0,
+      "low": 2,
       "moderate": 7,
-      "high": 9,
+      "high": 6,
       "critical": 0,
-      "total": 16
+      "total": 15
     },
     "dependencies": {
       "prod": 276,
