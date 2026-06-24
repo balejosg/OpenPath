@@ -147,6 +147,27 @@ free_port_53() {
     return 1
 }
 
+# Render the OpenPath /etc/resolv.conf body (local dnsmasq resolver). Kept as a
+# pure function so the content contract is unit-testable.
+#
+# Deliberately carries NO `search` domain. A search domain (e.g. `search lan`)
+# makes glibc retry a failed absolute lookup as "<host>.<search>"; for a
+# whitelisted FQDN that transiently fails to resolve (DNS churn during a
+# whitelist update, brief upstream hiccup) that fallthrough name is not
+# whitelisted, so the sinkhole wildcard (address=/#/<sink>) answers it with the
+# sink IP. The browser then commits to the dead sinkhole (IPv6-preferring clients
+# black-hole on the v6 sink) instead of failing fast and re-querying once the
+# real answer is available. Omitting the search domain makes such a miss a clean
+# NXDOMAIN. See dns.bats and the page-observer canary post-mortem.
+render_openpath_resolv_conf() {
+    cat << 'EOF'
+# Generado por openpath
+# DNS local (dnsmasq)
+nameserver 127.0.0.1
+options edns0 trust-ad
+EOF
+}
+
 # Configure /etc/resolv.conf to use local dnsmasq
 configure_resolv_conf() {
     log "Configuring /etc/resolv.conf..."
@@ -164,13 +185,7 @@ configure_resolv_conf() {
         cp /etc/resolv.conf "$CONFIG_DIR/resolv.conf.backup"
     fi
 
-    cat > /etc/resolv.conf << 'EOF'
-# Generado por openpath
-# DNS local (dnsmasq)
-nameserver 127.0.0.1
-options edns0 trust-ad
-search lan
-EOF
+    render_openpath_resolv_conf > /etc/resolv.conf
 
     chattr +i /etc/resolv.conf 2>/dev/null || true
 

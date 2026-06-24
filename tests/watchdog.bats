@@ -177,6 +177,18 @@ EOF
     ! grep -qx "google.com" "$probe_log"
 }
 
+@test "recover_resolv_conf restores local dnsmasq with no search domain" {
+    local extracted="$TEST_TMP_DIR/recover_resolv_conf.sh"
+    awk '/^recover_resolv_conf\(\) \{/,/^}/' \
+        "$PROJECT_DIR/linux/scripts/runtime/dnsmasq-watchdog.sh" > "$extracted"
+
+    grep -q "nameserver 127.0.0.1" "$extracted"
+    # A search domain makes a transient whitelisted-FQDN miss fall through to a
+    # sinkholed "<host>.<search>" answer and black-hole the browser; the watchdog
+    # recovery must not reintroduce one. See render_openpath_resolv_conf.
+    ! grep -qiE '^[[:space:]]*search([[:space:]]|$)' "$extracted"
+}
+
 ################################################################################
 # ADR 0011 — protected-mode state-transition tests
 ################################################################################

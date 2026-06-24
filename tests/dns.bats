@@ -168,10 +168,24 @@ EOF
 
 @test "resolv.conf points to localhost" {
     local resolv_file="$TEST_TMP_DIR/resolv.conf"
-    
+
     echo "nameserver 127.0.0.1" > "$resolv_file"
-    
+
     grep -q "nameserver 127.0.0.1" "$resolv_file"
+}
+
+@test "render_openpath_resolv_conf points at local dnsmasq and adds no search domain" {
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    run render_openpath_resolv_conf
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nameserver 127.0.0.1"* ]]
+    # A `search` domain makes a transient miss on a whitelisted FQDN fall through
+    # to "<host>.<search>", which the sinkhole wildcard (address=/#/<sink>) answers
+    # with a sink IP — so the browser commits to the dead sinkhole instead of
+    # failing fast and retrying. The OpenPath resolv.conf must carry no search domain.
+    ! grep -qiE '^[[:space:]]*search([[:space:]]|$)' <<< "$output"
 }
 
 @test "dnsmasq init script reads preserved upstream DNS from /etc openpath config" {

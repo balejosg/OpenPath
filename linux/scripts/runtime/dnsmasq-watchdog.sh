@@ -201,10 +201,12 @@ recover_upstream_dns() {
 recover_resolv_conf() {
     log "[WATCHDOG] Recuperando /etc/resolv.conf..."
     chattr -i /etc/resolv.conf 2>/dev/null || true
+    # No `search` domain: a search suffix turns a transient whitelisted-FQDN miss
+    # into a positive sinkhole answer via "<host>.<search>" (see
+    # render_openpath_resolv_conf in dns-runtime.sh), black-holing the browser.
     cat > /etc/resolv.conf << 'EOF'
 nameserver 127.0.0.1
 options edns0 trust-ad
-search lan
 EOF
     chattr +i /etc/resolv.conf 2>/dev/null || true
 }
