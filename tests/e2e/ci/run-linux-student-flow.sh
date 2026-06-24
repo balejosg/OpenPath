@@ -862,6 +862,77 @@ fi
     rm -f "$log"
 }
 
+# Browser-level proof: in real headless Firefox, a blocked sub-resource of an
+# allowed page must fail fast (onerror in ms) instead of black-holing for the
+# browser's connect timeout (~90s) -- the actual student symptom. Drives the
+# Firefox + selenium-webdriver already installed in the image. No-op when the
+# opt-in flag is off.
+assert_sinkhole_fast_fail_browser() {
+    if [[ "$STUDENT_SINKHOLE_FAST_FAIL" != "1" && "$STUDENT_SINKHOLE_FAST_FAIL" != "true" ]]; then
+        return 0
+    fi
+    echo "Verifying sinkhole fast-fail at the browser level (headless Firefox)..."
+    local probe="$ARTIFACTS_DIR/sinkhole-fastfail-browser-probe.js"
+    # host is passed to executeAsyncScript as arguments[0] (no string interpolation,
+    # so the quoted heredoc needs no shell/JS escaping).
+    cat > "$probe" <<'PROBEJS'
+const { Builder } = require('/openpath/tests/selenium/node_modules/selenium-webdriver');
+const firefox = require('/openpath/tests/selenium/node_modules/selenium-webdriver/firefox');
+(async () => {
+  const host = process.env.PROBE_HOST;
+  const opts = new firefox.Options().addArguments('-headless');
+  // Cap Firefox's own connect timeout so a regression (hang) ends in ~20s, not ~90s.
+  opts.setPreference('network.http.connection-timeout', 20);
+  opts.setPreference('network.http.connection-retry-timeout', 0);
+  const driver = await new Builder().forBrowser('firefox').setFirefoxOptions(opts).build();
+  try {
+    await driver.manage().setTimeouts({ script: 100000 });
+    await driver.get(process.env.PROBE_ORIGIN);
+    const result = await driver.executeAsyncScript(
+      'const cb = arguments[arguments.length - 1];' +
+      'const url = "https://" + arguments[0] + "/probe.js?cache=" + Date.now();' +
+      'const start = performance.now();' +
+      'const s = document.createElement("script"); s.src = url;' +
+      'let done = false;' +
+      'const finish = (status) => { if (done) return; done = true; cb({ status, durationMs: Math.round(performance.now() - start) }); };' +
+      's.onload = () => finish("ok"); s.onerror = () => finish("blocked");' +
+      'setTimeout(() => finish("cap-90s"), 90000);' +
+      'document.body.appendChild(s);',
+      host
+    );
+    console.log('PROBE_RESULT ' + JSON.stringify(result));
+  } finally { await driver.quit(); }
+})().catch((e) => { console.error('PROBE_ERROR ' + (e && e.message)); process.exit(2); });
+PROBEJS
+
+    # Pipe the probe into the container (docker cp can fail to chown the
+    # agent-managed resolv.conf mount on some daemons).
+    docker exec -i "$CONTAINER_NAME" sh -c 'cat > /tmp/sinkhole-fastfail-browser-probe.js' < "$probe"
+    local out
+    if ! out=$(docker exec \
+        -e PROBE_HOST="blocked.${OPENPATH_STUDENT_HOST_SUFFIX}" \
+        -e PROBE_ORIGIN="http://127.0.0.1:${FIXTURE_PORT}/" \
+        "$CONTAINER_NAME" node /tmp/sinkhole-fastfail-browser-probe.js 2>&1); then
+        echo "$out" >&2
+        echo "FAIL: browser probe errored" >&2
+        return 1
+    fi
+    local json status duration
+    json=$(printf '%s\n' "$out" | sed -n 's/^PROBE_RESULT //p' | tail -1)
+    status=$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])' 2>/dev/null)
+    duration=$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["durationMs"])' 2>/dev/null)
+    echo "  browser blocked sub-resource: status=${status:-?} durationMs=${duration:-?}"
+    if [[ "$status" == "ok" ]]; then
+        echo "FAIL: blocked sub-resource loaded in the browser (enforcement broken)" >&2
+        return 1
+    fi
+    if [[ -z "$duration" ]] || ((duration >= 6000)); then
+        echo "FAIL: blocked sub-resource did not fast-fail in the browser (${duration:-?}ms >= 6000ms)" >&2
+        return 1
+    fi
+    echo "PASS: browser blocked sub-resource fast-failed in ${duration}ms (< 6000ms)"
+}
+
 wait_for_linux_dns_policy_ready() {
     local max_attempts="${OPENPATH_LINUX_DNS_READINESS_ATTEMPTS:-12}"
     local delay_seconds="${OPENPATH_LINUX_DNS_READINESS_DELAY_SECONDS:-5}"
@@ -1000,6 +1071,7 @@ main() {
     run_timed_step "Install/enroll/update client" configure_client true
     run_timed_step "Verify SSE DNS policy readiness" wait_for_linux_dns_policy_ready
     run_timed_step "Verify sinkhole fast-fail" assert_sinkhole_fast_fail
+    run_timed_step "Verify sinkhole fast-fail (browser)" assert_sinkhole_fast_fail_browser
     run_timed_step "Verify SSE Firefox readiness" assert_linux_firefox_extension_ready
     run_timed_step "Run Selenium student suite (sse)" run_student_suite sse full
     run_timed_step "Bootstrap fallback scenario" bootstrap_scenario "Linux Student Policy Fallback"
