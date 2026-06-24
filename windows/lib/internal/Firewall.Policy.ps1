@@ -1305,10 +1305,16 @@ function Set-OpenPathFirewall {
                 }
             }
 
-            # IPv6 DNS has no local Acrylic listener (IPv6 binding disabled), so block it wholesale.
+            # IPv6 DNS has no local Acrylic listener (IPv6 binding disabled), so block it
+            # wholesale. New-NetFirewallRule REJECTS the '::/0' all-IPv6 prefix with "One
+            # or more of the address prefixes is invalid" (prefix length 0 is not allowed
+            # -- confirmed on the real Windows box), which previously aborted the entire
+            # firewall configuration mid-apply. Express all-IPv6 as the two valid /1
+            # halves (the standard /0 workaround). A wildcard "Any" would also match IPv4
+            # and override the upstream-DNS carve-out above, so this must stay IPv6-scoped.
             foreach ($protocol in @('UDP', 'TCP')) {
                 New-OpenPathFirewallRule -DisplayName "$script:RulePrefix-Block-DefaultDeny-DNS6-$protocol-53" `
-                    -Direction Outbound -Protocol $protocol -RemoteAddress '::/0' -RemotePort 53 `
+                    -Direction Outbound -Protocol $protocol -RemoteAddress @('::/1', '8000::/1') -RemotePort 53 `
                     -Action Block -Profile Any `
                     -Description "Default-deny outbound IPv6 DNS over $protocol/53" | Out-Null
             }

@@ -322,6 +322,30 @@ Describe "Firewall Module" {
             (@(Get-CapturedFirewallRules) | Where-Object { $_.DisplayName -eq 'OpenPath-DNS-Block-DNS-TCP' }).Count | Should -Be 0
         }
 
+        It "Blocks all IPv6 DNS using valid /1 halves instead of the Windows-rejected ::/0 prefix" {
+            # Regression: New-NetFirewallRule rejects '::/0' (prefix length 0) with "One or
+            # more of the address prefixes is invalid", which aborted the entire firewall
+            # apply mid-way on a real Windows endpoint. All-IPv6 must be the two /1 halves.
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    enableKnownDnsIpBlocking = $true
+                    enableDohIpBlocking = $true
+                    dohResolverIps = @('4.4.4.4')
+                }
+            } -ModuleName Firewall
+
+            $result = Set-OpenPathFirewall -UpstreamDNS '8.8.8.8' -AcrylicPath 'C:\OpenPath\Acrylic DNS Proxy'
+            $result | Should -BeTrue
+
+            $dns6Blocks = @(Get-CapturedFirewallRules) | Where-Object { $_.DisplayName -like '*Block-DefaultDeny-DNS6-*-53' }
+            $dns6Blocks.Count | Should -Be 2
+            foreach ($rule in $dns6Blocks) {
+                $rule.RemoteAddress | Should -Match '::/1'
+                $rule.RemoteAddress | Should -Match '8000::/1'
+                $rule.RemoteAddress | Should -Not -Match '::/0'
+            }
+        }
+
         It "Keeps QUIC blocking resolver-specific without adding a global UDP 443 block by default" {
             Mock Get-OpenPathConfig {
                 [PSCustomObject]@{
@@ -553,9 +577,11 @@ Describe "Firewall Module" {
             $result | Should -BeTrue
 
             foreach ($protocol in @('UDP', 'TCP')) {
+                # All-IPv6 is the two valid /1 halves, not the Windows-rejected '::/0' prefix.
                 (@(Get-CapturedFirewallRules | Where-Object {
                             $_.DisplayName -eq "OpenPath-DNS-Block-DefaultDeny-DNS6-$protocol-53" -and
-                            $_.RemoteAddress -eq '::/0' -and $_.Action -eq 'Block'
+                            $_.RemoteAddress -match '::/1' -and $_.RemoteAddress -match '8000::/1' -and
+                            $_.RemoteAddress -notmatch '::/0' -and $_.Action -eq 'Block'
                         })).Count | Should -Be 1
             }
         }

@@ -73,6 +73,16 @@ function Initialize-FirewallRuleCaptureMocks {
             [string]$Program
         )
 
+        # Mirror the real New-NetFirewallRule: it rejects a /0 (prefix length 0)
+        # RemoteAddress (e.g. '::/0' or '0.0.0.0/0') with "One or more of the address
+        # prefixes is invalid." Reproduce that here so this regression class fails the
+        # Pester suite instead of only surfacing on a live Windows endpoint.
+        foreach ($addr in @($RemoteAddress)) {
+            if ([string]$addr -match '/0\s*$') {
+                throw 'One or more of the address prefixes is invalid.'
+            }
+        }
+
         $script:createdFirewallRules += [PSCustomObject]@{
             DisplayName = $DisplayName
             Direction = $Direction
