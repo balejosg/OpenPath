@@ -529,6 +529,30 @@ Describe "AppControl Module" {
             $openPathAppxRule.Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('HighSection') | Should -Be '*'
         }
 
+        It "Merges OpenPath rules into a pristine policy that has no RuleCollection children" {
+            # Regression: a machine that has never had AppLocker configured returns
+            # '<AppLockerPolicy Version="1" />' with zero RuleCollection children, so
+            # $CurrentPolicy.AppLockerPolicy.RuleCollection is a scalar $null. Piping
+            # that $null into Where-Object { $_.GetAttribute(...) } ran the filter once
+            # with $_ = $null and threw "You cannot call a method on a null-valued
+            # expression", which aborted the mandatory installer app-control phase.
+            [xml]$currentPolicy = '<AppLockerPolicy Version="1" />'
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+            [xml]$openPathPolicy = New-OpenPathAppLockerPolicyXml -Spec $spec
+
+            { Merge-OpenPathAppLockerPolicyXml -CurrentPolicy $currentPolicy -OpenPathPolicy $openPathPolicy } | Should -Not -Throw
+
+            $mergedPolicy = Merge-OpenPathAppLockerPolicyXml -CurrentPolicy ([xml]'<AppLockerPolicy Version="1" />') -OpenPathPolicy $openPathPolicy
+            $exeCollection = @($mergedPolicy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Exe' })[0]
+            $exeCollection | Should -Not -BeNullOrEmpty
+            $exeCollection.GetAttribute('EnforcementMode') | Should -Be 'Enabled'
+            @($exeCollection.FilePathRule | Where-Object { $_.GetAttribute('Name') -like 'OpenPath non-admin app control*' }).Count | Should -BeGreaterThan 0
+
+            $appxCollection = @($mergedPolicy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+            $appxCollection | Should -Not -BeNullOrEmpty
+            $appxCollection.GetAttribute('EnforcementMode') | Should -Be 'Enabled'
+        }
+
         It "Classifies managed AppLocker rules using the rule Name attribute" {
             [xml]$policy = @'
 <AppLockerPolicy Version="1">

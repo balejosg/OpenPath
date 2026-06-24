@@ -563,7 +563,13 @@ function Merge-OpenPathAppLockerPolicyXml {
         }
 
         $collectionType = $sourceCollection.GetAttribute('Type')
-        $targetCollection = @($CurrentPolicy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq $collectionType })[0]
+        # A pristine local policy (Get-AppLockerPolicy -Local -Xml on a machine that has
+        # never had AppLocker configured) is '<AppLockerPolicy Version="1" />' with no
+        # RuleCollection children, so .RuleCollection is a scalar $null. Piping that $null
+        # into Where-Object runs the filter once with $_ = $null; the $null -ne $_ guard
+        # stops $null.GetAttribute(...) from throwing "You cannot call a method on a
+        # null-valued expression" and aborting the installer's app-control phase.
+        $targetCollection = @($CurrentPolicy.AppLockerPolicy.RuleCollection | Where-Object { $null -ne $_ -and $_.GetAttribute('Type') -eq $collectionType })[0]
 
         if (-not $targetCollection) {
             $targetCollection = $CurrentPolicy.ImportNode($sourceCollection, $false)
@@ -620,7 +626,9 @@ function Get-OpenPathAppLockerCollection {
         [string]$Type
     )
 
-    return @($PolicyXml.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq $Type })[0]
+    # Guard against a pristine policy whose .RuleCollection is a scalar $null (see
+    # Merge-OpenPathAppLockerPolicyXml): the $null -ne $_ check prevents $null.GetAttribute().
+    return @($PolicyXml.AppLockerPolicy.RuleCollection | Where-Object { $null -ne $_ -and $_.GetAttribute('Type') -eq $Type })[0]
 }
 
 function Test-OpenPathAppLockerCollectionMode {
