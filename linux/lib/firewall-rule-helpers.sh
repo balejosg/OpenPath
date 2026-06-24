@@ -323,6 +323,10 @@ apply_sinkhole_fast_fail_rules() {
     sinkhole_fast_fail_enabled || return 0
     add_optional_rule "Fast-fail blocked domains (RST to v4 sinkhole $OPENPATH_DNS_SINKHOLE_IPV4)" \
         iptables -A OUTPUT -d "$OPENPATH_DNS_SINKHOLE_IPV4" -p tcp -j REJECT --reject-with tcp-reset
+    # HTTP/3 (QUIC) is UDP/443; without this it would black-hole at the default
+    # DROP. icmp-port-unreachable makes a QUIC attempt to the sinkhole fail fast.
+    add_optional_rule "Fast-fail blocked domains (UDP reject to v4 sinkhole $OPENPATH_DNS_SINKHOLE_IPV4)" \
+        iptables -A OUTPUT -d "$OPENPATH_DNS_SINKHOLE_IPV4" -p udp -j REJECT --reject-with icmp-port-unreachable
 }
 
 bridge_enforcement_enabled() { openpath_flag_enabled "${BRIDGE_ENFORCEMENT_ENABLED:-1}"; }
@@ -481,6 +485,9 @@ apply_ipv6_firewall() {
     if sinkhole_fast_fail_enabled; then
         add_optional_rule "Fast-fail blocked domains (RST to v6 sinkhole $OPENPATH_DNS_SINKHOLE_IPV6)" \
             ip6tables -A OUTPUT -d "$OPENPATH_DNS_SINKHOLE_IPV6" -p tcp -j REJECT --reject-with tcp-reset
+        # HTTP/3 (QUIC) over IPv6 is UDP/443; reject it too so it fast-fails.
+        add_optional_rule "Fast-fail blocked domains (UDP reject to v6 sinkhole $OPENPATH_DNS_SINKHOLE_IPV6)" \
+            ip6tables -A OUTPUT -d "$OPENPATH_DNS_SINKHOLE_IPV6" -p udp -j REJECT --reject-with icmp6-port-unreachable
     fi
 
     add_optional_rule "IPv6 log dropped egress (detectability)" \

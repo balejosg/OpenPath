@@ -597,6 +597,17 @@ source_firewall() {
     grep -q -- "-A OUTPUT -d 192.0.2.1 -p tcp -j REJECT --reject-with tcp-reset" "$IPTABLES_LOG"
 }
 
+@test "apply_sinkhole_fast_fail_rules also rejects UDP to the v4 sinkhole so QUIC/HTTP3 fast-fails" {
+    export SINKHOLE_FAST_FAIL="1"
+    source_firewall
+
+    apply_sinkhole_fast_fail_rules
+
+    # HTTP/3 (QUIC) is UDP/443; without this it would black-hole at the default
+    # DROP. icmp-port-unreachable makes the QUIC attempt fail fast.
+    grep -q -- "-A OUTPUT -d 192.0.2.1 -p udp -j REJECT --reject-with icmp-port-unreachable" "$IPTABLES_LOG"
+}
+
 @test "apply_sinkhole_fast_fail_rules is a no-op when fast-fail is disabled (default)" {
     source_firewall
 
@@ -638,6 +649,15 @@ source_firewall() {
     activate_firewall
 
     ! grep -q -- "-j REJECT --reject-with tcp-reset" "$IPTABLES_LOG"
+}
+
+@test "apply_ipv6_firewall also rejects UDP to the v6 sinkhole so QUIC/HTTP3 fast-fails" {
+    export SINKHOLE_FAST_FAIL="1"
+    source_firewall
+
+    apply_ipv6_firewall
+
+    grep -q -- "-A OUTPUT -d 100:: -p udp -j REJECT --reject-with icmp6-port-unreachable" "$IP6TABLES_LOG"
 }
 
 @test "apply_ipv6_firewall sends a TCP reset to the v6 sinkhole before the default deny when fast-fail enabled" {
