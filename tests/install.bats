@@ -36,6 +36,23 @@ load 'test_helper'
 
 }
 
+@test "step_install_libraries installs defaults.conf so /etc/openpath/overrides.conf overrides take effect" {
+    # defaults.conf is the only non-.sh file in linux/lib/, so the `lib/*.sh`
+    # glob skipped it: the installed tree had no defaults.conf, common.sh could
+    # not source it, and /etc/openpath/overrides.conf (sourced ONLY by
+    # defaults.conf) never took effect -- every OPENPATH_* override was dead.
+    run grep -nF 'cp "$INSTALLER_SOURCE_DIR/lib/defaults.conf" "$INSTALL_DIR/lib/"' "$PROJECT_DIR/linux/lib/install-core-steps.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "build-deb.sh packages defaults.conf so overrides work on .deb installs" {
+    # Same gap as the script installer: the `lib/*.sh` glob skips defaults.conf,
+    # so .deb installs had no defaults.conf and /etc/openpath/overrides.conf was
+    # dead in production too.
+    run grep -nF 'cp "$LINUX_DIR/lib/defaults.conf"' "$PROJECT_DIR/linux/scripts/build/build-deb.sh"
+    [ "$status" -eq 0 ]
+}
+
 @test "install.sh supports --skip-firefox option" {
     run grep -n -- "--skip-firefox" "$PROJECT_DIR/linux/install.sh"
     [ "$status" -eq 0 ]

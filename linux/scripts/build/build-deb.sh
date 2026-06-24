@@ -46,6 +46,10 @@ echo "[4/8] Copying libraries..."
 mkdir -p "$BUILD_DIR/usr/local/lib/openpath/lib"
 mkdir -p "$BUILD_DIR/usr/local/lib/openpath/libexec"
 cp "$LINUX_DIR/lib/"*.sh "$BUILD_DIR/usr/local/lib/openpath/lib/"
+# defaults.conf is not a *.sh file; without it the installed common.sh has no
+# defaults.conf to source, which also kills /etc/openpath/overrides.conf
+# (sourced only by defaults.conf) -- every OPENPATH_* operator override no-ops.
+cp "$LINUX_DIR/lib/defaults.conf" "$BUILD_DIR/usr/local/lib/openpath/lib/"
 cp "$LINUX_DIR/libexec/browser-json.py" "$BUILD_DIR/usr/local/lib/openpath/libexec/"
 cp "$LINUX_DIR/libexec/runtime-dependency-overlay.py" "$BUILD_DIR/usr/local/lib/openpath/libexec/"
 cp "$LINUX_DIR/../runtime/browser-policy-spec.json" "$BUILD_DIR/usr/local/lib/openpath/libexec/"
