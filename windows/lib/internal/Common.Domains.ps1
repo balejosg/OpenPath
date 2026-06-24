@@ -368,8 +368,16 @@ function Restore-OpenPathProtectedMode {
         (Get-Command -Name 'Get-AcrylicPath' -ErrorAction SilentlyContinue)) {
         $acrylicPath = Get-AcrylicPath
         if ($acrylicPath) {
-            Set-OpenPathFirewall -UpstreamDNS $upstream -AcrylicPath $acrylicPath | Out-Null
-            return $true
+            # Reflect the firewall apply result instead of always reporting success.
+            # Set-OpenPathFirewall returns $false on a failed apply (e.g. an invalid rule
+            # left enforcement only partially configured); returning $true regardless hid
+            # that from callers. The watchdog re-attempts on its next cycle, but surfacing
+            # the failure here keeps a partial firewall observable.
+            $firewallConfigured = [bool](Set-OpenPathFirewall -UpstreamDNS $upstream -AcrylicPath $acrylicPath)
+            if (-not $firewallConfigured) {
+                Write-OpenPathLog 'Restore-OpenPathProtectedMode: firewall configuration reported failure; rules may be partially applied' -Level WARN
+            }
+            return $firewallConfigured
         }
     }
 

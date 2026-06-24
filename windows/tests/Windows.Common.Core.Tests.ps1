@@ -360,6 +360,18 @@ Describe "Common Module" {
 
             $content | Should -Match '(?s)function Restore-OpenPathLatestCheckpoint.*?Restore-OpenPathProtectedMode -Config \$Config'
         }
+
+        It "Returns the firewall apply result instead of unconditionally reporting success" {
+            # Regression: a failed Set-OpenPathFirewall leaves enforcement partially applied,
+            # but the branch returned $true regardless, hiding it. It must propagate the
+            # boolean result and drop the old `| Out-Null` + `return $true`.
+            $domainsHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Domains.ps1"
+            $content = Get-Content $domainsHelperPath -Raw
+
+            $content | Should -Match '\$firewallConfigured = \[bool\]\(Set-OpenPathFirewall'
+            $content | Should -Match 'return \$firewallConfigured'
+            $content | Should -Not -Match 'Set-OpenPathFirewall -UpstreamDNS \$upstream -AcrylicPath \$acrylicPath \| Out-Null'
+        }
     }
 
     Context "Get-OpenPathDnsProbeDomains" {
