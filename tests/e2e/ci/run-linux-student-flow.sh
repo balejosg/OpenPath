@@ -12,6 +12,10 @@ MACHINE_NAME="${OPENPATH_STUDENT_MACHINE_NAME:-linux-student-e2e}"
 ARTIFACTS_DIR="${OPENPATH_STUDENT_ARTIFACTS_DIR:-$PROJECT_ROOT/tests/e2e/artifacts/linux-student-policy}"
 STUDENT_HOST_SUFFIX="${OPENPATH_STUDENT_HOST_SUFFIX:-127.0.0.1.sslip.io}"
 STUDENT_SCENARIO_GROUP="${OPENPATH_STUDENT_SCENARIO_GROUP:-}"
+# Opt-in: install the agent with OPENPATH_SINKHOLE_FAST_FAIL=1 and assert that a
+# blocked domain fast-fails (firewall RST) instead of black-holing at the default
+# DROP. Off by default so the standard lane behaviour is unchanged.
+STUDENT_SINKHOLE_FAST_FAIL="${OPENPATH_STUDENT_SINKHOLE_FAST_FAIL:-0}"
 
 API_PID=""
 FIXTURE_PID=""
@@ -680,6 +684,15 @@ start_container_fixture_server() {
 configure_client() {
     local install_client="${1:-true}"
 
+    # Must land BEFORE install.sh: activate_firewall (which adds the sinkhole RST
+    # rule) runs during install, and defaults.conf sources /etc/openpath/overrides.conf
+    # before resolving SINKHOLE_FAST_FAIL. openpath-update.sh later regenerates the
+    # dnsmasq config (AAAA gating) with the override still in place.
+    if [[ "$STUDENT_SINKHOLE_FAST_FAIL" == "1" || "$STUDENT_SINKHOLE_FAST_FAIL" == "true" ]]; then
+        echo "Enabling sinkhole fast-fail (OPENPATH_SINKHOLE_FAST_FAIL=1) via /etc/openpath/overrides.conf"
+        docker exec "$CONTAINER_NAME" bash -lc 'mkdir -p /etc/openpath && printf "export OPENPATH_SINKHOLE_FAST_FAIL=1\n" > /etc/openpath/overrides.conf'
+    fi
+
     if [[ "$install_client" == "true" ]]; then
         echo "Installing Linux OpenPath client in container..."
         docker exec "$CONTAINER_NAME" bash -lc 'rm -rf /openpath/linux/firefox-extension && cp -a /openpath/firefox-extension /openpath/linux/firefox-extension && cd /openpath && ./linux/install.sh --unattended --skip-firefox'
@@ -796,6 +809,57 @@ fi
     fi
 
     rm -f "$readiness_log"
+}
+
+# When sinkhole fast-fail is enabled the agent was installed with
+# OPENPATH_SINKHOLE_FAST_FAIL=1, so a blocked domain must fail to connect
+# *instantly* (firewall RST to the non-local sinkhole) instead of black-holing at
+# the default DROP for the full TCP connect timeout (~90s). Measures the real curl
+# latency to the blocked host through the installed dnsmasq + firewall and asserts
+# it fast-fails (and is still blocked). Forces IPv4 because the container's v6
+# sinkhole fast-fails at routing anyway; the v4 sinkhole is the universal hang.
+# No-op when the opt-in flag is off (default lane unchanged).
+assert_sinkhole_fast_fail() {
+    if [[ "$STUDENT_SINKHOLE_FAST_FAIL" != "1" && "$STUDENT_SINKHOLE_FAST_FAIL" != "true" ]]; then
+        return 0
+    fi
+    echo "Verifying sinkhole fast-fail latency for a blocked domain..."
+    local log="$ARTIFACTS_DIR/linux-sinkhole-fast-fail.err.log"
+    rm -f "$log"
+    if ! docker exec \
+        -e OPENPATH_STUDENT_HOST_SUFFIX="$OPENPATH_STUDENT_HOST_SUFFIX" \
+        "$CONTAINER_NAME" \
+        bash -lc '
+set -uo pipefail
+host="blocked.${OPENPATH_STUDENT_HOST_SUFFIX}"
+threshold_ms=5000
+echo "blocked host: $host"
+echo "  A    -> $(dig @127.0.0.1 A "$host" +short +time=2 +tries=1 | head -1)"
+echo "  AAAA -> $(dig @127.0.0.1 AAAA "$host" +short +time=2 +tries=1 | head -1)"
+echo "  firewall RST rule: $(iptables -S OUTPUT 2>/dev/null | grep -c "REJECT --reject-with tcp-reset")"
+( source /usr/local/lib/openpath/lib/defaults.conf 2>/dev/null; echo "  resolved SINKHOLE_FAST_FAIL=${SINKHOLE_FAST_FAIL:-UNSET}" )
+echo "  sinkhole/deny rules:"; iptables -S OUTPUT 2>/dev/null | grep -E "192.0.2.1|OUTPUT -j (DROP|REJECT)" | sed "s/^/    /"
+start=$(date +%s%N)
+curl -4 -sS -o /dev/null --max-time 15 "https://$host/"
+rc=$?
+end=$(date +%s%N)
+elapsed_ms=$(( (end - start) / 1000000 ))
+echo "  curl -4 https://$host/ -> rc=$rc elapsed=${elapsed_ms}ms"
+if [ "$rc" -eq 0 ]; then
+    echo "FAIL: blocked host was reachable (enforcement broken)" >&2
+    exit 1
+fi
+if [ "$elapsed_ms" -lt "$threshold_ms" ]; then
+    echo "PASS: blocked domain fast-failed in ${elapsed_ms}ms (< ${threshold_ms}ms)"
+else
+    echo "FAIL: blocked domain hung ${elapsed_ms}ms (>= ${threshold_ms}ms) - sinkhole RST not effective" >&2
+    exit 1
+fi
+' 2>"$log"; then
+        cat "$log" >&2 || true
+        return 1
+    fi
+    rm -f "$log"
 }
 
 wait_for_linux_dns_policy_ready() {
@@ -935,6 +999,7 @@ main() {
     run_timed_step "Start fixture server" start_container_fixture_server
     run_timed_step "Install/enroll/update client" configure_client true
     run_timed_step "Verify SSE DNS policy readiness" wait_for_linux_dns_policy_ready
+    run_timed_step "Verify sinkhole fast-fail" assert_sinkhole_fast_fail
     run_timed_step "Verify SSE Firefox readiness" assert_linux_firefox_extension_ready
     run_timed_step "Run Selenium student suite (sse)" run_student_suite sse full
     run_timed_step "Bootstrap fallback scenario" bootstrap_scenario "Linux Student Policy Fallback"
