@@ -322,6 +322,88 @@ EOF
     ! grep -qx "address=/#/" "$config_file"
 }
 
+@test "write_dnsmasq_default_sinkhole_rules omits the v6 sinkhole (no AAAA answer) under fast-fail without an active IPv6 firewall" {
+    local config_file="$TEST_TMP_DIR/dnsmasq.conf"
+
+    log_warn() { echo "$1"; }
+    export -f log_warn
+
+    # Fast-fail on, but no active IPv6 firewall to reset connections to the v6
+    # sinkhole: returning 100:: would make a dual-stack client (Happy Eyeballs)
+    # attempt IPv6 first and black-hole for the full connect timeout. Set via the
+    # operator override surface (defaults.conf, sourced by dns.sh, derives the
+    # internal vars from these).
+    export OPENPATH_SINKHOLE_FAST_FAIL="1"
+    export OPENPATH_IPV6_FIREWALL_ENABLED="0"
+
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    run write_dnsmasq_default_sinkhole_rules "$config_file"
+
+    [ "$status" -eq 0 ]
+    # The IPv4 sinkhole still drives the (fast-failing) v4 path...
+    grep -qx "address=/#/192.0.2.1" "$config_file"
+    # ...but no v6 sinkhole answer, so the client falls straight to the v4 sinkhole.
+    ! grep -qx "address=/#/100::" "$config_file"
+}
+
+@test "write_dnsmasq_default_sinkhole_rules keeps the v6 sinkhole under fast-fail when an active IPv6 firewall can reset it" {
+    local config_file="$TEST_TMP_DIR/dnsmasq.conf"
+
+    log_warn() { echo "$1"; }
+    export -f log_warn
+
+    # Fast-fail on AND an active IPv6 firewall (ip6tables present, found by
+    # command -v) that will RST connections to the v6 sinkhole: keep emitting it.
+    export OPENPATH_SINKHOLE_FAST_FAIL="1"
+    export OPENPATH_IPV6_FIREWALL_ENABLED="1"
+    ip6tables() { return 0; }
+    export -f ip6tables
+
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    run write_dnsmasq_default_sinkhole_rules "$config_file"
+
+    [ "$status" -eq 0 ]
+    grep -qx "address=/#/192.0.2.1" "$config_file"
+    grep -qx "address=/#/100::" "$config_file"
+}
+
+@test "write_dnsmasq_protected_mode_config emits both sinkholes by default" {
+    local config_file="$TEST_TMP_DIR/dnsmasq-protected.conf"
+
+    log_warn() { echo "$1"; }
+    export -f log_warn
+
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    run write_dnsmasq_protected_mode_config "8.8.8.8" "$config_file"
+
+    [ "$status" -eq 0 ]
+    grep -qx "address=/#/192.0.2.1" "$config_file"
+    grep -qx "address=/#/100::" "$config_file"
+}
+
+@test "write_dnsmasq_protected_mode_config omits the v6 sinkhole (no AAAA answer) under fast-fail without an active IPv6 firewall" {
+    local config_file="$TEST_TMP_DIR/dnsmasq-protected.conf"
+
+    log_warn() { echo "$1"; }
+    export -f log_warn
+
+    # The watchdog protected-mode config must fast-fail the same way as the main
+    # config, or a tampered endpoint would still hang ~90s per blocked resource.
+    export OPENPATH_SINKHOLE_FAST_FAIL="1"
+    export OPENPATH_IPV6_FIREWALL_ENABLED="0"
+
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    run write_dnsmasq_protected_mode_config "8.8.8.8" "$config_file"
+
+    [ "$status" -eq 0 ]
+    grep -qx "address=/#/192.0.2.1" "$config_file"
+    ! grep -qx "address=/#/100::" "$config_file"
+}
+
 @test "runtime health probes never use an invalid sentinel domain as the blocked-domain check" {
     run grep -Rsn "blocked-test.invalid" "$PROJECT_DIR/linux/lib" "$PROJECT_DIR/linux/scripts/runtime"
 

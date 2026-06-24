@@ -81,6 +81,11 @@ activate_firewall() {
     # can narrow RFC1918_ALLOW to shrink the LAN/tethered-proxy blast radius.
     apply_rfc1918_egress_rules
 
+    # Fast-fail blocked domains: RST to the non-local sinkhole IP so a browser
+    # fails instantly instead of hanging at the default DROP. Must precede the
+    # final OUTPUT DROP. No-op unless SINKHOLE_FAST_FAIL is enabled.
+    apply_sinkhole_fast_fail_rules
+
     add_optional_rule "Log dropped egress (detectability)" \
         iptables -A OUTPUT -m limit --limit 5/min -j LOG --log-prefix "OPENPATH-EGRESS-DROP "
     add_critical_rule "Default deny (DROP all)" \
