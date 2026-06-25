@@ -65,13 +65,6 @@ OPENPATH_IPSET_STATE_FILE="${OPENPATH_IPSET_STATE_FILE:-/etc/iptables/openpath-i
 # See apply_http_egress_rules and emit_dnsmasq_allow_domain (dns-dnsmasq.sh).
 OPENPATH_ALLOW_DST_IPSET="${OPENPATH_ALLOW_DST_IPSET:-openpath-allow-dst}"
 OPENPATH_ALLOW_DST_IPSET6="${OPENPATH_ALLOW_DST_IPSET6:-openpath-allow-dst6}"
-
-# Non-local sinkhole addresses the dnsmasq default-deny resolves blocked domains
-# to (kept in sync with OPENPATH_DNS_SINKHOLE_IPV4/IPV6 in dns-dnsmasq.sh). The
-# fast-fail REJECT targets exactly these, so a blocked-domain connection is reset
-# instantly instead of black-holing at the default DROP.
-OPENPATH_DNS_SINKHOLE_IPV4="${OPENPATH_DNS_SINKHOLE_IPV4:-192.0.2.1}"
-OPENPATH_DNS_SINKHOLE_IPV6="${OPENPATH_DNS_SINKHOLE_IPV6:-100::}"
 # Entries in the egress allow set must not outlive the DNS answer that put a
 # shared CDN IP there: dnsmasq caps cached answers at max-cache-ttl=300s
 # (dns-dnsmasq.sh), so the allow-set timeout is aligned to <= that value. A
@@ -140,18 +133,6 @@ openpath_warn_unknown_enum() {
 doh_block_enabled() { openpath_flag_enabled "${DOH_BLOCK_ENABLED:-1}"; }
 vpn_block_enabled() { openpath_flag_enabled "${VPN_BLOCK_ENABLED:-1}"; }
 tor_block_enabled() { openpath_flag_enabled "${TOR_BLOCK_ENABLED:-1}"; }
-
-# Blocked domains resolve to a non-local sinkhole IP that the default DROP then
-# black-holes, so a browser hangs the full TCP connect timeout (~90s) on every
-# blocked sub-resource of an allowed page. When enabled, the firewall sends a TCP
-# reset for connections to the sinkhole IP (instant "connection refused") and the
-# DNS layer drops the v6 sinkhole answer when no IPv6 firewall can reset it.
-# SECURITY: the reset is scoped to the (already obviously-fake, non-routable)
-# sinkhole IP only, so it reveals nothing about which real destinations are
-# filtered (those still hit the silent DROP), never permits egress (it refuses),
-# and keeps the non-local sinkhole. Off by default; enable after WEDU/Docker
-# validation. Override: OPENPATH_SINKHOLE_FAST_FAIL.
-sinkhole_fast_fail_enabled() { openpath_flag_enabled "${SINKHOLE_FAST_FAIL:-0}"; }
 
 openpath_ipset_available() { command -v ipset >/dev/null 2>&1; }
 
@@ -311,24 +292,6 @@ apply_icmp_egress_rules() {
         iptables -A OUTPUT -p icmp -j ACCEPT
 }
 
-# Fast-fail for blocked domains (UX). Send a TCP reset for connections to the
-# non-local IPv4 sinkhole so a browser gets an instant "connection refused"
-# instead of hanging the full connect timeout at the default DROP. Inserted
-# before the final OUTPUT DROP in activate_firewall. Scoped strictly to the
-# sinkhole IP: real/direct-IP egress still hits the silent DROP (stealth
-# preserved), the reset never permits egress, and the non-local sinkhole is
-# unchanged. Best-effort (add_optional_rule): a kernel without the REJECT target
-# degrades to the current DROP/hang, never to a leak. No-op unless enabled.
-apply_sinkhole_fast_fail_rules() {
-    sinkhole_fast_fail_enabled || return 0
-    add_optional_rule "Fast-fail blocked domains (RST to v4 sinkhole $OPENPATH_DNS_SINKHOLE_IPV4)" \
-        iptables -A OUTPUT -d "$OPENPATH_DNS_SINKHOLE_IPV4" -p tcp -j REJECT --reject-with tcp-reset
-    # HTTP/3 (QUIC) is UDP/443; without this it would black-hole at the default
-    # DROP. icmp-port-unreachable makes a QUIC attempt to the sinkhole fail fast.
-    add_optional_rule "Fast-fail blocked domains (UDP reject to v4 sinkhole $OPENPATH_DNS_SINKHOLE_IPV4)" \
-        iptables -A OUTPUT -d "$OPENPATH_DNS_SINKHOLE_IPV4" -p udp -j REJECT --reject-with icmp-port-unreachable
-}
-
 bridge_enforcement_enabled() { openpath_flag_enabled "${BRIDGE_ENFORCEMENT_ENABLED:-1}"; }
 
 # Subject bridged/forwarded guest-VM traffic to netfilter. Loading br_netfilter
@@ -477,17 +440,6 @@ apply_ipv6_firewall() {
         log_warn "IPv6 name-aware egress unavailable (ipset) - allowing broad IPv6 HTTP/HTTPS"
         add_optional_rule "IPv6 allow HTTP (80)" ip6tables -A OUTPUT -p tcp --dport 80 -j ACCEPT
         add_optional_rule "IPv6 allow HTTPS (443)" ip6tables -A OUTPUT -p tcp --dport 443 -j ACCEPT
-    fi
-
-    # Fast-fail blocked domains on v6: RST to the v6 sinkhole so a dual-stack
-    # client (Happy Eyeballs) fails the v6 limb instantly instead of black-holing
-    # at the default DROP. Scoped to the sinkhole IP; must precede the DROP.
-    if sinkhole_fast_fail_enabled; then
-        add_optional_rule "Fast-fail blocked domains (RST to v6 sinkhole $OPENPATH_DNS_SINKHOLE_IPV6)" \
-            ip6tables -A OUTPUT -d "$OPENPATH_DNS_SINKHOLE_IPV6" -p tcp -j REJECT --reject-with tcp-reset
-        # HTTP/3 (QUIC) over IPv6 is UDP/443; reject it too so it fast-fails.
-        add_optional_rule "Fast-fail blocked domains (UDP reject to v6 sinkhole $OPENPATH_DNS_SINKHOLE_IPV6)" \
-            ip6tables -A OUTPUT -d "$OPENPATH_DNS_SINKHOLE_IPV6" -p udp -j REJECT --reject-with icmp6-port-unreachable
     fi
 
     add_optional_rule "IPv6 log dropped egress (detectability)" \
