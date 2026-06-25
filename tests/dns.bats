@@ -259,6 +259,7 @@ EOF
 }
 
 @test "generate_dnsmasq_config includes non-local sinkhole addresses first" {
+    export OPENPATH_SINKHOLE_FAST_FAIL="0" SINKHOLE_FAST_FAIL="0"  # legacy both-sinkholes layout (fast-fail opt-out; on is now default)
     export DNSMASQ_CONF="$TEST_TMP_DIR/dnsmasq.d/url-whitelist.conf"
     export PRIMARY_DNS="8.8.8.8"
     export VERSION="3.5"
@@ -319,6 +320,7 @@ EOF
 }
 
 @test "write_dnsmasq_default_sinkhole_rules emits explicit non-local IPv4 and IPv6 sinkholes only" {
+    export OPENPATH_SINKHOLE_FAST_FAIL="0" SINKHOLE_FAST_FAIL="0"  # legacy both-sinkholes layout (fast-fail opt-out; on is now default)
     local config_file="$TEST_TMP_DIR/dnsmasq.conf"
 
     log_warn() { echo "$1"; }
@@ -383,7 +385,8 @@ EOF
     grep -qx "address=/#/100::" "$config_file"
 }
 
-@test "write_dnsmasq_protected_mode_config emits both sinkholes by default" {
+@test "write_dnsmasq_protected_mode_config emits both sinkholes when fast-fail is disabled" {
+    export OPENPATH_SINKHOLE_FAST_FAIL="0" SINKHOLE_FAST_FAIL="0"  # legacy both-sinkholes layout (fast-fail opt-out; on is now default)
     local config_file="$TEST_TMP_DIR/dnsmasq-protected.conf"
 
     log_warn() { echo "$1"; }

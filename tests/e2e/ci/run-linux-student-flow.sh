@@ -12,10 +12,12 @@ MACHINE_NAME="${OPENPATH_STUDENT_MACHINE_NAME:-linux-student-e2e}"
 ARTIFACTS_DIR="${OPENPATH_STUDENT_ARTIFACTS_DIR:-$PROJECT_ROOT/tests/e2e/artifacts/linux-student-policy}"
 STUDENT_HOST_SUFFIX="${OPENPATH_STUDENT_HOST_SUFFIX:-127.0.0.1.sslip.io}"
 STUDENT_SCENARIO_GROUP="${OPENPATH_STUDENT_SCENARIO_GROUP:-}"
-# Opt-in: install the agent with OPENPATH_SINKHOLE_FAST_FAIL=1 and assert that a
-# blocked domain fast-fails (firewall RST) instead of black-holing at the default
-# DROP. Off by default so the standard lane behaviour is unchanged.
-STUDENT_SINKHOLE_FAST_FAIL="${OPENPATH_STUDENT_SINKHOLE_FAST_FAIL:-0}"
+# Sinkhole fast-fail is ON by default (defaults.conf SINKHOLE_FAST_FAIL=1), so the
+# lane installs the agent with NO override and asserts that a blocked domain
+# fast-fails (firewall RST) instead of black-holing ~90s -- exercising the real
+# shipped default. Set OPENPATH_STUDENT_SINKHOLE_FAST_FAIL=0 to install the opt-out
+# (override OPENPATH_SINKHOLE_FAST_FAIL=0) and skip the fast-fail assertions.
+STUDENT_SINKHOLE_FAST_FAIL="${OPENPATH_STUDENT_SINKHOLE_FAST_FAIL:-1}"
 
 API_PID=""
 FIXTURE_PID=""
@@ -684,13 +686,14 @@ start_container_fixture_server() {
 configure_client() {
     local install_client="${1:-true}"
 
-    # Must land BEFORE install.sh: activate_firewall (which adds the sinkhole RST
-    # rule) runs during install, and defaults.conf sources /etc/openpath/overrides.conf
-    # before resolving SINKHOLE_FAST_FAIL. openpath-update.sh later regenerates the
-    # dnsmasq config (AAAA gating) with the override still in place.
-    if [[ "$STUDENT_SINKHOLE_FAST_FAIL" == "1" || "$STUDENT_SINKHOLE_FAST_FAIL" == "true" ]]; then
-        echo "Enabling sinkhole fast-fail (OPENPATH_SINKHOLE_FAST_FAIL=1) via /etc/openpath/overrides.conf"
-        docker exec "$CONTAINER_NAME" bash -lc 'mkdir -p /etc/openpath && printf "export OPENPATH_SINKHOLE_FAST_FAIL=1\n" > /etc/openpath/overrides.conf'
+    # Fast-fail is ON by default now, so the standard install (no override) already
+    # adds the sinkhole RST rule and gates the AAAA sinkhole -- the lane exercises
+    # that real default. Only when opting OUT do we write an override BEFORE
+    # install.sh: activate_firewall runs during install, and defaults.conf sources
+    # /etc/openpath/overrides.conf before resolving SINKHOLE_FAST_FAIL.
+    if [[ "$STUDENT_SINKHOLE_FAST_FAIL" == "0" || "$STUDENT_SINKHOLE_FAST_FAIL" == "false" ]]; then
+        echo "Opting OUT of sinkhole fast-fail (OPENPATH_SINKHOLE_FAST_FAIL=0) via /etc/openpath/overrides.conf"
+        docker exec "$CONTAINER_NAME" bash -lc 'mkdir -p /etc/openpath && printf "export OPENPATH_SINKHOLE_FAST_FAIL=0\n" > /etc/openpath/overrides.conf'
     fi
 
     if [[ "$install_client" == "true" ]]; then

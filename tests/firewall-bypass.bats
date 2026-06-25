@@ -608,12 +608,21 @@ source_firewall() {
     grep -q -- "-A OUTPUT -d 192.0.2.1 -p udp -j REJECT --reject-with icmp-port-unreachable" "$IPTABLES_LOG"
 }
 
-@test "apply_sinkhole_fast_fail_rules is a no-op when fast-fail is disabled (default)" {
+@test "apply_sinkhole_fast_fail_rules is a no-op when fast-fail is explicitly disabled" {
+    export SINKHOLE_FAST_FAIL="0"
     source_firewall
 
     apply_sinkhole_fast_fail_rules
 
     [ ! -f "$IPTABLES_LOG" ]
+}
+
+@test "apply_sinkhole_fast_fail_rules sends a TCP reset by default (fast-fail on)" {
+    source_firewall
+
+    apply_sinkhole_fast_fail_rules
+
+    grep -q -- "-A OUTPUT -d 192.0.2.1 -p tcp -j REJECT --reject-with tcp-reset" "$IPTABLES_LOG"
 }
 
 @test "apply_sinkhole_fast_fail_rules honors a custom OPENPATH_DNS_SINKHOLE_IPV4 target" {
@@ -643,7 +652,8 @@ source_firewall() {
     grep -q -- "-A OUTPUT -j DROP" "$IPTABLES_LOG"
 }
 
-@test "activate_firewall emits no sinkhole RST by default (fast-fail off)" {
+@test "activate_firewall emits no sinkhole RST when fast-fail is explicitly disabled" {
+    export SINKHOLE_FAST_FAIL="0"
     source_firewall
 
     activate_firewall
@@ -674,7 +684,8 @@ source_firewall() {
     [ "$reject_line" -lt "$deny_line" ]
 }
 
-@test "apply_ipv6_firewall emits no v6 sinkhole RST by default (fast-fail off)" {
+@test "apply_ipv6_firewall emits no v6 sinkhole RST when fast-fail is explicitly disabled" {
+    export SINKHOLE_FAST_FAIL="0"
     source_firewall
 
     apply_ipv6_firewall

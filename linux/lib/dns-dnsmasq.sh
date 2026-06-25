@@ -113,7 +113,7 @@ EOF
 # this (inert) DNS answer. Self-contained env checks, since firewall-rule-helpers.sh
 # may not be sourced in the DNS-generation context.
 _dns_emit_blocked_aaaa_sinkhole() {
-    case "$(printf '%s' "${SINKHOLE_FAST_FAIL:-0}" | tr '[:upper:]' '[:lower:]')" in
+    case "$(printf '%s' "${SINKHOLE_FAST_FAIL:-1}" | tr '[:upper:]' '[:lower:]')" in
         '' | 0 | false | no | off | disabled) return 0 ;;
     esac
     case "$(printf '%s' "${IPV6_FIREWALL_ENABLED:-1}" | tr '[:upper:]' '[:lower:]')" in

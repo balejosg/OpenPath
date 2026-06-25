@@ -149,9 +149,9 @@ tor_block_enabled() { openpath_flag_enabled "${TOR_BLOCK_ENABLED:-1}"; }
 # SECURITY: the reset is scoped to the (already obviously-fake, non-routable)
 # sinkhole IP only, so it reveals nothing about which real destinations are
 # filtered (those still hit the silent DROP), never permits egress (it refuses),
-# and keeps the non-local sinkhole. Off by default; enable after WEDU/Docker
-# validation. Override: OPENPATH_SINKHOLE_FAST_FAIL.
-sinkhole_fast_fail_enabled() { openpath_flag_enabled "${SINKHOLE_FAST_FAIL:-0}"; }
+# and keeps the non-local sinkhole. On by default (validated on the firefox-esr
+# student-policy lane + staging canary). Set OPENPATH_SINKHOLE_FAST_FAIL=0 to opt out.
+sinkhole_fast_fail_enabled() { openpath_flag_enabled "${SINKHOLE_FAST_FAIL:-1}"; }
 
 openpath_ipset_available() { command -v ipset >/dev/null 2>&1; }
 
