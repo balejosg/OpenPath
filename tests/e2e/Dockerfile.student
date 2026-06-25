@@ -59,7 +59,14 @@ RUN arch="$(dpkg --print-architecture)" \
         arm64) firefox_os='linux64-aarch64'; geckodriver_arch='linux-aarch64' ;; \
         *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; \
        esac \
-    && wget -qO /tmp/firefox.tar.xz "https://download.mozilla.org/?product=firefox-devedition-latest-ssl&os=${firefox_os}&lang=en-US" \
+    # Use firefox-esr (the channel the production agent targets), NOT
+    # firefox-devedition: devedition is a rolling beta, and a new beta (153.0b4,
+    # 2026-06-24) stopped registering the force-installed UNSIGNED test extension,
+    # deterministically reddening this lane (payload/registration missing ->
+    # UnsupportedOperationError on the popup nav). ESR is stable and reliably
+    # honors xpinstall.signatures.required=false (set via the agent autoconfig),
+    # so the unsigned test XPI keeps registering across Firefox releases.
+    && wget -qO /tmp/firefox.tar.xz "https://download.mozilla.org/?product=firefox-esr-latest-ssl&os=${firefox_os}&lang=en-US" \
     && tar -xf /tmp/firefox.tar.xz -C /opt \
     && ln -sf /opt/firefox/firefox /usr/local/bin/firefox \
     && wget -qO /tmp/geckodriver.tar.gz "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/geckodriver-v${GECKODRIVER_VERSION}-${geckodriver_arch}.tar.gz" \

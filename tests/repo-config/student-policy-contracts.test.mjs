@@ -407,26 +407,38 @@ describe('repository verification contract', () => {
     );
   });
 
-  test('linux student policy image uses unsigned-addons-capable Firefox for Selenium', () => {
+  test('linux student policy image uses stable unsigned-addons-capable Firefox (ESR) for Selenium', () => {
     const linuxStudentDockerfile = readText('tests/e2e/Dockerfile.student');
 
+    // ESR (like Developer Edition/Nightly, unlike Release/Beta) honors
+    // xpinstall.signatures.required=false, so Selenium can load the unsigned E2E
+    // XPI when signed release artifacts are unavailable -- AND it is the stable
+    // channel the production agent targets (browser-firefox.sh installs firefox-esr).
+    // firefox-devedition is a rolling beta: 153.0b4 (2026-06-24) stopped registering
+    // the force-installed unsigned extension and deterministically reddened this lane.
     assert.match(
       linuxStudentDockerfile,
-      /firefox-devedition-latest-ssl/,
-      'Linux student-policy image should use Firefox Developer Edition because Selenium loads the unsigned E2E XPI when signed release artifacts are unavailable'
+      /firefox-esr-latest-ssl/,
+      'Linux student-policy image should fetch firefox-esr (unsigned-capable + stable + matches the production channel)'
+    );
+    assert.ok(
+      // The product string actually fetched -- not the bare word, which the
+      // explanatory Dockerfile comment legitimately mentions.
+      !linuxStudentDockerfile.includes('firefox-devedition-latest-ssl'),
+      'Linux student-policy image must NOT fetch firefox-devedition-latest: it is a rolling beta that breaks unsigned-extension registration unpredictably (153.0b4)'
     );
     assert.ok(
       !linuxStudentDockerfile.includes('FIREFOX_VERSION='),
-      'Linux student-policy image should not pin Firefox Release/ESR for unsigned extension tests'
+      'Linux student-policy image should track the latest ESR, not pin a stale Firefox version'
     );
     assert.ok(
       !linuxStudentDockerfile.includes('/pub/firefox/releases/'),
-      'Linux student-policy image should not download Firefox Release/ESR builds for unsigned extension tests'
+      'Linux student-policy image should use the firefox-esr-latest-ssl redirect, not a pinned archive build'
     );
     assert.match(
       linuxStudentDockerfile,
       /xz-utils/,
-      'Linux student-policy image should install xz-utils so Firefox Developer Edition tar.xz archives can be extracted'
+      'Linux student-policy image should install xz-utils so the Firefox tar.xz archive can be extracted'
     );
   });
 
