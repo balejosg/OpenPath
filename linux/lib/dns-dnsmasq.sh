@@ -77,7 +77,17 @@ cache-size=1000
 
 # DEFAULT BLOCK — everything not in the critical list is sinkholed
 address=/#/${sinkhole_ipv4}
-address=/#/${sinkhole_ipv6}
+EOF
+
+    # IPv6 default-deny answer: same fast-fail gating as the main sinkhole config
+    # (omit 100:: so a blocked AAAA returns no address when no active IPv6 firewall
+    # can reset it), so a tampered endpoint in protected mode does not hang on a v6
+    # sinkhole either.
+    if _dns_emit_blocked_aaaa_sinkhole; then
+        printf 'address=/#/%s\n' "$sinkhole_ipv6" >> "$temp_conf"
+    fi
+
+    cat >> "$temp_conf" << 'EOF'
 
 # CRITICAL DOMAINS — control plane, captive portal probes, OS/system
 EOF
@@ -92,6 +102,26 @@ EOF
     return 0
 }
 
+# Whether the blocked-domain IPv6 sinkhole answer (address=/#/<v6>) should be
+# written. Default: yes (unchanged). Under SINKHOLE_FAST_FAIL it is written only
+# when an active IPv6 firewall (ip6tables present + IPV6_FIREWALL_ENABLED) will
+# RST connections to the v6 sinkhole; otherwise it is omitted so a blocked domain
+# returns no AAAA address (dnsmasq answers REFUSED for the v4-only wildcard) and a
+# dual-stack client (Happy Eyeballs) falls straight to the fast-failing IPv4
+# sinkhole instead of black-holing on a v6 sinkhole nothing resets. Omitting
+# it leaks nothing: the v6 fail-closed boundary is the ip6tables firewall, not
+# this (inert) DNS answer. Self-contained env checks, since firewall-rule-helpers.sh
+# may not be sourced in the DNS-generation context.
+_dns_emit_blocked_aaaa_sinkhole() {
+    case "$(printf '%s' "${SINKHOLE_FAST_FAIL:-0}" | tr '[:upper:]' '[:lower:]')" in
+        '' | 0 | false | no | off | disabled) return 0 ;;
+    esac
+    case "$(printf '%s' "${IPV6_FIREWALL_ENABLED:-1}" | tr '[:upper:]' '[:lower:]')" in
+        0 | false | no | off | disabled) return 1 ;;
+    esac
+    command -v ip6tables >/dev/null 2>&1
+}
+
 write_dnsmasq_default_sinkhole_rules() {
     local conf_path="$1"
     local sinkhole_ipv4="${OPENPATH_DNS_SINKHOLE_IPV4:-192.0.2.1}"
@@ -102,10 +132,11 @@ write_dnsmasq_default_sinkhole_rules() {
         return 1
     fi
 
-    cat >> "$conf_path" <<EOF
-address=/#/${sinkhole_ipv4}
-address=/#/${sinkhole_ipv6}
-EOF
+    # IPv4 sinkhole first (Critical Contract: sinkhole before server= allows).
+    printf 'address=/#/%s\n' "$sinkhole_ipv4" >> "$conf_path"
+    if _dns_emit_blocked_aaaa_sinkhole; then
+        printf 'address=/#/%s\n' "$sinkhole_ipv6" >> "$conf_path"
+    fi
 }
 
 # Generate dnsmasq configuration

@@ -586,6 +586,102 @@ source_firewall() {
     grep -q -- "-A OUTPUT -p udp --dport 53 -j DROP" "$IP6TABLES_LOG"
 }
 
+# ============== Sinkhole fast-fail (UX: blocked domains fail instantly) ==============
+
+@test "apply_sinkhole_fast_fail_rules sends a TCP reset to the v4 sinkhole when enabled" {
+    export SINKHOLE_FAST_FAIL="1"
+    source_firewall
+
+    apply_sinkhole_fast_fail_rules
+
+    grep -q -- "-A OUTPUT -d 192.0.2.1 -p tcp -j REJECT --reject-with tcp-reset" "$IPTABLES_LOG"
+}
+
+@test "apply_sinkhole_fast_fail_rules also rejects UDP to the v4 sinkhole so QUIC/HTTP3 fast-fails" {
+    export SINKHOLE_FAST_FAIL="1"
+    source_firewall
+
+    apply_sinkhole_fast_fail_rules
+
+    # HTTP/3 (QUIC) is UDP/443; without this it would black-hole at the default
+    # DROP. icmp-port-unreachable makes the QUIC attempt fail fast.
+    grep -q -- "-A OUTPUT -d 192.0.2.1 -p udp -j REJECT --reject-with icmp-port-unreachable" "$IPTABLES_LOG"
+}
+
+@test "apply_sinkhole_fast_fail_rules is a no-op when fast-fail is disabled (default)" {
+    source_firewall
+
+    apply_sinkhole_fast_fail_rules
+
+    [ ! -f "$IPTABLES_LOG" ]
+}
+
+@test "apply_sinkhole_fast_fail_rules honors a custom OPENPATH_DNS_SINKHOLE_IPV4 target" {
+    export SINKHOLE_FAST_FAIL="1"
+    export OPENPATH_DNS_SINKHOLE_IPV4="198.51.100.7"
+    source_firewall
+
+    apply_sinkhole_fast_fail_rules
+
+    grep -q -- "-A OUTPUT -d 198.51.100.7 -p tcp -j REJECT --reject-with tcp-reset" "$IPTABLES_LOG"
+}
+
+@test "activate_firewall places the v4 sinkhole RST before the default deny and keeps the silent DROP (fast-fail on)" {
+    export SINKHOLE_FAST_FAIL="1"
+    source_firewall
+
+    activate_firewall
+
+    local reject_line deny_line
+    reject_line=$(grep -n -- "-A OUTPUT -d 192.0.2.1 -p tcp -j REJECT --reject-with tcp-reset" "$IPTABLES_LOG" | head -1 | cut -d: -f1)
+    deny_line=$(grep -n -- "-A OUTPUT -j DROP" "$IPTABLES_LOG" | head -1 | cut -d: -f1)
+    [ -n "$reject_line" ]
+    [ -n "$deny_line" ]
+    [ "$reject_line" -lt "$deny_line" ]
+    # Real/direct-IP egress still hits the silent DROP, so the RST reveals nothing
+    # about which real destinations are filtered (stealth preserved).
+    grep -q -- "-A OUTPUT -j DROP" "$IPTABLES_LOG"
+}
+
+@test "activate_firewall emits no sinkhole RST by default (fast-fail off)" {
+    source_firewall
+
+    activate_firewall
+
+    ! grep -q -- "-j REJECT --reject-with tcp-reset" "$IPTABLES_LOG"
+}
+
+@test "apply_ipv6_firewall also rejects UDP to the v6 sinkhole so QUIC/HTTP3 fast-fails" {
+    export SINKHOLE_FAST_FAIL="1"
+    source_firewall
+
+    apply_ipv6_firewall
+
+    grep -q -- "-A OUTPUT -d 100:: -p udp -j REJECT --reject-with icmp6-port-unreachable" "$IP6TABLES_LOG"
+}
+
+@test "apply_ipv6_firewall sends a TCP reset to the v6 sinkhole before the default deny when fast-fail enabled" {
+    export SINKHOLE_FAST_FAIL="1"
+    source_firewall
+
+    apply_ipv6_firewall
+
+    local reject_line deny_line
+    reject_line=$(grep -n -- "-A OUTPUT -d 100:: -p tcp -j REJECT --reject-with tcp-reset" "$IP6TABLES_LOG" | head -1 | cut -d: -f1)
+    deny_line=$(grep -n -- "-A OUTPUT -j DROP" "$IP6TABLES_LOG" | head -1 | cut -d: -f1)
+    [ -n "$reject_line" ]
+    [ -n "$deny_line" ]
+    [ "$reject_line" -lt "$deny_line" ]
+}
+
+@test "apply_ipv6_firewall emits no v6 sinkhole RST by default (fast-fail off)" {
+    source_firewall
+
+    apply_ipv6_firewall
+
+    ! grep -q -- "-j REJECT --reject-with tcp-reset" "$IP6TABLES_LOG"
+}
+
 # ============== RFC1918 knob + egress logging ==============
 
 @test "apply_rfc1918_egress_rules honors a custom RFC1918_ALLOW list" {

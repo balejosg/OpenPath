@@ -94,6 +94,11 @@ step_install_libraries() {
     mkdir -p "$CONFIG_DIR"
 
     cp "$INSTALLER_SOURCE_DIR/lib/"*.sh "$INSTALL_DIR/lib/"
+    # defaults.conf is not a *.sh file, so the glob above skips it. Without it the
+    # installed common.sh has no defaults.conf to source, which also kills
+    # /etc/openpath/overrides.conf (sourced only by defaults.conf) -- every
+    # OPENPATH_* operator override would silently no-op.
+    cp "$INSTALLER_SOURCE_DIR/lib/defaults.conf" "$INSTALL_DIR/lib/"
     cp "$INSTALLER_SOURCE_DIR/libexec/browser-json.py" "$INSTALL_DIR/libexec/"
     cp "$INSTALLER_SOURCE_DIR/libexec/runtime-dependency-overlay.py" "$INSTALL_DIR/libexec/"
     cp "$INSTALLER_SOURCE_DIR/../runtime/browser-policy-spec.json" "$INSTALL_DIR/libexec/"

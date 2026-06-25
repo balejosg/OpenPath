@@ -12,6 +12,10 @@ MACHINE_NAME="${OPENPATH_STUDENT_MACHINE_NAME:-linux-student-e2e}"
 ARTIFACTS_DIR="${OPENPATH_STUDENT_ARTIFACTS_DIR:-$PROJECT_ROOT/tests/e2e/artifacts/linux-student-policy}"
 STUDENT_HOST_SUFFIX="${OPENPATH_STUDENT_HOST_SUFFIX:-127.0.0.1.sslip.io}"
 STUDENT_SCENARIO_GROUP="${OPENPATH_STUDENT_SCENARIO_GROUP:-}"
+# Opt-in: install the agent with OPENPATH_SINKHOLE_FAST_FAIL=1 and assert that a
+# blocked domain fast-fails (firewall RST) instead of black-holing at the default
+# DROP. Off by default so the standard lane behaviour is unchanged.
+STUDENT_SINKHOLE_FAST_FAIL="${OPENPATH_STUDENT_SINKHOLE_FAST_FAIL:-0}"
 
 API_PID=""
 FIXTURE_PID=""
@@ -680,6 +684,15 @@ start_container_fixture_server() {
 configure_client() {
     local install_client="${1:-true}"
 
+    # Must land BEFORE install.sh: activate_firewall (which adds the sinkhole RST
+    # rule) runs during install, and defaults.conf sources /etc/openpath/overrides.conf
+    # before resolving SINKHOLE_FAST_FAIL. openpath-update.sh later regenerates the
+    # dnsmasq config (AAAA gating) with the override still in place.
+    if [[ "$STUDENT_SINKHOLE_FAST_FAIL" == "1" || "$STUDENT_SINKHOLE_FAST_FAIL" == "true" ]]; then
+        echo "Enabling sinkhole fast-fail (OPENPATH_SINKHOLE_FAST_FAIL=1) via /etc/openpath/overrides.conf"
+        docker exec "$CONTAINER_NAME" bash -lc 'mkdir -p /etc/openpath && printf "export OPENPATH_SINKHOLE_FAST_FAIL=1\n" > /etc/openpath/overrides.conf'
+    fi
+
     if [[ "$install_client" == "true" ]]; then
         echo "Installing Linux OpenPath client in container..."
         docker exec "$CONTAINER_NAME" bash -lc 'rm -rf /openpath/linux/firefox-extension && cp -a /openpath/firefox-extension /openpath/linux/firefox-extension && cd /openpath && ./linux/install.sh --unattended --skip-firefox'
@@ -796,6 +809,128 @@ fi
     fi
 
     rm -f "$readiness_log"
+}
+
+# When sinkhole fast-fail is enabled the agent was installed with
+# OPENPATH_SINKHOLE_FAST_FAIL=1, so a blocked domain must fail to connect
+# *instantly* (firewall RST to the non-local sinkhole) instead of black-holing at
+# the default DROP for the full TCP connect timeout (~90s). Measures the real curl
+# latency to the blocked host through the installed dnsmasq + firewall and asserts
+# it fast-fails (and is still blocked). Forces IPv4 because the container's v6
+# sinkhole fast-fails at routing anyway; the v4 sinkhole is the universal hang.
+# No-op when the opt-in flag is off (default lane unchanged).
+assert_sinkhole_fast_fail() {
+    if [[ "$STUDENT_SINKHOLE_FAST_FAIL" != "1" && "$STUDENT_SINKHOLE_FAST_FAIL" != "true" ]]; then
+        return 0
+    fi
+    echo "Verifying sinkhole fast-fail latency for a blocked domain..."
+    local log="$ARTIFACTS_DIR/linux-sinkhole-fast-fail.err.log"
+    rm -f "$log"
+    if ! docker exec \
+        -e OPENPATH_STUDENT_HOST_SUFFIX="$OPENPATH_STUDENT_HOST_SUFFIX" \
+        "$CONTAINER_NAME" \
+        bash -lc '
+set -uo pipefail
+host="blocked.${OPENPATH_STUDENT_HOST_SUFFIX}"
+threshold_ms=5000
+echo "blocked host: $host"
+echo "  A    -> $(dig @127.0.0.1 A "$host" +short +time=2 +tries=1 | head -1)"
+echo "  AAAA -> $(dig @127.0.0.1 AAAA "$host" +short +time=2 +tries=1 | head -1)"
+echo "  firewall RST rule: $(iptables -S OUTPUT 2>/dev/null | grep -c "REJECT --reject-with tcp-reset")"
+( source /usr/local/lib/openpath/lib/defaults.conf 2>/dev/null; echo "  resolved SINKHOLE_FAST_FAIL=${SINKHOLE_FAST_FAIL:-UNSET}" )
+echo "  sinkhole/deny rules:"; iptables -S OUTPUT 2>/dev/null | grep -E "192.0.2.1|OUTPUT -j (DROP|REJECT)" | sed "s/^/    /"
+start=$(date +%s%N)
+curl -4 -sS -o /dev/null --max-time 15 "https://$host/"
+rc=$?
+end=$(date +%s%N)
+elapsed_ms=$(( (end - start) / 1000000 ))
+echo "  curl -4 https://$host/ -> rc=$rc elapsed=${elapsed_ms}ms"
+if [ "$rc" -eq 0 ]; then
+    echo "FAIL: blocked host was reachable (enforcement broken)" >&2
+    exit 1
+fi
+if [ "$elapsed_ms" -lt "$threshold_ms" ]; then
+    echo "PASS: blocked domain fast-failed in ${elapsed_ms}ms (< ${threshold_ms}ms)"
+else
+    echo "FAIL: blocked domain hung ${elapsed_ms}ms (>= ${threshold_ms}ms) - sinkhole RST not effective" >&2
+    exit 1
+fi
+' 2>"$log"; then
+        cat "$log" >&2 || true
+        return 1
+    fi
+    rm -f "$log"
+}
+
+# Browser-level proof: in real headless Firefox, a blocked sub-resource of an
+# allowed page must fail fast (onerror in ms) instead of black-holing for the
+# browser's connect timeout (~90s) -- the actual student symptom. Drives the
+# Firefox + selenium-webdriver already installed in the image. No-op when the
+# opt-in flag is off.
+assert_sinkhole_fast_fail_browser() {
+    if [[ "$STUDENT_SINKHOLE_FAST_FAIL" != "1" && "$STUDENT_SINKHOLE_FAST_FAIL" != "true" ]]; then
+        return 0
+    fi
+    echo "Verifying sinkhole fast-fail at the browser level (headless Firefox)..."
+    local probe="$ARTIFACTS_DIR/sinkhole-fastfail-browser-probe.js"
+    # host is passed to executeAsyncScript as arguments[0] (no string interpolation,
+    # so the quoted heredoc needs no shell/JS escaping).
+    cat > "$probe" <<'PROBEJS'
+const { Builder } = require('/openpath/tests/selenium/node_modules/selenium-webdriver');
+const firefox = require('/openpath/tests/selenium/node_modules/selenium-webdriver/firefox');
+(async () => {
+  const host = process.env.PROBE_HOST;
+  const opts = new firefox.Options().addArguments('-headless');
+  // Cap Firefox's own connect timeout so a regression (hang) ends in ~20s, not ~90s.
+  opts.setPreference('network.http.connection-timeout', 20);
+  opts.setPreference('network.http.connection-retry-timeout', 0);
+  const driver = await new Builder().forBrowser('firefox').setFirefoxOptions(opts).build();
+  try {
+    await driver.manage().setTimeouts({ script: 100000 });
+    await driver.get(process.env.PROBE_ORIGIN);
+    const result = await driver.executeAsyncScript(
+      'const cb = arguments[arguments.length - 1];' +
+      'const url = "https://" + arguments[0] + "/probe.js?cache=" + Date.now();' +
+      'const start = performance.now();' +
+      'const s = document.createElement("script"); s.src = url;' +
+      'let done = false;' +
+      'const finish = (status) => { if (done) return; done = true; cb({ status, durationMs: Math.round(performance.now() - start) }); };' +
+      's.onload = () => finish("ok"); s.onerror = () => finish("blocked");' +
+      'setTimeout(() => finish("cap-90s"), 90000);' +
+      'document.body.appendChild(s);',
+      host
+    );
+    console.log('PROBE_RESULT ' + JSON.stringify(result));
+  } finally { await driver.quit(); }
+})().catch((e) => { console.error('PROBE_ERROR ' + (e && e.message)); process.exit(2); });
+PROBEJS
+
+    # Pipe the probe into the container (docker cp can fail to chown the
+    # agent-managed resolv.conf mount on some daemons).
+    docker exec -i "$CONTAINER_NAME" sh -c 'cat > /tmp/sinkhole-fastfail-browser-probe.js' < "$probe"
+    local out
+    if ! out=$(docker exec \
+        -e PROBE_HOST="blocked.${OPENPATH_STUDENT_HOST_SUFFIX}" \
+        -e PROBE_ORIGIN="http://127.0.0.1:${FIXTURE_PORT}/" \
+        "$CONTAINER_NAME" node /tmp/sinkhole-fastfail-browser-probe.js 2>&1); then
+        echo "$out" >&2
+        echo "FAIL: browser probe errored" >&2
+        return 1
+    fi
+    local json status duration
+    json=$(printf '%s\n' "$out" | sed -n 's/^PROBE_RESULT //p' | tail -1)
+    status=$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])' 2>/dev/null)
+    duration=$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["durationMs"])' 2>/dev/null)
+    echo "  browser blocked sub-resource: status=${status:-?} durationMs=${duration:-?}"
+    if [[ "$status" == "ok" ]]; then
+        echo "FAIL: blocked sub-resource loaded in the browser (enforcement broken)" >&2
+        return 1
+    fi
+    if [[ -z "$duration" ]] || ((duration >= 6000)); then
+        echo "FAIL: blocked sub-resource did not fast-fail in the browser (${duration:-?}ms >= 6000ms)" >&2
+        return 1
+    fi
+    echo "PASS: browser blocked sub-resource fast-failed in ${duration}ms (< 6000ms)"
 }
 
 wait_for_linux_dns_policy_ready() {
@@ -935,6 +1070,8 @@ main() {
     run_timed_step "Start fixture server" start_container_fixture_server
     run_timed_step "Install/enroll/update client" configure_client true
     run_timed_step "Verify SSE DNS policy readiness" wait_for_linux_dns_policy_ready
+    run_timed_step "Verify sinkhole fast-fail" assert_sinkhole_fast_fail
+    run_timed_step "Verify sinkhole fast-fail (browser)" assert_sinkhole_fast_fail_browser
     run_timed_step "Verify SSE Firefox readiness" assert_linux_firefox_extension_ready
     run_timed_step "Run Selenium student suite (sse)" run_student_suite sse full
     run_timed_step "Bootstrap fallback scenario" bootstrap_scenario "Linux Student Policy Fallback"
