@@ -654,6 +654,30 @@ JSON
     [[ "$output" == *"fact.firefox_native_host=ready"* ]]
 }
 
+@test "verify_firefox_extension_payload resolves the extensions root without a caller-provided resolver" {
+    # Reproduces the install path (browser.sh sources browser-request-readiness.sh
+    # WITHOUT openpath-browser-setup.sh), where resolve_firefox_extensions_root_dir
+    # is not pre-defined. The lib must resolve the unpacked extensions root itself,
+    # otherwise the staged extension is reported as a missing payload.
+    local ext_root="$TEST_TMP_DIR/share/mozilla/extensions"
+    local app_id="{ec8030f7-c20a-464f-9b0e-13a3a9e97384}"
+    local ext_dir="$ext_root/$app_id/openpath-block-monitor@openpath"
+    mkdir -p "$ext_dir"
+    touch "$ext_dir/manifest.json"
+
+    export FIREFOX_EXTENSIONS_ROOT="$ext_root"
+    export FIREFOX_EXTENSION_ID="openpath-block-monitor@openpath"
+    log() { echo "$1"; }
+    log_error() { echo "$1" >&2; }
+
+    # Deliberately do NOT define resolve_firefox_extensions_root_dir (no mock):
+    # this is exactly the unmocked install context that regressed.
+    source "$PROJECT_DIR/linux/lib/browser-request-readiness.sh"
+
+    run verify_firefox_extension_payload
+    [ "$status" -eq 0 ]
+}
+
 @test "openpath-browser-setup installs firefox integrations without applying Firefox browser policies" {
     local fake_install="$TEST_TMP_DIR/install"
     local fake_scripts="$TEST_TMP_DIR/scripts"

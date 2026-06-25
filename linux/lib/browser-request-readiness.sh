@@ -111,6 +111,22 @@ verify_firefox_local_policy_payload() {
     [ -d "$install_entry" ] && [ -f "$install_entry/manifest.json" ]
 }
 
+# Resolve the Firefox unpacked-extension root. Defined here (guarded) so this lib
+# is self-contained: the install path sources it via browser.sh WITHOUT
+# openpath-browser-setup.sh -- the only other place this helper is defined -- so
+# the readiness check would otherwise call an undefined function, resolve an empty
+# root, and report a correctly-staged extension as a missing payload. The guard
+# preserves a caller-provided definition (openpath-browser-setup.sh and test mocks).
+if ! declare -F resolve_firefox_extensions_root_dir >/dev/null 2>&1; then
+    resolve_firefox_extensions_root_dir() {
+        if declare -F get_firefox_extensions_root >/dev/null 2>&1; then
+            get_firefox_extensions_root
+            return 0
+        fi
+        printf '%s\n' "${FIREFOX_EXTENSIONS_ROOT:-/usr/share/mozilla/extensions}"
+    }
+fi
+
 verify_firefox_extension_payload() {
     local extensions_root=""
     local unpacked_extension_dir=""
