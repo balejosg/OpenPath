@@ -263,20 +263,6 @@
           "range": ">=7.23.0 <7.28.0"
         },
         {
-          "source": 1121189,
-          "name": "undici",
-          "dependency": "undici",
-          "title": "undici vulnerable to cross-user information disclosure via shared cache whitespace bypass",
-          "url": "https://github.com/advisories/GHSA-pr7r-676h-xcf6",
-          "severity": "moderate",
-          "cwe": ["CWE-524"],
-          "cvss": {
-            "score": 5.9,
-            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
-          },
-          "range": ">=7.0.0 <7.28.0"
-        },
-        {
           "source": 1121241,
           "name": "undici",
           "dependency": "undici",
@@ -343,6 +329,20 @@
           "cvss": {
             "score": 3.7,
             "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": ">=7.0.0 <7.28.0"
+        },
+        {
+          "source": 1121428,
+          "name": "undici",
+          "dependency": "undici",
+          "title": "undici vulnerable to cross-user information disclosure via shared cache whitespace bypass",
+          "url": "https://github.com/advisories/GHSA-pr7r-676h-xcf6",
+          "severity": "moderate",
+          "cwe": ["CWE-524"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
           },
           "range": ">=7.0.0 <7.28.0"
         }
