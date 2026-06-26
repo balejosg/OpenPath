@@ -7,6 +7,7 @@ import { useUsersList } from './useUsersList';
 import { useUsersActions } from './useUsersActions';
 import { downloadFile } from '../lib/download';
 import { buildUsersCsvExport } from '../lib/exportUsers';
+import { useT } from '../i18n/product-i18n';
 
 const PAGE_SIZE = 10;
 
@@ -76,6 +77,7 @@ export interface UseUsersViewModelReturn {
 }
 
 export function useUsersViewModel(): UseUsersViewModelReturn {
+  const t = useT();
   const { users, hasData, loading, fetching, error, fetchUsers } = useUsersList();
   const [showEditModal, setShowEditModal] = useState(false);
   const [showNewModal, setShowNewModal] = useState(false);
@@ -218,7 +220,7 @@ export function useUsersViewModel(): UseUsersViewModelReturn {
       return;
     }
 
-    const exportData = buildUsersCsvExport(filteredUsers);
+    const exportData = buildUsersCsvExport(filteredUsers, {}, t);
     downloadFile(exportData.content, exportData.filename, exportData.mimeType);
     setExportMessage('Export started');
   };

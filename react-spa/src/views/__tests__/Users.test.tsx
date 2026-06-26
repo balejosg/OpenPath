@@ -212,7 +212,7 @@ describe('Users View', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Edit User' });
 
-    expect(within(dialog).getByText('Roles actuales')).toBeInTheDocument();
+    expect(within(dialog).getByText('Current roles')).toBeInTheDocument();
     expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
     expect(within(dialog).getByText('Admin')).toBeInTheDocument();
     expect(within(dialog).getByText('Teacher')).toBeInTheDocument();
@@ -545,7 +545,7 @@ describe('Users View', () => {
 
     expect(await screen.findByText('Generate recovery token')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Generar token' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate token' }));
 
     await waitFor(() => {
       expect(mockGenerateResetToken).toHaveBeenCalledWith({ email: 'admin@example.com' });

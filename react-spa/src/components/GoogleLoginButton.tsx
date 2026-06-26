@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { useGoogleAuth, GoogleCredentialResponse } from '../hooks/useGoogleAuth';
 import '../types/google.d'; // Import for global Window type augmentation
+import { useT } from '../i18n/product-i18n';
 
 interface GoogleLoginButtonProps {
   onSuccess: (idToken: string) => void;
@@ -11,6 +12,7 @@ const GoogleLoginButton: React.FC<GoogleLoginButtonProps> = ({ onSuccess, disabl
   const { isLoaded, initGoogleAuth } = useGoogleAuth();
   const googleButtonRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
+  const t = useT();
 
   useEffect(() => {
     // Only initialize once when loaded and not disabled
@@ -48,7 +50,7 @@ const GoogleLoginButton: React.FC<GoogleLoginButtonProps> = ({ onSuccess, disabl
         {!isLoaded && disabled !== true && (
           <div
             className="w-[300px] h-10 bg-slate-100 animate-pulse rounded-lg border border-slate-200"
-            aria-label="Loading Google button..."
+            aria-label={t('googleLogin.loadingButton')}
           />
         )}
         {/* 

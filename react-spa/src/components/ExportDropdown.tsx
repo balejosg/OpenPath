@@ -1,20 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Download, ChevronDown, FileText, FileJson, FileSpreadsheet } from 'lucide-react';
 import { Button } from './ui/Button';
 import { cn } from '../lib/utils';
 import type { ExportFormat } from '../lib/exportRules';
+import { useT } from '../i18n/product-i18n';
 
 interface ExportDropdownProps {
   onExport: (format: ExportFormat) => void;
   disabled?: boolean;
   rulesCount: number;
 }
-
-const EXPORT_OPTIONS: { format: ExportFormat; label: string; icon: React.ReactNode }[] = [
-  { format: 'csv', label: 'CSV (.csv)', icon: <FileSpreadsheet size={14} /> },
-  { format: 'json', label: 'JSON (.json)', icon: <FileJson size={14} /> },
-  { format: 'txt', label: 'Text (.txt)', icon: <FileText size={14} /> },
-];
 
 /**
  * ExportDropdown - Dropdown button for exporting rules in different formats.
@@ -24,8 +19,18 @@ export const ExportDropdown: React.FC<ExportDropdownProps> = ({
   disabled = false,
   rulesCount,
 }) => {
+  const t = useT();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const EXPORT_OPTIONS: { format: ExportFormat; label: string; icon: React.ReactNode }[] = useMemo(
+    () => [
+      { format: 'csv', label: t('exportDropdown.formatCsv'), icon: <FileSpreadsheet size={14} /> },
+      { format: 'json', label: t('exportDropdown.formatJson'), icon: <FileJson size={14} /> },
+      { format: 'txt', label: t('exportDropdown.formatTxt'), icon: <FileText size={14} /> },
+    ],
+    [t]
+  );
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -73,10 +78,12 @@ export const ExportDropdown: React.FC<ExportDropdownProps> = ({
         size="md"
         onClick={() => setIsOpen(!isOpen)}
         disabled={disabled || rulesCount === 0}
-        title={rulesCount === 0 ? 'No rules to export' : 'Export rules'}
+        title={
+          rulesCount === 0 ? t('exportDropdown.noRulesToExport') : t('exportDropdown.exportRules')
+        }
       >
         <Download size={16} className="mr-1" />
-        Export
+        {t('common.export')}
         <ChevronDown
           size={14}
           className={cn('ml-1 transition-transform', isOpen && 'rotate-180')}
@@ -92,7 +99,9 @@ export const ExportDropdown: React.FC<ExportDropdownProps> = ({
         >
           <div className="px-3 py-2 border-b border-slate-100">
             <p className="text-xs text-slate-500">
-              Export {rulesCount} {rulesCount === 1 ? 'rule' : 'rules'}
+              {rulesCount === 1
+                ? t('exportDropdown.exportCountSingular', { count: String(rulesCount) })
+                : t('exportDropdown.exportCountPlural', { count: String(rulesCount) })}
             </p>
           </div>
 

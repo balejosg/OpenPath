@@ -3,6 +3,7 @@ import type { DragEvent } from 'react';
 
 import type { RuleType } from '@openpath/shared/rules-validation';
 
+import { useT } from '../i18n/product-i18n';
 import { parseCSV, type CSVParseResult } from '../lib/csv-parser';
 import { validateRuleValue } from '../lib/ruleDetection';
 import { reportError } from '../lib/reportError';
@@ -22,6 +23,7 @@ export function useBulkImportModalState({
   onImport,
   emptyErrorByType,
 }: UseBulkImportModalStateOptions) {
+  const t = useT();
   const [text, setText] = useState(initialText);
   const [ruleType, setRuleType] = useState<RuleType>('whitelist');
   const [isImporting, setIsImporting] = useState(false);
@@ -55,8 +57,8 @@ export function useBulkImportModalState({
       };
     }
 
-    return parseCSV(text);
-  }, [text]);
+    return parseCSV(text, { t });
+  }, [text, t]);
 
   const validationResults = useMemo(() => {
     const valid: string[] = [];
@@ -67,12 +69,12 @@ export function useBulkImportModalState({
       if (result.valid) {
         valid.push(value);
       } else {
-        invalid.push({ value, error: result.error ?? 'Invalid format' });
+        invalid.push({ value, error: result.error ?? t('bulkImport.error.invalidFormat') });
       }
     }
 
     return { valid, invalid };
-  }, [parseResult.values, ruleType]);
+  }, [parseResult.values, ruleType, t]);
 
   const valueCount = parseResult.values.length;
   const validCount = validationResults.valid.length;
@@ -88,11 +90,7 @@ export function useBulkImportModalState({
 
   const handleImport = useCallback(async () => {
     if (validCount === 0) {
-      setError(
-        invalidCount > 0
-          ? 'No value has a valid format. Fix errors before importing.'
-          : emptyErrorByType[ruleType]
-      );
+      setError(invalidCount > 0 ? t('bulkImport.error.noValidFormat') : emptyErrorByType[ruleType]);
       return;
     }
 
@@ -106,11 +104,11 @@ export function useBulkImportModalState({
         resetState();
         onClose();
       } else {
-        setError('All rules already exist');
+        setError(t('bulkImport.error.allExist'));
       }
     } catch (err) {
       reportError('Import failed:', err);
-      setError('Unable to import rules');
+      setError(t('bulkImport.error.importFailed'));
     } finally {
       setIsImporting(false);
     }
@@ -121,6 +119,7 @@ export function useBulkImportModalState({
     onImport,
     resetState,
     ruleType,
+    t,
     validCount,
     validationResults.valid,
   ]);
@@ -164,7 +163,7 @@ export function useBulkImportModalState({
       );
 
       if (validFiles.length === 0) {
-        setError('Only text files are allowed (.txt, .csv, .list)');
+        setError(t('bulkImport.error.textFilesOnly'));
         return;
       }
 
@@ -173,10 +172,10 @@ export function useBulkImportModalState({
         const combinedContent = contents.join('\n');
         setText((previous) => (previous ? `${previous}\n${combinedContent}` : combinedContent));
       } catch {
-        setError('Unable to read files');
+        setError(t('bulkImport.error.readFiles'));
       }
     },
-    [readFileContents]
+    [readFileContents, t]
   );
 
   const handleDragEnter = useCallback((event: DragEvent) => {

@@ -1,6 +1,7 @@
 import { AlertCircle, Loader2 } from 'lucide-react';
 import type { LibraryGroup } from '../../hooks/useGroupsViewModel';
 import { Modal } from '../ui/Modal';
+import { useT } from '../../i18n/product-i18n';
 
 interface CloneGroupModalProps {
   isOpen: boolean;
@@ -27,34 +28,37 @@ export function CloneGroupModal({
   onDisplayNameChange,
   onClone,
 }: CloneGroupModalProps) {
+  const t = useT();
   if (!cloneSource) return null;
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={`Clone: ${cloneSource.displayName || cloneSource.name}`}
+      title={t('groups.cloneModal.title', { name: cloneSource.displayName || cloneSource.name })}
       className="max-w-md"
     >
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            {t('groups.cloneModal.nameLabel')}
+          </label>
           <input
             type="text"
-            placeholder="E.g. primary-policy"
+            placeholder={t('groups.cloneModal.namePlaceholder')}
             value={name}
             onChange={(event) => onNameChange(event.target.value)}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
           />
-          <p className="text-xs text-slate-500 mt-1">
-            Used as the slug (must be unique in the instance).
-          </p>
+          <p className="text-xs text-slate-500 mt-1">{t('groups.cloneModal.nameHint')}</p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            {t('groups.cloneModal.descriptionLabel')}
+          </label>
           <textarea
-            placeholder="Policy description..."
+            placeholder={t('groups.cloneModal.descriptionPlaceholder')}
             value={displayName}
             onChange={(event) => onDisplayNameChange(event.target.value)}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none h-20 resize-none"
@@ -74,7 +78,7 @@ export function CloneGroupModal({
             disabled={saving}
             className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             onClick={onClone}
@@ -82,7 +86,7 @@ export function CloneGroupModal({
             className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {saving && <Loader2 size={16} className="animate-spin" />}
-            Clone
+            {t('common.clone')}
           </button>
         </div>
       </div>

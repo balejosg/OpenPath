@@ -1,4 +1,5 @@
 import { AlertTriangle } from 'lucide-react';
+import { useT } from '../i18n/product-i18n';
 import { DomainRequestsBulkActions } from '../components/domain-requests/DomainRequestsBulkActions';
 import { DomainRequestsDialogs } from '../components/domain-requests/DomainRequestsDialogs';
 import { DomainRequestsFilters } from '../components/domain-requests/DomainRequestsFilters';
@@ -10,11 +11,12 @@ interface DomainRequestsProps {
 }
 
 export default function DomainRequests({ canDeleteRequests = true }: DomainRequestsProps) {
+  const t = useT();
   const viewModel = useDomainRequestsViewModel({ canDeleteRequests });
 
   return (
     <div className="space-y-6">
-      <p className="text-slate-500 text-sm">Manage access requests for blocked domains</p>
+      <p className="text-slate-500 text-sm">{t('domainRequests.pageDescription')}</p>
 
       <DomainRequestsFilters
         searchInputRef={viewModel.filters.searchInputRef}

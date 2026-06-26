@@ -8,6 +8,7 @@ import {
   updateRuleAction,
 } from '../lib/rules-actions';
 import type { Rule, RuleType } from '../lib/rules';
+import { useT, useOpenPathI18n } from '../i18n/product-i18n';
 
 interface UseManagedRulesActionsOptions {
   groupId: string;
@@ -26,6 +27,9 @@ export function useManagedRulesActions({
   refetchRules,
   refetchCounts,
 }: UseManagedRulesActionsOptions) {
+  const t = useT();
+  const { locale } = useOpenPathI18n();
+
   const addRule = useCallback(
     async (value: string): Promise<boolean> => {
       return addRuleWithDetection(value, {
@@ -33,9 +37,11 @@ export function useManagedRulesActions({
         onToast,
         fetchRules: refetchRules,
         fetchCounts: refetchCounts,
+        t,
+        locale,
       });
     },
-    [groupId, onToast, refetchRules, refetchCounts]
+    [groupId, onToast, refetchRules, refetchCounts, t, locale]
   );
 
   const deleteRule = useCallback(
@@ -45,6 +51,8 @@ export function useManagedRulesActions({
           onToast,
           fetchRules: refetchRules,
           fetchCounts: refetchCounts,
+          t,
+          locale,
         });
         return;
       }
@@ -53,9 +61,11 @@ export function useManagedRulesActions({
         onToast,
         fetchRules: refetchRules,
         fetchCounts: refetchCounts,
+        t,
+        locale,
       });
     },
-    [onToast, refetchRules, refetchCounts]
+    [onToast, refetchRules, refetchCounts, t, locale]
   );
 
   const updateRule = useCallback(
@@ -64,9 +74,11 @@ export function useManagedRulesActions({
         groupId,
         onToast,
         fetchRules: refetchRules,
+        t,
+        locale,
       });
     },
-    [groupId, onToast, refetchRules]
+    [groupId, onToast, refetchRules, t, locale]
   );
 
   const bulkDeleteRules = useCallback(async (): Promise<void> => {
@@ -78,8 +90,10 @@ export function useManagedRulesActions({
       onToast,
       fetchRules: refetchRules,
       fetchCounts: refetchCounts,
+      t,
+      locale,
     });
-  }, [selectedIds, clearSelection, onToast, refetchRules, refetchCounts]);
+  }, [selectedIds, clearSelection, onToast, refetchRules, refetchCounts, t, locale]);
 
   const bulkCreateRules = useCallback(
     async (values: string[], type: RuleType): Promise<{ created: number; total: number }> => {
@@ -90,9 +104,11 @@ export function useManagedRulesActions({
         onToast,
         fetchRules: refetchRules,
         fetchCounts: refetchCounts,
+        t,
+        locale,
       });
     },
-    [groupId, onToast, refetchRules, refetchCounts]
+    [groupId, onToast, refetchRules, refetchCounts, t, locale]
   );
 
   return {

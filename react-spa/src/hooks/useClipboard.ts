@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { reportError } from '../lib/reportError';
+import { useT } from '../i18n/product-i18n';
 
 interface UseClipboardOptions {
   resetDelayMs?: number;
@@ -11,6 +12,7 @@ interface ClipboardState {
 }
 
 export function useClipboard(options: UseClipboardOptions = {}) {
+  const t = useT();
   const resetDelayMs = options.resetDelayMs ?? 2000;
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [{ copiedKey, error }, setState] = useState<ClipboardState>({
@@ -54,7 +56,7 @@ export function useClipboard(options: UseClipboardOptions = {}) {
         return true;
       } catch (err) {
         reportError('Failed to copy to clipboard:', err);
-        setState((previous) => ({ ...previous, error: 'Unable to copy to clipboard' }));
+        setState((previous) => ({ ...previous, error: t('clipboard.error.unableToCopy') }));
         return false;
       }
     },

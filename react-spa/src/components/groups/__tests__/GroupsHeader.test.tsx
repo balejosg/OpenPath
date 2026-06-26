@@ -17,7 +17,7 @@ describe('GroupsHeader', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /biblioteca/i }));
+    fireEvent.click(screen.getByRole('button', { name: /library/i }));
     fireEvent.click(screen.getByRole('button', { name: /\+ new group/i }));
 
     expect(onActiveViewChange).toHaveBeenCalledWith('library');

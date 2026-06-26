@@ -1,6 +1,7 @@
 import React from 'react';
 import { Bell, Menu, Search, ShieldCheck, Loader2 } from 'lucide-react';
 import { useCurrentUser, getRoleDisplayLabel } from '../hooks/useCurrentUser';
+import { useT } from '../i18n/product-i18n';
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -9,13 +10,14 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ onMenuClick, title }) => {
   const { user, loading: userLoading } = useCurrentUser();
+  const t = useT();
 
   return (
     <header className="h-16 bg-white border-b border-slate-200 sticky top-0 z-30 px-4 md:px-8 flex items-center justify-between shadow-sm">
       <div className="flex items-center gap-4">
         <button
           onClick={onMenuClick}
-          aria-label="Open menu"
+          aria-label={t('header.openMenu')}
           className="md:hidden p-2 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-100"
         >
           <Menu size={24} />
@@ -31,7 +33,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, title }) => {
           <Search size={16} className="text-slate-400" />
           <input
             type="text"
-            placeholder="Search..."
+            placeholder={t('header.search')}
             className="bg-transparent border-none outline-none text-sm text-slate-700 ml-2 w-full placeholder-slate-400"
           />
         </div>
@@ -39,7 +41,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, title }) => {
         {/* Security Indicator */}
         <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-green-50 border border-green-200 rounded-full">
           <ShieldCheck size={14} className="text-green-600" />
-          <span className="text-xs font-medium text-green-700">Secure Connection</span>
+          <span className="text-xs font-medium text-green-700">{t('header.secureConnection')}</span>
         </div>
 
         <div className="h-6 w-[1px] bg-slate-200 hidden sm:block"></div>
@@ -48,7 +50,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, title }) => {
         <div className="flex items-center gap-4">
           <button
             className="relative text-slate-400 hover:text-blue-600 transition-colors"
-            title="Notifications (coming soon)"
+            title={t('header.notifications')}
           >
             <Bell size={20} />
             {/* Notification badge - hidden until notifications feature is implemented */}
@@ -63,9 +65,13 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick, title }) => {
                   {user?.initials ?? '??'}
                 </div>
                 <div className="text-sm hidden md:block">
-                  <p className="font-medium text-slate-700 leading-none">{user?.name ?? 'User'}</p>
+                  <p className="font-medium text-slate-700 leading-none">
+                    {user?.name ?? t('header.userFallback')}
+                  </p>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {user?.primaryRole ? getRoleDisplayLabel(user.primaryRole) : 'No role'}
+                    {user?.primaryRole
+                      ? getRoleDisplayLabel(user.primaryRole, t)
+                      : t('header.noRoleFallback')}
                   </p>
                 </div>
               </>

@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Upload, FileText, AlertCircle, FileUp, Table, Info } from 'lucide-react';
 import type { RuleType } from '@openpath/shared/rules-validation';
 import { Modal } from './ui/Modal';
 import { Button } from './ui/Button';
 import { cn } from '../lib/utils';
 import { useBulkImportModalState } from '../hooks/useBulkImportModalState';
+import { useT } from '../i18n/product-i18n';
 
 interface BulkImportModalProps {
   isOpen: boolean;
@@ -13,51 +14,6 @@ interface BulkImportModalProps {
   /** Pre-populate the textarea with this text (e.g., from a dropped file) */
   initialText?: string;
 }
-
-const RULE_TYPE_OPTIONS: { value: RuleType; label: string; description: string }[] = [
-  {
-    value: 'whitelist',
-    label: 'Allowed domains',
-    description: 'Domains that will be accessible',
-  },
-  {
-    value: 'blocked_subdomain',
-    label: 'Blocked subdomains',
-    description: 'Specific subdomains to block',
-  },
-  {
-    value: 'blocked_path',
-    label: 'Blocked paths',
-    description: 'Specific paths to block',
-  },
-];
-
-const RULE_TYPE_UI: Record<
-  RuleType,
-  { label: string; placeholder: string; hint: string; emptyError: string }
-> = {
-  whitelist: {
-    label: 'Domains to import',
-    placeholder:
-      'Paste domains here, one per line:\n\ngoogle.com\nyoutube.com\nexample.org\n\nYou can also paste lists separated by commas or spaces.',
-    hint: 'Paste or type domains above',
-    emptyError: 'Enter at least one domain',
-  },
-  blocked_subdomain: {
-    label: 'Subdomains to import',
-    placeholder:
-      'Paste subdomains here, one per line:\n\nads.example.com\ntracker.example.com\n*.ads.example.com\n\nYou can also paste lists separated by commas or spaces.',
-    hint: 'Paste or type subdomains above',
-    emptyError: 'Enter at least one subdomain',
-  },
-  blocked_path: {
-    label: 'Paths to import',
-    placeholder:
-      'Paste paths here, one per line:\n\nexample.com/ads\nexample.com/tracking/*\n*/analytics/*\n\nYou can also paste lists separated by commas or spaces.',
-    hint: 'Paste or type paths above',
-    emptyError: 'Enter at least one path',
-  },
-};
 
 /**
  * BulkImportModal - Modal for importing multiple rules at once.
@@ -69,6 +25,56 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
   onImport,
   initialText = '',
 }) => {
+  const t = useT();
+
+  const RULE_TYPE_OPTIONS: { value: RuleType; label: string; description: string }[] = useMemo(
+    () => [
+      {
+        value: 'whitelist',
+        label: t('bulkImport.ruleType.whitelist.label'),
+        description: t('bulkImport.ruleType.whitelist.description'),
+      },
+      {
+        value: 'blocked_subdomain',
+        label: t('bulkImport.ruleType.blockedSubdomain.label'),
+        description: t('bulkImport.ruleType.blockedSubdomain.description'),
+      },
+      {
+        value: 'blocked_path',
+        label: t('bulkImport.ruleType.blockedPath.label'),
+        description: t('bulkImport.ruleType.blockedPath.description'),
+      },
+    ],
+    [t]
+  );
+
+  const RULE_TYPE_UI: Record<
+    RuleType,
+    { label: string; placeholder: string; hint: string; emptyError: string }
+  > = useMemo(
+    () => ({
+      whitelist: {
+        label: t('bulkImport.ruleTypeUi.whitelist.label'),
+        placeholder: t('bulkImport.ruleTypeUi.whitelist.placeholder'),
+        hint: t('bulkImport.ruleTypeUi.whitelist.hint'),
+        emptyError: t('bulkImport.ruleTypeUi.whitelist.emptyError'),
+      },
+      blocked_subdomain: {
+        label: t('bulkImport.ruleTypeUi.blockedSubdomain.label'),
+        placeholder: t('bulkImport.ruleTypeUi.blockedSubdomain.placeholder'),
+        hint: t('bulkImport.ruleTypeUi.blockedSubdomain.hint'),
+        emptyError: t('bulkImport.ruleTypeUi.blockedSubdomain.emptyError'),
+      },
+      blocked_path: {
+        label: t('bulkImport.ruleTypeUi.blockedPath.label'),
+        placeholder: t('bulkImport.ruleTypeUi.blockedPath.placeholder'),
+        hint: t('bulkImport.ruleTypeUi.blockedPath.hint'),
+        emptyError: t('bulkImport.ruleTypeUi.blockedPath.emptyError'),
+      },
+    }),
+    [t]
+  );
+
   const {
     dropZoneRef,
     error,
@@ -103,11 +109,18 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
   });
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Import rules" className="max-w-2xl">
+    <Modal
+      isOpen={isOpen}
+      onClose={handleClose}
+      title={t('bulkImport.title')}
+      className="max-w-2xl"
+    >
       <div className="space-y-4">
         {/* Rule type selector */}
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">Rule type</label>
+          <label className="block text-sm font-medium text-slate-700 mb-2">
+            {t('bulkImport.ruleTypeLabel')}
+          </label>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {RULE_TYPE_OPTIONS.map((option) => (
               <button
@@ -178,7 +191,9 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
               >
                 <div className="text-center">
                   <FileUp size={32} className="mx-auto text-blue-500 mb-2" />
-                  <p className="text-sm font-medium text-blue-700">Drop the file here</p>
+                  <p className="text-sm font-medium text-blue-700">
+                    {t('bulkImport.dropFileHere')}
+                  </p>
                   <p className="text-xs text-blue-500 mt-1">.txt, .csv, .list</p>
                 </div>
               </div>
@@ -190,11 +205,17 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
             <div className="text-xs text-slate-500">
               {valueCount > 0 ? (
                 <span className="flex items-center gap-2">
-                  <span className="text-blue-600 font-medium">{validCount} valid</span>
+                  <span className="text-blue-600 font-medium">
+                    {t('bulkImport.validCount', { count: String(validCount) })}
+                  </span>
                   {invalidCount > 0 && (
-                    <span className="text-red-500 font-medium">{invalidCount} invalid</span>
+                    <span className="text-red-500 font-medium">
+                      {t('bulkImport.invalidCount', { count: String(invalidCount) })}
+                    </span>
                   )}
-                  <span className="text-slate-400">({valueCount} detected)</span>
+                  <span className="text-slate-400">
+                    ({t('bulkImport.detectedCount', { count: String(valueCount) })})
+                  </span>
                 </span>
               ) : (
                 RULE_TYPE_UI[ruleType].hint
@@ -202,7 +223,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
             </div>
             <div className="text-xs text-slate-400">
               <FileUp size={12} className="inline mr-1" />
-              Drag .txt or .csv files here
+              {t('bulkImport.dragFilesHint')}
             </div>
           </div>
 
@@ -211,7 +232,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
             <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg text-xs text-slate-600">
               <Table size={14} className="text-slate-400" />
               <span>
-                CSV format detected
+                {t('bulkImport.csvFormatDetected')}
                 {parseResult.valueColumn && (
                   <span className="text-slate-500">
                     {' '}
@@ -240,8 +261,9 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
           <div className="p-3 bg-red-50 rounded-lg text-sm" data-testid="validation-errors">
             <div className="flex items-center gap-2 text-red-700 font-medium mb-2">
               <AlertCircle size={16} />
-              {invalidCount}{' '}
-              {invalidCount === 1 ? 'value with invalid format' : 'values with invalid format'}
+              {invalidCount === 1
+                ? t('bulkImport.invalidFormatSingular', { count: String(invalidCount) })
+                : t('bulkImport.invalidFormatPlural', { count: String(invalidCount) })}
             </div>
             <ul className="space-y-1 text-xs text-red-600">
               {validationResults.invalid.slice(0, 5).map((item, i) => (
@@ -253,13 +275,16 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
                 </li>
               ))}
               {invalidCount > 5 && (
-                <li className="text-red-400 italic">...and {String(invalidCount - 5)} more</li>
+                <li className="text-red-400 italic">
+                  {t('bulkImport.andMoreErrors', { count: String(invalidCount - 5) })}
+                </li>
               )}
             </ul>
             {validCount > 0 && (
               <p className="text-xs text-slate-500 mt-2">
-                Only the {String(validCount)} valid {validCount === 1 ? 'value' : 'values'} will be
-                imported.
+                {validCount === 1
+                  ? t('bulkImport.onlyValidWillBeImportedSingular', { count: String(validCount) })
+                  : t('bulkImport.onlyValidWillBeImportedPlural', { count: String(validCount) })}
               </p>
             )}
           </div>
@@ -276,7 +301,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
         {/* Actions */}
         <div className="flex justify-end gap-3 pt-2">
           <Button variant="outline" onClick={handleClose} disabled={isImporting}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button
             onClick={() => void handleImport()}
@@ -284,7 +309,9 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
             isLoading={isImporting}
           >
             <Upload size={14} className="mr-1" />
-            Import {validCount > 0 && `(${String(validCount)})`}
+            {validCount > 0
+              ? t('bulkImport.importWithCount', { count: String(validCount) })
+              : t('common.import')}
           </Button>
         </div>
       </div>

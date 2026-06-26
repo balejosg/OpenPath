@@ -4,6 +4,7 @@ import { getAuthTokenForHeader } from '../lib/auth-storage';
 import { reportError } from '../lib/reportError';
 import { useClipboard } from './useClipboard';
 import { useClassroomExemptions } from './useClassroomExemptions';
+import { useT } from '../i18n/product-i18n';
 
 export function findActiveSchedule(params: {
   schedules: ScheduleWithPermissions[];
@@ -112,6 +113,7 @@ export function useClassroomMachines(params: {
   oneOffSchedules: OneOffScheduleWithPermissions[];
   refetchClassrooms: () => Promise<Classroom[]>;
 }) {
+  const t = useT();
   const { selectedClassroom, schedules, oneOffSchedules, refetchClassrooms } = params;
   const [showEnrollModal, setShowEnrollModal] = useState(false);
   const [enrollToken, setEnrollToken] = useState<string | null>(null);
@@ -159,7 +161,7 @@ export function useClassroomMachines(params: {
     setLoadingToken(true);
     try {
       if (!selectedClassroom) {
-        setExemptionsError('Select a classroom first');
+        setExemptionsError(t('classroomMachines.error.selectClassroomFirst'));
         return;
       }
 
@@ -193,7 +195,7 @@ export function useClassroomMachines(params: {
       setShowEnrollModal(true);
     } catch (err) {
       reportError('Failed to get enrollment ticket:', err);
-      setExemptionsError('Unable to generate install command');
+      setExemptionsError(t('classroomMachines.error.unableToGenerateInstallCommand'));
     } finally {
       setLoadingToken(false);
     }

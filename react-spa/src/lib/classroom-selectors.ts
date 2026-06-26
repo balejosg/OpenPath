@@ -1,5 +1,6 @@
 import { resolveGroupDisplayName, type GroupLike } from '../components/groups/GroupLabel';
 import type { Classroom } from '../types';
+import type { ProductT } from '../i18n/product-i18n';
 import {
   toActiveClassroomRows,
   toClassroomsFromModels,
@@ -51,6 +52,7 @@ export function selectClassroomControlConfirmation(params: {
   groupById: ReadonlyMap<string, GroupLike>;
   classroomId: string;
   nextGroupId: string | null;
+  t: ProductT;
 }): ClassroomControlConfirmation | null {
   const classroom = params.classrooms.find((item) => item.id === params.classroomId);
   const currentActiveGroupId = classroom?.activeGroupId ?? null;
@@ -70,13 +72,15 @@ export function selectClassroomControlConfirmation(params: {
       group: currentGroup ?? null,
       source: 'manual',
       revealUnknownId: false,
+      t: params.t,
     }),
     nextName: resolveGroupDisplayName({
       groupId: params.nextGroupId,
       group: nextGroup ?? null,
       source: 'manual',
-      noneLabel: 'No group',
+      noneLabel: params.t('groups.label.noGroup'),
       revealUnknownId: true,
+      t: params.t,
     }),
   };
 }

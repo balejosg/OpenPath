@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, CheckSquare, Minus, Square } from 'lucide-react';
 import type { SortConfig, SortField } from '../../hooks/useRuleTableSort';
+import { useT } from '../../i18n/product-i18n';
 
 interface RulesTableHeaderProps {
   hasSelectionFeature: boolean;
@@ -34,6 +35,7 @@ export const RulesTableHeader: React.FC<RulesTableHeaderProps> = ({
   readOnly,
   sortConfig,
 }) => {
+  const t = useT();
   return (
     <thead>
       <tr className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500 font-bold tracking-wider">
@@ -42,7 +44,7 @@ export const RulesTableHeader: React.FC<RulesTableHeaderProps> = ({
             <button
               onClick={onToggleSelectAll}
               className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
-              title={isAllSelected ? 'Deselect all' : 'Select all'}
+              title={isAllSelected ? t('common.deselectAll') : t('common.selectAll')}
             >
               {isAllSelected ? (
                 <CheckSquare size={18} className="text-blue-600" />
@@ -60,7 +62,7 @@ export const RulesTableHeader: React.FC<RulesTableHeaderProps> = ({
             className="flex items-center gap-1 hover:text-slate-700 transition-colors group/sort"
             data-testid="sort-value"
           >
-            Value
+            {t('rules.header.value')}
             <span className="opacity-50 group-hover/sort:opacity-100 transition-opacity">
               {renderSortIcon('value', sortConfig)}
             </span>
@@ -72,26 +74,26 @@ export const RulesTableHeader: React.FC<RulesTableHeaderProps> = ({
             className="flex items-center gap-1 hover:text-slate-700 transition-colors group/sort"
             data-testid="sort-type"
           >
-            Type
+            {t('rules.header.type')}
             <span className="opacity-50 group-hover/sort:opacity-100 transition-opacity">
               {renderSortIcon('type', sortConfig)}
             </span>
           </button>
         </th>
-        <th className="px-4 py-3 hidden md:table-cell">Comment</th>
+        <th className="px-4 py-3 hidden md:table-cell">{t('rules.header.comment')}</th>
         <th className="px-4 py-3 w-28 hidden sm:table-cell">
           <button
             onClick={() => onSort('createdAt')}
             className="flex items-center gap-1 hover:text-slate-700 transition-colors group/sort"
             data-testid="sort-createdAt"
           >
-            Date
+            {t('rules.header.date')}
             <span className="opacity-50 group-hover/sort:opacity-100 transition-opacity">
               {renderSortIcon('createdAt', sortConfig)}
             </span>
           </button>
         </th>
-        {!readOnly && <th className="px-4 py-3 w-20 text-right">Actions</th>}
+        {!readOnly && <th className="px-4 py-3 w-20 text-right">{t('common.actions')}</th>}
       </tr>
     </thead>
   );

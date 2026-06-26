@@ -2,6 +2,7 @@ import React from 'react';
 import type { CurrentGroupSource } from '../../types';
 import { cn } from '../../lib/utils';
 import { isGroupEnabledLike } from '../../lib/groups';
+import { useT, type ProductT } from '../../i18n/product-i18n';
 
 export interface GroupLike {
   id: string;
@@ -103,17 +104,10 @@ export function resolveClassroomGroupSelectState(params: {
   };
 }
 
-export function getGroupSourceTag(source: CurrentGroupSource): string {
-  if (source === 'manual') return 'manual';
-  if (source === 'schedule') return 'schedule';
-  if (source === 'default') return 'default';
-  return '';
-}
-
-export function getGroupSourcePhrase(source: CurrentGroupSource): string {
-  if (source === 'default') return 'by default';
-  if (source === 'schedule') return 'by schedule';
-  if (source === 'manual') return 'manual';
+export function getGroupSourceTag(source: CurrentGroupSource, t: ProductT): string {
+  if (source === 'manual') return t('groups.source.tag.manual');
+  if (source === 'schedule') return t('groups.source.tag.schedule');
+  if (source === 'default') return t('groups.source.tag.default');
   return '';
 }
 
@@ -123,18 +117,19 @@ export function resolveGroupDisplayName(params: {
   source: CurrentGroupSource;
   revealUnknownId?: boolean;
   noneLabel?: string;
+  t: ProductT;
 }): string {
-  const { groupId, group, source, revealUnknownId, noneLabel } = params;
+  const { groupId, group, source, revealUnknownId, noneLabel, t } = params;
 
-  if (!groupId) return noneLabel ?? 'No group';
+  if (!groupId) return noneLabel ?? t('groups.label.noGroup');
   if (group) return group.displayName ?? group.name;
   if (revealUnknownId) return groupId;
 
-  if (source === 'manual') return 'Applied by another teacher';
-  if (source === 'default') return 'Assigned by admin';
-  if (source === 'schedule') return 'Reserved by another teacher';
+  if (source === 'manual') return t('groups.label.appliedByAnotherTeacher');
+  if (source === 'default') return t('groups.label.assignedByAdmin');
+  if (source === 'schedule') return t('groups.label.reservedByAnotherTeacher');
 
-  return 'Group unavailable';
+  return t('groups.label.unavailable');
 }
 
 export function resolveGroupDisplayNameFromLookup(params: {
@@ -144,8 +139,9 @@ export function resolveGroupDisplayNameFromLookup(params: {
   source: CurrentGroupSource;
   revealUnknownId?: boolean;
   noneLabel?: string;
+  t: ProductT;
 }): string {
-  const { groupId, groupById, displayName, source, revealUnknownId, noneLabel } = params;
+  const { groupId, groupById, displayName, source, revealUnknownId, noneLabel, t } = params;
 
   return resolveGroupDisplayName({
     groupId,
@@ -153,6 +149,7 @@ export function resolveGroupDisplayNameFromLookup(params: {
     source,
     revealUnknownId,
     noneLabel,
+    t,
   });
 }
 
@@ -191,13 +188,14 @@ export const GroupLabel: React.FC<GroupLabelProps> = ({
   className,
   title,
 }) => {
+  const t = useT();
   const enabled = group ? isGroupEnabled(group) : true;
-  const name = resolveGroupDisplayName({ groupId, group, source, revealUnknownId, noneLabel });
+  const name = resolveGroupDisplayName({ groupId, group, source, revealUnknownId, noneLabel, t });
 
   const parts: string[] = [name];
-  const sourceTag = showSourceTag ? getGroupSourceTag(source) : '';
+  const sourceTag = showSourceTag ? getGroupSourceTag(source, t) : '';
   if (sourceTag) parts.push(sourceTag);
-  if (showInactiveTag && !enabled) parts.push('inactive');
+  if (showInactiveTag && !enabled) parts.push(t('groups.label.inactiveTag'));
   const text = parts.join(' · ');
 
   if (variant === 'text') {

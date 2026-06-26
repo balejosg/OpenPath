@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 
 import type { TeacherScheduleEntry } from '../components/teacher/teacher-schedule-model';
 import { resolveTrpcErrorMessage } from '../lib/error-utils';
+import { useT } from '../i18n/product-i18n';
 import { reportError as defaultReportError } from '../lib/reportError';
 import { trpc as defaultTrpc } from '../lib/trpc';
 
@@ -75,6 +76,7 @@ export function useTeacherScheduleCommands({
   trpcClient = defaultTrpc,
   reportError = defaultReportError,
 }: UseTeacherScheduleCommandsParams) {
+  const t = useT();
   const [selectedEntry, setSelectedEntry] = useState<TeacherScheduleEntry | null>(null);
   const [editingEntry, setEditingEntry] = useState<TeacherScheduleEntry | null>(null);
   const [deleteEntry, setDeleteEntry] = useState<TeacherScheduleEntry | null>(null);
@@ -115,12 +117,12 @@ export function useTeacherScheduleCommands({
         await refreshDashboard();
       } catch (err) {
         reportError('Failed to apply active group:', err);
-        setScheduleError('Unable to apply the group to the classroom');
+        setScheduleError(t('scheduleCommands.error.applyGroup'));
       } finally {
         setScheduleSaving(false);
       }
     },
-    [refreshDashboard, reportError, trpcClient]
+    [refreshDashboard, reportError, t, trpcClient]
   );
 
   const handleReleaseClassroom = useCallback(
@@ -135,12 +137,12 @@ export function useTeacherScheduleCommands({
         await refreshDashboard();
       } catch (err) {
         reportError('Failed to release classroom:', err);
-        setScheduleError('Unable to apply the group to the classroom');
+        setScheduleError(t('scheduleCommands.error.applyGroup'));
       } finally {
         setScheduleSaving(false);
       }
     },
-    [refreshDashboard, reportError, trpcClient]
+    [refreshDashboard, reportError, t, trpcClient]
   );
 
   const handleEditSchedule = useCallback(
@@ -194,12 +196,12 @@ export function useTeacherScheduleCommands({
         setEditingEntry(null);
       } catch (err) {
         reportError('Failed to save schedule:', err);
-        setScheduleError(formatTeacherScheduleError(err, 'Unable to save schedule'));
+        setScheduleError(formatTeacherScheduleError(err, t('scheduleCommands.error.saveSchedule')));
       } finally {
         setScheduleSaving(false);
       }
     },
-    [editingEntry, refreshDashboard, reportError, trpcClient]
+    [editingEntry, refreshDashboard, reportError, t, trpcClient]
   );
 
   const handleSaveOneOffSchedule = useCallback(
@@ -219,12 +221,12 @@ export function useTeacherScheduleCommands({
         setEditingEntry(null);
       } catch (err) {
         reportError('Failed to save one-off schedule:', err);
-        setScheduleError(formatTeacherScheduleError(err, 'Unable to save schedule'));
+        setScheduleError(formatTeacherScheduleError(err, t('scheduleCommands.error.saveSchedule')));
       } finally {
         setScheduleSaving(false);
       }
     },
-    [editingEntry, refreshDashboard, reportError, trpcClient]
+    [editingEntry, refreshDashboard, reportError, t, trpcClient]
   );
 
   const handleConfirmDeleteSchedule = useCallback(async () => {
@@ -239,11 +241,11 @@ export function useTeacherScheduleCommands({
       setSelectedEntry(null);
     } catch (err) {
       reportError('Failed to delete schedule:', err);
-      setScheduleError(formatTeacherScheduleError(err, 'Unable to delete schedule'));
+      setScheduleError(formatTeacherScheduleError(err, t('scheduleCommands.error.deleteSchedule')));
     } finally {
       setScheduleSaving(false);
     }
-  }, [deleteEntry, refreshDashboard, reportError, trpcClient]);
+  }, [deleteEntry, refreshDashboard, reportError, t, trpcClient]);
 
   return {
     selectedEntry,

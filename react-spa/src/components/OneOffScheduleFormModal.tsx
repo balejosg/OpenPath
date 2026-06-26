@@ -5,6 +5,7 @@ import type { OneOffScheduleWithPermissions } from '../types';
 import { isGroupEnabled, type GroupLike } from './groups/GroupLabel';
 import { GroupSelect } from './groups/GroupSelect';
 import { Modal } from './ui/Modal';
+import { useT } from '../i18n/product-i18n';
 
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
@@ -66,6 +67,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
   onSave,
   onClose,
 }) => {
+  const t = useT();
   const isEdit = schedule !== null;
 
   const defaults = useMemo(() => {
@@ -105,23 +107,23 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
     setLocalError('');
 
     if (!groupId) {
-      setLocalError('Select a group');
+      setLocalError(t('oneOffScheduleForm.errorSelectGroup'));
       return;
     }
 
     const start = parseDateTimeLocalValue(startAt);
     const end = parseDateTimeLocalValue(endAt);
     if (!start) {
-      setLocalError('Select a start date/time');
+      setLocalError(t('oneOffScheduleForm.errorSelectStart'));
       return;
     }
     if (!end) {
-      setLocalError('Select an end date/time');
+      setLocalError(t('oneOffScheduleForm.errorSelectEnd'));
       return;
     }
 
     if (end.getTime() <= start.getTime()) {
-      setLocalError('End date/time must be after start date/time');
+      setLocalError(t('oneOffScheduleForm.errorEndAfterStart'));
       return;
     }
 
@@ -137,14 +139,14 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
     <Modal
       isOpen
       onClose={handleClose}
-      title={isEdit ? 'Edit One-Off Assignment' : 'New One-Off Assignment'}
+      title={isEdit ? t('oneOffScheduleForm.titleEdit') : t('oneOffScheduleForm.titleNew')}
       className="max-w-md"
     >
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label htmlFor="oneoff-start" className="block text-sm font-medium text-slate-700 mb-1">
-              Start
+              {t('oneOffScheduleForm.labelStart')}
             </label>
             <input
               id="oneoff-start"
@@ -157,7 +159,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
           </div>
           <div>
             <label htmlFor="oneoff-end" className="block text-sm font-medium text-slate-700 mb-1">
-              End
+              {t('oneOffScheduleForm.labelEnd')}
             </label>
             <input
               id="oneoff-end"
@@ -172,7 +174,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
 
         <div>
           <label htmlFor="oneoff-group" className="block text-sm font-medium text-slate-700 mb-1">
-            Rule Group
+            {t('oneOffScheduleForm.labelRuleGroup')}
           </label>
           <GroupSelect
             id="oneoff-group"
@@ -182,7 +184,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
             includeNoneOption={false}
             inactiveBehavior={schedule ? 'disable' : 'hide'}
             disabled={saving || groups.length === 0}
-            emptyLabel="No groups available"
+            emptyLabel={t('oneOffScheduleForm.emptyGroups')}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none disabled:bg-slate-50 disabled:text-slate-500"
           />
         </div>
@@ -199,7 +201,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
             disabled={saving}
             className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
           >
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             onClick={handleSubmit}
@@ -207,7 +209,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
             className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {saving && <Loader2 size={16} className="animate-spin" />}
-            {isEdit ? 'Save Changes' : 'Create Assignment'}
+            {isEdit ? t('common.saveChanges') : t('oneOffScheduleForm.createAssignment')}
           </button>
         </div>
       </div>

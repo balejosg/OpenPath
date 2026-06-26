@@ -5,6 +5,7 @@ import { ExportDropdown } from '../ExportDropdown';
 import { Button } from '../ui/Button';
 import { AlertCircle, Info, Plus, Search, Upload } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { useT } from '../../i18n/product-i18n';
 
 interface RulesManagerToolbarProps {
   readOnly: boolean;
@@ -43,6 +44,7 @@ export function RulesManagerToolbar({
   onOpenImport,
   onExport,
 }: RulesManagerToolbarProps) {
+  const t = useT();
   return (
     <>
       <div className="flex flex-col sm:flex-row gap-4">
@@ -50,7 +52,7 @@ export function RulesManagerToolbar({
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder={`Search across ${String(countsAll)} rules...`}
+            placeholder={t('rules.manager.searchPlaceholder', { count: String(countsAll) })}
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
@@ -63,7 +65,7 @@ export function RulesManagerToolbar({
               <div className="flex-1 sm:w-80">
                 <input
                   type="text"
-                  placeholder="Add domain, subdomain, or path..."
+                  placeholder={t('rules.manager.addPlaceholder')}
                   value={newValue}
                   onChange={(event) => onInputChange(event.target.value)}
                   onKeyDown={onAddKeyDown}
@@ -82,16 +84,16 @@ export function RulesManagerToolbar({
                 size="md"
               >
                 <Plus size={16} className="mr-1" />
-                Add
+                {t('common.add')}
               </Button>
               <Button
                 variant="outline"
                 onClick={onOpenImport}
                 size="md"
-                title="Import multiple rules"
+                title={t('rules.manager.importTitle')}
               >
                 <Upload size={16} className="mr-1" />
-                Import
+                {t('common.import')}
               </Button>
             </>
           )}
@@ -102,7 +104,7 @@ export function RulesManagerToolbar({
       {detectedType && !inputError && !validationError && (
         <p className="text-xs text-slate-500 flex items-center gap-1 -mt-2">
           <Info size={12} />
-          Will be added as:{' '}
+          {t('rules.manager.willBeAddedAs')}{' '}
           <span
             className={cn(
               'font-medium',
@@ -112,7 +114,7 @@ export function RulesManagerToolbar({
             {getRuleTypeBadge(detectedType.type)}
           </span>
           {detectedType.confidence === 'medium' && (
-            <span className="text-amber-600"> (suggested)</span>
+            <span className="text-amber-600"> {t('rules.manager.suggested')}</span>
           )}
         </p>
       )}

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { DomainRequest } from '@openpath/api';
 
+import { useT } from '../i18n/product-i18n';
+
 interface UseDomainRequestsBulkActionsOptions {
   requests: DomainRequest[];
   selectedPendingRequests: DomainRequest[];
@@ -17,6 +19,7 @@ export function useDomainRequestsBulkActions({
   approveRequest,
   rejectRequest,
 }: UseDomainRequestsBulkActionsOptions) {
+  const t = useT();
   const [bulkRejectReason, setBulkRejectReason] = useState('');
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{
@@ -90,8 +93,8 @@ export function useDomainRequestsBulkActions({
 
     setBulkMessage(
       failedCount > 0
-        ? `Approved ${successCount}. Failed ${failedCount}.`
-        : `Approved ${successCount} requests.`
+        ? t('domainRequests.bulk.approvedWithFailed', { successCount, failedCount })
+        : t('domainRequests.bulk.approvedAll', { successCount })
     );
     setBulkFailedIds(failedIds);
     setBulkFailedMode(failedCount > 0 ? 'approve' : null);
@@ -133,8 +136,8 @@ export function useDomainRequestsBulkActions({
 
     setBulkMessage(
       failedCount > 0
-        ? `Rejected ${successCount}. Failed ${failedCount}.`
-        : `Rejected ${successCount} requests.`
+        ? t('domainRequests.bulk.rejectedWithFailed', { successCount, failedCount })
+        : t('domainRequests.bulk.rejectedAll', { successCount })
     );
     setBulkFailedIds(failedIds);
     setBulkFailedMode(failedCount > 0 ? 'reject' : null);
@@ -149,7 +152,7 @@ export function useDomainRequestsBulkActions({
       (request) => request.status === 'pending' && bulkFailedIds.includes(request.id)
     );
     if (retryCandidates.length === 0) {
-      setBulkMessage('No failed pending requests to retry.');
+      setBulkMessage(t('domainRequests.bulk.noFailedToRetry'));
       setBulkFailedIds([]);
       setBulkFailedMode(null);
       return;

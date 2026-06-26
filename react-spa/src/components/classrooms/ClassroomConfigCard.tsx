@@ -125,6 +125,7 @@ export default function ClassroomConfigCard({
                     groupById,
                     displayName: classroom.currentGroupDisplayName,
                     source: 'manual',
+                    t,
                   })
                 : undefined
             }
@@ -177,6 +178,7 @@ export default function ClassroomConfigCard({
                     groupById,
                     displayName: classroom.defaultGroupDisplayName,
                     source: 'default',
+                    t,
                   })
                 : undefined
             }

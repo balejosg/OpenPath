@@ -1,4 +1,5 @@
 import { CheckCircle } from 'lucide-react';
+import { useT } from '../../i18n/product-i18n';
 
 interface BulkProgress {
   mode: 'approve' | 'reject';
@@ -35,19 +36,20 @@ export function DomainRequestsBulkActions({
   onSelectFailed,
   onRetryFailed,
 }: DomainRequestsBulkActionsProps) {
+  const t = useT();
   return (
     <>
       {selectedCount > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
           <div className="text-sm text-blue-900 font-medium">
-            {selectedCount} pending requests selected
+            {t('domainRequests.bulk.selectedCount', { count: selectedCount })}
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input
               type="text"
               value={bulkRejectReason}
               onChange={(event) => onBulkRejectReasonChange(event.target.value)}
-              placeholder="Bulk rejection reason (optional)"
+              placeholder={t('domainRequests.bulk.rejectReasonPlaceholder')}
               className="px-3 py-2 border border-blue-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -57,21 +59,21 @@ export function DomainRequestsBulkActions({
               disabled={bulkLoading}
               className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg disabled:opacity-50"
             >
-              {bulkLoading ? 'Processing...' : 'Approve selected'}
+              {bulkLoading ? t('common.processing') : t('domainRequests.bulk.approveSelected')}
             </button>
             <button
               onClick={onRejectSelected}
               disabled={bulkLoading}
               className="px-3 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg disabled:opacity-50"
             >
-              {bulkLoading ? 'Processing...' : 'Reject selected'}
+              {bulkLoading ? t('common.processing') : t('domainRequests.bulk.rejectSelected')}
             </button>
             <button
               onClick={onClearSelection}
               disabled={bulkLoading}
               className="px-3 py-2 bg-white border border-slate-300 text-slate-700 text-sm rounded-lg disabled:opacity-50"
             >
-              Clear selection
+              {t('domainRequests.bulk.clearSelection')}
             </button>
           </div>
           {bulkProgress && (
@@ -79,8 +81,8 @@ export function DomainRequestsBulkActions({
               <div className="flex items-center justify-between text-xs text-blue-900">
                 <span>
                   {bulkProgress.mode === 'approve'
-                    ? 'Bulk approval in progress...'
-                    : 'Bulk rejection in progress...'}
+                    ? t('domainRequests.bulk.approvalInProgress')
+                    : t('domainRequests.bulk.rejectionInProgress')}
                 </span>
                 <span>
                   {bulkProgress.done}/{bulkProgress.total}
@@ -98,20 +100,22 @@ export function DomainRequestsBulkActions({
           )}
           {bulkFailedIds.length > 0 && (
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-red-700">Failed: {bulkFailedIds.length}</span>
+              <span className="text-red-700">
+                {t('domainRequests.bulk.failedCount', { count: bulkFailedIds.length })}
+              </span>
               <button
                 onClick={onSelectFailed}
                 disabled={bulkLoading}
                 className="px-2 py-1 bg-white border border-red-300 text-red-700 rounded disabled:opacity-50"
               >
-                Select failed
+                {t('domainRequests.bulk.selectFailed')}
               </button>
               <button
                 onClick={onRetryFailed}
                 disabled={bulkLoading}
                 className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded disabled:opacity-50"
               >
-                Retry failed
+                {t('domainRequests.bulk.retryFailed')}
               </button>
             </div>
           )}

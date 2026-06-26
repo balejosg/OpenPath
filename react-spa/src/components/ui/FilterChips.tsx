@@ -1,5 +1,6 @@
 import React from 'react';
 import { cn } from '../../lib/utils';
+import { useT } from '../../i18n/product-i18n';
 
 export interface FilterOption {
   id: string;
@@ -37,11 +38,12 @@ export const FilterChips: React.FC<FilterChipsProps> = ({
   onChange,
   className,
 }) => {
+  const t = useT();
   return (
     <div
       className={cn('flex items-center gap-2 flex-wrap', className)}
       role="group"
-      aria-label="Filters"
+      aria-label={t('common.filters')}
     >
       {options.map((option) => {
         const isActive = option.id === activeId;

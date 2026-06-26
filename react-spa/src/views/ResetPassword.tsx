@@ -11,6 +11,7 @@ import {
   Mail,
 } from 'lucide-react';
 import { trpc } from '../lib/trpc';
+import { useT } from '../i18n/product-i18n';
 
 interface ResetPasswordProps {
   onNavigateToLogin: () => void;
@@ -18,6 +19,7 @@ interface ResetPasswordProps {
 }
 
 const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavigateToForgot }) => {
+  const t = useT();
   const [email, setEmail] = useState('');
   const [token, setToken] = useState('');
   const [password, setPassword] = useState('');
@@ -29,10 +31,10 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
   const [success, setSuccess] = useState(false);
 
   const passwordRequirements = [
-    { label: 'At least 8 characters', met: password.length >= 8 },
-    { label: 'One uppercase letter', met: /[A-Z]/.test(password) },
-    { label: 'One lowercase letter', met: /[a-z]/.test(password) },
-    { label: 'One number', met: /\d/.test(password) },
+    { label: t('resetPassword.req.minChars'), met: password.length >= 8 },
+    { label: t('resetPassword.req.uppercase'), met: /[A-Z]/.test(password) },
+    { label: t('resetPassword.req.lowercase'), met: /[a-z]/.test(password) },
+    { label: t('resetPassword.req.number'), met: /\d/.test(password) },
   ];
 
   const allRequirementsMet = passwordRequirements.every((r) => r.met);
@@ -51,9 +53,7 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
       await trpc.auth.resetPassword.mutate({ email, token, newPassword: password });
       setSuccess(true);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Unable to reset the password. Check the token.'
-      );
+      setError(err instanceof Error ? err.message : t('resetPassword.error.resetFailed'));
     } finally {
       setIsLoading(false);
     }
@@ -67,15 +67,15 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
             <div className="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">
               <CheckCircle className="text-green-600" size={32} />
             </div>
-            <h2 className="text-xl font-bold text-slate-800 mb-2">Password reset</h2>
-            <p className="text-slate-600 mb-6">
-              Your password has been updated. You can now sign in.
-            </p>
+            <h2 className="text-xl font-bold text-slate-800 mb-2">
+              {t('resetPassword.success.title')}
+            </h2>
+            <p className="text-slate-600 mb-6">{t('resetPassword.success.body')}</p>
             <button
               onClick={onNavigateToLogin}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
             >
-              Sign In
+              {t('auth.common.signIn')}
             </button>
           </div>
         </div>
@@ -92,7 +92,7 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
             <Shield className="text-white" size={32} />
           </div>
           <h1 className="text-2xl font-bold text-white">OpenPath</h1>
-          <p className="text-slate-400 mt-1">Reset password</p>
+          <p className="text-slate-400 mt-1">{t('resetPassword.subtitle')}</p>
         </div>
 
         {/* Card */}
@@ -102,7 +102,7 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
             className="flex items-center gap-2 text-slate-500 hover:text-slate-700 mb-6 text-sm font-medium transition-colors"
           >
             <ArrowLeft size={16} />
-            Back
+            {t('common.back')}
           </button>
 
           <form
@@ -113,7 +113,9 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
           >
             {/* Email */}
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">Email</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                {t('auth.common.email')}
+              </label>
               <div className="relative">
                 <Mail
                   className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
@@ -132,7 +134,7 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
             {/* Token */}
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2">
-                Recovery Token
+                {t('resetPassword.tokenLabel')}
               </label>
               <div className="relative">
                 <Key
@@ -143,7 +145,7 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
                   type="text"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
-                  placeholder="Paste your token here"
+                  placeholder={t('resetPassword.tokenPlaceholder')}
                   className="w-full pl-10 pr-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm"
                 />
               </div>
@@ -151,7 +153,9 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
 
             {/* New Password */}
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">New Password</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                {t('resetPassword.newPasswordLabel')}
+              </label>
               <div className="relative">
                 <Lock
                   className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
@@ -192,7 +196,7 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
             {/* Confirm Password */}
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2">
-                Confirm Password
+                {t('resetPassword.confirmPasswordLabel')}
               </label>
               <div className="relative">
                 <Lock
@@ -221,7 +225,7 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
                 </button>
               </div>
               {confirmPassword && !passwordsMatch && (
-                <p className="text-red-500 text-xs mt-1">Passwords do not match</p>
+                <p className="text-red-500 text-xs mt-1">{t('auth.validation.passwordMismatch')}</p>
               )}
             </div>
 
@@ -243,7 +247,7 @@ const ResetPassword: React.FC<ResetPasswordProps> = ({ onNavigateToLogin, onNavi
                   : 'bg-slate-200 text-slate-400 cursor-not-allowed'
               }`}
             >
-              {isLoading ? 'Processing...' : 'Reset password'}
+              {isLoading ? t('common.processing') : t('resetPassword.submitLabel')}
             </button>
           </form>
         </div>

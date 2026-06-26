@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { getEsActiveInactiveLabel } from '../../lib/status';
 import type { GroupCardViewModel, GroupsActiveView } from '../../hooks/useGroupsViewModel';
+import { useT } from '../../i18n/product-i18n';
 
 interface GroupsGridProps {
   activeView: GroupsActiveView;
@@ -37,13 +38,16 @@ export function GroupsGrid({
   onOpenConfigModal,
   onOpenCloneModal,
 }: GroupsGridProps) {
+  const t = useT();
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {loading ? (
         <div className="col-span-full flex items-center justify-center py-12">
           <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
           <span className="ml-2 text-slate-500">
-            {activeView === 'library' ? 'Loading library...' : 'Loading groups...'}
+            {activeView === 'library'
+              ? t('groups.grid.loadingLibrary')
+              : t('groups.grid.loadingGroups')}
           </span>
         </div>
       ) : error ? (
@@ -51,18 +55,18 @@ export function GroupsGrid({
           <AlertCircle className="w-6 h-6 text-red-400 mx-auto" />
           <span className="text-red-500 text-sm mt-2 block">{error}</span>
           <button onClick={onRetry} className="text-blue-600 hover:text-blue-800 text-sm mt-2">
-            Retry
+            {t('common.retry')}
           </button>
         </div>
       ) : groups.length === 0 ? (
         <div className="col-span-full text-center py-12 text-slate-500">
           {activeView === 'library'
-            ? 'No public policies in the library yet.'
+            ? t('groups.grid.emptyLibrary')
             : admin
-              ? 'No groups configured. Create one to get started.'
+              ? t('groups.grid.emptyAdmin')
               : teacherCanCreateGroups
-                ? 'You do not have policies yet. Create one to get started.'
-                : 'You do not have assigned policies yet. Ask an administrator to assign one.'}
+                ? t('groups.grid.emptyTeacherCanCreate')
+                : t('groups.grid.emptyTeacherNoCreate')}
 
           {activeView === 'my' && !admin && teacherCanCreateGroups && (
             <div className="mt-4">
@@ -70,7 +74,7 @@ export function GroupsGrid({
                 onClick={onOpenNewModal}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
               >
-                + Create my first policy
+                {t('groups.grid.createFirstPolicy')}
               </button>
             </div>
           )}
@@ -106,7 +110,7 @@ export function GroupsGrid({
             <div className="space-y-3">
               <div className="flex justify-between items-center text-sm py-2 border-t border-slate-100 border-b">
                 <span className="text-slate-500 flex items-center gap-2 text-xs">
-                  <ShieldCheck size={14} /> Allowed domains
+                  <ShieldCheck size={14} /> {t('groups.grid.allowedDomains')}
                 </span>
                 <span className="font-medium text-slate-900">{group.domainCount}</span>
               </div>
@@ -122,11 +126,13 @@ export function GroupsGrid({
                     className={`text-xs px-2 py-0.5 rounded-full border font-medium ${group.visibility === 'instance_public' ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-100 text-slate-600'}`}
                     title={
                       group.visibility === 'instance_public'
-                        ? 'Visible to everyone in the library'
-                        : 'Only visible to you'
+                        ? t('groups.grid.visibilityPublicTitle')
+                        : t('groups.grid.visibilityPrivateTitle')
                     }
                   >
-                    {group.visibility === 'instance_public' ? 'Public' : 'Private'}
+                    {group.visibility === 'instance_public'
+                      ? t('groups.grid.visibilityPublic')
+                      : t('groups.grid.visibilityPrivate')}
                   </span>
                 </div>
 
@@ -141,9 +147,9 @@ export function GroupsGrid({
                         })
                       }
                       className="text-xs text-slate-700 hover:text-slate-900 flex items-center gap-1 font-medium"
-                      title="View rules (read only)"
+                      title={t('groups.grid.viewRulesTitle')}
                     >
-                      <ArrowRight size={12} /> View
+                      <ArrowRight size={12} /> {t('common.view')}
                     </button>
                     <button
                       onClick={() => onOpenCloneModal(group.id)}
@@ -155,11 +161,11 @@ export function GroupsGrid({
                       }`}
                       title={
                         group.status === 'Active'
-                          ? 'Clone to edit'
-                          : 'Inactive groups cannot be cloned'
+                          ? t('groups.grid.cloneTitle')
+                          : t('groups.grid.cloneInactiveTitle')
                       }
                     >
-                      <Copy size={12} /> Clone
+                      <Copy size={12} /> {t('common.clone')}
                     </button>
                   </div>
                 ) : (
@@ -167,7 +173,7 @@ export function GroupsGrid({
                     onClick={() => onOpenConfigModal(group.id)}
                     className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 font-medium transition-opacity"
                   >
-                    Configure <ArrowRight size={12} />
+                    {t('common.configure')} <ArrowRight size={12} />
                   </button>
                 )}
               </div>

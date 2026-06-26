@@ -1,5 +1,6 @@
 import React from 'react';
 import { cn } from '../../lib/utils';
+import { useT } from '../../i18n/product-i18n';
 
 export interface TabItem {
   id: string;
@@ -43,6 +44,7 @@ export const Tabs: React.FC<TabsProps> = ({
   getTabId,
   getPanelId,
 }) => {
+  const t = useT();
   const tabRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
 
   const moveFocus = (currentIndex: number, direction: 1 | -1) => {
@@ -58,7 +60,7 @@ export const Tabs: React.FC<TabsProps> = ({
     <div
       className={cn('overflow-x-auto overflow-y-hidden border-b border-slate-200', className)}
       role="tablist"
-      aria-label={ariaLabel ?? 'Navigation tabs'}
+      aria-label={ariaLabel ?? t('tabs.navigationLabel')}
     >
       <div className="flex min-w-max gap-1">
         {tabs.map((tab, index) => {

@@ -14,6 +14,7 @@ import {
 import { cn } from '../../lib/utils';
 import { getRuleTypeBadge } from '../../lib/ruleDetection';
 import type { Rule, RuleType } from '../../lib/rules';
+import { useT } from '../../i18n/product-i18n';
 
 interface RulesTableRowProps {
   rule: Rule;
@@ -75,6 +76,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
   readOnly,
   rule,
 }) => {
+  const t = useT();
   return (
     <tr
       className={cn(
@@ -88,7 +90,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
           <button
             onClick={() => onToggleSelection?.(rule.id)}
             className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
-            title={isSelected ? 'Deselect' : 'Select'}
+            title={isSelected ? t('common.deselect') : t('common.select')}
             disabled={isEditing}
           >
             {isSelected ? (
@@ -118,7 +120,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
             )}
             onClick={() => hasOnSave && onStartEdit(rule)}
             onDoubleClick={() => hasOnSave && onStartEdit(rule)}
-            title={hasOnSave ? 'Click to edit' : undefined}
+            title={hasOnSave ? t('rules.row.clickToEdit') : undefined}
           >
             {rule.value}
           </span>
@@ -137,7 +139,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
           </span>
           {rule.source === 'auto_extension' && (
             <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full border font-medium bg-cyan-50 text-cyan-700 border-cyan-200">
-              Auto (Firefox)
+              {t('rules.row.autoFirefox')}
             </span>
           )}
         </div>
@@ -149,7 +151,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
             value={editComment}
             onChange={(e) => onSetEditComment(e.target.value)}
             onKeyDown={onHandleEditKeyDown}
-            placeholder="Comment (optional)"
+            placeholder={t('rules.row.commentPlaceholder')}
             className="w-full px-2 py-1 text-sm border border-amber-300 rounded focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none bg-white"
             data-testid="edit-comment-input"
           />
@@ -161,7 +163,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
             )}
             onClick={() => hasOnSave && onStartEdit(rule)}
             onDoubleClick={() => hasOnSave && onStartEdit(rule)}
-            title={hasOnSave ? 'Click to edit' : undefined}
+            title={hasOnSave ? t('rules.row.clickToEdit') : undefined}
           >
             {rule.comment ?? '-'}
           </span>
@@ -178,7 +180,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
                 onClick={() => void onSaveEdit()}
                 disabled={isSaving || !editValue.trim()}
                 className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Save (Enter)"
+                title={t('rules.row.saveHint')}
                 data-testid="save-edit-button"
               >
                 {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
@@ -187,7 +189,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
                 onClick={onCancelEdit}
                 disabled={isSaving}
                 className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors disabled:opacity-50"
-                title="Cancel (Esc)"
+                title={t('rules.row.cancelHint')}
                 data-testid="cancel-edit-button"
               >
                 <X size={14} />
@@ -199,7 +201,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
                 <button
                   onClick={() => onStartEdit(rule)}
                   className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                  title="Edit"
+                  title={t('common.edit')}
                   data-testid="edit-button"
                 >
                   <Edit2 size={14} />
@@ -210,8 +212,8 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
                 className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
                 title={
                   rule.type === 'whitelist' && rule.source === 'auto_extension'
-                    ? 'Revoke auto-approval'
-                    : 'Delete'
+                    ? t('rules.row.revokeAutoApproval')
+                    : t('common.delete')
                 }
               >
                 <Trash2 size={14} />

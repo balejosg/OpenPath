@@ -8,6 +8,12 @@ import {
 } from '../classroom-selectors';
 import type { Classroom } from '../../types';
 import type { ClassroomListModel } from '../classrooms';
+import { translateProductText } from '../../i18n/product-i18n';
+
+const t = (
+  key: Parameters<typeof translateProductText>[1],
+  params?: Parameters<typeof translateProductText>[2]
+) => translateProductText('en', key, params);
 
 const classroomModels: ClassroomListModel[] = [
   {
@@ -141,6 +147,7 @@ describe('classroom-selectors', () => {
         groupById,
         classroomId: 'classroom-1',
         nextGroupId: 'group-default',
+        t,
       })
     ).toEqual({
       classroomId: 'classroom-1',
@@ -155,6 +162,7 @@ describe('classroom-selectors', () => {
         groupById,
         classroomId: 'classroom-2',
         nextGroupId: 'group-default',
+        t,
       })
     ).toBeNull();
   });

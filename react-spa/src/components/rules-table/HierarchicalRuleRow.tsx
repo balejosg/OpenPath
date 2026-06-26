@@ -3,6 +3,7 @@ import { CheckSquare, Edit2, Loader2, Save, Square, Trash2, X } from 'lucide-rea
 import { cn } from '../../lib/utils';
 import { getRuleTypeBadge } from '../../lib/ruleDetection';
 import type { Rule } from '../../lib/rules';
+import { useT } from '../../i18n/product-i18n';
 
 interface HierarchicalRuleRowProps {
   rule: Rule;
@@ -39,6 +40,7 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
   readOnly,
   rule,
 }) => {
+  const t = useT();
   return (
     <tr
       className={cn(
@@ -52,7 +54,7 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
           <button
             onClick={() => onToggleSelection?.(rule.id)}
             className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
-            title={isSelected ? 'Deselect' : 'Select'}
+            title={isSelected ? t('common.deselect') : t('common.select')}
             disabled={isEditing}
           >
             {isSelected ? (
@@ -87,7 +89,7 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
                 e.stopPropagation();
                 if (canEdit) onStartEdit(rule);
               }}
-              title={canEdit ? 'Click to edit' : undefined}
+              title={canEdit ? t('rules.row.clickToEdit') : undefined}
             >
               {rule.value}
             </span>
@@ -101,7 +103,7 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
           </span>
           {rule.source === 'auto_extension' && (
             <span className="text-xs px-2 py-0.5 rounded bg-cyan-50 text-cyan-700 border border-cyan-200">
-              Auto (Firefox)
+              {t('rules.row.autoFirefox')}
             </span>
           )}
         </div>
@@ -114,7 +116,7 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
                 onClick={() => void onSaveEdit()}
                 disabled={isSaving || !editValue.trim()}
                 className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Save (Enter)"
+                title={t('rules.row.saveHint')}
                 data-testid="save-edit-button"
               >
                 {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
@@ -123,7 +125,7 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
                 onClick={onCancelEdit}
                 disabled={isSaving}
                 className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors disabled:opacity-50"
-                title="Cancel (Esc)"
+                title={t('rules.row.cancelHint')}
                 data-testid="cancel-edit-button"
               >
                 <X size={14} />
@@ -138,7 +140,7 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
                     onStartEdit(rule);
                   }}
                   className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                  title="Edit"
+                  title={t('common.edit')}
                   data-testid="edit-button"
                 >
                   <Edit2 size={14} />
@@ -152,8 +154,8 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
                 className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
                 title={
                   rule.type === 'whitelist' && rule.source === 'auto_extension'
-                    ? 'Revoke auto-approval'
-                    : 'Delete'
+                    ? t('rules.row.revokeAutoApproval')
+                    : t('common.delete')
                 }
               >
                 <Trash2 size={14} />

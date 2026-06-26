@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { useT } from '../i18n/product-i18n';
 
 import OneOffScheduleFormModal from '../components/OneOffScheduleFormModal';
 import ScheduleFormModal from '../components/ScheduleFormModal';
@@ -31,6 +32,7 @@ function toEditableGroups(groups: readonly GroupLike[]): GroupLike[] {
 }
 
 const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }) => {
+  const t = useT();
   const viewModel = useTeacherDashboardViewModel();
   const [weekMonday, setWeekMonday] = useState(() => getWeekMonday(new Date()));
 
@@ -133,9 +135,13 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }
 
       <ConfirmDialog
         isOpen={viewModel.controlConfirm !== null}
-        title="Confirm change"
-        confirmLabel={viewModel.controlConfirm?.nextGroupId ? 'Replace' : 'Release Classroom'}
-        cancelLabel="Cancel"
+        title={t('teacher.control.confirmChangeTitle')}
+        confirmLabel={
+          viewModel.controlConfirm?.nextGroupId
+            ? t('classrooms.dialog.replaceActiveGroup.confirm')
+            : t('teacher.control.releaseClassroom')
+        }
+        cancelLabel={t('common.cancel')}
         isLoading={viewModel.controlLoading}
         errorMessage={viewModel.controlConfirm ? (viewModel.controlError ?? undefined) : undefined}
         onClose={() => {
@@ -153,12 +159,14 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }
         }}
       >
         <p className="text-sm text-slate-600">
-          The classroom already has a manually applied policy (
+          {t('teacher.control.confirmBodyCurrent')}
           <strong>{viewModel.controlConfirm?.currentName}</strong>).
         </p>
         <p className="text-sm text-slate-600">
-          {viewModel.controlConfirm?.nextGroupId ? 'Replace with' : 'Release (no group)'}:{' '}
-          <strong>{viewModel.controlConfirm?.nextName}</strong>?
+          {viewModel.controlConfirm?.nextGroupId
+            ? t('teacher.control.confirmBodyReplaceWith')
+            : t('teacher.control.confirmBodyRelease')}
+          : <strong>{viewModel.controlConfirm?.nextName}</strong>?
         </p>
       </ConfirmDialog>
 
@@ -189,9 +197,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }
       {scheduleCommands.deleteEntry ? (
         <DangerConfirmDialog
           isOpen
-          title="Delete schedule"
-          confirmLabel="Delete"
-          cancelLabel="Cancel"
+          title={t('teacher.detail.deleteSchedule')}
+          confirmLabel={t('common.delete')}
+          cancelLabel={t('common.cancel')}
           isLoading={scheduleCommands.scheduleSaving}
           errorMessage={scheduleCommands.scheduleError || undefined}
           onClose={scheduleCommands.closeDeleteSchedule}
@@ -199,12 +207,18 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onNavigateToRules }
         >
           <div className="space-y-2 text-sm text-slate-600">
             <p>
-              Delete <strong>{scheduleCommands.deleteEntry.label}</strong>?
+              {t('teacher.deleteSchedule.confirmDelete')}{' '}
+              <strong>{scheduleCommands.deleteEntry.label}</strong>?
             </p>
-            <p>Type: {scheduleCommands.deleteEntry.kind === 'one_off' ? 'One-off' : 'Weekly'}</p>
             <p>
-              Schedule: {scheduleCommands.deleteEntry.startTime} -{' '}
-              {scheduleCommands.deleteEntry.endTime}
+              {t('teacher.deleteSchedule.typeLabel')}
+              {scheduleCommands.deleteEntry.kind === 'one_off'
+                ? t('teacher.schedule.oneOff')
+                : t('teacher.schedule.weekly')}
+            </p>
+            <p>
+              {t('teacher.deleteSchedule.scheduleLabel')}
+              {scheduleCommands.deleteEntry.startTime} - {scheduleCommands.deleteEntry.endTime}
             </p>
           </div>
         </DangerConfirmDialog>

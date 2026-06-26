@@ -1,7 +1,8 @@
 import type { User } from '../types';
-import { USER_ROLE_LABELS } from './roles';
+import { getUserRoleLabel } from './roles';
 import { toCsv } from './csv';
 import { getEsActiveInactiveLabel } from './status';
+import type { ProductT } from '../i18n/product-i18n';
 
 export const USERS_CSV_EXPORT_FILENAME = 'users.csv';
 export const USERS_CSV_EXPORT_MIME_TYPE = 'text/csv;charset=utf-8';
@@ -12,7 +13,8 @@ export interface UsersCsvExportOptions {
 
 export function buildUsersCsvExport(
   users: readonly User[],
-  options: UsersCsvExportOptions = {}
+  options: UsersCsvExportOptions = {},
+  t: ProductT
 ): {
   filename: string;
   mimeType: string;
@@ -24,7 +26,7 @@ export function buildUsersCsvExport(
   if (includeCodeColumns) headers.push('Roles_codigo', 'Estado_codigo');
 
   const rows = users.map((user) => {
-    const rolesLabel = user.roles.map((role) => USER_ROLE_LABELS[role]).join('|');
+    const rolesLabel = user.roles.map((role) => getUserRoleLabel(role, t)).join('|');
     const statusLabel = getEsActiveInactiveLabel(user.status);
     const base = [user.name, user.email, rolesLabel, statusLabel];
 

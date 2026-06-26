@@ -3,12 +3,12 @@ import type { OneOffScheduleWithPermissions, ScheduleWithPermissions } from '../
 import { trpc } from '../lib/trpc';
 import { resolveTrpcErrorMessage } from '../lib/error-utils';
 import { reportError } from '../lib/reportError';
-import { useOpenPathI18n } from '../i18n/product-i18n';
+import { useOpenPathI18n, useT } from '../i18n/product-i18n';
 
-function formatScheduleError(err: unknown, fallback: string): string {
+function formatScheduleError(err: unknown, fallback: string, conflictMessage: string): string {
   const raw = err instanceof Error ? err.message : '';
   return resolveTrpcErrorMessage(err, {
-    conflict: 'That time slot is already reserved',
+    conflict: conflictMessage,
     fallback: raw || fallback,
   });
 }
@@ -35,6 +35,7 @@ export const useClassroomSchedules = ({
   selectedClassroomId,
   onSchedulesUpdated,
 }: UseClassroomSchedulesParams) => {
+  const t = useT();
   const { locale } = useOpenPathI18n();
   const [schedules, setSchedules] = useState<ScheduleWithPermissions[]>([]);
   const [oneOffSchedules, setOneOffSchedules] = useState<OneOffScheduleWithPermissions[]>([]);
@@ -64,7 +65,7 @@ export const useClassroomSchedules = ({
       setOneOffSchedules(result.oneOffSchedules);
     } catch (err) {
       reportError('Failed to fetch schedules:', err);
-      setScheduleError('Unable to load schedules');
+      setScheduleError(t('classroomSchedules.error.unableToLoad'));
       setSchedules([]);
       setOneOffSchedules([]);
     } finally {
@@ -167,12 +168,18 @@ export const useClassroomSchedules = ({
         setScheduleFormStartTime(undefined);
       } catch (err: unknown) {
         reportError('Failed to save schedule:', err);
-        setScheduleError(formatScheduleError(err, 'Unable to save schedule'));
+        setScheduleError(
+          formatScheduleError(
+            err,
+            t('classroomSchedules.error.unableToSave'),
+            t('classroomSchedules.error.conflictSlot')
+          )
+        );
       } finally {
         setScheduleSaving(false);
       }
     },
-    [selectedClassroomId, editingSchedule, fetchSchedules, onSchedulesUpdated]
+    [selectedClassroomId, editingSchedule, fetchSchedules, onSchedulesUpdated, t]
   );
 
   const handleOneOffScheduleSave = useCallback(
@@ -205,12 +212,18 @@ export const useClassroomSchedules = ({
         setEditingOneOffSchedule(null);
       } catch (err: unknown) {
         reportError('Failed to save one-off schedule:', err);
-        setScheduleError(formatScheduleError(err, 'Unable to save schedule'));
+        setScheduleError(
+          formatScheduleError(
+            err,
+            t('classroomSchedules.error.unableToSave'),
+            t('classroomSchedules.error.conflictSlot')
+          )
+        );
       } finally {
         setScheduleSaving(false);
       }
     },
-    [selectedClassroomId, editingOneOffSchedule, fetchSchedules, onSchedulesUpdated]
+    [selectedClassroomId, editingOneOffSchedule, fetchSchedules, onSchedulesUpdated, t]
   );
 
   const requestScheduleDelete = useCallback((schedule: ScheduleWithPermissions) => {
@@ -252,11 +265,17 @@ export const useClassroomSchedules = ({
       setScheduleDeleteTarget(null);
     } catch (err: unknown) {
       reportError('Failed to delete schedule:', err);
-      setScheduleError(formatScheduleError(err, 'Unable to delete schedule'));
+      setScheduleError(
+        formatScheduleError(
+          err,
+          t('classroomSchedules.error.unableToDelete'),
+          t('classroomSchedules.error.conflictSlot')
+        )
+      );
     } finally {
       setScheduleSaving(false);
     }
-  }, [selectedClassroomId, scheduleDeleteTarget, fetchSchedules, onSchedulesUpdated]);
+  }, [selectedClassroomId, scheduleDeleteTarget, fetchSchedules, onSchedulesUpdated, t]);
 
   return {
     schedules,

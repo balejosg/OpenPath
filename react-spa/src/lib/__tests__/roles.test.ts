@@ -8,6 +8,12 @@ import {
   getRoleDisplayLabel,
   mapBackendRoleToUserRole,
 } from '../roles';
+import { translateProductText } from '../../i18n/product-i18n';
+
+const t = (
+  key: Parameters<typeof translateProductText>[1],
+  params?: Parameters<typeof translateProductText>[2]
+) => translateProductText('en', key, params);
 
 describe('roles helpers', () => {
   it('maps backend role strings to UserRole', () => {
@@ -28,13 +34,13 @@ describe('roles helpers', () => {
   });
 
   it('returns human-readable labels for raw role strings', () => {
-    expect(getRoleDisplayLabel('admin')).toBe('Admin');
-    expect(getRoleDisplayLabel('openpath-admin')).toBe('Admin');
-    expect(getRoleDisplayLabel('teacher')).toBe('Teacher');
-    expect(getRoleDisplayLabel('student')).toBe('User');
-    expect(getRoleDisplayLabel('viewer')).toBe('User');
-    expect(getRoleDisplayLabel('user')).toBe('User');
-    expect(getRoleDisplayLabel('custom')).toBe('custom');
+    expect(getRoleDisplayLabel('admin', t)).toBe('Admin');
+    expect(getRoleDisplayLabel('openpath-admin', t)).toBe('Admin');
+    expect(getRoleDisplayLabel('teacher', t)).toBe('Teacher');
+    expect(getRoleDisplayLabel('student', t)).toBe('User');
+    expect(getRoleDisplayLabel('viewer', t)).toBe('User');
+    expect(getRoleDisplayLabel('user', t)).toBe('User');
+    expect(getRoleDisplayLabel('custom', t)).toBe('custom');
   });
 
   it('exposes UI role labels for UserRole enum', () => {

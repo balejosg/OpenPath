@@ -3,6 +3,7 @@ import { AlertCircle } from 'lucide-react';
 
 import { Modal } from './Modal';
 import { Button } from './Button';
+import { useT } from '../../i18n/product-i18n';
 
 export interface ConfirmDialogProps {
   isOpen: boolean;
@@ -24,8 +25,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   isOpen,
   title,
   children,
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
+  confirmLabel,
+  cancelLabel,
   confirmVariant = 'primary',
   isLoading = false,
   errorMessage,
@@ -33,6 +34,9 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   onClose,
   onConfirm,
 }) => {
+  const t = useT();
+  const resolvedConfirmLabel = confirmLabel ?? t('common.confirm');
+  const resolvedCancelLabel = cancelLabel ?? t('common.cancel');
   const handleClose = useCallback(() => {
     if (isLoading) return;
     onClose();
@@ -52,7 +56,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 
         <div className="flex gap-3 pt-2">
           <Button variant="outline" className="flex-1" onClick={handleClose} disabled={isLoading}>
-            {cancelLabel}
+            {resolvedCancelLabel}
           </Button>
           <Button
             variant={confirmVariant}
@@ -61,7 +65,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             isLoading={isLoading}
             disabled={disableConfirm}
           >
-            {confirmLabel}
+            {resolvedConfirmLabel}
           </Button>
         </div>
       </div>

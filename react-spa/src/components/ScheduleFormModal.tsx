@@ -11,14 +11,7 @@ import {
 import { GroupSelect } from './groups/GroupSelect';
 import { isGroupEnabled, type GroupLike } from './groups/GroupLabel';
 import { Modal } from './ui/Modal';
-
-const DAY_OPTIONS = [
-  { value: 1, label: 'Monday' },
-  { value: 2, label: 'Tuesday' },
-  { value: 3, label: 'Wednesday' },
-  { value: 4, label: 'Thursday' },
-  { value: 5, label: 'Friday' },
-] as const;
+import { useT } from '../i18n/product-i18n';
 
 const TIME_OPTIONS = buildTimeOfDayOptions({ startHour: 7, endHour: 21, stepMinutes: 15 });
 
@@ -58,7 +51,16 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
   onSave,
   onClose,
 }) => {
+  const t = useT();
   const isEdit = schedule !== null;
+
+  const DAY_OPTIONS = [
+    { value: 1 as const, label: t('teacher.day.monday') },
+    { value: 2 as const, label: t('teacher.day.tuesday') },
+    { value: 3 as const, label: t('teacher.day.wednesday') },
+    { value: 4 as const, label: t('teacher.day.thursday') },
+    { value: 5 as const, label: t('teacher.day.friday') },
+  ];
 
   const roundedDefaultStart = defaultStartTime
     ? (roundTimeOfDayDown(defaultStartTime, 15) ?? defaultStartTime)
@@ -94,17 +96,17 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
   const handleSubmit = () => {
     setLocalError('');
     if (dayOfWeek === null) {
-      setLocalError('Select a day');
+      setLocalError(t('scheduleForm.errorSelectDay'));
       return;
     }
     if (!groupId) {
-      setLocalError('Select a group');
+      setLocalError(t('scheduleForm.errorSelectGroup'));
       return;
     }
 
     const cmp = compareTimeOfDay(startTime, endTime);
     if (cmp === null || cmp >= 0) {
-      setLocalError('End time must be after start time');
+      setLocalError(t('scheduleForm.errorEndTime'));
       return;
     }
     onSave({ dayOfWeek, startTime, endTime, groupId });
@@ -119,13 +121,15 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
     <Modal
       isOpen
       onClose={handleClose}
-      title={isEdit ? 'Edit Schedule' : 'New Schedule'}
+      title={isEdit ? t('scheduleForm.titleEdit') : t('scheduleForm.titleNew')}
       className="max-w-md"
     >
       <div className="space-y-4">
         {/* Day */}
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Day</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            {t('scheduleForm.labelDay')}
+          </label>
           <div className="flex gap-1.5">
             {DAY_OPTIONS.map((d) => (
               <button
@@ -151,7 +155,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
               htmlFor="schedule-start"
               className="block text-sm font-medium text-slate-700 mb-1"
             >
-              Start Time
+              {t('scheduleForm.labelStartTime')}
             </label>
             <select
               id="schedule-start"
@@ -159,16 +163,16 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
               onChange={(e) => setStartTime(e.target.value)}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
             >
-              {TIME_OPTIONS.map((t) => (
-                <option key={t} value={t}>
-                  {t}
+              {TIME_OPTIONS.map((time) => (
+                <option key={time} value={time}>
+                  {time}
                 </option>
               ))}
             </select>
           </div>
           <div>
             <label htmlFor="schedule-end" className="block text-sm font-medium text-slate-700 mb-1">
-              End Time
+              {t('scheduleForm.labelEndTime')}
             </label>
             <select
               id="schedule-end"
@@ -176,9 +180,9 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
               onChange={(e) => setEndTime(e.target.value)}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
             >
-              {TIME_OPTIONS.filter((t) => t > startTime).map((t) => (
-                <option key={t} value={t}>
-                  {t}
+              {TIME_OPTIONS.filter((time) => time > startTime).map((time) => (
+                <option key={time} value={time}>
+                  {time}
                 </option>
               ))}
             </select>
@@ -188,7 +192,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
         {/* Group */}
         <div>
           <label htmlFor="schedule-group" className="block text-sm font-medium text-slate-700 mb-1">
-            Rule Group
+            {t('scheduleForm.labelRuleGroup')}
           </label>
           <GroupSelect
             id="schedule-group"
@@ -198,7 +202,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
             includeNoneOption={false}
             inactiveBehavior={schedule ? 'disable' : 'hide'}
             disabled={saving || groups.length === 0}
-            emptyLabel="No groups available"
+            emptyLabel={t('scheduleForm.emptyGroups')}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none disabled:bg-slate-50 disabled:text-slate-500"
           />
         </div>
@@ -217,7 +221,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
             disabled={saving}
             className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
           >
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             onClick={handleSubmit}
@@ -225,7 +229,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
             className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {saving && <Loader2 size={16} className="animate-spin" />}
-            {isEdit ? 'Save Changes' : 'Create Schedule'}
+            {isEdit ? t('common.saveChanges') : t('scheduleForm.createSchedule')}
           </button>
         </div>
       </div>

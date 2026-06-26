@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from './Button';
+import { useT } from '../../i18n/product-i18n';
 
 let bodyScrollLockCount = 0;
 let previousBodyOverflow: string | null = null;
@@ -78,9 +79,11 @@ const Modal: React.FC<ModalProps> = ({
   title,
   children,
   className,
-  closeLabel = 'Close',
+  closeLabel,
   bodyClassName,
 }) => {
+  const t = useT();
+  const resolvedCloseLabel = closeLabel ?? t('common.close');
   const modalId = useId();
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -190,8 +193,8 @@ const Modal: React.FC<ModalProps> = ({
             size="icon"
             className="h-8 w-8 text-slate-400 hover:text-slate-600"
             onClick={onClose}
-            aria-label={closeLabel}
-            title={closeLabel}
+            aria-label={resolvedCloseLabel}
+            title={resolvedCloseLabel}
             ref={closeButtonRef}
           >
             <X size={18} />

@@ -4,6 +4,7 @@ import { reportError } from '../lib/reportError';
 import { selectActiveClassroomRowsFromModels } from '../lib/classroom-selectors';
 import { useClassroomListModelsQuery } from './useClassroomsList';
 import { useIntervalRefetch, useRefetchOnFocus } from './useLiveRefetch';
+import { useT } from '../i18n/product-i18n';
 
 interface StatsData {
   groupCount: number;
@@ -39,9 +40,19 @@ export const DASHBOARD_SORT_OPTIONS: { value: DashboardSortOption; label: string
   { value: 'recent', label: 'Recientes' },
 ];
 
+export function useDashboardSortOptions(): { value: DashboardSortOption; label: string }[] {
+  const t = useT();
+  return [
+    { value: 'name', label: 'Nombre (A-Z)' },
+    { value: 'rules', label: t('dashboard.sort.mostRules') },
+    { value: 'recent', label: 'Recientes' },
+  ];
+}
+
 const MAX_QUICK_ACCESS_GROUPS = 6;
 
 export function useDashboardViewModel() {
+  const t = useT();
   const [stats, setStats] = useState<StatsData | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -76,7 +87,7 @@ export function useDashboardViewModel() {
       setError(null);
     } catch (err) {
       reportError('Failed to fetch dashboard stats:', err);
-      setError('Unable to load statistics');
+      setError(t('dashboard.error.unableToLoadStatistics'));
     } finally {
       setLoading(false);
     }
@@ -114,7 +125,7 @@ export function useDashboardViewModel() {
         setGroupsError(null);
       } catch (err) {
         reportError('Failed to fetch groups:', err);
-        setGroupsError('Unable to load groups');
+        setGroupsError(t('dashboard.error.unableToLoadGroups'));
       } finally {
         setGroupsLoading(false);
       }

@@ -6,6 +6,7 @@ import { HierarchicalRulesTable } from '../HierarchicalRulesTable';
 import { RulesTable } from '../RulesTable';
 import { Tabs } from '../ui/Tabs';
 import type { ViewMode } from '../../hooks/useRulesManagerViewModel';
+import { useT } from '../../i18n/product-i18n';
 
 interface RulesManagerTableSectionProps {
   tabs: { id: ManagedRulesFilterType; label: string; count: number; icon?: ReactNode }[];
@@ -48,6 +49,7 @@ export function RulesManagerTableSection({
   onToggleSelection,
   onToggleSelectAll,
 }: RulesManagerTableSectionProps) {
+  const t = useT();
   return (
     <>
       <Tabs
@@ -64,7 +66,7 @@ export function RulesManagerTableSection({
             onClick={onRetry}
             className="text-red-700 hover:text-red-800 text-sm mt-2 underline"
           >
-            Retry
+            {t('common.retry')}
           </button>
         </div>
       )}

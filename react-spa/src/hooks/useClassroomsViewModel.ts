@@ -8,6 +8,7 @@ import { useAllowedGroups } from './useAllowedGroups';
 import { useClassroomListModelsQuery } from './useClassroomsList';
 import { useListDetailSelection } from './useListDetailSelection';
 import { useNormalizedSearch } from './useNormalizedSearch';
+import { useT } from '../i18n/product-i18n';
 
 interface UseClassroomsViewModelOptions {
   initialSelectedClassroomId?: string | null;
@@ -16,6 +17,7 @@ interface UseClassroomsViewModelOptions {
 export function useClassroomsViewModel({
   initialSelectedClassroomId = null,
 }: UseClassroomsViewModelOptions = {}) {
+  const t = useT();
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewModal, setShowNewModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -53,7 +55,7 @@ export function useClassroomsViewModel({
     initialSelectedId: initialSelectedClassroomId,
   });
 
-  const allowedGroupsError = groupsQueryError ? 'Unable to load classrooms' : null;
+  const allowedGroupsError = groupsQueryError ? t('classroomsViewModel.error.unableToLoad') : null;
   const isInitialLoading = classroomsQuery.loading || groupsLoading;
   const loadError = loadingError ?? allowedGroupsError;
 
@@ -99,7 +101,7 @@ export function useClassroomsViewModel({
 
   const handleCreateClassroom = useCallback(async () => {
     if (!newName.trim()) {
-      setNewError('Classroom name is required');
+      setNewError(t('classroomsViewModel.error.nameRequired'));
       return;
     }
 
@@ -120,7 +122,7 @@ export function useClassroomsViewModel({
       setShowNewModal(false);
     } catch (err) {
       reportError('Failed to create classroom:', err);
-      setNewError('Unable to create classroom');
+      setNewError(t('classroomsViewModel.error.unableToCreate'));
     } finally {
       setSaving(false);
     }

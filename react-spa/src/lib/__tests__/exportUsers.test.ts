@@ -6,6 +6,12 @@ import {
   USERS_CSV_EXPORT_FILENAME,
   USERS_CSV_EXPORT_MIME_TYPE,
 } from '../exportUsers';
+import { translateProductText } from '../../i18n/product-i18n';
+
+const t = (
+  key: Parameters<typeof translateProductText>[1],
+  params?: Parameters<typeof translateProductText>[2]
+) => translateProductText('en', key, params);
 
 describe('buildUsersCsvExport', () => {
   const users: User[] = [
@@ -26,7 +32,7 @@ describe('buildUsersCsvExport', () => {
   ];
 
   it('builds a localized CSV with code columnas by default', () => {
-    const result = buildUsersCsvExport(users);
+    const result = buildUsersCsvExport(users, {}, t);
 
     expect(result.filename).toBe(USERS_CSV_EXPORT_FILENAME);
     expect(result.mimeType).toBe(USERS_CSV_EXPORT_MIME_TYPE);
@@ -40,7 +46,7 @@ describe('buildUsersCsvExport', () => {
   });
 
   it('can omit code columnas when requested', () => {
-    const result = buildUsersCsvExport(users, { includeCodeColumns: false });
+    const result = buildUsersCsvExport(users, { includeCodeColumns: false }, t);
 
     expect(result.content).toBe(
       [

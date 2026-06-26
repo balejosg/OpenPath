@@ -2,6 +2,7 @@
  * CSV Parser utility for bulk rule import.
  * Handles various CSV formats with automatic header detection.
  */
+import type { ProductT } from '../i18n/product-i18n';
 
 export interface CSVParseResult {
   /** Successfully parsed values */
@@ -27,6 +28,8 @@ export interface CSVParseOptions {
   delimiter?: ',' | ';' | '\t';
   /** Skip rows starting with this character */
   commentChar?: string;
+  /** Optional translate fn for user-facing warning messages */
+  t?: ProductT;
 }
 
 const DEFAULT_PREFERRED_COLUMNS = [
@@ -175,6 +178,7 @@ export function parseCSV(content: string, options: CSVParseOptions = {}): CSVPar
     preferredColumns = DEFAULT_PREFERRED_COLUMNS,
     delimiter: explicitDelimiter,
     commentChar = '#',
+    t,
   } = options;
 
   const warnings: string[] = [];
@@ -186,7 +190,7 @@ export function parseCSV(content: string, options: CSVParseOptions = {}): CSVPar
       format: 'plain-text',
       totalRows: 0,
       skippedRows: 0,
-      warnings: ['The file is empty'],
+      warnings: [t ? t('csvParser.fileEmpty') : 'The file is empty'],
     };
   }
 

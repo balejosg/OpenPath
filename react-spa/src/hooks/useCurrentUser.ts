@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { trpc } from '../lib/trpc';
 import { getPrimaryRole, getRoleDisplayLabel as getRoleDisplayLabelFromLib } from '../lib/roles';
 import { reportError } from '../lib/reportError';
+import { useT } from '../i18n/product-i18n';
 
 export interface CurrentUser {
   id: string;
@@ -27,6 +28,7 @@ interface UseCurrentUserResult {
  * Uses trpc.auth.me to get user data.
  */
 export function useCurrentUser(): UseCurrentUserResult {
+  const t = useT();
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +69,7 @@ export function useCurrentUser(): UseCurrentUserResult {
       });
     } catch (err) {
       reportError('Failed to fetch current user:', err);
-      setError('Unable to load user profile');
+      setError(t('currentUser.error.unableToLoadProfile'));
       setUser(null);
     } finally {
       setLoading(false);
@@ -84,6 +86,9 @@ export function useCurrentUser(): UseCurrentUserResult {
 /**
  * Get display label for a role.
  */
-export function getRoleDisplayLabel(role: string): string {
-  return getRoleDisplayLabelFromLib(role);
+export function getRoleDisplayLabel(
+  role: string,
+  t: Parameters<typeof getRoleDisplayLabelFromLib>[1]
+): string {
+  return getRoleDisplayLabelFromLib(role, t);
 }

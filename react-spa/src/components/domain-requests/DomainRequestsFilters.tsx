@@ -96,7 +96,7 @@ export function DomainRequestsFilters({
           >
             <option value="all">{t('domainRequests.filters.source.all')}</option>
             <option value="firefox-extension">{t('domainRequests.filters.source.firefox')}</option>
-            <option value="manual">Manual/API</option>
+            <option value="manual">{t('domainRequests.filters.source.manual')}</option>
           </select>
           <select
             value={String(pageSize)}

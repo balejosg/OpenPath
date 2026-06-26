@@ -42,7 +42,7 @@ describe('ConfigureGroupModal', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Inactive' }));
     fireEvent.click(screen.getByRole('button', { name: 'Public' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Gestionar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
     expect(onStatusChange).toHaveBeenCalledWith('Inactive');

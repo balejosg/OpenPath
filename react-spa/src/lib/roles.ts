@@ -1,5 +1,6 @@
 import { UserRole } from '../types';
 import { normalizeUserRoleString } from '@openpath/shared/roles';
+import type { ProductT } from '../i18n/product-i18n';
 
 export const CREATE_USER_ROLES = ['teacher', 'admin'] as const;
 export type CreateUserRole = (typeof CREATE_USER_ROLES)[number];
@@ -30,10 +31,17 @@ export function getPrimaryRole(roles: readonly string[]): string {
   return 'student';
 }
 
-export function getRoleDisplayLabel(role: string): string {
+export function getRoleDisplayLabel(role: string, t: ProductT): string {
   const normalized = normalizeUserRoleString(role);
-  if (normalized === 'admin') return 'Admin';
-  if (normalized === 'teacher') return 'Teacher';
-  if (normalized === 'student') return 'User';
+  if (normalized === 'admin') return t('roles.admin');
+  if (normalized === 'teacher') return t('roles.teacher');
+  if (normalized === 'student') return t('roles.user');
   return role;
+}
+
+export function getUserRoleLabel(role: UserRole, t: ProductT): string {
+  if (role === UserRole.ADMIN) return t('roles.admin');
+  if (role === UserRole.TEACHER) return t('roles.teacher');
+  if (role === UserRole.STUDENT) return t('roles.user');
+  return t('roles.noRole');
 }

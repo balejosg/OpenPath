@@ -1,6 +1,7 @@
 import { useQueries } from '@tanstack/react-query';
 
 import type { ClassroomListModel } from '../lib/classrooms';
+import { useT } from '../i18n/product-i18n';
 import { trpc } from '../lib/trpc';
 import type { OneOffScheduleWithPermissions, ScheduleWithPermissions } from '../types';
 
@@ -15,6 +16,7 @@ export interface TeacherDashboardSchedulesResult {
 export function useTeacherDashboardSchedules(
   classrooms: readonly ClassroomListModel[]
 ): TeacherDashboardSchedulesResult {
+  const t = useT();
   const scheduleQueries = useQueries({
     queries: classrooms.map((classroom) => ({
       queryKey: ['teacher-dashboard', 'classroom-schedules', classroom.id],
@@ -32,7 +34,7 @@ export function useTeacherDashboardSchedules(
 
   const loading = scheduleQueries.some((query) => query.isPending);
   const error = scheduleQueries.some((query) => query.error)
-    ? 'Unable to load your schedules'
+    ? t('teacherDashboard.error.loadSchedules')
     : null;
 
   async function refetchSchedules(): Promise<void> {

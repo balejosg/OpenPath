@@ -6,11 +6,13 @@ import {
   selectClassroomControlConfirmation,
 } from '../lib/classroom-selectors';
 import { reportError } from '../lib/reportError';
+import { useT } from '../i18n/product-i18n';
 import { useAllowedGroups } from './useAllowedGroups';
 import { useClassroomListModelsQuery } from './useClassroomsList';
 import { useTeacherDashboardSchedules } from './useTeacherDashboardSchedules';
 
 export function useTeacherDashboardViewModel() {
+  const t = useT();
   const teacherGroupsEnabled = isTeacherGroupsFeatureEnabled();
   const shouldPoll = import.meta.env.MODE !== 'test';
   const {
@@ -38,7 +40,7 @@ export function useTeacherDashboardViewModel() {
     refetchSchedules: refetchMySchedules,
   } = useTeacherDashboardSchedules(classrooms);
 
-  const groupsError = groupsQueryError ? 'Unable to load your groups' : null;
+  const groupsError = groupsQueryError ? t('teacherDashboard.error.loadGroups') : null;
 
   const [selectedClassroomForControl, setSelectedClassroomForControl] = useState('');
   const [selectedGroupForControl, setSelectedGroupForControl] = useState('');
@@ -87,7 +89,7 @@ export function useTeacherDashboardViewModel() {
         return true;
       } catch (e) {
         reportError('Failed to apply active group:', e);
-        setControlError('Unable to apply the group to the classroom');
+        setControlError(t('teacherDashboard.error.applyGroup'));
         return false;
       } finally {
         setControlLoading(false);
@@ -105,6 +107,7 @@ export function useTeacherDashboardViewModel() {
       groupById,
       classroomId: selectedClassroomForControl,
       nextGroupId,
+      t,
     });
 
     if (confirmation) {

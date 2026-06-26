@@ -179,7 +179,7 @@ describe('Groups view', () => {
     renderGroups({ onNavigateToRules });
 
     await screen.findByText('grupo-1');
-    fireEvent.click(screen.getByRole('button', { name: 'Biblioteca' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Library' }));
 
     const cloneButton = await screen.findByRole('button', { name: /clone/i });
     fireEvent.click(cloneButton);

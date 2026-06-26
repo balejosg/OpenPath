@@ -21,6 +21,12 @@ vi.mock('../../lib/reportError', () => ({
 }));
 
 import { getRoleDisplayLabel, useCurrentUser } from '../useCurrentUser';
+import { translateProductText } from '../../i18n/product-i18n';
+
+const t = (
+  key: Parameters<typeof translateProductText>[1],
+  params?: Parameters<typeof translateProductText>[2]
+) => translateProductText('en', key, params);
 
 describe('useCurrentUser', () => {
   beforeEach(() => {
@@ -100,6 +106,6 @@ describe('useCurrentUser', () => {
 
     await waitFor(() => expect(result.current.user?.id).toBe('user-2'));
     expect(result.current.user?.primaryRole).toBe('admin');
-    expect(getRoleDisplayLabel('teacher')).toBe('Teacher');
+    expect(getRoleDisplayLabel('teacher', t)).toBe('Teacher');
   });
 });

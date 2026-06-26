@@ -25,16 +25,17 @@ export function UsersDeleteDialog({
   return (
     <DangerConfirmDialog
       isOpen
-      title="Delete User"
-      confirmLabel="Delete user"
-      cancelLabel="Cancel"
+      title={t('users.deleteDialog.title')}
+      confirmLabel={t('users.deleteDialog.confirmLabel')}
+      cancelLabel={t('common.cancel')}
       isLoading={deleting}
       errorMessage={deleteError}
       onClose={clearDeleteState}
       onConfirm={() => void handleConfirmDeleteUser()}
     >
       <p className="text-sm text-slate-600">
-        Delete <span className="font-semibold text-slate-800">{deleteTarget.name}</span>?
+        {t('common.delete')}{' '}
+        <span className="font-semibold text-slate-800">{deleteTarget.name}</span>?
       </p>
       <p className="text-xs text-slate-500">{t('common.dialog.destructiveActionCannotBeUndone')}</p>
     </DangerConfirmDialog>

@@ -2,6 +2,7 @@ import React from 'react';
 import { Trash2, X } from 'lucide-react';
 import { Button } from './ui/Button';
 import { cn } from '../lib/utils';
+import { useT } from '../i18n/product-i18n';
 
 interface BulkActionBarProps {
   selectedCount: number;
@@ -21,6 +22,8 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
   isDeleting = false,
   className,
 }) => {
+  const t = useT();
+
   if (selectedCount === 0) return null;
 
   return (
@@ -34,7 +37,9 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
       )}
     >
       {/* Selection count */}
-      <span className="text-sm font-medium whitespace-nowrap">{selectedCount} selected</span>
+      <span className="text-sm font-medium whitespace-nowrap">
+        {t('bulkActionBar.selectedCount', { count: String(selectedCount) })}
+      </span>
 
       {/* Divider */}
       <div className="w-px h-6 bg-slate-700" />
@@ -49,14 +54,14 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
           className="bg-red-600 hover:bg-red-700 text-white border-0"
         >
           <Trash2 size={14} className="mr-1" />
-          Delete
+          {t('common.delete')}
         </Button>
 
         <button
           onClick={onClear}
           disabled={isDeleting}
           className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors disabled:opacity-50"
-          title="Cancel selection"
+          title={t('bulkActionBar.cancelSelection')}
         >
           <X size={16} />
         </button>

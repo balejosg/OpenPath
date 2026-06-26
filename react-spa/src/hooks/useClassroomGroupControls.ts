@@ -7,6 +7,7 @@ import {
   type GroupLike,
 } from '../components/groups/GroupLabel';
 import { useClassroomConfigActions } from './useClassroomConfigActions';
+import { useT } from '../i18n/product-i18n';
 
 export function useClassroomGroupControls(params: {
   admin: boolean;
@@ -15,6 +16,7 @@ export function useClassroomGroupControls(params: {
   refetchClassrooms: () => Promise<Classroom[]>;
   setSelectedClassroom: (classroom: Classroom | null) => void;
 }) {
+  const t = useT();
   const { admin, selectedClassroom, groupById, refetchClassrooms, setSelectedClassroom } = params;
   const [activeGroupOverwriteConfirm, setActiveGroupOverwriteConfirm] = useState<{
     classroomId: string;
@@ -63,9 +65,10 @@ export function useClassroomGroupControls(params: {
               : null,
         source: groupId ? 'manual' : 'none',
         revealUnknownId: admin,
-        noneLabel: 'No active group',
+        noneLabel: t('classroomGroupControls.noActiveGroup'),
+        t,
       }),
-    [admin, groupById, selectedClassroom]
+    [admin, groupById, selectedClassroom, t]
   );
 
   const requestActiveGroupChange = useCallback(

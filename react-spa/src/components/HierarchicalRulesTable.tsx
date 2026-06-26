@@ -7,6 +7,7 @@ import { HierarchicalRuleRow } from './rules-table/HierarchicalRuleRow';
 import { useRuleEditor } from '../hooks/useRuleEditor';
 import { type DomainGroup } from '../lib/rule-groups';
 import { useHierarchicalRulesGroups } from '../hooks/useHierarchicalRulesGroups';
+import { useT } from '../i18n/product-i18n';
 
 export type { DomainGroup } from '../lib/rule-groups';
 
@@ -42,7 +43,7 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
   onDelete,
   onSave,
   onAddSubdomain,
-  emptyMessage = 'No rules configured',
+  emptyMessage,
   className,
   selectedIds,
   onToggleSelection,
@@ -50,6 +51,8 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
   isAllSelected,
   hasSelection,
 }) => {
+  const t = useT();
+  const resolvedEmptyMessage = emptyMessage ?? t('hierarchicalRulesTable.emptyMessage');
   const canEdit = !readOnly && onSave !== undefined;
   const hasSelectionFeature =
     !readOnly &&
@@ -82,7 +85,7 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
       <div className={cn('bg-white border border-slate-200 rounded-lg', className)}>
         <div className="flex items-center justify-center py-12 text-slate-400">
           <Loader2 size={20} className="animate-spin mr-2" />
-          Loading rules...
+          {t('hierarchicalRulesTable.loadingRules')}
         </div>
       </div>
     );
@@ -92,7 +95,7 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
   if (groups.length === 0) {
     return (
       <div className={cn('bg-white border border-slate-200 rounded-lg', className)}>
-        <div className="py-12 text-center text-slate-400 text-sm">{emptyMessage}</div>
+        <div className="py-12 text-center text-slate-400 text-sm">{resolvedEmptyMessage}</div>
       </div>
     );
   }
@@ -108,7 +111,7 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
                   <button
                     onClick={onToggleSelectAll}
                     className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
-                    title={isAllSelected ? 'Deselect all' : 'Select all'}
+                    title={isAllSelected ? t('common.deselectAll') : t('common.selectAll')}
                   >
                     {isAllSelected ? (
                       <CheckSquare size={18} className="text-blue-600" />
@@ -121,7 +124,7 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
                 </th>
               )}
               <th className="px-4 py-3 w-8"></th>
-              <th className="px-4 py-3">Domain / Rule</th>
+              <th className="px-4 py-3">{t('hierarchicalRulesTable.columnDomainRule')}</th>
               <th className="px-4 py-3 w-32">Estado</th>
               {!readOnly && <th className="px-4 py-3 w-24 text-right">Acciones</th>}
             </tr>

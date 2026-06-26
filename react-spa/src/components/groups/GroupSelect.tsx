@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { cn } from '../../lib/utils';
 import { isGroupEnabled, type GroupLike } from './GroupLabel';
+import { useT } from '../../i18n/product-i18n';
 
 type InactiveBehavior = 'hide' | 'disable';
 
@@ -30,20 +31,23 @@ export const GroupSelect: React.FC<GroupSelectProps> = ({
   onChange,
   groups,
   includeNoneOption = true,
-  noneLabel = 'No group',
+  noneLabel,
   inactiveBehavior = 'hide',
   unknownValueLabel,
   unknownValueDisabled = true,
-  emptyLabel = 'No groups disponibles',
+  emptyLabel,
   disabled,
   className,
 }) => {
+  const t = useT();
+  const resolvedNoneLabel = noneLabel ?? t('groups.select.noneLabel');
+  const resolvedEmptyLabel = emptyLabel ?? t('groups.select.emptyLabel');
   const options = useMemo(() => {
     const groupIds = new Set(groups.map((g) => g.id));
     const opts: { value: string; label: string; disabled?: boolean }[] = [];
 
     if (includeNoneOption) {
-      opts.push({ value: '', label: noneLabel });
+      opts.push({ value: '', label: resolvedNoneLabel });
     }
 
     if (value && !groupIds.has(value)) {
@@ -58,14 +62,17 @@ export const GroupSelect: React.FC<GroupSelectProps> = ({
       inactiveBehavior === 'hide' ? groups.filter((g) => isGroupEnabled(g)) : [...groups];
 
     if (!includeNoneOption && filtered.length === 0) {
-      opts.push({ value: '', label: emptyLabel, disabled: true });
+      opts.push({ value: '', label: resolvedEmptyLabel, disabled: true });
       return opts;
     }
 
     for (const g of filtered) {
       const enabled = isGroupEnabled(g);
       const base = g.displayName ?? g.name;
-      const label = !enabled && inactiveBehavior === 'disable' ? `${base} (Inactive)` : base;
+      const label =
+        !enabled && inactiveBehavior === 'disable'
+          ? `${base} ${t('groups.select.inactiveSuffix')}`
+          : base;
       opts.push({
         value: g.id,
         label,
@@ -77,12 +84,13 @@ export const GroupSelect: React.FC<GroupSelectProps> = ({
   }, [
     groups,
     includeNoneOption,
-    noneLabel,
+    resolvedNoneLabel,
     inactiveBehavior,
     value,
     unknownValueLabel,
     unknownValueDisabled,
-    emptyLabel,
+    resolvedEmptyLabel,
+    t,
   ]);
 
   return (

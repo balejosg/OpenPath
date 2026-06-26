@@ -7,6 +7,12 @@ import {
   deleteRuleWithUndoAction,
   updateRuleAction,
 } from '../rules-actions';
+import { translateProductText } from '../../i18n/product-i18n';
+
+const t = (
+  key: Parameters<typeof translateProductText>[1],
+  params?: Parameters<typeof translateProductText>[2]
+) => translateProductText('en', key, params);
 
 vi.mock('../trpc', () => ({
   trpc: {
@@ -64,6 +70,8 @@ describe('rules-actions', () => {
     onToast,
     fetchRules,
     fetchCounts,
+    t,
+    locale: 'en' as const,
   };
 
   beforeEach(() => {
@@ -111,6 +119,8 @@ describe('rules-actions', () => {
         onToast,
         fetchRules,
         fetchCounts,
+        t,
+        locale: 'en' as const,
       })
     ).resolves.toEqual({ created: 2, total: 2 });
 
@@ -128,6 +138,8 @@ describe('rules-actions', () => {
         onToast,
         fetchRules,
         fetchCounts,
+        t,
+        locale: 'en' as const,
       })
     ).resolves.toEqual({ created: 0, total: 1 });
 
@@ -140,7 +152,11 @@ describe('rules-actions', () => {
     mockUpdateRule.mockResolvedValue({ id: 'r1' });
 
     await expect(
-      updateRuleAction('r1', { value: 'example.com' }, { groupId: 'g1', onToast, fetchRules })
+      updateRuleAction(
+        'r1',
+        { value: 'example.com' },
+        { groupId: 'g1', onToast, fetchRules, t, locale: 'en' as const }
+      )
     ).resolves.toBe(true);
 
     expect(onToast).toHaveBeenCalledWith('Rule updated', 'success');
@@ -151,7 +167,11 @@ describe('rules-actions', () => {
     mockUpdateRule.mockRejectedValue(new Error('backend failure'));
 
     await expect(
-      updateRuleAction('r1', { value: 'example.com' }, { groupId: 'g1', onToast, fetchRules })
+      updateRuleAction(
+        'r1',
+        { value: 'example.com' },
+        { groupId: 'g1', onToast, fetchRules, t, locale: 'en' as const }
+      )
     ).resolves.toBe(false);
 
     expect(onToast).toHaveBeenCalledWith('Unable to update rule', 'error');
@@ -170,7 +190,7 @@ describe('rules-actions', () => {
         value: 'example.com',
         comment: null,
       },
-      { onToast, fetchRules, fetchCounts }
+      { onToast, fetchRules, fetchCounts, t, locale: 'en' as const }
     );
 
     expect(mockDeleteRule).toHaveBeenCalledWith({ id: 'r1', groupId: 'g1' });
@@ -209,7 +229,7 @@ describe('rules-actions', () => {
         value: 'cdn.example.com',
         comment: null,
       },
-      { onToast, fetchRules, fetchCounts }
+      { onToast, fetchRules, fetchCounts, t, locale: 'en' as const }
     );
 
     expect(confirmSpy).toHaveBeenCalledWith(
@@ -238,7 +258,7 @@ describe('rules-actions', () => {
         value: 'cdn.example.com',
         comment: null,
       },
-      { onToast, fetchRules, fetchCounts }
+      { onToast, fetchRules, fetchCounts, t, locale: 'en' as const }
     );
 
     expect(mockRevokeAutoApproval).not.toHaveBeenCalled();
@@ -262,7 +282,7 @@ describe('rules-actions', () => {
         value: 'cdn.example.com',
         comment: null,
       },
-      { onToast, fetchRules, fetchCounts }
+      { onToast, fetchRules, fetchCounts, t, locale: 'en' as const }
     );
 
     expect(onToast).toHaveBeenCalledWith('Unable to revoke automatic approval', 'error');
@@ -304,6 +324,8 @@ describe('rules-actions', () => {
       onToast,
       fetchRules,
       fetchCounts,
+      t,
+      locale: 'en' as const,
     });
 
     expect(clearSelection).toHaveBeenCalledTimes(1);

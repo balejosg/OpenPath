@@ -61,7 +61,7 @@ describe('useManagedRulesActions', () => {
 
     expect(revokeAutoApprovalAction).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'auto-1', source: 'auto_extension' }),
-      { onToast, fetchRules: refetchRules, fetchCounts: refetchCounts }
+      expect.objectContaining({ onToast, fetchRules: refetchRules, fetchCounts: refetchCounts })
     );
     expect(deleteRuleWithUndoAction).not.toHaveBeenCalled();
   });
@@ -84,7 +84,7 @@ describe('useManagedRulesActions', () => {
 
     expect(deleteRuleWithUndoAction).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'manual-1', source: 'manual' }),
-      { onToast, fetchRules: refetchRules, fetchCounts: refetchCounts }
+      expect.objectContaining({ onToast, fetchRules: refetchRules, fetchCounts: refetchCounts })
     );
     expect(bulkDeleteRulesWithUndoAction).not.toHaveBeenCalled();
   });
@@ -108,19 +108,25 @@ describe('useManagedRulesActions', () => {
       await result.current.bulkCreateRules(['a.example.com'], 'whitelist');
     });
 
-    expect(bulkDeleteRulesWithUndoAction).toHaveBeenCalledWith({
-      ids: ['rule-1', 'rule-2'],
-      clearSelection,
-      onToast,
-      fetchRules: refetchRules,
-      fetchCounts: refetchCounts,
-    });
-    expect(bulkCreateRulesAction).toHaveBeenCalledWith(['a.example.com'], 'whitelist', {
-      groupId: 'group-1',
-      onToast,
-      fetchRules: refetchRules,
-      fetchCounts: refetchCounts,
-    });
+    expect(bulkDeleteRulesWithUndoAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ids: ['rule-1', 'rule-2'],
+        clearSelection,
+        onToast,
+        fetchRules: refetchRules,
+        fetchCounts: refetchCounts,
+      })
+    );
+    expect(bulkCreateRulesAction).toHaveBeenCalledWith(
+      ['a.example.com'],
+      'whitelist',
+      expect.objectContaining({
+        groupId: 'group-1',
+        onToast,
+        fetchRules: refetchRules,
+        fetchCounts: refetchCounts,
+      })
+    );
   });
 
   it('delegates add and update rule actions', async () => {
@@ -131,16 +137,19 @@ describe('useManagedRulesActions', () => {
       await result.current.updateRule('rule-1', { value: 'updated.example.com' });
     });
 
-    expect(addRuleWithDetection).toHaveBeenCalledWith('example.com', {
-      groupId: 'group-1',
-      onToast,
-      fetchRules: refetchRules,
-      fetchCounts: refetchCounts,
-    });
+    expect(addRuleWithDetection).toHaveBeenCalledWith(
+      'example.com',
+      expect.objectContaining({
+        groupId: 'group-1',
+        onToast,
+        fetchRules: refetchRules,
+        fetchCounts: refetchCounts,
+      })
+    );
     expect(updateRuleAction).toHaveBeenCalledWith(
       'rule-1',
       { value: 'updated.example.com' },
-      { groupId: 'group-1', onToast, fetchRules: refetchRules }
+      expect.objectContaining({ groupId: 'group-1', onToast, fetchRules: refetchRules })
     );
   });
 });

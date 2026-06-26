@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import type { User } from '../types';
 import type { CreateUserRole } from '../lib/roles';
 import { resolveTrpcErrorMessage } from '../lib/error-utils';
+import { useT } from '../i18n/product-i18n';
 import { trpc } from '../lib/trpc';
 import { reportError } from '../lib/reportError';
 import { mapUnknownApiUserToUser, USERS_QUERY_KEY } from './useUsersList';
@@ -35,6 +36,7 @@ interface GenerateResetTokenInput {
 }
 
 export const useUsersActions = () => {
+  const t = useT();
   const queryClient = useQueryClient();
 
   const cancelUsersListQuery = useCallback(async () => {
@@ -159,15 +161,15 @@ export const useUsersActions = () => {
   const handleCreateUser = useCallback(
     async (input: CreateUserInput): Promise<CreateUserResult> => {
       if (!input.name.trim()) {
-        setCreateError('Name is required');
+        setCreateError(t('usersActions.error.nameRequired'));
         return { ok: false };
       }
       if (!input.email.trim()) {
-        setCreateError('Email is required');
+        setCreateError(t('usersActions.error.emailRequired'));
         return { ok: false };
       }
       if (!input.password.trim() || input.password.length < 8) {
-        setCreateError('Password must be at least 8 characters');
+        setCreateError(t('usersActions.error.passwordMin'));
         return { ok: false };
       }
 
@@ -186,11 +188,11 @@ export const useUsersActions = () => {
         reportError('Failed to create user:', err);
         setCreateError(
           resolveTrpcErrorMessage(err, {
-            badRequest: 'Email is invalid',
-            conflict: 'A user with that email already exists',
-            forbidden: 'You do not have permission to create users',
-            unauthorized: 'You do not have permission to create users',
-            fallback: 'Unable to create user. Try again.',
+            badRequest: t('usersActions.error.emailInvalid'),
+            conflict: t('usersActions.error.emailConflict'),
+            forbidden: t('usersActions.error.createForbidden'),
+            unauthorized: t('usersActions.error.createForbidden'),
+            fallback: t('usersActions.error.createFallback'),
           })
         );
         return { ok: false };
@@ -226,7 +228,7 @@ export const useUsersActions = () => {
       return true;
     } catch (err) {
       reportError('Failed to delete user:', err);
-      setDeleteError('Unable to delete user. Try again.');
+      setDeleteError(t('usersActions.error.deleteFallback'));
       return false;
     }
   }, [deleteTarget, deleteMutation, mutateUsersCache]);
@@ -243,10 +245,10 @@ export const useUsersActions = () => {
         reportError('Failed to generate reset token:', err);
         setResetError(
           resolveTrpcErrorMessage(err, {
-            forbidden: 'You do not have permission to reset passwords',
-            unauthorized: 'You do not have permission to reset passwords',
-            notFound: 'No user exists with that email',
-            fallback: 'Unable to generate token. Try again.',
+            forbidden: t('usersActions.error.resetForbidden'),
+            unauthorized: t('usersActions.error.resetForbidden'),
+            notFound: t('usersActions.error.resetNotFound'),
+            fallback: t('usersActions.error.resetFallback'),
           })
         );
         return { ok: false };

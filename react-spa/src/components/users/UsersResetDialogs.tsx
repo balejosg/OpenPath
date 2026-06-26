@@ -1,6 +1,7 @@
 import type React from 'react';
 
 import type { UseUsersViewModelReturn } from '../../hooks/useUsersViewModel';
+import { useT } from '../../i18n/product-i18n';
 import { DangerConfirmDialog } from '../ui/ConfirmDialog';
 import { Modal } from '../ui/Modal';
 
@@ -24,13 +25,15 @@ export function UsersResetDialogs({
   resetUser,
   resettingPassword,
 }: Props): React.JSX.Element {
+  const t = useT();
+
   return (
     <>
       <DangerConfirmDialog
         isOpen={resetFlow.status === 'confirm'}
-        title="Generate recovery token"
-        confirmLabel="Generar token"
-        cancelLabel="Cancel"
+        title={t('users.resetDialog.confirmTitle')}
+        confirmLabel={t('users.resetDialog.confirmLabel')}
+        cancelLabel={t('common.cancel')}
         isLoading={resettingPassword}
         errorMessage={resetError}
         onClose={closeResetFlow}
@@ -38,10 +41,7 @@ export function UsersResetDialogs({
       >
         {resetUser ? (
           <div className="space-y-2 text-sm text-slate-600">
-            <p>
-              You are generating a recovery token for{' '}
-              <span className="font-semibold text-slate-800">{resetUser.name}</span>.
-            </p>
+            <p>{t('users.resetDialog.confirmBody', { name: resetUser.name })}</p>
             <p className="font-mono text-xs text-slate-500">{resetUser.email}</p>
           </div>
         ) : null}
@@ -50,17 +50,14 @@ export function UsersResetDialogs({
       <Modal
         isOpen={resetFlow.status === 'success'}
         onClose={closeResetFlow}
-        title="Recovery token generated"
+        title={t('users.resetDialog.successTitle')}
         className="max-w-md"
       >
         <div className="space-y-4">
-          <p className="text-sm text-slate-600">
-            Share this token securely with the user so they can complete the reset from the sign-in
-            screen.
-          </p>
+          <p className="text-sm text-slate-600">{t('users.resetDialog.successBody')}</p>
           <div className="space-y-2">
             <label htmlFor="reset-token" className="text-sm font-medium text-slate-700">
-              Token
+              {t('users.resetDialog.tokenLabel')}
             </label>
             <input
               id="reset-token"
@@ -75,7 +72,7 @@ export function UsersResetDialogs({
               onClick={closeResetFlow}
               className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
             >
-              Close
+              {t('common.close')}
             </button>
           </div>
         </div>

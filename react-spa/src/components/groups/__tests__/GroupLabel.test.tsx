@@ -8,6 +8,12 @@ import {
   resolveGroupLike,
   toDisplayOnlyGroup,
 } from '../GroupLabel';
+import { translateProductText } from '../../../i18n/product-i18n';
+
+const t = (
+  key: Parameters<typeof translateProductText>[1],
+  params?: Parameters<typeof translateProductText>[2]
+) => translateProductText('en', key, params);
 
 describe('GroupLabel', () => {
   it('renders a known group displayName', () => {
@@ -35,7 +41,7 @@ describe('GroupLabel', () => {
 
 describe('resolveGroupDisplayName', () => {
   it('uses noneLabel when groupId is empty', () => {
-    const name = resolveGroupDisplayName({ groupId: '', source: 'none', noneLabel: 'No group' });
+    const name = resolveGroupDisplayName({ groupId: '', source: 'none', noneLabel: 'No group', t });
     expect(name).toBe('No group');
   });
 });
@@ -69,6 +75,7 @@ describe('display-only group helpers', () => {
       groupById: new Map(),
       displayName: 'Plan Visible',
       source: 'schedule',
+      t,
     });
 
     expect(name).toBe('Plan Visible');

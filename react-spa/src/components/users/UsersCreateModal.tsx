@@ -2,6 +2,7 @@ import type React from 'react';
 import { AlertCircle, Loader2 } from 'lucide-react';
 
 import type { UseUsersViewModelReturn } from '../../hooks/useUsersViewModel';
+import { useT } from '../../i18n/product-i18n';
 import { Modal } from '../ui/Modal';
 
 type Props = Pick<
@@ -40,18 +41,22 @@ export function UsersCreateModal({
   setNewRole,
   showNewModal,
 }: Props): React.JSX.Element | null {
+  const t = useT();
+
   if (!showNewModal) {
     return null;
   }
 
   return (
-    <Modal isOpen onClose={closeNewModal} title="New User" className="max-w-md">
+    <Modal isOpen onClose={closeNewModal} title={t('users.createModal.title')} className="max-w-md">
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            {t('users.createModal.nameLabel')}
+          </label>
           <input
             type="text"
-            placeholder="Full name"
+            placeholder={t('users.createModal.namePlaceholder')}
             value={newName}
             onChange={(e) => {
               setNewName(e.target.value);
@@ -61,7 +66,9 @@ export function UsersCreateModal({
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            {t('auth.common.email')}
+          </label>
           <input
             type="email"
             placeholder="user@example.com"
@@ -74,10 +81,12 @@ export function UsersCreateModal({
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            {t('auth.common.password')}
+          </label>
           <input
             type="password"
-            placeholder="Minimum 8 characters"
+            placeholder={t('users.createModal.passwordPlaceholder')}
             value={newPassword}
             onChange={(e) => {
               setNewPassword(e.target.value);
@@ -87,7 +96,9 @@ export function UsersCreateModal({
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Role</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            {t('users.createModal.roleLabel')}
+          </label>
           <select
             value={newRole}
             onChange={(e) => {
@@ -96,8 +107,8 @@ export function UsersCreateModal({
             }}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
           >
-            <option value="teacher">Teacher</option>
-            <option value="admin">Admin</option>
+            <option value="teacher">{t('users.createModal.roleTeacher')}</option>
+            <option value="admin">{t('users.createModal.roleAdmin')}</option>
           </select>
         </div>
         {createError && (
@@ -114,7 +125,7 @@ export function UsersCreateModal({
             disabled={saving}
             className="flex-1 px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => void createUser()}
@@ -122,7 +133,7 @@ export function UsersCreateModal({
             className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {saving && <Loader2 size={16} className="animate-spin" />}
-            Create User
+            {t('users.createModal.createButton')}
           </button>
         </div>
       </div>

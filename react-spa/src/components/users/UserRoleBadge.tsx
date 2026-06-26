@@ -1,7 +1,8 @@
 import type React from 'react';
 
 import { UserRole } from '../../types';
-import { USER_ROLE_LABELS } from '../../lib/roles';
+import { getUserRoleLabel } from '../../lib/roles';
+import { useT } from '../../i18n/product-i18n';
 
 const STYLES = {
   [UserRole.ADMIN]: 'bg-purple-50 text-purple-700 border-purple-200',
@@ -11,11 +12,12 @@ const STYLES = {
 };
 
 export function UserRoleBadge({ role }: { role: UserRole }): React.JSX.Element {
+  const t = useT();
   return (
     <span
       className={`px-2 py-0.5 rounded text-[11px] font-semibold border uppercase tracking-wide ${STYLES[role]}`}
     >
-      {USER_ROLE_LABELS[role]}
+      {getUserRoleLabel(role, t)}
     </span>
   );
 }
