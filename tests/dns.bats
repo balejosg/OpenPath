@@ -164,6 +164,53 @@ EOF
     [ "$output" = "168.63.129.16" ]
 }
 
+@test "detect_primary_dns keeps a persisted upstream when its dig probe is firewall-blocked" {
+    # Regression: once installed, apply_upstream_dns_owner_rule confines upstream
+    # :53 to dnsmasq's uid, so detect_primary_dns's own `dig @<upstream>` probe
+    # (run as root on the next openpath-update) is DROPPED. The agent must not
+    # discard the previously-validated, format-valid persisted upstream and fall
+    # back to 8.8.8.8 -- the firewall never allowed 8.8.8.8, so every dnsmasq
+    # forward to it is dropped and all DNS dies (whitelist download, control plane).
+    local state_dir="$TEST_TMP_DIR/detect-blocked-probe"
+    mkdir -p "$state_dir/etc"
+
+    printf '%s\n' "168.63.129.16" > "$state_dir/etc/original-dns.conf"
+    printf '%s\n' "nameserver 127.0.0.1" > "$state_dir/resolv.conf"
+
+    local helper_script="$TEST_TMP_DIR/detect-primary-dns-blocked.sh"
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+project_dir="$1"
+state_dir="$2"
+
+export ETC_CONFIG_DIR="$state_dir/etc"
+export VAR_STATE_DIR="$state_dir/var"
+export FALLBACK_DNS_PRIMARY="8.8.8.8"
+export OPENPATH_SYSTEMD_RESOLV_CONF="$state_dir/missing-systemd-resolv.conf"
+export OPENPATH_RESOLV_CONF="$state_dir/resolv.conf"
+
+mkdir -p "$ETC_CONFIG_DIR" "$VAR_STATE_DIR"
+
+source "$project_dir/linux/lib/common.sh"
+
+# No NetworkManager / no route, and EVERY dig probe fails (owner-confine firewall
+# drops root's @<upstream> queries).
+nmcli() { return 127; }
+ip() { return 1; }
+timeout() { return 1; }
+
+detect_primary_dns
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR" "$state_dir"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "168.63.129.16" ]
+}
+
 # ============== resolv.conf configuration tests ==============
 
 @test "resolv.conf points to localhost" {

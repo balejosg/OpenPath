@@ -54,11 +54,21 @@ detect_dns_from_resolv_conf() {
 detect_primary_dns() {
     local dns=""
 
-    # 1. Try to read saved DNS
+    # 1. Try to read saved DNS.
+    # Prefer the previously-persisted upstream when it is format-valid, WITHOUT
+    # re-probing it. Once installed, apply_upstream_dns_owner_rule (firewall)
+    # confines upstream :53 to dnsmasq's uid, so a `dig @<upstream>` probe run as
+    # root on a later openpath-update is dropped by our OWN firewall and always
+    # fails -- which would discard the good upstream and degrade PRIMARY_DNS to the
+    # 8.8.8.8 fallback. The firewall only ever allowed the persisted upstream, so
+    # every dnsmasq forward to that fallback is then dropped and all DNS dies
+    # (whitelist download, the management/control-plane host, etc.). The persisted
+    # value was validated when first written; keep it stable across updates so the
+    # dnsmasq upstream and the firewall's allowed upstream cannot diverge.
     if [ -f "$ORIGINAL_DNS_FILE" ]; then
         local saved_dns
         saved_dns=$(head -1 "$ORIGINAL_DNS_FILE")
-        if dns_candidate_resolves "$saved_dns"; then
+        if is_usable_upstream_dns "$saved_dns"; then
             echo "$saved_dns"
             return 0
         fi
