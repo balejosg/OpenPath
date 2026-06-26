@@ -102,6 +102,9 @@ class FakeElement {
 
 function matchesSelector(element: FakeElement, selector: string): boolean {
   const tag = element.tagName.toLowerCase();
+  if (selector === 'html, body, main, form, [role="main"], [role="search"], #search, #rso') {
+    return element.matches(selector);
+  }
   if (selector === 'canvas, iframe, object, embed') {
     return tag === 'canvas' || tag === 'iframe' || tag === 'object' || tag === 'embed';
   }
@@ -243,6 +246,51 @@ void describe('Google Search game guard content script', () => {
     });
 
     assert.equal(root.children[0]?.getAttribute('data-openpath-google-game-guard'), null);
+    assert.deepEqual(sentMessages, []);
+  });
+
+  void test('does not treat the Google account sign-in control as a game widget', async () => {
+    const root = new FakeElement('body');
+    const header = root.appendChild(new FakeElement('div', 'Gmail Imágenes Iniciar sesión'));
+    const signIn = header.appendChild(new FakeElement('a', 'Iniciar sesión'));
+    signIn.setAttribute('href', 'https://accounts.google.com/');
+    header.appendChild(new FakeElement('iframe'));
+    const results = root.appendChild(new FakeElement('div', 'Resultado normal de búsqueda'));
+    results.setAttribute('id', 'rso');
+    const result = results.appendChild(new FakeElement('a', 'Historia de Roma'));
+    result.setAttribute('href', 'https://example.org/roma');
+
+    const sentMessages = await importGuardWithFakePage({
+      host: 'www.google.es',
+      path: '/search',
+      query: '?q=historia+de+roma',
+      root,
+    });
+
+    assert.equal(header.getAttribute('data-openpath-google-game-guard'), null);
+    assert.deepEqual(sentMessages, []);
+  });
+
+  void test('never replaces a container that encloses the search results region', async () => {
+    const root = new FakeElement('body');
+    const wrapper = root.appendChild(new FakeElement('div', 'snake game online play now'));
+    const nav = wrapper.appendChild(new FakeElement('div'));
+    nav.appendChild(new FakeElement('button', 'Play'));
+    const results = wrapper.appendChild(new FakeElement('div', 'snake game results'));
+    results.setAttribute('id', 'rso');
+    const result = results.appendChild(new FakeElement('a', 'snake game online'));
+    result.setAttribute('href', 'https://example.org/snake');
+    wrapper.appendChild(new FakeElement('iframe'));
+
+    const sentMessages = await importGuardWithFakePage({
+      host: 'www.google.com',
+      path: '/search',
+      query: '?q=snake+game',
+      root,
+    });
+
+    assert.equal(wrapper.getAttribute('data-openpath-google-game-guard'), null);
+    assert.equal(results.getAttribute('data-openpath-google-game-guard'), null);
     assert.deepEqual(sentMessages, []);
   });
 

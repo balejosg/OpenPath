@@ -46,10 +46,13 @@ interface GoogleSearchGameGuardGlobal {
   ].join(',');
   const unsafeContainerSelector =
     'html, body, main, form, [role="main"], [role="search"], #search, #rso';
+  // Patterns intentionally exclude generic navigation/account verbs such as
+  // "iniciar" (as in "Iniciar sesion"/Sign in), "start", "empezar", "comenzar"
+  // and "reanudar". Those appear in ordinary Google chrome on every search page
+  // and previously made the sign-in control look like a game play-control.
   const gameTextPattern =
-    /\b(play|start|new game|tap to play|game|games|juego|juegos|jugar|juega|empezar|iniciar|solitaire|solitario|tic tac toe|tres en raya|snake|pac[\s-]?man|buscaminas|minesweeper|memory)\b/i;
-  const playTextPattern =
-    /\b(play|start|new game|tap to play|jugar|juega|empezar|iniciar|comenzar|reanudar)\b/i;
+    /\b(play|new game|tap to play|game|games|juego|juegos|jugar|juega|solitaire|solitario|tic tac toe|tres en raya|snake|pac[\s-]?man|buscaminas|minesweeper|memory)\b/i;
+  const playTextPattern = /\b(play|new game|tap to play|jugar|juega)\b/i;
   const gameResourcePattern = /(?:doodles\.google|google\.[^/]+\/logos\/|\/logos\/doodles?\/)/i;
   const googleGamePolicyReason = 'GOOGLE_GAME_POLICY';
 
@@ -105,6 +108,22 @@ interface GoogleSearchGameGuardGlobal {
 
   function isUnsafeContainer(element: Element): boolean {
     return matchesSafely(element, unsafeContainerSelector);
+  }
+
+  function querySelectorSafely(root: ParentNode, selector: string): Element | null {
+    try {
+      return root.querySelector(selector);
+    } catch {
+      return null;
+    }
+  }
+
+  // A genuine game widget is a localized element. Anything that encloses the
+  // search-results region (or another structural root) is a page-level
+  // container and must never be replaced, otherwise a single stray signal would
+  // blank out the entire results page.
+  function enclosesProtectedRegion(element: Element): boolean {
+    return querySelectorSafely(element, unsafeContainerSelector) !== null;
   }
 
   function hasBlockedAncestor(element: Element): boolean {
@@ -224,7 +243,7 @@ interface GoogleSearchGameGuardGlobal {
       if (hasBlockedAncestor(current)) {
         return null;
       }
-      if (isUnsafeContainer(current)) {
+      if (isUnsafeContainer(current) || enclosesProtectedRegion(current)) {
         return null;
       }
 
