@@ -234,6 +234,46 @@ EOF
     [[ "$output" == $'alice\t'"$home_dir"$'\t'"$override_profile" ]]
 }
 
+@test "firefox activation probe runs headless for a user that does not own the ambient display" {
+    # Regression: the installer runs from the desktop session owner's X session
+    # (DISPLAY/XAUTHORITY = madrid). Launching Firefox as a different user with
+    # that foreign display fails ("cannot open display") so the managed extension
+    # never installs for them -> registered=1 target_count=3.
+    run env DISPLAY=":0" XAUTHORITY="/home/madrid/.Xauthority" SUDO_USER="madrid" \
+        bash -c 'source "$1"; firefox_activation_probe_display_plan alumno root /home/alumno' \
+        bash "$PROJECT_DIR/linux/lib/firefox-activation-plan.sh"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "headless" ]
+}
+
+@test "firefox activation probe uses the ambient display for the session-owning user (via sudo)" {
+    run env DISPLAY=":0" XAUTHORITY="/home/madrid/.Xauthority" SUDO_USER="madrid" \
+        bash -c 'source "$1"; firefox_activation_probe_display_plan madrid root /home/madrid' \
+        bash "$PROJECT_DIR/linux/lib/firefox-activation-plan.sh"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = $'gui\t/home/madrid/.Xauthority\t:0' ]
+}
+
+@test "firefox activation probe uses the ambient display when running as the target user" {
+    run env DISPLAY=":1" XAUTHORITY="/home/alice/.Xauthority" \
+        bash -c 'unset SUDO_USER; source "$1"; firefox_activation_probe_display_plan alice alice /home/alice' \
+        bash "$PROJECT_DIR/linux/lib/firefox-activation-plan.sh"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = $'gui\t/home/alice/.Xauthority\t:1' ]
+}
+
+@test "firefox activation probe runs headless when no display is present" {
+    run env -u DISPLAY -u XAUTHORITY OPENPATH_X11_SOCKET="/nonexistent/X0" \
+        bash -c 'unset SUDO_USER; source "$1"; firefox_activation_probe_display_plan alice alice /home/alice' \
+        bash "$PROJECT_DIR/linux/lib/firefox-activation-plan.sh"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "headless" ]
+}
+
 write_fake_browser_sh() {
     local target="$1"
     local calls_file="$2"

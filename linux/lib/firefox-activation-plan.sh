@@ -363,12 +363,63 @@ log_firefox_registration_probe() {
         "Firefox registration probe_attempt=$probe_attempt activation_user=$activation_user profile_home=$profile_home probe_exit_status=$probe_exit_status registration_source=$registration_source registration_profile=$registration_profile"
 }
 
+# The ambient DISPLAY/XAUTHORITY belong to whoever started the install -- the
+# desktop session owner (== the sudo invoker, or the current user for a
+# self-install). They are only usable when the activation probe runs AS that same
+# user. For any OTHER user the foreign display cannot be opened ("cannot open
+# display: :0") and Firefox exits before it installs the force_installed managed
+# extension, so registration is missing for every profile except the session
+# owner's (registered=1 target_count=N).
+firefox_activation_probe_owns_ambient_display() {
+    local activation_user="$1"
+    local current_user="$2"
+
+    [ -n "$activation_user" ] || return 1
+    [ "$activation_user" = "$current_user" ] && return 0
+    [ -n "${SUDO_USER:-}" ] && [ "$activation_user" = "$SUDO_USER" ] && return 0
+    return 1
+}
+
+# Decide how the activation probe should launch Firefox for a target user.
+# Prints either:
+#   gui\t<XAUTHORITY-or-empty>\t<DISPLAY>   -- use the ambient X session
+#   headless                                -- run with --headless (no X needed)
+firefox_activation_probe_display_plan() {
+    local activation_user="$1"
+    local current_user="$2"
+    local profile_home="$3"
+    local xauthority_path="$profile_home/.Xauthority"
+    local x11_socket="${OPENPATH_X11_SOCKET:-/tmp/.X11-unix/X0}"
+    local probe_xauthority=""
+    local probe_display=""
+
+    if firefox_activation_probe_owns_ambient_display "$activation_user" "$current_user"; then
+        if [ -n "${XAUTHORITY:-}" ]; then
+            probe_xauthority="$XAUTHORITY"
+        elif [ -f "$xauthority_path" ]; then
+            probe_xauthority="$xauthority_path"
+        fi
+
+        if [ -n "${DISPLAY:-}" ]; then
+            probe_display="$DISPLAY"
+        elif [ -S "$x11_socket" ] && [ -n "$probe_xauthority" ]; then
+            probe_display=":0"
+        fi
+    fi
+
+    if [ -n "$probe_display" ]; then
+        printf 'gui\t%s\t%s\n' "$probe_xauthority" "$probe_display"
+    else
+        printf 'headless\n'
+    fi
+}
+
 run_firefox_activation_probe() {
     local firefox_binary="$1"
     local activation_user="$2"
     local profile_home="$3"
     local activation_profile="${4:-}"
-    local screenshot_path="/tmp/openpath-firefox-extension-activation.png"
+    local screenshot_path="${TMPDIR:-/tmp}/openpath-firefox-extension-activation.${activation_user:-unknown}.png"
     local current_user=""
 
     force_browser_close || true
@@ -381,21 +432,17 @@ run_firefox_activation_probe() {
 
     local display_env=()
     local firefox_args=()
-    local xauthority_path="$profile_home/.Xauthority"
+    local probe_plan=""
+    local probe_mode=""
+    local probe_xauthority=""
+    local probe_display=""
 
-    if [ -n "${XAUTHORITY:-}" ]; then
-        display_env+=("XAUTHORITY=$XAUTHORITY")
-    elif [ -f "$xauthority_path" ]; then
-        display_env+=("XAUTHORITY=$xauthority_path")
-    fi
+    probe_plan="$(firefox_activation_probe_display_plan "$activation_user" "$current_user" "$profile_home")"
+    IFS=$'\t' read -r probe_mode probe_xauthority probe_display <<< "$probe_plan"
 
-    if [ -n "${DISPLAY:-}" ]; then
-        display_env+=("DISPLAY=$DISPLAY")
-    elif [ -S /tmp/.X11-unix/X0 ] && [ "${#display_env[@]}" -gt 0 ]; then
-        display_env+=("DISPLAY=:0")
-    fi
-
-    if [ "${#display_env[@]}" -gt 0 ]; then
+    if [ "$probe_mode" = "gui" ]; then
+        [ -n "$probe_xauthority" ] && display_env+=("XAUTHORITY=$probe_xauthority")
+        display_env+=("DISPLAY=$probe_display")
         firefox_args=("--profile" "$activation_profile" "about:blank")
     else
         firefox_args=("--headless" "--profile" "$activation_profile" "--screenshot" "$screenshot_path" "about:blank")
