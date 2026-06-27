@@ -41,8 +41,8 @@ export function useRulesData({ groupId, filter, page, search, pageSize }: UseRul
 
       if (filter === 'blocked') {
         const [subdomains, paths] = await Promise.all([
-          trpc.groups.listRules.query({ groupId, type: 'blocked_subdomain' }),
-          trpc.groups.listRules.query({ groupId, type: 'blocked_path' }),
+          trpc.groups.listRules.query({ groupId, type: 'blocked_subdomain', enabled: true }),
+          trpc.groups.listRules.query({ groupId, type: 'blocked_path', enabled: true }),
         ]);
 
         let blockedRules = [...subdomains, ...paths];
@@ -64,6 +64,7 @@ export function useRulesData({ groupId, filter, page, search, pageSize }: UseRul
           groupId,
           type: filter === 'allowed' || filter === 'automatic' ? 'whitelist' : undefined,
           source: filter === 'automatic' ? 'auto_extension' : undefined,
+          enabled: filter === 'disabled' ? false : filter === 'all' ? undefined : true,
           limit: pageSize,
           offset: (page - 1) * pageSize,
           search: search.trim() || undefined,
