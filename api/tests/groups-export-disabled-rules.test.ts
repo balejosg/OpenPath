@@ -41,13 +41,13 @@ before(async () => {
     });
 });
 
-test('exportGroup omits disabled rules', async () => {
+void test('exportGroup omits disabled rules', async () => {
   const out = (await exportGroup(GID)) ?? '';
   assert.match(out, /on\.example\.com/);
   assert.doesNotMatch(out, /off\.example\.com/);
 });
 
-test('toggling enabled state busts the export cache', async () => {
+void test('toggling enabled state busts the export cache', async () => {
   const first = (await exportGroup(GID)) ?? '';
   // The enabled rule should be present before the toggle
   assert.match(first, /on\.example\.com/);

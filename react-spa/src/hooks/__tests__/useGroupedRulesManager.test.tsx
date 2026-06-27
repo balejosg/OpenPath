@@ -358,7 +358,7 @@ describe('useGroupedRulesManager', () => {
       );
       expect(queryMock).toHaveBeenLastCalledWith(
         expect.not.objectContaining({
-          source: expect.anything(),
+          source: expect.anything() as unknown,
         })
       );
 

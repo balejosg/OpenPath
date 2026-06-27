@@ -3,11 +3,13 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { useRulesData } from '../useRulesData';
 
-const paginated = vi.fn(async (_input: unknown) => ({ rules: [], total: 0, hasMore: false }));
+const paginated = vi.fn((_input: unknown) =>
+  Promise.resolve({ rules: [], total: 0, hasMore: false })
+);
 vi.mock('../../lib/trpc', () => ({
   trpc: {
     groups: {
-      listRules: { query: vi.fn(async () => []) },
+      listRules: { query: vi.fn(() => Promise.resolve([])) },
       listRulesPaginated: { query: (input: unknown) => paginated(input) },
     },
   },

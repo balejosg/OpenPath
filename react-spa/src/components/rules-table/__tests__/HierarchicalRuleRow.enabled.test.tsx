@@ -11,7 +11,7 @@ const baseRule = {
   comment: null,
   createdAt: '2026-01-01T00:00:00Z',
 };
-const noop = () => {};
+const noop = () => undefined;
 const baseProps = {
   isEditing: false,
   isSaving: false,
@@ -21,7 +21,7 @@ const baseProps = {
   readOnly: false,
   editValue: '',
   onStartEdit: noop,
-  onSaveEdit: async () => {},
+  onSaveEdit: () => Promise.resolve(),
   onCancelEdit: noop,
   onDelete: noop,
   onSetEditValue: noop,

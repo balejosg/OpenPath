@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const setRuleEnabled = vi.fn(async (_arg: unknown) => ({}));
-const bulkSetRulesEnabled = vi.fn(async (_arg: unknown) => ({ updated: 0 }));
+const setRuleEnabled = vi.fn((_arg: unknown) => Promise.resolve({}));
+const bulkSetRulesEnabled = vi.fn((_arg: unknown) => Promise.resolve({ updated: 0 }));
 vi.mock('../trpc', () => ({
   trpc: {
     groups: {
@@ -21,8 +21,8 @@ describe('setRuleEnabledAction', () => {
   beforeEach(() => vi.clearAllMocks());
   it('calls setRuleEnabled and notifies with undo', async () => {
     const onToast = vi.fn();
-    const fetchRules = vi.fn(async () => {});
-    const fetchCounts = vi.fn(async () => {});
+    const fetchRules = vi.fn(() => Promise.resolve());
+    const fetchCounts = vi.fn(() => Promise.resolve());
     await setRuleEnabledAction(
       { id: 'r1', groupId: 'g', type: 'whitelist', value: 'a.example.com', comment: null },
       false,
@@ -41,8 +41,8 @@ describe('bulkSetRulesEnabledAction', () => {
 
     const clearSelection = vi.fn();
     const onToast = vi.fn();
-    const fetchRules = vi.fn(async () => {});
-    const fetchCounts = vi.fn(async () => {});
+    const fetchRules = vi.fn(() => Promise.resolve());
+    const fetchCounts = vi.fn(() => Promise.resolve());
 
     await bulkSetRulesEnabledAction({
       ids: ['a', 'b'],

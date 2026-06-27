@@ -54,7 +54,7 @@ before(async () => {
     .onConflictDoNothing();
 });
 
-test('setRuleEnabled disables a rule and returns it', async () => {
+void test('setRuleEnabled disables a rule and returns it', async () => {
   const updated = await setRuleEnabled('se-1', false);
   assert.equal(updated?.enabled, false);
   const [row] = await db.select().from(whitelistRules).where(eq(whitelistRules.id, 'se-1'));
@@ -62,16 +62,16 @@ test('setRuleEnabled disables a rule and returns it', async () => {
   assert.equal(row.enabled, 0);
 });
 
-test('setRuleEnabled with non-existent id returns null', async () => {
+void test('setRuleEnabled with non-existent id returns null', async () => {
   assert.equal(await setRuleEnabled('nope', false), null);
 });
 
-test('bulkSetRulesEnabled applies to multiple rules', async () => {
+void test('bulkSetRulesEnabled applies to multiple rules', async () => {
   const n = await bulkSetRulesEnabled(['se-1', 'se-2'], false);
   assert.equal(n, 2);
 });
 
-test('bulkSetRulesEnabled re-enables previously disabled rules', async () => {
+void test('bulkSetRulesEnabled re-enables previously disabled rules', async () => {
   await bulkSetRulesEnabled(['se-bulk-1', 'se-bulk-2'], false);
   const n = await bulkSetRulesEnabled(['se-bulk-1', 'se-bulk-2'], true);
   assert.equal(n, 2);
@@ -81,12 +81,11 @@ test('bulkSetRulesEnabled re-enables previously disabled rules', async () => {
     .where(inArray(whitelistRules.id, ['se-bulk-1', 'se-bulk-2']));
   assert.equal(rows.length, 2);
   for (const row of rows) {
-    assert.ok(row, 'expected row to exist');
     assert.equal(row.enabled, 1);
   }
 });
 
-test('bulkSetRulesEnabled with empty ids returns 0', async () => {
+void test('bulkSetRulesEnabled with empty ids returns 0', async () => {
   const n = await bulkSetRulesEnabled([], true);
   assert.equal(n, 0);
 });

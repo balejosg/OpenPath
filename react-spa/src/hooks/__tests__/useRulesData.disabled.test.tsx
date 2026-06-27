@@ -18,13 +18,15 @@ vi.mock('../../lib/trpc', () => {
     trpc: {
       groups: {
         listRules: {
-          query: vi.fn(async ({ type, enabled }: { type?: string; enabled?: boolean }) => {
-            if (enabled === false) return [rule('off', false)];
-            if (type === 'whitelist') return [rule('on', true)];
-            return [];
+          query: vi.fn(({ type, enabled }: { type?: string; enabled?: boolean }) => {
+            if (enabled === false) return Promise.resolve([rule('off', false)]);
+            if (type === 'whitelist') return Promise.resolve([rule('on', true)]);
+            return Promise.resolve([]);
           }),
         },
-        listRulesPaginated: { query: vi.fn(async () => ({ rules: [], total: 0, hasMore: false })) },
+        listRulesPaginated: {
+          query: vi.fn(() => Promise.resolve({ rules: [], total: 0, hasMore: false })),
+        },
       },
     },
   };

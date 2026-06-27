@@ -17,7 +17,7 @@ after(async () => {
   await db.delete(whitelistGroups).where(eq(whitelistGroups.id, GID));
 });
 
-test('whitelist_rules.enabled defaults to 1 when omitted', async () => {
+void test('whitelist_rules.enabled defaults to 1 when omitted', async () => {
   await db
     .insert(whitelistRules)
     .values({
@@ -36,7 +36,7 @@ test('whitelist_rules.enabled defaults to 1 when omitted', async () => {
   assert.equal(row.enabled, 1);
 });
 
-test('whitelist_rules.enabled persists an explicit 0', async () => {
+void test('whitelist_rules.enabled persists an explicit 0', async () => {
   await db
     .insert(whitelistRules)
     .values({

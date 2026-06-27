@@ -39,7 +39,7 @@ after(async () => {
   await db.delete(whitelistGroups).where(eq(whitelistGroups.id, GID));
 });
 
-test('dbRuleToApi exposes enabled as boolean', () => {
+void test('dbRuleToApi exposes enabled as boolean', () => {
   const result = dbRuleToApi({
     id: 'x',
     groupId: GID,
@@ -64,7 +64,7 @@ test('dbRuleToApi exposes enabled as boolean', () => {
   assert.equal(resultEnabled.enabled, true);
 });
 
-test('getRulesByGroup filters by enabled', async () => {
+void test('getRulesByGroup filters by enabled', async () => {
   const onlyEnabled = await getRulesByGroup(GID, undefined, undefined, true);
   assert.deepEqual(onlyEnabled.map((r) => r.id).sort(), ['r-on']);
 
