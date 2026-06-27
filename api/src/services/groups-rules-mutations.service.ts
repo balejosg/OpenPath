@@ -298,9 +298,9 @@ export async function bulkSetRulesEnabled(
   enabled: boolean,
   options?: { rules?: Rule[] },
   deps: GroupsRulesDependencies = defaultRulesDependencies
-): Promise<GroupsResult<{ updated: number; rules: Rule[] }>> {
+): Promise<GroupsResult<{ updated: number }>> {
   if (ids.length === 0) {
-    return { ok: true, data: { updated: 0, rules: [] } };
+    return { ok: true, data: { updated: 0 } };
   }
   const rules = options?.rules ?? (await deps.getRulesByIds(ids));
 
@@ -324,7 +324,7 @@ export async function bulkSetRulesEnabled(
     }
   );
 
-  return { ok: true, data: { updated, rules } };
+  return { ok: true, data: { updated } };
 }
 
 export async function bulkCreateRules(

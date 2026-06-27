@@ -24,7 +24,8 @@ before(async () => {
 
 test('setRuleEnabled rejects rule from another group', async () => {
   const res = await GroupsService.setRuleEnabled({ id: 'svc-1', groupId: 'otro', enabled: false });
-  assert.equal(res.ok, false);
+  assert.ok(!res.ok);
+  assert.equal(res.error.code, 'BAD_REQUEST');
 });
 
 test('setRuleEnabled disables a rule', async () => {
@@ -33,7 +34,14 @@ test('setRuleEnabled disables a rule', async () => {
   assert.equal(res.ok && res.data.enabled, false);
 });
 
-test('listRules filters disabled rules', async () => {
+test('setRuleEnabled re-enables a rule', async () => {
+  const res = await GroupsService.setRuleEnabled({ id: 'svc-1', groupId: GID, enabled: true });
+  assert.ok(res.ok);
+  assert.equal(res.data.enabled, true);
+});
+
+test('listRules returns only disabled rules when enabled=false', async () => {
+  await GroupsService.setRuleEnabled({ id: 'svc-1', groupId: GID, enabled: false });
   const res = await GroupsService.listRules(GID, undefined, undefined, false);
   assert.equal(res.ok && res.data.some((r) => r.id === 'svc-1'), true);
 });
