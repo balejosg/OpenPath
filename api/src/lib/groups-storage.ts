@@ -110,7 +110,10 @@ export async function exportGroup(groupId: string): Promise<string | null> {
 
   const rules = await getRulesByGroup(groupId);
   const rulesVersion = rules
-    .map((rule) => `${rule.id}:${rule.type}:${rule.value}:${rule.source}:${rule.comment ?? ''}`)
+    .map(
+      (rule) =>
+        `${rule.id}:${rule.type}:${rule.value}:${rule.source}:${rule.enabled ? '1' : '0'}:${rule.comment ?? ''}`
+    )
     .sort()
     .join('|');
   const version = `${group.updatedAt.toISOString()}:${group.enabled ? '1' : '0'}:${rulesVersion}`;
@@ -131,7 +134,7 @@ export async function exportGroup(groupId: string): Promise<string | null> {
 
   let content = '';
 
-  const whitelist = rules.filter((rule) => rule.type === 'whitelist');
+  const whitelist = rules.filter((rule) => rule.type === 'whitelist' && rule.enabled);
   if (whitelist.length > 0) {
     content += '## WHITELIST\n';
     whitelist.forEach((rule) => {
@@ -140,7 +143,9 @@ export async function exportGroup(groupId: string): Promise<string | null> {
     content += '\n';
   }
 
-  const blockedSubdomains = rules.filter((rule) => rule.type === 'blocked_subdomain');
+  const blockedSubdomains = rules.filter(
+    (rule) => rule.type === 'blocked_subdomain' && rule.enabled
+  );
   if (blockedSubdomains.length > 0) {
     content += '## BLOCKED-SUBDOMAINS\n';
     blockedSubdomains.forEach((rule) => {
@@ -149,7 +154,7 @@ export async function exportGroup(groupId: string): Promise<string | null> {
     content += '\n';
   }
 
-  const blockedPaths = rules.filter((rule) => rule.type === 'blocked_path');
+  const blockedPaths = rules.filter((rule) => rule.type === 'blocked_path' && rule.enabled);
   if (blockedPaths.length > 0) {
     content += '## BLOCKED-PATHS\n';
     blockedPaths.forEach((rule) => {
