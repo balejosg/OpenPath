@@ -396,6 +396,196 @@ await describe(
       });
     });
 
+    await describe('Set Rule Enabled Operations', async () => {
+      let setEnabledGroupId = '';
+      let setEnabledRuleId = '';
+
+      before(async () => {
+        const activeHarness = getHarness();
+        setEnabledGroupId = (
+          await activeHarness.createGroup({
+            displayName: 'Set Enabled Test Group',
+            name: uniqueGroupName('set-enabled'),
+          })
+        ).id;
+
+        const createResp = await activeHarness.trpcMutate(
+          'groups.createRule',
+          {
+            groupId: setEnabledGroupId,
+            type: 'whitelist',
+            value: `set-enabled-${TEST_RUN_ID}-${Math.random().toString(36).slice(2, 6)}.com`,
+          },
+          bearerAuth(activeHarness.adminToken)
+        );
+        assertStatus(createResp, 200);
+        const { data: createdRule } = (await parseTRPC(createResp)) as { data?: { id: string } };
+        setEnabledRuleId = createdRule?.id ?? '';
+        assert.ok(setEnabledRuleId);
+      });
+
+      await test('should disable and re-enable a single rule (admin)', async () => {
+        const activeHarness = getHarness();
+
+        // Disable the rule
+        const disableResp = await activeHarness.trpcMutate(
+          'groups.setRuleEnabled',
+          { id: setEnabledRuleId, groupId: setEnabledGroupId, enabled: false },
+          bearerAuth(activeHarness.adminToken)
+        );
+        assertStatus(disableResp, 200);
+        const { data: disabledRule } = (await parseTRPC(disableResp)) as {
+          data?: { id: string; enabled: boolean };
+        };
+        assert.ok(disabledRule);
+        assert.strictEqual(disabledRule.enabled, false);
+
+        // Re-enable the rule
+        const enableResp = await activeHarness.trpcMutate(
+          'groups.setRuleEnabled',
+          { id: setEnabledRuleId, groupId: setEnabledGroupId, enabled: true },
+          bearerAuth(activeHarness.adminToken)
+        );
+        assertStatus(enableResp, 200);
+        const { data: enabledRule } = (await parseTRPC(enableResp)) as {
+          data?: { id: string; enabled: boolean };
+        };
+        assert.ok(enabledRule);
+        assert.strictEqual(enabledRule.enabled, true);
+      });
+
+      await test('should reject setRuleEnabled when groupId does not match rule owner', async () => {
+        const activeHarness = getHarness();
+
+        // Create a second group and use its ID with a rule from the first group
+        const wrongGroupId = (
+          await activeHarness.createGroup({
+            displayName: 'Wrong Group',
+            name: uniqueGroupName('wrong-group'),
+          })
+        ).id;
+
+        const resp = await activeHarness.trpcMutate(
+          'groups.setRuleEnabled',
+          { id: setEnabledRuleId, groupId: wrongGroupId, enabled: false },
+          bearerAuth(activeHarness.adminToken)
+        );
+        // The middleware assertCanAccessGroupId passes (admin has access to everything),
+        // but the service rejects because the rule's groupId doesn't match
+        assert.ok(resp.status === 400 || resp.status === 404);
+      });
+
+      await test('should bulk enable rules as admin (skips per-group preload)', async () => {
+        const activeHarness = getHarness();
+
+        // First disable the rule so we have something to enable
+        await activeHarness.trpcMutate(
+          'groups.setRuleEnabled',
+          { id: setEnabledRuleId, groupId: setEnabledGroupId, enabled: false },
+          bearerAuth(activeHarness.adminToken)
+        );
+
+        const bulkResp = await activeHarness.trpcMutate(
+          'groups.bulkSetRulesEnabled',
+          { ids: [setEnabledRuleId], enabled: true },
+          bearerAuth(activeHarness.adminToken)
+        );
+        assertStatus(bulkResp, 200);
+        const { data: bulkData } = (await parseTRPC(bulkResp)) as {
+          data?: { updated: number };
+        };
+        assert.ok(bulkData);
+        assert.ok(typeof bulkData.updated === 'number');
+        assert.ok(bulkData.updated >= 0);
+      });
+
+      await test('should bulk enable rules as non-admin teacher (preloads getRulesByIds)', async () => {
+        const activeHarness = getHarness();
+
+        // Create a group and rule for the teacher
+        const teacherGroupId = (
+          await activeHarness.createGroup({
+            displayName: 'Teacher Bulk Set Group',
+            name: uniqueGroupName('teacher-bulk-set'),
+          })
+        ).id;
+
+        const createRuleResp = await activeHarness.trpcMutate(
+          'groups.createRule',
+          {
+            groupId: teacherGroupId,
+            type: 'whitelist',
+            value: `teacher-bulk-${TEST_RUN_ID}-${Math.random().toString(36).slice(2, 6)}.com`,
+          },
+          bearerAuth(activeHarness.adminToken)
+        );
+        assertStatus(createRuleResp, 200);
+        const { data: teacherRule } = (await parseTRPC(createRuleResp)) as {
+          data?: { id: string };
+        };
+        const teacherRuleId = teacherRule?.id ?? '';
+        assert.ok(teacherRuleId);
+
+        const teacher = await activeHarness.createTeacherSession([teacherGroupId]);
+
+        const bulkResp = await activeHarness.trpcMutate(
+          'groups.bulkSetRulesEnabled',
+          { ids: [teacherRuleId], enabled: false },
+          bearerAuth(teacher.accessToken)
+        );
+        assertStatus(bulkResp, 200);
+        const { data: bulkData } = (await parseTRPC(bulkResp)) as {
+          data?: { updated: number };
+        };
+        assert.ok(bulkData);
+        assert.ok(typeof bulkData.updated === 'number');
+      });
+
+      await test('should reject bulkSetRulesEnabled when teacher targets an unauthorized group', async () => {
+        const activeHarness = getHarness();
+
+        // Create a group the teacher does NOT own, add a rule to it
+        const unauthorizedGroupId = (
+          await activeHarness.createGroup({
+            displayName: 'Unauthorized Bulk Group',
+            name: uniqueGroupName('unauth-bulk'),
+          })
+        ).id;
+
+        const createRuleResp = await activeHarness.trpcMutate(
+          'groups.createRule',
+          {
+            groupId: unauthorizedGroupId,
+            type: 'whitelist',
+            value: `unauth-${TEST_RUN_ID}-${Math.random().toString(36).slice(2, 6)}.com`,
+          },
+          bearerAuth(activeHarness.adminToken)
+        );
+        assertStatus(createRuleResp, 200);
+        const { data: unauthorizedRule } = (await parseTRPC(createRuleResp)) as {
+          data?: { id: string };
+        };
+        const unauthorizedRuleId = unauthorizedRule?.id ?? '';
+        assert.ok(unauthorizedRuleId);
+
+        // Create a teacher with access to a DIFFERENT group
+        const ownedGroupId = (
+          await activeHarness.createGroup({
+            displayName: 'Teacher Owned Group For Unauth',
+            name: uniqueGroupName('teacher-owned-unauth'),
+          })
+        ).id;
+        const teacher = await activeHarness.createTeacherSession([ownedGroupId]);
+
+        const bulkResp = await activeHarness.trpcMutate(
+          'groups.bulkSetRulesEnabled',
+          { ids: [unauthorizedRuleId], enabled: true },
+          bearerAuth(teacher.accessToken)
+        );
+        assert.strictEqual(bulkResp.status, 403);
+      });
+    });
+
     await describe('Clone Operations', async () => {
       await test('should clone a group and copy its rules', async () => {
         const source = await getHarness().createGroup({

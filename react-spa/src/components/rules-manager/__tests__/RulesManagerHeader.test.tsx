@@ -22,4 +22,50 @@ describe('RulesManagerHeader', () => {
     expect(onBack).toHaveBeenCalled();
     expect(onViewModeChange).toHaveBeenCalledWith('hierarchical');
   });
+
+  it('calls onViewModeChange with "flat" when clicking the flat view button from hierarchical mode', () => {
+    const onViewModeChange = vi.fn();
+
+    render(
+      <RulesManagerHeader
+        groupName="My Group"
+        viewMode="hierarchical"
+        onBack={vi.fn()}
+        onViewModeChange={onViewModeChange}
+      />
+    );
+
+    fireEvent.click(screen.getByTitle('Flat view'));
+    expect(onViewModeChange).toHaveBeenCalledWith('flat');
+  });
+
+  it('flat view button has active styling when viewMode is flat', () => {
+    render(
+      <RulesManagerHeader
+        groupName="My Group"
+        viewMode="flat"
+        onBack={vi.fn()}
+        onViewModeChange={vi.fn()}
+      />
+    );
+
+    const flatBtn = screen.getByTitle('Flat view');
+    expect(flatBtn).toHaveClass('bg-white');
+    expect(flatBtn).toHaveClass('text-slate-900');
+  });
+
+  it('hierarchical view button has active styling when viewMode is hierarchical', () => {
+    render(
+      <RulesManagerHeader
+        groupName="My Group"
+        viewMode="hierarchical"
+        onBack={vi.fn()}
+        onViewModeChange={vi.fn()}
+      />
+    );
+
+    const hierarchicalBtn = screen.getByTitle('Hierarchical view');
+    expect(hierarchicalBtn).toHaveClass('bg-white');
+    expect(hierarchicalBtn).toHaveClass('text-slate-900');
+  });
 });

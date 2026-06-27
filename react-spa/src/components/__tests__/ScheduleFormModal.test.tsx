@@ -146,4 +146,130 @@ describe('ScheduleFormModal Component', () => {
     expect(screen.getByRole('button', { name: 'Tue' })).toHaveClass('bg-blue-600');
     expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument();
   });
+
+  it('clicking a day button updates the selected day', () => {
+    const onSave = vi.fn();
+    render(
+      <ScheduleFormModal
+        schedule={null}
+        groups={groups}
+        saving={false}
+        error=""
+        onSave={onSave}
+        onClose={vi.fn()}
+      />
+    );
+
+    // Click Monday to select a day
+    fireEvent.click(screen.getByRole('button', { name: 'Mon' }));
+    // Now change end time and submit to confirm day was set
+    fireEvent.change(screen.getByLabelText('End Time'), { target: { value: '10:00' } });
+    fireEvent.click(screen.getByRole('button', { name: /create schedule/i }));
+
+    expect(onSave).toHaveBeenCalled();
+    const saved = onSave.mock.calls[0]?.[0] as { dayOfWeek: number };
+    expect(saved.dayOfWeek).toBe(1);
+  });
+
+  it('changing start time select updates state', () => {
+    const onSave = vi.fn();
+    render(
+      <ScheduleFormModal
+        schedule={null}
+        defaultDay={2}
+        groups={groups}
+        saving={false}
+        error=""
+        onSave={onSave}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText('Start Time'), { target: { value: '09:00' } });
+    fireEvent.change(screen.getByLabelText('End Time'), { target: { value: '10:00' } });
+    fireEvent.click(screen.getByRole('button', { name: /create schedule/i }));
+
+    expect(onSave).toHaveBeenCalled();
+    const saved = onSave.mock.calls[0]?.[0] as { startTime: string };
+    expect(saved.startTime).toBe('09:00');
+  });
+
+  it('shows error when start time is not before end time', () => {
+    const onSave = vi.fn();
+    render(
+      <ScheduleFormModal
+        schedule={null}
+        defaultDay={2}
+        defaultStartTime="10:00"
+        groups={groups}
+        saving={false}
+        error=""
+        onSave={onSave}
+        onClose={vi.fn()}
+      />
+    );
+
+    // Set end time equal to start time — compareTimeOfDay returns 0, which is >= 0
+    fireEvent.change(screen.getByLabelText('End Time'), { target: { value: '10:00' } });
+    fireEvent.click(screen.getByRole('button', { name: /create schedule/i }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByText('End time must be after start time')).toBeInTheDocument();
+  });
+
+  it('shows spinner and disables buttons when saving is true', () => {
+    const onClose = vi.fn();
+    const schedule: ScheduleWithPermissions = {
+      id: 's2',
+      classroomId: 'c1',
+      dayOfWeek: 3,
+      startTime: '09:00',
+      endTime: '10:00',
+      groupId: 'g1',
+      teacherId: 't1',
+      recurrence: 'weekly',
+      createdAt: new Date().toISOString(),
+      updatedAt: undefined,
+      isMine: true,
+      canEdit: true,
+    };
+
+    render(
+      <ScheduleFormModal
+        schedule={schedule}
+        groups={groups}
+        saving
+        error=""
+        onSave={vi.fn()}
+        onClose={onClose}
+      />
+    );
+
+    const cancelBtn = screen.getByRole('button', { name: /cancel/i });
+    const saveBtn = screen.getByRole('button', { name: /save changes/i });
+    expect(cancelBtn).toBeDisabled();
+    expect(saveBtn).toBeDisabled();
+
+    fireEvent.click(cancelBtn);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('shows error when group is missing', () => {
+    const onSave = vi.fn();
+    render(
+      <ScheduleFormModal
+        schedule={null}
+        defaultDay={1}
+        groups={[]}
+        saving={false}
+        error=""
+        onSave={onSave}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /create schedule/i }));
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByText('Select a group')).toBeInTheDocument();
+  });
 });
