@@ -24,7 +24,7 @@ interface RulesManagerTableSectionProps {
   onFilterChange: (filter: ManagedRulesFilterType) => void;
   onRetry: () => void;
   onDelete: (rule: Rule) => void;
-  onToggleEnabled: (rule: Rule) => void;
+  onToggleEnabled?: (rule: Rule) => void;
   onSave: (id: string, data: { value?: string; comment?: string | null }) => Promise<boolean>;
   onToggleSelection: (id: string) => void;
   onToggleSelectAll: () => void;
