@@ -69,3 +69,6 @@ firefox-extension/*.xpi
 
 # E2E test artifacts (selenium diagnostics, screenshots, etc.)
 tests/e2e/artifacts/
+
+# Superpowers SDD scratch (briefs, reports, ledger) — local only
+.superpowers/
