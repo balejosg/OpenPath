@@ -61,4 +61,48 @@ describe('BulkActionBar Component', () => {
     const deleteButton = screen.getByRole('button', { name: /delete/i });
     expect(deleteButton).toBeDisabled();
   });
+
+  it('renders disable and enable buttons when handlers are provided', () => {
+    const handleDisable = vi.fn();
+    const handleEnable = vi.fn();
+    render(
+      <BulkActionBar
+        selectedCount={3}
+        onDelete={noop}
+        onClear={noop}
+        onDisable={handleDisable}
+        onEnable={handleEnable}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /disable/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /enable/i })).toBeInTheDocument();
+  });
+
+  it('calls onDisable when disable button is clicked', () => {
+    const handleDisable = vi.fn();
+    render(
+      <BulkActionBar selectedCount={2} onDelete={noop} onClear={noop} onDisable={handleDisable} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /disable/i }));
+    expect(handleDisable).toHaveBeenCalledOnce();
+  });
+
+  it('calls onEnable when enable button is clicked', () => {
+    const handleEnable = vi.fn();
+    render(
+      <BulkActionBar selectedCount={2} onDelete={noop} onClear={noop} onEnable={handleEnable} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /enable/i }));
+    expect(handleEnable).toHaveBeenCalledOnce();
+  });
+
+  it('does not render disable or enable buttons when handlers are omitted', () => {
+    render(<BulkActionBar selectedCount={2} onDelete={noop} onClear={noop} />);
+
+    expect(screen.queryByRole('button', { name: /disable/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /enable/i })).toBeNull();
+  });
 });

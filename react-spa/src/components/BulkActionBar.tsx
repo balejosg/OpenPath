@@ -8,6 +8,8 @@ interface BulkActionBarProps {
   selectedCount: number;
   onDelete: () => void;
   onClear: () => void;
+  onDisable?: () => void;
+  onEnable?: () => void;
   isDeleting?: boolean;
   className?: string;
 }
@@ -19,6 +21,8 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
   selectedCount,
   onDelete,
   onClear,
+  onDisable,
+  onEnable,
   isDeleting = false,
   className,
 }) => {
@@ -46,6 +50,28 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
 
       {/* Actions */}
       <div className="flex items-center gap-2">
+        {onDisable && (
+          <Button
+            onClick={onDisable}
+            disabled={isDeleting}
+            size="sm"
+            className="bg-slate-600 hover:bg-slate-700 text-white border-0"
+          >
+            {t('rulesActions.bulkDisableButton')}
+          </Button>
+        )}
+
+        {onEnable && (
+          <Button
+            onClick={onEnable}
+            disabled={isDeleting}
+            size="sm"
+            className="bg-slate-600 hover:bg-slate-700 text-white border-0"
+          >
+            {t('rulesActions.bulkEnableButton')}
+          </Button>
+        )}
+
         <Button
           onClick={onDelete}
           disabled={isDeleting}

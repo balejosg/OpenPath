@@ -130,8 +130,6 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
         onSave={collection.actions.updateRule}
         onToggleSelection={collection.selection.toggleSelection}
         onToggleSelectAll={collection.selection.toggleSelectAll}
-        onBulkDisable={() => void collection.actions.bulkSetRulesEnabled(false)}
-        onBulkEnable={() => void collection.actions.bulkSetRulesEnabled(true)}
       />
 
       <RulesManagerPagination
@@ -154,6 +152,8 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
           onDelete={() => void viewModel.handleBulkDelete()}
           onClear={collection.selection.clearSelection}
           isDeleting={viewModel.bulkDeleting}
+          onDisable={() => void collection.actions.bulkSetRulesEnabled(false)}
+          onEnable={() => void collection.actions.bulkSetRulesEnabled(true)}
         />
       )}
 
