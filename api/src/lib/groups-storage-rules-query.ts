@@ -15,13 +15,18 @@ function filterRulesBySource<T extends { source: string }>(rules: T[], source?: 
   return source ? rules.filter((rule) => rule.source === source) : rules;
 }
 
+function filterRulesByEnabled<T extends { enabled: number }>(rules: T[], enabled?: boolean): T[] {
+  return enabled === undefined ? rules : rules.filter((rule) => (rule.enabled === 1) === enabled);
+}
+
 export async function getRulesByGroup(
   groupId: string,
   type?: RuleType,
-  source?: RuleSource
+  source?: RuleSource,
+  enabled?: boolean
 ): Promise<Rule[]> {
   const rules = await listRuleRowsByGroup(groupId, type);
-  return filterRulesBySource(rules, source)
+  return filterRulesByEnabled(filterRulesBySource(rules, source), enabled)
     .map(dbRuleToApi)
     .sort((left, right) => left.value.localeCompare(right.value));
 }
@@ -29,13 +34,14 @@ export async function getRulesByGroup(
 export async function getRulesByGroupPaginated(
   options: ListRulesOptions
 ): Promise<PaginatedRulesResult> {
-  const { groupId, type, source, limit = 50, offset = 0, search } = options;
+  const { groupId, type, source, enabled, limit = 50, offset = 0, search } = options;
   const rules = await listRuleRowsByGroup(groupId, type);
 
   let filtered = filterRulesBySource(rules, source);
+  filtered = filterRulesByEnabled(filtered, enabled);
   if (search?.trim()) {
     const searchLower = search.toLowerCase().trim();
-    filtered = rules.filter((rule) => rule.value.toLowerCase().includes(searchLower));
+    filtered = filtered.filter((rule) => rule.value.toLowerCase().includes(searchLower));
   }
 
   filtered.sort((left, right) => left.value.localeCompare(right.value));

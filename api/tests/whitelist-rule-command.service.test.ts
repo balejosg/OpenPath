@@ -46,6 +46,7 @@ function createAutoRule(overrides: Partial<Rule> = {}): Rule {
     type: 'whitelist',
     value: 'cdn.example.com',
     source: 'auto_extension',
+    enabled: true,
     comment: null,
     createdAt: '',
     ...overrides,

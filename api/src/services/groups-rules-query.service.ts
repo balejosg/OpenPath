@@ -15,14 +15,15 @@ import { ensureGroupExists } from './groups-rules-shared.js';
 export async function listRules(
   groupId: string,
   type?: RuleType,
-  source?: RuleSource
+  source?: RuleSource,
+  enabled?: boolean
 ): Promise<GroupsResult<Rule[]>> {
   const group = await ensureGroupExists(groupId);
   if (!group.ok) {
     return group;
   }
 
-  const rules = await groupsStorage.getRulesByGroup(groupId, type, source);
+  const rules = await groupsStorage.getRulesByGroup(groupId, type, source, enabled);
   return { ok: true, data: rules };
 }
 

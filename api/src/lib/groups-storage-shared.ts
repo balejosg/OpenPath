@@ -44,6 +44,7 @@ export interface Rule {
   type: RuleType;
   value: string;
   source: RuleSource;
+  enabled: boolean;
   comment: string | null;
   createdAt: string;
 }
@@ -75,6 +76,7 @@ export interface ListRulesOptions {
   groupId: string;
   type?: RuleType | undefined;
   source?: RuleSource | undefined;
+  enabled?: boolean | undefined;
   limit?: number | undefined;
   offset?: number | undefined;
   search?: string | undefined;
@@ -99,6 +101,7 @@ export interface ListRulesGroupedOptions {
   groupId: string;
   type?: RuleType | undefined;
   source?: RuleSource | undefined;
+  enabled?: boolean | undefined;
   limit?: number | undefined;
   offset?: number | undefined;
   search?: string | undefined;
@@ -140,7 +143,12 @@ export interface IGroupsStorage {
     visibility?: GroupVisibility
   ): Promise<void>;
   deleteGroup(id: string): Promise<boolean>;
-  getRulesByGroup(groupId: string, type?: RuleType): Promise<Rule[]>;
+  getRulesByGroup(
+    groupId: string,
+    type?: RuleType,
+    source?: RuleSource,
+    enabled?: boolean
+  ): Promise<Rule[]>;
   getRulesByGroupPaginated(options: ListRulesOptions): Promise<PaginatedRulesResult>;
   getRulesByGroupGrouped(options: ListRulesGroupedOptions): Promise<PaginatedGroupedRulesResult>;
   getRuleById(id: string): Promise<Rule | null>;
@@ -204,6 +212,7 @@ export function dbRuleToApi(rule: WhitelistRule): Rule {
     type: rule.type as RuleType,
     value: rule.value,
     source: (rule.source as RuleSource | null) ?? 'manual',
+    enabled: rule.enabled === 1,
     comment: rule.comment ?? null,
     createdAt: rule.createdAt?.toISOString() ?? new Date().toISOString(),
   };
