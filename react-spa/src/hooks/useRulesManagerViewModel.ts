@@ -1,13 +1,38 @@
 import { createElement, useCallback, useMemo, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
-import { Ban, Check } from 'lucide-react';
+import { Ban, Check, PowerOff } from 'lucide-react';
 import { detectRuleType, validateRuleValue } from '../lib/ruleDetection';
 import { readMultipleFiles } from '../lib/fileReader';
 import {
   useManagedRulesCollection,
   type ManagedRulesCollectionMode,
+  type ManagedRulesCounts,
   type ManagedRulesFilterType,
 } from './useManagedRulesCollection';
+
+export function buildRulesManagerTabs(counts: ManagedRulesCounts) {
+  return [
+    { id: 'all' as ManagedRulesFilterType, label: 'Todos', count: counts.all },
+    {
+      id: 'allowed' as ManagedRulesFilterType,
+      label: 'Permitidas',
+      count: counts.allowed,
+      icon: createElement(Check, { size: 14 }),
+    },
+    {
+      id: 'blocked' as ManagedRulesFilterType,
+      label: 'Bloqueadas',
+      count: counts.blocked,
+      icon: createElement(Ban, { size: 14 }),
+    },
+    {
+      id: 'disabled' as ManagedRulesFilterType,
+      label: 'Inhabilitadas',
+      count: counts.disabled,
+      icon: createElement(PowerOff, { size: 14 }),
+    },
+  ];
+}
 
 export type ViewMode = ManagedRulesCollectionMode;
 
@@ -152,33 +177,13 @@ export function useRulesManagerViewModel({
     ? 'No results found for your search'
     : collection.filters.active === 'allowed'
       ? 'No allowed domains'
-      : collection.filters.active === 'automatic'
-        ? 'No automatic approvals'
-        : collection.filters.active === 'blocked'
-          ? 'No blocked domains'
+      : collection.filters.active === 'blocked'
+        ? 'No blocked domains'
+        : collection.filters.active === 'disabled'
+          ? 'No disabled rules'
           : 'No rules configured. Add one to get started.';
 
-  const tabs = [
-    { id: 'all' as ManagedRulesFilterType, label: 'Todos', count: collection.filters.counts.all },
-    {
-      id: 'allowed' as ManagedRulesFilterType,
-      label: 'Permitidas',
-      count: collection.filters.counts.allowed,
-      icon: createElement(Check, { size: 14 }),
-    },
-    {
-      id: 'automatic' as ManagedRulesFilterType,
-      label: 'Automatic',
-      count: collection.filters.counts.automatic,
-      icon: createElement(Check, { size: 14 }),
-    },
-    {
-      id: 'blocked' as ManagedRulesFilterType,
-      label: 'Bloqueadas',
-      count: collection.filters.counts.blocked,
-      icon: createElement(Ban, { size: 14 }),
-    },
-  ];
+  const tabs = buildRulesManagerTabs(collection.filters.counts);
 
   return {
     viewMode,

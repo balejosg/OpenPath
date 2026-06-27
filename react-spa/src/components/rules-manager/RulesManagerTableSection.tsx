@@ -28,6 +28,8 @@ interface RulesManagerTableSectionProps {
   onSave: (id: string, data: { value?: string; comment?: string | null }) => Promise<boolean>;
   onToggleSelection: (id: string) => void;
   onToggleSelectAll: () => void;
+  onBulkDisable?: () => void;
+  onBulkEnable?: () => void;
 }
 
 export function RulesManagerTableSection({
@@ -50,6 +52,8 @@ export function RulesManagerTableSection({
   onSave,
   onToggleSelection,
   onToggleSelectAll,
+  onBulkDisable,
+  onBulkEnable,
 }: RulesManagerTableSectionProps) {
   const t = useT();
   return (
@@ -59,6 +63,25 @@ export function RulesManagerTableSection({
         activeTab={filter}
         onChange={(id) => onFilterChange(id as ManagedRulesFilterType)}
       />
+
+      {!readOnly && hasSelection && (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => onBulkDisable?.()}
+            className="px-3 py-1.5 text-sm rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
+          >
+            {t('rulesActions.bulkDisableButton')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onBulkEnable?.()}
+            className="px-3 py-1.5 text-sm rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
+          >
+            {t('rulesActions.bulkEnableButton')}
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-center">

@@ -130,6 +130,8 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
         onSave={collection.actions.updateRule}
         onToggleSelection={collection.selection.toggleSelection}
         onToggleSelectAll={collection.selection.toggleSelectAll}
+        onBulkDisable={() => void collection.actions.bulkSetRulesEnabled(false)}
+        onBulkEnable={() => void collection.actions.bulkSetRulesEnabled(true)}
       />
 
       <RulesManagerPagination
