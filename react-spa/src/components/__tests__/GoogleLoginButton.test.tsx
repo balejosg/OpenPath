@@ -6,13 +6,12 @@ import type { GoogleCredentialResponse } from '../../hooks/useGoogleAuth';
 
 const { mockInitGoogleAuth, mockUseGoogleAuth } = vi.hoisted(() => ({
   mockInitGoogleAuth: vi.fn<(cb: (r: GoogleCredentialResponse) => void) => void>(),
-  mockUseGoogleAuth:
-    vi.fn<
-      () => {
-        isLoaded: boolean;
-        initGoogleAuth: (cb: (r: GoogleCredentialResponse) => void) => void;
-      }
-    >(),
+  mockUseGoogleAuth: vi.fn<
+    () => {
+      isLoaded: boolean;
+      initGoogleAuth: (cb: (r: GoogleCredentialResponse) => void) => void;
+    }
+  >(),
 }));
 
 vi.mock('../../hooks/useGoogleAuth', () => ({
