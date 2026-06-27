@@ -51,6 +51,8 @@ export interface UseRulesManagerReturn {
     type: RuleType
   ) => Promise<{ created: number; total: number }>;
   updateRule: (id: string, data: { value?: string; comment?: string | null }) => Promise<boolean>;
+  setRuleEnabled: (rule: Rule, enabled: boolean) => Promise<void>;
+  bulkSetRulesEnabled: (enabled: boolean) => Promise<void>;
   refetch: () => Promise<void>;
 }
 
@@ -80,15 +82,22 @@ export function useRulesManager({
     rules,
     resetKeys: [page, filter, search],
   });
-  const { addRule, bulkCreateRules, bulkDeleteRules, deleteRule, updateRule } =
-    useManagedRulesActions({
-      clearSelection,
-      groupId,
-      onToast,
-      refetchCounts: fetchCounts,
-      refetchRules: fetchRules,
-      selectedIds,
-    });
+  const {
+    addRule,
+    bulkCreateRules,
+    bulkDeleteRules,
+    bulkSetRulesEnabled,
+    deleteRule,
+    setRuleEnabled,
+    updateRule,
+  } = useManagedRulesActions({
+    clearSelection,
+    groupId,
+    onToast,
+    refetchCounts: fetchCounts,
+    refetchRules: fetchRules,
+    selectedIds,
+  });
 
   // Calculate derived values
   const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -130,6 +139,8 @@ export function useRulesManager({
     bulkDeleteRules,
     bulkCreateRules,
     updateRule,
+    setRuleEnabled,
+    bulkSetRulesEnabled,
     refetch: async () => {
       await Promise.all([fetchRules(), fetchCounts()]);
     },

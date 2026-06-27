@@ -3,7 +3,7 @@ import { detectRuleType } from './ruleDetection';
 import { isDuplicateError } from './error-utils';
 import { getRuleTypeBadge, type RuleType } from './rules';
 import { reportError } from './reportError';
-import type { ProductT, ProductLocale } from '../i18n/product-i18n';
+import type { ProductT, ProductLocale, ProductI18nKey } from '../i18n/product-i18n';
 
 export type ToastFn = (message: string, type: 'success' | 'error', undoAction?: () => void) => void;
 
@@ -246,6 +246,79 @@ export async function revokeAutoApprovalAction(
   } catch (err) {
     reportError('Failed to revoke automatic approval:', err);
     params.onToast(params.t('rulesActions.unableToRevoke'), 'error');
+  }
+}
+
+export interface SetEnabledParams {
+  onToast: ToastFn;
+  fetchRules: () => Promise<void>;
+  fetchCounts: () => Promise<void>;
+  t: ProductT;
+  locale: ProductLocale;
+}
+
+export async function setRuleEnabledAction(
+  rule: RuleForUndo,
+  enabled: boolean,
+  params: SetEnabledParams
+): Promise<void> {
+  try {
+    await trpc.groups.setRuleEnabled.mutate({ id: rule.id, groupId: rule.groupId, enabled });
+    // Keys added in Task 12; cast to ProductI18nKey until then
+    const msgKey = (enabled ? 'rulesActions.enabled' : 'rulesActions.disabled') as ProductI18nKey;
+    params.onToast(params.t(msgKey, { value: rule.value }), 'success', () => {
+      void (async () => {
+        try {
+          await trpc.groups.setRuleEnabled.mutate({
+            id: rule.id,
+            groupId: rule.groupId,
+            enabled: !enabled,
+          });
+          await params.fetchRules();
+          await params.fetchCounts();
+        } catch (err) {
+          reportError('Failed to undo set-enabled:', err);
+          params.onToast(params.t('rulesActions.unableToUpdate'), 'error');
+        }
+      })();
+    });
+    await params.fetchRules();
+    await params.fetchCounts();
+  } catch (err) {
+    reportError('Failed to set rule enabled:', err);
+    params.onToast(params.t('rulesActions.unableToUpdate'), 'error');
+  }
+}
+
+export interface BulkSetEnabledParams {
+  ids: string[];
+  enabled: boolean;
+  clearSelection?: () => void;
+  onToast: ToastFn;
+  fetchRules: () => Promise<void>;
+  fetchCounts: () => Promise<void>;
+  t: ProductT;
+  locale: ProductLocale;
+}
+
+export async function bulkSetRulesEnabledAction(params: BulkSetEnabledParams): Promise<void> {
+  if (params.ids.length === 0) return;
+  try {
+    const result = await trpc.groups.bulkSetRulesEnabled.mutate({
+      ids: params.ids,
+      enabled: params.enabled,
+    });
+    params.clearSelection?.();
+    // Keys added in Task 12; cast to ProductI18nKey until then
+    const key = (
+      params.enabled ? 'rulesActions.bulkEnabled' : 'rulesActions.bulkDisabled'
+    ) as ProductI18nKey;
+    params.onToast(params.t(key, { count: result.updated }), 'success');
+    await params.fetchRules();
+    await params.fetchCounts();
+  } catch (err) {
+    reportError('Failed to bulk set enabled:', err);
+    params.onToast(params.t('rulesActions.unableToUpdate'), 'error');
   }
 }
 

@@ -53,6 +53,8 @@ export interface ManagedRulesActions {
     type: RuleType
   ) => Promise<{ created: number; total: number }>;
   updateRule: (id: string, data: { value?: string; comment?: string | null }) => Promise<boolean>;
+  setRuleEnabled: (rule: Rule, enabled: boolean) => Promise<void>;
+  bulkSetRulesEnabled: (enabled: boolean) => Promise<void>;
 }
 
 export interface ManagedRulesViewMode {
@@ -143,6 +145,8 @@ function adaptFlatRulesManager(
       bulkDeleteRules: manager.bulkDeleteRules,
       bulkCreateRules: manager.bulkCreateRules,
       updateRule: manager.updateRule,
+      setRuleEnabled: manager.setRuleEnabled,
+      bulkSetRulesEnabled: manager.bulkSetRulesEnabled,
     },
     refetch: manager.refetch,
   };
@@ -187,6 +191,8 @@ function adaptGroupedRulesManager(
       bulkDeleteRules: manager.bulkDeleteRules,
       bulkCreateRules: manager.bulkCreateRules,
       updateRule: manager.updateRule,
+      setRuleEnabled: manager.setRuleEnabled,
+      bulkSetRulesEnabled: manager.bulkSetRulesEnabled,
     },
     refetch: manager.refetch,
   };

@@ -55,6 +55,8 @@ export interface UseGroupedRulesManagerReturn {
     type: RuleType
   ) => Promise<{ created: number; total: number }>;
   updateRule: (id: string, data: { value?: string; comment?: string | null }) => Promise<boolean>;
+  setRuleEnabled: (rule: Rule, enabled: boolean) => Promise<void>;
+  bulkSetRulesEnabled: (enabled: boolean) => Promise<void>;
   refetch: () => Promise<void>;
 }
 
@@ -89,15 +91,22 @@ export function useGroupedRulesManager({
     domainGroups,
     resetKeys: [page, filter, search],
   });
-  const { addRule, bulkCreateRules, bulkDeleteRules, deleteRule, updateRule } =
-    useManagedRulesActions({
-      clearSelection,
-      groupId,
-      onToast,
-      refetchCounts: refetch,
-      refetchRules: refetch,
-      selectedIds,
-    });
+  const {
+    addRule,
+    bulkCreateRules,
+    bulkDeleteRules,
+    bulkSetRulesEnabled,
+    deleteRule,
+    setRuleEnabled,
+    updateRule,
+  } = useManagedRulesActions({
+    clearSelection,
+    groupId,
+    onToast,
+    refetchCounts: refetch,
+    refetchRules: refetch,
+    selectedIds,
+  });
 
   const hasMore = page < totalPages;
 
@@ -140,6 +149,8 @@ export function useGroupedRulesManager({
     bulkDeleteRules,
     bulkCreateRules,
     updateRule,
+    setRuleEnabled,
+    bulkSetRulesEnabled,
     refetch,
   };
 }

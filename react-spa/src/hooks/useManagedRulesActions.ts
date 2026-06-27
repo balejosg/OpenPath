@@ -3,8 +3,10 @@ import {
   addRuleWithDetection,
   bulkCreateRulesAction,
   bulkDeleteRulesWithUndoAction,
+  bulkSetRulesEnabledAction,
   deleteRuleWithUndoAction,
   revokeAutoApprovalAction,
+  setRuleEnabledAction,
   updateRuleAction,
 } from '../lib/rules-actions';
 import type { Rule, RuleType } from '../lib/rules';
@@ -111,11 +113,47 @@ export function useManagedRulesActions({
     [groupId, onToast, refetchRules, refetchCounts, t, locale]
   );
 
+  const setRuleEnabled = useCallback(
+    async (rule: Rule, enabled: boolean): Promise<void> => {
+      await setRuleEnabledAction(
+        {
+          id: rule.id,
+          groupId: rule.groupId,
+          type: rule.type,
+          value: rule.value,
+          comment: rule.comment,
+        },
+        enabled,
+        { onToast, fetchRules: refetchRules, fetchCounts: refetchCounts, t, locale }
+      );
+    },
+    [onToast, refetchRules, refetchCounts, t, locale]
+  );
+
+  const bulkSetRulesEnabled = useCallback(
+    async (enabled: boolean): Promise<void> => {
+      if (selectedIds.size === 0) return;
+      await bulkSetRulesEnabledAction({
+        ids: Array.from(selectedIds),
+        enabled,
+        clearSelection,
+        onToast,
+        fetchRules: refetchRules,
+        fetchCounts: refetchCounts,
+        t,
+        locale,
+      });
+    },
+    [selectedIds, clearSelection, onToast, refetchRules, refetchCounts, t, locale]
+  );
+
   return {
     addRule,
     deleteRule,
     updateRule,
     bulkDeleteRules,
     bulkCreateRules,
+    setRuleEnabled,
+    bulkSetRulesEnabled,
   };
 }
