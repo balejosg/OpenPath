@@ -12,7 +12,7 @@ const t = ((k: string) => k) as never;
 
 describe('setRuleEnabledAction', () => {
   beforeEach(() => vi.clearAllMocks());
-  it('llama setRuleEnabled y notifica con undo', async () => {
+  it('calls setRuleEnabled and notifies with undo', async () => {
     const onToast = vi.fn();
     const fetchRules = vi.fn(async () => {});
     const fetchCounts = vi.fn(async () => {});
