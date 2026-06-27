@@ -129,6 +129,38 @@ describe('Toast Component', () => {
     expect(screen.getByText('Success message')).toBeInTheDocument();
   });
 
+  it('auto-dismisses a plain success toast at the default duration', () => {
+    render(<TestComponent />);
+
+    fireEvent.click(screen.getByText('Show Success'));
+    expect(screen.getByText('Success message')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+
+    expect(screen.queryByText('Success message')).not.toBeInTheDocument();
+  });
+
+  it('keeps undo toasts visible past the default duration so the user can click Deshacer', () => {
+    render(<TestComponent />);
+
+    fireEvent.click(screen.getByText('Show Undo'));
+    expect(screen.getByText('Undo test')).toBeInTheDocument();
+
+    // Past the default 5s window: a plain success toast would be gone, the undo toast must persist.
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    expect(screen.getByText('Undo test')).toBeInTheDocument();
+
+    // It still auto-dismisses eventually.
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.queryByText('Undo test')).not.toBeInTheDocument();
+  });
+
   it('useToast hook adds error toast', () => {
     render(<TestComponent />);
 

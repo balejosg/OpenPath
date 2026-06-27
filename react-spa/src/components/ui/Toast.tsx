@@ -11,6 +11,10 @@ export interface ToastData {
   undoAction?: () => void;
 }
 
+const DEFAULT_TOAST_DURATION_MS = 5000;
+// Undo notifications require the user to act before they vanish, so they live longer.
+const UNDO_TOAST_DURATION_MS = 10000;
+
 interface ToastItemProps {
   toast: ToastData;
   onDismiss: (id: string) => void;
@@ -18,7 +22,7 @@ interface ToastItemProps {
 
 const ToastItem: React.FC<ToastItemProps> = ({ toast, onDismiss }) => {
   const [progress, setProgress] = useState(100);
-  const duration = toast.duration ?? 5000;
+  const duration = toast.duration ?? DEFAULT_TOAST_DURATION_MS;
 
   useEffect(() => {
     const startTime = Date.now();
@@ -126,7 +130,14 @@ export function useToast() {
 
   const success = useCallback(
     (message: string, undoAction?: () => void) => {
-      return addToast({ message, type: 'success', undoAction });
+      // An undo notification must stay long enough to read the message AND click "Deshacer",
+      // so it gets a longer window than a passive success confirmation.
+      return addToast({
+        message,
+        type: 'success',
+        undoAction,
+        duration: undoAction ? UNDO_TOAST_DURATION_MS : undefined,
+      });
     },
     [addToast]
   );
