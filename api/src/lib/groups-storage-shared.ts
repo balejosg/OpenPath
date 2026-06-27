@@ -171,6 +171,8 @@ export interface IGroupsStorage {
     executor?: DbExecutor
   ): Promise<number>;
   bulkDeleteRules(ids: string[], executor?: DbExecutor): Promise<number>;
+  setRuleEnabled(id: string, enabled: boolean, executor?: DbExecutor): Promise<Rule | null>;
+  bulkSetRulesEnabled(ids: string[], enabled: boolean, executor?: DbExecutor): Promise<number>;
   getStats(): Promise<GroupStats>;
   getSystemStatus(): Promise<SystemStatus>;
   toggleSystemStatus(enable: boolean): Promise<SystemStatus>;

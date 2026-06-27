@@ -134,6 +134,54 @@ export async function bulkDeleteRules(ids: string[], executor: DbExecutor = db):
   return deletedCount;
 }
 
+export async function setRuleEnabled(
+  id: string,
+  enabled: boolean,
+  executor: DbExecutor = db
+): Promise<Rule | null> {
+  const [existing] = await executor.select().from(whitelistRules).where(eq(whitelistRules.id, id));
+  if (!existing) return null;
+
+  await executor
+    .update(whitelistRules)
+    .set({ enabled: enabled ? 1 : 0 })
+    .where(eq(whitelistRules.id, id));
+  await touchGroupUpdatedAt(existing.groupId, executor);
+  logger.debug('Set rule enabled', { id, enabled });
+
+  return getRuleById(id);
+}
+
+export async function bulkSetRulesEnabled(
+  ids: string[],
+  enabled: boolean,
+  executor: DbExecutor = db
+): Promise<number> {
+  if (ids.length === 0) return 0;
+
+  const uniqueIds = Array.from(new Set(ids));
+  const existingRules = await executor
+    .select({ groupId: whitelistRules.groupId })
+    .from(whitelistRules)
+    .where(inArray(whitelistRules.id, uniqueIds));
+  const updatedCount = getRowCount(
+    await executor
+      .update(whitelistRules)
+      .set({ enabled: enabled ? 1 : 0 })
+      .where(inArray(whitelistRules.id, uniqueIds))
+  );
+
+  if (updatedCount > 0) {
+    const affectedGroupIds = new Set(existingRules.map((rule) => rule.groupId));
+    await Promise.all(
+      Array.from(affectedGroupIds, (groupId) => touchGroupUpdatedAt(groupId, executor))
+    );
+  }
+
+  logger.debug('Bulk set rules enabled', { count: updatedCount, requested: ids.length, enabled });
+  return updatedCount;
+}
+
 export async function bulkCreateRules(
   groupId: string,
   type: RuleType,

@@ -26,6 +26,7 @@ import {
 import {
   bulkCreateRules,
   bulkDeleteRules,
+  bulkSetRulesEnabled,
   copyRulesToGroup,
   createRule,
   deleteRule,
@@ -36,6 +37,7 @@ import {
   getRulesByGroupPaginated,
   getRulesByIds,
   isDomainBlocked,
+  setRuleEnabled,
   updateRule,
 } from './groups-storage-rules.js';
 
@@ -61,6 +63,7 @@ export type { BlockedCheckResult } from './groups-storage-rules.js';
 export {
   bulkCreateRules,
   bulkDeleteRules,
+  bulkSetRulesEnabled,
   copyRulesToGroup,
   createGroup,
   createRule,
@@ -80,6 +83,7 @@ export {
   getStats,
   getSystemStatus,
   isDomainBlocked,
+  setRuleEnabled,
   toggleSystemStatus,
   touchGroupUpdatedAt,
   updateGroup,
@@ -198,6 +202,8 @@ export const groupsStorage: IGroupsStorage = {
   deleteRule,
   bulkCreateRules,
   bulkDeleteRules,
+  setRuleEnabled,
+  bulkSetRulesEnabled,
   getStats,
   getSystemStatus,
   toggleSystemStatus,

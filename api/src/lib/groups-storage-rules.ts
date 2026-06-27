@@ -12,7 +12,9 @@ export { getRulesByGroupGrouped } from './groups-storage-rules-grouping.js';
 export {
   bulkCreateRules,
   bulkDeleteRules,
+  bulkSetRulesEnabled,
   createRule,
   deleteRule,
+  setRuleEnabled,
   updateRule,
 } from './groups-storage-rules-mutation.js';
