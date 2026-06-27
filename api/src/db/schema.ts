@@ -357,6 +357,7 @@ export const whitelistRules = pgTable(
     type: varchar('type', { length: 50 }).notNull(), // 'whitelist' | 'blocked_subdomain' | 'blocked_path'
     value: varchar('value', { length: 500 }).notNull(),
     source: varchar('source', { length: 50 }).default('manual').notNull(), // 'manual' | 'auto_extension'
+    enabled: integer('enabled').default(1).notNull(), // 1=activa (aplica en endpoint), 0=inhabilitada
     comment: text('comment'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   },

@@ -120,6 +120,13 @@
       "when": 1781740800000,
       "tag": "0016_health_report_enforcement_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1782576740619,
+      "tag": "0017_loose_silhouette",
+      "breakpoints": true
     }
   ]
 }
