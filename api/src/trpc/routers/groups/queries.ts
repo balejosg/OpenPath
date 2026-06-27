@@ -46,7 +46,12 @@ export const groupQueryProcedures = {
     }),
 
   listRules: teacherViewGroupIdProcedure(ListRulesSchema).query(async ({ input }) => {
-    const result = await GroupsService.listRules(input.groupId, input.type, input.source);
+    const result = await GroupsService.listRules(
+      input.groupId,
+      input.type,
+      input.source,
+      input.enabled
+    );
     if (!result.ok) {
       throwServiceError(result.error);
     }
@@ -59,6 +64,7 @@ export const groupQueryProcedures = {
         groupId: input.groupId,
         type: input.type,
         source: input.source,
+        enabled: input.enabled,
         limit: input.limit,
         offset: input.offset,
         search: input.search,
@@ -75,6 +81,7 @@ export const groupQueryProcedures = {
       groupId: input.groupId,
       type: input.type,
       source: input.source,
+      enabled: input.enabled,
       limit: input.limit,
       offset: input.offset,
       search: input.search,

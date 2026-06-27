@@ -250,6 +250,83 @@ export async function updateRule(
   return { ok: true, data: updated };
 }
 
+export async function setRuleEnabled(
+  input: { id: string; groupId: string; enabled: boolean },
+  deps: GroupsRulesDependencies = defaultRulesDependencies
+): Promise<GroupsResult<Rule>> {
+  const existingRule = await deps.getRuleById(input.id);
+  if (!existingRule) {
+    return { ok: false, error: { code: 'NOT_FOUND', message: 'Rule not found' } };
+  }
+  if (existingRule.groupId !== input.groupId) {
+    return {
+      ok: false,
+      error: { code: 'BAD_REQUEST', message: 'Rule does not belong to this group' },
+    };
+  }
+
+  const didUpdate = await DomainEventsService.writeTransactionalCommand(
+    {
+      publishers: { publishWhitelistChanged: deps.publishWhitelistChanged },
+      transactionRunner: deps.withTransaction,
+    },
+    async (tx, events) => {
+      const result = await (deps.setRuleEnabled ?? groupsStorage.setRuleEnabled)(
+        input.id,
+        input.enabled,
+        tx
+      );
+      if (result && existingRule.enabled !== input.enabled) {
+        events.publishWhitelistChanged(input.groupId);
+      }
+      return result !== null;
+    }
+  );
+
+  if (!didUpdate) {
+    return { ok: false, error: { code: 'NOT_FOUND', message: 'Rule not found' } };
+  }
+  const refreshed = await deps.getRuleById(input.id);
+  if (!refreshed) {
+    return { ok: false, error: { code: 'NOT_FOUND', message: 'Rule not found after update' } };
+  }
+  return { ok: true, data: refreshed };
+}
+
+export async function bulkSetRulesEnabled(
+  ids: string[],
+  enabled: boolean,
+  options?: { rules?: Rule[] },
+  deps: GroupsRulesDependencies = defaultRulesDependencies
+): Promise<GroupsResult<{ updated: number; rules: Rule[] }>> {
+  if (ids.length === 0) {
+    return { ok: true, data: { updated: 0, rules: [] } };
+  }
+  const rules = options?.rules ?? (await deps.getRulesByIds(ids));
+
+  const updated = await DomainEventsService.writeTransactionalCommand(
+    {
+      publishers: { publishWhitelistChanged: deps.publishWhitelistChanged },
+      transactionRunner: deps.withTransaction,
+    },
+    async (tx, events) => {
+      const count = await (deps.bulkSetRulesEnabled ?? groupsStorage.bulkSetRulesEnabled)(
+        ids,
+        enabled,
+        tx
+      );
+      if (count > 0) {
+        for (const groupId of new Set(rules.map((rule) => rule.groupId))) {
+          events.publishWhitelistChanged(groupId);
+        }
+      }
+      return count;
+    }
+  );
+
+  return { ok: true, data: { updated, rules } };
+}
+
 export async function bulkCreateRules(
   input: BulkCreateRulesInput,
   deps: Pick<

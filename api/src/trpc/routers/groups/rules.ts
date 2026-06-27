@@ -9,9 +9,11 @@ import {
 import {
   BulkCreateRulesSchema,
   BulkDeleteRulesSchema,
+  BulkSetRulesEnabledSchema,
   CreateRuleSchema,
   DeleteRuleSchema,
   RevokeAutoApprovalSchema,
+  SetRuleEnabledSchema,
   UpdateRuleSchema,
 } from './schemas.js';
 
@@ -107,6 +109,35 @@ export const groupRuleProcedures = {
       if (!result.ok) {
         throwServiceError(result.error);
       }
+      return result.data;
+    }),
+
+  setRuleEnabled: teacherGroupIdProcedure(SetRuleEnabledSchema).mutation(async ({ input }) => {
+    const result = await GroupsService.setRuleEnabled({
+      id: input.id,
+      groupId: input.groupId,
+      enabled: input.enabled,
+    });
+    if (!result.ok) throwServiceError(result.error);
+    return result.data;
+  }),
+
+  bulkSetRulesEnabled: teacherProcedure
+    .input(BulkSetRulesEnabledSchema)
+    .mutation(async ({ input, ctx }) => {
+      let preloadedRules: Awaited<ReturnType<typeof GroupsService.getRulesByIds>> | undefined;
+      if (!auth.isAdminToken(ctx.user)) {
+        preloadedRules = await GroupsService.getRulesByIds(input.ids);
+        for (const groupId of new Set(preloadedRules.map((r) => r.groupId))) {
+          await assertCanAccessGroupId(ctx.user, groupId);
+        }
+      }
+      const result = await GroupsService.bulkSetRulesEnabled(
+        input.ids,
+        input.enabled,
+        preloadedRules ? { rules: preloadedRules } : undefined
+      );
+      if (!result.ok) throwServiceError(result.error);
       return result.data;
     }),
 };

@@ -30,6 +30,7 @@ import {
 import {
   bulkCreateRules,
   bulkDeleteRules,
+  bulkSetRulesEnabled,
   createRule,
   deleteRule,
   getRuleById,
@@ -38,6 +39,7 @@ import {
   listRulesGrouped,
   listRulesPaginated,
   revokeAutoApproval,
+  setRuleEnabled,
   updateRule,
 } from './groups-rules.service.js';
 export type {
@@ -88,6 +90,8 @@ export const GroupsService = {
   deleteRule,
   bulkCreateRules,
   bulkDeleteRules,
+  setRuleEnabled,
+  bulkSetRulesEnabled,
   revokeAutoApproval,
   getStats,
   getSystemStatus,

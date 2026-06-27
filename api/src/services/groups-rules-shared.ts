@@ -13,6 +13,8 @@ export interface GroupsRulesDependencies {
   getRuleById: typeof groupsStorage.getRuleById;
   getRulesByIds: typeof groupsStorage.getRulesByIds;
   updateRule?: typeof groupsStorage.updateRule;
+  setRuleEnabled?: typeof groupsStorage.setRuleEnabled;
+  bulkSetRulesEnabled?: typeof groupsStorage.bulkSetRulesEnabled;
   publishWhitelistChanged: (groupId: string) => void;
   withTransaction: typeof withTransaction;
 }
@@ -26,6 +28,8 @@ export const defaultRulesDependencies: GroupsRulesDependencies = {
   getRuleById: groupsStorage.getRuleById,
   getRulesByIds: groupsStorage.getRulesByIds,
   updateRule: groupsStorage.updateRule,
+  setRuleEnabled: groupsStorage.setRuleEnabled,
+  bulkSetRulesEnabled: groupsStorage.bulkSetRulesEnabled,
   publishWhitelistChanged: DomainEventsService.publishWhitelistChanged.bind(DomainEventsService),
   withTransaction,
 };

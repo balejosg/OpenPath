@@ -8,15 +8,18 @@ import {
 import {
   bulkCreateRules,
   bulkDeleteRules,
+  bulkSetRulesEnabled,
   createRule,
   deleteRule,
   revokeAutoApproval,
+  setRuleEnabled,
   updateRule,
 } from './groups-rules-mutations.service.js';
 
 export {
   bulkCreateRules,
   bulkDeleteRules,
+  bulkSetRulesEnabled,
   createRule,
   deleteRule,
   getRuleById,
@@ -25,12 +28,14 @@ export {
   listRulesGrouped,
   listRulesPaginated,
   revokeAutoApproval,
+  setRuleEnabled,
   updateRule,
 };
 
 export const GroupsRulesService = {
   bulkCreateRules,
   bulkDeleteRules,
+  bulkSetRulesEnabled,
   createRule,
   deleteRule,
   getRuleById,
@@ -39,6 +44,7 @@ export const GroupsRulesService = {
   listRulesGrouped,
   listRulesPaginated,
   revokeAutoApproval,
+  setRuleEnabled,
   updateRule,
 };
 
