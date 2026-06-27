@@ -32,6 +32,7 @@ test('whitelist_rules.enabled defaults to 1 when omitted', async () => {
     .select()
     .from(whitelistRules)
     .where(eq(whitelistRules.id, 'rule-default-enabled'));
+  assert.ok(row);
   assert.equal(row.enabled, 1);
 });
 
@@ -51,5 +52,6 @@ test('whitelist_rules.enabled persists an explicit 0', async () => {
     .select()
     .from(whitelistRules)
     .where(eq(whitelistRules.id, 'rule-explicit-disabled'));
+  assert.ok(row);
   assert.equal(row.enabled, 0);
 });
