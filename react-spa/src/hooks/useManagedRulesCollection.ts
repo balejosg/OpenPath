@@ -22,6 +22,7 @@ export interface ManagedRulesCounts {
   allowed: number;
   automatic: number;
   blocked: number;
+  disabled: number;
 }
 
 export interface ManagedRulesFilters {

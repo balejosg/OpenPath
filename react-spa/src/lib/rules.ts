@@ -15,6 +15,7 @@ export interface Rule {
   type: RuleType;
   value: string;
   source?: 'manual' | 'auto_extension';
+  enabled?: boolean;
   comment: string | null;
   createdAt: string;
 }

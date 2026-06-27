@@ -19,7 +19,7 @@ interface UseGroupedRulesDataOptions {
 }
 
 export interface UseGroupedRulesDataResult {
-  counts: { all: number; allowed: number; automatic: number; blocked: number };
+  counts: { all: number; allowed: number; automatic: number; blocked: number; disabled: number };
   domainGroups: DomainGroup[];
   error: string | null;
   loading: boolean;
@@ -40,7 +40,13 @@ export function useGroupedRulesData({
   const [totalRules, setTotalRules] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [counts, setCounts] = useState({ all: 0, allowed: 0, automatic: 0, blocked: 0 });
+  const [counts, setCounts] = useState({
+    all: 0,
+    allowed: 0,
+    automatic: 0,
+    blocked: 0,
+    disabled: 0,
+  });
 
   const fetchSeqRef = useRef(createLatestGuard());
 
@@ -130,25 +136,29 @@ export function useGroupedRulesData({
     if (!groupId) return;
 
     try {
-      const [whitelist, autoApproved, subdomains, paths] = await Promise.all([
-        trpc.groups.listRules.query({ groupId, type: 'whitelist' }),
+      const [whitelist, autoApproved, subdomains, paths, disabledRules] = await Promise.all([
+        trpc.groups.listRules.query({ groupId, type: 'whitelist', enabled: true }),
         trpc.groups.listRules.query({
           groupId,
           type: 'whitelist',
           source: 'auto_extension',
+          enabled: true,
         }),
-        trpc.groups.listRules.query({ groupId, type: 'blocked_subdomain' }),
-        trpc.groups.listRules.query({ groupId, type: 'blocked_path' }),
+        trpc.groups.listRules.query({ groupId, type: 'blocked_subdomain', enabled: true }),
+        trpc.groups.listRules.query({ groupId, type: 'blocked_path', enabled: true }),
+        trpc.groups.listRules.query({ groupId, enabled: false }),
       ]);
 
       const allowed = whitelist.length;
       const blocked = subdomains.length + paths.length;
+      const disabled = disabledRules.length;
 
       setCounts({
-        all: allowed + blocked,
+        all: allowed + blocked + disabled,
         allowed,
         automatic: autoApproved.length,
         blocked,
+        disabled,
       });
     } catch (err) {
       reportError('Failed to fetch counts:', err);
