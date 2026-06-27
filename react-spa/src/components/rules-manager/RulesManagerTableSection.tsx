@@ -24,6 +24,7 @@ interface RulesManagerTableSectionProps {
   onFilterChange: (filter: ManagedRulesFilterType) => void;
   onRetry: () => void;
   onDelete: (rule: Rule) => void;
+  onToggleEnabled: (rule: Rule) => void;
   onSave: (id: string, data: { value?: string; comment?: string | null }) => Promise<boolean>;
   onToggleSelection: (id: string) => void;
   onToggleSelectAll: () => void;
@@ -45,6 +46,7 @@ export function RulesManagerTableSection({
   onFilterChange,
   onRetry,
   onDelete,
+  onToggleEnabled,
   onSave,
   onToggleSelection,
   onToggleSelectAll,
@@ -77,6 +79,7 @@ export function RulesManagerTableSection({
           loading={loading}
           readOnly={readOnly}
           onDelete={onDelete}
+          onToggleEnabled={readOnly ? undefined : onToggleEnabled}
           onSave={readOnly ? undefined : onSave}
           selectedIds={readOnly ? undefined : selectedIds}
           onToggleSelection={readOnly ? undefined : onToggleSelection}
@@ -93,6 +96,7 @@ export function RulesManagerTableSection({
           loading={loading}
           readOnly={readOnly}
           onDelete={onDelete}
+          onToggleEnabled={readOnly ? undefined : onToggleEnabled}
           onSave={readOnly ? undefined : onSave}
           selectedIds={readOnly ? undefined : selectedIds}
           onToggleSelection={readOnly ? undefined : onToggleSelection}

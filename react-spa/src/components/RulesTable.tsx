@@ -15,6 +15,7 @@ interface RulesTableProps {
   rules: Rule[];
   loading: boolean;
   onDelete: (rule: Rule) => void;
+  onToggleEnabled?: (rule: Rule) => void;
   onEdit?: (rule: Rule) => void;
   onSave?: (id: string, data: { value?: string; comment?: string | null }) => Promise<boolean>;
   readOnly?: boolean;
@@ -35,6 +36,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({
   rules,
   loading,
   onDelete,
+  onToggleEnabled,
   onEdit: _onEdit,
   onSave,
   readOnly = false,
@@ -128,6 +130,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({
                 isSelected={selectedIds?.has(rule.id) ?? false}
                 onCancelEdit={cancelEdit}
                 onDelete={onDelete}
+                onToggleEnabled={onToggleEnabled}
                 onHandleEditKeyDown={handleEditKeyDown}
                 onSaveEdit={saveEdit}
                 onSetEditComment={setEditComment}

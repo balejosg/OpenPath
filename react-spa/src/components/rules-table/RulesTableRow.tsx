@@ -5,6 +5,8 @@ import {
   CheckSquare,
   Edit2,
   Loader2,
+  Power,
+  PowerOff,
   Route,
   Save,
   Square,
@@ -30,6 +32,7 @@ interface RulesTableRowProps {
   onSaveEdit: () => Promise<void>;
   onCancelEdit: () => void;
   onDelete: (rule: Rule) => void;
+  onToggleEnabled?: (rule: Rule) => void;
   onSetEditValue: (value: string) => void;
   onSetEditComment: (value: string) => void;
   onHandleEditKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
@@ -67,6 +70,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
   isSelected,
   onCancelEdit,
   onDelete,
+  onToggleEnabled,
   onHandleEditKeyDown,
   onSaveEdit,
   onSetEditComment,
@@ -81,6 +85,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
     <tr
       className={cn(
         'hover:bg-slate-50 transition-colors group',
+        rule.enabled === false && 'opacity-60',
         isSelected && 'bg-blue-50 hover:bg-blue-100',
         isEditing && 'bg-amber-50 hover:bg-amber-50'
       )}
@@ -140,6 +145,11 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
           {rule.source === 'auto_extension' && (
             <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full border font-medium bg-cyan-50 text-cyan-700 border-cyan-200">
               {t('rules.row.autoFirefox')}
+            </span>
+          )}
+          {rule.enabled === false && (
+            <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full border font-medium bg-slate-100 text-slate-500 border-slate-200">
+              {t('rules.row.disabled')}
             </span>
           )}
         </div>
@@ -205,6 +215,16 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
                   data-testid="edit-button"
                 >
                   <Edit2 size={14} />
+                </button>
+              )}
+              {onToggleEnabled && (
+                <button
+                  onClick={() => onToggleEnabled(rule)}
+                  className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
+                  title={rule.enabled === false ? t('rules.row.enable') : t('rules.row.disable')}
+                  data-testid="toggle-enabled-button"
+                >
+                  {rule.enabled === false ? <Power size={14} /> : <PowerOff size={14} />}
                 </button>
               )}
               <button

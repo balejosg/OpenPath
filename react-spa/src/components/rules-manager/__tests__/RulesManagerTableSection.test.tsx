@@ -42,6 +42,7 @@ describe('RulesManagerTableSection', () => {
         onFilterChange={onFilterChange}
         onRetry={vi.fn()}
         onDelete={vi.fn()}
+        onToggleEnabled={vi.fn()}
         onSave={vi.fn(() => Promise.resolve(true))}
         onToggleSelection={vi.fn()}
         onToggleSelectAll={vi.fn()}

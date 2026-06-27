@@ -124,6 +124,9 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
         onDelete={(rule) => {
           void collection.actions.deleteRule(rule);
         }}
+        onToggleEnabled={(rule) =>
+          void collection.actions.setRuleEnabled(rule, rule.enabled === false)
+        }
         onSave={collection.actions.updateRule}
         onToggleSelection={collection.selection.toggleSelection}
         onToggleSelectAll={collection.selection.toggleSelectAll}

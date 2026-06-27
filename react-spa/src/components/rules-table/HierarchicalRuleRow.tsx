@@ -1,5 +1,15 @@
 import React from 'react';
-import { CheckSquare, Edit2, Loader2, Save, Square, Trash2, X } from 'lucide-react';
+import {
+  CheckSquare,
+  Edit2,
+  Loader2,
+  Power,
+  PowerOff,
+  Save,
+  Square,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { getRuleTypeBadge } from '../../lib/ruleDetection';
 import type { Rule } from '../../lib/rules';
@@ -19,6 +29,7 @@ interface HierarchicalRuleRowProps {
   onSaveEdit: () => Promise<void>;
   onCancelEdit: () => void;
   onDelete: (rule: Rule) => void;
+  onToggleEnabled?: (rule: Rule) => void;
   onSetEditValue: (value: string) => void;
   onHandleEditKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
 }
@@ -32,6 +43,7 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
   isSelected,
   onCancelEdit,
   onDelete,
+  onToggleEnabled,
   onHandleEditKeyDown,
   onSaveEdit,
   onSetEditValue,
@@ -45,6 +57,7 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
     <tr
       className={cn(
         'bg-white hover:bg-slate-50 transition-colors group',
+        rule.enabled === false && 'opacity-60',
         isSelected && 'bg-blue-50 hover:bg-blue-100',
         isEditing && 'bg-amber-50 hover:bg-amber-50'
       )}
@@ -106,6 +119,11 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
               {t('rules.row.autoFirefox')}
             </span>
           )}
+          {rule.enabled === false && (
+            <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full border font-medium bg-slate-100 text-slate-500 border-slate-200">
+              {t('rules.row.disabled')}
+            </span>
+          )}
         </div>
       </td>
       {!readOnly && (
@@ -144,6 +162,19 @@ export const HierarchicalRuleRow: React.FC<HierarchicalRuleRowProps> = ({
                   data-testid="edit-button"
                 >
                   <Edit2 size={14} />
+                </button>
+              )}
+              {onToggleEnabled && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleEnabled(rule);
+                  }}
+                  className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
+                  title={rule.enabled === false ? t('rules.row.enable') : t('rules.row.disable')}
+                  data-testid="toggle-enabled-button"
+                >
+                  {rule.enabled === false ? <Power size={14} /> : <PowerOff size={14} />}
                 </button>
               )}
               <button

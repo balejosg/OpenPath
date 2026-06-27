@@ -19,6 +19,7 @@ interface HierarchicalRulesTableProps {
   loading?: boolean;
   readOnly?: boolean;
   onDelete: (rule: Rule) => void;
+  onToggleEnabled?: (rule: Rule) => void;
   onSave?: (id: string, data: { value?: string; comment?: string | null }) => Promise<boolean>;
   onAddSubdomain?: (rootDomain: string) => void;
   emptyMessage?: string;
@@ -41,6 +42,7 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
   loading = false,
   readOnly = false,
   onDelete,
+  onToggleEnabled,
   onSave,
   onAddSubdomain,
   emptyMessage,
@@ -164,6 +166,7 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
                           isSelected={selectedIds?.has(rule.id) ?? false}
                           onCancelEdit={cancelEdit}
                           onDelete={onDelete}
+                          onToggleEnabled={onToggleEnabled}
                           onHandleEditKeyDown={handleEditKeyDown}
                           onSaveEdit={saveEdit}
                           onSetEditValue={setEditValue}
