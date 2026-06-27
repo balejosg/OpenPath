@@ -258,7 +258,7 @@ export interface SetEnabledParams {
 }
 
 export async function setRuleEnabledAction(
-  rule: RuleForUndo & { enabled?: boolean },
+  rule: RuleForUndo,
   enabled: boolean,
   params: SetEnabledParams
 ): Promise<void> {
