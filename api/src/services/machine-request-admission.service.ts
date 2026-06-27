@@ -121,7 +121,12 @@ export interface MachineRequestAdmissionDeps {
     source?: RuleSource,
     tx?: DbExecutor
   ) => Promise<CreateRuleResult>;
-  getRulesByGroup: (groupId: string, type?: RuleType) => Promise<Rule[]>;
+  getRulesByGroup: (
+    groupId: string,
+    type?: RuleType,
+    source?: RuleSource,
+    enabled?: boolean
+  ) => Promise<Rule[]>;
   isDomainBlocked: typeof groupsStorage.isDomainBlocked;
   logger: Pick<typeof logger, 'warn'>;
   publishWhitelistChanged: (groupId: string) => void;
