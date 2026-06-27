@@ -149,6 +149,8 @@ export async function setRuleEnabled(
   await touchGroupUpdatedAt(existing.groupId, executor);
   logger.debug('Set rule enabled', { id, enabled });
 
+  // NOTE: getRuleById reads from the ambient db (no executor param), mirroring updateRule;
+  // when called inside a transaction the returned Rule reflects committed state. Callers refetch.
   return getRuleById(id);
 }
 

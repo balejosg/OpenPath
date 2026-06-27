@@ -1,15 +1,19 @@
 // api/tests/groups-rules-set-enabled-storage.test.ts
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { db, whitelistGroups, whitelistRules } from '../src/db/index.js';
 import { setRuleEnabled, bulkSetRulesEnabled } from '../src/lib/groups-storage-rules-mutation.js';
 
 const GID = 'g-set-enabled';
+const GID2 = 'g-bulk-reenable';
 before(async () => {
   await db
     .insert(whitelistGroups)
-    .values({ id: GID, name: GID, displayName: GID })
+    .values([
+      { id: GID, name: GID, displayName: GID },
+      { id: GID2, name: GID2, displayName: GID2 },
+    ])
     .onConflictDoNothing();
   await db
     .insert(whitelistRules)
@@ -27,6 +31,22 @@ before(async () => {
         groupId: GID,
         type: 'whitelist',
         value: 'b.example.com',
+        source: 'manual',
+        enabled: 1,
+      },
+      {
+        id: 'se-bulk-1',
+        groupId: GID2,
+        type: 'whitelist',
+        value: 'c.example.com',
+        source: 'manual',
+        enabled: 1,
+      },
+      {
+        id: 'se-bulk-2',
+        groupId: GID2,
+        type: 'whitelist',
+        value: 'd.example.com',
         source: 'manual',
         enabled: 1,
       },
@@ -49,4 +69,24 @@ test('setRuleEnabled with non-existent id returns null', async () => {
 test('bulkSetRulesEnabled applies to multiple rules', async () => {
   const n = await bulkSetRulesEnabled(['se-1', 'se-2'], false);
   assert.equal(n, 2);
+});
+
+test('bulkSetRulesEnabled re-enables previously disabled rules', async () => {
+  await bulkSetRulesEnabled(['se-bulk-1', 'se-bulk-2'], false);
+  const n = await bulkSetRulesEnabled(['se-bulk-1', 'se-bulk-2'], true);
+  assert.equal(n, 2);
+  const rows = await db
+    .select()
+    .from(whitelistRules)
+    .where(inArray(whitelistRules.id, ['se-bulk-1', 'se-bulk-2']));
+  assert.equal(rows.length, 2);
+  for (const row of rows) {
+    assert.ok(row, 'expected row to exist');
+    assert.equal(row.enabled, 1);
+  }
+});
+
+test('bulkSetRulesEnabled with empty ids returns 0', async () => {
+  const n = await bulkSetRulesEnabled([], true);
+  assert.equal(n, 0);
 });
