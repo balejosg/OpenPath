@@ -32,7 +32,7 @@ export interface UseRulesManagerReturn {
   setSearch: (search: string) => void;
 
   // Counts
-  counts: { all: number; allowed: number; automatic: number; blocked: number; disabled: number };
+  counts: { all: number; allowed: number; blocked: number; disabled: number };
 
   // Selection
   selectedIds: Set<string>;

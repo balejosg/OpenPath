@@ -79,7 +79,7 @@ vi.mock('../../hooks/useRulesManagerViewModel', () => ({
         domainGroups: [],
         totalRules: 51,
         totalGroups: 0,
-        counts: { all: 51, allowed: 50, automatic: 0, blocked: 1 },
+        counts: { all: 51, allowed: 50, blocked: 1, disabled: 0 },
         loading: false,
         error: null,
         filter: 'all' as const,
@@ -121,8 +121,8 @@ vi.mock('../../hooks/useRulesManagerViewModel', () => ({
       tabs: [
         { id: 'all' as const, label: 'Todos', count: 51 },
         { id: 'allowed' as const, label: 'Permitidas', count: 50 },
-        { id: 'automatic' as const, label: 'Automáticas', count: 0 },
         { id: 'blocked' as const, label: 'Bloqueadas', count: 1 },
+        { id: 'disabled' as const, label: 'Inhabilitadas', count: 0 },
       ],
       emptyMessage: 'No rules configured',
       handleAddRule: mockViewModel.handleAddRule,

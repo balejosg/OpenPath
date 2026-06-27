@@ -133,36 +133,7 @@ describe('useRulesManager Hook', () => {
     });
   });
 
-  it('passes automatic source filter to the paginated API and counts automatic approvals', async () => {
-    vi.mocked(trpc.groups.listRules.query)
-      .mockResolvedValueOnce([
-        {
-          id: 'w1',
-          groupId: 'test-group',
-          type: 'whitelist',
-          source: 'manual',
-          value: 'a.com',
-          enabled: true,
-          comment: null,
-          createdAt: '2024-01-01T00:00:00Z',
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: 'a1',
-          groupId: 'test-group',
-          type: 'whitelist',
-          source: 'auto_extension',
-          value: 'cdn.a.com',
-          enabled: true,
-          comment: null,
-          createdAt: '2024-01-01T00:00:00Z',
-        },
-      ])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([]);
-
+  it('passes allowed filter type to the paginated API', async () => {
     const { result } = renderHook(() => useRulesManager(defaultOptions));
     const queryMock = vi.mocked(trpc.groups.listRulesPaginated.query);
 
@@ -171,7 +142,7 @@ describe('useRulesManager Hook', () => {
     });
 
     act(() => {
-      result.current.setFilter('automatic');
+      result.current.setFilter('allowed');
     });
 
     await waitFor(() => {
@@ -181,12 +152,14 @@ describe('useRulesManager Hook', () => {
     expect(queryMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         type: 'whitelist',
-        source: 'auto_extension',
       })
     );
 
+    // Ensure the in-flight fetch resolves before the test ends (prevents act warnings).
+    await (queryMock.mock.results[1]?.value ?? Promise.resolve());
+
     await waitFor(() => {
-      expect(result.current.counts.automatic).toBe(1);
+      expect(result.current.loading).toBe(false);
     });
   });
 

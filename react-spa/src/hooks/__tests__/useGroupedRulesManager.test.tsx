@@ -329,7 +329,7 @@ describe('useGroupedRulesManager', () => {
       });
     });
 
-    it('should pass automatic source filter to grouped API query', async () => {
+    it('should not include a source filter when the allowed filter is applied', async () => {
       const { result } = renderHook(() =>
         useGroupedRulesManager({
           groupId: 'test-group',
@@ -342,7 +342,7 @@ describe('useGroupedRulesManager', () => {
       });
 
       act(() => {
-        result.current.setFilter('automatic');
+        result.current.setFilter('allowed');
       });
 
       const queryMock = vi.mocked(trpc.groups.listRulesGrouped.query);
@@ -354,9 +354,20 @@ describe('useGroupedRulesManager', () => {
       expect(queryMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
           type: 'whitelist',
-          source: 'auto_extension',
         })
       );
+      expect(queryMock).toHaveBeenLastCalledWith(
+        expect.not.objectContaining({
+          source: expect.anything(),
+        })
+      );
+
+      // Ensure the in-flight fetch resolves before the test ends (prevents act warnings).
+      await (queryMock.mock.results[1]?.value ?? Promise.resolve());
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false);
+      });
     });
 
     it('groups blocked subdomain and path rules locally with search filtering', async () => {

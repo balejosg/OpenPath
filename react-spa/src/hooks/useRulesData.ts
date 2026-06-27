@@ -21,7 +21,6 @@ export function useRulesData({ groupId, filter, page, search, pageSize }: UseRul
   const [counts, setCounts] = useState({
     all: 0,
     allowed: 0,
-    automatic: 0,
     blocked: 0,
     disabled: 0,
   });
@@ -62,8 +61,7 @@ export function useRulesData({ groupId, filter, page, search, pageSize }: UseRul
       } else {
         const result = await trpc.groups.listRulesPaginated.query({
           groupId,
-          type: filter === 'allowed' || filter === 'automatic' ? 'whitelist' : undefined,
-          source: filter === 'automatic' ? 'auto_extension' : undefined,
+          type: filter === 'allowed' ? 'whitelist' : undefined,
           enabled: filter === 'disabled' ? false : filter === 'all' ? undefined : true,
           limit: pageSize,
           offset: (page - 1) * pageSize,
@@ -93,14 +91,8 @@ export function useRulesData({ groupId, filter, page, search, pageSize }: UseRul
     if (!groupId) return;
 
     try {
-      const [whitelist, autoApproved, subdomains, paths, disabledRules] = await Promise.all([
+      const [whitelist, subdomains, paths, disabledRules] = await Promise.all([
         trpc.groups.listRules.query({ groupId, type: 'whitelist', enabled: true }),
-        trpc.groups.listRules.query({
-          groupId,
-          type: 'whitelist',
-          source: 'auto_extension',
-          enabled: true,
-        }),
         trpc.groups.listRules.query({ groupId, type: 'blocked_subdomain', enabled: true }),
         trpc.groups.listRules.query({ groupId, type: 'blocked_path', enabled: true }),
         trpc.groups.listRules.query({ groupId, enabled: false }),
@@ -113,7 +105,6 @@ export function useRulesData({ groupId, filter, page, search, pageSize }: UseRul
       setCounts({
         all: allowed + blocked + disabled,
         allowed,
-        automatic: autoApproved.length,
         blocked,
         disabled,
       });

@@ -8,7 +8,6 @@ describe('rules manager tabs', () => {
     const tabs = buildRulesManagerTabs({
       all: 4,
       allowed: 2,
-      automatic: 1,
       blocked: 1,
       disabled: 1,
     });

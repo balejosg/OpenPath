@@ -20,7 +20,6 @@ interface UseManagedRulesCollectionOptions {
 export interface ManagedRulesCounts {
   all: number;
   allowed: number;
-  automatic: number;
   blocked: number;
   disabled: number;
 }

@@ -28,7 +28,7 @@ vi.mock('../../hooks/useRulesManager', () => ({
     setFilter: vi.fn(),
     search: '',
     setSearch: vi.fn(),
-    counts: { all: 1, allowed: 1, automatic: 0, blocked: 0 },
+    counts: { all: 1, allowed: 1, blocked: 0, disabled: 0 },
     // Selection state
     selectedIds: new Set<string>(),
     toggleSelection: vi.fn(),
@@ -77,7 +77,7 @@ vi.mock('../../hooks/useGroupedRulesManager', () => ({
     setFilter: vi.fn(),
     search: '',
     setSearch: vi.fn(),
-    counts: { all: 1, allowed: 1, automatic: 0, blocked: 0 },
+    counts: { all: 1, allowed: 1, blocked: 0, disabled: 0 },
     selectedIds: new Set<string>(),
     toggleSelection: vi.fn(),
     toggleSelectAll: vi.fn(),

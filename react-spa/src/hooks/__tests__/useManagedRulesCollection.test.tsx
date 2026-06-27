@@ -52,7 +52,7 @@ vi.mock('../useRulesManager', () => ({
     setFilter: mocks.flatSetFilter,
     search: 'flat',
     setSearch: mocks.flatSetSearch,
-    counts: { all: 4, allowed: 2, automatic: 1, blocked: 2 },
+    counts: { all: 4, allowed: 2, blocked: 2, disabled: 0 },
     selectedIds: mocks.flatSelectedIds,
     toggleSelection: vi.fn(),
     toggleSelectAll: vi.fn(),
@@ -89,7 +89,7 @@ vi.mock('../useGroupedRulesManager', () => ({
     setFilter: mocks.groupedSetFilter,
     search: 'grouped',
     setSearch: mocks.groupedSetSearch,
-    counts: { all: 7, allowed: 3, automatic: 2, blocked: 4 },
+    counts: { all: 7, allowed: 3, blocked: 4, disabled: 0 },
     selectedIds: mocks.groupedSelectedIds,
     toggleSelection: vi.fn(),
     toggleSelectAll: vi.fn(),
@@ -130,12 +130,12 @@ describe('useManagedRulesCollection', () => {
     expect(result.current.domainGroups).toEqual([]);
     expect(result.current.totalRules).toBe(1);
     expect(result.current.totalGroups).toBe(0);
-    expect(result.current.counts.automatic).toBe(1);
+    expect(result.current.counts.allowed).toBe(2);
     expect(result.current.filters.active).toBe('allowed');
     expect(result.current.filters.setActive).toBe(mocks.flatSetFilter);
     expect(result.current.filters.search).toBe('flat');
     expect(result.current.filters.setSearch).toBe(mocks.flatSetSearch);
-    expect(result.current.filters.counts.automatic).toBe(1);
+    expect(result.current.filters.counts.allowed).toBe(2);
     expect(result.current.page).toBe(2);
     expect(result.current.selection.selectedIds).toBe(mocks.flatSelectedIds);
     expect(result.current.actions.addRule).toBe(mocks.flatAddRule);
