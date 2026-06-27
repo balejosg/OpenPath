@@ -3,7 +3,7 @@ import { detectRuleType } from './ruleDetection';
 import { isDuplicateError } from './error-utils';
 import { getRuleTypeBadge, type RuleType } from './rules';
 import { reportError } from './reportError';
-import type { ProductT, ProductLocale, ProductI18nKey } from '../i18n/product-i18n';
+import type { ProductT, ProductLocale } from '../i18n/product-i18n';
 
 export type ToastFn = (message: string, type: 'success' | 'error', undoAction?: () => void) => void;
 
@@ -264,9 +264,10 @@ export async function setRuleEnabledAction(
 ): Promise<void> {
   try {
     await trpc.groups.setRuleEnabled.mutate({ id: rule.id, groupId: rule.groupId, enabled });
-    // Keys added in Task 12; cast to ProductI18nKey until then
-    const msgKey = (enabled ? 'rulesActions.enabled' : 'rulesActions.disabled') as ProductI18nKey;
-    params.onToast(params.t(msgKey, { value: rule.value }), 'success', () => {
+    const toastMsg = enabled
+      ? params.t('rulesActions.enabled', { value: rule.value })
+      : params.t('rulesActions.disabled', { value: rule.value });
+    params.onToast(toastMsg, 'success', () => {
       void (async () => {
         try {
           await trpc.groups.setRuleEnabled.mutate({
@@ -309,11 +310,10 @@ export async function bulkSetRulesEnabledAction(params: BulkSetEnabledParams): P
       enabled: params.enabled,
     });
     params.clearSelection?.();
-    // Keys added in Task 12; cast to ProductI18nKey until then
-    const key = (
-      params.enabled ? 'rulesActions.bulkEnabled' : 'rulesActions.bulkDisabled'
-    ) as ProductI18nKey;
-    params.onToast(params.t(key, { count: result.updated }), 'success');
+    const bulkToastMsg = params.enabled
+      ? params.t('rulesActions.bulkEnabled', { count: result.updated })
+      : params.t('rulesActions.bulkDisabled', { count: result.updated });
+    params.onToast(bulkToastMsg, 'success');
     await params.fetchRules();
     await params.fetchCounts();
   } catch (err) {
