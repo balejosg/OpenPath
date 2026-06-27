@@ -58,4 +58,12 @@ test('toggling enabled state busts the export cache', async () => {
   assert.doesNotMatch(second, /on\.example\.com/);
   // The two exports must differ, proving the cache was busted
   assert.notEqual(first, second);
+
+  // Re-enable the rule and confirm the export reverts (cache busted again)
+  await setRuleEnabled('ex-on', true);
+  const third = (await exportGroup(GID)) ?? '';
+  // The re-enabled rule must reappear
+  assert.match(third, /on\.example\.com/);
+  // The third export must differ from the disabled export (cache busted again)
+  assert.notEqual(third, second);
 });
