@@ -1,5 +1,4 @@
 import * as classroomStorage from '../lib/classroom-storage.js';
-import { config } from '../config.js';
 import DomainEventsService from './domain-events.service.js';
 
 export interface MachineContextSnapshot {
@@ -55,17 +54,6 @@ export async function getMachineContextSnapshot(
   };
 }
 
-export function setAutoApproveMachineRequests(enabled: boolean): { enabled: boolean } {
-  Object.defineProperty(config, 'autoApproveMachineRequests', {
-    value: enabled,
-    writable: true,
-    configurable: true,
-    enumerable: true,
-  });
-
-  return { enabled: config.autoApproveMachineRequests };
-}
-
 export async function tickScheduleBoundaries(at: Date): Promise<{ at: string }> {
   await DomainEventsService.tickScheduleBoundaryEvents(at);
   return { at: at.toISOString() };
@@ -73,6 +61,5 @@ export async function tickScheduleBoundaries(at: Date): Promise<{ at: string }> 
 
 export default {
   getMachineContextSnapshot,
-  setAutoApproveMachineRequests,
   tickScheduleBoundaries,
 };

@@ -17,8 +17,7 @@ export async function createRequest(
 ): Promise<RequestResult<StoredDomainRequest>> {
   const normalizedInput = {
     ...input,
-    domain:
-      input.source === 'auto_extension' ? input.domain : normalizeManualRequestDomain(input.domain),
+    domain: normalizeManualRequestDomain(input.domain),
   };
 
   // Resolve (and thereby validate) the request-eligible group BEFORE the pending

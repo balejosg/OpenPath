@@ -66,19 +66,6 @@ async function handleMachineContext(
   });
 }
 
-async function handleAutoApprove(req: Request, res: Response): Promise<void> {
-  const authorized = await requireTeacherOrAdmin(req, res);
-  if (!authorized) return;
-
-  const enabled = getBodyField(req.body as unknown, 'enabled');
-  if (typeof enabled !== 'boolean') {
-    res.status(400).json({ success: false, error: 'enabled boolean is required' });
-    return;
-  }
-
-  res.json({ success: true, ...TestSupportService.setAutoApproveMachineRequests(enabled) });
-}
-
 async function handleClock(
   req: Request,
   res: Response,
@@ -148,15 +135,6 @@ export function registerTestSupportRoutes(
       sendJsonInternalError,
       (req, res) =>
         handleMachineContext(req, res, { getCurrentEvaluationTime: deps.getCurrentEvaluationTime })
-    )
-  );
-
-  app.post(
-    '/api/test-support/auto-approve',
-    createAsyncRouteHandler(
-      'Test-support auto-approve error',
-      sendJsonInternalError,
-      handleAutoApprove
     )
   );
 

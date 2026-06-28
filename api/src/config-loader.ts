@@ -24,7 +24,6 @@ export interface LoadedConfig {
   readonly jwtSecret: string;
   readonly jwtAccessExpiry: string;
   readonly jwtRefreshExpiry: string;
-  readonly autoApproveMachineRequests: boolean;
   readonly googleClientId: string;
   readonly globalRateLimitWindowMs: number;
   readonly globalRateLimitMax: number;
@@ -83,7 +82,6 @@ export function loadConfig(
     jwtSecret: resolveJwtSecret(env, nodeEnv),
     jwtAccessExpiry: env.JWT_ACCESS_EXPIRY ?? env.JWT_EXPIRES_IN ?? '24h',
     jwtRefreshExpiry: env.JWT_REFRESH_EXPIRY ?? env.JWT_REFRESH_EXPIRES_IN ?? '7d',
-    autoApproveMachineRequests: parseBooleanEnv(env.AUTO_APPROVE_MACHINE_REQUESTS, false),
     googleClientId: env.GOOGLE_CLIENT_ID ?? '',
     globalRateLimitWindowMs: parseIntEnv(env.RATE_LIMIT_WINDOW_MS, 60 * 1000),
     globalRateLimitMax: parseIntEnv(env.RATE_LIMIT_MAX, 200),

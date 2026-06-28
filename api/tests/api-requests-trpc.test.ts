@@ -223,42 +223,5 @@ void describe('Request API tests - tRPC request procedures', async () => {
         'rejection should explain the group does not exist'
       );
     });
-
-    await test('public source=auto_extension cannot select the no-normalization branch', async () => {
-      const suffix = Date.now().toString();
-      const group = `scope-src-${suffix}`;
-      await insertWhitelistGroup(group);
-
-      // Submit a multi-label subdomain with a spoofed auto_extension source. The
-      // public path must coerce the source so manual normalization still runs and
-      // the stored domain is collapsed (not the verbatim subdomain that the
-      // skip-normalization auto_extension branch would have preserved).
-      const submitted = `deep.sub.srcnorm-${suffix}.example.com`;
-      const response = await trpcMutate('requests.create', {
-        domain: submitted,
-        reason: 'source spoof attempt',
-        requesterEmail: 'spoof@example.com',
-        groupId: group,
-        source: 'auto_extension',
-      });
-
-      assert.strictEqual(response.status, 200, 'a valid manual-style request should succeed');
-      const data = (await parseTRPC(response)).data as { domain?: string; source?: string };
-      assert.notStrictEqual(
-        data.domain,
-        submitted,
-        'public requests.create must normalize the domain despite a spoofed auto_extension source'
-      );
-      assert.match(
-        data.domain ?? '',
-        /^[^.]+\.[^.]+$/,
-        'normalized domain should collapse to a registrable root'
-      );
-      assert.notStrictEqual(
-        data.source,
-        'auto_extension',
-        'public callers must not be able to persist source=auto_extension'
-      );
-    });
   });
 });

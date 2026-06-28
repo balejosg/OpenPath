@@ -39,19 +39,6 @@ export interface ApprovedWhitelistRequestCommandResult {
   updated: StoredDomainRequest;
 }
 
-export interface AutomaticWhitelistRuleInput {
-  diagnosticContext?: string | undefined;
-  domain: string;
-  groupId: string;
-  originPage?: string | undefined;
-  reason?: string | undefined;
-}
-
-export interface AutomaticWhitelistRuleCommandResult {
-  duplicate: boolean;
-  status: 'approved' | 'duplicate';
-}
-
 export interface BulkDeleteWhitelistRulesInput {
   ids: string[];
   rules: Rule[];
@@ -114,17 +101,6 @@ export const defaultWhitelistRuleCommandDependencies: WhitelistRuleCommandDepend
 
 function normalizeRuleComment(comment: string | null | undefined): string | null {
   return comment ?? null;
-}
-
-function createSourceComment(input: AutomaticWhitelistRuleInput): string {
-  const reasonText = input.reason ?? '';
-  const diagnosticText = input.diagnosticContext
-    ? ` - diagnostic (${input.diagnosticContext})`
-    : '';
-
-  return input.originPage
-    ? `Auto-approved via Firefox extension (${input.originPage.slice(0, 300)})${reasonText ? ` - ${reasonText}` : ''}${diagnosticText}`
-    : `Auto-approved via Firefox extension${reasonText ? ` - ${reasonText}` : ''}${diagnosticText}`;
 }
 
 async function withWhitelistEvents<TResult>(
@@ -246,42 +222,9 @@ export async function approveWhitelistRequest(
   });
 }
 
-export async function createAutomaticWhitelistRule(
-  input: AutomaticWhitelistRuleInput,
-  deps: CreateRuleDeps = defaultWhitelistRuleCommandDependencies
-): Promise<AutomaticWhitelistRuleCommandResult> {
-  const created = await withWhitelistEvents(deps, async (tx, events) => {
-    const result = await deps.createRule(
-      input.groupId,
-      'whitelist',
-      input.domain,
-      createSourceComment(input),
-      'auto_extension',
-      tx
-    );
-
-    if (result.success) {
-      events.publishWhitelistChanged(input.groupId);
-    }
-
-    return result;
-  });
-
-  if (!created.success && created.error !== 'Rule already exists') {
-    throw new Error(created.error ?? 'Could not create rule');
-  }
-
-  const duplicate = created.error === 'Rule already exists';
-  return {
-    duplicate,
-    status: duplicate ? 'duplicate' : 'approved',
-  };
-}
-
 export default {
   approveWhitelistRequest,
   bulkDeleteWhitelistRules,
-  createAutomaticWhitelistRule,
   createManualWhitelistRule,
   deleteWhitelistRule,
 };

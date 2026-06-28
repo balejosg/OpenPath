@@ -1,24 +1,14 @@
-import { config } from '../config.js';
-import { withTransaction, type DbExecutor } from '../db/index.js';
 import { normalizeManualRequestDomain } from '@openpath/shared/domain';
 import * as classroomStorage from '../lib/classroom-storage.js';
-import * as groupsStorage from '../lib/groups-storage.js';
 import { logger } from '../lib/logger.js';
 import { normalizeHostInput } from '../lib/machine-proof.js';
 import { parseWhitelistDomain } from '../lib/public-request-input.js';
 import { resolveMachineTokenHostnameAccess } from '../lib/server-request-auth.js';
 import type { AuthenticatedMachine } from '../lib/server-request-auth.js';
-import type { CreateRuleResult, Rule, RuleSource, RuleType } from '../lib/groups-storage.js';
-import DomainEventsService from './domain-events.service.js';
 import { createRequest } from './request-command.service.js';
 import type { RequestCreationInput } from './request-command.service.js';
 import type { RequestResult, RequestServiceError } from './request-service-shared.js';
-import { createAutomaticWhitelistRule } from './whitelist-rule-command.service.js';
 import type { EffectivePolicyContext } from '../lib/classroom-storage.js';
-import {
-  admissionTargetMatchesBlockedPath,
-  ruleValues,
-} from './machine-request-admission-policy.js';
 
 export type PublicRequestServiceError = RequestServiceError;
 export type PublicRequestResult<T> = RequestResult<T>;
@@ -48,19 +38,9 @@ export interface CreateSubmittedMachineRequestInput {
   token: string;
 }
 
-export interface DecideAutoMachineRequestInput {
-  diagnosticContext?: string | undefined;
-  domainRaw: string;
-  hostnameRaw: string;
-  originPage?: string | undefined;
-  reason?: string | undefined;
-  targetUrl?: string | undefined;
-  token: string;
-}
-
 interface CreateMachineRequestInput extends CreateSubmittedMachineRequestInput {
   logContext: string;
-  source: 'auto_extension' | 'firefox-extension';
+  source: 'firefox-extension';
 }
 
 export interface PendingMachineRequestOutcome {
@@ -69,35 +49,8 @@ export interface PendingMachineRequestOutcome {
   groupId: string;
   requestId: string;
   requestStatus: string;
-  source: 'auto_extension' | 'firefox-extension';
+  source: 'firefox-extension';
 }
-
-export interface ApprovedMachineRequestOutcome {
-  autoApproved: true;
-  domain: string;
-  duplicate: boolean;
-  groupId: string;
-  source: 'auto_extension';
-  status: 'approved' | 'duplicate';
-}
-
-export type AutoMachineRequestOutcome =
-  | PendingMachineRequestOutcome
-  | ApprovedMachineRequestOutcome;
-
-type AutoMachineAdmissionDecision =
-  | {
-      kind: 'rejected';
-      error: RequestServiceError;
-    }
-  | {
-      kind: 'pending';
-      context: MachineRequestContext;
-    }
-  | {
-      kind: 'approved';
-      context: MachineRequestContext;
-    };
 
 type MachineHostnameAccess =
   | { ok: true; machine: AuthenticatedMachine; requestedHostname: string }
@@ -109,27 +62,10 @@ type MachineHostnameAccess =
     };
 
 export interface MachineRequestAdmissionDeps {
-  autoApproveMachineRequests: boolean;
   createRequest: (
     input: RequestCreationInput
   ) => Promise<RequestResult<{ id: string; status: string }>>;
-  createRule: (
-    groupId: string,
-    type: RuleType,
-    value: string,
-    comment?: string | null,
-    source?: RuleSource,
-    tx?: DbExecutor
-  ) => Promise<CreateRuleResult>;
-  getRulesByGroup: (
-    groupId: string,
-    type?: RuleType,
-    source?: RuleSource,
-    enabled?: boolean
-  ) => Promise<Rule[]>;
-  isDomainBlocked: typeof groupsStorage.isDomainBlocked;
   logger: Pick<typeof logger, 'warn'>;
-  publishWhitelistChanged: (groupId: string) => void;
   resolveEffectiveMachinePolicyContext: (
     hostname: string
   ) => Promise<EffectivePolicyContext | null>;
@@ -137,66 +73,17 @@ export interface MachineRequestAdmissionDeps {
     machineToken: string;
     hostname: string;
   }) => Promise<MachineHostnameAccess>;
-  createTransactionalWriter: typeof DomainEventsService.createTransactionalWriter;
-  withTransaction: typeof withTransaction;
 }
 
 const defaultDeps: MachineRequestAdmissionDeps = {
-  autoApproveMachineRequests: config.autoApproveMachineRequests,
   createRequest,
-  createRule: groupsStorage.createRule,
-  getRulesByGroup: groupsStorage.getRulesByGroup,
-  isDomainBlocked: groupsStorage.isDomainBlocked,
   logger,
-  publishWhitelistChanged: DomainEventsService.publishWhitelistChanged.bind(DomainEventsService),
   resolveEffectiveMachinePolicyContext: classroomStorage.resolveEffectiveMachinePolicyContext,
   resolveMachineTokenHostnameAccess,
-  createTransactionalWriter: DomainEventsService.createTransactionalWriter,
-  withTransaction,
 };
 
 function resolveDeps(deps?: Partial<MachineRequestAdmissionDeps>): MachineRequestAdmissionDeps {
-  return { ...defaultDeps, autoApproveMachineRequests: config.autoApproveMachineRequests, ...deps };
-}
-
-async function isTargetBlockedPath(
-  groupId: string,
-  targetUrl: string | undefined,
-  deps: MachineRequestAdmissionDeps
-): Promise<boolean> {
-  if (!targetUrl) {
-    return false;
-  }
-
-  const rules = await deps.getRulesByGroup(groupId, 'blocked_path');
-  return admissionTargetMatchesBlockedPath(targetUrl, ruleValues(rules));
-}
-
-async function decideAutoMachineAdmission(
-  input: DecideAutoMachineRequestInput,
-  context: MachineRequestContext,
-  deps: MachineRequestAdmissionDeps
-): Promise<AutoMachineAdmissionDecision> {
-  const blockedSubdomain = await deps.isDomainBlocked(context.groupId, context.domain);
-  if (blockedSubdomain.blocked) {
-    return {
-      kind: 'rejected',
-      error: { code: 'FORBIDDEN', message: 'Target matches a blocked subdomain rule' },
-    };
-  }
-
-  if (await isTargetBlockedPath(context.groupId, input.targetUrl, deps)) {
-    return {
-      kind: 'rejected',
-      error: { code: 'FORBIDDEN', message: 'Target URL matches a blocked path rule' },
-    };
-  }
-
-  if (!deps.autoApproveMachineRequests) {
-    return { kind: 'pending', context };
-  }
-
-  return { kind: 'approved', context };
+  return { ...defaultDeps, ...deps };
 }
 
 export async function resolveMachineRequestAdmission(
@@ -266,28 +153,15 @@ export async function resolveMachineRequestAdmission(
   };
 }
 
-function requestDomainForSource(
-  input: Pick<CreateMachineRequestInput, 'source'>,
-  context: MachineRequestContext
-): string {
-  return input.source === 'firefox-extension'
-    ? normalizeManualRequestDomain(context.domain)
-    : context.domain;
-}
-
 async function createMachineRequestFromContext(
   input: CreateMachineRequestInput,
   context: MachineRequestContext,
   deps: MachineRequestAdmissionDeps
 ): Promise<PublicRequestResult<PendingMachineRequestOutcome>> {
-  const domain = requestDomainForSource(input, context);
+  const domain = normalizeManualRequestDomain(context.domain);
   const created = await deps.createRequest({
     domain,
-    reason:
-      input.reason ??
-      (input.source === 'auto_extension'
-        ? 'Submitted via Firefox extension auto request'
-        : 'Submitted via Firefox extension'),
+    reason: input.reason ?? 'Submitted via Firefox extension',
     groupId: context.groupId,
     source: input.source,
     machineHostname: context.machineHostname,
@@ -341,80 +215,7 @@ export async function createSubmittedMachineRequest(
   );
 }
 
-export async function decideAutoMachineRequest(
-  input: DecideAutoMachineRequestInput,
-  depsInput?: Partial<MachineRequestAdmissionDeps>
-): Promise<PublicRequestResult<AutoMachineRequestOutcome>> {
-  const deps = resolveDeps(depsInput);
-  const context = await resolveMachineRequestAdmission(
-    {
-      ...input,
-      logContext: 'Auto request',
-    },
-    deps
-  );
-  if (!context.ok) {
-    return context;
-  }
-
-  const decision = await decideAutoMachineAdmission(input, context.data, deps);
-  if (decision.kind === 'rejected') {
-    return { ok: false, error: decision.error };
-  }
-
-  if (decision.kind === 'pending') {
-    return createMachineRequestFromContext(
-      {
-        ...input,
-        logContext: 'Auto request',
-        source: 'auto_extension',
-      },
-      decision.context,
-      deps
-    );
-  }
-
-  try {
-    const created = await createAutomaticWhitelistRule(
-      {
-        diagnosticContext: input.diagnosticContext,
-        domain: decision.context.domain,
-        groupId: decision.context.groupId,
-        originPage: input.originPage,
-        reason: input.reason,
-      },
-      {
-        createRule: deps.createRule,
-        createTransactionalWriter: deps.createTransactionalWriter,
-        publishWhitelistChanged: deps.publishWhitelistChanged,
-        withTransaction: deps.withTransaction,
-      }
-    );
-
-    return {
-      ok: true,
-      data: {
-        autoApproved: true,
-        domain: decision.context.domain,
-        duplicate: created.duplicate,
-        groupId: decision.context.groupId,
-        source: 'auto_extension',
-        status: created.status,
-      },
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      error: {
-        code: 'BAD_REQUEST',
-        message: error instanceof Error ? error.message : String(error),
-      },
-    };
-  }
-}
-
 export default {
   createSubmittedMachineRequest,
-  decideAutoMachineRequest,
   resolveMachineRequestAdmission,
 };

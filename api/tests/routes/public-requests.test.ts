@@ -3,7 +3,6 @@ import assert from 'node:assert';
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 const { startHttpTestHarness } = await import('../http-test-harness.js');
-const { loadConfig } = await import('../../src/config.js');
 const { db } = await import('../../src/db/index.js');
 
 let apiUrl: string;
@@ -33,26 +32,6 @@ await describe('public-requests routes', async () => {
     if (harness !== undefined) {
       await harness.close();
     }
-  });
-
-  await test('loadConfig disables machine auto-approval by default and only enables it explicitly', () => {
-    const baseEnv = {
-      NODE_ENV: 'test',
-      JWT_SECRET: 'test-jwt-secret',
-    };
-    const defaultConfig = loadConfig(baseEnv);
-    const enabledConfig = loadConfig({
-      ...baseEnv,
-      AUTO_APPROVE_MACHINE_REQUESTS: 'true',
-    });
-    const disabledConfig = loadConfig({
-      ...baseEnv,
-      AUTO_APPROVE_MACHINE_REQUESTS: 'false',
-    });
-
-    assert.strictEqual(defaultConfig.autoApproveMachineRequests, false);
-    assert.strictEqual(enabledConfig.autoApproveMachineRequests, true);
-    assert.strictEqual(disabledConfig.autoApproveMachineRequests, false);
   });
 
   await test('POST /api/requests/submit normalizes manual requests to root domain and exposes public status', async () => {

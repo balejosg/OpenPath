@@ -7,7 +7,6 @@ import DomainEventsService from '../src/services/domain-events.service.js';
 import {
   approveWhitelistRequest,
   bulkDeleteWhitelistRules,
-  createAutomaticWhitelistRule,
   createManualWhitelistRule,
   type WhitelistRuleCommandDependencies,
 } from '../src/services/whitelist-rule-command.service.js';
@@ -178,48 +177,6 @@ await describe('whitelist rule command service', async () => {
       'commit',
       'event:group-a',
     ]);
-  });
-
-  await test('auto-approval creates auto-extension rules and returns approved outcome', async () => {
-    const { calls, createdRules, deps } = createDeps();
-
-    const result = await createAutomaticWhitelistRule(
-      {
-        diagnosticContext: 'xmlhttprequest',
-        domain: 'cdn.example.com',
-        groupId: 'group-a',
-        originPage: 'https://teacher.school.example/dashboard',
-        reason: 'ajax',
-      },
-      deps
-    );
-
-    assert.deepEqual(result, { duplicate: false, status: 'approved' });
-    const createdRule = createdRules[0];
-    assert.ok(createdRule);
-    assert.equal(createdRule.source, 'auto_extension');
-    assert.match(String(createdRule.comment), /diagnostic \(xmlhttprequest\)/);
-    assert.deepEqual(calls, [
-      'begin',
-      'create:auto_extension:whitelist',
-      'commit',
-      'event:group-a',
-    ]);
-  });
-
-  await test('duplicate auto-approval returns duplicate outcome without publishing', async () => {
-    const { calls, deps } = createDeps({}, { success: false, error: 'Rule already exists' });
-
-    const result = await createAutomaticWhitelistRule(
-      {
-        domain: 'cdn.example.com',
-        groupId: 'group-a',
-      },
-      deps
-    );
-
-    assert.deepEqual(result, { duplicate: true, status: 'duplicate' });
-    assert.deepEqual(calls, ['begin', 'create:auto_extension:whitelist', 'commit']);
   });
 
   await test('bulk deletion publishes each affected group after commit', async () => {
