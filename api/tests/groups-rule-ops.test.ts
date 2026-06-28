@@ -3,6 +3,7 @@ import assert from 'node:assert';
 
 import {
   type GroupStats,
+  type GroupWithCounts,
   type Rule,
   type SystemStatus,
   startGroupsTestHarness,
@@ -550,6 +551,188 @@ await describe(
           },
           bearerAuth(getHarness().adminToken)
         );
+      });
+    });
+
+    await describe('Paginated and Grouped Rule Queries', async () => {
+      let paginatedGroupId = '';
+      let groupedGroupId = '';
+      let privateGroupId = '';
+      let privateGroupName = '';
+      let teacherToken = '';
+
+      before(async () => {
+        const activeHarness = getHarness();
+
+        paginatedGroupId = (
+          await activeHarness.createGroup({
+            displayName: 'Paginated Rules Group',
+            name: uniqueGroupName('paginated-rules'),
+          })
+        ).id;
+
+        await activeHarness.trpcMutate(
+          'groups.bulkCreateRules',
+          {
+            groupId: paginatedGroupId,
+            type: 'whitelist',
+            values: [`paginated-a-${TEST_RUN_ID}.com`, `paginated-b-${TEST_RUN_ID}.com`],
+          },
+          bearerAuth(activeHarness.adminToken)
+        );
+
+        groupedGroupId = (
+          await activeHarness.createGroup({
+            displayName: 'Grouped Rules Group',
+            name: uniqueGroupName('grouped-rules'),
+          })
+        ).id;
+
+        await activeHarness.trpcMutate(
+          'groups.bulkCreateRules',
+          {
+            groupId: groupedGroupId,
+            type: 'whitelist',
+            values: [`grouped-a-${TEST_RUN_ID}.com`],
+          },
+          bearerAuth(activeHarness.adminToken)
+        );
+
+        privateGroupName = uniqueGroupName('private-group');
+        privateGroupId = (
+          await activeHarness.createGroup({
+            displayName: 'Private Group',
+            name: privateGroupName,
+            visibility: 'private',
+          })
+        ).id;
+
+        const unrelatedGroupId = (
+          await activeHarness.createGroup({
+            displayName: 'Unrelated Teacher Group',
+            name: uniqueGroupName('unrelated-teacher'),
+          })
+        ).id;
+        teacherToken = (await activeHarness.createTeacherSession([unrelatedGroupId])).accessToken;
+      });
+
+      await test('listRulesPaginated returns paginated rules for a valid group', async () => {
+        const response = await getHarness().trpcQuery(
+          'groups.listRulesPaginated',
+          { groupId: paginatedGroupId, limit: 10, offset: 0 },
+          bearerAuth(getHarness().adminToken)
+        );
+        assertStatus(response, 200);
+
+        const { data } = (await parseTRPC(response)) as {
+          data?: { rules: Rule[]; total: number };
+        };
+        assert.ok(data);
+        assert.ok(typeof data.total === 'number');
+        assert.ok(Array.isArray(data.rules));
+        assert.ok(data.total >= 2);
+      });
+
+      await test('listRulesPaginated returns 404 for unknown groupId', async () => {
+        const response = await getHarness().trpcQuery(
+          'groups.listRulesPaginated',
+          { groupId: '00000000-0000-0000-0000-000000000000', limit: 10, offset: 0 },
+          bearerAuth(getHarness().adminToken)
+        );
+        assert.strictEqual(response.status, 404);
+      });
+
+      await test('listRulesGrouped returns grouped rules for a valid group', async () => {
+        const response = await getHarness().trpcQuery(
+          'groups.listRulesGrouped',
+          { groupId: groupedGroupId, limit: 20, offset: 0 },
+          bearerAuth(getHarness().adminToken)
+        );
+        assertStatus(response, 200);
+
+        const { data } = (await parseTRPC(response)) as {
+          data?: { totalGroups: number };
+        };
+        assert.ok(data);
+        assert.ok(typeof data.totalGroups === 'number');
+      });
+
+      await test('listRulesGrouped returns 404 for unknown groupId', async () => {
+        const response = await getHarness().trpcQuery(
+          'groups.listRulesGrouped',
+          { groupId: '00000000-0000-0000-0000-000000000001', limit: 20, offset: 0 },
+          bearerAuth(getHarness().adminToken)
+        );
+        assert.strictEqual(response.status, 404);
+      });
+
+      await test('listRules returns 404 for unknown groupId', async () => {
+        const response = await getHarness().trpcQuery(
+          'groups.listRules',
+          { groupId: '00000000-0000-0000-0000-000000000002' },
+          bearerAuth(getHarness().adminToken)
+        );
+        assert.strictEqual(response.status, 404);
+      });
+
+      await test('getById returns the group for admin', async () => {
+        const response = await getHarness().trpcQuery(
+          'groups.getById',
+          { id: privateGroupId },
+          bearerAuth(getHarness().adminToken)
+        );
+        assertStatus(response, 200);
+        const { data } = (await parseTRPC(response)) as { data?: GroupWithCounts };
+        assert.ok(data);
+        assert.strictEqual(data.id, privateGroupId);
+      });
+
+      await test('getById returns 404 for a nonexistent group', async () => {
+        const response = await getHarness().trpcQuery(
+          'groups.getById',
+          { id: '00000000-0000-0000-0000-000000000003' },
+          bearerAuth(getHarness().adminToken)
+        );
+        assert.strictEqual(response.status, 404);
+      });
+
+      await test('getById returns 403 for teacher without access to a private group', async () => {
+        const response = await getHarness().trpcQuery(
+          'groups.getById',
+          { id: privateGroupId },
+          bearerAuth(teacherToken)
+        );
+        assert.strictEqual(response.status, 403);
+      });
+
+      await test('getByName returns the group for admin', async () => {
+        const response = await getHarness().trpcQuery(
+          'groups.getByName',
+          { name: privateGroupName },
+          bearerAuth(getHarness().adminToken)
+        );
+        assertStatus(response, 200);
+        const { data } = (await parseTRPC(response)) as { data?: GroupWithCounts };
+        assert.ok(data);
+        assert.strictEqual(data.name, privateGroupName);
+      });
+
+      await test('getByName returns 404 for a nonexistent group name', async () => {
+        const response = await getHarness().trpcQuery(
+          'groups.getByName',
+          { name: 'definitely-does-not-exist-xyz-abc' },
+          bearerAuth(getHarness().adminToken)
+        );
+        assert.strictEqual(response.status, 404);
+      });
+
+      await test('getByName returns 403 for teacher without access to a private group', async () => {
+        const response = await getHarness().trpcQuery(
+          'groups.getByName',
+          { name: privateGroupName },
+          bearerAuth(teacherToken)
+        );
+        assert.strictEqual(response.status, 403);
       });
     });
   }
