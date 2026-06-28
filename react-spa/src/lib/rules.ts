@@ -14,7 +14,6 @@ export interface Rule {
   groupId: string;
   type: RuleType;
   value: string;
-  source?: 'manual' | 'auto_extension';
   enabled?: boolean;
   comment: string | null;
   createdAt: string;

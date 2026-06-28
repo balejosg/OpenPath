@@ -8,7 +8,6 @@ vi.mock('../../lib/rules-actions', () => ({
   bulkCreateRulesAction: vi.fn().mockResolvedValue({ created: 1, total: 1 }),
   bulkDeleteRulesWithUndoAction: vi.fn().mockResolvedValue(undefined),
   deleteRuleWithUndoAction: vi.fn().mockResolvedValue(undefined),
-  revokeAutoApprovalAction: vi.fn().mockResolvedValue(undefined),
   updateRuleAction: vi.fn().mockResolvedValue(true),
 }));
 
@@ -17,7 +16,6 @@ import {
   bulkCreateRulesAction,
   bulkDeleteRulesWithUndoAction,
   deleteRuleWithUndoAction,
-  revokeAutoApprovalAction,
   updateRuleAction,
 } from '../../lib/rules-actions';
 
@@ -44,28 +42,6 @@ describe('useManagedRulesActions', () => {
     );
   }
 
-  it('revokes automatic whitelist approvals instead of deleting with undo', async () => {
-    const { result } = renderActions();
-
-    await act(async () => {
-      await result.current.deleteRule({
-        id: 'auto-1',
-        groupId: 'group-1',
-        type: 'whitelist',
-        source: 'auto_extension',
-        value: 'cdn.example.com',
-        comment: null,
-        createdAt: '2024-01-01',
-      });
-    });
-
-    expect(revokeAutoApprovalAction).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'auto-1', source: 'auto_extension' }),
-      expect.objectContaining({ onToast, fetchRules: refetchRules, fetchCounts: refetchCounts })
-    );
-    expect(deleteRuleWithUndoAction).not.toHaveBeenCalled();
-  });
-
   it('keeps manual deletes undoable and skips empty bulk operations', async () => {
     const { result } = renderActions();
 
@@ -74,7 +50,6 @@ describe('useManagedRulesActions', () => {
         id: 'manual-1',
         groupId: 'group-1',
         type: 'whitelist',
-        source: 'manual',
         value: 'example.com',
         comment: null,
         createdAt: '2024-01-01',
@@ -83,7 +58,7 @@ describe('useManagedRulesActions', () => {
     });
 
     expect(deleteRuleWithUndoAction).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'manual-1', source: 'manual' }),
+      expect.objectContaining({ id: 'manual-1' }),
       expect.objectContaining({ onToast, fetchRules: refetchRules, fetchCounts: refetchCounts })
     );
     expect(bulkDeleteRulesWithUndoAction).not.toHaveBeenCalled();

@@ -229,26 +229,6 @@ export async function deleteRuleWithUndoAction(
   }
 }
 
-export async function revokeAutoApprovalAction(
-  rule: RuleForUndo,
-  params: DeleteRuleParams
-): Promise<void> {
-  try {
-    const confirmed =
-      typeof window === 'undefined' ||
-      window.confirm(params.t('rulesActions.confirmRevoke', { value: rule.value }));
-    if (!confirmed) return;
-
-    await trpc.groups.revokeAutoApproval.mutate({ id: rule.id, groupId: rule.groupId });
-    params.onToast(params.t('rulesActions.blockedAfterRevoke', { value: rule.value }), 'success');
-    await params.fetchRules();
-    await params.fetchCounts();
-  } catch (err) {
-    reportError('Failed to revoke automatic approval:', err);
-    params.onToast(params.t('rulesActions.unableToRevoke'), 'error');
-  }
-}
-
 export interface SetEnabledParams {
   onToast: ToastFn;
   fetchRules: () => Promise<void>;

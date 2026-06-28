@@ -72,23 +72,6 @@ describe('RulesTable Component', () => {
     expect(handleDelete).toHaveBeenCalledWith(mockRules[0]);
   });
 
-  it('labels automatic approvals and changes delete affordance to revoke', () => {
-    const autoRule: Rule = {
-      id: 'auto-1',
-      groupId: 'group-1',
-      type: 'whitelist',
-      source: 'auto_extension',
-      value: 'cdn.example.com',
-      comment: null,
-      createdAt: '2024-01-15T10:00:00Z',
-    };
-
-    render(<RulesTable rules={[autoRule]} loading={false} onDelete={noop} />);
-
-    expect(screen.getByText('Auto (Firefox)')).toBeInTheDocument();
-    expect(screen.getByTitle('Revoke auto-approval')).toBeInTheDocument();
-  });
-
   it('shows edit button when onSave is provided', () => {
     const handleSave = vi.fn().mockResolvedValue(true);
     render(<RulesTable rules={mockRules} loading={false} onDelete={noop} onSave={handleSave} />);

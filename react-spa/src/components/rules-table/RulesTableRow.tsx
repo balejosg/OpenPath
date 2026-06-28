@@ -142,11 +142,6 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
             {getTypeIcon(rule.type)}
             {getRuleTypeBadge(rule.type)}
           </span>
-          {rule.source === 'auto_extension' && (
-            <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full border font-medium bg-cyan-50 text-cyan-700 border-cyan-200">
-              {t('rules.row.autoFirefox')}
-            </span>
-          )}
           {rule.enabled === false && (
             <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full border font-medium bg-slate-100 text-slate-500 border-slate-200">
               {t('rules.row.disabled')}
@@ -230,11 +225,7 @@ export const RulesTableRow: React.FC<RulesTableRowProps> = ({
               <button
                 onClick={() => onDelete(rule)}
                 className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                title={
-                  rule.type === 'whitelist' && rule.source === 'auto_extension'
-                    ? t('rules.row.revokeAutoApproval')
-                    : t('common.delete')
-                }
+                title={t('common.delete')}
               >
                 <Trash2 size={14} />
               </button>

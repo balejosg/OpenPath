@@ -5,7 +5,6 @@ import {
   bulkDeleteRulesWithUndoAction,
   bulkSetRulesEnabledAction,
   deleteRuleWithUndoAction,
-  revokeAutoApprovalAction,
   setRuleEnabledAction,
   updateRuleAction,
 } from '../lib/rules-actions';
@@ -48,17 +47,6 @@ export function useManagedRulesActions({
 
   const deleteRule = useCallback(
     async (rule: Rule): Promise<void> => {
-      if (rule.type === 'whitelist' && rule.source === 'auto_extension') {
-        await revokeAutoApprovalAction(rule, {
-          onToast,
-          fetchRules: refetchRules,
-          fetchCounts: refetchCounts,
-          t,
-          locale,
-        });
-        return;
-      }
-
       await deleteRuleWithUndoAction(rule, {
         onToast,
         fetchRules: refetchRules,

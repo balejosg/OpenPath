@@ -44,9 +44,6 @@ vi.mock('../../lib/trpc', () => ({
       deleteRule: {
         mutate: vi.fn().mockResolvedValue({ deleted: true }),
       },
-      revokeAutoApproval: {
-        mutate: vi.fn().mockResolvedValue({ revoked: true, blockedRuleId: 'blocked-rule' }),
-      },
       updateRule: {
         mutate: vi.fn().mockResolvedValue({
           id: '1',

@@ -32,9 +32,6 @@ vi.mock('../trpc', () => ({
       deleteRule: {
         mutate: vi.fn(),
       },
-      revokeAutoApproval: {
-        mutate: vi.fn(),
-      },
       updateRule: {
         mutate: vi.fn(),
       },
@@ -53,9 +50,6 @@ const mockBulkDeleteRules = trpc.groups.bulkDeleteRules.mutate as unknown as Ret
   typeof vi.fn
 >;
 const mockDeleteRule = trpc.groups.deleteRule.mutate as unknown as ReturnType<typeof vi.fn>;
-const mockRevokeAutoApproval = trpc.groups.revokeAutoApproval.mutate as unknown as ReturnType<
-  typeof vi.fn
->;
 const mockUpdateRule = trpc.groups.updateRule.mutate as unknown as ReturnType<typeof vi.fn>;
 
 describe('rules-actions', () => {
@@ -214,82 +208,6 @@ describe('rules-actions', () => {
     await waitFor(() => {
       expect(onToast).toHaveBeenCalledWith('"example.com" restored', 'success');
     });
-  });
-
-  it('revokeAutoApprovalAction: confirms, revokes, and refetches without undo', async () => {
-    const { revokeAutoApprovalAction } = await import('../rules-actions');
-    mockRevokeAutoApproval.mockResolvedValue({ revoked: true, blockedRuleId: 'blocked-rule' });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
-    await revokeAutoApprovalAction(
-      {
-        id: 'auto-1',
-        groupId: 'g1',
-        type: 'whitelist',
-        value: 'cdn.example.com',
-        comment: null,
-      },
-      { onToast, fetchRules, fetchCounts, t, locale: 'en' as const }
-    );
-
-    expect(confirmSpy).toHaveBeenCalledWith(
-      'Revoking automatic approval for "cdn.example.com" will block this domain from being auto-approved again.'
-    );
-    expect(mockRevokeAutoApproval).toHaveBeenCalledWith({ id: 'auto-1', groupId: 'g1' });
-    expect(onToast).toHaveBeenCalledWith(
-      '"cdn.example.com" blocked after revoking automatic approval',
-      'success'
-    );
-    expect(fetchRules).toHaveBeenCalledTimes(1);
-    expect(fetchCounts).toHaveBeenCalledTimes(1);
-
-    confirmSpy.mockRestore();
-  });
-
-  it('revokeAutoApprovalAction: skips API call when teacher cancels confirmation', async () => {
-    const { revokeAutoApprovalAction } = await import('../rules-actions');
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-
-    await revokeAutoApprovalAction(
-      {
-        id: 'auto-1',
-        groupId: 'g1',
-        type: 'whitelist',
-        value: 'cdn.example.com',
-        comment: null,
-      },
-      { onToast, fetchRules, fetchCounts, t, locale: 'en' as const }
-    );
-
-    expect(mockRevokeAutoApproval).not.toHaveBeenCalled();
-    expect(onToast).not.toHaveBeenCalled();
-    expect(fetchRules).not.toHaveBeenCalled();
-    expect(fetchCounts).not.toHaveBeenCalled();
-
-    confirmSpy.mockRestore();
-  });
-
-  it('revokeAutoApprovalAction: toasts error when revoke fails', async () => {
-    const { revokeAutoApprovalAction } = await import('../rules-actions');
-    mockRevokeAutoApproval.mockRejectedValue(new Error('backend failure'));
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
-    await revokeAutoApprovalAction(
-      {
-        id: 'auto-1',
-        groupId: 'g1',
-        type: 'whitelist',
-        value: 'cdn.example.com',
-        comment: null,
-      },
-      { onToast, fetchRules, fetchCounts, t, locale: 'en' as const }
-    );
-
-    expect(onToast).toHaveBeenCalledWith('Unable to revoke automatic approval', 'error');
-    expect(fetchRules).not.toHaveBeenCalled();
-    expect(fetchCounts).not.toHaveBeenCalled();
-
-    confirmSpy.mockRestore();
   });
 
   it('bulkDeleteRulesWithUndoAction: clears selection, toasts, and supports undo', async () => {

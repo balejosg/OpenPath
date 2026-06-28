@@ -187,33 +187,6 @@ describe('HierarchicalRulesTable Component', () => {
       expect(screen.getByText('Allowed')).toBeInTheDocument();
     });
 
-    it('shows automatic approval labels and revoke action on expanded rows', () => {
-      const handleDelete = vi.fn();
-      const automaticRules: Rule[] = [
-        {
-          id: 'auto-1',
-          groupId: 'group-1',
-          type: 'whitelist',
-          source: 'auto_extension',
-          value: 'cdn.example.com',
-          comment: null,
-          createdAt: '2024-01-15T10:00:00Z',
-        },
-      ];
-
-      render(
-        <HierarchicalRulesTable rules={automaticRules} loading={false} onDelete={handleDelete} />
-      );
-
-      fireEvent.click(screen.getByText('example.com'));
-
-      expect(screen.getByText('Auto (Firefox)')).toBeInTheDocument();
-      const revokeButton = screen.getByTitle('Revoke auto-approval');
-      fireEvent.click(revokeButton);
-
-      expect(handleDelete).toHaveBeenCalledWith(automaticRules[0]);
-    });
-
     it('shows "Blocked" for groups with only blocked rules', () => {
       const blockedRules: Rule[] = [
         {
