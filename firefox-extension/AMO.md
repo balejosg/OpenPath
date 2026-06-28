@@ -132,7 +132,7 @@ Use screenshots that show real OpenPath behavior, not generic browser chrome:
 - `webRequest` and `webRequestBlocking`: required to detect blocked-resource failures and path-blocking behavior
 - `webNavigation`: clears per-tab state when navigation changes
 - `captivePortal`: reads Firefox captive-portal state so native-confirmed exact-host portal recovery only runs while Firefox reports a locked portal, and reconciles local protected mode when connectivity returns
-- `tabs`: updates the tab badge and popup context
+- `tabs`: updates the tab badge and popup context, and redirects already-open tabs to the OpenPath blocked-page screen when the local policy stops allowing their host
 - `clipboardWrite`: copies blocked-domain lists for operator workflows
 - `nativeMessaging`: local-only integration with the native host
 - `storage`: keeps managed config and local runtime state in browser storage
