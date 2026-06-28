@@ -769,6 +769,24 @@ def get_blocked_subdomains():
         return {"success": False, "action": "get-blocked-subdomains", "error": str(e)}
 
 
+def get_policy_version():
+    """Devuelve un sello de versión barato del whitelist local (mtime_ns:size).
+
+    Solo hace stat() del archivo local; no lee su contenido ni contacta la red.
+    """
+    whitelist_file = get_whitelist_file_path()
+    if whitelist_file is None:
+        return {"success": True, "action": "get-policy-version", "version": ""}
+
+    try:
+        st = whitelist_file.stat()
+        version = f"{st.st_mtime_ns}:{st.st_size}"
+        return {"success": True, "action": "get-policy-version", "version": version}
+    except Exception as e:
+        log_debug(f"Error getting policy version: {e}")
+        return {"success": False, "action": "get-policy-version", "error": str(e)}
+
+
 def handle_message(message):
     """Procesa un mensaje y devuelve la respuesta"""
 
@@ -815,6 +833,9 @@ def handle_message(message):
 
     elif action == "get-blocked-subdomains":
         return get_blocked_subdomains()
+
+    elif action == "get-policy-version":
+        return get_policy_version()
 
     elif action == "allow-local-runtime-dependency":
         return write_runtime_dependency_request(message)

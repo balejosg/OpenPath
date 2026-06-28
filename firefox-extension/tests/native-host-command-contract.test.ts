@@ -29,3 +29,17 @@ void test('native host reports DNS policy state independently from CLI discovery
     /"policy_active": is_dns_policy_active\(\) and whitelist_cmd is not None,/
   );
 });
+
+void test('native host exposes get-policy-version derived from local whitelist stat', () => {
+  const source = readFileSync(
+    new URL('../native/openpath-native-host.py', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(source, /def get_policy_version\(\):/);
+  assert.match(source, /elif action == "get-policy-version":\n\s*return get_policy_version\(\)/);
+  // sello derivado de mtime_ns + size, sin hashear contenido
+  assert.match(source, /st_mtime_ns/);
+  assert.match(source, /st_size/);
+  assert.doesNotMatch(source, /def get_policy_version\([^)]*\):[\s\S]*?hashlib/);
+});
