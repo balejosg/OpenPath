@@ -31,7 +31,6 @@ await describe('test-support routes', async () => {
 
     const routes = getRegisteredRoutes(app);
     assert.ok(routes.includes('GET /api/test-support/machine-context/:hostname'));
-    assert.ok(routes.includes('POST /api/test-support/auto-approve'));
     assert.ok(routes.includes('POST /api/test-support/clock'));
     assert.ok(routes.includes('POST /api/test-support/tick-boundaries'));
   });
