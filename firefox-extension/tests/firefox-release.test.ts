@@ -413,7 +413,7 @@ void describe('Firefox release signing helpers', () => {
     });
 
     assert.equal(result.metadata.extensionId, 'openpath-block-monitor@openpath');
-    assert.equal(result.metadata.version, '2.0.0');
+    assert.equal(result.metadata.version, '2.0.1');
     assert.equal(
       result.metadata.installUrl,
       'https://downloads.example/openpath-firefox-extension.xpi'
