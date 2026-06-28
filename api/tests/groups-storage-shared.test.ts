@@ -38,7 +38,6 @@ await test('groups-storage shared mappers normalize DB rows', () => {
     groupId: 'group-1',
     type: 'whitelist',
     value: 'example.com',
-    source: 'manual',
     enabled: 1,
     comment: null,
     createdAt: now,

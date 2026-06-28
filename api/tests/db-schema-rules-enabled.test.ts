@@ -25,7 +25,6 @@ void test('whitelist_rules.enabled defaults to 1 when omitted', async () => {
       groupId: GID,
       type: 'whitelist',
       value: 'default.example.com',
-      source: 'manual',
     })
     .onConflictDoNothing();
   const [row] = await db
@@ -44,7 +43,6 @@ void test('whitelist_rules.enabled persists an explicit 0', async () => {
       groupId: GID,
       type: 'whitelist',
       value: 'disabled.example.com',
-      source: 'manual',
       enabled: 0,
     })
     .onConflictDoNothing();

@@ -80,7 +80,6 @@ export async function seedE2E(): Promise<void> {
         groupId: TEST_GROUP.id,
         type: 'whitelist',
         value: 'seeded-inline-edit.example.com',
-        source: 'manual',
         comment: 'E2E seed: baseline rule for UI table rendering',
       })
       .onConflictDoNothing();

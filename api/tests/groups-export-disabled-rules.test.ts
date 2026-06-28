@@ -23,7 +23,6 @@ before(async () => {
         groupId: GID,
         type: 'whitelist',
         value: 'on.example.com',
-        source: 'manual',
         enabled: 1,
       },
       {
@@ -31,7 +30,6 @@ before(async () => {
         groupId: GID,
         type: 'whitelist',
         value: 'off.example.com',
-        source: 'manual',
         enabled: 0,
       },
     ])

@@ -259,7 +259,6 @@ await describe('groups rules service', async () => {
           groupId: 'group-a',
           type: 'whitelist' as const,
           value: 'a.example.com',
-          source: 'manual' as const,
           enabled: true,
           comment: null,
           createdAt: '',

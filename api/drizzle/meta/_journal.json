@@ -127,6 +127,13 @@
       "when": 1782576740619,
       "tag": "0017_loose_silhouette",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1782638015678,
+      "tag": "0018_talented_the_executioner",
+      "breakpoints": true
     }
   ]
 }

@@ -16,7 +16,6 @@ before(async () => {
       groupId: GID,
       type: 'whitelist',
       value: 'a.example.com',
-      source: 'manual',
       enabled: 1,
     })
     .onConflictDoNothing();
