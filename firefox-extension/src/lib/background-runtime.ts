@@ -3,6 +3,7 @@ import { registerBackgroundListeners } from './background-listeners.js';
 import { createBackgroundMessageHandler } from './background-message-handler.js';
 import { createBackgroundPathRulesController } from './background-path-rules.js';
 import { createBackgroundSubdomainRulesController } from './background-subdomain-rules.js';
+import { createBackgroundTabReconciliationController } from './background-tab-reconciliation.js';
 import { logger, getErrorMessage } from './logger.js';
 import {
   DEFAULT_REQUEST_CONFIG,
@@ -144,6 +145,23 @@ export function createBackgroundRuntime(
       });
     }
   }
+
+  const tabReconciliationController = createBackgroundTabReconciliationController({
+    getPolicyVersion: async () => {
+      const response = (await nativeMessagingClient.sendMessage({
+        action: 'get-policy-version',
+      })) as { success?: boolean; version?: string; error?: string };
+      return {
+        success: response.success === true,
+        version: typeof response.version === 'string' ? response.version : '',
+        ...(typeof response.error === 'string' ? { error: response.error } : {}),
+      };
+    },
+    checkDomains: (domains) => nativeMessagingClient.checkDomains(domains),
+    queryTabs: () => browser.tabs.query({}),
+    redirectToBlockedScreen: ({ tabId, hostname, error }) =>
+      redirectToBlockedScreen({ tabId, hostname, error, origin: null }),
+  });
 
   const {
     addBlockedDomain,
@@ -452,8 +470,10 @@ export function createBackgroundRuntime(
     registerCaptivePortalListeners();
     await blockedPathRulesController.init();
     await blockedSubdomainRulesController.init();
+    await tabReconciliationController.init();
     blockedPathRulesController.startRefreshLoop();
     blockedSubdomainRulesController.startRefreshLoop();
+    tabReconciliationController.startRefreshLoop();
     logger.info('[Blocking Monitor] Background script v2.0.0 (MV3) loaded');
   }
 

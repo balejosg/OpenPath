@@ -45,6 +45,7 @@ function createRuntimeHarnessWithOptions(options: {
   blockedPaths?: string[];
   captivePortalState?: string;
   nativeMessageResponder?: (message: unknown) => unknown;
+  openTabs?: { id: number; url: string }[];
 }): {
   browser: Browser;
   fetchBodies: unknown[];
@@ -166,6 +167,9 @@ function createRuntimeHarnessWithOptions(options: {
             })),
           });
         }
+        if (action === 'get-policy-version') {
+          return Promise.resolve({ success: true, version: 'policy-v1' });
+        }
 
         return Promise.resolve({ success: true });
       },
@@ -181,6 +185,7 @@ function createRuntimeHarnessWithOptions(options: {
     },
     tabs: {
       get: () => Promise.resolve({ id: 5, url: 'http://portal.example/app' }),
+      query: () => Promise.resolve(options.openTabs ?? []),
       onRemoved: {
         addListener: (listener: (tabId: number) => void) => {
           tabRemovedListener = listener;
@@ -1039,6 +1044,31 @@ void test('background runtime drops cached block decisions after a whitelist upd
     });
     await waitForAsyncRuntime();
     assert.equal(countNativeChecks(harness.nativeMessages, 'blocked.example'), 2);
+  } finally {
+    harness.restoreGlobals();
+  }
+});
+
+void test('background runtime redirects already-open tabs when policy removes their host', async () => {
+  const harness = createRuntimeHarnessWithOptions({
+    openTabs: [{ id: 7, url: 'http://blocked.example/page' }],
+  });
+  try {
+    const runtime = createBackgroundRuntime(harness.browser);
+    await runtime.init();
+    await waitForAsyncRuntime();
+
+    assert.deepEqual(
+      harness.tabUpdates.filter((update) => update.tabId === 7),
+      [
+        {
+          tabId: 7,
+          update: {
+            url: 'moz-extension://unit-test/blocked/blocked.html?domain=blocked.example&error=POLICY_BLOCKED',
+          },
+        },
+      ]
+    );
   } finally {
     harness.restoreGlobals();
   }
