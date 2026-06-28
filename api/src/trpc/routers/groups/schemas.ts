@@ -62,11 +62,6 @@ export const DeleteRuleSchema = z.object({
   groupId: z.string().optional(),
 });
 
-export const RevokeAutoApprovalSchema = z.object({
-  id: z.string().min(1),
-  groupId: z.string().min(1),
-});
-
 export const CreateRuleSchema = z
   .object({
     groupId: z.string().min(1),

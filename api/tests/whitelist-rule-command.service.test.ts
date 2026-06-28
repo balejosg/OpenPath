@@ -9,7 +9,6 @@ import {
   bulkDeleteWhitelistRules,
   createAutomaticWhitelistRule,
   createManualWhitelistRule,
-  revokeAutomaticWhitelistRule,
   type WhitelistRuleCommandDependencies,
 } from '../src/services/whitelist-rule-command.service.js';
 import type { StoredDomainRequest } from '../src/services/request-command-shared.js';
@@ -221,37 +220,6 @@ await describe('whitelist rule command service', async () => {
 
     assert.deepEqual(result, { duplicate: true, status: 'duplicate' });
     assert.deepEqual(calls, ['begin', 'create:auto_extension:whitelist', 'commit']);
-  });
-
-  await test('revokes automatic approvals by replacing them with blocked subdomain rules', async () => {
-    const { calls, createdRules, deps } = createDeps();
-
-    const result = await revokeAutomaticWhitelistRule(
-      {
-        resolvedBy: 'teacher@example.com',
-        rule: createAutoRule(),
-      },
-      deps
-    );
-
-    assert.deepEqual(result, { blockedRuleId: 'rule-1', revoked: true });
-    assert.deepEqual(createdRules, [
-      {
-        comment: 'Revoked automatic approval by teacher@example.com',
-        groupId: 'group-a',
-        source: 'manual',
-        tx,
-        type: 'blocked_subdomain',
-        value: 'cdn.example.com',
-      },
-    ]);
-    assert.deepEqual(calls, [
-      'begin',
-      'delete:rule-auto-1',
-      'create:manual:blocked_subdomain',
-      'commit',
-      'event:group-a',
-    ]);
   });
 
   await test('bulk deletion publishes each affected group after commit', async () => {

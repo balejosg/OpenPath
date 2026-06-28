@@ -18,7 +18,6 @@ import {
   bulkDeleteWhitelistRules,
   createManualWhitelistRule,
   deleteWhitelistRule,
-  revokeAutomaticWhitelistRule,
 } from './whitelist-rule-command.service.js';
 
 export async function createRule(
@@ -100,49 +99,6 @@ export async function deleteRule(
   );
 
   return { ok: true, data: { deleted } };
-}
-
-export async function revokeAutoApproval(
-  input: { id: string; groupId: string; resolvedBy: string },
-  deps: GroupsRulesDependencies = defaultRulesDependencies
-): Promise<GroupsResult<{ revoked: boolean; blockedRuleId: string | null }>> {
-  const rule = await deps.getRuleById(input.id);
-  if (rule?.groupId !== input.groupId) {
-    return { ok: false, error: { code: 'NOT_FOUND', message: 'Rule not found' } };
-  }
-
-  if (rule.type !== 'whitelist' || rule.source !== 'auto_extension') {
-    return {
-      ok: false,
-      error: {
-        code: 'BAD_REQUEST',
-        message: 'Only automatic whitelist approvals can be revoked this way',
-      },
-    };
-  }
-
-  try {
-    const result = await revokeAutomaticWhitelistRule(
-      { resolvedBy: input.resolvedBy, rule },
-      {
-        createRule: deps.createRule,
-        deleteRule: deps.deleteRule,
-        publishWhitelistChanged: deps.publishWhitelistChanged,
-        writeTransactionalCommand: DomainEventsService.writeTransactionalCommand,
-        withTransaction: deps.withTransaction,
-      }
-    );
-
-    return { ok: true, data: result };
-  } catch (error) {
-    return {
-      ok: false,
-      error: {
-        code: 'BAD_REQUEST',
-        message: error instanceof Error ? error.message : String(error),
-      },
-    };
-  }
 }
 
 export async function bulkDeleteRules(

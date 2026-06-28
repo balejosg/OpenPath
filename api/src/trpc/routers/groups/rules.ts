@@ -12,7 +12,6 @@ import {
   BulkSetRulesEnabledSchema,
   CreateRuleSchema,
   DeleteRuleSchema,
-  RevokeAutoApprovalSchema,
   SetRuleEnabledSchema,
   UpdateRuleSchema,
 } from './schemas.js';
@@ -62,20 +61,6 @@ export const groupRuleProcedures = {
     }
     return result.data;
   }),
-
-  revokeAutoApproval: teacherGroupIdProcedure(RevokeAutoApprovalSchema).mutation(
-    async ({ input, ctx }) => {
-      const result = await GroupsService.revokeAutoApproval({
-        id: input.id,
-        groupId: input.groupId,
-        resolvedBy: ctx.user.name,
-      });
-      if (!result.ok) {
-        throwServiceError(result.error);
-      }
-      return result.data;
-    }
-  ),
 
   bulkCreateRules: teacherGroupIdProcedure(BulkCreateRulesSchema).mutation(async ({ input }) => {
     const result = await GroupsService.bulkCreateRules({

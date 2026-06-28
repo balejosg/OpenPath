@@ -52,16 +52,6 @@ export interface AutomaticWhitelistRuleCommandResult {
   status: 'approved' | 'duplicate';
 }
 
-export interface RevokeAutomaticWhitelistRuleInput {
-  resolvedBy: string;
-  rule: Rule;
-}
-
-export interface RevokeAutomaticWhitelistRuleCommandResult {
-  blockedRuleId: string | null;
-  revoked: boolean;
-}
-
 export interface BulkDeleteWhitelistRulesInput {
   ids: string[];
   rules: Rule[];
@@ -108,16 +98,6 @@ type RequestApprovalDeps = Pick<
   | 'createTransactionalWriter'
   | 'publishWhitelistChanged'
   | 'updateRequestStatus'
-  | 'writeTransactionalCommand'
-  | 'withTransaction'
->;
-
-type RevokeAutoApprovalDeps = Pick<
-  WhitelistRuleCommandDependencies,
-  | 'createRule'
-  | 'createTransactionalWriter'
-  | 'deleteRule'
-  | 'publishWhitelistChanged'
   | 'writeTransactionalCommand'
   | 'withTransaction'
 >;
@@ -298,43 +278,10 @@ export async function createAutomaticWhitelistRule(
   };
 }
 
-export async function revokeAutomaticWhitelistRule(
-  input: RevokeAutomaticWhitelistRuleInput,
-  deps: RevokeAutoApprovalDeps = defaultWhitelistRuleCommandDependencies
-): Promise<RevokeAutomaticWhitelistRuleCommandResult> {
-  const comment = `Revoked automatic approval by ${input.resolvedBy}`;
-
-  return withWhitelistEvents(deps, async (tx, events) => {
-    const deleted = await deps.deleteRule(input.rule.id, tx);
-    const created = await deps.createRule(
-      input.rule.groupId,
-      'blocked_subdomain',
-      input.rule.value,
-      comment,
-      'manual',
-      tx
-    );
-
-    if (!created.success && created.error !== 'Rule already exists') {
-      throw new Error(created.error ?? 'Failed to create blocking rule');
-    }
-
-    if (deleted || created.success) {
-      events.publishWhitelistChanged(input.rule.groupId);
-    }
-
-    return {
-      blockedRuleId: created.id ?? null,
-      revoked: deleted,
-    };
-  });
-}
-
 export default {
   approveWhitelistRequest,
   bulkDeleteWhitelistRules,
   createAutomaticWhitelistRule,
   createManualWhitelistRule,
   deleteWhitelistRule,
-  revokeAutomaticWhitelistRule,
 };

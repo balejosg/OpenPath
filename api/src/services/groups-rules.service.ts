@@ -11,7 +11,6 @@ import {
   bulkSetRulesEnabled,
   createRule,
   deleteRule,
-  revokeAutoApproval,
   setRuleEnabled,
   updateRule,
 } from './groups-rules-mutations.service.js';
@@ -27,7 +26,6 @@ export {
   listRules,
   listRulesGrouped,
   listRulesPaginated,
-  revokeAutoApproval,
   setRuleEnabled,
   updateRule,
 };
@@ -43,7 +41,6 @@ export const GroupsRulesService = {
   listRules,
   listRulesGrouped,
   listRulesPaginated,
-  revokeAutoApproval,
   setRuleEnabled,
   updateRule,
 };
