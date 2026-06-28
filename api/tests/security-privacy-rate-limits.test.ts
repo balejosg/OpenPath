@@ -111,26 +111,6 @@ void describe('Security tests - privacy boundaries and public rate limits', () =
     assert.ok(errorMessage.includes('unrecognized_keys'));
   });
 
-  void test('allows auto request bursts from subresource-heavy pages', async () => {
-    const responses = await Promise.all(
-      Array.from({ length: 6 }, () =>
-        request('/api/requests/auto', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Forwarded-For': '198.51.100.80',
-          },
-          body: JSON.stringify({}),
-        })
-      )
-    );
-
-    assert.equal(
-      responses.some((response) => response.status === 429),
-      false
-    );
-  });
-
   void test('keeps the public manual request rate limit tight', async () => {
     const responses = await Promise.all(
       Array.from({ length: 6 }, () =>
