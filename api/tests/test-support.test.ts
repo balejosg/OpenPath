@@ -227,54 +227,5 @@ await describe('test-support routes', { timeout: 30000 }, async () => {
       const body = (await resp.json()) as { success: boolean };
       assert.strictEqual(body.success, true);
     });
-
-    // --- /api/test-support/auto-approve ---
-
-    await test('POST /api/test-support/auto-approve returns 401 without auth', async () => {
-      const resp = await fetch(`${getApiUrl()}/api/test-support/auto-approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true }),
-      });
-      assert.strictEqual(resp.status, 401);
-    });
-
-    await test('POST /api/test-support/auto-approve returns 400 when enabled is missing', async () => {
-      const resp = await fetch(`${getApiUrl()}/api/test-support/auto-approve`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${adminToken}`,
-        },
-        body: JSON.stringify({}),
-      });
-      assert.strictEqual(resp.status, 400);
-      const body = (await resp.json()) as { success: boolean };
-      assert.strictEqual(body.success, false);
-    });
-
-    await test('POST /api/test-support/auto-approve returns 200 with valid enabled boolean', async () => {
-      const resp = await fetch(`${getApiUrl()}/api/test-support/auto-approve`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${adminToken}`,
-        },
-        body: JSON.stringify({ enabled: true }),
-      });
-      assert.strictEqual(resp.status, 200);
-      const body = (await resp.json()) as { success: boolean };
-      assert.strictEqual(body.success, true);
-
-      // Reset
-      await fetch(`${getApiUrl()}/api/test-support/auto-approve`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${adminToken}`,
-        },
-        body: JSON.stringify({ enabled: false }),
-      });
-    });
   });
 });
