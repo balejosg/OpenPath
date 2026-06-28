@@ -39,7 +39,6 @@ function createRuleRecord(overrides: Partial<Rule> = {}): Rule {
     groupId: 'group-a',
     type: 'whitelist',
     value: 'example.com',
-    source: 'manual',
     enabled: true,
     comment: null,
     createdAt: '',
@@ -57,7 +56,6 @@ await describe('groups rules service', async () => {
     const createdRules: {
       comment: string | null | undefined;
       groupId: string;
-      source: string | undefined;
       type: string;
       value: string;
     }[] = [];
@@ -71,8 +69,8 @@ await describe('groups rules service', async () => {
       },
       {
         bulkDeleteRules: () => Promise.resolve(0),
-        createRule: (groupId, type, value, comment, source) => {
-          createdRules.push({ comment, groupId, source, type, value });
+        createRule: (groupId, type, value, comment) => {
+          createdRules.push({ comment, groupId, type, value });
           return Promise.resolve({ success: true, id: 'rule-1' });
         },
         deleteRule: () => Promise.resolve(false),
@@ -91,7 +89,6 @@ await describe('groups rules service', async () => {
       {
         comment: 'Teacher note',
         groupId: 'group-1',
-        source: 'manual',
         type: 'whitelist',
         value: 'example.com',
       },
@@ -197,7 +194,6 @@ await describe('groups rules service', async () => {
             groupId: 'group-a',
             type: 'whitelist',
             value: 'a.example.com',
-            source: 'manual',
             enabled: true,
             comment: null,
             createdAt: '',
@@ -207,7 +203,6 @@ await describe('groups rules service', async () => {
             groupId: 'group-b',
             type: 'whitelist',
             value: 'b.example.com',
-            source: 'manual',
             enabled: true,
             comment: null,
             createdAt: '',
@@ -234,7 +229,6 @@ await describe('groups rules service', async () => {
             groupId: 'group-a',
             type: 'whitelist',
             value: 'a.example.com',
-            source: 'manual',
             enabled: true,
             comment: null,
             createdAt: '',
@@ -244,7 +238,6 @@ await describe('groups rules service', async () => {
             groupId: 'group-b',
             type: 'whitelist',
             value: 'b.example.com',
-            source: 'manual',
             enabled: true,
             comment: null,
             createdAt: '',
@@ -287,7 +280,6 @@ await describe('groups rules service', async () => {
   await test('bulk creates cleaned rules and publishes once when storage creates rows', async () => {
     const createdBatches: {
       groupId: string;
-      source: string | undefined;
       type: string;
       values: string[];
     }[] = [];
@@ -299,8 +291,8 @@ await describe('groups rules service', async () => {
         values: [' First.example ', 'second.example'],
       },
       {
-        bulkCreateRules: (groupId, type, values, source) => {
-          createdBatches.push({ groupId, source, type, values });
+        bulkCreateRules: (groupId, type, values) => {
+          createdBatches.push({ groupId, type, values });
           return Promise.resolve(values.length);
         },
         getGroupById: () =>
@@ -314,7 +306,6 @@ await describe('groups rules service', async () => {
     assert.deepEqual(createdBatches, [
       {
         groupId: 'group-a',
-        source: 'manual',
         type: 'whitelist',
         values: ['first.example', 'second.example'],
       },

@@ -42,7 +42,7 @@ void test('setRuleEnabled re-enables a rule', async () => {
 
 void test('listRules returns only disabled rules when enabled=false', async () => {
   await GroupsService.setRuleEnabled({ id: 'svc-1', groupId: GID, enabled: false });
-  const res = await GroupsService.listRules(GID, undefined, undefined, false);
+  const res = await GroupsService.listRules(GID, undefined, false);
   assert.ok(res.ok);
   assert.equal(
     res.data.some((r) => r.id === 'svc-1'),

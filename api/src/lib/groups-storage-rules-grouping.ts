@@ -4,13 +4,8 @@ import {
   type DomainGroup,
   type ListRulesGroupedOptions,
   type PaginatedGroupedRulesResult,
-  type RuleSource,
 } from './groups-storage-shared.js';
 import { listRuleRowsByGroup } from './groups-storage-rules-shared.js';
-
-function filterRulesBySource<T extends { source: string }>(rules: T[], source?: RuleSource): T[] {
-  return source ? rules.filter((rule) => rule.source === source) : rules;
-}
 
 function filterRulesByEnabled<T extends { enabled: number }>(rules: T[], enabled?: boolean): T[] {
   return enabled === undefined ? rules : rules.filter((rule) => (rule.enabled === 1) === enabled);
@@ -19,11 +14,10 @@ function filterRulesByEnabled<T extends { enabled: number }>(rules: T[], enabled
 export async function getRulesByGroupGrouped(
   options: ListRulesGroupedOptions
 ): Promise<PaginatedGroupedRulesResult> {
-  const { groupId, type, source, enabled, limit = 20, offset = 0, search } = options;
+  const { groupId, type, enabled, limit = 20, offset = 0, search } = options;
   const rules = await listRuleRowsByGroup(groupId, type);
 
-  let filtered = filterRulesBySource(rules, source);
-  filtered = filterRulesByEnabled(filtered, enabled);
+  let filtered = filterRulesByEnabled(rules, enabled);
   if (search?.trim()) {
     const searchLower = search.toLowerCase().trim();
     filtered = filtered.filter((rule) => rule.value.toLowerCase().includes(searchLower));

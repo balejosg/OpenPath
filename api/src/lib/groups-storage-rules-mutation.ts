@@ -8,7 +8,6 @@ import { logger } from './logger.js';
 import {
   type CreateRuleResult,
   type Rule,
-  type RuleSource,
   type RuleType,
   type UpdateRuleInput,
 } from './groups-storage-shared.js';
@@ -64,7 +63,6 @@ export async function createRule(
   type: RuleType,
   value: string,
   comment: string | null = null,
-  source: RuleSource = 'manual',
   executor: DbExecutor = db
 ): Promise<CreateRuleResult> {
   const normalizedValue = normalizeRuleValue(type, value);
@@ -90,12 +88,11 @@ export async function createRule(
     groupId,
     type,
     value: normalizedValue,
-    source,
     comment,
   });
 
   await touchGroupUpdatedAt(groupId, executor);
-  logger.debug('Created rule', { id, groupId, type, value: normalizedValue, source });
+  logger.debug('Created rule', { id, groupId, type, value: normalizedValue });
   return { success: true, id };
 }
 
@@ -188,14 +185,13 @@ export async function bulkCreateRules(
   groupId: string,
   type: RuleType,
   values: string[],
-  source: RuleSource = 'manual',
   executor: DbExecutor = db
 ): Promise<number> {
   let count = 0;
   for (const value of values) {
     const normalizedValue = normalize.domain(value);
     if (normalizedValue) {
-      const result = await createRule(groupId, type, normalizedValue, null, source, executor);
+      const result = await createRule(groupId, type, normalizedValue, null, executor);
       if (result.success) count++;
     }
   }

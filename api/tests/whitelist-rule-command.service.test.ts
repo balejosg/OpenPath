@@ -43,7 +43,6 @@ function createAutoRule(overrides: Partial<Rule> = {}): Rule {
     groupId: 'group-a',
     type: 'whitelist',
     value: 'cdn.example.com',
-    source: 'auto_extension',
     enabled: true,
     comment: null,
     createdAt: '',
@@ -59,7 +58,6 @@ function createDeps(
   createdRules: {
     comment: string | null | undefined;
     groupId: string;
-    source: string | undefined;
     tx: DbExecutor | undefined;
     type: RuleType;
     value: string;
@@ -70,7 +68,6 @@ function createDeps(
   const createdRules: {
     comment: string | null | undefined;
     groupId: string;
-    source: string | undefined;
     tx: DbExecutor | undefined;
     type: RuleType;
     value: string;
@@ -82,9 +79,9 @@ function createDeps(
       return Promise.resolve(0);
     },
     createTransactionalWriter: DomainEventsService.createTransactionalWriter,
-    createRule: (groupId, type, value, comment, source, executor) => {
-      calls.push(`create:${String(source)}:${type}`);
-      createdRules.push({ groupId, type, value, comment, source, tx: executor });
+    createRule: (groupId, type, value, comment, executor) => {
+      calls.push(`create:manual:${type}`);
+      createdRules.push({ groupId, type, value, comment, tx: executor });
       return Promise.resolve(createRuleResult);
     },
     deleteRule: (id) => {
@@ -136,7 +133,6 @@ await describe('whitelist rule command service', async () => {
       {
         comment: null,
         groupId: 'group-a',
-        source: 'manual',
         tx,
         type: 'whitelist',
         value: 'cdn.example.com',
@@ -164,7 +160,6 @@ await describe('whitelist rule command service', async () => {
       {
         comment: null,
         groupId: 'group-a',
-        source: 'manual',
         tx,
         type: 'whitelist',
         value: 'cdn.example.com',

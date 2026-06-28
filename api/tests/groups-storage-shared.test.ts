@@ -38,11 +38,14 @@ await test('groups-storage shared mappers normalize DB rows', () => {
     groupId: 'group-1',
     type: 'whitelist',
     value: 'example.com',
-    source: 'auto_extension',
+    source: 'manual',
     enabled: 1,
     comment: null,
     createdAt: now,
   });
-  assert.equal(rule.source, 'auto_extension');
+  assert.equal(rule.id, 'rule-1');
   assert.equal(rule.type, 'whitelist');
+  assert.equal(rule.value, 'example.com');
+  assert.equal(rule.enabled, true);
+  assert.equal(rule.comment, null);
 });

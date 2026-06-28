@@ -310,7 +310,6 @@ export async function bulkCreateRules(
         input.groupId,
         input.type,
         cleanedValues,
-        'manual',
         tx
       );
 

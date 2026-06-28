@@ -131,7 +131,6 @@ export async function createManualWhitelistRule(
       input.type,
       input.value,
       normalizeRuleComment(input.comment),
-      'manual',
       tx
     );
 
@@ -188,7 +187,6 @@ export async function approveWhitelistRequest(
       'whitelist',
       input.domain,
       null,
-      'manual',
       tx
     );
 

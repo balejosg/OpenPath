@@ -2,7 +2,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { eq } from 'drizzle-orm';
 import { db, whitelistRules } from '../db/index.js';
 import type { DbExecutor } from '../db/index.js';
-import type { RuleSource } from './groups-storage-shared.js';
 
 export async function copyRulesToGroup(
   params: {
@@ -26,7 +25,6 @@ export async function copyRulesToGroup(
       groupId: params.toGroupId,
       type: rule.type,
       value: rule.value,
-      source: (rule.source as RuleSource | null) ?? 'manual',
       comment: rule.comment ?? null,
     }));
 

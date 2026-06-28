@@ -5,7 +5,6 @@ import type {
   PaginatedGroupedRulesResult,
   PaginatedRulesResult,
   Rule,
-  RuleSource,
   RuleType,
 } from '../lib/groups-storage.js';
 
@@ -15,7 +14,6 @@ import { ensureGroupExists } from './groups-rules-shared.js';
 export async function listRules(
   groupId: string,
   type?: RuleType,
-  source?: RuleSource,
   enabled?: boolean
 ): Promise<GroupsResult<Rule[]>> {
   const group = await ensureGroupExists(groupId);
@@ -23,7 +21,7 @@ export async function listRules(
     return group;
   }
 
-  const rules = await groupsStorage.getRulesByGroup(groupId, type, source, enabled);
+  const rules = await groupsStorage.getRulesByGroup(groupId, type, enabled);
   return { ok: true, data: rules };
 }
 

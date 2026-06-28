@@ -15,12 +15,9 @@ import * as auth from '../../lib/auth.js';
 
 /**
  * Source values a PUBLIC (unauthenticated) caller may declare on requests.create.
- * Crucially this excludes `auto_extension`: that value selects the
- * skip-normalization branch in the request command service and is reserved for
- * the machine-authenticated REST request flow. Allowing it on the public tRPC
- * surface would let a caller bypass manual-domain normalization. Any source the
- * public caller supplies that is not in this allowlist is coerced to `manual` so
- * the normalization branch always runs for public submissions.
+ * Any source the public caller supplies that is not in this allowlist is coerced
+ * to `manual`. Normalization always runs for public submissions — there is no
+ * skip-normalization path on the public tRPC surface.
  */
 const PUBLIC_REQUEST_SOURCES = new Set(['manual', 'firefox-extension', 'web']);
 const DEFAULT_PUBLIC_REQUEST_SOURCE = 'manual';
@@ -44,8 +41,7 @@ export const requestsRouter = router({
         reason: input.reason ?? 'No reason provided',
         requesterEmail: input.requesterEmail,
         groupId: input.groupId,
-        // Server-assigned: a public caller cannot select `auto_extension` (the
-        // skip-normalization branch). Unknown sources collapse to `manual`.
+        // Server-assigned: unknown or non-allowlisted sources collapse to `manual`.
         source: resolvePublicRequestSource(input.source),
         machineHostname: input.machineHostname,
         originHost: input.originHost,

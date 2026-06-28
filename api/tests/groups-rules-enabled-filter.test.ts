@@ -65,10 +65,10 @@ void test('dbRuleToApi exposes enabled as boolean', () => {
 });
 
 void test('getRulesByGroup filters by enabled', async () => {
-  const onlyEnabled = await getRulesByGroup(GID, undefined, undefined, true);
+  const onlyEnabled = await getRulesByGroup(GID, undefined, true);
   assert.deepEqual(onlyEnabled.map((r) => r.id).sort(), ['r-on']);
 
-  const onlyDisabled = await getRulesByGroup(GID, undefined, undefined, false);
+  const onlyDisabled = await getRulesByGroup(GID, undefined, false);
   assert.deepEqual(onlyDisabled.map((r) => r.id).sort(), ['r-off']);
 
   const all = await getRulesByGroup(GID);

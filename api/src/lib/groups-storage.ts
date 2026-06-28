@@ -54,7 +54,6 @@ export type {
   PaginatedGroupedRulesResult,
   PaginatedRulesResult,
   Rule,
-  RuleSource,
   RuleType,
   SystemStatus,
   UpdateRuleInput,
@@ -112,7 +111,7 @@ export async function exportGroup(groupId: string): Promise<string | null> {
   const rulesVersion = rules
     .map(
       (rule) =>
-        `${rule.id}:${rule.type}:${rule.value}:${rule.source}:${rule.enabled ? '1' : '0'}:${rule.comment ?? ''}`
+        `${rule.id}:${rule.type}:${rule.value}:${rule.enabled ? '1' : '0'}:${rule.comment ?? ''}`
     )
     .sort()
     .join('|');

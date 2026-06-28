@@ -5,9 +5,6 @@ import type { DbExecutor } from '../db/index.js';
 /** Rule type for whitelist entries */
 export type RuleType = 'whitelist' | 'blocked_subdomain' | 'blocked_path';
 
-/** Rule source for whitelist entries */
-export type RuleSource = 'manual' | 'auto_extension';
-
 /** Group visibility scope */
 export type { GroupVisibility };
 
@@ -43,7 +40,6 @@ export interface Rule {
   groupId: string;
   type: RuleType;
   value: string;
-  source: RuleSource;
   enabled: boolean;
   comment: string | null;
   createdAt: string;
@@ -75,7 +71,6 @@ export interface SystemStatus {
 export interface ListRulesOptions {
   groupId: string;
   type?: RuleType | undefined;
-  source?: RuleSource | undefined;
   enabled?: boolean | undefined;
   limit?: number | undefined;
   offset?: number | undefined;
@@ -100,7 +95,6 @@ export interface DomainGroup {
 export interface ListRulesGroupedOptions {
   groupId: string;
   type?: RuleType | undefined;
-  source?: RuleSource | undefined;
   enabled?: boolean | undefined;
   limit?: number | undefined;
   offset?: number | undefined;
@@ -143,12 +137,7 @@ export interface IGroupsStorage {
     visibility?: GroupVisibility
   ): Promise<void>;
   deleteGroup(id: string): Promise<boolean>;
-  getRulesByGroup(
-    groupId: string,
-    type?: RuleType,
-    source?: RuleSource,
-    enabled?: boolean
-  ): Promise<Rule[]>;
+  getRulesByGroup(groupId: string, type?: RuleType, enabled?: boolean): Promise<Rule[]>;
   getRulesByGroupPaginated(options: ListRulesOptions): Promise<PaginatedRulesResult>;
   getRulesByGroupGrouped(options: ListRulesGroupedOptions): Promise<PaginatedGroupedRulesResult>;
   getRuleById(id: string): Promise<Rule | null>;
@@ -158,7 +147,6 @@ export interface IGroupsStorage {
     type: RuleType,
     value: string,
     comment?: string | null,
-    source?: RuleSource,
     executor?: DbExecutor
   ): Promise<CreateRuleResult>;
   updateRule(input: UpdateRuleInput, executor?: DbExecutor): Promise<Rule | null>;
@@ -167,7 +155,6 @@ export interface IGroupsStorage {
     groupId: string,
     type: RuleType,
     values: string[],
-    source?: RuleSource,
     executor?: DbExecutor
   ): Promise<number>;
   bulkDeleteRules(ids: string[], executor?: DbExecutor): Promise<number>;
@@ -213,7 +200,6 @@ export function dbRuleToApi(rule: WhitelistRule): Rule {
     groupId: rule.groupId,
     type: rule.type as RuleType,
     value: rule.value,
-    source: (rule.source as RuleSource | null) ?? 'manual',
     enabled: rule.enabled === 1,
     comment: rule.comment ?? null,
     createdAt: rule.createdAt?.toISOString() ?? new Date().toISOString(),
