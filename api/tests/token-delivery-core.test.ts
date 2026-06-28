@@ -321,8 +321,8 @@ void describe('Token delivery core flows', { timeout: 30000 }, async () => {
 
       await db.execute(
         sql.raw(`
-          INSERT INTO whitelist_rules (id, group_id, type, value, source)
-          VALUES ('${ruleId}', 'etag-group', 'whitelist', '${ruleValue}', 'manual')
+          INSERT INTO whitelist_rules (id, group_id, type, value)
+          VALUES ('${ruleId}', 'etag-group', 'whitelist', '${ruleValue}')
           ON CONFLICT (group_id, type, value) DO NOTHING
         `)
       );
