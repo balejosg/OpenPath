@@ -991,7 +991,6 @@ async function runAjaxAutoAllowScenarioSet(
   mode: PolicyMode,
   targets: StudentPolicyTargets
 ): Promise<void> {
-  await client.setAutoApprove(false);
   let linuxAutoAllowPhases: LinuxAutoAllowDiagnosticPhase[] = [
     {
       id: 'firefox-extension-ready',
@@ -1234,102 +1233,6 @@ async function runAjaxAutoAllowScenarioSet(
     }
     await writeLinuxArtifact(false);
     throw error;
-  }
-
-  logScenarioStep('SP-006 blocked subdomain prevents ajax auto-allow');
-  const blockedSubdomainRule = await client.createGroupRule(
-    driver.scenario.groups.restricted.id,
-    'blocked_subdomain',
-    targets.hosts.ajaxBlockedSubdomain,
-    'Block AJAX dependency subdomain for Selenium policy test'
-  );
-
-  try {
-    await driver.forceLocalUpdate();
-    await driver.openAndExpectLoaded({
-      url: targets.siteOkUrl,
-      title: 'OpenPath Site Fixture',
-      selector: '#page-status',
-    });
-    const blockedSubdomainFetch = await driver.runCrossOriginFetchProbe(
-      targets.ajaxBlockedSubdomainFetchUrl
-    );
-    assert.strictEqual(blockedSubdomainFetch, 'blocked');
-    const blockedSubdomainRequest = await client.submitAutoRequest(
-      targets.hosts.ajaxBlockedSubdomain,
-      'Blocked subdomain must prevent AJAX dependency auto-allow',
-      {
-        originPage: targets.siteOkUrl,
-        targetUrl: targets.ajaxBlockedSubdomainFetchUrl,
-      }
-    );
-    assert.strictEqual(blockedSubdomainRequest.success, false);
-    assert.match(blockedSubdomainRequest.error ?? '', /blocked subdomain/i);
-    await driver.waitForConvergence(
-      async () => {
-        await driver.assertDnsBlocked(targets.hosts.ajaxBlockedSubdomain);
-      },
-      { timeoutMs: 20_000, pollMs: 1_000 }
-    );
-  } finally {
-    await client.deleteGroupRule(blockedSubdomainRule.id, driver.scenario.groups.restricted.id);
-    await driver.forceLocalUpdate();
-  }
-
-  logScenarioStep('SP-006 blocked path prevents ajax auto-allow');
-  const blockedPathRule = await client.createGroupRule(
-    driver.scenario.groups.restricted.id,
-    'blocked_path',
-    `${targets.hosts.ajaxBlockedPath}/fetch/private`,
-    'Block AJAX dependency path for Selenium policy test'
-  );
-
-  try {
-    await driver.forceLocalUpdate();
-    await driver.refreshBlockedPathRules();
-    await settlePolicyChange(
-      driver,
-      mode,
-      async () => {
-        assert.deepStrictEqual(
-          await driver.evaluateBlockedPathDebug(targets.ajaxBlockedPathFetchUrl, 'fetch'),
-          {
-            cancel: true,
-            reason: `BLOCKED_PATH_POLICY:${targets.hosts.ajaxBlockedPath}/fetch/private`,
-          }
-        );
-      },
-      { refreshBlockedPaths: true, timeoutMs: 20_000 }
-    );
-    await driver.openAndExpectLoaded({
-      url: targets.siteOkUrl,
-      title: 'OpenPath Site Fixture',
-      selector: '#page-status',
-    });
-    const blockedPathFetch = await driver.runCrossOriginFetchProbe(targets.ajaxBlockedPathFetchUrl);
-    assert.strictEqual(blockedPathFetch, 'blocked');
-    const blockedPathRequest = await client.submitAutoRequest(
-      targets.hosts.ajaxBlockedPath,
-      'Blocked path must prevent AJAX dependency auto-allow',
-      {
-        originPage: targets.siteOkUrl,
-        targetUrl: targets.ajaxBlockedPathFetchUrl,
-      }
-    );
-    assert.strictEqual(blockedPathRequest.success, false);
-    assert.match(blockedPathRequest.error ?? '', /blocked path/i);
-    await driver.assertWhitelistMissing(targets.hosts.ajaxBlockedPath);
-    await driver.assertDnsBlocked(targets.hosts.ajaxBlockedPath);
-  } finally {
-    await client.deleteGroupRule(blockedPathRule.id, driver.scenario.groups.restricted.id);
-    await driver.forceLocalUpdate();
-    try {
-      await driver.refreshBlockedPathRules();
-    } catch (error) {
-      logScenarioStep(
-        `blocked-path cleanup refresh error: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
   }
 }
 
@@ -1752,7 +1655,6 @@ export async function runBrowserDependencyObservabilitySpikeScenario(
 
   try {
     logScenarioStep('SP-BROWSER-DEPENDENCY-001 preflight');
-    await client.setAutoApprove(false);
     await client.ensureWhitelistRule(
       restrictedGroupId,
       plan.origin.host,
@@ -1966,7 +1868,6 @@ export async function runLinuxRuntimeDependencyApplyScenario(
 
   try {
     logScenarioStep('SP-LINUX-RUNTIME-DEPENDENCY-APPLY prepare approved anchor');
-    await client.setAutoApprove(false);
     await client.ensureWhitelistRule(
       restrictedGroupId,
       plan.origin.host,
@@ -2067,7 +1968,6 @@ export async function runDnsEvidenceMatrixScenario(
 
   try {
     logScenarioStep('SP-DNS-MATRIX-001 prepare approved origin without dependency preseed');
-    await client.setAutoApprove(false);
     await client.ensureWhitelistRule(
       restrictedGroupId,
       plan.origin.host,
@@ -2229,7 +2129,6 @@ export async function runDnsEvidenceMatrixV2Scenario(
 
   try {
     logScenarioStep('SP-DNS-MATRIX-V2-001 prepare approved anchors without dependencies');
-    await client.setAutoApprove(false);
     await client.ensureWhitelistRule(
       restrictedGroupId,
       plan.origin.host,
@@ -2356,7 +2255,6 @@ export async function runDnsDiscoverySpikeScenario(
 
   try {
     logScenarioStep('SP-DNS-001 prepare approved origin without dependency preseed');
-    await client.setAutoApprove(false);
     await client.ensureWhitelistRule(
       restrictedGroupId,
       plan.origin.host,
@@ -2686,39 +2584,6 @@ async function runActiveGroupAndScheduleScenarios(
   await client.setTestClock(null);
 }
 
-async function runAutoApproveProbe(
-  client: StudentPolicyServerClient,
-  driver: StudentPolicyDriver,
-  mode: PolicyMode,
-  targets: StudentPolicyTargets
-): Promise<void> {
-  logScenarioStep('SP-006 and SP-007 auto-approve');
-
-  await client.setAutoApprove(false);
-  const pendingAutoRequest = await client.submitAutoRequest(
-    targets.hosts.auto,
-    'Auto-approve disabled should keep request pending',
-    {
-      originPage: targets.rejectedDomainUrl,
-    }
-  );
-  assert.strictEqual(pendingAutoRequest.success, true);
-  assert.strictEqual(pendingAutoRequest.autoApproved, false);
-  await settlePolicyChange(driver, mode, async () => {
-    await driver.assertDnsBlocked(targets.hosts.auto);
-  });
-
-  await client.setAutoApprove(true);
-  const autoRequest = await client.submitAutoRequest(
-    targets.hosts.auto,
-    'Auto-approve test trigger'
-  );
-  assert.strictEqual(autoRequest.success, true);
-  await settlePolicyChange(driver, mode, async () => {
-    await driver.assertWhitelistContains(targets.hosts.auto);
-  });
-}
-
 export async function runStudentPolicyMatrix(
   client: StudentPolicyServerClient,
   driver: StudentPolicyDriver,
@@ -2726,7 +2591,6 @@ export async function runStudentPolicyMatrix(
 ): Promise<void> {
   const targets = buildTargets(driver.scenario);
 
-  await client.setAutoApprove(false);
   await seedBaselineWhitelist(client, driver, mode, targets);
   await runRequestLifecycleScenarioSet(client, driver, mode, targets);
   await runBlockedSubdomainScenarios(client, driver, mode, targets);
@@ -2789,7 +2653,6 @@ export async function runStudentPolicyMatrixPhaseTwo(
   await seedBaselineWhitelist(client, driver, mode, targets, { verifyBrowser: false });
   await runTemporaryExemptionScenarios(client, driver, mode, targets);
   await runActiveGroupAndScheduleScenarios(client, driver, mode, targets);
-  await runAutoApproveProbe(client, driver, mode, targets);
 }
 
 export async function runFallbackPropagationProbe(

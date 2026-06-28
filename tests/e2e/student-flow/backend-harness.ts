@@ -36,8 +36,6 @@ export {
   registerMachine,
   rejectRequest,
   setActiveGroup,
-  setAutoApprove,
-  submitAutoRequest,
   submitManualRequest,
   tickBoundaries,
 } from './backend-harness-api.js';

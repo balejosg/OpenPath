@@ -2,7 +2,6 @@ import {
   getOption,
   optionalProp,
   parseArgs,
-  parseBoolean,
   printJson,
   requireOption,
 } from './backend-harness-shared.js';
@@ -15,8 +14,6 @@ import {
   getRequestStatus,
   rejectRequest,
   setActiveGroup,
-  setAutoApprove,
-  submitAutoRequest,
   submitManualRequest,
   tickBoundaries,
 } from './backend-harness-api.js';
@@ -47,19 +44,6 @@ export async function runCli(argv: string[]): Promise<void> {
 
     case 'submit-request': {
       const result = await submitManualRequest({
-        apiUrl: requireOption(options, 'api-url'),
-        domain: requireOption(options, 'domain'),
-        hostname: requireOption(options, 'hostname'),
-        token: requireOption(options, 'machine-token'),
-        ...optionalProp('reason', getOption(options, 'reason')),
-        ...optionalProp('originPage', getOption(options, 'origin-page')),
-      });
-      printJson(result);
-      return;
-    }
-
-    case 'submit-auto-request': {
-      const result = await submitAutoRequest({
         apiUrl: requireOption(options, 'api-url'),
         domain: requireOption(options, 'domain'),
         hostname: requireOption(options, 'hostname'),
@@ -165,12 +149,6 @@ export async function runCli(argv: string[]): Promise<void> {
       return;
     }
 
-    case 'set-auto-approve': {
-      const result = await setAutoApprove(parseBoolean(requireOption(options, 'enabled')));
-      printJson(result);
-      return;
-    }
-
     case 'tick-boundaries': {
       const result = await tickBoundaries(requireOption(options, 'at'));
       printJson(result);
@@ -179,7 +157,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
     case '':
       throw new Error(
-        'Missing command. Expected one of: bootstrap, submit-request, submit-auto-request, request-status, approve-request, reject-request, create-rule, delete-rule, create-exemption, delete-exemption, set-active-group, set-auto-approve, tick-boundaries'
+        'Missing command. Expected one of: bootstrap, submit-request, request-status, approve-request, reject-request, create-rule, delete-rule, create-exemption, delete-exemption, set-active-group, tick-boundaries'
       );
 
     default:

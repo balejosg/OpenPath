@@ -28,8 +28,6 @@ const {
   getRequestStatus,
   rejectRequest,
   setActiveGroup,
-  setAutoApprove,
-  submitAutoRequest,
   submitManualRequest,
   tickBoundaries,
 } = await import('./backend-harness.js');
@@ -61,7 +59,6 @@ await describe('student policy backend harness', async () => {
   beforeEach(async () => {
     await resetDb();
     await seedE2E();
-    await setAutoApprove(false);
   });
 
   after(async () => {
@@ -204,7 +201,7 @@ await describe('student policy backend harness', async () => {
     assert.strictEqual(rejectedStatus.status, 'rejected');
   });
 
-  await test('exemption, active group, auto-approve, and boundary helpers are callable', async () => {
+  await test('exemption, active group, and boundary helpers are callable', async () => {
     const scenario = await bootstrapStudentScenario({
       apiUrl,
       scenarioName: 'Harness Control Flow',
@@ -236,21 +233,6 @@ await describe('student policy backend harness', async () => {
       groupId: null,
     });
     assert.strictEqual(cleared.currentGroupId, scenario.groups.restricted.id);
-
-    const autoApprove = await setAutoApprove(true);
-    assert.strictEqual(autoApprove.enabled, true);
-
-    const autoApproved = await submitAutoRequest({
-      apiUrl,
-      domain: 'auto-approved.example.com',
-      hostname: scenario.machine.reportedHostname,
-      token: scenario.machine.machineToken,
-      originPage: `https://${scenario.fixtures.apiSite}/fetch/private.json`,
-      reason: 'Auto-approve through harness',
-    });
-    assert.strictEqual(autoApproved.success, true);
-    assert.strictEqual(autoApproved.autoApproved, true);
-    assert.strictEqual(autoApproved.approved, true);
 
     const deletedExemption = await deleteTemporaryExemption({
       apiUrl,

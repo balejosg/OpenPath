@@ -100,21 +100,6 @@ export class StudentPolicyServerClient {
     });
   }
 
-  public async submitAutoRequest(
-    domain: string,
-    reason: string,
-    options: { originPage?: string; targetUrl?: string } = {}
-  ): Promise<RequestSubmissionResult> {
-    return this.postJsonAllowingError<RequestSubmissionResult>('/api/requests/auto', {
-      domain,
-      hostname: this.scenario.machine.reportedHostname,
-      token: this.scenario.machine.machineToken,
-      reason,
-      origin_page: options.originPage ?? buildFixtureUrl(this.scenario.fixtures.site, '/ok'),
-      ...(options.targetUrl === undefined ? {} : { target_url: options.targetUrl }),
-    });
-  }
-
   public async getRequestStatus(requestId: string): Promise<RequestStatusResult> {
     return this.trpcQuery<RequestStatusResult>('requests.getStatus', { id: requestId });
   }
@@ -259,18 +244,6 @@ export class StudentPolicyServerClient {
       this.scenario.auth.teacher.accessToken
     );
     return result.currentGroupId;
-  }
-
-  public async setAutoApprove(enabled: boolean): Promise<void> {
-    const result = await this.postJson<{ enabled?: boolean }>(
-      '/api/test-support/auto-approve',
-      { enabled },
-      this.scenario.auth.teacher.accessToken
-    );
-
-    if (result.enabled !== enabled) {
-      throw new Error(`Expected auto-approve=${String(enabled)}, got ${String(result.enabled)}`);
-    }
   }
 
   public async tickBoundaries(at: string): Promise<void> {

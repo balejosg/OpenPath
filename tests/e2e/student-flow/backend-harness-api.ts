@@ -274,29 +274,6 @@ export async function submitManualRequest(params: {
   );
 }
 
-export async function submitAutoRequest(params: {
-  apiUrl: string;
-  domain: string;
-  hostname: string;
-  token: string;
-  reason?: string;
-  originPage?: string;
-}): Promise<PublicRequestSubmission> {
-  return requestJson<PublicRequestSubmission>(
-    `${normalizeApiUrl(params.apiUrl)}/api/requests/auto`,
-    {
-      method: 'POST',
-      body: {
-        domain: params.domain,
-        hostname: params.hostname,
-        token: params.token,
-        ...(params.reason ? { reason: params.reason } : {}),
-        ...(params.originPage ? { origin_page: params.originPage } : {}),
-      },
-    }
-  );
-}
-
 export async function getRequestStatus(params: {
   apiUrl: string;
   requestId: string;
@@ -431,19 +408,6 @@ export async function setActiveGroup(params: {
   });
 
   return { currentGroupId: result.currentGroupId };
-}
-
-export async function setAutoApprove(enabled: boolean): Promise<{ enabled: boolean }> {
-  const { config } = await import('../../../api/src/config.js');
-
-  Object.defineProperty(config, 'autoApproveMachineRequests', {
-    value: enabled,
-    writable: true,
-    configurable: true,
-    enumerable: true,
-  });
-
-  return { enabled: config.autoApproveMachineRequests };
 }
 
 export async function tickBoundaries(atIsoTimestamp: string): Promise<{ at: string }> {
