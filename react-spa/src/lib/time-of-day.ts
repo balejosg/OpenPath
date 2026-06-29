@@ -1,3 +1,13 @@
+/**
+ * Allowed minute step for schedule times in the SPA.
+ *
+ * Mirror of `SCHEDULE_TIME_STEP_MINUTES` in `@openpath/shared` (the backend
+ * source of truth). Kept as a local literal to avoid pulling the shared barrel
+ * (zod schemas, etc.) into the SPA bundle just for one constant. A unit test
+ * asserts this stays equal to the shared value.
+ */
+export const SCHEDULE_TIME_STEP_MINUTES = 5;
+
 export function parseTimeOfDayToMinutes(value: string): number | null {
   const [hRaw, mRaw] = value.split(':');
   const h = Number(hRaw);

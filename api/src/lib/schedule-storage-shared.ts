@@ -6,6 +6,7 @@
  */
 
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
+import { assertQuarterHourTime, assertQuarterHourInstant } from '@openpath/shared';
 import { db, schedules } from '../db/index.js';
 
 export type DBSchedule = typeof schedules.$inferSelect;
@@ -44,12 +45,6 @@ export interface UpdateOneOffScheduleInput {
   groupId?: string | undefined;
 }
 
-interface TimeParts {
-  hours: number;
-  minutes: number;
-  seconds: number;
-}
-
 export function weeklyRecurrenceWhereClause(): ReturnType<typeof or> {
   return or(eq(schedules.recurrence, 'weekly'), isNull(schedules.recurrence));
 }
@@ -72,40 +67,6 @@ function parseTimeToMinutes(time: string): number {
   if (!Number.isInteger(h) || !Number.isInteger(m)) return Number.NaN;
   if (h < 0 || h > 23 || m < 0 || m > 59) return Number.NaN;
   return h * 60 + m;
-}
-
-function parseTimeParts(time: string): TimeParts {
-  const match = /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/.exec(time);
-  if (!match) {
-    throw new Error('Invalid time format. Use HH:MM (24h)');
-  }
-
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  const seconds = Number(match[3] ?? '0');
-  return { hours, minutes, seconds };
-}
-
-function assertQuarterHourTime(time: string): void {
-  const { minutes, seconds } = parseTimeParts(time);
-  if (seconds !== 0) {
-    throw new Error('Time must not include seconds');
-  }
-  if (minutes % 15 !== 0) {
-    throw new Error('Time must be in 15-minute increments');
-  }
-}
-
-function assertQuarterHourInstant(date: Date): void {
-  if (!Number.isFinite(date.getTime())) {
-    throw new Error('Invalid date');
-  }
-  if (date.getUTCSeconds() !== 0 || date.getUTCMilliseconds() !== 0) {
-    throw new Error('Time must not include seconds');
-  }
-  if (date.getUTCMinutes() % 15 !== 0) {
-    throw new Error('Time must be in 15-minute increments');
-  }
 }
 
 export function timeToMinutes(time: string): number {

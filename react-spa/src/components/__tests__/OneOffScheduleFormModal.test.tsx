@@ -199,6 +199,22 @@ describe('OneOffScheduleFormModal', () => {
     expect(screen.getByText('Select an end date/time')).toBeInTheDocument();
   });
 
+  it('uses a 5-minute step on the datetime inputs', () => {
+    render(
+      <OneOffScheduleFormModal
+        schedule={null}
+        groups={groups}
+        saving={false}
+        error=""
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText('Start')).toHaveAttribute('step', '300');
+    expect(screen.getByLabelText('End')).toHaveAttribute('step', '300');
+  });
+
   it('disables close button when saving is true', () => {
     const onClose = vi.fn();
     render(

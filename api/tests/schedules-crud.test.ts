@@ -61,16 +61,28 @@ void describe('Schedule storage - CRUD operations', () => {
     }, /must not include seconds/i);
   });
 
-  void test('should reject one-off schedules not in 15-minute increments', async () => {
+  void test('should reject one-off schedules not in 5-minute increments', async () => {
     await assert.rejects(async () => {
       await scheduleStorage.createOneOffSchedule({
         classroomId: testClassroomId,
         teacherId: testTeacherId,
         groupId: testGroupId,
-        startAt: new Date(2026, 1, 23, 11, 10, 0, 0),
+        startAt: new Date(2026, 1, 23, 11, 13, 0, 0),
         endAt: new Date(2026, 1, 23, 12, 0, 0, 0),
       });
-    }, /15-minute increments/i);
+    }, /\b5-minute increments/i);
+  });
+
+  void test('should accept one-off schedules on a 5-minute boundary', async () => {
+    await assert.doesNotReject(async () => {
+      await scheduleStorage.createOneOffSchedule({
+        classroomId: testClassroomId,
+        teacherId: testTeacherId,
+        groupId: testGroupId,
+        startAt: new Date(2026, 1, 23, 11, 20, 0, 0),
+        endAt: new Date(2026, 1, 23, 11, 55, 0, 0),
+      });
+    });
   });
 
   void test('should reject one-off schedule when endAt <= startAt', async () => {
@@ -182,17 +194,30 @@ void describe('Schedule storage - CRUD operations', () => {
     }, /Invalid time format/);
   });
 
-  void test('should reject times not in 15-minute increments', async () => {
+  void test('should reject times not in 5-minute increments', async () => {
     await assert.rejects(async () => {
       await scheduleStorage.createSchedule({
         classroomId: testClassroomId,
         teacherId: testTeacherId,
         groupId: testGroupId,
         dayOfWeek: 1,
-        startTime: '08:10',
+        startTime: '08:13',
         endTime: '09:00',
       });
-    }, /15-minute increments/);
+    }, /\b5-minute increments/);
+  });
+
+  void test('should accept weekly times on a 5-minute boundary', async () => {
+    await assert.doesNotReject(async () => {
+      await scheduleStorage.createSchedule({
+        classroomId: testClassroomId,
+        teacherId: testTeacherId,
+        groupId: testGroupId,
+        dayOfWeek: 1,
+        startTime: '08:20',
+        endTime: '09:35',
+      });
+    });
   });
 
   void test('should reject startTime >= endTime', async () => {
@@ -306,7 +331,7 @@ void describe('Schedule storage - CRUD operations', () => {
     }, /dayOfWeek must be between 1.*and 5/);
   });
 
-  void test('should reject update with non-15-minute times', async () => {
+  void test('should reject update with non-5-minute times', async () => {
     const schedule = await scheduleStorage.createSchedule({
       classroomId: testClassroomId,
       teacherId: testTeacherId,
@@ -318,9 +343,9 @@ void describe('Schedule storage - CRUD operations', () => {
 
     await assert.rejects(async () => {
       await scheduleStorage.updateSchedule(schedule.id, {
-        startTime: '08:05',
+        startTime: '08:13',
         endTime: '09:00',
       });
-    }, /15-minute increments/);
+    }, /\b5-minute increments/);
   });
 });

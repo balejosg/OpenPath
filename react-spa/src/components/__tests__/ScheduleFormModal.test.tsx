@@ -254,6 +254,52 @@ describe('ScheduleFormModal Component', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('accepts a 5-minute-step start time that is not a quarter hour', () => {
+    const onSave = vi.fn();
+    render(
+      <ScheduleFormModal
+        schedule={null}
+        defaultDay={2}
+        groups={groups}
+        saving={false}
+        error=""
+        onSave={onSave}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText('Start Time'), { target: { value: '08:20' } });
+    fireEvent.change(screen.getByLabelText('End Time'), { target: { value: '09:35' } });
+    fireEvent.click(screen.getByRole('button', { name: /create schedule/i }));
+
+    expect(onSave).toHaveBeenCalled();
+    const saved = onSave.mock.calls[0]?.[0] as { startTime: string; endTime: string };
+    expect(saved.startTime).toBe('08:20');
+    expect(saved.endTime).toBe('09:35');
+  });
+
+  it('rejects a start time that is not on the 5-minute step', () => {
+    const onSave = vi.fn();
+    render(
+      <ScheduleFormModal
+        schedule={null}
+        defaultDay={2}
+        groups={groups}
+        saving={false}
+        error=""
+        onSave={onSave}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText('Start Time'), { target: { value: '08:13' } });
+    fireEvent.change(screen.getByLabelText('End Time'), { target: { value: '09:00' } });
+    fireEvent.click(screen.getByRole('button', { name: /create schedule/i }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByText('Times must be on a 5-minute step')).toBeInTheDocument();
+  });
+
   it('shows error when group is missing', () => {
     const onSave = vi.fn();
     render(

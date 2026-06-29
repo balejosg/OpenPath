@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Loader2 } from 'lucide-react';
 
 import type { OneOffScheduleWithPermissions } from '../types';
+import { SCHEDULE_TIME_STEP_MINUTES } from '../lib/time-of-day';
 import { isGroupEnabled, type GroupLike } from './groups/GroupLabel';
 import { GroupSelect } from './groups/GroupSelect';
 import { Modal } from './ui/Modal';
@@ -11,13 +12,13 @@ function pad2(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-function roundUpToQuarterHour(date: Date): Date {
+function roundUpToFiveMinutes(date: Date): Date {
   const d = new Date(date);
   d.setSeconds(0, 0);
   const minutes = d.getMinutes();
-  const remainder = minutes % 15;
+  const remainder = minutes % SCHEDULE_TIME_STEP_MINUTES;
   if (remainder !== 0) {
-    d.setMinutes(minutes + (15 - remainder));
+    d.setMinutes(minutes + (SCHEDULE_TIME_STEP_MINUTES - remainder));
   }
   return d;
 }
@@ -75,12 +76,12 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
       const start = new Date(schedule.startAt);
       const end = new Date(schedule.endAt);
       return {
-        start: Number.isFinite(start.getTime()) ? start : roundUpToQuarterHour(new Date()),
+        start: Number.isFinite(start.getTime()) ? start : roundUpToFiveMinutes(new Date()),
         end: Number.isFinite(end.getTime()) ? end : new Date(Date.now() + 60 * 60 * 1000),
       };
     }
 
-    const start = roundUpToQuarterHour(new Date());
+    const start = roundUpToFiveMinutes(new Date());
     const end = new Date(start.getTime() + 60 * 60 * 1000);
     return { start, end };
   }, [schedule]);
@@ -151,7 +152,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
             <input
               id="oneoff-start"
               type="datetime-local"
-              step={900}
+              step={SCHEDULE_TIME_STEP_MINUTES * 60}
               value={startAt}
               onChange={(e) => setStartAt(e.target.value)}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
@@ -164,7 +165,7 @@ const OneOffScheduleFormModal: React.FC<OneOffScheduleFormModalProps> = ({
             <input
               id="oneoff-end"
               type="datetime-local"
-              step={900}
+              step={SCHEDULE_TIME_STEP_MINUTES * 60}
               value={endAt}
               onChange={(e) => setEndAt(e.target.value)}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { SCHEDULE_TIME_STEP_MINUTES as SHARED_STEP } from '@openpath/shared';
 import {
+  SCHEDULE_TIME_STEP_MINUTES,
   buildTimeOfDayOptions,
   compareTimeOfDay,
   formatMinutesToTimeOfDay,
@@ -8,6 +10,12 @@ import {
 } from '../time-of-day';
 
 describe('time-of-day', () => {
+  it('keeps the SPA time step in sync with @openpath/shared', () => {
+    // The SPA mirrors the constant locally to avoid pulling the shared barrel
+    // into the bundle; this test (not shipped) guards they stay equal.
+    expect(SCHEDULE_TIME_STEP_MINUTES).toBe(SHARED_STEP);
+  });
+
   it('parses HH:MM to minutes and validates bounds', () => {
     expect(parseTimeOfDayToMinutes('00:00')).toBe(0);
     expect(parseTimeOfDayToMinutes('23:59')).toBe(23 * 60 + 59);

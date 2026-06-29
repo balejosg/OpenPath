@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 
 import {
+  SCHEDULE_TIME_STEP_MINUTES,
   normalizeTimeHHMM,
   parseTimeToMinutes,
   parseTimeParts,
@@ -59,27 +60,36 @@ describe('schedule-time', () => {
     });
   });
 
+  describe('SCHEDULE_TIME_STEP_MINUTES', () => {
+    it('is the 5-minute granularity used across schedule validation', () => {
+      assert.strictEqual(SCHEDULE_TIME_STEP_MINUTES, 5);
+    });
+  });
+
   describe('assertQuarterHourTime', () => {
-    it('accepts quarter-hour times without seconds', () => {
+    it('accepts times aligned to the 5-minute step without seconds', () => {
       assert.doesNotThrow(() => {
         assertQuarterHourTime('10:00');
       });
       assert.doesNotThrow(() => {
-        assertQuarterHourTime('10:15');
+        assertQuarterHourTime('10:05');
       });
       assert.doesNotThrow(() => {
-        assertQuarterHourTime('10:45');
+        assertQuarterHourTime('10:20');
+      });
+      assert.doesNotThrow(() => {
+        assertQuarterHourTime('10:35');
       });
     });
 
-    it('rejects non-quarter-hour minutes', () => {
+    it('rejects minutes that are not on the 5-minute step', () => {
       assert.throws(
         () => {
-          assertQuarterHourTime('10:10');
+          assertQuarterHourTime('10:03');
         },
         (err: unknown) => {
           assert.ok(err instanceof Error);
-          assert.match(err.message, /15-minute/i);
+          assert.match(err.message, /5-minute/i);
           return true;
         }
       );
@@ -100,9 +110,9 @@ describe('schedule-time', () => {
   });
 
   describe('assertQuarterHourInstant', () => {
-    it('accepts instants aligned to a quarter-hour boundary', () => {
+    it('accepts instants aligned to the 5-minute step', () => {
       assert.doesNotThrow(() => {
-        assertQuarterHourInstant(new Date('2025-01-01T10:15:00.000Z'));
+        assertQuarterHourInstant(new Date('2025-01-01T10:20:00.000Z'));
       });
     });
 
@@ -132,14 +142,14 @@ describe('schedule-time', () => {
       );
     });
 
-    it('rejects non-quarter-hour minutes', () => {
+    it('rejects minutes that are not on the 5-minute step', () => {
       assert.throws(
         () => {
           assertQuarterHourInstant(new Date('2025-01-01T10:16:00.000Z'));
         },
         (err: unknown) => {
           assert.ok(err instanceof Error);
-          assert.match(err.message, /15-minute/i);
+          assert.match(err.message, /5-minute/i);
           return true;
         }
       );

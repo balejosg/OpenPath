@@ -5,6 +5,15 @@ interface TimeParts {
 }
 
 /**
+ * Granularity (in minutes) that schedule start/end times must align to.
+ *
+ * This is the single source of truth for the allowed minute step across the
+ * SPA time inputs and the backend validators. Classes may start/end on any
+ * multiple of this value (e.g. :00, :05, :20, :35).
+ */
+export const SCHEDULE_TIME_STEP_MINUTES = 5;
+
+/**
  * Normalize a time string to HH:MM.
  *
  * Accepts values like "09:30" or "09:30:00" (DB may include seconds).
@@ -53,16 +62,20 @@ export function parseTimeParts(time: string): TimeParts {
   return { hours, minutes, seconds };
 }
 
+// Name kept for historical/back-compat reasons; the allowed step is now
+// SCHEDULE_TIME_STEP_MINUTES (5), not a quarter hour.
 export function assertQuarterHourTime(time: string): void {
   const { minutes, seconds } = parseTimeParts(time);
   if (seconds !== 0) {
     throw new Error('Time must not include seconds');
   }
-  if (minutes % 15 !== 0) {
-    throw new Error('Time must be in 15-minute increments');
+  if (minutes % SCHEDULE_TIME_STEP_MINUTES !== 0) {
+    throw new Error(`Time must be in ${String(SCHEDULE_TIME_STEP_MINUTES)}-minute increments`);
   }
 }
 
+// Name kept for historical/back-compat reasons; the allowed step is now
+// SCHEDULE_TIME_STEP_MINUTES (5), not a quarter hour.
 export function assertQuarterHourInstant(date: Date): void {
   if (!Number.isFinite(date.getTime())) {
     throw new Error('Invalid date');
@@ -72,7 +85,7 @@ export function assertQuarterHourInstant(date: Date): void {
     throw new Error('Time must not include seconds');
   }
 
-  if (date.getUTCMinutes() % 15 !== 0) {
-    throw new Error('Time must be in 15-minute increments');
+  if (date.getUTCMinutes() % SCHEDULE_TIME_STEP_MINUTES !== 0) {
+    throw new Error(`Time must be in ${String(SCHEDULE_TIME_STEP_MINUTES)}-minute increments`);
   }
 }

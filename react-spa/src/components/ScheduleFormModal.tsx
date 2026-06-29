@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Loader2, AlertCircle } from 'lucide-react';
 import type { ScheduleWithPermissions } from '../types';
 import {
-  buildTimeOfDayOptions,
+  SCHEDULE_TIME_STEP_MINUTES,
   compareTimeOfDay,
   formatMinutesToTimeOfDay,
   parseTimeOfDayToMinutes,
@@ -13,7 +13,10 @@ import { isGroupEnabled, type GroupLike } from './groups/GroupLabel';
 import { Modal } from './ui/Modal';
 import { useT } from '../i18n/product-i18n';
 
-const TIME_OPTIONS = buildTimeOfDayOptions({ startHour: 7, endHour: 21, stepMinutes: 15 });
+// School-day bounds for the native time inputs. Times must fall on a
+// SCHEDULE_TIME_STEP_MINUTES-minute step (see @openpath/shared).
+const TIME_MIN = '07:00';
+const TIME_MAX = '21:00';
 
 function normalizeDayOfWeek(value: unknown): number | null {
   const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
@@ -63,7 +66,7 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
   ];
 
   const roundedDefaultStart = defaultStartTime
-    ? (roundTimeOfDayDown(defaultStartTime, 15) ?? defaultStartTime)
+    ? (roundTimeOfDayDown(defaultStartTime, SCHEDULE_TIME_STEP_MINUTES) ?? defaultStartTime)
     : null;
   const defaultStart = schedule?.startTime ?? roundedDefaultStart ?? '08:00';
   const defaultStartMinutes = parseTimeOfDayToMinutes(defaultStart) ?? 8 * 60;
@@ -101,6 +104,18 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
     }
     if (!groupId) {
       setLocalError(t('scheduleForm.errorSelectGroup'));
+      return;
+    }
+
+    const startMinutes = parseTimeOfDayToMinutes(startTime);
+    const endMinutes = parseTimeOfDayToMinutes(endTime);
+    if (
+      startMinutes === null ||
+      endMinutes === null ||
+      startMinutes % SCHEDULE_TIME_STEP_MINUTES !== 0 ||
+      endMinutes % SCHEDULE_TIME_STEP_MINUTES !== 0
+    ) {
+      setLocalError(t('scheduleForm.errorTimeStep'));
       return;
     }
 
@@ -157,35 +172,31 @@ const ScheduleFormModal: React.FC<ScheduleFormModalProps> = ({
             >
               {t('scheduleForm.labelStartTime')}
             </label>
-            <select
+            <input
               id="schedule-start"
+              type="time"
+              min={TIME_MIN}
+              max={TIME_MAX}
+              step={SCHEDULE_TIME_STEP_MINUTES * 60}
               value={startTime}
               onChange={(e) => setStartTime(e.target.value)}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-            >
-              {TIME_OPTIONS.map((time) => (
-                <option key={time} value={time}>
-                  {time}
-                </option>
-              ))}
-            </select>
+            />
           </div>
           <div>
             <label htmlFor="schedule-end" className="block text-sm font-medium text-slate-700 mb-1">
               {t('scheduleForm.labelEndTime')}
             </label>
-            <select
+            <input
               id="schedule-end"
+              type="time"
+              min={TIME_MIN}
+              max={TIME_MAX}
+              step={SCHEDULE_TIME_STEP_MINUTES * 60}
               value={endTime}
               onChange={(e) => setEndTime(e.target.value)}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-            >
-              {TIME_OPTIONS.filter((time) => time > startTime).map((time) => (
-                <option key={time} value={time}>
-                  {time}
-                </option>
-              ))}
-            </select>
+            />
           </div>
         </div>
 
