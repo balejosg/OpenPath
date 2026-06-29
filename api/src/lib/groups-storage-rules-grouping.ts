@@ -42,13 +42,16 @@ export async function getRulesByGroupGrouped(
     const groupRules = groupedMap.get(root) ?? [];
     groupRules.sort((left, right) => left.value.localeCompare(right.value));
 
-    const hasWhitelist = groupRules.some((rule) => rule.type === 'whitelist');
-    const hasBlocked = groupRules.some(
+    // blocked_subdomain / blocked_path are carve-out exceptions within a domain,
+    // never a block of the whole root domain. A group is therefore 'allowed' when
+    // every rule is a whitelist entry, and 'mixed' as soon as it contains any blocked
+    // carve-out (with or without a whitelist). The parent root row must not appear
+    // fully 'blocked' just because a child subdomain/path is blocked.
+    const hasBlockedCarveOut = groupRules.some(
       (rule) => rule.type === 'blocked_subdomain' || rule.type === 'blocked_path'
     );
 
-    const status: DomainGroup['status'] =
-      hasWhitelist && hasBlocked ? 'mixed' : hasBlocked ? 'blocked' : 'allowed';
+    const status: DomainGroup['status'] = hasBlockedCarveOut ? 'mixed' : 'allowed';
 
     return {
       root,

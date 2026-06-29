@@ -187,7 +187,10 @@ describe('HierarchicalRulesTable Component', () => {
       expect(screen.getByText('Allowed')).toBeInTheDocument();
     });
 
-    it('shows "Blocked" for groups with only blocked rules', () => {
+    it('shows "Mixed" (not "Blocked") for groups whose only rules are blocked carve-outs', () => {
+      // blocked_subdomain / blocked_path are carve-out exceptions within a domain,
+      // never a block of the whole root. The parent root row must not appear fully
+      // "Blocked" just because a child subdomain/path is blocked.
       const blockedRules: Rule[] = [
         {
           id: '1',
@@ -208,7 +211,8 @@ describe('HierarchicalRulesTable Component', () => {
       ];
 
       render(<HierarchicalRulesTable rules={blockedRules} loading={false} onDelete={noop} />);
-      expect(screen.getByText('Blocked')).toBeInTheDocument();
+      expect(screen.getByText('Mixed')).toBeInTheDocument();
+      expect(screen.queryByText('Blocked')).not.toBeInTheDocument();
     });
 
     it('shows "Mixed" for groups with mixed rules', () => {

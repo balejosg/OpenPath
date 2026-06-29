@@ -27,9 +27,13 @@ export function toDomainGroups(rules: Rule[]): DomainGroup[] {
   }
 
   for (const group of grouped.values()) {
-    const allAllowed = group.rules.every((rule) => rule.type === 'whitelist');
-    const allBlocked = group.rules.every((rule) => rule.type !== 'whitelist');
-    group.status = allAllowed ? 'allowed' : allBlocked ? 'blocked' : 'mixed';
+    // blocked_subdomain / blocked_path are carve-out exceptions within a domain,
+    // never a block of the whole root domain. A group is therefore 'allowed' when
+    // every rule is a whitelist entry, and 'mixed' as soon as it contains any blocked
+    // carve-out (with or without a whitelist). The parent root row must not appear
+    // fully 'blocked' just because a child subdomain/path is blocked.
+    const hasBlockedCarveOut = group.rules.some((rule) => rule.type !== 'whitelist');
+    group.status = hasBlockedCarveOut ? 'mixed' : 'allowed';
   }
 
   return Array.from(grouped.values()).sort((left, right) => left.root.localeCompare(right.root));
