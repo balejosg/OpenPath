@@ -27,6 +27,7 @@ const AppContent: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState(() => getTabFromPathname(initialPathname));
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [pendingSelectedClassroomId, setPendingSelectedClassroomId] = useState<string | null>(null);
   const isAuthRef = useRef(isAuth);
 
@@ -137,7 +138,8 @@ const AppContent: React.FC = () => {
     isClassroomsView ? 'lg:h-screen lg:overflow-hidden' : ''
   );
   const contentShellClassName = cn(
-    'flex-1 md:ml-64 flex flex-col min-h-screen',
+    'flex-1 flex flex-col min-h-screen transition-all duration-300',
+    sidebarCollapsed ? 'md:ml-16' : 'md:ml-64',
     isClassroomsView ? 'lg:h-full lg:min-h-0 lg:overflow-hidden' : ''
   );
   const mainClassName = cn(
@@ -162,7 +164,13 @@ const AppContent: React.FC = () => {
 
   return (
     <div data-testid="openpath-shell-root" className={appShellClassName}>
-      <Sidebar activeTab={activeTab} setActiveTab={handleSidebarTabChange} isOpen={sidebarOpen} />
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={handleSidebarTabChange}
+        isOpen={sidebarOpen}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
+      />
 
       {/* Overlay */}
       {sidebarOpen && (

@@ -28,7 +28,13 @@ vi.mock('./components/Header', () => ({
 }));
 
 vi.mock('./components/Sidebar', () => ({
-  default: ({ setActiveTab }: { setActiveTab: (tab: string) => void }) => (
+  default: ({
+    setActiveTab,
+    onToggleCollapse,
+  }: {
+    setActiveTab: (tab: string) => void;
+    onToggleCollapse?: () => void;
+  }) => (
     <nav>
       <button onClick={() => setActiveTab('dashboard')}>Ir dashboard</button>
       <button onClick={() => setActiveTab('classrooms')}>Ir aulas</button>
@@ -36,6 +42,7 @@ vi.mock('./components/Sidebar', () => ({
       <button onClick={() => setActiveTab('users')}>Ir usuarios</button>
       <button onClick={() => setActiveTab('domains')}>Ir dominios</button>
       <button onClick={() => setActiveTab('settings')}>Ir configuracion</button>
+      <button onClick={() => onToggleCollapse?.()}>Plegar barra</button>
     </nav>
   ),
 }));
@@ -343,6 +350,22 @@ describe('App', () => {
     fireEvent.click(screen.getByText('Ir configuracion'));
     expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
     expect(screen.getByText('Settings view')).toBeInTheDocument();
+  });
+
+  it('collapses the desktop content offset when the sidebar collapse control is toggled', async () => {
+    render(<App />);
+
+    const content = screen.getByTestId('openpath-shell-content');
+    expect(content).toHaveClass('md:ml-64');
+    expect(content).not.toHaveClass('md:ml-16');
+
+    fireEvent.click(screen.getByText('Plegar barra'));
+
+    await waitFor(() => {
+      const next = screen.getByTestId('openpath-shell-content');
+      expect(next).toHaveClass('md:ml-16');
+      expect(next).not.toHaveClass('md:ml-64');
+    });
   });
 
   it('falls back to teacher views for protected admin tabs and toggles the mobile overlay', async () => {
