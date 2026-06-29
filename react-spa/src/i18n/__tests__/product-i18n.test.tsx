@@ -88,6 +88,13 @@ describe('product i18n', () => {
     }
   });
 
+  it('exposes collapse/expand sidebar toggle labels in both catalogs', () => {
+    expect(translateProductText('en', 'sidebar.toggle.collapse')).toBe('Collapse menu');
+    expect(translateProductText('en', 'sidebar.toggle.expand')).toBe('Expand menu');
+    expect(translateProductText('es', 'sidebar.toggle.collapse')).toBe('Plegar menú');
+    expect(translateProductText('es', 'sidebar.toggle.expand')).toBe('Expandir menú');
+  });
+
   it('keeps remaining audited OpenPath UI files catalog-backed and locale-aware', () => {
     const repoRoot = resolve(__dirname, '../..');
     const auditedSources = [
