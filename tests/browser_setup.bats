@@ -718,6 +718,37 @@ JSON
     [ "$status" -eq 0 ]
 }
 
+@test "verify_firefox_extension_payload does not corrupt FIREFOX_APP_ID when pre-exported" {
+    # Reproduces the openpath-browser-setup.sh execution path: the script exports
+    # FIREFOX_APP_ID before load_libraries sources browser.sh which sources this
+    # lib. The module-level FIREFOX_APP_ID init previously used a parameter
+    # expansion with a literal {}-brace default, which bash parsed as closing the
+    # outer ${...} early, appending an extra } to the pre-exported value. That
+    # turned "{ec8030f7-...}" into "{ec8030f7-...}}", causing the unpacked extension
+    # dir check to look at the wrong (non-existent) path and report payload=missing.
+    local ext_root="$TEST_TMP_DIR/share/mozilla/extensions"
+    local app_id="{ec8030f7-c20a-464f-9b0e-13a3a9e97384}"
+    local ext_dir="$ext_root/$app_id/openpath-block-monitor@openpath"
+    mkdir -p "$ext_dir"
+    touch "$ext_dir/manifest.json"
+
+    # Pre-export exactly as openpath-browser-setup.sh does.
+    export FIREFOX_APP_ID="{ec8030f7-c20a-464f-9b0e-13a3a9e97384}"
+    export FIREFOX_EXTENSIONS_ROOT="$ext_root"
+    export FIREFOX_EXTENSION_ID="openpath-block-monitor@openpath"
+    log() { echo "$1"; }
+    log_error() { echo "$1" >&2; }
+
+    source "$PROJECT_DIR/linux/lib/browser-request-readiness.sh"
+
+    # FIREFOX_APP_ID must remain exactly the pre-exported value, not gain an
+    # extra trailing } from the nested-brace parameter expansion that was there.
+    [ "$FIREFOX_APP_ID" = "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}" ]
+
+    run verify_firefox_extension_payload
+    [ "$status" -eq 0 ]
+}
+
 @test "openpath-browser-setup installs firefox integrations without applying Firefox browser policies" {
     local fake_install="$TEST_TMP_DIR/install"
     local fake_scripts="$TEST_TMP_DIR/scripts"

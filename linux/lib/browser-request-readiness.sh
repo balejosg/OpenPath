@@ -5,7 +5,14 @@
 ################################################################################
 
 FIREFOX_EXTENSION_ID="${FIREFOX_EXTENSION_ID:-${FIREFOX_MANAGED_EXTENSION_ID:-openpath-block-monitor@openpath}}"
-FIREFOX_APP_ID="${FIREFOX_APP_ID:-{ec8030f7-c20a-464f-9b0e-13a3a9e97384}}"
+# The Firefox application GUID must be initialized without nesting literal curly
+# braces inside a parameter expansion default: bash parses the first } it finds
+# as the end of the ${...}, appending an extra } to any pre-exported value.
+# Use an explicit if-guard so the literal is only assigned when the variable is
+# empty, which is safe regardless of the caller-provided export state.
+if [ -z "${FIREFOX_APP_ID:-}" ]; then
+    FIREFOX_APP_ID="{ec8030f7-c20a-464f-9b0e-13a3a9e97384}"
+fi
 FIREFOX_RELEASE_SOURCE="${FIREFOX_RELEASE_SOURCE:-$INSTALL_DIR/firefox-release}"
 
 openpath_browser_readiness_has_tokenized_whitelist_url() {
