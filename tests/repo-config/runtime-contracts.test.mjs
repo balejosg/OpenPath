@@ -310,6 +310,7 @@ describe('repository verification contract', () => {
       'OPENPATH_APT_MIRRORS',
       'Acquire::ForceIPv4',
       'Acquire::http::Timeout',
+      'Acquire::http::No-Cache',
       'rewrite_ubuntu_sources_for_mirror',
       'timeout "$timeout_seconds"',
       'openpath_apt_update_output_failed',
@@ -318,6 +319,26 @@ describe('repository verification contract', () => {
       assert.ok(
         aptHelpers.includes(fragment),
         `linux/lib/apt.sh should configure resilient APT behavior with ${fragment}`
+      );
+    }
+
+    // The unstable APT repository is served from raw.githubusercontent.com, which
+    // sits behind a Fastly edge cache (max-age=300). Without an explicit
+    // anti-cache directive, a freshly published index can be shadowed by a stale
+    // edge copy for the cache window, so a bootstrap install resolves and installs
+    // an OLD package version even though a newer one was just published. This is a
+    // real canary failure mode: a fixed package is published but the next canary
+    // still installs the previous (buggy) deb. Force apt to bypass the edge cache
+    // for index fetches in every place that writes the OpenPath apt conf.
+    for (const [label, contents] of [
+      ['linux/lib/apt.sh', aptHelpers],
+      ['linux/scripts/build/apt-setup.sh', aptSetup],
+      ['linux/scripts/build/apt-bootstrap.sh', aptBootstrap],
+    ]) {
+      assert.ok(
+        contents.includes('Acquire::http::No-Cache "true"') &&
+          contents.includes('Acquire::https::No-Cache "true"'),
+        `${label} should set Acquire::*::No-Cache so a freshly published unstable index is not shadowed by a stale CDN edge copy`
       );
     }
 

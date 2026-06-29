@@ -49,6 +49,10 @@ Acquire::Retries "$(openpath_apt_attempts)";
 Acquire::ForceIPv4 "true";
 Acquire::http::Timeout "$OPENPATH_APT_CONNECT_TIMEOUT_SECONDS";
 Acquire::https::Timeout "$OPENPATH_APT_CONNECT_TIMEOUT_SECONDS";
+Acquire::http::No-Cache "true";
+Acquire::https::No-Cache "true";
+Acquire::http::Max-Age "0";
+Acquire::https::Max-Age "0";
 APT::Get::Assume-Yes "true";
 DPkg::Lock::Timeout "120";
 EOF
