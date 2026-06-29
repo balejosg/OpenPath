@@ -158,6 +158,19 @@ verify_firefox_extension_payload() {
     fi
 
     log_error "Firefox extension payload not available after setup"
+    # Diagnostic breadcrumb (debug-gated) that prints the ACTUAL evaluated values
+    # for each payload condition so a canary/staging failure can be triaged from
+    # the install log without re-instrumenting. Off by default; set
+    # OPENPATH_DEBUG_FIREFOX_PAYLOAD=1 to enable.
+    if [ "${OPENPATH_DEBUG_FIREFOX_PAYLOAD:-0}" = "1" ]; then
+        local local_payload_rc="?"
+        local managed_payload_rc="?"
+        verify_firefox_local_policy_payload >/dev/null 2>&1 && local_payload_rc=0 || local_payload_rc=$?
+        verify_firefox_managed_api_payload >/dev/null 2>&1 && managed_payload_rc=0 || managed_payload_rc=$?
+        log_error "firefox_payload_debug extensions_root=$extensions_root FIREFOX_APP_ID=$FIREFOX_APP_ID FIREFOX_EXTENSION_ID=$FIREFOX_EXTENSION_ID"
+        log_error "firefox_payload_debug unpacked_dir=$unpacked_extension_dir dir_exists=$([ -d "$unpacked_extension_dir" ] && echo yes || echo no) manifest_exists=$([ -f "$unpacked_extension_dir/manifest.json" ] && echo yes || echo no)"
+        log_error "firefox_payload_debug release_source=$FIREFOX_RELEASE_SOURCE metadata_exists=$([ -f "$FIREFOX_RELEASE_SOURCE/metadata.json" ] && echo yes || echo no) local_policy_rc=$local_payload_rc managed_api_rc=$managed_payload_rc"
+    fi
     return 1
 }
 
