@@ -100,10 +100,10 @@ const ClassroomListPane: React.FC<ClassroomListPaneProps> = ({
               <div
                 key={room.id}
                 onClick={() => onSelectClassroom(room.id)}
-                className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                className={`p-4 rounded-lg border transition-all ${
                   selectedClassroomId === room.id
-                    ? 'bg-blue-50 border-blue-200 ring-1 ring-blue-200 shadow-sm'
-                    : 'bg-white border-slate-200 hover:border-blue-200 hover:shadow-sm'
+                    ? 'cursor-default bg-blue-50 border-blue-200 ring-1 ring-blue-200 shadow-sm'
+                    : 'cursor-pointer bg-white border-slate-200 hover:border-blue-200 hover:shadow-sm'
                 }`}
               >
                 <div className="flex justify-between items-start mb-2">
