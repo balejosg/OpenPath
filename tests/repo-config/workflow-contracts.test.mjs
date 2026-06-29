@@ -506,7 +506,7 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
   );
   assert.equal(
     firefoxPackageJson.devDependencies?.['web-ext'],
-    '10.1.0',
+    '10.4.0',
     'Firefox AMO signing should use a pinned repo-local web-ext version'
   );
 
