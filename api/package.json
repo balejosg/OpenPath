@@ -129,7 +129,7 @@
     "@stryker-mutator/typescript-checker": "^9.6.0",
     "@types/bcrypt": "^6.0.0",
     "@types/compression": "^1.8.1",
-    "@types/cors": "^2.8.17",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/k6": "^0.54.1",
