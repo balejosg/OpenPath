@@ -85,4 +85,45 @@ describe('Sidebar', () => {
     fireEvent.click(domainsButton);
     expect(setActiveTab).toHaveBeenCalledWith('domains');
   });
+
+  it('renders expanded by default with full-width desktop classes', () => {
+    render(<Sidebar activeTab="dashboard" setActiveTab={setActiveTab} isOpen />);
+
+    const aside = screen.getByRole('complementary');
+    expect(aside.className).toContain('md:w-64');
+    expect(aside.className).not.toContain('md:w-16');
+
+    expect(screen.getByRole('button', { name: 'Collapse menu' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+    expect(screen.getByRole('button', { name: 'Dashboard' })).not.toHaveAttribute('title');
+  });
+
+  it('renders an icon rail when collapsed', () => {
+    render(<Sidebar activeTab="dashboard" setActiveTab={setActiveTab} isOpen collapsed />);
+
+    const aside = screen.getByRole('complementary');
+    expect(aside.className).toContain('md:w-16');
+
+    const toggle = screen.getByRole('button', { name: 'Expand menu' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    expect(screen.getByRole('button', { name: 'Dashboard' })).toHaveAttribute('title', 'Dashboard');
+  });
+
+  it('invokes onToggleCollapse when the collapse control is clicked', () => {
+    const onToggleCollapse = vi.fn();
+    render(
+      <Sidebar
+        activeTab="dashboard"
+        setActiveTab={setActiveTab}
+        isOpen
+        onToggleCollapse={onToggleCollapse}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse menu' }));
+    expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+  });
 });

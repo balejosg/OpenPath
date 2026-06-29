@@ -8,6 +8,8 @@ import {
   LogOut,
   Settings,
   Shield,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { NavItem } from '../types';
 import { logout, isAdmin } from '../lib/auth';
@@ -17,6 +19,8 @@ interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
   isOpen: boolean;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
   allowDomainRequestsForNonAdmins?: boolean;
 }
 
@@ -24,6 +28,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   setActiveTab,
   isOpen,
+  collapsed = false,
+  onToggleCollapse,
   allowDomainRequestsForNonAdmins = false,
 }) => {
   const normalizedActiveTab = activeTab === 'rules' ? 'groups' : activeTab;
@@ -55,21 +61,40 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className={`fixed top-0 left-0 z-40 h-screen transition-transform duration-300 ease-out ${
+      className={`fixed top-0 left-0 z-40 h-screen transition-all duration-300 ease-out ${
         isOpen ? 'translate-x-0' : '-translate-x-full'
-      } md:translate-x-0 w-64 bg-slate-900 text-white flex flex-col border-r border-slate-800 shadow-xl`}
+      } md:translate-x-0 w-64 ${
+        collapsed ? 'md:w-16' : 'md:w-64'
+      } bg-slate-900 text-white flex flex-col border-r border-slate-800 shadow-xl`}
     >
-      {/* Branding */}
-      <div className="h-16 flex items-center px-6 bg-slate-950 border-b border-slate-800">
-        <div className="flex items-center gap-3">
+      {/* Branding + collapse toggle */}
+      <div
+        className={`h-16 flex items-center px-6 md:px-4 bg-slate-950 border-b border-slate-800 ${
+          collapsed ? 'md:justify-center' : 'justify-between'
+        }`}
+      >
+        <div className={`flex items-center gap-3 ${collapsed ? 'md:hidden' : ''}`}>
           <Shield className="text-blue-500" size={24} strokeWidth={2.5} />
           <span className="text-lg font-semibold tracking-wide text-slate-100">OpenPath</span>
         </div>
+        <button
+          type="button"
+          onClick={() => onToggleCollapse?.()}
+          aria-label={collapsed ? t('sidebar.toggle.expand') : t('sidebar.toggle.collapse')}
+          aria-expanded={!collapsed}
+          className="hidden md:flex items-center justify-center p-1.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors"
+        >
+          {collapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
+        </button>
       </div>
 
       {/* Navigation */}
       <div className="flex-1 py-6 px-3 space-y-1 overflow-y-auto">
-        <div className="px-3 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+        <div
+          className={`px-3 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider ${
+            collapsed ? 'md:hidden' : ''
+          }`}
+        >
           {t('sidebar.section.mainMenu')}
         </div>
         {navItems.map((item) => (
@@ -77,7 +102,10 @@ const Sidebar: React.FC<SidebarProps> = ({
             key={item.id}
             onClick={() => setActiveTab(item.id)}
             aria-current={normalizedActiveTab === item.id ? 'page' : undefined}
+            title={collapsed ? item.label : undefined}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group ${
+              collapsed ? 'md:justify-center' : ''
+            } ${
               normalizedActiveTab === item.id
                 ? 'bg-blue-600 text-white shadow-md shadow-blue-900/20'
                 : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
@@ -92,7 +120,9 @@ const Sidebar: React.FC<SidebarProps> = ({
             >
               {item.icon}
             </span>
-            <span className="font-medium text-sm">{item.label}</span>
+            <span className={`font-medium text-sm ${collapsed ? 'md:hidden' : ''}`}>
+              {item.label}
+            </span>
           </button>
         ))}
       </div>
@@ -102,23 +132,33 @@ const Sidebar: React.FC<SidebarProps> = ({
         <button
           onClick={() => setActiveTab('settings')}
           aria-current={normalizedActiveTab === 'settings' ? 'page' : undefined}
+          title={collapsed ? t('sidebar.nav.settings') : undefined}
           className={`flex items-center gap-3 px-3 py-2 w-full transition-colors rounded-lg mb-1 ${
+            collapsed ? 'md:justify-center' : ''
+          } ${
             normalizedActiveTab === 'settings'
               ? 'text-white bg-slate-800'
               : 'text-slate-400 hover:text-white hover:bg-slate-800'
           }`}
         >
           <Settings size={18} />
-          <span className="text-sm">{t('sidebar.nav.settings')}</span>
+          <span className={`text-sm ${collapsed ? 'md:hidden' : ''}`}>
+            {t('sidebar.nav.settings')}
+          </span>
         </button>
         <button
           onClick={() => {
             logout();
           }}
-          className="flex items-center gap-3 px-3 py-2 w-full text-red-400 hover:text-red-300 transition-colors rounded-lg hover:bg-red-950/30"
+          title={collapsed ? t('sidebar.nav.logout') : undefined}
+          className={`flex items-center gap-3 px-3 py-2 w-full text-red-400 hover:text-red-300 transition-colors rounded-lg hover:bg-red-950/30 ${
+            collapsed ? 'md:justify-center' : ''
+          }`}
         >
           <LogOut size={18} />
-          <span className="text-sm">{t('sidebar.nav.logout')}</span>
+          <span className={`text-sm ${collapsed ? 'md:hidden' : ''}`}>
+            {t('sidebar.nav.logout')}
+          </span>
         </button>
       </div>
     </aside>
