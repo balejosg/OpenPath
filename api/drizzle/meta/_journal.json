@@ -134,6 +134,13 @@
       "when": 1782638015678,
       "tag": "0018_talented_the_executioner",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1782838223364,
+      "tag": "0019_whole_squadron_supreme",
+      "breakpoints": true
     }
   ]
 }

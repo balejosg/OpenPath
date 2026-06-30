@@ -194,6 +194,9 @@ export const machineExemptions = pgTable(
       .notNull()
       .references(() => classrooms.id, { onDelete: 'cascade' }),
     scheduleId: uuid('schedule_id').references(() => schedules.id, { onDelete: 'cascade' }),
+    groupId: varchar('group_id', { length: 50 }).references(() => whitelistGroups.id, {
+      onDelete: 'set null',
+    }),
     source: varchar('source', { length: 20 }).notNull().default('schedule'),
     reason: text('reason'),
     createdBy: varchar('created_by', { length: 50 }).references(() => users.id, {
