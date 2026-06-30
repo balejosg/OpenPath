@@ -205,6 +205,9 @@ function createRuntimeHarnessWithOptions(options: {
           webRequestErrorListener = listener;
         },
       },
+      onHistoryStateUpdated: {
+        addListener: () => undefined,
+      },
     },
     webRequest: {
       onBeforeRequest: {

@@ -3,6 +3,8 @@ import { registerBackgroundListeners } from './background-listeners.js';
 import { createBackgroundMessageHandler } from './background-message-handler.js';
 import { createBackgroundPathRulesController } from './background-path-rules.js';
 import { createBackgroundSubdomainRulesController } from './background-subdomain-rules.js';
+import { createBackgroundAllowedPathRulesController } from './background-allowed-path-rules.js';
+import type { NativeAllowedPathsResponse } from './allowed-path.js';
 import { createBackgroundTabReconciliationController } from './background-tab-reconciliation.js';
 import { logger, getErrorMessage } from './logger.js';
 import {
@@ -115,6 +117,13 @@ export function createBackgroundRuntime(
       (await nativeMessagingClient.sendMessage({
         action: 'get-blocked-subdomains',
       })) as NativeBlockedSubdomainsResponse,
+  });
+  const allowedPathRulesController = createBackgroundAllowedPathRulesController({
+    extensionOrigin,
+    getAllowedPaths: async () =>
+      (await nativeMessagingClient.sendMessage({
+        action: 'get-allowed-paths',
+      })) as NativeAllowedPathsResponse,
   });
   const captivePortalRecoveryController = createCaptivePortalRecoveryController({
     getPortalState: async () => getCaptivePortalApi()?.getState?.(),
@@ -430,6 +439,7 @@ export function createBackgroundRuntime(
         await Promise.all([
           blockedPathRulesController.refresh(true),
           blockedSubdomainRulesController.refresh(true),
+          allowedPathRulesController.refresh(true),
         ]);
       }
       return response;
@@ -460,6 +470,7 @@ export function createBackgroundRuntime(
       },
       evaluateBlockedPath: blockedPathRulesController.evaluateRequest,
       evaluateBlockedSubdomain: blockedSubdomainRulesController.evaluateRequest,
+      evaluateAllowedPath: allowedPathRulesController.evaluateRequest,
       confirmBlockedScreenNavigation: blockedScreenConfirmer.confirm,
       recoverCaptivePortalNavigation,
       handleRuntimeMessage,
@@ -470,9 +481,11 @@ export function createBackgroundRuntime(
     registerCaptivePortalListeners();
     await blockedPathRulesController.init();
     await blockedSubdomainRulesController.init();
+    await allowedPathRulesController.init();
     await tabReconciliationController.init();
     blockedPathRulesController.startRefreshLoop();
     blockedSubdomainRulesController.startRefreshLoop();
+    allowedPathRulesController.startRefreshLoop();
     tabReconciliationController.startRefreshLoop();
     logger.info('[Blocking Monitor] Background script v2.0.0 (MV3) loaded');
   }

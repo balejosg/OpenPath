@@ -5,6 +5,7 @@ import { t } from './i18n.js';
 import { shouldClearBlockedMonitorStateOnNavigate } from './blocked-screen-contract.js';
 import { BLOCKED_SCREEN_PATH, ROUTE_BLOCK_REASON, extractHostname } from './path-blocking.js';
 import { BLOCKED_SUBDOMAIN_REASON } from './subdomain-blocking.js';
+import { ALLOWED_PATH_BLOCK_REASON } from './allowed-path.js';
 import {
   createBlockedScreenNavigationController,
   type BlockedScreenContext,
@@ -35,6 +36,9 @@ interface BackgroundListenersOptions {
     details: WebRequest.OnBeforeRequestDetailsType
   ) => { cancel?: boolean; redirectUrl?: string; reason?: string } | null;
   evaluateBlockedSubdomain: (
+    details: WebRequest.OnBeforeRequestDetailsType
+  ) => { cancel?: boolean; redirectUrl?: string; reason?: string } | null;
+  evaluateAllowedPath: (
     details: WebRequest.OnBeforeRequestDetailsType
   ) => { cancel?: boolean; redirectUrl?: string; reason?: string } | null;
   confirmBlockedScreenNavigation?: (
@@ -307,6 +311,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
       const result =
         options.evaluateBlockedPath(details) ??
         options.evaluateBlockedSubdomain(details) ??
+        options.evaluateAllowedPath(details) ??
         evaluateGoogleGameBlocking(details, {
           extensionOrigin: options.browser.runtime.getURL('/'),
         });
@@ -472,6 +477,32 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
         logger.debug(`[Monitor] Limpiando bloqueos para tab ${details.tabId.toString()}`);
         options.clearTabRuntimeState(details.tabId);
       }
+    }
+  );
+
+  options.browser.webNavigation.onHistoryStateUpdated.addListener(
+    (details: WebNavigation.OnHistoryStateUpdatedDetailsType) => {
+      if (details.frameId !== 0) {
+        return;
+      }
+      const result = options.evaluateAllowedPath({
+        type: 'main_frame',
+        url: details.url,
+        tabId: details.tabId,
+      } as WebRequest.OnBeforeRequestDetailsType);
+      if (!result?.redirectUrl) {
+        return;
+      }
+      const hostname = extractHostname(details.url) ?? t('blockedUnknownDomain');
+      if (details.tabId >= 0) {
+        options.addBlockedDomain(
+          details.tabId,
+          hostname,
+          result.reason ?? `${ALLOWED_PATH_BLOCK_REASON}:unknown`,
+          null
+        );
+      }
+      void options.browser.tabs.update(details.tabId, { url: result.redirectUrl });
     }
   );
 

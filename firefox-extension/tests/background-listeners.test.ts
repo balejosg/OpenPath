@@ -124,6 +124,9 @@ function createListenerHarness(
           webNavigationError = listener;
         },
       },
+      onHistoryStateUpdated: {
+        addListener: () => undefined,
+      },
     },
     runtime: {
       getURL: (path: string) => `moz-extension://unit-test/${path}`,
@@ -165,6 +168,7 @@ function createListenerHarness(
       options.evaluateBlockedPath ?? ((): ReturnType<EvaluateBlockedPath> => null),
     evaluateBlockedSubdomain:
       options.evaluateBlockedSubdomain ?? ((): ReturnType<EvaluateBlockedSubdomain> => null),
+    evaluateAllowedPath: (): null => null,
     allowLocalRuntimeDependency: async (input) => {
       localRuntimeDependencyCalls.push(input);
       return options.allowLocalRuntimeDependency
