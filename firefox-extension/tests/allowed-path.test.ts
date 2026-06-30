@@ -12,8 +12,8 @@ function state(paths: string[]): AllowedPathRulesState {
 }
 const EXT = 'moz-extension://abc/';
 
-describe('evaluateAllowedPath', () => {
-  it('ignores a host with no allowed_path rule', () => {
+void describe('evaluateAllowedPath', () => {
+  void it('ignores a host with no allowed_path rule', () => {
     const s = state(['youtube.com/watch?v=abc']);
     assert.equal(
       evaluateAllowedPath({ type: 'main_frame', url: 'https://example.com/x' }, s, {
@@ -22,7 +22,7 @@ describe('evaluateAllowedPath', () => {
       null
     );
   });
-  it('allows the matching URL on a managed host (incl. extra params + www)', () => {
+  void it('allows the matching URL on a managed host (incl. extra params + www)', () => {
     const s = state(['youtube.com/watch?v=abc']);
     assert.equal(
       evaluateAllowedPath(
@@ -33,7 +33,7 @@ describe('evaluateAllowedPath', () => {
       null
     );
   });
-  it('blocks a non-matching main_frame URL on a managed host', () => {
+  void it('blocks a non-matching main_frame URL on a managed host', () => {
     const s = state(['youtube.com/watch?v=abc']);
     const r = evaluateAllowedPath(
       { type: 'main_frame', url: 'https://www.youtube.com/watch?v=zzz' },
@@ -42,7 +42,7 @@ describe('evaluateAllowedPath', () => {
     );
     assert.ok(r?.redirectUrl?.startsWith(EXT));
   });
-  it('never gates sub-resources, even on a managed host', () => {
+  void it('never gates sub-resources, even on a managed host', () => {
     const s = state(['youtube.com/watch?v=abc']);
     assert.equal(
       evaluateAllowedPath({ type: 'xmlhttprequest', url: 'https://www.youtube.com/api/stats' }, s, {
@@ -51,7 +51,7 @@ describe('evaluateAllowedPath', () => {
       null
     );
   });
-  it('drops a global-wildcard rule (no managed host)', () => {
+  void it('drops a global-wildcard rule (no managed host)', () => {
     const s = state(['*/watch']);
     assert.equal(s.managedHosts.size, 0);
     assert.equal(

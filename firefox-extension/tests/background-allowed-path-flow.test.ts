@@ -65,13 +65,13 @@ function createMinimalBrowser(): {
 
   return {
     browser,
-    dispatchHistoryStateUpdated: (details) => {
+    dispatchHistoryStateUpdated: (details): void => {
       if (!historyStateUpdatedListener) {
         throw new Error('onHistoryStateUpdated listener not registered');
       }
       historyStateUpdatedListener(details);
     },
-    dispatchBeforeRequest: (details) => {
+    dispatchBeforeRequest: (details): unknown => {
       if (!beforeRequestListener) {
         throw new Error('onBeforeRequest listener not registered');
       }

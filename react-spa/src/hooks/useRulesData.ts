@@ -81,7 +81,7 @@ export function useRulesData({ groupId, filter, page, search, pageSize }: UseRul
       } else {
         const result = await trpc.groups.listRulesPaginated.query({
           groupId,
-          enabled: filter === 'disabled' ? false : filter === 'all' ? undefined : true,
+          enabled: filter === 'disabled' ? false : undefined,
           limit: pageSize,
           offset: (page - 1) * pageSize,
           search: search.trim() || undefined,
