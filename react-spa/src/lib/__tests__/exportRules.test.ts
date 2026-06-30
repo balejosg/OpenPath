@@ -170,6 +170,36 @@ describe('exportRules utilities', () => {
       expect(text).not.toContain('## BLOCKED-PATHS');
     });
 
+    it('includes ## ALLOWED-PATHS section for allowed_path rules', () => {
+      const rulesWithAllowedPath: Rule[] = [
+        {
+          id: '1',
+          groupId: 'group-1',
+          value: 'google.com',
+          type: 'whitelist',
+          comment: null,
+          createdAt: '2026-01-15T10:00:00Z',
+        },
+        {
+          id: '2',
+          groupId: 'group-1',
+          value: 'youtube.com/watch',
+          type: 'allowed_path',
+          comment: null,
+          createdAt: '2026-01-18T10:00:00Z',
+        },
+      ];
+
+      const text = rulesToText(rulesWithAllowedPath, true);
+
+      expect(text).toContain('## WHITELIST');
+      expect(text).toContain('google.com');
+      expect(text).toContain('## ALLOWED-PATHS');
+      expect(text).toContain('youtube.com/watch');
+      expect(text).not.toContain('## BLOCKED-PATHS');
+      expect(text).not.toContain('## BLOCKED-SUBDOMAINS');
+    });
+
     it('handles empty array', () => {
       const text = rulesToText([], false);
       expect(text).toBe('');
