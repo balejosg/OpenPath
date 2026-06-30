@@ -268,3 +268,28 @@ describe('validateRuleValue - edge cases', () => {
     assert.strictEqual(result.valid, true);
   });
 });
+
+// =============================================================================
+// validateRuleValue - allowed_path
+// =============================================================================
+
+describe('validateRuleValue allowed_path', () => {
+  it('accepts a concrete domain + path', () => {
+    assert.equal(validateRuleValue('youtube.com/watch?v=abc', 'allowed_path').valid, true);
+  });
+  it('accepts a full URL (cleaned, path preserved)', () => {
+    assert.equal(
+      validateRuleValue('https://www.youtube.com/watch?v=abc', 'allowed_path').valid,
+      true
+    );
+  });
+  it('rejects a value with no path', () => {
+    assert.equal(validateRuleValue('youtube.com', 'allowed_path').valid, false);
+  });
+  it('rejects a global wildcard domain (must target a concrete domain)', () => {
+    assert.equal(validateRuleValue('*/watch', 'allowed_path').valid, false);
+  });
+  it('rejects whitespace in the path', () => {
+    assert.equal(validateRuleValue('youtube.com/a b', 'allowed_path').valid, false);
+  });
+});

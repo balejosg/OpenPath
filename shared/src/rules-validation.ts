@@ -9,8 +9,8 @@
 // Types
 // =============================================================================
 
-/** The three rule types supported by whitelist groups. */
-export type RuleType = 'whitelist' | 'blocked_subdomain' | 'blocked_path';
+/** The rule types supported by whitelist groups. */
+export type RuleType = 'whitelist' | 'blocked_subdomain' | 'blocked_path' | 'allowed_path';
 
 export type RuleValidationCode =
   | 'EMPTY'
@@ -229,6 +229,56 @@ function validatePath(value: string): RuleValidationResult {
   return { valid: true };
 }
 
+/**
+ * Validate an allowed-path (allow-by-URL) rule. Like validatePath, but the domain
+ * part is always validated as a concrete domain — a global "*" wildcard is rejected,
+ * because an allow rule must target a specific host.
+ */
+function validateAllowedPath(value: string): RuleValidationResult {
+  const slashIndex = value.indexOf('/');
+  if (slashIndex === -1) {
+    return {
+      valid: false,
+      code: 'PATH_MISSING_SLASH',
+      error: 'Path must contain a slash (/). Example: example.com/path',
+    };
+  }
+
+  const domainPart = value.substring(0, slashIndex);
+  const pathPart = value.substring(slashIndex + 1);
+
+  const domainResult = validateDomain(domainPart);
+  if (!domainResult.valid) {
+    const details: RuleValidationResult['details'] = {};
+    if (domainResult.code !== undefined) {
+      details.domainCode = domainResult.code;
+    }
+    if (domainResult.error !== undefined) {
+      details.domainError = domainResult.error;
+    }
+    return {
+      valid: false,
+      code: 'PATH_INVALID_DOMAIN',
+      error: `Invalid domain in path: ${domainResult.error ?? ''}`,
+      details,
+    };
+  }
+
+  if (!pathPart) {
+    return { valid: false, code: 'PATH_EMPTY', error: 'Path after domain cannot be empty' };
+  }
+
+  if (!PATH_SEGMENT_REGEX.test(pathPart)) {
+    return {
+      valid: false,
+      code: 'PATH_INVALID_CHARS',
+      error: 'Path contains invalid characters (whitespace)',
+    };
+  }
+
+  return { valid: true };
+}
+
 // =============================================================================
 // Main validation dispatcher
 // =============================================================================
@@ -243,7 +293,9 @@ function validatePath(value: string): RuleValidationResult {
  */
 export function validateRuleValue(value: string, type: RuleType): RuleValidationResult {
   const cleaned =
-    type === 'blocked_path' ? cleanRuleValue(value, true) : cleanRuleValue(value, false);
+    type === 'blocked_path' || type === 'allowed_path'
+      ? cleanRuleValue(value, true)
+      : cleanRuleValue(value, false);
 
   if (!cleaned) {
     return { valid: false, code: 'EMPTY', error: 'Value cannot be empty' };
@@ -256,5 +308,7 @@ export function validateRuleValue(value: string, type: RuleType): RuleValidation
       return validateSubdomain(cleaned);
     case 'blocked_path':
       return validatePath(cleaned);
+    case 'allowed_path':
+      return validateAllowedPath(cleaned);
   }
 }
