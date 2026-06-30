@@ -45,7 +45,7 @@ interface ClassroomDetailPaneProps {
   onDefaultGroupChange: (next: string) => void | Promise<void>;
   onCaptivePortalDomainsChange: (domains: string[]) => void | Promise<void>;
   onOpenEnrollModal: () => void | Promise<void>;
-  onCreateExemption: (machineId: string) => void | Promise<void>;
+  onCreateExemption: (machineId: string, groupId: string | null) => void | Promise<void>;
   onCreateOperationalExemption: (
     machineId: string,
     durationHours: number,
@@ -189,6 +189,7 @@ export default function ClassroomDetailPane({
           <ClassroomMachinesCard
             admin={admin}
             classroom={selectedClassroom}
+            groups={allowedGroups as GroupLike[]}
             hasActiveSchedule={activeSchedule !== null}
             exemptionByMachineId={exemptionByMachineId}
             exemptionMutating={exemptionMutating}

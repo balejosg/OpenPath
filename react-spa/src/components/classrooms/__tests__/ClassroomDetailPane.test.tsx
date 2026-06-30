@@ -115,6 +115,7 @@ function buildProps(overrides: Partial<React.ComponentProps<typeof ClassroomDeta
           machineHostname: 'pc-01',
           classroomId: 'classroom-1',
           scheduleId: 'schedule-1',
+          groupId: null,
           source: 'schedule' as const,
           reason: null,
           createdBy: 'teacher-1',

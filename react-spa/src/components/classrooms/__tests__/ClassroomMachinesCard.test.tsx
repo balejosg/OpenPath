@@ -42,6 +42,7 @@ function buildExemption(): ClassroomExemption {
     machineHostname: 'pc-01',
     classroomId: 'classroom-1',
     scheduleId: 'schedule-1',
+    groupId: null,
     source: 'schedule',
     reason: null,
     createdBy: 'teacher-1',
@@ -54,6 +55,7 @@ function buildProps(overrides: Partial<React.ComponentProps<typeof ClassroomMach
   return {
     admin: true,
     classroom: buildClassroom(),
+    groups: [] as React.ComponentProps<typeof ClassroomMachinesCard>['groups'],
     hasActiveSchedule: true,
     exemptionByMachineId: new Map([['machine-1', buildExemption()]]),
     exemptionMutating: {},
@@ -61,7 +63,9 @@ function buildProps(overrides: Partial<React.ComponentProps<typeof ClassroomMach
     loadingExemptions: false,
     enrollModalLoadingToken: false,
     onOpenEnrollModal: vi.fn(),
-    onCreateExemption: vi.fn(),
+    onCreateExemption: vi.fn() as React.ComponentProps<
+      typeof ClassroomMachinesCard
+    >['onCreateExemption'],
     onCreateOperationalExemption: vi.fn(),
     onDeleteExemption: vi.fn(),
     ...overrides,
@@ -111,7 +115,7 @@ describe('ClassroomMachinesCard', () => {
     expect(screen.queryByRole('button', { name: 'Release' })).not.toBeInTheDocument();
   });
 
-  it('shows teacher release only for calendar-controlled classrooms', () => {
+  it('shows teacher apply-group controls only enabled for calendar-controlled classrooms', () => {
     const props = buildProps({
       admin: false,
       classroom: buildClassroom({ currentGroupSource: 'manual' }),
@@ -120,7 +124,10 @@ describe('ClassroomMachinesCard', () => {
     });
     const { rerender } = render(<ClassroomMachinesCard {...props} />);
 
-    expect(screen.queryByRole('button', { name: 'Release' })).not.toBeInTheDocument();
+    // With manual source, controls are rendered but disabled
+    const disabledButtons = screen.getAllByRole('button', { name: /apply group/i });
+    expect(disabledButtons).toHaveLength(2);
+    expect(disabledButtons[0]).toBeDisabled();
 
     rerender(
       <ClassroomMachinesCard
@@ -129,7 +136,35 @@ describe('ClassroomMachinesCard', () => {
       />
     );
 
-    expect(screen.getAllByRole('button', { name: 'Release' })).toHaveLength(2);
+    // With schedule source, controls are enabled
+    const enabledButtons = screen.getAllByRole('button', { name: /apply group/i });
+    expect(enabledButtons).toHaveLength(2);
+    expect(enabledButtons[0]).not.toBeDisabled();
+  });
+
+  it('applies the selected group to a machine', async () => {
+    const onCreateExemption = vi.fn() as React.ComponentProps<
+      typeof ClassroomMachinesCard
+    >['onCreateExemption'];
+    render(
+      <ClassroomMachinesCard
+        {...buildProps({
+          admin: false,
+          classroom: buildClassroom({ currentGroupSource: 'schedule' }),
+          exemptionByMachineId: new Map(),
+          hasActiveSchedule: true,
+          groups: [{ id: 'group-x', name: 'Group X', enabled: true }],
+          onCreateExemption,
+        })}
+      />
+    );
+
+    const [select] = screen.getAllByLabelText(/apply group|aplicar grupo/i);
+    fireEvent.change(select, { target: { value: 'group-x' } });
+    const [applyButton] = screen.getAllByRole('button', { name: /apply group|aplicar grupo/i });
+    fireEvent.click(applyButton);
+
+    expect(onCreateExemption).toHaveBeenCalledWith('machine-1', 'group-x');
   });
 
   it('labels operational exemptions before schedule exemptions', () => {

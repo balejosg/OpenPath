@@ -2,10 +2,12 @@ import React, { useState } from 'react';
 import { AlertCircle, Download, Loader2, Monitor, X } from 'lucide-react';
 import type { Classroom, ClassroomExemption } from '../../types';
 import { useOpenPathI18n } from '../../i18n/product-i18n';
+import { isGroupEnabled, type GroupLike } from '../groups/GroupLabel';
 
 interface ClassroomMachinesCardProps {
   admin: boolean;
   classroom: Classroom;
+  groups: GroupLike[];
   hasActiveSchedule: boolean;
   exemptionByMachineId: ReadonlyMap<string, ClassroomExemption>;
   exemptionMutating: Partial<Record<string, boolean>>;
@@ -13,7 +15,7 @@ interface ClassroomMachinesCardProps {
   loadingExemptions: boolean;
   enrollModalLoadingToken: boolean;
   onOpenEnrollModal: () => void | Promise<void>;
-  onCreateExemption: (machineId: string) => void | Promise<void>;
+  onCreateExemption: (machineId: string, groupId: string | null) => void | Promise<void>;
   onCreateOperationalExemption: (
     machineId: string,
     durationHours: number,
@@ -25,6 +27,7 @@ interface ClassroomMachinesCardProps {
 export default function ClassroomMachinesCard({
   admin,
   classroom,
+  groups,
   hasActiveSchedule,
   exemptionByMachineId,
   exemptionMutating,
@@ -40,6 +43,7 @@ export default function ClassroomMachinesCard({
   const [operationalMachineId, setOperationalMachineId] = useState<string | null>(null);
   const [durationHours, setDurationHours] = useState('1');
   const [reason, setReason] = useState('');
+  const [pendingGroupByMachine, setPendingGroupByMachine] = useState<Record<string, string>>({});
   const canCreateScheduleExemption = classroom.currentGroupSource === 'schedule';
 
   const submitOperationalExemption = () => {
@@ -139,7 +143,14 @@ export default function ClassroomMachinesCard({
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {isExempt && (
                     <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full border border-green-200 font-medium">
-                      {exemptionSourceLabel}: {t('classrooms.machines.exemption.noRestriction')}
+                      {exemptionSourceLabel}:{' '}
+                      {exemption.groupId
+                        ? t('classrooms.machines.exemption.group', {
+                            name:
+                              groups.find((g) => g.id === exemption.groupId)?.name ??
+                              exemption.groupId,
+                          })
+                        : t('classrooms.machines.exemption.noRestriction')}
                       {expiresTime
                         ? ` · ${t('classrooms.machines.exemption.until', { time: expiresTime })}`
                         : ''}
@@ -165,14 +176,50 @@ export default function ClassroomMachinesCard({
                     >
                       {mutating ? t('common.loadingEllipsis') : t('classrooms.machines.exempt')}
                     </button>
-                  ) : hasActiveSchedule && canCreateScheduleExemption ? (
-                    <button
-                      onClick={() => void onCreateExemption(machine.id)}
-                      disabled={mutating || loadingExemptions}
-                      className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm transition-colors shadow-sm font-medium disabled:opacity-50"
-                    >
-                      {mutating ? t('common.loadingEllipsis') : t('classrooms.machines.release')}
-                    </button>
+                  ) : hasActiveSchedule ? (
+                    <div className="machine-exempt-controls">
+                      <label className="sr-only" htmlFor={`grp-${machine.id}`}>
+                        {t('classrooms.machines.applyGroup')}
+                      </label>
+                      <select
+                        id={`grp-${machine.id}`}
+                        value={pendingGroupByMachine[machine.id] ?? ''}
+                        disabled={!canCreateScheduleExemption || mutating || loadingExemptions}
+                        onChange={(e) =>
+                          setPendingGroupByMachine((prev) => ({
+                            ...prev,
+                            [machine.id]: e.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">
+                          {t('classrooms.machines.groupSelect.unrestricted')}
+                        </option>
+                        {groups
+                          .filter((g) => isGroupEnabled(g))
+                          .map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {g.name}
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={!canCreateScheduleExemption || mutating || loadingExemptions}
+                        onClick={() =>
+                          void onCreateExemption(
+                            machine.id,
+                            (pendingGroupByMachine[machine.id] ?? '') === ''
+                              ? null
+                              : (pendingGroupByMachine[machine.id] ?? null)
+                          )
+                        }
+                      >
+                        {mutating
+                          ? t('common.loadingEllipsis')
+                          : t('classrooms.machines.applyGroup')}
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               </div>
