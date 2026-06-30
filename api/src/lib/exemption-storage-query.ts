@@ -101,8 +101,8 @@ export async function getActiveMachineExemption(
     )
     .orderBy(desc(machineExemptions.createdAt));
 
-  if (rows.length === 0) return null;
   const chosen = rows.find((r) => r.groupId !== null) ?? rows[0];
+  if (!chosen) return null;
   return {
     id: chosen.id,
     groupId: chosen.groupId,

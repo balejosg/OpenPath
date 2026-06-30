@@ -142,7 +142,7 @@ describe('ClassroomMachinesCard', () => {
     expect(enabledButtons[0]).not.toBeDisabled();
   });
 
-  it('applies the selected group to a machine', async () => {
+  it('applies the selected group to a machine', () => {
     const onCreateExemption = vi.fn() as React.ComponentProps<
       typeof ClassroomMachinesCard
     >['onCreateExemption'];

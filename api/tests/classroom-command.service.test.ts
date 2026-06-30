@@ -393,10 +393,8 @@ await describe('classroom command service exports', async () => {
       groupId: createFixtureId('not-allowed'),
       createdBy: 'legacy_admin',
     });
-    assert.equal(denied.ok, false);
-    if (!denied.ok) {
-      assert.equal(denied.error.code, 'FORBIDDEN');
-    }
+    assert.ok(!denied.ok);
+    assert.equal(denied.error.code, 'FORBIDDEN');
   });
 
   await test('returns access and not-found errors for exemption commands', async () => {
