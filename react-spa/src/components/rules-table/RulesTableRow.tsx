@@ -16,6 +16,7 @@ import {
 import { cn } from '../../lib/utils';
 import { getRuleTypeBadge } from '../../lib/ruleDetection';
 import type { Rule, RuleType } from '../../lib/rules';
+import { categorizeRuleType } from '../../lib/rules';
 import { useT } from '../../i18n/product-i18n';
 
 interface RulesTableRowProps {
@@ -55,7 +56,7 @@ function getTypeIcon(type: RuleType) {
 }
 
 function getTypeBadgeClass(type: RuleType) {
-  return type === 'whitelist'
+  return categorizeRuleType(type) === 'allowed'
     ? 'bg-green-100 text-green-700 border-green-200'
     : 'bg-red-100 text-red-700 border-red-200';
 }
