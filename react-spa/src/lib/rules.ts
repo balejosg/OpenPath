@@ -46,6 +46,12 @@ const RULE_TYPE_META: Record<
     exportKey: 'rules.type.blockedPath.export',
     category: 'blocked',
   },
+  allowed_path: {
+    labelKey: 'rules.type.allowedPath.label',
+    badgeKey: 'rules.type.allowedPath.badge',
+    exportKey: 'rules.type.allowedPath.export',
+    category: 'allowed',
+  },
 };
 
 export function getRuleTypeLabel(type: RuleType, locale: ProductLocale = 'en'): string {

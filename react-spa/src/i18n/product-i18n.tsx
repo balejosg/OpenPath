@@ -378,6 +378,9 @@ export const productI18nCatalogs = {
     'rules.type.blockedPath.label': 'Blocked path',
     'rules.type.blockedPath.badge': 'Path blocked',
     'rules.type.blockedPath.export': 'Blocked path',
+    'rules.type.allowedPath.label': 'Allowed path',
+    'rules.type.allowedPath.badge': 'Path allowed',
+    'rules.type.allowedPath.export': 'Allowed path',
     'rules.detect.pathReason': 'Contains a path (/)',
     'rules.detect.subdomainExistingReason':
       '"{rootDomain}" is already allowed, so this subdomain will be blocked',
@@ -619,6 +622,9 @@ export const productI18nCatalogs = {
     'bulkImport.ruleType.blockedSubdomain.description': 'Specific subdomains to block',
     'bulkImport.ruleType.blockedPath.label': 'Blocked paths',
     'bulkImport.ruleType.blockedPath.description': 'Specific paths to block',
+    'bulkImport.ruleType.allowedPath.label': 'Allowed paths',
+    'bulkImport.ruleType.allowedPath.description':
+      'Specific URLs to allow (rest of the domain stays blocked)',
     'bulkImport.ruleTypeUi.whitelist.label': 'Domains to import',
     'bulkImport.ruleTypeUi.whitelist.placeholder':
       'Paste domains here, one per line:\n\ngoogle.com\nyoutube.com\nexample.org\n\nYou can also paste lists separated by commas or spaces.',
@@ -634,6 +640,10 @@ export const productI18nCatalogs = {
       'Paste paths here, one per line:\n\nexample.com/ads\nexample.com/tracking/*\n*/analytics/*\n\nYou can also paste lists separated by commas or spaces.',
     'bulkImport.ruleTypeUi.blockedPath.hint': 'Paste or type paths above',
     'bulkImport.ruleTypeUi.blockedPath.emptyError': 'Enter at least one path',
+    'bulkImport.ruleTypeUi.allowedPath.label': 'Allowed URLs to import',
+    'bulkImport.ruleTypeUi.allowedPath.placeholder': 'youtube.com/watch?v=...',
+    'bulkImport.ruleTypeUi.allowedPath.hint': 'Paste or type domain/path lines above',
+    'bulkImport.ruleTypeUi.allowedPath.emptyError': 'Enter at least one allowed URL',
     'bulkImport.dropFileHere': 'Drop the file here',
     'bulkImport.dragFilesHint': 'Drag .txt or .csv files here',
     'bulkImport.validCount': '{count} valid',
@@ -1121,6 +1131,9 @@ export const productI18nCatalogs = {
     'rules.type.blockedPath.label': 'Ruta bloqueada',
     'rules.type.blockedPath.badge': 'Ruta bloq.',
     'rules.type.blockedPath.export': 'Ruta bloqueada',
+    'rules.type.allowedPath.label': 'Ruta permitida',
+    'rules.type.allowedPath.badge': 'Ruta perm.',
+    'rules.type.allowedPath.export': 'Ruta permitida',
     'rules.detect.pathReason': 'Contiene una ruta (/)',
     'rules.detect.subdomainExistingReason':
       '"{rootDomain}" ya está permitido, se bloqueará este subdominio',
@@ -1372,6 +1385,9 @@ export const productI18nCatalogs = {
     'bulkImport.ruleType.blockedSubdomain.description': 'Subdominios específicos a bloquear',
     'bulkImport.ruleType.blockedPath.label': 'Rutas bloqueadas',
     'bulkImport.ruleType.blockedPath.description': 'Rutas específicas a bloquear',
+    'bulkImport.ruleType.allowedPath.label': 'Rutas permitidas',
+    'bulkImport.ruleType.allowedPath.description':
+      'URLs concretas a permitir (el resto del dominio sigue bloqueado)',
     'bulkImport.ruleTypeUi.whitelist.label': 'Dominios a importar',
     'bulkImport.ruleTypeUi.whitelist.placeholder':
       'Pega los dominios aquí, uno por línea:\n\ngoogle.com\nyoutube.com\nexample.org\n\nTambién puedes pegar listas separadas por comas o espacios.',
@@ -1387,6 +1403,10 @@ export const productI18nCatalogs = {
       'Pega las rutas aquí, una por línea:\n\nexample.com/ads\nexample.com/tracking/*\n*/analytics/*\n\nTambién puedes pegar listas separadas por comas o espacios.',
     'bulkImport.ruleTypeUi.blockedPath.hint': 'Pega o escribe las rutas arriba',
     'bulkImport.ruleTypeUi.blockedPath.emptyError': 'Introduce al menos una ruta',
+    'bulkImport.ruleTypeUi.allowedPath.label': 'URLs permitidas a importar',
+    'bulkImport.ruleTypeUi.allowedPath.placeholder': 'youtube.com/watch?v=...',
+    'bulkImport.ruleTypeUi.allowedPath.hint': 'Pega o escribe lineas dominio/ruta arriba',
+    'bulkImport.ruleTypeUi.allowedPath.emptyError': 'Introduce al menos una URL permitida',
     'bulkImport.dropFileHere': 'Suelta el archivo aquí',
     'bulkImport.dragFilesHint': 'Arrastra archivos .txt o .csv aquí',
     'bulkImport.validCount': '{count} válidos',

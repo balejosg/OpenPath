@@ -49,6 +49,7 @@ export function rulesToText(rules: Rule[], grouped = false): string {
   const whitelist = rules.filter((r) => r.type === 'whitelist');
   const blockedSubdomain = rules.filter((r) => r.type === 'blocked_subdomain');
   const blockedPath = rules.filter((r) => r.type === 'blocked_path');
+  const allowedPath = rules.filter((r) => r.type === 'allowed_path');
 
   const sections: string[] = [];
 
@@ -67,6 +68,12 @@ export function rulesToText(rules: Rule[], grouped = false): string {
   if (blockedPath.length > 0) {
     sections.push('## BLOCKED-PATHS');
     sections.push(...blockedPath.map((r) => r.value));
+    sections.push('');
+  }
+
+  if (allowedPath.length > 0) {
+    sections.push('## ALLOWED-PATHS');
+    sections.push(...allowedPath.map((r) => r.value));
     sections.push('');
   }
 

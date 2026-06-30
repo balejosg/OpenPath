@@ -44,6 +44,11 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
         label: t('bulkImport.ruleType.blockedPath.label'),
         description: t('bulkImport.ruleType.blockedPath.description'),
       },
+      {
+        value: 'allowed_path',
+        label: t('bulkImport.ruleType.allowedPath.label'),
+        description: t('bulkImport.ruleType.allowedPath.description'),
+      },
     ],
     [t]
   );
@@ -70,6 +75,12 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
         placeholder: t('bulkImport.ruleTypeUi.blockedPath.placeholder'),
         hint: t('bulkImport.ruleTypeUi.blockedPath.hint'),
         emptyError: t('bulkImport.ruleTypeUi.blockedPath.emptyError'),
+      },
+      allowed_path: {
+        label: t('bulkImport.ruleTypeUi.allowedPath.label'),
+        placeholder: t('bulkImport.ruleTypeUi.allowedPath.placeholder'),
+        hint: t('bulkImport.ruleTypeUi.allowedPath.hint'),
+        emptyError: t('bulkImport.ruleTypeUi.allowedPath.emptyError'),
       },
     }),
     [t]
@@ -101,6 +112,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
       whitelist: RULE_TYPE_UI.whitelist.emptyError,
       blocked_subdomain: RULE_TYPE_UI.blocked_subdomain.emptyError,
       blocked_path: RULE_TYPE_UI.blocked_path.emptyError,
+      allowed_path: RULE_TYPE_UI.allowed_path.emptyError,
     },
     initialText,
     isOpen,

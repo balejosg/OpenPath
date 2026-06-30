@@ -99,7 +99,7 @@ describe('useRulesManager Hook', () => {
   it('provides filter state and setter', async () => {
     const { result } = renderHook(() => useRulesManager(defaultOptions));
 
-    const queryMock = vi.mocked(trpc.groups.listRulesPaginated.query);
+    const listRulesMock = vi.mocked(trpc.groups.listRules.query);
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -112,52 +112,48 @@ describe('useRulesManager Hook', () => {
     });
 
     await waitFor(() => {
-      expect(queryMock).toHaveBeenCalledTimes(2);
-    });
-
-    expect(queryMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        type: 'whitelist',
-      })
-    );
-
-    // Ensure the in-flight fetch resolves before the test ends (prevents act warnings).
-    await (queryMock.mock.results[1]?.value ?? Promise.resolve());
-
-    await waitFor(() => {
       expect(result.current.loading).toBe(false);
       expect(result.current.filter).toBe('allowed');
     });
+
+    // When filter is 'allowed', listRules is called with whitelist and allowed_path
+    expect(listRulesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'whitelist', enabled: true })
+    );
+    expect(listRulesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'allowed_path', enabled: true })
+    );
   });
 
-  it('passes allowed filter type to the paginated API', async () => {
+  it('passes allowed filter type to the flat list using client-side merge', async () => {
     const { result } = renderHook(() => useRulesManager(defaultOptions));
-    const queryMock = vi.mocked(trpc.groups.listRulesPaginated.query);
+    const listRulesMock = vi.mocked(trpc.groups.listRules.query);
+    const paginatedMock = vi.mocked(trpc.groups.listRulesPaginated.query);
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
+
+    const paginatedCallsBefore = paginatedMock.mock.calls.length;
 
     act(() => {
       result.current.setFilter('allowed');
     });
 
     await waitFor(() => {
-      expect(queryMock).toHaveBeenCalledTimes(2);
-    });
-
-    expect(queryMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        type: 'whitelist',
-      })
-    );
-
-    // Ensure the in-flight fetch resolves before the test ends (prevents act warnings).
-    await (queryMock.mock.results[1]?.value ?? Promise.resolve());
-
-    await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
+
+    // listRulesPaginated should not have been called again for the allowed filter
+    expect(paginatedMock.mock.calls.length).toBe(paginatedCallsBefore);
+
+    // listRules should have been called with whitelist and allowed_path
+    expect(listRulesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'whitelist', enabled: true })
+    );
+    expect(listRulesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'allowed_path', enabled: true })
+    );
   });
 
   it('builds blocked tab from subdomain and path rules with search and pagination', async () => {

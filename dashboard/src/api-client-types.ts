@@ -11,7 +11,7 @@ export interface Group {
   blockedPathCount: number;
 }
 
-export type RuleType = 'whitelist' | 'blocked_subdomain' | 'blocked_path';
+export type RuleType = 'whitelist' | 'blocked_subdomain' | 'blocked_path' | 'allowed_path';
 
 export interface Rule {
   id: string;

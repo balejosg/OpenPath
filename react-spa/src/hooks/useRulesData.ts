@@ -58,10 +58,29 @@ export function useRulesData({ groupId, filter, page, search, pageSize }: UseRul
 
         const start = (page - 1) * pageSize;
         filteredRules = blockedRules.slice(start, start + pageSize);
+      } else if (filter === 'allowed') {
+        const [whitelist, allowedPaths] = await Promise.all([
+          trpc.groups.listRules.query({ groupId, type: 'whitelist', enabled: true }),
+          trpc.groups.listRules.query({ groupId, type: 'allowed_path', enabled: true }),
+        ]);
+
+        let allowedRules = [...whitelist, ...allowedPaths];
+
+        if (search.trim()) {
+          const searchLower = search.toLowerCase().trim();
+          allowedRules = allowedRules.filter((rule) =>
+            rule.value.toLowerCase().includes(searchLower)
+          );
+        }
+
+        allowedRules.sort((a, b) => a.value.localeCompare(b.value));
+        filteredTotal = allowedRules.length;
+
+        const start = (page - 1) * pageSize;
+        filteredRules = allowedRules.slice(start, start + pageSize);
       } else {
         const result = await trpc.groups.listRulesPaginated.query({
           groupId,
-          type: filter === 'allowed' ? 'whitelist' : undefined,
           enabled: filter === 'disabled' ? false : filter === 'all' ? undefined : true,
           limit: pageSize,
           offset: (page - 1) * pageSize,
@@ -91,14 +110,15 @@ export function useRulesData({ groupId, filter, page, search, pageSize }: UseRul
     if (!groupId) return;
 
     try {
-      const [whitelist, subdomains, paths, disabledRules] = await Promise.all([
+      const [whitelist, allowedPaths, subdomains, paths, disabledRules] = await Promise.all([
         trpc.groups.listRules.query({ groupId, type: 'whitelist', enabled: true }),
+        trpc.groups.listRules.query({ groupId, type: 'allowed_path', enabled: true }),
         trpc.groups.listRules.query({ groupId, type: 'blocked_subdomain', enabled: true }),
         trpc.groups.listRules.query({ groupId, type: 'blocked_path', enabled: true }),
         trpc.groups.listRules.query({ groupId, enabled: false }),
       ]);
 
-      const allowed = whitelist.length;
+      const allowed = whitelist.length + allowedPaths.length;
       const blocked = subdomains.length + paths.length;
       const disabled = disabledRules.length;
 

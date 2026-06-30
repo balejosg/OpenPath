@@ -289,7 +289,7 @@ describe('useGroupedRulesManager', () => {
   });
 
   describe('filtering', () => {
-    it('should pass filter type to API query', async () => {
+    it('should fetch both whitelist and allowed_path rules when allowed filter is applied', async () => {
       const { result } = renderHook(() =>
         useGroupedRulesManager({
           groupId: 'test-group',
@@ -306,27 +306,22 @@ describe('useGroupedRulesManager', () => {
         result.current.setFilter('allowed');
       });
 
-      const queryMock = vi.mocked(trpc.groups.listRulesGrouped.query);
-
-      await waitFor(() => {
-        expect(queryMock).toHaveBeenCalledTimes(2);
-      });
-
-      expect(queryMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          type: 'whitelist',
-        })
-      );
-
-      // Ensure the in-flight fetch resolves before the test ends (prevents act warnings).
-      await (queryMock.mock.results[1]?.value ?? Promise.resolve());
+      const listRulesMock = vi.mocked(trpc.groups.listRules.query);
 
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
+
+      // When filter is 'allowed', listRules is called with whitelist and allowed_path
+      expect(listRulesMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'whitelist', enabled: true })
+      );
+      expect(listRulesMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'allowed_path', enabled: true })
+      );
     });
 
-    it('should not include a source filter when the allowed filter is applied', async () => {
+    it('should not call listRulesGrouped when the allowed filter is applied', async () => {
       const { result } = renderHook(() =>
         useGroupedRulesManager({
           groupId: 'test-group',
@@ -338,33 +333,20 @@ describe('useGroupedRulesManager', () => {
         expect(result.current.loading).toBe(false);
       });
 
+      const groupedCallsBefore = vi.mocked(trpc.groups.listRulesGrouped.query).mock.calls.length;
+
       act(() => {
         result.current.setFilter('allowed');
       });
 
-      const queryMock = vi.mocked(trpc.groups.listRulesGrouped.query);
-
-      await waitFor(() => {
-        expect(queryMock).toHaveBeenCalledTimes(2);
-      });
-
-      expect(queryMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          type: 'whitelist',
-        })
-      );
-      expect(queryMock).toHaveBeenLastCalledWith(
-        expect.not.objectContaining({
-          source: expect.anything() as unknown,
-        })
-      );
-
-      // Ensure the in-flight fetch resolves before the test ends (prevents act warnings).
-      await (queryMock.mock.results[1]?.value ?? Promise.resolve());
-
       await waitFor(() => {
         expect(result.current.loading).toBe(false);
       });
+
+      // listRulesGrouped should not have been called again when filter is 'allowed'
+      expect(vi.mocked(trpc.groups.listRulesGrouped.query).mock.calls.length).toBe(
+        groupedCallsBefore
+      );
     });
 
     it('groups blocked subdomain and path rules locally with search filtering', async () => {

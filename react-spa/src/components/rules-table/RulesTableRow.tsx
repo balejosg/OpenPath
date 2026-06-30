@@ -49,6 +49,8 @@ function getTypeIcon(type: RuleType) {
       return <Ban size={12} className="text-red-600" />;
     case 'blocked_path':
       return <Route size={12} className="text-red-600" />;
+    case 'allowed_path':
+      return <Route size={12} className="text-green-600" />;
   }
 }
 
