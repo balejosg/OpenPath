@@ -29,6 +29,7 @@ export const createClassroomExemptionInputSchema = z.object({
   machineId: z.string().min(1),
   classroomId: z.string().min(1),
   scheduleId: z.uuid(),
+  groupId: z.string().min(1).nullable().optional(),
 });
 
 export const createOperationalClassroomExemptionInputSchema = z.object({

@@ -366,6 +366,39 @@ await describe('classroom command service exports', async () => {
     assert.deepEqual(adminDelete, { ok: true, data: { success: true } });
   });
 
+  await test('teacher can apply an allowed group to a machine and is denied an unallowed one', async () => {
+    const groupId = createFixtureId('apply-group');
+    await ensureWhitelistGroup(groupId);
+    const { classroom, machine } = await createClassroomWithMachine('apply-group');
+    const schedule = await createActiveOneOffSchedule(classroom.id, groupId);
+    const teacher = teacherUser([groupId]);
+
+    const ok = await service.createExemptionForClassroom(teacher, {
+      classroomId: classroom.id,
+      machineId: machine.id,
+      scheduleId: schedule.id,
+      groupId,
+      createdBy: 'legacy_admin',
+    });
+    if (!ok.ok) {
+      assert.fail(ok.error.message);
+    }
+    assert.equal(ok.data.groupId, groupId);
+
+    // Un grupo que el profesor NO tiene se rechaza antes de persistir.
+    const denied = await service.createExemptionForClassroom(teacher, {
+      classroomId: classroom.id,
+      machineId: machine.id,
+      scheduleId: schedule.id,
+      groupId: createFixtureId('not-allowed'),
+      createdBy: 'legacy_admin',
+    });
+    assert.equal(denied.ok, false);
+    if (!denied.ok) {
+      assert.equal(denied.error.code, 'FORBIDDEN');
+    }
+  });
+
   await test('returns access and not-found errors for exemption commands', async () => {
     const groupId = createFixtureId('restricted-group');
     await ensureWhitelistGroup(groupId);

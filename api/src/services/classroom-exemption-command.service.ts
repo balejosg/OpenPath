@@ -6,6 +6,7 @@ import {
   getActiveMachineExemptionsByClassroom,
   getMachineExemptionById,
 } from '../lib/exemption-storage.js';
+import { canApproveGroup } from '../lib/auth-authorization.js';
 
 import * as auth from '../lib/auth.js';
 import { getCurrentSchedule } from '../lib/schedule-storage.js';
@@ -47,6 +48,13 @@ export async function createExemptionForClassroom(
     };
   }
 
+  if (input.groupId && !canApproveGroup(user, input.groupId)) {
+    return {
+      ok: false,
+      error: { code: 'FORBIDDEN', message: 'You cannot apply this group' },
+    };
+  }
+
   try {
     const created = await DomainEventsService.withQueuedEvents(async (events) => {
       const exemption = await createMachineExemption({
@@ -54,6 +62,7 @@ export async function createExemptionForClassroom(
         classroomId: input.classroomId,
         scheduleId: input.scheduleId,
         createdBy: input.createdBy,
+        groupId: input.groupId ?? null,
       });
       events.publishClassroomChanged(input.classroomId);
       return exemption;
