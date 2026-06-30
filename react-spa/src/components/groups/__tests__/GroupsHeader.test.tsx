@@ -72,4 +72,19 @@ describe('GroupsHeader', () => {
     // New group button should NOT show in library view even with canCreateGroups
     expect(screen.queryByRole('button', { name: /new group/i })).not.toBeInTheDocument();
   });
+
+  it('renders headerActions in the header when provided', () => {
+    render(
+      <GroupsHeader
+        activeView="my"
+        admin
+        canCreateGroups={false}
+        onActiveViewChange={vi.fn()}
+        onOpenNewModal={vi.fn()}
+        headerActions={<button>Importar de la biblioteca</button>}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Importar de la biblioteca' })).toBeInTheDocument();
+  });
 });

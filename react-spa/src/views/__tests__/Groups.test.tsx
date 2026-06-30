@@ -161,6 +161,14 @@ describe('Groups view', () => {
     });
   });
 
+  it('forwards headerActions into the groups header', async () => {
+    renderWithQueryClient(
+      <Groups onNavigateToRules={vi.fn()} headerActions={<button>Header Action X</button>} />
+    );
+
+    expect(await screen.findByRole('button', { name: 'Header Action X' })).toBeInTheDocument();
+  });
+
   it('clones a library group and routes the user to its rules', async () => {
     const onNavigateToRules = vi.fn();
     mockLibraryListGroups.mockResolvedValueOnce([

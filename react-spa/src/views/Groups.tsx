@@ -9,9 +9,10 @@ import { useGroupsViewModel } from '../hooks/useGroupsViewModel';
 
 interface GroupsProps {
   onNavigateToRules: (group: { id: string; name: string; readOnly?: boolean }) => void;
+  headerActions?: React.ReactNode;
 }
 
-const Groups: React.FC<GroupsProps> = ({ onNavigateToRules }) => {
+const Groups: React.FC<GroupsProps> = ({ onNavigateToRules, headerActions }) => {
   const { ToastContainer } = useToast();
   const viewModel = useGroupsViewModel({ onNavigateToRules });
 
@@ -23,6 +24,7 @@ const Groups: React.FC<GroupsProps> = ({ onNavigateToRules }) => {
         canCreateGroups={viewModel.canCreateGroups}
         onActiveViewChange={viewModel.setActiveView}
         onOpenNewModal={viewModel.openNewModal}
+        headerActions={headerActions}
       />
 
       <GroupsGrid

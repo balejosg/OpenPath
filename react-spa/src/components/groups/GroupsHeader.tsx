@@ -1,4 +1,5 @@
 import { BookOpen, Folder } from 'lucide-react';
+import type { ReactNode } from 'react';
 import type { GroupsActiveView } from '../../hooks/useGroupsViewModel';
 import { useT } from '../../i18n/product-i18n';
 
@@ -8,6 +9,7 @@ interface GroupsHeaderProps {
   canCreateGroups: boolean;
   onActiveViewChange: (view: GroupsActiveView) => void;
   onOpenNewModal: () => void;
+  headerActions?: ReactNode;
 }
 
 export function GroupsHeader({
@@ -16,6 +18,7 @@ export function GroupsHeader({
   canCreateGroups,
   onActiveViewChange,
   onOpenNewModal,
+  headerActions,
 }: GroupsHeaderProps) {
   const t = useT();
   return (
@@ -54,13 +57,18 @@ export function GroupsHeader({
         </div>
       </div>
 
-      {canCreateGroups && activeView === 'my' && (
-        <button
-          onClick={onOpenNewModal}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
-        >
-          {t('groups.header.newGroup')}
-        </button>
+      {(headerActions ?? (canCreateGroups && activeView === 'my')) && (
+        <div className="flex items-center gap-2 sm:justify-end">
+          {headerActions}
+          {canCreateGroups && activeView === 'my' && (
+            <button
+              onClick={onOpenNewModal}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+            >
+              {t('groups.header.newGroup')}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
