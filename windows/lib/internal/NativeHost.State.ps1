@@ -14,11 +14,12 @@ function Read-NativeState {
 }
 
 function Get-WhitelistSections {
-    # parses the whitelist file into Whitelist, BlockedSubdomains, and BlockedPaths sections; returns empty section arrays when the file is absent.
+    # parses the whitelist file into Whitelist, BlockedSubdomains, BlockedPaths, and AllowedPaths sections; returns empty section arrays when the file is absent.
     $result = [ordered]@{
         Whitelist = @()
         BlockedSubdomains = @()
         BlockedPaths = @()
+        AllowedPaths = @()
     }
 
     if (-not (Test-Path $script:WhitelistPath)) {
@@ -47,6 +48,7 @@ function Get-WhitelistSections {
             'WHITELIST' { $result.Whitelist += $trimmed }
             'BLOCKED-SUBDOMAINS' { $result.BlockedSubdomains += $trimmed }
             'BLOCKED-PATHS' { $result.BlockedPaths += $trimmed }
+            'ALLOWED-PATHS' { $result.AllowedPaths += $trimmed }
         }
     }
 

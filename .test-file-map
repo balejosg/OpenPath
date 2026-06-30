@@ -203,10 +203,10 @@ tests/e2e/student-flow/backend-harness-api.ts|tests/e2e/student-flow/backend-har
 tests/e2e/student-flow/backend-harness-scenario.ts|tests/e2e/student-flow/backend-harness.test.ts
 tests/e2e/student-flow/backend-harness-cli.ts|tests/e2e/student-flow/backend-harness.test.ts
 linux/install.sh|tests/install.bats,tests/linux-e2e.bats
-linux/lib/common.sh|tests/install.bats,tests/captive-portal.bats,tests/openpath-update.bats
+linux/lib/common.sh|tests/install.bats,tests/captive-portal.bats,tests/openpath-update.bats,tests/dns-dnsmasq-allowed-paths.bats
 linux/lib/dns-validation.sh|tests/dns.bats,tests/common.bats,tests/captive-portal.bats
 linux/lib/dns-runtime.sh|tests/dns.bats,tests/common.bats,tests/captive-portal.bats,tests/openpath-update.bats
-linux/lib/dns-dnsmasq.sh|tests/dns.bats,tests/common.bats,tests/captive-portal.bats,tests/repo-config/failure-semantics-contracts.test.mjs
+linux/lib/dns-dnsmasq.sh|tests/dns.bats,tests/common.bats,tests/captive-portal.bats,tests/repo-config/failure-semantics-contracts.test.mjs,tests/dns-dnsmasq-allowed-paths.bats
 linux/lib/browser.sh|tests/browser_policy.bats,tests/browser_firefox_extension.bats,tests/browser_native_host.bats,tests/browser_chromium.bats,tests/linux-e2e.bats
 linux/lib/browser-request-readiness.sh|tests/browser_setup.bats,tests/linux-e2e.bats
 linux/lib/browser-process.sh|tests/browser_policy.bats,tests/browser_firefox_extension.bats,tests/browser_native_host.bats,tests/browser_chromium.bats,tests/linux-e2e.bats

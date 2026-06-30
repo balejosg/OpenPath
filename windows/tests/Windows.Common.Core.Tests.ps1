@@ -610,6 +610,41 @@ allowed.example/private
             @($sections.BlockedSubdomains).Count | Should -Be 0
             @($sections.BlockedPaths).Count | Should -Be 0
         }
+
+        It "Parses ALLOWED-PATHS section and never leaks path entries into Whitelist" {
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-allowed-paths-" + [Guid]::NewGuid().ToString() + ".txt")
+
+            try {
+                @'
+## WHITELIST
+youtube.com
+
+## ALLOWED-PATHS
+youtube.com/watch?v=abc
+'@ | Set-Content $tempFile -Encoding UTF8
+
+                $sections = InModuleScope Common -Parameters @{
+                    TempFile = $tempFile
+                } {
+                    Get-OpenPathWhitelistSectionsFromFile -Path $TempFile
+                }
+
+                # Bare domain must be in Whitelist
+                $sections.Whitelist | Should -Contain 'youtube.com'
+
+                # Path entry must appear in AllowedPaths, not Whitelist
+                $sections.AllowedPaths | Should -Contain 'youtube.com/watch?v=abc'
+                $sections.Whitelist | Should -Not -Contain 'youtube.com/watch?v=abc'
+
+                # No entry with a slash must appear in Whitelist
+                foreach ($entry in @($sections.Whitelist)) {
+                    $entry | Should -Not -Match '/'
+                }
+            }
+            finally {
+                Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     Context "ConvertTo-OpenPathWhitelistFileContent" {
@@ -628,6 +663,27 @@ allowed.example/private
                 'ads.allowed.example',
                 '## BLOCKED-PATHS',
                 'allowed.example/private'
+            )
+        }
+
+        It "Serializes ALLOWED-PATHS section" {
+            $content = InModuleScope Common {
+                ConvertTo-OpenPathWhitelistFileContent `
+                    -Whitelist @('allowed.example') `
+                    -BlockedSubdomains @('ads.allowed.example') `
+                    -BlockedPaths @('allowed.example/private') `
+                    -AllowedPaths @('allowed.example/ok')
+            }
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '## WHITELIST',
+                'allowed.example',
+                '## BLOCKED-SUBDOMAINS',
+                'ads.allowed.example',
+                '## BLOCKED-PATHS',
+                'allowed.example/private',
+                '## ALLOWED-PATHS',
+                'allowed.example/ok'
             )
         }
     }

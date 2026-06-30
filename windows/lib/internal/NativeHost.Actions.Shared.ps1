@@ -293,6 +293,45 @@ function Get-NativeHostBlockedPathResponse {
         source = $script:WhitelistPath
     }
 }
+function Get-NativeHostAllowedPathResponse {
+    <#
+    .SYNOPSIS
+    Builds the native host response payload for a get-allowed-paths action from the current whitelist sections.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Sections
+    )
+
+    $paths = @($Sections.AllowedPaths)
+    $digest = ''
+    if ($paths.Count -gt 0) {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes(($paths -join "`n"))
+            $digest = ([System.BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
+        }
+        finally {
+            $sha.Dispose()
+        }
+    }
+
+    $mtime = 0
+    if (Test-Path $script:WhitelistPath) {
+        $whitelistItem = Get-Item $script:WhitelistPath
+        $mtime = [int]([DateTimeOffset]$whitelistItem.LastWriteTimeUtc).ToUnixTimeSeconds()
+    }
+
+    return @{
+        success = $true
+        action = 'get-allowed-paths'
+        paths = $paths
+        count = $paths.Count
+        hash = $digest
+        mtime = $mtime
+        source = $script:WhitelistPath
+    }
+}
 function Get-NativeHostBlockedSubdomainResponse {
     <#
     .SYNOPSIS

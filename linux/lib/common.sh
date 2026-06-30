@@ -120,6 +120,7 @@ export DNS_CHANGED="${DNS_CHANGED:-false}"
 WHITELIST_DOMAINS=()
 BLOCKED_SUBDOMAINS=()
 BLOCKED_PATHS=()
+ALLOWED_PATHS=()
 
 # Logging function with levels
 # Includes PID and caller for structured debugging in fleet deployments
@@ -231,16 +232,17 @@ is_openpath_domain_format() {
 # Parse whitelist file sections
 parse_whitelist_sections() {
     local file="$1"
-    
+
     WHITELIST_DOMAINS=()
     BLOCKED_SUBDOMAINS=()
     BLOCKED_PATHS=()
-    
+    ALLOWED_PATHS=()
+
     if [ ! -f "$file" ]; then
         log "Whitelist file not found: $file"
         return 1
     fi
-    
+
     local entry_type=""
     local entry_value=""
     while IFS=$'\t' read -r entry_type entry_value; do
@@ -254,6 +256,9 @@ parse_whitelist_sections() {
             "blocked_path")
                 BLOCKED_PATHS+=("$entry_value")
                 ;;
+            "allowed_path")
+                ALLOWED_PATHS+=("$entry_value")
+                ;;
         esac
     done < <(
         awk '
@@ -261,6 +266,7 @@ parse_whitelist_sections() {
             /^[[:space:]]*##[[:space:]]*WHITELIST[[:space:]]*$/ { section = "whitelist"; next }
             /^[[:space:]]*##[[:space:]]*BLOCKED-SUBDOMAINS[[:space:]]*$/ { section = "blocked_sub"; next }
             /^[[:space:]]*##[[:space:]]*BLOCKED-PATHS[[:space:]]*$/ { section = "blocked_path"; next }
+            /^[[:space:]]*##[[:space:]]*ALLOWED-PATHS[[:space:]]*$/ { section = "allowed_path"; next }
             /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
             {
                 line = $0
@@ -269,10 +275,10 @@ parse_whitelist_sections() {
             }
         ' "$file"
     )
-    
+
     protect_control_plane_rules
 
-    log "Parsed: ${#WHITELIST_DOMAINS[@]} domains, ${#BLOCKED_SUBDOMAINS[@]} blocked subdomains, ${#BLOCKED_PATHS[@]} blocked paths"
+    log "Parsed: ${#WHITELIST_DOMAINS[@]} domains, ${#BLOCKED_SUBDOMAINS[@]} blocked subdomains, ${#BLOCKED_PATHS[@]} blocked paths, ${#ALLOWED_PATHS[@]} allowed paths"
 }
 
 # Check if script is running as root

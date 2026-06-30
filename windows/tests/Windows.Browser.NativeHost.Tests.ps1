@@ -488,6 +488,31 @@ Describe "Browser Module - Native Host" {
             )
         }
 
+        It "Returns allowed paths from the native whitelist mirror via get-allowed-paths action" {
+            $nativeStatePath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1"
+            $stateContent = Get-Content $nativeStatePath -Raw
+            $actionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Shared.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.MessageDispatch.ps1") -Raw)
+
+            # NativeHost.State.ps1 must declare and populate AllowedPaths
+            Assert-ContentContainsAll -Content $stateContent -Needles @(
+                'AllowedPaths = @()',
+                '''ALLOWED-PATHS'' { $result.AllowedPaths += $trimmed }'
+            )
+
+            # NativeHost.Actions.Shared.ps1 must expose the response builder and dispatch must route the action
+            Assert-ContentContainsAll -Content $actionsContent -Needles @(
+                'function Get-NativeHostAllowedPathResponse',
+                '$paths = @($Sections.AllowedPaths)',
+                "action = 'get-allowed-paths'",
+                'paths = $paths',
+                "'get-allowed-paths' {"
+            )
+
+            # ALLOWED-PATHS must not bleed into WHITELIST entries (the section switch must route it away)
+            $stateContent | Should -Match "'ALLOWED-PATHS'"
+            $stateContent | Should -Not -Match "ALLOWED-PATHS.*Whitelist\s*\+="
+        }
+
         It "Supports local runtime dependency overlay action without full URL fields" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             $nativeHostActionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.RuntimeDependency.ps1") -Raw)

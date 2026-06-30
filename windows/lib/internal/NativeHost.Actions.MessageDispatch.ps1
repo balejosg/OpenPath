@@ -116,6 +116,10 @@ function Invoke-NativeHostMessageAction {
             return (Get-NativeHostBlockedPathResponse -Sections $sections)
         }
 
+        'get-allowed-paths' {
+            return (Get-NativeHostAllowedPathResponse -Sections $sections)
+        }
+
         'get-blocked-subdomains' {
             return (Get-NativeHostBlockedSubdomainResponse -Sections $sections)
         }

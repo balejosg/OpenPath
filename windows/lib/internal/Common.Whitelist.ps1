@@ -35,6 +35,7 @@ function Get-OpenPathWhitelistSectionsFromFile {
         Whitelist = @()
         BlockedSubdomains = @()
         BlockedPaths = @()
+        AllowedPaths = @()
         IsDisabled = $false
     }
 
@@ -68,6 +69,7 @@ function Get-OpenPathWhitelistSectionsFromFile {
             'WHITELIST' { $result.Whitelist += $trimmed }
             'BLOCKED-SUBDOMAINS' { $result.BlockedSubdomains += $trimmed }
             'BLOCKED-PATHS' { $result.BlockedPaths += $trimmed }
+            'ALLOWED-PATHS' { $result.AllowedPaths += $trimmed }
         }
     }
 
@@ -85,6 +87,8 @@ function ConvertTo-OpenPathWhitelistFileContent {
         [string[]]$BlockedSubdomains = @(),
 
         [string[]]$BlockedPaths = @(),
+
+        [string[]]$AllowedPaths = @(),
 
         [switch]$Disabled
     )
@@ -115,6 +119,15 @@ function ConvertTo-OpenPathWhitelistFileContent {
     $lines.Add('') | Out-Null
     $lines.Add('## BLOCKED-PATHS') | Out-Null
     foreach ($pathRule in @($BlockedPaths)) {
+        $trimmed = ([string]$pathRule).Trim()
+        if ($trimmed) {
+            $lines.Add($trimmed) | Out-Null
+        }
+    }
+
+    $lines.Add('') | Out-Null
+    $lines.Add('## ALLOWED-PATHS') | Out-Null
+    foreach ($pathRule in @($AllowedPaths)) {
         $trimmed = ([string]$pathRule).Trim()
         if ($trimmed) {
             $lines.Add($trimmed) | Out-Null

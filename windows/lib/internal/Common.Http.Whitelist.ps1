@@ -34,6 +34,7 @@ function Get-OpenPathFromUrl {
         Whitelist         = @()
         BlockedSubdomains = @()
         BlockedPaths      = @()
+        AllowedPaths      = @()
         IsDisabled        = $false
         NotModified       = $false
     }
@@ -68,6 +69,7 @@ function Get-OpenPathFromUrl {
             'WHITELIST'          { $result.Whitelist += $line }
             'BLOCKED-SUBDOMAINS' { $result.BlockedSubdomains += $line }
             'BLOCKED-PATHS'      { $result.BlockedPaths += $line }
+            'ALLOWED-PATHS'      { $result.AllowedPaths += $line }
         }
     }
 
