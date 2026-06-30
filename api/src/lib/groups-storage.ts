@@ -162,6 +162,15 @@ export async function exportGroup(groupId: string): Promise<string | null> {
     content += '\n';
   }
 
+  const allowedPaths = rules.filter((rule) => rule.type === 'allowed_path' && rule.enabled);
+  if (allowedPaths.length > 0) {
+    content += '## ALLOWED-PATHS\n';
+    allowedPaths.forEach((rule) => {
+      content += `${rule.value}\n`;
+    });
+    content += '\n';
+  }
+
   const finalContent = `${content.trim()}\n`;
   exportCache.delete(groupId);
   exportCache.set(groupId, { version, content: finalContent });

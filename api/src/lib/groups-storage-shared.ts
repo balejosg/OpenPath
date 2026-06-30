@@ -3,7 +3,7 @@ import type { WhitelistGroup, WhitelistRule } from '../db/schema.js';
 import type { DbExecutor } from '../db/index.js';
 
 /** Rule type for whitelist entries */
-export type RuleType = 'whitelist' | 'blocked_subdomain' | 'blocked_path';
+export type RuleType = 'whitelist' | 'blocked_subdomain' | 'blocked_path' | 'allowed_path';
 
 /** Group visibility scope */
 export type { GroupVisibility };

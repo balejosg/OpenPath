@@ -192,4 +192,44 @@ await describe('Groups Router - export flows', { timeout: 30000 }, async () => {
       assert.strictEqual(response.status, 404);
     });
   });
+
+  await describe('ALLOWED-PATHS export section', async () => {
+    let allowedPathGroupId = '';
+
+    before(async () => {
+      allowedPathGroupId = (
+        await getHarness().createGroup({
+          displayName: 'Allowed Path Export Test Group',
+          name: uniqueGroupName('allowed-path-export'),
+        })
+      ).id;
+
+      for (const rule of [
+        { type: 'whitelist', value: 'youtube.com' },
+        { type: 'blocked_path', value: 'example.com/ads' },
+        { type: 'allowed_path', value: 'youtube.com/watch?v=abc' },
+      ] as const) {
+        await getHarness().trpcMutate(
+          'groups.createRule',
+          { groupId: allowedPathGroupId, type: rule.type, value: rule.value },
+          bearerAuth(getHarness().adminToken)
+        );
+      }
+    });
+
+    // allowed_path rules must serialize into their own ## ALLOWED-PATHS section.
+    await test('exportGroup emits ## ALLOWED-PATHS after ## BLOCKED-PATHS', async () => {
+      const response = await getHarness().trpcQuery(
+        'groups.export',
+        { groupId: allowedPathGroupId },
+        bearerAuth(getHarness().adminToken)
+      );
+      assertStatus(response, 200);
+
+      const { data } = (await parseTRPC(response)) as { data?: { name: string; content: string } };
+      const content = data?.content ?? '';
+      assert.match(content, /## ALLOWED-PATHS\nyoutube\.com\/watch\?v=abc/);
+      assert.ok(content.indexOf('## BLOCKED-PATHS') < content.indexOf('## ALLOWED-PATHS'));
+    });
+  });
 });

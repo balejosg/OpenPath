@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import { validateRuleValue } from '@openpath/shared/rules-validation';
 
-export const RuleTypeSchema = z.enum(['whitelist', 'blocked_subdomain', 'blocked_path']);
+export const RuleTypeSchema = z.enum([
+  'whitelist',
+  'blocked_subdomain',
+  'blocked_path',
+  'allowed_path',
+]);
 export const GroupVisibilitySchema = z.enum(['private', 'instance_public']);
 
 export const CreateGroupSchema = z.object({
