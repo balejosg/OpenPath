@@ -237,5 +237,14 @@ async function insertOrReuseExemption(
     throw new MachineExemptionError('CONFLICT', 'Could not create exemption');
   }
 
+  if (row.groupId !== input.groupId) {
+    const updated = await db
+      .update(machineExemptions)
+      .set({ groupId: input.groupId })
+      .where(eq(machineExemptions.id, row.id))
+      .returning();
+    return updated[0] ?? row;
+  }
+
   return row;
 }

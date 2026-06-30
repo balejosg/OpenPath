@@ -497,6 +497,54 @@ await describe('exemption-storage', async () => {
     assert.strictEqual(result?.groupId, UNRESTRICTED_GROUP_ID);
   });
 
+  await test('re-applying with a different groupId during the same window updates the stored group_id', async () => {
+    const classroom = await classroomStorage.createClassroom({
+      name: `grp-update-room-${TEST_RUN_ID}`,
+      displayName: 'Group Update Room',
+      defaultGroupId: 'default-group',
+    });
+    const machine = await classroomStorage.registerMachine({
+      hostname: `pc-grp-update-${TEST_RUN_ID}`,
+      classroomId: classroom.id,
+    });
+    const schedule = await scheduleStorage.createSchedule({
+      classroomId: classroom.id,
+      teacherId: 'legacy_admin',
+      groupId: 'group-scheduled',
+      dayOfWeek: 1,
+      startTime: '09:00',
+      endTime: '10:00',
+    });
+
+    const now = new Date(2026, 1, 23, 9, 15, 30);
+
+    // First apply: groupId = 'group-scheduled'
+    await createMachineExemption({
+      machineId: machine.id,
+      classroomId: classroom.id,
+      scheduleId: schedule.id,
+      createdBy: 'legacy_admin',
+      groupId: 'group-scheduled',
+      now,
+    });
+
+    // Re-apply same machine+schedule+now but with a DIFFERENT groupId
+    const reapplied = await createMachineExemption({
+      machineId: machine.id,
+      classroomId: classroom.id,
+      scheduleId: schedule.id,
+      createdBy: 'legacy_admin',
+      groupId: 'group-one-off',
+      now,
+    });
+
+    assert.strictEqual(reapplied.groupId, 'group-one-off');
+
+    const active = await getActiveMachineExemption(machine.id, classroom.id, now);
+    assert.ok(active);
+    assert.strictEqual(active.groupId, 'group-one-off');
+  });
+
   await test('createMachineExemption persists group_id and getActiveMachineExemption returns it', async () => {
     const classroom = await classroomStorage.createClassroom({
       name: `grp-room-${TEST_RUN_ID}`,
