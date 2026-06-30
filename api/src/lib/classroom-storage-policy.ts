@@ -1,5 +1,5 @@
 import { getCurrentSchedule, getCurrentSchedulesByClassroomIds } from './schedule-storage.js';
-import { isMachineExempt } from './exemption-storage.js';
+import { getActiveMachineExemption } from './exemption-storage.js';
 import {
   buildClassroomPolicyScope,
   toEffectivePolicyContext,
@@ -102,8 +102,17 @@ export async function resolveEffectiveMachineEnforcementPolicyContext(
   const classroom = await getClassroomById(classroomId);
   if (!classroom) return null;
 
-  const exempt = await isMachineExempt(machine.id, classroomId, now);
-  if (exempt) {
+  const active = await getActiveMachineExemption(machine.id, classroomId, now);
+  if (active) {
+    if (active.groupId) {
+      return {
+        classroomId: classroom.id,
+        classroomName: classroom.name,
+        groupId: active.groupId,
+        mode: 'grouped',
+        reason: 'exemption',
+      };
+    }
     return {
       classroomId: classroom.id,
       classroomName: classroom.name,

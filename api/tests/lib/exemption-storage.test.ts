@@ -426,6 +426,77 @@ await describe('exemption-storage', async () => {
     assert.strictEqual(exemptions.length, 0);
   });
 
+  await test('enforcement: active exemption with group_id applies that group to the machine', async () => {
+    const classroom = await classroomStorage.createClassroom({
+      name: `enf-room-${TEST_RUN_ID}`,
+      displayName: 'Enforcement Room',
+      defaultGroupId: 'default-group',
+    });
+    const machine = await classroomStorage.registerMachine({
+      hostname: `pc-enf-${TEST_RUN_ID}`,
+      classroomId: classroom.id,
+    });
+    const schedule = await scheduleStorage.createSchedule({
+      classroomId: classroom.id,
+      teacherId: 'legacy_admin',
+      groupId: 'group-scheduled',
+      dayOfWeek: 1,
+      startTime: '09:00',
+      endTime: '10:00',
+    });
+    const now = new Date(2026, 1, 23, 9, 15, 30);
+
+    // Sin exención: el PC recibe el grupo del aula (por calendario).
+    const baseline = await classroomStorage.resolveMachineEnforcementContext(machine.hostname, now);
+    assert.strictEqual(baseline?.groupId, 'group-scheduled');
+
+    // Con exención + group_id: el PC recibe el grupo override.
+    await createMachineExemption({
+      machineId: machine.id,
+      classroomId: classroom.id,
+      scheduleId: schedule.id,
+      createdBy: 'legacy_admin',
+      groupId: 'group-one-off',
+      now,
+    });
+    const overridden = await classroomStorage.resolveMachineEnforcementContext(
+      machine.hostname,
+      now
+    );
+    assert.strictEqual(overridden?.groupId, 'group-one-off');
+  });
+
+  await test('enforcement: active exemption without group_id stays unrestricted', async () => {
+    const classroom = await classroomStorage.createClassroom({
+      name: `unr-room-${TEST_RUN_ID}`,
+      displayName: 'Unrestricted Room',
+      defaultGroupId: 'default-group',
+    });
+    const machine = await classroomStorage.registerMachine({
+      hostname: `pc-unr-${TEST_RUN_ID}`,
+      classroomId: classroom.id,
+    });
+    const schedule = await scheduleStorage.createSchedule({
+      classroomId: classroom.id,
+      teacherId: 'legacy_admin',
+      groupId: 'group-scheduled',
+      dayOfWeek: 1,
+      startTime: '09:00',
+      endTime: '10:00',
+    });
+    const now = new Date(2026, 1, 23, 9, 15, 30);
+
+    await createMachineExemption({
+      machineId: machine.id,
+      classroomId: classroom.id,
+      scheduleId: schedule.id,
+      createdBy: 'legacy_admin',
+      now, // groupId omitido => NULL
+    });
+    const result = await classroomStorage.resolveMachineEnforcementContext(machine.hostname, now);
+    assert.strictEqual(result?.groupId, UNRESTRICTED_GROUP_ID);
+  });
+
   await test('createMachineExemption persists group_id and getActiveMachineExemption returns it', async () => {
     const classroom = await classroomStorage.createClassroom({
       name: `grp-room-${TEST_RUN_ID}`,
