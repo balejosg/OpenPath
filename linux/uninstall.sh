@@ -53,6 +53,12 @@ systemctl stop openpath-agent-update.timer 2>/dev/null || true
 systemctl stop dnsmasq-watchdog.timer 2>/dev/null || true
 systemctl stop captive-portal-detector.service 2>/dev/null || true
 systemctl stop openpath-runtime-dependency-apply.path 2>/dev/null || true
+# Stop the regenerator SERVICES too (not just their timer/path triggers): an
+# in-flight watchdog or runtime-dependency-apply run can otherwise finish and
+# rewrite /etc/dnsmasq.d/openpath.conf after we remove it below (a uninstall
+# race that surfaces on ubuntu-24.04 systemd timing).
+systemctl stop dnsmasq-watchdog.service 2>/dev/null || true
+systemctl stop openpath-runtime-dependency-apply.service 2>/dev/null || true
 systemctl stop dnsmasq 2>/dev/null || true
 systemctl disable dnsmasq 2>/dev/null || true
 
@@ -353,6 +359,11 @@ EOF
         echo "  ⚠ DNS still has problems - a restart may be required"
     fi
 fi
+
+# Final sweep: the [4/7] systemd-resolved restart can wake a regenerator that
+# rewrites the dnsmasq config after the earlier removal, so remove it once more
+# now that every service and trigger is stopped.
+rm -f /etc/dnsmasq.d/openpath.conf 2>/dev/null || true
 
 echo ""
 echo "======================================================"
