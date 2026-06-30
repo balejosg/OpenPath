@@ -692,6 +692,9 @@ def get_blocked_paths():
                     section = "blocked_path"
                     found_blocked_path_section = True
                     continue
+                if line_upper == "## ALLOWED-PATHS":
+                    section = "allowed_path"
+                    continue
 
                 if not line or line.startswith("#"):
                     continue
@@ -724,6 +727,74 @@ def get_blocked_paths():
         return {"success": False, "action": "get-blocked-paths", "error": str(e)}
 
 
+def get_allowed_paths():
+    """Obtiene reglas de ## ALLOWED-PATHS del whitelist local (allow-por-ruta).
+
+    El DNS/firewall ignoran esta seccion; solo la usa la extension del navegador.
+    """
+    whitelist_file = get_whitelist_file_path()
+    if whitelist_file is None:
+        return {
+            "success": False,
+            "action": "get-allowed-paths",
+            "error": "Whitelist file not found",
+        }
+
+    allowed_paths = []
+    section = ""
+    found_allowed_path_section = False
+
+    try:
+        with open(whitelist_file, "r", encoding="utf-8", errors="ignore") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                line_upper = line.upper()
+
+                if line_upper == "## WHITELIST":
+                    section = "whitelist"
+                    continue
+                if line_upper == "## BLOCKED-SUBDOMAINS":
+                    section = "blocked_sub"
+                    continue
+                if line_upper == "## BLOCKED-PATHS":
+                    section = "blocked_path"
+                    continue
+                if line_upper == "## ALLOWED-PATHS":
+                    section = "allowed_path"
+                    found_allowed_path_section = True
+                    continue
+
+                if not line or line.startswith("#"):
+                    continue
+
+                if not section:
+                    section = "whitelist"
+
+                if section == "allowed_path":
+                    allowed_paths.append(line)
+                    if len(allowed_paths) >= MAX_PATH_RULES:
+                        break
+
+        if not found_allowed_path_section:
+            log_debug("Warning: ## ALLOWED-PATHS section not found in whitelist file")
+
+        digest = hashlib.sha256("\n".join(allowed_paths).encode("utf-8")).hexdigest()
+        mtime = int(whitelist_file.stat().st_mtime)
+
+        return {
+            "success": True,
+            "action": "get-allowed-paths",
+            "paths": allowed_paths,
+            "count": len(allowed_paths),
+            "hash": digest,
+            "mtime": mtime,
+            "source": str(whitelist_file),
+        }
+    except Exception as e:
+        log_debug(f"Error getting allowed paths: {e}")
+        return {"success": False, "action": "get-allowed-paths", "error": str(e)}
+
+
 def get_blocked_subdomains():
     """Obtiene reglas de ## BLOCKED-SUBDOMAINS del whitelist local"""
     whitelist_file = get_whitelist_file_path()
@@ -746,7 +817,7 @@ def get_blocked_subdomains():
                 if line_upper == "## BLOCKED-SUBDOMAINS":
                     section = "blocked_sub"
                     continue
-                if line_upper in ("## WHITELIST", "## BLOCKED-PATHS"):
+                if line_upper in ("## WHITELIST", "## BLOCKED-PATHS", "## ALLOWED-PATHS"):
                     section = "other"
                     continue
                 if not line or line.startswith("#"):
@@ -830,6 +901,9 @@ def handle_message(message):
 
     elif action == "get-blocked-paths":
         return get_blocked_paths()
+
+    elif action == "get-allowed-paths":
+        return get_allowed_paths()
 
     elif action == "get-blocked-subdomains":
         return get_blocked_subdomains()
