@@ -175,6 +175,7 @@ describe('useClassroomExemptions', () => {
       machineId: 'machine-1',
       classroomId: 'classroom-1',
       scheduleId: activeSchedule.id,
+      groupId: null,
     });
 
     await waitFor(() => {
@@ -286,6 +287,29 @@ describe('useClassroomExemptions', () => {
       expect(refetchClassrooms).toHaveBeenCalledTimes(1);
       expect(mockListExemptions).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it('forwards the selected groupId when creating an exemption', async () => {
+    const { result } = renderHook(() =>
+      useClassroomExemptions({
+        selectedClassroom: classroom,
+        activeSchedule: weeklySchedule,
+        scheduleBoundarySources: [weeklySchedule],
+        refetchClassrooms: vi.fn(),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loadingExemptions).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.handleCreateExemption('machine-1', 'group-x');
+    });
+
+    expect(mockCreateExemption).toHaveBeenCalledWith(
+      expect.objectContaining({ machineId: 'machine-1', groupId: 'group-x' })
+    );
   });
 
   it('disables schedule-boundary invalidation when the classroom already has an active group', async () => {

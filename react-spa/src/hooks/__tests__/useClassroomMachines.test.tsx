@@ -247,6 +247,7 @@ describe('useClassroomMachines', () => {
       machineId: 'machine-1',
       classroomId: 'classroom-1',
       scheduleId: `${startAt}-${endAt}`,
+      groupId: null,
     });
 
     await waitFor(() => {

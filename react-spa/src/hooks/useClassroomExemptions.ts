@@ -71,7 +71,7 @@ export function useClassroomExemptions({
   }, []);
 
   const handleCreateExemption = useCallback(
-    async (machineId: string) => {
+    async (machineId: string, groupId: string | null = null) => {
       if (!selectedClassroom || !activeSchedule) {
         return;
       }
@@ -83,6 +83,7 @@ export function useClassroomExemptions({
           machineId,
           classroomId: selectedClassroom.id,
           scheduleId: activeSchedule.id,
+          groupId,
         });
         await fetchExemptions(selectedClassroom.id);
       } catch (err) {
