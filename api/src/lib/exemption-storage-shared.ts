@@ -49,6 +49,7 @@ export interface CreateMachineExemptionInput {
   classroomId: string;
   scheduleId: string;
   createdBy: string | null;
+  groupId?: string | null | undefined;
   now?: Date | undefined;
 }
 
@@ -70,6 +71,7 @@ export interface ActiveMachineExemption {
   classroomId: string;
   scheduleId: string | null;
   source: MachineExemptionSource;
+  groupId: string | null;
   reason: string | null;
   createdBy: string | null;
   createdAt: Date | null;

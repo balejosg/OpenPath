@@ -59,6 +59,7 @@ export async function createMachineExemption(
       source: 'schedule',
       reason: null,
       createdBy: input.createdBy,
+      groupId: input.groupId ?? null,
       expiresAt: endAt,
     });
   }
@@ -101,6 +102,7 @@ export async function createMachineExemption(
     source: 'schedule',
     reason: null,
     createdBy: input.createdBy,
+    groupId: input.groupId ?? null,
     expiresAt: buildExpiresAtForScheduleEnd(now, schedule.endTime),
   });
 }
@@ -147,6 +149,7 @@ export async function createOperationalMachineExemption(
     source: 'operational',
     reason,
     createdBy: input.createdBy,
+    groupId: null,
     expiresAt: new Date(now.getTime() + input.durationHours * 60 * 60 * 1000),
   });
 }
@@ -185,6 +188,7 @@ interface InsertMachineExemptionInput {
   source: 'schedule' | 'operational';
   reason: string | null;
   createdBy: string | null;
+  groupId: string | null;
   expiresAt: Date;
 }
 
@@ -202,6 +206,7 @@ async function insertOrReuseExemption(
       source: input.source,
       reason: input.reason,
       createdBy: input.createdBy,
+      groupId: input.groupId,
       expiresAt: input.expiresAt,
     })
     .onConflictDoNothing()

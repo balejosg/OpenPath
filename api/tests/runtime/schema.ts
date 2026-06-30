@@ -48,6 +48,7 @@ async function ensureMachineExemptionsSchema(): Promise<void> {
     'ALTER TABLE "machine_exemptions" ALTER COLUMN "schedule_id" DROP NOT NULL;',
     'ALTER TABLE "machine_exemptions" ADD COLUMN IF NOT EXISTS "source" varchar(20) DEFAULT \'schedule\' NOT NULL;',
     'ALTER TABLE "machine_exemptions" ADD COLUMN IF NOT EXISTS "reason" text;',
+    'ALTER TABLE "machine_exemptions" ADD COLUMN IF NOT EXISTS "group_id" varchar(50);',
     'ALTER TABLE "machine_exemptions" DROP CONSTRAINT IF EXISTS "machine_exemptions_machine_schedule_expires_key";',
     'DROP INDEX IF EXISTS "machine_exemptions_machine_schedule_expires_key";',
     'DROP INDEX IF EXISTS "machine_exemptions_machine_operational_expires_key";',

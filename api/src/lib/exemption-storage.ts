@@ -16,6 +16,7 @@ export {
 
 export {
   getActiveExemptHostnamesByClassroom,
+  getActiveMachineExemption,
   getActiveMachineExemptionsByClassroom,
   isMachineExempt,
 } from './exemption-storage-query.js';

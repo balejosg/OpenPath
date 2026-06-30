@@ -10,6 +10,7 @@ import {
   UNRESTRICTED_GROUP_ID,
   createMachineExemption,
   createOperationalMachineExemption,
+  getActiveMachineExemption,
   getActiveMachineExemptionsByClassroom,
   isMachineExempt,
 } from '../../src/lib/exemption-storage.js';
@@ -63,6 +64,9 @@ await describe('exemption-storage', async () => {
     );
     await db.execute(
       sql.raw('ALTER TABLE "machine_exemptions" ADD COLUMN IF NOT EXISTS "reason" text;')
+    );
+    await db.execute(
+      sql.raw('ALTER TABLE "machine_exemptions" ADD COLUMN IF NOT EXISTS "group_id" varchar(50);')
     );
     await db.execute(
       sql.raw(
@@ -420,5 +424,41 @@ await describe('exemption-storage', async () => {
 
     const exemptions = await getActiveMachineExemptionsByClassroom(classroom.id, now);
     assert.strictEqual(exemptions.length, 0);
+  });
+
+  await test('createMachineExemption persists group_id and getActiveMachineExemption returns it', async () => {
+    const classroom = await classroomStorage.createClassroom({
+      name: `grp-room-${TEST_RUN_ID}`,
+      displayName: 'Group Room',
+      defaultGroupId: 'default-group',
+    });
+    const machine = await classroomStorage.registerMachine({
+      hostname: `pc-grp-${TEST_RUN_ID}`,
+      classroomId: classroom.id,
+    });
+    const schedule = await scheduleStorage.createSchedule({
+      classroomId: classroom.id,
+      teacherId: 'legacy_admin',
+      groupId: 'group-scheduled',
+      dayOfWeek: 1,
+      startTime: '09:00',
+      endTime: '10:00',
+    });
+
+    const now = new Date(2026, 1, 23, 9, 15, 30); // mismo (día=lunes, dentro de franja) que los tests existentes
+    const created = await createMachineExemption({
+      machineId: machine.id,
+      classroomId: classroom.id,
+      scheduleId: schedule.id,
+      createdBy: 'legacy_admin',
+      groupId: 'group-one-off',
+      now,
+    });
+    assert.strictEqual(created.groupId, 'group-one-off');
+
+    const active = await getActiveMachineExemption(machine.id, classroom.id, now);
+    assert.ok(active);
+    assert.strictEqual(active.groupId, 'group-one-off');
+    assert.strictEqual(active.source, 'schedule');
   });
 });
