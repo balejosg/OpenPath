@@ -28,7 +28,6 @@ describe('GroupsGrid', () => {
         onRetry={vi.fn()}
         onOpenNewModal={vi.fn()}
         onNavigateToRules={onNavigateToRules}
-        onOpenConfigModal={vi.fn()}
         onOpenCloneModal={onOpenCloneModal}
       />
     );
@@ -42,5 +41,37 @@ describe('GroupsGrid', () => {
       readOnly: true,
     });
     expect(onOpenCloneModal).toHaveBeenCalledWith('library-1');
+  });
+
+  it('navigates directly to domains from a my-group card', () => {
+    const onNavigateToRules = vi.fn();
+
+    render(
+      <GroupsGrid
+        activeView="my"
+        groups={[
+          {
+            id: 'group-1',
+            name: 'grupo-1',
+            displayName: 'Grupo 1',
+            description: 'Grupo 1',
+            domainCount: 3,
+            status: 'Active',
+            visibility: 'private',
+          },
+        ]}
+        loading={false}
+        error={null}
+        admin
+        teacherCanCreateGroups={false}
+        onRetry={vi.fn()}
+        onOpenNewModal={vi.fn()}
+        onNavigateToRules={onNavigateToRules}
+        onOpenCloneModal={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /manage domains/i }));
+    expect(onNavigateToRules).toHaveBeenCalledWith({ id: 'group-1', name: 'Grupo 1' });
   });
 });

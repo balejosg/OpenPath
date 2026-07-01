@@ -39,7 +39,6 @@ const Groups: React.FC<GroupsProps> = ({ onNavigateToRules, headerActions }) => 
         }}
         onOpenNewModal={viewModel.openNewModal}
         onNavigateToRules={onNavigateToRules}
-        onOpenConfigModal={viewModel.openConfigModal}
         onOpenCloneModal={viewModel.openCloneModal}
       />
 

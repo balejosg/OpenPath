@@ -21,7 +21,6 @@ interface GroupsGridProps {
   onRetry: () => void;
   onOpenNewModal: () => void;
   onNavigateToRules: (group: { id: string; name: string; readOnly?: boolean }) => void;
-  onOpenConfigModal: (groupId: string) => void;
   onOpenCloneModal: (groupId: string) => void;
 }
 
@@ -35,7 +34,6 @@ export function GroupsGrid({
   onRetry,
   onOpenNewModal,
   onNavigateToRules,
-  onOpenConfigModal,
   onOpenCloneModal,
 }: GroupsGridProps) {
   const t = useT();
@@ -170,10 +168,11 @@ export function GroupsGrid({
                   </div>
                 ) : (
                   <button
-                    onClick={() => onOpenConfigModal(group.id)}
+                    onClick={() => onNavigateToRules({ id: group.id, name: group.displayName })}
                     className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 font-medium transition-opacity"
+                    title={t('groups.grid.manageDomains')}
                   >
-                    {t('common.configure')} <ArrowRight size={12} />
+                    {t('groups.grid.manageDomains')} <ArrowRight size={12} />
                   </button>
                 )}
               </div>

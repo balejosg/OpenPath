@@ -71,22 +71,6 @@ describe('Groups view', () => {
     mockCloneGroup.mockResolvedValue({ id: 'clone-1', name: 'biblioteca-copia' });
   });
 
-  it('shows actionable inline feedback when group configuration save fails with 400', async () => {
-    mockUpdateGroup.mockRejectedValueOnce({ data: { code: 'BAD_REQUEST' } });
-
-    renderGroups();
-
-    await screen.findByText('grupo-1');
-    fireEvent.click(screen.getByRole('button', { name: /configure/i }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Save Changes' }));
-
-    await waitFor(() => {
-      expect(mockUpdateGroup).toHaveBeenCalled();
-    });
-
-    expect(await screen.findByText('Review the group details before saving.')).toBeInTheDocument();
-  });
-
   it('shows create CTA + create-oriented empty-state for a teacher', async () => {
     isAdminMock.mockReturnValue(false);
     isTeacherMock.mockReturnValue(true);
