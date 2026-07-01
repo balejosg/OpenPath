@@ -29,7 +29,6 @@ export const TeacherClassroomControlCard: React.FC<TeacherClassroomControlCardPr
     controlLoading,
     controlError,
     handleTakeControl,
-    teacherGroupsEnabled,
   } = viewModel;
 
   return (
@@ -78,11 +77,7 @@ export const TeacherClassroomControlCard: React.FC<TeacherClassroomControlCardPr
           {groupsError && <p className="mt-2 text-xs text-red-600">{groupsError}</p>}
 
           {!groupsLoading && !groupsError && groups.length === 0 && (
-            <p className="mt-2 text-xs text-slate-500 italic">
-              {teacherGroupsEnabled
-                ? t('teacher.control.noPolicies')
-                : t('teacher.control.noAssignedPolicies')}
-            </p>
+            <p className="mt-2 text-xs text-slate-500 italic">{t('teacher.control.noPolicies')}</p>
           )}
 
           {(() => {

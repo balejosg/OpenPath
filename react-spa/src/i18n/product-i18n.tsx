@@ -189,8 +189,6 @@ export const productI18nCatalogs = {
     'teacher.control.policyToApply': 'Policy to apply',
     'teacher.control.restoreDefault': 'Restore default (No group)',
     'teacher.control.noPolicies': 'You have no policies. Go to "My Policies" to create one.',
-    'teacher.control.noAssignedPolicies':
-      'You have no assigned policies. Ask an administrator to assign one.',
     'teacher.control.manageRules': 'Manage rules for this policy',
     'teacher.control.applyPolicy': 'Apply Policy',
     'teacher.control.releaseClassroom': 'Release Classroom',
@@ -944,8 +942,6 @@ export const productI18nCatalogs = {
     'teacher.control.policyToApply': 'Política a aplicar',
     'teacher.control.restoreDefault': 'Restaurar valor por defecto (sin grupo)',
     'teacher.control.noPolicies': 'No tienes políticas. Ve a "Mis políticas" para crear una.',
-    'teacher.control.noAssignedPolicies':
-      'No tienes políticas asignadas. Pide a un administrador que te asigne una.',
     'teacher.control.manageRules': 'Gestionar reglas de esta política',
     'teacher.control.applyPolicy': 'Aplicar política',
     'teacher.control.releaseClassroom': 'Liberar aula',

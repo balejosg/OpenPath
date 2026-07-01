@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
 import { trpc } from '../lib/trpc';
-import { isTeacherGroupsFeatureEnabled } from '../lib/auth';
 import {
   selectActiveClassroomRowsFromModels,
   selectClassroomControlConfirmation,
@@ -13,7 +12,6 @@ import { useTeacherDashboardSchedules } from './useTeacherDashboardSchedules';
 
 export function useTeacherDashboardViewModel() {
   const t = useT();
-  const teacherGroupsEnabled = isTeacherGroupsFeatureEnabled();
   const shouldPoll = import.meta.env.MODE !== 'test';
   const {
     data: classrooms,
@@ -140,7 +138,6 @@ export function useTeacherDashboardViewModel() {
   );
 
   return {
-    teacherGroupsEnabled,
     classrooms,
     classroomsLoading,
     classroomsError,

@@ -4,7 +4,6 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import TeacherDashboard from '../TeacherDashboard';
 import { renderWithQueryClient } from '../../test-utils/query';
 import type { ClassroomListItem } from '../../lib/classrooms';
-import { USER_KEY } from '../../lib/auth-storage';
 import type { OneOffScheduleWithPermissions, ScheduleWithPermissions } from '../../types';
 
 let queryClient: ReturnType<typeof renderWithQueryClient>['queryClient'] | null = null;
@@ -813,26 +812,7 @@ describe('TeacherDashboard', () => {
     expect(mockSchedulesDelete).not.toHaveBeenCalled();
   });
 
-  it('shows classroom control hints from the server-derived teacher groups capability', async () => {
-    mockGroupsListQuery.mockResolvedValue([]);
-    const firstRender = await renderTeacherDashboardReady();
-
-    expect(
-      await screen.findByText('You have no assigned policies. Ask an administrator to assign one.')
-    ).toBeInTheDocument();
-
-    firstRender.unmount();
-    localStorage.setItem('openpath_teacher_groups_enabled', '1');
-    localStorage.setItem(
-      USER_KEY,
-      JSON.stringify({
-        id: 'teacher-1',
-        email: 'teacher@example.com',
-        name: 'Teacher',
-        roles: [{ role: 'teacher' }],
-        capabilities: { teacherGroups: true },
-      })
-    );
+  it('shows the create-oriented classroom control hint for teachers', async () => {
     mockGroupsListQuery.mockResolvedValue([]);
     await renderTeacherDashboardReady();
 
