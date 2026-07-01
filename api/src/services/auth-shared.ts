@@ -132,20 +132,6 @@ function currentSessionTransport(): LoginResponse['sessionTransport'] {
   return process.env.OPENPATH_ACCESS_TOKEN_COOKIE_NAME ? 'cookie' : 'token';
 }
 
-function readBooleanEnv(value: string | undefined): boolean {
-  return ['1', 'true', 'yes', 'on'].includes(value?.trim().toLowerCase() ?? '');
-}
-
-export function deriveUserCapabilities(roleInfo: RoleInfo[]): AuthUser['capabilities'] {
-  const hasAdminRole = roleInfo.some((role) => role.role === 'admin');
-  const hasTeacherRole = roleInfo.some((role) => role.role === 'teacher');
-  const teacherGroupsEnabled = readBooleanEnv(process.env.OPENPATH_TEACHER_GROUPS_CAPABILITY);
-
-  return {
-    teacherGroups: hasAdminRole || (hasTeacherRole && teacherGroupsEnabled),
-  };
-}
-
 export function buildAuthUser(
   user: {
     id: string;
@@ -161,7 +147,6 @@ export function buildAuthUser(
     name: user.name,
     emailVerified: user.emailVerified ?? false,
     roles: roleInfo,
-    capabilities: deriveUserCapabilities(roleInfo),
   };
 }
 
