@@ -3,6 +3,8 @@
 import { execFileSync, execSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
+import { resolveDiffBase } from './lib/diff-base.mjs';
+
 const ROOT_DIR = resolve(import.meta.dirname, '..');
 
 const WORKSPACE_ORDER = [
@@ -17,26 +19,21 @@ function getChangedFiles() {
   const { base, head } = parseRangeArgs(process.argv.slice(2));
 
   try {
-    if (base) {
-      const output = gitOutput(['diff', '--name-only', '--diff-filter=ACMR', base, head]);
+    const resolved = resolveDiffBase({ explicitBase: base, head, gitExec: silentGitOutput });
+
+    if (resolved.mode === 'range') {
+      const output = gitOutput(['diff', '--name-only', '--diff-filter=ACMR', resolved.base, head]);
 
       return output.split('\n').filter((file) => file.trim());
     }
 
-    const staged = execSync('git diff --cached --name-only --diff-filter=ACMR', {
-      encoding: 'utf-8',
-      cwd: ROOT_DIR,
-    });
+    if (resolved.mode === 'staged') {
+      const staged = execSync('git diff --cached --name-only --diff-filter=ACMR', {
+        encoding: 'utf-8',
+        cwd: ROOT_DIR,
+      });
 
-    const stagedFiles = staged.split('\n').filter((file) => file.trim());
-    if (stagedFiles.length > 0) {
-      return stagedFiles;
-    }
-
-    if (gitRefExists('HEAD~1')) {
-      const output = gitOutput(['diff', '--name-only', '--diff-filter=ACMR', 'HEAD~1', head]);
-
-      return output.split('\n').filter((file) => file.trim());
+      return staged.split('\n').filter((file) => file.trim());
     }
 
     return [];
@@ -73,22 +70,21 @@ function parseRangeArgs(argv) {
   return options;
 }
 
-function gitRefExists(ref) {
-  try {
-    execFileSync('git', ['rev-parse', '--verify', '--quiet', ref], {
-      cwd: ROOT_DIR,
-      stdio: 'ignore',
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function gitOutput(args) {
   return execFileSync('git', args, {
     encoding: 'utf-8',
     cwd: ROOT_DIR,
+  });
+}
+
+// Used only for base-resolution probes (staged check, merge-base, ref-exists): these are
+// expected to fail in some environments (e.g. no `origin` remote), so stderr is suppressed to
+// avoid noisy "fatal: ..." output on the happy path.
+function silentGitOutput(args) {
+  return execFileSync('git', args, {
+    encoding: 'utf-8',
+    cwd: ROOT_DIR,
+    stdio: ['ignore', 'pipe', 'ignore'],
   });
 }
 

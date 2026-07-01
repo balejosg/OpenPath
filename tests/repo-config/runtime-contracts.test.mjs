@@ -157,6 +157,7 @@ describe('repository verification contract', () => {
     const verifyFullScript = readText('scripts/verify-full.sh');
     const runChangedCoverage = readText('scripts/run-changed-coverage.js');
     const checkNewFileCoverage = readText('scripts/check-new-file-coverage.js');
+    const diffBaseLib = readText('scripts/lib/diff-base.mjs');
 
     for (const script of [runChangedCoverage, checkNewFileCoverage]) {
       assert.ok(
@@ -168,10 +169,21 @@ describe('repository verification contract', () => {
         'coverage scripts should accept OPENPATH_VERIFY_BASE/OPENPATH_VERIFY_HEAD environment overrides'
       );
       assert.ok(
-        script.includes('HEAD~1') && script.includes('git diff --cached'),
-        'coverage scripts should keep staged checks but fall back to the last commit when no range is supplied'
+        script.includes('git diff --cached'),
+        'coverage scripts should keep the staged-changes check when no explicit range is supplied'
+      );
+      assert.ok(
+        script.includes('./lib/diff-base.mjs'),
+        'coverage scripts should share their base-resolution logic via scripts/lib/diff-base.mjs'
       );
     }
+
+    assert.ok(
+      diffBaseLib.includes('merge-base') &&
+        diffBaseLib.includes('origin/main') &&
+        diffBaseLib.includes('HEAD~1'),
+      'diff-base.mjs should default an unset base to the merge-base with origin/main, only falling back to HEAD~1 when origin is unavailable'
+    );
 
     assert.ok(
       verifyFullScript.includes('OPENPATH_VERIFY_BASE') &&
