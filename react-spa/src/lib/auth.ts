@@ -21,9 +21,6 @@ export interface User {
     role: UserRole | LegacyUserRole;
     groupIds?: string[];
   }[];
-  capabilities?: {
-    teacherGroups?: boolean;
-  };
 }
 
 /**
@@ -68,14 +65,6 @@ export function isTeacher(): boolean {
 export function isStudent(): boolean {
   const user = getCurrentUser();
   return userHasRole(user?.roles, 'student');
-}
-
-/**
- * Capability: allow teachers to create/manage their own groups in the UI.
- * Derived by the API and cached with the authenticated user; older cached users default to false.
- */
-export function isTeacherGroupsFeatureEnabled(): boolean {
-  return getCurrentUser()?.capabilities?.teacherGroups === true;
 }
 
 /**

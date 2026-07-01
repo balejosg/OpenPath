@@ -41,7 +41,6 @@ describe('useCurrentUser', () => {
         name: 'Teacher One',
         email: 'teacher@example.com',
         roles: [{ role: 'teacher' }],
-        capabilities: { teacherGroups: true },
       },
     });
 
@@ -55,7 +54,6 @@ describe('useCurrentUser', () => {
       name: 'Teacher One',
       email: 'teacher@example.com',
       roles: ['teacher'],
-      capabilities: { teacherGroups: true },
       initials: 'TO',
       primaryRole: 'teacher',
     });
@@ -82,7 +80,6 @@ describe('useCurrentUser', () => {
           name: '',
           email: 'first@example.com',
           roles: [],
-          capabilities: {},
         },
       })
       .mockResolvedValueOnce({
@@ -98,7 +95,6 @@ describe('useCurrentUser', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.user?.initials).toBe('??');
-    expect(result.current.user?.capabilities.teacherGroups).toBe(false);
 
     await act(async () => {
       await result.current.refetch();

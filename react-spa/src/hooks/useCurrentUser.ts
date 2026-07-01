@@ -9,9 +9,6 @@ export interface CurrentUser {
   name: string;
   email: string;
   roles: string[];
-  capabilities: {
-    teacherGroups: boolean;
-  };
   initials: string;
   primaryRole: string;
 }
@@ -52,18 +49,12 @@ export function useCurrentUser(): UseCurrentUserResult {
         .toUpperCase();
 
       const primaryRole = getPrimaryRole(roles);
-      const profileWithOptionalCapabilities = profile as {
-        capabilities?: { teacherGroups?: boolean };
-      };
 
       setUser({
         id: profile.id,
         name: profile.name,
         email: profile.email,
         roles,
-        capabilities: {
-          teacherGroups: profileWithOptionalCapabilities.capabilities?.teacherGroups === true,
-        },
         initials: initials || '??',
         primaryRole,
       });

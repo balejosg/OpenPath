@@ -18,7 +18,6 @@ const baseUser: CurrentUser = {
   name: 'Ana García',
   email: 'ana@example.com',
   roles: ['teacher'],
-  capabilities: { teacherGroups: false },
   initials: 'AG',
   primaryRole: 'teacher',
 };
