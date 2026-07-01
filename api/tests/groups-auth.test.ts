@@ -90,6 +90,25 @@ await describe('Groups Router - authorization and CRUD', { timeout: 30000 }, asy
       testGroupId = data.id;
     });
 
+    await test('should allow a teacher to create a group', async () => {
+      const teacher = await getHarness().createTeacherSession([]);
+
+      const response = await getHarness().trpcMutate(
+        'groups.create',
+        {
+          name: uniqueGroupName('teacher-create'),
+          displayName: 'Teacher Created Group',
+        },
+        bearerAuth(teacher.accessToken)
+      );
+
+      assertStatus(response, 200);
+
+      const { data } = (await parseTRPC(response)) as { data?: CreateGroupResult };
+      assert.ok(data?.id);
+      assert.ok(data.name);
+    });
+
     await test('should get group by ID', async () => {
       const response = await getHarness().trpcQuery(
         'groups.getById',
