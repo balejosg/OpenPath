@@ -255,6 +255,9 @@ describe('RulesManager wiring', () => {
     };
     render(<RulesManager groupId="group-1" groupName="Wiring Group" onBack={vi.fn()} />);
 
+    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.getByText('Private')).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole('button', { name: /settings/i }));
     expect(mockGroupSettings.open).toHaveBeenCalled();
   });
@@ -280,5 +283,7 @@ describe('RulesManager wiring', () => {
     render(<RulesManager groupId="group-1" groupName="Read Only" readOnly onBack={vi.fn()} />);
 
     expect(screen.queryByRole('button', { name: /settings/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Active')).not.toBeInTheDocument();
+    expect(screen.queryByText('Private')).not.toBeInTheDocument();
   });
 });
