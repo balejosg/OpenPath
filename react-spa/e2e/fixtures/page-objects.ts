@@ -228,9 +228,9 @@ export class GroupsPage {
     return groups;
   }
 
-  async clickConfigureGroup(groupName: string) {
+  async clickManageDomains(groupName: string) {
     const group = this.page.getByText(groupName).locator('..').locator('..');
-    await group.getByRole('button', { name: /Configurar|Configure/i }).click();
+    await group.getByRole('button', { name: /Gestionar dominios|Manage domains/i }).click();
   }
 
   async createGroup(name: string, description: string) {
@@ -350,34 +350,29 @@ export class BulkImportPage {
     await this.page.waitForTimeout(500);
 
     // Prefer the seeded E2E group so the RulesManager opens on a stable dataset.
+    // The my/admin card now navigates straight to RulesManager (no intermediate modal).
     const seededGroupCard = this.page
       .locator('div.bg-white.border.border-slate-200.rounded-lg')
       .filter({ hasText: /E2E Test Group/i })
       .first();
-    const seededConfigButton = seededGroupCard.getByRole('button', {
-      name: /Configurar|Configure/i,
+    const seededManageButton = seededGroupCard.getByRole('button', {
+      name: /Gestionar dominios|Manage domains/i,
     });
 
-    const configButton = await Promise.race([
-      seededConfigButton
+    const manageButton = await Promise.race([
+      seededManageButton
         .waitFor({ state: 'visible', timeout: 5000 })
-        .then(() => seededConfigButton),
+        .then(() => seededManageButton),
       this.page
-        .getByRole('button', { name: /Configurar|Configure/i })
+        .getByRole('button', { name: /Gestionar dominios|Manage domains/i })
         .first()
         .waitFor({ state: 'visible', timeout: 5000 })
-        .then(() => this.page.getByRole('button', { name: /Configurar|Configure/i }).first()),
+        .then(() =>
+          this.page.getByRole('button', { name: /Gestionar dominios|Manage domains/i }).first()
+        ),
     ]);
-    await configButton.waitFor({ state: 'visible', timeout: 5000 });
-    await configButton.click();
-
-    // Wait for modal to appear
-    await this.page.waitForTimeout(300);
-
-    // Click "Gestionar" link inside the modal to navigate to RulesManager
-    const manageLink = this.page.getByRole('button', { name: /Gestionar|Manage Rules|Manage/i });
-    await manageLink.waitFor({ state: 'visible', timeout: 5000 });
-    await manageLink.click();
+    await manageButton.waitFor({ state: 'visible', timeout: 5000 });
+    await manageButton.click();
     await this.page.waitForLoadState('networkidle');
 
     // Wait for RulesManager to load (look for the import button)
@@ -563,17 +558,12 @@ export class RulesManagerPage {
 
     await this.page.waitForTimeout(500);
 
-    // Click the first "Configurar" button to open the config modal
-    const configButton = this.page.getByRole('button', { name: /Configurar|Configure/i }).first();
-    await configButton.waitFor({ state: 'visible', timeout: 5000 });
-    await configButton.click();
-
-    await this.page.waitForTimeout(300);
-
-    // Click "Gestionar" link inside the modal to navigate to RulesManager
-    const manageLink = this.page.getByRole('button', { name: /Gestionar|Manage Rules|Manage/i });
-    await manageLink.waitFor({ state: 'visible', timeout: 5000 });
-    await manageLink.click();
+    // The my/admin card now navigates straight to RulesManager (no intermediate modal).
+    const manageButton = this.page
+      .getByRole('button', { name: /Gestionar dominios|Manage domains/i })
+      .first();
+    await manageButton.waitFor({ state: 'visible', timeout: 5000 });
+    await manageButton.click();
     await this.page.waitForLoadState('networkidle');
 
     // Wait for RulesManager to load. Seed a baseline rule if the selected group is empty,
