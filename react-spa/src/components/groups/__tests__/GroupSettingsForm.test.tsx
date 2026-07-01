@@ -50,4 +50,19 @@ describe('GroupSettingsForm', () => {
     const slugParagraph = document.querySelector('p.text-xs.text-slate-500');
     expect(slugParagraph?.textContent ?? '').not.toContain('Slug:');
   });
+
+  it('activates and privatizes the group from an inactive/public starting state', () => {
+    const props = renderForm({ status: 'Inactive', visibility: 'instance_public' });
+
+    const activeButton = screen.getByRole('button', { name: 'Active' });
+    const privateButton = screen.getByRole('button', { name: 'Private' });
+
+    fireEvent.click(activeButton);
+    fireEvent.click(privateButton);
+
+    expect(props.onStatusChange).toHaveBeenCalledWith('Active');
+    expect(props.onVisibilityChange).toHaveBeenCalledWith('private');
+    expect(activeButton.className).not.toContain('bg-green-50');
+    expect(privateButton.className).not.toContain('bg-slate-100');
+  });
 });

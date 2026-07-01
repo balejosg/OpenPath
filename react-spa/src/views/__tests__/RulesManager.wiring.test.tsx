@@ -36,6 +36,8 @@ const mockViewModel = vi.hoisted(() => ({
   collectionToggleSelection: vi.fn(),
   collectionToggleSelectAll: vi.fn(),
   collectionClearSelection: vi.fn(),
+  collectionSetRuleEnabled: vi.fn().mockResolvedValue(undefined),
+  collectionBulkSetRulesEnabled: vi.fn().mockResolvedValue(undefined),
 }));
 
 const mockGroupSettings = vi.hoisted(() => ({
@@ -130,6 +132,8 @@ vi.mock('../../hooks/useRulesManagerViewModel', () => ({
           bulkDeleteRules: mockViewModel.collectionBulkDeleteRules,
           bulkCreateRules: mockViewModel.collectionBulkCreateRules,
           updateRule: mockViewModel.collectionUpdateRule,
+          setRuleEnabled: mockViewModel.collectionSetRuleEnabled,
+          bulkSetRulesEnabled: mockViewModel.collectionBulkSetRulesEnabled,
         },
         refetch: mockViewModel.collectionRefetch,
       },
@@ -285,5 +289,35 @@ describe('RulesManager wiring', () => {
     expect(screen.queryByRole('button', { name: /settings/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Active')).not.toBeInTheDocument();
     expect(screen.queryByText('Private')).not.toBeInTheDocument();
+  });
+
+  it('saves settings from the drawer', () => {
+    mockGroupSettings.metadata = {
+      displayName: 'Grupo 1',
+      status: 'Active',
+      visibility: 'private',
+    };
+    mockGroupSettings.isOpen = true;
+    render(<RulesManager groupId="group-1" groupName="Wiring Group" onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    expect(mockGroupSettings.save).toHaveBeenCalled();
+  });
+
+  it('wires bulk enable/disable and the row toggle-enabled control', () => {
+    render(<RulesManager groupId="group-1" groupName="Wiring Group" onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable' }));
+    expect(mockViewModel.collectionBulkSetRulesEnabled).toHaveBeenCalledWith(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+    expect(mockViewModel.collectionBulkSetRulesEnabled).toHaveBeenCalledWith(true);
+
+    fireEvent.click(screen.getByTestId('toggle-enabled-button'));
+    expect(mockViewModel.collectionSetRuleEnabled).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'rule-1' }),
+      false
+    );
   });
 });
