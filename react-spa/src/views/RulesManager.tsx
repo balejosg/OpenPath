@@ -10,6 +10,8 @@ import { RulesManagerToolbar } from '../components/rules-manager/RulesManagerToo
 import { useToast } from '../components/ui/Toast';
 import { exportRules } from '../lib/exportRules';
 import { useRulesManagerViewModel } from '../hooks/useRulesManagerViewModel';
+import { useGroupSettings } from '../hooks/useGroupSettings';
+import { GroupSettingsDrawer } from '../components/groups/GroupSettingsDrawer';
 
 interface RulesManagerProps {
   groupId: string;
@@ -38,6 +40,7 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
     onError: toastError,
   });
   const { collection } = viewModel;
+  const settings = useGroupSettings({ groupId, active: !readOnly });
 
   return (
     <div
@@ -66,6 +69,9 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
         viewMode={viewModel.viewMode}
         onBack={onBack}
         onViewModeChange={viewModel.handleViewModeChange}
+        status={!readOnly ? settings.metadata?.status : undefined}
+        visibility={!readOnly ? settings.metadata?.visibility : undefined}
+        onOpenSettings={!readOnly && settings.metadata ? settings.open : undefined}
       />
 
       {readOnly && (
@@ -163,6 +169,25 @@ export const RulesManager: React.FC<RulesManagerProps> = ({
           onClose={viewModel.closeImportModal}
           onImport={collection.actions.bulkCreateRules}
           initialText={viewModel.importInitialText}
+        />
+      )}
+
+      {!readOnly && (
+        <GroupSettingsDrawer
+          isOpen={settings.isOpen}
+          title={t('groups.settingsDrawer.title', { name: groupName })}
+          saving={settings.saving}
+          description={settings.description}
+          status={settings.status}
+          visibility={settings.visibility}
+          error={settings.error}
+          onClose={settings.close}
+          onDescriptionChange={settings.setDescription}
+          onStatusChange={settings.setStatus}
+          onVisibilityChange={settings.setVisibility}
+          onSave={() => {
+            void settings.save();
+          }}
         />
       )}
     </div>

@@ -104,6 +104,24 @@ vi.mock('../../components/ui/Toast', () => ({
   }),
 }));
 
+vi.mock('../../hooks/useGroupSettings', () => ({
+  useGroupSettings: () => ({
+    metadata: null,
+    isOpen: false,
+    open: vi.fn(),
+    close: vi.fn(),
+    saving: false,
+    error: null,
+    description: '',
+    status: 'Active',
+    visibility: 'private',
+    setDescription: vi.fn(),
+    setStatus: vi.fn(),
+    setVisibility: vi.fn(),
+    save: vi.fn(),
+  }),
+}));
+
 describe('RulesManager View', () => {
   const defaultProps = {
     groupId: 'test-group',

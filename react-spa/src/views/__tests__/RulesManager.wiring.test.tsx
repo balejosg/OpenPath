@@ -38,6 +38,30 @@ const mockViewModel = vi.hoisted(() => ({
   collectionClearSelection: vi.fn(),
 }));
 
+const mockGroupSettings = vi.hoisted(() => ({
+  metadata: null as null | {
+    displayName: string;
+    status: 'Active' | 'Inactive';
+    visibility: 'private' | 'instance_public';
+  },
+  isOpen: false,
+  open: vi.fn(),
+  close: vi.fn(),
+  saving: false,
+  error: null as string | null,
+  description: 'Grupo 1',
+  status: 'Active' as 'Active' | 'Inactive',
+  visibility: 'private' as 'private' | 'instance_public',
+  setDescription: vi.fn(),
+  setStatus: vi.fn(),
+  setVisibility: vi.fn(),
+  save: vi.fn(),
+}));
+
+vi.mock('../../hooks/useGroupSettings', () => ({
+  useGroupSettings: () => mockGroupSettings,
+}));
+
 vi.mock('../../components/ui/Toast', () => ({
   useToast: () => ({
     success: mockToast.success,
@@ -147,6 +171,8 @@ vi.mock('../../hooks/useRulesManagerViewModel', () => ({
 describe('RulesManager wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGroupSettings.metadata = null;
+    mockGroupSettings.isOpen = false;
   });
 
   it('passes collection callbacks to toolbar, table, pagination and bulk actions', () => {
@@ -219,5 +245,40 @@ describe('RulesManager wiring', () => {
 
     fireEvent.dragEnter(container);
     expect(mockViewModel.handleDragEnter).not.toHaveBeenCalled();
+  });
+
+  it('shows the settings gear when editable and opens the drawer', () => {
+    mockGroupSettings.metadata = {
+      displayName: 'Grupo 1',
+      status: 'Active',
+      visibility: 'private',
+    };
+    render(<RulesManager groupId="group-1" groupName="Wiring Group" onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /settings/i }));
+    expect(mockGroupSettings.open).toHaveBeenCalled();
+  });
+
+  it('renders the settings drawer when open', () => {
+    mockGroupSettings.metadata = {
+      displayName: 'Grupo 1',
+      status: 'Active',
+      visibility: 'private',
+    };
+    mockGroupSettings.isOpen = true;
+    render(<RulesManager groupId="group-1" groupName="Wiring Group" onBack={vi.fn()} />);
+
+    expect(screen.getByText('Settings: Wiring Group')).toBeInTheDocument();
+  });
+
+  it('hides the settings gear in read-only mode', () => {
+    mockGroupSettings.metadata = {
+      displayName: 'Grupo 1',
+      status: 'Active',
+      visibility: 'private',
+    };
+    render(<RulesManager groupId="group-1" groupName="Read Only" readOnly onBack={vi.fn()} />);
+
+    expect(screen.queryByRole('button', { name: /settings/i })).not.toBeInTheDocument();
   });
 });
