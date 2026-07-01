@@ -4,7 +4,6 @@ import { trpc } from '../lib/trpc';
 import { useGroupsViewModelActions } from './groupsViewModelActions';
 import { useGroupsViewModelData } from './groupsViewModelData';
 import { useGroupsViewModelState } from './groupsViewModelState';
-import { useMutationFeedback } from './useMutationFeedback';
 
 type GroupsListOutput = Awaited<ReturnType<typeof trpc.groups.list.query>>;
 export type AllowedGroup = GroupsListOutput[number];
@@ -36,21 +35,9 @@ export function useGroupsViewModel({ onNavigateToRules }: UseGroupsViewModelOpti
   const canCreateGroups = admin || teacherCanCreateGroups;
   const data = useGroupsViewModelData(state.activeView);
 
-  const {
-    error: configError,
-    clearError: clearConfigError,
-    captureError: captureConfigError,
-  } = useMutationFeedback({
-    badRequest: 'Review the group details before saving.',
-    conflict: 'Unable to save because the group was recently modified. Reload and try again.',
-    fallback: 'Unable to save group settings. Try again.',
-  });
-
   const actions = useGroupsViewModelActions({
     state,
     data,
-    clearConfigError,
-    captureConfigError,
     onNavigateToRules,
   });
 
@@ -65,7 +52,6 @@ export function useGroupsViewModel({ onNavigateToRules }: UseGroupsViewModelOpti
     error: data.error,
     refetchActiveView: data.refetchActiveView,
     showNewModal: state.showNewModal,
-    showConfigModal: state.showConfigModal,
     showCloneModal: state.showCloneModal,
     selectedGroup: state.selectedGroup,
     cloneSource: state.cloneSource,
@@ -79,13 +65,6 @@ export function useGroupsViewModel({ onNavigateToRules }: UseGroupsViewModelOpti
     cloneDisplayName: state.cloneDisplayName,
     setCloneDisplayName: state.setCloneDisplayName,
     cloneError: state.cloneError,
-    configDescription: state.configDescription,
-    setConfigDescription: state.setConfigDescription,
-    configStatus: state.configStatus,
-    setConfigStatus: state.setConfigStatus,
-    configVisibility: state.configVisibility,
-    setConfigVisibility: state.setConfigVisibility,
-    configError,
     saving: state.saving,
     ...actions,
   };

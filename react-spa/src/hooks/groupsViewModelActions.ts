@@ -11,16 +11,12 @@ type GroupsViewModelData = ReturnType<typeof useGroupsViewModelData>;
 interface UseGroupsViewModelActionsOptions {
   state: GroupsViewModelState;
   data: GroupsViewModelData;
-  clearConfigError: () => void;
-  captureConfigError: (error: unknown) => void;
   onNavigateToRules: (group: { id: string; name: string; readOnly?: boolean }) => void;
 }
 
 export function useGroupsViewModelActions({
   state,
   data,
-  clearConfigError,
-  captureConfigError,
   onNavigateToRules,
 }: UseGroupsViewModelActionsOptions) {
   const handleCreateGroup = async () => {
@@ -62,28 +58,6 @@ export function useGroupsViewModelActions({
           fallback: 'Unable to create group. Try again.',
         })
       );
-    } finally {
-      state.setSaving(false);
-    }
-  };
-
-  const handleSaveConfig = async () => {
-    if (!state.selectedGroup) return;
-
-    try {
-      state.setSaving(true);
-      clearConfigError();
-      await trpc.groups.update.mutate({
-        id: state.selectedGroup.id,
-        displayName: state.configDescription,
-        enabled: state.configStatus === 'Active',
-        visibility: state.configVisibility,
-      });
-      await data.refetchGroups();
-      state.setShowConfigModal(false);
-    } catch (err) {
-      reportError('Failed to update group:', err);
-      captureConfigError(err);
     } finally {
       state.setSaving(false);
     }
@@ -146,23 +120,6 @@ export function useGroupsViewModelActions({
     state.setShowNewModal(false);
   };
 
-  const openConfigModal = (groupId: string) => {
-    const group = data.allowedGroupById.get(groupId);
-    if (!group) return;
-
-    state.setSelectedGroup(group);
-    state.setConfigDescription(group.displayName || group.name);
-    state.setConfigStatus(group.enabled ? 'Active' : 'Inactive');
-    state.setConfigVisibility(group.visibility);
-    clearConfigError();
-    state.setShowConfigModal(true);
-  };
-
-  const closeConfigModal = () => {
-    clearConfigError();
-    state.setShowConfigModal(false);
-  };
-
   const openCloneModal = (groupId: string) => {
     const group = data.libraryGroups.find((candidate) => candidate.id === groupId);
     if (!group) return;
@@ -198,12 +155,9 @@ export function useGroupsViewModelActions({
 
   return {
     handleCreateGroup,
-    handleSaveConfig,
     handleCloneGroup,
     openNewModal,
     closeNewModal,
-    openConfigModal,
-    closeConfigModal,
     openCloneModal,
     closeCloneModal,
     handleNewGroupNameChange,

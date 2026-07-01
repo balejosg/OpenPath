@@ -1,6 +1,5 @@
 import React from 'react';
 import { CloneGroupModal } from '../components/groups/CloneGroupModal';
-import { ConfigureGroupModal } from '../components/groups/ConfigureGroupModal';
 import { CreateGroupModal } from '../components/groups/CreateGroupModal';
 import { GroupsGrid } from '../components/groups/GroupsGrid';
 import { GroupsHeader } from '../components/groups/GroupsHeader';
@@ -54,24 +53,6 @@ const Groups: React.FC<GroupsProps> = ({ onNavigateToRules, headerActions }) => 
         onCreate={() => {
           void viewModel.handleCreateGroup();
         }}
-      />
-
-      <ConfigureGroupModal
-        isOpen={viewModel.showConfigModal}
-        group={viewModel.selectedGroup}
-        saving={viewModel.saving}
-        description={viewModel.configDescription}
-        status={viewModel.configStatus}
-        visibility={viewModel.configVisibility}
-        error={viewModel.configError}
-        onClose={viewModel.closeConfigModal}
-        onDescriptionChange={viewModel.setConfigDescription}
-        onStatusChange={viewModel.setConfigStatus}
-        onVisibilityChange={viewModel.setConfigVisibility}
-        onSave={() => {
-          void viewModel.handleSaveConfig();
-        }}
-        onNavigateToRules={onNavigateToRules}
       />
 
       <CloneGroupModal
