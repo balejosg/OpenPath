@@ -1,5 +1,5 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
 import { renderHookWithQueryClient } from '../../test-utils/query';
 import { useGroupsViewModel } from '../useGroupsViewModel';
 
@@ -18,10 +18,14 @@ vi.mock('../../lib/trpc', () => ({
   },
 }));
 
+const { isAdminMock, isTeacherMock } = vi.hoisted(() => ({
+  isAdminMock: vi.fn(() => true),
+  isTeacherMock: vi.fn(() => false),
+}));
+
 vi.mock('../../lib/auth', () => ({
-  isAdmin: () => true,
-  isTeacher: () => false,
-  isTeacherGroupsFeatureEnabled: () => false,
+  isAdmin: () => isAdminMock(),
+  isTeacher: () => isTeacherMock(),
 }));
 
 vi.mock('../useAllowedGroups', () => ({
@@ -58,6 +62,23 @@ vi.mock('../../lib/reportError', () => ({
 }));
 
 describe('useGroupsViewModel', () => {
+  beforeEach(() => {
+    isAdminMock.mockReturnValue(true);
+    isTeacherMock.mockReturnValue(false);
+  });
+
+  it('lets a teacher create groups without any capability flag', () => {
+    isAdminMock.mockReturnValue(false);
+    isTeacherMock.mockReturnValue(true);
+
+    const { result } = renderHookWithQueryClient(() =>
+      useGroupsViewModel({ onNavigateToRules: vi.fn() })
+    );
+
+    expect(result.current.canCreateGroups).toBe(true);
+    expect(result.current.teacherCanCreateGroups).toBe(true);
+  });
+
   it('loads library groups and opens clone modal with derived defaults', async () => {
     mockLibraryList.mockResolvedValueOnce([
       {

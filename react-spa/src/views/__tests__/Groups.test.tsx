@@ -25,7 +25,6 @@ const mockLibraryListGroups = vi.fn();
 const mockCloneGroup = vi.fn();
 const isAdminMock = vi.fn(() => true);
 const isTeacherMock = vi.fn(() => false);
-const teacherFlagMock = vi.fn(() => false);
 
 vi.mock('../../lib/trpc', () => ({
   trpc: {
@@ -48,7 +47,6 @@ vi.mock('../../components/ui/Toast', () => ({
 vi.mock('../../lib/auth', () => ({
   isAdmin: () => isAdminMock(),
   isTeacher: () => isTeacherMock(),
-  isTeacherGroupsFeatureEnabled: () => teacherFlagMock(),
 }));
 
 describe('Groups view', () => {
@@ -56,7 +54,6 @@ describe('Groups view', () => {
     vi.clearAllMocks();
     isAdminMock.mockReturnValue(true);
     isTeacherMock.mockReturnValue(false);
-    teacherFlagMock.mockReturnValue(false);
     mockCreateGroup.mockResolvedValue({ id: 'group-2' });
     mockListGroups.mockResolvedValue([
       {
@@ -90,27 +87,9 @@ describe('Groups view', () => {
     expect(await screen.findByText('Review the group details before saving.')).toBeInTheDocument();
   });
 
-  it('does not show create CTA for teacher when feature flag is disabled', async () => {
+  it('shows create CTA + create-oriented empty-state for a teacher', async () => {
     isAdminMock.mockReturnValue(false);
     isTeacherMock.mockReturnValue(true);
-    teacherFlagMock.mockReturnValue(false);
-    mockListGroups.mockResolvedValueOnce([]);
-
-    renderGroups();
-
-    expect(
-      await screen.findByText(
-        'You do not have assigned policies yet. Ask an administrator to assign one.'
-      )
-    ).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /\+\s*new\s*group/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /\+\s*create\s*my\s*first\s*policy/i })).toBeNull();
-  });
-
-  it('shows create CTA + updated empty-state for teacher when feature flag is enabled', async () => {
-    isAdminMock.mockReturnValue(false);
-    isTeacherMock.mockReturnValue(true);
-    teacherFlagMock.mockReturnValue(true);
     mockListGroups.mockResolvedValueOnce([]);
 
     renderGroups();

@@ -1,5 +1,5 @@
 import type { GroupVisibility } from '@openpath/shared';
-import { isAdmin, isTeacher, isTeacherGroupsFeatureEnabled } from '../lib/auth';
+import { isAdmin, isTeacher } from '../lib/auth';
 import { trpc } from '../lib/trpc';
 import { useGroupsViewModelActions } from './groupsViewModelActions';
 import { useGroupsViewModelData } from './groupsViewModelData';
@@ -32,7 +32,7 @@ export function useGroupsViewModel({ onNavigateToRules }: UseGroupsViewModelOpti
   const state = useGroupsViewModelState();
 
   const admin = isAdmin();
-  const teacherCanCreateGroups = isTeacher() && isTeacherGroupsFeatureEnabled();
+  const teacherCanCreateGroups = isTeacher();
   const canCreateGroups = admin || teacherCanCreateGroups;
   const data = useGroupsViewModelData(state.activeView);
 
