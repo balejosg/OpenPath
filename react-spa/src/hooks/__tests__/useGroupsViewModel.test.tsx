@@ -49,14 +49,6 @@ vi.mock('../useAllowedGroups', () => ({
   }),
 }));
 
-vi.mock('../useMutationFeedback', () => ({
-  useMutationFeedback: () => ({
-    error: '',
-    clearError: vi.fn(),
-    captureError: vi.fn(),
-  }),
-}));
-
 vi.mock('../../lib/reportError', () => ({
   reportError: vi.fn(),
 }));
