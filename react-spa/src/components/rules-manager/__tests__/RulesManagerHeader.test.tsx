@@ -68,4 +68,38 @@ describe('RulesManagerHeader', () => {
     expect(hierarchicalBtn).toHaveClass('bg-white');
     expect(hierarchicalBtn).toHaveClass('text-slate-900');
   });
+
+  it('renders badges + settings button when onOpenSettings is provided and opens settings', () => {
+    const onOpenSettings = vi.fn();
+    render(
+      <RulesManagerHeader
+        groupName="Grupo 1"
+        viewMode="flat"
+        onBack={vi.fn()}
+        onViewModeChange={vi.fn()}
+        status="Inactive"
+        visibility="instance_public"
+        onOpenSettings={onOpenSettings}
+      />
+    );
+
+    expect(screen.getByText('Inactive')).toBeInTheDocument();
+    expect(screen.getByText('Public')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /settings/i }));
+    expect(onOpenSettings).toHaveBeenCalled();
+  });
+
+  it('hides the settings button when onOpenSettings is not provided', () => {
+    render(
+      <RulesManagerHeader
+        groupName="Grupo 1"
+        viewMode="flat"
+        onBack={vi.fn()}
+        onViewModeChange={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /settings/i })).not.toBeInTheDocument();
+  });
 });
