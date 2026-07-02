@@ -95,6 +95,13 @@ function ConvertTo-OpenPathNormalizedConfig {
     return $normalized
 }
 
+function Test-OpenPathConfigUrlSecure {
+    # https everywhere; http only for loopback (dev/CI), never for remote endpoints.
+    param([string]$Url)
+    if ($Url -match '^https://\S+$') { return $true }
+    return ($Url -match '^http://(localhost|127\.0\.0\.1)(:\d+)?(/\S*)?$')
+}
+
 function Test-OpenPathConfig {
     # validates that a config object has a reachable apiUrl, whitelistUrl, and at least one of classroom/classroomId; returns Valid, MissingFields, Config
     param(
@@ -109,10 +116,10 @@ function Test-OpenPathConfig {
     $classroom = [string](Get-OpenPathConfigValue -Config $normalized -Name 'classroom' -DefaultValue '')
     $classroomId = [string](Get-OpenPathConfigValue -Config $normalized -Name 'classroomId' -DefaultValue '')
 
-    if ($apiUrl -notmatch '^https?://\S+$') {
+    if (-not (Test-OpenPathConfigUrlSecure -Url $apiUrl)) {
         $missingFields += 'apiUrl'
     }
-    if ($whitelistUrl -notmatch '^https?://\S+$') {
+    if (-not (Test-OpenPathConfigUrlSecure -Url $whitelistUrl)) {
         $missingFields += 'whitelistUrl'
     }
     if (-not $classroom -and -not $classroomId) {

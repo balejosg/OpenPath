@@ -81,6 +81,32 @@ Describe "OpenPath Config Model" {
         @($result.MissingFields) | Should -Not -Contain "whitelistUrl"
     }
 
+    It "Rejects plaintext http:// apiUrl and whitelistUrl" {
+        $config = ConvertTo-OpenPathNormalizedConfig -Config ([PSCustomObject]@{
+                apiUrl = "http://school.example"
+                whitelistUrl = "http://school.example/w/machine-token-123/whitelist.txt"
+                classroomId = "classroom-123"
+            })
+
+        $result = Test-OpenPathConfig -Config $config
+
+        $result.Valid | Should -BeFalse
+        @($result.MissingFields) | Should -Contain "apiUrl"
+        @($result.MissingFields) | Should -Contain "whitelistUrl"
+    }
+
+    It "Accepts https and loopback http (dev) endpoints as secure" {
+        (Test-OpenPathConfig -Config (ConvertTo-OpenPathNormalizedConfig -Config ([PSCustomObject]@{
+                    apiUrl = "https://school.example"
+                    whitelistUrl = "https://school.example/w/token/whitelist.txt"
+                    classroomId = "classroom-123" }))).Valid | Should -BeTrue
+
+        (Test-OpenPathConfig -Config (ConvertTo-OpenPathNormalizedConfig -Config ([PSCustomObject]@{
+                    apiUrl = "http://localhost:3000"
+                    whitelistUrl = "http://127.0.0.1:3000/w/token/whitelist.txt"
+                    classroomId = "classroom-123" }))).Valid | Should -BeTrue
+    }
+
     It "Normalizes hashtable config input using config keys" {
         $config = ConvertTo-OpenPathNormalizedConfig -Config @{
             requestApiUrl = "https://school.example/"
