@@ -40,12 +40,24 @@ function Get-OpenPathRecoveryUtcNow {
     return [DateTime]::UtcNow
 }
 
+function Test-OpenPathRecoveryRequestId {
+    # Accepts only a safe, bare leaf name (server IDs are Guid('N') hex; hyphenated ids allowed).
+    # Rejects traversal, separators, and over-long values before they build a filesystem path.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$RequestId)
+
+    if ([string]::IsNullOrWhiteSpace($RequestId)) { return $false }
+    if ($RequestId.Length -gt 64) { return $false }
+    if ($RequestId -notmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,63}$') { return $false }
+    return ([System.IO.Path]::GetFileName($RequestId) -eq $RequestId)
+}
+
 function ConvertFrom-OpenPathRecoveryRequestFile {
     param([Parameter(Mandatory = $true)][System.IO.FileInfo]$File)
 
     try {
         $request = Get-Content $File.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        if (-not $request.requestId) {
+        if (-not (Test-OpenPathRecoveryRequestId -RequestId ([string]$request.requestId))) {
+            Write-OpenPathLog "Captive portal recovery: rejecting request with invalid requestId in $($File.FullName)" -Level WARN
             return $null
         }
 
@@ -160,6 +172,10 @@ function Write-OpenPathCaptivePortalRecoveryResult {
         [Parameter(Mandatory = $true)][hashtable]$Payload
     )
 
+    if (-not (Test-OpenPathRecoveryRequestId -RequestId $RequestId)) {
+        throw "Refusing to write recovery file for unsafe requestId: $RequestId"
+    }
+
     if (-not (Test-Path $ResultPath -ErrorAction SilentlyContinue)) {
         New-Item -ItemType Directory -Path $ResultPath -Force | Out-Null
     }
@@ -179,6 +195,10 @@ function Write-OpenPathCaptivePortalRecoveryProgress {
         [Parameter(Mandatory = $true)][string]$Phase,
         [hashtable]$Payload = @{}
     )
+
+    if (-not (Test-OpenPathRecoveryRequestId -RequestId $RequestId)) {
+        throw "Refusing to write recovery file for unsafe requestId: $RequestId"
+    }
 
     if (-not (Test-Path $ProgressPath -ErrorAction SilentlyContinue)) {
         New-Item -ItemType Directory -Path $ProgressPath -Force | Out-Null

@@ -255,6 +255,39 @@ Describe "Watchdog Script" {
             $content | Should -Not -Match '\$portalRecoveryHosts = @\(Get-OpenPathCaptivePortalAllowedHosts -Hosts \$portalRecoveryHostCandidates\)'
         }
 
+        It "W-4: rejects a queue request whose requestId is a path-traversal string" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $start = $content.IndexOf('function Get-OpenPathRecoveryUtcNow')
+            $end = $content.IndexOf('$queuePath = Get-OpenPathCapabilityStoragePath')
+            . ([scriptblock]::Create($content.Substring($start, $end - $start)))
+            function Write-OpenPathLog { param([Parameter(ValueFromPipeline = $true)]$Message, $Level) }
+
+            $queueDir = Join-Path $TestDrive 'queue-traversal'
+            New-Item -ItemType Directory -Path $queueDir -Force | Out-Null
+            $badFile = Join-Path $queueDir 'bad.json'
+            @{ requestId = '..\..\evil'; triggerHost = 'x' } |
+                ConvertTo-Json -Depth 4 | Set-Content -Path $badFile -Encoding UTF8
+
+            ConvertFrom-OpenPathRecoveryRequestFile -File (Get-Item $badFile) | Should -BeNullOrEmpty
+        }
+
+        It "W-4: recovery progress writer refuses to escape the progress directory" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $start = $content.IndexOf('function Get-OpenPathRecoveryUtcNow')
+            $end = $content.IndexOf('$queuePath = Get-OpenPathCapabilityStoragePath')
+            . ([scriptblock]::Create($content.Substring($start, $end - $start)))
+
+            $progressPath = Join-Path $TestDrive 'progress-traversal'
+            New-Item -ItemType Directory -Path $progressPath -Force | Out-Null
+            $escaped = Join-Path (Split-Path $progressPath -Parent) 'evil.json'
+
+            { Write-OpenPathCaptivePortalRecoveryProgress -ProgressPath $progressPath -RequestId '..\evil' -Phase 'request-read' } |
+                Should -Throw
+            Test-Path $escaped | Should -BeFalse
+        }
+
         It "Restores protected mode when reconcile request reports authenticated state" {
             $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Recover-CaptivePortal.ps1"
             $content = Get-Content $scriptPath -Raw
