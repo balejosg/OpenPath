@@ -409,4 +409,61 @@ Describe "Update Script" {
             $postReplacementBody | Should -Match 'Post-replacement checksum mismatch'
         }
     }
+
+    Context "Self-update artifact integrity" {
+        It "Requires a well-formed sha256 for every manifest file entry before downloading it" {
+            $updateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $content = Get-Content $updateHelperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '$declaredHash = if ($file.PSObject.Properties[''sha256'']) { [string]$file.sha256 } else { '''' }',
+                '[string]::IsNullOrWhiteSpace($declaredHash) -or $declaredHash -notmatch ''^[0-9a-fA-F]{64}$''',
+                'Manifest entry missing/invalid sha256 for $manifestPath'
+            )
+
+            # The mandatory-hash guard must run before the file is downloaded.
+            $downloadStart = $content.IndexOf('Invoke-WebRequest -Uri $fileUrl')
+            $guardStart = $content.IndexOf('Manifest entry missing/invalid sha256 for $manifestPath')
+            $guardStart | Should -BeGreaterThan 0
+            $downloadStart | Should -BeGreaterThan $guardStart
+        }
+
+        It "Compares the downloaded and post-replacement hashes unconditionally, without an optional-check guard" {
+            $updateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $content = Get-Content $updateHelperPath -Raw
+
+            $content | Should -Not -Match 'if \(\$expectedHash\) \{'
+
+            $downloadLoopStart = $content.IndexOf('foreach ($file in $manifestFiles)')
+            $applyLoopStart = $content.IndexOf('Save-OpenPathIntegrityBackup')
+            $downloadLoopBody = $content.Substring($downloadLoopStart, $applyLoopStart - $downloadLoopStart)
+            $downloadLoopBody | Should -Match '(?s)Invoke-WebRequest -Uri \$fileUrl.*?\$actualHash = \(Get-FileHash -Path \$stagedPath -Algorithm SHA256 -ErrorAction Stop\)\.Hash\.ToLowerInvariant\(\)\s+if \(\$actualHash -ne \$expectedHash\.ToLowerInvariant\(\)\) \{\s+throw "Checksum mismatch for \$manifestPath"'
+
+            $postReplacementStart = $content.IndexOf('foreach ($download in $downloadedFiles)', $applyLoopStart)
+            $postReplacementStart = $content.IndexOf('foreach ($download in $downloadedFiles)', $postReplacementStart + 1)
+            $configUpdateStart = $content.IndexOf('if ($config.PSObject.Properties[''version''])')
+            $postReplacementBody = $content.Substring($postReplacementStart, $configUpdateStart - $postReplacementStart)
+            $postReplacementBody | Should -Match '(?s)\$actualHash = \(Get-FileHash -Path \$download\.DestinationPath -Algorithm SHA256 -ErrorAction Stop\)\.Hash\.ToLowerInvariant\(\)\s+if \(\$actualHash -ne \$expectedHash\.ToLowerInvariant\(\)\) \{\s+throw "Post-replacement checksum mismatch for \$\(\$download\.RelativePath\)"'
+        }
+
+        It "Gates staged .ps1/.psm1 artifacts behind an opt-in Authenticode signature check" {
+            $updateHelperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $content = Get-Content $updateHelperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                '$enforceSignature = ($env:OPENPATH_SELFUPDATE_REQUIRE_SIGNATURE -eq ''1'')',
+                'if ($enforceSignature -and ($download.StagedPath -match ''\.psm?1$''))',
+                '$sig = Get-AuthenticodeSignature -FilePath $download.StagedPath',
+                'if ($sig.Status -ne ''Valid'')',
+                'Self-update artifact failed Authenticode verification: $($download.RelativePath) ($($sig.Status))'
+            )
+
+            # The signature gate must run per downloaded file, before it replaces the live destination file.
+            $applyLoopStart = $content.IndexOf('foreach ($download in $downloadedFiles)')
+            $moveStart = $content.IndexOf('Move-Item -Path $tempDestinationPath', $applyLoopStart)
+            $sigGateStart = $content.IndexOf('$enforceSignature = ', $applyLoopStart)
+            $sigGateStart | Should -BeGreaterThan $applyLoopStart
+            $sigGateStart | Should -BeLessThan $moveStart
+        }
+    }
 }

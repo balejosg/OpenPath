@@ -192,6 +192,11 @@ function Invoke-OpenPathAgentSelfUpdate {
                 throw "Rejected rooted file path from manifest: $manifestPath"
             }
 
+            $declaredHash = if ($file.PSObject.Properties['sha256']) { [string]$file.sha256 } else { '' }
+            if ([string]::IsNullOrWhiteSpace($declaredHash) -or $declaredHash -notmatch '^[0-9a-fA-F]{64}$') {
+                throw "Manifest entry missing/invalid sha256 for $manifestPath"
+            }
+
             $stagedPath = Join-Path $stagingRoot $relativePath
             $stagedDirectory = Split-Path $stagedPath -Parent
             if (-not (Test-Path $stagedDirectory)) {
@@ -204,11 +209,9 @@ function Invoke-OpenPathAgentSelfUpdate {
             Invoke-WebRequest -Uri $fileUrl -Method Get -Headers $headers -OutFile $stagedPath -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
 
             $expectedHash = if ($file.PSObject.Properties['sha256']) { [string]$file.sha256 } else { '' }
-            if ($expectedHash) {
-                $actualHash = (Get-FileHash -Path $stagedPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
-                if ($actualHash -ne $expectedHash.ToLowerInvariant()) {
-                    throw "Checksum mismatch for $manifestPath"
-                }
+            $actualHash = (Get-FileHash -Path $stagedPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+            if ($actualHash -ne $expectedHash.ToLowerInvariant()) {
+                throw "Checksum mismatch for $manifestPath"
             }
 
             $destinationPath = Join-Path $script:OpenPathRoot $relativePath
@@ -234,6 +237,14 @@ function Invoke-OpenPathAgentSelfUpdate {
                 New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
             }
 
+            $enforceSignature = ($env:OPENPATH_SELFUPDATE_REQUIRE_SIGNATURE -eq '1')
+            if ($enforceSignature -and ($download.StagedPath -match '\.psm?1$')) {
+                $sig = Get-AuthenticodeSignature -FilePath $download.StagedPath
+                if ($sig.Status -ne 'Valid') {
+                    throw "Self-update artifact failed Authenticode verification: $($download.RelativePath) ($($sig.Status))"
+                }
+            }
+
             $hadExistingFile = Test-Path $download.DestinationPath
             if ($hadExistingFile) {
                 Copy-Item -Path $download.DestinationPath -Destination $download.BackupPath -Force -ErrorAction Stop
@@ -253,11 +264,9 @@ function Invoke-OpenPathAgentSelfUpdate {
         foreach ($download in $downloadedFiles) {
             $manifestEntry = @($manifestFiles | Where-Object { ([string]$_.path -replace '/', '\') -eq $download.RelativePath })[0]
             $expectedHash = if ($manifestEntry -and $manifestEntry.PSObject.Properties['sha256']) { [string]$manifestEntry.sha256 } else { '' }
-            if ($expectedHash) {
-                $actualHash = (Get-FileHash -Path $download.DestinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
-                if ($actualHash -ne $expectedHash.ToLowerInvariant()) {
-                    throw "Post-replacement checksum mismatch for $($download.RelativePath)"
-                }
+            $actualHash = (Get-FileHash -Path $download.DestinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+            if ($actualHash -ne $expectedHash.ToLowerInvariant()) {
+                throw "Post-replacement checksum mismatch for $($download.RelativePath)"
             }
         }
 
