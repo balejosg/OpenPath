@@ -422,6 +422,26 @@ Describe "DNS Module" {
             }
         }
 
+        It "Logs an auditable telemetry line for each net-new runtime dependency auto-allow" -Skip:(-not $IsWindows) {
+            Mock Write-OpenPathLog { } -ModuleName DNS
+
+            InModuleScope DNS {
+                $updated = Update-OpenPathRuntimeDependencyOverlay `
+                    -Entries @() `
+                    -Requests @(
+                        [PSCustomObject]@{ anchorHost = 'www.reddit.com'; dependencyHost = 'cdn-new.example'; requestType = 'script' }
+                    ) `
+                    -WhitelistedDomains @('reddit.com') `
+                    -BlockedSubdomains @()
+
+                $updated.Entries.dependencyHost | Should -Contain 'cdn-new.example'
+            }
+
+            Should -Invoke Write-OpenPathLog -ModuleName DNS -Times 1 -ParameterFilter {
+                $Message -match 'runtime-dependency auto-allow' -and $Message -match 'cdn-new\.example'
+            }
+        }
+
         It "Generates valid hosts content" -Skip:(-not ((Test-FunctionExists 'Test-AcrylicInstalled') -and (Test-FunctionExists 'Update-AcrylicHost') -and (Test-AcrylicInstalled))) {
             $result = Update-AcrylicHost -WhitelistedDomains @("example.com", "test.com") -BlockedSubdomains @()
             $result | Should -BeTrue

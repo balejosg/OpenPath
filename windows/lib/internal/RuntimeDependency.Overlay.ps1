@@ -170,6 +170,10 @@ function Update-OpenPathRuntimeDependencyOverlay {
                 expiresAt = $expiresAt.ToString('o')
                 source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal
             }
+            # Auditability: every NET-NEW auto-allow makes a domain newly resolvable. Log it so
+            # teachers/operators can review runtime-dependency grants and detect queue abuse
+            # (the queue is user-writable and self-asserted; see red-team F2).
+            Write-OpenPathLog "runtime-dependency auto-allow: anchor=$($candidate.AnchorHost) dependency=$($candidate.DependencyHost) type=$($candidate.RequestType)" -Level INFO
         }
         $processed += 1
     }
