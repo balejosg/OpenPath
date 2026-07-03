@@ -1719,6 +1719,22 @@ Describe "Watchdog Script" {
                 '$actions += ''SetLocalDns'''
             )
         }
+
+        It "Treats loopback behind another resolver as missing local DNS (primary-position check)" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $helperContent = Get-Content $helperPath -Raw
+            $start = $helperContent.IndexOf('function Test-OpenPathAdapterDnsLoopbackPrimary')
+            $end = $helperContent.IndexOf('function Get-OpenPathActiveIpv4AdaptersMissingLocalDns')
+            . ([scriptblock]::Create($helperContent.Substring($start, $end - $start)))
+
+            Test-OpenPathAdapterDnsLoopbackPrimary -ServerAddresses @('127.0.0.1') | Should -BeTrue
+            Test-OpenPathAdapterDnsLoopbackPrimary -ServerAddresses @('127.0.0.1', '8.8.8.8') | Should -BeTrue
+            Test-OpenPathAdapterDnsLoopbackPrimary -ServerAddresses @('8.8.8.8', '127.0.0.1') | Should -BeFalse
+            Test-OpenPathAdapterDnsLoopbackPrimary -ServerAddresses @() | Should -BeFalse
+
+            $helperContent | Should -Match 'Test-OpenPathAdapterDnsLoopbackPrimary -ServerAddresses \$serverAddresses'
+            $helperContent | Should -Not -Match "serverAddresses -notcontains '127\.0\.0\.1'"
+        }
     }
 
     Context "Split DNS topology drift" {

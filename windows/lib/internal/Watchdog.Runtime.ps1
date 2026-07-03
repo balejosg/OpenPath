@@ -146,9 +146,21 @@ function Invoke-OpenPathWatchdogPrechecks {
     }
 }
 
+function Test-OpenPathAdapterDnsLoopbackPrimary {
+    # returns true only when 127.0.0.1 (the local Acrylic proxy) is the PRIMARY IPv4 DNS
+    # server. A loopback entry sitting behind another resolver (e.g. '8.8.8.8','127.0.0.1')
+    # lets Windows prefer the non-loopback server and bypass the filter, so it is not primary.
+    [CmdletBinding()]
+    param([string[]]$ServerAddresses = @())
+
+    $servers = @($ServerAddresses | ForEach-Object { [string]$_ } | Where-Object { $_ })
+    if ($servers.Count -eq 0) { return $false }
+    return ($servers[0] -eq '127.0.0.1')
+}
+
 function Get-OpenPathActiveIpv4AdaptersMissingLocalDns {
-    # returns a list of active ipv4 adapters whose dns server addresses do not include 127.0.0.1
-    # used to detect adapters that bypass the local acrylic proxy
+    # returns a list of active ipv4 adapters whose primary ipv4 dns server is not 127.0.0.1
+    # used to detect adapters that bypass or deprioritize the local acrylic proxy
     [CmdletBinding()]
     param()
 
@@ -167,7 +179,7 @@ function Get-OpenPathActiveIpv4AdaptersMissingLocalDns {
             $serverAddresses += @($entry.ServerAddresses)
         }
 
-        if ($serverAddresses -notcontains '127.0.0.1') {
+        if (-not (Test-OpenPathAdapterDnsLoopbackPrimary -ServerAddresses $serverAddresses)) {
             $missingAdapters += [PSCustomObject]@{
                 Name = [string]$adapter.Name
                 InterfaceIndex = $interfaceIndex
