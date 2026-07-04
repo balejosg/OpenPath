@@ -620,6 +620,14 @@ capture_vm_config() {
 
 move_windows_vm_to_lab() {
   local lab_net0
+  # Clean leftover OpenPath firewall rules from a prior install/rehearsal BEFORE the
+  # pre-lab snapshot, while the VM is still up. Their default-deny DNS rules allow DNS
+  # only to 127.0.0.1/8.8.8.8/8.8.4.4 and block the lab resolver 10.77.0.53, so the
+  # portal fails to resolve in the browser-before probe (portalDetected=false). The lab
+  # snapshots the live base and rolls back to it, perpetuating the dirty state across
+  # runs, so cleaning here keeps the snapshot base deterministically clean. Best-effort.
+  log "cleaning leftover OpenPath firewall rules on VM $WINDOWS_VMID before snapshot"
+  run_windows_ps 120 "Remove-NetFirewallRule -DisplayName 'OpenPath*' -ErrorAction SilentlyContinue" || log "firewall pre-clean warning (non-fatal)"
   SNAPSHOT_NAME="pre-wedu-lab-ci-$(date -u +%Y%m%dT%H%M%SZ)"
   log "snapshot=$SNAPSHOT_NAME"
   ssh_proxmox qm shutdown "$WINDOWS_VMID" --timeout 120 || ssh_proxmox qm stop "$WINDOWS_VMID"
