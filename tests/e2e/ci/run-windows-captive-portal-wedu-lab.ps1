@@ -1406,9 +1406,47 @@ function Test-WeduPostAuthNetworkFidelity {
     }
 }
 
+function Invoke-WeduSplitDnsPrime {
+    <#
+    .SYNOPSIS
+    Runs one OpenPath watchdog cycle so Acrylic + the firewall pick up the lab
+    network's DhcpNameServer as the split-DNS portal upstream before the fail-closed
+    precondition is evaluated.
+    .DESCRIPTION
+    After the controller moves this VM onto the WEDU lab subnet, OpenPath has not yet
+    had a scheduled watchdog cycle to reconfigure split DNS for the new DhcpNameServer
+    (Get-OpenPathSplitDnsPortalUpstreams). The watchdog also re-pins the adapter DNS to
+    127.0.0.1, so without a primed cycle Assert-WeduLabNetwork observes adapter=127.0.0.1
+    with a stale Acrylic upstream and fail-closes. Priming one cycle makes the split-DNS
+    state deterministic before the precondition snapshot. Non-fatal: Assert-WeduLabNetwork
+    remains the real fail-closed gate.
+    #>
+    try {
+        $prior = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
+            Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+        $priorRunTime = if ($prior) { [datetime]$prior.LastRunTime } else { [datetime]::MinValue }
+        Start-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop
+        for ($wait = 1; $wait -le 240; $wait++) {
+            Start-Sleep -Milliseconds 500
+            $info = Get-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction SilentlyContinue |
+                Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+            if (-not $info) { continue }
+            # 267009 (0x41301) == task currently running; LastTaskResult overflows [int].
+            $running = ([long]$info.LastTaskResult -eq 267009)
+            $ranThisCycle = ([datetime]$info.LastRunTime -gt $priorRunTime)
+            if ($ranThisCycle -and -not $running) { break }
+        }
+    }
+    catch {
+        # Swallow: a failed prime just leaves Assert-WeduLabNetwork to fail-close as before.
+    }
+}
+
 function Invoke-WeduLabRun {
     Ensure-ArtifactRoot
     $config = Get-WeduLabConfig
+
+    Invoke-WeduSplitDnsPrime
 
     $networkBefore = Get-WeduNetworkSnapshot
     Save-Json -Value $networkBefore -Path $script:NetworkBeforePath
