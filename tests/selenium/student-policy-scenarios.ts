@@ -914,7 +914,10 @@ async function runRequestLifecycleScenarioSet(
     targets.requestDomainUrl,
     {
       reason: 'Request host needed for lesson flow',
-      timeoutMs: 30_000,
+      // 60s (was 30s): opening the blocked screen + submitting the request is a full
+      // Firefox nav + extension render + native-messaging round-trip that intermittently
+      // exceeds 30s on a loaded self-hosted CI runner (flaky SP-FB-001 timeout).
+      timeoutMs: 60_000,
     }
   );
   assert.match(requestStatusText, /Solicitud enviada|Request sent/);
@@ -2670,7 +2673,10 @@ export async function runFallbackPropagationProbe(
     targets.requestDomainUrl,
     {
       reason: 'Fallback propagation request approval proof',
-      timeoutMs: 30_000,
+      // 60s (was 30s): the fallback scenario runs later under heavier runner load, and
+      // opening the blocked screen + submitting is a full Firefox + extension +
+      // native-messaging round-trip that intermittently exceeds 30s (flaky SP-FB-001).
+      timeoutMs: 60_000,
     }
   );
   assert.match(requestStatusText, /Solicitud enviada|Request sent/);
