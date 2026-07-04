@@ -1688,18 +1688,33 @@ Describe "Browser Module - Native Host" {
                 return 'Portal'
             }
 
-            $sections = [PSCustomObject]@{
-                Whitelist = @()
+            # Isolate $script:OpenPathRoot so a real C:\OpenPath install's captive-portal
+            # marker/observation files (present on the self-hosted runner) cannot leak in and
+            # downgrade the signal from the intended live 'sync-probe' to 'observation'.
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-portal-signal-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                New-Item -ItemType Directory -Path (Join-Path $tempRoot 'data') -Force | Out-Null
+
+                $sections = [PSCustomObject]@{
+                    Whitelist = @()
+                }
+
+                $result = Invoke-NativeHostCheckAction `
+                    -Message ([PSCustomObject]@{ domains = @('portal.example'); error = 'NS_ERROR_UNKNOWN_HOST'; source = 'blocked-screen-navigation' }) `
+                    -Sections $sections
+
+                $result.success | Should -BeTrue
+                $result.results[0].domain | Should -Be 'portal.example'
+                $result.results[0].portal_recovery_eligible | Should -BeTrue
+                $result.results[0].portal_recovery_signal | Should -Be 'sync-probe'
             }
-
-            $result = Invoke-NativeHostCheckAction `
-                -Message ([PSCustomObject]@{ domains = @('portal.example'); error = 'NS_ERROR_UNKNOWN_HOST'; source = 'blocked-screen-navigation' }) `
-                -Sections $sections
-
-            $result.success | Should -BeTrue
-            $result.results[0].domain | Should -Be 'portal.example'
-            $result.results[0].portal_recovery_eligible | Should -BeTrue
-            $result.results[0].portal_recovery_signal | Should -Be 'sync-probe'
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
 
         It "Ignores expired captive portal markers and stale observations in native check results" {
@@ -1763,17 +1778,32 @@ Describe "Browser Module - Native Host" {
                 return 'Portal'
             }
 
-            $sections = [PSCustomObject]@{
-                Whitelist = @()
+            # Isolate $script:OpenPathRoot so a real C:\OpenPath install's captive-portal
+            # marker/observation files (present on the self-hosted runner) cannot leak in and
+            # downgrade the signal from the intended live 'sync-probe' to 'observation'.
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-portal-signal-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                New-Item -ItemType Directory -Path (Join-Path $tempRoot 'data') -Force | Out-Null
+
+                $sections = [PSCustomObject]@{
+                    Whitelist = @()
+                }
+                $message = [PSCustomObject]@{ domains = @('portal.example'); error = 'NS_ERROR_UNKNOWN_HOST'; source = 'blocked-screen-navigation' }
+
+                $first = Invoke-NativeHostCheckAction -Message $message -Sections $sections
+                $second = Invoke-NativeHostCheckAction -Message $message -Sections $sections
+
+                $first.results[0].portal_recovery_signal | Should -Be 'sync-probe'
+                $second.results[0].portal_recovery_signal | Should -Be 'sync-probe'
+                $script:portalProbeCount | Should -Be 1
             }
-            $message = [PSCustomObject]@{ domains = @('portal.example'); error = 'NS_ERROR_UNKNOWN_HOST'; source = 'blocked-screen-navigation' }
-
-            $first = Invoke-NativeHostCheckAction -Message $message -Sections $sections
-            $second = Invoke-NativeHostCheckAction -Message $message -Sections $sections
-
-            $first.results[0].portal_recovery_signal | Should -Be 'sync-probe'
-            $second.results[0].portal_recovery_signal | Should -Be 'sync-probe'
-            $script:portalProbeCount | Should -Be 1
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
 
         It "Rejects system and browser update hosts as runtime dependencies" {
