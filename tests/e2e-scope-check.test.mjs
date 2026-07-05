@@ -1,7 +1,13 @@
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { E2E_IRRELEVANT_RULES, classifyFile, decideE2eScope } from '../scripts/lib/e2e-scope.mjs';
+import { runCli } from '../scripts/e2e-scope-check.mjs';
 
 /**
  * Fake gitExec for decideE2eScope() tests: no live repo dependency.
@@ -211,5 +217,179 @@ describe('decideE2eScope (scripts/lib/e2e-scope.mjs)', () => {
     assert.equal(result.decision, 'run');
     assert.match(result.reason, /e2e-relevant: react-spa\/src\/App\.tsx/);
     assert.equal(result.classified.length, 3, 'classification is reported for every changed file');
+  });
+});
+
+describe('runCli (scripts/e2e-scope-check.mjs)', () => {
+  function makeStream() {
+    return {
+      data: '',
+      write(chunk) {
+        this.data += chunk;
+        return true;
+      },
+    };
+  }
+
+  test('docs-only range -> prints report to stderr and exactly "skip" to stdout', () => {
+    const stdout = makeStream();
+    const stderr = makeStream();
+    // docs/a.md hits docs/** (first match wins); README.md falls through to **/*.md
+    const gitExec = makeGitExec(rangeResponses('docs/a.md\0README.md\0'));
+
+    const decision = runCli({
+      env: { OPENPATH_PREPUSH_REMOTE_SHA: SHA_A, OPENPATH_PREPUSH_LOCAL_SHA: SHA_B },
+      gitExec,
+      stdout,
+      stderr,
+    });
+
+    assert.equal(decision, 'skip');
+    assert.equal(stdout.data, 'skip\n', 'stdout must carry only the machine-readable word');
+    assert.match(stderr.data, /e2e scope: SKIP -- all 2 changed file\(s\) matched/);
+    assert.match(stderr.data, /docs\/\*\* {2}docs\/a\.md/);
+    assert.match(stderr.data, /\*\*\/\*\.md {2}README\.md/);
+  });
+
+  test('mixed range -> "run" naming the first e2e-relevant file', () => {
+    const stdout = makeStream();
+    const stderr = makeStream();
+    const gitExec = makeGitExec(rangeResponses('docs/a.md\0api/src/index.ts\0'));
+
+    const decision = runCli({
+      env: { OPENPATH_PREPUSH_REMOTE_SHA: SHA_A, OPENPATH_PREPUSH_LOCAL_SHA: SHA_B },
+      gitExec,
+      stdout,
+      stderr,
+    });
+
+    assert.equal(decision, 'run');
+    assert.equal(stdout.data, 'run\n');
+    assert.match(
+      stderr.data,
+      /e2e scope: RUN -- changed file is e2e-relevant: api\/src\/index\.ts/
+    );
+    assert.match(stderr.data, /e2e-relevant {2}api\/src\/index\.ts/);
+  });
+
+  test('OPENPATH_VERIFY_E2E=1 -> "run" without touching git', () => {
+    const stdout = makeStream();
+    const stderr = makeStream();
+    const gitExec = () => {
+      throw new Error('gitExec should not be called when e2e is forced');
+    };
+
+    const decision = runCli({
+      env: {
+        OPENPATH_PREPUSH_REMOTE_SHA: SHA_A,
+        OPENPATH_PREPUSH_LOCAL_SHA: SHA_B,
+        OPENPATH_VERIFY_E2E: '1',
+      },
+      gitExec,
+      stdout,
+      stderr,
+    });
+
+    assert.equal(decision, 'run');
+    assert.match(stderr.data, /forced by OPENPATH_VERIFY_E2E=1/);
+  });
+
+  test('no range in env (manual invocation) -> "run"', () => {
+    const stdout = makeStream();
+    const stderr = makeStream();
+
+    const decision = runCli({ env: {}, gitExec: makeGitExec([]), stdout, stderr });
+
+    assert.equal(decision, 'run');
+    assert.match(stderr.data, /no pushed range provided/);
+  });
+
+  test('whitespace around env SHAs is trimmed', () => {
+    const stdout = makeStream();
+    const stderr = makeStream();
+    const gitExec = makeGitExec(rangeResponses('docs/a.md\0'));
+
+    const decision = runCli({
+      env: {
+        OPENPATH_PREPUSH_REMOTE_SHA: ` ${SHA_A}\n`,
+        OPENPATH_PREPUSH_LOCAL_SHA: `${SHA_B} `,
+      },
+      gitExec,
+      stdout,
+      stderr,
+    });
+
+    assert.equal(decision, 'skip');
+  });
+});
+
+describe('e2e-scope-check.mjs CLI integration (scratch git repo, real git)', () => {
+  const CLI_PATH = fileURLToPath(new URL('../scripts/e2e-scope-check.mjs', import.meta.url));
+
+  function initScratchRepo() {
+    const repo = mkdtempSync(join(tmpdir(), 'e2e-scope-'));
+    const git = (...args) =>
+      execFileSync(
+        'git',
+        ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args],
+        { cwd: repo, encoding: 'utf8' }
+      );
+    git('init', '-q');
+    mkdirSync(join(repo, 'docs'));
+    mkdirSync(join(repo, 'react-spa'));
+    writeFileSync(join(repo, 'docs', 'a.md'), 'base\n');
+    writeFileSync(join(repo, 'react-spa', 'app.ts'), 'export const x = 1;\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'base');
+    return { repo, git };
+  }
+
+  function runCliProcess(repo, remoteSha, localSha) {
+    return execFileSync(process.execPath, [CLI_PATH], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        OPENPATH_VERIFY_E2E: '0',
+        OPENPATH_PREPUSH_REMOTE_SHA: remoteSha,
+        OPENPATH_PREPUSH_LOCAL_SHA: localSha,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  }
+
+  test('docs-only commit -> skip; SPA commit -> run', () => {
+    const { repo, git } = initScratchRepo();
+    try {
+      const baseSha = git('rev-parse', 'HEAD').trim();
+
+      writeFileSync(join(repo, 'docs', 'a.md'), 'docs change\n');
+      git('add', '.');
+      git('commit', '-q', '-m', 'docs only');
+      const docsSha = git('rev-parse', 'HEAD').trim();
+
+      writeFileSync(join(repo, 'react-spa', 'app.ts'), 'export const x = 2;\n');
+      git('add', '.');
+      git('commit', '-q', '-m', 'spa change');
+      const spaSha = git('rev-parse', 'HEAD').trim();
+
+      assert.equal(runCliProcess(repo, baseSha, docsSha).trim(), 'skip');
+      assert.equal(runCliProcess(repo, baseSha, spaSha).trim(), 'run');
+      assert.equal(runCliProcess(repo, docsSha, spaSha).trim(), 'run');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test('remote SHA missing from the local object store -> run', () => {
+    const { repo, git } = initScratchRepo();
+    try {
+      const localSha = git('rev-parse', 'HEAD').trim();
+      const unknownSha = 'f'.repeat(40);
+
+      assert.equal(runCliProcess(repo, unknownSha, localSha).trim(), 'run');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
