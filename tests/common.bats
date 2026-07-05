@@ -596,3 +596,99 @@ EOF
     ! grep -q "firewallState" "$curl_log"
     ! grep -q "whitelistAgeHours" "$curl_log"
 }
+
+@test "send_health_report_to_api includes allowlisted configPosture from effective flags" {
+    local etc_dir="$TEST_TMP_DIR/etc/openpath"
+    local bin_dir="$TEST_TMP_DIR/bin"
+    local curl_log="$TEST_TMP_DIR/curl-posture.log"
+
+    mkdir -p "$etc_dir" "$bin_dir"
+    HEALTH_API_URL_CONF="$etc_dir/health-api-url.conf"
+    echo "https://api.example.test" > "$HEALTH_API_URL_CONF"
+    VAR_STATE_DIR="$TEST_TMP_DIR/state"
+
+    cat > "$bin_dir/curl" << EOF
+#!/bin/bash
+echo "\$*" >> "$curl_log"
+echo -n "200"
+exit 0
+EOF
+    chmod +x "$bin_dir/curl"
+    PATH="$bin_dir:$PATH"
+
+    # Effective flag values as defaults.conf produces them (1/0) plus an
+    # operator-style boolean override ("true") to prove normalization.
+    IPV6_FIREWALL_ENABLED="1"
+    SINKHOLE_FAST_FAIL="0"
+    CAPTIVE_PORTAL_SCOPED_PASSTHROUGH_ENABLED="true"
+    ALLOW_SET_EGRESS_ENABLED="1"
+    RFC1918_EGRESS_MODE="restricted"
+    FAILURE_MODE="protected"
+
+    run send_health_report_to_api "HEALTHY" "watchdog_ok" "true" "true" "0" "4.1.0"
+    [ "$status" -eq 0 ]
+
+    for _ in $(seq 1 20); do [ -f "$curl_log" ] && break; sleep 0.1; done
+    [ -f "$curl_log" ]
+    grep -q '"configPosture"' "$curl_log"
+    grep -q '"ipv6FirewallEnabled": "true"' "$curl_log"
+    grep -q '"sinkholeFastFail": "false"' "$curl_log"
+    grep -q '"captivePortalScopedPassthrough": "true"' "$curl_log"
+    grep -q '"rfc1918EgressMode": "restricted"' "$curl_log"
+    grep -q '"allowSetEgressEnabled": "true"' "$curl_log"
+    grep -q '"failureMode": "protected"' "$curl_log"
+    # Windows-only key must be absent on Linux.
+    ! grep -q "outboundEgressFloorEnabled" "$curl_log"
+    # Zero streak must be omitted.
+    ! grep -q "healthReportFailStreak" "$curl_log"
+}
+
+@test "send_health_report_to_api logs delivery failure, counts a streak, reports and resets it" {
+    local etc_dir="$TEST_TMP_DIR/etc/openpath"
+    local bin_dir="$TEST_TMP_DIR/bin"
+    local curl_log="$TEST_TMP_DIR/curl-streak.log"
+    local streak_file="$TEST_TMP_DIR/state/health-report-fail-streak"
+
+    mkdir -p "$etc_dir" "$bin_dir"
+    HEALTH_API_URL_CONF="$etc_dir/health-api-url.conf"
+    echo "https://api.example.test" > "$HEALTH_API_URL_CONF"
+    VAR_STATE_DIR="$TEST_TMP_DIR/state"
+    LOG_FILE="$TEST_TMP_DIR/openpath.log"
+
+    # First delivery fails (curl transport error).
+    cat > "$bin_dir/curl" << EOF
+#!/bin/bash
+echo "\$*" >> "$curl_log"
+echo -n "000"
+exit 7
+EOF
+    chmod +x "$bin_dir/curl"
+    PATH="$bin_dir:$PATH"
+
+    run send_health_report_to_api "HEALTHY" "watchdog_ok" "true" "true" "0" "4.1.0"
+    [ "$status" -eq 0 ]   # caller is never blocked or failed by delivery
+
+    for _ in $(seq 1 30); do [ -f "$streak_file" ] && break; sleep 0.1; done
+    [ -f "$streak_file" ]
+    [ "$(cat "$streak_file")" = "1" ]
+    grep -q "\[HEALTH\] Report delivery failed" "$LOG_FILE"
+
+    # Second delivery succeeds: payload carries the streak, then it resets.
+    cat > "$bin_dir/curl" << EOF
+#!/bin/bash
+echo "\$*" >> "$curl_log.ok"
+echo -n "200"
+exit 0
+EOF
+    chmod +x "$bin_dir/curl"
+
+    run send_health_report_to_api "HEALTHY" "watchdog_ok" "true" "true" "0" "4.1.0"
+    [ "$status" -eq 0 ]
+
+    for _ in $(seq 1 30); do [ -f "$curl_log.ok" ] && break; sleep 0.1; done
+    [ -f "$curl_log.ok" ]
+    grep -q '"healthReportFailStreak": 1' "$curl_log.ok"
+
+    for _ in $(seq 1 30); do [ "$(cat "$streak_file" 2>/dev/null)" = "0" ] && break; sleep 0.1; done
+    [ "$(cat "$streak_file")" = "0" ]
+}

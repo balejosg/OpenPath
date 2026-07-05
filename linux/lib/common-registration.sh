@@ -118,6 +118,77 @@ register_machine() {
     parse_machine_registration_response "$REGISTER_RESPONSE"
 }
 
+# Normalize an effective flag value (defaults.conf style 1/0 plus operator
+# overrides true/false/yes/no/on/off) to the canonical posture strings
+# "true"/"false". Anything else (including empty/unset) yields "" so the
+# caller omits the key entirely — the server must record "not reported",
+# never a guessed value.
+normalize_posture_bool() {
+    local raw="${1:-}"
+    case "${raw,,}" in
+        1|true|yes|on) echo "true" ;;
+        0|false|no|off) echo "false" ;;
+        *) echo "" ;;
+    esac
+}
+
+health_report_fail_streak_file() {
+    echo "${VAR_STATE_DIR:-/var/lib/openpath}/health-report-fail-streak"
+}
+
+# Prints the persisted consecutive-delivery-failure count (0 when the file is
+# missing or holds anything but a plain non-negative integer).
+read_health_report_fail_streak() {
+    local streak_file value
+    streak_file=$(health_report_fail_streak_file)
+    value=$(cat "$streak_file" 2>/dev/null || true)
+    case "$value" in
+        ''|*[!0-9]*) echo "0" ;;
+        *) echo "$value" ;;
+    esac
+}
+
+# Synchronous delivery worker: POSTs the payload, then records the outcome.
+# Run it in the background from send_health_report_to_api — non-blocking for
+# the caller, but no longer silent: failures are logged and counted.
+# Args: $1=api_url $2=auth_token (may be empty) $3=payload
+deliver_health_report_payload() {
+    local api_url="$1"
+    local auth_token="$2"
+    local payload="$3"
+
+    local http_code="000"
+    local curl_exit=0
+    if [ -n "$auth_token" ]; then
+        http_code=$(timeout 5 curl -s -o /dev/null -w '%{http_code}' -X POST \
+            "$api_url/trpc/healthReports.submit" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $auth_token" \
+            -d "$payload" 2>/dev/null) && curl_exit=0 || curl_exit=$?
+    else
+        http_code=$(timeout 5 curl -s -o /dev/null -w '%{http_code}' -X POST \
+            "$api_url/trpc/healthReports.submit" \
+            -H "Content-Type: application/json" \
+            -d "$payload" 2>/dev/null) && curl_exit=0 || curl_exit=$?
+    fi
+
+    local streak_file
+    streak_file=$(health_report_fail_streak_file)
+    mkdir -p "$(dirname "$streak_file")" 2>/dev/null || true
+
+    if [ "$curl_exit" -eq 0 ] && [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+        echo "0" > "$streak_file" 2>/dev/null || true
+        return 0
+    fi
+
+    local streak
+    streak=$(read_health_report_fail_streak)
+    streak=$((streak + 1))
+    echo "$streak" > "$streak_file" 2>/dev/null || true
+    log_warn "[HEALTH] Report delivery failed (curl_exit=$curl_exit http=$http_code streak=$streak)"
+    return 1
+}
+
 send_health_report_to_api() {
     local status="$1"
     local actions="$2"
@@ -153,11 +224,26 @@ send_health_report_to_api() {
     local hostname
     hostname=$(get_registered_machine_name)
 
+    # Effective flag posture. The variables are set by defaults.conf, which
+    # common.sh sources before this library; empty/unrecognized values are
+    # omitted from the payload (absent = "not reported").
+    local posture_ipv6 posture_sff posture_scoped posture_ase
+    posture_ipv6=$(normalize_posture_bool "${IPV6_FIREWALL_ENABLED:-}")
+    posture_sff=$(normalize_posture_bool "${SINKHOLE_FAST_FAIL:-}")
+    posture_scoped=$(normalize_posture_bool "${CAPTIVE_PORTAL_SCOPED_PASSTHROUGH_ENABLED:-}")
+    posture_ase=$(normalize_posture_bool "${ALLOW_SET_EGRESS_ENABLED:-}")
+
+    local fail_streak
+    fail_streak=$(read_health_report_fail_streak)
+
     local payload
     # Canonical field names (v1.3+): agentVersion and platform are added alongside
     # the legacy version field so old API versions also accept the payload.
     payload=$(HN="$hostname" ST="$status" DR="$dnsmasq_running" DRE="$dns_resolving" \
-        FC="$fail_count" AC="$actions" VER="$version" FW="$firewall_state" WA="$whitelist_age_hours" python3 -c '
+        FC="$fail_count" AC="$actions" VER="$version" FW="$firewall_state" WA="$whitelist_age_hours" \
+        CFG_IPV6="$posture_ipv6" CFG_SFF="$posture_sff" CFG_SCOPED="$posture_scoped" \
+        CFG_ASE="$posture_ase" CFG_R1918="${RFC1918_EGRESS_MODE:-}" CFG_FMODE="${FAILURE_MODE:-}" \
+        FS="$fail_streak" python3 -c '
 import json, os
 dr = os.environ["DR"] == "true"
 dre = os.environ["DRE"] == "true"
@@ -182,18 +268,35 @@ if wa != "":
         report["whitelistAgeHours"] = float(wa)
     except ValueError:
         pass
+# Allowlisted effective flag posture (canonical key order; absent keys omitted).
+posture = {}
+for key, env in (
+    ("ipv6FirewallEnabled", "CFG_IPV6"),
+    ("sinkholeFastFail", "CFG_SFF"),
+    ("captivePortalScopedPassthrough", "CFG_SCOPED"),
+):
+    value = os.environ.get(env, "")
+    if value in ("true", "false"):
+        posture[key] = value
+mode = os.environ.get("CFG_R1918", "").strip().lower()
+if mode:
+    posture["rfc1918EgressMode"] = mode
+ase = os.environ.get("CFG_ASE", "")
+if ase in ("true", "false"):
+    posture["allowSetEgressEnabled"] = ase
+fmode = os.environ.get("CFG_FMODE", "").strip().lower()
+if fmode:
+    posture["failureMode"] = fmode
+if posture:
+    report["configPosture"] = posture
+fs = os.environ.get("FS", "")
+if fs.isdigit() and int(fs) > 0:
+    report["healthReportFailStreak"] = int(fs)
 print(json.dumps({"json": report}))')
 
-    if [ -n "$auth_token" ]; then
-        timeout 5 curl -s -X POST "$api_url/trpc/healthReports.submit" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $auth_token" \
-            -d "$payload" >/dev/null 2>&1 &
-    else
-        timeout 5 curl -s -X POST "$api_url/trpc/healthReports.submit" \
-            -H "Content-Type: application/json" \
-            -d "$payload" >/dev/null 2>&1 &
-    fi
+    # Non-blocking but non-silent: the backgrounded worker captures the HTTP
+    # outcome, logs failures, and maintains the fail-streak counter.
+    deliver_health_report_payload "$api_url" "$auth_token" "$payload" &
 
     return 0
 }
