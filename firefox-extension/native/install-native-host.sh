@@ -17,52 +17,40 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ################################################################################
-# install-native-host.sh - Instala el host de Native Messaging
-# Parte del sistema Monitor de Bloqueos de Red
+# install-native-host.sh - Dev-mode Firefox native messaging host install.
+#
+# Thin wrapper over the production Linux registration seam
+# (install_native_host in linux/lib/browser-native-host.sh), scoped to the
+# current user so no sudo is required. Production installs go through
+# linux/install.sh / openpath-update.sh with the system paths instead.
 ################################################################################
 
-set -e
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# Colores
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# Per-user dev defaults. Production defaults are the system paths
+# (/usr/lib/mozilla/native-messaging-hosts, /usr/local/lib/openpath).
+export FIREFOX_NATIVE_HOST_DIR="${FIREFOX_NATIVE_HOST_DIR:-$HOME/.mozilla/native-messaging-hosts}"
+export OPENPATH_NATIVE_HOST_INSTALL_DIR="${OPENPATH_NATIVE_HOST_INSTALL_DIR:-$HOME/.local/lib/openpath}"
 
-echo -e "${BLUE}Instalando Native Messaging Host...${NC}"
-echo ""
-
-# Verificar que existe el script
-if [ ! -f "$SCRIPT_DIR/openpath-native-host.py" ]; then
-    echo -e "${RED}Error: openpath-native-host.py no encontrado${NC}"
-    exit 1
+# Minimal logger; the production caller gets log() from linux/lib/common.sh.
+if ! declare -F log >/dev/null 2>&1; then
+    log() { printf '%s\n' "$*"; }
 fi
 
-# Instalar el script del host
-echo "  → Instalando script en /usr/local/bin/..."
-sudo cp "$SCRIPT_DIR/openpath-native-host.py" /usr/local/bin/
-sudo chmod +x /usr/local/bin/openpath-native-host.py
+# shellcheck source=../../linux/lib/browser.sh
+source "$REPO_ROOT/linux/lib/browser.sh"
 
-# Crear directorio para manifests de usuario (sin sudo)
-NATIVE_HOST_DIR="$HOME/.mozilla/native-messaging-hosts"
-echo "  → Creando directorio $NATIVE_HOST_DIR..."
-mkdir -p "$NATIVE_HOST_DIR"
-
-# Instalar el manifest
-echo "  → Instalando manifest de Native Messaging..."
-cp "$SCRIPT_DIR/whitelist_native_host.json" "$NATIVE_HOST_DIR/whitelist_native_host.json"
-
-# Crear archivo de log
-echo "  → Configurando archivo de log..."
-sudo touch /var/log/openpath-native-host.log
-sudo chmod 666 /var/log/openpath-native-host.log
+echo "Installing Firefox native messaging host (dev mode, current user only)..."
+install_native_host "$SCRIPT_DIR" ""
 
 echo ""
-echo -e "${GREEN}✓ Native Messaging Host instalado correctamente${NC}"
+echo "Native messaging host installed."
+echo "  Manifest:    $FIREFOX_NATIVE_HOST_DIR/$OPENPATH_FIREFOX_NATIVE_HOST_FILENAME"
+echo "  Host script: $OPENPATH_NATIVE_HOST_INSTALL_DIR/$OPENPATH_NATIVE_HOST_SCRIPT_NAME"
 echo ""
-echo "Para usar esta funcionalidad:"
-echo "  1. Recarga la extensión en about:debugging"
-echo "  2. El botón 'Verificar en Lista' estará disponible en el popup"
-echo ""
+echo "Next steps:"
+echo "  1. Reload the extension in about:debugging"
+echo "  2. Native-host-backed checks are then available from the extension popup"

@@ -142,9 +142,44 @@ EOF
     [ "$status" -eq 0 ]
 }
 
-@test "manual native host installer uses the Firefox contract filename" {
-    run grep -nF 'whitelist_native_host.json' "$PROJECT_DIR/firefox-extension/native/install-native-host.sh"
+@test "manual native host installer wraps the production registration seam" {
+    run grep -nF 'source "$REPO_ROOT/linux/lib/browser.sh"' "$PROJECT_DIR/firefox-extension/native/install-native-host.sh"
     [ "$status" -eq 0 ]
+    run grep -nF 'install_native_host "$SCRIPT_DIR"' "$PROJECT_DIR/firefox-extension/native/install-native-host.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "dev install-native-host.sh registers per-user through the production seam" {
+    export HOME="$TEST_TMP_DIR/home"
+    mkdir -p "$HOME"
+    unset FIREFOX_NATIVE_HOST_DIR OPENPATH_NATIVE_HOST_INSTALL_DIR
+
+    run bash "$PROJECT_DIR/firefox-extension/native/install-native-host.sh"
+    [ "$status" -eq 0 ]
+
+    local manifest="$HOME/.mozilla/native-messaging-hosts/whitelist_native_host.json"
+    local host_script="$HOME/.local/lib/openpath/openpath-native-host.py"
+    [ -f "$manifest" ]
+    [ -x "$host_script" ]
+
+    run python3 - "$manifest" "$PROJECT_DIR/tests/contracts/browser-firefox-native-host.json" <<'PYEOF'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+fixture = json.load(open(sys.argv[2]))
+assert manifest["name"] == fixture["name"], manifest["name"]
+assert manifest["type"] == fixture["type"], manifest["type"]
+assert manifest["allowed_extensions"] == fixture["allowedExtensions"], manifest["allowed_extensions"]
+PYEOF
+    [ "$status" -eq 0 ]
+
+    run python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["path"])' "$manifest"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$host_script" ]
+}
+
+@test "dev install-native-host.sh output is English-only" {
+    run grep -nE 'Instalando|instalado|extensión|Recarga|Verificar|Colores' "$PROJECT_DIR/firefox-extension/native/install-native-host.sh"
+    [ "$status" -eq 1 ]
 }
 #!/usr/bin/env bats
 ################################################################################
