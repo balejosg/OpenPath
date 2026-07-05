@@ -192,6 +192,66 @@ describe('repository verification contract', () => {
     );
   });
 
+  test('pre-push consumes the githooks stdin ref list before delegating to verify:full', () => {
+    const hook = readFileSync(resolve(projectRoot, '.husky/pre-push'), 'utf8');
+
+    assert.match(
+      hook,
+      /while read -r _local_ref local_sha _remote_ref remote_sha/,
+      'pre-push should read the "<local-ref> <local-sha> <remote-ref> <remote-sha>" stdin lines'
+    );
+    assert.ok(
+      hook.indexOf('while read') < hook.indexOf('npm run verify:full'),
+      'stdin must be consumed before verify:full so child processes cannot swallow the ref list'
+    );
+    assert.match(
+      hook,
+      /"\$ref_count" -eq 1/,
+      'pre-push should export the pushed range only for single-ref pushes (multi-ref -> RUN)'
+    );
+    assert.ok(
+      hook.includes('export OPENPATH_PREPUSH_LOCAL_SHA OPENPATH_PREPUSH_REMOTE_SHA'),
+      'pre-push should hand the pushed range to verify-full.sh via OPENPATH_PREPUSH_* variables'
+    );
+    assert.ok(hook.includes('npm run verify:full'), 'pre-push must still delegate to verify:full');
+  });
+
+  test('verify-full gates only the e2e stage, defaults to RUN, and honors the force flag', () => {
+    const verifyFullScript = readText('scripts/verify-full.sh');
+    const gateIndex = verifyFullScript.indexOf('e2e-scope-check.mjs');
+
+    assert.ok(gateIndex > -1, 'verify-full.sh should consult scripts/e2e-scope-check.mjs');
+    for (const stage of [
+      "concurrently --group --names 'static,checks,security'",
+      'npm run verify:coverage',
+      'npm run verify:unit',
+    ]) {
+      const stageIndex = verifyFullScript.indexOf(stage);
+      assert.ok(
+        stageIndex > -1 && stageIndex < gateIndex,
+        `${stage} must stay unconditional and run before the e2e scope gate`
+      );
+    }
+    assert.ok(
+      verifyFullScript.includes('OPENPATH_VERIFY_E2E'),
+      'verify-full.sh should honor the OPENPATH_VERIFY_E2E=1 force flag'
+    );
+    assert.ok(
+      verifyFullScript.includes('OPENPATH_PREPUSH_REMOTE_SHA') &&
+        verifyFullScript.includes('OPENPATH_PREPUSH_LOCAL_SHA'),
+      'e2e scoping must activate only when the pre-push hook provides the pushed range'
+    );
+    assert.ok(
+      verifyFullScript.includes('|| echo run'),
+      'a crashed scope check must fall back to running e2e'
+    );
+    assert.match(
+      verifyFullScript,
+      /else\s+npm run e2e:full\s+fi/,
+      'the no-range branch (manual npm run verify:full) must run the full e2e stage unchanged'
+    );
+  });
+
   test('repository test-file enforcement covers mapped Linux and Windows client scripts', () => {
     const checkTestFilesScript = readText('scripts/check-test-files.sh');
 

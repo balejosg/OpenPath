@@ -1,6 +1,26 @@
 set -e
 
+# Capture the githooks(5) pre-push ref list from stdin BEFORE anything else can consume it.
+# One line per ref being pushed: "<local-ref> <local-sha> <remote-ref> <remote-sha>".
+ref_count=0
+prepush_local_sha=""
+prepush_remote_sha=""
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  ref_count=$((ref_count + 1))
+  prepush_local_sha="$local_sha"
+  prepush_remote_sha="$remote_sha"
+done
+
 bash scripts/require-main-branch.sh pre-push OpenPath
+
+if [ "$ref_count" -eq 1 ]; then
+  # Exactly one pushed ref: hand the range to verify-full.sh so it can path-scope the e2e
+  # stage via scripts/e2e-scope-check.mjs. Any other count (0 = nothing pushed, >1 =
+  # multi-ref push) leaves the variables unset, and verify-full.sh then always runs e2e.
+  OPENPATH_PREPUSH_LOCAL_SHA="$prepush_local_sha"
+  OPENPATH_PREPUSH_REMOTE_SHA="$prepush_remote_sha"
+  export OPENPATH_PREPUSH_LOCAL_SHA OPENPATH_PREPUSH_REMOTE_SHA
+fi
 
 echo ""
 echo "=========================================="
