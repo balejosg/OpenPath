@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: OpenPath repository
-> Last verified: 2026-06-12
+> Last verified: 2026-07-02
 > Source of truth: `docs/contract-tests.md` -- update this file whenever a source-text contract test is added, removed, or its guarded files change.
 
 ## What is a source-text contract test?
@@ -294,6 +294,8 @@ Uses `Get-Content -Raw` on many internal native-host files.
 
 **The content-concatenation pattern** in this test is particularly dangerous: several `It` blocks build a virtual combined file by concatenating multiple `Get-Content -Raw` results with newlines, then run regex assertions on the combined string. A function name that appears in any of those files will satisfy the needle, so if the function moves between files the needle may still pass -- but if it is renamed, the needle fails regardless of which file it is in.
 
+The `Context "Native host manifest parity with the shared contract fixture"` block additionally reads `windows/lib/Browser.FirefoxNativeHost.psm1` as raw text with fixture-derived needles (`return '<name>'`, manifest filename, `type = 'stdio'`, `allowed_extensions = @('<id>')`, `path = $wrapperPath`) sourced from `tests/contracts/browser-firefox-native-host.json`.
+
 ---
 
 ### scripts/check-ps-datetime-culture.mjs (PS DateTime culture guard)
@@ -425,6 +427,38 @@ Guards the OSS independence rule: no tracked source file in the source dirs list
 | `api/`, `react-spa/src/`, `linux/`, `windows/lib/`, `windows/libexec/`, `firefox-extension/src/`, `scripts/` (test paths excluded) | Case-insensitive substring match of the forbidden wrapper term against each tracked file's content | Do not introduce references to the SaaS wrapper in source dirs; wrapper-specific references belong in the wrapper repo. |
 
 See root AGENTS.md "OpenPath Independence" for the boundary rule. The test itself must not contain the literal forbidden term -- it is constructed at runtime to keep the source scan clean.
+
+---
+
+### tests/repo-config/extension-id-contracts.test.mjs
+
+Pins every hard-coded Firefox extension id to the canonical source, `firefox-extension/manifest.json` (`browser_specific_settings.gecko.id`), and sweeps the whole repo with `git grep` for new literals.
+
+| Source files read                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Needle kinds                                                                                                                                  | Before renaming or editing                                                                                                                                                                                                                                                  |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `firefox-extension/manifest.json`, `firefox-extension/native/whitelist_native_host.json`, `windows/lib/Browser.FirefoxNativeHost.psm1`, `windows/lib/Browser.FirefoxPolicy.psm1`, `linux/lib/firefox-policy.sh`, `linux/lib/browser-request-readiness.sh`, `linux/lib/runtime-cli-system.sh`, `linux/lib/common-config-persistence.sh`, `linux/scripts/runtime/openpath-browser-setup.sh`, `linux/uninstall.sh`, `linux/debian-package/DEBIAN/postrm`, `firefox-extension/verify-firefox-amo-version.mjs`, `firefox-extension/upload-firefox-amo-source.mjs`, `firefox-extension/sync-firefox-amo-policy.mjs`, `tests/contracts/browser-firefox-managed-extension.json`, `tests/contracts/browser-firefox-native-host.json` | Extension-id literal embedded in an exact per-site source context; repo-wide `git grep -F` sweep restricted to inventoried sites, tests, docs | Renaming the id: update the manifest plus every inventoried site, then this registry row. Refactoring a context line: update `EXTENSION_ID_SITES` in the test. Adding a new literal: derive it from the platform seam instead, or inventory it in the test and in this row. |
+
+### tests/repo-config/native-host-manifest-contracts.test.mjs
+
+Anchors the native-messaging host shape (name, type, manifest filename, allowed extension) to the shared fixture `tests/contracts/browser-firefox-native-host.json` across the template, the Linux lib, the Windows module, and the extension sources.
+
+| Source files read                                                                                                                                                                                                                                                                                                                                                                                           | Needle kinds                                                                                                                                                                                                                                 | Before renaming or editing                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/contracts/browser-firefox-native-host.json`, `firefox-extension/manifest.json`, `firefox-extension/native/whitelist_native_host.json`, `linux/lib/browser.sh`, `windows/lib/Browser.FirefoxNativeHost.psm1`, `firefox-extension/src/background.ts`, `firefox-extension/src/blocked-page.ts`, `firefox-extension/src/lib/background-runtime.ts`, `firefox-extension/src/lib/config-storage-native.ts` | Fixture-key equality on JSON files; env-default and filename-derivation lines in `browser.sh`; manifest-field, filename, and dual HKLM registry-path needles in the psm1; `const NATIVE_HOST_NAME = '...'` declarations in extension sources | Renaming the host requires updating the fixture, all guarded sources, and `firefox-extension/tests/native-host-contract.test.ts` in one change. |
+
+### tests/repo-config/health-report-parity-contracts.test.mjs
+
+Guards the Linux and Windows health-report emitters for canonical/legacy field parity.
+
+| Source files read                                                                 | Needle kinds                                                                                                                                                                                                                                       | Before renaming or editing                                                                                       |
+| --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `linux/lib/common-registration.sh`, `windows/lib/internal/Common.Http.Health.ps1` | JSON key literals (`"firewallState"`, `"whitelistAgeHours"`, `"firefoxRegistration"`, `"targetCount"`, legacy `"dnsmasqRunning"`/`"dnsResolving"`/`"version"`, `agentVersion`, `platform`), function-name needle `read_firefox_registration_state` | Renaming a payload key or the marker-reader function breaks the parity tests -- update source and test together. |
+
+---
+
+### tests/browser_native_host.bats (source-text subset)
+
+Most of this file is behavioral; two tests read `firefox-extension/native/install-native-host.sh` as text: `manual native host installer wraps the production registration seam` greps for the `source .../linux/lib/browser.sh` and `install_native_host "$SCRIPT_DIR"` lines, and `dev install-native-host.sh output is English-only` asserts the absence of known Spanish strings. Rewriting the wrapper's source or call lines requires updating those needles.
 
 ---
 

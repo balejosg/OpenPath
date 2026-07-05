@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: `firefox-extension/`
-> Last verified: 2026-05-09
+> Last verified: 2026-07-02
 > Source of truth: `firefox-extension/README.md`
 
 This package contains the OpenPath browser-extension assets used to detect blocked resources and support managed browser rollout workflows.
@@ -35,6 +35,14 @@ Build/test commands:
 npm run build --workspace=@openpath/firefox-extension
 npm test --workspace=@openpath/firefox-extension
 ```
+
+Optional native-host-backed checks in dev builds need the native messaging host registered for your user:
+
+```bash
+firefox-extension/native/install-native-host.sh
+```
+
+The script is a thin wrapper over the production Linux registration seam (`install_native_host` in `linux/lib/browser-native-host.sh`), scoped to the current user -- no sudo. It writes the manifest to `~/.mozilla/native-messaging-hosts/whitelist_native_host.json` and the host script to `~/.local/lib/openpath/`; override with `FIREFOX_NATIVE_HOST_DIR` / `OPENPATH_NATIVE_HOST_INSTALL_DIR`. Production installs go through `linux/install.sh` with the system paths instead.
 
 ## Release Artifact Flows
 
