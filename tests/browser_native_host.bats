@@ -181,6 +181,42 @@ PYEOF
     run grep -nE 'Instalando|instalado|extensión|Recarga|Verificar|Colores' "$PROJECT_DIR/firefox-extension/native/install-native-host.sh"
     [ "$status" -eq 1 ]
 }
+
+@test "install_native_host writes a manifest matching the shared native-host fixture" {
+    local native_dir="$TEST_TMP_DIR/native"
+    mkdir -p "$native_dir"
+    cp "$PROJECT_DIR/firefox-extension/native/openpath-native-host.py" "$native_dir/"
+    cp "$PROJECT_DIR/firefox-extension/native/whitelist_native_host.json" "$native_dir/"
+
+    export FIREFOX_NATIVE_HOST_DIR="$TEST_TMP_DIR/native-manifests"
+    export OPENPATH_NATIVE_HOST_INSTALL_DIR="$TEST_TMP_DIR/native-bin"
+
+    source "$PROJECT_DIR/linux/lib/browser.sh"
+
+    run install_native_host "$native_dir"
+    [ "$status" -eq 0 ]
+
+    local expected_name
+    expected_name="$(browser_contract_fixture_value "browser-firefox-native-host.json" "name")"
+    local manifest="$FIREFOX_NATIVE_HOST_DIR/${expected_name}.json"
+    [ -f "$manifest" ]
+
+    run python3 - "$manifest" "$PROJECT_DIR/tests/contracts/browser-firefox-native-host.json" <<'PYEOF'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+fixture = json.load(open(sys.argv[2]))
+assert manifest["name"] == fixture["name"], manifest["name"]
+assert manifest["type"] == fixture["type"], manifest["type"]
+assert manifest["allowed_extensions"] == fixture["allowedExtensions"], manifest["allowed_extensions"]
+PYEOF
+    [ "$status" -eq 0 ]
+
+    # The manifest's exec target must be the installed, executable host script.
+    run python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["path"])' "$manifest"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$OPENPATH_NATIVE_HOST_INSTALL_DIR/openpath-native-host.py" ]
+    [ -x "$output" ]
+}
 #!/usr/bin/env bats
 ################################################################################
 # browser_native_host.bats - Native host and removal tests

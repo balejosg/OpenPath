@@ -113,6 +113,46 @@ Describe "Browser Module - Native Host" {
         }
     }
 
+    Context "Native host manifest parity with the shared contract fixture" {
+        BeforeAll {
+            $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
+            Import-Module $nativeHostModulePath -Force -Global -ErrorAction Stop
+        }
+
+        It "Builds the manifest from the fixture name, type and allowed extension" {
+            $fixture = Get-ContractFixtureJson -FileName 'browser-firefox-native-host.json'
+            $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
+            $nativeHostContent = Get-Content $nativeHostModulePath -Raw
+
+            Assert-ContentContainsAll -Content $nativeHostContent -Needles @(
+                "return '$($fixture.name)'",
+                "\$($fixture.manifestFilename)",
+                "type = '$($fixture.type)'",
+                "allowed_extensions = @('$($fixture.allowedExtensions[0])')",
+                'path = $wrapperPath'
+            )
+        }
+
+        It "Registers both HKLM registry views for the fixture host name" {
+            $fixture = Get-ContractFixtureJson -FileName 'browser-firefox-native-host.json'
+
+            $registryPaths = @(Get-OpenPathFirefoxNativeHostRegistryPaths)
+            $registryPaths.Count | Should -Be 2
+            $registryPaths | Should -Contain "HKLM\SOFTWARE\Mozilla\NativeMessagingHosts\$($fixture.name)"
+            $registryPaths | Should -Contain "HKLM\SOFTWARE\WOW6432Node\Mozilla\NativeMessagingHosts\$($fixture.name)"
+        }
+
+        It "Points the manifest at the staged cmd wrapper exec target" {
+            $fixture = Get-ContractFixtureJson -FileName 'browser-firefox-native-host.json'
+
+            (Get-OpenPathFirefoxNativeHostManifestPath) | Should -BeLike "*\$($fixture.manifestFilename)"
+            (Get-OpenPathFirefoxNativeHostWrapperPath) | Should -BeLike "*\OpenPath-NativeHost.cmd"
+
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.ArtifactCatalog.ps1")
+            @(Get-OpenPathNativeHostArtifactNames) | Should -Contain 'OpenPath-NativeHost.cmd'
+        }
+    }
+
     Context "Native host registration" {
         It "Serves request config from the staged native directory without reading locked agent internals" {
             $repoWindowsRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
