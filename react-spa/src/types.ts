@@ -46,6 +46,7 @@ export interface Classroom {
     hostname: string;
     lastSeen: string | null;
     status: MachineStatus;
+    configPosture?: Record<string, string> | null;
   }[];
 }
 

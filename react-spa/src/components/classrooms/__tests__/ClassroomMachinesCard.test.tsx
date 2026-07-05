@@ -187,4 +187,41 @@ describe('ClassroomMachinesCard', () => {
     expect(screen.getByText(/Admin/)).toBeInTheDocument();
     expect(screen.getByText(/Incidencia/)).toBeInTheDocument();
   });
+
+  it('renders the config posture line for machines that report it', () => {
+    const props = buildProps({
+      classroom: buildClassroom({
+        machines: [
+          {
+            id: 'machine-1',
+            hostname: 'pc-01',
+            lastSeen: '2026-03-06T08:00:00.000Z',
+            status: 'online',
+            configPosture: { sinkholeFastFail: 'true', rfc1918EgressMode: 'restricted' },
+          },
+          {
+            id: 'machine-2',
+            hostname: 'pc-02',
+            lastSeen: null,
+            status: 'offline',
+          },
+        ],
+      }),
+      exemptionByMachineId: new Map<string, ClassroomExemption>(),
+    });
+    render(<ClassroomMachinesCard {...props} />);
+
+    const postureLine = screen.getByText(/Sinkhole fast-fail: true/);
+    expect(postureLine).toBeInTheDocument();
+    expect(postureLine.textContent).toContain('RFC1918 egress: restricted');
+    // Only the reporting machine gets a posture line.
+    expect(screen.getAllByText(/Flags:/)).toHaveLength(1);
+  });
+
+  it('renders no posture line when machines do not report configPosture', () => {
+    const props = buildProps({ exemptionByMachineId: new Map<string, ClassroomExemption>() });
+    render(<ClassroomMachinesCard {...props} />);
+
+    expect(screen.queryByText(/Flags:/)).not.toBeInTheDocument();
+  });
 });

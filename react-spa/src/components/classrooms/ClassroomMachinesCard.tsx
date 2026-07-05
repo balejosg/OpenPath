@@ -3,6 +3,7 @@ import { AlertCircle, Download, Loader2, Monitor, X } from 'lucide-react';
 import type { Classroom, ClassroomExemption } from '../../types';
 import { useOpenPathI18n } from '../../i18n/product-i18n';
 import { isGroupEnabled, type GroupLike } from '../groups/GroupLabel';
+import { configPostureEntries } from '../../lib/config-posture';
 
 interface ClassroomMachinesCardProps {
   admin: boolean;
@@ -121,6 +122,10 @@ export default function ClassroomMachinesCard({
                   date: new Date(machine.lastSeen).toLocaleString(locale),
                 })
               : '';
+            const postureEntries = configPostureEntries(machine.configPosture);
+            const postureLine = postureEntries
+              .map((entry) => `${t(`classrooms.machines.posture.${entry.key}`)}: ${entry.value}`)
+              .join(' · ');
 
             return (
               <div
@@ -137,6 +142,11 @@ export default function ClassroomMachinesCard({
                       {machineStatusLabel}
                       {lastSeenLabel ? ` · ${lastSeenLabel}` : ''}
                     </p>
+                    {postureEntries.length > 0 && (
+                      <p className="text-xs text-slate-500 truncate">
+                        {t('classrooms.machines.posture.title')}: {postureLine}
+                      </p>
+                    )}
                   </div>
                 </div>
 
