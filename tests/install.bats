@@ -849,3 +849,76 @@ EOF
     run grep -n 'installer_args+=("\${EXTRA_INSTALLER_ARGS\[@\]}")' "$PROJECT_DIR/linux/quick-install.sh"
     [ "$status" -eq 0 ]
 }
+
+@test "read_firefox_registration_state parses the ready marker into tab-separated fields" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+
+    export FIREFOX_EXTENSION_READY_FILE="$TEST_TMP_DIR/firefox-extension-ready"
+    cat > "$FIREFOX_EXTENSION_READY_FILE" <<'EOF'
+extension_id=openpath-block-monitor@openpath
+target_count=3
+registered_count=2
+verified_at=2026-07-02T10:00:00Z
+profile=alice|/home/alice|/home/alice/.mozilla/firefox/x.default|registered|extensions.json
+EOF
+
+    run read_firefox_registration_state
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf '2\t3\t2026-07-02T10:00:00Z')" ]
+}
+
+@test "read_firefox_registration_state prints nothing for a missing or malformed marker" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+
+    export FIREFOX_EXTENSION_READY_FILE="$TEST_TMP_DIR/does-not-exist"
+    run read_firefox_registration_state
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+
+    printf 'target_count=oops\nregistered_count=\n' > "$TEST_TMP_DIR/bad-marker"
+    export FIREFOX_EXTENSION_READY_FILE="$TEST_TMP_DIR/bad-marker"
+    run read_firefox_registration_state
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "send_health_report_to_api emits firefoxRegistration only when marker values are provided" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+
+    HEALTH_API_URL_CONF="$TEST_TMP_DIR/health-api-url.conf"
+    echo "https://api.example" > "$HEALTH_API_URL_CONF"
+    HEALTH_API_SECRET_CONF="$TEST_TMP_DIR/health-api-secret.conf"
+
+    get_registered_machine_name() { echo "pc-01"; }
+    get_machine_token_from_whitelist_url_file() { return 1; }
+    CAPTURE_FILE="$TEST_TMP_DIR/payload.json"
+    timeout() { shift; "$@"; }
+    curl() {
+        local prev="" arg
+        for arg in "$@"; do
+            [ "$prev" = "-d" ] && printf '%s' "$arg" > "$CAPTURE_FILE"
+            prev="$arg"
+        done
+    }
+
+    send_health_report_to_api "healthy" "none" "true" "true" 0 "1.2.3" "" "" \
+        "2" "3" "2026-07-02T10:00:00Z"
+    wait
+
+    run python3 - "$CAPTURE_FILE" <<'PYEOF'
+import json, sys
+report = json.load(open(sys.argv[1]))["json"]
+assert report["firefoxRegistration"] == {
+    "registered": 2,
+    "targetCount": 3,
+    "lastCheckedAt": "2026-07-02T10:00:00Z",
+}, report
+PYEOF
+    [ "$status" -eq 0 ]
+
+    # Omission case: an 8-arg legacy call must not emit the key at all.
+    send_health_report_to_api "healthy" "none" "true" "true" 0 "1.2.3"
+    wait
+    run python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["json"]; assert "firefoxRegistration" not in r, r' "$CAPTURE_FILE"
+    [ "$status" -eq 0 ]
+}

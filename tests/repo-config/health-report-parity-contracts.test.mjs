@@ -61,6 +61,22 @@ describe('T9: health report cross-platform field-parity contracts', () => {
     );
   });
 
+  test('Linux send_health_report_to_api emits optional firefoxRegistration from the ready marker', () => {
+    const src = readText('linux/lib/common-registration.sh');
+    assert.ok(
+      src.includes('"firefoxRegistration"'),
+      'linux/lib/common-registration.sh must emit optional "firefoxRegistration"'
+    );
+    assert.ok(
+      src.includes('"targetCount"'),
+      'linux/lib/common-registration.sh firefoxRegistration must use the canonical "targetCount" key'
+    );
+    assert.ok(
+      src.includes('read_firefox_registration_state'),
+      'linux/lib/common-registration.sh must define the ready-marker reader'
+    );
+  });
+
   // ── Windows ─────────────────────────────────────────────────────────────────
 
   test('Windows Send-OpenPathHealthReport emits canonical agentVersion field', () => {

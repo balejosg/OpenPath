@@ -203,6 +203,13 @@ send_health_report_to_api() {
     local firewall_state="${7:-}"
     local whitelist_age_hours="${8:-}"
 
+    # Optional Firefox managed-extension registration state (positional so
+    # deployed 8-arg callers still work). Empty registered/target values omit
+    # the firefoxRegistration object entirely.
+    local firefox_registered_count="${9:-}"
+    local firefox_target_count="${10:-}"
+    local firefox_last_checked_at="${11:-}"
+
     if [ ! -f "$HEALTH_API_URL_CONF" ]; then
         log_debug "[HEALTH] No health API configured (create $HEALTH_API_URL_CONF)"
         return 0
@@ -243,7 +250,8 @@ send_health_report_to_api() {
         FC="$fail_count" AC="$actions" VER="$version" FW="$firewall_state" WA="$whitelist_age_hours" \
         CFG_IPV6="$posture_ipv6" CFG_SFF="$posture_sff" CFG_SCOPED="$posture_scoped" \
         CFG_ASE="$posture_ase" CFG_R1918="${RFC1918_EGRESS_MODE:-}" CFG_FMODE="${FAILURE_MODE:-}" \
-        FS="$fail_streak" python3 -c '
+        FS="$fail_streak" \
+        FRR="$firefox_registered_count" FRT="$firefox_target_count" FRA="$firefox_last_checked_at" python3 -c '
 import json, os
 dr = os.environ["DR"] == "true"
 dre = os.environ["DRE"] == "true"
@@ -266,6 +274,17 @@ wa = os.environ.get("WA", "")
 if wa != "":
     try:
         report["whitelistAgeHours"] = float(wa)
+    except ValueError:
+        pass
+frr = os.environ.get("FRR", "")
+frt = os.environ.get("FRT", "")
+fra = os.environ.get("FRA", "")
+if frr != "" and frt != "":
+    try:
+        registration = {"registered": int(frr), "targetCount": int(frt)}
+        if fra != "":
+            registration["lastCheckedAt"] = fra
+        report["firefoxRegistration"] = registration
     except ValueError:
         pass
 # Allowlisted effective flag posture (canonical key order; absent keys omitted).
@@ -299,4 +318,26 @@ print(json.dumps({"json": report}))')
     deliver_health_report_payload "$api_url" "$auth_token" "$payload" &
 
     return 0
+}
+
+# Prints "registered_count<TAB>target_count<TAB>verified_at" parsed from the
+# Firefox extension ready marker written by verify_firefox_extension_registered
+# (linux/lib/firefox-activation-plan.sh). Prints nothing when the marker is
+# absent or incomplete so callers omit firefoxRegistration from the health
+# payload entirely ("not reported", never a false registration-down).
+read_firefox_registration_state() {
+    local marker_path="${FIREFOX_EXTENSION_READY_FILE:-${VAR_STATE_DIR:-/var/lib/openpath}/firefox-extension-ready}"
+
+    [ -f "$marker_path" ] || return 0
+
+    awk -F= '
+        $1 == "registered_count" { registered = $2 }
+        $1 == "target_count" { target = $2 }
+        $1 == "verified_at" { verified = $2 }
+        END {
+            if (registered ~ /^[0-9]+$/ && target ~ /^[0-9]+$/) {
+                printf "%s\t%s\t%s\n", registered, target, verified
+            }
+        }
+    ' "$marker_path" 2>/dev/null || true
 }
