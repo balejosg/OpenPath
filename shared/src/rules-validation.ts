@@ -1,8 +1,11 @@
 /**
  * Rule value validation for domains, subdomains, and paths.
  *
- * This module provides server-side validation that mirrors the client-side
- * validation in react-spa/src/lib/ruleDetection.ts. Both MUST stay in sync.
+ * This is the canonical (single source of truth) implementation. The React
+ * SPA client (react-spa/src/lib/ruleDetection.ts) does not keep a parallel
+ * copy — it imports `validateRuleValue`/`cleanRuleValue` directly from this
+ * module via the `@openpath/shared/rules-validation` subpath, and only adds
+ * detection heuristics and SPA-local i18n message wiring on top.
  */
 
 // =============================================================================

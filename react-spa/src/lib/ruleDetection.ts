@@ -1,5 +1,11 @@
 /**
  * Rule Detection - Automatically detect rule type based on input pattern
+ *
+ * Validation (`validateRuleValue`/`cleanRuleValue`) is re-exported from the
+ * canonical implementation in @openpath/shared/rules-validation
+ * (OpenPath/shared/src/rules-validation.ts) — this file does not keep a
+ * parallel copy; it only adds detection heuristics and SPA-local i18n
+ * message wiring on top (see the "Validation" section comment below).
  */
 
 import { getRootDomain } from '@openpath/shared/domain';
