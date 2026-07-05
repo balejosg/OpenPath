@@ -163,5 +163,42 @@ await describe('integration health report workflow', async () => {
       targetCount: 3,
       lastCheckedAt: '2026-07-02T10:00:00Z',
     });
+
+    // A later report WITHOUT firefoxRegistration must not wipe the stored value.
+    const secondReport = await trpcMutate(
+      'healthReports.submit',
+      { hostname, status: 'healthy', version: '3.5' },
+      { Authorization: `Bearer ${machine.machineToken}` }
+    );
+    assert.ok([200, 201].includes(secondReport.status), 'Second report should succeed');
+
+    const secondListResponse = await trpcQuery('classrooms.list', undefined, getAdminBearerAuth());
+    assert.equal(secondListResponse.status, 200, 'Should list classrooms after second report');
+    const secondClassrooms = (await parseTRPC(secondListResponse)).data as {
+      machines?: {
+        hostname: string;
+        firefoxRegistration?: {
+          registered: number;
+          targetCount: number;
+          lastCheckedAt?: string;
+        } | null;
+      }[];
+    }[];
+    const reportedAfterSecond = secondClassrooms
+      .flatMap((classroom) => classroom.machines ?? [])
+      .find((entry) => entry.hostname === machine.machineHostname);
+    assert.ok(
+      reportedAfterSecond,
+      'Expected the reporting machine in classrooms.list output after second report'
+    );
+    assert.deepEqual(
+      reportedAfterSecond.firefoxRegistration,
+      {
+        registered: 2,
+        targetCount: 3,
+        lastCheckedAt: '2026-07-02T10:00:00Z',
+      },
+      'A later report without firefoxRegistration must not wipe the stored value'
+    );
   });
 });
