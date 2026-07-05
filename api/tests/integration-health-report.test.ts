@@ -48,4 +48,69 @@ await describe('integration health report workflow', async () => {
       'Expected registered machine to appear in the health report summary'
     );
   });
+
+  await test('persists configPosture latest-wins and healthReportFailStreak per report', async () => {
+    const suffix = `${Date.now().toString()}-posture`;
+    const hostname = `integration-posture-host-${suffix}`;
+    const machine = await provisionMachineAccess({
+      classroomName: `integration-posture-room-${suffix}`,
+      groupName: `integration-posture-group-${suffix}`,
+      hostname,
+    });
+
+    const firstReport = await trpcMutate(
+      'healthReports.submit',
+      {
+        hostname,
+        status: 'healthy',
+        version: '3.5',
+        configPosture: { sinkholeFastFail: 'true', rfc1918EgressMode: 'restricted' },
+        healthReportFailStreak: 2,
+      },
+      { Authorization: `Bearer ${machine.machineToken}` }
+    );
+    assert.ok(
+      [200, 201].includes(firstReport.status),
+      `First posture report should succeed, got ${String(firstReport.status)}`
+    );
+
+    // A later report WITHOUT configPosture must not wipe the stored posture.
+    const secondReport = await trpcMutate(
+      'healthReports.submit',
+      { hostname, status: 'healthy', version: '3.5' },
+      { Authorization: `Bearer ${machine.machineToken}` }
+    );
+    assert.ok([200, 201].includes(secondReport.status), 'Second report should succeed');
+
+    const listResponse = await trpcQuery('classrooms.list', undefined, getAdminBearerAuth());
+    assert.equal(listResponse.status, 200, 'Should list classrooms');
+    const classrooms = (await parseTRPC(listResponse)).data as {
+      machines?: {
+        hostname: string;
+        configPosture?: Record<string, string> | null;
+      }[];
+    }[];
+    const reported = classrooms
+      .flatMap((classroom) => classroom.machines ?? [])
+      .find((entry) => entry.hostname === machine.machineHostname);
+    assert.ok(reported, 'Expected the reporting machine in classrooms.list output');
+    assert.deepEqual(reported.configPosture, {
+      sinkholeFastFail: 'true',
+      rfc1918EgressMode: 'restricted',
+    });
+
+    const hostResponse = await trpcQuery(
+      'healthReports.getByHost',
+      { hostname: machine.machineHostname },
+      getAdminBearerAuth()
+    );
+    assert.equal(hostResponse.status, 200, 'Should fetch host reports');
+    const hostData = (await parseTRPC(hostResponse)).data as {
+      reports: { healthReportFailStreak?: number | null }[];
+    };
+    assert.ok(
+      hostData.reports.some((report) => report.healthReportFailStreak === 2),
+      'Expected the first report to carry healthReportFailStreak=2'
+    );
+  });
 });

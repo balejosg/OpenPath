@@ -96,6 +96,10 @@ export const healthReportsRouter = router({
       input.whitelistAgeHours === undefined ? null : Math.round(input.whitelistAgeHours);
     const resolvedCaptivePortalMode = input.captivePortalMode ?? null;
 
+    // Flag posture + delivery fail streak (canonical-only; null = not reported).
+    const resolvedConfigPosture = input.configPosture ?? null;
+    const resolvedHealthReportFailStreak = input.healthReportFailStreak ?? null;
+
     await healthReports.saveHealthReport(
       machine.hostname,
       stripUndefined({
@@ -105,6 +109,8 @@ export const healthReportsRouter = router({
         firewallActive: resolvedFirewallActive,
         whitelistAgeHours: resolvedWhitelistAgeHours,
         captivePortalMode: resolvedCaptivePortalMode,
+        configPosture: resolvedConfigPosture,
+        healthReportFailStreak: resolvedHealthReportFailStreak,
         failCount: input.failCount ?? 0,
         actions: input.actions ?? '',
         version: resolvedVersion,

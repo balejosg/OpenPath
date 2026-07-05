@@ -27,6 +27,8 @@ export interface HealthReport {
   failCount: number;
   actions: string;
   version: string;
+  configPosture?: Record<string, string> | null;
+  healthReportFailStreak?: number | null;
 }
 
 export interface HostData {
@@ -72,6 +74,7 @@ export async function saveHealthReport(
     failCount: reportData.failCount,
     actions: normalizedActions,
     version: reportData.version,
+    healthReportFailStreak: reportData.healthReportFailStreak ?? null,
     reportedAt: now,
   });
 
@@ -81,6 +84,9 @@ export async function saveHealthReport(
     .set({
       lastSeen: now,
       version: reportData.version || undefined,
+      // Latest-wins, but only when the agent reported it; a report without
+      // posture (old agent) must not wipe the stored posture.
+      ...(reportData.configPosture ? { configPosture: reportData.configPosture } : {}),
       updatedAt: now,
     })
     .where(eq(machines.hostname, hostname));
@@ -146,6 +152,7 @@ export async function getAllReports(): Promise<ReportsData> {
       whitelistAgeHours: report.whitelistAgeHours ?? null,
       captivePortalMode: report.captivePortalMode === null ? null : report.captivePortalMode === 1,
       failCount: report.failCount ?? 0,
+      healthReportFailStreak: report.healthReportFailStreak ?? null,
       actions: report.actions ?? '',
       version: report.version ?? '',
     });
@@ -186,6 +193,7 @@ export async function getHostReports(hostname: string): Promise<HostData | null>
       whitelistAgeHours: report.whitelistAgeHours ?? null,
       captivePortalMode: report.captivePortalMode === null ? null : report.captivePortalMode === 1,
       failCount: report.failCount ?? 0,
+      healthReportFailStreak: report.healthReportFailStreak ?? null,
       actions: report.actions ?? '',
       version: report.version ?? '',
     })),

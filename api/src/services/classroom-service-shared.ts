@@ -23,6 +23,7 @@ export interface MachineInfo {
   hostname: string;
   lastSeen: string | null;
   status: MachineStatus;
+  configPosture: Record<string, string> | null;
 }
 
 export interface MachineRegistrationResult {
@@ -153,12 +154,14 @@ export function toMachineInfo(machine: {
   id: string;
   hostname: string;
   lastSeen: Date | null;
+  configPosture?: Record<string, string> | null;
 }): MachineInfo {
   return {
     id: machine.id,
     hostname: machine.hostname,
     lastSeen: machine.lastSeen?.toISOString() ?? null,
     status: calculateMachineStatus(machine.lastSeen),
+    configPosture: machine.configPosture ?? null,
   };
 }
 
@@ -177,6 +180,7 @@ export function buildClassroomWithMachines(
     id: string;
     hostname: string;
     lastSeen: Date | null;
+    configPosture?: Record<string, string> | null;
   }[],
   scope?: {
     currentGroupId: string | null;

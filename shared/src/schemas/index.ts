@@ -164,6 +164,51 @@ export const WindowsHealthExtension = z.object({
 });
 
 /**
+ * Canonical allowlist of flag-posture keys an agent may report. FLAT map —
+ * no nesting, no free-form keys. Order here is the canonical display order.
+ * The react-spa mirrors this list locally (never a runtime barrel import);
+ * its test-only sync assert compares against this export.
+ */
+export const CONFIG_POSTURE_KEYS = [
+  'ipv6FirewallEnabled',
+  'sinkholeFastFail',
+  'captivePortalScopedPassthrough',
+  'rfc1918EgressMode',
+  'allowSetEgressEnabled',
+  'failureMode',
+  'outboundEgressFloorEnabled',
+] as const;
+
+export type ConfigPostureKey = (typeof CONFIG_POSTURE_KEYS)[number];
+
+const configPostureValue = z.string().min(1).max(32);
+
+/**
+ * Effective flag/config posture reported by an endpoint agent. Every key is
+ * optional (absent-on-platform keys are omitted); every value is the agent's
+ * *effective* string value ("true"/"false", or a mode string such as
+ * "all"/"restricted"/"protected"/"open"). Unknown keys are STRIPPED by zod's
+ * default object behaviour, so free-form keys never reach storage — but the
+ * report as a whole is not rejected, keeping the telemetry endpoint lenient.
+ */
+export const ConfigPosture = z.object({
+  /** Linux IPV6_FIREWALL_ENABLED — "true"/"false". */
+  ipv6FirewallEnabled: configPostureValue.optional(),
+  /** Linux SINKHOLE_FAST_FAIL — "true"/"false". */
+  sinkholeFastFail: configPostureValue.optional(),
+  /** Linux CAPTIVE_PORTAL_SCOPED_PASSTHROUGH_ENABLED — "true"/"false". */
+  captivePortalScopedPassthrough: configPostureValue.optional(),
+  /** Linux RFC1918_EGRESS_MODE — "all"/"restricted". */
+  rfc1918EgressMode: configPostureValue.optional(),
+  /** Linux ALLOW_SET_EGRESS_ENABLED — "true"/"false". */
+  allowSetEgressEnabled: configPostureValue.optional(),
+  /** Linux FAILURE_MODE — "protected"/"open". */
+  failureMode: configPostureValue.optional(),
+  /** Windows config.json outboundEgressFloorEnabled — "true"/"false". */
+  outboundEgressFloorEnabled: configPostureValue.optional(),
+});
+
+/**
  * Canonical health-report payload that agents POST to
  * POST /trpc/healthReports.submit.
  *
@@ -207,6 +252,11 @@ export const HealthReportSubmitInput = z.looseObject({
   /** Originating platform – allows server-side fanout without field guessing. */
   platform: z.enum(['linux', 'windows']).optional(),
 
+  /** Effective flag/config posture (optional; allowlisted keys only — see ConfigPosture). */
+  configPosture: ConfigPosture.optional(),
+  /** Consecutive failed health-report deliveries before this (successful) one. */
+  healthReportFailStreak: z.number().int().nonnegative().optional(),
+
   // ── legacy fields kept for backward-compat with deployed agents ──────────
   // Both Linux and Windows already send these exact names; do NOT remove.
   /** Legacy wire alias (prefer dnsState in new code); kept for deployed-agent compatibility. */
@@ -225,6 +275,7 @@ export const HealthReportSubmitInput = z.looseObject({
 
 export type HealthReportSubmitInput = z.infer<typeof HealthReportSubmitInput>;
 export type WindowsHealthExtension = z.infer<typeof WindowsHealthExtension>;
+export type ConfigPosture = z.infer<typeof ConfigPosture>;
 
 export const PushSubscription = z.object({
   id: z.string(),

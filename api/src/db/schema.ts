@@ -19,6 +19,7 @@ import {
   index,
   check,
   boolean,
+  jsonb,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -133,6 +134,12 @@ export const machines = pgTable(
       onDelete: 'cascade',
     }),
     version: varchar('version', { length: 50 }).default('unknown'),
+    // Latest effective flag/config posture reported by the agent's health
+    // payload; null = agent has not reported it. Flat allowlisted key→value
+    // string map; shape matches ConfigPosture in @openpath/shared (kept as a
+    // plain string record here so the DB schema stays import-free of
+    // workspace packages).
+    configPosture: jsonb('config_posture').$type<Record<string, string>>(),
     lastSeen: timestamp('last_seen', { withTimezone: true }).defaultNow(),
     downloadTokenHash: varchar('download_token_hash', { length: 64 }).unique(),
     downloadTokenLastRotatedAt: timestamp('download_token_last_rotated_at', { withTimezone: true }),
@@ -321,6 +328,7 @@ export const healthReports = pgTable(
     firewallActive: integer('firewall_active'), // 1=true, 0=false, null=unknown
     whitelistAgeHours: integer('whitelist_age_hours'), // null=unknown
     captivePortalMode: integer('captive_portal_mode'), // 1=true, 0=false, null=unknown
+    healthReportFailStreak: integer('health_report_fail_streak'), // null=not reported
     failCount: integer('fail_count').default(0),
     actions: text('actions'),
     version: varchar('version', { length: 50 }),

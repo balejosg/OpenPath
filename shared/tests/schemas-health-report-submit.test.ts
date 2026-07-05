@@ -212,4 +212,93 @@ describe('HealthReportSubmitInput schema', () => {
     assert.strictEqual(parsed.version, '1.0.2');
     assert.strictEqual(parsed.dnsmasqRunning, false);
   });
+
+  // ── configPosture (effective flag posture) + healthReportFailStreak ───────
+
+  it('accepts a full linux configPosture and a windows-only posture', () => {
+    assert.doesNotThrow(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'HEALTHY',
+        configPosture: {
+          ipv6FirewallEnabled: 'true',
+          sinkholeFastFail: 'true',
+          captivePortalScopedPassthrough: 'false',
+          rfc1918EgressMode: 'all',
+          allowSetEgressEnabled: 'true',
+          failureMode: 'protected',
+        },
+      })
+    );
+    assert.doesNotThrow(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-02',
+        status: 'HEALTHY',
+        configPosture: { outboundEgressFloorEnabled: 'false' },
+      })
+    );
+  });
+
+  it('strips free-form configPosture keys (allowlist only reaches storage)', () => {
+    const parsed = HealthReportSubmitInput.parse({
+      hostname: 'pc-01',
+      status: 'HEALTHY',
+      configPosture: { sinkholeFastFail: 'true', freeFormKey: 'x' },
+    });
+    assert.deepEqual(parsed.configPosture, { sinkholeFastFail: 'true' });
+  });
+
+  it('rejects non-string, empty, or oversized configPosture values', () => {
+    assert.throws(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'HEALTHY',
+        configPosture: { sinkholeFastFail: true },
+      })
+    );
+    assert.throws(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'HEALTHY',
+        configPosture: { failureMode: '' },
+      })
+    );
+    assert.throws(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'HEALTHY',
+        configPosture: { failureMode: 'x'.repeat(33) },
+      })
+    );
+  });
+
+  it('accepts healthReportFailStreak and rejects negative or fractional values', () => {
+    assert.doesNotThrow(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'HEALTHY',
+        healthReportFailStreak: 3,
+      })
+    );
+    assert.throws(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'HEALTHY',
+        healthReportFailStreak: -1,
+      })
+    );
+    assert.throws(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'HEALTHY',
+        healthReportFailStreak: 1.5,
+      })
+    );
+  });
+
+  it('still accepts payloads without configPosture (old agents)', () => {
+    assert.doesNotThrow(() =>
+      HealthReportSubmitInput.parse({ hostname: 'pc-01', status: 'HEALTHY' })
+    );
+  });
 });

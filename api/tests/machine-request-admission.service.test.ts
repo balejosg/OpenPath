@@ -17,6 +17,7 @@ type AccessResult =
 
 const testMachine: AuthenticatedMachine = {
   classroomId: 'classroom-1',
+  configPosture: null,
   createdAt: null,
   downloadTokenHash: 'hash',
   downloadTokenLastRotatedAt: null,
