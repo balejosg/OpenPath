@@ -148,16 +148,31 @@ function Send-OpenPathHealthReport {
         $headers['Authorization'] = "Bearer $authToken"
     }
 
+    # Delivery success/failure is decided SOLELY by Invoke-RestMethod. Local
+    # streak-file persistence is best-effort telemetry and must never flip
+    # this result nor escape the function (DELIVERY NON-BLOCKING contract).
+    $delivered = $false
+    $nextFailStreak = $failStreak + 1
     try {
         Invoke-RestMethod -Uri $healthUrl -Method Post -Headers $headers -Body $payload `
             -TimeoutSec 10 -ErrorAction Stop | Out-Null
-        Set-OpenPathHealthReportFailStreak -Value 0
-        return $true
+        $delivered = $true
     }
     catch {
-        $newStreak = (Get-OpenPathHealthReportFailStreak) + 1
-        Set-OpenPathHealthReportFailStreak -Value $newStreak
-        Write-OpenPathLog "Health report failed (non-critical, streak=$newStreak): $_" -Level WARN
-        return $false
+        Write-OpenPathLog "Health report failed (non-critical, streak=$nextFailStreak): $_" -Level WARN
     }
+
+    try {
+        if ($delivered) {
+            Set-OpenPathHealthReportFailStreak -Value 0
+        }
+        else {
+            Set-OpenPathHealthReportFailStreak -Value $nextFailStreak
+        }
+    }
+    catch {
+        Write-OpenPathLog "Health report fail-streak persistence failed (non-fatal): $_" -Level WARN
+    }
+
+    return $delivered
 }

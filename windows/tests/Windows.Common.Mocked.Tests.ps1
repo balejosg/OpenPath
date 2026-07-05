@@ -682,6 +682,50 @@ download.mozilla.org/firefox/releases
             $payload.json.healthReportFailStreak | Should -Be 1
             (Get-Content $streakPath -Raw).Trim() | Should -Be '0'
         }
+
+        It "Returns true on delivery success even when the streak-file reset write throws (local I/O never corrupts the delivery signal)" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl  = 'https://api.example.com'
+                    version = '4.1.0'
+                }
+            } -ModuleName Common
+            Mock Write-OpenPathLog {} -ModuleName Common
+            Mock Invoke-RestMethod {
+                return @{ result = @{ data = @{ json = @{ ok = $true } } } }
+            } -ModuleName Common
+            Mock Set-OpenPathHealthReportFailStreak {
+                throw 'disk full'
+            } -ModuleName Common
+
+            $script:nonBlockingResult = $null
+            { $script:nonBlockingResult = Send-OpenPathHealthReport -Status 'HEALTHY' -Version '4.1.0' } | Should -Not -Throw
+            $script:nonBlockingResult | Should -BeTrue
+
+            Should -Invoke Write-OpenPathLog -ModuleName Common -Times 0 -ParameterFilter {
+                $Message -match 'Health report failed'
+            }
+        }
+
+        It "Returns false without throwing when both delivery and the streak-file write fail (non-blocking guarantee)" {
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl  = 'https://api.example.com'
+                    version = '4.1.0'
+                }
+            } -ModuleName Common
+            Mock Write-OpenPathLog {} -ModuleName Common
+            Mock Invoke-RestMethod {
+                throw 'connection refused'
+            } -ModuleName Common
+            Mock Set-OpenPathHealthReportFailStreak {
+                throw 'disk full'
+            } -ModuleName Common
+
+            $script:nonBlockingResult = $null
+            { $script:nonBlockingResult = Send-OpenPathHealthReport -Status 'HEALTHY' -Version '4.1.0' } | Should -Not -Throw
+            $script:nonBlockingResult | Should -BeFalse
+        }
     }
 
     Context "Restore-OpenPathLatestCheckpoint" {
