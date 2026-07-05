@@ -29,6 +29,10 @@
     "./roles": {
       "types": "./dist/roles.d.ts",
       "import": "./dist/roles.js"
+    },
+    "./schedule-time": {
+      "types": "./dist/schedule-time.d.ts",
+      "import": "./dist/schedule-time.js"
     }
   },
   "scripts": {

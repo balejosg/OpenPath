@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SCHEDULE_TIME_STEP_MINUTES as SHARED_STEP } from '@openpath/shared';
+import { SCHEDULE_TIME_STEP_MINUTES as SHARED_STEP } from '@openpath/shared/schedule-time';
 import {
   SCHEDULE_TIME_STEP_MINUTES,
   buildTimeOfDayOptions,

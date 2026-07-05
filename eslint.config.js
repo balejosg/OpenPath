@@ -61,6 +61,29 @@ export default tseslint.config(
       'no-console': ['error', { allow: ['error'] }],
     },
   },
+  // Guard against importing a runtime VALUE from the @openpath/shared barrel: it previously
+  // pulled the whole shared package into the SPA bundle and regressed the e2e memory test
+  // (react-spa/e2e/performance.spec.ts, "no memory leaks on navigation @performance @memory")
+  // from ~21MB to ~50MB growth. `import type` and subpath imports (e.g.
+  // '@openpath/shared/rules-validation') are unaffected.
+  {
+    files: ['react-spa/src/**/*.{ts,tsx}'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@openpath/shared',
+              allowTypeImports: true,
+              message:
+                "Importing a runtime value from the '@openpath/shared' barrel pulls the whole shared package into the SPA bundle. Use a subpath import instead (e.g. '@openpath/shared/rules-validation') or 'import type' if you only need types.",
+            },
+          ],
+        },
+      ],
+    },
+  },
   // Import-cycle guard: error on runtime import cycles in SPA and extension.
   // Type-only imports (import type …) are automatically skipped by the rule.
   // Tolerated runtime cycles carry inline disable comments referencing AGENTS.md.
