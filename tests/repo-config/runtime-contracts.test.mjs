@@ -218,7 +218,7 @@ describe('repository verification contract', () => {
 
   test('verify-full gates only the e2e stage, defaults to RUN, and honors the force flag', () => {
     const verifyFullScript = readText('scripts/verify-full.sh');
-    const gateIndex = verifyFullScript.indexOf('e2e-scope-check.mjs');
+    const gateIndex = verifyFullScript.indexOf('node scripts/e2e-scope-check.mjs');
 
     assert.ok(gateIndex > -1, 'verify-full.sh should consult scripts/e2e-scope-check.mjs');
     for (const stage of [
@@ -233,8 +233,8 @@ describe('repository verification contract', () => {
       );
     }
     assert.ok(
-      verifyFullScript.includes('OPENPATH_VERIFY_E2E'),
-      'verify-full.sh should honor the OPENPATH_VERIFY_E2E=1 force flag'
+      verifyFullScript.includes('[[ "${OPENPATH_VERIFY_E2E:-}" == "1" ]]'),
+      'verify-full.sh should honor the exact OPENPATH_VERIFY_E2E=1 force-flag comparison'
     );
     assert.ok(
       verifyFullScript.includes('OPENPATH_PREPUSH_REMOTE_SHA') &&
@@ -242,13 +242,21 @@ describe('repository verification contract', () => {
       'e2e scoping must activate only when the pre-push hook provides the pushed range'
     );
     assert.ok(
-      verifyFullScript.includes('|| echo run'),
-      'a crashed scope check must fall back to running e2e'
+      verifyFullScript.includes(
+        'e2e_scope_decision="$(node scripts/e2e-scope-check.mjs || echo run)"'
+      ),
+      'a crashed scope check must fall back to running e2e via the exact `|| echo run` fallback expression'
     );
-    assert.match(
-      verifyFullScript,
-      /else\s+npm run e2e:full\s+fi/,
-      'the no-range branch (manual npm run verify:full) must run the full e2e stage unchanged'
+    assert.ok(
+      verifyFullScript.includes('[[ "$e2e_scope_decision" == "skip" ]]'),
+      'the scope-check result must be compared against the exact "skip" literal -- renaming or ' +
+        'typo-ing this comparison would silently change skip semantics without any other test noticing'
+    );
+    assert.ok(
+      verifyFullScript.trimEnd().endsWith('else\n  npm run e2e:full\nfi'),
+      'the no-range branch (manual npm run verify:full) must be the FINAL branch of the whole script -- ' +
+        'a bare /else\\s+npm run e2e:full\\s+fi/ regex also matches the INNER not-skip branch nested ' +
+        'inside the elif, so it would not catch a regression that guts this outer else'
     );
   });
 
