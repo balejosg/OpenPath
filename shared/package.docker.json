@@ -17,7 +17,8 @@
       "types": "./dist/rules-validation.d.ts",
       "import": "./dist/rules-validation.js"
     },
-    "./roles": { "types": "./dist/roles.d.ts", "import": "./dist/roles.js" }
+    "./roles": { "types": "./dist/roles.d.ts", "import": "./dist/roles.js" },
+    "./schedule-time": { "types": "./dist/schedule-time.d.ts", "import": "./dist/schedule-time.js" }
   },
   "engines": { "node": ">=20.0.0" },
   "dependencies": { "zod": "^4.3.6" },
