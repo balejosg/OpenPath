@@ -24,3 +24,11 @@ targetRules = ["generic-api-key"]
 paths = ['''^tests/e2e/agent-integration\.bats$''']
 regexTarget = "line"
 regexes = ['''local valid_token="abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"''']
+
+[[allowlists]]
+description = "SPA config-posture unit test asserts the {key,value} entry shape with posture flag names (no real secret; the property named 'key' plus a flag name trips generic-api-key)."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^react-spa/src/lib/__tests__/config-posture\.test\.ts$''']
+regexTarget = "line"
+regexes = ['''key: '[A-Za-z0-9]+'''']
