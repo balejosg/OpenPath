@@ -524,6 +524,12 @@ download.mozilla.org/firefox/releases
     }
 
     Context "Send-OpenPathHealthReport" {
+        BeforeEach {
+            Mock Get-OpenPathHealthReportFailStreakPath {
+                Join-Path $TestDrive 'streak-context-default.txt'
+            } -ModuleName Common
+        }
+
         It "Posts health reports to the tRPC endpoint with expected payload fields" {
             $script:capturedUri = $null
             $script:capturedHeaders = $null
@@ -589,6 +595,92 @@ download.mozilla.org/firefox/releases
 
             $result = Send-OpenPathHealthReport -Status 'HEALTHY'
             $result | Should -BeFalse
+        }
+
+        It "Includes configPosture with the effective outboundEgressFloorEnabled value" {
+            $script:capturedBody = $null
+            $streakPath = Join-Path $TestDrive 'streak-posture.txt'
+
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl = 'https://api.example.com'
+                    version = '4.1.0'
+                    outboundEgressFloorEnabled = $true
+                }
+            } -ModuleName Common
+            Mock Get-OpenPathHealthReportFailStreakPath { $streakPath } -ModuleName Common
+            Mock Invoke-RestMethod {
+                param([string]$Uri, [string]$Method, [hashtable]$Headers, [string]$Body)
+                $script:capturedBody = $Body
+                return @{ result = @{ data = @{ json = @{ ok = $true } } } }
+            } -ModuleName Common
+
+            $result = Send-OpenPathHealthReport -Status 'HEALTHY' -Version '4.1.0'
+            $result | Should -BeTrue
+
+            $payload = $script:capturedBody | ConvertFrom-Json
+            $payload.json.configPosture.outboundEgressFloorEnabled | Should -Be 'true'
+            # Linux-only keys must be absent on Windows.
+            $payload.json.configPosture.PSObject.Properties.Name | Should -Not -Contain 'sinkholeFastFail'
+            # Zero streak must be omitted.
+            $payload.json.PSObject.Properties.Name | Should -Not -Contain 'healthReportFailStreak'
+        }
+
+        It "Defaults outboundEgressFloorEnabled to false when config omits it" {
+            $script:capturedBody = $null
+            $streakPath = Join-Path $TestDrive 'streak-default.txt'
+
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl = 'https://api.example.com'
+                    version = '4.1.0'
+                }
+            } -ModuleName Common
+            Mock Get-OpenPathHealthReportFailStreakPath { $streakPath } -ModuleName Common
+            Mock Invoke-RestMethod {
+                param([string]$Uri, [string]$Method, [hashtable]$Headers, [string]$Body)
+                $script:capturedBody = $Body
+                return @{ result = @{ data = @{ json = @{ ok = $true } } } }
+            } -ModuleName Common
+
+            Send-OpenPathHealthReport -Status 'HEALTHY' -Version '4.1.0' | Should -BeTrue
+
+            $payload = $script:capturedBody | ConvertFrom-Json
+            $payload.json.configPosture.outboundEgressFloorEnabled | Should -Be 'false'
+        }
+
+        It "Counts a fail streak on delivery failure, reports it on next success, then resets" {
+            $script:capturedBody = $null
+            $streakPath = Join-Path $TestDrive 'streak-count.txt'
+
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl = 'https://api.example.com'
+                    version = '4.1.0'
+                }
+            } -ModuleName Common
+            Mock Get-OpenPathHealthReportFailStreakPath { $streakPath } -ModuleName Common
+            # Keep the WARN log write inside the mock sandbox on the failure path.
+            Mock Write-OpenPathLog {} -ModuleName Common
+            Mock Invoke-RestMethod { throw 'connection refused' } -ModuleName Common
+
+            Send-OpenPathHealthReport -Status 'HEALTHY' -Version '4.1.0' | Should -BeFalse
+            (Get-Content $streakPath -Raw).Trim() | Should -Be '1'
+            Should -Invoke Write-OpenPathLog -ModuleName Common -Times 1 -ParameterFilter {
+                $Message -match 'streak=1'
+            }
+
+            Mock Invoke-RestMethod {
+                param([string]$Uri, [string]$Method, [hashtable]$Headers, [string]$Body)
+                $script:capturedBody = $Body
+                return @{ result = @{ data = @{ json = @{ ok = $true } } } }
+            } -ModuleName Common
+
+            Send-OpenPathHealthReport -Status 'HEALTHY' -Version '4.1.0' | Should -BeTrue
+
+            $payload = $script:capturedBody | ConvertFrom-Json
+            $payload.json.healthReportFailStreak | Should -Be 1
+            (Get-Content $streakPath -Raw).Trim() | Should -Be '0'
         }
     }
 
