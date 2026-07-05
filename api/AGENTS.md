@@ -38,6 +38,12 @@ Current procedure types:
 
 ## Testing
 
+Suite tiers:
+
+- `npm test` is the curated fast smoke subset, NOT the full suite. Root `test`/`test:local`/`test:api`, turbo caching, and the pre-push `verify:unit` lane all depend on its speed; only append to it (`scripts/run-api-coverage.js` regex-parses it).
+- `npm run test:all` runs every runnable `test:*` suite. Its command list is derived from `package.json` by `scripts/test-script-inventory.ts`, followed by a remainder lane for top-level test files no script references. New `test:*` scripts are picked up automatically; a script that must not run there needs an entry in `EXCLUDED_TEST_SCRIPTS` with a reason, otherwise `test:all` and the contract test fail loudly. `tests/test-script-coverage-contract.test.ts` fails, listing exact files, if any test file becomes unreachable. Per-command watchdog: `RUN_ALL_TIMEOUT_MS` (default 120000). Many suites expect the Docker test DB from the repo root `docker-compose.test.yml` (port 5433).
+- `npm run test:coverage` is the CI coverage lane; it discovers every top-level test file programmatically and provisions its own DB env.
+
 Prefer existing scripts because they already provision an ephemeral loopback port and keep the Node test runner serial:
 
 ```bash
@@ -156,7 +162,7 @@ Machine auth scope split example:
 
 ```bash
 cd api
-NODE_ENV=test node --import tsx --test --test-concurrency=1 --test-force-exit tests/machine-auth-scope-enrollment.test.ts tests/machine-auth-scope-boundaries.test.ts tests/machine-auth-scope-operational.test.ts tests/machine-auth-scope.test.ts
+NODE_ENV=test node --import tsx --test --test-concurrency=1 --test-force-exit tests/machine-auth-scope-enrollment.test.ts tests/machine-auth-scope-boundaries.test.ts tests/machine-auth-scope-operational.test.ts
 ```
 
 Blocked domains split example:

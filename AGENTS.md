@@ -164,7 +164,8 @@ Use the smallest relevant test surface first.
 
 ### API
 
-- all: `npm test --workspace=@openpath/api`
+- curated smoke set (what CI unit lanes, turbo, and pre-push run): `npm test --workspace=@openpath/api`
+- every suite plus uncovered top-level test files: `npm run test:all --workspace=@openpath/api`
 - focused: `npm run test:auth --workspace=@openpath/api`
 - focused: `npm run test:setup --workspace=@openpath/api`
 - focused: `npm run test:e2e --workspace=@openpath/api`
