@@ -156,6 +156,8 @@ export const productI18nCatalogs = {
     'classrooms.machines.status.stale': 'Unstable connection',
     'classrooms.machines.status.offline': 'Offline',
     'classrooms.machines.lastSeen': 'Last: {date}',
+    'classrooms.machines.firefox.registration': 'Firefox extension: {registered}/{target} profiles',
+    'classrooms.machines.firefox.lastChecked': 'Last checked: {date}',
     'classrooms.machines.posture.title': 'Flags',
     'classrooms.machines.posture.ipv6FirewallEnabled': 'IPv6 firewall',
     'classrooms.machines.posture.sinkholeFastFail': 'Sinkhole fast-fail',
@@ -915,6 +917,9 @@ export const productI18nCatalogs = {
     'classrooms.machines.status.stale': 'Conexión inestable',
     'classrooms.machines.status.offline': 'Sin conexión',
     'classrooms.machines.lastSeen': 'Última vez: {date}',
+    'classrooms.machines.firefox.registration':
+      'Extensión de Firefox: {registered}/{target} perfiles',
+    'classrooms.machines.firefox.lastChecked': 'Última verificación: {date}',
     'classrooms.machines.posture.title': 'Flags',
     'classrooms.machines.posture.ipv6FirewallEnabled': 'Cortafuegos IPv6',
     'classrooms.machines.posture.sinkholeFastFail': 'Fallo rápido del sumidero',

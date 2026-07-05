@@ -126,6 +126,21 @@ export default function ClassroomMachinesCard({
             const postureLine = postureEntries
               .map((entry) => `${t(`classrooms.machines.posture.${entry.key}`)}: ${entry.value}`)
               .join(' · ');
+            const firefoxRegistration = machine.firefoxRegistration ?? null;
+            const firefoxRegistrationLabel = firefoxRegistration
+              ? t('classrooms.machines.firefox.registration', {
+                  registered: firefoxRegistration.registered,
+                  target: firefoxRegistration.targetCount,
+                })
+              : '';
+            const firefoxRegistrationDegraded =
+              firefoxRegistration !== null &&
+              firefoxRegistration.registered < firefoxRegistration.targetCount;
+            const firefoxLastCheckedTitle = firefoxRegistration?.lastCheckedAt
+              ? t('classrooms.machines.firefox.lastChecked', {
+                  date: new Date(firefoxRegistration.lastCheckedAt).toLocaleString(locale),
+                })
+              : undefined;
 
             return (
               <div
@@ -147,6 +162,16 @@ export default function ClassroomMachinesCard({
                         {t('classrooms.machines.posture.title')}: {postureLine}
                       </p>
                     )}
+                    {firefoxRegistrationLabel ? (
+                      <p
+                        className={`text-xs truncate ${
+                          firefoxRegistrationDegraded ? 'text-amber-600' : 'text-slate-500'
+                        }`}
+                        title={firefoxLastCheckedTitle}
+                      >
+                        {firefoxRegistrationLabel}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
 

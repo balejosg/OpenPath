@@ -47,6 +47,14 @@ export interface Classroom {
     lastSeen: string | null;
     status: MachineStatus;
     configPosture?: Record<string, string> | null;
+    // Latest Firefox managed-extension registration reported by the agent.
+    // Mirrors FirefoxRegistrationHealth in @openpath/shared (inline copy —
+    // never import runtime values from the shared barrel into react-spa).
+    firefoxRegistration?: {
+      registered: number;
+      targetCount: number;
+      lastCheckedAt?: string;
+    } | null;
   }[];
 }
 

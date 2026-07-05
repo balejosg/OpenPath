@@ -224,4 +224,58 @@ describe('ClassroomMachinesCard', () => {
 
     expect(screen.queryByText(/Flags:/)).not.toBeInTheDocument();
   });
+
+  it('shows a degraded Firefox registration line with last-checked tooltip', () => {
+    const classroom = buildClassroom({
+      machines: [
+        {
+          id: 'machine-1',
+          hostname: 'pc-01',
+          lastSeen: '2026-03-06T08:00:00.000Z',
+          status: 'online',
+          firefoxRegistration: {
+            registered: 2,
+            targetCount: 3,
+            lastCheckedAt: '2026-07-02T10:00:00.000Z',
+          },
+        },
+      ],
+    });
+    render(
+      <ClassroomMachinesCard {...buildProps({ classroom, exemptionByMachineId: new Map() })} />
+    );
+
+    const label = screen.getByText('Firefox extension: 2/3 profiles');
+    expect(label).toHaveClass('text-amber-600');
+    expect(label).toHaveAttribute('title', expect.stringContaining('Last checked:'));
+  });
+
+  it('renders full registration neutrally and omits the line for non-reporting machines', () => {
+    const classroom = buildClassroom({
+      machines: [
+        {
+          id: 'machine-1',
+          hostname: 'pc-01',
+          lastSeen: '2026-03-06T08:00:00.000Z',
+          status: 'online',
+          firefoxRegistration: { registered: 3, targetCount: 3 },
+        },
+        {
+          id: 'machine-2',
+          hostname: 'pc-02',
+          lastSeen: null,
+          status: 'offline',
+        },
+      ],
+    });
+    render(
+      <ClassroomMachinesCard {...buildProps({ classroom, exemptionByMachineId: new Map() })} />
+    );
+
+    const label = screen.getByText('Firefox extension: 3/3 profiles');
+    expect(label).toHaveClass('text-slate-500');
+    expect(label).not.toHaveAttribute('title');
+    // machine-2 sent no firefoxRegistration (old agent): no Firefox line at all.
+    expect(screen.getAllByText(/Firefox extension:/)).toHaveLength(1);
+  });
 });
