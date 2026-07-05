@@ -24,6 +24,7 @@ export interface MachineInfo {
   lastSeen: string | null;
   status: MachineStatus;
   configPosture: Record<string, string> | null;
+  firefoxRegistration: { registered: number; targetCount: number; lastCheckedAt?: string } | null;
 }
 
 export interface MachineRegistrationResult {
@@ -155,6 +156,7 @@ export function toMachineInfo(machine: {
   hostname: string;
   lastSeen: Date | null;
   configPosture?: Record<string, string> | null;
+  firefoxRegistration?: { registered: number; targetCount: number; lastCheckedAt?: string } | null;
 }): MachineInfo {
   return {
     id: machine.id,
@@ -162,6 +164,7 @@ export function toMachineInfo(machine: {
     lastSeen: machine.lastSeen?.toISOString() ?? null,
     status: calculateMachineStatus(machine.lastSeen),
     configPosture: machine.configPosture ?? null,
+    firefoxRegistration: machine.firefoxRegistration ?? null,
   };
 }
 
@@ -181,6 +184,11 @@ export function buildClassroomWithMachines(
     hostname: string;
     lastSeen: Date | null;
     configPosture?: Record<string, string> | null;
+    firefoxRegistration?: {
+      registered: number;
+      targetCount: number;
+      lastCheckedAt?: string;
+    } | null;
   }[],
   scope?: {
     currentGroupId: string | null;

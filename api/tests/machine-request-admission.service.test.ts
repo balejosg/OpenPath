@@ -21,6 +21,7 @@ const testMachine: AuthenticatedMachine = {
   createdAt: null,
   downloadTokenHash: 'hash',
   downloadTokenLastRotatedAt: null,
+  firefoxRegistration: null,
   hostname: 'lab-host-01',
   id: 'machine-1',
   lastSeen: null,

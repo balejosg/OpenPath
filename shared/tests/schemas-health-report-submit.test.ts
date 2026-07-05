@@ -301,4 +301,53 @@ describe('HealthReportSubmitInput schema', () => {
       HealthReportSubmitInput.parse({ hostname: 'pc-01', status: 'HEALTHY' })
     );
   });
+
+  // ── firefoxRegistration (Firefox managed-extension registration state) ────
+
+  it('accepts firefoxRegistration with registered, targetCount and lastCheckedAt', () => {
+    assert.doesNotThrow(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'HEALTHY',
+        firefoxRegistration: {
+          registered: 2,
+          targetCount: 3,
+          lastCheckedAt: '2026-07-02T10:00:00Z',
+        },
+      })
+    );
+  });
+
+  it('accepts firefoxRegistration without lastCheckedAt', () => {
+    assert.doesNotThrow(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'HEALTHY',
+        firefoxRegistration: { registered: 0, targetCount: 0 },
+      })
+    );
+  });
+
+  it('rejects firefoxRegistration with negative or non-integer counts', () => {
+    assert.throws(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'HEALTHY',
+        firefoxRegistration: { registered: -1, targetCount: 3 },
+      })
+    );
+    assert.throws(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'HEALTHY',
+        firefoxRegistration: { registered: 1.5, targetCount: 3 },
+      })
+    );
+  });
+
+  it('still accepts payloads without firefoxRegistration (old agents)', () => {
+    assert.doesNotThrow(() =>
+      HealthReportSubmitInput.parse({ hostname: 'pc-01', status: 'HEALTHY' })
+    );
+  });
 });

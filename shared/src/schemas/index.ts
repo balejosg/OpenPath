@@ -163,6 +163,16 @@ export const WindowsHealthExtension = z.object({
   browserEnforcement: z.string().optional(),
 });
 
+/** Firefox managed-extension registration state as measured by the endpoint agent. */
+export const FirefoxRegistrationHealth = z.object({
+  /** Firefox profiles where the managed extension is registered and active. */
+  registered: z.number().int().nonnegative(),
+  /** Firefox profiles the agent expects to register (activation targets). */
+  targetCount: z.number().int().nonnegative(),
+  /** ISO-8601 UTC timestamp of the last registration verification. */
+  lastCheckedAt: z.string().optional(),
+});
+
 /**
  * Canonical allowlist of flag-posture keys an agent may report. FLAT map —
  * no nesting, no free-form keys. Order here is the canonical display order.
@@ -251,6 +261,8 @@ export const HealthReportSubmitInput = z.looseObject({
   agentVersion: z.string().optional(),
   /** Originating platform – allows server-side fanout without field guessing. */
   platform: z.enum(['linux', 'windows']).optional(),
+  /** Firefox managed-extension registration state (optional; Linux agent). */
+  firefoxRegistration: FirefoxRegistrationHealth.optional(),
 
   /** Effective flag/config posture (optional; allowlisted keys only — see ConfigPosture). */
   configPosture: ConfigPosture.optional(),
@@ -276,6 +288,7 @@ export const HealthReportSubmitInput = z.looseObject({
 export type HealthReportSubmitInput = z.infer<typeof HealthReportSubmitInput>;
 export type WindowsHealthExtension = z.infer<typeof WindowsHealthExtension>;
 export type ConfigPosture = z.infer<typeof ConfigPosture>;
+export type FirefoxRegistrationHealth = z.infer<typeof FirefoxRegistrationHealth>;
 
 export const PushSubscription = z.object({
   id: z.string(),

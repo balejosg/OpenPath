@@ -29,6 +29,7 @@ export interface HealthReport {
   version: string;
   configPosture?: Record<string, string> | null;
   healthReportFailStreak?: number | null;
+  firefoxRegistration?: { registered: number; targetCount: number; lastCheckedAt?: string } | null;
 }
 
 export interface HostData {
@@ -87,6 +88,10 @@ export async function saveHealthReport(
       // Latest-wins, but only when the agent reported it; a report without
       // posture (old agent) must not wipe the stored posture.
       ...(reportData.configPosture ? { configPosture: reportData.configPosture } : {}),
+      // Only overwrite when the agent reported it; old agents must not wipe state.
+      ...(reportData.firefoxRegistration
+        ? { firefoxRegistration: reportData.firefoxRegistration }
+        : {}),
       updatedAt: now,
     })
     .where(eq(machines.hostname, hostname));

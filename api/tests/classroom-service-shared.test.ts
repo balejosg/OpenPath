@@ -42,4 +42,25 @@ await describe('classroom service shared helpers', async () => {
     });
     assert.equal(withoutPosture.configPosture, null);
   });
+
+  await test('carries firefoxRegistration through toMachineInfo and defaults to null', () => {
+    const withState = shared.toMachineInfo({
+      id: 'machine-1',
+      hostname: 'lab-01',
+      lastSeen: new Date(),
+      firefoxRegistration: { registered: 2, targetCount: 3, lastCheckedAt: '2026-07-02T10:00:00Z' },
+    });
+    assert.deepEqual(withState.firefoxRegistration, {
+      registered: 2,
+      targetCount: 3,
+      lastCheckedAt: '2026-07-02T10:00:00Z',
+    });
+
+    const withoutState = shared.toMachineInfo({
+      id: 'machine-2',
+      hostname: 'lab-02',
+      lastSeen: null,
+    });
+    assert.equal(withoutState.firefoxRegistration, null);
+  });
 });

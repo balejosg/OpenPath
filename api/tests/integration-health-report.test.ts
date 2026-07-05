@@ -113,4 +113,55 @@ await describe('integration health report workflow', async () => {
       'Expected the first report to carry healthReportFailStreak=2'
     );
   });
+
+  await test('persists firefoxRegistration onto the machine and exposes it to classrooms', async () => {
+    const suffix = `${Date.now().toString()}-ffreg`;
+    const hostname = `integration-ffreg-host-${suffix}`;
+    const machine = await provisionMachineAccess({
+      classroomName: `integration-ffreg-room-${suffix}`,
+      groupName: `integration-ffreg-group-${suffix}`,
+      hostname,
+    });
+
+    const reportResponse = await trpcMutate(
+      'healthReports.submit',
+      {
+        hostname,
+        status: 'healthy',
+        version: '3.5',
+        firefoxRegistration: {
+          registered: 2,
+          targetCount: 3,
+          lastCheckedAt: '2026-07-02T10:00:00Z',
+        },
+      },
+      { Authorization: `Bearer ${machine.machineToken}` }
+    );
+    assert.ok(
+      [200, 201].includes(reportResponse.status),
+      `Health report submission should succeed, got ${String(reportResponse.status)}`
+    );
+
+    const listResponse = await trpcQuery('classrooms.list', undefined, getAdminBearerAuth());
+    assert.equal(listResponse.status, 200, 'Should list classrooms');
+    const classrooms = (await parseTRPC(listResponse)).data as {
+      machines?: {
+        hostname: string;
+        firefoxRegistration?: {
+          registered: number;
+          targetCount: number;
+          lastCheckedAt?: string;
+        } | null;
+      }[];
+    }[];
+    const reported = classrooms
+      .flatMap((classroom) => classroom.machines ?? [])
+      .find((entry) => entry.hostname === machine.machineHostname);
+    assert.ok(reported, 'Expected the reporting machine in classrooms.list output');
+    assert.deepEqual(reported.firefoxRegistration, {
+      registered: 2,
+      targetCount: 3,
+      lastCheckedAt: '2026-07-02T10:00:00Z',
+    });
+  });
 });

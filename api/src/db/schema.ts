@@ -140,6 +140,15 @@ export const machines = pgTable(
     // plain string record here so the DB schema stays import-free of
     // workspace packages).
     configPosture: jsonb('config_posture').$type<Record<string, string>>(),
+    // Latest Firefox managed-extension registration state reported by the
+    // agent's health payload; null = agent has not reported it. Shape matches
+    // FirefoxRegistrationHealth in @openpath/shared (mirrored inline to keep
+    // the DB schema import-free of workspace packages).
+    firefoxRegistration: jsonb('firefox_registration').$type<{
+      registered: number;
+      targetCount: number;
+      lastCheckedAt?: string;
+    }>(),
     lastSeen: timestamp('last_seen', { withTimezone: true }).defaultNow(),
     downloadTokenHash: varchar('download_token_hash', { length: 64 }).unique(),
     downloadTokenLastRotatedAt: timestamp('download_token_last_rotated_at', { withTimezone: true }),

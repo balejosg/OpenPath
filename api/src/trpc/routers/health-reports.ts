@@ -100,6 +100,9 @@ export const healthReportsRouter = router({
     const resolvedConfigPosture = input.configPosture ?? null;
     const resolvedHealthReportFailStreak = input.healthReportFailStreak ?? null;
 
+    // Firefox registration state (canonical-only; null = the agent did not report it).
+    const resolvedFirefoxRegistration = input.firefoxRegistration ?? null;
+
     await healthReports.saveHealthReport(
       machine.hostname,
       stripUndefined({
@@ -111,6 +114,7 @@ export const healthReportsRouter = router({
         captivePortalMode: resolvedCaptivePortalMode,
         configPosture: resolvedConfigPosture,
         healthReportFailStreak: resolvedHealthReportFailStreak,
+        firefoxRegistration: resolvedFirefoxRegistration,
         failCount: input.failCount ?? 0,
         actions: input.actions ?? '',
         version: resolvedVersion,
