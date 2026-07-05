@@ -1,0 +1,6 @@
+{
+  "name": "whitelist_native_host",
+  "type": "stdio",
+  "manifestFilename": "whitelist_native_host.json",
+  "allowedExtensions": ["openpath-block-monitor@openpath"]
+}

@@ -13,4 +13,5 @@ import './repo-config/agent-config-parity-contracts.test.mjs';
 import './repo-config/oss-boundary-contracts.test.mjs';
 import './repo-config/agent-verify-contracts.test.mjs';
 import './repo-config/extension-id-contracts.test.mjs';
+import './repo-config/native-host-manifest-contracts.test.mjs';
 import './openpath-promotion-contract.test.mjs';

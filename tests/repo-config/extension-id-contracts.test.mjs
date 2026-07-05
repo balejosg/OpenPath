@@ -69,6 +69,10 @@ const EXTENSION_ID_SITES = [
     file: 'tests/contracts/browser-firefox-managed-extension.json',
     contexts: (id) => [`"extensionId": "${id}"`],
   },
+  {
+    file: 'tests/contracts/browser-firefox-native-host.json',
+    contexts: (id) => [`"allowedExtensions": ["${id}"]`],
+  },
 ];
 
 // Tracked files that may mention the id without being definition sites:
