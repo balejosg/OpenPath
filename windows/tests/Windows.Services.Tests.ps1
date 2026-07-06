@@ -7,7 +7,12 @@ Describe "Services Module" {
     }
 
     Context "Get-OpenPathTaskStatus" {
-        It "Returns an array or empty result" -Skip:(-not (Test-FunctionExists 'Get-OpenPathTaskStatus')) {
+        # Get-OpenPathTaskStatus is always defined by Services.psm1 (Test-FunctionExists is
+        # never a meaningful gate here and, being evaluated at Pester discovery time before this
+        # Describe's BeforeAll imports the module, was actually always false -> perpetual skip).
+        # The real platform dependency is Get-ScheduledTask itself, a Windows-only cmdlet that
+        # throws a command-not-found error on non-Windows hosts, so gate on $IsWindows instead.
+        It "Returns an array or empty result" -Skip:(-not $IsWindows) {
             $status = Get-OpenPathTaskStatus
             # Status can be empty array, null, or array of objects
             { $status } | Should -Not -Throw
@@ -89,7 +94,13 @@ Describe "Services Module" {
             $definition.Settings.ExecutionTimeLimit.TotalMinutes | Should -Be 2
         }
 
-        It "Accepts custom interval parameters" -Skip:(-not ((Test-FunctionExists 'Register-OpenPathTask') -and (Test-IsAdmin))) {
+        # Register-OpenPathTask is always defined by Services.psm1, and -WhatIf short-circuits
+        # via $PSCmdlet.ShouldProcess() before any privileged Task Scheduler cmdlet runs, so
+        # neither a Test-FunctionExists nor a Test-IsAdmin gate is needed (verified: runs clean,
+        # unprivileged, on non-Windows too). The old combined gate was evaluated at Pester
+        # discovery time, before this Describe's BeforeAll imports the module, so it was always
+        # false -> perpetual skip regardless of platform or privilege.
+        It "Accepts custom interval parameters" {
             # Just verify the function signature works
             { Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 2 -WhatIf } | Should -Not -Throw
         }
@@ -268,20 +279,25 @@ Describe "Services Module" {
             $result.taskLastResultHex | Should -Be "0x00041301"
         }
 
-        It "Accepts SSE as a valid task type" -Skip:(-not (Test-FunctionExists 'Start-OpenPathTask')) {
+        # Start-OpenPathTask is always defined by Services.psm1, and -WhatIf short-circuits via
+        # $PSCmdlet.ShouldProcess() before Invoke-OpenPathScheduledTask (the Windows-only part)
+        # ever runs, so no gate is needed (verified: runs clean on non-Windows too). The old
+        # Test-FunctionExists gates were evaluated at Pester discovery time, before this
+        # Describe's BeforeAll imports the module, so they were always false -> perpetual skip.
+        It "Accepts SSE as a valid task type" {
             # Verify the SSE task type is accepted in the ValidateSet
             { Start-OpenPathTask -TaskType SSE -WhatIf } | Should -Not -Throw
         }
 
-        It "Accepts AgentUpdate as a valid task type" -Skip:(-not (Test-FunctionExists 'Start-OpenPathTask')) {
+        It "Accepts AgentUpdate as a valid task type" {
             { Start-OpenPathTask -TaskType AgentUpdate -WhatIf } | Should -Not -Throw
         }
 
-        It "Accepts RuntimeDependencyApply as a valid task type" -Skip:(-not (Test-FunctionExists 'Start-OpenPathTask')) {
+        It "Accepts RuntimeDependencyApply as a valid task type" {
             { Start-OpenPathTask -TaskType RuntimeDependencyApply -WhatIf } | Should -Not -Throw
         }
 
-        It "Accepts CaptivePortalRecovery as a valid task type" -Skip:(-not (Test-FunctionExists 'Start-OpenPathTask')) {
+        It "Accepts CaptivePortalRecovery as a valid task type" {
             { Start-OpenPathTask -TaskType CaptivePortalRecovery -WhatIf } | Should -Not -Throw
         }
     }

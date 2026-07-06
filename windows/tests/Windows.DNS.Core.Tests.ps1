@@ -48,14 +48,20 @@ Describe "DNS Module" {
     }
 
     Context "Test-AcrylicInstalled" {
-        It "Returns a boolean value" -Skip:(-not (Test-FunctionExists 'Test-AcrylicInstalled')) {
+        # Test-AcrylicInstalled is always defined by DNS.psm1 and is cross-platform safe (only
+        # Test-Path / Get-ChildItem underneath), so no gate is needed. The old Test-FunctionExists
+        # gate was evaluated at Pester discovery time, before this Describe's BeforeAll imports
+        # the module, so it was always false -> perpetual skip regardless of platform.
+        It "Returns a boolean value" {
             $result = Test-AcrylicInstalled
             $result | Should -BeOfType [bool]
         }
     }
 
     Context "Get-AcrylicPath" {
-        It "Returns null or valid path" -Skip:(-not (Test-FunctionExists 'Get-AcrylicPath')) {
+        # Same reasoning as Test-AcrylicInstalled above: always defined, cross-platform safe,
+        # the discovery-time Test-FunctionExists gate was always false.
+        It "Returns null or valid path" {
             $path = Get-AcrylicPath
             if ($path) {
                 Test-Path $path | Should -BeTrue
@@ -442,7 +448,19 @@ Describe "DNS Module" {
             }
         }
 
-        It "Generates valid hosts content" -Skip:(-not ((Test-FunctionExists 'Test-AcrylicInstalled') -and (Test-FunctionExists 'Update-AcrylicHost') -and (Test-AcrylicInstalled))) {
+        # Update-AcrylicHost genuinely needs a real Acrylic DNS Proxy installation on disk (it
+        # writes AcrylicHosts.txt under the detected install path and returns $false when Acrylic
+        # isn't found), so this one is legitimately environment-optional -- unlike the two Contexts
+        # above. The old gate combined that with Test-FunctionExists checks and was evaluated at
+        # Pester discovery time (before BeforeAll imports the module), so it was always false
+        # regardless of whether Acrylic was actually installed. Move the check into the test body
+        # so it runs after the module import and reflects the real install state.
+        It "Generates valid hosts content" {
+            if (-not (Test-AcrylicInstalled)) {
+                Set-ItResult -Skipped -Because 'requires a real Acrylic DNS Proxy installation on disk'
+                return
+            }
+
             $result = Update-AcrylicHost -WhitelistedDomains @("example.com", "test.com") -BlockedSubdomains @()
             $result | Should -BeTrue
         }
