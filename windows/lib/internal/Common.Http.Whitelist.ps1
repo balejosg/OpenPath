@@ -47,31 +47,12 @@ function Get-OpenPathFromUrl {
 
     $content = if ($httpResult) { [string]$httpResult.Content } else { '' }
     $newEtag = if ($httpResult) { [string]$httpResult.ETag } else { $null }
-    $currentSection = 'WHITELIST'
-
-    foreach ($line in $content -split "`n") {
-        $line = $line.Trim()
-        if (-not $line) { continue }
-
-        if ($line -match '^#\s*DESACTIVADO\b') {
-            $result.IsDisabled = $true
-            continue
-        }
-
-        if ($line -match "^##\s*(.+)$") {
-            $currentSection = $Matches[1].Trim().ToUpper()
-            continue
-        }
-
-        if ($line.StartsWith('#')) { continue }
-
-        switch ($currentSection) {
-            'WHITELIST'          { $result.Whitelist += $line }
-            'BLOCKED-SUBDOMAINS' { $result.BlockedSubdomains += $line }
-            'BLOCKED-PATHS'      { $result.BlockedPaths += $line }
-            'ALLOWED-PATHS'      { $result.AllowedPaths += $line }
-        }
-    }
+    $sections = Get-OpenPathWhitelistSectionsFromLines -Lines ($content -split "`n")
+    $result.Whitelist = @($sections.Whitelist)
+    $result.BlockedSubdomains = @($sections.BlockedSubdomains)
+    $result.BlockedPaths = @($sections.BlockedPaths)
+    $result.AllowedPaths = @($sections.AllowedPaths)
+    $result.IsDisabled = [bool]$sections.IsDisabled
 
     if ($result.IsDisabled) {
         Write-OpenPathLog "Parsed: $($result.Whitelist.Count) whitelisted, $($result.BlockedSubdomains.Count) blocked subdomains, $($result.BlockedPaths.Count) blocked paths, disabled=$($result.IsDisabled)"

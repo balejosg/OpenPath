@@ -100,6 +100,22 @@ Describe "Common Module - Mocked Tests" {
             $result.IsDisabled | Should -BeTrue
         }
 
+        It "Parses sections and mid-document spaced sentinel like the file parser" {
+            Mock Invoke-OpenPathHttpGetText {
+                [PSCustomObject]@{
+                    StatusCode = 200
+                    Content    = "domain1.com`n# Desactivado`n## blocked-subdomains`nbad.domain1.com`n## ALLOWED-PATHS`ndomain1.com/ok"
+                    ETag       = $null
+                }
+            } -ModuleName Common
+
+            $result = Get-OpenPathFromUrl -Url "http://test.example.com/whitelist.txt"
+            $result.IsDisabled | Should -BeTrue
+            $result.Whitelist | Should -Contain 'domain1.com'
+            $result.BlockedSubdomains | Should -Contain 'bad.domain1.com'
+            $result.AllowedPaths | Should -Contain 'domain1.com/ok'
+        }
+
         It "Accepts disabled whitelist even without minimum domains" {
             Mock Invoke-OpenPathHttpGetText {
                 [PSCustomObject]@{ StatusCode = 200; Content = "#DESACTIVADO"; ETag = $null }
