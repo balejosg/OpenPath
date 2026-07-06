@@ -1,0 +1,15 @@
+{
+  "id": "s02-blocked-domain-v6-off",
+  "title": "With the IPv6 firewall disabled and fast-fail on, a blocked domain returns NO AAAA answer (never a v6 sinkhole nothing can reset)",
+  "invariantSource": "linux/lib/dns-dnsmasq.sh:105-123 (_dns_emit_blocked_aaaa_sinkhole); page-observer canary post-mortem",
+  "platforms": ["linux"],
+  "given": {
+    "whitelist": ["example.com"],
+    "flags": { "SINKHOLE_FAST_FAIL": "1", "IPV6_FIREWALL_ENABLED": "0" }
+  },
+  "expect": {
+    "dns": [{ "host": "not-on-the-list.example.net", "a": "sinkhole", "aaaa": "no-answer" }],
+    "egress": [{ "dest": "sinkhole-v4", "proto": "tcp", "port": 443, "verdict": "refused" }],
+    "invariants": ["sinkhole-order"]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "s07-search-domain-no-fallthrough",
+  "title": "Page-observer canary regression: the OpenPath resolv.conf carries NO search domain, so a transiently-failing whitelisted FQDN gets a clean NXDOMAIN instead of a search-expanded name falling through into the sinkhole wildcard",
+  "invariantSource": "linux/lib/dns-runtime.sh:150-170 (render_openpath_resolv_conf)",
+  "platforms": ["linux"],
+  "given": {
+    "whitelist": ["example.com"]
+  },
+  "expect": {
+    "dns": [{ "host": "example.com", "a": "real" }],
+    "invariants": ["resolv-conf-no-search-domain"]
+  }
+}

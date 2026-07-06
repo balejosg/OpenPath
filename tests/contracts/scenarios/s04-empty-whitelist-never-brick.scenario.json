@@ -1,0 +1,25 @@
+{
+  "id": "s04-empty-whitelist-never-brick",
+  "title": "Empty whitelist (fetch failure posture) stays fail-closed per ADR-0011 but NEVER an empty allow-set under default-deny: protected/captive domains still resolve and populate the egress allow set",
+  "invariantSource": "linux/lib/firewall-rule-helpers.sh:160-203; docs/adr/0011-unified-failure-semantics.md",
+  "platforms": ["linux"],
+  "given": {
+    "whitelist": [],
+    "flags": { "ALLOW_SET_EGRESS_ENABLED": "1" }
+  },
+  "expect": {
+    "dns": [
+      { "host": "detectportal.firefox.com", "a": "real" },
+      { "host": "definitely-not-allowed.example.org", "a": "sinkhole" }
+    ],
+    "egress": [
+      {
+        "dest": "resolved:detectportal.firefox.com",
+        "proto": "tcp",
+        "port": 80,
+        "verdict": "allowed"
+      }
+    ],
+    "invariants": ["sinkhole-order", "allow-set-populated-when-scoped"]
+  }
+}

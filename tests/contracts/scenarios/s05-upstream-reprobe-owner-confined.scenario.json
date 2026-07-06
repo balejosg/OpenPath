@@ -1,0 +1,14 @@
+{
+  "id": "s05-upstream-reprobe-owner-confined",
+  "title": "Regression 8fe4cbc0: with upstream :53 owner-confined to dnsmasq, re-detection trusts the persisted format-valid upstream instead of re-probing (which the agent's own firewall drops) and never degrades to a never-allowed fallback",
+  "invariantSource": "linux/lib/common-connectivity.sh:54-77; commit 8fe4cbc0",
+  "platforms": ["linux"],
+  "given": {
+    "whitelist": ["example.com"],
+    "setup": "persisted-upstream"
+  },
+  "expect": {
+    "dns": [{ "host": "example.com", "a": "real" }],
+    "invariants": ["upstream-consistency"]
+  }
+}

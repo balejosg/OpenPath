@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "openpath://tests/contracts/scenarios/schema.json",
+  "title": "OpenPath cross-platform firewall + DNS sinkhole contract scenario",
+  "description": "Language-neutral scenario fixtures encoding the enforcement invariants of linux/lib/{firewall-rule-helpers,dns-dnsmasq,dns-runtime}.sh and windows/lib/internal/Firewall.Policy.ps1. Executed by tests/e2e/contract-scenarios/run-contract-scenarios.sh (Linux, real dnsmasq+iptables inside the E2E Docker lane) and tests/e2e/ci/run-windows-contract-scenarios.ps1 (Windows, real firewall on the self-hosted lab runner) plus the mocked unit rungs (tests/contract-scenarios.bats, windows/tests/Windows.ContractScenarios.Tests.ps1). Flag keys are the canonical linux/lib/defaults.conf variable names; Linux maps each key K to the OPENPATH_K environment override, Windows maps DOH_BLOCK_ENABLED to config.enableDohIpBlocking and treats SINKHOLE_FAST_FAIL / IPV6_FIREWALL_ENABLED / ALLOW_SET_EGRESS_ENABLED as linux-only (scenarios overriding those must be linux-scoped). fail-open/fail-closed semantics follow docs/adr/0011-unified-failure-semantics.md and are settled: scenarios encode them, they do not re-litigate them.",
+  "type": "object",
+  "required": ["id", "title", "platforms", "given", "expect"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^s[0-9]{2}-[a-z0-9-]+$" },
+    "title": { "type": "string" },
+    "invariantSource": {
+      "type": "string",
+      "description": "File:line or commit reference of the prose invariant this scenario encodes"
+    },
+    "platforms": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "enum": ["linux", "windows"] }
+    },
+    "given": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "whitelist": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Domains treated as the downloaded whitelist for this scenario. Empty array = the empty-whitelist / fetch-failure posture (ADR-0011)."
+        },
+        "flags": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "SINKHOLE_FAST_FAIL",
+              "IPV6_FIREWALL_ENABLED",
+              "ALLOW_SET_EGRESS_ENABLED",
+              "DOH_BLOCK_ENABLED",
+              "VPN_BLOCK_ENABLED",
+              "TOR_BLOCK_ENABLED"
+            ]
+          },
+          "additionalProperties": { "enum": ["0", "1"] }
+        },
+        "setup": {
+          "enum": ["persisted-upstream"],
+          "description": "Procedural pre-step implemented by the platform runner. persisted-upstream: persist the detected upstream to ORIGINAL_DNS_FILE, apply the firewall (owner-confining upstream :53 to dnsmasq's uid), then re-run detect_primary_dns and require the persisted value back (regression 8fe4cbc0)."
+        }
+      }
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["host"],
+            "additionalProperties": false,
+            "properties": {
+              "host": { "type": "string" },
+              "a": { "$ref": "#/definitions/dnsExpectation" },
+              "aaaa": { "$ref": "#/definitions/dnsExpectation" }
+            }
+          }
+        },
+        "egress": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["dest", "verdict"],
+            "additionalProperties": false,
+            "properties": {
+              "dest": { "type": "string" },
+              "proto": { "enum": ["tcp", "udp"] },
+              "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+              "verdict": { "enum": ["allowed", "refused", "dropped"] },
+              "platforms": { "type": "array", "items": { "enum": ["linux", "windows"] } },
+              "note": { "type": "string" }
+            }
+          }
+        },
+        "invariants": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "sinkhole-order",
+              "resolv-conf-no-search-domain",
+              "allow-set-populated-when-scoped",
+              "upstream-consistency",
+              "bypass-blocks-applied",
+              "v6-dns-block-split-halves",
+              "no-slash-zero-prefix",
+              "no-ipv6-loopback-rule"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "dnsExpectation": {
+      "oneOf": [
+        { "enum": ["sinkhole", "real", "no-answer", "not-sinkhole", "blocked"] },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "linux": { "enum": ["sinkhole", "real", "no-answer", "not-sinkhole", "blocked"] },
+            "windows": { "enum": ["sinkhole", "real", "no-answer", "not-sinkhole", "blocked"] }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "s06-bypass-blocks-and-v6-blanket",
+  "title": "Regressions 33d67ea4 + c29a2d03: the full anti-bypass catalog (DoT/DoH/VPN/Tor) is applied end-to-end, all-IPv6 rules use valid prefixes (::/1+8000::/1, never the rejected ::/0), no ::1 loopback rule is emitted, and v6 DNS + default egress are denied",
+  "invariantSource": "windows/lib/internal/Firewall.Policy.ps1:458-472,1308-1320; linux/lib/firewall-rule-helpers.sh:419-507",
+  "platforms": ["linux", "windows"],
+  "given": {
+    "whitelist": ["example.com"],
+    "flags": {
+      "DOH_BLOCK_ENABLED": "1",
+      "VPN_BLOCK_ENABLED": "1",
+      "TOR_BLOCK_ENABLED": "1",
+      "IPV6_FIREWALL_ENABLED": "1"
+    }
+  },
+  "expect": {
+    "egress": [
+      { "dest": "dot-any", "proto": "tcp", "port": 853, "verdict": "dropped" },
+      { "dest": "doh-resolver:9.9.9.9", "proto": "tcp", "port": 443, "verdict": "dropped" },
+      { "dest": "vpn:udp:51820", "proto": "udp", "port": 51820, "verdict": "dropped" },
+      { "dest": "tor:9050", "proto": "tcp", "port": 9050, "verdict": "dropped" },
+      { "dest": "v6-dns-any", "proto": "udp", "port": 53, "verdict": "dropped" },
+      {
+        "dest": "any-other",
+        "verdict": "dropped",
+        "platforms": ["linux"],
+        "note": "terminal OUTPUT default deny; Windows transport floor is default-OFF (W-1b) so this is linux-only"
+      }
+    ],
+    "invariants": [
+      "bypass-blocks-applied",
+      "v6-dns-block-split-halves",
+      "no-slash-zero-prefix",
+      "no-ipv6-loopback-rule"
+    ]
+  }
+}

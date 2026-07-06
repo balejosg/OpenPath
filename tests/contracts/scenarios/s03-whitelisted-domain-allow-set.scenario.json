@@ -1,0 +1,31 @@
+{
+  "id": "s03-whitelisted-domain-allow-set",
+  "title": "Whitelisted domain resolves to real addresses and its resolved IPs land in the name-aware egress allow set (v4 always, v6 when enabled); AAAA is never the sinkhole",
+  "invariantSource": "linux/lib/dns-dnsmasq.sh:9-23 (emit_dnsmasq_allow_domain); linux/lib/firewall-rule-helpers.sh:184-203; c29a2d03",
+  "platforms": ["linux", "windows"],
+  "given": {
+    "whitelist": ["example.com"],
+    "flags": { "ALLOW_SET_EGRESS_ENABLED": "1", "IPV6_FIREWALL_ENABLED": "1" }
+  },
+  "expect": {
+    "dns": [{ "host": "example.com", "a": "real", "aaaa": "not-sinkhole" }],
+    "egress": [
+      {
+        "dest": "resolved:example.com",
+        "proto": "tcp",
+        "port": 443,
+        "verdict": "allowed",
+        "platforms": ["linux"]
+      },
+      {
+        "dest": "resolved6:example.com",
+        "proto": "tcp",
+        "port": 443,
+        "verdict": "allowed",
+        "platforms": ["linux"],
+        "note": "skipped when the upstream returns no AAAA"
+      }
+    ],
+    "invariants": ["sinkhole-order"]
+  }
+}

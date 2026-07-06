@@ -1,0 +1,44 @@
+{
+  "id": "s01-blocked-domain-sinkhole",
+  "title": "Blocked domain answers A=sinkhole; AAAA=v6 sinkhole only while an active IPv6 firewall can reset it; sinkhole egress fast-fails",
+  "invariantSource": "linux/lib/firewall-rule-helpers.sh:144-154,314-330; linux/lib/dns-dnsmasq.sh:105-140",
+  "platforms": ["linux", "windows"],
+  "given": {
+    "whitelist": ["example.com"],
+    "flags": { "SINKHOLE_FAST_FAIL": "1", "IPV6_FIREWALL_ENABLED": "1" }
+  },
+  "expect": {
+    "dns": [
+      {
+        "host": "not-on-the-list.example.net",
+        "a": { "linux": "sinkhole", "windows": "blocked" },
+        "aaaa": { "linux": "sinkhole", "windows": "blocked" }
+      }
+    ],
+    "egress": [
+      {
+        "dest": "sinkhole-v4",
+        "proto": "tcp",
+        "port": 443,
+        "verdict": "refused",
+        "platforms": ["linux"]
+      },
+      {
+        "dest": "sinkhole-v4",
+        "proto": "udp",
+        "port": 443,
+        "verdict": "refused",
+        "platforms": ["linux"],
+        "note": "QUIC/HTTP3 must fast-fail too"
+      },
+      {
+        "dest": "sinkhole-v6",
+        "proto": "tcp",
+        "port": 443,
+        "verdict": "refused",
+        "platforms": ["linux"]
+      }
+    ],
+    "invariants": ["sinkhole-order"]
+  }
+}
