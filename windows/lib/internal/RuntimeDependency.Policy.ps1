@@ -5,6 +5,13 @@ if (-not (Get-Variable -Name OpenPathRuntimeDependencyActionAllowLocal -Scope Sc
     }
 }
 
+if (-not (Get-Command -Name 'Get-OpenPathMicrosoftSystemDomains' -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $commonDomainsCatalogPath = Join-Path $PSScriptRoot 'Common.Domains.Catalog.ps1'
+    if (Test-Path $commonDomainsCatalogPath -ErrorAction SilentlyContinue) {
+        . $commonDomainsCatalogPath
+    }
+}
+
 function Normalize-OpenPathRuntimeDependencyHost {
     # trims, lowercases, and validates a host string; returns empty string for .local hosts, single-label names, or format violations
     [CmdletBinding()]
@@ -71,66 +78,19 @@ function Get-OpenPathRuntimeDependencyProtectedHosts {
     if (Get-Command -Name 'Get-OpenPathAlwaysAllowedDomains' -ErrorAction SilentlyContinue) {
         $domainSources += @(Get-OpenPathAlwaysAllowedDomains)
     }
-    $domainSources += @(
-        'detectportal.firefox.com',
-        'connectivity-check.ubuntu.com',
-        'captive.apple.com',
-        'www.msftconnecttest.com',
-        'msftconnecttest.com',
-        'clients3.google.com',
-        'time.windows.com',
-        'time.google.com',
-        'windowsupdate.com',
-        'windowsupdate.microsoft.com',
-        'update.microsoft.com',
-        'delivery.mp.microsoft.com',
-        'do.dsp.mp.microsoft.com',
-        'api.cdp.microsoft.com',
-        'definitionupdates.microsoft.com',
-        'download.microsoft.com',
-        'download.windowsupdate.com',
-        'go.microsoft.com',
-        'adl.windows.com',
-        'tsfe.trafficshaping.dsp.mp.microsoft.com',
-        'wdcp.microsoft.com',
-        'wdcpalt.microsoft.com',
-        'wd.microsoft.com',
-        'smartscreen-prod.microsoft.com',
-        'crl.microsoft.com',
-        'www.microsoft.com',
-        'wns.windows.com',
-        'displaycatalog.mp.microsoft.com',
-        'storequality.microsoft.com',
-        'dsx.mp.microsoft.com',
-        'edge.microsoft.com',
-        'config.edge.skype.com',
-        'iecvlist.microsoft.com',
-        'manage.microsoft.com',
-        'dm.microsoft.com',
-        'graph.microsoft.com',
-        'login.microsoft.com',
-        'login.live.com',
-        'login.microsoftonline.com',
-        'aadcdn.msauth.net',
-        'aadcdn.msftauth.net',
-        'azureedge.net',
-        'blob.core.windows.net',
-        'aus5.mozilla.org',
-        'firefox.settings.services.mozilla.com',
-        'firefox-settings-attachments.cdn.mozilla.net',
-        'content-signature-2.cdn.mozilla.net',
-        'download.mozilla.org',
-        'download.cdn.mozilla.net',
-        'archive.mozilla.org',
-        'ftp.mozilla.org',
-        'safebrowsing.googleapis.com',
-        'addons.mozilla.org',
-        'versioncheck.addons.mozilla.org',
-        'services.addons.mozilla.org',
-        'ciscobinary.openh264.org',
-        'redirector.gvt1.com',
-        'clients2.googleusercontent.com'
-    )
+    foreach ($requiredCatalogCommand in @('Get-OpenPathCaptivePortalProbeDomains', 'Get-OpenPathMicrosoftSystemDomains', 'Get-OpenPathFirefoxSystemDomains')) {
+        if (-not (Get-Command -Name $requiredCatalogCommand -ErrorAction SilentlyContinue)) {
+            throw "Common.Domains.Catalog.ps1 is required for the runtime dependency protected-host floor ($requiredCatalogCommand missing)"
+        }
+    }
+    # Composition is set-equal to the previous inline list: the catalog's extra
+    # '*.windowsupdate.com' wildcard is dropped by Normalize-OpenPathRuntimeDependencyHost
+    # and the msftconnecttest pair dedupes into the probe set (pinned at 58 by
+    # Windows.Common.Core.Tests.ps1 'Domain catalog characterization').
+    $domainSources += @(Get-OpenPathCaptivePortalProbeDomains)
+    $domainSources += @('time.windows.com', 'time.google.com')
+    $domainSources += @(Get-OpenPathMicrosoftSystemDomains)
+    $domainSources += @(Get-OpenPathFirefoxSystemDomains)
 
     foreach ($domain in $domainSources) {
         $normalized = Normalize-OpenPathRuntimeDependencyHost -Value $domain

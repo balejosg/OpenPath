@@ -7,6 +7,7 @@ function Get-OpenPathNativeHostArtifactNames {
         'RequestSetup.State.psm1',
         'Common.Redaction.ps1',
         'Common.Whitelist.Sections.ps1',
+        'Common.Domains.Catalog.ps1',
         'RuntimeDependency.Protocol.ps1',
         'RuntimeDependency.Policy.ps1',
         'RuntimeDependency.Queue.ps1',

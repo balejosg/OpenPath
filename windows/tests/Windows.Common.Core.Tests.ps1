@@ -602,6 +602,12 @@ Describe "Common Module" {
                 $joined | Should -Match ([regex]::Escape($expected))
             }
         }
+
+        It "Standalone policy floor is composed from the shared domain catalog (fail-closed without it)" {
+            $policyPath = Join-Path $PSScriptRoot '..' 'lib' 'internal' 'RuntimeDependency.Policy.ps1'
+            $script = "`$ErrorActionPreference='Stop'; . '$policyPath'; if (-not (Get-Command Get-OpenPathMicrosoftSystemDomains -ErrorAction SilentlyContinue)) { 'CATALOG-MISSING' } else { 'CATALOG-LOADED' }"
+            (& pwsh -NoProfile -Command $script | Select-Object -Last 1) | Should -Be 'CATALOG-LOADED'
+        }
     }
 
     Context "Get-ValidWhitelistDomainsFromFile" {
