@@ -472,6 +472,18 @@ Describe "Common Module" {
             } | Should -BeNullOrEmpty
         }
 
+        It "Returns nothing for non-http(s) URI schemes" {
+            InModuleScope Common {
+                Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl 'ftp://api.example.com/w/tok1/whitelist.txt'
+            } | Should -BeNullOrEmpty
+        }
+
+        It "Returns nothing for a bare absolute path that is not a URL" {
+            InModuleScope Common {
+                Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl '/w/tok1/whitelist.txt'
+            } | Should -BeNullOrEmpty
+        }
+
         It "Update.Runtime shares the canonical machine-token implementation" {
             $updateRuntime = Import-Module (Join-Path $PSScriptRoot '..' 'lib' 'Update.Runtime.psm1') -Force -PassThru
             try {
@@ -480,6 +492,12 @@ Describe "Common Module" {
             finally {
                 Remove-Module $updateRuntime -Force -ErrorAction SilentlyContinue
             }
+        }
+
+        It "Update.Runtime does not redefine the machine-token function locally" {
+            $updateRuntimeContent = Get-Content (Join-Path $PSScriptRoot '..' 'lib' 'Update.Runtime.psm1') -Raw
+            $updateRuntimeContent | Should -Not -Match 'function Get-OpenPathMachineTokenFromWhitelistUrl'
+            $updateRuntimeContent | Should -Match ([regex]::Escape("internal\Common.MachineToken.ps1"))
         }
 
         It "Builds protected domains from configured control-plane URLs and bootstrap hosts" {

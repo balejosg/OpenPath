@@ -104,7 +104,7 @@ Describe "Common Module - Mocked Tests" {
             Mock Invoke-OpenPathHttpGetText {
                 [PSCustomObject]@{
                     StatusCode = 200
-                    Content    = "domain1.com`n# Desactivado`n## blocked-subdomains`nbad.domain1.com`n## ALLOWED-PATHS`ndomain1.com/ok"
+                    Content    = "domain1.com`n# Desactivado`n## blocked-subdomains`nbad.domain1.com`n## BLOCKED-PATHS`ndomain1.com/bad`n## ALLOWED-PATHS`ndomain1.com/ok"
                     ETag       = $null
                 }
             } -ModuleName Common
@@ -113,6 +113,7 @@ Describe "Common Module - Mocked Tests" {
             $result.IsDisabled | Should -BeTrue
             $result.Whitelist | Should -Contain 'domain1.com'
             $result.BlockedSubdomains | Should -Contain 'bad.domain1.com'
+            $result.BlockedPaths | Should -Contain 'domain1.com/bad'
             $result.AllowedPaths | Should -Contain 'domain1.com/ok'
         }
 

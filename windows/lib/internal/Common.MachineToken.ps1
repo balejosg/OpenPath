@@ -19,6 +19,9 @@ function Get-OpenPathMachineTokenFromWhitelistUrl {
 
     try {
         $uri = [System.Uri]::new($candidate)
+        if (-not $uri.IsAbsoluteUri -or $uri.Scheme -notin @('http', 'https')) {
+            return $null
+        }
         $match = [regex]::Match($uri.AbsolutePath, '/w/([^/]+)/whitelist\.txt$', 'IgnoreCase')
         if ($match.Success) {
             return [System.Uri]::UnescapeDataString($match.Groups[1].Value)

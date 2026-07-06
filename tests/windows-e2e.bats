@@ -124,6 +124,15 @@ load 'test_helper'
 
     run grep -nF "'NativeHost.Actions.ps1'" "$PROJECT_DIR/windows/lib/internal/NativeHost.ArtifactCatalog.ps1"
     [ "$status" -eq 0 ]
+
+    run grep -nF "'Common.Whitelist.Sections.ps1'" "$PROJECT_DIR/windows/lib/internal/NativeHost.ArtifactCatalog.ps1"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "'Common.Domains.Catalog.ps1'" "$PROJECT_DIR/windows/lib/internal/NativeHost.ArtifactCatalog.ps1"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "'CaptivePortal.StateFiles.ps1'" "$PROJECT_DIR/windows/lib/internal/NativeHost.ArtifactCatalog.ps1"
+    [ "$status" -eq 0 ]
 }
 
 @test "windows native host prefers staged support libraries when running under Firefox" {
