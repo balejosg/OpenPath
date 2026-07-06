@@ -352,3 +352,4 @@ windows/scripts/Start-SSEListener.ps1|windows/tests/Windows.Tests.ps1,windows/te
 windows/lib/internal/Sse.Coalescer.ps1|windows/tests/Windows.SSE.Coalescer.Tests.ps1
 linux/lib/defaults.conf|tests/repo-config/agent-config-parity-contracts.test.mjs
 docs/agent-config-parity.md|tests/repo-config/agent-config-parity-contracts.test.mjs
+linux/lib/common-contract-constants.sh|tests/contract-constants.bats

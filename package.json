@@ -28,7 +28,7 @@
     "test:student-policy:linux": "bash tests/e2e/ci/run-linux-student-flow.sh",
     "test:student-policy:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-student-flow.ps1",
     "check:ps-culture": "node scripts/check-ps-datetime-culture.mjs",
-    "test:repo-config": "node --test tests/repo-config.test.mjs tests/generate-docker-manifests.test.mjs tests/check-ps-datetime-culture.test.mjs tests/verify-stable-client-extension-id.test.mjs tests/check-new-file-coverage.test.mjs tests/e2e-scope-check.test.mjs",
+    "test:repo-config": "node --test tests/repo-config.test.mjs tests/generate-docker-manifests.test.mjs tests/check-ps-datetime-culture.test.mjs tests/verify-stable-client-extension-id.test.mjs tests/check-new-file-coverage.test.mjs tests/e2e-scope-check.test.mjs tests/generate-contract-constants.test.mjs",
     "test:windows-runner-direct": "node --test tests/windows-runner-direct.test.mjs",
     "test:repo-test-files": "bash scripts/check-test-files.sh",
     "test:watch:spa": "npm run test --workspace=@openpath/react-spa -- --watch",
@@ -60,6 +60,8 @@
     "size:check": "test -d react-spa/dist && npm run size --workspace=@openpath/react-spa || echo 'SKIP: react-spa/dist not built, skipping size check'",
     "docker:manifests": "node scripts/generate-docker-manifests.mjs",
     "docker:manifests:check": "node scripts/generate-docker-manifests.mjs --check",
+    "contract:constants": "node scripts/generate-contract-constants.mjs",
+    "contract:constants:check": "node scripts/generate-contract-constants.mjs --check",
     "diagnostics:windows:direct": "node scripts/run-windows-runner-direct.mjs",
     "diagnostics:linux-student:local": "node scripts/run-linux-student-policy-local.mjs",
     "ops:change-brief": "node ../scripts/change-brief.mjs --workspace .. --repo openpath"

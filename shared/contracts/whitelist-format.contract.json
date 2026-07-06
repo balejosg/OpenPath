@@ -1,0 +1,33 @@
+{
+  "$comment": "Single source of truth for the whitelist.txt wire format. Consumed by scripts/generate-contract-constants.mjs (generated TS/Bash includes) and by windows/tests/Windows.ContractConstants.Tests.ps1 (a sync-guard that pins the existing Windows catalog functions to these same values). Probe lists are per-OS on purpose: unioning them would change agent behavior (see plan: Known Divergences #7).",
+  "disabledSentinel": "#DESACTIVADO",
+  "sectionHeaders": {
+    "whitelist": "## WHITELIST",
+    "blockedSubdomains": "## BLOCKED-SUBDOMAINS",
+    "blockedPaths": "## BLOCKED-PATHS",
+    "allowedPaths": "## ALLOWED-PATHS"
+  },
+  "captivePortalProbeDomains": {
+    "linux": [
+      "detectportal.firefox.com",
+      "connectivity-check.ubuntu.com",
+      "captive.apple.com",
+      "www.msftconnecttest.com",
+      "clients3.google.com"
+    ],
+    "windows": [
+      "detectportal.firefox.com",
+      "connectivity-check.ubuntu.com",
+      "captive.apple.com",
+      "www.msftconnecttest.com",
+      "msftconnecttest.com",
+      "clients3.google.com"
+    ],
+    "windowsDetectionHosts": [
+      "www.msftconnecttest.com",
+      "msftconnecttest.com",
+      "detectportal.firefox.com",
+      "clients3.google.com"
+    ]
+  }
+}
