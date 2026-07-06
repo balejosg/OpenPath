@@ -210,6 +210,47 @@ function Get-FreeTcpPort {
     }
 }
 
+function Clear-TcpListenerPort {
+    param(
+        [Parameter(Mandatory = $true)][int]$Port,
+        [Parameter(Mandatory = $true)][string]$Context
+    )
+
+    # The API (3201) and fixture (18082) servers bind fixed ports. On a persistent
+    # self-hosted runner a prior run that was terminated abnormally (GitHub step
+    # timeout, runner interruption, or a dropped detached execution) can leave a
+    # node.exe still holding the port. reset-self-hosted-windows-runner.ps1 does not
+    # reap it (its node.exe command-line filters do not match api/src/server.ts or
+    # fixture-server.ts), and Stop-BackgroundJobs only runs on a graceful exit, so the
+    # next run's server fails to bind and exits before becoming ready. Free the port
+    # deterministically before binding instead of racing a leftover listener.
+    for ($attempt = 1; $attempt -le 10; $attempt += 1) {
+        $owners = @(
+            Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.OwningProcess } |
+                Where-Object { $_ -and $_ -ne $PID } |
+                Sort-Object -Unique
+        )
+
+        if ($owners.Count -eq 0) {
+            return
+        }
+
+        foreach ($owningPid in $owners) {
+            $ownerName = try { (Get-Process -Id $owningPid -ErrorAction Stop).ProcessName } catch { 'unknown' }
+            Write-DiagnosticNote "Clearing stale listener on port $Port for ${Context}: stopping pid=$owningPid name=$ownerName"
+            Stop-Process -Id $owningPid -Force -ErrorAction SilentlyContinue
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    $remaining = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    if ($remaining.Count -gt 0) {
+        throw "Port $Port for $Context is still held by another listener after cleanup (owners: $(($remaining | ForEach-Object { $_.OwningProcess }) -join ', '))."
+    }
+}
+
 function Assert-LastExitCode {
     param(
         [Parameter(Mandatory = $true)][string]$Context
@@ -642,6 +683,7 @@ function Initialize-TestDatabase {
 
 function Start-ApiServer {
     Write-Step "Starting API on port $($script:ApiPort)..."
+    Clear-TcpListenerPort -Port $script:ApiPort -Context 'API server'
     $apiLog = Join-Path $script:ArtifactsRoot 'api.log'
     $apiErrLog = Join-Path $script:ArtifactsRoot 'api.err.log'
     $dataDir = Join-Path $script:ArtifactsRoot 'api-data'
@@ -694,6 +736,7 @@ function Start-ApiServer {
 
 function Start-FixtureServer {
     Write-Step "Starting fixture server on port $($script:FixturePort)..."
+    Clear-TcpListenerPort -Port $script:FixturePort -Context 'fixture server'
     $fixtureLog = Join-Path $script:ArtifactsRoot 'fixture-server.log'
     $fixtureErrLog = Join-Path $script:ArtifactsRoot 'fixture-server.err.log'
     $nodeCommand = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
