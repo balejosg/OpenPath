@@ -213,13 +213,10 @@ setup() {
 # ============== Configuration tests ==============
 
 @test "captive portal uses configurable URL from defaults.conf" {
-    # Source defaults.conf to verify CAPTIVE_PORTAL_URL is configurable
-    if [ -f "$PROJECT_DIR/linux/lib/defaults.conf" ]; then
-        source "$PROJECT_DIR/linux/lib/defaults.conf"
-        [ -n "$CAPTIVE_PORTAL_URL" ]
-    else
-        skip "defaults.conf not found"
-    fi
+    # defaults.conf is a committed repo file (like its sibling test below, which sources it
+    # unconditionally), so this always runs -- no skip guard needed.
+    source "$PROJECT_DIR/linux/lib/defaults.conf"
+    [ -n "$CAPTIVE_PORTAL_URL" ]
 }
 
 @test "CAPTIVE_PORTAL_URL can be overridden via environment" {
