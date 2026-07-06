@@ -35,7 +35,7 @@
     "test:service-coverage": "NODE_ENV=test node --import tsx --test --test-concurrency=1 --test-force-exit tests/service-coverage-user-storage.test.ts tests/service-coverage-setup.test.ts tests/service-coverage-schema.test.ts tests/service-coverage-user-service.test.ts tests/service-coverage-auth-service.test.ts",
     "test:coverage-regressions": "NODE_ENV=test node --import tsx --test --test-concurrency=1 --test-force-exit tests/coverage-regressions-storage.test.ts tests/coverage-regressions-legacy-storage.test.ts tests/coverage-regressions-router-validation.test.ts",
     "test:integration": "NODE_ENV=test node --import tsx --test --test-concurrency=1 --test-force-exit tests/integration-user-workflow.test.ts tests/integration-health-report.test.ts tests/integration-classroom-management.test.ts tests/integration-domain-request.test.ts",
-    "test:integration:api": "NODE_ENV=test node --import tsx --test --test-force-exit tests/integration/*.test.ts",
+    "test:integration:api": "NODE_ENV=test node --import tsx --test --test-concurrency=1 --test-force-exit tests/integration/*.test.ts",
     "test:push": "tsx scripts/run-node-test-suite.ts 'tests/push-*.test.ts'",
     "test:security": "tsx scripts/run-node-test-suite.ts tests/security-headers.test.ts tests/security-authorization.test.ts tests/security-auth.test.ts tests/security-input-validation.test.ts tests/security-privacy-rate-limits.test.ts",
     "test:server": "NODE_ENV=test node --import tsx --test --test-concurrency=1 --test-force-exit tests/server-assets.test.ts tests/server-request-auth.test.ts tests/server-setup-cookie.test.ts",
