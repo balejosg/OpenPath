@@ -17,6 +17,7 @@ RUN . /tmp/openpath-apt.sh \
     systemd-sysv \
     iproute2 \
     procps \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 # Remove unnecessary systemd services that won't work in container
@@ -40,6 +41,7 @@ COPY linux/ ./linux/
 COPY runtime/ ./runtime/
 COPY windows/ ./windows/
 COPY tests/e2e/ ./tests/e2e/
+COPY tests/contracts/ ./tests/contracts/
 COPY firefox-extension/manifest.json ./firefox-extension/manifest.json
 COPY firefox-extension/_locales/ ./firefox-extension/_locales/
 COPY firefox-extension/dist/ ./firefox-extension/dist/

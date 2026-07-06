@@ -7,6 +7,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 IMAGE_TAG="${OPENPATH_E2E_IMAGE_TAG:-openpath-e2e:latest}"
 CONTAINER_NAME="${OPENPATH_E2E_CONTAINER_NAME:-e2e-test-$$}"
 INSTALLER_ONLY=0
+CONTRACT_SCENARIOS=0
+CONTRACT_ARTIFACT_DIR="${OPENPATH_CONTRACT_ARTIFACT_DIR:-$PROJECT_ROOT/tests/e2e/artifacts/contract-scenarios}"
 
 _context_dir=""
 
@@ -16,12 +18,21 @@ while [ "$#" -gt 0 ]; do
             INSTALLER_ONLY=1
             shift
             ;;
+        --contract-scenarios)
+            CONTRACT_SCENARIOS=1
+            shift
+            ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 2
             ;;
     esac
 done
+
+if [ "$INSTALLER_ONLY" = "1" ] && [ "$CONTRACT_SCENARIOS" = "1" ]; then
+    echo "--installer-only and --contract-scenarios are mutually exclusive" >&2
+    exit 2
+fi
 
 cleanup() {
     # Best-effort cleanup
@@ -82,12 +93,13 @@ create_minimal_context() {
     local tmp
     tmp="$(mktemp -d -t openpath-e2e-context.XXXXXXXX)"
 
-    mkdir -p "$tmp/linux" "$tmp/runtime" "$tmp/tests/e2e" "$tmp/firefox-extension" "$tmp/windows"
+    mkdir -p "$tmp/linux" "$tmp/runtime" "$tmp/tests/e2e" "$tmp/tests/contracts" "$tmp/firefox-extension" "$tmp/windows"
 
     # Core Linux agent + E2E runner scripts
     cp -a "$PROJECT_ROOT/linux/." "$tmp/linux/"
     cp -a "$PROJECT_ROOT/runtime/." "$tmp/runtime/"
     cp -a "$PROJECT_ROOT/tests/e2e/." "$tmp/tests/e2e/"
+    cp -a "$PROJECT_ROOT/tests/contracts/." "$tmp/tests/contracts/"
 
     # Keep Windows tree so pre-install validation does not warn
     cp -a "$PROJECT_ROOT/windows/." "$tmp/windows/"
@@ -667,6 +679,7 @@ main() {
         "${docker_dns_args[@]}" \
         -e CI=true \
         -e OPENPATH_INSTALLER_CONTRACT_MODE="$INSTALLER_ONLY" \
+        -e OPENPATH_CONTRACT_SCENARIOS_MODE="$CONTRACT_SCENARIOS" \
         "$IMAGE_TAG"
 
     echo "Waiting for systemd to boot..."
@@ -692,6 +705,16 @@ main() {
         echo "E2E tests failed (result: $result)"
         debug_container
         exit 1
+    fi
+
+    if [ "$CONTRACT_SCENARIOS" = "1" ]; then
+        mkdir -p "$CONTRACT_ARTIFACT_DIR"
+        docker cp "$CONTAINER_NAME:/openpath/tests/e2e/artifacts/contract-scenarios/." \
+            "$CONTRACT_ARTIFACT_DIR/" 2>/dev/null || true
+        echo ""
+        echo "Contract scenario evidence: $CONTRACT_ARTIFACT_DIR"
+        echo "Linux contract scenarios passed"
+        return 0
     fi
 
     if [ "$INSTALLER_ONLY" = "1" ]; then

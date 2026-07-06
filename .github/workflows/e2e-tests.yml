@@ -79,6 +79,8 @@ jobs:
       linux_student_policy: ${{ steps.filter.outputs.linux_student_policy }}
       windows_student_policy: ${{ steps.filter.outputs.windows_student_policy }}
       windows_captive_portal: ${{ steps.filter.outputs.windows_captive_portal }}
+      linux_contract_scenarios: ${{ steps.filter.outputs.linux_contract_scenarios }}
+      windows_contract_scenarios: ${{ steps.filter.outputs.windows_contract_scenarios }}
       windows_student_policy_sse_group: ${{ steps.filter.outputs.windows_student_policy_sse_group }}
       windows_student_policy_sse_reason: ${{ steps.filter.outputs.windows_student_policy_sse_reason }}
 
@@ -128,12 +130,25 @@ jobs:
               windows_captive_portal=true
             fi
 
+            linux_contract_scenarios=false
+            windows_contract_scenarios=false
+            if { [ "$manual_platform" = "all" ] || [ "$manual_platform" = "linux" ]; } &&
+               [ "$manual_suite" = "all" ]; then
+              linux_contract_scenarios=true
+            fi
+            if { [ "$manual_platform" = "all" ] || [ "$manual_platform" = "windows" ]; } &&
+               [ "$manual_suite" = "all" ]; then
+              windows_contract_scenarios=true
+            fi
+
             echo "release_infra_only=false" >> "$GITHUB_OUTPUT"
             echo "linux_e2e=$linux_e2e" >> "$GITHUB_OUTPUT"
             echo "windows_e2e=$windows_e2e" >> "$GITHUB_OUTPUT"
             echo "linux_student_policy=$linux_student_policy" >> "$GITHUB_OUTPUT"
             echo "windows_student_policy=$windows_student_policy" >> "$GITHUB_OUTPUT"
             echo "windows_captive_portal=$windows_captive_portal" >> "$GITHUB_OUTPUT"
+            echo "linux_contract_scenarios=$linux_contract_scenarios" >> "$GITHUB_OUTPUT"
+            echo "windows_contract_scenarios=$windows_contract_scenarios" >> "$GITHUB_OUTPUT"
             echo "windows_student_policy_sse_group=$windows_student_policy_sse_group" >> "$GITHUB_OUTPUT"
             echo "windows_student_policy_sse_reason=$windows_student_policy_sse_reason" >> "$GITHUB_OUTPUT"
             {
@@ -173,6 +188,8 @@ jobs:
           linux_student_policy=false
           windows_student_policy=false
           windows_captive_portal=false
+          linux_contract_scenarios=false
+          windows_contract_scenarios=false
           windows_student_policy_sse_group=full
           windows_student_policy_sse_reason="Windows Student Policy not selected; target-platform lane not required for this diff."
           release_infra_only=false
@@ -211,12 +228,22 @@ jobs:
             windows_captive_portal=true
           fi
 
+          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq '^(tests/contracts/scenarios/|tests/e2e/contract-scenarios/|tests/contract-scenarios\.bats$|linux/lib/|tests/e2e/(Dockerfile$|docker-e2e-runner\.sh$|ci/run-linux-e2e\.sh$|ci/run-linux-contract-scenarios\.sh$)|\.github/workflows/e2e-tests\.yml$)'; then
+            linux_contract_scenarios=true
+          fi
+
+          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq '^(tests/contracts/scenarios/|tests/e2e/contract-scenarios/|tests/e2e/ci/run-windows-contract-scenarios\.ps1$|tests/e2e/Windows-ContractScenarios\.Tests\.ps1$|windows/lib/Firewall\.psm1$|windows/lib/internal/Firewall\.|\.github/workflows/e2e-tests\.yml$)'; then
+            windows_contract_scenarios=true
+          fi
+
           echo "release_infra_only=$release_infra_only" >> "$GITHUB_OUTPUT"
           echo "linux_e2e=$linux_e2e" >> "$GITHUB_OUTPUT"
           echo "windows_e2e=$windows_e2e" >> "$GITHUB_OUTPUT"
           echo "linux_student_policy=$linux_student_policy" >> "$GITHUB_OUTPUT"
           echo "windows_student_policy=$windows_student_policy" >> "$GITHUB_OUTPUT"
           echo "windows_captive_portal=$windows_captive_portal" >> "$GITHUB_OUTPUT"
+          echo "linux_contract_scenarios=$linux_contract_scenarios" >> "$GITHUB_OUTPUT"
+          echo "windows_contract_scenarios=$windows_contract_scenarios" >> "$GITHUB_OUTPUT"
           echo "windows_student_policy_sse_group=$windows_student_policy_sse_group" >> "$GITHUB_OUTPUT"
           echo "windows_student_policy_sse_reason=$windows_student_policy_sse_reason" >> "$GITHUB_OUTPUT"
           {
@@ -231,6 +258,8 @@ jobs:
             echo "- Linux Student Policy selected: $linux_student_policy"
             echo "- Windows Student Policy selected: $windows_student_policy"
             echo "- Windows Captive Portal selected: $windows_captive_portal"
+            echo "- Linux Contract Scenarios selected: $linux_contract_scenarios"
+            echo "- Windows Contract Scenarios selected: $windows_contract_scenarios"
             echo "- Windows Student Policy SSE group: $windows_student_policy_sse_group"
             echo "- Windows Student Policy SSE routing reason: $windows_student_policy_sse_reason"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -347,6 +376,47 @@ jobs:
         with:
           name: linux-student-policy-artifacts-${{ github.run_id }}
           path: tests/e2e/artifacts/linux-student-policy
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ============================================
+  # Linux Contract Scenarios (firewall + DNS sinkhole invariants)
+  # ============================================
+  linux-contract-scenarios:
+    name: Linux Contract Scenarios
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    needs: detect-relevant-changes
+    if: needs.detect-relevant-changes.outputs.linux_contract_scenarios == 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: ./.github/actions/setup-node
+        with:
+          cache-playwright: true
+
+      - name: Build Firefox Extension
+        uses: ./.github/actions/build-workspaces
+        with:
+          build-shared: 'false'
+          build-api: 'false'
+          build-extension: 'true'
+
+      - name: Run Linux contract scenarios (systemd container)
+        shell: bash
+        run: |
+          npm run test:contract:linux
+
+      - name: Upload contract scenario evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-contract-scenarios-artifacts-${{ github.run_id }}
+          path: tests/e2e/artifacts/contract-scenarios
           if-no-files-found: ignore
           retention-days: 7
 
@@ -494,6 +564,7 @@ jobs:
         linux-student-policy,
         windows-student-policy,
         windows-captive-portal-navigation,
+        linux-contract-scenarios,
       ]
     if: always()
 
@@ -557,6 +628,14 @@ jobs:
             echo "❌ Windows Captive Portal Navigation: ${{ needs.windows-captive-portal-navigation.result }}"
           fi
 
+          if [[ "${{ needs.linux-contract-scenarios.result }}" == "success" ]]; then
+            echo "✅ Linux Contract Scenarios: PASSED"
+          elif [[ "${{ needs.linux-contract-scenarios.result }}" == "skipped" ]]; then
+            echo "⏭️ Linux Contract Scenarios: SKIPPED"
+          else
+            echo "❌ Linux Contract Scenarios: ${{ needs.linux-contract-scenarios.result }}"
+          fi
+
           if [[ "${{ needs.detect-relevant-changes.result }}" == "failure" ]] || \
              [[ "${{ needs.detect-relevant-changes.result }}" == "cancelled" ]] || \
              [[ "${{ needs.linux-e2e.result }}" == "failure" ]] || \
@@ -568,6 +647,8 @@ jobs:
              [[ "${{ needs.windows-student-policy.result }}" == "cancelled" ]] || \
              [[ "${{ needs.windows-captive-portal-navigation.result }}" == "failure" ]] || \
              [[ "${{ needs.windows-captive-portal-navigation.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.linux-contract-scenarios.result }}" == "failure" ]] || \
+             [[ "${{ needs.linux-contract-scenarios.result }}" == "cancelled" ]] || \
               [[ "${{ needs.windows-e2e.result }}" == "cancelled" ]]; then
             echo ""
             echo "❌ E2E Tests FAILED"

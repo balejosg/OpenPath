@@ -1580,6 +1580,8 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
     'linux_student_policy',
     'windows_student_policy',
     'windows_captive_portal',
+    'linux_contract_scenarios',
+    'windows_contract_scenarios',
   ]) {
     const outputExpression = `${outputName}: \${{ steps.filter.outputs.${outputName} }}`;
     assert.ok(
@@ -1787,6 +1789,15 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
       windowsCaptivePortalBlock.includes('captive-portal-navigation'),
     'windows-captive-portal-navigation should upload direct diagnostic artifacts'
   );
+
+  const linuxContractBlock = extractWorkflowJobBlock(e2eWorkflow, 'linux-contract-scenarios');
+  assert.ok(
+    linuxContractBlock.includes(
+      "needs.detect-relevant-changes.outputs.linux_contract_scenarios == 'true'"
+    ),
+    'linux-contract-scenarios should run only for contract-scenario relevant changes'
+  );
+
   assert.ok(
     windowsStudentPolicyBlock.includes('name: Prepare self-hosted Windows runner state') &&
       windowsStudentPolicyBlock.includes('name: Restore self-hosted Windows runner state') &&

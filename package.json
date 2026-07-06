@@ -23,6 +23,7 @@
     "test:e2e:smoke": "npm run test:e2e --workspace=@openpath/react-spa -- --grep @smoke",
     "test:installer:linux": "bash tests/e2e/ci/run-linux-installer-contracts.sh",
     "test:installer:apt": "bash tests/e2e/ci/run-linux-apt-contracts.sh",
+    "test:contract:linux": "bash tests/e2e/ci/run-linux-contract-scenarios.sh",
     "test:installer:contracts": "npm run test:installer:linux && npm run test:installer:apt",
     "test:student-policy:linux": "bash tests/e2e/ci/run-linux-student-flow.sh",
     "test:student-policy:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-student-flow.ps1",

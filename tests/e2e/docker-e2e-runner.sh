@@ -29,7 +29,22 @@ resolve_installer_contract_mode() {
     printf '0\n'
 }
 
+resolve_contract_scenarios_mode() {
+    if [ -n "${OPENPATH_CONTRACT_SCENARIOS_MODE:-}" ]; then
+        printf '%s\n' "$OPENPATH_CONTRACT_SCENARIOS_MODE"
+        return 0
+    fi
+
+    if [ -r /proc/1/environ ]; then
+        tr '\0' '\n' < /proc/1/environ | sed -n 's/^OPENPATH_CONTRACT_SCENARIOS_MODE=//p' | head -n 1
+        return 0
+    fi
+
+    printf '0\n'
+}
+
 INSTALLER_CONTRACT_MODE="$(resolve_installer_contract_mode)"
+CONTRACT_SCENARIOS_MODE="$(resolve_contract_scenarios_mode)"
 
 echo ""
 echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
@@ -110,6 +125,16 @@ echo -e "${BLUE}[5/6]${NC} Running smoke tests..."
 if [ "$INSTALLER_CONTRACT_MODE" = "1" ]; then
     echo ""
     echo -e "${GREEN}✓${NC} Installer contract mode completed after install + smoke tests"
+    exit 0
+fi
+
+if [ "$CONTRACT_SCENARIOS_MODE" = "1" ]; then
+    echo ""
+    echo -e "${BLUE}[6/6]${NC} Running firewall+DNS contract scenarios..."
+    ./tests/e2e/contract-scenarios/run-contract-scenarios.sh \
+        --artifact-dir /openpath/tests/e2e/artifacts/contract-scenarios
+    echo ""
+    echo -e "${GREEN}✓${NC} Contract scenarios completed"
     exit 0
 fi
 
