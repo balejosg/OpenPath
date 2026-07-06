@@ -113,4 +113,29 @@ Describe "Contract scenarios (mocked Windows unit rung)" {
             { Test-ContractRuleSetInvariant -Invariant 'not-a-real-invariant' -Rules @() } | Should -Throw
         }
     }
+
+    Context "Test-ContractDnsAnswerBlocked (pure function, mirrors dns_probe_result_is_blocked)" {
+        It "classifies sinkhole/unspecified answers as blocked" {
+            Test-ContractDnsAnswerBlocked -Addresses @('0.0.0.0') | Should -BeTrue
+            Test-ContractDnsAnswerBlocked -Addresses @('::') | Should -BeTrue
+            Test-ContractDnsAnswerBlocked -Addresses @('192.0.2.1') | Should -BeTrue
+            Test-ContractDnsAnswerBlocked -Addresses @('100::') | Should -BeTrue
+            Test-ContractDnsAnswerBlocked -Addresses @('0.0.0.0', '::', '192.0.2.1', '100::') | Should -BeTrue
+        }
+
+        It "classifies no answers at all (null or empty) as blocked" {
+            Test-ContractDnsAnswerBlocked -Addresses $null | Should -BeTrue
+            Test-ContractDnsAnswerBlocked -Addresses @() | Should -BeTrue
+        }
+
+        It "classifies a real resolved address as not blocked" {
+            Test-ContractDnsAnswerBlocked -Addresses @('93.184.216.34') | Should -BeFalse
+        }
+
+        It "classifies a mixed set with any real address as not blocked" {
+            # Contract is "every answer is sinkhole" -- one real address among
+            # sinkhole values must still flip the verdict to not-blocked.
+            Test-ContractDnsAnswerBlocked -Addresses @('0.0.0.0', '93.184.216.34') | Should -BeFalse
+        }
+    }
 }
