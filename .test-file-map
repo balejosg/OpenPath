@@ -284,6 +284,7 @@ windows/lib/internal/NativeHost.CaptivePortalRecoveryQueue.ps1|windows/tests/Win
 windows/lib/internal/CaptivePortal.AcrylicPolicyTransaction.ps1|windows/tests/Windows.Watchdog.Tests.ps1
 windows/lib/internal/CaptivePortal.DiagnosticsDiscovery.ps1|windows/tests/Windows.Watchdog.Tests.ps1,tests/wedu-captive-portal-harness-contract.test.mjs
 windows/lib/internal/CaptivePortal.RecoveryTransition.ps1|windows/tests/Windows.Watchdog.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1
+windows/lib/internal/CaptivePortal.StateFiles.ps1|windows/tests/Windows.Common.Core.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1
 windows/lib/internal/Update.Script.Config.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Update.Script.Apply.ps1|windows/tests/Windows.Tests.ps1
 windows/lib/internal/Update.Script.Rollback.ps1|windows/tests/Windows.Tests.ps1

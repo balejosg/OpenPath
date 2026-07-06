@@ -10,6 +10,7 @@ Import-Module "$modulePath\lib\Common.psm1" -ErrorAction SilentlyContinue
 . (Join-Path $PSScriptRoot 'internal\AcrylicHostsRenderer.ps1')
 . (Join-Path $PSScriptRoot 'internal\AcrylicConfigWriter.ps1')
 . (Join-Path $PSScriptRoot 'internal\CaptivePortal.AcrylicPolicyTransaction.ps1')
+. (Join-Path $PSScriptRoot 'internal\CaptivePortal.StateFiles.ps1')
 $runtimeDependencyOverlayPath = Join-Path $PSScriptRoot 'internal\RuntimeDependency.Overlay.ps1'
 if (Test-Path $runtimeDependencyOverlayPath -ErrorAction SilentlyContinue) {
     . $runtimeDependencyOverlayPath
@@ -121,20 +122,7 @@ function Get-OpenPathCaptivePortalMarker {
     .OUTPUTS
         PSCustomObject or $null
     #>
-    if (-not (Test-Path $script:CaptivePortalStatePath)) {
-        return $null
-    }
-
-    try {
-        $raw = Get-Content $script:CaptivePortalStatePath -Raw -ErrorAction Stop
-        if (-not $raw) {
-            return $null
-        }
-        return ($raw | ConvertFrom-Json -ErrorAction Stop)
-    }
-    catch {
-        return $null
-    }
+    return (Read-OpenPathCaptivePortalStateJson -Path $script:CaptivePortalStatePath)
 }
 
 function Set-OpenPathCaptivePortalMarker {
@@ -1559,20 +1547,7 @@ function Get-OpenPathCaptivePortalObservation {
     .OUTPUTS
         PSCustomObject or $null
     #>
-    if (-not (Test-Path $script:CaptivePortalObservationPath)) {
-        return $null
-    }
-
-    try {
-        $raw = Get-Content $script:CaptivePortalObservationPath -Raw -ErrorAction Stop
-        if (-not $raw) {
-            return $null
-        }
-        return ($raw | ConvertFrom-Json -ErrorAction Stop)
-    }
-    catch {
-        return $null
-    }
+    return (Read-OpenPathCaptivePortalStateJson -Path $script:CaptivePortalObservationPath)
 }
 
 function Update-OpenPathCaptivePortalObservation {

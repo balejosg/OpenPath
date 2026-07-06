@@ -162,6 +162,25 @@ if (-not (Get-Command -Name 'Get-OpenPathCaptivePortalRecoveryTransitionMarkerSu
     throw 'CaptivePortal.RecoveryTransition.ps1 is required for native host captive portal recovery transitions.'
 }
 
+$nativeHostCaptivePortalStateFilesCandidatePaths = @()
+if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+    $nativeHostCaptivePortalStateFilesCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\CaptivePortal.StateFiles.ps1')
+}
+if ($PSScriptRoot) {
+    $nativeHostCaptivePortalStateFilesCandidatePaths += (Join-Path $PSScriptRoot 'CaptivePortal.StateFiles.ps1')
+}
+
+foreach ($nativeHostCaptivePortalStateFilesCandidatePath in ($nativeHostCaptivePortalStateFilesCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
+    if (Test-Path $nativeHostCaptivePortalStateFilesCandidatePath -ErrorAction SilentlyContinue) {
+        . $nativeHostCaptivePortalStateFilesCandidatePath
+        break
+    }
+}
+
+if (-not (Get-Command -Name 'Read-OpenPathCaptivePortalStateJson' -ErrorAction SilentlyContinue)) {
+    throw 'CaptivePortal.StateFiles.ps1 is required for native host captive portal state reads.'
+}
+
 if (-not (Get-Command -Name 'Test-OpenPathRuntimeDependencyCandidate' -ErrorAction SilentlyContinue)) {
     throw 'RuntimeDependency.Policy.ps1 is required for native host runtime dependency validation.'
 }

@@ -922,4 +922,41 @@ youtube.com/watch?v=abc
             $result | Should -BeOfType [bool]
         }
     }
+
+    Context "Read-OpenPathCaptivePortalStateJson" {
+        BeforeAll {
+            . (Join-Path $PSScriptRoot '..' 'lib' 'internal' 'CaptivePortal.StateFiles.ps1')
+        }
+
+        It "Returns null for a missing file" {
+            Read-OpenPathCaptivePortalStateJson -Path (Join-Path ([System.IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString() + '.json')) | Should -BeNullOrEmpty
+        }
+
+        It "Returns null for an empty file" {
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-empty-" + [Guid]::NewGuid().ToString() + ".json")
+            try {
+                New-Item -ItemType File -Path $tempFile -Force | Out-Null
+                Read-OpenPathCaptivePortalStateJson -Path $tempFile | Should -BeNullOrEmpty
+            }
+            finally { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
+        }
+
+        It "Returns null for unparseable JSON" {
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-bad-" + [Guid]::NewGuid().ToString() + ".json")
+            try {
+                'not json {' | Set-Content $tempFile -Encoding UTF8
+                Read-OpenPathCaptivePortalStateJson -Path $tempFile | Should -BeNullOrEmpty
+            }
+            finally { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
+        }
+
+        It "Parses a valid state file" {
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-good-" + [Guid]::NewGuid().ToString() + ".json")
+            try {
+                '{"active": true, "state": "Portal"}' | Set-Content $tempFile -Encoding UTF8
+                (Read-OpenPathCaptivePortalStateJson -Path $tempFile).state | Should -Be 'Portal'
+            }
+            finally { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
+        }
+    }
 }

@@ -92,18 +92,22 @@ function Get-NativeHostCaptivePortalActiveMarker {
     <#
     .SYNOPSIS
     Reads the captive portal active marker file and returns its payload when the marker is valid and unexpired.
+    .DESCRIPTION
+    File read+parse delegates to the shared Read-OpenPathCaptivePortalStateJson
+    (CaptivePortal.StateFiles.ps1). The active/expiry filtering and the
+    Path/LastWriteTimeUtc annotation are native-host semantics and stay here.
     #>
     $markerPath = 'C:\OpenPath\data\captive-portal-active.json'
     if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
         $markerPath = Join-Path (Join-Path $script:OpenPathRoot 'data') 'captive-portal-active.json'
     }
 
-    if (-not (Test-Path $markerPath -ErrorAction SilentlyContinue)) {
+    $payload = Read-OpenPathCaptivePortalStateJson -Path $markerPath
+    if (-not $payload) {
         return $null
     }
 
     try {
-        $payload = Get-Content -Path $markerPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         if ($payload.PSObject.Properties['active'] -and -not [bool]$payload.active) {
             return $null
         }
@@ -547,16 +551,7 @@ function Get-NativeHostCaptivePortalObservation {
         $observationPath = Join-Path (Join-Path $script:OpenPathRoot 'data') 'captive-portal-observation.json'
     }
 
-    if (-not (Test-Path $observationPath -ErrorAction SilentlyContinue)) {
-        return $null
-    }
-
-    try {
-        return (Get-Content -Path $observationPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
-    }
-    catch {
-        return $null
-    }
+    return (Read-OpenPathCaptivePortalStateJson -Path $observationPath)
 }
 
 function Test-NativeHostCaptivePortalObservationRecent {
