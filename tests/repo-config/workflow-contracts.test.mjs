@@ -1798,6 +1798,53 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
     'linux-contract-scenarios should run only for contract-scenario relevant changes'
   );
 
+  const windowsContractBlock = extractWorkflowJobBlock(e2eWorkflow, 'windows-contract-scenarios');
+  assert.ok(
+    windowsContractBlock.includes(
+      "needs.detect-relevant-changes.outputs.windows_contract_scenarios == 'true'"
+    ),
+    'windows-contract-scenarios should run only for contract-scenario relevant changes'
+  );
+  assert.ok(
+    windowsContractBlock.includes("OPENPATH_CONTRACT_REAL_FIREWALL: '1'"),
+    'only the lab job may arm the real-firewall guard for the live contract rung'
+  );
+  assert.ok(
+    windowsContractBlock.includes('acquire-shared-windows-runner-lock.ps1') &&
+      windowsContractBlock.includes('release-shared-windows-runner-lock.ps1') &&
+      windowsContractBlock.includes('reset-self-hosted-windows-runner.ps1'),
+    'windows-contract-scenarios must follow the shared-runner lock/reset pattern'
+  );
+  assert.ok(
+    windowsContractBlock.includes('runs-on: [self-hosted, Windows, X64, proxmox, openpath]'),
+    'windows-contract-scenarios should run on the pinned OpenPath self-hosted Windows runner'
+  );
+  assert.ok(
+    windowsContractBlock.includes('run-windows-contract-scenarios.ps1'),
+    'windows-contract-scenarios should invoke the guarded live contract-scenario harness'
+  );
+  assert.ok(
+    windowsContractBlock.includes('actions/upload-artifact@v7') &&
+      windowsContractBlock.includes('tests/e2e/artifacts/windows-contract-scenarios'),
+    'windows-contract-scenarios should upload live contract-scenario evidence artifacts'
+  );
+  const windowsContractRunStep = windowsContractBlock
+    .split(/\n {6}- name: /)
+    .find((step) => step.startsWith('Run Windows contract scenarios'));
+  assert.ok(
+    windowsContractRunStep,
+    'windows-contract-scenarios should have a Run Windows contract scenarios step'
+  );
+  assert.ok(
+    !windowsContractRunStep.includes('continue-on-error'),
+    'windows-contract-scenarios test step must not swallow failures with continue-on-error'
+  );
+  assert.ok(
+    e2eWorkflow.includes('needs.windows-contract-scenarios.result') &&
+      e2eWorkflow.includes('Windows Contract Scenarios'),
+    'E2E summary should report and gate the Windows contract-scenarios lab lane'
+  );
+
   assert.ok(
     windowsStudentPolicyBlock.includes('name: Prepare self-hosted Windows runner state') &&
       windowsStudentPolicyBlock.includes('name: Restore self-hosted Windows runner state') &&

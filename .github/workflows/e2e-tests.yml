@@ -551,6 +551,61 @@ jobs:
           retention-days: 7
 
   # ============================================
+  # Windows Contract Scenarios (real firewall, lab runner only)
+  # ============================================
+  windows-contract-scenarios:
+    name: Windows Contract Scenarios (lab)
+    runs-on: [self-hosted, Windows, X64, proxmox, openpath]
+    timeout-minutes: 30
+    needs: detect-relevant-changes
+    if: needs.detect-relevant-changes.outputs.windows_contract_scenarios == 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Acquire shared Windows runner lock
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/acquire-shared-windows-runner-lock.ps1
+
+      - name: Prepare self-hosted Windows runner state
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/reset-self-hosted-windows-runner.ps1
+
+      - name: Run Windows contract scenarios (real firewall)
+        shell: pwsh
+        env:
+          OPENPATH_CONTRACT_REAL_FIREWALL: '1'
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-contract-scenarios.ps1
+
+      - name: Restore self-hosted Windows runner state
+        if: always()
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/reset-self-hosted-windows-runner.ps1
+
+      - name: Release shared Windows runner lock
+        if: always()
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/release-shared-windows-runner-lock.ps1
+
+      - name: Upload Windows contract scenario evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-contract-scenarios-artifacts-${{ github.run_id }}
+          path: tests/e2e/artifacts/windows-contract-scenarios
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ============================================
   # Summary Job
   # ============================================
   e2e-summary:
@@ -565,6 +620,7 @@ jobs:
         windows-student-policy,
         windows-captive-portal-navigation,
         linux-contract-scenarios,
+        windows-contract-scenarios,
       ]
     if: always()
 
@@ -636,6 +692,14 @@ jobs:
             echo "❌ Linux Contract Scenarios: ${{ needs.linux-contract-scenarios.result }}"
           fi
 
+          if [[ "${{ needs.windows-contract-scenarios.result }}" == "success" ]]; then
+            echo "✅ Windows Contract Scenarios: PASSED"
+          elif [[ "${{ needs.windows-contract-scenarios.result }}" == "skipped" ]]; then
+            echo "⏭️ Windows Contract Scenarios: SKIPPED"
+          else
+            echo "❌ Windows Contract Scenarios: ${{ needs.windows-contract-scenarios.result }}"
+          fi
+
           if [[ "${{ needs.detect-relevant-changes.result }}" == "failure" ]] || \
              [[ "${{ needs.detect-relevant-changes.result }}" == "cancelled" ]] || \
              [[ "${{ needs.linux-e2e.result }}" == "failure" ]] || \
@@ -649,6 +713,8 @@ jobs:
              [[ "${{ needs.windows-captive-portal-navigation.result }}" == "cancelled" ]] || \
              [[ "${{ needs.linux-contract-scenarios.result }}" == "failure" ]] || \
              [[ "${{ needs.linux-contract-scenarios.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.windows-contract-scenarios.result }}" == "failure" ]] || \
+             [[ "${{ needs.windows-contract-scenarios.result }}" == "cancelled" ]] || \
               [[ "${{ needs.windows-e2e.result }}" == "cancelled" ]]; then
             echo ""
             echo "❌ E2E Tests FAILED"
