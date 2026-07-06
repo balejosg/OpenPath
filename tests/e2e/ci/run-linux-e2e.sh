@@ -701,6 +701,17 @@ main() {
     result=$(docker exec "$CONTAINER_NAME" systemctl show e2e-tests.service --property=Result --value 2>/dev/null || echo "failed")
     echo "Service Result: $result"
 
+    if [ "$CONTRACT_SCENARIOS" = "1" ]; then
+        mkdir -p "$CONTRACT_ARTIFACT_DIR"
+        docker cp "$CONTAINER_NAME:/openpath/tests/e2e/artifacts/contract-scenarios/." \
+            "$CONTRACT_ARTIFACT_DIR/" 2>/dev/null || true
+        if [ ! -s "$CONTRACT_ARTIFACT_DIR/summary.txt" ]; then
+            echo "::warning::contract-scenario evidence missing or empty at $CONTRACT_ARTIFACT_DIR"
+        fi
+        echo ""
+        echo "Contract scenario evidence: $CONTRACT_ARTIFACT_DIR"
+    fi
+
     if [ "$result" != "success" ]; then
         echo "E2E tests failed (result: $result)"
         debug_container
@@ -708,11 +719,6 @@ main() {
     fi
 
     if [ "$CONTRACT_SCENARIOS" = "1" ]; then
-        mkdir -p "$CONTRACT_ARTIFACT_DIR"
-        docker cp "$CONTAINER_NAME:/openpath/tests/e2e/artifacts/contract-scenarios/." \
-            "$CONTRACT_ARTIFACT_DIR/" 2>/dev/null || true
-        echo ""
-        echo "Contract scenario evidence: $CONTRACT_ARTIFACT_DIR"
         echo "Linux contract scenarios passed"
         return 0
     fi
