@@ -1,41 +1,34 @@
-# OpenPath - Captive portal recovery task
+# SYSTEM-side captive-portal recovery queue runner.
+# Consumed by scripts\Recover-CaptivePortal.ps1 (SYSTEM scheduled task
+# OpenPath-CaptivePortalRecovery). The unelevated native host only WRITES
+# request files (NativeHost.CaptivePortalRecoveryQueue.ps1); this file owns
+# reading, validating, executing, and answering them. Moving it here makes the
+# request-id guard (Test-OpenPathRecoveryRequestId) and the result/progress
+# writers unit-testable by plain dot-source instead of character-offset carving.
+# The captive-portal state probe (Get-OpenPathCaptivePortalRecoveryState) stays
+# in the entry script on purpose: the direct-runner navigation harness patches
+# that function's body by literal text replacement.
+# This file is in the SYSTEM integrity baseline (Common.Integrity.ps1).
 
-#Requires -RunAsAdministrator
-[CmdletBinding()]
-param()
+if (-not (Get-Command -Name 'Get-OpenPathCaptivePortalRecoveryTransitionMarkerSummary' -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $recoveryTransitionPath = Join-Path $PSScriptRoot 'CaptivePortal.RecoveryTransition.ps1'
+    if (Test-Path $recoveryTransitionPath -ErrorAction SilentlyContinue) {
+        . $recoveryTransitionPath
+    }
+}
 
-$ErrorActionPreference = 'Stop'
+if (-not (Get-Command -Name 'Read-OpenPathCaptivePortalStateJson' -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $captivePortalStateFilesPath = Join-Path $PSScriptRoot 'CaptivePortal.StateFiles.ps1'
+    if (Test-Path $captivePortalStateFilesPath -ErrorAction SilentlyContinue) {
+        . $captivePortalStateFilesPath
+    }
+}
+
 $MaxRequestAgeSeconds = 60
 $RecentSuccessSeconds = 30
 $RecoveryDnsMaxAttempts = 1
 $RecoveryDnsDelayMilliseconds = 250
 $RecoveryDnsAttemptTimeoutSeconds = 1
-
-. (Join-Path $PSScriptRoot '..\lib\internal\WindowsRoot.ps1')
-$OpenPathRoot = Resolve-OpenPathWindowsRoot
-
-Import-Module "$OpenPathRoot\lib\ScriptBootstrap.psm1" -Force
-Initialize-OpenPathScriptSession `
-    -OpenPathRoot $OpenPathRoot `
-    -DependentModules @('DNS', 'Firewall', 'CaptivePortal') `
-    -RequiredCommands @(
-    'Write-OpenPathLog',
-    'Get-OpenPathCapabilityStoragePath',
-    'Get-OpenPathCaptivePortalMarker',
-    'Get-OpenPathCaptivePortalAllowedHosts',
-    'Select-OpenPathCaptivePortalAllowedRecoveryHosts',
-    'Get-OpenPathConfiguredCaptivePortalDomains',
-    'Get-OpenPathCaptivePortalProtectedModeExitEvidence',
-    'Test-OpenPathCaptivePortalState',
-    'Test-OpenPathCaptivePortalModeActive',
-    'Update-OpenPathCaptivePortalObservation',
-    'Enable-OpenPathCaptivePortalMode',
-    'Disable-OpenPathCaptivePortalMode'
-) `
-    -ScriptName 'Recover-CaptivePortal.ps1' | Out-Null
-
-. (Join-Path $OpenPathRoot 'lib\internal\CaptivePortal.RecoveryTransition.ps1')
-. (Join-Path $OpenPathRoot 'lib\internal\CaptivePortal.RecoveryRunner.ps1')
 
 function Get-OpenPathRecoveryUtcNow {
     return [DateTime]::UtcNow
@@ -123,13 +116,7 @@ function Get-OpenPathRecentCaptivePortalRecoverySuccess {
 
     $activeMarkerPath = Join-Path (Join-Path $OpenPathRoot 'data') 'captive-portal-active.json'
     if ((Test-Path $activeMarkerPath -ErrorAction SilentlyContinue) -and (($NowUtc - (Get-Item $activeMarkerPath).LastWriteTimeUtc).TotalSeconds -le $RecentSuccessSeconds)) {
-        $marker = $null
-        try {
-            $marker = Get-Content $activeMarkerPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        }
-        catch {
-            $marker = $null
-        }
+        $marker = Read-OpenPathCaptivePortalStateJson -Path $activeMarkerPath
         return [PSCustomObject]@{
             Source = 'active-marker'
             Path = $activeMarkerPath
@@ -221,12 +208,6 @@ function Write-OpenPathCaptivePortalRecoveryProgress {
     $targetPath = Join-Path $ProgressPath "$RequestId.json"
     $progress | ConvertTo-Json -Depth 6 | Set-Content -Path $targetPath -Encoding ASCII
     return $targetPath
-}
-
-function Get-OpenPathCaptivePortalRecoveryState {
-    param([Parameter(Mandatory = $true)][DateTime]$NowUtc)
-
-    return (Test-OpenPathCaptivePortalState -TimeoutSec 3)
 }
 
 function Get-OpenPathRequestedCaptivePortalRecoveryState {
@@ -590,17 +571,30 @@ function Invoke-OpenPathCaptivePortalRecoveryRequest {
     }
 }
 
-$queuePath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue -OpenPathRoot $OpenPathRoot
-$resultPath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult -OpenPathRoot $OpenPathRoot
-$progressPath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryProgress -OpenPathRoot $OpenPathRoot
-$nowUtc = Get-OpenPathRecoveryUtcNow
-$requestEnvelopes = @(Get-OpenPathCaptivePortalRecoveryRequests -QueuePath $queuePath)
+function Invoke-OpenPathCaptivePortalRecoveryQueue {
+    <#
+    .SYNOPSIS
+        Drains the captive-portal recovery request queue (SYSTEM context).
+    .PARAMETER OpenPathRoot
+        Resolved OpenPath install root (passed by the entry script).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OpenPathRoot
+    )
 
-if ($requestEnvelopes.Count -eq 0) {
-    Write-OpenPathLog 'Captive portal recovery: no pending request found' -Level WARN
-    return
-}
+    $queuePath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryQueue -OpenPathRoot $OpenPathRoot
+    $resultPath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryResult -OpenPathRoot $OpenPathRoot
+    $progressPath = Get-OpenPathCapabilityStoragePath -Name CaptivePortalRecoveryProgress -OpenPathRoot $OpenPathRoot
+    $nowUtc = Get-OpenPathRecoveryUtcNow
+    $requestEnvelopes = @(Get-OpenPathCaptivePortalRecoveryRequests -QueuePath $queuePath)
 
-foreach ($requestEnvelope in $requestEnvelopes) {
-    Invoke-OpenPathCaptivePortalRecoveryRequest -RequestEnvelope $requestEnvelope -ResultPath $resultPath -ProgressPath $progressPath -NowUtc $nowUtc
+    if ($requestEnvelopes.Count -eq 0) {
+        Write-OpenPathLog 'Captive portal recovery: no pending request found' -Level WARN
+        return
+    }
+
+    foreach ($requestEnvelope in $requestEnvelopes) {
+        Invoke-OpenPathCaptivePortalRecoveryRequest -RequestEnvelope $requestEnvelope -ResultPath $resultPath -ProgressPath $progressPath -NowUtc $nowUtc
+    }
 }

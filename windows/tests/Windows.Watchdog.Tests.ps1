@@ -1575,6 +1575,22 @@ Describe "Watchdog Script" {
                 'Get-OpenPathConfiguredCaptivePortalDomains'
             )
         }
+
+        It "Recovery runner leaf dot-sources standalone and rejects traversal request ids" {
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1")
+            Get-Command Invoke-OpenPathCaptivePortalRecoveryQueue -ErrorAction Stop | Out-Null
+            Test-OpenPathRecoveryRequestId -RequestId '..\..\evil' | Should -BeFalse
+            Test-OpenPathRecoveryRequestId -RequestId ([Guid]::NewGuid().ToString('N')) | Should -BeTrue
+            $MaxRequestAgeSeconds | Should -Be 60
+            $RecentSuccessSeconds | Should -Be 30
+        }
+
+        It "Recovery runner leaf never defines the harness-patched state probe" {
+            $leafContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "CaptivePortal.RecoveryRunner.ps1") -Raw
+            $leafContent | Should -Not -Match 'function Get-OpenPathCaptivePortalRecoveryState'
+            $leafContent | Should -Not -Match 'captive-portal-recovery-fixture-state\.json'
+            $leafContent | Should -Not -Match 'direct-runner-captive-portal-navigation'
+        }
     }
 
     Context "Integrity checks" {
@@ -1612,7 +1628,8 @@ Describe "Watchdog Script" {
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 '$script:OpenPathRoot\scripts\Apply-RuntimeDependencyQueue.ps1',
-                '$script:OpenPathRoot\scripts\Recover-CaptivePortal.ps1'
+                '$script:OpenPathRoot\scripts\Recover-CaptivePortal.ps1',
+                '$script:OpenPathRoot\lib\internal\CaptivePortal.RecoveryRunner.ps1'
             )
         }
 
