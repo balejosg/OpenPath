@@ -702,6 +702,30 @@ youtube.com/watch?v=abc
         }
     }
 
+    Context "Get-OpenPathWhitelistSectionsFromLines" {
+        It "Parses pre-split lines including CR remnants identically to the file parser" {
+            $sections = InModuleScope Common {
+                Get-OpenPathWhitelistSectionsFromLines -Lines @(
+                    "#DESACTIVADO`r",
+                    '## WHITELIST',
+                    "allowed.example`r",
+                    '## BLOCKED-SUBDOMAINS',
+                    'ads.allowed.example'
+                )
+            }
+            $sections.IsDisabled | Should -BeTrue
+            $sections.Whitelist | Should -Be @('allowed.example')
+            $sections.BlockedSubdomains | Should -Be @('ads.allowed.example')
+        }
+
+        It "Returns empty sections for null or empty input" {
+            $sections = InModuleScope Common { Get-OpenPathWhitelistSectionsFromLines -Lines @() }
+            $sections.IsDisabled | Should -BeFalse
+            @($sections.Whitelist).Count | Should -Be 0
+            @($sections.AllowedPaths).Count | Should -Be 0
+        }
+    }
+
     Context "ConvertTo-OpenPathWhitelistFileContent" {
         It "Serializes whitelist, blocked subdomains, and blocked paths sections" {
             $content = InModuleScope Common {

@@ -1,3 +1,10 @@
+if (-not (Get-Command -Name 'Get-OpenPathWhitelistSectionsFromLines' -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $whitelistSectionsPath = Join-Path $PSScriptRoot 'Common.Whitelist.Sections.ps1'
+    if (Test-Path $whitelistSectionsPath -ErrorAction SilentlyContinue) {
+        . $whitelistSectionsPath
+    }
+}
+
 function Get-ValidWhitelistDomainsFromFile {
     <#
     .SYNOPSIS
@@ -17,63 +24,6 @@ function Get-ValidWhitelistDomainsFromFile {
             ForEach-Object { $_.Trim() } |
             Where-Object { Test-OpenPathDomainFormat -Domain $_ }
     )
-}
-
-function Get-OpenPathWhitelistSectionsFromFile {
-    <#
-    .SYNOPSIS
-        Returns all supported whitelist sections from a local whitelist file.
-    .PARAMETER Path
-        Full path to whitelist file
-    #>
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-
-    $result = [ordered]@{
-        Whitelist = @()
-        BlockedSubdomains = @()
-        BlockedPaths = @()
-        AllowedPaths = @()
-        IsDisabled = $false
-    }
-
-    if (-not (Test-Path $Path)) {
-        return [PSCustomObject]$result
-    }
-
-    $section = 'WHITELIST'
-    foreach ($line in Get-Content $Path -ErrorAction SilentlyContinue) {
-        $trimmed = ([string]$line).Trim()
-
-        if (-not $trimmed) {
-            continue
-        }
-
-        if ($trimmed -match '^#\s*DESACTIVADO\b') {
-            $result.IsDisabled = $true
-            continue
-        }
-
-        if ($trimmed -match '^##\s*(.+)$') {
-            $section = $Matches[1].Trim().ToUpperInvariant()
-            continue
-        }
-
-        if ($trimmed.StartsWith('#')) {
-            continue
-        }
-
-        switch ($section) {
-            'WHITELIST' { $result.Whitelist += $trimmed }
-            'BLOCKED-SUBDOMAINS' { $result.BlockedSubdomains += $trimmed }
-            'BLOCKED-PATHS' { $result.BlockedPaths += $trimmed }
-            'ALLOWED-PATHS' { $result.AllowedPaths += $trimmed }
-        }
-    }
-
-    return [PSCustomObject]$result
 }
 
 function ConvertTo-OpenPathWhitelistFileContent {
