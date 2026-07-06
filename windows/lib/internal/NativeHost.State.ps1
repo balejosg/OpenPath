@@ -1,3 +1,19 @@
+if (-not (Get-Command -Name 'Get-OpenPathWhitelistSectionsFromFile' -ErrorAction SilentlyContinue)) {
+    $whitelistSectionsCandidatePaths = @()
+    if ($PSScriptRoot) {
+        $whitelistSectionsCandidatePaths += (Join-Path $PSScriptRoot 'Common.Whitelist.Sections.ps1')
+    }
+    if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) {
+        $whitelistSectionsCandidatePaths += (Join-Path $script:OpenPathRoot 'lib\internal\Common.Whitelist.Sections.ps1')
+    }
+    foreach ($whitelistSectionsCandidatePath in ($whitelistSectionsCandidatePaths | Where-Object { $_ } | Select-Object -Unique)) {
+        if (Test-Path $whitelistSectionsCandidatePath -ErrorAction SilentlyContinue) {
+            . $whitelistSectionsCandidatePath
+            break
+        }
+    }
+}
+
 function Read-NativeState {
     # reads and parses the native host state json file; returns an empty object when the file is missing or unreadable.
     if (-not (Test-Path $script:StatePath)) {
@@ -14,45 +30,11 @@ function Read-NativeState {
 }
 
 function Get-WhitelistSections {
-    # parses the whitelist file into Whitelist, BlockedSubdomains, BlockedPaths, and AllowedPaths sections; returns empty section arrays when the file is absent.
-    $result = [ordered]@{
-        Whitelist = @()
-        BlockedSubdomains = @()
-        BlockedPaths = @()
-        AllowedPaths = @()
-    }
-
-    if (-not (Test-Path $script:WhitelistPath)) {
-        return [PSCustomObject]$result
-    }
-
-    $section = 'WHITELIST'
-    foreach ($line in Get-Content $script:WhitelistPath -ErrorAction SilentlyContinue) {
-        $trimmed = [string]$line
-        $trimmed = $trimmed.Trim()
-
-        if (-not $trimmed) {
-            continue
-        }
-
-        if ($trimmed -match '^##\s*(.+)$') {
-            $section = $Matches[1].Trim().ToUpperInvariant()
-            continue
-        }
-
-        if ($trimmed.StartsWith('#')) {
-            continue
-        }
-
-        switch ($section) {
-            'WHITELIST' { $result.Whitelist += $trimmed }
-            'BLOCKED-SUBDOMAINS' { $result.BlockedSubdomains += $trimmed }
-            'BLOCKED-PATHS' { $result.BlockedPaths += $trimmed }
-            'ALLOWED-PATHS' { $result.AllowedPaths += $trimmed }
-        }
-    }
-
-    return [PSCustomObject]$result
+    # returns the native whitelist mirror sections via the shared owner parser
+    # (Common.Whitelist.Sections.ps1). Unlike the old inline copy this includes
+    # IsDisabled (additive; the entry parsing is byte-identical because sentinel
+    # lines start with '#' and were already skipped as comments).
+    return (Get-OpenPathWhitelistSectionsFromFile -Path $script:WhitelistPath)
 }
 
 function Resolve-DomainIp {

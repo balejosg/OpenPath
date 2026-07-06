@@ -515,7 +515,11 @@ Describe "Browser Module - Native Host" {
             $stateContent = Get-Content $nativeStatePath -Raw
             $actionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Shared.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.MessageDispatch.ps1") -Raw)
 
+            $whitelistSectionsContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Whitelist.Sections.ps1") -Raw
             Assert-ContentContainsAll -Content $stateContent -Needles @(
+                'Get-OpenPathWhitelistSectionsFromFile -Path $script:WhitelistPath'
+            )
+            Assert-ContentContainsAll -Content $whitelistSectionsContent -Needles @(
                 'BlockedSubdomains = @()',
                 '''BLOCKED-SUBDOMAINS'' { $result.BlockedSubdomains += $trimmed }'
             )
@@ -533,8 +537,12 @@ Describe "Browser Module - Native Host" {
             $stateContent = Get-Content $nativeStatePath -Raw
             $actionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Shared.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.MessageDispatch.ps1") -Raw)
 
-            # NativeHost.State.ps1 must declare and populate AllowedPaths
+            # The shared owner parser must declare and populate AllowedPaths
+            $whitelistSectionsContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Whitelist.Sections.ps1") -Raw
             Assert-ContentContainsAll -Content $stateContent -Needles @(
+                'Get-OpenPathWhitelistSectionsFromFile -Path $script:WhitelistPath'
+            )
+            Assert-ContentContainsAll -Content $whitelistSectionsContent -Needles @(
                 'AllowedPaths = @()',
                 '''ALLOWED-PATHS'' { $result.AllowedPaths += $trimmed }'
             )
@@ -549,8 +557,8 @@ Describe "Browser Module - Native Host" {
             )
 
             # ALLOWED-PATHS must not bleed into WHITELIST entries (the section switch must route it away)
-            $stateContent | Should -Match "'ALLOWED-PATHS'"
-            $stateContent | Should -Not -Match "ALLOWED-PATHS.*Whitelist\s*\+="
+            $whitelistSectionsContent | Should -Match "'ALLOWED-PATHS'"
+            $whitelistSectionsContent | Should -Not -Match "ALLOWED-PATHS.*Whitelist\s*\+="
         }
 
         It "Supports local runtime dependency overlay action without full URL fields" {
