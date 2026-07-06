@@ -590,10 +590,7 @@ Describe "Browser Module - Native Host" {
                 '$script:OpenPathRuntimeDependencyBatchMaxEntries',
                 'function Invoke-NativeHostLocalRuntimeDependencyAction',
                 'function Invoke-NativeHostLocalRuntimeDependencyBatchAction',
-                'function Get-NativeHostRuntimeDependencyQueuePath',
-                'function Find-NativeHostRuntimeDependencyQueueRequest',
-                'function Write-NativeHostRuntimeDependencyQueueRequest',
-                'Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue',
+                'Write-OpenPathRuntimeDependencyQueueRequest `',
                 'Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay',
                 'anchorHost',
                 'dependencyHost',
@@ -612,7 +609,8 @@ Describe "Browser Module - Native Host" {
             Assert-ContentContainsAll -Content $runtimeDependencyQueueContent -Needles @(
                 'RuntimeDependency.Protocol.ps1',
                 'version = $script:OpenPathRuntimeDependencyQueueVersion',
-                'source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal'
+                'source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal',
+                'Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyQueue'
             )
             Assert-ContentContainsAll -Content $runtimeDependencyOverlayContent -Needles @(
                 'RuntimeDependency.Protocol.ps1',
@@ -636,7 +634,9 @@ Describe "Browser Module - Native Host" {
             $nativeHostActionsContent | Should -Not -Match 'Write-NativeHostRuntimeDependencyOverlay'
             $nativeHostActionsContent | Should -Not -Match 'Read-NativeHostRuntimeDependencyOverlay'
             $nativeHostActionsContent | Should -Not -Match 'Update-AcrylicHost -WhitelistedDomains'
-            $nativeHostActionsContent | Should -Not -Match '(?s)function Find-NativeHostRuntimeDependencyQueueRequest.*?foreach \(\$requestFile'
+            $nativeHostActionsContent | Should -Not -Match 'function Find-NativeHostRuntimeDependencyQueueRequest'
+            $nativeHostActionsContent | Should -Not -Match 'function Write-NativeHostRuntimeDependencyQueueRequest'
+            $nativeHostActionsContent | Should -Not -Match 'function Get-NativeHostMicrosoftSystemRuntimeDependencyRoots'
             $nativeHostActionsContent | Should -Not -Match '\[string\]\$Host\b'
             $nativeHostActionsContent | Should -Not -Match 'foreach \(\$host in'
             $nativeHostActionsContent | Should -Not -Match '/api/requests/auto'
@@ -701,7 +701,7 @@ Describe "Browser Module - Native Host" {
             ).Value
             $recoveryFunction | Should -Not -Match 'Global\\OpenPathNativeWhitelistUpdateTrigger'
             $recoveryFunction | Should -Not -Match 'Invoke-UpdateTask'
-            $recoveryFunction | Should -Not -Match 'Write-NativeHostRuntimeDependencyQueueRequest'
+            $recoveryFunction | Should -Not -Match 'Write-(?:NativeHost|OpenPath)RuntimeDependencyQueueRequest'
             $recoveryFunction | Should -Not -Match 'Update-AcrylicHost'
             $recoveryFunction | Should -Not -Match 'whitelistUrl'
             $recoveryFunction | Should -Not -Match 'cookies?'
