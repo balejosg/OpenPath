@@ -557,6 +557,53 @@ Describe "Common Module" {
         }
     }
 
+    Context "Domain catalog characterization" {
+        It "Pins the captive portal probe domain list" {
+            InModuleScope Common { Get-OpenPathCaptivePortalProbeDomains } | Should -Be @(
+                'detectportal.firefox.com',
+                'connectivity-check.ubuntu.com',
+                'captive.apple.com',
+                'www.msftconnecttest.com',
+                'msftconnecttest.com',
+                'clients3.google.com'
+            )
+        }
+
+        It "Pins the Microsoft system domain roots" {
+            $domains = InModuleScope Common { Get-OpenPathMicrosoftSystemDomains }
+            $domains | Should -HaveCount 38
+            $domains[0] | Should -Be '*.windowsupdate.com'
+            $domains | Should -Contain 'msftconnecttest.com'
+            $domains | Should -Contain 'blob.core.windows.net'
+        }
+
+        It "Pins the Firefox system domain roots" {
+            $domains = InModuleScope Common { Get-OpenPathFirefoxSystemDomains }
+            $domains | Should -HaveCount 15
+            $domains[0] | Should -Be 'aus5.mozilla.org'
+            $domains | Should -Contain 'clients2.googleusercontent.com'
+        }
+
+        It "Pins the standalone runtime-dependency protected floor at 58 hosts" {
+            # Fresh pwsh so no Common export leaks into the Get-Command guards inside
+            # Get-OpenPathRuntimeDependencyProtectedHosts (this reproduces the native
+            # host context, where only the Policy floor applies).
+            $policyPath = Join-Path $PSScriptRoot '..' 'lib' 'internal' 'RuntimeDependency.Policy.ps1'
+            $script = "`$ErrorActionPreference='Stop'; . '$policyPath'; `$h = @(Get-OpenPathRuntimeDependencyProtectedHosts); `$h.Count"
+            $count = & pwsh -NoProfile -Command $script
+            [int]($count | Select-Object -Last 1) | Should -Be 58
+        }
+
+        It "Standalone protected floor covers the probe, Microsoft, Firefox, and NTP anchors" {
+            $policyPath = Join-Path $PSScriptRoot '..' 'lib' 'internal' 'RuntimeDependency.Policy.ps1'
+            $script = "`$ErrorActionPreference='Stop'; . '$policyPath'; @(Get-OpenPathRuntimeDependencyProtectedHosts) -join ','"
+            $joined = (& pwsh -NoProfile -Command $script | Select-Object -Last 1)
+            foreach ($expected in @('detectportal.firefox.com', 'msftconnecttest.com', 'windowsupdate.com', 'graph.microsoft.com', 'blob.core.windows.net', 'aus5.mozilla.org', 'clients2.googleusercontent.com', 'time.windows.com')) {
+                $joined | Should -Match ([regex]::Escape($expected))
+            }
+        }
+    }
+
     Context "Get-ValidWhitelistDomainsFromFile" {
         It "Returns valid domains and ignores invalid entries" {
             $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-domains-" + [Guid]::NewGuid().ToString() + ".txt")
