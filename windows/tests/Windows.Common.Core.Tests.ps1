@@ -645,6 +645,61 @@ youtube.com/watch?v=abc
                 Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
             }
         }
+
+        It "Flags IsDisabled for a case-insensitive spaced sentinel on any line and drops the line" {
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-sentinel-" + [Guid]::NewGuid().ToString() + ".txt")
+            try {
+                "## WHITELIST`nallowed.example`n# desactivado`nsecond.example" | Set-Content $tempFile -Encoding UTF8
+                $sections = InModuleScope Common -Parameters @{ TempFile = $tempFile } {
+                    Get-OpenPathWhitelistSectionsFromFile -Path $TempFile
+                }
+                $sections.IsDisabled | Should -BeTrue
+                $sections.Whitelist | Should -Contain 'allowed.example'
+                $sections.Whitelist | Should -Contain 'second.example'
+                $sections.Whitelist | Should -Not -Contain '# desactivado'
+            }
+            finally { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
+        }
+
+        It "Routes entries under an unknown section header away from every known section" {
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-unknown-header-" + [Guid]::NewGuid().ToString() + ".txt")
+            try {
+                "## WHITELIST`nallowed.example`n## FUTURE-SECTION`ndropped.example" | Set-Content $tempFile -Encoding UTF8
+                $sections = InModuleScope Common -Parameters @{ TempFile = $tempFile } {
+                    Get-OpenPathWhitelistSectionsFromFile -Path $TempFile
+                }
+                $sections.Whitelist | Should -Not -Contain 'dropped.example'
+                $sections.BlockedSubdomains | Should -HaveCount 0
+                $sections.BlockedPaths | Should -HaveCount 0
+                $sections.AllowedPaths | Should -HaveCount 0
+            }
+            finally { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
+        }
+
+        It "Uppercases section headers invariantly so lowercase headers are recognized" {
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-lowercase-header-" + [Guid]::NewGuid().ToString() + ".txt")
+            try {
+                "## whitelist`nallowed.example`n## blocked-subdomains`nads.allowed.example" | Set-Content $tempFile -Encoding UTF8
+                $sections = InModuleScope Common -Parameters @{ TempFile = $tempFile } {
+                    Get-OpenPathWhitelistSectionsFromFile -Path $TempFile
+                }
+                $sections.Whitelist | Should -Contain 'allowed.example'
+                $sections.BlockedSubdomains | Should -Contain 'ads.allowed.example'
+            }
+            finally { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
+        }
+
+        It "Trims whitespace-padded entry lines" {
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-trim-" + [Guid]::NewGuid().ToString() + ".txt")
+            try {
+                "## WHITELIST`n  padded.example  " | Set-Content $tempFile -Encoding UTF8
+                $sections = InModuleScope Common -Parameters @{ TempFile = $tempFile } {
+                    Get-OpenPathWhitelistSectionsFromFile -Path $TempFile
+                }
+                $sections.Whitelist | Should -Contain 'padded.example'
+            }
+            finally { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
+        }
     }
 
     Context "ConvertTo-OpenPathWhitelistFileContent" {
