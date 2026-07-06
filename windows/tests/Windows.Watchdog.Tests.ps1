@@ -925,9 +925,11 @@ Describe "Watchdog Script" {
         It "Keeps connectivity-probe domains resolvable in the limited-mode affinity mask" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "CaptivePortal.psm1"
             $domainsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Domains.ps1"
+            $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Domains.Catalog.ps1"
             $commonPath = Join-Path $PSScriptRoot ".." "lib" "Common.psm1"
             $moduleContent = Get-Content $modulePath -Raw
             $domainsContent = Get-Content $domainsPath -Raw
+            $catalogContent = Get-Content $catalogPath -Raw
             $commonContent = Get-Content $commonPath -Raw
 
             # Without the probe domains in the limited-mode Acrylic mask the
@@ -939,8 +941,10 @@ Describe "Watchdog Script" {
                 'Get-OpenPathCaptivePortalProbeDomains',
                 '@(Get-AcrylicExactAffinityMaskEntries -Domains $probeDomains)'
             )
+            Assert-ContentContainsAll -Content $catalogContent -Needles @(
+                'function Get-OpenPathCaptivePortalProbeDomains'
+            )
             Assert-ContentContainsAll -Content $domainsContent -Needles @(
-                'function Get-OpenPathCaptivePortalProbeDomains',
                 'Domains = @(Get-OpenPathCaptivePortalProbeDomains)'
             )
             $commonContent | Should -Match "'Get-OpenPathCaptivePortalProbeDomains',"
