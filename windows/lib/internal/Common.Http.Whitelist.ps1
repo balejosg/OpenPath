@@ -153,23 +153,3 @@ function Get-OpenPathFromUrl {
 
     return $result
 }
-
-function Get-OpenPathMachineTokenFromWhitelistUrl {
-    <#
-    .SYNOPSIS
-        Extracts machine token from tokenized whitelist URL
-    #>
-    param(
-        [string]$WhitelistUrl
-    )
-
-    if (-not $WhitelistUrl) {
-        return $null
-    }
-
-    if ($WhitelistUrl -match '/w/([^/]+)/') {
-        return [string]$Matches[1]
-    }
-
-    return $null
-}

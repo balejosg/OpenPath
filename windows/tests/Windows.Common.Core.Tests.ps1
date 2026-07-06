@@ -448,6 +448,40 @@ Describe "Common Module" {
             $token | Should -Be 'abc123token'
         }
 
+        It "URL-unescapes percent-encoded machine tokens" {
+            InModuleScope Common {
+                Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl 'https://api.example.com/w/abc%2Btoken/whitelist.txt'
+            } | Should -Be 'abc+token'
+        }
+
+        It "Ignores query strings after the whitelist path" {
+            InModuleScope Common {
+                Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl 'https://api.example.com/w/tok1/whitelist.txt?cache=1'
+            } | Should -Be 'tok1'
+        }
+
+        It "Returns nothing when the URL path does not end in /whitelist.txt" {
+            InModuleScope Common {
+                Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl 'https://api.example.com/w/tok1/'
+            } | Should -BeNullOrEmpty
+        }
+
+        It "Returns nothing for relative or malformed URLs" {
+            InModuleScope Common {
+                Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl 'not a url /w/tok1/whitelist.txt extra'
+            } | Should -BeNullOrEmpty
+        }
+
+        It "Update.Runtime shares the canonical machine-token implementation" {
+            $updateRuntime = Import-Module (Join-Path $PSScriptRoot '..' 'lib' 'Update.Runtime.psm1') -Force -PassThru
+            try {
+                & $updateRuntime { Get-OpenPathMachineTokenFromWhitelistUrl -WhitelistUrl 'https://api.example.com/w/abc%2Btoken/whitelist.txt' } | Should -Be 'abc+token'
+            }
+            finally {
+                Remove-Module $updateRuntime -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Builds protected domains from configured control-plane URLs and bootstrap hosts" {
             Mock Get-OpenPathConfig {
                 [PSCustomObject]@{

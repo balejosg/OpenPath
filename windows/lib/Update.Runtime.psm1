@@ -3,6 +3,7 @@
 $script:OpenPathUpdateRuntimeSessionInitialized = $false
 $script:OpenPathUpdateRuntimeRoot = ''
 . (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')
+. (Join-Path $PSScriptRoot 'internal\Common.MachineToken.ps1')
 
 function Import-OpenPathUpdateRuntimeHelper {
     <#
@@ -104,32 +105,6 @@ function Initialize-OpenPathUpdateRuntimeSession {
 
     $script:OpenPathUpdateRuntimeSessionInitialized = $true
     $script:OpenPathUpdateRuntimeRoot = $OpenPathRoot
-}
-
-function Get-OpenPathMachineTokenFromWhitelistUrl {
-    <#
-    .SYNOPSIS
-    Extracts the machine token path segment from a whitelist URL, returning an empty string when not present.
-    #>
-    [CmdletBinding()]
-    param([AllowNull()][string]$WhitelistUrl = '')
-
-    $candidate = ([string]$WhitelistUrl).Trim()
-    if (-not $candidate) { return '' }
-
-    try {
-        $uri = [System.Uri]::new($candidate)
-        $path = $uri.AbsolutePath
-        $match = [regex]::Match($path, '/w/([^/]+)/whitelist\.txt$', 'IgnoreCase')
-        if ($match.Success) {
-            return [System.Uri]::UnescapeDataString($match.Groups[1].Value)
-        }
-    }
-    catch {
-        Write-OpenPathLog "Could not parse machine token from whitelist URL: $_" -Level WARN
-    }
-
-    return ''
 }
 
 function Normalize-OpenPathMachineClientConfigDomains {

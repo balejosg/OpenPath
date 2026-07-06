@@ -17,6 +17,7 @@ $script:DomainPattern = '^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a
 . (Join-Path $script:InternalModulePath 'CapabilityStorage.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Redaction.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Config.ps1')
+. (Join-Path $script:InternalModulePath 'Common.MachineToken.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Domains.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Http.ps1')
 . (Join-Path $script:InternalModulePath 'Common.Whitelist.Sections.ps1')
