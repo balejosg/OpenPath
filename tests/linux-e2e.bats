@@ -733,7 +733,7 @@ EOF
     run grep -nF 'COPY runtime/ ./runtime/' "$PROJECT_DIR/tests/e2e/ci/run-linux-apt-contracts.sh"
     [ "$status" -eq 0 ]
 
-    run grep -nF 'mkdir -p "$tmp/linux" "$tmp/runtime" "$tmp/tests/e2e" "$tmp/firefox-extension" "$tmp/windows"' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
+    run grep -nF 'mkdir -p "$tmp/linux" "$tmp/runtime" "$tmp/tests/e2e" "$tmp/tests/contracts" "$tmp/firefox-extension" "$tmp/windows"' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
     [ "$status" -eq 0 ]
 
     run grep -nF 'cp -a "$PROJECT_ROOT/runtime/." "$tmp/runtime/"' "$PROJECT_DIR/tests/e2e/ci/run-linux-e2e.sh"
