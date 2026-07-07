@@ -817,3 +817,36 @@ EOF
     run grep -nF 'Chrome/Edge force-install is not available on unmanaged Windows; use store guidance, Firefox auto-install, or a managed CRX/update-manifest rollout.' "$PROJECT_DIR/windows/lib/install/Installer.Staging.ps1"
     [ "$status" -eq 0 ]
 }
+
+# ============== DNS-sinkhole <-> firewall contract single-owner pins ==============
+
+@test "sinkhole IP default literals have exactly one owner in linux/lib (defaults.conf)" {
+    run grep -rl -- ':-192\.0\.2\.1' "$PROJECT_DIR/linux/lib"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$PROJECT_DIR/linux/lib/defaults.conf" ]
+
+    run grep -rl -- ':-100::' "$PROJECT_DIR/linux/lib"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$PROJECT_DIR/linux/lib/defaults.conf" ]
+}
+
+@test "ip6tables availability is probed only by the contract owner" {
+    run grep -rl -- 'command -v ip6tables' "$PROJECT_DIR/linux/lib"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$PROJECT_DIR/linux/lib/dns-firewall-contract.sh" ]
+}
+
+@test "dns-dnsmasq.sh delegates the fail-closed decision instead of parsing flags inline" {
+    # Expansion-form needles so comments naming the flags cannot fake-satisfy this.
+    run grep -Fn '${SINKHOLE_FAST_FAIL' "$PROJECT_DIR/linux/lib/dns-dnsmasq.sh"
+    [ "$status" -ne 0 ]
+
+    run grep -Fn '${IPV6_FIREWALL_ENABLED' "$PROJECT_DIR/linux/lib/dns-dnsmasq.sh"
+    [ "$status" -ne 0 ]
+
+    run grep -Fn 'ipv6_sinkhole_fail_closed' "$PROJECT_DIR/linux/lib/dns-dnsmasq.sh"
+    [ "$status" -eq 0 ]
+
+    run grep -Fn 'ipv6_sinkhole_fail_closed' "$PROJECT_DIR/linux/lib/firewall-rule-helpers.sh"
+    [ "$status" -eq 0 ]
+}

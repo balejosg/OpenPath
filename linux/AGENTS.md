@@ -52,6 +52,12 @@ server=/allowed.com/8.8.8.8
 
 Reversing that order breaks whitelist enforcement.
 
+The sinkhole addresses are the canonical `OPENPATH_DNS_SINKHOLE_IPV4` /
+`OPENPATH_DNS_SINKHOLE_IPV6` defaults registered in `lib/defaults.conf`. The
+emit-vs-RST decision for the IPv6 sinkhole is owned by
+`lib/dns-firewall-contract.sh` (`ipv6_sinkhole_fail_closed`), consumed by both
+`dns-dnsmasq.sh` and `firewall-rule-helpers.sh` -- never re-implement it inline.
+
 ## Testing
 
 ```bash

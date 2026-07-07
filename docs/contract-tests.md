@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: OpenPath repository
-> Last verified: 2026-07-06
+> Last verified: 2026-07-07
 > Source of truth: `docs/contract-tests.md` -- update this file whenever a source-text contract test is added, removed, or its guarded files change.
 
 ## What is a source-text contract test?
@@ -243,6 +243,17 @@ Greps over Windows installer scripts, `scripts/Update-OpenPath.ps1`, `windows/li
 | `windows/lib/internal/DNS.Diagnostics.ps1`            | Function name, timing call                                                                                                               | Same as above.             |
 | `tests/e2e/ci/acquire-shared-windows-runner-lock.ps1` | Lock path string                                                                                                                         | Same as above.             |
 | `.github/workflows/e2e-tests.yml` (subset)            | Absent pre-install step names, lock step names                                                                                           | Same as above.             |
+
+---
+
+### tests/linux-e2e.bats (sinkhole-contract subset) and tests/e2e/ci/run-linux-apt-contracts.sh (installed-tree greps)
+
+| Source files read                    | Needle kinds                                                                                                                                                                                                                                | Before renaming or editing |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `linux/lib/defaults.conf`            | Required default-literal expansions `OPENPATH_DNS_SINKHOLE_IPV4:-192.0.2.1` / `OPENPATH_DNS_SINKHOLE_IPV6:-100::` (also grepped in the INSTALLED tree by the apt lane); exclusive ownership of `:-192.0.2.1` / `:-100::` within `linux/lib` | Same as above.             |
+| `linux/lib/dns-firewall-contract.sh` | Exclusive owner of `command -v ip6tables` within `linux/lib`; `test -f` presence check in the apt lane's installed tree                                                                                                                     | Same as above.             |
+| `linux/lib/dns-dnsmasq.sh`           | Forbidden inline flag expansions `${SINKHOLE_FAST_FAIL` / `${IPV6_FIREWALL_ENABLED`; required call needle `ipv6_sinkhole_fail_closed`                                                                                                       | Same as above.             |
+| `linux/lib/firewall-rule-helpers.sh` | Required call needle `ipv6_sinkhole_fail_closed`                                                                                                                                                                                            | Same as above.             |
 
 ---
 
