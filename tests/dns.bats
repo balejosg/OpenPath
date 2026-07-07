@@ -1121,3 +1121,38 @@ EOF
     run dnsmasq_upstream_resolv_conf_path
     [ "$output" = "$TEST_TMP_DIR/resolv.conf" ]
 }
+
+@test "select_usable_upstream_dns is owned by common-connectivity (available from common.sh alone)" {
+    export OPENPATH_FALLBACK_DNS="9.9.9.9"
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+
+    run select_usable_upstream_dns "127.0.0.1"
+    [ "$status" -eq 0 ]
+    [ "$output" = "9.9.9.9" ]
+}
+
+@test "resolve_persisted_upstream_dns prefers etc, then the legacy var file, then the configured fallback" {
+    export ETC_CONFIG_DIR="$TEST_TMP_DIR/etc"
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var"
+    export OPENPATH_FALLBACK_DNS="9.9.9.9"
+    mkdir -p "$ETC_CONFIG_DIR" "$VAR_STATE_DIR"
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+
+    printf '%s\n' "10.77.0.53" > "$ETC_CONFIG_DIR/original-dns.conf"
+    printf '%s\n' "10.88.0.53" > "$VAR_STATE_DIR/original-dns.conf"
+    run resolve_persisted_upstream_dns
+    [ "$status" -eq 0 ]
+    [ "$output" = "10.77.0.53" ]
+
+    printf '%s\n' "224.0.0.1" > "$ETC_CONFIG_DIR/original-dns.conf"
+    run resolve_persisted_upstream_dns
+    [ "$status" -eq 0 ]
+    [ "$output" = "10.88.0.53" ]
+
+    rm -f "$ETC_CONFIG_DIR/original-dns.conf" "$VAR_STATE_DIR/original-dns.conf"
+    run resolve_persisted_upstream_dns
+    [ "$status" -eq 0 ]
+    [ "$output" = "9.9.9.9" ]
+}

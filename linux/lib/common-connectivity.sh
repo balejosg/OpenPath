@@ -24,6 +24,27 @@ is_usable_upstream_dns() {
     return 0
 }
 
+# Print the given candidate when it is a usable upstream, else the fallback
+# (default: FALLBACK_DNS_PRIMARY), else 8.8.8.8. Single owner of the
+# upstream-fallback policy. (Moved from dns-runtime.sh; the declare -F guards
+# were dropped because is_usable_upstream_dns is defined in this same file.)
+select_usable_upstream_dns() {
+    local dns="${1:-}"
+    local fallback="${2:-${FALLBACK_DNS_PRIMARY:-8.8.8.8}}"
+
+    if is_usable_upstream_dns "$dns"; then
+        printf '%s\n' "$dns"
+        return 0
+    fi
+
+    if is_usable_upstream_dns "$fallback"; then
+        printf '%s\n' "$fallback"
+        return 0
+    fi
+
+    printf '%s\n' "8.8.8.8"
+}
+
 dns_candidate_resolves() {
     local dns="$1"
 
@@ -65,13 +86,10 @@ detect_primary_dns() {
     # (whitelist download, the management/control-plane host, etc.). The persisted
     # value was validated when first written; keep it stable across updates so the
     # dnsmasq upstream and the firewall's allowed upstream cannot diverge.
-    if [ -f "$ORIGINAL_DNS_FILE" ]; then
-        local saved_dns
-        saved_dns=$(head -1 "$ORIGINAL_DNS_FILE")
-        if is_usable_upstream_dns "$saved_dns"; then
-            echo "$saved_dns"
-            return 0
-        fi
+    local saved_dns
+    if saved_dns=$(read_persisted_upstream_dns "$ORIGINAL_DNS_FILE"); then
+        echo "$saved_dns"
+        return 0
     fi
 
     # 2. NetworkManager
@@ -105,12 +123,7 @@ detect_primary_dns() {
         return 0
     fi
 
-    dns="${FALLBACK_DNS_PRIMARY:-8.8.8.8}"
-    if is_usable_upstream_dns "$dns"; then
-        echo "$dns"
-    else
-        echo "8.8.8.8"
-    fi
+    select_usable_upstream_dns ""
 }
 
 validate_ip() {
@@ -156,6 +169,29 @@ persist_upstream_dns() {
     is_usable_upstream_dns "$dns" || return 1
 
     printf '%s\n' "$dns" > "$dns_file"
+}
+
+# Resolve the upstream for boot / watchdog-recovery / disable flows: the
+# canonical persisted file, then the legacy /var location, then the configured
+# fallback. Never re-derives from the live network: the firewall only allows
+# the persisted upstream on :53, so a re-derived value can silently diverge
+# and be dropped. Always succeeds (prints a usable IP).
+#
+# The if/return form (not `cmd && return 0`) is deliberate: a failing `a && b`
+# statement would abort `set -e` callers (postinst, test helpers) mid-function;
+# if-conditions are exempt.
+resolve_persisted_upstream_dns() {
+    local primary_file="${1:-${ORIGINAL_DNS_FILE:-}}"
+    local legacy_file="${2:-${VAR_STATE_DIR:-/var/lib/openpath}/original-dns.conf}"
+
+    if read_persisted_upstream_dns "$primary_file"; then
+        return 0
+    fi
+    if read_persisted_upstream_dns "$legacy_file"; then
+        return 0
+    fi
+
+    select_usable_upstream_dns ""
 }
 
 # Single owner of the dnsmasq upstream resolv-file path. The env override is a
