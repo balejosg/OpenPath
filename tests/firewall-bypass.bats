@@ -693,6 +693,57 @@ source_firewall() {
     ! grep -q -- "-j REJECT --reject-with tcp-reset" "$IP6TABLES_LOG"
 }
 
+@test "v6 sinkhole DNS emission and firewall RST agree in every flag cell (fail-closed contract)" {
+    source_firewall
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    # Cell format: SINKHOLE_FAST_FAIL|IPV6_FIREWALL_ENABLED|expected_dns|expected_fw
+    # ("unset" means the variable is unset; empty field means set-but-empty).
+    # ip6tables is mocked present in this harness; the ip6tables-absent axis is
+    # covered by the dns.bats OPENPATH_IPV6_FIREWALL_ENABLED=0 tests plus the
+    # single-owner pin in linux-e2e.bats (both sides share one
+    # ip6tables_available, so presence-divergence is structurally impossible).
+    # The one emit-without-RST family is the deliberate legacy opt-out
+    # (fast-fail disabled): DNS emits both sinkholes, firewall never REJECTs.
+    local cell sff v6fw want_dns want_fw
+    for cell in \
+        "unset|unset|emit|rst" \
+        "1|1|emit|rst" \
+        "|1|emit|rst" \
+        "TRUE|1|emit|rst" \
+        "1|unset|emit|rst" \
+        "1||emit|rst" \
+        "1|0|omit|norst" \
+        "1|off|omit|norst" \
+        "1|FALSE|omit|norst" \
+        "0|1|emit|norst" \
+        "0|0|emit|norst" \
+        "off|unset|emit|norst" \
+        "FALSE|1|emit|norst" \
+        "disabled|1|emit|norst"; do
+        IFS='|' read -r sff v6fw want_dns want_fw <<< "$cell"
+
+        unset SINKHOLE_FAST_FAIL IPV6_FIREWALL_ENABLED
+        if [ "$sff" != "unset" ]; then export SINKHOLE_FAST_FAIL="$sff"; fi
+        if [ "$v6fw" != "unset" ]; then export IPV6_FIREWALL_ENABLED="$v6fw"; fi
+
+        local dns_decision="omit"
+        if _dns_emit_blocked_aaaa_sinkhole; then dns_decision="emit"; fi
+
+        rm -f "$IP6TABLES_LOG"
+        apply_ipv6_firewall
+        local fw_decision="norst"
+        if [ -f "$IP6TABLES_LOG" ] && grep -q -- "-p tcp -j REJECT --reject-with tcp-reset" "$IP6TABLES_LOG"; then
+            fw_decision="rst"
+        fi
+
+        if [ "$dns_decision" != "$want_dns" ] || [ "$fw_decision" != "$want_fw" ]; then
+            echo "cell [$cell]: dns=$dns_decision (want $want_dns) fw=$fw_decision (want $want_fw)"
+            return 1
+        fi
+    done
+}
+
 # ============== RFC1918 knob + egress logging ==============
 
 @test "apply_rfc1918_egress_rules honors a custom RFC1918_ALLOW list" {
