@@ -189,12 +189,13 @@ recover_upstream_dns() {
     if [ -x "$SCRIPTS_DIR/dnsmasq-init-resolv.sh" ]; then
         "$SCRIPTS_DIR/dnsmasq-init-resolv.sh"
     else
-        mkdir -p /run/dnsmasq
-        local dns
-        dns=$(head -1 "$ORIGINAL_DNS_FILE" 2>/dev/null)
-        [ -z "$dns" ] && dns="8.8.8.8"
-        echo "nameserver $dns" > /run/dnsmasq/resolv.conf
-        echo "nameserver 8.8.8.8" >> /run/dnsmasq/resolv.conf
+        # Same read path as the boot script: persisted (etc, then legacy /var),
+        # else configured fallback. Never re-derives from the live network.
+        local resolv_out dns
+        resolv_out=$(dnsmasq_upstream_resolv_conf_path)
+        mkdir -p "$(dirname "$resolv_out")"
+        dns=$(resolve_persisted_upstream_dns)
+        render_dnsmasq_upstream_resolv_conf "$dns" > "$resolv_out"
     fi
 }
 

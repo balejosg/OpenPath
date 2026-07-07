@@ -436,3 +436,45 @@ HARNESS
     [ "$status" -eq 0 ]
     [[ "$output" == *"STATUS=ESCAPE_OPEN"* ]]
 }
+
+@test "recover_upstream_dns fallback validates the persisted upstream and uses the shared secondary" {
+    local helper_script="$TEST_TMP_DIR/recover-upstream.sh"
+
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+project_dir="$1"
+state_dir="$2"
+
+export ETC_CONFIG_DIR="$state_dir/etc"
+export VAR_STATE_DIR="$state_dir/var"
+export SCRIPTS_DIR="$state_dir/bin-without-init-script"
+export OPENPATH_DNSMASQ_RESOLV_CONF="$state_dir/run/resolv.conf"
+mkdir -p "$ETC_CONFIG_DIR" "$VAR_STATE_DIR" "$SCRIPTS_DIR"
+
+# Martian canonical value + valid legacy value: the recovery must skip the
+# martian and use the legacy file, with the shared 8.8.4.4 secondary.
+printf '%s\n' "224.0.0.1" > "$ETC_CONFIG_DIR/original-dns.conf"
+printf '%s\n' "10.77.0.53" > "$VAR_STATE_DIR/original-dns.conf"
+
+source "$project_dir/linux/lib/common.sh"
+log() { :; }
+
+extracted="$state_dir/recover_upstream_dns.sh"
+awk '/^recover_upstream_dns\(\) \{/,/^}/' \
+    "$project_dir/linux/scripts/runtime/dnsmasq-watchdog.sh" > "$extracted"
+source "$extracted"
+
+recover_upstream_dns
+cat "$OPENPATH_DNSMASQ_RESOLV_CONF"
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR" "$TEST_TMP_DIR"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nameserver 10.77.0.53"* ]]
+    [[ "$output" == *"nameserver 8.8.4.4"* ]]
+    [[ "$output" != *"224.0.0.1"* ]]
+}
