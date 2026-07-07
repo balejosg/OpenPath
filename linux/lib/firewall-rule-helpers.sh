@@ -82,12 +82,8 @@ OPENPATH_DNS_SINKHOLE_IPV6="${OPENPATH_DNS_SINKHOLE_IPV6:-100::}"
 # so timeout-alignment only shrinks the reuse window, it does not close it.
 OPENPATH_ALLOW_SET_TIMEOUT="${OPENPATH_ALLOW_SET_TIMEOUT:-300}"
 
-ipv6_firewall_enabled() { openpath_flag_enabled "${IPV6_FIREWALL_ENABLED:-1}"; }
-ip6tables_available() { command -v ip6tables >/dev/null 2>&1; }
-
-# IPv6 egress is filtered only when enabled AND ip6tables is usable; otherwise
-# IPv6 is left to the (inert) dnsmasq v6 sinkhole, which is the pre-existing gap.
-ipv6_firewall_active() { ipv6_firewall_enabled && ip6tables_available; }
+# openpath_flag_enabled and the ipv6/sinkhole predicates are owned by
+# dns-firewall-contract.sh (sourced via common.sh before this file).
 
 # True when the IPv6 name-aware allow set can be used (v6 firewall active, the
 # allow-set feature enabled, and ipset available to populate it).
@@ -111,15 +107,6 @@ openpath_default_tor_block_ports() {
     printf '%s' "9001,9030,9050,9051,9150"
 }
 
-openpath_flag_enabled() {
-    local value="${1:-1}"
-    value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
-    case "$value" in
-        0 | false | no | off | disabled) return 1 ;;
-        *) return 0 ;;
-    esac
-}
-
 # Surface (but do not "fix") a security-relevant enum env var set to an
 # unrecognized value, so a typo such as RFC1918_EGRESS_MODE=restrict does not
 # silently no-op an intended hardening and leave the operator believing it took
@@ -140,18 +127,6 @@ openpath_warn_unknown_enum() {
 doh_block_enabled() { openpath_flag_enabled "${DOH_BLOCK_ENABLED:-1}"; }
 vpn_block_enabled() { openpath_flag_enabled "${VPN_BLOCK_ENABLED:-1}"; }
 tor_block_enabled() { openpath_flag_enabled "${TOR_BLOCK_ENABLED:-1}"; }
-
-# Blocked domains resolve to a non-local sinkhole IP that the default DROP then
-# black-holes, so a browser hangs the full TCP connect timeout (~90s) on every
-# blocked sub-resource of an allowed page. When enabled, the firewall sends a TCP
-# reset for connections to the sinkhole IP (instant "connection refused") and the
-# DNS layer drops the v6 sinkhole answer when no IPv6 firewall can reset it.
-# SECURITY: the reset is scoped to the (already obviously-fake, non-routable)
-# sinkhole IP only, so it reveals nothing about which real destinations are
-# filtered (those still hit the silent DROP), never permits egress (it refuses),
-# and keeps the non-local sinkhole. On by default (validated on the firefox-esr
-# student-policy lane + staging canary). Set OPENPATH_SINKHOLE_FAST_FAIL=0 to opt out.
-sinkhole_fast_fail_enabled() { openpath_flag_enabled "${SINKHOLE_FAST_FAIL:-1}"; }
 
 openpath_ipset_available() { command -v ipset >/dev/null 2>&1; }
 

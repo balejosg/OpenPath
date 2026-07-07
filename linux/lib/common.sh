@@ -95,6 +95,9 @@ OPENPATH_PROTECTED_DOMAINS=()
 # shellcheck disable=SC2034 # Used from sourced protected-domain helpers.
 OPENPATH_PROTECTED_DOMAINS_READY=0
 
+# shellcheck source=dns-firewall-contract.sh
+source "$(dirname "${BASH_SOURCE[0]}")/dns-firewall-contract.sh"
+
 # shellcheck source=common-connectivity.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common-connectivity.sh"
 

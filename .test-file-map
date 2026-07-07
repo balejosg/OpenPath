@@ -216,6 +216,7 @@ linux/lib/firewall.sh|tests/firewall.bats,tests/linux-e2e.bats
 linux/lib/firewall-rule-helpers.sh|tests/firewall.bats,tests/linux-e2e.bats
 linux/lib/firewall-snapshot.sh|tests/firewall.bats,tests/linux-e2e.bats
 linux/lib/firewall-runtime.sh|tests/firewall.bats,tests/linux-e2e.bats
+linux/lib/dns-firewall-contract.sh|tests/firewall-bypass.bats,tests/dns.bats
 linux/lib/install-helpers.sh|tests/install.bats,tests/linux-e2e.bats
 linux/lib/runtime-cli.sh|tests/install.bats
 linux/lib/runtime-cli-compat.sh|tests/install.bats

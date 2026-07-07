@@ -744,6 +744,27 @@ source_firewall() {
     done
 }
 
+@test "the fail-closed contract is loaded by common.sh alone (DNS-generation context needs no firewall lib)" {
+    run bash -c "source \"$PROJECT_DIR/linux/lib/common.sh\" >/dev/null 2>&1; declare -F ipv6_sinkhole_fail_closed >/dev/null && declare -F openpath_flag_enabled >/dev/null && declare -F sinkhole_fast_fail_enabled >/dev/null && declare -F ipv6_firewall_active >/dev/null && declare -F ipv6_firewall_enabled >/dev/null && declare -F ip6tables_available >/dev/null && echo CONTRACT_OWNER_OK"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"CONTRACT_OWNER_OK"* ]]
+}
+
+@test "ipv6_sinkhole_fail_closed is true only when fast-fail is on AND the v6 firewall is active" {
+    # ip6tables is mocked present in this harness (exported function).
+    export SINKHOLE_FAST_FAIL="1" IPV6_FIREWALL_ENABLED="1"
+    run ipv6_sinkhole_fail_closed
+    [ "$status" -eq 0 ]
+
+    export SINKHOLE_FAST_FAIL="0"
+    run ipv6_sinkhole_fail_closed
+    [ "$status" -eq 1 ]
+
+    export SINKHOLE_FAST_FAIL="1" IPV6_FIREWALL_ENABLED="0"
+    run ipv6_sinkhole_fail_closed
+    [ "$status" -eq 1 ]
+}
+
 # ============== RFC1918 knob + egress logging ==============
 
 @test "apply_rfc1918_egress_rules honors a custom RFC1918_ALLOW list" {
