@@ -196,17 +196,15 @@ configure_resolv_conf() {
 configure_upstream_dns() {
     log "Configuring upstream DNS..."
 
-    mkdir -p /run/dnsmasq
+    local resolv_out
+    resolv_out=$(dnsmasq_upstream_resolv_conf_path)
+    mkdir -p "$(dirname "$resolv_out")"
 
     PRIMARY_DNS=$(select_usable_upstream_dns "$(detect_primary_dns)")
 
-    echo "$PRIMARY_DNS" > "$ORIGINAL_DNS_FILE"
+    persist_upstream_dns "$PRIMARY_DNS"
 
-    cat > /run/dnsmasq/resolv.conf << EOF
-# DNS upstream para dnsmasq
-nameserver $PRIMARY_DNS
-nameserver ${FALLBACK_DNS_SECONDARY:-8.8.4.4}
-EOF
+    render_dnsmasq_upstream_resolv_conf "$PRIMARY_DNS" > "$resolv_out"
 
     log "✓ Upstream DNS configured: $PRIMARY_DNS"
 }

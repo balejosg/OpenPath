@@ -153,7 +153,8 @@ step_detect_dns() {
     echo "[4/13] Detecting primary DNS..."
 
     PRIMARY_DNS=$(detect_primary_dns)
-    echo "$PRIMARY_DNS" > "$CONFIG_DIR/original-dns.conf"
+    persist_upstream_dns "$PRIMARY_DNS" "$CONFIG_DIR/original-dns.conf" \
+        || echo "⚠ Detected DNS not persisted (invalid: $PRIMARY_DNS)"
     echo "✓ DNS primario: $PRIMARY_DNS"
 }
 

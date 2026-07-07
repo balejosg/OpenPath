@@ -69,7 +69,8 @@ case "$1" in
         # Step 1: Detect and save primary DNS before disabling systemd-resolved.
         echo "  Detecting primary DNS..."
         PRIMARY_DNS=$(detect_primary_dns)
-        echo "$PRIMARY_DNS" > "$ORIGINAL_DNS_FILE"
+        persist_upstream_dns "$PRIMARY_DNS" \
+            || echo "  WARNING: detected DNS not persisted (invalid: $PRIMARY_DNS)"
 
         # Step 2: Free port 53 (disable systemd-resolved)
         echo "  Releasing port 53..."

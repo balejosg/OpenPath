@@ -922,3 +922,46 @@ PYEOF
     run python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["json"]; assert "firefoxRegistration" not in r, r' "$CAPTURE_FILE"
     [ "$status" -eq 0 ]
 }
+
+@test "step_detect_dns persists via the shared writer and refuses martian values" {
+    local helper_script="$TEST_TMP_DIR/step-detect-dns.sh"
+
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -eo pipefail
+
+project_dir="$1"
+state_dir="$2"
+detected="$3"
+
+export ETC_CONFIG_DIR="$state_dir/etc"
+export VAR_STATE_DIR="$state_dir/var"
+mkdir -p "$ETC_CONFIG_DIR" "$VAR_STATE_DIR"
+
+source "$project_dir/linux/lib/common.sh"
+
+detect_primary_dns() { printf '%s\n' "$detected"; }
+
+extracted="$state_dir/step_detect_dns.sh"
+awk '/^step_detect_dns\(\) \{/,/^}/' \
+    "$project_dir/linux/lib/install-core-steps.sh" > "$extracted"
+source "$extracted"
+
+step_detect_dns
+
+if [ -f "$CONFIG_DIR/original-dns.conf" ]; then
+    printf 'PERSISTED=%s\n' "$(head -1 "$CONFIG_DIR/original-dns.conf")"
+else
+    printf 'PERSISTED=NONE\n'
+fi
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR" "$TEST_TMP_DIR/valid" "10.77.0.53"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PERSISTED=10.77.0.53"* ]]
+
+    run "$helper_script" "$PROJECT_DIR" "$TEST_TMP_DIR/martian" "224.0.0.1"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PERSISTED=NONE"* ]]
+}

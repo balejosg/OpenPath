@@ -1156,3 +1156,23 @@ EOF
     [ "$status" -eq 0 ]
     [ "$output" = "9.9.9.9" ]
 }
+
+@test "configure_upstream_dns persists and renders through the owner helpers" {
+    export ETC_CONFIG_DIR="$TEST_TMP_DIR/etc"
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var"
+    export OPENPATH_DNSMASQ_RESOLV_CONF="$TEST_TMP_DIR/run/dnsmasq/resolv.conf"
+    mkdir -p "$ETC_CONFIG_DIR" "$VAR_STATE_DIR"
+    printf '%s\n' "10.77.0.53" > "$ETC_CONFIG_DIR/original-dns.conf"
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+    log() { :; }
+
+    configure_upstream_dns
+
+    [ -f "$OPENPATH_DNSMASQ_RESOLV_CONF" ]
+    grep -qx "nameserver 10.77.0.53" "$OPENPATH_DNSMASQ_RESOLV_CONF"
+    grep -qx "nameserver 8.8.4.4" "$OPENPATH_DNSMASQ_RESOLV_CONF"
+    grep -qx "# DNS upstream para dnsmasq" "$OPENPATH_DNSMASQ_RESOLV_CONF"
+    grep -qx "10.77.0.53" "$ETC_CONFIG_DIR/original-dns.conf"
+}
