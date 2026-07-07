@@ -644,6 +644,28 @@ move_windows_vm_to_lab() {
 }
 
 configure_windows_lab_network() {
+  # Neutralize any leftover OpenPath DNS enforcement from a prior run BEFORE the
+  # convergence loop below, mirroring the firewall pre-clean in move_windows_vm_to_lab.
+  # A prior install/rehearsal can leave AcrylicDNSProxySvc Running with the adapter DNS
+  # statically pinned to the Acrylic loopback 127.0.0.1 (Set-LocalDNS in
+  # windows/lib/internal/DNS.Acrylic.Service.ps1). That pin survives the pre-lab
+  # snapshot/rollback, so the DHCP-offered lab resolver 10.77.0.53 never lands on the
+  # adapter and the loop below never sees the expected DNS. This MUST run here -- after
+  # the reboot onto vmbr10, before convergence -- not before the snapshot: Acrylic is
+  # StartupType=Automatic, so it would re-pin on the post-snapshot reboot, and disabling
+  # it before the snapshot would poison the rollback base (the runner's normal resolver
+  # is Acrylic on 127.0.0.1). It is fully transient: restore_windows_vm rolls the VM back
+  # to the pre-lab snapshot at cleanup, and run_wedu_direct_diagnostic re-stages OpenPath
+  # and re-primes Acrylic split-DNS afterward. Best-effort; a failure must not fail the lab.
+  log "neutralizing leftover OpenPath Acrylic DNS pin on VM $WINDOWS_VMID before lab-network convergence"
+  run_windows_ps 120 "
+\$ErrorActionPreference = 'Continue'
+Stop-Service -Name 'AcrylicDNSProxySvc' -Force -ErrorAction SilentlyContinue
+Get-NetAdapter -ErrorAction SilentlyContinue |
+  Where-Object { \$_.Status -eq 'Up' } |
+  ForEach-Object { Set-DnsClientServerAddress -InterfaceIndex \$_.ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue }
+Clear-DnsClientCache -ErrorAction SilentlyContinue
+" || log "Acrylic DNS pin neutralization warning (non-fatal)"
   run_windows_ps 180 "
 \$ErrorActionPreference = 'Stop'
 \$adapter = Get-NetAdapter | Where-Object { \$_.Status -eq 'Up' } | Sort-Object ifIndex | Select-Object -First 1
