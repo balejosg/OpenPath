@@ -54,3 +54,18 @@ setup() {
     [ "$func_line" -lt "$stop_line" ]
     [ "$stop_line" -lt "$loop_line" ]
 }
+
+@test "convergence loop explicitly asserts the lab resolver on the adapter (reset cannot clear the static 127.0.0.1 pin)" {
+    # -ResetServerAddresses cannot clear a static NameServer=127.0.0.1 pin (verified live on
+    # the runner); once a lab-subnet IP has landed the loop must explicitly
+    # Set-DnsClientServerAddress -ServerAddresses the expected lab DNS, or convergence never
+    # sees 10.77.0.53 on a runner carrying a leftover OpenPath DNS pin.
+    grep -qF -- "-ServerAddresses '\$EXPECTED_DNS'" "$SCRIPT"
+    # That explicit assertion must live inside the convergence loop (after 'for (\$attempt').
+    local loop_line set_line
+    loop_line="$(grep -Fn 'for (\$attempt = 1' "$SCRIPT" | head -1 | cut -d: -f1)"
+    set_line="$(grep -Fn -- "-ServerAddresses '\$EXPECTED_DNS'" "$SCRIPT" | head -1 | cut -d: -f1)"
+    [ -n "$loop_line" ]
+    [ -n "$set_line" ]
+    [ "$loop_line" -lt "$set_line" ]
+}

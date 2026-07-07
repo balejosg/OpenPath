@@ -683,6 +683,16 @@ for (\$attempt = 1; \$attempt -le 12; \$attempt++) {
   ipconfig /renew \$adapter.Name | Out-Null
   Start-Sleep -Seconds 5
   \$currentIps = @(Get-NetIPAddress -InterfaceIndex \$adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty IPAddress)
+  # A leftover OpenPath install can leave the adapter DNS statically pinned to the Acrylic
+  # loopback 127.0.0.1 via a NameServer registry value that survives -ResetServerAddresses
+  # and DHCP renew (a static NameServer overrides the DHCP-offered resolver). Once a
+  # lab-subnet IP has landed the VM is genuinely on the lab network, so explicitly assert
+  # the expected lab resolver on the adapter. On a clean runner the DHCP DNS already
+  # matches, so this is a no-op re-set to the same value; on a pinned runner it replaces
+  # the stale 127.0.0.1 pin so convergence reflects the lab network.
+  if (@(\$currentIps | Where-Object { \$_ -like '10.77.0.*' }).Count -gt 0) {
+    Set-DnsClientServerAddress -InterfaceIndex \$adapter.ifIndex -ServerAddresses '$EXPECTED_DNS' -ErrorAction SilentlyContinue
+  }
   \$currentDns = @((Get-DnsClientServerAddress -InterfaceIndex \$adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses)
   \$sample = [pscustomobject]@{
     attempt = \$attempt
