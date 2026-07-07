@@ -118,6 +118,64 @@ validate_ip() {
     [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]
 }
 
+# ---------------------------------------------------------------------------
+# Persisted-upstream owner helpers.
+#
+# The dnsmasq upstream and the firewall's allowed upstream must be the exact
+# same IP (see the detect_primary_dns comment above; violation of this
+# invariant caused the June 2026 all-DNS-dies outage). Every read, write, and
+# render of that persisted fact goes through the helpers below; no caller may
+# re-derive or re-format it inline.
+# ---------------------------------------------------------------------------
+
+# Print the first line of a persisted upstream-DNS file when it is
+# format-valid (validate_ip + martian filter). Returns 1 otherwise.
+read_persisted_upstream_dns() {
+    local dns_file="${1:-${ORIGINAL_DNS_FILE:-}}"
+    local dns
+
+    [ -n "$dns_file" ] && [ -f "$dns_file" ] || return 1
+
+    # `|| true` keeps an unreadable-file edge from aborting `set -e` callers;
+    # the empty result is rejected by the format check below.
+    dns=$(head -1 "$dns_file" 2>/dev/null || true)
+    is_usable_upstream_dns "$dns" || return 1
+
+    printf '%s\n' "$dns"
+}
+
+# Persist a format-valid upstream DNS IP as the single line of the given file
+# (default: $ORIGINAL_DNS_FILE). Refuses to write a value that
+# read_persisted_upstream_dns would reject, so the persisted file can always
+# be trusted without re-probing.
+persist_upstream_dns() {
+    local dns="$1"
+    local dns_file="${2:-${ORIGINAL_DNS_FILE:-}}"
+
+    [ -n "$dns_file" ] || return 1
+    is_usable_upstream_dns "$dns" || return 1
+
+    printf '%s\n' "$dns" > "$dns_file"
+}
+
+# Single owner of the dnsmasq upstream resolv-file path. The env override is a
+# test seam; production always uses the default.
+dnsmasq_upstream_resolv_conf_path() {
+    printf '%s\n' "${OPENPATH_DNSMASQ_RESOLV_CONF:-/run/dnsmasq/resolv.conf}"
+}
+
+# Render the dnsmasq upstream resolv.conf body. Pure function; the single
+# owner of this format (consumed by configure_upstream_dns, the generated
+# dnsmasq-init-resolv.sh boot script, and the watchdog upstream recovery).
+render_dnsmasq_upstream_resolv_conf() {
+    local primary="$1"
+    local secondary="${2:-${FALLBACK_DNS_SECONDARY:-8.8.4.4}}"
+
+    printf '# DNS upstream para dnsmasq\n'
+    printf 'nameserver %s\n' "$primary"
+    printf 'nameserver %s\n' "$secondary"
+}
+
 # Discover the DHCP-provided DNS servers for the current network.
 # Linux analogue of the Windows DhcpNameServer registry lookup
 # (Get-OpenPathCaptivePortalDhcpNameServerCandidates): the DHCP-offered

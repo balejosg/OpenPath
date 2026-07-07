@@ -1041,3 +1041,83 @@ EOF
     run sanitize_domain 'example$(rm -rf /).com'
     [ "$output" = "examplerm-rf.com" ]
 }
+
+# ============== Persisted-upstream owner helpers ==============
+
+@test "read_persisted_upstream_dns returns a format-valid persisted upstream" {
+    export ETC_CONFIG_DIR="$TEST_TMP_DIR/etc"
+    mkdir -p "$ETC_CONFIG_DIR"
+    printf '%s\n' "10.77.0.53" > "$ETC_CONFIG_DIR/original-dns.conf"
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+
+    run read_persisted_upstream_dns
+    [ "$status" -eq 0 ]
+    [ "$output" = "10.77.0.53" ]
+}
+
+@test "read_persisted_upstream_dns rejects a martian persisted value" {
+    export ETC_CONFIG_DIR="$TEST_TMP_DIR/etc"
+    mkdir -p "$ETC_CONFIG_DIR"
+    printf '%s\n' "224.0.0.1" > "$ETC_CONFIG_DIR/original-dns.conf"
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+
+    run read_persisted_upstream_dns
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
+@test "read_persisted_upstream_dns fails cleanly when the file is missing" {
+    export ETC_CONFIG_DIR="$TEST_TMP_DIR/etc"
+    mkdir -p "$ETC_CONFIG_DIR"
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+
+    run read_persisted_upstream_dns
+    [ "$status" -eq 1 ]
+}
+
+@test "persist_upstream_dns writes a value the reader accepts and refuses martians" {
+    export ETC_CONFIG_DIR="$TEST_TMP_DIR/etc"
+    mkdir -p "$ETC_CONFIG_DIR"
+
+    source "$PROJECT_DIR/linux/lib/common.sh"
+
+    run persist_upstream_dns "10.77.0.53"
+    [ "$status" -eq 0 ]
+
+    run read_persisted_upstream_dns
+    [ "$status" -eq 0 ]
+    [ "$output" = "10.77.0.53" ]
+
+    run persist_upstream_dns "127.0.0.1" "$TEST_TMP_DIR/etc/rejected.conf"
+    [ "$status" -eq 1 ]
+    [ ! -f "$TEST_TMP_DIR/etc/rejected.conf" ]
+}
+
+@test "render_dnsmasq_upstream_resolv_conf emits the shared header, primary, and secondary" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+
+    run render_dnsmasq_upstream_resolv_conf "10.77.0.53"
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "# DNS upstream para dnsmasq" ]
+    [ "${lines[1]}" = "nameserver 10.77.0.53" ]
+    [ "${lines[2]}" = "nameserver 8.8.4.4" ]
+
+    run render_dnsmasq_upstream_resolv_conf "10.77.0.53" "1.1.1.1"
+    [ "$status" -eq 0 ]
+    [ "${lines[2]}" = "nameserver 1.1.1.1" ]
+}
+
+@test "dnsmasq_upstream_resolv_conf_path defaults to /run and honors the test override" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+
+    run dnsmasq_upstream_resolv_conf_path
+    [ "$status" -eq 0 ]
+    [ "$output" = "/run/dnsmasq/resolv.conf" ]
+
+    export OPENPATH_DNSMASQ_RESOLV_CONF="$TEST_TMP_DIR/resolv.conf"
+    run dnsmasq_upstream_resolv_conf_path
+    [ "$output" = "$TEST_TMP_DIR/resolv.conf" ]
+}
