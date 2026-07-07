@@ -7,7 +7,8 @@ Bash endpoint agent: `dnsmasq` DNS sinkhole, firewall enforcement, browser polic
 Core modules live under `lib/`:
 
 - `common.sh`: shared config, logging, and filesystem helpers
-- `dns.sh`: upstream DNS detection and `dnsmasq` config generation
+- `common-connectivity.sh`: single owner of the primary-DNS-upstream concept -- detection ladder, martian filter, persisted-file read/write (`persist_upstream_dns`/`read_persisted_upstream_dns`/`resolve_persisted_upstream_dns`), and the dnsmasq upstream resolv.conf render; the generated `dnsmasq-init-resolv.sh` boot script sources it and must never re-derive the upstream from the live network
+- `dns.sh`: `dnsmasq` config generation and DNS runtime orchestration (upstream detection lives in `common-connectivity.sh`)
 - `firewall.sh`: local DNS enforcement and bypass resistance
 - `browser.sh` and browser policy helpers: Firefox/Chromium policy and extension staging
 - `services.sh`: systemd services, timers, logrotate, dispatcher hooks
