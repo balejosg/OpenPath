@@ -152,6 +152,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Neutralize flaky third-party apt sources (GitHub runner)
+        run: |
+          # Hosted runners ship packages.microsoft.com / azure-cli apt sources
+          # that intermittently serve invalid InRelease files ("Clearsigned
+          # file isn't valid, got 'NOSPLIT'"), which aborts apt-get update even
+          # though none of them are needed to install dnsmasq/bats. Remove them
+          # so the installs below stay green during a Microsoft repo outage.
+          sudo find /etc/apt/sources.list.d -type f \
+            \( -iname '*microsoft*' -o -iname '*azure*' \) -print -delete || true
+
       - name: Install dnsmasq
         run: |
           sudo env DEBIAN_FRONTEND=noninteractive bash -c '. ./linux/lib/apt.sh && apt_install_with_retry "dnsmasq" apt-get install -y dnsmasq'
