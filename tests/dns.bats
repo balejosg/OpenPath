@@ -1315,3 +1315,44 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"DEGRADED_OK"* ]]
 }
+
+# ============== Sinkhole IP canonical owner ==============
+
+@test "overridden sinkhole addresses propagate to the generated sinkhole rules" {
+    local config_file="$TEST_TMP_DIR/dnsmasq.conf"
+
+    log_warn() { echo "$1"; }
+    export -f log_warn
+    ip6tables() { return 0; }
+    export -f ip6tables
+
+    export OPENPATH_DNS_SINKHOLE_IPV4="198.51.100.7"
+    export OPENPATH_DNS_SINKHOLE_IPV6="100::7"
+    export OPENPATH_SINKHOLE_FAST_FAIL="1"
+    export OPENPATH_IPV6_FIREWALL_ENABLED="1"
+
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    run write_dnsmasq_default_sinkhole_rules "$config_file"
+
+    [ "$status" -eq 0 ]
+    grep -qx "address=/#/198.51.100.7" "$config_file"
+    grep -qx "address=/#/100::7" "$config_file"
+    ! grep -qx "address=/#/" "$config_file"
+}
+
+@test "dns_probe_result_is_public honors overridden sinkhole addresses (B1)" {
+    export OPENPATH_DNS_SINKHOLE_IPV4="198.51.100.7"
+    export OPENPATH_DNS_SINKHOLE_IPV6="100::7"
+
+    source "$PROJECT_DIR/linux/lib/dns.sh"
+
+    run dns_probe_result_is_public "198.51.100.7"
+    [ "$status" -eq 1 ]
+
+    run dns_probe_result_is_public "100::7"
+    [ "$status" -eq 1 ]
+
+    run dns_probe_result_is_public "142.250.184.14"
+    [ "$status" -eq 0 ]
+}

@@ -57,8 +57,8 @@ EOF
 write_dnsmasq_protected_mode_config() {
     local upstream_dns="$1"
     local conf_path="${2:-$DNSMASQ_CONF}"
-    local sinkhole_ipv4="${OPENPATH_DNS_SINKHOLE_IPV4:-192.0.2.1}"
-    local sinkhole_ipv6="${OPENPATH_DNS_SINKHOLE_IPV6:-100::}"
+    local sinkhole_ipv4="$OPENPATH_DNS_SINKHOLE_IPV4"
+    local sinkhole_ipv6="$OPENPATH_DNS_SINKHOLE_IPV6"
 
     if [ -z "${upstream_dns:-}" ]; then
         log_warn "write_dnsmasq_protected_mode_config: upstream DNS is empty"
@@ -124,8 +124,8 @@ _dns_emit_blocked_aaaa_sinkhole() {
 
 write_dnsmasq_default_sinkhole_rules() {
     local conf_path="$1"
-    local sinkhole_ipv4="${OPENPATH_DNS_SINKHOLE_IPV4:-192.0.2.1}"
-    local sinkhole_ipv6="${OPENPATH_DNS_SINKHOLE_IPV6:-100::}"
+    local sinkhole_ipv4="$OPENPATH_DNS_SINKHOLE_IPV4"
+    local sinkhole_ipv6="$OPENPATH_DNS_SINKHOLE_IPV6"
 
     if [ -z "${conf_path:-}" ]; then
         log_warn "write_dnsmasq_default_sinkhole_rules: output path is empty"

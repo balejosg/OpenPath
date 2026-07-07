@@ -99,10 +99,16 @@ resolve_local_dns_probe() {
 dns_probe_result_is_public() {
     local result="${1:-}"
 
-    printf '%s\n' "$result" | awk '
+    # sink4/sink6 are the canonical defaults.conf values, so a deployment that
+    # overrides the sinkhole addresses still classifies its own sinkhole
+    # answers as non-public. 0.0.0.0/:: are generic null answers, not
+    # sinkholes, and stay literal.
+    printf '%s\n' "$result" | awk \
+        -v sink4="$OPENPATH_DNS_SINKHOLE_IPV4" \
+        -v sink6="$OPENPATH_DNS_SINKHOLE_IPV6" '
         /^[[:space:]]*$/ { next }
         $0 == "0.0.0.0" || $0 == "::" { next }
-        $0 == "192.0.2.1" || $0 == "100::" { next }
+        $0 == sink4 || $0 == sink6 { next }
         { found = 1; exit }
         END { exit found ? 0 : 1 }
     '

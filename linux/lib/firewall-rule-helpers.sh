@@ -66,12 +66,9 @@ OPENPATH_IPSET_STATE_FILE="${OPENPATH_IPSET_STATE_FILE:-/etc/iptables/openpath-i
 OPENPATH_ALLOW_DST_IPSET="${OPENPATH_ALLOW_DST_IPSET:-openpath-allow-dst}"
 OPENPATH_ALLOW_DST_IPSET6="${OPENPATH_ALLOW_DST_IPSET6:-openpath-allow-dst6}"
 
-# Non-local sinkhole addresses the dnsmasq default-deny resolves blocked domains
-# to (kept in sync with OPENPATH_DNS_SINKHOLE_IPV4/IPV6 in dns-dnsmasq.sh). The
-# fast-fail REJECT targets exactly these, so a blocked-domain connection is reset
-# instantly instead of black-holing at the default DROP.
-OPENPATH_DNS_SINKHOLE_IPV4="${OPENPATH_DNS_SINKHOLE_IPV4:-192.0.2.1}"
-OPENPATH_DNS_SINKHOLE_IPV6="${OPENPATH_DNS_SINKHOLE_IPV6:-100::}"
+# The fast-fail REJECT rules target the non-local sinkhole addresses
+# OPENPATH_DNS_SINKHOLE_IPV4/IPV6 -- canonical defaults registered in
+# defaults.conf (sourced via common.sh before this file in every context).
 # Entries in the egress allow set must not outlive the DNS answer that put a
 # shared CDN IP there: dnsmasq caps cached answers at max-cache-ttl=300s
 # (dns-dnsmasq.sh), so the allow-set timeout is aligned to <= that value. A
