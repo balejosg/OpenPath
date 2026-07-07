@@ -1814,3 +1814,45 @@ EOF
     run grep -n "fact.firefox_native_host" "$PROJECT_DIR/linux/lib/runtime-cli-system.sh"
     [ "$status" -eq 0 ]
 }
+
+@test "cmd_disable resolves the disabled-mode upstream through the shared owner" {
+    local helper_script="$TEST_TMP_DIR/cmd-disable-upstream.sh"
+
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -eo pipefail
+
+project_dir="$1"
+state_dir="$2"
+
+export ETC_CONFIG_DIR="$state_dir/etc"
+export VAR_STATE_DIR="$state_dir/var"
+mkdir -p "$ETC_CONFIG_DIR" "$VAR_STATE_DIR"
+
+# Martian canonical value + valid legacy value: disable must not hand the
+# martian to enter_disabled_mode.
+printf '%s\n' "224.0.0.1" > "$ETC_CONFIG_DIR/original-dns.conf"
+printf '%s\n' "10.77.0.53" > "$VAR_STATE_DIR/original-dns.conf"
+
+source "$project_dir/linux/lib/common.sh"
+
+YELLOW=""
+GREEN=""
+NC=""
+systemctl() { return 0; }
+enter_disabled_mode() { printf 'DISABLED_UPSTREAM=%s\n' "$1"; }
+
+extracted="$state_dir/cmd_disable.sh"
+awk '/^cmd_disable\(\) \{/,/^}/' \
+    "$project_dir/linux/lib/runtime-cli-system.sh" > "$extracted"
+source "$extracted"
+
+cmd_disable
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR" "$TEST_TMP_DIR"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"DISABLED_UPSTREAM=10.77.0.53"* ]]
+}

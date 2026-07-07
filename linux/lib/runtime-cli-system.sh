@@ -570,7 +570,7 @@ cmd_disable() {
     systemctl stop openpath-dnsmasq.timer
     systemctl stop dnsmasq-watchdog.timer
 
-    enter_disabled_mode "$(head -1 "$ORIGINAL_DNS_FILE" 2>/dev/null || echo "8.8.8.8")"
+    enter_disabled_mode "$(resolve_persisted_upstream_dns)"
 
     echo -e "${GREEN}✓ Sistema deshabilitado${NC}"
 }
