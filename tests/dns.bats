@@ -1176,3 +1176,142 @@ EOF
     grep -qx "# DNS upstream para dnsmasq" "$OPENPATH_DNSMASQ_RESOLV_CONF"
     grep -qx "10.77.0.53" "$ETC_CONFIG_DIR/original-dns.conf"
 }
+
+@test "dnsmasq init script delegates to the connectivity owner and never re-derives from the live network" {
+    local state_dir="$TEST_TMP_DIR/dns-init-owner"
+    local helper_script="$TEST_TMP_DIR/create-dns-init-owner.sh"
+
+    mkdir -p "$state_dir"
+
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+project_dir="$1"
+state_dir="$2"
+
+export INSTALL_DIR="$project_dir/linux"
+export ETC_CONFIG_DIR="$state_dir/etc/openpath"
+export VAR_STATE_DIR="$state_dir/var/lib/openpath"
+export SCRIPTS_DIR="$state_dir/bin"
+mkdir -p "$ETC_CONFIG_DIR" "$VAR_STATE_DIR" "$SCRIPTS_DIR"
+
+source "$project_dir/linux/lib/common.sh"
+source "$project_dir/linux/lib/dns.sh"
+
+create_dns_init_script
+
+generated="$SCRIPTS_DIR/dnsmasq-init-resolv.sh"
+grep -F "lib/common-connectivity.sh" "$generated" >/dev/null
+grep -F "resolve_persisted_upstream_dns" "$generated" >/dev/null
+grep -F "render_dnsmasq_upstream_resolv_conf" "$generated" >/dev/null
+# Explicit if/exit (not `! grep`): `!`-prefixed pipelines are exempt from
+# set -e, which would let a forbidden-pattern regression pass silently.
+for forbidden in "nmcli" "ip route" "read_dns_from_resolv_conf"; do
+    if grep -q "$forbidden" "$generated"; then
+        echo "FORBIDDEN RE-DERIVATION LOGIC PRESENT: $forbidden"
+        exit 1
+    fi
+done
+echo "OWNER_DELEGATION_OK"
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR" "$state_dir"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OWNER_DELEGATION_OK"* ]]
+}
+
+@test "generated dnsmasq init script resolves persisted upstream with legacy and fallback tiers" {
+    local state_dir="$TEST_TMP_DIR/dns-init-exec"
+    local helper_script="$TEST_TMP_DIR/run-dns-init-exec.sh"
+
+    mkdir -p "$state_dir"
+
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+project_dir="$1"
+state_dir="$2"
+
+export INSTALL_DIR="$project_dir/linux"
+export ETC_CONFIG_DIR="$state_dir/etc/openpath"
+export VAR_STATE_DIR="$state_dir/var/lib/openpath"
+export SCRIPTS_DIR="$state_dir/bin"
+export OPENPATH_FALLBACK_DNS="9.9.9.9"
+mkdir -p "$ETC_CONFIG_DIR" "$VAR_STATE_DIR" "$SCRIPTS_DIR"
+
+source "$project_dir/linux/lib/common.sh"
+source "$project_dir/linux/lib/dns.sh"
+
+create_dns_init_script
+
+export OPENPATH_DNSMASQ_RESOLV_CONF="$state_dir/resolv.conf"
+
+# Tier 1: canonical persisted file wins.
+printf '%s\n' "10.77.0.53" > "$ETC_CONFIG_DIR/original-dns.conf"
+"$SCRIPTS_DIR/dnsmasq-init-resolv.sh" >/dev/null
+grep -qx "nameserver 10.77.0.53" "$OPENPATH_DNSMASQ_RESOLV_CONF"
+grep -qx "nameserver 8.8.4.4" "$OPENPATH_DNSMASQ_RESOLV_CONF"
+
+# Tier 2: martian canonical value falls back to the legacy /var file.
+printf '%s\n' "224.0.0.1" > "$ETC_CONFIG_DIR/original-dns.conf"
+printf '%s\n' "10.88.0.53" > "$VAR_STATE_DIR/original-dns.conf"
+"$SCRIPTS_DIR/dnsmasq-init-resolv.sh" >/dev/null
+grep -qx "nameserver 10.88.0.53" "$OPENPATH_DNSMASQ_RESOLV_CONF"
+
+# Tier 3: nothing persisted -> baked configured fallback, never a live re-derive.
+rm -f "$ETC_CONFIG_DIR/original-dns.conf" "$VAR_STATE_DIR/original-dns.conf"
+"$SCRIPTS_DIR/dnsmasq-init-resolv.sh" >/dev/null
+grep -qx "nameserver 9.9.9.9" "$OPENPATH_DNSMASQ_RESOLV_CONF"
+
+echo "BOOT_TIERS_OK"
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR" "$state_dir"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"BOOT_TIERS_OK"* ]]
+}
+
+@test "generated dnsmasq init script degrades to a verbatim persisted read when the library is missing" {
+    local state_dir="$TEST_TMP_DIR/dns-init-degraded"
+    local helper_script="$TEST_TMP_DIR/run-dns-init-degraded.sh"
+
+    mkdir -p "$state_dir"
+
+    cat > "$helper_script" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+project_dir="$1"
+state_dir="$2"
+
+# Bake a nonexistent install dir so the generated script cannot source the lib.
+export INSTALL_DIR="$state_dir/missing-install"
+export ETC_CONFIG_DIR="$state_dir/etc/openpath"
+export VAR_STATE_DIR="$state_dir/var/lib/openpath"
+export SCRIPTS_DIR="$state_dir/bin"
+mkdir -p "$ETC_CONFIG_DIR" "$VAR_STATE_DIR" "$SCRIPTS_DIR"
+
+source "$project_dir/linux/lib/common.sh"
+source "$project_dir/linux/lib/dns.sh"
+
+create_dns_init_script
+
+export OPENPATH_DNSMASQ_RESOLV_CONF="$state_dir/resolv.conf"
+printf '%s\n' "10.77.0.53" > "$ETC_CONFIG_DIR/original-dns.conf"
+"$SCRIPTS_DIR/dnsmasq-init-resolv.sh" >/dev/null
+grep -qx "nameserver 10.77.0.53" "$OPENPATH_DNSMASQ_RESOLV_CONF"
+echo "DEGRADED_OK"
+EOF
+    chmod +x "$helper_script"
+
+    run "$helper_script" "$PROJECT_DIR" "$state_dir"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"DEGRADED_OK"* ]]
+}
