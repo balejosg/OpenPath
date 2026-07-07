@@ -4,21 +4,23 @@
 # enabled, register its resolved IPs into the firewall allow ipset
 # (openpath-allow-dst) via dnsmasq's ipset= directive, so the host can actually
 # connect to them on 80/443. Mirrors apply_http_egress_rules
-# (firewall-rule-helpers.sh). Self-contained: falls back to the default set name
+# (firewall-rule-helpers.sh). Flag parsing comes from dns-firewall-contract.sh
+# (always loaded via common.sh); the set-name defaults still fall back locally
 # when firewall-rule-helpers.sh is not sourced.
 emit_dnsmasq_allow_domain() {
     local domain="$1" upstream="$2" conf="$3"
     printf 'server=/%s/%s\n' "$domain" "$upstream" >> "$conf"
-    case "$(printf '%s' "${ALLOW_SET_EGRESS_ENABLED:-1}" | tr '[:upper:]' '[:lower:]')" in
-        0 | false | no | off | disabled) return 0 ;;
-    esac
-    # Add resolved IPv4 to the v4 allow set, and AAAA to the v6 set when the IPv6
-    # firewall is enabled (dnsmasq routes each address to the matching family).
+    openpath_flag_enabled "${ALLOW_SET_EGRESS_ENABLED:-1}" || return 0
+    # Add resolved IPv4 to the v4 allow set, and AAAA to the v6 set when the
+    # IPv6 firewall is enabled (dnsmasq routes each address to the matching
+    # family). Known pre-existing divergent cell, unchanged here: with the flag
+    # enabled but ip6tables absent, the firewall side (ipv6_allow_set_active)
+    # never creates the v6 set this directive references. See the sinkhole
+    # contract plan's Q2 before "fixing" this to ipv6_firewall_active.
     local sets="${OPENPATH_ALLOW_DST_IPSET:-openpath-allow-dst}"
-    case "$(printf '%s' "${IPV6_FIREWALL_ENABLED:-1}" | tr '[:upper:]' '[:lower:]')" in
-        0 | false | no | off | disabled) ;;
-        *) sets="${sets},${OPENPATH_ALLOW_DST_IPSET6:-openpath-allow-dst6}" ;;
-    esac
+    if ipv6_firewall_enabled; then
+        sets="${sets},${OPENPATH_ALLOW_DST_IPSET6:-openpath-allow-dst6}"
+    fi
     printf 'ipset=/%s/%s\n' "$domain" "$sets" >> "$conf"
 }
 
@@ -103,23 +105,21 @@ EOF
 }
 
 # Whether the blocked-domain IPv6 sinkhole answer (address=/#/<v6>) should be
-# written. Default: yes (unchanged). Under SINKHOLE_FAST_FAIL it is written only
-# when an active IPv6 firewall (ip6tables present + IPV6_FIREWALL_ENABLED) will
-# RST connections to the v6 sinkhole; otherwise it is omitted so a blocked domain
-# returns no AAAA address (dnsmasq answers REFUSED for the v4-only wildcard) and a
+# written. With fast-fail opted out (OPENPATH_SINKHOLE_FAST_FAIL=0) the legacy
+# layout always writes it. Under fast-fail it is written exactly when
+# ipv6_sinkhole_fail_closed (dns-firewall-contract.sh, loaded via common.sh)
+# says an active IPv6 firewall will RST connections to the v6 sinkhole;
+# otherwise it is omitted so a blocked domain returns no AAAA answer and a
 # dual-stack client (Happy Eyeballs) falls straight to the fast-failing IPv4
 # sinkhole instead of black-holing on a v6 sinkhole nothing resets. Omitting
 # it leaks nothing: the v6 fail-closed boundary is the ip6tables firewall, not
-# this (inert) DNS answer. Self-contained env checks, since firewall-rule-helpers.sh
-# may not be sourced in the DNS-generation context.
+# this (inert) DNS answer. The firewall v6 rule builder consumes the same
+# predicate, so the two sides cannot diverge. (The previous inline copy also
+# listed the empty string as fast-fail-disabled -- dead code, since ${VAR:-1}
+# already maps empty to "1"; the shared parse is effectively identical.)
 _dns_emit_blocked_aaaa_sinkhole() {
-    case "$(printf '%s' "${SINKHOLE_FAST_FAIL:-1}" | tr '[:upper:]' '[:lower:]')" in
-        '' | 0 | false | no | off | disabled) return 0 ;;
-    esac
-    case "$(printf '%s' "${IPV6_FIREWALL_ENABLED:-1}" | tr '[:upper:]' '[:lower:]')" in
-        0 | false | no | off | disabled) return 1 ;;
-    esac
-    command -v ip6tables >/dev/null 2>&1
+    sinkhole_fast_fail_enabled || return 0
+    ipv6_sinkhole_fail_closed
 }
 
 write_dnsmasq_default_sinkhole_rules() {

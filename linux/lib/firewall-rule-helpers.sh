@@ -454,7 +454,10 @@ apply_ipv6_firewall() {
     # Fast-fail blocked domains on v6: RST to the v6 sinkhole so a dual-stack
     # client (Happy Eyeballs) fails the v6 limb instantly instead of black-holing
     # at the default DROP. Scoped to the sinkhole IP; must precede the DROP.
-    if sinkhole_fast_fail_enabled; then
+    # ipv6_firewall_active already holds here (function guard above), so this
+    # equals sinkhole_fast_fail_enabled -- but naming the shared predicate ties
+    # this block to the DNS side's AAAA-emission decision by construction.
+    if ipv6_sinkhole_fail_closed; then
         add_optional_rule "Fast-fail blocked domains (RST to v6 sinkhole $OPENPATH_DNS_SINKHOLE_IPV6)" \
             ip6tables -A OUTPUT -d "$OPENPATH_DNS_SINKHOLE_IPV6" -p tcp -j REJECT --reject-with tcp-reset
         # HTTP/3 (QUIC) over IPv6 is UDP/443; reject it too so it fast-fails.
