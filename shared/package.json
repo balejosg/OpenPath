@@ -46,7 +46,7 @@
     "test:coverage": "node ../scripts/run-c8-coverage.js \"node --import tsx --test tests/*.test.ts\""
   },
   "dependencies": {
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
