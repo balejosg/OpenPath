@@ -60,7 +60,7 @@
     "is-potential-custom-element-name": "^1.0.1",
     "jsdom": "^27.4.0",
     "pathe": "^2.0.3",
-    "postcss": "^8.5.14",
+    "postcss": "^8.5.23",
     "size-limit": "^12.1.0",
     "tailwindcss": "^4.1.18",
     "typescript": "~5.8.2",
