@@ -48,6 +48,16 @@ Describe "Watchdog Script" {
     }
 
     Context "AppControl repair" {
+        It "Resyncs the restricted group without creating it so legacy machines are not migrated" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $content = Get-Content $helperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                "'Sync-OpenPathRestrictedGroup'",
+                'Sync-OpenPathRestrictedGroup -CreateIfMissing $false'
+            )
+        }
+
         It "Reapplies AppControl with approved student browsers from config" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw

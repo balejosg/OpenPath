@@ -52,6 +52,15 @@ function Invoke-OpenPathWatchdogPrechecks {
         [PSCustomObject]$Config
     )
 
+    if (Get-Command -Name 'Sync-OpenPathRestrictedGroup' -ErrorAction SilentlyContinue) {
+        try {
+            Sync-OpenPathRestrictedGroup -CreateIfMissing $false | Out-Null
+        }
+        catch {
+            Write-OpenPathLog "Watchdog: OpenPath-Restricted group sync failed: $_" -Level WARN
+        }
+    }
+
     $portalModeActive = Test-OpenPathCaptivePortalModeActive -SkipExpiredRestore
     $captiveState = 'NoNetwork'
     try {
