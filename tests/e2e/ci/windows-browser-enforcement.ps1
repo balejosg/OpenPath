@@ -548,6 +548,22 @@ function Invoke-AdminProbes {
     catch {
         Add-ProbeResult -Name 'AppLocker admin allow-all remains intact' -Section admin -Status fail -Detail $_.Exception.Message
     }
+
+    $curlPath = Join-Path $env:WINDIR 'System32\curl.exe'
+    if (Test-Path $curlPath) {
+        try {
+            $curlOutput = & $curlPath --version 2>&1 | Out-String
+            $curlOk = ($LASTEXITCODE -eq 0)
+        }
+        catch {
+            $curlOk = $false
+            $curlOutput = $_.Exception.Message
+        }
+        Add-ProbeResult -Name 'Admin can run AppLocker-blocked tool (curl.exe)' -Section admin -Status $(if ($curlOk) { 'pass' } else { 'fail' }) -Detail $(if ($curlOk) { 'Elevated admin ran curl.exe, which is blocked for the OpenPath-Restricted group.' } else { "Elevated admin could not run curl.exe (exit $LASTEXITCODE): $curlOutput" })
+    }
+    else {
+        Add-ProbeResult -Name 'Admin can run AppLocker-blocked tool (curl.exe)' -Section admin -Status skip -Detail 'curl.exe not present on this Windows build.'
+    }
 }
 
 function Write-Report {

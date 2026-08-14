@@ -368,6 +368,7 @@ $localUser = $null
 try {
     $localUser = New-LocalUser -Name $studentUserName -Password $securePassword -PasswordNeverExpires -UserMayNotChangePassword -Description 'OpenPath browser-boundary CI student'
     Add-LocalGroupMember -Group 'Users' -Member $studentUserName -ErrorAction SilentlyContinue
+    Add-LocalGroupMember -Group 'OpenPath-Restricted' -Member $studentUserName -ErrorAction Stop
     $studentSid = (Get-LocalUser -Name $studentUserName).SID.Value
     Grant-OpenPathUserRight -Sid $studentSid -Right 'SeBatchLogonRight'
     Grant-OpenPathUserRight -Sid $studentSid -Right 'SeInteractiveLogonRight'
