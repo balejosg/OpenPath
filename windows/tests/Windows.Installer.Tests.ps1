@@ -1045,6 +1045,7 @@ Describe "Installer" {
                 "Get-Command -Name 'AppControl\Set-OpenPathNonAdminAppControl' -ErrorAction Stop",
                 "Get-Command -Name 'AppControl\Test-OpenPathNonAdminAppControlActive' -ErrorAction Stop",
                 "Get-Command -Name 'AppControl\Remove-OpenPathNonAdminAppControl' -ErrorAction Stop",
+                "Get-Command -Name 'AppControl\Sync-OpenPathRestrictedGroup' -ErrorAction Stop",
                 'Import-Module "$OpenPathRoot\lib\DNS.psm1" -Force -Global',
                 'Import-Module "$OpenPathRoot\lib\Browser.psm1" -Force -Global',
                 'Import-Module "$OpenPathRoot\lib\Services.psm1" -Force -Global'
@@ -1125,6 +1126,18 @@ Describe "Installer" {
             $content = Get-Content $scriptPath -Raw
 
             $content | Should -Match '(?s)if \(\$enableNonAdminAppControl\).*?\$script:OpenPathAppControlCommands\.Set.*?else \{.*?\$script:OpenPathAppControlCommands\.Remove.*?-Confirm:\$false.*?Managed browser boundary disabled; AppLocker boundary not applied'
+        }
+
+        It "Syncs the restricted group before applying AppControl in the app-control phase" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            $content | Should -Match '(?s)\$script:OpenPathAppControlCommands\.Sync -CreateIfMissing \$true'
+            $syncIndex = $content.IndexOf('$script:OpenPathAppControlCommands.Sync -CreateIfMissing $true')
+            $setIndex = $content.IndexOf('$appControlApplied = [bool](& $script:OpenPathAppControlCommands.Set')
+            $syncIndex | Should -BeGreaterThan -1
+            $setIndex | Should -BeGreaterThan -1
+            $syncIndex | Should -BeLessThan $setIndex
         }
 
         It "Fails the app-control phase when required AppControl cannot be applied and validated" {

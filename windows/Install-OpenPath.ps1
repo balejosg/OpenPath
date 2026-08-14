@@ -394,6 +394,7 @@ $script:OpenPathAppControlCommands = @{
     Set = Get-Command -Name 'AppControl\Set-OpenPathNonAdminAppControl' -ErrorAction Stop
     Test = Get-Command -Name 'AppControl\Test-OpenPathNonAdminAppControlActive' -ErrorAction Stop
     Remove = Get-Command -Name 'AppControl\Remove-OpenPathNonAdminAppControl' -ErrorAction Stop
+    Sync = Get-Command -Name 'AppControl\Sync-OpenPathRestrictedGroup' -ErrorAction Stop
 }
 
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'configuration' -Action {
@@ -626,6 +627,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
         $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
         $approvedStudentBrowsers = @($config.approvedStudentBrowsers)
         if ($enableNonAdminAppControl) {
+            & $script:OpenPathAppControlCommands.Sync -CreateIfMissing $true | Out-Null
             $appControlApplied = [bool](& $script:OpenPathAppControlCommands.Set -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference)
             if (-not $appControlApplied) {
                 throw 'Set-OpenPathNonAdminAppControl did not apply the required AppControl boundary.'
