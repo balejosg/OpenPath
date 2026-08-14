@@ -60,6 +60,116 @@ function Get-OpenPathAppLockerRuleName {
     return ''
 }
 
+function Get-OpenPathRestrictedGroupSid {
+    <#
+    .SYNOPSIS
+    Returns the SID of the OpenPath-Restricted local group.
+    .DESCRIPTION
+    Falls back to BUILTIN\Users (S-1-5-32-545) with a WARN when the group cannot be
+    resolved, keeping legacy machines (and non-Windows test hosts) on the historical
+    non-admin scope.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $fallbackSid = 'S-1-5-32-545'
+    if (-not (Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue)) {
+        Write-OpenPathLog 'OpenPath-Restricted group lookup unavailable; falling back to BUILTIN\Users' -Level WARN
+        return $fallbackSid
+    }
+
+    try {
+        $group = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+        return [string]$group.SID.Value
+    }
+    catch {
+        Write-OpenPathLog "OpenPath-Restricted group not found; falling back to BUILTIN\Users: $_" -Level WARN
+        return $fallbackSid
+    }
+}
+
+function Sync-OpenPathRestrictedGroup {
+    <#
+    .SYNOPSIS
+    Ensures the OpenPath-Restricted local group contains every enabled non-administrator local user.
+    .DESCRIPTION
+    Idempotent, additive-only membership sync (never removes members). With
+    -CreateIfMissing the group is created when absent (installer path); without it a
+    missing group is a no-op (watchdog path), so machines deployed before the
+    restricted-group model keep the legacy BUILTIN\Users policy until reinstall.
+    Returns $true when the group is present after the call.
+    #>
+    [CmdletBinding()]
+    param(
+        [bool]$CreateIfMissing = $false
+    )
+
+    if (-not (Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue)) {
+        Write-OpenPathLog 'OpenPath-Restricted group sync unavailable; AppLocker policy falls back to BUILTIN\Users' -Level WARN
+        return $false
+    }
+
+    $group = $null
+    try {
+        $group = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+    }
+    catch {
+        if ($CreateIfMissing -and (Get-Command -Name New-LocalGroup -ErrorAction SilentlyContinue)) {
+            try {
+                $group = New-LocalGroup -Name 'OpenPath-Restricted' -Description 'Users restricted by OpenPath app control' -ErrorAction Stop
+                Write-OpenPathLog 'Created local group OpenPath-Restricted'
+            }
+            catch {
+                Write-OpenPathLog "Failed to create OpenPath-Restricted group: $_" -Level WARN
+                return $false
+            }
+        }
+        else {
+            Write-OpenPathLog 'OpenPath-Restricted group absent; membership sync skipped (legacy BUILTIN\Users policy remains until reinstall)' -Level WARN
+            return $false
+        }
+    }
+
+    $adminMembers = @()
+    try {
+        $adminMembers = @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop | ForEach-Object { [string]$_.SID.Value })
+    }
+    catch {
+        Write-OpenPathLog "Failed to enumerate Administrators for group sync: $_" -Level WARN
+        $adminMembers = @()
+    }
+
+    $existingMembers = @()
+    try {
+        $existingMembers = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop | ForEach-Object { [string]$_.SID.Value })
+    }
+    catch {
+        Write-OpenPathLog "Failed to enumerate OpenPath-Restricted members: $_" -Level WARN
+        $existingMembers = @()
+    }
+
+    try {
+        $added = 0
+        foreach ($user in @(Get-LocalUser -ErrorAction Stop)) {
+            if (-not $user.PSObject.Properties['Enabled'] -or -not $user.Enabled) { continue }
+            if (-not $user.PSObject.Properties['SID']) { continue }
+            $sid = [string]$user.SID.Value
+            if ($sid -in $adminMembers) { continue }
+            if ($sid -in $existingMembers) { continue }
+            Add-LocalGroupMember -Group 'OpenPath-Restricted' -Member $user.Name -ErrorAction Stop
+            $added++
+        }
+        if ($added -gt 0) {
+            Write-OpenPathLog "OpenPath-Restricted membership synced: added $added non-admin user(s)"
+        }
+        return $true
+    }
+    catch {
+        Write-OpenPathLog "Failed to sync OpenPath-Restricted membership: $_" -Level WARN
+        return $false
+    }
+}
+
 function Test-OpenPathAppLockerRuleManaged {
     <#
     .SYNOPSIS
@@ -947,5 +1057,7 @@ Export-ModuleMember -Function @(
     'Test-OpenPathAppControlAvailable',
     'Set-OpenPathNonAdminAppControl',
     'Test-OpenPathNonAdminAppControlActive',
-    'Remove-OpenPathNonAdminAppControl'
+    'Remove-OpenPathNonAdminAppControl',
+    'Get-OpenPathRestrictedGroupSid',
+    'Sync-OpenPathRestrictedGroup'
 )
