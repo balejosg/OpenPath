@@ -75,6 +75,48 @@ Describe "Installer cleanup helper" {
         }
     }
 
+    It "Removes the OpenPath-Restricted group during cleanup" {
+        $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
+        $cleanupHelper = Get-Content $cleanupHelperPath -Raw
+
+        Assert-ContentContainsAll -Content $cleanupHelper -Needles @(
+            'function Remove-OpenPathInstallerRestrictedGroup',
+            "Remove-LocalGroup -Name 'OpenPath-Restricted'"
+        )
+        $appLockerIndex = $cleanupHelper.IndexOf('Remove-OpenPathInstallerAppLockerRules')
+        $restrictedGroupIndex = $cleanupHelper.IndexOf('Remove-OpenPathInstallerRestrictedGroup')
+        $appLockerIndex | Should -BeGreaterThan -1
+        $restrictedGroupIndex | Should -BeGreaterThan -1
+    }
+
+    It "Removes the restricted group when cleanup runs and is silent when absent" {
+        $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
+        . $cleanupHelperPath
+
+        $global:opCleanupRemoveCalls = 0
+        function global:Get-LocalGroup { [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
+        function global:Remove-LocalGroup { param($Name) $global:opCleanupRemoveCalls++ }
+        try {
+            Remove-OpenPathInstallerRestrictedGroup
+            $global:opCleanupRemoveCalls | Should -Be 1
+        }
+        finally {
+            Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
+            Remove-Item Function:\Remove-LocalGroup -ErrorAction SilentlyContinue
+            Remove-Item Variable:\opCleanupRemoveCalls -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "Uninstall removes the restricted group via AppControl when available" {
+        $uninstallPath = Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1"
+        $content = Get-Content $uninstallPath -Raw
+
+        Assert-ContentContainsAll -Content $content -Needles @(
+            "Get-Command -Name Remove-OpenPathRestrictedGroup -ErrorAction SilentlyContinue",
+            'Remove-OpenPathRestrictedGroup | Out-Null'
+        )
+    }
+
     It "Restores DNS from legacy snapshots with array interface indexes" {
         $cleanupHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
         . $cleanupHelperPath

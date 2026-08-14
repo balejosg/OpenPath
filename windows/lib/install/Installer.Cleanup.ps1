@@ -249,6 +249,22 @@ function Remove-OpenPathInstallerAppLockerRules {
     }
 }
 
+function Remove-OpenPathInstallerRestrictedGroup {
+    <#
+    .SYNOPSIS
+        Removes the OpenPath-Restricted local group when it exists. No-op when absent or unavailable.
+    #>
+    if (-not (Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue)) { return }
+    try {
+        if (Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue) {
+            Remove-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+        }
+    }
+    catch {
+        Write-InstallerWarning "  Failed to remove OpenPath-Restricted group: $_"
+    }
+}
+
 function ConvertTo-OpenPathInstallerFirewallManifestRuleNames {
     <#
     .SYNOPSIS
@@ -541,6 +557,7 @@ function Invoke-OpenPathInstallerExistingInstallCleanup {
     Restore-OpenPathInstallerDnsSettings
     Remove-OpenPathInstallerFirewallRules
     Remove-OpenPathInstallerAppLockerRules
+    Remove-OpenPathInstallerRestrictedGroup
     Remove-OpenPathInstallerBrowserArtifacts
     Stop-OpenPathInstallerAcrylicService -KeepAcrylic:$KeepAcrylic
     Remove-OpenPathInstallerInstallRoot -KeepLogs:$KeepLogs -OpenPathRoot $OpenPathRoot

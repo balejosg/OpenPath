@@ -347,6 +347,10 @@ else {
     Remove-OpenPathFallbackAppLockerRules
 }
 
+if (Get-Command -Name Remove-OpenPathRestrictedGroup -ErrorAction SilentlyContinue) {
+    Remove-OpenPathRestrictedGroup | Out-Null
+}
+
 # Step 4: Remove browser policies
 Write-Host "[4/6] Removing browser policies..." -ForegroundColor Yellow
 

@@ -743,5 +743,19 @@ Describe "AppControl Module" {
             Sync-OpenPathRestrictedGroup -CreateIfMissing $true | Should -BeTrue
             @($global:opAddedMembers) | Should -Be @('student2')
         }
+
+        It "Removes the restricted group when it exists and is silent when absent" {
+            $global:opRemoveCalls = 0
+            function global:Get-LocalGroup { [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
+            function global:Remove-LocalGroup { param($Name) $global:opRemoveCalls++ }
+            try {
+                Remove-OpenPathRestrictedGroup
+                $global:opRemoveCalls | Should -Be 1
+            }
+            finally {
+                Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
+                Remove-Item Function:\Remove-LocalGroup -ErrorAction SilentlyContinue
+            }
+        }
     }
 }

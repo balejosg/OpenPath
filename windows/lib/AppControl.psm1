@@ -1049,6 +1049,28 @@ function Remove-OpenPathNonAdminAppControl {
     }
 }
 
+function Remove-OpenPathRestrictedGroup {
+    <#
+    .SYNOPSIS
+    Removes the OpenPath-Restricted local group when it exists. No-op when absent or unavailable.
+    #>
+    [CmdletBinding()]
+    param()
+
+    if (-not (Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue)) {
+        return
+    }
+    try {
+        if (Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue) {
+            Remove-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+            Write-OpenPathLog 'Removed OpenPath-Restricted group'
+        }
+    }
+    catch {
+        Write-OpenPathLog "Failed to remove OpenPath-Restricted group: $_" -Level WARN
+    }
+}
+
 Export-ModuleMember -Function @(
     'Get-OpenPathAlwaysDeniedAppxProductNames',
     'New-OpenPathNonAdminAppLockerPolicySpec',
@@ -1059,5 +1081,6 @@ Export-ModuleMember -Function @(
     'Test-OpenPathNonAdminAppControlActive',
     'Remove-OpenPathNonAdminAppControl',
     'Get-OpenPathRestrictedGroupSid',
-    'Sync-OpenPathRestrictedGroup'
+    'Sync-OpenPathRestrictedGroup',
+    'Remove-OpenPathRestrictedGroup'
 )
