@@ -166,6 +166,18 @@ Get-WinEvent -LogName "Microsoft-Windows-AppLocker/EXE and DLL" -MaxEvents 50 |
 
 Event ID 8004 is an AppLocker block event. If a legitimate application is being blocked, verify it is installed under an IT-managed location such as `Program Files` or `Program Files (x86)`. Applications in student-writable locations (`Downloads`, `Desktop`, `Temp`) are intentionally blocked.
 
+User-scoped AppLocker rules apply to the local `OpenPath-Restricted` group, which the installer keeps in sync with all enabled non-administrator local users. Local administrators are not members and are exempt.
+
+**Administrator blocked by AppLocker (event 8004 on an admin session):** check whether the admin account is a member of `OpenPath-Restricted`:
+
+```powershell
+Get-LocalGroupMember -Group 'OpenPath-Restricted' | Select-Object Name, SID
+```
+
+The watchdog sync only adds members and never removes them, so a manually added admin stays until removed. Remove the admin from the group with `Remove-LocalGroupMember -Group 'OpenPath-Restricted' -Member '<admin-user>'`, or reinstall to rebuild the group. A fresh install also recreates the group if it was deleted by hand.
+
+**Restricted group missing (policy falls back to `BUILTIN\Users`):** machines installed before the restricted-group model keep the legacy `BUILTIN\Users` scope and log a WARN (`OpenPath-Restricted group not found; falling back to BUILTIN\Users`). Admins on those machines can remain limited by the boundary; reinstall OpenPath (or run `Sync-OpenPathRestrictedGroup -CreateIfMissing $true` from an elevated shell with the AppControl module loaded) to adopt the group model.
+
 ### Browser Doctor Report
 
 `doctor browser` runs `Get-OpenPathBrowserDoctorReport` from `lib\Browser.psm1` and prints a structured summary of browser extension readiness, native host registration, and managed policy state:

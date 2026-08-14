@@ -39,6 +39,14 @@ executables or scripts launched from student-writable locations such as
 Downloads, Desktop, or Temp, and selected bypass tools such as `curl`, `ssh`,
 `winget`, `certutil`, `bitsadmin`, `mshta`, `wscript`, and `cscript`.
 
+User-scoped rules are applied to the local `OpenPath-Restricted` group instead
+of `BUILTIN\Users`, so local administrators are never limited by the boundary.
+The installer creates this group and keeps it in sync with all enabled
+non-administrator local users (membership is additive only; the watchdog
+repeats the sync without creating the group, and it never removes members).
+Machines installed before this model keep the legacy `BUILTIN\Users` scope
+until they are reinstalled; the watchdog intentionally does not migrate them.
+
 Before enabling enforcement on real student PCs, inventory the software teachers
 need, install required classroom applications through IT-managed locations such
 as Program Files, and validate the exact student account flow on a limited pilot
