@@ -431,7 +431,7 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
     return [PSCustomObject]@{
         Mode = $Mode
         EnforcementMode = if ($Mode -eq 'AuditOnly') { 'AuditOnly' } else { 'Enabled' }
-        NonAdminSid = 'S-1-5-32-545'
+        RestrictedSid = Get-OpenPathRestrictedGroupSid
         AdminSid = 'S-1-5-32-544'
         SystemSid = 'S-1-5-18'
         ApprovedBrowsers = @($approvedBrowserSet.Keys | Sort-Object)
@@ -598,7 +598,7 @@ function New-OpenPathAppLockerPolicyXml {
 
         foreach ($path in $denyPaths) {
             $pathId = ($path -replace '[^0-9A-Za-z]+', '-').Trim('-')
-            $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType users deny $pathId" -Sid $Spec.NonAdminSid -Action 'Deny' -Path $path
+            $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType users deny $pathId" -Sid $Spec.RestrictedSid -Action 'Deny' -Path $path
         }
 
         $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType administrators allow all" -Sid $Spec.AdminSid -Action 'Allow' -Path '*'
@@ -611,7 +611,7 @@ function New-OpenPathAppLockerPolicyXml {
             }
 
             $pathId = ($path -replace '[^0-9A-Za-z]+', '-').Trim('-')
-            $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType users allow $pathId" -Sid $Spec.NonAdminSid -Action 'Allow' -Path $path -Exceptions $exceptions
+            $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType users allow $pathId" -Sid $Spec.RestrictedSid -Action 'Allow' -Path $path -Exceptions $exceptions
         }
 
         $ruleCollections += "    <RuleCollection Type=`"$collectionType`" EnforcementMode=`"$($Spec.EnforcementMode)`">`n$($rules -join "`n")`n    </RuleCollection>"
@@ -620,7 +620,7 @@ function New-OpenPathAppLockerPolicyXml {
     $appxRules = @()
     foreach ($productName in @($Spec.UnapprovedBrowserDenyAppxProducts)) {
         $productId = ($productName -replace '[^0-9A-Za-z]+', '-').Trim('-')
-        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users deny $productId" -Sid $Spec.NonAdminSid -Action 'Deny' -PublisherName '*' -ProductName $productName -BinaryName '*'
+        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users deny $productId" -Sid $Spec.RestrictedSid -Action 'Deny' -PublisherName '*' -ProductName $productName -BinaryName '*'
     }
     # W-2: deny the parallel-network-stack Microsoft Appx packages (WSL, Windows
     # Terminal, OpenSSH/Telnet) ahead of the Microsoft-signed allow. AppLocker
@@ -628,7 +628,7 @@ function New-OpenPathAppLockerPolicyXml {
     # Microsoft-signed allow below keeps the rest of the inbox/Store surface usable.
     foreach ($productName in @($Spec.AlwaysDeniedAppxProducts)) {
         $productId = ($productName -replace '[^0-9A-Za-z]+', '-').Trim('-')
-        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users deny parallel network stack $productId" -Sid $Spec.NonAdminSid -Action 'Deny' -PublisherName '*' -ProductName $productName -BinaryName '*'
+        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users deny parallel network stack $productId" -Sid $Spec.RestrictedSid -Action 'Deny' -PublisherName '*' -ProductName $productName -BinaryName '*'
     }
     # Allow only Microsoft-signed packaged apps (OS inbox and Store-distributed Microsoft apps).
     # A global ProductName='*' allow lets any publisher's Appx run, including sideloaded alternate
@@ -888,7 +888,7 @@ function Test-OpenPathAppLockerBoundaryPolicy {
     }
 
     foreach ($productName in @($spec.AlwaysDeniedAppxProducts)) {
-        if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Deny' -Sid $spec.NonAdminSid -ProductName $productName)) {
+        if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Deny' -Sid $spec.RestrictedSid -ProductName $productName)) {
             return $false
         }
     }
@@ -896,12 +896,12 @@ function Test-OpenPathAppLockerBoundaryPolicy {
     $approvedSet = Get-OpenPathApprovedBrowserSet -ApprovedBrowsers $ApprovedBrowsers
     if (-not $approvedSet.Edge) {
         foreach ($path in @($spec.UnapprovedBrowserDenyPaths | Where-Object { $_ -match '\\Microsoft\\Edge\\Application\\msedge\.exe$' })) {
-            if (-not (Test-OpenPathFilePathRulePresent -Collection $exeCollection -Action 'Deny' -Sid $spec.NonAdminSid -Path $path)) {
+            if (-not (Test-OpenPathFilePathRulePresent -Collection $exeCollection -Action 'Deny' -Sid $spec.RestrictedSid -Path $path)) {
                 return $false
             }
         }
         foreach ($productName in @($spec.UnapprovedBrowserDenyAppxProducts)) {
-            if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Deny' -Sid $spec.NonAdminSid -ProductName $productName)) {
+            if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Deny' -Sid $spec.RestrictedSid -ProductName $productName)) {
                 return $false
             }
         }

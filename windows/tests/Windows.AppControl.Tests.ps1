@@ -70,7 +70,7 @@ Describe "AppControl Module" {
                 'C:\Program Files (x86)\Internet Explorer\iexplore.exe'
             )
 
-            $spec.NonAdminSid | Should -Be 'S-1-5-32-545'
+            $spec.RestrictedSid | Should -Be 'S-1-5-32-545'
             $spec.AdminSid | Should -Be 'S-1-5-32-544'
             $spec.SystemSid | Should -Be 'S-1-5-18'
             $spec.Mode | Should -Be 'Enforced'
@@ -200,7 +200,22 @@ Describe "AppControl Module" {
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -Mode 'AuditOnly'
 
             $spec.Mode | Should -Be 'AuditOnly'
-            $spec.NonAdminSid | Should -Be 'S-1-5-32-545'
+            $spec.RestrictedSid | Should -Be 'S-1-5-32-545'
+        }
+
+        It "Scopes user Deny and Allow rules to the restricted group SID when the group exists" {
+            function global:Get-LocalGroup { [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-10-20-30-4242' } } }
+            try {
+                $spec = New-OpenPathNonAdminAppLockerPolicySpec
+                $spec.RestrictedSid | Should -Be 'S-1-5-21-10-20-30-4242'
+
+                $xml = New-OpenPathAppLockerPolicyXml -Spec $spec
+                $xml | Should -Match 'S-1-5-21-10-20-30-4242'
+                $xml | Should -Not -Match ([regex]::Escape('S-1-5-32-545'))
+            }
+            finally {
+                Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
+            }
         }
 
         It "Generates AppLocker rule ids without braces for GuidType compatibility" {
