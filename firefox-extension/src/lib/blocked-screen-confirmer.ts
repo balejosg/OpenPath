@@ -17,7 +17,13 @@ const BLOCKED_SCREEN_DECISION_TTL_MS = 5_000;
 // Upper bound on how long the blocked-screen confirmation waits for the native host. A slow or hung
 // host must not stall the decision; on timeout we treat it as "not confirmed" and fall back to the
 // reactive navigation-error path instead of blocking the preflight.
-const BLOCKED_SCREEN_NATIVE_CONFIRM_TIMEOUT_MS = 1_500;
+//
+// Must fit the Windows native host's cold-start round trip: the host is a PowerShell script spawned
+// per session (Firefox kills idle hosts), so the first check pays script engine startup, support-file
+// dot-sourcing, and state reads. Measured ~0.9-1.0s on runner-class hardware without AV; student
+// machines with real-time AV can take several seconds. Keep the bound above that range while still
+// failing open promptly on a genuinely dead host.
+const BLOCKED_SCREEN_NATIVE_CONFIRM_TIMEOUT_MS = 4_000;
 
 export function isNativePolicyBlockedResult(
   result: VerifyResponse['results'][number] | undefined

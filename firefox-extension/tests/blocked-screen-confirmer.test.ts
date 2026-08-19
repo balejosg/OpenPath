@@ -222,6 +222,24 @@ void test('confirmer falls back to not-blocked when the native host does not ans
   assert.equal(native.calls(), 2);
 });
 
+// The Windows native host is a PowerShell script spawned cold per session, so its first check
+// round trip is far slower than the Linux Python host. The default confirmation timeout must fit
+// that round trip (measured ~0.9-1.0s on runner-class hardware without AV) or blocked screens
+// silently fail open on student machines with real-time AV.
+void test('confirmer default timeout fits the Windows native host cold-start round trip', async () => {
+  const native = countingCheck(
+    (domains) =>
+      new Promise<VerifyResponse>((resolve) => {
+        setTimeout(() => {
+          resolve(blockedResponse(domains));
+        }, 2_500);
+      })
+  );
+  const confirmer = createBlockedScreenConfirmer({ checkDomains: native.check, now: () => 1000 });
+
+  assert.deepEqual(await confirmer.confirm(context('blocked.example')), { blocked: true });
+});
+
 void test('confirmer reports captive-portal recovery eligibility through the injected callback', async () => {
   const eligibility: { hostname: string; eligible: boolean }[] = [];
   const native = countingCheck((domains) =>
