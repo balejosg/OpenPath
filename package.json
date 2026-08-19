@@ -8,7 +8,7 @@
     "prepare": "husky || true",
     "postinstall": "patch-package",
     "build": "npm run build --workspaces --if-present",
-    "lint": "eslint . --max-warnings=0 --cache --cache-location .eslintcache",
+    "lint": "npm run lint --workspace=@openpath/shared && npm run lint --workspace=@openpath/api && npm run lint --workspace=@openpath/dashboard && npm run lint --workspace=@openpath/react-spa && npm run lint --workspace=@openpath/firefox-extension && eslint tests --max-warnings=0 --cache --cache-location .eslintcache --concurrency off",
     "lint:fix": "eslint . --fix --cache --cache-location .eslintcache",
     "lint:shell": "shellcheck --severity=warning linux/lib/*.sh linux/scripts/**/*.sh tests/**/*.sh",
     "clean": "npm run clean --workspaces --if-present && rm -rf node_modules",

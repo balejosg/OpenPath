@@ -19,6 +19,7 @@ export default tseslint.config(
       '**/*.config.mjs',
       '**/shared/tests/**',
       'react-spa/e2e/**',
+      'tests/e2e/artifacts/**',
       'firefox-extension/blocked/**',
       'firefox-extension/xpi-signature-evidence.mjs',
       'tests/repo-config.test.mjs',
