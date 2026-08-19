@@ -229,7 +229,7 @@
           "range": ">=3.0.0 <3.1.5"
         },
         {
-          "source": 1144861,
+          "source": 1145454,
           "name": "fast-uri",
           "dependency": "fast-uri",
           "title": "fast-uri vulnerable to host confusion via failed IDN canonicalization",
