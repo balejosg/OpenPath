@@ -311,6 +311,30 @@ Describe "Browser Module - Native Host" {
             )
         }
 
+        It "Preserves an existing native host registration when request setup is incomplete during updates" {
+            $nativeHostModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.FirefoxNativeHost.psm1"
+            $browserModulePath = Join-Path $PSScriptRoot ".." "lib" "Browser.psm1"
+            $updateModulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
+            $nativeHostContent = Get-Content $nativeHostModulePath -Raw
+            $browserContent = Get-Content $browserModulePath -Raw
+            $updateContent = Get-Content $updateModulePath -Raw
+
+            Assert-ContentContainsAll -Content $nativeHostContent -Needles @(
+                '[switch]$PreserveExistingOnNotReady',
+                'preserving existing native host registration',
+                'if ($PreserveExistingOnNotReady) {'
+            )
+
+            Assert-ContentContainsAll -Content $browserContent -Needles @(
+                '[switch]$PreserveExistingOnNotReady',
+                'PreserveExistingOnNotReady:$PreserveExistingOnNotReady'
+            )
+
+            Assert-ContentContainsAll -Content $updateContent -Needles @(
+                'Register-OpenPathFirefoxNativeHost -Config $config -PreserveExistingOnNotReady'
+            )
+        }
+
         It "Stores classroom identity in native host state for request diagnostics" {
             $requestSetupModulePath = Join-Path $PSScriptRoot ".." "lib" "RequestSetup.State.psm1"
             $requestSetupContent = Get-Content $requestSetupModulePath -Raw
@@ -1725,6 +1749,39 @@ Describe "Browser Module - Native Host" {
                 Remove-Item Env:OPENPATH_CAPTIVE_PORTAL_RECOVERY_RESULT_PATH -ErrorAction SilentlyContinue
                 Remove-Item $queuePath, $resultPath -Recurse -Force -ErrorAction SilentlyContinue
             }
+        }
+
+        It "Skips DNS resolution and reports active policy for denied native checks" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+            $script:ResolveDomainIpCallCount = 0
+
+            function Resolve-DomainIp {
+                param([string]$Domain)
+                $script:ResolveDomainIpCallCount += 1
+                return '203.0.113.10'
+            }
+            function Get-NativeHostPortalRecoverySignal {
+                param([string]$Domain, [object]$Message)
+                return 'none'
+            }
+            function Invoke-NativeHostAuthenticatedCaptivePortalRestoreIfNeeded {}
+
+            $result = Invoke-NativeHostCheckAction `
+                -Message ([PSCustomObject]@{ domains = @('blocked.example', 'allowed.example') }) `
+                -Sections ([PSCustomObject]@{ Whitelist = @('allowed.example') })
+
+            $blocked = $result.results | Where-Object { $_.domain -eq 'blocked.example' }
+            $allowed = $result.results | Where-Object { $_.domain -eq 'allowed.example' }
+
+            $result.success | Should -BeTrue
+            $blocked.in_whitelist | Should -BeFalse
+            $blocked.resolved_ip | Should -BeNullOrEmpty
+            $blocked.policy_active | Should -BeTrue
+            $allowed.in_whitelist | Should -BeTrue
+            $allowed.resolved_ip | Should -Be '203.0.113.10'
+            $allowed.policy_active | Should -BeTrue
+            $script:ResolveDomainIpCallCount | Should -Be 1
         }
 
         It "Exposes portal recovery eligibility in native check results" {

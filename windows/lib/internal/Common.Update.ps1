@@ -320,7 +320,7 @@ function Invoke-OpenPathAgentSelfUpdate {
             Enable-OpenPathTask | Out-Null
         }
         if (Get-Command -Name 'Register-OpenPathFirefoxNativeHost' -ErrorAction SilentlyContinue) {
-            Register-OpenPathFirefoxNativeHost -Config $config | Out-Null
+            Register-OpenPathFirefoxNativeHost -Config $config -PreserveExistingOnNotReady | Out-Null
         }
         if (Get-Command -Name 'Restore-OpenPathProtectedMode' -ErrorAction SilentlyContinue) {
             Restore-OpenPathProtectedMode -Config $config | Out-Null

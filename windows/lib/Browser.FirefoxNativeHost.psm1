@@ -188,7 +188,12 @@ function Register-OpenPathFirefoxNativeHost {
         [AllowNull()]
         [object]$Config = $null,
 
-        [switch]$ClearWhitelist
+        [switch]$ClearWhitelist,
+
+        # Preserve an already-registered native host when request setup is incomplete instead of
+        # unregistering it. Used by the update path: a transiently incomplete config (for example
+        # during token rotation) must never tear down a working browser integration.
+        [switch]$PreserveExistingOnNotReady
     )
 
     $nativeRoot = Get-OpenPathFirefoxNativeHostRoot
@@ -201,6 +206,10 @@ function Register-OpenPathFirefoxNativeHost {
         }
         else {
             'OpenPath request setup is incomplete.'
+        }
+        if ($PreserveExistingOnNotReady) {
+            Write-OpenPathLog "Firefox native host request setup is incomplete; preserving existing native host registration. $diagnosticMessage" -Level WARN
+            return $false
         }
         Write-OpenPathLog "Firefox native host request setup is incomplete; skipping native host registration. $diagnosticMessage" -Level WARN
         Unregister-OpenPathFirefoxNativeHost | Out-Null

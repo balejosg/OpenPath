@@ -94,10 +94,12 @@ function Register-OpenPathFirefoxNativeHost {
         [AllowNull()]
         [object]$Config = $null,
 
-        [switch]$ClearWhitelist
+        [switch]$ClearWhitelist,
+
+        [switch]$PreserveExistingOnNotReady
     )
 
-    Browser.FirefoxNativeHost\Register-OpenPathFirefoxNativeHost -Config $Config -ClearWhitelist:$ClearWhitelist
+    Browser.FirefoxNativeHost\Register-OpenPathFirefoxNativeHost -Config $Config -ClearWhitelist:$ClearWhitelist -PreserveExistingOnNotReady:$PreserveExistingOnNotReady
 }
 
 function Unregister-OpenPathFirefoxNativeHost {
