@@ -1,5 +1,5 @@
 function Invoke-NativeHostCheckAction {
-    # validates each domain in the message, checks whitelist membership, resolves its IP, and evaluates captive-portal recovery eligibility; returns a per-domain results array.
+    # validates each domain in the message, checks whitelist membership, resolves allowed domains, and evaluates captive-portal recovery eligibility; returns a per-domain results array.
     param(
         [Parameter(Mandatory = $true)]
         [object]$Message,
@@ -20,12 +20,15 @@ function Invoke-NativeHostCheckAction {
     Invoke-NativeHostAuthenticatedCaptivePortalRestoreIfNeeded
 
     $results = foreach ($domain in $validDomains) {
+        $inWhitelist = $whitelistSet.Contains($domain)
         $portalRecoverySignal = Get-NativeHostPortalRecoverySignal -Domain $domain -Message $Message
+        $resolvedIp = if ($inWhitelist) { Resolve-DomainIp -Domain $domain } else { $null }
         @{
             domain = $domain
-            in_whitelist = $whitelistSet.Contains($domain)
-            resolved_ip = (Resolve-DomainIp -Domain $domain)
-            portal_recovery_eligible = ((-not $whitelistSet.Contains($domain)) -and $portalRecoverySignal -ne 'none')
+            in_whitelist = $inWhitelist
+            resolved_ip = $resolvedIp
+            policy_active = $true
+            portal_recovery_eligible = ((-not $inWhitelist) -and $portalRecoverySignal -ne 'none')
             portal_recovery_signal = $portalRecoverySignal
         }
     }
