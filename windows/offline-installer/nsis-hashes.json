@@ -1,0 +1,8 @@
+{
+  "version": "3.10",
+  "acceptedMakensisSha256": [
+    "be8265b2c6705c6451c899c37c49f1f4a6d4592007fbbc420e1e488b57b48b8a",
+    "913ac7636eec910061c737a120c067ce9a77dbc2e69fac8d8117761376f271c3"
+  ],
+  "notes": "Digests taken from the official nsis-3.10.zip distribution: Bin/makensis.exe (first) and the top-level makensis.exe copy (second)."
+}

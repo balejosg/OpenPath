@@ -179,3 +179,61 @@ test('offline installer Pester suite exists and is registered in the aggregate r
     );
   }
 });
+
+test('offline installer build helpers enforce trailer format, payload inventory, and NSIS pin', () => {
+  const placeholderGenerator = readText(
+    'windows/offline-installer/scripts/generate-trailer-placeholder.mjs'
+  );
+  for (const marker of ['OPWSI1', 'OPWS', '65536', '52', '16']) {
+    assert.ok(
+      placeholderGenerator.includes(marker),
+      `trailer placeholder generator should encode ${marker}`
+    );
+  }
+
+  const manifestBuilder = readText('windows/offline-installer/scripts/build-payload-manifest.mjs');
+  for (const requiredPayload of [
+    'payloads/acrylic/Acrylic-Portable.zip',
+    'payloads/firefox-esr/Firefox-Setup-esr.exe',
+    'openpath-firefox-extension.xpi',
+    'metadata.json',
+    'chromium-managed',
+    'VERSION',
+  ]) {
+    assert.ok(
+      manifestBuilder.includes(requiredPayload),
+      `payload manifest builder should require ${requiredPayload}`
+    );
+  }
+  assert.match(
+    manifestBuilder,
+    /process\.exit\(1\)|throw new Error/,
+    'payload manifest builder should fail closed on missing payloads'
+  );
+
+  const nsisHashes = JSON.parse(readText('windows/offline-installer/nsis-hashes.json'));
+  assert.equal(nsisHashes.version, '3.10');
+  assert.ok(
+    Array.isArray(nsisHashes.acceptedMakensisSha256) &&
+      nsisHashes.acceptedMakensisSha256.length > 0,
+    'nsis-hashes.json should list accepted makensis.exe SHA-256 digests'
+  );
+
+  const verifyScript = readText('windows/offline-installer/scripts/verify-nsis.ps1');
+  assert.match(verifyScript, /Get-FileHash/);
+  assert.match(verifyScript, /exit 1/, 'verify-nsis.ps1 must exit non-zero on hash mismatch');
+
+  const appendScript = readText('windows/offline-installer/scripts/append-trailer-placeholder.mjs');
+  assert.match(
+    appendScript,
+    /trailer-placeholder\.bin/,
+    'append step should concatenate the committed placeholder onto the compiled exe'
+  );
+  assert.match(appendScript, /OpenPath-Windows-Setup-Template\.exe/);
+
+  const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
+  for (const marker of ['Install-OpenPath.ps1', '-OfflineConfigPath', 'payload-manifest.json']) {
+    assert.ok(nsiSource.includes(marker), `NSIS source should reference ${marker}`);
+  }
+  assert.doesNotMatch(nsiSource, /classroompath/i, 'NSIS template must stay wrapper-agnostic');
+});

@@ -96,58 +96,38 @@ function ConvertTo-OpenPathOfflineUtcDateTime {
     return $parsed.ToUniversalTime()
 }
 
-function Read-OpenPathOfflineConfig {
-    <#
-    .SYNOPSIS
-        Reads and strictly validates the generic offline installer configuration JSON.
-    .PARAMETER Path
-        Path to the offline configuration file written by the bootstrapper.
-    #>
-    [CmdletBinding()]
+function ConvertFrom-OpenPathOfflineConfigObject {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Path
+        [object]$Config
     )
 
-    if (-not (Test-Path $Path)) {
-        throw "Offline installer configuration not found: $Path"
-    }
-
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
-    $config = $null
-    try {
-        $config = $raw | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
-        throw "Offline installer configuration is not valid JSON: $_"
-    }
-
-    if ($config -isnot [PSCustomObject]) {
+    if ($Config -isnot [PSCustomObject]) {
         throw 'Offline installer configuration must be a JSON object'
     }
 
-    Assert-OpenPathOfflineSchemaVersion -Config $config
+    Assert-OpenPathOfflineSchemaVersion -Config $Config
 
     foreach ($requiredName in @('apiUrl', 'classroomId', 'enrollmentToken', 'enrollmentTokenExpiresAt')) {
-        $property = $config.PSObject.Properties[$requiredName]
+        $property = $Config.PSObject.Properties[$requiredName]
         if (-not $property) {
             throw "Offline installer configuration is missing required field '$requiredName'"
         }
     }
 
-    Assert-OpenPathOfflineHttpsUrl -Value ([string]$config.apiUrl) -Name 'apiUrl'
-    Assert-OpenPathOfflineNonEmptyString -Value ([string]$config.classroomId) -Name 'classroomId'
+    Assert-OpenPathOfflineHttpsUrl -Value ([string]$Config.apiUrl) -Name 'apiUrl'
+    Assert-OpenPathOfflineNonEmptyString -Value ([string]$Config.classroomId) -Name 'classroomId'
     Assert-OpenPathOfflineNonEmptyString `
-        -Value ([string]$config.enrollmentToken) `
+        -Value ([string]$Config.enrollmentToken) `
         -Name 'enrollmentToken' `
         -MaximumLength $script:OpenPathOfflineMaxStringChars
 
     $expiresAt = ConvertTo-OpenPathOfflineUtcDateTime `
-        -Value $config.enrollmentTokenExpiresAt `
+        -Value $Config.enrollmentTokenExpiresAt `
         -Name 'enrollmentTokenExpiresAt'
 
     $captivePortalDomains = @()
-    $domainsProperty = $config.PSObject.Properties['captivePortalDomains']
+    $domainsProperty = $Config.PSObject.Properties['captivePortalDomains']
     if ($domainsProperty -and $null -ne $domainsProperty.Value) {
         if ($domainsProperty.Value -isnot [System.Array]) {
             throw 'Offline installer configuration field captivePortalDomains must be an array'
@@ -167,7 +147,7 @@ function Read-OpenPathOfflineConfig {
     $installFirefoxIfMissing = $false
     $enforceManagedBrowserBoundary = $false
     $approvedStudentBrowsers = @('Firefox')
-    $optionsProperty = $config.PSObject.Properties['options']
+    $optionsProperty = $Config.PSObject.Properties['options']
     if ($optionsProperty -and $null -ne $optionsProperty.Value) {
         if ($optionsProperty.Value -isnot [PSCustomObject]) {
             throw 'Offline installer configuration field options must be an object'
@@ -205,15 +185,57 @@ function Read-OpenPathOfflineConfig {
     }
 
     return [PSCustomObject]@{
-        ApiUrl = [string]$config.apiUrl
-        ClassroomId = [string]$config.classroomId
-        EnrollmentToken = [string]$config.enrollmentToken
+        ApiUrl = [string]$Config.apiUrl
+        ClassroomId = [string]$Config.classroomId
+        EnrollmentToken = [string]$Config.enrollmentToken
         EnrollmentTokenExpiresAt = $expiresAt
         CaptivePortalDomains = $captivePortalDomains
         InstallFirefoxIfMissing = $installFirefoxIfMissing
         EnforceManagedBrowserBoundary = $enforceManagedBrowserBoundary
         ApprovedStudentBrowsers = $approvedStudentBrowsers
     }
+}
+
+function Read-OpenPathOfflineConfigText {
+    <#
+    .SYNOPSIS
+        Validates an already-extracted offline configuration payload.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigJson
+    )
+
+    try {
+        $config = $ConfigJson | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "Offline installer configuration is not valid JSON: $_"
+    }
+
+    return ConvertFrom-OpenPathOfflineConfigObject -Config $config
+}
+
+function Read-OpenPathOfflineConfig {
+    <#
+    .SYNOPSIS
+        Reads and strictly validates the generic offline installer configuration JSON.
+    .PARAMETER Path
+        Path to the offline configuration file written by the bootstrapper.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path $Path)) {
+        throw "Offline installer configuration not found: $Path"
+    }
+
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    return Read-OpenPathOfflineConfigText -ConfigJson $raw
 }
 
 function Assert-OpenPathOfflinePayloadManifest {

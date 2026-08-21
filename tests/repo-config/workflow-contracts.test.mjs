@@ -2032,3 +2032,44 @@ test('E2E release evidence is not cancelled by newer pushes on the same branch',
     'e2e-tests.yml should preserve in-flight same-SHA release evidence instead of cancelling it on the next push'
   );
 });
+
+test('release scripts workflow builds the offline NSIS template on a pinned Windows runner', () => {
+  const releaseWorkflow = readText('.github/workflows/release-scripts.yml');
+  const templateJob = extractWorkflowJobBlock(releaseWorkflow, 'windows-offline-template');
+
+  for (const required of [
+    'runs-on: windows-2025',
+    'joncloud/makensis-action@v4',
+    "nsis-version: '3.10'",
+    'nsis-hashes.json',
+    'scripts/verify-nsis.ps1',
+    'scripts/build-payload-manifest.mjs',
+    'OpenPath-Windows-Setup-Template.exe',
+  ]) {
+    assert.ok(
+      templateJob.includes(required),
+      `windows-offline-template job should include ${required}`
+    );
+  }
+
+  assert.ok(
+    /supply-chain/i.test(templateJob),
+    'windows-offline-template job should annotate NSIS hash mismatches as supply-chain violations'
+  );
+});
+
+test('release scripts workflow publishes template assets while retaining the Windows zip', () => {
+  const releaseWorkflow = readText('.github/workflows/release-scripts.yml');
+  const filesMatch = releaseWorkflow.match(/files: \|\n([\s\S]*?)(?=\n {6}- |\n {2}[a-z])/);
+  assert.ok(filesMatch, 'release-scripts.yml should declare release asset files');
+
+  const assets = filesMatch[1];
+  for (const asset of [
+    'OpenPath-Windows-Setup-Template.exe',
+    'OpenPath-Windows-Setup-Template.exe.sha256',
+    'payload-manifest.json',
+    'windows-v${{ steps.vars.outputs.version }}.zip',
+  ]) {
+    assert.ok(assets.includes(asset), `release assets should include ${asset}`);
+  }
+});
