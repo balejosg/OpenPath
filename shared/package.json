@@ -37,6 +37,10 @@
     "./schedule-time": {
       "types": "./dist/schedule-time.d.ts",
       "import": "./dist/schedule-time.js"
+    },
+    "./windows-offline-installer": {
+      "types": "./dist/windows-offline-installer.d.ts",
+      "import": "./dist/windows-offline-installer.js"
     }
   },
   "scripts": {

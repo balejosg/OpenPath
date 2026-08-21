@@ -9,3 +9,4 @@ export * from './slug.js';
 export * from './education-domain-recipes.js';
 export * from './captive-portal-domains.js';
 export * from './contract-constants.js';
+export * from './windows-offline-installer.js';
