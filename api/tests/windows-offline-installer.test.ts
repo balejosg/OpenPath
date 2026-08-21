@@ -101,6 +101,39 @@ void describe('windows offline installer trailer', () => {
     });
   });
 
+  void test('rejects trailers with a slot length other than the v1 fixed size', async () => {
+    await withTempDir(async (directoryPath) => {
+      const wrongSlotLength = WINDOWS_OFFLINE_INSTALLER_SLOT_LENGTH - 1;
+      const trailer = Buffer.from(serialize(validConfig));
+      trailer.writeUInt32LE(wrongSlotLength, 16);
+      trailer.writeUInt32LE(
+        wrongSlotLength,
+        trailer.length - WINDOWS_OFFLINE_INSTALLER_EPILOGUE_SIZE + 4
+      );
+
+      const filePath = path.join(directoryPath, 'bad-slot-length.exe');
+      await writeFile(filePath, trailer);
+
+      await assert.rejects(() => parseFromFile(filePath), /slot length.*65536/i);
+      await assert.rejects(
+        () => applyOverlay(filePath, path.join(directoryPath, 'output.exe'), validConfig),
+        /slot length.*65536/i
+      );
+    });
+  });
+
+  void test('rejects non-zero reserved header flags', async () => {
+    await withTempDir(async (directoryPath) => {
+      const trailer = Buffer.from(serialize(validConfig));
+      trailer.writeUInt16LE(1, 10);
+
+      const filePath = path.join(directoryPath, 'bad-flags.exe');
+      await writeFile(filePath, trailer);
+
+      await assert.rejects(() => parseFromFile(filePath), /unsupported.*flags/i);
+    });
+  });
+
   void test('rejects payload lengths beyond the configured slot length', async () => {
     await withTempDir(async (directoryPath) => {
       const trailer = Buffer.from(serialize(validConfig));
@@ -188,10 +221,7 @@ void describe('windows offline installer trailer', () => {
       assert.deepEqual(parsed.config, outputConfig);
 
       const entries = await readdir(directoryPath);
-      assert.deepEqual(
-        entries.filter((entry) => entry.includes('.tmp-')),
-        []
-      );
+      assert.deepEqual(entries.sort(), ['output.exe', 'template.exe']);
     });
   });
 

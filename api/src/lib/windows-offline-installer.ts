@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, open, readFile, rename, rm } from 'node:fs/promises';
+import { copyFile, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -77,6 +77,14 @@ function buildTrailer(payload: Buffer, slotLength: number): Buffer {
   return Buffer.concat([buildHeader(payload, slotLength), slot, buildEpilogue(slotLength)]);
 }
 
+function validateSlotLength(slotLength: number): void {
+  if (slotLength !== WINDOWS_OFFLINE_INSTALLER_SLOT_LENGTH) {
+    throw new Error(
+      `Offline installer trailer slot length must be ${String(WINDOWS_OFFLINE_INSTALLER_SLOT_LENGTH)} in schema v1`
+    );
+  }
+}
+
 function validateZeroPadding(slot: Buffer, payloadLength: number): void {
   for (let index = payloadLength; index < slot.length; index += 1) {
     if (slot[index] !== 0) {
@@ -123,6 +131,8 @@ export async function parseFromFile(filePath: string): Promise<ParsedWindowsOffl
     const headerSize = epilogue.readUInt32LE(8);
     const epilogueSize = epilogue.readUInt32LE(12);
 
+    validateSlotLength(slotLength);
+
     if (headerSize !== WINDOWS_OFFLINE_INSTALLER_HEADER_SIZE) {
       throw new Error('Offline installer trailer header size is invalid');
     }
@@ -147,7 +157,13 @@ export async function parseFromFile(filePath: string): Promise<ParsedWindowsOffl
       throw new Error(`Unsupported offline installer schema version: ${String(schemaVersion)}`);
     }
 
+    const flags = header.readUInt16LE(10);
+    if (flags !== WINDOWS_OFFLINE_INSTALLER_FLAGS) {
+      throw new Error('Offline installer trailer uses unsupported flags; schema v1 requires 0');
+    }
+
     const headerSlotLength = header.readUInt32LE(16);
+    validateSlotLength(headerSlotLength);
     if (headerSlotLength !== slotLength) {
       throw new Error('Offline installer trailer slot length does not match the epilogue');
     }
@@ -190,21 +206,19 @@ export async function applyOverlay(
   const payload = serializePayload(config);
   const parsedTemplate = await parseFromFile(templatePath);
   const outputDirectory = path.dirname(outputPath);
+  const outputFileName = path.basename(outputPath);
   await mkdir(outputDirectory, { recursive: true });
 
-  const stagingDirectory = await mkdtemp(
-    path.join(outputDirectory, '.openpath-offline-installer-')
-  );
-  const stagedOutputPath = path.join(stagingDirectory, `${path.basename(outputPath)}.tmp-overlay`);
+  const stagedOutputPath = path.join(outputDirectory, `.${outputFileName}.tmp-overlay`);
 
   try {
     await copyFile(templatePath, stagedOutputPath);
     const handle = await open(stagedOutputPath, 'r+');
     try {
-      const header = buildHeader(payload, parsedTemplate.slotLength);
-      const slot = Buffer.alloc(parsedTemplate.slotLength);
+      const header = buildHeader(payload, WINDOWS_OFFLINE_INSTALLER_SLOT_LENGTH);
+      const slot = Buffer.alloc(WINDOWS_OFFLINE_INSTALLER_SLOT_LENGTH);
       payload.copy(slot, 0);
-      const epilogue = buildEpilogue(parsedTemplate.slotLength);
+      const epilogue = buildEpilogue(WINDOWS_OFFLINE_INSTALLER_SLOT_LENGTH);
 
       await handle.write(header, 0, header.length, parsedTemplate.trailerStart);
       await handle.write(
@@ -217,7 +231,9 @@ export async function applyOverlay(
         epilogue,
         0,
         epilogue.length,
-        parsedTemplate.trailerStart + parsedTemplate.headerSize + parsedTemplate.slotLength
+        parsedTemplate.trailerStart +
+          parsedTemplate.headerSize +
+          WINDOWS_OFFLINE_INSTALLER_SLOT_LENGTH
       );
     } finally {
       await handle.close();
@@ -225,7 +241,7 @@ export async function applyOverlay(
 
     await rename(stagedOutputPath, outputPath);
   } finally {
-    await rm(stagingDirectory, { recursive: true, force: true });
+    await rm(stagedOutputPath, { force: true });
   }
 }
 
