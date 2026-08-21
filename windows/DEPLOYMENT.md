@@ -130,6 +130,27 @@ For MDM-managed deployments, wrap the installer in a detection/installation scri
 
 Before deploying to real student machines, validate the AppLocker policy on a pilot device using a non-admin account. See `windows/README.md` for the full browser boundary warning.
 
+### 5. Offline Installer (Air-Gapped / Restricted Networks)
+
+For machines that cannot reach the API during installation, a self-contained installer carries
+the enrollment token inside its own file. The executable is a standard NSIS setup with an
+`OPWSI1` trailer appended after the NSIS payload: a fixed-size binary slot holding the API URL,
+classroom id, enrollment token, captive-portal domains, and approved browsers, followed by a
+fixed epilogue. The trailer is read from the raw bytes of the downloaded file, so HTTP proxies
+and download managers cannot break it.
+
+Build and distribution are wrapper-specific: OpenPath ships the generic template
+(`windows/offline-installer/OpenPath-Windows-Setup.nsi`), the trailer reader
+(`offline-installer/scripts/Read-Trailer.ps1`), and the offline runtime
+(`windows/lib/install/Installer.Offline.ps1`). The offline runtime defers enrollment to first
+boot: it stages a DPAPI-protected pending state readable only by SYSTEM, registers a startup
+retry task, and transitions `PENDING -> ENROLLED` once connectivity exists. An expired embedded
+token moves the machine to `EXPIRED`; re-install with a fresh installer.
+
+Contract details live in `shared/src/windows-offline-installer.ts` (magic bytes, slot sizes,
+Zod schemas) and `api/src/lib/windows-offline-installer.ts` (append/parse). Repo-config tests in
+`tests/repo-config/windows-offline-installer-contracts.test.mjs` pin the format.
+
 ## Package and Runtime Artifacts
 
 After installation the agent occupies `C:\OpenPath\` with the following layout:
