@@ -15,6 +15,7 @@ export interface EnrollmentTicketOutput {
   classroomId: string;
   classroomName: string;
   enrollmentToken: string;
+  expiresAt: string;
 }
 
 export interface EnrollmentScriptOutput {

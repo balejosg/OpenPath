@@ -1,5 +1,10 @@
 import * as classroomStorage from '../lib/classroom-storage.js';
-import { generateEnrollmentToken, verifyEnrollmentToken } from '../lib/enrollment-token.js';
+import {
+  EnrollmentTokenTtlError,
+  assertWithinEnrollmentTtlCeiling,
+  generateEnrollmentTokenWithExpiry,
+  verifyEnrollmentToken,
+} from '../lib/enrollment-token.js';
 import ClassroomService from './classroom.service.js';
 import type { JWTPayload } from '../types/index.js';
 import type {
@@ -105,6 +110,7 @@ export async function resolveEnrollmentTokenAccess(
 export async function issueEnrollmentTicket(input: {
   classroomId: string;
   user: JWTPayload;
+  expiresIn?: string;
 }): Promise<EnrollmentServiceResult<EnrollmentTicketOutput>> {
   if (!hasEnrollmentRole(input.user.roles)) {
     return {
@@ -120,6 +126,21 @@ export async function issueEnrollmentTicket(input: {
     };
   }
 
+  if (input.expiresIn !== undefined) {
+    try {
+      assertWithinEnrollmentTtlCeiling(input.expiresIn);
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: 'BAD_REQUEST',
+          message:
+            error instanceof EnrollmentTokenTtlError ? error.message : 'Invalid expiresIn value',
+        },
+      };
+    }
+  }
+
   const access = await ClassroomService.ensureUserCanEnrollClassroom(input.user, input.classroomId);
   if (!access.ok) {
     return {
@@ -131,14 +152,29 @@ export async function issueEnrollmentTicket(input: {
     };
   }
 
-  return {
-    ok: true,
-    data: {
-      enrollmentToken: generateEnrollmentToken(access.data.id),
-      classroomId: access.data.id,
-      classroomName: access.data.name,
-    },
-  };
+  try {
+    const bundle = generateEnrollmentTokenWithExpiry(access.data.id, input.expiresIn);
+    return {
+      ok: true,
+      data: {
+        enrollmentToken: bundle.enrollmentToken,
+        expiresAt: bundle.expiresAt,
+        classroomId: access.data.id,
+        classroomName: access.data.name,
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        code: 'BAD_REQUEST',
+        message:
+          error instanceof EnrollmentTokenTtlError
+            ? error.message
+            : 'Unable to issue enrollment token',
+      },
+    };
+  }
 }
 
 export const EnrollmentAccessService = {

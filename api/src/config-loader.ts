@@ -9,6 +9,19 @@ import {
 } from './config-env.js';
 
 const DEFAULT_DATABASE_URL = ['postgres://', 'openpath:openpath@localhost:5432/openpath'].join('');
+const DEFAULT_ENROLLMENT_TOKEN_MAX_TTL_HOURS = 24;
+
+function parsePositiveIntEnv(value: string | undefined, fallback: number, name: string): number {
+  if (!value) return fallback;
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
 
 export interface LoadedConfig {
   readonly port: number;
@@ -24,6 +37,7 @@ export interface LoadedConfig {
   readonly jwtSecret: string;
   readonly jwtAccessExpiry: string;
   readonly jwtRefreshExpiry: string;
+  readonly enrollmentTokenMaxTtlHours: number;
   readonly googleClientId: string;
   readonly globalRateLimitWindowMs: number;
   readonly globalRateLimitMax: number;
@@ -82,6 +96,11 @@ export function loadConfig(
     jwtSecret: resolveJwtSecret(env, nodeEnv),
     jwtAccessExpiry: env.JWT_ACCESS_EXPIRY ?? env.JWT_EXPIRES_IN ?? '24h',
     jwtRefreshExpiry: env.JWT_REFRESH_EXPIRY ?? env.JWT_REFRESH_EXPIRES_IN ?? '7d',
+    enrollmentTokenMaxTtlHours: parsePositiveIntEnv(
+      env.ENROLLMENT_TOKEN_MAX_TTL_HOURS,
+      DEFAULT_ENROLLMENT_TOKEN_MAX_TTL_HOURS,
+      'ENROLLMENT_TOKEN_MAX_TTL_HOURS'
+    ),
     googleClientId: env.GOOGLE_CLIENT_ID ?? '',
     globalRateLimitWindowMs: parseIntEnv(env.RATE_LIMIT_WINDOW_MS, 60 * 1000),
     globalRateLimitMax: parseIntEnv(env.RATE_LIMIT_MAX, 200),

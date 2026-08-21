@@ -15,4 +15,33 @@ void describe('config loader', () => {
       'https://raw.githubusercontent.com/balejosg/openpath/gh-pages/apt'
     );
   });
+
+  void test('defaults the enrollment token max TTL to 24 hours', () => {
+    const config = loadConfig({ NODE_ENV: 'test' });
+    assert.equal(config.enrollmentTokenMaxTtlHours, 24);
+  });
+
+  void test('accepts a positive integer enrollment token max TTL override', () => {
+    const config = loadConfig({ NODE_ENV: 'test', ENROLLMENT_TOKEN_MAX_TTL_HOURS: '48' });
+    assert.equal(config.enrollmentTokenMaxTtlHours, 48);
+  });
+
+  void test('rejects non-positive or non-integer enrollment token max TTL overrides', () => {
+    assert.throws(
+      () => loadConfig({ NODE_ENV: 'test', ENROLLMENT_TOKEN_MAX_TTL_HOURS: '0' }),
+      /positive integer/
+    );
+    assert.throws(
+      () => loadConfig({ NODE_ENV: 'test', ENROLLMENT_TOKEN_MAX_TTL_HOURS: '-4' }),
+      /positive integer/
+    );
+    assert.throws(
+      () => loadConfig({ NODE_ENV: 'test', ENROLLMENT_TOKEN_MAX_TTL_HOURS: '2.5' }),
+      /positive integer/
+    );
+    assert.throws(
+      () => loadConfig({ NODE_ENV: 'test', ENROLLMENT_TOKEN_MAX_TTL_HOURS: 'soon' }),
+      /positive integer/
+    );
+  });
 });

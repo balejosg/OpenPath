@@ -41,6 +41,18 @@ function sendEnrollmentServiceErrorText(
   res.status(statusMap[error.code] ?? 400).send(error.message);
 }
 
+function getTicketExpiresIn(
+  body: unknown
+): { ok: true; value: string | undefined } | { ok: false; message: string } {
+  if (typeof body !== 'object' || body === null) return { ok: true, value: undefined };
+  const raw = (body as Record<string, unknown>).expiresIn;
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    return { ok: false, message: 'expiresIn must be a non-empty duration string' };
+  }
+  return { ok: true, value: raw };
+}
+
 export function registerEnrollmentRoutes(app: Express): void {
   app.post(
     '/api/enroll/:classroomId/ticket',
@@ -54,9 +66,16 @@ export function registerEnrollmentRoutes(app: Express): void {
           return;
         }
 
+        const expiresIn = getTicketExpiresIn(req.body);
+        if (!expiresIn.ok) {
+          res.status(400).json({ success: false, error: expiresIn.message });
+          return;
+        }
+
         const result = await issueEnrollmentTicket({
           user: decoded,
           classroomId: getFirstParam(req.params.classroomId) ?? '',
+          ...(expiresIn.value !== undefined ? { expiresIn: expiresIn.value } : {}),
         });
         if (!result.ok) {
           sendEnrollmentServiceErrorJson(res, result.error);
@@ -68,6 +87,7 @@ export function registerEnrollmentRoutes(app: Express): void {
         res.json({
           success: true,
           enrollmentToken: result.data.enrollmentToken,
+          expiresAt: result.data.expiresAt,
           classroomId: result.data.classroomId,
           classroomName: result.data.classroomName,
         });
