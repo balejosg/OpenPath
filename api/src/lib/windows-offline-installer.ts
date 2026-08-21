@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -93,6 +93,56 @@ function validateZeroPadding(slot: Buffer, payloadLength: number): void {
   }
 }
 
+async function readExactly(
+  handle: Awaited<ReturnType<typeof open>>,
+  buffer: Buffer,
+  position: number,
+  label: string
+): Promise<void> {
+  let offset = 0;
+
+  while (offset < buffer.length) {
+    const { bytesRead } = await handle.read(
+      buffer,
+      offset,
+      buffer.length - offset,
+      position + offset
+    );
+    if (bytesRead <= 0) {
+      throw new Error(
+        `Failed to read complete ${label}: expected ${String(buffer.length)} bytes, received ${String(offset)}`
+      );
+    }
+
+    offset += bytesRead;
+  }
+}
+
+async function writeExactly(
+  handle: Awaited<ReturnType<typeof open>>,
+  buffer: Buffer,
+  position: number,
+  label: string
+): Promise<void> {
+  let offset = 0;
+
+  while (offset < buffer.length) {
+    const { bytesWritten } = await handle.write(
+      buffer,
+      offset,
+      buffer.length - offset,
+      position + offset
+    );
+    if (bytesWritten <= 0) {
+      throw new Error(
+        `Failed to write complete ${label}: expected ${String(buffer.length)} bytes, wrote ${String(offset)}`
+      );
+    }
+
+    offset += bytesWritten;
+  }
+}
+
 function parsePayload(payload: Buffer): WindowsOfflineInstallerConfig {
   let parsed: unknown;
   try {
@@ -121,7 +171,7 @@ export async function parseFromFile(filePath: string): Promise<ParsedWindowsOffl
     }
 
     const epilogue = Buffer.alloc(WINDOWS_OFFLINE_INSTALLER_EPILOGUE_SIZE);
-    await handle.read(epilogue, 0, epilogue.length, fileSize - epilogue.length);
+    await readExactly(handle, epilogue, fileSize - epilogue.length, 'trailer epilogue');
 
     if (!epilogue.subarray(0, 4).equals(EPILOGUE_MAGIC_BYTES)) {
       throw new Error('Offline installer trailer epilogue magic is invalid');
@@ -146,7 +196,7 @@ export async function parseFromFile(filePath: string): Promise<ParsedWindowsOffl
     }
 
     const header = Buffer.alloc(headerSize);
-    await handle.read(header, 0, header.length, trailerStart);
+    await readExactly(handle, header, trailerStart, 'trailer header');
 
     if (!header.subarray(0, 8).equals(HEADER_MAGIC_BYTES)) {
       throw new Error('Offline installer trailer header magic is invalid');
@@ -174,7 +224,7 @@ export async function parseFromFile(filePath: string): Promise<ParsedWindowsOffl
     }
 
     const slot = Buffer.alloc(slotLength);
-    await handle.read(slot, 0, slot.length, trailerStart + headerSize);
+    await readExactly(handle, slot, trailerStart + headerSize, 'payload slot');
 
     validateZeroPadding(slot, payloadLength);
     const payload = slot.subarray(0, payloadLength);
@@ -209,7 +259,10 @@ export async function applyOverlay(
   const outputFileName = path.basename(outputPath);
   await mkdir(outputDirectory, { recursive: true });
 
-  const stagedOutputPath = path.join(outputDirectory, `.${outputFileName}.tmp-overlay`);
+  const stagedOutputPath = path.join(
+    outputDirectory,
+    `.${outputFileName}.${process.pid.toString()}.${randomUUID()}.tmp-overlay`
+  );
 
   try {
     await copyFile(templatePath, stagedOutputPath);
@@ -220,20 +273,20 @@ export async function applyOverlay(
       payload.copy(slot, 0);
       const epilogue = buildEpilogue(WINDOWS_OFFLINE_INSTALLER_SLOT_LENGTH);
 
-      await handle.write(header, 0, header.length, parsedTemplate.trailerStart);
-      await handle.write(
+      await writeExactly(handle, header, parsedTemplate.trailerStart, 'trailer header');
+      await writeExactly(
+        handle,
         slot,
-        0,
-        slot.length,
-        parsedTemplate.trailerStart + parsedTemplate.headerSize
+        parsedTemplate.trailerStart + parsedTemplate.headerSize,
+        'payload slot'
       );
-      await handle.write(
+      await writeExactly(
+        handle,
         epilogue,
-        0,
-        epilogue.length,
         parsedTemplate.trailerStart +
           parsedTemplate.headerSize +
-          WINDOWS_OFFLINE_INSTALLER_SLOT_LENGTH
+          WINDOWS_OFFLINE_INSTALLER_SLOT_LENGTH,
+        'trailer epilogue'
       );
     } finally {
       await handle.close();

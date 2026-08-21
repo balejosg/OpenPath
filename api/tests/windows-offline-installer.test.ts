@@ -225,6 +225,46 @@ void describe('windows offline installer trailer', () => {
     });
   });
 
+  void test('supports concurrent overlays targeting the same output path', async () => {
+    await withTempDir(async (directoryPath) => {
+      const templateConfig = WINDOWS_OFFLINE_INSTALLER_CONFIG_SCHEMA.parse({
+        ...validConfig,
+        classroomId: 'template-classroom',
+      });
+      const outputA = WINDOWS_OFFLINE_INSTALLER_CONFIG_SCHEMA.parse({
+        ...validConfig,
+        classroomId: 'output-classroom-a',
+        enrollmentToken: 'overlay.payload.signature.a',
+      });
+      const outputB = WINDOWS_OFFLINE_INSTALLER_CONFIG_SCHEMA.parse({
+        ...validConfig,
+        classroomId: 'output-classroom-b',
+        enrollmentToken: 'overlay.payload.signature.b',
+      });
+
+      const templatePath = path.join(directoryPath, 'template.exe');
+      const outputPath = path.join(directoryPath, 'output.exe');
+      await writeFile(
+        templatePath,
+        Buffer.concat([Buffer.from('prefix', 'utf8'), serialize(templateConfig)])
+      );
+
+      await Promise.all([
+        applyOverlay(templatePath, outputPath, outputA),
+        applyOverlay(templatePath, outputPath, outputB),
+      ]);
+
+      const parsed = await parseFromFile(outputPath);
+      assert.ok(
+        parsed.config.classroomId === outputA.classroomId ||
+          parsed.config.classroomId === outputB.classroomId
+      );
+
+      const entries = await readdir(directoryPath);
+      assert.deepEqual(entries.sort(), ['output.exe', 'template.exe']);
+    });
+  });
+
   void test('hashes the final artifact bytes exactly', async () => {
     await withTempDir(async (directoryPath) => {
       const filePath = path.join(directoryPath, 'artifact.exe');
@@ -239,7 +279,7 @@ void describe('windows offline installer trailer', () => {
       ]);
 
       assert.equal(fileHash, createHash('sha256').update(fileBytes).digest('hex'));
-      assert.deepEqual(await stat(filePath), await stat(filePath));
+      assert.equal((await stat(filePath)).size, fileBytes.length);
     });
   });
 });
