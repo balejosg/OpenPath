@@ -21,6 +21,7 @@ interface CalendarGroupDisplay {
 
 interface ClassroomDetailPaneProps {
   admin: boolean;
+  headerActions?: React.ReactNode;
   allowedGroups: readonly GroupLike[];
   calendarGroupsForDisplay: CalendarGroupDisplay[];
   classroomConfigError: string;
@@ -64,6 +65,7 @@ type ClassroomDetailTab = 'settings' | 'machines' | 'schedule';
 
 export default function ClassroomDetailPane({
   admin,
+  headerActions,
   allowedGroups,
   calendarGroupsForDisplay,
   classroomConfigError,
@@ -147,6 +149,14 @@ export default function ClassroomDetailPane({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {headerActions ? (
+        <div
+          data-testid="classroom-detail-header-actions"
+          className="flex items-center justify-end gap-2 px-1 pb-2"
+        >
+          {headerActions}
+        </div>
+      ) : null}
       <Tabs
         tabs={tabs}
         activeTab={activeTab}

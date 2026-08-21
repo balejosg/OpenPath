@@ -17,11 +17,13 @@ import { useT } from '../i18n/product-i18n';
 interface ClassroomsProps {
   initialSelectedClassroomId?: string | null;
   onInitialSelectedClassroomIdConsumed?: () => void;
+  headerActions?: React.ReactNode;
 }
 
 const Classrooms: React.FC<ClassroomsProps> = ({
   initialSelectedClassroomId = null,
   onInitialSelectedClassroomIdConsumed,
+  headerActions,
 }) => {
   const t = useT();
   const {
@@ -143,6 +145,7 @@ const Classrooms: React.FC<ClassroomsProps> = ({
       <div className="min-w-0 flex-1 flex flex-col lg:min-h-0 lg:overflow-hidden">
         <ClassroomDetailPane
           admin={admin}
+          headerActions={headerActions}
           allowedGroups={allowedGroups}
           calendarGroupsForDisplay={calendarGroupsForDisplay}
           classroomConfigError={classroomConfigError}

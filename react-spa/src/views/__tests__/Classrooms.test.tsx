@@ -364,6 +364,22 @@ describe('Classrooms', () => {
     mockExemptionsListQuery.mockResolvedValue({ exemptions: [] });
   });
 
+  it('forwards generic headerActions into the detail pane header', async () => {
+    installHookOverrides({});
+    renderClassrooms({ headerActions: <button>Offline Installer Action</button> });
+
+    expect(await screen.findByTestId('classroom-detail-header-actions')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Offline Installer Action' })).toBeInTheDocument();
+  });
+
+  it('omits the header action slot when headerActions is not provided', async () => {
+    installHookOverrides({});
+    renderClassrooms();
+
+    await screen.findAllByText('Laboratorio Norte');
+    expect(screen.queryByTestId('classroom-detail-header-actions')).not.toBeInTheDocument();
+  });
+
   it('shows current group as default when it matches default group', async () => {
     mockClassroomsListQuery.mockResolvedValue([
       {
