@@ -131,6 +131,8 @@ function Copy-OpenPathInstallerRuntime {
 
         [switch]$Unattended,
 
+        [switch]$RequireCompleteStaging,
+
         [string]$ChromeExtensionStoreUrl = "",
 
         [string]$EdgeExtensionStoreUrl = "",
@@ -261,6 +263,9 @@ function Copy-OpenPathInstallerRuntime {
 
         Write-InstallerVerbose "  Firefox native host assets staged in $OpenPathRoot\browser-extension\firefox\native"
     }
+    elseif ($RequireCompleteStaging) {
+        throw "Offline installs require staged Firefox native host artifacts ($($missingNativeHostArtifacts -join ', ') missing)"
+    }
     else {
         Write-InstallerWarning "  WARNING: Firefox native host artifacts missing ($($missingNativeHostArtifacts -join ', '))"
     }
@@ -288,6 +293,9 @@ function Copy-OpenPathInstallerRuntime {
 
         Write-InstallerVerbose "  Signed Firefox Release artifacts staged in $OpenPathRoot\browser-extension\firefox-release"
     }
+    elseif ($RequireCompleteStaging) {
+        throw "Offline installs require staged signed Firefox Release artifacts (metadata.json and openpath-firefox-extension.xpi); none found in $($firefoxReleaseCandidates -join ', ')"
+    }
     elseif (-not ($FirefoxExtensionId -and $FirefoxExtensionInstallUrl)) {
         Write-InstallerWarning "  WARNING: Firefox Release extension auto-install requires a signed XPI distribution (AMO, HTTPS URL, or staged signed artifact)."
         Write-InstallerWarning "  Firefox browser policies will not be written until a signed extension distribution is configured."
@@ -308,6 +316,9 @@ function Copy-OpenPathInstallerRuntime {
         New-Item -ItemType Directory -Path $chromiumManagedTarget -Force | Out-Null
         Copy-Item (Join-Path $chromiumManagedSource 'metadata.json') -Destination (Join-Path $chromiumManagedTarget 'metadata.json') -Force
         Write-InstallerVerbose "  Chromium managed rollout metadata staged in $OpenPathRoot\browser-extension\chromium-managed"
+    }
+    elseif ($RequireCompleteStaging) {
+        throw "Offline installs require staged Chromium managed rollout metadata (metadata.json); none found in $($chromiumManagedCandidates -join ', ')"
     }
     else {
         Write-InstallerWarning "  WARNING: Chromium managed rollout metadata not found in browser-extension\chromium-managed or firefox-extension\build\chromium-managed; Edge/Chrome managed extension install skipped"

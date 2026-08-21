@@ -486,6 +486,20 @@ function Invoke-OpenPathUpdateCycle {
         if ($shouldRunUpdate) {
             Write-OpenPathLog "=== Starting openpath update ==="
 
+            $offlineHelperPath = Join-Path $OpenPathRoot 'lib\install\Installer.Offline.ps1'
+            if (Test-Path $offlineHelperPath) {
+                . $offlineHelperPath
+                try {
+                    $pendingEnrollmentOutcome = (Invoke-OpenPathPendingEnrollmentRetry -OpenPathRoot $OpenPathRoot).Outcome
+                    if ($pendingEnrollmentOutcome -eq 'REGISTERED') {
+                        Write-OpenPathLog 'Pending enrollment resolved during this cycle; continuing with refreshed config'
+                    }
+                }
+                catch {
+                    Write-OpenPathLog "Pending enrollment retry could not run: $_" -Level WARN
+                }
+            }
+
             $config = Get-OpenPathConfig
             $config = Sync-OpenPathMachineClientConfig -Config $config
             $portalActiveState = Write-OpenPathUpdatePortalActiveState `

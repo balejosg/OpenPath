@@ -19,7 +19,14 @@
     },
     "./schemas": { "types": "./dist/schemas/index.d.ts", "import": "./dist/schemas/index.js" },
     "./roles": { "types": "./dist/roles.d.ts", "import": "./dist/roles.js" },
-    "./schedule-time": { "types": "./dist/schedule-time.d.ts", "import": "./dist/schedule-time.js" }
+    "./schedule-time": {
+      "types": "./dist/schedule-time.d.ts",
+      "import": "./dist/schedule-time.js"
+    },
+    "./windows-offline-installer": {
+      "types": "./dist/windows-offline-installer.d.ts",
+      "import": "./dist/windows-offline-installer.js"
+    }
   },
   "engines": { "node": ">=20.0.0" },
   "dependencies": { "zod": "^4.3.6" },

@@ -45,6 +45,7 @@ param(
     [string[]]$ApprovedStudentBrowsers = @('Firefox'),
     [ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]
     [string]$BrowserCleanupMode = 'ReportOnly',
+    [string]$OfflineConfigPath = "",
     [string]$TimingOutputPath = ""
 )
 
@@ -84,6 +85,35 @@ $OpenPathRoot = Resolve-OpenPathWindowsRoot
 . (Join-Path $installerHelperRoot 'Installer.Dns.ps1')
 . (Join-Path $installerHelperRoot 'Installer.Staging.ps1')
 . (Join-Path $installerHelperRoot 'Installer.Enrollment.ps1')
+. (Join-Path $installerHelperRoot 'Installer.Offline.ps1')
+
+$offlineMode = [bool]$OfflineConfigPath
+$offlineEnrollmentExpiresAt = ''
+if ($offlineMode) {
+    if (-not (Test-Path $OfflineConfigPath)) {
+        Write-Host "ERROR: Offline configuration not found: $OfflineConfigPath" -ForegroundColor Red
+        exit 10
+    }
+
+    try {
+        $offlineConfig = Read-OpenPathOfflineConfig -Path $OfflineConfigPath
+    }
+    catch {
+        Write-Host "ERROR: Invalid offline configuration: $($_.Exception.Message)" -ForegroundColor Red
+        exit 10
+    }
+
+    $apiBaseUrl = $offlineConfig.ApiUrl
+    $ClassroomId = $offlineConfig.ClassroomId
+    $EnrollmentToken = $offlineConfig.EnrollmentToken
+    $offlineEnrollmentExpiresAt = $offlineConfig.EnrollmentTokenExpiresAt.ToString('o')
+    if (@($CaptivePortalDomains).Count -eq 0 -and @($offlineConfig.CaptivePortalDomains).Count -gt 0) {
+        $CaptivePortalDomains = @($offlineConfig.CaptivePortalDomains)
+    }
+    if (@($offlineConfig.ApprovedStudentBrowsers).Count -gt 0) {
+        $ApprovedStudentBrowsers = @($offlineConfig.ApprovedStudentBrowsers)
+    }
+}
 
 $enrollmentContext = Resolve-OpenPathInstallerEnrollmentContext `
     -ApiBaseUrl $apiBaseUrl `
@@ -98,6 +128,9 @@ $RegistrationToken = [string]$enrollmentContext.RegistrationToken
 $EnrollmentToken = [string]$enrollmentContext.EnrollmentToken
 $enforceManagedBrowserBoundary = [bool]$EnforceManagedBrowserBoundary
 if ($classroomModeRequested -and $Unattended -and -not $PSBoundParameters.ContainsKey('EnforceManagedBrowserBoundary')) {
+    $enforceManagedBrowserBoundary = $true
+}
+if ($offlineMode -and $offlineConfig.EnforceManagedBrowserBoundary -and -not $PSBoundParameters.ContainsKey('EnforceManagedBrowserBoundary')) {
     $enforceManagedBrowserBoundary = $true
 }
 
@@ -378,6 +411,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'runtime' -Action {
             -OpenPathRoot $OpenPathRoot `
             -ScriptDir $scriptDir `
             -Unattended:$Unattended `
+            -RequireCompleteStaging:$offlineMode `
             -ChromeExtensionStoreUrl $ChromeExtensionStoreUrl `
             -EdgeExtensionStoreUrl $EdgeExtensionStoreUrl `
             -FirefoxExtensionId $FirefoxExtensionId `
@@ -385,6 +419,18 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'runtime' -Action {
     }
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+
+if ($offlineMode) {
+    $offlineManifestPath = Join-Path $scriptDir 'payload-manifest.json'
+    $phaseResult = Invoke-OpenPathPlannedPhase -Name 'offline-payload-verification' -Action {
+        Start-OpenPathInstallTimedStep -Name 'offline-payload-verification'
+        Assert-OpenPathOfflinePayloadManifest `
+            -ManifestPath $offlineManifestPath `
+            -StagingRoot $scriptDir
+        Complete-OpenPathInstallTimedStep -Name 'offline-payload-verification'
+    }
+    Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+}
 
 Import-Module "$OpenPathRoot\lib\Common.psm1" -Force -Global
 Import-Module "$OpenPathRoot\lib\RequestSetup.State.psm1" -Force -Global
@@ -443,6 +489,21 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'acrylic' -Action {
                 throw 'Acrylic is installed but the AcrylicDNSProxySvc service could not be registered or started'
             }
         }
+        elseif ($offlineMode) {
+            $acrylicEntry = Get-OpenPathOfflineManifestEntry `
+                -ManifestPath $offlineManifestPath `
+                -RelativePath 'payloads/acrylic/Acrylic-Portable.zip'
+            $installed = Install-AcrylicDNSFromLocalSource `
+                -AcrylicZipPath (Join-Path $scriptDir $acrylicEntry.path) `
+                -ExpectedSha256 $acrylicEntry.sha256 `
+                -WhatIf:$WhatIfPreference
+            if ($installed -and ($WhatIfPreference -or ((Test-AcrylicInstalled) -and (Ensure-AcrylicService -Start)))) {
+                Write-InstallerVerbose '  Acrylic instalado desde el paquete offline'
+            }
+            else {
+                throw 'Local Acrylic installation failed or did not produce a running AcrylicDNSProxySvc service'
+            }
+        }
         else {
             $installed = Install-AcrylicDNS -WhatIf:$WhatIfPreference
             if ($installed -and ($WhatIfPreference -or ((Test-AcrylicInstalled) -and (Ensure-AcrylicService -Start)))) {
@@ -477,7 +538,10 @@ Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'local-dns' -Action {
     Start-OpenPathInstallTimedStep -Name 'local-dns'
-    if ($deferLocalDnsUntilRemoteBootstrap) {
+    if ($offlineMode) {
+        Write-InstallerVerbose '  DNS local se activara tras completar el enrolamiento diferido'
+    }
+    elseif ($deferLocalDnsUntilRemoteBootstrap) {
         Write-InstallerVerbose '  DNS local se activara tras descargar y aplicar la primera whitelist'
         Ensure-InstallerRemoteBootstrapDns -ApiBaseUrl $apiBaseUrl -PrimaryDNS $primaryDNS -WhatIf:$WhatIfPreference | Out-Null
         Write-InstallerVerbose '  DNS remoto verificado para enrollment'
@@ -518,11 +582,24 @@ if ($classroomModeRequested) {
         Complete-OpenPathInstallTimedStep -Name 'enrollment' -Status $machineRegistered
 
         if ($classroomModeRequested -and $Unattended -and $machineRegistered -ne 'REGISTERED') {
-            Write-InstallerError 'ERROR: Classroom enrollment did not complete; domain requests will not be configured.'
-            if ($enrollmentError) {
-                Write-InstallerError "  $enrollmentError"
+            if ($offlineMode) {
+                Save-OpenPathPendingEnrollmentState `
+                    -OpenPathRoot $OpenPathRoot `
+                    -ApiUrl $apiBaseUrl `
+                    -ClassroomId $ClassroomId `
+                    -EnrollmentToken $EnrollmentToken `
+                    -ExpiresAt $offlineEnrollmentExpiresAt
+                $machineRegistered = 'PENDING'
+                Set-Variable -Name machineRegistered -Scope Script -Value $machineRegistered
+                Write-InstallerWarning '  Enrollment deferred; pending state saved and retry scheduled on next startup with connectivity.'
             }
-            throw 'Classroom enrollment did not complete'
+            else {
+                Write-InstallerError 'ERROR: Classroom enrollment did not complete; domain requests will not be configured.'
+                if ($enrollmentError) {
+                    Write-InstallerError "  $enrollmentError"
+                }
+                throw 'Classroom enrollment did not complete'
+            }
         }
     }
     Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
@@ -556,7 +633,8 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'native-host' -Action {
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
-if ($classroomModeRequested -and $Unattended -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup -or -not $nativeHostRequestSetup.Ready)) {
+$pendingEnrollment = ($machineRegistered -eq 'PENDING')
+if ($classroomModeRequested -and $Unattended -and -not $pendingEnrollment -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup -or -not $nativeHostRequestSetup.Ready)) {
     Write-InstallerError 'ERROR: Firefox native host registration incomplete; domain requests will not be configured.'
     throw 'Firefox native host registration incomplete'
 }
@@ -578,7 +656,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
     try {
         Start-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
         $firefoxReadyConfig = Get-OpenPathConfig
-        if ($classroomModeRequested) {
+        if ($classroomModeRequested -and -not $pendingEnrollment) {
             $firefoxReady = Test-OpenPathFirefoxManagedExtensionReady -Config $firefoxReadyConfig
             if (-not $firefoxReady.Ready) {
                 Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$firefoxReady.FailureCode)
@@ -592,7 +670,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
     }
     catch {
         Complete-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready' -Status 'failed' -ErrorMessage ([string]$_)
-        if ($classroomModeRequested) {
+        if ($classroomModeRequested -and -not $pendingEnrollment) {
             Write-InstallerError 'ERROR: Firefox managed extension policy is not ready after installation.'
             Write-InstallerError "  $_"
             throw 'Firefox managed extension readiness validation failed'
@@ -699,5 +777,10 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'summary' -Action {
         -PrimaryDNS $primaryDNS
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+
+if ($pendingEnrollment) {
+    Write-InstallerNotice 'OpenPath is installed. Enrollment is pending; it will retry automatically on the next startup with connectivity.'
+    exit 60
+}
 
 exit 0

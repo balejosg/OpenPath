@@ -37,6 +37,7 @@ Describe "Installer" {
                 'preflight',
                 'directories',
                 'runtime',
+                'offline-payload-verification',
                 'configuration',
                 'acrylic',
                 'acrylic-configuration',
@@ -589,7 +590,7 @@ Describe "Installer" {
             Assert-ContentContainsAll -Content $content -Needles @(
                 'if ($classroomModeRequested -and $Unattended -and $machineRegistered -ne ''REGISTERED'')',
                 'ERROR: Classroom enrollment did not complete; domain requests will not be configured.',
-                'if ($classroomModeRequested -and $Unattended -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup -or -not $nativeHostRequestSetup.Ready))',
+                'if ($classroomModeRequested -and $Unattended -and -not $pendingEnrollment -and (-not $nativeHostRegistered -or -not $nativeHostRequestSetup -or -not $nativeHostRequestSetup.Ready))',
                 'ERROR: Firefox native host registration incomplete; domain requests will not be configured.',
                 'exit 1'
             )

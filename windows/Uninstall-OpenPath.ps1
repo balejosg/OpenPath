@@ -260,6 +260,15 @@ function Remove-OpenPathInstallRoot {
 
     for ($attempt = 1; $attempt -le 5; $attempt++) {
         try {
+            foreach ($pendingEnrollmentPath in @(
+                    (Join-Path $OpenPathRoot 'data\pending-enrollment.json.dpapi'),
+                    (Join-Path $OpenPathRoot 'data\pending-enrollment.json')
+                )) {
+                if (Test-Path $pendingEnrollmentPath) {
+                    Remove-Item -LiteralPath $pendingEnrollmentPath -Force -ErrorAction SilentlyContinue
+                }
+            }
+
             if ($KeepLogs) {
                 Get-ChildItem $OpenPathRoot -Exclude "data" -ErrorAction SilentlyContinue |
                     Remove-Item -Recurse -Force -ErrorAction Stop

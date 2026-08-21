@@ -106,6 +106,7 @@ function New-OpenPathInstallPlan {
         New-OpenPathInstallPhase -Name 'preflight' -Step 0 -TotalSteps 7 -Status 'Running preflight validation' -Inputs @{ SkipPreflight = $Parameters.SkipPreflight } -RecoveryHint 'Run Pre-Install-Validation.ps1 manually and fix reported prerequisites.'
         New-OpenPathInstallPhase -Name 'directories' -Step 1 -TotalSteps 7 -Status 'Creating directory structure' -RecoveryHint 'Check permissions for C:\OpenPath.'
         New-OpenPathInstallPhase -Name 'runtime' -Step 2 -TotalSteps 7 -Status 'Copying modules and scripts' -RecoveryHint 'Verify installer package contents and retry from a local directory.'
+        New-OpenPathInstallPhase -Name 'offline-payload-verification' -Inputs @{ OfflineConfigPath = $Parameters.OfflineConfigPath } -RecoveryHint 'Verify the offline payload manifest and staged payloads, then rerun from a complete package.'
         New-OpenPathInstallPhase -Name 'configuration' -Step 3 -TotalSteps 7 -Status 'Creating configuration' -Inputs $Parameters -RecoveryHint 'Check installer parameters and enrollment configuration.'
         New-OpenPathInstallPhase -Name 'acrylic' -Step 4 -TotalSteps 7 -Status 'Installing Acrylic DNS Proxy' -Inputs @{ SkipAcrylic = $Parameters.SkipAcrylic } -RecoveryHint 'Install or repair Acrylic DNS Proxy, then rerun the installer.'
         New-OpenPathInstallPhase -Name 'acrylic-configuration' -RecoveryHint 'Check Acrylic configuration file permissions.'
