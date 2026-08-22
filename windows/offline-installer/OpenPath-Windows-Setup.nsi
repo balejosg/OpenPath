@@ -38,6 +38,11 @@ VIProductVersion "1.0.0.0"
 VIAddVersionKey /LANG=1033 "ProductName" "${PRODUCT_NAME} Offline Installer Template"
 VIAddVersionKey /LANG=1033 "FileDescription" "${PRODUCT_DESCRIPTION}"
 
+Function .onInit
+    InitPluginsDir
+    StrCpy $INSTDIR "$PLUGINSDIR\OpenPathOfflineSetup"
+FunctionEnd
+
 Page InstFiles
 ShowInstDetails show
 

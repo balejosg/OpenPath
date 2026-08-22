@@ -354,3 +354,6 @@ windows/lib/internal/Sse.Coalescer.ps1|windows/tests/Windows.SSE.Coalescer.Tests
 linux/lib/defaults.conf|tests/repo-config/agent-config-parity-contracts.test.mjs
 docs/agent-config-parity.md|tests/repo-config/agent-config-parity-contracts.test.mjs
 linux/lib/common-contract-constants.sh|tests/contract-constants.bats
+windows/lib/install/Installer.Offline.ps1|windows/tests/Windows.OfflineInstaller.Tests.ps1,tests/repo-config/windows-offline-installer-contracts.test.mjs
+windows/offline-installer/scripts/Read-Trailer.ps1|windows/tests/Windows.OfflineInstaller.Tests.ps1,tests/repo-config/windows-offline-installer-contracts.test.mjs,windows/offline-installer/tests/trailer-roundtrip.test.mjs
+windows/offline-installer/scripts/verify-nsis.ps1|tests/repo-config/windows-offline-installer-contracts.test.mjs

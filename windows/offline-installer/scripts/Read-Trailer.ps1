@@ -37,7 +37,7 @@ try {
     $fileStream = [System.IO.File]::OpenRead($ExecutablePath)
     try {
         $length = $fileStream.Length
-        if ($length -lt 68) {
+        if ($length -lt 65604) {
             throw 'Executable is too small to contain an offline trailer'
         }
 
@@ -66,7 +66,7 @@ try {
             throw 'Short read while reading the trailer header'
         }
 
-        if ([System.Text.Encoding]::ASCII.GetString($header, 0, 6) -ne "OPWSI1`0`0") {
+        if ([System.Text.Encoding]::ASCII.GetString($header, 0, 8) -ne "OPWSI1`0`0") {
             throw 'Invalid trailer header magic'
         }
 

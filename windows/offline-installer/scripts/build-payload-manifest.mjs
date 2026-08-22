@@ -130,6 +130,13 @@ function main() {
     fail(`unreadable payload pins (${pinsPath}): ${error.message}`);
   }
 
+  const pinnedPaths = new Set(Object.values(pins).map((pin) => pin.manifestPath));
+  for (const requiredPayload of REQUIRED_PAYLOAD_FILES) {
+    if (!pinnedPaths.has(requiredPayload)) {
+      errors.push(`missing pin definition for required payload: ${requiredPayload}`);
+    }
+  }
+
   for (const [pinName, pin] of Object.entries(pins)) {
     const payloadPath = join(payloadsDir, pin.manifestPath);
     if (!existsSync(payloadPath)) {

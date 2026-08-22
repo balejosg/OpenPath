@@ -6,7 +6,7 @@ if (-not (Get-Command -Name 'Set-OpenPathCapabilityStorageAcl' -ErrorAction Sile
 }
 
 $script:OpenPathOfflineConfigSchemaVersion = 1
-$script:OpenPathOfflineMaxCaptivePortalDomains = 64
+$script:OpenPathOfflineMaxCaptivePortalDomains = 16
 $script:OpenPathOfflineMaxStringChars = 2048
 $script:OpenPathOfflineApprovedBrowsers = @('Firefox', 'Chrome', 'Edge')
 
@@ -116,11 +116,14 @@ function ConvertFrom-OpenPathOfflineConfigObject {
     }
 
     Assert-OpenPathOfflineHttpsUrl -Value ([string]$Config.apiUrl) -Name 'apiUrl'
-    Assert-OpenPathOfflineNonEmptyString -Value ([string]$Config.classroomId) -Name 'classroomId'
+    Assert-OpenPathOfflineNonEmptyString `
+        -Value ([string]$Config.classroomId) `
+        -Name 'classroomId' `
+        -MaximumLength 128
     Assert-OpenPathOfflineNonEmptyString `
         -Value ([string]$Config.enrollmentToken) `
         -Name 'enrollmentToken' `
-        -MaximumLength $script:OpenPathOfflineMaxStringChars
+        -MaximumLength 8192
 
     $expiresAt = ConvertTo-OpenPathOfflineUtcDateTime `
         -Value $Config.enrollmentTokenExpiresAt `
