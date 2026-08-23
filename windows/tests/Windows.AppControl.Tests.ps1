@@ -7,6 +7,7 @@ Describe "AppControl Module" {
     BeforeAll {
         $modulePath = Join-Path $PSScriptRoot ".." "lib"
         Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
+        function global:Get-LocalGroup { throw 'not found' }
     }
 
     Context "New-OpenPathNonAdminAppLockerPolicySpec" {
@@ -670,6 +671,7 @@ Describe "AppControl Module" {
     Context "Restricted group SID and membership sync" {
         AfterEach {
             Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
+            function global:Get-LocalGroup { throw 'not found' }
             Remove-Item Function:\New-LocalGroup -ErrorAction SilentlyContinue
             Remove-Item Function:\Get-LocalGroupMember -ErrorAction SilentlyContinue
             Remove-Item Function:\Get-LocalUser -ErrorAction SilentlyContinue
@@ -757,5 +759,9 @@ Describe "AppControl Module" {
                 Remove-Item Function:\Remove-LocalGroup -ErrorAction SilentlyContinue
             }
         }
+    }
+
+    AfterAll {
+        Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
     }
 }

@@ -94,18 +94,20 @@ function Get-OpenPathCapabilityStoragePath {
 }
 
 function New-OpenPathCapabilityStorageAccessRule {
-    # constructs a FileSystemAccessRule granting $Rights to $Identity with full container and object inheritance.
+    # constructs a FileSystemAccessRule granting $Rights to $Identity with container/object inheritance for directories or None for files.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Identity,
-        [Parameter(Mandatory = $true)][string]$Rights
+        [Parameter(Mandatory = $true)][string]$Rights,
+        [string]$InheritanceFlags = 'ContainerInherit,ObjectInherit',
+        [string]$PropagationFlags = 'None'
     )
 
     return (New-Object System.Security.AccessControl.FileSystemAccessRule(
             $Identity,
             $Rights,
-            'ContainerInherit,ObjectInherit',
-            'None',
+            $InheritanceFlags,
+            $PropagationFlags,
             'Allow'
         ))
 }
@@ -118,24 +120,27 @@ function Set-OpenPathCapabilityStorageAcl {
         [string]$Profile = 'RestrictedRoot'
     )
 
+    $isContainer = (Test-Path -Path $Path -PathType Container -ErrorAction SilentlyContinue)
+    $inheritanceFlags = if ($isContainer) { 'ContainerInherit,ObjectInherit' } else { 'None' }
+
     $acl = Get-Acl $Path
     if ($Profile -eq 'RestrictedRoot') {
         $acl.SetAccessRuleProtection($true, $false)
         @($acl.Access) | ForEach-Object { [void]$acl.RemoveAccessRule($_) }
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'NT AUTHORITY\SYSTEM' -Rights 'FullControl'))
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Administrators' -Rights 'FullControl'))
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'NT AUTHORITY\SYSTEM' -Rights 'FullControl' -InheritanceFlags $inheritanceFlags))
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Administrators' -Rights 'FullControl' -InheritanceFlags $inheritanceFlags))
     }
     elseif ($Profile -eq 'RuntimeDependencyQueue') {
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'Modify'))
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'Modify' -InheritanceFlags $inheritanceFlags))
     }
     elseif ($Profile -eq 'CaptivePortalRecoveryQueue') {
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'Modify'))
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'Modify' -InheritanceFlags $inheritanceFlags))
     }
     elseif ($Profile -eq 'CaptivePortalRecoveryResultRead') {
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'ReadAndExecute'))
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'ReadAndExecute' -InheritanceFlags $inheritanceFlags))
     }
     elseif ($Profile -eq 'BrowserExtensionRead') {
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'ReadAndExecute'))
+        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'ReadAndExecute' -InheritanceFlags $inheritanceFlags))
     }
 
     Set-Acl $Path $acl

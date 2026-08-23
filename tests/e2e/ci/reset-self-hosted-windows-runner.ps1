@@ -93,6 +93,15 @@ catch {
     Write-Warning "Unable to remove OpenPath AppLocker rules during runner reset: $_"
 }
 
+try {
+    if (Get-Command Remove-LocalGroup -ErrorAction SilentlyContinue) {
+        Remove-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue
+    }
+}
+catch {
+    Write-Warning "Unable to remove OpenPath-Restricted group during runner reset: $_"
+}
+
 $currentRepoRoot = $null
 try {
     $currentRepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Path
