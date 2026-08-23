@@ -204,14 +204,14 @@ Describe "Offline installer" {
         It "Transitions expired state to an EXPIRED marker without secrets and logs re-installation guidance" -Skip:(($null -ne $IsWindows) -and (-not $IsWindows)) {
             $openPathRoot = Join-Path $script:OfflineTestRoot 'expired-root'
             New-Item -ItemType Directory -Path (Join-Path $openPathRoot 'data') -Force | Out-Null
+            Mock Write-OpenPathLog { }
+
             Save-OpenPathPendingEnrollmentState `
                 -OpenPathRoot $openPathRoot `
                 -ApiUrl 'https://api.example.test' `
                 -ClassroomId 'room_expired' `
                 -EnrollmentToken 'expired-secret' `
                 -ExpiresAt ([System.DateTime]::UtcNow.AddMinutes(-10).ToString('o')) | Out-Null
-
-            Mock Write-OpenPathLog { }
 
             $outcome = Invoke-OpenPathPendingEnrollmentRetry -OpenPathRoot $openPathRoot
 
