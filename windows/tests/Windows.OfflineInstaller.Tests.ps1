@@ -172,7 +172,7 @@ Describe "Offline installer" {
                 -ApiUrl 'https://api.example.test' `
                 -ClassroomId 'room_pending' `
                 -EnrollmentToken 'bearer-secret-value' `
-                -ExpiresAt ([System.DateTime]::UtcNow.AddHours(20).ToString('o'))
+                -ExpiresAt ([System.DateTimeOffset]::UtcNow.AddHours(20).ToString('o'))
 
             $statePath | Should -BeLike '*.dpapi'
             Test-Path $statePath | Should -BeTrue
@@ -194,8 +194,8 @@ Describe "Offline installer" {
         }
 
         It "Detects expired pending state" {
-            $expiredState = [PSCustomObject]@{ expiresAt = [System.DateTime]::UtcNow.AddMinutes(-5).ToString('o') }
-            $liveState = [PSCustomObject]@{ expiresAt = [System.DateTime]::UtcNow.AddHours(1).ToString('o') }
+            $expiredState = [PSCustomObject]@{ expiresAt = [System.DateTimeOffset]::UtcNow.AddMinutes(-5).ToString('o') }
+            $liveState = [PSCustomObject]@{ expiresAt = [System.DateTimeOffset]::UtcNow.AddHours(1).ToString('o') }
 
             Test-OpenPathPendingEnrollmentExpired -State $expiredState | Should -BeTrue
             Test-OpenPathPendingEnrollmentExpired -State $liveState | Should -BeFalse
@@ -211,7 +211,7 @@ Describe "Offline installer" {
                 -ApiUrl 'https://api.example.test' `
                 -ClassroomId 'room_expired' `
                 -EnrollmentToken 'expired-secret' `
-                -ExpiresAt ([System.DateTime]::UtcNow.AddMinutes(-10).ToString('o')) | Out-Null
+                -ExpiresAt ([System.DateTimeOffset]::UtcNow.AddMinutes(-10).ToString('o')) | Out-Null
 
             $outcome = Invoke-OpenPathPendingEnrollmentRetry -OpenPathRoot $openPathRoot
 
