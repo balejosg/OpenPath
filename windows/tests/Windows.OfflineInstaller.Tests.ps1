@@ -196,9 +196,11 @@ Describe "Offline installer" {
         It "Detects expired pending state" {
             $expiredState = [PSCustomObject]@{ expiresAt = [System.DateTime]::UtcNow.AddMinutes(-5).ToString('yyyy-MM-ddTHH:mm:ss.fffffff') + 'Z' }
             $liveState = [PSCustomObject]@{ expiresAt = [System.DateTime]::UtcNow.AddHours(1).ToString('yyyy-MM-ddTHH:mm:ss.fffffff') + 'Z' }
+            $jsonRoundTrippedExpiredState = (@{ expiresAt = $expiredState.expiresAt } | ConvertTo-Json -Compress | ConvertFrom-Json)
 
             Test-OpenPathPendingEnrollmentExpired -State $expiredState | Should -BeTrue
             Test-OpenPathPendingEnrollmentExpired -State $liveState | Should -BeFalse
+            Test-OpenPathPendingEnrollmentExpired -State $jsonRoundTrippedExpiredState | Should -BeTrue
         }
 
         It "Transitions expired state to an EXPIRED marker without secrets and logs re-installation guidance" -Skip:(($null -ne $IsWindows) -and (-not $IsWindows)) {

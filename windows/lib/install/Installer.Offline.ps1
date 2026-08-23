@@ -560,7 +560,7 @@ function Test-OpenPathPendingEnrollmentExpired {
     )
 
     $expiresAt = ConvertTo-OpenPathOfflineUtcDateTime `
-        -Value ([string]$State.expiresAt) `
+        -Value $State.expiresAt `
         -Name 'pending enrollment expiresAt'
 
     return ([System.DateTime]::UtcNow -ge $expiresAt)
