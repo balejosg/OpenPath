@@ -165,6 +165,7 @@ Describe "Offline installer" {
         It "Saves pending state as a DPAPI blob with restrictive ACLs and reads it back" -Skip:(($null -ne $IsWindows) -and (-not $IsWindows)) {
             $openPathRoot = Join-Path $script:OfflineTestRoot 'agent-root'
             New-Item -ItemType Directory -Path (Join-Path $openPathRoot 'data') -Force | Out-Null
+            Mock Write-OpenPathLog { }
 
             $statePath = Save-OpenPathPendingEnrollmentState `
                 -OpenPathRoot $openPathRoot `
