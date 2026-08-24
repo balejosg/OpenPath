@@ -364,20 +364,20 @@ describe('Classrooms', () => {
     mockExemptionsListQuery.mockResolvedValue({ exemptions: [] });
   });
 
-  it('forwards generic headerActions into the detail pane header', async () => {
-    installHookOverrides({});
-    renderClassrooms({ headerActions: <button>Offline Installer Action</button> });
+  it('renders the Windows action for the currently selected classroom', async () => {
+    const renderWindowsInstallAction = vi.fn((classroomId: string) => (
+      <a href={`/installer/${classroomId}.exe`}>Installer {classroomId}</a>
+    ));
+    installHookOverrides({ enrollPlatform: 'windows' });
 
-    expect(await screen.findByTestId('classroom-detail-header-actions')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Offline Installer Action' })).toBeInTheDocument();
-  });
+    renderClassrooms({ renderWindowsInstallAction });
 
-  it('omits the header action slot when headerActions is not provided', async () => {
-    installHookOverrides({});
-    renderClassrooms();
-
-    await screen.findAllByText('Laboratorio Norte');
-    expect(screen.queryByTestId('classroom-detail-header-actions')).not.toBeInTheDocument();
+    const action = await screen.findByRole('link', { name: 'Installer classroom-1' });
+    expect(action).toBeInTheDocument();
+    expect(renderWindowsInstallAction).toHaveBeenCalledWith('classroom-1');
+    expect(action.compareDocumentPosition(screen.getByText('PowerShell alternative'))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
   });
 
   it('shows current group as default when it matches default group', async () => {

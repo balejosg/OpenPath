@@ -203,6 +203,30 @@ describe('useClassroomMachines', () => {
     });
   });
 
+  it('opens the enrollment modal with Windows selected every time', async () => {
+    const { result } = renderHook(() =>
+      useClassroomMachines({
+        selectedClassroom: classroom,
+        schedules: [],
+        oneOffSchedules: [],
+        refetchClassrooms: vi.fn(),
+      })
+    );
+
+    await act(async () => {
+      await result.current.enrollModal.open();
+    });
+    expect(result.current.enrollModal.enrollPlatform).toBe('windows');
+
+    act(() => result.current.enrollModal.selectPlatform('linux'));
+    act(() => result.current.enrollModal.close());
+
+    await act(async () => {
+      await result.current.enrollModal.open();
+    });
+    expect(result.current.enrollModal.enrollPlatform).toBe('windows');
+  });
+
   it('creates and deletes machine exemptions around the active schedule', async () => {
     const now = new Date();
     const startAt = new Date(now.getTime() - 15 * 60 * 1000).toISOString();
@@ -282,13 +306,19 @@ describe('useClassroomMachines', () => {
     expect(mockGetAuthTokenForHeader).toHaveBeenCalled();
     expect(global.fetch).toHaveBeenCalled();
     expect(result.current.enrollModal.isOpen).toBe(true);
+    expect(result.current.enrollModal.enrollPlatform).toBe('windows');
+    expect(result.current.enrollModal.enrollCommand).toContain('-EncodedCommand ');
+
+    act(() => {
+      result.current.enrollModal.selectPlatform('linux');
+    });
+
     expect(result.current.enrollModal.enrollCommand).toContain('/api/enroll/classroom-1');
 
     act(() => {
       result.current.enrollModal.selectPlatform('windows');
     });
 
-    expect(result.current.enrollModal.enrollCommand).toContain('-EncodedCommand ');
     expect(decodeEncodedPowerShellCommand(result.current.enrollModal.enrollCommand)).toContain(
       'windows.ps1'
     );

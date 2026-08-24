@@ -11,6 +11,7 @@ interface EnrollClassroomModalProps {
   selectedClassroom: Classroom | null;
   enrollPlatform: 'linux' | 'windows';
   enrollCommand: string;
+  windowsInstallAction?: React.ReactNode;
   onClose: () => void;
   onSelectPlatform: (platform: 'linux' | 'windows') => void;
   onCopy: () => void;
@@ -23,6 +24,7 @@ const EnrollClassroomModal: React.FC<EnrollClassroomModalProps> = ({
   selectedClassroom,
   enrollPlatform,
   enrollCommand,
+  windowsInstallAction,
   onClose,
   onSelectPlatform,
   onCopy,
@@ -44,16 +46,9 @@ const EnrollClassroomModal: React.FC<EnrollClassroomModalProps> = ({
       ) : null}
       <div className="mb-3 inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
         <button
-          onClick={() => onSelectPlatform('linux')}
-          className={`px-3 py-1.5 text-xs rounded-md transition-colors font-medium ${
-            enrollPlatform === 'linux'
-              ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-600 hover:text-slate-800'
-          }`}
-        >
-          {t('enroll.modal.platformLinux')}
-        </button>
-        <button
+          type="button"
+          role="tab"
+          aria-selected={enrollPlatform === 'windows'}
           onClick={() => onSelectPlatform('windows')}
           className={`px-3 py-1.5 text-xs rounded-md transition-colors font-medium ${
             enrollPlatform === 'windows'
@@ -63,29 +58,76 @@ const EnrollClassroomModal: React.FC<EnrollClassroomModalProps> = ({
         >
           {t('enroll.modal.platformWindows')}
         </button>
-      </div>
-      <div className="bg-slate-900 text-green-400 rounded-lg p-4 font-mono text-xs overflow-x-auto relative">
         <button
-          onClick={onCopy}
-          className="absolute top-2 right-2 inline-flex items-center gap-1 text-slate-400 hover:text-white"
-          title={isCopied ? t('common.copied') : t('common.copyToClipboard')}
-          aria-label={isCopied ? t('common.copied') : t('common.copyToClipboard')}
+          type="button"
+          role="tab"
+          aria-selected={enrollPlatform === 'linux'}
+          onClick={() => onSelectPlatform('linux')}
+          className={`px-3 py-1.5 text-xs rounded-md transition-colors font-medium ${
+            enrollPlatform === 'linux'
+              ? 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-600 hover:text-slate-800'
+          }`}
         >
-          {isCopied ? (
-            <>
-              <Check size={16} className="text-green-400" />
-              <span className="text-[10px] font-semibold text-green-400">{t('common.copied')}</span>
-            </>
-          ) : (
-            <Copy size={16} />
-          )}
+          {t('enroll.modal.platformLinux')}
         </button>
-        <pre className="whitespace-pre-wrap pr-8">{enrollCommand}</pre>
       </div>
-      {enrollPlatform === 'linux' ? (
-        <p className="text-xs text-slate-500 mt-3">{t('enroll.modal.linuxNote')}</p>
+      {enrollPlatform === 'windows' && windowsInstallAction ? (
+        <div data-testid="windows-install-action" className="mb-4">
+          {windowsInstallAction}
+        </div>
+      ) : null}
+      {enrollPlatform === 'windows' ? (
+        <>
+          <h3 className="mb-2 text-sm font-semibold text-slate-800">
+            {t('enroll.modal.windowsPowerShellAlternative')}
+          </h3>
+          <div className="bg-slate-900 text-green-400 rounded-lg p-4 font-mono text-xs overflow-x-auto relative">
+            <button
+              onClick={onCopy}
+              className="absolute top-2 right-2 inline-flex items-center gap-1 text-slate-400 hover:text-white"
+              title={isCopied ? t('common.copied') : t('common.copyToClipboard')}
+              aria-label={isCopied ? t('common.copied') : t('common.copyToClipboard')}
+            >
+              {isCopied ? (
+                <>
+                  <Check size={16} className="text-green-400" />
+                  <span className="text-[10px] font-semibold text-green-400">
+                    {t('common.copied')}
+                  </span>
+                </>
+              ) : (
+                <Copy size={16} />
+              )}
+            </button>
+            <pre className="whitespace-pre-wrap pr-8">{enrollCommand}</pre>
+          </div>
+          <p className="text-xs text-slate-500 mt-3">{t('enroll.modal.windowsNote')}</p>
+        </>
       ) : (
-        <p className="text-xs text-slate-500 mt-3">{t('enroll.modal.windowsNote')}</p>
+        <>
+          <div className="bg-slate-900 text-green-400 rounded-lg p-4 font-mono text-xs overflow-x-auto relative">
+            <button
+              onClick={onCopy}
+              className="absolute top-2 right-2 inline-flex items-center gap-1 text-slate-400 hover:text-white"
+              title={isCopied ? t('common.copied') : t('common.copyToClipboard')}
+              aria-label={isCopied ? t('common.copied') : t('common.copyToClipboard')}
+            >
+              {isCopied ? (
+                <>
+                  <Check size={16} className="text-green-400" />
+                  <span className="text-[10px] font-semibold text-green-400">
+                    {t('common.copied')}
+                  </span>
+                </>
+              ) : (
+                <Copy size={16} />
+              )}
+            </button>
+            <pre className="whitespace-pre-wrap pr-8">{enrollCommand}</pre>
+          </div>
+          <p className="text-xs text-slate-500 mt-3">{t('enroll.modal.linuxNote')}</p>
+        </>
       )}
       <div className="mt-6 flex justify-end">
         <button

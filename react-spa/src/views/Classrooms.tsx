@@ -17,13 +17,15 @@ import { useT } from '../i18n/product-i18n';
 interface ClassroomsProps {
   initialSelectedClassroomId?: string | null;
   onInitialSelectedClassroomIdConsumed?: () => void;
+  /** @deprecated Use renderWindowsInstallAction for the enrollment modal. */
   headerActions?: React.ReactNode;
+  renderWindowsInstallAction?: (classroomId: string) => React.ReactNode;
 }
 
 const Classrooms: React.FC<ClassroomsProps> = ({
   initialSelectedClassroomId = null,
   onInitialSelectedClassroomIdConsumed,
-  headerActions,
+  renderWindowsInstallAction,
 }) => {
   const t = useT();
   const {
@@ -125,6 +127,10 @@ const Classrooms: React.FC<ClassroomsProps> = ({
     refetchClassrooms,
   });
 
+  const windowsInstallAction = selectedClassroom
+    ? renderWindowsInstallAction?.(selectedClassroom.id)
+    : undefined;
+
   return (
     <div className="flex flex-col gap-6 lg:h-full lg:min-h-0 lg:flex-row lg:overflow-hidden">
       <ClassroomListPane
@@ -145,7 +151,6 @@ const Classrooms: React.FC<ClassroomsProps> = ({
       <div className="min-w-0 flex-1 flex flex-col lg:min-h-0 lg:overflow-hidden">
         <ClassroomDetailPane
           admin={admin}
-          headerActions={headerActions}
           allowedGroups={allowedGroups}
           calendarGroupsForDisplay={calendarGroupsForDisplay}
           classroomConfigError={classroomConfigError}
@@ -302,6 +307,7 @@ const Classrooms: React.FC<ClassroomsProps> = ({
         selectedClassroom={selectedClassroom}
         enrollPlatform={enrollModal.enrollPlatform}
         enrollCommand={enrollModal.enrollCommand}
+        windowsInstallAction={windowsInstallAction}
         onClose={enrollModal.close}
         onSelectPlatform={enrollModal.selectPlatform}
         onCopy={enrollModal.copy}

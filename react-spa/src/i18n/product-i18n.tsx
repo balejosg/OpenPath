@@ -688,6 +688,7 @@ export const productI18nCatalogs = {
       'The agent will auto-update via APT. Make sure the computer has internet access during installation.',
     'enroll.modal.windowsNote':
       'Run PowerShell as Administrator. The installer registers the computer with a classroom token and configures daily silent agent updates.',
+    'enroll.modal.windowsPowerShellAlternative': 'PowerShell alternative',
     'calendar.header.time': 'Time',
     'calendar.day.monday.short': 'Mon',
     'calendar.day.tuesday.short': 'Tue',
@@ -1461,6 +1462,7 @@ export const productI18nCatalogs = {
       'El agente se actualizará automáticamente vía APT. Asegúrate de que el equipo tenga acceso a internet durante la instalación.',
     'enroll.modal.windowsNote':
       'Ejecuta PowerShell como administrador. El instalador registra el equipo con un token de aula y configura actualizaciones silenciosas diarias del agente.',
+    'enroll.modal.windowsPowerShellAlternative': 'Alternativa PowerShell',
     'calendar.header.time': 'Hora',
     'calendar.day.monday.short': 'Lun',
     'calendar.day.tuesday.short': 'Mar',

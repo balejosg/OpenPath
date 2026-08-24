@@ -117,7 +117,7 @@ export function useClassroomMachines(params: {
   const { selectedClassroom, schedules, oneOffSchedules, refetchClassrooms } = params;
   const [showEnrollModal, setShowEnrollModal] = useState(false);
   const [enrollToken, setEnrollToken] = useState<string | null>(null);
-  const [enrollPlatform, setEnrollPlatform] = useState<'linux' | 'windows'>('linux');
+  const [enrollPlatform, setEnrollPlatform] = useState<'linux' | 'windows'>('windows');
   const [loadingToken, setLoadingToken] = useState(false);
 
   const {
@@ -191,7 +191,7 @@ export function useClassroomMachines(params: {
       }
 
       setEnrollToken(data.enrollmentToken);
-      setEnrollPlatform('linux');
+      setEnrollPlatform('windows');
       setShowEnrollModal(true);
     } catch (err) {
       reportError('Failed to get enrollment ticket:', err);
