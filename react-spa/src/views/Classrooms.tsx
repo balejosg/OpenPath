@@ -17,8 +17,6 @@ import { useT } from '../i18n/product-i18n';
 interface ClassroomsProps {
   initialSelectedClassroomId?: string | null;
   onInitialSelectedClassroomIdConsumed?: () => void;
-  /** @deprecated Use renderWindowsInstallAction for the enrollment modal. */
-  headerActions?: React.ReactNode;
   renderWindowsInstallAction?: (classroomId: string) => React.ReactNode;
 }
 
