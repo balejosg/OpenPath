@@ -17,6 +17,7 @@ import {
   tokens,
   passwordResetTokens,
   emailVerificationTokens,
+  windowsOfflineDownloadRefs,
 } from './schema.js';
 
 // =============================================================================
@@ -29,6 +30,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   tokens: many(tokens),
   passwordResetTokens: many(passwordResetTokens),
   emailVerificationTokens: many(emailVerificationTokens),
+  windowsOfflineDownloadRefs: many(windowsOfflineDownloadRefs),
 }));
 
 // =============================================================================
@@ -54,7 +56,22 @@ export const classroomsRelations = relations(classrooms, ({ many }) => ({
   machines: many(machines),
   schedules: many(schedules),
   machineExemptions: many(machineExemptions),
+  windowsOfflineDownloadRefs: many(windowsOfflineDownloadRefs),
 }));
+
+export const windowsOfflineDownloadRefsRelations = relations(
+  windowsOfflineDownloadRefs,
+  ({ one }) => ({
+    classroom: one(classrooms, {
+      fields: [windowsOfflineDownloadRefs.classroomId],
+      references: [classrooms.id],
+    }),
+    createdByUser: one(users, {
+      fields: [windowsOfflineDownloadRefs.createdBy],
+      references: [users.id],
+    }),
+  })
+);
 
 // =============================================================================
 // Machine Relations

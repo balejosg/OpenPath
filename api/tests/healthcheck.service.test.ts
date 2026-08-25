@@ -15,6 +15,7 @@ await test('healthcheck service returns readiness status shape', async () => {
     assert.ok(typeof result.responseTime === 'string');
     assert.ok(result.checks.auth !== undefined);
     assert.ok(result.checks.storage !== undefined);
+    assert.equal(result.checks.windowsOfflineInstaller?.status, 'not_configured');
   } finally {
     if (previousJwtSecret === undefined) {
       Reflect.deleteProperty(process.env, 'JWT_SECRET');

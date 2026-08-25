@@ -22,6 +22,7 @@ export default defineConfig({
     'schedules',
     'machine_exemptions',
     'tokens',
+    'windows_offline_download_refs',
     'settings',
     'password_reset_tokens',
     'email_verification_tokens',

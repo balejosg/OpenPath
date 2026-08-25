@@ -237,3 +237,22 @@ test('offline installer build helpers enforce trailer format, payload inventory,
   }
   assert.doesNotMatch(nsiSource, /classroompath/i, 'NSIS template must stay wrapper-agnostic');
 });
+
+test('Windows offline installer canary is read-only unless installation is explicit', () => {
+  const canary = readText('tests/e2e/ci/run-windows-offline-installer-canary.ps1');
+
+  for (const marker of [
+    'Read-Trailer.ps1',
+    'ExpectedClassroomId',
+    'Get-FileHash',
+    'trailer-validation-failed',
+    '[switch]$Install',
+    'OfflineConfigPath',
+  ]) {
+    assert.ok(canary.includes(marker), `Windows canary should include ${marker}`);
+  }
+  assert.match(canary, /if \(\$Install\)/, 'installation must be opt-in');
+  assert.match(canary, /status = 'ok'/, 'canary should emit safe success JSON');
+  assert.match(canary, /status = 'failed'/, 'canary should emit safe failure JSON');
+  assert.doesNotMatch(canary, /EnrollmentToken|accessToken|Bearer/i);
+});

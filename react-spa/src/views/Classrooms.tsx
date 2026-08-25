@@ -8,6 +8,7 @@ import { useClassroomsViewModel } from '../hooks/useClassroomsViewModel';
 import ClassroomDetailPane from '../components/classrooms/ClassroomDetailPane';
 import ClassroomListPane from '../components/classrooms/ClassroomListPane';
 import EnrollClassroomModal from '../components/classrooms/EnrollClassroomModal';
+import WindowsOfflineInstallerAction from '../components/classrooms/WindowsOfflineInstallerAction';
 import NewClassroomModal from '../components/classrooms/NewClassroomModal';
 import ScheduleFormModal from '../components/ScheduleFormModal';
 import OneOffScheduleFormModal from '../components/OneOffScheduleFormModal';
@@ -126,7 +127,9 @@ const Classrooms: React.FC<ClassroomsProps> = ({
   });
 
   const windowsInstallAction = selectedClassroom
-    ? renderWindowsInstallAction?.(selectedClassroom.id)
+    ? (renderWindowsInstallAction?.(selectedClassroom.id) ?? (
+        <WindowsOfflineInstallerAction classroomId={selectedClassroom.id} />
+      ))
     : undefined;
 
   return (

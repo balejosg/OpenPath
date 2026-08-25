@@ -8,6 +8,10 @@ import type { Config } from './config.js';
 import { cleanupBlacklist } from './lib/auth.js';
 import { logger } from './lib/logger.js';
 import { ensureDefaultAdminFromEnv } from './services/default-admin.service.js';
+import {
+  checkWindowsOfflineInstallerReadiness,
+  type WindowsOfflineInstallerReadiness,
+} from './lib/windows-offline-installer-readiness.js';
 
 export interface ServerRuntimeDeps {
   cleanupTokenBlacklist: () => Promise<void>;
@@ -18,6 +22,9 @@ export interface ServerRuntimeDeps {
   processApi: {
     on: (event: string, listener: (...args: unknown[]) => void) => unknown;
   };
+  verifyWindowsOfflineInstallerPreflight?: (
+    env: Readonly<Record<string, string | undefined>>
+  ) => Promise<void>;
 }
 
 export interface ServerRuntime {
@@ -28,6 +35,20 @@ export interface ServerRuntime {
 }
 
 const SHUTDOWN_TIMEOUT_MS = 30000;
+
+function verifyWindowsOfflineInstallerPreflight(
+  env: Readonly<Record<string, string | undefined>>
+): Promise<void> {
+  const readiness: WindowsOfflineInstallerReadiness = checkWindowsOfflineInstallerReadiness({
+    env,
+  });
+  if (!readiness.ready) {
+    return Promise.reject(
+      new Error(`Windows offline installer readiness failed: ${readiness.code}`)
+    );
+  }
+  return Promise.resolve();
+}
 
 const defaultDeps: ServerRuntimeDeps = {
   cleanupTokenBlacklist: cleanupBlacklist,
@@ -41,6 +62,7 @@ const defaultDeps: ServerRuntimeDeps = {
   },
   loggerInstance: logger,
   processApi: process,
+  verifyWindowsOfflineInstallerPreflight,
 };
 
 interface ListenableApp {
@@ -117,6 +139,10 @@ export function createServerRuntime(
     } else {
       deps.loggerInstance.warn('Skipping database migrations (SKIP_DB_MIGRATIONS=true)');
     }
+
+    await (deps.verifyWindowsOfflineInstallerPreflight ?? verifyWindowsOfflineInstallerPreflight)(
+      env
+    );
 
     let startedServer: Server | undefined;
     await new Promise<void>((resolve) => {

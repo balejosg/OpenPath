@@ -79,6 +79,27 @@ the main config object. `JWT_SECRET` throws at startup if unset in any environme
 | `OPENPATH_LINUX_AGENT_MIN_DIRECT_UPGRADE_VERSION` | _(none)_                                                                             | `api/src/lib/server-asset-linux.ts`                                                            | Minimum agent version that can upgrade directly without the bridge shim                                                                                                                                        |
 | `OPENPATH_FIREFOX_EXTENSION_INSTALL_URL`          | _(none)_                                                                             | `api/src/services/enrollment-bootstrap.service.ts`                                             | URL included in enrollment scripts pointing to the Firefox extension .xpi                                                                                                                                      |
 
+### Windows offline installer
+
+These variables are read by the pinned-template loader, readiness check,
+provisioning command, and artifact service. Set all five pin variables together
+to enable the capability. Keep the template directory immutable and the artifact
+directory private and writable; the configuration rejects nested roots.
+
+| Variable                                            | Default                             | Read at                                                           | Purpose                                                                                                      |
+| --------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `OPENPATH_WINDOWS_OFFLINE_TEMPLATE_DIR`             | _(required when configured)_        | `api/src/lib/windows-offline-installer-config.ts`                 | Immutable root containing `<version>/<commit>/OpenPath-Windows-Setup-Template.exe` and its `.sha256` sidecar |
+| `OPENPATH_WINDOWS_OFFLINE_ARTIFACTS_DIR`            | _(required when configured)_        | `api/src/lib/windows-offline-installer-config.ts`                 | Private writable root for generated `.exe` artifacts; never use the template root                            |
+| `OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION`         | _(required when configured)_        | `api/src/lib/windows-offline-installer-config.ts`                 | Exact non-`latest` template version directory                                                                |
+| `OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT`          | _(required when configured)_        | `api/src/lib/windows-offline-installer-config.ts`                 | Full lowercase 40-character commit SHA for the template directory                                            |
+| `OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256`          | _(required when configured)_        | `api/src/lib/windows-offline-installer-config.ts`                 | Expected lowercase SHA-256 digest of the template executable                                                 |
+| `OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG`     | `scripts-v<version>-<short-commit>` | `api/src/lib/windows-offline-installer-config.ts`                 | Exact release tag used by provisioning; `latest` and tags containing `latest` are rejected                   |
+| `OPENPATH_GITHUB_REPO`                              | `balejosg/openpath`                 | `api/src/services/windows-offline-installer-provision.service.ts` | GitHub `owner/repository` used only by the explicit provisioning command                                     |
+| `OPENPATH_WINDOWS_OFFLINE_TOKEN_TTL_HOURS`          | `2` (max `24`)                      | `api/src/lib/windows-offline-installer-config.ts`                 | Enrollment-token lifetime embedded in a generated installer                                                  |
+| `OPENPATH_WINDOWS_OFFLINE_DOWNLOAD_TTL_MINUTES`     | `10` (max `60`)                     | `api/src/lib/windows-offline-installer-config.ts`                 | Lifetime of the opaque binary-download reference                                                             |
+| `OPENPATH_WINDOWS_OFFLINE_DOWNLOAD_MAX_ATTEMPTS`    | `3` (max `10`)                      | `api/src/lib/windows-offline-installer-config.ts`                 | Bounded download retries before status `410`                                                                 |
+| `OPENPATH_WINDOWS_OFFLINE_ARTIFACT_RETENTION_HOURS` | `24` (max `168`)                    | `api/src/lib/windows-offline-installer-config.ts`                 | Retention bound for artifact cleanup and operational policy                                                  |
+
 ---
 
 ## SPA (`react-spa/src/`)

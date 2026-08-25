@@ -689,6 +689,13 @@ export const productI18nCatalogs = {
     'enroll.modal.windowsNote':
       'Run PowerShell as Administrator. The installer registers the computer with a classroom token and configures daily silent agent updates.',
     'enroll.modal.windowsPowerShellAlternative': 'PowerShell alternative',
+    'enroll.modal.windowsInstaller.linkAction': 'Download Windows installer (.exe)',
+    'enroll.modal.windowsInstaller.generating': 'Generating installer…',
+    'enroll.modal.windowsInstaller.retryAction': 'Retry download',
+    'enroll.modal.windowsInstaller.regenerateAction': 'Generate a new installer',
+    'enroll.modal.windowsInstaller.error': 'Could not generate the installer.',
+    'enroll.modal.windowsInstaller.metadata':
+      'v{version} · SHA-256 {sha256}… · token expires {expiresAt}',
     'calendar.header.time': 'Time',
     'calendar.day.monday.short': 'Mon',
     'calendar.day.tuesday.short': 'Tue',
@@ -1463,6 +1470,13 @@ export const productI18nCatalogs = {
     'enroll.modal.windowsNote':
       'Ejecuta PowerShell como administrador. El instalador registra el equipo con un token de aula y configura actualizaciones silenciosas diarias del agente.',
     'enroll.modal.windowsPowerShellAlternative': 'Alternativa PowerShell',
+    'enroll.modal.windowsInstaller.linkAction': 'Descargar instalador de Windows (.exe)',
+    'enroll.modal.windowsInstaller.generating': 'Generando instalador…',
+    'enroll.modal.windowsInstaller.retryAction': 'Reintentar descarga',
+    'enroll.modal.windowsInstaller.regenerateAction': 'Generar un instalador nuevo',
+    'enroll.modal.windowsInstaller.error': 'No se pudo generar el instalador.',
+    'enroll.modal.windowsInstaller.metadata':
+      'v{version} · SHA-256 {sha256}… · el token caduca {expiresAt}',
     'calendar.header.time': 'Hora',
     'calendar.day.monday.short': 'Lun',
     'calendar.day.tuesday.short': 'Mar',

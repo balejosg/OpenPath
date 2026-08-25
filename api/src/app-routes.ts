@@ -13,6 +13,7 @@ import { registerExtensionRoutes } from './routes/extensions.js';
 import { registerSetupRoutes } from './routes/setup.js';
 import { registerEnrollmentRoutes } from './routes/enrollment.js';
 import { registerMachineRoutes } from './routes/machines.js';
+import { registerWindowsOfflineInstallerRoutes } from './routes/windows-offline-installer.js';
 import { registerTestSupportRoutes } from './routes/test-support.js';
 import { createContext } from './trpc/context.js';
 import { appRouter } from './trpc/routers/index.js';
@@ -42,6 +43,7 @@ export function registerAppRoutes(
     setTestNowOverride: deps.setTestNowOverride,
   });
   registerMachineRoutes(app, { getCurrentEvaluationTime: deps.getCurrentEvaluationTime });
+  registerWindowsOfflineInstallerRoutes(app);
 
   registerSwaggerRoutes(app, deps.swaggerUi, deps.getSwaggerSpec);
   registerTrpcRoutes(app);

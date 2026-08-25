@@ -136,6 +136,38 @@ async function ensureEmailVerificationSchema(): Promise<void> {
   }
 }
 
+async function ensureWindowsOfflineInstallerSchema(): Promise<void> {
+  await db.execute(
+    sql.raw(
+      'CREATE TABLE IF NOT EXISTS "windows_offline_download_refs" (\n' +
+        '  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,\n' +
+        '  "classroom_id" varchar(50) NOT NULL,\n' +
+        '  "classroom_name" varchar(255) NOT NULL,\n' +
+        '  "created_by" varchar(50),\n' +
+        '  "reference_hash" varchar(64) NOT NULL UNIQUE,\n' +
+        '  "artifact_file_name" varchar(255) NOT NULL,\n' +
+        '  "artifact_sha256" varchar(64) NOT NULL,\n' +
+        '  "artifact_size" bigint NOT NULL,\n' +
+        '  "max_attempts" integer NOT NULL,\n' +
+        '  "used_attempts" integer DEFAULT 0 NOT NULL,\n' +
+        '  "expires_at" timestamp with time zone NOT NULL,\n' +
+        '  "consumed_at" timestamp with time zone,\n' +
+        '  "created_at" timestamp with time zone DEFAULT now() NOT NULL\n' +
+        ');'
+    )
+  );
+  await db.execute(
+    sql.raw(
+      'CREATE INDEX IF NOT EXISTS "windows_offline_download_refs_expires_idx" ON "windows_offline_download_refs" ("expires_at");'
+    )
+  );
+  await db.execute(
+    sql.raw(
+      'CREATE INDEX IF NOT EXISTS "windows_offline_download_refs_classroom_idx" ON "windows_offline_download_refs" ("classroom_id", "created_at");'
+    )
+  );
+}
+
 async function ensureGroupForeignKeyConstraints(): Promise<void> {
   const statements = [
     'ALTER TABLE "classrooms" DROP CONSTRAINT IF EXISTS "classrooms_default_group_id_whitelist_groups_id_fk";',
@@ -176,6 +208,7 @@ export async function ensureTestSchema(): Promise<void> {
   await ensureMachinesSchema();
   await ensureHealthReportsSchema();
   await ensureEmailVerificationSchema();
+  await ensureWindowsOfflineInstallerSchema();
   await ensureGroupForeignKeyConstraints();
   await seedBaselineWhitelistGroups();
 }

@@ -48,6 +48,7 @@
 - Linux deployment notes: [`linux/DEPLOYMENT.md`](../linux/DEPLOYMENT.md)
 - Linux troubleshooting: [`linux/TROUBLESHOOTING.md`](../linux/TROUBLESHOOTING.md)
 - Windows deployment notes: [`windows/DEPLOYMENT.md`](../windows/DEPLOYMENT.md)
+- Windows offline installer capability: [`docs/windows-offline-installer.md`](windows-offline-installer.md)
 - Windows offline installer (trailer contract, deferred enrollment): [`windows/DEPLOYMENT.md`](../windows/DEPLOYMENT.md), contract in `shared/src/windows-offline-installer.ts`
 - Windows troubleshooting: [`windows/TROUBLESHOOTING.md`](../windows/TROUBLESHOOTING.md)
 - Windows outbound egress floor (opt-in + canary): [`docs/windows-egress-floor.md`](windows-egress-floor.md)

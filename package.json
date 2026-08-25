@@ -25,6 +25,7 @@
     "test:installer:apt": "bash tests/e2e/ci/run-linux-apt-contracts.sh",
     "test:contract:linux": "bash tests/e2e/ci/run-linux-contract-scenarios.sh",
     "test:installer:contracts": "npm run test:installer:linux && npm run test:installer:apt",
+    "provision:windows-offline-installer": "npm run provision:windows-offline-installer --workspace=@openpath/api",
     "test:student-policy:linux": "bash tests/e2e/ci/run-linux-student-flow.sh",
     "test:student-policy:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-student-flow.ps1",
     "check:ps-culture": "node scripts/check-ps-datetime-culture.mjs",
@@ -63,6 +64,7 @@
     "contract:constants": "node scripts/generate-contract-constants.mjs",
     "contract:constants:check": "node scripts/generate-contract-constants.mjs --check",
     "diagnostics:windows:direct": "node scripts/run-windows-runner-direct.mjs",
+    "canary:windows-offline-installer": "node scripts/windows-offline-installer-canary.mjs",
     "diagnostics:linux-student:local": "node scripts/run-linux-student-policy-local.mjs",
     "ops:change-brief": "node ../scripts/change-brief.mjs --workspace .. --repo openpath"
   },

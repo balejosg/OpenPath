@@ -93,6 +93,46 @@ await describe('server runtime', async () => {
     assert.equal(events.includes('default-admin'), true);
   });
 
+  await test('runs the offline installer readiness preflight before accepting traffic', async () => {
+    const events: string[] = [];
+    const fakeApp = {
+      listen: (_port: number, _host: string, callback?: () => void): { close: () => void } => {
+        events.push('listen');
+        callback?.();
+        return { close: (): void => undefined };
+      },
+    };
+    const config = loadConfig({
+      ...process.env,
+      NODE_ENV: 'test',
+      JWT_SECRET: 'server-runtime-test-secret',
+      HOST: '127.0.0.1',
+      PORT: '3012',
+      ENABLE_SWAGGER: 'false',
+    });
+
+    const runtime = createServerRuntime(
+      fakeApp as never,
+      config,
+      { ...process.env, SKIP_DB_MIGRATIONS: 'true' },
+      {
+        cleanupTokenBlacklist: () => Promise.resolve(),
+        ensureDefaultAdmin: () => Promise.resolve(),
+        exitProcess: (): void => undefined,
+        initializeSchema: () => Promise.resolve(),
+        loggerInstance: createLogger(events),
+        processApi: { on: () => undefined },
+        verifyWindowsOfflineInstallerPreflight: (): Promise<void> => {
+          events.push('offline-preflight');
+          return Promise.resolve();
+        },
+      }
+    );
+
+    await runtime.startServer();
+    assert.equal(events.indexOf('offline-preflight') < events.indexOf('listen'), true);
+  });
+
   await test('registerProcessHandlers wires signal and error handlers', () => {
     const handlers: string[] = [];
     const config = loadConfig({

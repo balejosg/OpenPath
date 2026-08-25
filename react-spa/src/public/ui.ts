@@ -3,3 +3,4 @@ export { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../compone
 export { ConfirmDialog, DangerConfirmDialog } from '../components/ui/ConfirmDialog';
 export { Input } from '../components/ui/Input';
 export { Modal } from '../components/ui/Modal';
+export { default as WindowsOfflineInstallerAction } from '../components/classrooms/WindowsOfflineInstallerAction';

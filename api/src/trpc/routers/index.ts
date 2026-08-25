@@ -11,6 +11,7 @@ import { healthcheckRouter } from './healthcheck.js';
 import { groupsRouter } from './groups.js';
 import { backupRouter } from './backup.js';
 import { apiTokensRouter } from './api-tokens.js';
+import { windowsOfflineInstallerRouter } from './windows-offline-installer.js';
 
 export const appRouter = router({
   auth: authRouter,
@@ -25,6 +26,7 @@ export const appRouter = router({
   groups: groupsRouter,
   backup: backupRouter,
   apiTokens: apiTokensRouter,
+  windowsOfflineInstaller: windowsOfflineInstallerRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -1,6 +1,7 @@
 import { getStats } from '../lib/user-storage.js';
 import { logger } from '../lib/logger.js';
 import { getErrorMessage } from '@openpath/shared';
+import { checkWindowsOfflineInstallerReadiness } from '../lib/windows-offline-installer-readiness.js';
 
 export interface ReadinessCheckStatus {
   status: string;
@@ -34,6 +35,20 @@ export async function getReadinessStatus(): Promise<ReadinessResult> {
   const authConfigured = process.env.JWT_SECRET !== undefined && process.env.JWT_SECRET !== '';
   checks.auth = { status: authConfigured ? 'configured' : 'not_configured' };
   if (!authConfigured) {
+    status = 'degraded';
+  }
+
+  const windowsOfflineInstaller = checkWindowsOfflineInstallerReadiness();
+  checks.windowsOfflineInstaller = {
+    status:
+      windowsOfflineInstaller.code === 'NOT_CONFIGURED'
+        ? 'not_configured'
+        : windowsOfflineInstaller.ready
+          ? 'ok'
+          : 'error',
+    ...(windowsOfflineInstaller.ready ? {} : { error: windowsOfflineInstaller.code }),
+  };
+  if (!windowsOfflineInstaller.ready) {
     status = 'degraded';
   }
 

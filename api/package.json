@@ -67,6 +67,7 @@
     "db:migrate:request-metadata": "tsx scripts/migrate-request-metadata.ts",
     "db:test": "node -e \"import { db } from './dist/src/db/index.js'; console.log('DB module loaded'); process.exit(0);\"",
     "db:push": "tsx scripts/repair-group-fk-compat.ts && drizzle-kit push --force",
+    "provision:windows-offline-installer": "tsx scripts/provision-windows-offline-installer.ts",
     "drizzle:generate": "drizzle-kit generate",
     "drizzle:push": "drizzle-kit push",
     "drizzle:studio": "drizzle-kit studio",

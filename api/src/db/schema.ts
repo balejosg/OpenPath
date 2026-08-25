@@ -14,6 +14,7 @@ import {
   integer,
   time,
   uuid,
+  bigint,
   unique,
   uniqueIndex,
   index,
@@ -252,6 +253,37 @@ export const tokens = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   },
   (table) => [index('tokens_expires_at_idx').on(table.expiresAt)]
+);
+
+// =============================================================================
+// Windows Offline Installer Download References
+// =============================================================================
+
+export const windowsOfflineDownloadRefs = pgTable(
+  'windows_offline_download_refs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    classroomId: varchar('classroom_id', { length: 50 })
+      .notNull()
+      .references(() => classrooms.id, { onDelete: 'cascade' }),
+    classroomName: varchar('classroom_name', { length: 255 }).notNull(),
+    createdBy: varchar('created_by', { length: 50 }).references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    referenceHash: varchar('reference_hash', { length: 64 }).notNull().unique(),
+    artifactFileName: varchar('artifact_file_name', { length: 255 }).notNull(),
+    artifactSha256: varchar('artifact_sha256', { length: 64 }).notNull(),
+    artifactSize: bigint('artifact_size', { mode: 'number' }).notNull(),
+    maxAttempts: integer('max_attempts').notNull(),
+    usedAttempts: integer('used_attempts').default(0).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('windows_offline_download_refs_expires_idx').on(table.expiresAt),
+    index('windows_offline_download_refs_classroom_idx').on(table.classroomId, table.createdAt),
+  ]
 );
 
 // =============================================================================
