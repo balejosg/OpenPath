@@ -107,12 +107,10 @@ await describe('enrollment service', async () => {
     });
 
     assert.equal(result.ok, true);
-    if (result.ok) {
-      assert.equal(result.data.classroomId, classroom.id);
-      assert.equal(result.data.classroomName, classroom.name);
-      assert.ok(typeof result.data.enrollmentToken === 'string');
-      assert.ok(typeof result.data.expiresAt === 'string');
-    }
+    assert.equal(result.data.classroomId, classroom.id);
+    assert.equal(result.data.classroomName, classroom.name);
+    assert.ok(typeof result.data.enrollmentToken === 'string');
+    assert.ok(typeof result.data.expiresAt === 'string');
   });
 
   await test('resolveEnrollmentContext handles validation and success cases', async () => {
@@ -169,10 +167,8 @@ await describe('enrollment service', async () => {
       authorizationHeader: `Bearer ${validToken}`,
     });
     assert.equal(success.ok, true);
-    if (success.ok) {
-      assert.equal(success.data.classroom.id, classroom.id);
-      assert.equal(success.data.enrollmentToken, validToken);
-    }
+    assert.equal(success.data.classroom.id, classroom.id);
+    assert.equal(success.data.enrollmentToken, validToken);
   });
 
   await test('resolveEnrollmentTokenAccess handles validation and success cases', async () => {
@@ -197,9 +193,7 @@ await describe('enrollment service', async () => {
     const validToken = generateEnrollmentToken(classroom.id);
     const success = await resolveEnrollmentTokenAccess(`Bearer ${validToken}`);
     assert.equal(success.ok, true);
-    if (success.ok) {
-      assert.equal(success.data.classroomId, classroom.id);
-      assert.equal(success.data.classroomName, classroom.name);
-    }
+    assert.equal(success.data.classroomId, classroom.id);
+    assert.equal(success.data.classroomName, classroom.name);
   });
 });
