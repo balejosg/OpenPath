@@ -7,7 +7,7 @@ import { after, before, describe, test } from 'node:test';
 
 import { serialize } from '../src/lib/windows-offline-installer.js';
 import { startHttpTestHarness, type HttpTestHarness } from './http-test-harness.js';
-import { assertStatus, bearerAuth, parseTRPC } from './test-utils.js';
+import { assertStatus, bearerAuth, parseTRPC, uniqueEmail } from './test-utils.js';
 
 let harness: HttpTestHarness;
 let root: string;
@@ -113,5 +113,95 @@ void describe('OpenPath Windows offline installer HTTP capability', () => {
 
     const replay = await fetch(localDownloadUrl);
     assert.equal(replay.status, 410);
+  });
+
+  void test('maps a missing classroom to a not-found tRPC error', async () => {
+    const response = await harness.trpcMutate(
+      'windowsOfflineInstaller.generate',
+      { classroomId: 'classroom-does-not-exist' },
+      bearerAuth(adminToken)
+    );
+
+    assert.equal(response.status, 404);
+  });
+
+  void test('maps a teacher without classroom scope to a forbidden tRPC error', async () => {
+    const groupResponse = await harness.trpcMutate(
+      'groups.create',
+      { name: 'offline-installer-private-group', displayName: 'Offline Installer Private Group' },
+      bearerAuth(adminToken)
+    );
+    assertStatus(groupResponse, 200);
+    const groupPayload = (await parseTRPC(groupResponse)) as { data?: { id?: string } };
+    const groupId = groupPayload.data?.id ?? '';
+    assert.ok(groupId);
+
+    const restrictedClassroomResponse = await harness.trpcMutate(
+      'classrooms.create',
+      {
+        name: 'offline-installer-restricted-classroom',
+        displayName: 'Offline Installer Restricted Classroom',
+        defaultGroupId: groupId,
+      },
+      bearerAuth(adminToken)
+    );
+    assert.ok([200, 201].includes(restrictedClassroomResponse.status));
+    const restrictedClassroomPayload = (await parseTRPC(restrictedClassroomResponse)) as {
+      data?: { id?: string };
+    };
+    const restrictedClassroomId = restrictedClassroomPayload.data?.id ?? '';
+    assert.ok(restrictedClassroomId);
+
+    const email = uniqueEmail('offline-installer-denied');
+    const password = 'TeacherPassword123!';
+    const userResponse = await harness.trpcMutate(
+      'users.create',
+      {
+        email,
+        password,
+        name: 'Offline Installer Denied Teacher',
+        role: 'teacher',
+        groupIds: [],
+      },
+      bearerAuth(adminToken)
+    );
+    assertStatus(userResponse, 200);
+
+    const loginResponse = await harness.trpcMutate('auth.login', { email, password });
+    assertStatus(loginResponse, 200);
+    const loginPayload = (await parseTRPC(loginResponse)) as {
+      data?: { accessToken?: string };
+    };
+    const teacherToken = loginPayload.data?.accessToken ?? '';
+    assert.ok(teacherToken);
+
+    const response = await harness.trpcMutate(
+      'windowsOfflineInstaller.generate',
+      { classroomId: restrictedClassroomId },
+      bearerAuth(teacherToken)
+    );
+
+    assert.equal(response.status, 403);
+  });
+
+  void test('maps unrecognized installer errors to an internal tRPC error', async () => {
+    const templateDigest = process.env.OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256;
+    delete process.env.OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256;
+
+    try {
+      const response = await harness.trpcMutate(
+        'windowsOfflineInstaller.generate',
+        { classroomId },
+        bearerAuth(adminToken)
+      );
+
+      assert.equal(response.status, 500);
+    } finally {
+      if (templateDigest === undefined) {
+        delete process.env.OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256;
+      } else {
+        process.env.OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256 = templateDigest;
+      }
+    }
   });
 });

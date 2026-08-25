@@ -10,6 +10,7 @@ import {
   loadWindowsOfflineInstallerConfig,
 } from '../src/lib/windows-offline-installer-config.js';
 import {
+  formatProvisionResult,
   provisionWindowsOfflineInstallerTemplate,
   WindowsOfflineInstallerProvisionError,
 } from '../src/services/windows-offline-installer-provision.service.js';
@@ -97,6 +98,55 @@ void describe('OpenPath Windows offline installer provisioning', () => {
         'OpenPath-Windows-Setup-Template.exe',
         'OpenPath-Windows-Setup-Template.exe.sha256',
       ]);
+
+      const cached = await provisionWindowsOfflineInstallerTemplate({
+        env,
+        fetchImpl: () =>
+          Promise.reject(new Error('A verified template must not be downloaded again')),
+      });
+      assert.deepEqual(cached, {
+        status: 'verified',
+        filePath: templatePath,
+        releaseTag: 'scripts-v4.1.0-aaaaaaa',
+        sha256: digest,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('rejects invalid configuration before network access and formats results safely', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-template-config-'));
+    const env = envFor(root, 'a'.repeat(64));
+
+    try {
+      await assert.rejects(
+        () =>
+          provisionWindowsOfflineInstallerTemplate({
+            env: {
+              ...env,
+              OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION: 'latest',
+            },
+            verifyOnly: true,
+            fetchImpl: () => Promise.resolve(response('unexpected')),
+          }),
+        (error: unknown) =>
+          error instanceof WindowsOfflineInstallerProvisionError && error.code === 'CONFIG_INVALID'
+      );
+
+      assert.equal(
+        formatProvisionResult({
+          status: 'verified',
+          filePath: '/srv/templates/OpenPath-Windows-Setup-Template.exe',
+          releaseTag: 'scripts-v4.1.0-aaaaaaa',
+          sha256: 'b'.repeat(64),
+        }),
+        JSON.stringify({
+          status: 'verified',
+          releaseTag: 'scripts-v4.1.0-aaaaaaa',
+          sha256: 'b'.repeat(64),
+        })
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
