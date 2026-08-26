@@ -103,6 +103,8 @@ function Get-SafeInstallerStatus {
             if ($exitCode -eq 255) { return 'read-trailer-start' }
         }
         11 {
+            if ($exitCode -eq 254) { return 'read-trailer-exec-error' }
+            if ($exitCode -eq 253) { return 'read-trailer-exec-timeout' }
             return "read-trailer-exit-$exitCode"
         }
         12 {
@@ -118,6 +120,8 @@ function Get-SafeInstallerStatus {
             if ($exitCode -eq 255) { return 'run-installer-start' }
         }
         31 {
+            if ($exitCode -eq 254) { return 'run-installer-exec-error' }
+            if ($exitCode -eq 253) { return 'run-installer-exec-timeout' }
             return "run-installer-exit-$exitCode"
         }
     }

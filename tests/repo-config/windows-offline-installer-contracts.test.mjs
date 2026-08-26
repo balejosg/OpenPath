@@ -496,7 +496,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
     nsiSource.indexOf('Section "ReadTrailer"'),
     nsiSource.indexOf('SectionEnd', nsiSource.indexOf('Section "ReadTrailer"'))
   );
-  const trailerResultOffset = readTrailerSection.indexOf('Pop $0');
+  const trailerResultOffset = readTrailerSection.indexOf("' $0");
   const trailerBranchOffset = readTrailerSection.indexOf('StrCmp $0 "0" trailer_ok trailer_failed');
   const trailerEvidenceOffset = readTrailerSection.indexOf(
     'Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"'
@@ -509,8 +509,13 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     readTrailerSection,
-    /nsExec::ExecToLog '\"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe\" -NoProfile/,
-    'NSIS must invoke the built-in Windows PowerShell executable with an explicit quoted path'
+    /ExecWait '\"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe\" -NoProfile[^']*' \$0/,
+    'NSIS must synchronously invoke the built-in Windows PowerShell executable with an explicit quoted path'
+  );
+  assert.doesNotMatch(
+    readTrailerSection,
+    /nsExec::ExecToLog/,
+    'NSIS trailer validation must not collapse nsExec error strings into a numeric marker'
   );
   const runInstallerSection = nsiSource.slice(
     nsiSource.indexOf('Section "RunInstaller"'),
@@ -518,8 +523,27 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     runInstallerSection,
-    /nsExec::ExecToLog '\"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe\" -NoProfile/,
-    'NSIS must invoke the offline installer through the same explicit PowerShell path'
+    /ExecWait '\"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe\" -NoProfile[^']*' \$1/,
+    'NSIS must synchronously invoke the offline installer through the same explicit PowerShell path'
+  );
+  assert.doesNotMatch(
+    runInstallerSection,
+    /nsExec::ExecToLog/,
+    'NSIS offline installation must not depend on plugin-specific error strings'
+  );
+  const normalizeStatusSource = nsiSource.slice(
+    nsiSource.indexOf('Function NormalizeOfflineStatusByte'),
+    nsiSource.indexOf('Function WriteOfflineStage')
+  );
+  assert.match(
+    normalizeStatusSource,
+    /StrCmp \$R0 "error"[\s\S]*Push "\$\{OFFLINE_STATUS_EXEC_ERROR\}"/,
+    'NSIS evidence must encode launch failures with a reserved byte value'
+  );
+  assert.match(
+    normalizeStatusSource,
+    /StrCmp \$R0 "timeout"[\s\S]*Push "\$\{OFFLINE_STATUS_EXEC_TIMEOUT\}"/,
+    'NSIS evidence must encode timeout failures with a reserved byte value'
   );
   assert.doesNotMatch(
     nsiSource,

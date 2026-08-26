@@ -43,6 +43,8 @@ ManifestDPIAware true
 !define OFFLINE_STAGE_EXTRACT_OK 21
 !define OFFLINE_STAGE_RUN_INSTALLER_START 30
 !define OFFLINE_STAGE_RUN_INSTALLER_EXIT 31
+!define OFFLINE_STATUS_EXEC_TIMEOUT 253
+!define OFFLINE_STATUS_EXEC_ERROR 254
 
 Name "${PRODUCT_NAME}"
 OutFile "${BUILD_DIR}\OpenPath-Windows-Setup.exe"
@@ -63,11 +65,32 @@ Function .onInit
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-status.txt"
 FunctionEnd
 
+Function NormalizeOfflineStatusByte
+    ; ExecWait normally returns a numeric process exit code, but it can return
+    ; a string when Windows cannot start the child or the timeout is reached.
+    ; Never pass those strings to FileWriteByte: NSIS would coerce them to an
+    ; ambiguous zero byte. Reserve two values for these launch outcomes.
+    Pop $R0
+    StrCmp $R0 "error" offline_status_exec_error
+    StrCmp $R0 "timeout" offline_status_exec_timeout
+    Push $R0
+    Return
+offline_status_exec_error:
+    Push "${OFFLINE_STATUS_EXEC_ERROR}"
+    Return
+offline_status_exec_timeout:
+    Push "${OFFLINE_STATUS_EXEC_TIMEOUT}"
+    Return
+FunctionEnd
+
 Function WriteOfflineStage
     ; Stack arguments are stage byte, then exit byte. FileWriteByte avoids any
     ; text encoding or locale ambiguity in this diagnostic-only marker.
     Pop $R0
     Pop $R1
+    Push $R0
+    Call NormalizeOfflineStatusByte
+    Pop $R0
     FileOpen $R2 "$TEMP\OpenPathOfflineSetup-$EXEFILE-status.txt" w
     FileWriteByte $R2 $R1
     FileWriteByte $R2 $R0
@@ -93,11 +116,9 @@ Section "ReadTrailer" SEC00
 
     ; Validate the versioned trailer before extracting anything. A template
     ; that was never customized carries a placeholder slot and aborts here.
-    nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json"'
-    Pop $0
-    ; Branch before calling the evidence helper. nsExec returns the child exit
-    ; value as a string, and the helper is deliberately allowed to use shared
-    ; registers while it writes the bounded marker.
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json"' $0
+    ; Branch before calling the evidence helper so the child result controls
+    ; the installer outcome rather than a diagnostic write.
     StrCmp $0 "0" trailer_ok trailer_failed
 trailer_failed:
     Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
@@ -149,8 +170,7 @@ Section "RunInstaller" SEC02
     Push "${OFFLINE_STAGE_RUN_INSTALLER_START}"
     Push "${OFFLINE_STATUS_SENTINEL}"
     Call WriteOfflineStage
-    nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -Unattended'
-    Pop $1
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -Unattended' $1
     Push "${OFFLINE_STAGE_RUN_INSTALLER_EXIT}"
     Push $1
     Call WriteOfflineStage
