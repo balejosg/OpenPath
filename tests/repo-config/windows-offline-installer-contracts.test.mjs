@@ -507,6 +507,20 @@ test('Windows release evidence executes the personalized NSIS executable and its
     trailerEvidenceOffset > trailerBranchOffset,
     'NSIS must branch before an evidence helper can affect the result register'
   );
+  assert.match(
+    readTrailerSection,
+    /nsExec::ExecToLog '\"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe\" -NoProfile/,
+    'NSIS must invoke the built-in Windows PowerShell executable with an explicit quoted path'
+  );
+  const runInstallerSection = nsiSource.slice(
+    nsiSource.indexOf('Section "RunInstaller"'),
+    nsiSource.indexOf('SectionEnd', nsiSource.indexOf('Section "RunInstaller"'))
+  );
+  assert.match(
+    runInstallerSection,
+    /nsExec::ExecToLog '\"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe\" -NoProfile/,
+    'NSIS must invoke the offline installer through the same explicit PowerShell path'
+  );
   assert.doesNotMatch(
     nsiSource,
     /-ExecutablePath "\$EXEPATH"/,

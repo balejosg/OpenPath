@@ -93,7 +93,7 @@ Section "ReadTrailer" SEC00
 
     ; Validate the versioned trailer before extracting anything. A template
     ; that was never customized carries a placeholder slot and aborts here.
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json"'
+    nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json"'
     Pop $0
     ; Branch before calling the evidence helper. nsExec returns the child exit
     ; value as a string, and the helper is deliberately allowed to use shared
@@ -149,7 +149,7 @@ Section "RunInstaller" SEC02
     Push "${OFFLINE_STAGE_RUN_INSTALLER_START}"
     Push "${OFFLINE_STATUS_SENTINEL}"
     Call WriteOfflineStage
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -Unattended'
+    nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -Unattended'
     Pop $1
     Push "${OFFLINE_STAGE_RUN_INSTALLER_EXIT}"
     Push $1
