@@ -39,6 +39,8 @@ ManifestDPIAware true
 !define OFFLINE_STAGE_READ_TRAILER_START 10
 !define OFFLINE_STAGE_READ_TRAILER_EXIT 11
 !define OFFLINE_STAGE_READ_TRAILER_OK 12
+!define OFFLINE_STAGE_READ_TRAILER_OUTPUT_PRESENT 13
+!define OFFLINE_STAGE_READ_TRAILER_OUTPUT_MISSING 14
 !define OFFLINE_STAGE_EXTRACT_START 20
 !define OFFLINE_STAGE_EXTRACT_OK 21
 !define OFFLINE_STAGE_RUN_INSTALLER_START 30
@@ -145,7 +147,17 @@ Section "ReadTrailer" SEC00
     ; representations on the real Windows runtime.
     StrCmp $0 "" trailer_exec_error
     StrCmp $0 "error" trailer_exec_error
-    IfFileExists "$INSTDIR\offline-config.json" trailer_ok trailer_failed
+    IfFileExists "$INSTDIR\offline-config.json" trailer_output_present trailer_output_missing
+trailer_output_missing:
+    Push "${OFFLINE_STAGE_READ_TRAILER_OUTPUT_MISSING}"
+    Push "0"
+    Call WriteOfflineStage
+    Goto trailer_failed
+trailer_output_present:
+    Push "${OFFLINE_STAGE_READ_TRAILER_OUTPUT_PRESENT}"
+    Push "0"
+    Call WriteOfflineStage
+    Goto trailer_ok
 trailer_failed:
     Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
     Push $0

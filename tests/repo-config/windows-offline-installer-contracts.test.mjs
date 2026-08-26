@@ -508,7 +508,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   const trailerResultOffset = readTrailerSection.indexOf("' $0");
   const trailerBranchOffset = readTrailerSection.indexOf(
-    'IfFileExists "$INSTDIR\\offline-config.json" trailer_ok trailer_failed'
+    'IfFileExists "$INSTDIR\\offline-config.json" trailer_output_present trailer_output_missing'
   );
   const trailerEvidenceOffset = readTrailerSection.indexOf(
     'Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"'
@@ -532,8 +532,18 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     readTrailerSection,
-    /IfFileExists "\$INSTDIR\\offline-config\.json" trailer_ok trailer_failed/,
+    /IfFileExists "\$INSTDIR\\offline-config\.json" trailer_output_present trailer_output_missing/,
     'NSIS must require the canonical trailer reader output before continuing'
+  );
+  assert.match(
+    readTrailerSection,
+    /trailer_output_present:[\s\S]*OFFLINE_STAGE_READ_TRAILER_OUTPUT_PRESENT[\s\S]*Goto trailer_ok/,
+    'NSIS must record a successful trailer output commit before continuing'
+  );
+  assert.match(
+    readTrailerSection,
+    /trailer_output_missing:[\s\S]*OFFLINE_STAGE_READ_TRAILER_OUTPUT_MISSING[\s\S]*Goto trailer_failed/,
+    'NSIS must record a missing trailer output before failing closed'
   );
   assert.match(
     readTrailerSection,

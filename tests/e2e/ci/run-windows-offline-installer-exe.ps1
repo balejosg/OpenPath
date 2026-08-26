@@ -110,6 +110,12 @@ function Get-SafeInstallerStatus {
         12 {
             if ($exitCode -eq 0) { return 'read-trailer-ok' }
         }
+        13 {
+            if ($exitCode -eq 0) { return 'read-trailer-output-present' }
+        }
+        14 {
+            if ($exitCode -eq 0) { return 'read-trailer-output-missing' }
+        }
         20 {
             if ($exitCode -eq 255) { return 'extract-start' }
         }
