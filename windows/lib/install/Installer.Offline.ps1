@@ -566,8 +566,9 @@ function Install-AcrylicDNSFromLocalSource {
         return $false
     }
 
-    Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-validate'
+    Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-validate-hash'
     Assert-AcrylicDownloadHash -Path $AcrylicZipPath -ExpectedSha256 $ExpectedSha256 -ArtifactName (Split-Path $AcrylicZipPath -Leaf)
+    Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-validate-archive'
     if (-not (Test-AcrylicPortableArchive -Path $AcrylicZipPath)) {
         throw 'Staged Acrylic archive is not a valid portable release'
     }
