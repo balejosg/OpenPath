@@ -400,6 +400,11 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /Test-Path -LiteralPath \$validationPath -PathType Leaf/,
     'PowerShell trailer validation must use the output file because a script exit code is not a native process exit code'
   );
+  assert.match(
+    trailerValidationBlock,
+    /powershell\.exe[\s\S]*-File \$readerPath/,
+    'preflight must exercise the same Windows PowerShell executable that NSIS launches'
+  );
   assert.doesNotMatch(
     trailerValidationBlock,
     /\$readerExitCode\s*=\s*\$LASTEXITCODE/,

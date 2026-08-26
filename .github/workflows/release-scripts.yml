@@ -138,10 +138,12 @@ jobs:
           $validationPath = Join-Path $env:RUNNER_TEMP 'openpath-offline-installer-e2e-trailer-validation.json'
           $readerSucceeded = $false
           try {
-            & (Resolve-Path 'windows/offline-installer/scripts/Read-Trailer.ps1') `
+            $readerPath = (Resolve-Path 'windows/offline-installer/scripts/Read-Trailer.ps1').Path
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $readerPath `
               -ExecutablePath $personalizedPath `
               -OutputConfigPath $validationPath
-            $readerSucceeded = Test-Path -LiteralPath $validationPath -PathType Leaf
+            $nativeExitCode = $LASTEXITCODE
+            $readerSucceeded = $nativeExitCode -eq 0 -and (Test-Path -LiteralPath $validationPath -PathType Leaf)
           } catch {
             $readerSucceeded = $false
           } finally {
