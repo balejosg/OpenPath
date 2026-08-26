@@ -674,7 +674,8 @@ if ($classroomModeRequested) {
                     -ApiUrl $apiBaseUrl `
                     -ClassroomId $ClassroomId `
                     -EnrollmentToken $EnrollmentToken `
-                    -ExpiresAt $offlineEnrollmentExpiresAt
+                    -ExpiresAt $offlineEnrollmentExpiresAt `
+                    -FailureStatusPath $FailureStatusPath
                 $script:OpenPathInstallerCurrentPhase = 'enrollment-pending-saved'
                 $machineRegistered = 'PENDING'
                 Set-Variable -Name machineRegistered -Scope Script -Value $machineRegistered

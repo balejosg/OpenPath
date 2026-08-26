@@ -1070,11 +1070,19 @@ Describe "Installer" {
         It "Keeps deferred enrollment save failures diagnosable without exposing state" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw
+            $offlinePath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Offline.ps1"
+            $offlineContent = Get-Content $offlinePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 "`$script:OpenPathInstallerCurrentPhase = 'enrollment-attempt'",
                 "`$script:OpenPathInstallerCurrentPhase = 'enrollment-save-pending'",
                 "`$script:OpenPathInstallerCurrentPhase = 'enrollment-pending-saved'"
+            )
+            Assert-ContentContainsAll -Content $offlineContent -Needles @(
+                "Write-OpenPathOfflineInstallPhase -Path `$FailureStatusPath -Phase 'enrollment-pending-protect'",
+                "Write-OpenPathOfflineInstallPhase -Path `$FailureStatusPath -Phase 'enrollment-pending-write'",
+                "Write-OpenPathOfflineInstallPhase -Path `$FailureStatusPath -Phase 'enrollment-pending-acl'",
+                "Write-OpenPathOfflineInstallPhase -Path `$FailureStatusPath -Phase 'enrollment-pending-complete'"
             )
         }
 

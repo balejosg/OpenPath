@@ -671,7 +671,9 @@ function Save-OpenPathPendingEnrollmentState {
         [string]$EnrollmentToken,
 
         [Parameter(Mandatory = $true)]
-        [string]$ExpiresAt
+        [string]$ExpiresAt,
+
+        [string]$FailureStatusPath = ''
     )
 
     Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
@@ -684,6 +686,7 @@ function Save-OpenPathPendingEnrollmentState {
         savedAtUtc = [System.DateTime]::UtcNow.ToString('o')
     }
 
+    Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'enrollment-pending-protect'
     $jsonBytes = [System.Text.Encoding]::UTF8.GetBytes(($state | ConvertTo-Json -Compress))
     $protectedBytes = [System.Security.Cryptography.ProtectedData]::Protect(
         $jsonBytes,
@@ -696,9 +699,11 @@ function Save-OpenPathPendingEnrollmentState {
     }
 
     $statePath = Get-OpenPathPendingEnrollmentStatePath -OpenPathRoot $OpenPathRoot
+    Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'enrollment-pending-write'
     [System.IO.File]::WriteAllBytes($statePath, $protectedBytes)
 
     try {
+        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'enrollment-pending-acl'
         Set-OpenPathCapabilityStorageAcl -Path $statePath -Profile RestrictedRoot
     }
     catch {
@@ -706,6 +711,7 @@ function Save-OpenPathPendingEnrollmentState {
         throw "Could not apply restrictive ACLs to pending enrollment state; token was not persisted: $_"
     }
 
+    Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'enrollment-pending-complete'
     Write-OpenPathLog "Saved deferred enrollment state for classroom $ClassroomId" -Level INFO
     return $statePath
 }
