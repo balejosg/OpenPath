@@ -4,12 +4,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { prepareFirefoxReleaseArtifacts } from './build-firefox-release.mjs';
 import { assertFirefoxAmoSignedXpi } from './xpi-signature-evidence.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
+const require = createRequire(import.meta.url);
 const extensionRoot = path.dirname(__filename);
 const defaultArtifactsDir = path.join(extensionRoot, 'build', 'firefox-release-signing');
 const firefoxReleaseSourceEntries = [
@@ -482,8 +484,23 @@ function readVersionFromSignArgs(args) {
   }
 }
 
-export function resolveNpxCommand(platform = process.platform) {
-  return platform === 'win32' ? 'npx.cmd' : 'npx';
+export function resolveWebExtInvocation(options) {
+  const { platform = process.platform, args } = options;
+  if (platform !== 'win32') {
+    return { command: 'npx', args };
+  }
+
+  const webExtIndex = args.indexOf('web-ext');
+  if (webExtIndex < 0) {
+    fail('web-ext command is missing from the signing arguments');
+  }
+
+  const webExtPackageEntry = require.resolve('web-ext');
+  const webExtEntryPoint = path.join(path.dirname(webExtPackageEntry), 'bin', 'web-ext.js');
+  return {
+    command: process.execPath,
+    args: [webExtEntryPoint, ...args.slice(webExtIndex + 1)],
+  };
 }
 
 export function runWebExtSignWithRetry(options) {
@@ -512,7 +529,7 @@ export function runWebExtSignWithRetry(options) {
     env.WEB_EXT_SIGN_MAX_THROTTLE_WAIT_SECONDS,
     defaultWebExtSignMaxThrottleWaitSeconds
   );
-  const npxCommand = resolveNpxCommand(platform);
+  const invocation = resolveWebExtInvocation({ platform, args });
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     const remainingTotalMs = deadlineMs === undefined ? undefined : deadlineMs - nowImpl();
@@ -528,7 +545,7 @@ export function runWebExtSignWithRetry(options) {
       remainingTotalMs === undefined || processTimeoutMs === undefined
         ? processTimeoutMs
         : Math.min(processTimeoutMs, remainingTotalMs);
-    const result = spawnSyncImpl(npxCommand, args, {
+    const result = spawnSyncImpl(invocation.command, invocation.args, {
       cwd,
       encoding: 'utf8',
       timeout: attemptTimeoutMs,

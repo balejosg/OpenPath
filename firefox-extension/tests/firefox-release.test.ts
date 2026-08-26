@@ -103,7 +103,10 @@ interface SignFirefoxReleaseModule {
     deadlineMs?: number;
   };
   resolveAmoSigningFailureState: (status: number | null | undefined) => string;
-  resolveNpxCommand: (platform?: NodeJS.Platform) => string;
+  resolveWebExtInvocation: (options: { platform?: NodeJS.Platform; args: string[] }) => {
+    command: string;
+    args: string[];
+  };
   runWebExtSignWithRetry: (options: {
     args: string[];
     cwd: string;
@@ -274,7 +277,7 @@ const {
   resolveAmoRecoveryTiming,
   resolveWebExtSignTiming,
   resolveAmoSigningFailureState,
-  resolveNpxCommand,
+  resolveWebExtInvocation,
   runWebExtSignWithRetry,
   waitForAmoSignedXpi,
   writeAmoSigningStateArtifact,
@@ -1505,19 +1508,27 @@ void describe('Firefox release signing helpers', () => {
     assert.equal(resolveAmoSigningFailureState(null), 'hard-failure');
   });
 
-  void test('AMO signing resolves the Windows npx command shim', () => {
-    assert.equal(resolveNpxCommand('win32'), 'npx.cmd');
-    assert.equal(resolveNpxCommand('linux'), 'npx');
+  void test('AMO signing resolves a direct local web-ext entrypoint on Windows', () => {
+    const invocation = resolveWebExtInvocation({
+      platform: 'win32',
+      args: ['--yes', '--no-install', 'web-ext', 'sign', '--channel=unlisted'],
+    });
+
+    assert.equal(invocation.command, process.execPath);
+    assert.match(invocation.args[0] ?? '', /web-ext[\\/]bin[\\/]web-ext\.js$/u);
+    assert.deepEqual(invocation.args.slice(1), ['sign', '--channel=unlisted']);
   });
 
-  void test('runWebExtSignWithRetry invokes npx.cmd on Windows runners', () => {
+  void test('runWebExtSignWithRetry invokes the local web-ext entrypoint on Windows runners', () => {
     const commands: string[] = [];
+    const commandArgs: string[][] = [];
     const result = runWebExtSignWithRetry({
       args: ['--yes', '--no-install', 'web-ext', 'sign'],
       cwd: extensionRoot,
       platform: 'win32',
-      spawnSyncImpl: (command) => {
+      spawnSyncImpl: (command, args) => {
         commands.push(command);
+        commandArgs.push(args);
         return {
           status: 0,
           signal: null,
@@ -1530,7 +1541,9 @@ void describe('Firefox release signing helpers', () => {
     });
 
     assert.equal(result.status, 0);
-    assert.deepEqual(commands, ['npx.cmd']);
+    assert.deepEqual(commands, [process.execPath]);
+    assert.match(commandArgs[0]?.[0] ?? '', /web-ext[\\/]bin[\\/]web-ext\.js$/u);
+    assert.deepEqual(commandArgs[0]?.slice(1), ['sign']);
   });
 
   void test('runWebExtSignWithRetry waits and retries AMO throttling responses', () => {
