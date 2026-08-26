@@ -195,7 +195,8 @@ Describe "Offline installer" {
             $functionBody | Should -Not -Match 'https?://'
             $functionBody | Should -Not -Match 'choco'
             $functionBody | Should -Match 'Assert-AcrylicDownloadHash'
-            $functionBody | Should -Match 'Expand-Archive'
+            $functionBody | Should -Match '\[System\.IO\.Compression\.ZipFile\]::ExtractToDirectory'
+            $functionBody | Should -Match 'Copy-Item -LiteralPath \$extractedItem\.FullName'
         }
 
         It "Throws when the staged ZIP is absent or fails the hash assertion" {
@@ -227,6 +228,30 @@ Describe "Offline installer" {
 
             Should -Invoke Register-AcrylicServiceFromPath -Times 1 -Exactly
             Should -Invoke Write-OpenPathLog -Times 0 -Exactly -ParameterFilter { $Level -eq 'ERROR' }
+        }
+
+        It "Extracts a portable archive whose files are at the ZIP root" {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zipSource = Join-Path $script:OfflineTestRoot 'acrylic-root-zip-src'
+            New-Item -ItemType Directory -Path $zipSource -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $zipSource 'AcrylicService.exe') -Value 'service' -Encoding ASCII
+            Set-Content -LiteralPath (Join-Path $zipSource 'AcrylicConfiguration.ini') -Value 'config' -Encoding ASCII
+            $zipPath = Join-Path $script:OfflineTestRoot 'Acrylic-root-layout.zip'
+            Compress-Archive -Path (Join-Path $zipSource '*') -DestinationPath $zipPath -Force
+            $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+            Mock Register-AcrylicServiceFromPath { return $true }
+            Mock Test-AcrylicInstalled { return $false }
+            Mock Write-OpenPathLog { }
+
+            $targetDir = Join-Path $script:OfflineTestRoot 'acrylic-root-target'
+            Install-AcrylicDNSFromLocalSource `
+                -AcrylicZipPath $zipPath `
+                -ExpectedSha256 $hash `
+                -InstallDir $targetDir | Should -BeTrue
+
+            Test-Path -LiteralPath (Join-Path $targetDir 'AcrylicService.exe') | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $targetDir 'AcrylicConfiguration.ini') | Should -BeTrue
         }
 
         It "Keeps Chocolatey as an online-only fallback that offline never reaches" {

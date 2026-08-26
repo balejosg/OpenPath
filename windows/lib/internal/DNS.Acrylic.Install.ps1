@@ -84,16 +84,30 @@ function Register-AcrylicServiceFromPath {
     $service = Get-AcrylicRegisteredService
     if ($service) { return $true }
 
+    $uiPath = Join-Path $AcrylicPath 'AcrylicUI.exe'
     $installProcess = $null
-    try {
-        $installProcess = Start-Process -FilePath $servicePath -ArgumentList '/INSTALL' -PassThru -WindowStyle Hidden -ErrorAction Stop
-        if (-not $installProcess.WaitForExit(15000)) {
-            Stop-Process -Id $installProcess.Id -Force -ErrorAction SilentlyContinue
-            Write-OpenPathLog 'Acrylic service registration process timed out; falling back to direct service registration' -Level WARN
+    if (Test-Path $uiPath) {
+        try {
+            # AcrylicService.exe is the service runtime, not the installer. The
+            # portable release documents service registration through its UI.
+            $installProcess = Start-Process `
+                -FilePath $uiPath `
+                -ArgumentList 'InstallAcrylicService' `
+                -WorkingDirectory $AcrylicPath `
+                -PassThru `
+                -WindowStyle Hidden `
+                -ErrorAction Stop
+            if (-not $installProcess.WaitForExit(15000)) {
+                Stop-Process -Id $installProcess.Id -Force -ErrorAction SilentlyContinue
+                Write-OpenPathLog 'Acrylic UI service registration timed out; falling back to direct service registration' -Level WARN
+            }
+        }
+        catch {
+            Write-OpenPathLog "Acrylic UI service registration failed: $_" -Level WARN
         }
     }
-    catch {
-        Write-OpenPathLog "Acrylic service registration executable failed: $_" -Level WARN
+    else {
+        Write-OpenPathLog 'AcrylicUI.exe is absent; falling back to direct service registration' -Level WARN
     }
 
     Start-Sleep -Seconds 2

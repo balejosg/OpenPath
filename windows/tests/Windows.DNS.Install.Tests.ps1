@@ -63,6 +63,15 @@ Describe "DNS Module - Install Contracts" {
             )
         }
 
+        It "Registers the service through the portable release UI contract" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Install.ps1"
+            $content = Get-Content $modulePath -Raw
+
+            $content | Should -Match 'AcrylicUI\.exe'
+            $content | Should -Match "ArgumentList 'InstallAcrylicService'"
+            $content | Should -Not -Match "AcrylicService\.exe' -ArgumentList '/INSTALL'"
+        }
+
         It "Falls back to Chocolatey when the direct Acrylic download fails" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Install.ps1"
             $content = Get-Content $modulePath -Raw

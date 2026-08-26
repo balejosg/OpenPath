@@ -348,7 +348,10 @@ load 'test_helper'
 }
 
 @test "windows acrylic service registration is bounded and verifies service registration" {
-    run grep -nF "Start-Process -FilePath \$servicePath -ArgumentList '/INSTALL'" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Install.ps1"
+    run grep -nF -- "-ArgumentList 'InstallAcrylicService'" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Install.ps1"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "AcrylicUI.exe" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Install.ps1"
     [ "$status" -eq 0 ]
 
     run grep -nF "\$installProcess.WaitForExit(" "$PROJECT_DIR/windows/lib/internal/DNS.Acrylic.Install.ps1"
