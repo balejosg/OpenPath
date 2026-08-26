@@ -1067,6 +1067,17 @@ Describe "Installer" {
             )
         }
 
+        It "Keeps deferred enrollment save failures diagnosable without exposing state" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                "`$script:OpenPathInstallerCurrentPhase = 'enrollment-attempt'",
+                "`$script:OpenPathInstallerCurrentPhase = 'enrollment-save-pending'",
+                "`$script:OpenPathInstallerCurrentPhase = 'enrollment-pending-saved'"
+            )
+        }
+
         It "Loads the installer cleanup helper before install steps can mutate an existing runtime" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw

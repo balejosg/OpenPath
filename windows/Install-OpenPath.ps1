@@ -643,6 +643,7 @@ $enrollmentError = ''
 if ($classroomModeRequested) {
     $phaseResult = Invoke-OpenPathPlannedPhase -Name 'enrollment' -Action {
         Start-OpenPathInstallTimedStep -Name 'enrollment'
+        $script:OpenPathInstallerCurrentPhase = 'enrollment-attempt'
         $enrollmentResult = Invoke-OpenPathInstallerEnrollment `
             -OpenPathRoot $OpenPathRoot `
             -ApiBaseUrl $apiBaseUrl `
@@ -667,12 +668,14 @@ if ($classroomModeRequested) {
 
         if ($classroomModeRequested -and $Unattended -and $machineRegistered -ne 'REGISTERED') {
             if ($offlineMode) {
+                $script:OpenPathInstallerCurrentPhase = 'enrollment-save-pending'
                 Save-OpenPathPendingEnrollmentState `
                     -OpenPathRoot $OpenPathRoot `
                     -ApiUrl $apiBaseUrl `
                     -ClassroomId $ClassroomId `
                     -EnrollmentToken $EnrollmentToken `
                     -ExpiresAt $offlineEnrollmentExpiresAt
+                $script:OpenPathInstallerCurrentPhase = 'enrollment-pending-saved'
                 $machineRegistered = 'PENDING'
                 Set-Variable -Name machineRegistered -Scope Script -Value $machineRegistered
                 Write-InstallerWarning '  Enrollment deferred; pending state saved and retry scheduled on next startup with connectivity.'
