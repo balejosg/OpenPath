@@ -86,17 +86,35 @@ function Get-SafeInstallerStatus {
     }
 
     try {
-        $value = ([string](Get-Content -LiteralPath $Path -Raw -ErrorAction Stop)).Trim()
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
     }
     catch {
         return 'unreadable'
     }
 
-    if ($value.Length -gt 64 -or $value -notmatch '^(read-trailer-start|read-trailer-exit-[0-9]+|read-trailer-ok|extract-start|extract-ok|run-installer-start|run-installer-exit-[0-9]+)$') {
+    if ($bytes.Length -gt 512) {
         return 'invalid'
     }
 
-    return $value
+    $utf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    foreach ($encoding in @(
+            $utf8,
+            [System.Text.Encoding]::Unicode,
+            [System.Text.Encoding]::BigEndianUnicode
+        )) {
+        try {
+            $value = ([string]$encoding.GetString($bytes)).Trim()
+        }
+        catch {
+            continue
+        }
+
+        if ($value -match '^(read-trailer-start|read-trailer-exit-[0-9]+|read-trailer-ok|extract-start|extract-ok|run-installer-start|run-installer-exit-[0-9]+)$') {
+            return $value
+        }
+    }
+
+    return 'invalid'
 }
 
 function Start-EnrollmentFixture {

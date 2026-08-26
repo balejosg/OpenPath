@@ -452,6 +452,11 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /installerStatus\s*=\s*Get-SafeInstallerStatus/,
     'Windows EXE evidence must preserve only the bounded NSIS stage status for diagnosis'
   );
+  assert.match(
+    executableLane,
+    /ReadAllBytes[\s\S]*Encoding\]\:\:Unicode/,
+    'Windows EXE evidence must decode the NSIS Unicode stage marker without reading arbitrary logs'
+  );
   const failureEvidenceBlock = executableLane.slice(
     executableLane.lastIndexOf('catch {'),
     executableLane.lastIndexOf('finally {')
