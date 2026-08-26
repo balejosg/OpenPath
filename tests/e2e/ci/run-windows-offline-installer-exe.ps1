@@ -104,6 +104,7 @@ function Get-SafeInstallerStatus {
         )) {
         try {
             $value = ([string]$encoding.GetString($bytes)).Trim()
+            $value = $value.Trim([char]0).Trim()
         }
         catch {
             continue
