@@ -492,15 +492,20 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /FileWriteByte/,
     'NSIS stage status must use an unambiguous bounded byte representation'
   );
-  assert.match(
-    nsiSource,
-    /Pop \$0[\s\S]*StrCpy \$R3 \$0[\s\S]*Call WriteOfflineStage[\s\S]*StrCmp \$R3 "0" trailer_ok trailer_failed/,
-    'NSIS must preserve the exact nsExec success string across safe evidence writes'
+  const readTrailerSection = nsiSource.slice(
+    nsiSource.indexOf('Section "ReadTrailer"'),
+    nsiSource.indexOf('SectionEnd', nsiSource.indexOf('Section "ReadTrailer"'))
   );
-  assert.doesNotMatch(
-    nsiSource,
-    /StrCmp \$0 "0" trailer_ok trailer_failed/,
-    'NSIS must not compare a result register that evidence writing may clobber'
+  const trailerResultOffset = readTrailerSection.indexOf('Pop $0');
+  const trailerBranchOffset = readTrailerSection.indexOf('StrCmp $0 "0" trailer_ok trailer_failed');
+  const trailerEvidenceOffset = readTrailerSection.indexOf(
+    'Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"'
+  );
+  assert.ok(trailerResultOffset >= 0, 'NSIS must capture the trailer reader result');
+  assert.ok(trailerBranchOffset > trailerResultOffset, 'NSIS must branch on the trailer result');
+  assert.ok(
+    trailerEvidenceOffset > trailerBranchOffset,
+    'NSIS must branch before an evidence helper can affect the result register'
   );
   assert.doesNotMatch(
     nsiSource,

@@ -95,18 +95,21 @@ Section "ReadTrailer" SEC00
     ; that was never customized carries a placeholder slot and aborts here.
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json"'
     Pop $0
-    StrCpy $R3 $0
+    ; Branch before calling the evidence helper. nsExec returns the child exit
+    ; value as a string, and the helper is deliberately allowed to use shared
+    ; registers while it writes the bounded marker.
+    StrCmp $0 "0" trailer_ok trailer_failed
+trailer_failed:
     Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
     Push $0
     Call WriteOfflineStage
-    ; nsExec returns the child exit value as a string. Compare that exact
-    ; success value so the real PowerShell return contract is preserved.
-    StrCmp $R3 "0" trailer_ok trailer_failed
-trailer_failed:
         DetailPrint "Trailer validation failed with code $0"
         SetErrorLevel 10
         Abort
 trailer_ok:
+    Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
+    Push "0"
+    Call WriteOfflineStage
     Push "${OFFLINE_STAGE_READ_TRAILER_OK}"
     Push "0"
     Call WriteOfflineStage
