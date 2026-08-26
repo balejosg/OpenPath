@@ -112,18 +112,18 @@ jobs:
         run: |
           $personalizedPath = Join-Path $env:RUNNER_TEMP 'OpenPath-Windows-Setup-E2E.exe'
           $validationPath = Join-Path $env:RUNNER_TEMP 'openpath-offline-installer-e2e-trailer-validation.json'
-          $readerExitCode = 1
+          $readerSucceeded = $false
           try {
             & (Resolve-Path 'windows/offline-installer/scripts/Read-Trailer.ps1') `
               -ExecutablePath $personalizedPath `
               -OutputConfigPath $validationPath
-            $readerExitCode = $LASTEXITCODE
+            $readerSucceeded = Test-Path -LiteralPath $validationPath -PathType Leaf
           } catch {
-            $readerExitCode = 1
+            $readerSucceeded = $false
           } finally {
             Remove-Item -LiteralPath $validationPath -Force -ErrorAction SilentlyContinue
           }
-          if ($readerExitCode -ne 0) {
+          if (-not $readerSucceeded) {
             Write-Host '::error::The personalized trailer failed canonical PowerShell validation before NSIS execution.'
             exit 1
           }

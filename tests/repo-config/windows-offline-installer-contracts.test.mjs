@@ -378,6 +378,23 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /name: Validate personalized trailer with PowerShell[\s\S]*Read-Trailer\.ps1/,
     'release workflow must validate the customized trailer with the canonical PowerShell reader before launching NSIS'
   );
+  const trailerValidationStart = workflow.indexOf(
+    'name: Validate personalized trailer with PowerShell'
+  );
+  const trailerValidationEnd = workflow.indexOf(
+    'name: Execute the personalized NSIS executable E2E'
+  );
+  const trailerValidationBlock = workflow.slice(trailerValidationStart, trailerValidationEnd);
+  assert.match(
+    trailerValidationBlock,
+    /Test-Path -LiteralPath \$validationPath -PathType Leaf/,
+    'PowerShell trailer validation must use the output file because a script exit code is not a native process exit code'
+  );
+  assert.doesNotMatch(
+    trailerValidationBlock,
+    /\$readerExitCode\s*=\s*\$LASTEXITCODE/,
+    'PowerShell trailer validation must not treat the native-process exit code as the script result'
+  );
 
   const manifestBuild = workflow.indexOf('build-payload-manifest.mjs');
   const nsisCompile = workflow.indexOf('name: Compile NSIS template');
