@@ -69,6 +69,7 @@ Function .onInit
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-status.txt"
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-status-*.txt"
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"
+    Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt"
 FunctionEnd
 
 Function NormalizeOfflineStatusByte

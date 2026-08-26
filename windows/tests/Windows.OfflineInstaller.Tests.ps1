@@ -258,6 +258,27 @@ Describe "Offline installer" {
             Get-Content -LiteralPath $statusPath -Raw | Should -Be 'acrylic-local-complete'
         }
 
+        It "Leaves a bounded extraction phase when local staging fails" {
+            $zipPath = Join-Path $script:OfflineTestRoot 'invalid-acrylic.zip'
+            Set-Content -LiteralPath $zipPath -Value 'not-a-zip' -Encoding ASCII
+            $statusPath = Join-Path $script:OfflineTestRoot 'invalid-acrylic-status.txt'
+
+            Mock Assert-AcrylicDownloadHash { }
+            Mock Test-AcrylicPortableArchive { return $true }
+            Mock Test-AcrylicInstalled { return $false }
+            Mock Write-OpenPathLog { }
+
+            {
+                Install-AcrylicDNSFromLocalSource `
+                    -AcrylicZipPath $zipPath `
+                    -ExpectedSha256 ('0' * 64) `
+                    -InstallDir (Join-Path $script:OfflineTestRoot 'invalid-acrylic-target') `
+                    -FailureStatusPath $statusPath
+            } | Should -Throw
+
+            Get-Content -LiteralPath $statusPath -Raw | Should -Be 'acrylic-local-extract'
+        }
+
         It "Keeps Chocolatey as an online-only fallback that offline never reaches" {
             $onlineInstaller = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "DNS.Acrylic.Install.ps1") -Raw
             $offlineModule = Get-Content (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Offline.ps1") -Raw

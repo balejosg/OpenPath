@@ -645,6 +645,11 @@ test('real NSIS failures expose only a bounded installer phase for diagnosis', (
     'installer failures should write only the current phase, never raw diagnostics'
   );
   assert.match(
+    installer,
+    /function Get-OpenPathInstallerFailurePhase[\s\S]*\$phase -ne 'acrylic-install-local'[\s\S]*\$candidate[\s\S]*return \$candidate/,
+    'installer failures should preserve a bounded local-install subphase without masking later phases'
+  );
+  assert.match(
     nsiSource,
     /-FailureStatusPath "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-installer-failure-phase\.txt"/,
     'NSIS should request the bounded failure-phase marker from the existing offline entrypoint'
@@ -653,6 +658,11 @@ test('real NSIS failures expose only a bounded installer phase for diagnosis', (
     nsiSource,
     /CopyFiles \/SILENT "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-installer-failure-phase\.txt" "\$TEMP"/,
     'NSIS should publish only the bounded failure-phase marker to the evidence temp root'
+  );
+  assert.match(
+    nsiSource,
+    /Delete "\$TEMP\\OpenPathOfflineSetup-\$EXEFILE-installer-failure-phase\.txt"/,
+    'NSIS should remove a stale installer failure-phase marker before a new run'
   );
   assert.match(
     installer,

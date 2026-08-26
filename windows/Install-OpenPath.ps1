@@ -192,6 +192,25 @@ function Write-OpenPathInstallerFailureStatus {
     }
 }
 
+function Get-OpenPathInstallerFailurePhase {
+    $phase = $script:OpenPathInstallerCurrentPhase
+    if ($phase -ne 'acrylic-install-local' -or -not $FailureStatusPath) {
+        return $phase
+    }
+
+    try {
+        $candidate = (Get-Content -LiteralPath $FailureStatusPath -Raw -ErrorAction Stop).Trim()
+        if ($candidate -match '^[A-Za-z0-9-]{1,64}$') {
+            return $candidate
+        }
+    }
+    catch {
+        # Failure diagnostics must never replace the original installer error.
+    }
+
+    return $phase
+}
+
 function Set-OpenPathOfflinePayloadFailurePhase {
     param(
         [AllowNull()]
@@ -216,9 +235,10 @@ function Set-OpenPathOfflinePayloadFailurePhase {
 }
 
 trap {
+    $failurePhase = Get-OpenPathInstallerFailurePhase
     Write-OpenPathInstallerFailureStatus `
         -Path $FailureStatusPath `
-        -Phase $script:OpenPathInstallerCurrentPhase
+        -Phase $failurePhase
     if ($script:OpenPathInstallerMutated) {
         Invoke-OpenPathInstallRollback
     }
