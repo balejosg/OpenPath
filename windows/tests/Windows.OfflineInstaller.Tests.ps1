@@ -136,6 +136,22 @@ Describe "Offline installer" {
             { Assert-OpenPathOfflinePayloadManifest -ManifestPath $manifestPath -StagingRoot $stagingRoot } |
                 Should -Throw -ExpectedMessage '*hash-io-pinned-other*'
         }
+
+        It "Classifies only genuine missing-command errors as command failures" {
+            try {
+                throw "The term 'Get-FileHash' is not recognized as the name of a cmdlet"
+            }
+            catch {
+                Get-OpenPathOfflinePayloadIoFailureClass -ErrorRecord $_ | Should -Be 'command'
+            }
+
+            try {
+                throw 'The path could not be found'
+            }
+            catch {
+                Get-OpenPathOfflinePayloadIoFailureClass -ErrorRecord $_ | Should -Be 'not-found'
+            }
+        }
     }
 
     Context "Install-AcrylicDNSFromLocalSource" {

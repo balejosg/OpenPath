@@ -290,7 +290,7 @@ function Get-OpenPathOfflinePayloadIoFailureClass {
         ''
     }
 
-    if ($message -match 'not recognized|cannot find the path|command') {
+    if ($message -match "The term '.+' is not recognized|is not recognized as the name of a cmdlet|command was not found") {
         return 'command'
     }
     if ($message -match 'parameter cannot be found|positional parameter') {
@@ -302,7 +302,7 @@ function Get-OpenPathOfflinePayloadIoFailureClass {
     if ($message -match 'access is denied|unauthorized|permission') {
         return 'access'
     }
-    if ($message -match 'not found|does not exist') {
+    if ($message -match 'not found|does not exist|could not be found') {
         return 'not-found'
     }
     return 'other'
