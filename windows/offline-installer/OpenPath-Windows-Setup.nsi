@@ -135,10 +135,14 @@ Section "ReadTrailer" SEC00
     IfErrors trailer_exec_error
     ; Branch before any evidence publication so the child result controls the
     ; installer outcome rather than a diagnostic copy operation.
-    ; ExecWait exposes the child exit code as a string-valued user variable on
-    ; the Windows PowerShell path. Compare the exact success value so a normal
-    ; zero exit reaches the success branch on the real NSIS runtime.
-    StrCmp $0 "0" trailer_ok trailer_failed
+    ; ExecWait exposes the child result through a user variable. Reject the
+    ; documented launch-error sentinel before coercing the successful numeric
+    ; exit code; the real NSIS runtime can otherwise keep an integer-looking
+    ; value in a representation that does not match a literal string.
+    StrCmp $0 "" trailer_exec_error
+    StrCmp $0 "error" trailer_exec_error
+    IntOp $R4 $0 + 0
+    IntCmp $R4 0 trailer_ok trailer_failed trailer_failed
 trailer_failed:
     Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
     Push $0
