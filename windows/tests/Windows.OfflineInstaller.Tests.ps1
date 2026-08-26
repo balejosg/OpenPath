@@ -68,6 +68,12 @@ Describe "Offline installer" {
     }
 
     Context "Assert-OpenPathOfflinePayloadManifest" {
+        It "uses the Windows PowerShell-compatible hash parameter" {
+            $offlineModule = Get-Content (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Offline.ps1") -Raw
+
+            $offlineModule | Should -Match 'Get-FileHash -Path \$stagedPath'
+        }
+
         It "Verifies every required payload by size and sha256 without network access" {
             $stagingRoot = Join-Path $script:OfflineTestRoot 'staging-ok'
             New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'payloads\acrylic') -Force | Out-Null

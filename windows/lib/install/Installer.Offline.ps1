@@ -357,7 +357,11 @@ function Assert-OpenPathOfflinePayloadManifest {
         $expectedSha256 = [string]$entry.sha256
         if (-not [string]::IsNullOrWhiteSpace($expectedSha256)) {
             try {
-                $actualSha256 = (Get-FileHash -LiteralPath $stagedPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                # Windows PowerShell 5.1 (the shell launched by NSIS) exposes
+                # Get-FileHash through -Path. The manifest paths are generated
+                # from the package inventory and are already validated as
+                # staged leaf files above.
+                $actualSha256 = (Get-FileHash -Path $stagedPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
             }
             catch {
                 $failures += "could not hash payload: $relativePath"
