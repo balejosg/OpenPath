@@ -538,8 +538,10 @@ $deferLocalDnsUntilRemoteBootstrap = $classroomModeRequested -or [bool]$Whitelis
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'acrylic' -Action {
     Start-OpenPathInstallTimedStep -Name 'acrylic'
     if (-not $SkipAcrylic) {
+        $script:OpenPathInstallerCurrentPhase = 'acrylic-detect-existing'
         if (Test-AcrylicInstalled) {
             Write-InstallerVerbose '  Acrylic ya instalado'
+            $script:OpenPathInstallerCurrentPhase = 'acrylic-ensure-service'
             if ($WhatIfPreference -or (Ensure-AcrylicService -Start)) {
                 Write-InstallerVerbose '  Servicio Acrylic listo'
             }
@@ -548,13 +550,16 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'acrylic' -Action {
             }
         }
         elseif ($offlineMode) {
+            $script:OpenPathInstallerCurrentPhase = 'acrylic-resolve-manifest'
             $acrylicEntry = Get-OpenPathOfflineManifestEntry `
                 -ManifestPath $offlineManifestPath `
                 -RelativePath 'payloads/acrylic/Acrylic-Portable.zip'
+            $script:OpenPathInstallerCurrentPhase = 'acrylic-install-local'
             $installed = Install-AcrylicDNSFromLocalSource `
                 -AcrylicZipPath (Join-Path $scriptDir $acrylicEntry.path) `
                 -ExpectedSha256 $acrylicEntry.sha256 `
                 -WhatIf:$WhatIfPreference
+            $script:OpenPathInstallerCurrentPhase = 'acrylic-ensure-service'
             if ($installed -and ($WhatIfPreference -or ((Test-AcrylicInstalled) -and (Ensure-AcrylicService -Start)))) {
                 Write-InstallerVerbose '  Acrylic instalado desde el paquete offline'
             }

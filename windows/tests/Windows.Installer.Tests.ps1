@@ -168,6 +168,20 @@ Describe "Installer" {
             $content.IndexOf("Invoke-OpenPathPlannedPhase -Name 'acrylic-configuration'") | Should -BeLessThan $content.IndexOf("Invoke-OpenPathPlannedPhase -Name 'local-dns'")
         }
 
+        It "keeps Acrylic installer failure evidence at bounded operation phases" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            foreach ($phase in @(
+                    'acrylic-detect-existing',
+                    'acrylic-resolve-manifest',
+                'acrylic-install-local',
+                'acrylic-ensure-service'
+                )) {
+                $content | Should -Match ([regex]::Escape($phase))
+            }
+        }
+
         It "Rolls back OpenPath-owned mutations through catchable installer failures" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw
