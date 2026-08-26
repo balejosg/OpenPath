@@ -1087,6 +1087,21 @@ Describe "Installer" {
             $content | Should -Match ([regex]::Escape("if (`$phase -notin @('acrylic-install-local', 'enrollment-save-pending') -or -not `$FailureStatusPath)"))
         }
 
+        It "Classifies pending ACL failures without exposing raw exception data" {
+            $offlinePath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Offline.ps1"
+            $content = Get-Content $offlinePath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'function Get-OpenPathPendingEnrollmentAclFailurePhase',
+                'enrollment-pending-acl-access',
+                'enrollment-pending-acl-descriptor',
+                'enrollment-pending-acl-command',
+                'enrollment-pending-acl-failed',
+                'Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase $aclFailurePhase'
+            )
+            $content | Should -Not -Match 'Write-OpenPathOfflineInstallPhase\s+-Path\s+\$FailureStatusPath\s+-Phase\s+\$\{?\$_'
+        }
+
         It "Loads the installer cleanup helper before install steps can mutate an existing runtime" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw

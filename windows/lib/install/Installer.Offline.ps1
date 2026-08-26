@@ -648,6 +648,36 @@ function Get-OpenPathPendingEnrollmentStatePath {
     return (Join-Path $OpenPathRoot 'data\pending-enrollment.json.dpapi')
 }
 
+function Get-OpenPathPendingEnrollmentAclFailurePhase {
+    <#
+    .SYNOPSIS
+        Maps an ACL failure to a bounded diagnostic phase without emitting its raw details.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$ErrorRecord)
+
+    $exception = if ($ErrorRecord -and $ErrorRecord.Exception) {
+        $ErrorRecord.Exception
+    }
+    else {
+        $null
+    }
+    $exceptionType = if ($exception) { [string]$exception.GetType().Name } else { '' }
+    $failureText = if ($exception) { [string]$exception } else { [string]$ErrorRecord }
+
+    if ($exceptionType -match 'Unauthorized|SecurityException' -or $failureText -match '(?i)access is denied|unauthorized') {
+        return 'enrollment-pending-acl-access'
+    }
+    if ($exceptionType -match 'CommandNotFound|PlatformNotSupported|TypeLoad|FileNotFound' -or $failureText -match '(?i)not recognized|command was not found|Set-Acl|icacls') {
+        return 'enrollment-pending-acl-command'
+    }
+    if ($exceptionType -match 'Argument|Invalid|NotSupported' -or $failureText -match '(?i)security descriptor|access rule|parameter is incorrect|invalid') {
+        return 'enrollment-pending-acl-descriptor'
+    }
+
+    return 'enrollment-pending-acl-failed'
+}
+
 function Save-OpenPathPendingEnrollmentState {
     <#
     .SYNOPSIS
@@ -707,6 +737,8 @@ function Save-OpenPathPendingEnrollmentState {
         Set-OpenPathCapabilityStorageAcl -Path $statePath -Profile RestrictedRoot
     }
     catch {
+        $aclFailurePhase = Get-OpenPathPendingEnrollmentAclFailurePhase -ErrorRecord $_
+        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase $aclFailurePhase
         Remove-Item $statePath -Force -ErrorAction SilentlyContinue
         throw "Could not apply restrictive ACLs to pending enrollment state; token was not persisted: $_"
     }
