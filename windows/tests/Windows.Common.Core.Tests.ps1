@@ -54,15 +54,16 @@ Describe "Common Module" {
             }
         }
 
-        It "Uses a portable file security descriptor for the restricted pending state" {
+        It "Uses Windows ACL tooling with portable SIDs for the restricted pending state" {
             $capabilityStoragePath = Join-Path $PSScriptRoot ".." "lib" "internal" "CapabilityStorage.ps1"
             $content = Get-Content $capabilityStoragePath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                'System.Security.AccessControl.FileSecurity',
-                'S-1-5-18',
-                'S-1-5-32-544',
-                'Set-Acl -LiteralPath $Path -AclObject $security'
+                "Join-Path `$env:SystemRoot 'System32\icacls.exe'",
+                "'/inheritance:r'",
+                "'/grant:r'",
+                "'*S-1-5-18:(F)'",
+                "'*S-1-5-32-544:(F)'"
             )
         }
 

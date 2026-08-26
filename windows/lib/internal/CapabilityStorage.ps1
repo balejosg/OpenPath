@@ -134,19 +134,25 @@ function Set-OpenPathCapabilityStorageAcl {
     $inheritanceFlags = if ($isContainer) { 'ContainerInherit,ObjectInherit' } else { 'None' }
 
     if ($Profile -eq 'RestrictedRoot') {
-        # Build a fresh descriptor for the restricted profile. Reusing and
-        # mutating Get-Acl output is unreliable for files under Windows
-        # PowerShell 5.1, especially after inherited ACEs are removed.
-        $security = if ($isContainer) {
-            New-Object System.Security.AccessControl.DirectorySecurity
+        # Use the inbox Windows ACL tool for the restricted profile. It accepts
+        # portable SIDs directly and avoids PowerShell/.NET descriptor behavior
+        # differences across Windows PowerShell and PowerShell 7.
+        $icaclsPath = Join-Path $env:SystemRoot 'System32\icacls.exe'
+        if (-not (Test-Path -LiteralPath $icaclsPath -PathType Leaf)) {
+            throw 'Windows ACL tool is unavailable'
         }
-        else {
-            New-Object System.Security.AccessControl.FileSecurity
+        $icaclsArguments = @(
+            $Path,
+            '/inheritance:r',
+            '/grant:r',
+            '*S-1-5-18:(F)',
+            '*S-1-5-32-544:(F)'
+        )
+        & $icaclsPath @icaclsArguments 2>$null | Out-Null
+        $icaclsExitCode = $LASTEXITCODE
+        if ($icaclsExitCode -ne 0) {
+            throw "Windows ACL tool failed with exit code $icaclsExitCode"
         }
-        $security.SetAccessRuleProtection($true, $false)
-        $security.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'S-1-5-18' -Rights 'FullControl' -InheritanceFlags $inheritanceFlags))
-        $security.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'S-1-5-32-544' -Rights 'FullControl' -InheritanceFlags $inheritanceFlags))
-        Set-Acl -LiteralPath $Path -AclObject $security
         return
     }
 
