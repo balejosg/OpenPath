@@ -635,8 +635,13 @@ test('NSIS stages trailer-reader dependencies before validating the trailer', ()
   );
   assert.match(
     readTrailerSection,
-    /-StatusPath "\$TEMP\\OpenPathOfflineSetup-\$EXEFILE-trailer-status\.txt"/,
-    'NSIS must pass only a bounded temporary trailer marker path'
+    /-StatusPath "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-trailer-status\.txt"/,
+    'NSIS must keep the trailer marker private until the child has finished'
+  );
+  assert.match(
+    readTrailerSection,
+    /ExecWait[\s\S]*CopyFiles \/SILENT "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-trailer-status\.txt" "\$TEMP"[\s\S]*IfFileExists "\$INSTDIR\\offline-config\.json"/,
+    'NSIS must publish only the bounded trailer marker before deciding the output result'
   );
   assert.match(
     readTrailerSection,
