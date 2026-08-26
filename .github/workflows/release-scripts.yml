@@ -37,8 +37,24 @@ jobs:
 
       - name: Build Firefox extension artifacts
         run: |
+          $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+          $programFiles = [Environment]::GetEnvironmentVariable('ProgramFiles')
+          $edgeCandidates = @()
+          foreach ($programFilesRoot in @($programFilesX86, $programFiles)) {
+            if ($programFilesRoot) {
+              $edgeCandidates += Join-Path $programFilesRoot 'Microsoft\Edge\Application\msedge.exe'
+            }
+          }
+          $edgePath = $edgeCandidates |
+            Where-Object { Test-Path -LiteralPath $_ } |
+            Select-Object -First 1
+          if (-not $edgePath) {
+            throw 'Microsoft Edge is required to create managed Chromium metadata for the offline template'
+          }
+          $env:OPENPATH_CHROMIUM_PACKAGER = $edgePath
+          $env:OPENPATH_CHROMIUM_REQUIRE_MANAGED = 'true'
           npm run build --workspace=@openpath/firefox-extension
-          npm run build:chromium-managed --workspace=@openpath/firefox-extension
+          npm run build:chromium-managed --workspace=@openpath/firefox-extension -- --require-managed
 
       - name: Prepare AMO-signed Firefox release artifacts
         uses: ./.github/actions/prepare-firefox-release-artifacts

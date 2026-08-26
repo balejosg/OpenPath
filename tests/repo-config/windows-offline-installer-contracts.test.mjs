@@ -502,4 +502,19 @@ test('release template workflow prepares signed Firefox artifacts through the ca
     /web-ext-api-secret:\s*\$\{\{ secrets\.WEB_EXT_API_SECRET \}\}/,
     'template workflow must pass the AMO API secret through the canonical action'
   );
+  assert.match(
+    workflow,
+    /OPENPATH_CHROMIUM_PACKAGER/,
+    'template workflow must select an installed Chromium-compatible packager'
+  );
+  assert.match(
+    workflow,
+    /OPENPATH_CHROMIUM_REQUIRE_MANAGED[\s\S]*--require-managed/,
+    'template workflow must fail closed when managed Chromium metadata cannot be built'
+  );
+  assert.match(
+    workflow,
+    /ProgramFiles\(x86\)[\s\S]*Microsoft\\Edge[\\/]Application[\\/]msedge\.exe/,
+    'template workflow must inspect the standard hosted Edge installation path'
+  );
 });
