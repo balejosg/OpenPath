@@ -98,7 +98,9 @@ Section "ReadTrailer" SEC00
     Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
     Push $0
     Call WriteOfflineStage
-    IntCmp $0 0 trailer_ok trailer_failed trailer_failed
+    ; nsExec returns the child exit value as a string. Compare that exact
+    ; success value so the real PowerShell return contract is preserved.
+    StrCmp $0 "0" trailer_ok trailer_failed
 trailer_failed:
         DetailPrint "Trailer validation failed with code $0"
         SetErrorLevel 10

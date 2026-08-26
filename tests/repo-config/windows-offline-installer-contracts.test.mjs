@@ -492,6 +492,16 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /FileWriteByte/,
     'NSIS stage status must use an unambiguous bounded byte representation'
   );
+  assert.match(
+    nsiSource,
+    /StrCmp \$0 "0" trailer_ok trailer_failed/,
+    'NSIS must branch on the exact nsExec success string returned by PowerShell'
+  );
+  assert.doesNotMatch(
+    nsiSource,
+    /IntCmp \$0 0 trailer_ok trailer_failed trailer_failed/,
+    'NSIS must not reinterpret the nsExec result through integer comparison'
+  );
   assert.doesNotMatch(
     nsiSource,
     /-ExecutablePath "\$EXEPATH"/,
