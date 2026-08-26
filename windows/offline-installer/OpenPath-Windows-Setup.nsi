@@ -62,7 +62,7 @@ Section "ReadTrailer" SEC00
 
     ; Validate the versioned trailer before extracting anything. A template
     ; that was never customized carries a placeholder slot and aborts here.
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEPATH" -OutputConfigPath "$INSTDIR\offline-config.json"'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json"'
     Pop $0
     IntCmp $0 0 +3 0 +3
         DetailPrint "Trailer validation failed with code $0"

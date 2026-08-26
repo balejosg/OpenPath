@@ -429,6 +429,16 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /File "\/oname=scripts\\Read-Trailer\.ps1" "\$\{REPO_ROOT\}\\windows\\offline-installer\\scripts\\Read-Trailer\.ps1"/,
     'NSIS must load its trailer reader from an explicit repository path'
   );
+  assert.match(
+    nsiSource,
+    /-ExecutablePath "\$EXEDIR\\\$EXEFILE"/,
+    'NSIS must pass the running executable path using its directory and filename variables'
+  );
+  assert.doesNotMatch(
+    nsiSource,
+    /-ExecutablePath "\$EXEPATH"/,
+    'NSIS must not rely on the ambiguous EXEPATH variable for trailer validation'
+  );
 });
 
 test('NSIS stages trailer-reader dependencies before validating the trailer', () => {
