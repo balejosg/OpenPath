@@ -605,6 +605,32 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
 });
 
+test('real NSIS failures expose only a bounded installer phase for diagnosis', () => {
+  const installer = readText('windows/Install-OpenPath.ps1');
+  const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
+
+  assert.match(
+    installer,
+    /\[string\]\$FailureStatusPath = ""/,
+    'the offline entrypoint should accept an optional safe failure-phase output path'
+  );
+  assert.match(
+    installer,
+    /Write-OpenPathInstallerFailureStatus[\s\S]*\$script:OpenPathInstallerCurrentPhase/,
+    'installer failures should write only the current phase, never raw diagnostics'
+  );
+  assert.match(
+    nsiSource,
+    /-FailureStatusPath "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-installer-failure-phase\.txt"/,
+    'NSIS should request the bounded failure-phase marker from the existing offline entrypoint'
+  );
+  assert.match(
+    nsiSource,
+    /CopyFiles \/SILENT "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-installer-failure-phase\.txt" "\$TEMP"/,
+    'NSIS should publish only the bounded failure-phase marker to the evidence temp root'
+  );
+});
+
 test('NSIS stages trailer-reader dependencies before validating the trailer', () => {
   const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
   const readTrailerSection = nsiSource.slice(

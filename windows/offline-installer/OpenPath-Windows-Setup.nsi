@@ -243,11 +243,16 @@ Section "RunInstaller" SEC02
     Push "${OFFLINE_STATUS_SENTINEL}"
     Call WriteOfflineStage
     ClearErrors
-    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -Unattended' $1
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -FailureStatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt" -Unattended' $1
     IfErrors installer_exec_error
     Push "${OFFLINE_STAGE_RUN_INSTALLER_EXIT}"
     Push $1
     Call WriteOfflineStage
+    ; Keep only the bounded phase name for safe CI diagnostics. The child
+    ; output, paths, and error text never leave the temporary evidence root.
+    ClearErrors
+    CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt" "$TEMP"
+    ClearErrors
     SetErrorLevel $1
     Goto installer_done
 installer_exec_error:

@@ -150,6 +150,30 @@ function Get-SafeInstallerStatusSnapshot {
     )
 }
 
+function Get-SafeInstallerFailurePhase {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return 'missing'
+    }
+
+    try {
+        $phase = (Get-Content -LiteralPath $Path -Raw).Trim()
+    }
+    catch {
+        return 'unreadable'
+    }
+
+    if ($phase -match '^[A-Za-z0-9-]{1,64}$') {
+        return $phase
+    }
+
+    return 'invalid'
+}
+
 function Get-SafeTrailerDiagnosticStatus {
     param(
         [Parameter(Mandatory = $true)]
@@ -298,8 +322,10 @@ $urlAcl = "https://localhost:$ConnectivityPort/"
 $trailerConfigFile = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-exe-trailer-$([guid]::NewGuid().ToString('N')).json"
 $installerStatusPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-status.txt"
 $trailerDiagnosticPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-trailer-status.txt"
+$failurePhasePath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-installer-failure-phase.txt"
 $installerStatus = 'missing'
 $installerStatusSnapshot = @()
+$installerFailurePhase = 'missing'
 $trailerDiagnosticStatus = 'missing'
 $trailerDiagnosticSource = 'installer-child'
 $result = $null
@@ -311,6 +337,7 @@ try {
     $installExitCode = [int]$installProcess.ExitCode
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
     $installerStatusSnapshot = Get-SafeInstallerStatusSnapshot
+    $installerFailurePhase = Get-SafeInstallerFailurePhase -Path $failurePhasePath
     $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
     $script:CurrentStage = 'validate-installer-exit'
     if ($installExitCode -ne 60) {
@@ -394,6 +421,7 @@ try {
         status = 'ok'
         installerExitCode = $installExitCode
         installerStatus = $installerStatus
+        installerFailurePhase = $installerFailurePhase
         trailerDiagnosticStatus = $trailerDiagnosticStatus
         trailerDiagnosticSource = $trailerDiagnosticSource
         trailerValidated = $true
@@ -409,6 +437,7 @@ try {
 catch {
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
     $installerStatusSnapshot = Get-SafeInstallerStatusSnapshot
+    $installerFailurePhase = Get-SafeInstallerFailurePhase -Path $failurePhasePath
     $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
     if ($trailerDiagnosticStatus -eq 'missing') {
         $reader = Join-Path $PSScriptRoot '..\..\..\windows\offline-installer\scripts\Read-Trailer.ps1'
@@ -434,6 +463,7 @@ catch {
         installerExitCode = $installExitCode
         installerStatus = $installerStatus
         installerStatusSnapshot = $installerStatusSnapshot
+        installerFailurePhase = $installerFailurePhase
         trailerDiagnosticStatus = $trailerDiagnosticStatus
         trailerDiagnosticSource = $trailerDiagnosticSource
     }
@@ -467,6 +497,9 @@ finally {
     }
     if (Test-Path -LiteralPath $trailerDiagnosticPath) {
         Remove-Item -LiteralPath $trailerDiagnosticPath -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $failurePhasePath) {
+        Remove-Item -LiteralPath $failurePhasePath -Force -ErrorAction SilentlyContinue
     }
     Get-ChildItem -LiteralPath ([System.IO.Path]::GetTempPath()) -Filter 'OpenPathOfflineSetup-*-status*.txt' -File -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue

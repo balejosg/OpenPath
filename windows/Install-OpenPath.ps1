@@ -46,7 +46,8 @@ param(
     [ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]
     [string]$BrowserCleanupMode = 'ReportOnly',
     [string]$OfflineConfigPath = "",
-    [string]$TimingOutputPath = ""
+    [string]$TimingOutputPath = "",
+    [string]$FailureStatusPath = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,6 +60,7 @@ if ($script:OpenPathInstallerQuietMode) {
 $scriptDir = $PSScriptRoot
 $apiBaseUrl = if ($ApiUrl) { $ApiUrl.TrimEnd('/') } else { '' }
 $installerHelperRoot = Join-Path $scriptDir 'lib\install'
+$script:OpenPathInstallerCurrentPhase = 'startup'
 
 if (-not (Test-Path "$scriptDir\lib\*.psm1")) {
     $parentDir = Split-Path $scriptDir -Parent
@@ -167,7 +169,33 @@ function Invoke-OpenPathInstallRollback {
     Write-InstallerWarning 'Rollback completed; OpenPath logs were left in place for diagnosis.'
 }
 
+function Write-OpenPathInstallerFailureStatus {
+    param(
+        [string]$Path = '',
+        [string]$Phase = 'startup'
+    )
+
+    if (-not $Path) {
+        return
+    }
+
+    $safePhase = if ($Phase -match '^[A-Za-z0-9-]{1,64}$') { $Phase } else { 'startup' }
+    try {
+        $parent = Split-Path $Path -Parent
+        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        Set-Content -LiteralPath $Path -Value $safePhase -NoNewline -Encoding ASCII -Force
+    }
+    catch {
+        # Failure diagnostics must never replace the original installer error.
+    }
+}
+
 trap {
+    Write-OpenPathInstallerFailureStatus `
+        -Path $FailureStatusPath `
+        -Phase $script:OpenPathInstallerCurrentPhase
     if ($script:OpenPathInstallerMutated) {
         Invoke-OpenPathInstallRollback
     }
@@ -226,6 +254,7 @@ function Invoke-OpenPathPlannedPhase {
         [scriptblock]$Action = $null
     )
 
+    $script:OpenPathInstallerCurrentPhase = $Name
     $phase = Get-OpenPathInstallPhaseFromPlan -Name $Name
     if ($Action) {
         $phase.Action = $Action
