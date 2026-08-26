@@ -2040,7 +2040,7 @@ test('release scripts workflow builds the offline NSIS template on a pinned Wind
   for (const required of [
     'runs-on: windows-2025',
     'joncloud/makensis-action@v4',
-    "nsis-version: '3.10'",
+    'choco install nsis --version=3.10',
     'nsis-hashes.json',
     'scripts/verify-nsis.ps1',
     'scripts/build-payload-manifest.mjs',
@@ -2055,6 +2055,11 @@ test('release scripts workflow builds the offline NSIS template on a pinned Wind
   assert.ok(
     /supply-chain/i.test(templateJob),
     'windows-offline-template job should annotate NSIS hash mismatches as supply-chain violations'
+  );
+  assert.doesNotMatch(
+    templateJob,
+    /^\s+nsis-version:/m,
+    'windows-offline-template should not pass the unsupported nsis-version action input'
   );
 });
 

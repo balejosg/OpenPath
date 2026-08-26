@@ -388,6 +388,16 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /script-file:\s*windows\/offline-installer\/OpenPath-Windows-Setup\.nsi/,
     'the NSIS action must compile the repository offline-installer script explicitly'
   );
+  assert.match(
+    workflow,
+    /npm run build --workspace=@openpath\/shared/,
+    'Windows trailer tests must build the shared runtime package before importing API helpers'
+  );
+  assert.doesNotMatch(
+    workflow,
+    /^\s+nsis-version:/m,
+    'the NSIS action must not use the unsupported nsis-version input'
+  );
 
   assert.match(
     nsiSource,

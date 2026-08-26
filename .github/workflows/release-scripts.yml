@@ -53,6 +53,7 @@ jobs:
           }
           $env:OPENPATH_CHROMIUM_PACKAGER = $edgePath
           $env:OPENPATH_CHROMIUM_REQUIRE_MANAGED = 'true'
+          npm run build --workspace=@openpath/shared
           npm run build --workspace=@openpath/firefox-extension
           npm run build:chromium-managed --workspace=@openpath/firefox-extension -- --require-managed
 
@@ -86,7 +87,6 @@ jobs:
         uses: joncloud/makensis-action@v4
         with:
           script-file: windows/offline-installer/OpenPath-Windows-Setup.nsi
-          nsis-version: '3.10'
           arguments: '/V3 /DREPO_ROOT=${{ github.workspace }}'
 
       - name: Re-verify compiler hash after compile
