@@ -188,6 +188,21 @@ Describe "Offline installer" {
     }
 
     Context "Install-AcrylicDNSFromLocalSource" {
+        It "Exports every Acrylic helper used by the offline bootstrapper" {
+            $modulePath = Join-Path $PSScriptRoot ".." "lib" "DNS.psm1"
+            $exportBlock = [regex]::Match(
+                (Get-Content -LiteralPath $modulePath -Raw),
+                'Export-ModuleMember -Function @\([\s\S]*?\n\)'
+            ).Value
+
+            foreach ($requiredName in @(
+                    'Assert-AcrylicDownloadHash',
+                    'Test-AcrylicPortableArchive',
+                    'Register-AcrylicServiceFromPath')) {
+                $exportBlock | Should -Match ("'{0}'," -f $requiredName)
+            }
+        }
+
         It "Never references download URLs or Chocolatey in the offline install path" {
             $content = Get-Content (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Offline.ps1") -Raw
             $functionBody = [regex]::Match($content, 'function Install-AcrylicDNSFromLocalSource\s*\{[\s\S]*?\n\}').Value
@@ -293,7 +308,7 @@ Describe "Offline installer" {
                     -ExpectedSha256 ('0' * 64) `
                     -FailureStatusPath $statusPath
             } | Should -Throw
-            Get-Content -LiteralPath $statusPath -Raw | Should -Be 'acrylic-local-validate-hash'
+            Get-Content -LiteralPath $statusPath -Raw | Should -Be 'acrylic-local-validate-hash-io'
 
             Mock Assert-AcrylicDownloadHash { }
             Mock Test-AcrylicPortableArchive { return $false }

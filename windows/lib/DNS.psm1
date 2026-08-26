@@ -18,6 +18,9 @@ $script:InternalModulePath = Join-Path $PSScriptRoot 'internal'
 Export-ModuleMember -Function @(
     'Get-AcrylicPath',
     'Test-AcrylicInstalled',
+    'Assert-AcrylicDownloadHash',
+    'Test-AcrylicPortableArchive',
+    'Register-AcrylicServiceFromPath',
     'Install-AcrylicDNS',
     'Ensure-AcrylicService',
     'Update-AcrylicHost',
