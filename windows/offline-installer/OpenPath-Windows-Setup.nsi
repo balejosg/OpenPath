@@ -116,11 +116,22 @@ Section "ReadTrailer" SEC00
     SetOutPath "$INSTDIR"
     File "/oname=scripts\Read-Trailer.ps1" "${REPO_ROOT}\windows\offline-installer\scripts\Read-Trailer.ps1"
 
+    ; Windows may deny a second reader while the running installer image is
+    ; held open. Validate an exact byte-for-byte temporary copy of this same
+    ; executable; it contains the same trailer and no second runtime.
+    ClearErrors
+    CopyFiles /SILENT "$EXEDIR\$EXEFILE" "$INSTDIR"
+    IfErrors trailer_copy_error
+
     ; Validate the versioned trailer before extracting anything. A template
     ; that was never customized carries a placeholder slot and aborts here.
     ClearErrors
-    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json" -StatusPath "$TEMP\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"' $0
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$INSTDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json" -StatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"' $0
     IfErrors trailer_exec_error
+    ; Publish the diagnostic only after ExecWait has reported its launch
+    ; result. It is copied from the private extracted root to the bounded
+    ; evidence path and is never used to decide whether installation passes.
+    CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" "$TEMP"
     ; Branch before calling the evidence helper so the child result controls
     ; the installer outcome rather than a diagnostic write.
     StrCmp $0 "0" trailer_ok trailer_failed
@@ -144,6 +155,10 @@ trailer_exec_error:
     Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
     Push $0
     Call WriteOfflineStage
+    SetErrorLevel 10
+    Abort
+trailer_copy_error:
+    DetailPrint "Could not stage a private executable copy for trailer validation"
     SetErrorLevel 10
     Abort
 trailer_done:

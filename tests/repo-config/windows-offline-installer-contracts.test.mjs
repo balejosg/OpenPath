@@ -479,8 +479,8 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     nsiSource,
-    /-ExecutablePath "\$EXEDIR\\\$EXEFILE"/,
-    'NSIS must pass the running executable path using its directory and filename variables'
+    /CopyFiles \/SILENT "\$EXEDIR\\\$EXEFILE" "\$INSTDIR"[\s\S]*-ExecutablePath "\$INSTDIR\\\$EXEFILE"/,
+    'NSIS must pass an exact temporary copy of the running executable to the trailer reader'
   );
   assert.match(
     nsiSource,
@@ -597,8 +597,18 @@ test('NSIS stages trailer-reader dependencies before validating the trailer', ()
   );
   assert.match(
     readTrailerSection,
-    /-StatusPath "\$TEMP\\OpenPathOfflineSetup-\$EXEFILE-trailer-status\.txt"/,
-    'NSIS must pass only its private bounded trailer marker path'
+    /-StatusPath "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-trailer-status\.txt"/,
+    'NSIS must pass a private extracted-root trailer marker path'
+  );
+  assert.match(
+    readTrailerSection,
+    /CopyFiles \/SILENT "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-trailer-status\.txt" "\$TEMP"/,
+    'NSIS must publish only the bounded trailer marker after ExecWait reports its result'
+  );
+  assert.match(
+    readTrailerSection,
+    /CopyFiles \/SILENT "\$EXEDIR\\\$EXEFILE" "\$INSTDIR"[\s\S]*-ExecutablePath "\$INSTDIR\\\$EXEFILE"/,
+    'NSIS must validate a temporary copy because the running executable can be locked for sharing'
   );
 });
 
