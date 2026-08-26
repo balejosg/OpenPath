@@ -545,6 +545,16 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /StrCmp \$R0 "timeout"[\s\S]*Push "\$\{OFFLINE_STATUS_EXEC_TIMEOUT\}"/,
     'NSIS evidence must encode timeout failures with a reserved byte value'
   );
+  assert.match(
+    normalizeStatusSource,
+    /StrCmp \$R0 "" offline_status_exec_error/,
+    'NSIS evidence must classify an undefined process result as a launch failure'
+  );
+  assert.match(
+    readTrailerSection,
+    /ClearErrors[\s\S]*ExecWait[\s\S]*IfErrors trailer_exec_error/,
+    'NSIS must inspect the ExecWait error flag before trusting its output variable'
+  );
   assert.doesNotMatch(
     nsiSource,
     /-ExecutablePath "\$EXEPATH"/,

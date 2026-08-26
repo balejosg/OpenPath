@@ -71,6 +71,7 @@ Function NormalizeOfflineStatusByte
     ; Never pass those strings to FileWriteByte: NSIS would coerce them to an
     ; ambiguous zero byte. Reserve two values for these launch outcomes.
     Pop $R0
+    StrCmp $R0 "" offline_status_exec_error
     StrCmp $R0 "error" offline_status_exec_error
     StrCmp $R0 "timeout" offline_status_exec_timeout
     Push $R0
@@ -116,7 +117,9 @@ Section "ReadTrailer" SEC00
 
     ; Validate the versioned trailer before extracting anything. A template
     ; that was never customized carries a placeholder slot and aborts here.
+    ClearErrors
     ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json"' $0
+    IfErrors trailer_exec_error
     ; Branch before calling the evidence helper so the child result controls
     ; the installer outcome rather than a diagnostic write.
     StrCmp $0 "0" trailer_ok trailer_failed
@@ -134,6 +137,15 @@ trailer_ok:
     Push "${OFFLINE_STAGE_READ_TRAILER_OK}"
     Push "0"
     Call WriteOfflineStage
+    Goto trailer_done
+trailer_exec_error:
+    StrCpy $0 "${OFFLINE_STATUS_EXEC_ERROR}"
+    Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
+    Push $0
+    Call WriteOfflineStage
+    SetErrorLevel 10
+    Abort
+trailer_done:
 SectionEnd
 
 Section "ExtractAndVerify" SEC01
@@ -170,9 +182,18 @@ Section "RunInstaller" SEC02
     Push "${OFFLINE_STAGE_RUN_INSTALLER_START}"
     Push "${OFFLINE_STATUS_SENTINEL}"
     Call WriteOfflineStage
+    ClearErrors
     ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -Unattended' $1
+    IfErrors installer_exec_error
     Push "${OFFLINE_STAGE_RUN_INSTALLER_EXIT}"
     Push $1
     Call WriteOfflineStage
     SetErrorLevel $1
+    Goto installer_done
+installer_exec_error:
+    Push "${OFFLINE_STAGE_RUN_INSTALLER_EXIT}"
+    Push "${OFFLINE_STATUS_EXEC_ERROR}"
+    Call WriteOfflineStage
+    SetErrorLevel 1
+installer_done:
 SectionEnd
