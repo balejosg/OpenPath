@@ -129,6 +129,15 @@ function Get-SafeInstallerStatus {
     return 'invalid'
 }
 
+function Get-SafeInstallerStatusSnapshot {
+    $tempPath = [System.IO.Path]::GetTempPath()
+    return @(
+        Get-ChildItem -LiteralPath $tempPath -Filter 'OpenPathOfflineSetup-*-status.txt' -File -ErrorAction SilentlyContinue |
+            Sort-Object -Property Name |
+            ForEach-Object { Get-SafeInstallerStatus -Path $_.FullName }
+    )
+}
+
 function Get-SafeTrailerDiagnosticStatus {
     param(
         [Parameter(Mandatory = $true)]
@@ -278,6 +287,7 @@ $trailerConfigFile = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-exe-t
 $installerStatusPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-status.txt"
 $trailerDiagnosticPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-trailer-status.txt"
 $installerStatus = 'missing'
+$installerStatusSnapshot = @()
 $trailerDiagnosticStatus = 'missing'
 $trailerDiagnosticSource = 'installer-child'
 $result = $null
@@ -288,6 +298,7 @@ try {
     $installProcess = Start-Process -FilePath $resolvedExecutable -ArgumentList @('/S') -Wait -PassThru
     $installExitCode = [int]$installProcess.ExitCode
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
+    $installerStatusSnapshot = Get-SafeInstallerStatusSnapshot
     $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
     $script:CurrentStage = 'validate-installer-exit'
     if ($installExitCode -ne 60) {
@@ -385,6 +396,7 @@ try {
 }
 catch {
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
+    $installerStatusSnapshot = Get-SafeInstallerStatusSnapshot
     $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
     if ($trailerDiagnosticStatus -eq 'missing') {
         $reader = Join-Path $PSScriptRoot '..\..\..\windows\offline-installer\scripts\Read-Trailer.ps1'
@@ -409,6 +421,7 @@ catch {
         failureStage = $script:CurrentStage
         installerExitCode = $installExitCode
         installerStatus = $installerStatus
+        installerStatusSnapshot = $installerStatusSnapshot
         trailerDiagnosticStatus = $trailerDiagnosticStatus
         trailerDiagnosticSource = $trailerDiagnosticSource
     }

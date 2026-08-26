@@ -457,6 +457,11 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /ReadAllBytes[\s\S]*bytes\.Length\s*-ne\s*2[\s\S]*switch \(\$stage\)/,
     'Windows EXE evidence must decode only the fixed two-byte NSIS stage marker'
   );
+  assert.match(
+    executableLane,
+    /Get-ChildItem[\s\S]*OpenPathOfflineSetup-\*-status\.txt[\s\S]*Get-SafeInstallerStatus/,
+    'Windows EXE failure evidence must inspect all bounded stage markers without uploading paths or logs'
+  );
   const failureEvidenceBlock = executableLane.slice(
     executableLane.lastIndexOf('catch {'),
     executableLane.lastIndexOf('finally {')
