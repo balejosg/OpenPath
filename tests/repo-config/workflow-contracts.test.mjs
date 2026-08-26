@@ -1179,6 +1179,14 @@ test('required Windows CI runs Pester in an untracked child host without success
     'the self-hosted Windows reset helper should normalize Acrylic and Firefox policy state between jobs'
   );
   assert.ok(
+    windowsRunnerReset.includes('takeown.exe') &&
+      windowsRunnerReset.includes('icacls.exe') &&
+      windowsRunnerReset.includes('/reset') &&
+      windowsRunnerReset.includes('/T') &&
+      windowsRunnerReset.includes('C:\\OpenPath'),
+    'the self-hosted Windows reset helper should recover restrictive OpenPath ACLs before deleting the install root'
+  );
+  assert.ok(
     windowsRunnerReset.includes('Stop-Service -Name $acrylicServiceName') &&
       !windowsRunnerReset.includes('sc.exe delete $acrylicServiceName') &&
       !windowsRunnerReset.includes('Acrylic DNS Proxy",') &&

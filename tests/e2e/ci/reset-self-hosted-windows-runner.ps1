@@ -58,12 +58,39 @@ Get-Process -ErrorAction SilentlyContinue |
 $acrylicServiceName = 'AcrylicDNSProxySvc'
 Stop-Service -Name $acrylicServiceName -Force -ErrorAction SilentlyContinue
 
+function Restore-OpenPathInstallRootAccess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $takeownPath = Join-Path $env:SystemRoot 'System32\takeown.exe'
+    $icaclsPath = Join-Path $env:SystemRoot 'System32\icacls.exe'
+
+    if (Test-Path -LiteralPath $takeownPath -PathType Leaf) {
+        & $takeownPath /F $Path /R /D Y 2>$null | Out-Null
+    }
+
+    if (Test-Path -LiteralPath $icaclsPath -PathType Leaf) {
+        # Previous jobs may have applied a non-inheriting SYSTEM/Administrators
+        # ACL to the install root. Restore inherited permissions before the
+        # cleanup delete, then grant the elevated runner identities traversal
+        # and delete rights recursively. This is limited to the known test root.
+        & $icaclsPath $Path /reset /T /C /Q 2>$null | Out-Null
+        & $icaclsPath $Path /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C /Q 2>$null | Out-Null
+    }
+}
+
 $pathsToRemove = @(
     'C:\OpenPath'
 )
 
 foreach ($path in $pathsToRemove) {
     if ($path -and (Test-Path -LiteralPath $path)) {
+        Restore-OpenPathInstallRootAccess -Path $path
         Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
