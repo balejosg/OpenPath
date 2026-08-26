@@ -524,6 +524,13 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /IntCmp \$0 0 trailer_ok trailer_failed trailer_failed/,
     'NSIS must compare the ExecWait result numerically before continuing'
   );
+  const trailerDiagnosticCopyOffset = readTrailerSection.indexOf(
+    'CopyFiles /SILENT "$INSTDIR\\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" "$TEMP"'
+  );
+  assert.ok(
+    trailerDiagnosticCopyOffset > trailerEvidenceOffset,
+    'NSIS must publish trailer diagnostics only after the child exit result has selected the success path'
+  );
   assert.match(
     readTrailerSection,
     /ExecWait '\"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe\" -NoProfile[^']*' \$0/,

@@ -133,12 +133,8 @@ Section "ReadTrailer" SEC00
     ClearErrors
     ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$INSTDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json" -StatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"' $0
     IfErrors trailer_exec_error
-    ; Publish the diagnostic only after ExecWait has reported its launch
-    ; result. It is copied from the private extracted root to the bounded
-    ; evidence path and is never used to decide whether installation passes.
-    CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" "$TEMP"
-    ; Branch before calling the evidence helper so the child result controls
-    ; the installer outcome rather than a diagnostic write.
+    ; Branch before any evidence publication so the child result controls the
+    ; installer outcome rather than a diagnostic copy operation.
     IntCmp $0 0 trailer_ok trailer_failed trailer_failed
 trailer_failed:
     Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
@@ -154,6 +150,10 @@ trailer_ok:
     Push "${OFFLINE_STAGE_READ_TRAILER_OK}"
     Push "0"
     Call WriteOfflineStage
+    ; Publish the diagnostic only after the successful decision. It is copied
+    ; from the private extracted root to the bounded evidence path and is
+    ; never used to decide whether installation passes.
+    CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" "$TEMP"
     Goto trailer_done
 trailer_exec_error:
     StrCpy $0 "${OFFLINE_STATUS_EXEC_ERROR}"
