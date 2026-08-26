@@ -279,6 +279,7 @@ $installerStatusPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOffl
 $trailerDiagnosticPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-trailer-status.txt"
 $installerStatus = 'missing'
 $trailerDiagnosticStatus = 'missing'
+$trailerDiagnosticSource = 'installer-child'
 $result = $null
 
 try {
@@ -370,6 +371,8 @@ try {
         status = 'ok'
         installerExitCode = $installExitCode
         installerStatus = $installerStatus
+        trailerDiagnosticStatus = $trailerDiagnosticStatus
+        trailerDiagnosticSource = $trailerDiagnosticSource
         trailerValidated = $true
         payloadManifestValidated = $true
         pendingStateObserved = $true
@@ -383,6 +386,23 @@ try {
 catch {
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
     $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
+    if ($trailerDiagnosticStatus -eq 'missing') {
+        $reader = Join-Path $PSScriptRoot '..\..\..\windows\offline-installer\scripts\Read-Trailer.ps1'
+        if (Test-Path -LiteralPath $reader -PathType Leaf) {
+            try {
+                & $shell -NoProfile -ExecutionPolicy Bypass -File $reader `
+                    -ExecutablePath $resolvedExecutable `
+                    -OutputConfigPath $trailerConfigFile `
+                    -StatusPath $trailerDiagnosticPath *> $null
+            }
+            catch {
+                # Keep the diagnostic best-effort; the original EXE result
+                # remains the only pass/fail signal for this lane.
+            }
+            $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
+            $trailerDiagnosticSource = 'post-process'
+        }
+    }
     $failure = [ordered]@{
         status = 'failed'
         code = 'windows-offline-installer-exe-e2e-failed'
@@ -390,6 +410,7 @@ catch {
         installerExitCode = $installExitCode
         installerStatus = $installerStatus
         trailerDiagnosticStatus = $trailerDiagnosticStatus
+        trailerDiagnosticSource = $trailerDiagnosticSource
     }
     Write-SafeEvidence -Payload $failure -Path $EvidencePath
     $failure | ConvertTo-Json -Compress
