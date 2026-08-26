@@ -140,11 +140,6 @@ Section "ReadTrailer" SEC00
     ClearErrors
     ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$INSTDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json" -StatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"' $0
     IfErrors trailer_exec_error
-    ; Publish only the bounded reader marker. Keep it private during reader
-    ; execution so its final state can be captured even when validation fails.
-    ClearErrors
-    CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" "$TEMP"
-    ClearErrors
     IfFileExists "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" trailer_marker_present trailer_marker_missing
 trailer_marker_missing:
     Push "${OFFLINE_STAGE_READ_TRAILER_MARKER_MISSING}"
@@ -156,6 +151,11 @@ trailer_marker_present:
     Push "0"
     Call WriteOfflineStage
 trailer_output_check:
+    ; Publish only the bounded reader marker. Keep it private during reader
+    ; execution so its final state can be captured even when validation fails.
+    ClearErrors
+    CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" "$TEMP"
+    ClearErrors
     ; Branch before any evidence publication so the child result controls the
     ; installer outcome rather than a diagnostic copy operation.
     ; ExecWait exposes the child result through a user variable. Reject the
