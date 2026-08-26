@@ -507,9 +507,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
     nsiSource.indexOf('SectionEnd', nsiSource.indexOf('Section "ReadTrailer"'))
   );
   const trailerResultOffset = readTrailerSection.indexOf("' $0");
-  const trailerBranchOffset = readTrailerSection.indexOf(
-    'IntCmp $0 0 trailer_ok trailer_failed trailer_failed'
-  );
+  const trailerBranchOffset = readTrailerSection.indexOf('StrCmp $0 "0" trailer_ok trailer_failed');
   const trailerEvidenceOffset = readTrailerSection.indexOf(
     'Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"'
   );
@@ -521,8 +519,8 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     readTrailerSection,
-    /IntCmp \$0 0 trailer_ok trailer_failed trailer_failed/,
-    'NSIS must compare the ExecWait result numerically before continuing'
+    /StrCmp \$0 "0" trailer_ok trailer_failed/,
+    'NSIS must compare the exact successful ExecWait result before continuing'
   );
   const trailerDiagnosticCopyOffset = readTrailerSection.indexOf(
     'CopyFiles /SILENT "$INSTDIR\\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" "$TEMP"'
