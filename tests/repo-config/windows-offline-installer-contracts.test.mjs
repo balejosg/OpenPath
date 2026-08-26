@@ -465,3 +465,32 @@ test('standalone Docker provisions the pinned template before exposing the API',
   assert.match(docs, /read-only|:ro/i);
   assert.match(docs, /persistent|volume/i);
 });
+
+test('release template workflow prepares signed Firefox artifacts through the canonical action', () => {
+  const workflow = readText('.github/workflows/release-scripts.yml');
+  const buildStep = workflow.indexOf('npm run build --workspace=@openpath/firefox-extension');
+  const prepareAction = workflow.indexOf(
+    'uses: ./.github/actions/prepare-firefox-release-artifacts'
+  );
+
+  assert.ok(buildStep >= 0, 'template workflow must build the Firefox extension first');
+  assert.ok(
+    prepareAction > buildStep,
+    'template workflow must prepare signed artifacts after building the extension'
+  );
+  assert.doesNotMatch(
+    workflow,
+    /npm run build:firefox-release --workspace=@openpath\/firefox-extension/,
+    'template workflow must not run the signed-artifact bundler before AMO signing'
+  );
+  assert.match(
+    workflow,
+    /web-ext-api-key:\s*\$\{\{ secrets\.WEB_EXT_API_KEY \}\}/,
+    'template workflow must pass the AMO API key through the canonical action'
+  );
+  assert.match(
+    workflow,
+    /web-ext-api-secret:\s*\$\{\{ secrets\.WEB_EXT_API_SECRET \}\}/,
+    'template workflow must pass the AMO API secret through the canonical action'
+  );
+});

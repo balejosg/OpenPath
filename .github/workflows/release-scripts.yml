@@ -35,15 +35,16 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Build and AMO-sign Firefox release artifacts
-        env:
-          WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
-          WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+      - name: Build Firefox extension artifacts
         run: |
           npm run build --workspace=@openpath/firefox-extension
-          npm run build:firefox-release --workspace=@openpath/firefox-extension
           npm run build:chromium-managed --workspace=@openpath/firefox-extension
-          npm run sign:firefox-release --workspace=@openpath/firefox-extension
+
+      - name: Prepare AMO-signed Firefox release artifacts
+        uses: ./.github/actions/prepare-firefox-release-artifacts
+        with:
+          web-ext-api-key: ${{ secrets.WEB_EXT_API_KEY }}
+          web-ext-api-secret: ${{ secrets.WEB_EXT_API_SECRET }}
 
       - name: Download and verify pinned offline payloads
         shell: pwsh
