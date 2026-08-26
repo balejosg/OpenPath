@@ -194,7 +194,7 @@ function Write-OpenPathInstallerFailureStatus {
 
 function Get-OpenPathInstallerFailurePhase {
     $phase = $script:OpenPathInstallerCurrentPhase
-    if ($phase -ne 'acrylic-install-local' -or -not $FailureStatusPath) {
+    if ($phase -notin @('acrylic-install-local', 'enrollment-save-pending') -or -not $FailureStatusPath) {
         return $phase
     }
 

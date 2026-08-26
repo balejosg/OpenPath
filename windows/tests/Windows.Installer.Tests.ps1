@@ -1084,6 +1084,7 @@ Describe "Installer" {
                 "Write-OpenPathOfflineInstallPhase -Path `$FailureStatusPath -Phase 'enrollment-pending-acl'",
                 "Write-OpenPathOfflineInstallPhase -Path `$FailureStatusPath -Phase 'enrollment-pending-complete'"
             )
+            $content | Should -Match ([regex]::Escape("if (`$phase -notin @('acrylic-install-local', 'enrollment-save-pending') -or -not `$FailureStatusPath)"))
         }
 
         It "Loads the installer cleanup helper before install steps can mutate an existing runtime" {

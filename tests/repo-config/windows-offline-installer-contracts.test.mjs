@@ -646,8 +646,8 @@ test('real NSIS failures expose only a bounded installer phase for diagnosis', (
   );
   assert.match(
     installer,
-    /function Get-OpenPathInstallerFailurePhase[\s\S]*\$phase -ne 'acrylic-install-local'[\s\S]*\$candidate[\s\S]*return \$candidate/,
-    'installer failures should preserve a bounded local-install subphase without masking later phases'
+    /function Get-OpenPathInstallerFailurePhase[\s\S]*\$phase -notin @\('acrylic-install-local', 'enrollment-save-pending'\)[\s\S]*\$candidate[\s\S]*return \$candidate/,
+    'installer failures should preserve bounded subphases without masking later phases'
   );
   assert.match(
     nsiSource,
