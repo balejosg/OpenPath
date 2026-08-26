@@ -447,6 +447,11 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /installerExitCode\s*=\s*\$installExitCode/,
     'Windows EXE evidence must preserve the installer exit code when available'
   );
+  assert.match(
+    executableLane,
+    /installerStatus\s*=\s*Get-SafeInstallerStatus/,
+    'Windows EXE evidence must preserve only the bounded NSIS stage status for diagnosis'
+  );
   const failureEvidenceBlock = executableLane.slice(
     executableLane.lastIndexOf('catch {'),
     executableLane.lastIndexOf('finally {')
@@ -471,6 +476,11 @@ test('Windows release evidence executes the personalized NSIS executable and its
     nsiSource,
     /-ExecutablePath "\$EXEDIR\\\$EXEFILE"/,
     'NSIS must pass the running executable path using its directory and filename variables'
+  );
+  assert.match(
+    nsiSource,
+    /OpenPathOfflineSetup-\$EXEFILE-status\.txt/,
+    'NSIS must expose only a bounded stage status file for safe executable-lane diagnosis'
   );
   assert.doesNotMatch(
     nsiSource,

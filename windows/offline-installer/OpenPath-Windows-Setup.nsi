@@ -45,12 +45,30 @@ VIAddVersionKey /LANG=1033 "FileDescription" "${PRODUCT_DESCRIPTION}"
 Function .onInit
     InitPluginsDir
     StrCpy $INSTDIR "$PLUGINSDIR\OpenPathOfflineSetup"
+    ; Leave only a bounded, non-sensitive stage marker for the executable
+    ; evidence lane. Delete a marker left by an earlier failed attempt before
+    ; this run starts so stale diagnostics cannot be mistaken for progress.
+    Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-status.txt"
+FunctionEnd
+
+Function WriteOfflineStage
+    ; This file contains only an allow-listed stage name or numeric exit code.
+    ; It exists solely to diagnose a non-zero child-process result without
+    ; uploading installer logs, command lines, or configuration material.
+    Exch $0
+    FileOpen $1 "$TEMP\OpenPathOfflineSetup-$EXEFILE-status.txt" w
+    FileWrite $1 "$0$\r$\n"
+    FileClose $1
+    Pop $0
 FunctionEnd
 
 Page InstFiles
 ShowInstDetails show
 
 Section "ReadTrailer" SEC00
+    Push "read-trailer-start"
+    Call WriteOfflineStage
+
     ; The trailer reader runs before the complete package is extracted. Stage
     ; only its two local validation dependencies in the temporary root first.
     SetOutPath "$INSTDIR\lib\internal"
@@ -64,13 +82,22 @@ Section "ReadTrailer" SEC00
     ; that was never customized carries a placeholder slot and aborts here.
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json"'
     Pop $0
-    IntCmp $0 0 +3 0 +3
+    Push "read-trailer-exit-$0"
+    Call WriteOfflineStage
+    IntCmp $0 0 trailer_ok trailer_failed trailer_failed
+trailer_failed:
         DetailPrint "Trailer validation failed with code $0"
         SetErrorLevel 10
         Abort
+trailer_ok:
+    Push "read-trailer-ok"
+    Call WriteOfflineStage
 SectionEnd
 
 Section "ExtractAndVerify" SEC01
+    Push "extract-start"
+    Call WriteOfflineStage
+
     ; Keep the extracted package layout aligned with the offline manifest:
     ; Windows sources are rooted at $INSTDIR, runtime assets under runtime\,
     ; and extension release artifacts under their own named directories.
@@ -91,10 +118,16 @@ Section "ExtractAndVerify" SEC01
     SetOutPath "$INSTDIR\chromium-managed"
     File /nonfatal /a /r "${EXTENSION_BUILD_DIR}\chromium-managed\*.*"
     SetOutPath "$INSTDIR"
+    Push "extract-ok"
+    Call WriteOfflineStage
 SectionEnd
 
 Section "RunInstaller" SEC02
+    Push "run-installer-start"
+    Call WriteOfflineStage
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -Unattended'
     Pop $1
+    Push "run-installer-exit-$1"
+    Call WriteOfflineStage
     SetErrorLevel $1
 SectionEnd
