@@ -494,13 +494,13 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     nsiSource,
-    /StrCmp \$0 "0" trailer_ok trailer_failed/,
-    'NSIS must branch on the exact nsExec success string returned by PowerShell'
+    /Pop \$0[\s\S]*StrCpy \$R3 \$0[\s\S]*Call WriteOfflineStage[\s\S]*StrCmp \$R3 "0" trailer_ok trailer_failed/,
+    'NSIS must preserve the exact nsExec success string across safe evidence writes'
   );
   assert.doesNotMatch(
     nsiSource,
-    /IntCmp \$0 0 trailer_ok trailer_failed trailer_failed/,
-    'NSIS must not reinterpret the nsExec result through integer comparison'
+    /StrCmp \$0 "0" trailer_ok trailer_failed/,
+    'NSIS must not compare a result register that evidence writing may clobber'
   );
   assert.doesNotMatch(
     nsiSource,
