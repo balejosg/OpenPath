@@ -533,7 +533,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     readTrailerSection,
-    /ExecWait '\"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe\" -NoProfile[^']*' \$0/,
+    /ExecWait '"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe" -NoProfile[^']*' \$0/,
     'NSIS must synchronously invoke the built-in Windows PowerShell executable with an explicit quoted path'
   );
   assert.doesNotMatch(
@@ -547,7 +547,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     runInstallerSection,
-    /ExecWait '\"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe\" -NoProfile[^']*' \$1/,
+    /ExecWait '"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe" -NoProfile[^']*' \$1/,
     'NSIS must synchronously invoke the offline installer through the same explicit PowerShell path'
   );
   assert.doesNotMatch(
