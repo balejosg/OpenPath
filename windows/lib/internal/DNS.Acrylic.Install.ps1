@@ -179,6 +179,32 @@ function Test-AcrylicPortableArchive {
     }
 }
 
+function Get-AcrylicFileSha256 {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    # The offline bootstrapper invokes Windows PowerShell 5.1 with -NoProfile;
+    # hash the literal file stream without relying on Get-FileHash module loading.
+    $stream = $null
+    $algorithm = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        $algorithm = [System.Security.Cryptography.SHA256]::Create()
+        $digest = $algorithm.ComputeHash($stream)
+        return ([System.BitConverter]::ToString($digest).Replace('-', '')).ToLowerInvariant()
+    }
+    finally {
+        if ($algorithm) {
+            $algorithm.Dispose()
+        }
+        if ($stream) {
+            $stream.Dispose()
+        }
+    }
+}
+
 function Assert-AcrylicDownloadHash {
     <#
     .SYNOPSIS
@@ -196,7 +222,7 @@ function Assert-AcrylicDownloadHash {
         [Parameter(Mandatory = $true)][string]$ArtifactName
     )
 
-    $actualSha256 = (Get-FileHash -Path $Path -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+    $actualSha256 = Get-AcrylicFileSha256 -Path $Path
     if ($actualSha256 -ne $ExpectedSha256.ToLowerInvariant()) {
         throw "$ArtifactName SHA256 mismatch. Expected $ExpectedSha256, got $actualSha256"
     }

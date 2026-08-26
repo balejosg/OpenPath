@@ -159,6 +159,17 @@ Describe "Offline installer" {
                 Should -Not -Throw
         }
 
+        It "uses a literal hash provider for the Acrylic archive too" {
+            $archivePath = Join-Path $script:OfflineTestRoot 'acrylic-hash-provider.bin'
+            'acrylic-provider' | Set-Content -LiteralPath $archivePath -Encoding UTF8
+            $hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+            Mock Get-FileHash { throw "The term 'Get-FileHash' is not recognized as the name of a cmdlet" }
+
+            { Assert-AcrylicDownloadHash -Path $archivePath -ExpectedSha256 $hash -ArtifactName 'Acrylic-Portable.zip' } |
+                Should -Not -Throw
+        }
+
         It "Classifies only genuine missing-command errors as command failures" {
             try {
                 throw "The term 'Get-FileHash' is not recognized as the name of a cmdlet"
