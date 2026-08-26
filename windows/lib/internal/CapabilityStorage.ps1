@@ -103,13 +103,23 @@ function New-OpenPathCapabilityStorageAccessRule {
         [string]$PropagationFlags = 'None'
     )
 
-    return (New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $Identity,
-            $Rights,
-            $InheritanceFlags,
-            $PropagationFlags,
-            'Allow'
-        ))
+    $identityReference = if ($Identity -match '^S-\d-\d+(?:-\d+)+$') {
+        New-Object System.Security.Principal.SecurityIdentifier($Identity)
+    }
+    else {
+        New-Object System.Security.Principal.NTAccount($Identity)
+    }
+    $rightsValue = [System.Enum]::Parse([System.Security.AccessControl.FileSystemRights], $Rights)
+    $inheritanceValue = [System.Enum]::Parse([System.Security.AccessControl.InheritanceFlags], $InheritanceFlags)
+    $propagationValue = [System.Enum]::Parse([System.Security.AccessControl.PropagationFlags], $PropagationFlags)
+
+    return [System.Security.AccessControl.FileSystemAccessRule]::new(
+        $identityReference,
+        $rightsValue,
+        $inheritanceValue,
+        $propagationValue,
+        [System.Security.AccessControl.AccessControlType]::Allow
+    )
 }
 
 function Set-OpenPathCapabilityStorageAcl {
@@ -123,14 +133,25 @@ function Set-OpenPathCapabilityStorageAcl {
     $isContainer = (Test-Path -Path $Path -PathType Container -ErrorAction SilentlyContinue)
     $inheritanceFlags = if ($isContainer) { 'ContainerInherit,ObjectInherit' } else { 'None' }
 
-    $acl = Get-Acl $Path
     if ($Profile -eq 'RestrictedRoot') {
-        $acl.SetAccessRuleProtection($true, $false)
-        @($acl.Access) | ForEach-Object { [void]$acl.RemoveAccessRule($_) }
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'NT AUTHORITY\SYSTEM' -Rights 'FullControl' -InheritanceFlags $inheritanceFlags))
-        $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Administrators' -Rights 'FullControl' -InheritanceFlags $inheritanceFlags))
+        # Build a fresh descriptor for the restricted profile. Reusing and
+        # mutating Get-Acl output is unreliable for files under Windows
+        # PowerShell 5.1, especially after inherited ACEs are removed.
+        $security = if ($isContainer) {
+            New-Object System.Security.AccessControl.DirectorySecurity
+        }
+        else {
+            New-Object System.Security.AccessControl.FileSecurity
+        }
+        $security.SetAccessRuleProtection($true, $false)
+        $security.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'S-1-5-18' -Rights 'FullControl' -InheritanceFlags $inheritanceFlags))
+        $security.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'S-1-5-32-544' -Rights 'FullControl' -InheritanceFlags $inheritanceFlags))
+        Set-Acl -LiteralPath $Path -AclObject $security
+        return
     }
-    elseif ($Profile -eq 'RuntimeDependencyQueue') {
+
+    $acl = Get-Acl $Path
+    if ($Profile -eq 'RuntimeDependencyQueue') {
         $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'Modify' -InheritanceFlags $inheritanceFlags))
     }
     elseif ($Profile -eq 'CaptivePortalRecoveryQueue') {

@@ -54,6 +54,18 @@ Describe "Common Module" {
             }
         }
 
+        It "Uses a portable file security descriptor for the restricted pending state" {
+            $capabilityStoragePath = Join-Path $PSScriptRoot ".." "lib" "internal" "CapabilityStorage.ps1"
+            $content = Get-Content $capabilityStoragePath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'System.Security.AccessControl.FileSecurity',
+                'S-1-5-18',
+                'S-1-5-32-544',
+                'Set-Acl -LiteralPath $Path -AclObject $security'
+            )
+        }
+
         It "Honors runtime dependency queue and overlay environment overrides" {
             $previousQueue = $env:OPENPATH_RUNTIME_DEPENDENCY_QUEUE_PATH
             $previousOverlay = $env:OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_PATH
