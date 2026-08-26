@@ -131,7 +131,7 @@ Section "ReadTrailer" SEC00
     ; Validate the versioned trailer before extracting anything. A template
     ; that was never customized carries a placeholder slot and aborts here.
     ClearErrors
-    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$INSTDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json" -StatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"' $0
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$INSTDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json" -StatusPath "$TEMP\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"' $0
     IfErrors trailer_exec_error
     ; Branch before any evidence publication so the child result controls the
     ; installer outcome rather than a diagnostic copy operation.
@@ -160,10 +160,8 @@ trailer_ok:
     Push "${OFFLINE_STAGE_READ_TRAILER_OK}"
     Push "0"
     Call WriteOfflineStage
-    ; Publish the diagnostic only after the successful decision. It is copied
-    ; from the private extracted root to the bounded evidence path and is
+    ; The diagnostic is already a bounded two-byte marker in %TEMP%; it is
     ; never used to decide whether installation passes.
-    CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" "$TEMP"
     Goto trailer_done
 trailer_exec_error:
     StrCpy $0 "${OFFLINE_STATUS_EXEC_ERROR}"

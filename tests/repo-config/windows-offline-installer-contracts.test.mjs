@@ -524,13 +524,6 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /IfFileExists "\$INSTDIR\\offline-config\.json" trailer_ok trailer_failed/,
     'NSIS must require the canonical trailer reader output before continuing'
   );
-  const trailerDiagnosticCopyOffset = readTrailerSection.indexOf(
-    'CopyFiles /SILENT "$INSTDIR\\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" "$TEMP"'
-  );
-  assert.ok(
-    trailerDiagnosticCopyOffset > trailerEvidenceOffset,
-    'NSIS must publish trailer diagnostics only after the child exit result has selected the success path'
-  );
   assert.match(
     readTrailerSection,
     /ExecWait '"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe" -NoProfile[^']*' \$0/,
@@ -621,13 +614,8 @@ test('NSIS stages trailer-reader dependencies before validating the trailer', ()
   );
   assert.match(
     readTrailerSection,
-    /-StatusPath "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-trailer-status\.txt"/,
-    'NSIS must pass a private extracted-root trailer marker path'
-  );
-  assert.match(
-    readTrailerSection,
-    /CopyFiles \/SILENT "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-trailer-status\.txt" "\$TEMP"/,
-    'NSIS must publish only the bounded trailer marker after ExecWait reports its result'
+    /-StatusPath "\$TEMP\\OpenPathOfflineSetup-\$EXEFILE-trailer-status\.txt"/,
+    'NSIS must pass only a bounded temporary trailer marker path'
   );
   assert.match(
     readTrailerSection,
