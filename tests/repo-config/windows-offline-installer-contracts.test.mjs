@@ -629,6 +629,16 @@ test('real NSIS failures expose only a bounded installer phase for diagnosis', (
     /CopyFiles \/SILENT "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-installer-failure-phase\.txt" "\$TEMP"/,
     'NSIS should publish only the bounded failure-phase marker to the evidence temp root'
   );
+  assert.match(
+    installer,
+    /function Set-OpenPathOfflinePayloadFailurePhase[\s\S]*'missing'[\s\S]*'sha256'[\s\S]*'size'[\s\S]*offline-payload-verification-\$suffix/,
+    'payload failures should expose only a bounded verification category for diagnosis'
+  );
+  assert.match(
+    installer,
+    /Set-OpenPathOfflinePayloadFailurePhase -ErrorRecord \$_/,
+    'payload verification should classify its failure before the phase result is returned'
+  );
 });
 
 test('NSIS stages trailer-reader dependencies before validating the trailer', () => {

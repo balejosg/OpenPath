@@ -192,6 +192,38 @@ function Write-OpenPathInstallerFailureStatus {
     }
 }
 
+function Set-OpenPathOfflinePayloadFailurePhase {
+    param(
+        [AllowNull()]
+        [object]$ErrorRecord
+    )
+
+    $message = if ($ErrorRecord -and $ErrorRecord.Exception) {
+        [string]$ErrorRecord.Exception.Message
+    }
+    else {
+        ''
+    }
+
+    $suffix = if ($message -match 'missing payload:') {
+        'missing'
+    }
+    elseif ($message -match 'sha256 mismatch') {
+        'sha256'
+    }
+    elseif ($message -match 'size mismatch') {
+        'size'
+    }
+    elseif ($message -match 'Offline payload manifest') {
+        'manifest'
+    }
+    else {
+        'failed'
+    }
+
+    $script:OpenPathInstallerCurrentPhase = "offline-payload-verification-$suffix"
+}
+
 trap {
     Write-OpenPathInstallerFailureStatus `
         -Path $FailureStatusPath `
@@ -453,9 +485,15 @@ if ($offlineMode) {
     $offlineManifestPath = Join-Path $scriptDir 'payload-manifest.json'
     $phaseResult = Invoke-OpenPathPlannedPhase -Name 'offline-payload-verification' -Action {
         Start-OpenPathInstallTimedStep -Name 'offline-payload-verification'
-        Assert-OpenPathOfflinePayloadManifest `
-            -ManifestPath $offlineManifestPath `
-            -StagingRoot $scriptDir
+        try {
+            Assert-OpenPathOfflinePayloadManifest `
+                -ManifestPath $offlineManifestPath `
+                -StagingRoot $scriptDir
+        }
+        catch {
+            Set-OpenPathOfflinePayloadFailurePhase -ErrorRecord $_
+            throw
+        }
         Complete-OpenPathInstallTimedStep -Name 'offline-payload-verification'
     }
     Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
