@@ -134,7 +134,7 @@ Section "ReadTrailer" SEC00
     CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" "$TEMP"
     ; Branch before calling the evidence helper so the child result controls
     ; the installer outcome rather than a diagnostic write.
-    StrCmp $0 "0" trailer_ok trailer_failed
+    IntCmp $0 0 trailer_ok trailer_failed trailer_failed
 trailer_failed:
     Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
     Push $0
