@@ -135,14 +135,17 @@ Section "ReadTrailer" SEC00
     IfErrors trailer_exec_error
     ; Branch before any evidence publication so the child result controls the
     ; installer outcome rather than a diagnostic copy operation.
+    ; The extracted root is unique, but remove the output explicitly so a
+    ; partial child cannot make a later retry look successful.
+    Delete "$INSTDIR\offline-config.json"
     ; ExecWait exposes the child result through a user variable. Reject the
-    ; documented launch-error sentinel before coercing the successful numeric
-    ; exit code; the real NSIS runtime can otherwise keep an integer-looking
-    ; value in a representation that does not match a literal string.
+    ; documented launch-error sentinel, then require the canonical reader's
+    ; output file. That file is written only after trailer, payload, and JSON
+    ; validation, and this output-file commit is stable across NSIS numeric
+    ; representations on the real Windows runtime.
     StrCmp $0 "" trailer_exec_error
     StrCmp $0 "error" trailer_exec_error
-    IntOp $R4 $0 + 0
-    IntCmp $R4 0 trailer_ok trailer_failed trailer_failed
+    IfFileExists "$INSTDIR\offline-config.json" trailer_ok trailer_failed
 trailer_failed:
     Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
     Push $0
