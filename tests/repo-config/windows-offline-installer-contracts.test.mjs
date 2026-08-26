@@ -72,6 +72,16 @@ test('offline helper module implements config validation, payload verification, 
     /Assert-AcrylicDownloadHash/,
     'offline Acrylic install must verify the ZIP hash before extracting'
   );
+  assert.match(
+    localAcrylic,
+    /\[System\.IO\.Compression\.ZipFile\]::ExtractToDirectory/,
+    'offline Acrylic install must use the Windows-compatible ZIP extractor'
+  );
+  assert.match(
+    localAcrylic,
+    /Copy-Item -LiteralPath \$extractedItem\.FullName/,
+    'offline Acrylic install must stage root-level ZIP entries without wildcard parsing'
+  );
 });
 
 test('offline payload manifest validation fails closed on missing or mismatched payloads', () => {

@@ -558,6 +558,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'acrylic' -Action {
             $installed = Install-AcrylicDNSFromLocalSource `
                 -AcrylicZipPath (Join-Path $scriptDir $acrylicEntry.path) `
                 -ExpectedSha256 $acrylicEntry.sha256 `
+                -FailureStatusPath $FailureStatusPath `
                 -WhatIf:$WhatIfPreference
             $script:OpenPathInstallerCurrentPhase = 'acrylic-ensure-service'
             if ($installed -and ($WhatIfPreference -or ((Test-AcrylicInstalled) -and (Ensure-AcrylicService -Start)))) {

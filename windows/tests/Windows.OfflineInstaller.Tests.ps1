@@ -197,6 +197,7 @@ Describe "Offline installer" {
             $functionBody | Should -Match 'Assert-AcrylicDownloadHash'
             $functionBody | Should -Match '\[System\.IO\.Compression\.ZipFile\]::ExtractToDirectory'
             $functionBody | Should -Match 'Copy-Item -LiteralPath \$extractedItem\.FullName'
+            $functionBody | Should -Match 'Write-OpenPathOfflineInstallPhase'
         }
 
         It "Throws when the staged ZIP is absent or fails the hash assertion" {
@@ -245,13 +246,16 @@ Describe "Offline installer" {
             Mock Write-OpenPathLog { }
 
             $targetDir = Join-Path $script:OfflineTestRoot 'acrylic-root-target'
+            $statusPath = Join-Path $script:OfflineTestRoot 'acrylic-root-status.txt'
             Install-AcrylicDNSFromLocalSource `
                 -AcrylicZipPath $zipPath `
                 -ExpectedSha256 $hash `
-                -InstallDir $targetDir | Should -BeTrue
+                -InstallDir $targetDir `
+                -FailureStatusPath $statusPath | Should -BeTrue
 
             Test-Path -LiteralPath (Join-Path $targetDir 'AcrylicService.exe') | Should -BeTrue
             Test-Path -LiteralPath (Join-Path $targetDir 'AcrylicConfiguration.ini') | Should -BeTrue
+            Get-Content -LiteralPath $statusPath -Raw | Should -Be 'acrylic-local-complete'
         }
 
         It "Keeps Chocolatey as an online-only fallback that offline never reaches" {

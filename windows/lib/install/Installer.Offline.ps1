@@ -507,6 +507,26 @@ function Get-OpenPathOfflineManifestEntry {
     throw "Offline payload manifest has no entry for '$RelativePath'"
 }
 
+function Write-OpenPathOfflineInstallPhase {
+    param(
+        [string]$Path = '',
+
+        [Parameter(Mandatory = $true)]
+        [string]$Phase
+    )
+
+    if (-not $Path -or $Phase -notmatch '^[A-Za-z0-9-]{1,64}$') {
+        return
+    }
+
+    try {
+        Set-Content -LiteralPath $Path -Value $Phase -NoNewline -Encoding ASCII -Force
+    }
+    catch {
+        # Diagnostic output must never replace the install result.
+    }
+}
+
 function Install-AcrylicDNSFromLocalSource {
     <#
     .SYNOPSIS
@@ -526,10 +546,14 @@ function Install-AcrylicDNSFromLocalSource {
 
         [string]$InstallDir = "${env:ProgramFiles(x86)}\Acrylic DNS Proxy",
 
-        [switch]$Force
+        [switch]$Force,
+
+        [string]$FailureStatusPath = ''
     )
 
+    Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-start'
     if ((Test-AcrylicInstalled) -and -not $Force) {
+        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-existing'
         Write-OpenPathLog 'Acrylic DNS Proxy already installed; local source install skipped'
         return $true
     }
@@ -542,6 +566,7 @@ function Install-AcrylicDNSFromLocalSource {
         return $false
     }
 
+    Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-validate'
     Assert-AcrylicDownloadHash -Path $AcrylicZipPath -ExpectedSha256 $ExpectedSha256 -ArtifactName (Split-Path $AcrylicZipPath -Leaf)
     if (-not (Test-AcrylicPortableArchive -Path $AcrylicZipPath)) {
         throw 'Staged Acrylic archive is not a valid portable release'
@@ -550,13 +575,16 @@ function Install-AcrylicDNSFromLocalSource {
     $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("acrylic-offline-" + [Guid]::NewGuid().ToString('N'))
 
     try {
+        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-create-temp'
         New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-extract'
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
         [System.IO.Compression.ZipFile]::ExtractToDirectory($AcrylicZipPath, $tempDir)
         if (-not (Test-Path $installDir)) {
             New-Item -ItemType Directory -Path $installDir -Force | Out-Null
         }
 
+        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-stage'
         # The pinned Acrylic archive is flat. Preserve the historical
         # flattening of a single wrapper directory, while copying every root
         # entry when the archive has a mixed or flat layout.
@@ -574,11 +602,14 @@ function Install-AcrylicDNSFromLocalSource {
             }
         }
 
+        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-validate-output'
         if (-not (Test-Path (Join-Path $installDir 'AcrylicService.exe'))) {
             throw 'Local Acrylic install did not produce AcrylicService.exe'
         }
 
+        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-register'
         Register-AcrylicServiceFromPath -AcrylicPath $installDir | Out-Null
+        Write-OpenPathOfflineInstallPhase -Path $FailureStatusPath -Phase 'acrylic-local-complete'
         Write-OpenPathLog 'Acrylic DNS Proxy installed from local offline source'
         return $true
     }
