@@ -107,6 +107,27 @@ jobs:
       - name: Validate appended trailer round-trip
         run: node --import tsx --test windows/offline-installer/tests/trailer-roundtrip.test.mjs
 
+      - name: Validate personalized trailer with PowerShell
+        shell: pwsh
+        run: |
+          $personalizedPath = Join-Path $env:RUNNER_TEMP 'OpenPath-Windows-Setup-E2E.exe'
+          $validationPath = Join-Path $env:RUNNER_TEMP 'openpath-offline-installer-e2e-trailer-validation.json'
+          $readerExitCode = 1
+          try {
+            & (Resolve-Path 'windows/offline-installer/scripts/Read-Trailer.ps1') `
+              -ExecutablePath $personalizedPath `
+              -OutputConfigPath $validationPath
+            $readerExitCode = $LASTEXITCODE
+          } catch {
+            $readerExitCode = 1
+          } finally {
+            Remove-Item -LiteralPath $validationPath -Force -ErrorAction SilentlyContinue
+          }
+          if ($readerExitCode -ne 0) {
+            Write-Host '::error::The personalized trailer failed canonical PowerShell validation before NSIS execution.'
+            exit 1
+          }
+
       - name: Execute the personalized NSIS executable E2E
         shell: pwsh
         run: |

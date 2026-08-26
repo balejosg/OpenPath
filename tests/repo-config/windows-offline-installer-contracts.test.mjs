@@ -366,12 +366,18 @@ test('Windows release evidence executes the personalized NSIS executable and its
   const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
   for (const marker of [
     'create-personalized-test-installer.mjs',
+    'Validate personalized trailer with PowerShell',
     'run-windows-offline-installer-exe.ps1',
     'Execute the personalized NSIS executable E2E',
     'Upload personalized NSIS E2E evidence',
   ]) {
     assert.ok(workflow.includes(marker), `release workflow should include ${marker}`);
   }
+  assert.match(
+    workflow,
+    /name: Validate personalized trailer with PowerShell[\s\S]*Read-Trailer\.ps1/,
+    'release workflow must validate the customized trailer with the canonical PowerShell reader before launching NSIS'
+  );
 
   const manifestBuild = workflow.indexOf('build-payload-manifest.mjs');
   const nsisCompile = workflow.indexOf('name: Compile NSIS template');
