@@ -247,7 +247,7 @@ function Throw-OpenPathOfflinePayloadVerificationFailure {
         [string]$Message,
 
         [Parameter(Mandatory = $true)]
-        [ValidateSet('manifest', 'entry', 'missing', 'sha256', 'size', 'io', 'failed')]
+        [ValidateSet('manifest', 'entry', 'missing', 'sha256', 'size', 'hash-io', 'size-io', 'io', 'failed')]
         [string]$Category
     )
 
@@ -325,7 +325,7 @@ function Assert-OpenPathOfflinePayloadManifest {
             }
             catch {
                 $failures += "could not hash payload: $relativePath"
-                $failureCategories += 'io'
+                $failureCategories += 'hash-io'
                 continue
             }
             if ($actualSha256 -ne $expectedSha256.ToLowerInvariant()) {
@@ -342,7 +342,7 @@ function Assert-OpenPathOfflinePayloadManifest {
             }
             catch {
                 $failures += "could not read payload size: $relativePath"
-                $failureCategories += 'io'
+                $failureCategories += 'size-io'
                 continue
             }
             if ([long]$actualSize -ne [long]$expectedSize) {
@@ -353,7 +353,7 @@ function Assert-OpenPathOfflinePayloadManifest {
     }
 
     if ($failures.Count -gt 0) {
-        $category = @('missing', 'sha256', 'size', 'entry', 'io', 'manifest', 'failed') |
+        $category = @('missing', 'sha256', 'size', 'hash-io', 'size-io', 'entry', 'io', 'manifest', 'failed') |
             Where-Object { $failureCategories -contains $_ } |
             Select-Object -First 1
         if (-not $category) {
