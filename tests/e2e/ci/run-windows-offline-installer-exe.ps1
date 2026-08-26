@@ -129,6 +129,56 @@ function Get-SafeInstallerStatus {
     return 'invalid'
 }
 
+function Get-SafeTrailerDiagnosticStatus {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return 'missing'
+    }
+
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+    }
+    catch {
+        return 'unreadable'
+    }
+
+    if ($bytes.Length -ne 2) {
+        return 'invalid'
+    }
+
+    $stage = [int]$bytes[0]
+    $result = [int]$bytes[1]
+    if ($result -eq 0) {
+        switch ($stage) {
+            3 { return 'payload-ok' }
+            5 { return 'output-ok' }
+        }
+    }
+    if ($result -eq 255) {
+        switch ($stage) {
+            1 { return 'bootstrap-start' }
+            2 { return 'module-start' }
+            3 { return 'payload-start' }
+            4 { return 'config-start' }
+        }
+    }
+    if ($result -eq 1) {
+        switch ($stage) {
+            1 { return 'bootstrap-failed' }
+            2 { return 'module-failed' }
+            3 { return 'payload-failed' }
+            4 { return 'config-failed' }
+            5 { return 'output-failed' }
+        }
+    }
+
+    return 'invalid'
+}
+
 function Start-EnrollmentFixture {
     param(
         [Parameter(Mandatory = $true)]
@@ -226,7 +276,9 @@ $sslAppId = '{4c9e7d9c-2d7c-4e4e-bb3e-2f5f0b7e7c42}'
 $urlAcl = "https://localhost:$ConnectivityPort/"
 $trailerConfigFile = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-exe-trailer-$([guid]::NewGuid().ToString('N')).json"
 $installerStatusPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-status.txt"
+$trailerDiagnosticPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-trailer-status.txt"
 $installerStatus = 'missing'
+$trailerDiagnosticStatus = 'missing'
 $result = $null
 
 try {
@@ -235,6 +287,7 @@ try {
     $installProcess = Start-Process -FilePath $resolvedExecutable -ArgumentList @('/S') -Wait -PassThru
     $installExitCode = [int]$installProcess.ExitCode
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
+    $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
     $script:CurrentStage = 'validate-installer-exit'
     if ($installExitCode -ne 60) {
         throw 'offline-install-did-not-reach-pending-state'
@@ -329,12 +382,14 @@ try {
 }
 catch {
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
+    $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
     $failure = [ordered]@{
         status = 'failed'
         code = 'windows-offline-installer-exe-e2e-failed'
         failureStage = $script:CurrentStage
         installerExitCode = $installExitCode
         installerStatus = $installerStatus
+        trailerDiagnosticStatus = $trailerDiagnosticStatus
     }
     Write-SafeEvidence -Payload $failure -Path $EvidencePath
     $failure | ConvertTo-Json -Compress
@@ -363,6 +418,9 @@ finally {
     }
     if (Test-Path -LiteralPath $installerStatusPath) {
         Remove-Item -LiteralPath $installerStatusPath -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $trailerDiagnosticPath) {
+        Remove-Item -LiteralPath $trailerDiagnosticPath -Force -ErrorAction SilentlyContinue
     }
     $uninstaller = Join-Path $OpenPathRoot 'Uninstall-OpenPath.ps1'
     if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {

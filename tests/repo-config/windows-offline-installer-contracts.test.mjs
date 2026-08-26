@@ -582,8 +582,23 @@ test('NSIS stages trailer-reader dependencies before validating the trailer', ()
   const trailerReader = readText('windows/offline-installer/scripts/Read-Trailer.ps1');
   assert.match(
     trailerReader,
+    /\[string\]\$StatusPath/,
+    'the trailer reader must accept an optional diagnostic marker path'
+  );
+  assert.match(
+    trailerReader,
+    /WriteAllBytes\([\s\S]*\$StatusPath[\s\S]*\[byte\[\]\]/,
+    'the trailer reader diagnostic must be a bounded binary marker'
+  );
+  assert.match(
+    trailerReader,
     /offlineModuleCandidates[\s\S]*Join-Path \$PSScriptRoot '\.\.\\lib\\install\\Installer\.Offline\.ps1'/,
     'trailer reader must resolve dependencies from the extracted installer root'
+  );
+  assert.match(
+    readTrailerSection,
+    /-StatusPath "\$TEMP\\OpenPathOfflineSetup-\$EXEFILE-trailer-status\.txt"/,
+    'NSIS must pass only its private bounded trailer marker path'
   );
 });
 

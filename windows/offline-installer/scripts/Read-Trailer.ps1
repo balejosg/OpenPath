@@ -10,12 +10,40 @@ param(
     [string]$ExecutablePath,
 
     [Parameter(Mandatory = $true)]
-    [string]$OutputConfigPath
+    [string]$OutputConfigPath,
+
+    [string]$StatusPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
+$script:TrailerDiagnosticStage = 1
+
+function Write-TrailerDiagnostic {
+    param(
+        [Parameter(Mandatory = $true)]
+        [byte]$Result
+    )
+
+    if ([string]::IsNullOrWhiteSpace($StatusPath)) {
+        return
+    }
+
+    try {
+        [System.IO.File]::WriteAllBytes(
+            $StatusPath,
+            [byte[]]@([byte]$script:TrailerDiagnosticStage, $Result)
+        )
+    }
+    catch {
+        # Diagnostics are best-effort and must never change installer behavior.
+    }
+}
+
+Write-TrailerDiagnostic -Result 255
+
 if (-not (Test-Path $ExecutablePath)) {
+    Write-TrailerDiagnostic -Result 1
     Write-Error "Executable not found: $ExecutablePath"
     exit 10
 }
@@ -29,19 +57,25 @@ $offlineModule = $offlineModuleCandidates |
     Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
     Select-Object -First 1
 if (-not $offlineModule) {
+    Write-TrailerDiagnostic -Result 1
     throw 'Offline validation module not found beside trailer reader'
 }
 
 $offlineModuleRoot = Split-Path -Parent $offlineModule
 $capabilityStorage = Join-Path (Join-Path (Split-Path -Parent $offlineModuleRoot) 'internal') 'CapabilityStorage.ps1'
 if (-not (Test-Path -LiteralPath $capabilityStorage -PathType Leaf)) {
+    Write-TrailerDiagnostic -Result 1
     throw 'Capability storage module not found beside offline validation module'
 }
 
 . $capabilityStorage
 . $offlineModule
+$script:TrailerDiagnosticStage = 2
+Write-TrailerDiagnostic -Result 255
 
 try {
+    $script:TrailerDiagnosticStage = 3
+    Write-TrailerDiagnostic -Result 255
     $fileStream = [System.IO.File]::OpenRead($ExecutablePath)
     try {
         $length = $fileStream.Length
@@ -118,7 +152,10 @@ try {
     if ($expectedSha256 -ne $actualHex) {
         throw 'Trailer payload SHA-256 mismatch'
     }
+    Write-TrailerDiagnostic -Result 0
 
+    $script:TrailerDiagnosticStage = 4
+    Write-TrailerDiagnostic -Result 255
     $configText = [System.Text.Encoding]::UTF8.GetString($payload)
     try {
         $config = $configText | ConvertFrom-Json -ErrorAction Stop
@@ -129,6 +166,7 @@ try {
 
     $classroomProperty = $config.PSObject.Properties['classroomId']
     if ($classroomProperty -and [string]$classroomProperty.Value -eq 'template-placeholder') {
+        Write-TrailerDiagnostic -Result 1
         Write-Error 'This is the uncustomized template; generate a classroom installer before installing.'
         exit 10
     }
@@ -141,11 +179,14 @@ try {
     }
     [System.IO.File]::WriteAllText($OutputConfigPath, $configText, (New-Object System.Text.UTF8Encoding($false)))
     Set-OpenPathCapabilityStorageAcl -Path $OutputConfigPath -Profile RestrictedRoot
+    $script:TrailerDiagnosticStage = 5
+    Write-TrailerDiagnostic -Result 0
 
     Write-Host "Offline configuration extracted for classroom $($validated.ClassroomId)"
     exit 0
 }
 catch {
+    Write-TrailerDiagnostic -Result 1
     Write-Error "Invalid offline installer trailer: $_"
     exit 10
 }

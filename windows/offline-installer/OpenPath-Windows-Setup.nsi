@@ -63,6 +63,7 @@ Function .onInit
     ; evidence lane. Delete a marker left by an earlier failed attempt before
     ; this run starts so stale diagnostics cannot be mistaken for progress.
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-status.txt"
+    Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"
 FunctionEnd
 
 Function NormalizeOfflineStatusByte
@@ -118,7 +119,7 @@ Section "ReadTrailer" SEC00
     ; Validate the versioned trailer before extracting anything. A template
     ; that was never customized carries a placeholder slot and aborts here.
     ClearErrors
-    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json"' $0
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json" -StatusPath "$TEMP\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"' $0
     IfErrors trailer_exec_error
     ; Branch before calling the evidence helper so the child result controls
     ; the installer outcome rather than a diagnostic write.
