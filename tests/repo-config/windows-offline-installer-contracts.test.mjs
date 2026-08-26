@@ -513,7 +513,18 @@ test('Windows release evidence executes the personalized NSIS executable and its
   const trailerEvidenceOffset = readTrailerSection.indexOf(
     'Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"'
   );
+  const trailerExecOffset = readTrailerSection.indexOf(
+    'ExecWait \'"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"'
+  );
+  const trailerOutputCleanupOffset = readTrailerSection.indexOf(
+    'Delete "$INSTDIR\\offline-config.json"'
+  );
   assert.ok(trailerResultOffset >= 0, 'NSIS must capture the trailer reader result');
+  assert.ok(trailerExecOffset >= 0, 'NSIS must invoke the canonical trailer reader');
+  assert.ok(
+    trailerOutputCleanupOffset >= 0 && trailerOutputCleanupOffset < trailerExecOffset,
+    'NSIS must remove stale trailer output before invoking the reader'
+  );
   assert.ok(trailerBranchOffset > trailerResultOffset, 'NSIS must branch on the trailer result');
   assert.ok(
     trailerEvidenceOffset > trailerBranchOffset,

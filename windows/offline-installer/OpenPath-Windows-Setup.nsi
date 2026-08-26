@@ -130,14 +130,14 @@ Section "ReadTrailer" SEC00
 
     ; Validate the versioned trailer before extracting anything. A template
     ; that was never customized carries a placeholder slot and aborts here.
+    ; Remove stale output before invoking the reader. A successful reader
+    ; commits its validated configuration by creating this file.
+    Delete "$INSTDIR\offline-config.json"
     ClearErrors
     ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$INSTDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json" -StatusPath "$TEMP\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"' $0
     IfErrors trailer_exec_error
     ; Branch before any evidence publication so the child result controls the
     ; installer outcome rather than a diagnostic copy operation.
-    ; The extracted root is unique, but remove the output explicitly so a
-    ; partial child cannot make a later retry look successful.
-    Delete "$INSTDIR\offline-config.json"
     ; ExecWait exposes the child result through a user variable. Reject the
     ; documented launch-error sentinel, then require the canonical reader's
     ; output file. That file is written only after trailer, payload, and JSON
