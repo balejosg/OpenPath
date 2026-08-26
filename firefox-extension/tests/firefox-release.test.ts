@@ -103,10 +103,12 @@ interface SignFirefoxReleaseModule {
     deadlineMs?: number;
   };
   resolveAmoSigningFailureState: (status: number | null | undefined) => string;
+  resolveNpxCommand: (platform?: NodeJS.Platform) => string;
   runWebExtSignWithRetry: (options: {
     args: string[];
     cwd: string;
     env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
     spawnSyncImpl?: (
       command: string,
       args: string[],
@@ -272,6 +274,7 @@ const {
   resolveAmoRecoveryTiming,
   resolveWebExtSignTiming,
   resolveAmoSigningFailureState,
+  resolveNpxCommand,
   runWebExtSignWithRetry,
   waitForAmoSignedXpi,
   writeAmoSigningStateArtifact,
@@ -1500,6 +1503,34 @@ void describe('Firefox release signing helpers', () => {
     assert.equal(resolveAmoSigningFailureState(124), 'timeout');
     assert.equal(resolveAmoSigningFailureState(1), 'hard-failure');
     assert.equal(resolveAmoSigningFailureState(null), 'hard-failure');
+  });
+
+  void test('AMO signing resolves the Windows npx command shim', () => {
+    assert.equal(resolveNpxCommand('win32'), 'npx.cmd');
+    assert.equal(resolveNpxCommand('linux'), 'npx');
+  });
+
+  void test('runWebExtSignWithRetry invokes npx.cmd on Windows runners', () => {
+    const commands: string[] = [];
+    const result = runWebExtSignWithRetry({
+      args: ['--yes', '--no-install', 'web-ext', 'sign'],
+      cwd: extensionRoot,
+      platform: 'win32',
+      spawnSyncImpl: (command) => {
+        commands.push(command);
+        return {
+          status: 0,
+          signal: null,
+          output: [],
+          pid: 123,
+          stdout: '',
+          stderr: '',
+        };
+      },
+    });
+
+    assert.equal(result.status, 0);
+    assert.deepEqual(commands, ['npx.cmd']);
   });
 
   void test('runWebExtSignWithRetry waits and retries AMO throttling responses', () => {

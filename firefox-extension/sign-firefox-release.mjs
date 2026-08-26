@@ -482,11 +482,16 @@ function readVersionFromSignArgs(args) {
   }
 }
 
+export function resolveNpxCommand(platform = process.platform) {
+  return platform === 'win32' ? 'npx.cmd' : 'npx';
+}
+
 export function runWebExtSignWithRetry(options) {
   const {
     args,
     cwd,
     env = process.env,
+    platform = process.platform,
     spawnSyncImpl = spawnSync,
     sleepSyncImpl = sleepSync,
     nowImpl = Date.now,
@@ -507,6 +512,7 @@ export function runWebExtSignWithRetry(options) {
     env.WEB_EXT_SIGN_MAX_THROTTLE_WAIT_SECONDS,
     defaultWebExtSignMaxThrottleWaitSeconds
   );
+  const npxCommand = resolveNpxCommand(platform);
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     const remainingTotalMs = deadlineMs === undefined ? undefined : deadlineMs - nowImpl();
@@ -522,7 +528,7 @@ export function runWebExtSignWithRetry(options) {
       remainingTotalMs === undefined || processTimeoutMs === undefined
         ? processTimeoutMs
         : Math.min(processTimeoutMs, remainingTotalMs);
-    const result = spawnSyncImpl('npx', args, {
+    const result = spawnSyncImpl(npxCommand, args, {
       cwd,
       encoding: 'utf8',
       timeout: attemptTimeoutMs,
