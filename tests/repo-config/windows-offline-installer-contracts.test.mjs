@@ -78,7 +78,21 @@ test('offline payload manifest validation fails closed on missing or mismatched 
   const offlineModule = readText('windows/lib/install/Installer.Offline.ps1');
   const manifestCheck = extractFunctionBody(offlineModule, 'Assert-OpenPathOfflinePayloadManifest');
 
-  assert.match(manifestCheck, /Get-FileHash/, 'manifest validation must hash staged payloads');
+  assert.match(
+    offlineModule,
+    /function Get-OpenPathOfflinePayloadSha256\b/,
+    'manifest validation must expose a dedicated payload hash provider'
+  );
+  assert.match(
+    manifestCheck,
+    /Get-OpenPathOfflinePayloadSha256/,
+    'manifest validation must hash staged payloads through the provider'
+  );
+  assert.match(
+    offlineModule,
+    /\[System\.IO\.File\]::OpenRead\(\$Path\)/,
+    'payload hash provider must use a literal .NET file stream'
+  );
   assert.match(
     offlineModule,
     /Assert-OpenPathOfflinePayloadManifest/,
