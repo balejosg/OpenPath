@@ -68,10 +68,12 @@ Describe "Offline installer" {
     }
 
     Context "Assert-OpenPathOfflinePayloadManifest" {
-        It "uses the Windows PowerShell-compatible hash parameter" {
+        It "uses a Windows PowerShell-independent literal hash provider" {
             $offlineModule = Get-Content (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Offline.ps1") -Raw
 
-            $offlineModule | Should -Match 'Get-FileHash -Path \$stagedPath'
+            $offlineModule | Should -Match 'function Get-OpenPathOfflinePayloadSha256'
+            $offlineModule | Should -Match '\[System\.IO\.File\]::OpenRead\(\$Path\)'
+            $offlineModule | Should -Not -Match 'Get-FileHash -Path \$stagedPath'
         }
 
         It "Verifies every required payload by size and sha256 without network access" {
@@ -131,10 +133,30 @@ Describe "Offline installer" {
                 )
             } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
-            Mock Get-FileHash { throw 'simulated hash IO failure' }
+            Mock Get-OpenPathOfflinePayloadSha256 { throw 'simulated hash IO failure' }
 
             { Assert-OpenPathOfflinePayloadManifest -ManifestPath $manifestPath -StagingRoot $stagingRoot } |
                 Should -Throw -ExpectedMessage '*hash-io-pinned-other*'
+        }
+
+        It "does not depend on Get-FileHash being auto-loaded by Windows PowerShell" {
+            $stagingRoot = Join-Path $script:OfflineTestRoot 'staging-hash-provider'
+            New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'payloads') -Force | Out-Null
+            $payloadPath = Join-Path $stagingRoot 'payloads\provider.bin'
+            'provider' | Set-Content -LiteralPath $payloadPath -Encoding UTF8
+            $hash = (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $size = (Get-Item -LiteralPath $payloadPath).Length
+            $manifestPath = Join-Path $stagingRoot 'payload-manifest.json'
+            @{
+                payloads = @(
+                    @{ path = 'payloads/provider.bin'; origin = 'repo:windows'; sha256 = $hash; size = $size }
+                )
+            } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+
+            Mock Get-FileHash { throw "The term 'Get-FileHash' is not recognized as the name of a cmdlet" }
+
+            { Assert-OpenPathOfflinePayloadManifest -ManifestPath $manifestPath -StagingRoot $stagingRoot } |
+                Should -Not -Throw
         }
 
         It "Classifies only genuine missing-command errors as command failures" {

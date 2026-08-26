@@ -308,6 +308,33 @@ function Get-OpenPathOfflinePayloadIoFailureClass {
     return 'other'
 }
 
+function Get-OpenPathOfflinePayloadSha256 {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    # Use the .NET stream API so the Windows PowerShell 5.1 launcher does not
+    # depend on the optional Get-FileHash command being auto-loaded.
+    $stream = $null
+    $algorithm = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        $algorithm = [System.Security.Cryptography.SHA256]::Create()
+        $digest = $algorithm.ComputeHash($stream)
+        return ([System.BitConverter]::ToString($digest).Replace('-', '')).ToLowerInvariant()
+    }
+    finally {
+        if ($algorithm) {
+            $algorithm.Dispose()
+        }
+        if ($stream) {
+            $stream.Dispose()
+        }
+    }
+}
+
 function Get-OpenPathOfflinePayloadIoFailureCategory {
     param(
         [Parameter(Mandatory = $true)]
@@ -391,11 +418,7 @@ function Assert-OpenPathOfflinePayloadManifest {
         $expectedSha256 = [string]$entry.sha256
         if (-not [string]::IsNullOrWhiteSpace($expectedSha256)) {
             try {
-                # Windows PowerShell 5.1 (the shell launched by NSIS) exposes
-                # Get-FileHash through -Path. The manifest paths are generated
-                # from the package inventory and are already validated as
-                # staged leaf files above.
-                $actualSha256 = (Get-FileHash -Path $stagedPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+                $actualSha256 = Get-OpenPathOfflinePayloadSha256 -Path $stagedPath
             }
             catch {
                 $failures += "could not hash payload: $relativePath"
