@@ -30,6 +30,14 @@ else {
         $candidates += $resolvedCommand.Source
     }
 
+    # The Chocolatey NSIS package installs the compiler in the standard
+    # Program Files (x86) location on Windows. The package shim above is not
+    # the compiler itself and must not be the only path we inspect.
+    $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+    if ($programFilesX86) {
+        $candidates += (Join-Path $programFilesX86 'NSIS\makensis.exe')
+    }
+
     # Chocolatey installs a shim into its bin directory; prefer the real
     # compiler binaries inside the package layout over hashed shims.
     $chocoRoot = if ($env:ChocolateyInstall) { $env:ChocolateyInstall } else { "$env:ProgramData\chocolatey" }

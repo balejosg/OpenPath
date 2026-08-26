@@ -222,6 +222,15 @@ test('offline installer build helpers enforce trailer format, payload inventory,
   const verifyScript = readText('windows/offline-installer/scripts/verify-nsis.ps1');
   assert.match(verifyScript, /Get-FileHash/);
   assert.match(verifyScript, /exit 1/, 'verify-nsis.ps1 must exit non-zero on hash mismatch');
+  assert.match(
+    verifyScript,
+    /GetEnvironmentVariable\('ProgramFiles\(x86\)'\)/,
+    'verify-nsis.ps1 must inspect the standard Program Files (x86) environment location'
+  );
+  assert.ok(
+    verifyScript.includes("Join-Path $programFilesX86 'NSIS\\makensis.exe'"),
+    'verify-nsis.ps1 must inspect the standard Chocolatey NSIS installation path'
+  );
 
   const appendScript = readText('windows/offline-installer/scripts/append-trailer-placeholder.mjs');
   assert.match(
