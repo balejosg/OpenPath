@@ -479,7 +479,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     nsiSource,
-    /File "\/oname=scripts\\Read-Trailer\.ps1" "\$\{REPO_ROOT\}\\windows\\offline-installer\\scripts\\Read-Trailer\.ps1"/,
+    /SetOutPath "\$INSTDIR\\scripts"[\s\S]*File "\/oname=Read-Trailer\.ps1" "\$\{REPO_ROOT\}\\windows\\offline-installer\\scripts\\Read-Trailer\.ps1"/,
     'NSIS must load its trailer reader from an explicit repository path'
   );
   assert.match(

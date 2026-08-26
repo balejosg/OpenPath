@@ -122,8 +122,8 @@ Section "ReadTrailer" SEC00
     File "/oname=CapabilityStorage.ps1" "${REPO_ROOT}\windows\lib\internal\CapabilityStorage.ps1"
     SetOutPath "$INSTDIR\lib\install"
     File "/oname=Installer.Offline.ps1" "${REPO_ROOT}\windows\lib\install\Installer.Offline.ps1"
-    SetOutPath "$INSTDIR"
-    File "/oname=scripts\Read-Trailer.ps1" "${REPO_ROOT}\windows\offline-installer\scripts\Read-Trailer.ps1"
+    SetOutPath "$INSTDIR\scripts"
+    File "/oname=Read-Trailer.ps1" "${REPO_ROOT}\windows\offline-installer\scripts\Read-Trailer.ps1"
 
     ; Windows may deny a second reader while the running installer image is
     ; held open. Validate an exact byte-for-byte temporary copy of this same
