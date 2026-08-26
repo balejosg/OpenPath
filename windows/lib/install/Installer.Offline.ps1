@@ -247,11 +247,47 @@ function Throw-OpenPathOfflinePayloadVerificationFailure {
         [string]$Message,
 
         [Parameter(Mandatory = $true)]
-        [ValidateSet('manifest', 'entry', 'missing', 'sha256', 'size', 'hash-io', 'size-io', 'io', 'failed')]
+        [ValidatePattern('^(manifest|entry|missing|sha256|size|hash-io|size-io|io|failed)(-(repo|windows|runtime|extension|pinned|unknown))?$')]
         [string]$Category
     )
 
     throw "Offline payload verification failed [$Category]:`n$Message"
+}
+
+function Get-OpenPathOfflinePayloadSourceClass {
+    param(
+        [AllowNull()]
+        [object]$Entry
+    )
+
+    $origin = if ($Entry -and $Entry.PSObject.Properties['origin']) {
+        [string]$Entry.origin
+    }
+    else {
+        ''
+    }
+
+    switch -Regex ($origin) {
+        '^repo:windows$' { return 'windows' }
+        '^repo:runtime$' { return 'runtime' }
+        '^repo$' { return 'repo' }
+        '^build$' { return 'extension' }
+        '^pinned:' { return 'pinned' }
+        default { return 'unknown' }
+    }
+}
+
+function Get-OpenPathOfflinePayloadFailureCategory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('hash-io', 'size-io')]
+        [string]$Category,
+
+        [AllowNull()]
+        [object]$Entry
+    )
+
+    return "$Category-$(Get-OpenPathOfflinePayloadSourceClass -Entry $Entry)"
 }
 
 function Assert-OpenPathOfflinePayloadManifest {
@@ -325,7 +361,9 @@ function Assert-OpenPathOfflinePayloadManifest {
             }
             catch {
                 $failures += "could not hash payload: $relativePath"
-                $failureCategories += 'hash-io'
+                $failureCategories += Get-OpenPathOfflinePayloadFailureCategory `
+                    -Category 'hash-io' `
+                    -Entry $entry
                 continue
             }
             if ($actualSha256 -ne $expectedSha256.ToLowerInvariant()) {
@@ -342,7 +380,9 @@ function Assert-OpenPathOfflinePayloadManifest {
             }
             catch {
                 $failures += "could not read payload size: $relativePath"
-                $failureCategories += 'size-io'
+                $failureCategories += Get-OpenPathOfflinePayloadFailureCategory `
+                    -Category 'size-io' `
+                    -Entry $entry
                 continue
             }
             if ([long]$actualSize -ne [long]$expectedSize) {
@@ -353,7 +393,29 @@ function Assert-OpenPathOfflinePayloadManifest {
     }
 
     if ($failures.Count -gt 0) {
-        $category = @('missing', 'sha256', 'size', 'hash-io', 'size-io', 'entry', 'io', 'manifest', 'failed') |
+        $category = @(
+                'missing',
+                'sha256',
+                'size',
+                'hash-io-repo',
+                'hash-io-windows',
+                'hash-io-runtime',
+                'hash-io-extension',
+                'hash-io-pinned',
+                'hash-io-unknown',
+                'size-io-repo',
+                'size-io-windows',
+                'size-io-runtime',
+                'size-io-extension',
+                'size-io-pinned',
+                'size-io-unknown',
+                'hash-io',
+                'size-io',
+                'entry',
+                'io',
+                'manifest',
+                'failed'
+            ) |
             Where-Object { $failureCategories -contains $_ } |
             Select-Object -First 1
         if (-not $category) {

@@ -108,6 +108,28 @@ Describe "Offline installer" {
             { Assert-OpenPathOfflinePayloadManifest -ManifestPath $manifestPath -StagingRoot $stagingRoot } |
                 Should -Throw -ExpectedMessage '*Offline payload verification failed*'
         }
+
+        It "Keeps payload hash IO diagnostics bounded to the payload source class" {
+            $stagingRoot = Join-Path $script:OfflineTestRoot 'staging-hash-io'
+            New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'payloads') -Force | Out-Null
+            $payloadPath = Join-Path $stagingRoot 'payloads\pinned.bin'
+            'pinned' | Set-Content -LiteralPath $payloadPath -Encoding UTF8
+            $manifestPath = Join-Path $stagingRoot 'payload-manifest.json'
+            @{
+                payloads = @(
+                    @{
+                        path = 'payloads/pinned.bin'
+                        origin = 'pinned:firefox'
+                        sha256 = ('0' * 64)
+                    }
+                )
+            } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+
+            Mock Get-FileHash { throw 'simulated hash IO failure' }
+
+            { Assert-OpenPathOfflinePayloadManifest -ManifestPath $manifestPath -StagingRoot $stagingRoot } |
+                Should -Throw -ExpectedMessage '*hash-io-pinned*'
+        }
     }
 
     Context "Install-AcrylicDNSFromLocalSource" {
