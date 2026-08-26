@@ -607,6 +607,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
 
 test('real NSIS failures expose only a bounded installer phase for diagnosis', () => {
   const installer = readText('windows/Install-OpenPath.ps1');
+  const offlineModule = readText('windows/lib/install/Installer.Offline.ps1');
   const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
 
   assert.match(
@@ -631,13 +632,18 @@ test('real NSIS failures expose only a bounded installer phase for diagnosis', (
   );
   assert.match(
     installer,
-    /function Set-OpenPathOfflinePayloadFailurePhase[\s\S]*'missing'[\s\S]*'sha256'[\s\S]*'size'[\s\S]*offline-payload-verification-\$suffix/,
+    /function Set-OpenPathOfflinePayloadFailurePhase[\s\S]*\$Matches\[1\][\s\S]*offline-payload-verification-\$suffix/,
     'payload failures should expose only a bounded verification category for diagnosis'
   );
   assert.match(
     installer,
     /Set-OpenPathOfflinePayloadFailurePhase -ErrorRecord \$_/,
     'payload verification should classify its failure before the phase result is returned'
+  );
+  assert.match(
+    offlineModule,
+    /ValidateSet\('manifest', 'entry', 'missing', 'sha256', 'size', 'io', 'failed'\)[\s\S]*Offline payload verification failed \[\$Category\]/,
+    'payload verification should retain a structured, non-sensitive failure category'
   );
 });
 

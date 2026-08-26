@@ -205,17 +205,8 @@ function Set-OpenPathOfflinePayloadFailurePhase {
         ''
     }
 
-    $suffix = if ($message -match 'missing payload:') {
-        'missing'
-    }
-    elseif ($message -match 'sha256 mismatch') {
-        'sha256'
-    }
-    elseif ($message -match 'size mismatch') {
-        'size'
-    }
-    elseif ($message -match 'Offline payload manifest') {
-        'manifest'
+    $suffix = if ($message -match 'Offline payload verification failed \[(manifest|entry|missing|sha256|size|io|failed)\]') {
+        $Matches[1]
     }
     else {
         'failed'

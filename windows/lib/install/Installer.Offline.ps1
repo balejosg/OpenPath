@@ -241,6 +241,19 @@ function Read-OpenPathOfflineConfig {
     return Read-OpenPathOfflineConfigText -ConfigJson $raw
 }
 
+function Throw-OpenPathOfflinePayloadVerificationFailure {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('manifest', 'entry', 'missing', 'sha256', 'size', 'io', 'failed')]
+        [string]$Category
+    )
+
+    throw "Offline payload verification failed [$Category]:`n$Message"
+}
+
 function Assert-OpenPathOfflinePayloadManifest {
     <#
     .SYNOPSIS
@@ -262,8 +275,10 @@ function Assert-OpenPathOfflinePayloadManifest {
         [string]$StagingRoot
     )
 
-    if (-not (Test-Path $ManifestPath)) {
-        throw "Offline payload manifest not found: $ManifestPath"
+    if (-not (Test-Path $ManifestPath -PathType Leaf)) {
+        Throw-OpenPathOfflinePayloadVerificationFailure `
+            -Category 'manifest' `
+            -Message "Offline payload manifest not found: $ManifestPath"
     }
 
     $manifest = $null
@@ -271,7 +286,9 @@ function Assert-OpenPathOfflinePayloadManifest {
         $manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
     }
     catch {
-        throw "Offline payload manifest is not valid JSON: $_"
+        Throw-OpenPathOfflinePayloadVerificationFailure `
+            -Category 'manifest' `
+            -Message "Offline payload manifest is not valid JSON: $_"
     }
 
     $entries = $manifest
@@ -279,43 +296,72 @@ function Assert-OpenPathOfflinePayloadManifest {
         $entries = $manifest.payloads
     }
     if ($entries -isnot [System.Array]) {
-        throw 'Offline payload manifest must contain a payloads array'
+        Throw-OpenPathOfflinePayloadVerificationFailure `
+            -Category 'manifest' `
+            -Message 'Offline payload manifest must contain a payloads array'
     }
 
     $failures = @()
+    $failureCategories = @()
     foreach ($entry in @($entries)) {
         $relativePath = [string]$entry.path
         if ([string]::IsNullOrWhiteSpace($relativePath)) {
             $failures += 'manifest entry without a path'
+            $failureCategories += 'entry'
             continue
         }
 
         $stagedPath = Join-Path $StagingRoot $relativePath
-        if (-not (Test-Path $stagedPath)) {
+        if (-not (Test-Path $stagedPath -PathType Leaf)) {
             $failures += "missing payload: $relativePath"
+            $failureCategories += 'missing'
             continue
         }
 
         $expectedSha256 = [string]$entry.sha256
         if (-not [string]::IsNullOrWhiteSpace($expectedSha256)) {
-            $actualSha256 = (Get-FileHash -LiteralPath $stagedPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+            try {
+                $actualSha256 = (Get-FileHash -LiteralPath $stagedPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+            }
+            catch {
+                $failures += "could not hash payload: $relativePath"
+                $failureCategories += 'io'
+                continue
+            }
             if ($actualSha256 -ne $expectedSha256.ToLowerInvariant()) {
                 $failures += "sha256 mismatch for ${relativePath}: expected $expectedSha256 got $actualSha256"
+                $failureCategories += 'sha256'
                 continue
             }
         }
 
         $expectedSize = $entry.size
         if ($null -ne $expectedSize) {
-            $actualSize = (Get-Item -LiteralPath $stagedPath -ErrorAction Stop).Length
+            try {
+                $actualSize = (Get-Item -LiteralPath $stagedPath -ErrorAction Stop).Length
+            }
+            catch {
+                $failures += "could not read payload size: $relativePath"
+                $failureCategories += 'io'
+                continue
+            }
             if ([long]$actualSize -ne [long]$expectedSize) {
                 $failures += "size mismatch for ${relativePath}: expected $expectedSize got $actualSize"
+                $failureCategories += 'size'
             }
         }
     }
 
     if ($failures.Count -gt 0) {
-        throw ("Offline payload verification failed:`n" + ($failures -join "`n"))
+        $category = @('missing', 'sha256', 'size', 'entry', 'io', 'manifest', 'failed') |
+            Where-Object { $failureCategories -contains $_ } |
+            Select-Object -First 1
+        if (-not $category) {
+            $category = 'failed'
+        }
+        Throw-OpenPathOfflinePayloadVerificationFailure `
+            -Category $category `
+            -Message ($failures -join "`n")
     }
 }
 
