@@ -218,6 +218,7 @@ Section "ExtractAndVerify" SEC01
     ; The build directory contains inputs and outputs for this compilation and
     ; must never be copied into the installer payload.
     SetOutPath "$INSTDIR"
+    File "/oname=Install-OpenPath.ps1" "${REPO_ROOT}\windows\Install-OpenPath.ps1"
     File /r /x "offline-installer\build" "${REPO_ROOT}\windows\*.*"
     File /oname=VERSION "${REPO_ROOT}\VERSION"
     File /oname=payload-manifest.json "${PAYLOAD_MANIFEST}"

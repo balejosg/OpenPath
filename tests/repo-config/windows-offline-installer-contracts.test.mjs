@@ -312,6 +312,11 @@ test('NSIS extracts offline manifest and payloads under the installer root', () 
   const acrylicFile = nsiSource.indexOf('File /oname=Acrylic-Portable.zip');
 
   assert.ok(rootOutput >= 0, 'NSIS must establish the installer root output path');
+  assert.match(
+    nsiSource,
+    /SetOutPath "\$INSTDIR"[\s\S]*File "\/oname=Install-OpenPath\.ps1" "\$\{REPO_ROOT\}\\windows\\Install-OpenPath\.ps1"/,
+    'NSIS must materialize the offline entrypoint explicitly at the installer root'
+  );
   assert.ok(runtimeOutput > rootOutput, 'NSIS must switch to the runtime output path explicitly');
   assert.ok(
     payloadOutput > runtimeOutput,
