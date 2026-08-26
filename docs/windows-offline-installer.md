@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: OpenPath API and Windows agent
-> Last verified: 2026-08-25
+> Last verified: 2026-08-26
 > Source of truth: `api/src/services/windows-offline-installer-artifact.service.ts`
 
 OpenPath provides a generic, authenticated way to create a personalized Windows
@@ -67,9 +67,16 @@ Successful responses include `Content-Type: application/octet-stream`, an
 attachment `Content-Disposition` filename, `Cache-Control: no-store`,
 `X-Content-Type-Options: nosniff`, and `Content-Length`. The bounded attempt is
 reserved before opening the file, but the reference is consumed only after the
-complete stream finishes. An interrupted transfer therefore retains its
-remaining retry budget; a complete download is removed from the private
-artifact directory.
+complete stream finishes. An interrupted transfer releases its active-transfer
+slot while retaining the reference's remaining bounded retry budget; the
+interrupted attempt is still counted. Concurrent transfers are allowed when
+they already reserved distinct attempts within that budget. The first complete
+transfer makes the reference consumed (`410` for later requests), while any
+already-active bounded transfers may finish; the last completion removes the
+artifact from the private directory.
+The orphan scan has a five-minute grace period for a file published just before
+its reference row becomes visible; older unreferenced `.exe` files are removed
+on cleanup.
 
 ## Pinned template and storage
 
@@ -104,15 +111,40 @@ readiness check after migrations and before listening; health reports the
 capability as `not_configured`, `ok`, or a safe error code. Readiness never
 provisions or repairs the template and caches a verified hash by file identity.
 
+### Standalone Docker deployment
+
+The supported standalone deployment runs the provisioning job before the API:
+
+```bash
+export PUBLIC_URL=https://openpath.example.test
+export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION=4.1.0
+export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT=<40-lowercase-hex-commit>
+export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256=<64-lowercase-hex-digest>
+export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG=scripts-v4.1.0-<commit-prefix>
+docker compose -f api/docker-compose.yml up
+```
+
+The compose contract uses `/app/var/windows-offline-installer/templates` as the
+shared template root and `/app/var/windows-offline-installer/artifacts` as the
+private artifact root. The one-shot provisioner mounts the template volume
+read-write, provisions and verifies the exact pin, and must complete before the
+API starts. The API mounts the template volume read-only (`:ro`) and the
+artifacts volume read-write with a private runtime-user-only root; both are
+named persistent volumes. `PUBLIC_URL` and all four template pins are required
+by compose so a public deployment cannot
+silently start with an unusable offline-installer action.
+
 ## UI and wrapper integration
 
 The OpenPath SPA exposes `WindowsOfflineInstallerAction` through the public SPA
 surface. The Windows option is first in the enrollment modal. Generation starts
 only after the user clicks the visible download action; the page does not mount
-with an automatic download or persistent `href`. After generation the user can
-click the link to download the `.exe`, see version/hash/expiry metadata, retry a
-failed generation, and use the PowerShell fallback when appropriate. Strings and
-error states are localized in English and Spanish.
+with an automatic download or persistent `href`. Each explicit click generates
+a fresh reference and immediately starts that download through an ephemeral
+anchor; the reference is never left reusable in the DOM. The user can see
+version/hash/expiry metadata, retry a failed generation, and use the PowerShell
+fallback when appropriate. Strings and error states are localized in English
+and Spanish.
 
 ## Canary and Windows evidence
 
@@ -127,10 +159,16 @@ OPENPATH_CANARY_CLASSROOM_ID='<classroom-id>' \
 npm run canary:windows-offline-installer
 ```
 
-For target-platform evidence, run the read-only PowerShell helper on a Windows
-runner with the generated executable. It validates the trailer, classroom ID,
-optional API URL, and file hash; it does not install or modify the machine unless
-`-Install` is explicitly supplied:
+The release workflow also runs the real executable lane on an isolated Windows
+runner. It customizes the template, launches the personalized NSIS executable
+unattended, validates the extracted payload manifest and pending DPAPI state,
+then starts a local HTTPS enrollment fixture and calls the existing retry path.
+This is the evidence required to claim that the generated `.exe` executes; it
+does not introduce a second Windows runtime.
+
+For quick target-platform evidence, the read-only PowerShell helper validates the
+trailer, classroom ID, optional API URL, and file hash. It does not install or
+modify the machine unless `-Install` is explicitly supplied:
 
 ```powershell
 pwsh -NoProfile -File .\tests\e2e\ci\run-windows-offline-installer-canary.ps1 `
@@ -139,6 +177,17 @@ pwsh -NoProfile -File .\tests\e2e\ci\run-windows-offline-installer-canary.ps1 `
   -ExpectedApiUrl 'https://api.example.test'
 ```
 
+The real release lane can be invoked from the repository root after the Windows
+template build has produced a personalized executable:
+
+```powershell
+pwsh -NoProfile -File .\tests\e2e\ci\run-windows-offline-installer-exe.ps1 `
+  -ExecutablePath .\OpenPath-Classroom-Windows-Setup.exe `
+  -ExpectedClassroomId '<classroom-id>' `
+  -ExpectedApiUrl 'https://localhost:18443' `
+  -EvidencePath .\windows-offline-installer-exe-evidence.json
+```
+
 Do not report target-platform evidence from local Linux tests alone. The local
-contract and HTTP tests prove the API lifecycle; a Windows runner is required to
-claim that the generated installer executes on Windows.
+contract and HTTP tests prove the API lifecycle; the release Windows executable
+lane is required to claim that the generated installer executes on Windows.

@@ -7,7 +7,20 @@ import { config } from '../config.js';
 export function getPublicBaseUrl(req: Request): string {
   const configuredBaseUrl = config.publicUrl?.trim();
   if (configuredBaseUrl) {
+    let parsed: URL;
+    try {
+      parsed = new URL(configuredBaseUrl);
+    } catch {
+      throw new Error('PUBLIC_URL must be a valid absolute URL');
+    }
+    if (config.isProduction && parsed.protocol !== 'https:') {
+      throw new Error('PUBLIC_URL must use HTTPS in production');
+    }
     return configuredBaseUrl.replace(/\/+$/, '');
+  }
+
+  if (config.isProduction) {
+    throw new Error('PUBLIC_URL must be configured for public URL generation in production');
   }
 
   return `${req.protocol}://${req.get('host') ?? `${config.host}:${String(config.port)}`}`.replace(

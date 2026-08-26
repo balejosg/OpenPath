@@ -44,4 +44,32 @@ void describe('config loader', () => {
       /positive integer/
     );
   });
+
+  void test('requires a credential-free HTTPS PUBLIC_URL in production when configured', () => {
+    assert.throws(
+      () =>
+        loadConfig({
+          NODE_ENV: 'production',
+          JWT_SECRET: 'config-loader-production-secret',
+          PUBLIC_URL: 'http://internal-container:3000',
+        }),
+      /PUBLIC_URL must use HTTPS/u
+    );
+    assert.throws(
+      () =>
+        loadConfig({
+          NODE_ENV: 'production',
+          JWT_SECRET: 'config-loader-production-secret',
+          PUBLIC_URL: 'https://user:password@openpath.example.test',
+        }),
+      /PUBLIC_URL must contain a hostname and no URL credentials/u
+    );
+
+    const config = loadConfig({
+      NODE_ENV: 'production',
+      JWT_SECRET: 'config-loader-production-secret',
+      PUBLIC_URL: 'https://openpath.example.test/',
+    });
+    assert.equal(config.publicUrl, 'https://openpath.example.test/');
+  });
 });

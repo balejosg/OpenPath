@@ -6,7 +6,8 @@
 ;
 ; Build-time overrides (pass with makensis -DKEY=VALUE):
 ;   REPO_ROOT            repo checkout root (defaults to ..\..)
-;   PAYLOAD_MANIFEST     built payload-manifest.json (defaults to ..\build\)
+;   BUILD_DIR            generated installer output and payload root
+;   PAYLOAD_MANIFEST     built payload-manifest.json (defaults below)
 ;   EXTENSION_BUILD_DIR  firefox-extension build output root
 
 Unicode true
@@ -18,18 +19,21 @@ ManifestDPIAware true
 !ifndef REPO_ROOT
     !define REPO_ROOT "..\.."
 !endif
+!ifndef BUILD_DIR
+    !define BUILD_DIR "${REPO_ROOT}\windows\offline-installer\build"
+!endif
 !ifndef PAYLOAD_MANIFEST
-    !define PAYLOAD_MANIFEST "..\build\payload-manifest.json"
+    !define PAYLOAD_MANIFEST "${BUILD_DIR}\payload-manifest.json"
 !endif
 !ifndef EXTENSION_BUILD_DIR
     !define EXTENSION_BUILD_DIR "${REPO_ROOT}\firefox-extension\build"
 !endif
 !ifndef PAYLOADS_DIR
-    !define PAYLOADS_DIR "..\build\payloads"
+    !define PAYLOADS_DIR "${BUILD_DIR}\payloads"
 !endif
 
 Name "${PRODUCT_NAME}"
-OutFile "..\build\OpenPath-Windows-Setup.exe"
+OutFile "${BUILD_DIR}\OpenPath-Windows-Setup.exe"
 InstallDir "$TEMP\OpenPathOfflineSetup"
 SetCompressor /SOLID lzma
 RequestExecutionLevel admin
@@ -47,8 +51,14 @@ Page InstFiles
 ShowInstDetails show
 
 Section "ReadTrailer" SEC00
+    ; The trailer reader runs before the complete package is extracted. Stage
+    ; only its two local validation dependencies in the temporary root first.
+    SetOutPath "$INSTDIR\lib\internal"
+    File "/oname=CapabilityStorage.ps1" "${REPO_ROOT}\windows\lib\internal\CapabilityStorage.ps1"
+    SetOutPath "$INSTDIR\lib\install"
+    File "/oname=Installer.Offline.ps1" "${REPO_ROOT}\windows\lib\install\Installer.Offline.ps1"
     SetOutPath "$INSTDIR"
-    File "/oname=scripts\Read-Trailer.ps1" "scripts\Read-Trailer.ps1"
+    File "/oname=scripts\Read-Trailer.ps1" "${REPO_ROOT}\windows\offline-installer\scripts\Read-Trailer.ps1"
 
     ; Validate the versioned trailer before extracting anything. A template
     ; that was never customized carries a placeholder slot and aborts here.
@@ -61,14 +71,26 @@ Section "ReadTrailer" SEC00
 SectionEnd
 
 Section "ExtractAndVerify" SEC01
-    File /r "${REPO_ROOT}\windows\*.*"
-    File /r "${REPO_ROOT}\runtime\*.*"
+    ; Keep the extracted package layout aligned with the offline manifest:
+    ; Windows sources are rooted at $INSTDIR, runtime assets under runtime\,
+    ; and extension release artifacts under their own named directories.
+    ; The build directory contains inputs and outputs for this compilation and
+    ; must never be copied into the installer payload.
+    SetOutPath "$INSTDIR"
+    File /r /x "offline-installer\build" "${REPO_ROOT}\windows\*.*"
     File /oname=VERSION "${REPO_ROOT}\VERSION"
     File /oname=payload-manifest.json "${PAYLOAD_MANIFEST}"
-    File /oname=payloads\acrylic\Acrylic-Portable.zip "${PAYLOADS_DIR}\acrylic\Acrylic-Portable.zip"
-    File /oname=payloads\firefox-esr\Firefox-Setup-esr.exe "${PAYLOADS_DIR}\firefox-esr\Firefox-Setup-esr.exe"
+    SetOutPath "$INSTDIR\runtime"
+    File /r "${REPO_ROOT}\runtime\*.*"
+    SetOutPath "$INSTDIR\payloads\acrylic"
+    File /oname=Acrylic-Portable.zip "${PAYLOADS_DIR}\acrylic\Acrylic-Portable.zip"
+    SetOutPath "$INSTDIR\payloads\firefox-esr"
+    File /oname=Firefox-Setup-esr.exe "${PAYLOADS_DIR}\firefox-esr\Firefox-Setup-esr.exe"
+    SetOutPath "$INSTDIR\firefox-release"
     File /nonfatal /a /r "${EXTENSION_BUILD_DIR}\firefox-release\*.*"
+    SetOutPath "$INSTDIR\chromium-managed"
     File /nonfatal /a /r "${EXTENSION_BUILD_DIR}\chromium-managed\*.*"
+    SetOutPath "$INSTDIR"
 SectionEnd
 
 Section "RunInstaller" SEC02

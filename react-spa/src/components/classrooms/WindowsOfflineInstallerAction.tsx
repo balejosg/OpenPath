@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import { useT } from '../../i18n/product-i18n';
 import { trpc } from '../../lib/trpc';
@@ -30,36 +30,54 @@ export default function WindowsOfflineInstallerAction({ classroomId }: Props): R
   const [progress, setProgress] = useState<Progress>('idle');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<InstallerMetadata | null>(null);
-  const [downloadHref, setDownloadHref] = useState<string | undefined>();
+  const generationSequence = useRef(0);
 
   useEffect(() => {
+    generationSequence.current += 1;
     setProgress('idle');
     setError(null);
     setResult(null);
-    setDownloadHref(undefined);
   }, [classroomId]);
 
   const generateInstaller = (): void => {
+    if (progress === 'generating') return;
+
+    const requestSequence = generationSequence.current + 1;
+    generationSequence.current = requestSequence;
     setError(null);
     setResult(null);
-    setDownloadHref(undefined);
     setProgress('generating');
 
     void trpc.windowsOfflineInstaller.generate
       .mutate({ classroomId })
       .then((nextResult: InstallerResult) => {
+        if (generationSequence.current !== requestSequence) return;
+
         setResult({
           fileName: nextResult.fileName,
           version: nextResult.version,
           sha256: nextResult.sha256,
           tokenExpiresAt: nextResult.tokenExpiresAt,
         });
-        setDownloadHref(nextResult.downloadUrl);
         setProgress('ready');
+
+        const downloadAnchor = document.createElement('a');
+        downloadAnchor.href = nextResult.downloadUrl;
+        downloadAnchor.download = nextResult.fileName;
+        downloadAnchor.rel = 'noreferrer';
+        downloadAnchor.style.display = 'none';
+        document.body.append(downloadAnchor);
+        try {
+          downloadAnchor.click();
+        } finally {
+          downloadAnchor.removeAttribute('href');
+          downloadAnchor.remove();
+        }
       })
       .catch(() => {
+        if (generationSequence.current !== requestSequence) return;
+
         setResult(null);
-        setDownloadHref(undefined);
         setError(t('enroll.modal.windowsInstaller.error'));
         setProgress('error');
       });
@@ -73,7 +91,6 @@ export default function WindowsOfflineInstallerAction({ classroomId }: Props): R
       : t('enroll.modal.windowsInstaller.linkAction');
 
   const handleDownloadClick = (event: React.MouseEvent<HTMLAnchorElement>): void => {
-    if (downloadHref) return;
     event.preventDefault();
     if (isGenerating) return;
     generateInstaller();
@@ -88,8 +105,6 @@ export default function WindowsOfflineInstallerAction({ classroomId }: Props): R
   return (
     <div className="flex flex-col items-end gap-1" data-testid="windows-offline-installer-action">
       <a
-        href={downloadHref}
-        download={result?.fileName}
         role="link"
         aria-disabled={isGenerating ? 'true' : undefined}
         tabIndex={isGenerating ? -1 : 0}
@@ -114,25 +129,16 @@ export default function WindowsOfflineInstallerAction({ classroomId }: Props): R
         </span>
       ) : null}
       {result ? (
-        <>
-          <span
-            className="max-w-md text-right text-[11px] text-slate-500"
-            data-testid="windows-offline-installer-metadata"
-          >
-            {t('enroll.modal.windowsInstaller.metadata', {
-              version: result.version,
-              sha256: result.sha256.slice(0, 12),
-              expiresAt: result.tokenExpiresAt,
-            })}
-          </span>
-          <button
-            type="button"
-            onClick={generateInstaller}
-            className="text-[11px] text-slate-500 underline underline-offset-2 hover:text-slate-700"
-          >
-            {t('enroll.modal.windowsInstaller.regenerateAction')}
-          </button>
-        </>
+        <span
+          className="max-w-md text-right text-[11px] text-slate-500"
+          data-testid="windows-offline-installer-metadata"
+        >
+          {t('enroll.modal.windowsInstaller.metadata', {
+            version: result.version,
+            sha256: result.sha256.slice(0, 12),
+            expiresAt: result.tokenExpiresAt,
+          })}
+        </span>
       ) : null}
     </div>
   );

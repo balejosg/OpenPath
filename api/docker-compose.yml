@@ -2,10 +2,10 @@
 # For local development and simple deployments
 #
 # Usage:
-#   docker compose up        # Start the API
-#   docker compose up -d     # Start in background
-#   docker compose logs -f   # View logs
-#   docker compose down      # Stop and remove containers
+#   docker compose -f api/docker-compose.yml up        # Provision, then start the API
+#   docker compose -f api/docker-compose.yml up -d     # Start in background
+#   docker compose -f api/docker-compose.yml logs -f   # View logs
+#   docker compose -f api/docker-compose.yml down      # Stop and remove containers
 
 version: '3.8'
 
@@ -28,6 +28,30 @@ services:
       timeout: 5s
       retries: 5
 
+  windows-offline-installer-provision:
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+    container_name: openpath-windows-offline-installer-provision
+    restart: 'no'
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - OPENPATH_WINDOWS_OFFLINE_TEMPLATE_DIR=/app/var/windows-offline-installer/templates
+      - OPENPATH_WINDOWS_OFFLINE_ARTIFACTS_DIR=/app/var/windows-offline-installer/artifacts
+      - OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION=${OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION:?OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION is required}
+      - OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT=${OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT:?OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT is required}
+      - OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256=${OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256:?OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256 is required}
+      - OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG=${OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG:?OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG is required}
+      - OPENPATH_GITHUB_REPO=${OPENPATH_GITHUB_REPO:-balejosg/openpath}
+    command:
+      - sh
+      - -ec
+      - |
+        node dist/scripts/provision-windows-offline-installer.js
+        node dist/scripts/provision-windows-offline-installer.js --verify-only
+    volumes:
+      - windows_offline_installer_templates:/app/var/windows-offline-installer/templates
+
   api:
     build:
       context: ..
@@ -40,6 +64,8 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - PORT=3000
       - HOST=0.0.0.0
+      - PUBLIC_URL=${PUBLIC_URL:?PUBLIC_URL is required for public installer links}
+      - TRUST_PROXY=${TRUST_PROXY:-}
       - DB_HOST=db
       - DB_PORT=5432
       - DB_NAME=${DB_NAME:-openpath}
@@ -62,12 +88,25 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SLOW_REQUEST_THRESHOLD_MS=${SLOW_REQUEST_THRESHOLD_MS:-1000}
       - REDIS_URL=${REDIS_URL:-}
+      - OPENPATH_WINDOWS_OFFLINE_TEMPLATE_DIR=/app/var/windows-offline-installer/templates
+      - OPENPATH_WINDOWS_OFFLINE_ARTIFACTS_DIR=/app/var/windows-offline-installer/artifacts
+      - OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION=${OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION:?OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION is required}
+      - OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT=${OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT:?OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT is required}
+      - OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256=${OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256:?OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256 is required}
+      - OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG=${OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG:?OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG is required}
+      - OPENPATH_GITHUB_REPO=${OPENPATH_GITHUB_REPO:-balejosg/openpath}
     depends_on:
       db:
         condition: service_healthy
+      windows-offline-installer-provision:
+        condition: service_completed_successfully
     volumes:
       # Persist logs
       - api-logs:/app/logs
+      # The API can only read the provisioned immutable template.
+      - windows_offline_installer_templates:/app/var/windows-offline-installer/templates:ro
+      # Generated personalized installers remain private and persistent for their TTL.
+      - windows_offline_installer_artifacts:/app/var/windows-offline-installer/artifacts
     healthcheck:
       test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://127.0.0.1:3000/health']
       interval: 30s
@@ -83,3 +122,5 @@ services:
 volumes:
   postgres_data:
   api-logs:
+  windows_offline_installer_templates:
+  windows_offline_installer_artifacts:

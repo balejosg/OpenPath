@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
@@ -107,6 +107,104 @@ void describe('OpenPath Windows offline installer download references', () => {
 
       await assert.rejects(() => readFile(artifactPath));
       assert.equal(await readFile(templatePath, 'utf8'), 'immutable template');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('does not delete an artifact while its final bounded attempt is in flight', async () => {
+    const service = createWindowsOfflineDownloadRefsService();
+    const classroomId = (await harness.createClassroom()).id;
+    const minted = await service.mintReference({
+      classroomId,
+      classroomName: 'Lab In Flight',
+      createdBy: adminUserId(),
+      artifactFileName: 'OpenPath-Lab-In-Flight-Windows-Setup.exe',
+      artifactSha256: 'd'.repeat(64),
+      artifactSize: 12,
+      ttlMinutes: 10,
+      maxAttempts: 1,
+    });
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-in-flight-'));
+    const artifactPath = path.join(
+      root,
+      artifactFileNameFromReferenceHash(minted.ref.referenceHash)
+    );
+
+    try {
+      await writeFile(artifactPath, 'active transfer');
+      await service.consumeAttempt(minted.rawToken);
+
+      await service.cleanupExpired(root);
+      assert.equal(await readFile(artifactPath, 'utf8'), 'active transfer');
+
+      await service.markConsumed(minted.rawToken);
+      await service.cleanupExpired(root);
+      await assert.rejects(() => readFile(artifactPath));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('allows bounded concurrent reservations without letting cleanup remove the active artifact', async () => {
+    const service = createWindowsOfflineDownloadRefsService();
+    const classroomId = (await harness.createClassroom()).id;
+    const minted = await service.mintReference({
+      classroomId,
+      classroomName: 'Lab Concurrent',
+      createdBy: adminUserId(),
+      artifactFileName: 'OpenPath-Lab-Concurrent-Windows-Setup.exe',
+      artifactSha256: 'e'.repeat(64),
+      artifactSize: 12,
+      ttlMinutes: 10,
+      maxAttempts: 2,
+    });
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-concurrent-'));
+    const artifactPath = path.join(
+      root,
+      artifactFileNameFromReferenceHash(minted.ref.referenceHash)
+    );
+
+    try {
+      await writeFile(artifactPath, 'active transfer');
+      const reservations = await Promise.all([
+        service.consumeAttempt(minted.rawToken),
+        service.consumeAttempt(minted.rawToken),
+      ]);
+      assert.deepEqual(reservations.map((reservation) => reservation.usedAttempts).sort(), [1, 2]);
+
+      await service.cleanupExpired(root);
+      assert.equal(await readFile(artifactPath, 'utf8'), 'active transfer');
+
+      await Promise.all([
+        service.markConsumed(minted.rawToken),
+        service.markConsumed(minted.rawToken),
+      ]);
+      await assert.rejects(
+        () => service.consumeAttempt(minted.rawToken),
+        (error: unknown) => error instanceof DownloadReferenceError && error.code === 'CONSUMED'
+      );
+      await service.cleanupExpired(root);
+      await assert.rejects(() => readFile(artifactPath));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('gives newly published orphan artifacts time to acquire their reference row', async () => {
+    const service = createWindowsOfflineDownloadRefsService();
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-orphan-'));
+    const orphanPath = path.join(root, `${'f'.repeat(32)}.exe`);
+
+    try {
+      await writeFile(orphanPath, 'newly published artifact');
+      await service.cleanupExpired(root);
+      assert.equal(await readFile(orphanPath, 'utf8'), 'newly published artifact');
+
+      const oldTimestamp = new Date(Date.now() - 10 * 60_000);
+      await utimes(orphanPath, oldTimestamp, oldTimestamp);
+      await service.cleanupExpired(root);
+      await assert.rejects(() => readFile(orphanPath));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

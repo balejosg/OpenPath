@@ -42,7 +42,7 @@ function verifyWindowsOfflineInstallerPreflight(
   const readiness: WindowsOfflineInstallerReadiness = checkWindowsOfflineInstallerReadiness({
     env,
   });
-  if (!readiness.ready) {
+  if (!readiness.ready || (env.NODE_ENV === 'production' && readiness.code === 'NOT_CONFIGURED')) {
     return Promise.reject(
       new Error(`Windows offline installer readiness failed: ${readiness.code}`)
     );

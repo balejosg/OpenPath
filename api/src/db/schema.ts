@@ -276,6 +276,7 @@ export const windowsOfflineDownloadRefs = pgTable(
     artifactSize: bigint('artifact_size', { mode: 'number' }).notNull(),
     maxAttempts: integer('max_attempts').notNull(),
     usedAttempts: integer('used_attempts').default(0).notNull(),
+    activeTransfers: integer('active_transfers').default(0).notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

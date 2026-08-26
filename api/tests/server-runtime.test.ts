@@ -133,6 +133,33 @@ await describe('server runtime', async () => {
     assert.equal(events.indexOf('offline-preflight') < events.indexOf('listen'), true);
   });
 
+  await test('does not expose a public production server with an unconfigured installer', async () => {
+    const events: string[] = [];
+    const fakeApp = {
+      listen: (): { close: () => void } => {
+        events.push('listen');
+        return { close: (): void => undefined };
+      },
+    };
+    const productionEnv = {
+      NODE_ENV: 'production',
+      JWT_SECRET: 'server-runtime-production-secret',
+      SKIP_DB_MIGRATIONS: 'true',
+    };
+    const config = loadConfig(productionEnv);
+    const runtime = createServerRuntime(fakeApp as never, config, productionEnv, {
+      cleanupTokenBlacklist: () => Promise.resolve(),
+      ensureDefaultAdmin: () => Promise.resolve(),
+      exitProcess: (): void => undefined,
+      initializeSchema: () => Promise.resolve(),
+      loggerInstance: createLogger(events),
+      processApi: { on: () => undefined },
+    });
+
+    await assert.rejects(() => runtime.startServer(), /readiness failed: NOT_CONFIGURED/u);
+    assert.equal(events.includes('listen'), false);
+  });
+
   await test('registerProcessHandlers wires signal and error handlers', () => {
     const handlers: string[] = [];
     const config = loadConfig({

@@ -21,6 +21,7 @@ let server: ReturnType<express.Express['listen']>;
 let baseUrl: string;
 let artifactsDir: string;
 let consumedCount = 0;
+let releasedCount = 0;
 
 before(async () => {
   artifactsDir = await mkdtemp(path.join(tmpdir(), 'openpath-download-route-'));
@@ -48,13 +49,18 @@ before(async () => {
             artifactSize: bytes.length,
             maxAttempts: 3,
             usedAttempts: 1,
+            activeTransfers: 1,
             expiresAt: new Date(Date.now() + 60_000),
             consumedAt: null,
           });
         },
-        markConsumed: (): Promise<void> => {
-          consumedCount += 1;
+        releaseAttempt: (): Promise<void> => {
+          releasedCount += 1;
           return Promise.resolve();
+        },
+        markConsumed: (): Promise<boolean> => {
+          consumedCount += 1;
+          return Promise.resolve(true);
         },
       },
       resolveArtifactPath: (hash) =>
@@ -112,5 +118,6 @@ void describe('OpenPath Windows offline installer download route', () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     assert.equal(consumedCount, 1);
+    assert.equal(releasedCount, 0);
   });
 });

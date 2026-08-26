@@ -23,6 +23,27 @@ function parsePositiveIntEnv(value: string | undefined, fallback: number, name: 
   return parsed;
 }
 
+function parsePublicUrl(value: string | undefined, nodeEnv: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error('PUBLIC_URL must be a valid absolute URL');
+  }
+
+  if (!parsed.hostname || parsed.username || parsed.password) {
+    throw new Error('PUBLIC_URL must contain a hostname and no URL credentials');
+  }
+  if (nodeEnv === 'production' && parsed.protocol !== 'https:') {
+    throw new Error('PUBLIC_URL must use HTTPS in production');
+  }
+
+  return trimmed;
+}
+
 export interface LoadedConfig {
   readonly port: number;
   readonly host: string;
@@ -83,7 +104,7 @@ export function loadConfig(
   return {
     port: parseIntEnv(env.PORT, 3000),
     host: env.HOST ?? '0.0.0.0',
-    publicUrl: env.PUBLIC_URL,
+    publicUrl: parsePublicUrl(env.PUBLIC_URL, nodeEnv),
     nodeEnv,
     trustProxy: parseTrustProxyEnv(env.TRUST_PROXY),
     isProduction: nodeEnv === 'production',

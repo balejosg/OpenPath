@@ -1,13 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  accessSync,
-  constants,
-  existsSync,
-  mkdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { accessSync, constants, existsSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -58,7 +50,6 @@ export function resetWindowsOfflineInstallerReadinessCache(): void {
 }
 
 function defaultProbeArtifactsWrite(artifactsDir: string): void {
-  mkdirSync(artifactsDir, { recursive: false });
   const probePath = path.join(
     artifactsDir,
     `.openpath-readiness-${String(process.pid)}-${randomUUID()}`

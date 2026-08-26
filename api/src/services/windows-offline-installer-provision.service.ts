@@ -45,6 +45,11 @@ export interface ProvisionOptions {
 
 const TEMPLATE_FILE_NAME = 'OpenPath-Windows-Setup-Template.exe';
 const HEX_SHA256 = /^[0-9a-f]{64}$/u;
+const GITHUB_ASSET_HOSTS = new Set([
+  'github.com',
+  'objects.githubusercontent.com',
+  'release-assets.githubusercontent.com',
+]);
 
 function mapTemplateError(
   error: WindowsOfflineTemplateCacheError
@@ -61,7 +66,7 @@ function releaseAssetUrl(config: WindowsOfflineInstallerConfig, fileName: string
 async function fetchBytes(fetchImpl: typeof fetch, url: string): Promise<Buffer> {
   let response: Response;
   try {
-    response = await fetchImpl(url, { redirect: 'error' });
+    response = await fetchImpl(url, { redirect: 'follow' });
   } catch {
     throw new WindowsOfflineInstallerProvisionError('DOWNLOAD_FAILED', 'Template download failed');
   }
@@ -69,10 +74,48 @@ async function fetchBytes(fetchImpl: typeof fetch, url: string): Promise<Buffer>
     throw new WindowsOfflineInstallerProvisionError('DOWNLOAD_FAILED', 'Template download failed');
   }
 
+  validateReleaseRedirect(url, response.url);
+
   try {
     return Buffer.from(await response.arrayBuffer());
   } catch {
     throw new WindowsOfflineInstallerProvisionError('DOWNLOAD_FAILED', 'Template download failed');
+  }
+}
+
+function validateReleaseRedirect(initialUrl: string, finalUrl: string): void {
+  if (!finalUrl) return;
+
+  let initial: URL;
+  let final: URL;
+  try {
+    initial = new URL(initialUrl);
+    final = new URL(finalUrl);
+  } catch {
+    throw new WindowsOfflineInstallerProvisionError(
+      'DOWNLOAD_FAILED',
+      'Template download redirected to an invalid URL'
+    );
+  }
+
+  if (final.protocol !== 'https:' || !GITHUB_ASSET_HOSTS.has(final.hostname.toLowerCase())) {
+    throw new WindowsOfflineInstallerProvisionError(
+      'DOWNLOAD_FAILED',
+      'Template download redirected outside GitHub asset storage'
+    );
+  }
+
+  const initialReleasePath = initial.pathname;
+  const finalIsLogicalRelease = final.pathname.includes('/releases/download/');
+  if (
+    (final.origin === initial.origin &&
+      (final.pathname !== initialReleasePath || final.search !== initial.search)) ||
+    (final.origin !== initial.origin && finalIsLogicalRelease)
+  ) {
+    throw new WindowsOfflineInstallerProvisionError(
+      'DOWNLOAD_FAILED',
+      'Template download redirected to a different release asset'
+    );
   }
 }
 
@@ -157,15 +200,21 @@ export async function provisionWindowsOfflineInstallerTemplate(
   const stagingDir = path.join(stagingRoot, config.templateCommit);
   const targetDir = path.dirname(templatePath);
   try {
-    await mkdir(stagingDir, { recursive: true, mode: 0o750 });
+    await mkdir(stagingDir, { recursive: true, mode: 0o755 });
     await writeFile(path.join(stagingDir, TEMPLATE_FILE_NAME), templateBytes, { mode: 0o640 });
     await writeFile(path.join(stagingDir, `${TEMPLATE_FILE_NAME}.sha256`), sidecarBytes, {
-      mode: 0o640,
+      mode: 0o644,
     });
-    await chmod(path.join(stagingDir, TEMPLATE_FILE_NAME), 0o640);
-    await chmod(path.join(stagingDir, `${TEMPLATE_FILE_NAME}.sha256`), 0o640);
+    await chmod(path.join(stagingDir, TEMPLATE_FILE_NAME), 0o444);
+    await chmod(path.join(stagingDir, `${TEMPLATE_FILE_NAME}.sha256`), 0o444);
 
-    await mkdir(path.dirname(targetDir), { recursive: true, mode: 0o750 });
+    await mkdir(config.templateDir, { recursive: true, mode: 0o755 });
+    await chmod(config.templateDir, 0o755);
+    await mkdir(path.join(config.templateDir, config.templateVersion), {
+      recursive: true,
+      mode: 0o755,
+    });
+    await chmod(path.join(config.templateDir, config.templateVersion), 0o755);
     try {
       await rename(stagingDir, targetDir);
     } catch {

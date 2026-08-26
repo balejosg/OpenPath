@@ -19,7 +19,10 @@ import { resolveWindowsOfflineInstallerArtifactsDir } from '../lib/windows-offli
 import { logger } from '../lib/logger.js';
 
 export interface WindowsOfflineInstallerRouteDeps {
-  refs: Pick<WindowsOfflineDownloadRefsService, 'consumeAttempt' | 'markConsumed'>;
+  refs: Pick<
+    WindowsOfflineDownloadRefsService,
+    'consumeAttempt' | 'releaseAttempt' | 'markConsumed'
+  >;
   resolveArtifactPath: (referenceHash: string) => string;
 }
 
@@ -37,8 +40,8 @@ function sendSafeError(res: Parameters<RequestHandler>[1], status: number, error
 /**
  * Serves an opaque, short-lived reference. The attempt is reserved before
  * opening the file, but the reference is consumed only after the complete
- * response has finished. Aborted streams therefore remain eligible for the
- * bounded retry budget.
+ * response has finished. Aborted streams release their active-transfer slot;
+ * their bounded retry budget remains consumed.
  */
 export function createWindowsOfflineInstallerDownloadHandler(
   deps: WindowsOfflineInstallerRouteDeps
@@ -53,6 +56,17 @@ export function createWindowsOfflineInstallerDownloadHandler(
     void deps.refs
       .consumeAttempt(reference)
       .then(async (record) => {
+        let attemptSettled = false;
+        const releaseActiveAttempt = (): void => {
+          if (attemptSettled) return;
+          attemptSettled = true;
+          void deps.refs.releaseAttempt(reference).catch(() => {
+            logger.error('offline_installer_reference_attempt_release_failed', {
+              code: 'ATTEMPT_RELEASE_FAILED',
+            });
+          });
+        };
+
         const artifactPath = deps.resolveArtifactPath(record.referenceHash);
         let artifactStat;
         try {
@@ -66,6 +80,7 @@ export function createWindowsOfflineInstallerDownloadHandler(
             throw new Error('artifact checksum mismatch');
           }
         } catch {
+          releaseActiveAttempt();
           logger.warn('offline_installer_artifact_unavailable', { code: 'ARTIFACT_INVALID' });
           sendSafeError(res, 404, 'Installer artifact unavailable');
           return;
@@ -83,11 +98,10 @@ export function createWindowsOfflineInstallerDownloadHandler(
         let streamEnded = false;
         let streamFailed = false;
         let responseClosed = false;
-        let finalized = false;
 
         const finalizeSuccessfulDownload = (): void => {
           if (
-            finalized ||
+            attemptSettled ||
             streamFailed ||
             responseClosed ||
             !streamEnded ||
@@ -95,13 +109,20 @@ export function createWindowsOfflineInstallerDownloadHandler(
           ) {
             return;
           }
-          finalized = true;
+          attemptSettled = true;
           void deps.refs
             .markConsumed(reference)
-            .then(() => rm(artifactPath, { force: true }))
+            .then((canRemoveArtifact) =>
+              canRemoveArtifact ? rm(artifactPath, { force: true }) : undefined
+            )
             .catch(() => {
               logger.error('offline_installer_reference_consume_mark_failed', {
                 code: 'CONSUME_MARK_FAILED',
+              });
+              void deps.refs.releaseAttempt(reference).catch(() => {
+                logger.error('offline_installer_reference_attempt_release_failed', {
+                  code: 'ATTEMPT_RELEASE_FAILED',
+                });
               });
             });
         };
@@ -112,12 +133,17 @@ export function createWindowsOfflineInstallerDownloadHandler(
         });
         stream.on('error', () => {
           streamFailed = true;
+          releaseActiveAttempt();
           logger.warn('offline_installer_download_stream_failed', { code: 'STREAM_FAILED' });
           if (!res.destroyed) res.destroy();
         });
         res.on('finish', finalizeSuccessfulDownload);
         res.on('close', () => {
-          if (!res.writableFinished) responseClosed = true;
+          if (!res.writableFinished) {
+            responseClosed = true;
+            releaseActiveAttempt();
+            if (!stream.destroyed) stream.destroy();
+          }
         });
 
         stream.pipe(res);

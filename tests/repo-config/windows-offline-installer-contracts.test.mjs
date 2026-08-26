@@ -235,6 +235,42 @@ test('offline installer build helpers enforce trailer format, payload inventory,
   for (const marker of ['Install-OpenPath.ps1', '-OfflineConfigPath', 'payload-manifest.json']) {
     assert.ok(nsiSource.includes(marker), `NSIS source should reference ${marker}`);
   }
+  assert.match(
+    nsiSource,
+    /File \/r \/x [\s\S]*offline-installer\\build/,
+    'NSIS must exclude its build inputs and outputs from the packaged runtime'
+  );
+  assert.match(
+    nsiSource,
+    /SetOutPath "\$INSTDIR\\runtime"[\s\S]*File \/r "\$\{REPO_ROOT\}\\runtime\\\*\.\*"/,
+    'runtime assets must be extracted beneath the runtime package directory'
+  );
+  assert.match(
+    nsiSource,
+    /SetOutPath "\$INSTDIR\\firefox-release"[\s\S]*firefox-release\\\*\.\*/,
+    'signed Firefox artifacts must retain their package directory'
+  );
+  assert.match(
+    nsiSource,
+    /SetOutPath "\$INSTDIR\\chromium-managed"[\s\S]*chromium-managed\\\*\.\*/,
+    'Chromium metadata must retain its package directory'
+  );
+  const manifestBuilderSource = readText(
+    'windows/offline-installer/scripts/build-payload-manifest.mjs'
+  );
+  assert.match(
+    manifestBuilderSource,
+    /toManifestEntry\(filePath, treeRoot, `repo:\$\{tree\}`, packagePrefix\)/,
+    'payload manifest paths must match the NSIS extraction roots'
+  );
+  assert.match(
+    manifestBuilderSource,
+    /offline-installer', 'build'/,
+    'payload manifest must exclude the NSIS build directory'
+  );
+  const staging = readText('windows/lib/install/Installer.Staging.ps1');
+  assert.match(staging, /Join-Path \$ScriptDir 'firefox-release'/);
+  assert.match(staging, /Join-Path \$ScriptDir 'chromium-managed'/);
   assert.doesNotMatch(nsiSource, /classroompath/i, 'NSIS template must stay wrapper-agnostic');
 });
 
@@ -255,4 +291,177 @@ test('Windows offline installer canary is read-only unless installation is expli
   assert.match(canary, /status = 'ok'/, 'canary should emit safe success JSON');
   assert.match(canary, /status = 'failed'/, 'canary should emit safe failure JSON');
   assert.doesNotMatch(canary, /EnrollmentToken|accessToken|Bearer/i);
+});
+
+test('NSIS extracts offline manifest and payloads under the installer root', () => {
+  const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
+  const rootOutput = nsiSource.indexOf('SetOutPath "$INSTDIR"');
+  const runtimeOutput = nsiSource.indexOf('SetOutPath "$INSTDIR\\runtime"');
+  const payloadOutput = nsiSource.indexOf('SetOutPath "$INSTDIR\\payloads\\acrylic"');
+  const manifestFile = nsiSource.indexOf('File /oname=payload-manifest.json');
+  const versionFile = nsiSource.indexOf('File /oname=VERSION');
+  const acrylicFile = nsiSource.indexOf('File /oname=Acrylic-Portable.zip');
+
+  assert.ok(rootOutput >= 0, 'NSIS must establish the installer root output path');
+  assert.ok(runtimeOutput > rootOutput, 'NSIS must switch to the runtime output path explicitly');
+  assert.ok(
+    payloadOutput > runtimeOutput,
+    'NSIS must switch to the payload output path explicitly'
+  );
+  assert.ok(
+    manifestFile > rootOutput && manifestFile < runtimeOutput,
+    'payload-manifest.json must be copied to the installer root'
+  );
+  assert.ok(
+    versionFile > rootOutput && versionFile < runtimeOutput,
+    'VERSION must be copied to the installer root'
+  );
+  assert.ok(acrylicFile > payloadOutput, 'Acrylic must be copied below the payloads root');
+  assert.match(
+    nsiSource,
+    /SetOutPath "\$INSTDIR\\payloads\\firefox-esr"[\s\S]*File \/oname=Firefox-Setup-esr\.exe/,
+    'Firefox ESR must be copied below the payloads root'
+  );
+});
+
+test('Windows release evidence executes the personalized NSIS executable and its offline retry path', () => {
+  const executableLane = readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1');
+  for (const marker of [
+    'Start-Process',
+    "-ArgumentList @('/S')",
+    'Read-Trailer.ps1',
+    'pending-enrollment.json.dpapi',
+    'Assert-EqualValue',
+    'Invoke-OpenPathPendingEnrollmentRetry',
+    'HttpListener',
+    'netsh http add urlacl',
+    'netsh http delete urlacl',
+    '$urlAclAdded = $false',
+    'https://localhost:',
+    'pendingStateCleared = $true',
+  ]) {
+    assert.ok(executableLane.includes(marker), `Windows executable lane should include ${marker}`);
+  }
+  assert.match(
+    executableLane,
+    /Write-SafeEvidence[\s\S]*payloadManifestValidated = \$true/,
+    'Windows executable evidence must report manifest validation without writing credentials'
+  );
+  assert.doesNotMatch(
+    executableLane,
+    /Write-SafeEvidence[\s\S]*(?:enrollmentToken|Bearer|accessToken)/i,
+    'Windows executable evidence must not contain auth material'
+  );
+
+  const workflow = readText('.github/workflows/release-scripts.yml');
+  const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
+  for (const marker of [
+    'create-personalized-test-installer.mjs',
+    'run-windows-offline-installer-exe.ps1',
+    'Execute the personalized NSIS executable E2E',
+    'Upload personalized NSIS E2E evidence',
+  ]) {
+    assert.ok(workflow.includes(marker), `release workflow should include ${marker}`);
+  }
+
+  const manifestBuild = workflow.indexOf('build-payload-manifest.mjs');
+  const nsisCompile = workflow.indexOf('name: Compile NSIS template');
+  const trailerAppend = workflow.indexOf('append-trailer-placeholder.mjs');
+  assert.ok(manifestBuild >= 0, 'release workflow must build the manifest');
+  assert.ok(nsisCompile >= 0, 'release workflow must compile NSIS');
+  assert.ok(trailerAppend >= 0, 'release workflow must append the trailer');
+  assert.ok(
+    manifestBuild < nsisCompile && nsisCompile < trailerAppend,
+    'NSIS must receive the payload manifest before compilation and append the trailer afterward'
+  );
+  assert.match(
+    workflow,
+    /script-file:\s*windows\/offline-installer\/OpenPath-Windows-Setup\.nsi/,
+    'the NSIS action must compile the repository offline-installer script explicitly'
+  );
+
+  assert.match(
+    nsiSource,
+    /!define BUILD_DIR "\$\{REPO_ROOT\}\\windows\\offline-installer\\build"/,
+    'NSIS build output must stay inside the repository build directory'
+  );
+  assert.match(
+    nsiSource,
+    /File "\/oname=scripts\\Read-Trailer\.ps1" "\$\{REPO_ROOT\}\\windows\\offline-installer\\scripts\\Read-Trailer\.ps1"/,
+    'NSIS must load its trailer reader from an explicit repository path'
+  );
+});
+
+test('NSIS stages trailer-reader dependencies before validating the trailer', () => {
+  const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
+  const readTrailerSection = nsiSource.slice(
+    nsiSource.indexOf('Section "ReadTrailer"'),
+    nsiSource.indexOf('SectionEnd', nsiSource.indexOf('Section "ReadTrailer"'))
+  );
+
+  assert.match(
+    readTrailerSection,
+    /SetOutPath "\$INSTDIR\\lib\\internal"[\s\S]*File "\/oname=CapabilityStorage\.ps1" "\$\{REPO_ROOT\}\\windows\\lib\\internal\\CapabilityStorage\.ps1"/,
+    'trailer validation must have its ACL dependency before the first NSIS section runs'
+  );
+  assert.match(
+    readTrailerSection,
+    /SetOutPath "\$INSTDIR\\lib\\install"[\s\S]*File "\/oname=Installer\.Offline\.ps1" "\$\{REPO_ROOT\}\\windows\\lib\\install\\Installer\.Offline\.ps1"/,
+    'trailer validation must have its offline config dependency before the first NSIS section runs'
+  );
+  const trailerReader = readText('windows/offline-installer/scripts/Read-Trailer.ps1');
+  assert.match(
+    trailerReader,
+    /offlineModuleCandidates[\s\S]*Join-Path \$PSScriptRoot '\.\.\\lib\\install\\Installer\.Offline\.ps1'/,
+    'trailer reader must resolve dependencies from the extracted installer root'
+  );
+});
+
+test('standalone Docker provisions the pinned template before exposing the API', () => {
+  const compose = readText('api/docker-compose.yml');
+  const runtimeTemplateDir = '/app/var/windows-offline-installer/templates';
+  const runtimeArtifactsDir = '/app/var/windows-offline-installer/artifacts';
+
+  assert.match(compose, /windows-offline-installer-provision:/);
+  assert.match(compose, /node dist\/scripts\/provision-windows-offline-installer\.js/);
+  assert.match(compose, /--verify-only/);
+  assert.match(compose, /service_completed_successfully/);
+  assert.match(
+    compose,
+    new RegExp(`OPENPATH_WINDOWS_OFFLINE_TEMPLATE_DIR=${runtimeTemplateDir.replaceAll('/', '\\/')}`)
+  );
+  assert.match(
+    compose,
+    new RegExp(
+      `OPENPATH_WINDOWS_OFFLINE_ARTIFACTS_DIR=${runtimeArtifactsDir.replaceAll('/', '\\/')}`
+    )
+  );
+
+  for (const pin of [
+    'OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION',
+    'OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT',
+    'OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256',
+    'OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG',
+  ]) {
+    assert.match(compose, new RegExp(`${pin}=\\$\\{${pin}:\\?`));
+  }
+
+  assert.match(compose, new RegExp(`windows_offline_installer_templates:${runtimeTemplateDir}:ro`));
+  assert.match(compose, new RegExp(`windows_offline_installer_artifacts:${runtimeArtifactsDir}`));
+  const dockerfile = readText('api/Dockerfile');
+  assert.match(
+    dockerfile,
+    /chmod 0700 \/app\/var\/windows-offline-installer\/artifacts/,
+    'the artifact volume must be private to the runtime user'
+  );
+  assert.match(
+    compose,
+    /PUBLIC_URL=\$\{PUBLIC_URL:\?PUBLIC_URL is required for public installer links\}/
+  );
+
+  const docs = readText('docs/windows-offline-installer.md');
+  assert.match(docs, /docker compose(?: -f api\/docker-compose\.yml)? up/);
+  assert.match(docs, /provision.*before.*traffic|before.*provision.*traffic/i);
+  assert.match(docs, /read-only|:ro/i);
+  assert.match(docs, /persistent|volume/i);
 });

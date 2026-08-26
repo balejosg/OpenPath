@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, test } from 'node:test';
@@ -222,6 +222,24 @@ void describe('windows offline installer trailer', () => {
 
       const entries = await readdir(directoryPath);
       assert.deepEqual(entries.sort(), ['output.exe', 'template.exe']);
+    });
+  });
+
+  void test('applies an overlay when the pinned template is read-only for the runtime user', async () => {
+    await withTempDir(async (directoryPath) => {
+      const templatePath = path.join(directoryPath, 'readonly-template.exe');
+      const outputPath = path.join(directoryPath, 'readonly-output.exe');
+      await writeFile(
+        templatePath,
+        Buffer.concat([Buffer.from('prefix', 'utf8'), serialize(validConfig)])
+      );
+      await chmod(templatePath, 0o444);
+
+      await applyOverlay(templatePath, outputPath, validConfig);
+
+      assert.deepEqual((await parseFromFile(outputPath)).config, validConfig);
+      assert.equal((await stat(templatePath)).mode & 0o777, 0o444);
+      assert.equal((await stat(outputPath)).mode & 0o777, 0o600);
     });
   });
 

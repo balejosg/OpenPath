@@ -1,0 +1,1 @@
+ALTER TABLE "windows_offline_download_refs" ADD COLUMN "active_transfers" integer DEFAULT 0 NOT NULL;

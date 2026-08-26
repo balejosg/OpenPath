@@ -45,6 +45,10 @@ jobs:
           npm run build:chromium-managed --workspace=@openpath/firefox-extension
           npm run sign:firefox-release --workspace=@openpath/firefox-extension
 
+      - name: Download and verify pinned offline payloads
+        shell: pwsh
+        run: node windows/offline-installer/scripts/download-pinned-payloads.mjs --repo-root .
+
       - name: Install pinned NSIS 3.10
         run: choco install nsis --version=3.10 -y --no-progress
 
@@ -58,9 +62,13 @@ jobs:
             exit 1
           }
 
+      - name: Build and verify offline payload manifest
+        run: node windows/offline-installer/scripts/build-payload-manifest.mjs --repo-root . --out windows/offline-installer/build/payload-manifest.json
+
       - name: Compile NSIS template
         uses: joncloud/makensis-action@v4
         with:
+          script-file: windows/offline-installer/OpenPath-Windows-Setup.nsi
           nsis-version: '3.10'
           arguments: '/V3 /DREPO_ROOT=${{ github.workspace }}'
 
@@ -74,14 +82,55 @@ jobs:
             exit 1
           }
 
-      - name: Append trailer placeholder and build payload manifest
+      - name: Append trailer placeholder
         run: |
           node windows/offline-installer/scripts/generate-trailer-placeholder.mjs windows/offline-installer/build/trailer-placeholder.bin
           node windows/offline-installer/scripts/append-trailer-placeholder.mjs windows/offline-installer/build/OpenPath-Windows-Setup.exe windows/offline-installer/build/trailer-placeholder.bin windows/offline-installer/build/OpenPath-Windows-Setup-Template.exe
-          node windows/offline-installer/scripts/build-payload-manifest.mjs --repo-root . --out windows/offline-installer/build/payload-manifest.json
 
       - name: Validate appended trailer round-trip
         run: node --import tsx --test windows/offline-installer/tests/trailer-roundtrip.test.mjs
+
+      - name: Execute the personalized NSIS executable E2E
+        shell: pwsh
+        run: |
+          $configPath = Join-Path $env:RUNNER_TEMP 'openpath-offline-installer-e2e-config.json'
+          $personalizedPath = Join-Path $env:RUNNER_TEMP 'OpenPath-Windows-Setup-E2E.exe'
+          $evidencePath = Join-Path $env:RUNNER_TEMP 'openpath-windows-offline-installer-exe-evidence.json'
+          @{
+            schemaVersion = 1
+            apiUrl = 'https://localhost:18443'
+            classroomId = 'release-e2e-classroom'
+            enrollmentToken = 'release-e2e-enrollment-token'
+            enrollmentTokenExpiresAt = '2036-01-01T00:00:00.000Z'
+            captivePortalDomains = @()
+            options = @{
+              approvedStudentBrowsers = @('Firefox')
+              installFirefoxIfMissing = $true
+              enforceManagedBrowserBoundary = $true
+            }
+          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+          node --import tsx windows/offline-installer/scripts/create-personalized-test-installer.mjs `
+            --template windows/offline-installer/build/OpenPath-Windows-Setup-Template.exe `
+            --output $personalizedPath `
+            --config $configPath
+
+          & (Resolve-Path 'tests/e2e/ci/run-windows-offline-installer-exe.ps1') `
+            -ExecutablePath $personalizedPath `
+            -ExpectedClassroomId 'release-e2e-classroom' `
+            -ExpectedApiUrl 'https://localhost:18443' `
+            -EvidencePath $evidencePath
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Upload personalized NSIS E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-offline-installer-exe-evidence
+          path: ${{ runner.temp }}/openpath-windows-offline-installer-exe-evidence.json
+          if-no-files-found: warn
 
       - name: Upload template artifacts
         uses: actions/upload-artifact@v7

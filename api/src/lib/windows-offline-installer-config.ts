@@ -26,6 +26,7 @@ const HEX_SHA256 = /^[0-9a-f]{64}$/;
 const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/;
 const TEMPLATE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const RELEASE_TAG = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const RELEASE_COMMIT_SUFFIX = /^[0-9a-f]{7,40}$/;
 const GITHUB_REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const MAX_TOKEN_TTL_HOURS = 24;
 const MAX_DOWNLOAD_TTL_MINUTES = 60;
@@ -101,6 +102,7 @@ export function isWindowsOfflineInstallerConfigured(
     'OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION',
     'OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT',
     'OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256',
+    'OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG',
   ].some((name) => Boolean(env[name]?.trim()));
 }
 
@@ -165,6 +167,18 @@ export function loadWindowsOfflineInstallerConfig(
   ) {
     throw new WindowsOfflineInstallerConfigError(
       'OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG must be an exact release tag, not latest'
+    );
+  }
+
+  const expectedReleaseTagPrefix = `scripts-v${templateVersion}-`;
+  const releaseCommitSuffix = templateReleaseTag.slice(expectedReleaseTagPrefix.length);
+  if (
+    !templateReleaseTag.startsWith(expectedReleaseTagPrefix) ||
+    !RELEASE_COMMIT_SUFFIX.test(releaseCommitSuffix) ||
+    !templateCommit.startsWith(releaseCommitSuffix)
+  ) {
+    throw new WindowsOfflineInstallerConfigError(
+      'OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG must be scripts-v<version>-<commit-prefix>'
     );
   }
 

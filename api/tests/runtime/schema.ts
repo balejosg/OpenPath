@@ -150,10 +150,16 @@ async function ensureWindowsOfflineInstallerSchema(): Promise<void> {
         '  "artifact_size" bigint NOT NULL,\n' +
         '  "max_attempts" integer NOT NULL,\n' +
         '  "used_attempts" integer DEFAULT 0 NOT NULL,\n' +
+        '  "active_transfers" integer DEFAULT 0 NOT NULL,\n' +
         '  "expires_at" timestamp with time zone NOT NULL,\n' +
         '  "consumed_at" timestamp with time zone,\n' +
         '  "created_at" timestamp with time zone DEFAULT now() NOT NULL\n' +
         ');'
+    )
+  );
+  await db.execute(
+    sql.raw(
+      'ALTER TABLE "windows_offline_download_refs" ADD COLUMN IF NOT EXISTS "active_transfers" integer DEFAULT 0 NOT NULL;'
     )
   );
   await db.execute(

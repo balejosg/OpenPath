@@ -2,7 +2,20 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { and, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 
 import { db } from '../db/index.js';
 import * as schema from '../db/schema.js';
@@ -21,6 +34,7 @@ export interface DownloadRefRecord {
   artifactSize: number;
   maxAttempts: number;
   usedAttempts: number;
+  activeTransfers: number;
   expiresAt: Date;
   consumedAt: Date | null;
 }
@@ -57,6 +71,7 @@ export interface MintWindowsOfflineDownloadReferenceInput {
 const RAW_REFERENCE_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const REFERENCE_HASH_PATTERN = /^[0-9a-f]{64}$/u;
 const ARTIFACT_FILE_PATTERN = /^[0-9a-f]{32}\.exe$/u;
+const ORPHAN_ARTIFACT_GRACE_MS = 5 * 60 * 1000;
 
 export function isValidWindowsOfflineDownloadReference(value: string): boolean {
   return RAW_REFERENCE_PATTERN.test(value);
@@ -89,6 +104,7 @@ function toRecord(row: WindowsOfflineDownloadRef): DownloadRefRecord {
     artifactSize: row.artifactSize,
     maxAttempts: row.maxAttempts,
     usedAttempts: row.usedAttempts,
+    activeTransfers: row.activeTransfers,
     expiresAt: row.expiresAt,
     consumedAt: row.consumedAt,
   };
@@ -117,7 +133,9 @@ export interface WindowsOfflineDownloadRefsService {
     input: MintWindowsOfflineDownloadReferenceInput
   ): Promise<{ ref: DownloadRefRecord; rawToken: string }>;
   consumeAttempt(rawToken: string): Promise<DownloadRefRecord>;
-  markConsumed(rawToken: string): Promise<void>;
+  releaseAttempt(rawToken: string): Promise<void>;
+  /** Returns true when this completion released the final active transfer. */
+  markConsumed(rawToken: string): Promise<boolean>;
   invalidateReference(rawToken: string): Promise<void>;
   cleanupExpired(artifactsDir: string): Promise<number>;
   now(): Date;
@@ -163,9 +181,9 @@ export function createWindowsOfflineDownloadRefsService(
   }
 
   /**
-   * Atomically reserves one attempt. A dropped connection leaves the attempt
-   * available until its bounded retry budget is exhausted; only a completed
-   * response calls markConsumed.
+   * Atomically reserves one attempt and marks one transfer active. Concurrent
+   * transfers are allowed while the bounded retry budget remains; a completed
+   * response calls markConsumed and an aborted transfer calls releaseAttempt.
    */
   async function consumeAttempt(rawToken: string): Promise<DownloadRefRecord> {
     if (!isValidWindowsOfflineDownloadReference(rawToken)) {
@@ -189,6 +207,7 @@ export function createWindowsOfflineDownloadRefsService(
       .update(schema.windowsOfflineDownloadRefs)
       .set({
         usedAttempts: sql`${schema.windowsOfflineDownloadRefs.usedAttempts} + 1`,
+        activeTransfers: sql`${schema.windowsOfflineDownloadRefs.activeTransfers} + 1`,
       })
       .where(
         and(
@@ -215,17 +234,40 @@ export function createWindowsOfflineDownloadRefsService(
     return toRecord(updated);
   }
 
-  async function markConsumed(rawToken: string): Promise<void> {
+  async function releaseAttempt(rawToken: string): Promise<void> {
     if (!isValidWindowsOfflineDownloadReference(rawToken)) return;
     await database
       .update(schema.windowsOfflineDownloadRefs)
-      .set({ consumedAt: now() })
+      .set({
+        activeTransfers: sql`GREATEST(${schema.windowsOfflineDownloadRefs.activeTransfers} - 1, 0)`,
+      })
       .where(
         and(
           eq(schema.windowsOfflineDownloadRefs.referenceHash, hashDownloadReference(rawToken)),
-          isNull(schema.windowsOfflineDownloadRefs.consumedAt)
+          gt(schema.windowsOfflineDownloadRefs.activeTransfers, 0)
         )
       );
+  }
+
+  async function markConsumed(rawToken: string): Promise<boolean> {
+    if (!isValidWindowsOfflineDownloadReference(rawToken)) return false;
+    const [row] = await database
+      .update(schema.windowsOfflineDownloadRefs)
+      .set({
+        consumedAt: sql`COALESCE(${schema.windowsOfflineDownloadRefs.consumedAt}, ${now()})`,
+        activeTransfers: sql`GREATEST(${schema.windowsOfflineDownloadRefs.activeTransfers} - 1, 0)`,
+      })
+      .where(
+        and(
+          eq(schema.windowsOfflineDownloadRefs.referenceHash, hashDownloadReference(rawToken)),
+          or(
+            isNull(schema.windowsOfflineDownloadRefs.consumedAt),
+            gt(schema.windowsOfflineDownloadRefs.activeTransfers, 0)
+          )
+        )
+      )
+      .returning({ activeTransfers: schema.windowsOfflineDownloadRefs.activeTransfers });
+    return row?.activeTransfers === 0;
   }
 
   async function invalidateReference(rawToken: string): Promise<void> {
@@ -246,26 +288,48 @@ export function createWindowsOfflineDownloadRefsService(
       .select()
       .from(schema.windowsOfflineDownloadRefs)
       .where(
-        or(
-          isNotNull(schema.windowsOfflineDownloadRefs.consumedAt),
-          lte(schema.windowsOfflineDownloadRefs.expiresAt, currentTime),
-          gte(
-            schema.windowsOfflineDownloadRefs.usedAttempts,
-            schema.windowsOfflineDownloadRefs.maxAttempts
-          )
+        and(
+          or(
+            isNotNull(schema.windowsOfflineDownloadRefs.consumedAt),
+            lte(schema.windowsOfflineDownloadRefs.expiresAt, currentTime),
+            gte(
+              schema.windowsOfflineDownloadRefs.usedAttempts,
+              schema.windowsOfflineDownloadRefs.maxAttempts
+            )
+          ),
+          eq(schema.windowsOfflineDownloadRefs.activeTransfers, 0)
         )
       );
 
+    const deletedRows =
+      staleRows.length > 0
+        ? await database
+            .delete(schema.windowsOfflineDownloadRefs)
+            .where(
+              and(
+                inArray(
+                  schema.windowsOfflineDownloadRefs.id,
+                  staleRows.map((row) => row.id)
+                ),
+                eq(schema.windowsOfflineDownloadRefs.activeTransfers, 0)
+              )
+            )
+            .returning({ referenceHash: schema.windowsOfflineDownloadRefs.referenceHash })
+        : [];
+
     const resolvedArtifactsDir = path.resolve(artifactsDir);
+    const orphanCutoffMs = currentTime.getTime() - ORPHAN_ARTIFACT_GRACE_MS;
     const staleFileNames = new Set(
-      staleRows.map((row) => artifactFileNameFromReferenceHash(row.referenceHash))
+      deletedRows.map((row) => artifactFileNameFromReferenceHash(row.referenceHash))
     );
-    const removeArtifact = (fileName: string): void => {
+    const removeArtifact = (fileName: string, onlyIfOlderThanGrace = false): void => {
       const filePath = path.join(resolvedArtifactsDir, fileName);
       try {
-        if (existsSync(filePath) && statSync(filePath).isFile()) {
-          rmSync(filePath, { force: true });
-        }
+        if (!existsSync(filePath)) return;
+        const fileStat = statSync(filePath);
+        if (!fileStat.isFile()) return;
+        if (onlyIfOlderThanGrace && fileStat.mtimeMs > orphanCutoffMs) return;
+        rmSync(filePath, { force: true });
       } catch {
         logger.warn('offline_installer_cleanup_failed', { code: 'artifact_remove_failed' });
       }
@@ -284,24 +348,26 @@ export function createWindowsOfflineDownloadRefsService(
 
       for (const fileName of readdirSync(resolvedArtifactsDir)) {
         if (ARTIFACT_FILE_PATTERN.test(fileName) && !activeFileNames.has(fileName)) {
-          removeArtifact(fileName);
+          // A generator publishes the file immediately after inserting its
+          // reference row. Keep a short grace window for that cross-process
+          // publication gap; crashed generations are removed on a later pass.
+          removeArtifact(fileName, true);
         }
       }
     }
 
-    if (staleRows.length > 0) {
-      await database.delete(schema.windowsOfflineDownloadRefs).where(
-        inArray(
-          schema.windowsOfflineDownloadRefs.id,
-          staleRows.map((row) => row.id)
-        )
-      );
-    }
-
-    return staleRows.length;
+    return deletedRows.length;
   }
 
-  return { mintReference, consumeAttempt, markConsumed, invalidateReference, cleanupExpired, now };
+  return {
+    mintReference,
+    consumeAttempt,
+    releaseAttempt,
+    markConsumed,
+    invalidateReference,
+    cleanupExpired,
+    now,
+  };
 }
 
 export function logReferenceFailure(code: DownloadReferenceErrorCode): void {

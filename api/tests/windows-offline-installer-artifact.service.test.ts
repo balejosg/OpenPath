@@ -75,6 +75,7 @@ function buildRefs(): TestRefs {
           artifactSize: input.artifactSize,
           maxAttempts: input.maxAttempts,
           usedAttempts: 0,
+          activeTransfers: 0,
           expiresAt: new Date(Date.now() + input.ttlMinutes * 60_000),
           consumedAt: null,
         },
@@ -163,6 +164,7 @@ void describe('OpenPath Windows offline installer artifact service', () => {
       assert.equal(result.reference.length > 20, true);
       assert.equal(await readFile(artifactPath, 'utf8'), 'artifact');
       assert.equal((await stat(artifactPath)).isFile(), true);
+      assert.equal((await stat(path.join(root, 'artifacts'))).mode & 0o777, 0o700);
       assert.equal(ticketCalls.length, 1);
       assert.equal(overlayCalls.length, 1);
     } finally {

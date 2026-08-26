@@ -63,13 +63,17 @@ describe('WindowsOfflineInstallerAction', () => {
     expect(click).not.toHaveBeenCalled();
   });
 
-  it('leaves a visible download link and generates a fresh reference on explicit regeneration', async () => {
-    const click = vi
-      .spyOn(HTMLAnchorElement.prototype, 'click')
-      .mockImplementation(() => undefined);
+  it('generates and navigates with a fresh ephemeral reference on every click', async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      const href = this.getAttribute('href');
+      if (href) navigatedHrefs.push(href);
+    });
     generateMutate
       .mockResolvedValueOnce(buildResult('/api/windows-offline-installer/download?ref=A'))
       .mockResolvedValueOnce(buildResult('/api/windows-offline-installer/download?ref=B'));
+    const navigatedHrefs: string[] = [];
 
     const user = userEvent.setup();
     render(<WindowsOfflineInstallerAction classroomId="classroom-cache" />);
@@ -77,25 +81,88 @@ describe('WindowsOfflineInstallerAction', () => {
 
     await user.click(link);
     await waitFor(() =>
-      expect(link).toHaveAttribute('href', '/api/windows-offline-installer/download?ref=A')
+      expect(navigatedHrefs).toEqual(['/api/windows-offline-installer/download?ref=A'])
     );
-    expect(click).not.toHaveBeenCalled();
+    expect(link).not.toHaveAttribute('href');
+    expect(document.querySelectorAll('a[href*="windows-offline-installer/download"]').length).toBe(
+      0
+    );
 
-    await user.click(screen.getByRole('button', { name: 'Generate a new installer' }));
+    await user.click(link);
     await waitFor(() =>
-      expect(link).toHaveAttribute('href', '/api/windows-offline-installer/download?ref=B')
+      expect(navigatedHrefs).toEqual([
+        '/api/windows-offline-installer/download?ref=A',
+        '/api/windows-offline-installer/download?ref=B',
+      ])
     );
     expect(generateMutate).toHaveBeenNthCalledWith(1, { classroomId: 'classroom-cache' });
     expect(generateMutate).toHaveBeenNthCalledWith(2, { classroomId: 'classroom-cache' });
+    expect(link).not.toHaveAttribute('href');
+    expect(click).toHaveBeenCalledTimes(2);
   });
 
-  it('turns generation errors into a localized retry action', async () => {
+  it('turns generation errors into a retry that requests a fresh reference', async () => {
     generateMutate.mockRejectedValueOnce(new Error('network'));
+    generateMutate.mockResolvedValueOnce(
+      buildResult('/api/windows-offline-installer/download?ref=retry')
+    );
+    const navigatedHrefs: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      const href = this.getAttribute('href');
+      if (href) navigatedHrefs.push(href);
+    });
     const user = userEvent.setup();
     render(<WindowsOfflineInstallerAction classroomId="classroom-error" />);
 
     await user.click(screen.getByRole('link', { name: 'Download Windows installer (.exe)' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not generate the installer.');
-    expect(screen.getByRole('link', { name: 'Retry download' })).toBeInTheDocument();
+    const retry = screen.getByRole('link', { name: 'Retry download' });
+    expect(retry).not.toHaveAttribute('href');
+    await user.click(retry);
+    await waitFor(() =>
+      expect(navigatedHrefs).toEqual(['/api/windows-offline-installer/download?ref=retry'])
+    );
+    expect(generateMutate).toHaveBeenCalledTimes(2);
+    expect(retry).not.toHaveAttribute('href');
+  });
+
+  it('drops stale generation metadata when the classroom changes', async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    generateMutate.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirst = resolve;
+      })
+    );
+    generateMutate.mockResolvedValueOnce(
+      buildResult('/api/windows-offline-installer/download?ref=B')
+    );
+    const navigatedHrefs: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      const href = this.getAttribute('href');
+      if (href) navigatedHrefs.push(href);
+    });
+    const user = userEvent.setup();
+    const view = render(<WindowsOfflineInstallerAction classroomId="classroom-A" />);
+
+    await user.click(screen.getByRole('link', { name: 'Download Windows installer (.exe)' }));
+    view.rerender(<WindowsOfflineInstallerAction classroomId="classroom-B" />);
+    expect(screen.queryByTestId('windows-offline-installer-metadata')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Download Windows installer (.exe)' })
+    ).not.toHaveAttribute('href');
+
+    resolveFirst?.(buildResult('/api/windows-offline-installer/download?ref=A'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(navigatedHrefs).toEqual([]);
+    expect(screen.queryByTestId('windows-offline-installer-metadata')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('link', { name: 'Download Windows installer (.exe)' }));
+    await waitFor(() =>
+      expect(navigatedHrefs).toEqual(['/api/windows-offline-installer/download?ref=B'])
+    );
   });
 });

@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS "windows_offline_download_refs" (
 	"artifact_size" bigint NOT NULL,
 	"max_attempts" integer NOT NULL,
 	"used_attempts" integer DEFAULT 0 NOT NULL,
+	"active_transfers" integer DEFAULT 0 NOT NULL,
 	"expires_at" timestamp with time zone NOT NULL,
 	"consumed_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,

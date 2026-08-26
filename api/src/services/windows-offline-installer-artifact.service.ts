@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { chmod, mkdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -220,7 +220,8 @@ export function createWindowsOfflineInstallerService(
     }
 
     try {
-      await mkdir(config.artifactsDir, { recursive: true, mode: 0o750 });
+      await mkdir(config.artifactsDir, { recursive: true, mode: 0o700 });
+      await chmod(config.artifactsDir, 0o700);
     } catch {
       throw new WindowsOfflineInstallerError(
         'ARTIFACTS_UNAVAILABLE',

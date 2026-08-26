@@ -90,6 +90,50 @@ void describe('OpenPath Windows offline installer configuration', () => {
     });
   });
 
+  void test('requires the release tag to identify the configured version and commit', () => {
+    assert.throws(
+      () =>
+        loadWindowsOfflineInstallerConfig({
+          ...baseEnv('/tmp/openpath-installer-root'),
+          OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG: 'scripts-v4.2.0-aaaaaaa',
+        }),
+      /RELEASE_TAG/i
+    );
+
+    assert.throws(
+      () =>
+        loadWindowsOfflineInstallerConfig({
+          ...baseEnv('/tmp/openpath-installer-root'),
+          OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG: 'scripts-v4.1.0-ggggggg',
+        }),
+      /RELEASE_TAG/i
+    );
+
+    assert.throws(
+      () =>
+        loadWindowsOfflineInstallerConfig({
+          ...baseEnv('/tmp/openpath-installer-root'),
+          OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG: 'scripts-v4.1.0-bbbbbbb',
+        }),
+      /RELEASE_TAG/i
+    );
+
+    assert.equal(
+      loadWindowsOfflineInstallerConfig({
+        ...baseEnv('/tmp/openpath-installer-root'),
+        OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG: 'scripts-v4.1.0-aaaaaaa',
+      }).templateReleaseTag,
+      'scripts-v4.1.0-aaaaaaa'
+    );
+    assert.equal(
+      loadWindowsOfflineInstallerConfig({
+        ...baseEnv('/tmp/openpath-installer-root'),
+        OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG: `scripts-v4.1.0-${'a'.repeat(12)}`,
+      }).templateReleaseTag,
+      `scripts-v4.1.0-${'a'.repeat(12)}`
+    );
+  });
+
   void test('rejects nested template and artifact roots', () => {
     assert.throws(
       () =>

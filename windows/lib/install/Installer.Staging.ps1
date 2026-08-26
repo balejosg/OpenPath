@@ -271,6 +271,7 @@ function Copy-OpenPathInstallerRuntime {
     }
 
     $firefoxReleaseCandidates = @(
+        (Join-Path $ScriptDir 'firefox-release'),
         (Join-Path $ScriptDir 'browser-extension\firefox-release'),
         (Join-Path $ScriptDir 'firefox-extension\build\firefox-release'),
         (Join-Path (Split-Path $ScriptDir -Parent) 'firefox-extension\build\firefox-release')
@@ -302,6 +303,7 @@ function Copy-OpenPathInstallerRuntime {
     }
 
     $chromiumManagedCandidates = @(
+        (Join-Path $ScriptDir 'chromium-managed'),
         (Join-Path $ScriptDir 'browser-extension\chromium-managed'),
         (Join-Path $ScriptDir 'firefox-extension\build\chromium-managed'),
         (Join-Path (Split-Path $ScriptDir -Parent) 'firefox-extension\build\chromium-managed')

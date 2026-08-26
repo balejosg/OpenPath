@@ -48,7 +48,10 @@ export async function getReadinessStatus(): Promise<ReadinessResult> {
           : 'error',
     ...(windowsOfflineInstaller.ready ? {} : { error: windowsOfflineInstaller.code }),
   };
-  if (!windowsOfflineInstaller.ready) {
+  if (
+    !windowsOfflineInstaller.ready ||
+    (process.env.NODE_ENV === 'production' && windowsOfflineInstaller.code === 'NOT_CONFIGURED')
+  ) {
     status = 'degraded';
   }
 

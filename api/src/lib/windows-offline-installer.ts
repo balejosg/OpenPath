@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -266,6 +266,10 @@ export async function applyOverlay(
 
   try {
     await copyFile(templatePath, stagedOutputPath);
+    // GitHub-provisioned templates are intentionally read-only. Make only the
+    // private overlay temporary writable; the published artifact retains the
+    // restrictive mode and the canonical template is never modified.
+    await chmod(stagedOutputPath, 0o600);
     const handle = await open(stagedOutputPath, 'r+');
     try {
       const header = buildHeader(payload, WINDOWS_OFFLINE_INSTALLER_SLOT_LENGTH);

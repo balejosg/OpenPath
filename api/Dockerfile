@@ -79,6 +79,9 @@ COPY api/src/db/schema.sql ./api/dist/src/db/schema.sql
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001 -G nodejs && \
+    mkdir -p /app/var/windows-offline-installer/templates /app/var/windows-offline-installer/artifacts && \
+    chmod 0755 /app/var/windows-offline-installer/templates && \
+    chmod 0700 /app/var/windows-offline-installer/artifacts && \
     chown -R nodejs:nodejs /app
 
 USER nodejs

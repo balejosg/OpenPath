@@ -20,14 +20,22 @@ if (-not (Test-Path $ExecutablePath)) {
     exit 10
 }
 
-$scriptRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$offlineModule = Join-Path $scriptRoot 'windows\lib\install\Installer.Offline.ps1'
-$capabilityStorage = Join-Path $scriptRoot 'windows\lib\internal\CapabilityStorage.ps1'
-if (-not (Test-Path $offlineModule)) {
-    # running from the extracted installer tree at runtime
-    $runtimeRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $offlineModule = Join-Path $runtimeRoot 'lib\install\Installer.Offline.ps1'
-    $capabilityStorage = Join-Path $runtimeRoot 'lib\internal\CapabilityStorage.ps1'
+$offlineModuleCandidates = @(
+    (Join-Path $PSScriptRoot '..\lib\install\Installer.Offline.ps1'),
+    (Join-Path $PSScriptRoot '..\..\lib\install\Installer.Offline.ps1'),
+    (Join-Path $PSScriptRoot '..\..\..\windows\lib\install\Installer.Offline.ps1')
+)
+$offlineModule = $offlineModuleCandidates |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -First 1
+if (-not $offlineModule) {
+    throw 'Offline validation module not found beside trailer reader'
+}
+
+$offlineModuleRoot = Split-Path -Parent $offlineModule
+$capabilityStorage = Join-Path (Join-Path (Split-Path -Parent $offlineModuleRoot) 'internal') 'CapabilityStorage.ps1'
+if (-not (Test-Path -LiteralPath $capabilityStorage -PathType Leaf)) {
+    throw 'Capability storage module not found beside offline validation module'
 }
 
 . $capabilityStorage
