@@ -459,7 +459,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     executableLane,
-    /Get-ChildItem[\s\S]*OpenPathOfflineSetup-\*-status\.txt[\s\S]*Get-SafeInstallerStatus/,
+    /Get-ChildItem[\s\S]*OpenPathOfflineSetup-\*-status\*\.txt[\s\S]*Get-SafeInstallerStatus/,
     'Windows EXE failure evidence must inspect all bounded stage markers without uploading paths or logs'
   );
   const failureEvidenceBlock = executableLane.slice(
@@ -496,6 +496,11 @@ test('Windows release evidence executes the personalized NSIS executable and its
     nsiSource,
     /FileWriteByte/,
     'NSIS stage status must use an unambiguous bounded byte representation'
+  );
+  assert.match(
+    nsiSource,
+    /OpenPathOfflineSetup-\$EXEFILE-status-\$R1\.txt/,
+    'NSIS must preserve one bounded stage marker per installer phase'
   );
   const readTrailerSection = nsiSource.slice(
     nsiSource.indexOf('Section "ReadTrailer"'),

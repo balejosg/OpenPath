@@ -132,7 +132,7 @@ function Get-SafeInstallerStatus {
 function Get-SafeInstallerStatusSnapshot {
     $tempPath = [System.IO.Path]::GetTempPath()
     return @(
-        Get-ChildItem -LiteralPath $tempPath -Filter 'OpenPathOfflineSetup-*-status.txt' -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $tempPath -Filter 'OpenPathOfflineSetup-*-status*.txt' -File -ErrorAction SilentlyContinue |
             Sort-Object -Property Name |
             ForEach-Object { Get-SafeInstallerStatus -Path $_.FullName }
     )
@@ -456,6 +456,8 @@ finally {
     if (Test-Path -LiteralPath $trailerDiagnosticPath) {
         Remove-Item -LiteralPath $trailerDiagnosticPath -Force -ErrorAction SilentlyContinue
     }
+    Get-ChildItem -LiteralPath ([System.IO.Path]::GetTempPath()) -Filter 'OpenPathOfflineSetup-*-status*.txt' -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
     $uninstaller = Join-Path $OpenPathRoot 'Uninstall-OpenPath.ps1'
     if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
         & $shell -NoProfile -ExecutionPolicy Bypass -File $uninstaller *> $null

@@ -63,6 +63,7 @@ Function .onInit
     ; evidence lane. Delete a marker left by an earlier failed attempt before
     ; this run starts so stale diagnostics cannot be mistaken for progress.
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-status.txt"
+    Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-status-*.txt"
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"
 FunctionEnd
 
@@ -97,6 +98,10 @@ Function WriteOfflineStage
     FileWriteByte $R2 $R1
     FileWriteByte $R2 $R0
     FileClose $R2
+    FileOpen $R3 "$TEMP\OpenPathOfflineSetup-$EXEFILE-status-$R1.txt" w
+    FileWriteByte $R3 $R1
+    FileWriteByte $R3 $R0
+    FileClose $R3
 FunctionEnd
 
 Page InstFiles
