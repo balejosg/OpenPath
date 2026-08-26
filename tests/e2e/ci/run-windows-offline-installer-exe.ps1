@@ -92,26 +92,33 @@ function Get-SafeInstallerStatus {
         return 'unreadable'
     }
 
-    if ($bytes.Length -gt 512) {
+    if ($bytes.Length -ne 2) {
         return 'invalid'
     }
 
-    $utf8 = New-Object System.Text.UTF8Encoding($false, $true)
-    foreach ($encoding in @(
-            $utf8,
-            [System.Text.Encoding]::Unicode,
-            [System.Text.Encoding]::BigEndianUnicode
-        )) {
-        try {
-            $value = ([string]$encoding.GetString($bytes)).Trim()
-            $value = $value.Trim([char]0).Trim()
+    $stage = [int]$bytes[0]
+    $exitCode = [int]$bytes[1]
+    switch ($stage) {
+        10 {
+            if ($exitCode -eq 255) { return 'read-trailer-start' }
         }
-        catch {
-            continue
+        11 {
+            return "read-trailer-exit-$exitCode"
         }
-
-        if ($value -match '^(read-trailer-start|read-trailer-exit-[0-9]+|read-trailer-ok|extract-start|extract-ok|run-installer-start|run-installer-exit-[0-9]+)$') {
-            return $value
+        12 {
+            if ($exitCode -eq 0) { return 'read-trailer-ok' }
+        }
+        20 {
+            if ($exitCode -eq 255) { return 'extract-start' }
+        }
+        21 {
+            if ($exitCode -eq 0) { return 'extract-ok' }
+        }
+        30 {
+            if ($exitCode -eq 255) { return 'run-installer-start' }
+        }
+        31 {
+            return "run-installer-exit-$exitCode"
         }
     }
 

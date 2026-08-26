@@ -454,8 +454,8 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     executableLane,
-    /ReadAllBytes[\s\S]*Encoding\]\:\:Unicode/,
-    'Windows EXE evidence must decode the NSIS Unicode stage marker without reading arbitrary logs'
+    /ReadAllBytes[\s\S]*bytes\.Length\s*-ne\s*2[\s\S]*switch \(\$stage\)/,
+    'Windows EXE evidence must decode only the fixed two-byte NSIS stage marker'
   );
   const failureEvidenceBlock = executableLane.slice(
     executableLane.lastIndexOf('catch {'),
@@ -486,6 +486,11 @@ test('Windows release evidence executes the personalized NSIS executable and its
     nsiSource,
     /OpenPathOfflineSetup-\$EXEFILE-status\.txt/,
     'NSIS must expose only a bounded stage status file for safe executable-lane diagnosis'
+  );
+  assert.match(
+    nsiSource,
+    /FileWriteByte/,
+    'NSIS stage status must use an unambiguous bounded byte representation'
   );
   assert.doesNotMatch(
     nsiSource,

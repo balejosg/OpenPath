@@ -32,6 +32,18 @@ ManifestDPIAware true
     !define PAYLOADS_DIR "${BUILD_DIR}\payloads"
 !endif
 
+; The executable evidence lane reads a two-byte marker from %TEMP%. Keep the
+; stage values stable and the exit value bounded to one byte; the marker must
+; never contain configuration, command lines, or installer output.
+!define OFFLINE_STATUS_SENTINEL 255
+!define OFFLINE_STAGE_READ_TRAILER_START 10
+!define OFFLINE_STAGE_READ_TRAILER_EXIT 11
+!define OFFLINE_STAGE_READ_TRAILER_OK 12
+!define OFFLINE_STAGE_EXTRACT_START 20
+!define OFFLINE_STAGE_EXTRACT_OK 21
+!define OFFLINE_STAGE_RUN_INSTALLER_START 30
+!define OFFLINE_STAGE_RUN_INSTALLER_EXIT 31
+
 Name "${PRODUCT_NAME}"
 OutFile "${BUILD_DIR}\OpenPath-Windows-Setup.exe"
 InstallDir "$TEMP\OpenPathOfflineSetup"
@@ -52,21 +64,22 @@ Function .onInit
 FunctionEnd
 
 Function WriteOfflineStage
-    ; This file contains only an allow-listed stage name or numeric exit code.
-    ; It exists solely to diagnose a non-zero child-process result without
-    ; uploading installer logs, command lines, or configuration material.
-    Exch $0
-    FileOpen $1 "$TEMP\OpenPathOfflineSetup-$EXEFILE-status.txt" w
-    FileWrite $1 "$0$\r$\n"
-    FileClose $1
-    Pop $0
+    ; Stack arguments are stage byte, then exit byte. FileWriteByte avoids any
+    ; text encoding or locale ambiguity in this diagnostic-only marker.
+    Pop $R0
+    Pop $R1
+    FileOpen $R2 "$TEMP\OpenPathOfflineSetup-$EXEFILE-status.txt" w
+    FileWriteByte $R2 $R1
+    FileWriteByte $R2 $R0
+    FileClose $R2
 FunctionEnd
 
 Page InstFiles
 ShowInstDetails show
 
 Section "ReadTrailer" SEC00
-    Push "read-trailer-start"
+    Push "${OFFLINE_STAGE_READ_TRAILER_START}"
+    Push "${OFFLINE_STATUS_SENTINEL}"
     Call WriteOfflineStage
 
     ; The trailer reader runs before the complete package is extracted. Stage
@@ -82,7 +95,8 @@ Section "ReadTrailer" SEC00
     ; that was never customized carries a placeholder slot and aborts here.
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$EXEDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json"'
     Pop $0
-    Push "read-trailer-exit-$0"
+    Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"
+    Push $0
     Call WriteOfflineStage
     IntCmp $0 0 trailer_ok trailer_failed trailer_failed
 trailer_failed:
@@ -90,12 +104,14 @@ trailer_failed:
         SetErrorLevel 10
         Abort
 trailer_ok:
-    Push "read-trailer-ok"
+    Push "${OFFLINE_STAGE_READ_TRAILER_OK}"
+    Push "0"
     Call WriteOfflineStage
 SectionEnd
 
 Section "ExtractAndVerify" SEC01
-    Push "extract-start"
+    Push "${OFFLINE_STAGE_EXTRACT_START}"
+    Push "${OFFLINE_STATUS_SENTINEL}"
     Call WriteOfflineStage
 
     ; Keep the extracted package layout aligned with the offline manifest:
@@ -118,16 +134,19 @@ Section "ExtractAndVerify" SEC01
     SetOutPath "$INSTDIR\chromium-managed"
     File /nonfatal /a /r "${EXTENSION_BUILD_DIR}\chromium-managed\*.*"
     SetOutPath "$INSTDIR"
-    Push "extract-ok"
+    Push "${OFFLINE_STAGE_EXTRACT_OK}"
+    Push "0"
     Call WriteOfflineStage
 SectionEnd
 
 Section "RunInstaller" SEC02
-    Push "run-installer-start"
+    Push "${OFFLINE_STAGE_RUN_INSTALLER_START}"
+    Push "${OFFLINE_STATUS_SENTINEL}"
     Call WriteOfflineStage
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -Unattended'
     Pop $1
-    Push "run-installer-exit-$1"
+    Push "${OFFLINE_STAGE_RUN_INSTALLER_EXIT}"
+    Push $1
     Call WriteOfflineStage
     SetErrorLevel $1
 SectionEnd
