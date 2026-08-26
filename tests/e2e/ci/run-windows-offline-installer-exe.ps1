@@ -28,6 +28,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$script:CurrentStage = 'preflight'
+$installExitCode = $null
 
 function Get-AvailablePowerShell {
     $command = Get-Command powershell.exe -ErrorAction SilentlyContinue
@@ -172,13 +174,16 @@ $trailerConfigFile = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-exe-t
 $result = $null
 
 try {
+    $script:CurrentStage = 'launch-executable'
     $env:OPENPATH_WINDOWS_ROOT = $OpenPathRoot
     $installProcess = Start-Process -FilePath $resolvedExecutable -ArgumentList @('/S') -Wait -PassThru
     $installExitCode = [int]$installProcess.ExitCode
+    $script:CurrentStage = 'validate-installer-exit'
     if ($installExitCode -ne 60) {
         throw 'offline-install-did-not-reach-pending-state'
     }
 
+    $script:CurrentStage = 'validate-installed-state'
     $pendingStatePath = Join-Path $OpenPathRoot 'data\pending-enrollment.json.dpapi'
     $installedConfigPath = Join-Path $OpenPathRoot 'data\config.json'
     if (-not (Test-Path -LiteralPath $pendingStatePath -PathType Leaf)) {
@@ -191,10 +196,12 @@ try {
         throw 'offline-runtime-missing'
     }
 
+    $script:CurrentStage = 'validate-installed-config'
     $installedConfig = Get-Content -LiteralPath $installedConfigPath -Raw | ConvertFrom-Json
     Assert-EqualValue -Actual ([string]$installedConfig.classroomId) -Expected $ExpectedClassroomId -Code 'installed-classroom-mismatch'
     Assert-EqualValue -Actual ([string]$installedConfig.apiUrl) -Expected $ExpectedApiUrl -Code 'installed-api-url-mismatch'
 
+    $script:CurrentStage = 'validate-trailer'
     $reader = Join-Path $PSScriptRoot '..\..\..\windows\offline-installer\scripts\Read-Trailer.ps1'
     if (-not (Test-Path -LiteralPath $reader -PathType Leaf)) {
         throw 'offline-trailer-reader-missing'
@@ -207,6 +214,7 @@ try {
     Assert-EqualValue -Actual ([string]$trailerConfig.classroomId) -Expected $ExpectedClassroomId -Code 'trailer-classroom-mismatch'
     Assert-EqualValue -Actual ([string]$trailerConfig.apiUrl) -Expected $ExpectedApiUrl -Code 'trailer-api-url-mismatch'
 
+    $script:CurrentStage = 'configure-local-https'
     $certificate = New-SelfSignedCertificate -DnsName 'localhost' -CertStoreLocation 'Cert:\LocalMachine\My'
     $certificateFile = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-exe-e2e-$([guid]::NewGuid().ToString('N')).cer"
     Export-Certificate -Cert $certificate -FilePath $certificateFile -Type CERT | Out-Null
@@ -223,6 +231,7 @@ try {
     }
     $urlAclAdded = $true
 
+    $script:CurrentStage = 'start-enrollment-fixture'
     $stubJob = Start-EnrollmentFixture -Prefix $urlAcl -ClassroomId $ExpectedClassroomId -Port $ConnectivityPort
     Start-Sleep -Seconds 2
     if ($stubJob.State -eq 'Failed') {
@@ -230,6 +239,7 @@ try {
         throw 'local-enrollment-fixture-failed'
     }
 
+    $script:CurrentStage = 'retry-pending-enrollment'
     . (Join-Path $OpenPathRoot 'lib\install\Installer.Offline.ps1')
     $retry = Invoke-OpenPathPendingEnrollmentRetry -OpenPathRoot $OpenPathRoot
     if ([string]$retry.Outcome -ne 'REGISTERED') {
@@ -239,6 +249,7 @@ try {
         throw 'pending-enrollment-state-not-cleared'
     }
 
+    $script:CurrentStage = 'validate-completed-state'
     $completedConfig = Get-Content -LiteralPath $installedConfigPath -Raw | ConvertFrom-Json
     Assert-EqualValue -Actual ([string]$completedConfig.classroomId) -Expected $ExpectedClassroomId -Code 'completed-classroom-mismatch'
     if ([string]::IsNullOrWhiteSpace([string]$completedConfig.whitelistUrl)) {
@@ -262,6 +273,8 @@ catch {
     $failure = [ordered]@{
         status = 'failed'
         code = 'windows-offline-installer-exe-e2e-failed'
+        failureStage = $script:CurrentStage
+        installerExitCode = $installExitCode
     }
     Write-SafeEvidence -Payload $failure -Path $EvidencePath
     $failure | ConvertTo-Json -Compress

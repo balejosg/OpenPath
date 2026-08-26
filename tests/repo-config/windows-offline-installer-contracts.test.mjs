@@ -400,6 +400,26 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
 
   assert.match(
+    executableLane,
+    /failureStage\s*=\s*\$script:CurrentStage/,
+    'Windows EXE evidence must preserve a safe failure stage for diagnosis'
+  );
+  assert.match(
+    executableLane,
+    /installerExitCode\s*=\s*\$installExitCode/,
+    'Windows EXE evidence must preserve the installer exit code when available'
+  );
+  const failureEvidenceBlock = executableLane.slice(
+    executableLane.lastIndexOf('catch {'),
+    executableLane.lastIndexOf('finally {')
+  );
+  assert.doesNotMatch(
+    failureEvidenceBlock,
+    /Exception\.Message|Receive-Job|openpath\.log/,
+    'Windows EXE failure evidence must not upload raw exception or installer logs'
+  );
+
+  assert.match(
     nsiSource,
     /!define BUILD_DIR "\$\{REPO_ROOT\}\\windows\\offline-installer\\build"/,
     'NSIS build output must stay inside the repository build directory'
