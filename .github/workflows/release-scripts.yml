@@ -107,6 +107,30 @@ jobs:
       - name: Validate appended trailer round-trip
         run: node --import tsx --test windows/offline-installer/tests/trailer-roundtrip.test.mjs
 
+      - name: Create personalized NSIS executable
+        shell: pwsh
+        run: |
+          $configPath = Join-Path $env:RUNNER_TEMP 'openpath-offline-installer-e2e-config.json'
+          $personalizedPath = Join-Path $env:RUNNER_TEMP 'OpenPath-Windows-Setup-E2E.exe'
+          @{
+            schemaVersion = 1
+            apiUrl = 'https://localhost:18443'
+            classroomId = 'release-e2e-classroom'
+            enrollmentToken = 'release-e2e-enrollment-token'
+            enrollmentTokenExpiresAt = '2036-01-01T00:00:00.000Z'
+            captivePortalDomains = @()
+            options = @{
+              approvedStudentBrowsers = @('Firefox')
+              installFirefoxIfMissing = $true
+              enforceManagedBrowserBoundary = $true
+            }
+          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+          node --import tsx windows/offline-installer/scripts/create-personalized-test-installer.mjs `
+            --template windows/offline-installer/build/OpenPath-Windows-Setup-Template.exe `
+            --output $personalizedPath `
+            --config $configPath
+
       - name: Validate personalized trailer with PowerShell
         shell: pwsh
         run: |
@@ -131,27 +155,8 @@ jobs:
       - name: Execute the personalized NSIS executable E2E
         shell: pwsh
         run: |
-          $configPath = Join-Path $env:RUNNER_TEMP 'openpath-offline-installer-e2e-config.json'
           $personalizedPath = Join-Path $env:RUNNER_TEMP 'OpenPath-Windows-Setup-E2E.exe'
           $evidencePath = Join-Path $env:RUNNER_TEMP 'openpath-windows-offline-installer-exe-evidence.json'
-          @{
-            schemaVersion = 1
-            apiUrl = 'https://localhost:18443'
-            classroomId = 'release-e2e-classroom'
-            enrollmentToken = 'release-e2e-enrollment-token'
-            enrollmentTokenExpiresAt = '2036-01-01T00:00:00.000Z'
-            captivePortalDomains = @()
-            options = @{
-              approvedStudentBrowsers = @('Firefox')
-              installFirefoxIfMissing = $true
-              enforceManagedBrowserBoundary = $true
-            }
-          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configPath -Encoding UTF8
-
-          node --import tsx windows/offline-installer/scripts/create-personalized-test-installer.mjs `
-            --template windows/offline-installer/build/OpenPath-Windows-Setup-Template.exe `
-            --output $personalizedPath `
-            --config $configPath
 
           & (Resolve-Path 'tests/e2e/ci/run-windows-offline-installer-exe.ps1') `
             -ExecutablePath $personalizedPath `

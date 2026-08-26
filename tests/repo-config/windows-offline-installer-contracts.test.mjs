@@ -365,7 +365,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
   const workflow = readText('.github/workflows/release-scripts.yml');
   const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
   for (const marker of [
-    'create-personalized-test-installer.mjs',
+    'Create personalized NSIS executable',
     'Validate personalized trailer with PowerShell',
     'run-windows-offline-installer-exe.ps1',
     'Execute the personalized NSIS executable E2E',
@@ -385,6 +385,16 @@ test('Windows release evidence executes the personalized NSIS executable and its
     'name: Execute the personalized NSIS executable E2E'
   );
   const trailerValidationBlock = workflow.slice(trailerValidationStart, trailerValidationEnd);
+  const personalizedBuildStart = workflow.indexOf('name: Create personalized NSIS executable');
+  assert.ok(
+    personalizedBuildStart >= 0 && personalizedBuildStart < trailerValidationStart,
+    'the personalized executable must be created before its PowerShell trailer validation'
+  );
+  assert.match(
+    workflow.slice(personalizedBuildStart, trailerValidationStart),
+    /create-personalized-test-installer\.mjs/,
+    'the release workflow must create the personalized executable in its own step'
+  );
   assert.match(
     trailerValidationBlock,
     /Test-Path -LiteralPath \$validationPath -PathType Leaf/,
