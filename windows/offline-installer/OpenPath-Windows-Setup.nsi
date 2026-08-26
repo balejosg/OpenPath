@@ -41,6 +41,8 @@ ManifestDPIAware true
 !define OFFLINE_STAGE_READ_TRAILER_OK 12
 !define OFFLINE_STAGE_READ_TRAILER_OUTPUT_PRESENT 13
 !define OFFLINE_STAGE_READ_TRAILER_OUTPUT_MISSING 14
+!define OFFLINE_STAGE_READ_TRAILER_MARKER_PRESENT 15
+!define OFFLINE_STAGE_READ_TRAILER_MARKER_MISSING 16
 !define OFFLINE_STAGE_EXTRACT_START 20
 !define OFFLINE_STAGE_EXTRACT_OK 21
 !define OFFLINE_STAGE_RUN_INSTALLER_START 30
@@ -143,6 +145,17 @@ Section "ReadTrailer" SEC00
     ClearErrors
     CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" "$TEMP"
     ClearErrors
+    IfFileExists "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" trailer_marker_present trailer_marker_missing
+trailer_marker_missing:
+    Push "${OFFLINE_STAGE_READ_TRAILER_MARKER_MISSING}"
+    Push "0"
+    Call WriteOfflineStage
+    Goto trailer_output_check
+trailer_marker_present:
+    Push "${OFFLINE_STAGE_READ_TRAILER_MARKER_PRESENT}"
+    Push "0"
+    Call WriteOfflineStage
+trailer_output_check:
     ; Branch before any evidence publication so the child result controls the
     ; installer outcome rather than a diagnostic copy operation.
     ; ExecWait exposes the child result through a user variable. Reject the

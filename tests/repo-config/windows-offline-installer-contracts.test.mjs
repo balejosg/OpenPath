@@ -645,6 +645,11 @@ test('NSIS stages trailer-reader dependencies before validating the trailer', ()
   );
   assert.match(
     readTrailerSection,
+    /IfFileExists "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-trailer-status\.txt" trailer_marker_present trailer_marker_missing/,
+    'NSIS must preserve a bounded marker-state diagnostic when the child exits'
+  );
+  assert.match(
+    readTrailerSection,
     /CopyFiles \/SILENT "\$EXEDIR\\\$EXEFILE" "\$INSTDIR"[\s\S]*-ExecutablePath "\$INSTDIR\\\$EXEFILE"/,
     'NSIS must validate a temporary copy because the running executable can be locked for sharing'
   );
