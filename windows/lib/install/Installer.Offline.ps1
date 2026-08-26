@@ -247,7 +247,7 @@ function Throw-OpenPathOfflinePayloadVerificationFailure {
         [string]$Message,
 
         [Parameter(Mandatory = $true)]
-        [ValidatePattern('^(manifest|entry|missing|sha256|size|hash-io|size-io|io|failed)(-(repo|windows|runtime|extension|pinned|unknown))?$')]
+        [ValidatePattern('^(manifest|entry|missing|sha256|size|hash-io|size-io|io|failed)(-(repo|windows|runtime|extension|pinned|unknown)(-(command|parameter|null|access|not-found|other))?)?$')]
         [string]$Category
     )
 
@@ -277,17 +277,51 @@ function Get-OpenPathOfflinePayloadSourceClass {
     }
 }
 
-function Get-OpenPathOfflinePayloadFailureCategory {
+function Get-OpenPathOfflinePayloadIoFailureClass {
+    param(
+        [AllowNull()]
+        [object]$ErrorRecord
+    )
+
+    $message = if ($ErrorRecord -and $ErrorRecord.Exception) {
+        [string]$ErrorRecord.Exception.Message
+    }
+    else {
+        ''
+    }
+
+    if ($message -match 'not recognized|cannot find the path|command') {
+        return 'command'
+    }
+    if ($message -match 'parameter cannot be found|positional parameter') {
+        return 'parameter'
+    }
+    if ($message -match 'null-valued expression|cannot call a method on a null') {
+        return 'null'
+    }
+    if ($message -match 'access is denied|unauthorized|permission') {
+        return 'access'
+    }
+    if ($message -match 'not found|does not exist') {
+        return 'not-found'
+    }
+    return 'other'
+}
+
+function Get-OpenPathOfflinePayloadIoFailureCategory {
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet('hash-io', 'size-io')]
         [string]$Category,
 
         [AllowNull()]
-        [object]$Entry
+        [object]$Entry,
+
+        [AllowNull()]
+        [object]$ErrorRecord
     )
 
-    return "$Category-$(Get-OpenPathOfflinePayloadSourceClass -Entry $Entry)"
+    return "$Category-$(Get-OpenPathOfflinePayloadSourceClass -Entry $Entry)-$(Get-OpenPathOfflinePayloadIoFailureClass -ErrorRecord $ErrorRecord)"
 }
 
 function Assert-OpenPathOfflinePayloadManifest {
@@ -365,9 +399,10 @@ function Assert-OpenPathOfflinePayloadManifest {
             }
             catch {
                 $failures += "could not hash payload: $relativePath"
-                $failureCategories += Get-OpenPathOfflinePayloadFailureCategory `
+                $failureCategories += Get-OpenPathOfflinePayloadIoFailureCategory `
                     -Category 'hash-io' `
-                    -Entry $entry
+                    -Entry $entry `
+                    -ErrorRecord $_
                 continue
             }
             if ($actualSha256 -ne $expectedSha256.ToLowerInvariant()) {
@@ -384,9 +419,10 @@ function Assert-OpenPathOfflinePayloadManifest {
             }
             catch {
                 $failures += "could not read payload size: $relativePath"
-                $failureCategories += Get-OpenPathOfflinePayloadFailureCategory `
+                $failureCategories += Get-OpenPathOfflinePayloadIoFailureCategory `
                     -Category 'size-io' `
-                    -Entry $entry
+                    -Entry $entry `
+                    -ErrorRecord $_
                 continue
             }
             if ([long]$actualSize -ne [long]$expectedSize) {
@@ -397,31 +433,15 @@ function Assert-OpenPathOfflinePayloadManifest {
     }
 
     if ($failures.Count -gt 0) {
-        $category = @(
-                'missing',
-                'sha256',
-                'size',
-                'hash-io-repo',
-                'hash-io-windows',
-                'hash-io-runtime',
-                'hash-io-extension',
-                'hash-io-pinned',
-                'hash-io-unknown',
-                'size-io-repo',
-                'size-io-windows',
-                'size-io-runtime',
-                'size-io-extension',
-                'size-io-pinned',
-                'size-io-unknown',
-                'hash-io',
-                'size-io',
-                'entry',
-                'io',
-                'manifest',
-                'failed'
-            ) |
-            Where-Object { $failureCategories -contains $_ } |
-            Select-Object -First 1
+        $category = $null
+        foreach ($baseCategory in @('missing', 'sha256', 'size', 'hash-io', 'size-io', 'entry', 'io', 'manifest', 'failed')) {
+            $category = $failureCategories |
+                Where-Object { $_ -eq $baseCategory -or $_ -like "$baseCategory-*" } |
+                Select-Object -First 1
+            if ($category) {
+                break
+            }
+        }
         if (-not $category) {
             $category = 'failed'
         }

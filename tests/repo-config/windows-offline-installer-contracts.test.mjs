@@ -632,7 +632,7 @@ test('real NSIS failures expose only a bounded installer phase for diagnosis', (
   );
   assert.match(
     installer,
-    /function Set-OpenPathOfflinePayloadFailurePhase[\s\S]*hash-io[\s\S]*runtime\|extension\|pinned\|unknown[\s\S]*\$Matches\[1\][\s\S]*offline-payload-verification-\$suffix/,
+    /function Set-OpenPathOfflinePayloadFailurePhase[\s\S]*hash-io[\s\S]*runtime\|extension\|pinned\|unknown[\s\S]*command\|parameter\|null\|access\|not-found\|other[\s\S]*\$Matches\[1\][\s\S]*offline-payload-verification-\$suffix/,
     'payload failures should expose only a bounded verification category for diagnosis'
   );
   assert.match(
@@ -642,7 +642,7 @@ test('real NSIS failures expose only a bounded installer phase for diagnosis', (
   );
   assert.match(
     offlineModule,
-    /ValidatePattern\('\^\(manifest\|entry\|missing\|sha256\|size\|hash-io\|size-io\|io\|failed\)\(-\(repo\|windows\|runtime\|extension\|pinned\|unknown\)\)\?\$'\)[\s\S]*Offline payload verification failed \[\$Category\]/,
+    /ValidatePattern\('\^\(manifest\|entry\|missing\|sha256\|size\|hash-io\|size-io\|io\|failed\)\(-\(repo\|windows\|runtime\|extension\|pinned\|unknown\)\(-\(command\|parameter\|null\|access\|not-found\|other\)\)\?\)\?\$'\)[\s\S]*Offline payload verification failed \[\$Category\]/,
     'payload verification should retain a structured, non-sensitive failure category'
   );
 });

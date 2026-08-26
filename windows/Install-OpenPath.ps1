@@ -205,7 +205,7 @@ function Set-OpenPathOfflinePayloadFailurePhase {
         ''
     }
 
-    $suffix = if ($message -match 'Offline payload verification failed \[((?:manifest|entry|missing|sha256|size|hash-io|size-io|io|failed)(?:-(?:repo|windows|runtime|extension|pinned|unknown))?)\]') {
+    $suffix = if ($message -match 'Offline payload verification failed \[((?:manifest|entry|missing|sha256|size|hash-io|size-io|io|failed)(?:-(?:repo|windows|runtime|extension|pinned|unknown)(?:-(?:command|parameter|null|access|not-found|other))?)?)\]') {
         $Matches[1]
     }
     else {

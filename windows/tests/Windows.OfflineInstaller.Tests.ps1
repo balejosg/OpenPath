@@ -134,7 +134,7 @@ Describe "Offline installer" {
             Mock Get-FileHash { throw 'simulated hash IO failure' }
 
             { Assert-OpenPathOfflinePayloadManifest -ManifestPath $manifestPath -StagingRoot $stagingRoot } |
-                Should -Throw -ExpectedMessage '*hash-io-pinned*'
+                Should -Throw -ExpectedMessage '*hash-io-pinned-other*'
         }
     }
 
