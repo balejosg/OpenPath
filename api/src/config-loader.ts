@@ -7,6 +7,7 @@ import {
   parseTrustProxyEnv,
   resolveJwtSecret,
 } from './config-env.js';
+import { isWindowsOfflineInstallerConfigured } from './lib/windows-offline-installer-config.js';
 
 const DEFAULT_DATABASE_URL = ['postgres://', 'openpath:openpath@localhost:5432/openpath'].join('');
 const DEFAULT_ENROLLMENT_TOKEN_MAX_TTL_HOURS = 24;
@@ -36,6 +37,9 @@ function parsePublicUrl(value: string | undefined, nodeEnv: string): string | un
 
   if (!parsed.hostname || parsed.username || parsed.password) {
     throw new Error('PUBLIC_URL must contain a hostname and no URL credentials');
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error('PUBLIC_URL must not contain a query string or fragment');
   }
   if (nodeEnv === 'production' && parsed.protocol !== 'https:') {
     throw new Error('PUBLIC_URL must use HTTPS in production');
@@ -101,10 +105,15 @@ export function loadConfig(
     throw new Error('CORS_ORIGINS must not include * in production');
   }
 
+  const publicUrl = parsePublicUrl(env.PUBLIC_URL, nodeEnv);
+  if (nodeEnv === 'production' && isWindowsOfflineInstallerConfigured(env) && !publicUrl) {
+    throw new Error('PUBLIC_URL is required when the offline installer is configured');
+  }
+
   return {
     port: parseIntEnv(env.PORT, 3000),
     host: env.HOST ?? '0.0.0.0',
-    publicUrl: parsePublicUrl(env.PUBLIC_URL, nodeEnv),
+    publicUrl,
     nodeEnv,
     trustProxy: parseTrustProxyEnv(env.TRUST_PROXY),
     isProduction: nodeEnv === 'production',

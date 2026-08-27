@@ -272,6 +272,7 @@ export const windowsOfflineDownloadRefs = pgTable(
     }),
     referenceHash: varchar('reference_hash', { length: 64 }).notNull().unique(),
     artifactFileName: varchar('artifact_file_name', { length: 255 }).notNull(),
+    artifactStorageFileName: varchar('artifact_storage_file_name', { length: 255 }).notNull(),
     artifactSha256: varchar('artifact_sha256', { length: 64 }).notNull(),
     artifactSize: bigint('artifact_size', { mode: 'number' }).notNull(),
     maxAttempts: integer('max_attempts').notNull(),
@@ -284,6 +285,22 @@ export const windowsOfflineDownloadRefs = pgTable(
   (table) => [
     index('windows_offline_download_refs_expires_idx').on(table.expiresAt),
     index('windows_offline_download_refs_classroom_idx').on(table.classroomId, table.createdAt),
+  ]
+);
+
+export const windowsOfflineDownloadTransferLeases = pgTable(
+  'windows_offline_download_transfer_leases',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    downloadRefId: uuid('download_ref_id')
+      .notNull()
+      .references(() => windowsOfflineDownloadRefs.id, { onDelete: 'cascade' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('windows_offline_transfer_leases_ref_idx').on(table.downloadRefId),
+    index('windows_offline_transfer_leases_expires_idx').on(table.expiresAt),
   ]
 );
 

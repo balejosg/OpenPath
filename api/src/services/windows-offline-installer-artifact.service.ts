@@ -26,7 +26,7 @@ import { logger } from '../lib/logger.js';
 import { issueEnrollmentTicket } from './enrollment-access.service.js';
 import {
   createWindowsOfflineDownloadRefsService,
-  artifactFileNameFromReferenceHash,
+  validateArtifactStorageFileName,
   type WindowsOfflineDownloadRefsService,
 } from './windows-offline-installer-download-refs.service.js';
 import type { JWTPayload } from '../types/index.js';
@@ -68,7 +68,6 @@ interface ClassroomForInstaller {
 }
 
 interface ArtifactRefs {
-  cleanupExpired?: (artifactsDir: string) => Promise<number>;
   invalidateReference: (rawToken: string) => Promise<void>;
   mintReference: WindowsOfflineDownloadRefsService['mintReference'];
 }
@@ -105,12 +104,12 @@ export function sanitizeWindowsInstallerFileName(classroomName: string): string 
   return `OpenPath-${safeName.replace(/\s+/g, '-')}-Windows-Setup.exe`;
 }
 
-function toSafeBaseUrl(value: string): string {
-  return value.replace(/\/+$/u, '');
-}
-
 function buildDownloadUrl(baseUrl: string, rawReference: string): string {
-  return `${toSafeBaseUrl(baseUrl)}/api/windows-offline-installer/download?ref=${encodeURIComponent(rawReference)}`;
+  const url = new URL(baseUrl);
+  url.pathname = `${url.pathname.replace(/\/+$/u, '')}/api/windows-offline-installer/download`;
+  url.search = new URLSearchParams({ ref: rawReference }).toString();
+  url.hash = '';
+  return url.toString();
 }
 
 function readCaptivePortalDomains(classroom: ClassroomForInstaller): string[] {
@@ -167,6 +166,7 @@ export function createWindowsOfflineInstallerService(
         version: config.templateVersion,
         commit: config.templateCommit,
         sha256: config.templateSha256,
+        releaseTag: config.templateReleaseTag,
       });
     } catch (error) {
       logger.error('offline_installer_template_unavailable', {
@@ -229,15 +229,13 @@ export function createWindowsOfflineInstallerService(
       );
     }
 
-    const cleanupPromise = refs.cleanupExpired?.(config.artifactsDir);
-    if (cleanupPromise) void cleanupPromise.catch(() => undefined);
-
     const stagingPath = path.join(
       config.artifactsDir,
       `.${String(process.pid)}-${randomUUID()}.staging.exe`
     );
     const artifactFileName = sanitizeWindowsInstallerFileName(classroom.name);
     let publishedReference: string | undefined;
+    let publishedPath: string | undefined;
 
     try {
       try {
@@ -248,6 +246,19 @@ export function createWindowsOfflineInstallerService(
 
       const artifactSha256 = await hashFileSha256(stagingPath);
       const artifactSize = (await stat(stagingPath)).size;
+      const artifactStorageFileName = validateArtifactStorageFileName(`${randomUUID()}.exe`);
+      publishedPath = path.join(config.artifactsDir, artifactStorageFileName);
+
+      try {
+        await renameArtifact(stagingPath, publishedPath);
+      } catch {
+        await rm(publishedPath, { force: true });
+        throw new WindowsOfflineInstallerError(
+          'ARTIFACT_PUBLISH_FAILED',
+          'Installer artifact could not be published'
+        );
+      }
+
       let minted: Awaited<ReturnType<ArtifactRefs['mintReference']>>;
       try {
         minted = await refs.mintReference({
@@ -255,6 +266,7 @@ export function createWindowsOfflineInstallerService(
           classroomName: classroom.name,
           createdBy: input.user.sub,
           artifactFileName,
+          artifactStorageFileName,
           artifactSha256,
           artifactSize,
           ttlMinutes: config.downloadRefTtlMinutes,
@@ -267,28 +279,6 @@ export function createWindowsOfflineInstallerService(
         );
       }
       publishedReference = minted.rawToken;
-
-      const publishedPath = path.join(
-        config.artifactsDir,
-        artifactFileNameFromReferenceHash(minted.ref.referenceHash)
-      );
-      try {
-        await renameArtifact(stagingPath, publishedPath);
-      } catch {
-        await rm(stagingPath, { force: true });
-        try {
-          await refs.invalidateReference(minted.rawToken);
-        } catch {
-          logger.error('offline_installer_reference_invalidate_failed', {
-            code: 'INVALIDATE_FAILED',
-          });
-        }
-        publishedReference = undefined;
-        throw new WindowsOfflineInstallerError(
-          'ARTIFACT_PUBLISH_FAILED',
-          'Installer artifact could not be published'
-        );
-      }
 
       return {
         fileName: artifactFileName,
@@ -304,8 +294,13 @@ export function createWindowsOfflineInstallerService(
       };
     } catch (error) {
       await rm(stagingPath, { force: true });
-      if (error instanceof WindowsOfflineInstallerError) throw error;
-      logger.error('offline_installer_generation_failed', { code: 'GENERATION_FAILED' });
+      if (publishedPath) {
+        await rm(publishedPath, { force: true }).catch(() => {
+          logger.error('offline_installer_artifact_remove_failed', {
+            code: 'ARTIFACT_REMOVE_FAILED',
+          });
+        });
+      }
       if (publishedReference) {
         try {
           await refs.invalidateReference(publishedReference);
@@ -315,13 +310,19 @@ export function createWindowsOfflineInstallerService(
           });
         }
       }
+      if (error instanceof WindowsOfflineInstallerError) throw error;
+      logger.error('offline_installer_generation_failed', { code: 'GENERATION_FAILED' });
       throw new WindowsOfflineInstallerError('GENERATION_FAILED', 'Installer generation failed');
     }
   }
 
   function resolvePublishedArtifactPath(referenceHash: string): string {
     const config = loadConfig('https://openpath.invalid');
-    return path.join(config.artifactsDir, artifactFileNameFromReferenceHash(referenceHash));
+    let storageFileName = referenceHash;
+    if (/^[0-9a-f]{64}$/u.test(referenceHash)) {
+      storageFileName = `${referenceHash.slice(0, 32)}.exe`;
+    }
+    return path.join(config.artifactsDir, validateArtifactStorageFileName(storageFileName));
   }
 
   return { generate, resolvePublishedArtifactPath, refs };

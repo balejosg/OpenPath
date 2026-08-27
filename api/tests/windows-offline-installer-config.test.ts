@@ -194,6 +194,15 @@ void describe('OpenPath Windows offline installer readiness', () => {
       const digest = createHash('sha256').update(templateBytes).digest('hex');
       await writeFile(templatePath, templateBytes);
       await writeFile(`${templatePath}.sha256`, `${digest}  template.exe\n`);
+      await writeFile(
+        `${templatePath}.provenance.json`,
+        `${JSON.stringify({
+          version: TEMPLATE_VERSION,
+          commit: TEMPLATE_COMMIT,
+          releaseTag: 'scripts-v4.1.0-aaaaaaa',
+          sha256: digest,
+        })}\n`
+      );
       await chmod(templateDir, 0o755);
       await chmod(templatePath, 0o644);
 

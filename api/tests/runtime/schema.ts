@@ -146,6 +146,7 @@ async function ensureWindowsOfflineInstallerSchema(): Promise<void> {
         '  "created_by" varchar(50),\n' +
         '  "reference_hash" varchar(64) NOT NULL UNIQUE,\n' +
         '  "artifact_file_name" varchar(255) NOT NULL,\n' +
+        '  "artifact_storage_file_name" varchar(255) NOT NULL,\n' +
         '  "artifact_sha256" varchar(64) NOT NULL,\n' +
         '  "artifact_size" bigint NOT NULL,\n' +
         '  "max_attempts" integer NOT NULL,\n' +
@@ -160,6 +161,50 @@ async function ensureWindowsOfflineInstallerSchema(): Promise<void> {
   await db.execute(
     sql.raw(
       'ALTER TABLE "windows_offline_download_refs" ADD COLUMN IF NOT EXISTS "active_transfers" integer DEFAULT 0 NOT NULL;'
+    )
+  );
+  await db.execute(
+    sql.raw(
+      'ALTER TABLE "windows_offline_download_refs" ADD COLUMN IF NOT EXISTS "artifact_storage_file_name" varchar(255);'
+    )
+  );
+  await db.execute(
+    sql.raw(
+      'UPDATE "windows_offline_download_refs" SET "artifact_storage_file_name" = left("reference_hash", 32) || \'.exe\' WHERE "artifact_storage_file_name" IS NULL;'
+    )
+  );
+  await db.execute(
+    sql.raw(
+      'ALTER TABLE "windows_offline_download_refs" ALTER COLUMN "artifact_storage_file_name" SET NOT NULL;'
+    )
+  );
+  await db.execute(
+    sql.raw(
+      'CREATE TABLE IF NOT EXISTS "windows_offline_download_transfer_leases" (\n' +
+        '  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,\n' +
+        '  "download_ref_id" uuid NOT NULL,\n' +
+        '  "expires_at" timestamp with time zone NOT NULL,\n' +
+        '  "created_at" timestamp with time zone DEFAULT now() NOT NULL\n' +
+        ');'
+    )
+  );
+  await db.execute(
+    sql.raw(
+      'CREATE INDEX IF NOT EXISTS "windows_offline_transfer_leases_ref_idx" ON "windows_offline_download_transfer_leases" ("download_ref_id");'
+    )
+  );
+  await db.execute(
+    sql.raw(
+      'CREATE INDEX IF NOT EXISTS "windows_offline_transfer_leases_expires_idx" ON "windows_offline_download_transfer_leases" ("expires_at");'
+    )
+  );
+  await db.execute(
+    sql.raw(
+      'DO $$ BEGIN\n' +
+        '  ALTER TABLE "windows_offline_download_transfer_leases" ADD CONSTRAINT "windows_offline_download_transfer_leases_download_ref_id_windows_offline_download_refs_id_fk" FOREIGN KEY ("download_ref_id") REFERENCES "public"."windows_offline_download_refs"("id") ON DELETE cascade ON UPDATE no action;\n' +
+        'EXCEPTION\n' +
+        '  WHEN duplicate_object THEN NULL;\n' +
+        'END $$;'
     )
   );
   await db.execute(

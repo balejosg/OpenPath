@@ -41,6 +41,15 @@ before(async () => {
     `${templatePath}.sha256`,
     `${digest(templateBytes)}  ${path.basename(templatePath)}\n`
   );
+  await writeFile(
+    `${templatePath}.provenance.json`,
+    `${JSON.stringify({
+      version: '4.1.0',
+      commit: 'c'.repeat(40),
+      releaseTag: 'scripts-v4.1.0-ccccccc',
+      sha256: digest(templateBytes),
+    })}\n`
+  );
 
   harness = await startHttpTestHarness({
     env: {
@@ -52,6 +61,7 @@ before(async () => {
       OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION: '4.1.0',
       OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT: 'c'.repeat(40),
       OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256: digest(templateBytes),
+      OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG: 'scripts-v4.1.0-ccccccc',
       OPENPATH_WINDOWS_OFFLINE_DOWNLOAD_MAX_ATTEMPTS: '3',
       OPENPATH_WINDOWS_OFFLINE_DOWNLOAD_TTL_MINUTES: '10',
     },

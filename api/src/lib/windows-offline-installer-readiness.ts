@@ -1,5 +1,13 @@
-import { randomUUID } from 'node:crypto';
-import { accessSync, constants, existsSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  accessSync,
+  constants,
+  existsSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -8,6 +16,7 @@ import {
   type WindowsOfflineInstallerConfig,
 } from './windows-offline-installer-config.js';
 import {
+  getWindowsOfflineInstallerTemplateProvenancePath,
   loadCachedWindowsOfflineTemplate,
   WindowsOfflineTemplateCacheError,
   type WindowsOfflineTemplateLoaderIo,
@@ -22,6 +31,9 @@ export type WindowsOfflineInstallerReadinessCode =
   | 'SIDECAR_INVALID'
   | 'SIDECAR_HASH_MISMATCH'
   | 'TEMPLATE_HASH_MISMATCH'
+  | 'PROVENANCE_MISSING'
+  | 'PROVENANCE_INVALID'
+  | 'PROVENANCE_MISMATCH'
   | 'ARTIFACTS_DIR_UNAVAILABLE'
   | 'ARTIFACTS_DIR_NOT_WRITABLE';
 
@@ -54,10 +66,12 @@ function defaultProbeArtifactsWrite(artifactsDir: string): void {
     artifactsDir,
     `.openpath-readiness-${String(process.pid)}-${randomUUID()}`
   );
+  let created = false;
   try {
     writeFileSync(probePath, 'ok', { flag: 'wx' });
+    created = true;
   } finally {
-    rmSync(probePath, { force: true });
+    if (created) rmSync(probePath, { force: true });
   }
 }
 
@@ -73,16 +87,21 @@ function notReady(code: WindowsOfflineInstallerReadinessCode): WindowsOfflineIns
 
 function fileIdentity(
   filePath: string,
-  statTemplateFile: NonNullable<WindowsOfflineInstallerReadinessOptions['statTemplateFile']>
+  statTemplateFile: NonNullable<WindowsOfflineInstallerReadinessOptions['statTemplateFile']>,
+  readForFingerprint?: WindowsOfflineTemplateLoaderIo['readFile']
 ): string | null {
   try {
     const fileStat = statTemplateFile(filePath);
+    const contentFingerprint = readForFingerprint
+      ? createHash('sha256').update(readForFingerprint(filePath)).digest('hex')
+      : '';
     return [
       filePath,
       fileStat.size,
       fileStat.mtimeMs,
       fileStat.ctimeMs ?? '',
       fileStat.ino ?? '',
+      contentFingerprint,
     ].join(':');
   } catch {
     return null;
@@ -101,11 +120,15 @@ function checkTemplateWithCache(
     'OpenPath-Windows-Setup-Template.exe'
   );
   const sidecarPath = `${templatePath}.sha256`;
+  const provenancePath = getWindowsOfflineInstallerTemplateProvenancePath(templatePath);
   const templateIdentity = fileIdentity(templatePath, statTemplateFile);
-  const sidecarIdentity = fileIdentity(sidecarPath, statTemplateFile);
+  const readForFingerprint: NonNullable<WindowsOfflineTemplateLoaderIo['readFile']> =
+    options.readTemplateFile ?? ((filePath: string): Buffer | string => readFileSync(filePath));
+  const sidecarIdentity = fileIdentity(sidecarPath, statTemplateFile, readForFingerprint);
+  const provenanceIdentity = fileIdentity(provenancePath, statTemplateFile, readForFingerprint);
   const cacheKey =
-    templateIdentity && sidecarIdentity
-      ? [templateIdentity, sidecarIdentity, config.templateSha256].join('|')
+    templateIdentity && sidecarIdentity && provenanceIdentity
+      ? [templateIdentity, sidecarIdentity, provenanceIdentity, config.templateSha256].join('|')
       : null;
 
   if (cacheKey) {
@@ -121,6 +144,7 @@ function checkTemplateWithCache(
         version: config.templateVersion,
         commit: config.templateCommit,
         sha256: config.templateSha256,
+        releaseTag: config.templateReleaseTag,
       },
       {
         ...(options.readTemplateFile ? { readFile: options.readTemplateFile } : {}),

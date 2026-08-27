@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: OpenPath API and Windows agent
-> Last verified: 2026-08-26
+> Last verified: 2026-08-27
 > Source of truth: `api/src/services/windows-offline-installer-artifact.service.ts`
 
 OpenPath provides a generic, authenticated way to create a personalized Windows
@@ -73,10 +73,19 @@ interrupted attempt is still counted. Concurrent transfers are allowed when
 they already reserved distinct attempts within that budget. The first complete
 transfer makes the reference consumed (`410` for later requests), while any
 already-active bounded transfers may finish; the last completion removes the
-artifact from the private directory.
-The orphan scan has a five-minute grace period for a file published just before
-its reference row becomes visible; older unreferenced `.exe` files are removed
-on cleanup.
+artifact from the private directory. Active transfers use expiring leases, so a
+restart can recover abandoned reservations without allowing a slow legitimate
+stream to be deleted early. Cleanup removes consumed, expired, and exhausted
+references only after their leases are gone. The maintenance lifecycle runs
+once before the API listens and periodically while it lives; it passes
+`OPENPATH_WINDOWS_OFFLINE_ARTIFACT_RETENTION_HOURS` to the orphan scan. Recent
+unreferenced files remain within that bounded retention window, while older
+personalized artifacts are removed. The template root is never scanned.
+
+`GET /health` is liveness only and remains `200` while a dependency is degraded.
+`GET /ready` is the deployment readiness endpoint: it returns `200` only when
+the configured capability and dependencies are ready, otherwise `503`. Its
+response contains status codes only, never filesystem paths, tokens, or secrets.
 
 ## Pinned template and storage
 
@@ -87,6 +96,7 @@ root and writable artifact root must be separate:
 ```text
 <templateDir>/<version>/<commit>/OpenPath-Windows-Setup-Template.exe
 <templateDir>/<version>/<commit>/OpenPath-Windows-Setup-Template.exe.sha256
+<templateDir>/<version>/<commit>/OpenPath-Windows-Setup-Template.exe.provenance.json
 <artifactsDir>/<opaque-derived-name>.exe
 ```
 
@@ -104,12 +114,16 @@ npm run provision:windows-offline-installer --workspace=@openpath/api
 npm run provision:windows-offline-installer --workspace=@openpath/api -- --verify-only
 ```
 
-Provisioning downloads only the exact configured GitHub release asset and its
-sidecar, verifies the digest, and publishes atomically. `--verify-only` is
-local-only and never fetches or repairs files. API startup performs the local
-readiness check after migrations and before listening; health reports the
-capability as `not_configured`, `ok`, or a safe error code. Readiness never
-provisions or repairs the template and caches a verified hash by file identity.
+Provisioning first resolves the exact GitHub tag to its exact full source commit,
+then downloads only the exact configured release assets and sidecar, verifies
+the expected and actual SHA-256 values, writes the local provenance manifest,
+and publishes atomically. A valid target is reused; an invalid target is
+quarantined and restored if replacement verification fails. `--verify-only` is
+local-only and never fetches or repairs files: it verifies the executable,
+sidecar, and persisted provenance. API startup performs the local readiness
+check after migrations and before listening; readiness reports the capability as
+`not_configured`, `ok`, or a safe error code and caches all required file
+identities. Readiness never provisions or repairs the template.
 
 ### Standalone Docker deployment
 
@@ -121,6 +135,7 @@ export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION=4.1.0
 export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT=<40-lowercase-hex-commit>
 export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256=<64-lowercase-hex-digest>
 export OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG=scripts-v4.1.0-<commit-prefix>
+export OPENPATH_WINDOWS_OFFLINE_ARTIFACT_RETENTION_HOURS=24
 docker compose -f api/docker-compose.yml up
 ```
 

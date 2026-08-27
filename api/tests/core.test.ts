@@ -28,6 +28,7 @@ await describe('core routes', async () => {
 
     const routes = getRegisteredRoutes(app);
     assert.ok(routes.includes('GET /health'));
+    assert.ok(routes.includes('GET /ready'));
     assert.ok(routes.includes('GET /api/config'));
     assert.ok(routes.includes('GET /export/:name.txt'));
   });

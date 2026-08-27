@@ -12,6 +12,10 @@ import {
   checkWindowsOfflineInstallerReadiness,
   type WindowsOfflineInstallerReadiness,
 } from './lib/windows-offline-installer-readiness.js';
+import {
+  createWindowsOfflineInstallerMaintenance,
+  type WindowsOfflineInstallerMaintenance,
+} from './services/windows-offline-installer-maintenance.service.js';
 
 export interface ServerRuntimeDeps {
   cleanupTokenBlacklist: () => Promise<void>;
@@ -22,6 +26,7 @@ export interface ServerRuntimeDeps {
   processApi: {
     on: (event: string, listener: (...args: unknown[]) => void) => unknown;
   };
+  windowsOfflineInstallerMaintenance?: WindowsOfflineInstallerMaintenance;
   verifyWindowsOfflineInstallerPreflight?: (
     env: Readonly<Record<string, string | undefined>>
   ) => Promise<void>;
@@ -63,6 +68,7 @@ const defaultDeps: ServerRuntimeDeps = {
   loggerInstance: logger,
   processApi: process,
   verifyWindowsOfflineInstallerPreflight,
+  windowsOfflineInstallerMaintenance: createWindowsOfflineInstallerMaintenance(),
 };
 
 interface ListenableApp {
@@ -144,6 +150,14 @@ export function createServerRuntime(
       env
     );
 
+    try {
+      await deps.windowsOfflineInstallerMaintenance?.runStartupCleanup();
+    } catch {
+      deps.loggerInstance.warn('offline_installer_maintenance_failed', {
+        code: 'STARTUP_CLEANUP_FAILED',
+      });
+    }
+
     let startedServer: Server | undefined;
     await new Promise<void>((resolve) => {
       startedServer = app.listen(runtimeConfig.port, runtimeConfig.host, () => {
@@ -156,6 +170,7 @@ export function createServerRuntime(
     }
 
     server = startedServer;
+    deps.windowsOfflineInstallerMaintenance?.start();
 
     void onServerStarted(serverStartTime);
 
@@ -170,6 +185,7 @@ export function createServerRuntime(
     isShuttingDown = true;
 
     deps.loggerInstance.info(`Received ${signal}, starting graceful shutdown...`);
+    deps.windowsOfflineInstallerMaintenance?.stop();
 
     const forceShutdownTimeout = setTimeout(() => {
       deps.loggerInstance.error('Graceful shutdown timeout exceeded, forcing exit');

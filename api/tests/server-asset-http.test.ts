@@ -61,6 +61,32 @@ void test('uses the configured public URL instead of request host or forwarded h
   }
 });
 
+void test('preserves a configured public pathname base without trusting proxy headers', () => {
+  const configured = loadConfig({
+    NODE_ENV: 'test',
+    JWT_SECRET: 'server-asset-http-base-secret',
+    PUBLIC_URL: 'https://public.openpath.example.test/base/',
+  });
+  const previous = loadConfig({
+    NODE_ENV: 'test',
+    JWT_SECRET: 'server-asset-http-previous-secret',
+  });
+  setConfigForTests(configured);
+
+  try {
+    assert.equal(
+      getPublicBaseUrl({
+        protocol: 'http',
+        headers: { host: 'internal-api:3000' },
+        get: () => 'internal-api:3000',
+      } as never),
+      'https://public.openpath.example.test/base'
+    );
+  } finally {
+    setConfigForTests(previous);
+  }
+});
+
 void test('fails closed for public URL generation in production without PUBLIC_URL', () => {
   const production = loadConfig({
     NODE_ENV: 'production',

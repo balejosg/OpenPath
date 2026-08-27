@@ -72,4 +72,40 @@ void describe('config loader', () => {
     });
     assert.equal(config.publicUrl, 'https://openpath.example.test/');
   });
+
+  void test('rejects PUBLIC_URL query strings and fragments', () => {
+    assert.throws(
+      () =>
+        loadConfig({
+          NODE_ENV: 'test',
+          PUBLIC_URL: 'https://openpath.example.test/base?tenant=one',
+        }),
+      /query string or fragment/i
+    );
+    assert.throws(
+      () =>
+        loadConfig({
+          NODE_ENV: 'test',
+          PUBLIC_URL: 'https://openpath.example.test/base#installer',
+        }),
+      /query string or fragment/i
+    );
+  });
+
+  void test('requires PUBLIC_URL during production startup when offline installer is configured', () => {
+    assert.throws(
+      () =>
+        loadConfig({
+          NODE_ENV: 'production',
+          JWT_SECRET: 'config-loader-production-secret',
+          OPENPATH_WINDOWS_OFFLINE_TEMPLATE_DIR: '/srv/templates',
+          OPENPATH_WINDOWS_OFFLINE_ARTIFACTS_DIR: '/srv/artifacts',
+          OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION: '4.1.0',
+          OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT: 'a'.repeat(40),
+          OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256: 'b'.repeat(64),
+          OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG: 'scripts-v4.1.0-aaaaaaa',
+        }),
+      /PUBLIC_URL.*required.*offline installer/i
+    );
+  });
 });

@@ -1,6 +1,5 @@
 import { getStats } from '../lib/user-storage.js';
 import { logger } from '../lib/logger.js';
-import { getErrorMessage } from '@openpath/shared';
 import { checkWindowsOfflineInstallerReadiness } from '../lib/windows-offline-installer-readiness.js';
 
 export interface ReadinessCheckStatus {
@@ -25,10 +24,9 @@ export async function getReadinessStatus(): Promise<ReadinessResult> {
   try {
     const stats = await getStats();
     checks.storage = { status: 'ok', totalRequests: stats.total };
-  } catch (error: unknown) {
-    const message = getErrorMessage(error);
-    logger.error('Healthcheck readiness check failed', { error: message });
-    checks.storage = { status: 'error', error: message };
+  } catch {
+    logger.error('Healthcheck readiness check failed', { code: 'STORAGE_UNAVAILABLE' });
+    checks.storage = { status: 'error', error: 'STORAGE_UNAVAILABLE' };
     status = 'degraded';
   }
 

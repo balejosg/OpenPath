@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS "windows_offline_download_refs" (
 	"created_by" varchar(50),
 	"reference_hash" varchar(64) NOT NULL,
 	"artifact_file_name" varchar(255) NOT NULL,
+	"artifact_storage_file_name" varchar(255) NOT NULL,
 	"artifact_sha256" varchar(64) NOT NULL,
 	"artifact_size" bigint NOT NULL,
 	"max_attempts" integer NOT NULL,
@@ -183,6 +184,17 @@ CREATE TABLE IF NOT EXISTS "windows_offline_download_refs" (
 CREATE INDEX IF NOT EXISTS "windows_offline_download_refs_expires_idx" ON "windows_offline_download_refs" ("expires_at");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "windows_offline_download_refs_classroom_idx" ON "windows_offline_download_refs" ("classroom_id","created_at");
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "windows_offline_download_transfer_leases" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"download_ref_id" uuid NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "windows_offline_transfer_leases_ref_idx" ON "windows_offline_download_transfer_leases" ("download_ref_id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "windows_offline_transfer_leases_expires_idx" ON "windows_offline_download_transfer_leases" ("expires_at");
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "users" (
 	"id" varchar(50) PRIMARY KEY NOT NULL,
@@ -365,6 +377,12 @@ END $$;
 --> statement-breakpoint
 DO $$ BEGIN
 	ALTER TABLE "windows_offline_download_refs" ADD CONSTRAINT "windows_offline_download_refs_created_by_users_id_fk" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;
+EXCEPTION
+	WHEN duplicate_object THEN NULL;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+	ALTER TABLE "windows_offline_download_transfer_leases" ADD CONSTRAINT "windows_offline_download_transfer_leases_download_ref_id_windows_offline_download_refs_id_fk" FOREIGN KEY ("download_ref_id") REFERENCES "public"."windows_offline_download_refs"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
 	WHEN duplicate_object THEN NULL;
 END $$;

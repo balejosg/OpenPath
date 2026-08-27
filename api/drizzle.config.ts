@@ -23,6 +23,7 @@ export default defineConfig({
     'machine_exemptions',
     'tokens',
     'windows_offline_download_refs',
+    'windows_offline_download_transfer_leases',
     'settings',
     'password_reset_tokens',
     'email_verification_tokens',

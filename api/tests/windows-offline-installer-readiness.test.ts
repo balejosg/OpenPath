@@ -26,6 +26,15 @@ async function withFixture(run: (fixture: ReadinessFixture) => Promise<void>): P
   const templatePath = path.join(templateDirectory, 'OpenPath-Windows-Setup-Template.exe');
   await writeFile(templatePath, templateBytes);
   await writeFile(`${templatePath}.sha256`, `${templateDigest}  template.exe\n`);
+  await writeFile(
+    path.join(templateDirectory, 'OpenPath-Windows-Setup-Template.exe.provenance.json'),
+    `${JSON.stringify({
+      version: TEMPLATE_VERSION,
+      commit: TEMPLATE_COMMIT,
+      releaseTag: 'scripts-v4.1.0-aaaaaaa',
+      sha256: templateDigest,
+    })}\n`
+  );
 
   try {
     resetWindowsOfflineInstallerReadinessCache();
@@ -164,6 +173,26 @@ void test('readiness fails closed when a changed template no longer matches its 
     assert.deepEqual(checkWindowsOfflineInstallerReadiness(options), {
       ready: false,
       code: 'TEMPLATE_HASH_MISMATCH',
+    });
+  });
+});
+
+void test('readiness revalidates changed local release provenance', async () => {
+  await withFixture(async ({ env, templatePath }) => {
+    assert.deepEqual(checkWindowsOfflineInstallerReadiness({ env }), { ready: true, code: 'OK' });
+    await writeFile(
+      `${templatePath}.provenance.json`,
+      `${JSON.stringify({
+        version: TEMPLATE_VERSION,
+        commit: 'b'.repeat(40),
+        releaseTag: 'scripts-v4.1.0-aaaaaaa',
+        sha256: 'f'.repeat(64),
+      })}\n`
+    );
+
+    assert.deepEqual(checkWindowsOfflineInstallerReadiness({ env }), {
+      ready: false,
+      code: 'PROVENANCE_MISMATCH',
     });
   });
 });

@@ -20,6 +20,7 @@ export async function resetDb(): Promise<void> {
     'whitelist_groups',
     'whitelist_rules',
     'email_verification_tokens',
+    'windows_offline_download_transfer_leases',
     'windows_offline_download_refs',
   ];
 

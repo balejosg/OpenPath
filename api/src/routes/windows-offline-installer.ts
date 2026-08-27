@@ -6,11 +6,12 @@ import type express from 'express';
 import type { RequestHandler } from 'express';
 
 import {
-  artifactFileNameFromReferenceHash,
   createWindowsOfflineDownloadRefsService,
+  DEFAULT_WINDOWS_OFFLINE_TRANSFER_LEASE_MS,
   DownloadReferenceError,
   isValidWindowsOfflineDownloadReference,
   logReferenceFailure,
+  validateArtifactStorageFileName,
   type WindowsOfflineDownloadRefsService,
 } from '../services/windows-offline-installer-download-refs.service.js';
 import { sanitizeWindowsInstallerFileName } from '../services/windows-offline-installer-artifact.service.js';
@@ -22,8 +23,11 @@ export interface WindowsOfflineInstallerRouteDeps {
   refs: Pick<
     WindowsOfflineDownloadRefsService,
     'consumeAttempt' | 'releaseAttempt' | 'markConsumed'
-  >;
-  resolveArtifactPath: (referenceHash: string) => string;
+  > &
+    Partial<Pick<WindowsOfflineDownloadRefsService, 'renewAttempt' | 'transferLeaseMs'>>;
+  clearIntervalImpl?: typeof clearInterval;
+  resolveArtifactPath: (artifactStorageFileName: string) => string;
+  setIntervalImpl?: typeof setInterval;
 }
 
 const STATUS_BY_CODE: Record<DownloadReferenceError['code'], number> = {
@@ -56,18 +60,38 @@ export function createWindowsOfflineInstallerDownloadHandler(
     void deps.refs
       .consumeAttempt(reference)
       .then(async (record) => {
+        const transferId = record.transferId;
+        if (!transferId) {
+          logger.error('offline_installer_reference_attempt_missing_lease', {
+            code: 'ATTEMPT_LEASE_MISSING',
+          });
+          sendSafeError(res, 500, 'Download failed');
+          return;
+        }
         let attemptSettled = false;
+        let stopLeaseRenewal = (): void => undefined;
         const releaseActiveAttempt = (): void => {
           if (attemptSettled) return;
           attemptSettled = true;
-          void deps.refs.releaseAttempt(reference).catch(() => {
+          stopLeaseRenewal();
+          void deps.refs.releaseAttempt(reference, transferId).catch(() => {
             logger.error('offline_installer_reference_attempt_release_failed', {
               code: 'ATTEMPT_RELEASE_FAILED',
             });
           });
         };
 
-        const artifactPath = deps.resolveArtifactPath(record.referenceHash);
+        let artifactPath: string;
+        try {
+          artifactPath = deps.resolveArtifactPath(
+            validateArtifactStorageFileName(record.artifactStorageFileName)
+          );
+        } catch {
+          releaseActiveAttempt();
+          logger.warn('offline_installer_artifact_unavailable', { code: 'ARTIFACT_INVALID' });
+          sendSafeError(res, 404, 'Installer artifact unavailable');
+          return;
+        }
         let artifactStat;
         try {
           await access(artifactPath);
@@ -99,6 +123,46 @@ export function createWindowsOfflineInstallerDownloadHandler(
         let streamFailed = false;
         let responseClosed = false;
 
+        if (deps.refs.renewAttempt) {
+          const setIntervalImpl = deps.setIntervalImpl ?? setInterval;
+          const clearIntervalImpl = deps.clearIntervalImpl ?? clearInterval;
+          const leaseMs = deps.refs.transferLeaseMs ?? DEFAULT_WINDOWS_OFFLINE_TRANSFER_LEASE_MS;
+          const renewalIntervalMs = Math.max(1_000, Math.floor(leaseMs / 3));
+          let renewalInFlight = false;
+          const renewLease = (): void => {
+            if (attemptSettled || renewalInFlight) return;
+            renewalInFlight = true;
+            void deps.refs
+              .renewAttempt?.(reference, transferId)
+              .then((renewed) => {
+                if (!renewed && !attemptSettled) {
+                  logger.error('offline_installer_reference_lease_expired', {
+                    code: 'LEASE_EXPIRED',
+                  });
+                  stream.destroy(new Error('transfer lease expired'));
+                }
+              })
+              .catch(() => {
+                if (!attemptSettled) {
+                  logger.error('offline_installer_reference_lease_renewal_failed', {
+                    code: 'LEASE_RENEWAL_FAILED',
+                  });
+                  stream.destroy(new Error('transfer lease renewal failed'));
+                }
+              })
+              .finally(() => {
+                renewalInFlight = false;
+              });
+          };
+          const renewalTimer = setIntervalImpl(renewLease, renewalIntervalMs);
+          stopLeaseRenewal = (): void => {
+            clearIntervalImpl(renewalTimer);
+            stopLeaseRenewal = (): void => undefined;
+          };
+          const unref = (renewalTimer as unknown as { unref?: () => void }).unref;
+          if (typeof unref === 'function') unref.call(renewalTimer);
+        }
+
         const finalizeSuccessfulDownload = (): void => {
           if (
             attemptSettled ||
@@ -110,8 +174,9 @@ export function createWindowsOfflineInstallerDownloadHandler(
             return;
           }
           attemptSettled = true;
+          stopLeaseRenewal();
           void deps.refs
-            .markConsumed(reference)
+            .markConsumed(reference, transferId)
             .then((canRemoveArtifact) =>
               canRemoveArtifact ? rm(artifactPath, { force: true }) : undefined
             )
@@ -119,7 +184,7 @@ export function createWindowsOfflineInstallerDownloadHandler(
               logger.error('offline_installer_reference_consume_mark_failed', {
                 code: 'CONSUME_MARK_FAILED',
               });
-              void deps.refs.releaseAttempt(reference).catch(() => {
+              void deps.refs.releaseAttempt(reference, transferId).catch(() => {
                 logger.error('offline_installer_reference_attempt_release_failed', {
                   code: 'ATTEMPT_RELEASE_FAILED',
                 });
@@ -177,8 +242,8 @@ export function registerWindowsOfflineInstallerRoutes(
     '/api/windows-offline-installer/download',
     createWindowsOfflineInstallerDownloadHandler({
       refs,
-      resolveArtifactPath: (referenceHash) =>
-        path.join(artifactsDir, artifactFileNameFromReferenceHash(referenceHash)),
+      resolveArtifactPath: (artifactStorageFileName) =>
+        path.join(artifactsDir, validateArtifactStorageFileName(artifactStorageFileName)),
     })
   );
 }

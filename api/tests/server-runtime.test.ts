@@ -133,6 +133,66 @@ await describe('server runtime', async () => {
     assert.equal(events.indexOf('offline-preflight') < events.indexOf('listen'), true);
   });
 
+  await test('runs offline installer maintenance before listen and stops it during shutdown', async () => {
+    const events: string[] = [];
+    const fakeServer = {
+      close: (callback: (error?: Error) => void): void => {
+        events.push('close');
+        callback();
+      },
+    };
+    const fakeApp = {
+      listen: (_port: number, _host: string, callback?: () => void): typeof fakeServer => {
+        events.push('listen');
+        callback?.();
+        return fakeServer;
+      },
+    };
+    const config = loadConfig({
+      ...process.env,
+      NODE_ENV: 'test',
+      JWT_SECRET: 'server-runtime-test-secret',
+      HOST: '127.0.0.1',
+      PORT: '3013',
+      ENABLE_SWAGGER: 'false',
+    });
+
+    const runtime = createServerRuntime(
+      fakeApp as never,
+      config,
+      { ...process.env, SKIP_DB_MIGRATIONS: 'true' },
+      {
+        cleanupTokenBlacklist: () => Promise.resolve(),
+        ensureDefaultAdmin: () => Promise.resolve(),
+        exitProcess: () => {
+          events.push('exit');
+        },
+        initializeSchema: () => Promise.resolve(),
+        loggerInstance: createLogger(events),
+        processApi: { on: () => undefined },
+        windowsOfflineInstallerMaintenance: {
+          runStartupCleanup: () => {
+            events.push('maintenance-startup');
+            return Promise.resolve();
+          },
+          start: () => {
+            events.push('maintenance-start');
+          },
+          stop: () => {
+            events.push('maintenance-stop');
+          },
+        },
+      }
+    );
+
+    await runtime.startServer();
+    runtime.gracefulShutdown('SIGTERM');
+
+    assert.equal(events.indexOf('maintenance-startup') < events.indexOf('listen'), true);
+    assert.equal(events.indexOf('maintenance-start') > events.indexOf('listen'), true);
+    assert.equal(events.includes('maintenance-stop'), true);
+  });
+
   await test('does not expose a public production server with an unconfigured installer', async () => {
     const events: string[] = [];
     const fakeApp = {

@@ -764,10 +764,22 @@ test('standalone Docker provisions the pinned template before exposing the API',
   ]) {
     assert.match(compose, new RegExp(`${pin}=\\$\\{${pin}:\\?`));
   }
+  assert.equal(
+    compose.match(
+      /OPENPATH_WINDOWS_OFFLINE_ARTIFACT_RETENTION_HOURS=\$\{OPENPATH_WINDOWS_OFFLINE_ARTIFACT_RETENTION_HOURS:-24\}/g
+    )?.length,
+    2,
+    'provisioner and API must receive the same bounded artifact retention setting'
+  );
 
   assert.match(compose, new RegExp(`windows_offline_installer_templates:${runtimeTemplateDir}:ro`));
   assert.match(compose, new RegExp(`windows_offline_installer_artifacts:${runtimeArtifactsDir}`));
   const dockerfile = readText('api/Dockerfile');
+  assert.match(
+    dockerfile,
+    /HEALTHCHECK[\s\S]*127\.0\.0\.1:3000\/ready|HEALTHCHECK[\s\S]*localhost:3000\/ready/
+  );
+  assert.doesNotMatch(dockerfile, /HEALTHCHECK[\s\S]*\/health/);
   assert.match(
     dockerfile,
     /chmod 0700 \/app\/var\/windows-offline-installer\/artifacts/,
@@ -776,6 +788,16 @@ test('standalone Docker provisions the pinned template before exposing the API',
   assert.match(
     compose,
     /PUBLIC_URL=\$\{PUBLIC_URL:\?PUBLIC_URL is required for public installer links\}/
+  );
+  assert.match(
+    compose,
+    /127\.0\.0\.1:3000\/ready/,
+    'Docker must use the readiness endpoint rather than liveness'
+  );
+  assert.doesNotMatch(
+    compose,
+    /healthcheck:[\s\S]*127\.0\.0\.1:3000\/health/,
+    'Docker healthcheck must not classify liveness as readiness'
   );
 
   const docs = readText('docs/windows-offline-installer.md');

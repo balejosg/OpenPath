@@ -13,10 +13,16 @@ export function getPublicBaseUrl(req: Request): string {
     } catch {
       throw new Error('PUBLIC_URL must be a valid absolute URL');
     }
+    if (!parsed.hostname || parsed.username || parsed.password) {
+      throw new Error('PUBLIC_URL must contain a hostname and no URL credentials');
+    }
+    if (parsed.search || parsed.hash) {
+      throw new Error('PUBLIC_URL must not contain a query string or fragment');
+    }
     if (config.isProduction && parsed.protocol !== 'https:') {
       throw new Error('PUBLIC_URL must use HTTPS in production');
     }
-    return configuredBaseUrl.replace(/\/+$/, '');
+    return `${parsed.origin}${parsed.pathname.replace(/\/+$/u, '')}`;
   }
 
   if (config.isProduction) {

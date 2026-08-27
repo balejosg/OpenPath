@@ -23,14 +23,19 @@ async function parseJson(response) {
 }
 
 async function generateInstaller({ baseUrl, accessToken, classroomId, fetchImpl = fetch }) {
-  const response = await fetchImpl(`${baseUrl}/trpc/windowsOfflineInstaller.generate`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ classroomId }),
-  });
+  let response;
+  try {
+    response = await fetchImpl(`${baseUrl}/trpc/windowsOfflineInstaller.generate`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ classroomId }),
+    });
+  } catch {
+    throw new Error('generation-network-error');
+  }
   const body = await parseJson(response);
   if (!response.ok || !body.result?.data) throw new Error('generation-failed');
   return body.result.data;
@@ -38,7 +43,12 @@ async function generateInstaller({ baseUrl, accessToken, classroomId, fetchImpl 
 
 async function downloadAndVerify({ downloadUrl, expectedSha256, baseUrl, fetchImpl = fetch }) {
   const resolvedUrl = new URL(downloadUrl, `${baseUrl}/`).href;
-  const response = await fetchImpl(resolvedUrl);
+  let response;
+  try {
+    response = await fetchImpl(resolvedUrl);
+  } catch {
+    throw new Error('download-network-error');
+  }
   if (!response.ok) throw new Error(`download-status-${String(response.status)}`);
   if (response.headers.get('content-type') !== 'application/octet-stream') {
     throw new Error('download-content-type');
@@ -46,27 +56,47 @@ async function downloadAndVerify({ downloadUrl, expectedSha256, baseUrl, fetchIm
   if (!(response.headers.get('content-disposition') ?? '').toLowerCase().includes('.exe')) {
     throw new Error('download-content-disposition');
   }
-  const bytes = Buffer.from(await response.arrayBuffer());
+  let bytes;
+  try {
+    bytes = Buffer.from(await response.arrayBuffer());
+  } catch {
+    throw new Error('download-body-error');
+  }
   if (bytes.length === 0 || sha256(bytes) !== expectedSha256) {
     throw new Error('download-checksum');
   }
   return { bytes, resolvedUrl };
 }
 
-async function waitForConsumed({ resolvedUrl, fetchImpl = fetch }) {
-  const deadline = Date.now() + REPLAY_DEADLINE_MS;
+async function waitForConsumed({
+  resolvedUrl,
+  fetchImpl = fetch,
+  nowImpl = Date.now,
+  sleepImpl = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  replayDeadlineMs = REPLAY_DEADLINE_MS,
+}) {
+  const deadline = nowImpl() + replayDeadlineMs;
   let lastStatus = 0;
   do {
-    const response = await fetchImpl(resolvedUrl);
+    let response;
+    try {
+      response = await fetchImpl(resolvedUrl);
+    } catch {
+      throw new Error('replay-network-error');
+    }
     lastStatus = response.status;
     if (response.status === 410) return;
     if (response.status === 200) {
-      await response.arrayBuffer();
+      try {
+        await response.arrayBuffer();
+      } catch {
+        throw new Error('replay-body-error');
+      }
     } else {
       throw new Error(`replay-status-${String(response.status)}`);
     }
-    if (Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
-  } while (Date.now() < deadline);
+    if (nowImpl() < deadline) await sleepImpl(100);
+  } while (nowImpl() < deadline);
 
   throw new Error(`replay-not-consumed-${String(lastStatus)}`);
 }
@@ -76,6 +106,9 @@ export async function runWindowsOfflineInstallerCanary({
   accessToken,
   classroomId,
   fetchImpl = fetch,
+  nowImpl = Date.now,
+  sleepImpl = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  replayDeadlineMs = REPLAY_DEADLINE_MS,
 }) {
   const result = await generateInstaller({ baseUrl, accessToken, classroomId, fetchImpl });
   const { resolvedUrl } = await downloadAndVerify({
@@ -84,7 +117,13 @@ export async function runWindowsOfflineInstallerCanary({
     baseUrl,
     fetchImpl,
   });
-  await waitForConsumed({ resolvedUrl, fetchImpl });
+  await waitForConsumed({
+    resolvedUrl,
+    fetchImpl,
+    nowImpl,
+    sleepImpl,
+    replayDeadlineMs,
+  });
   return {
     status: 'ok',
     version: result.version,

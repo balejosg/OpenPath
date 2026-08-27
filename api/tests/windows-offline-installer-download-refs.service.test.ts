@@ -62,7 +62,8 @@ void describe('OpenPath Windows offline installer download references', () => {
       (error: unknown) => error instanceof DownloadReferenceError && error.code === 'EXHAUSTED'
     );
 
-    await service.markConsumed(minted.rawToken);
+    assert.ok(consumedAttempt.transferId);
+    await service.markConsumed(minted.rawToken, consumedAttempt.transferId);
     await assert.rejects(
       () => service.consumeAttempt(minted.rawToken),
       (error: unknown) => error instanceof DownloadReferenceError && error.code === 'CONSUMED'
@@ -82,6 +83,7 @@ void describe('OpenPath Windows offline installer download references', () => {
       classroomName: 'Lab South',
       createdBy: adminUserId(),
       artifactFileName: 'OpenPath-Lab-South-Windows-Setup.exe',
+      artifactStorageFileName: '22222222-2222-4222-8222-222222222222.exe',
       artifactSha256: 'b'.repeat(64),
       artifactSize: 12,
       ttlMinutes: 10,
@@ -90,10 +92,7 @@ void describe('OpenPath Windows offline installer download references', () => {
     const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-cleanup-'));
     const artifactsDir = path.join(root, 'artifacts');
     const templateDir = path.join(root, 'templates');
-    const artifactPath = path.join(
-      artifactsDir,
-      artifactFileNameFromReferenceHash(minted.ref.referenceHash)
-    );
+    const artifactPath = path.join(artifactsDir, minted.ref.artifactStorageFileName);
     const templatePath = path.join(templateDir, 'OpenPath-Windows-Setup-Template.exe');
 
     try {
@@ -101,12 +100,53 @@ void describe('OpenPath Windows offline installer download references', () => {
       await mkdir(templateDir, { recursive: true });
       await writeFile(artifactPath, 'personalized');
       await writeFile(templatePath, 'immutable template');
-      await service.markConsumed(minted.rawToken);
+      const attempt = await service.consumeAttempt(minted.rawToken);
+      assert.ok(attempt.transferId);
+      await service.markConsumed(minted.rawToken, attempt.transferId);
 
       await service.cleanupExpired(artifactsDir);
 
       await assert.rejects(() => readFile(artifactPath));
       assert.equal(await readFile(templatePath, 'utf8'), 'immutable template');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('removes an expired reference and artifact without another generation', async () => {
+    let currentTime = new Date();
+    const service = createWindowsOfflineDownloadRefsService({
+      now: () => new Date(currentTime),
+    });
+    const classroomId = (await harness.createClassroom()).id;
+    const minted = await service.mintReference({
+      classroomId,
+      classroomName: 'Lab Expired',
+      createdBy: adminUserId(),
+      artifactFileName: 'OpenPath-Lab-Expired-Windows-Setup.exe',
+      artifactSha256: 'a'.repeat(64),
+      artifactSize: 12,
+      ttlMinutes: 1,
+      maxAttempts: 1,
+    });
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-expired-'));
+    const artifactPath = path.join(root, minted.ref.artifactStorageFileName);
+
+    try {
+      await writeFile(artifactPath, 'expired artifact');
+      currentTime = new Date(currentTime.getTime() + 2 * 60_000);
+
+      await assert.rejects(
+        () => service.consumeAttempt(minted.rawToken),
+        (error: unknown) => error instanceof DownloadReferenceError && error.code === 'EXPIRED'
+      );
+      await service.cleanupExpired(root);
+
+      await assert.rejects(
+        () => service.consumeAttempt(minted.rawToken),
+        (error: unknown) => error instanceof DownloadReferenceError && error.code === 'INVALID'
+      );
+      await assert.rejects(() => readFile(artifactPath));
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -133,12 +173,13 @@ void describe('OpenPath Windows offline installer download references', () => {
 
     try {
       await writeFile(artifactPath, 'active transfer');
-      await service.consumeAttempt(minted.rawToken);
+      const attempt = await service.consumeAttempt(minted.rawToken);
 
       await service.cleanupExpired(root);
       assert.equal(await readFile(artifactPath, 'utf8'), 'active transfer');
 
-      await service.markConsumed(minted.rawToken);
+      assert.ok(attempt.transferId);
+      await service.markConsumed(minted.rawToken, attempt.transferId);
       await service.cleanupExpired(root);
       await assert.rejects(() => readFile(artifactPath));
     } finally {
@@ -176,10 +217,12 @@ void describe('OpenPath Windows offline installer download references', () => {
       await service.cleanupExpired(root);
       assert.equal(await readFile(artifactPath, 'utf8'), 'active transfer');
 
-      await Promise.all([
-        service.markConsumed(minted.rawToken),
-        service.markConsumed(minted.rawToken),
-      ]);
+      await Promise.all(
+        reservations.map((reservation) => {
+          assert.ok(reservation.transferId);
+          return service.markConsumed(minted.rawToken, reservation.transferId);
+        })
+      );
       await assert.rejects(
         () => service.consumeAttempt(minted.rawToken),
         (error: unknown) => error instanceof DownloadReferenceError && error.code === 'CONSUMED'
@@ -205,6 +248,167 @@ void describe('OpenPath Windows offline installer download references', () => {
       await utimes(orphanPath, oldTimestamp, oldTimestamp);
       await service.cleanupExpired(root);
       await assert.rejects(() => readFile(orphanPath));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('cleans abandoned staging artifacts after the orphan grace period', async () => {
+    const service = createWindowsOfflineDownloadRefsService();
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-staging-orphan-'));
+    const orphanPath = path.join(root, '.123-11111111-1111-4111-8111-111111111111.staging.exe');
+
+    try {
+      await writeFile(orphanPath, 'abandoned staging artifact');
+      await service.cleanupExpired(root);
+      assert.equal(await readFile(orphanPath, 'utf8'), 'abandoned staging artifact');
+
+      const oldTimestamp = new Date(Date.now() - 10 * 60_000);
+      await utimes(orphanPath, oldTimestamp, oldTimestamp);
+      await service.cleanupExpired(root);
+      await assert.rejects(() => readFile(orphanPath));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('honors configured artifact retention instead of using a fixed orphan grace period', async () => {
+    const service = createWindowsOfflineDownloadRefsService();
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-retention-'));
+    const orphanPath = path.join(root, `${'1'.repeat(32)}.exe`);
+
+    try {
+      await writeFile(orphanPath, 'retained artifact');
+      const oneHourAgo = new Date(Date.now() - 60 * 60_000);
+      await utimes(orphanPath, oneHourAgo, oneHourAgo);
+
+      await (
+        service.cleanupExpired as unknown as (
+          artifactsDir: string,
+          options: { artifactRetentionHours: number }
+        ) => Promise<number>
+      )(root, { artifactRetentionHours: 24 });
+
+      assert.equal(await readFile(orphanPath, 'utf8'), 'retained artifact');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('recovers an abandoned final transfer after a simulated process restart', async () => {
+    let currentTime = new Date();
+    const service = createWindowsOfflineDownloadRefsService({ now: () => new Date(currentTime) });
+    const classroomId = (await harness.createClassroom()).id;
+    const minted = await service.mintReference({
+      classroomId,
+      classroomName: 'Lab Crash Recovery',
+      createdBy: adminUserId(),
+      artifactFileName: 'OpenPath-Lab-Crash-Recovery-Windows-Setup.exe',
+      artifactSha256: 'a'.repeat(64),
+      artifactSize: 12,
+      ttlMinutes: 10,
+      maxAttempts: 1,
+    });
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-crash-recovery-'));
+    const artifactPath = path.join(
+      root,
+      artifactFileNameFromReferenceHash(minted.ref.referenceHash)
+    );
+
+    try {
+      await writeFile(artifactPath, 'active transfer');
+      await service.consumeAttempt(minted.rawToken);
+
+      currentTime = new Date(currentTime.getTime() + 26 * 60_000);
+      await service.cleanupExpired(root);
+
+      await assert.rejects(
+        () => service.consumeAttempt(minted.rawToken),
+        (error: unknown) => error instanceof DownloadReferenceError
+      );
+      await assert.rejects(() => readFile(artifactPath));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('renews a slow legitimate transfer before cleanup can reclaim its lease', async () => {
+    let currentTime = new Date();
+    const service = createWindowsOfflineDownloadRefsService({
+      now: () => new Date(currentTime),
+      transferLeaseMs: 5 * 60_000,
+    });
+    const classroomId = (await harness.createClassroom()).id;
+    const minted = await service.mintReference({
+      classroomId,
+      classroomName: 'Lab Slow Transfer',
+      createdBy: adminUserId(),
+      artifactFileName: 'OpenPath-Lab-Slow-Transfer-Windows-Setup.exe',
+      artifactSha256: 'e'.repeat(64),
+      artifactSize: 12,
+      ttlMinutes: 1,
+      maxAttempts: 1,
+    });
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-slow-transfer-'));
+    const artifactPath = path.join(
+      root,
+      artifactFileNameFromReferenceHash(minted.ref.referenceHash)
+    );
+
+    try {
+      await writeFile(artifactPath, 'slow transfer');
+      const attempt = await service.consumeAttempt(minted.rawToken);
+      currentTime = new Date(currentTime.getTime() + 5 * 60_000);
+      assert.ok(attempt.transferId);
+      assert.equal(await service.renewAttempt(minted.rawToken, attempt.transferId), true);
+
+      currentTime = new Date(currentTime.getTime() + 2 * 60_000);
+      await service.cleanupExpired(root);
+      assert.equal(await readFile(artifactPath, 'utf8'), 'slow transfer');
+
+      await service.markConsumed(minted.rawToken, attempt.transferId);
+      await service.cleanupExpired(root);
+      await assert.rejects(() => readFile(artifactPath));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('recovers a transfer after its last heartbeat expires', async () => {
+    let currentTime = new Date();
+    const transferLeaseMs = 5 * 60_000;
+    const service = createWindowsOfflineDownloadRefsService({
+      now: () => new Date(currentTime),
+      transferLeaseMs,
+    });
+    const classroomId = (await harness.createClassroom()).id;
+    const minted = await service.mintReference({
+      classroomId,
+      classroomName: 'Lab Lease Deadline',
+      createdBy: adminUserId(),
+      artifactFileName: 'OpenPath-Lab-Lease-Deadline-Windows-Setup.exe',
+      artifactSha256: 'f'.repeat(64),
+      artifactSize: 12,
+      ttlMinutes: 1,
+      maxAttempts: 1,
+    });
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-lease-deadline-'));
+    const artifactPath = path.join(
+      root,
+      artifactFileNameFromReferenceHash(minted.ref.referenceHash)
+    );
+
+    try {
+      await writeFile(artifactPath, 'lease deadline');
+      const attempt = await service.consumeAttempt(minted.rawToken);
+      assert.ok(attempt.transferId);
+
+      currentTime = new Date(currentTime.getTime() + 4 * 60_000);
+      assert.equal(await service.renewAttempt(minted.rawToken, attempt.transferId), true);
+
+      currentTime = new Date(currentTime.getTime() + 6 * 60_000);
+      await service.cleanupExpired(root);
+      await assert.rejects(() => readFile(artifactPath));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -169,6 +169,20 @@
       "when": 1787733330481,
       "tag": "0023_demonic_umar",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1787820845966,
+      "tag": "0024_dear_karen_page",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1787821593897,
+      "tag": "0025_open_namor",
+      "breakpoints": true
     }
   ]
 }

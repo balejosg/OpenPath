@@ -89,10 +89,10 @@ USER nodejs
 # Expose port
 EXPOSE 3000
 
-# Health check (API is strictly JSON, but /health might return 200 OK)
+# Readiness check includes the configured offline-installer capability.
 # Assuming wget works on localhost
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ready || exit 1
 
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
