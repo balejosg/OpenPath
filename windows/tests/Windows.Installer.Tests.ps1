@@ -201,6 +201,40 @@ Describe "Installer" {
     }
 
     Context "ACL lockdown" {
+        BeforeAll {
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "CapabilityStorage.ps1")
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Progress.ps1")
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1")
+        }
+
+        It "Keeps SYSTEM and Administrators able to traverse the restricted install tree" -Skip:($IsWindows -ne $true -or -not (Test-IsAdmin)) {
+            $root = Join-Path $TestDrive "OpenPath-install-root"
+
+            {
+                Initialize-OpenPathInstallDirectories -OpenPathRoot $root
+            } | Should -Not -Throw
+
+            foreach ($relativePath in @(
+                    '',
+                    'data',
+                    'data\runtime-dependency-queue',
+                    'browser-extension'
+                )) {
+                $path = if ($relativePath) { Join-Path $root $relativePath } else { $root }
+                $acl = Get-Acl -LiteralPath $path
+
+                @($acl.Access | Where-Object {
+                        ([string]$_.IdentityReference) -eq 'NT AUTHORITY\SYSTEM' -and
+                        ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl
+                    }).Count | Should -BeGreaterThan 0 -Because "SYSTEM must retain full control at $relativePath"
+
+                @($acl.Access | Where-Object {
+                        ([string]$_.IdentityReference) -eq 'BUILTIN\Administrators' -and
+                        ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl
+                    }).Count | Should -BeGreaterThan 0 -Because "Administrators must retain full control at $relativePath"
+            }
+        }
+
         It "Sets restrictive file permissions during installation" {
             $scriptPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
             $content = Get-Content $scriptPath -Raw
