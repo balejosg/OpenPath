@@ -63,7 +63,9 @@ Describe "Common Module" {
                 "'/inheritance:r'",
                 "'/grant:r'",
                 "'*S-1-5-18:(OI)(CI)F'",
-                "'*S-1-5-32-544:(OI)(CI)F'"
+                "'*S-1-5-32-544:(OI)(CI)F'",
+                "'*S-1-5-18:(F)'",
+                "'*S-1-5-32-544:(F)'"
             )
         }
 

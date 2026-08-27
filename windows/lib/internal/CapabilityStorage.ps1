@@ -141,12 +141,14 @@ function Set-OpenPathCapabilityStorageAcl {
         if (-not (Test-Path -LiteralPath $icaclsPath -PathType Leaf)) {
             throw 'Windows ACL tool is unavailable'
         }
+        $systemGrant = if ($isContainer) { '*S-1-5-18:(OI)(CI)F' } else { '*S-1-5-18:(F)' }
+        $administratorsGrant = if ($isContainer) { '*S-1-5-32-544:(OI)(CI)F' } else { '*S-1-5-32-544:(F)' }
         $icaclsArguments = @(
             $Path,
             '/inheritance:r',
             '/grant:r',
-            '*S-1-5-18:(OI)(CI)F',
-            '*S-1-5-32-544:(OI)(CI)F'
+            $systemGrant,
+            $administratorsGrant
         )
         & $icaclsPath @icaclsArguments 2>$null | Out-Null
         $icaclsExitCode = $LASTEXITCODE
