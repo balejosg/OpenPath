@@ -74,11 +74,13 @@ export function createWindowsOfflineInstallerDownloadHandler(
           if (attemptSettled) return;
           attemptSettled = true;
           stopLeaseRenewal();
-          void deps.refs.releaseAttempt(reference, transferId).catch(() => {
-            logger.error('offline_installer_reference_attempt_release_failed', {
-              code: 'ATTEMPT_RELEASE_FAILED',
+          void Promise.resolve()
+            .then(() => deps.refs.releaseAttempt(reference, transferId))
+            .catch(() => {
+              logger.error('offline_installer_reference_attempt_release_failed', {
+                code: 'ATTEMPT_RELEASE_FAILED',
+              });
             });
-          });
         };
 
         let artifactPath: string;
@@ -132,8 +134,9 @@ export function createWindowsOfflineInstallerDownloadHandler(
           const renewLease = (): void => {
             if (attemptSettled || renewalInFlight) return;
             renewalInFlight = true;
-            void deps.refs
-              .renewAttempt?.(reference, transferId)
+            const renewAttempt = deps.refs.renewAttempt;
+            void Promise.resolve()
+              .then(() => renewAttempt?.(reference, transferId))
               .then((renewed) => {
                 if (!renewed && !attemptSettled) {
                   logger.error('offline_installer_reference_lease_expired', {
@@ -175,8 +178,8 @@ export function createWindowsOfflineInstallerDownloadHandler(
           }
           attemptSettled = true;
           stopLeaseRenewal();
-          void deps.refs
-            .markConsumed(reference, transferId)
+          void Promise.resolve()
+            .then(() => deps.refs.markConsumed(reference, transferId))
             .then((canRemoveArtifact) =>
               canRemoveArtifact ? rm(artifactPath, { force: true }) : undefined
             )
@@ -184,11 +187,13 @@ export function createWindowsOfflineInstallerDownloadHandler(
               logger.error('offline_installer_reference_consume_mark_failed', {
                 code: 'CONSUME_MARK_FAILED',
               });
-              void deps.refs.releaseAttempt(reference, transferId).catch(() => {
-                logger.error('offline_installer_reference_attempt_release_failed', {
-                  code: 'ATTEMPT_RELEASE_FAILED',
+              void Promise.resolve()
+                .then(() => deps.refs.releaseAttempt(reference, transferId))
+                .catch(() => {
+                  logger.error('offline_installer_reference_attempt_release_failed', {
+                    code: 'ATTEMPT_RELEASE_FAILED',
+                  });
                 });
-              });
             });
         };
 
