@@ -32,10 +32,7 @@ import {
   provisionWindowsOfflineInstallerTemplate,
   WindowsOfflineInstallerProvisionError,
 } from '../src/services/windows-offline-installer-provision.service.js';
-import {
-  loadCachedWindowsOfflineTemplate,
-  WindowsOfflineTemplateCacheError,
-} from '../src/lib/windows-offline-installer-template.js';
+import { loadCachedWindowsOfflineTemplate } from '../src/lib/windows-offline-installer-template.js';
 
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
@@ -72,6 +69,22 @@ function exactCommitProvenance(
   );
 }
 
+function fetchForProvisionTest(
+  env: Record<string, string>,
+  templateBytes: Buffer,
+  digest: string
+): (url: string | URL | Request) => Promise<Response> {
+  return (url) => {
+    const provenance = exactCommitProvenance(url, env);
+    if (provenance) return Promise.resolve(provenance);
+    return Promise.resolve(
+      requestUrl(url).endsWith('.sha256')
+        ? response(`${digest}  OpenPath-Windows-Setup-Template.exe\n`)
+        : response(templateBytes)
+    );
+  };
+}
+
 interface ProvisionWorkerResult {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -83,7 +96,11 @@ function spawnProvisionWorker(
   root: string,
   digest: string,
   templateBytes: Buffer,
-  options: { crashAfterFirstRename?: boolean; renameDelayMs?: number } = {}
+  options: {
+    crashBeforeCommit?: boolean;
+    crashAfterCommit?: boolean;
+    renameDelayMs?: number;
+  } = {}
 ): Promise<ProvisionWorkerResult> {
   const env = envFor(root, digest);
   const provisionModuleUrl = pathToFileURL(
@@ -96,7 +113,8 @@ const configuredEnv = ${JSON.stringify(env)};
 const digest = ${JSON.stringify(digest)};
 const bytes = Buffer.from(${JSON.stringify(templateBytes.toString('base64'))}, 'base64');
 const delayMs = ${String(options.renameDelayMs ?? 0)};
-const crashAfterFirstRename = ${String(options.crashAfterFirstRename === true)};
+const crashBeforeCommit = ${String(options.crashBeforeCommit === true)};
+const crashAfterCommit = ${String(options.crashAfterCommit === true)};
 let renameCount = 0;
 const fetchImpl = async (url) => {
   const requestedUrl = String(url);
@@ -112,7 +130,8 @@ const renamePath = async (sourcePath, targetPath) => {
   if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
   await renameFile(sourcePath, targetPath);
   renameCount += 1;
-  if (crashAfterFirstRename && renameCount === 1) process.exit(17);
+  if (crashBeforeCommit && renameCount === 1) process.exit(17);
+  if (crashAfterCommit && targetPath.endsWith('.current')) process.exit(17);
 };
 try {
   const result = await provisionWindowsOfflineInstallerTemplate({ env: configuredEnv, fetchImpl, renamePath });
@@ -129,6 +148,74 @@ try {
       env: {
         ...process.env,
         ...env,
+      },
+    }
+  );
+
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  return new Promise<ProvisionWorkerResult>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      resolve({ code, signal, stderr, stdout });
+    });
+  });
+}
+
+function spawnGenerationReaderWorker(
+  root: string,
+  firstDigest: string,
+  secondDigest: string,
+  durationMs = 500
+): Promise<ProvisionWorkerResult> {
+  const firstEnv = envFor(root, firstDigest);
+  const secondEnv = envFor(root, secondDigest);
+  const templateModuleUrl = pathToFileURL(
+    path.resolve('src/lib/windows-offline-installer-template.js')
+  ).href;
+  const workerScript = `
+const { loadCachedWindowsOfflineTemplate } = await import(${JSON.stringify(templateModuleUrl)});
+const firstEnv = ${JSON.stringify(firstEnv)};
+const secondEnv = ${JSON.stringify(secondEnv)};
+const endAt = Date.now() + ${String(durationMs)};
+let successfulReads = 0;
+let incompleteReads = 0;
+while (Date.now() < endAt) {
+  let readSucceeded = false;
+  for (const configuredEnv of [firstEnv, secondEnv]) {
+    try {
+      const loaded = loadCachedWindowsOfflineTemplate(configuredEnv.OPENPATH_WINDOWS_OFFLINE_TEMPLATE_DIR, {
+        version: configuredEnv.OPENPATH_WINDOWS_OFFLINE_TEMPLATE_VERSION,
+        commit: configuredEnv.OPENPATH_WINDOWS_OFFLINE_TEMPLATE_COMMIT,
+        sha256: configuredEnv.OPENPATH_WINDOWS_OFFLINE_TEMPLATE_SHA256,
+        releaseTag: configuredEnv.OPENPATH_WINDOWS_OFFLINE_TEMPLATE_RELEASE_TAG,
+      });
+      if (!loaded.filePath.includes('/generations/') && !loaded.filePath.includes('\\\\generations\\\\')) {
+        throw new Error('reader did not resolve an immutable generation');
+      }
+      readSucceeded = true;
+      break;
+    } catch {}
+  }
+  if (readSucceeded) successfulReads += 1;
+  else incompleteReads += 1;
+}
+process.stdout.write(JSON.stringify({ successfulReads, incompleteReads }));
+`;
+  const child = spawn(
+    process.execPath,
+    ['--import', 'tsx', '--input-type=module', '--eval', workerScript],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ...firstEnv,
       },
     }
   );
@@ -300,7 +387,9 @@ void describe('OpenPath Windows offline installer provisioning', () => {
         },
       });
       const config = loadWindowsOfflineInstallerConfig(env);
-      const templatePath = getWindowsOfflineInstallerTemplatePath(config);
+      const canonicalTemplatePath = getWindowsOfflineInstallerTemplatePath(config);
+      const canonicalDirectory = path.dirname(canonicalTemplatePath);
+      const currentPath = path.join(canonicalDirectory, '.current');
 
       assert.equal(result.status, 'provisioned');
       assert.deepEqual(requestedUrls, [
@@ -308,13 +397,18 @@ void describe('OpenPath Windows offline installer provisioning', () => {
         'https://github.com/balejosg/openpath/releases/download/scripts-v4.1.0-aaaaaaa/OpenPath-Windows-Setup-Template.exe',
         'https://github.com/balejosg/openpath/releases/download/scripts-v4.1.0-aaaaaaa/OpenPath-Windows-Setup-Template.exe.sha256',
       ]);
+      const generationName = (await readFile(currentPath, 'utf8')).trim();
+      assert.match(generationName, /^generation-[0-9a-f-]+$/u);
+      const generationDirectory = path.join(canonicalDirectory, 'generations', generationName);
+      const templatePath = path.join(generationDirectory, 'OpenPath-Windows-Setup-Template.exe');
       assert.deepEqual(await readFile(templatePath), templateBytes);
       assert.match(await readFile(`${templatePath}.sha256`, 'utf8'), new RegExp(digest));
-      assert.deepEqual((await readdir(path.dirname(templatePath))).sort(), [
+      assert.deepEqual((await readdir(generationDirectory)).sort(), [
         'OpenPath-Windows-Setup-Template.exe',
         'OpenPath-Windows-Setup-Template.exe.provenance.json',
         'OpenPath-Windows-Setup-Template.exe.sha256',
       ]);
+      assert.equal(result.filePath, templatePath);
 
       const cached = await provisionWindowsOfflineInstallerTemplate({
         env,
@@ -374,7 +468,7 @@ void describe('OpenPath Windows offline installer provisioning', () => {
     }
   });
 
-  void test('stages on the template volume before the atomic publish rename', async () => {
+  void test('stages and commits a complete generation with one observable pointer rename', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'openpath-template-same-volume-'));
     const templateBytes = Buffer.from('same-volume template bytes');
     const digest = sha256(templateBytes);
@@ -401,23 +495,25 @@ void describe('OpenPath Windows offline installer provisioning', () => {
         },
       });
 
-      assert.equal(renameCalls.length, 3);
-      const expectedTargetNames = new Set([
-        'OpenPath-Windows-Setup-Template.exe',
-        'OpenPath-Windows-Setup-Template.exe.provenance.json',
-        'OpenPath-Windows-Setup-Template.exe.sha256',
-      ]);
+      assert.equal(renameCalls.length, 2);
+      const firstRename = renameCalls[0];
+      const secondRename = renameCalls[1];
+      assert.ok(firstRename);
+      assert.ok(secondRename);
       const configuredTemplateDir = env.OPENPATH_WINDOWS_OFFLINE_TEMPLATE_DIR;
       if (configuredTemplateDir === undefined) throw new Error('expected template directory');
       const templateRoot = path.resolve(configuredTemplateDir);
-      for (const renameCall of renameCalls) {
-        assert.equal(renameCall.source.startsWith(`${templateRoot}${path.sep}`), true);
-        assert.equal(renameCall.target.startsWith(`${templateRoot}${path.sep}`), true);
-        assert.equal(path.dirname(renameCall.target), path.dirname(templatePath));
-        assert.equal(expectedTargetNames.delete(path.basename(renameCall.target)), true);
-        assert.equal(existsSync(path.dirname(templatePath)), true);
-      }
-      assert.equal(expectedTargetNames.size, 0);
+      assert.equal(firstRename.source.startsWith(`${templateRoot}${path.sep}`), true);
+      assert.equal(firstRename.target.startsWith(`${templateRoot}${path.sep}`), true);
+      assert.match(path.basename(firstRename.target), /^generation-[0-9a-f-]+$/u);
+      assert.equal(path.basename(secondRename.target), '.current');
+      assert.equal(path.dirname(secondRename.target), path.dirname(templatePath));
+      assert.equal(
+        path.dirname(firstRename.target),
+        path.join(path.dirname(templatePath), 'generations')
+      );
+      assert.equal(existsSync(path.dirname(templatePath)), true);
+      assert.equal(existsSync(path.join(path.dirname(templatePath), '.current')), true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -553,12 +649,18 @@ void describe('OpenPath Windows offline installer provisioning', () => {
       const config = loadWindowsOfflineInstallerConfig(envFor(root, digest));
       const versionDirectory = path.join(config.templateDir, config.templateVersion);
       const commitDirectory = path.dirname(getWindowsOfflineInstallerTemplatePath(config));
-      const templatePath = getWindowsOfflineInstallerTemplatePath(config);
+      const currentGeneration = (
+        await readFile(path.join(commitDirectory, '.current'), 'utf8')
+      ).trim();
+      const generationDirectory = path.join(commitDirectory, 'generations', currentGeneration);
+      const templatePath = path.join(generationDirectory, 'OpenPath-Windows-Setup-Template.exe');
       const sidecarPath = `${templatePath}.sha256`;
       const provenancePath = `${templatePath}.provenance.json`;
 
       assert.equal((await stat(versionDirectory)).mode & 0o777, 0o755);
       assert.equal((await stat(commitDirectory)).mode & 0o777, 0o755);
+      assert.equal((await stat(path.join(commitDirectory, 'generations'))).mode & 0o777, 0o755);
+      assert.equal((await stat(generationDirectory)).mode & 0o777, 0o755);
       assert.equal((await stat(templatePath)).mode & 0o777, 0o444);
       assert.equal((await stat(sidecarPath)).mode & 0o777, 0o444);
       assert.equal((await stat(provenancePath)).mode & 0o777, 0o444);
@@ -714,8 +816,8 @@ void describe('OpenPath Windows offline installer provisioning', () => {
       });
 
       assert.equal(result.status, 'provisioned');
-      assert.deepEqual(await readFile(templatePath), templateBytes);
-      assert.match(await readFile(`${templatePath}.sha256`, 'utf8'), new RegExp(digest));
+      assert.deepEqual(await readFile(result.filePath), templateBytes);
+      assert.match(await readFile(`${result.filePath}.sha256`, 'utf8'), new RegExp(digest));
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -750,8 +852,8 @@ void describe('OpenPath Windows offline installer provisioning', () => {
       });
 
       assert.equal(result.status, 'provisioned');
-      assert.equal((await readFile(templatePath)).equals(templateBytes), true);
-      assert.match(await readFile(`${templatePath}.sha256`, 'utf8'), new RegExp(digest));
+      assert.equal((await readFile(result.filePath)).equals(templateBytes), true);
+      assert.match(await readFile(`${result.filePath}.sha256`, 'utf8'), new RegExp(digest));
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -815,10 +917,14 @@ void describe('OpenPath Windows offline installer provisioning', () => {
       ]);
 
       assert.deepEqual(results.map((result) => result.status).sort(), ['provisioned', 'verified']);
-      const templatePath = getWindowsOfflineInstallerTemplatePath(
-        loadWindowsOfflineInstallerConfig(env)
-      );
-      assert.equal((await readFile(templatePath)).equals(templateBytes), true);
+      const config = loadWindowsOfflineInstallerConfig(env);
+      const loaded = loadCachedWindowsOfflineTemplate(config.templateDir, {
+        version: config.templateVersion,
+        commit: config.templateCommit,
+        sha256: config.templateSha256,
+        releaseTag: config.templateReleaseTag,
+      });
+      assert.equal((await readFile(loaded.filePath)).equals(templateBytes), true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -841,7 +947,6 @@ void describe('OpenPath Windows offline installer provisioning', () => {
       }
 
       const config = loadWindowsOfflineInstallerConfig(envFor(root, digest));
-      const templatePath = getWindowsOfflineInstallerTemplatePath(config);
       assert.doesNotThrow(() =>
         loadCachedWindowsOfflineTemplate(config.templateDir, {
           version: config.templateVersion,
@@ -850,64 +955,102 @@ void describe('OpenPath Windows offline installer provisioning', () => {
           releaseTag: config.templateReleaseTag,
         })
       );
-      assert.deepEqual(await readFile(templatePath), templateBytes);
+      const loaded = loadCachedWindowsOfflineTemplate(config.templateDir, {
+        version: config.templateVersion,
+        commit: config.templateCommit,
+        sha256: config.templateSha256,
+        releaseTag: config.templateReleaseTag,
+      });
+      assert.deepEqual(await readFile(loaded.filePath), templateBytes);
+
+      const lockPath = path.join(
+        config.templateDir,
+        config.templateVersion,
+        config.templateCommit,
+        '.publish.lock'
+      );
+      await writeFile(lockPath, '');
+      await cleanupStaleWindowsOfflineInstallerProvisioningDirectories(config);
+      assert.equal(existsSync(lockPath), true);
+      await rm(lockPath, { force: true });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  void test('keeps the canonical directory observable while readers fail closed during repair', async () => {
+  void test('lets a separate-process reader observe only complete old or new generations', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'openpath-template-reader-'));
-    const templateBytes = Buffer.from('reader-visible pinned template');
-    const digest = sha256(templateBytes);
-    const env = envFor(root, digest);
-    const fetchImpl = (url: string | URL | Request): Promise<Response> => {
-      const provenance = exactCommitProvenance(url, env);
-      if (provenance) return Promise.resolve(provenance);
-      return Promise.resolve(
-        requestUrl(url).endsWith('.sha256')
-          ? response(`${digest}  OpenPath-Windows-Setup-Template.exe\n`)
-          : response(templateBytes)
-      );
-    };
+    const firstBytes = Buffer.from('first reader-visible pinned template');
+    const secondBytes = Buffer.from('second reader-visible pinned template');
+    const firstDigest = sha256(firstBytes);
+    const secondDigest = sha256(secondBytes);
+    const firstEnv = envFor(root, firstDigest);
+    const secondEnv = envFor(root, secondDigest);
+
+    const fetchFor =
+      (
+        env: Record<string, string>,
+        templateBytes: Buffer,
+        digest: string
+      ): ((url: string | URL | Request) => Promise<Response>) =>
+      (url) => {
+        const provenance = exactCommitProvenance(url, env);
+        if (provenance) return Promise.resolve(provenance);
+        return Promise.resolve(
+          requestUrl(url).endsWith('.sha256')
+            ? response(`${digest}  OpenPath-Windows-Setup-Template.exe\n`)
+            : response(templateBytes)
+        );
+      };
 
     try {
-      await provisionWindowsOfflineInstallerTemplate({ env, fetchImpl });
-      const config = loadWindowsOfflineInstallerConfig(env);
-      const templatePath = getWindowsOfflineInstallerTemplatePath(config);
-      await chmod(templatePath, 0o644);
-      const targetDir = path.dirname(templatePath);
-      await writeFile(templatePath, Buffer.from('corrupt bytes'));
+      await provisionWindowsOfflineInstallerTemplate({
+        env: firstEnv,
+        fetchImpl: fetchFor(firstEnv, firstBytes, firstDigest),
+      });
 
-      const worker = spawnProvisionWorker(root, digest, templateBytes, { renameDelayMs: 100 });
-      let observedFailClosedReader = false;
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        assert.equal(existsSync(targetDir), true);
-        try {
-          loadCachedWindowsOfflineTemplate(config.templateDir, {
-            version: config.templateVersion,
-            commit: config.templateCommit,
-            sha256: config.templateSha256,
-            releaseTag: config.templateReleaseTag,
-          });
-        } catch (error) {
-          observedFailClosedReader = true;
-          assert.equal(error instanceof WindowsOfflineTemplateCacheError, true);
-        }
-        await waitBriefly(10);
-      }
+      let releaseCommit!: () => void;
+      let signalCommitReached!: () => void;
+      const commitReached = new Promise<void>((resolve) => {
+        signalCommitReached = resolve;
+      });
+      const holdCommit = new Promise<void>((resolve) => {
+        releaseCommit = resolve;
+      });
+      const reader = spawnGenerationReaderWorker(root, firstDigest, secondDigest, 700);
+      const publisher = provisionWindowsOfflineInstallerTemplate({
+        env: secondEnv,
+        fetchImpl: fetchFor(secondEnv, secondBytes, secondDigest),
+        renamePath: async (sourcePath, targetPath) => {
+          if (path.basename(targetPath) === '.current') {
+            signalCommitReached();
+            await holdCommit;
+          }
+          await rename(sourcePath, targetPath);
+        },
+      });
 
-      const result = await worker;
-      assert.equal(result.code, 0, result.stderr);
-      assert.equal(observedFailClosedReader, true);
-      assert.doesNotThrow(() =>
-        loadCachedWindowsOfflineTemplate(config.templateDir, {
-          version: config.templateVersion,
-          commit: config.templateCommit,
-          sha256: config.templateSha256,
-          releaseTag: config.templateReleaseTag,
-        })
-      );
+      await commitReached;
+      await waitBriefly(50);
+      releaseCommit();
+      const [published, readerResult] = await Promise.all([publisher, reader]);
+      assert.equal(published.status, 'provisioned');
+      assert.equal(readerResult.code, 0, readerResult.stderr);
+      const readerEvidence = JSON.parse(readerResult.stdout) as {
+        successfulReads: number;
+        incompleteReads: number;
+      };
+      assert.equal(readerEvidence.successfulReads > 0, true);
+      assert.equal(readerEvidence.incompleteReads, 0);
+
+      const secondConfig = loadWindowsOfflineInstallerConfig(secondEnv);
+      const loaded = loadCachedWindowsOfflineTemplate(secondConfig.templateDir, {
+        version: secondConfig.templateVersion,
+        commit: secondConfig.templateCommit,
+        sha256: secondConfig.templateSha256,
+        releaseTag: secondConfig.templateReleaseTag,
+      });
+      assert.deepEqual(await readFile(loaded.filePath), secondBytes);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -949,6 +1092,7 @@ void describe('OpenPath Windows offline installer provisioning', () => {
       const config = loadWindowsOfflineInstallerConfig(env);
       const templatePath = getWindowsOfflineInstallerTemplatePath(config);
       assert.equal(existsSync(path.dirname(templatePath)), true);
+      assert.equal(existsSync(path.join(path.dirname(templatePath), '.current')), false);
       await assert.rejects(
         () => provisionWindowsOfflineInstallerTemplate({ env, verifyOnly: true }),
         (error: unknown) =>
@@ -958,7 +1102,7 @@ void describe('OpenPath Windows offline installer provisioning', () => {
 
       const repaired = await provisionWindowsOfflineInstallerTemplate({ env, fetchImpl });
       assert.equal(repaired.status, 'provisioned');
-      assert.deepEqual(await readFile(templatePath), templateBytes);
+      assert.deepEqual(await readFile(repaired.filePath), templateBytes);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -972,13 +1116,12 @@ void describe('OpenPath Windows offline installer provisioning', () => {
 
     try {
       const crashed = await spawnProvisionWorker(root, digest, templateBytes, {
-        crashAfterFirstRename: true,
+        crashBeforeCommit: true,
       });
       assert.equal(crashed.code, 17);
       assert.equal(crashed.signal, null);
 
       const config = loadWindowsOfflineInstallerConfig(env);
-      const templatePath = getWindowsOfflineInstallerTemplatePath(config);
       await assert.rejects(
         () =>
           provisionWindowsOfflineInstallerTemplate({
@@ -1020,7 +1163,7 @@ void describe('OpenPath Windows offline installer provisioning', () => {
       };
       const result = await provisionWindowsOfflineInstallerTemplate({ env, fetchImpl });
       assert.equal(result.status, 'provisioned');
-      assert.deepEqual(await readFile(templatePath), templateBytes);
+      assert.deepEqual(await readFile(result.filePath), templateBytes);
       assert.deepEqual(
         (await readdir(config.templateDir)).filter((entry) =>
           entry.startsWith('.openpath-windows-template-')
@@ -1028,6 +1171,124 @@ void describe('OpenPath Windows offline installer provisioning', () => {
         []
       );
       await assert.rejects(access(legacyQuarantineRoot));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('keeps the committed generation usable after a crash immediately after commit', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-template-crash-after-commit-'));
+    const templateBytes = Buffer.from('crash after commit pinned template');
+    const digest = sha256(templateBytes);
+    const env = envFor(root, digest);
+
+    try {
+      const crashed = await spawnProvisionWorker(root, digest, templateBytes, {
+        crashAfterCommit: true,
+      });
+      assert.equal(crashed.code, 17);
+      assert.equal(crashed.signal, null);
+
+      const config = loadWindowsOfflineInstallerConfig(env);
+      const loaded = loadCachedWindowsOfflineTemplate(config.templateDir, {
+        version: config.templateVersion,
+        commit: config.templateCommit,
+        sha256: config.templateSha256,
+        releaseTag: config.templateReleaseTag,
+      });
+      assert.deepEqual(await readFile(loaded.filePath), templateBytes);
+      const verified = await provisionWindowsOfflineInstallerTemplate({ env, verifyOnly: true });
+      assert.equal(verified.status, 'verified');
+      assert.equal(verified.filePath, loaded.filePath);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('preserves the previous valid generation when staging I/O fails', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-template-staging-failure-'));
+    const previousBytes = Buffer.from('previous valid generation');
+    const nextBytes = Buffer.from('next generation that never commits');
+    const previousDigest = sha256(previousBytes);
+    const nextDigest = sha256(nextBytes);
+    const previousEnv = envFor(root, previousDigest);
+    const nextEnv = envFor(root, nextDigest);
+
+    try {
+      await provisionWindowsOfflineInstallerTemplate({
+        env: previousEnv,
+        fetchImpl: fetchForProvisionTest(previousEnv, previousBytes, previousDigest),
+      });
+
+      await assert.rejects(
+        () =>
+          provisionWindowsOfflineInstallerTemplate({
+            env: nextEnv,
+            fetchImpl: fetchForProvisionTest(nextEnv, nextBytes, nextDigest),
+            writeFileImpl: (filePath) => {
+              if (filePath.endsWith('OpenPath-Windows-Setup-Template.exe')) {
+                throw new Error('injected staging I/O failure');
+              }
+              return Promise.resolve();
+            },
+          }),
+        (error: unknown) =>
+          error instanceof WindowsOfflineInstallerProvisionError && error.code === 'PUBLISH_FAILED'
+      );
+
+      const previousConfig = loadWindowsOfflineInstallerConfig(previousEnv);
+      const loaded = loadCachedWindowsOfflineTemplate(previousConfig.templateDir, {
+        version: previousConfig.templateVersion,
+        commit: previousConfig.templateCommit,
+        sha256: previousConfig.templateSha256,
+        releaseTag: previousConfig.templateReleaseTag,
+      });
+      assert.deepEqual(await readFile(loaded.filePath), previousBytes);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('cleans abandoned generations and staging without deleting the current generation', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-template-generation-cleanup-'));
+    const templateBytes = Buffer.from('generation cleanup pinned template');
+    const digest = sha256(templateBytes);
+    const env = envFor(root, digest);
+
+    try {
+      await provisionWindowsOfflineInstallerTemplate({
+        env,
+        fetchImpl: fetchForProvisionTest(env, templateBytes, digest),
+      });
+      const config = loadWindowsOfflineInstallerConfig(env);
+      const commitDirectory = path.dirname(getWindowsOfflineInstallerTemplatePath(config));
+      const currentGeneration = (
+        await readFile(path.join(commitDirectory, '.current'), 'utf8')
+      ).trim();
+      const abandonedGeneration = path.join(commitDirectory, 'generations', 'generation-abandoned');
+      await mkdir(abandonedGeneration, { recursive: true });
+      await writeFile(path.join(abandonedGeneration, 'orphan'), 'orphan');
+      const abandonedStaging = path.join(
+        config.templateDir,
+        '.openpath-windows-template-abandoned'
+      );
+      await mkdir(abandonedStaging, { recursive: true });
+      const oldTimestamp = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      await utimes(abandonedGeneration, oldTimestamp, oldTimestamp);
+      await utimes(abandonedStaging, oldTimestamp, oldTimestamp);
+
+      await cleanupStaleWindowsOfflineInstallerProvisioningDirectories(config);
+
+      await assert.rejects(access(abandonedGeneration));
+      await assert.rejects(access(abandonedStaging));
+      const loaded = loadCachedWindowsOfflineTemplate(config.templateDir, {
+        version: config.templateVersion,
+        commit: config.templateCommit,
+        sha256: config.templateSha256,
+        releaseTag: config.templateReleaseTag,
+      });
+      assert.equal(path.basename(path.dirname(loaded.filePath)), currentGeneration);
+      assert.deepEqual(await readFile(loaded.filePath), templateBytes);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

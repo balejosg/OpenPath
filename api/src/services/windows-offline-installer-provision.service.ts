@@ -1,6 +1,17 @@
-import { createHash } from 'node:crypto';
-import { lstatSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstatSync, readFileSync } from 'node:fs';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -10,7 +21,12 @@ import {
 } from '../lib/windows-offline-installer-config.js';
 import {
   loadCachedWindowsOfflineTemplate,
+  loadWindowsOfflineTemplateBundle,
   getWindowsOfflineInstallerTemplateProvenancePath,
+  WINDOWS_OFFLINE_TEMPLATE_CURRENT_FILE_NAME,
+  WINDOWS_OFFLINE_TEMPLATE_FILE_NAME,
+  WINDOWS_OFFLINE_TEMPLATE_GENERATIONS_DIR_NAME,
+  type CachedWindowsOfflineTemplate,
   type WindowsOfflineTemplateProvenance,
   WindowsOfflineTemplateCacheError,
 } from '../lib/windows-offline-installer-template.js';
@@ -47,10 +63,14 @@ export interface ProvisionOptions {
   env?: Readonly<Record<string, string | undefined>>;
   fetchImpl?: typeof fetch;
   renamePath?: (sourcePath: string, targetPath: string) => Promise<void>;
+  writeFileImpl?: (
+    filePath: string,
+    data: string | Buffer,
+    options?: { mode?: number }
+  ) => Promise<void>;
   verifyOnly?: boolean;
 }
 
-const TEMPLATE_FILE_NAME = 'OpenPath-Windows-Setup-Template.exe';
 const HEX_SHA256 = /^[0-9a-f]{64}$/u;
 const GITHUB_ASSET_HOSTS = new Set([
   'github.com',
@@ -61,7 +81,21 @@ const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const STALE_PUBLISH_RETENTION_MS = 24 * 60 * 60 * 1000;
 const STAGING_ROOT_PATTERN = /^\.openpath-windows-template-[A-Za-z0-9]+$/u;
 const LEGACY_QUARANTINE_PATTERN = /^\.[0-9a-f]{40}-[0-9a-f-]{36}\.quarantine$/u;
+const GENERATION_PATTERN =
+  /^generation-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const ABANDONED_GENERATION_PATTERN = /^generation-[A-Za-z0-9._-]+$/u;
+const POINTER_TEMP_PATTERN = /^\.current\.[0-9a-f-]+\.tmp$/u;
+const PUBLISH_LOCK_FILE_NAME = '.publish.lock';
+const PUBLISH_LOCK_STALE_MS = 10 * 60 * 1000;
+const PUBLISH_LOCK_WAIT_MS = 30 * 1000;
+const PUBLISH_LOCK_RETRY_MS = 25;
 const publishLocks = new Map<string, Promise<void>>();
+
+function errorCode(error: unknown): unknown {
+  return typeof error === 'object' && error !== null && 'code' in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+}
 
 function isMissingPathError(error: unknown): boolean {
   return (
@@ -122,6 +156,144 @@ async function withPublishLock<T>(key: string, operation: () => Promise<T>): Pro
   } finally {
     release();
     if (publishLocks.get(key) === current) publishLocks.delete(key);
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return errorCode(error) !== 'ESRCH';
+  }
+}
+
+async function isStaleFilesystemLock(lockPath: string): Promise<boolean> {
+  let lockStat;
+  try {
+    lockStat = await stat(lockPath);
+  } catch (error) {
+    return errorCode(error) === 'ENOENT';
+  }
+
+  try {
+    const lockHandle = await open(lockPath, 'r');
+    try {
+      const contents = await lockHandle.readFile('utf8');
+      const parsed: unknown = JSON.parse(contents);
+      const pid =
+        typeof parsed === 'object' && parsed !== null && 'pid' in parsed
+          ? (parsed as { pid?: unknown }).pid
+          : undefined;
+      if (typeof pid === 'number' && Number.isInteger(pid) && !processIsAlive(pid)) return true;
+      if (Date.now() - lockStat.mtimeMs <= PUBLISH_LOCK_STALE_MS) return false;
+      return typeof pid !== 'number' || !Number.isInteger(pid);
+    } finally {
+      await lockHandle.close();
+    }
+  } catch {
+    // A creator owns the file immediately after the exclusive open, before it
+    // can write its PID. Treat a fresh malformed/empty lock as live; only an
+    // old unreadable lock may be reclaimed after a crash.
+    return Date.now() - lockStat.mtimeMs > PUBLISH_LOCK_STALE_MS;
+  }
+}
+
+async function wait(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function reclaimStaleFilesystemLock(lockPath: string): Promise<boolean> {
+  const reclaimedPath = `${lockPath}.${String(process.pid)}-${randomUUID()}.stale`;
+  try {
+    // Rename claims the exact lock entry before removing it. A check followed
+    // by unlink could delete a new owner's lock between those two operations.
+    await rename(lockPath, reclaimedPath);
+  } catch (error) {
+    return errorCode(error) === 'ENOENT';
+  }
+  await rm(reclaimedPath, { force: true });
+  return true;
+}
+
+async function acquireFilesystemPublishLock(lockPath: string): Promise<() => Promise<void>> {
+  const deadline = Date.now() + PUBLISH_LOCK_WAIT_MS;
+  while (Date.now() < deadline) {
+    let lockHandle: FileHandle | undefined;
+    let lockCreated = false;
+    try {
+      lockHandle = await open(lockPath, 'wx', 0o600);
+      lockCreated = true;
+      await lockHandle.writeFile(
+        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })
+      );
+      await lockHandle.sync();
+      const ownedLockHandle = lockHandle;
+      let released = false;
+      return async (): Promise<void> => {
+        if (released) return;
+        released = true;
+        try {
+          await ownedLockHandle.close();
+        } finally {
+          await rm(lockPath, { force: true });
+        }
+      };
+    } catch (error) {
+      try {
+        await lockHandle?.close();
+      } catch {
+        // The acquisition failed before the handle could be closed.
+      }
+      if (lockCreated) await rm(lockPath, { force: true });
+      if (errorCode(error) !== 'EEXIST') {
+        throw new Error('template publish lock acquisition failed', { cause: error });
+      }
+      if ((await isStaleFilesystemLock(lockPath)) && (await reclaimStaleFilesystemLock(lockPath))) {
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error('template publish lock timeout', { cause: error });
+      }
+      await wait(PUBLISH_LOCK_RETRY_MS);
+    }
+  }
+  throw new Error('template publish lock timeout');
+}
+
+async function withFilesystemPublishLock<T>(
+  lockPath: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  const release = await acquireFilesystemPublishLock(lockPath);
+  try {
+    return await operation();
+  } finally {
+    await release();
+  }
+}
+
+async function syncFile(filePath: string): Promise<void> {
+  const handle = await open(filePath, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function syncDirectory(directoryPath: string): Promise<void> {
+  try {
+    const handle = await open(directoryPath, 'r');
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    const code = errorCode(error);
+    if (code !== 'EINVAL' && code !== 'ENOTSUP' && code !== 'EISDIR') throw error;
   }
 }
 
@@ -370,6 +542,54 @@ function provenanceFor(config: WindowsOfflineInstallerConfig): WindowsOfflineTem
   };
 }
 
+function currentGenerationName(commitDirectory: string): string | null | undefined {
+  const currentPath = path.join(commitDirectory, WINDOWS_OFFLINE_TEMPLATE_CURRENT_FILE_NAME);
+  let currentStat;
+  try {
+    currentStat = lstatSync(currentPath);
+  } catch (error) {
+    return isMissingPathError(error) ? null : undefined;
+  }
+  if (!currentStat.isFile() || currentStat.isSymbolicLink()) return undefined;
+  try {
+    const value = readFileSync(currentPath, 'utf8').trim();
+    return GENERATION_PATTERN.test(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function removeIfStale(candidate: string, cutoff: number): Promise<void> {
+  try {
+    if (lstatSync(candidate).isSymbolicLink()) return;
+    if ((await stat(candidate)).mtimeMs > cutoff) return;
+    await rm(candidate, { recursive: true, force: true });
+  } catch {
+    logger.warn('offline_installer_template_recovery_cleanup_failed', {
+      code: 'RECOVERY_CLEANUP_FAILED',
+    });
+  }
+}
+
+async function cleanupGenerationDirectory(
+  generationsDirectory: string,
+  currentName: string,
+  cutoff: number
+): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(generationsDirectory, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === currentName) continue;
+    if (!ABANDONED_GENERATION_PATTERN.test(entry.name)) continue;
+    await removeIfStale(path.join(generationsDirectory, entry.name), cutoff);
+  }
+}
+
 export async function cleanupStaleWindowsOfflineInstallerProvisioningDirectories(
   config: WindowsOfflineInstallerConfig
 ): Promise<void> {
@@ -378,8 +598,20 @@ export async function cleanupStaleWindowsOfflineInstallerProvisioningDirectories
   const scanDirectories = [config.templateDir];
   try {
     const versionEntries = await readdir(config.templateDir, { withFileTypes: true });
-    for (const entry of versionEntries) {
-      if (entry.isDirectory()) scanDirectories.push(path.join(config.templateDir, entry.name));
+    for (const versionEntry of versionEntries) {
+      if (!versionEntry.isDirectory()) continue;
+      const versionDirectory = path.join(config.templateDir, versionEntry.name);
+      scanDirectories.push(versionDirectory);
+      try {
+        const commitEntries = await readdir(versionDirectory, { withFileTypes: true });
+        for (const commitEntry of commitEntries) {
+          if (commitEntry.isDirectory()) {
+            scanDirectories.push(path.join(versionDirectory, commitEntry.name));
+          }
+        }
+      } catch {
+        // A missing or concurrently removed version directory is harmless.
+      }
     }
   } catch {
     return;
@@ -394,106 +626,148 @@ export async function cleanupStaleWindowsOfflineInstallerProvisioningDirectories
       continue;
     }
 
+    const currentName = currentGenerationName(directory);
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (!STAGING_ROOT_PATTERN.test(entry.name) && !LEGACY_QUARANTINE_PATTERN.test(entry.name)) {
-        continue;
-      }
       const candidate = path.join(directory, entry.name);
-      try {
-        if (lstatSync(candidate).isSymbolicLink()) continue;
-        const metadata = await stat(candidate);
-        if (metadata.mtimeMs > cutoff) continue;
-        await rm(candidate, { recursive: true, force: true });
-      } catch {
-        // A stale recovery directory is best effort. It is never used as a
-        // published template, and a later provisioning attempt can retry it.
-        logger.warn('offline_installer_template_recovery_cleanup_failed', {
-          code: 'RECOVERY_CLEANUP_FAILED',
-        });
+      if (entry.isDirectory()) {
+        if (STAGING_ROOT_PATTERN.test(entry.name) || LEGACY_QUARANTINE_PATTERN.test(entry.name)) {
+          await removeIfStale(candidate, cutoff);
+        } else if (entry.name === WINDOWS_OFFLINE_TEMPLATE_GENERATIONS_DIR_NAME) {
+          // If the pointer is malformed, preserve every generation. Cleanup
+          // must never destroy the only recoverable copy after a crash.
+          if (currentName !== null && currentName !== undefined) {
+            await cleanupGenerationDirectory(candidate, currentName, cutoff);
+          }
+        }
+      } else if (POINTER_TEMP_PATTERN.test(entry.name)) {
+        await removeIfStale(candidate, cutoff);
+      } else if (entry.name === PUBLISH_LOCK_FILE_NAME) {
+        if (await isStaleFilesystemLock(candidate)) await reclaimStaleFilesystemLock(candidate);
       }
     }
   }
 }
 
-function isVerifiedTemplate(config: WindowsOfflineInstallerConfig, templateDir: string): boolean {
-  if (templatePathContainsSymlink(config)) return false;
+function verifiedTemplate(
+  config: WindowsOfflineInstallerConfig
+): CachedWindowsOfflineTemplate | null {
+  if (templatePathContainsSymlink(config)) return null;
   try {
-    loadCachedWindowsOfflineTemplate(templateDir, {
+    return loadCachedWindowsOfflineTemplate(config.templateDir, {
       version: config.templateVersion,
       commit: config.templateCommit,
       sha256: config.templateSha256,
       releaseTag: config.templateReleaseTag,
     });
-    return true;
   } catch {
-    return false;
+    return null;
   }
 }
 
+function assertSafePublicationPaths(config: WindowsOfflineInstallerConfig): void {
+  assertSafeTemplatePath(config);
+  const canonicalDirectory = path.dirname(getWindowsOfflineInstallerTemplatePath(config));
+  const generationsDirectory = path.join(
+    canonicalDirectory,
+    WINDOWS_OFFLINE_TEMPLATE_GENERATIONS_DIR_NAME
+  );
+  const currentPath = path.join(canonicalDirectory, WINDOWS_OFFLINE_TEMPLATE_CURRENT_FILE_NAME);
+  if (pathContainsSymlink(generationsDirectory) || pathContainsSymlink(currentPath)) {
+    throw new WindowsOfflineInstallerProvisionError(
+      'PUBLISH_FAILED',
+      'Pinned template publication path contains an unsupported symbolic link'
+    );
+  }
+}
+
+type ProvisionWriteFile = (
+  filePath: string,
+  data: string | Buffer,
+  options?: { mode?: number }
+) => Promise<void>;
+
 async function publishStagedTemplate(
   config: WindowsOfflineInstallerConfig,
-  templatePath: string,
   stagingDir: string,
-  renamePath: (sourcePath: string, targetPath: string) => Promise<void>
+  renamePath: (sourcePath: string, targetPath: string) => Promise<void>,
+  writeFileImpl: ProvisionWriteFile
 ): Promise<ProvisionResult> {
-  const targetDir = path.dirname(templatePath);
-  return withPublishLock(templatePath, async () => {
-    if (isVerifiedTemplate(config, config.templateDir)) {
-      return existingTemplateResult(config, templatePath);
-    }
+  const canonicalTemplatePath = getWindowsOfflineInstallerTemplatePath(config);
+  const targetDir = path.dirname(canonicalTemplatePath);
+  const generationsDirectory = path.join(targetDir, WINDOWS_OFFLINE_TEMPLATE_GENERATIONS_DIR_NAME);
+  const currentPath = path.join(targetDir, WINDOWS_OFFLINE_TEMPLATE_CURRENT_FILE_NAME);
+  const lockPath = path.join(targetDir, PUBLISH_LOCK_FILE_NAME);
 
-    try {
-      // Keep the canonical directory in place for readers. Each replacement
-      // is atomic, and the loader/readiness code accepts the directory only
-      // after the executable, sidecar, and provenance all verify together.
-      assertSafeTemplatePath(config);
-      await mkdir(targetDir, { recursive: true, mode: 0o755 });
-      assertSafeTemplatePath(config);
-      await chmod(targetDir, 0o755);
+  return (async (): Promise<ProvisionResult> => {
+    assertSafePublicationPaths(config);
+    await mkdir(targetDir, { recursive: true, mode: 0o755 });
+    await chmod(targetDir, 0o755);
+    assertSafePublicationPaths(config);
 
-      const publishFiles = [
-        TEMPLATE_FILE_NAME,
-        `${TEMPLATE_FILE_NAME}.sha256`,
-        `${TEMPLATE_FILE_NAME}.provenance.json`,
-      ];
-      for (const fileName of publishFiles) {
+    return withPublishLock(targetDir, async () =>
+      withFilesystemPublishLock(lockPath, async () => {
+        const existing = verifiedTemplate(config);
+        if (existing) return existingTemplateResult(config, existing.filePath);
+
         try {
-          await renamePath(path.join(stagingDir, fileName), path.join(targetDir, fileName));
-        } catch {
-          // Another process may have completed the same pinned bundle while
-          // this process was publishing. Accept only a fully verified result.
-          if (isVerifiedTemplate(config, config.templateDir)) {
-            return existingTemplateResult(config, templatePath);
-          }
-          throw new Error('template file publish failed');
-        }
-      }
-      if (!isVerifiedTemplate(config, config.templateDir)) {
-        throw new Error('published template verification failed');
-      }
-      return {
-        status: 'provisioned',
-        filePath: templatePath,
-        releaseTag: config.templateReleaseTag,
-        sha256: config.templateSha256,
-      };
-    } catch {
-      // Do not remove or roll back the canonical directory here. A failed
-      // file replacement can leave an incomplete bundle, but readers fail
-      // closed until the next complete verification. Removing the directory
-      // would reintroduce an observable missing-path window and could destroy
-      // a valid bundle published concurrently by another process.
-      if (isVerifiedTemplate(config, config.templateDir)) {
-        return existingTemplateResult(config, templatePath);
-      }
+          assertSafePublicationPaths(config);
+          await mkdir(targetDir, { recursive: true, mode: 0o755 });
+          await chmod(targetDir, 0o755);
+          assertSafePublicationPaths(config);
+          await mkdir(generationsDirectory, { recursive: true, mode: 0o755 });
+          await chmod(generationsDirectory, 0o755);
+          assertSafePublicationPaths(config);
 
-      throw new WindowsOfflineInstallerProvisionError(
-        'PUBLISH_FAILED',
-        'Pinned template could not be published'
-      );
-    }
-  });
+          // The staging directory is validated as a complete bundle before it
+          // is made reachable from the canonical pointer.
+          loadWindowsOfflineTemplateBundle(stagingDir, {
+            version: config.templateVersion,
+            commit: config.templateCommit,
+            sha256: config.templateSha256,
+            releaseTag: config.templateReleaseTag,
+          });
+
+          const generationName = `generation-${randomUUID()}`;
+          const generationPath = path.join(generationsDirectory, generationName);
+          assertSafePublicationPaths(config);
+          await renamePath(stagingDir, generationPath);
+          await syncDirectory(generationsDirectory);
+          await syncDirectory(targetDir);
+
+          const pointerTempPath = path.join(targetDir, `.current.${randomUUID()}.tmp`);
+          try {
+            await writeFileImpl(pointerTempPath, `${generationName}\n`, { mode: 0o444 });
+            await chmod(pointerTempPath, 0o444);
+            await syncFile(pointerTempPath);
+            // This is the single observable commit. Readers resolve one
+            // immutable generation through this pointer and never combine files.
+            await renamePath(pointerTempPath, currentPath);
+            await syncDirectory(targetDir);
+          } finally {
+            await rm(pointerTempPath, { force: true });
+          }
+
+          const published = verifiedTemplate(config);
+          if (!published) throw new Error('published template verification failed');
+          return {
+            status: 'provisioned',
+            filePath: published.filePath,
+            releaseTag: config.templateReleaseTag,
+            sha256: config.templateSha256,
+          };
+        } catch {
+          // A failed preparation or pointer commit cannot affect an already
+          // committed generation. Accept a concurrent complete publication only.
+          const preserved = verifiedTemplate(config);
+          if (preserved) return existingTemplateResult(config, preserved.filePath);
+          throw new WindowsOfflineInstallerProvisionError(
+            'PUBLISH_FAILED',
+            'Pinned template could not be published'
+          );
+        }
+      })
+    );
+  })();
 }
 
 export async function provisionWindowsOfflineInstallerTemplate(
@@ -509,18 +783,17 @@ export async function provisionWindowsOfflineInstallerTemplate(
     );
   }
 
-  const templatePath = getWindowsOfflineInstallerTemplatePath(config);
   if (!options.verifyOnly) {
     await cleanupStaleWindowsOfflineInstallerProvisioningDirectories(config);
   }
   try {
-    loadCachedWindowsOfflineTemplate(config.templateDir, {
+    const cached = loadCachedWindowsOfflineTemplate(config.templateDir, {
       version: config.templateVersion,
       commit: config.templateCommit,
       sha256: config.templateSha256,
       releaseTag: config.templateReleaseTag,
     });
-    return existingTemplateResult(config, templatePath);
+    return existingTemplateResult(config, cached.filePath);
   } catch (error) {
     const code =
       error instanceof WindowsOfflineTemplateCacheError
@@ -536,11 +809,16 @@ export async function provisionWindowsOfflineInstallerTemplate(
   assertSafeTemplatePath(config);
 
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const writeFileImpl: ProvisionWriteFile =
+    options.writeFileImpl ??
+    (async (filePath, data, writeOptions): Promise<void> => {
+      await writeFile(filePath, data, writeOptions);
+    });
 
   await resolveExactReleaseCommit(fetchImpl, config);
 
-  const templateUrl = releaseAssetUrl(config, TEMPLATE_FILE_NAME);
-  const sidecarUrl = releaseAssetUrl(config, `${TEMPLATE_FILE_NAME}.sha256`);
+  const templateUrl = releaseAssetUrl(config, WINDOWS_OFFLINE_TEMPLATE_FILE_NAME);
+  const sidecarUrl = releaseAssetUrl(config, `${WINDOWS_OFFLINE_TEMPLATE_FILE_NAME}.sha256`);
   const [templateBytes, sidecarBytes] = await Promise.all([
     fetchBytes(fetchImpl, templateUrl),
     fetchBytes(fetchImpl, sidecarUrl),
@@ -565,23 +843,35 @@ export async function provisionWindowsOfflineInstallerTemplate(
   try {
     await mkdir(stagingDir, { recursive: true, mode: 0o755 });
     await chmod(stagingDir, 0o755);
-    await writeFile(path.join(stagingDir, TEMPLATE_FILE_NAME), templateBytes, { mode: 0o444 });
-    await writeFile(path.join(stagingDir, `${TEMPLATE_FILE_NAME}.sha256`), sidecarBytes, {
+    const stagedTemplatePath = path.join(stagingDir, WINDOWS_OFFLINE_TEMPLATE_FILE_NAME);
+    const stagedSidecarPath = `${stagedTemplatePath}.sha256`;
+    await writeFileImpl(stagedTemplatePath, templateBytes, { mode: 0o444 });
+    await writeFileImpl(stagedSidecarPath, sidecarBytes, {
       mode: 0o444,
     });
-    await chmod(path.join(stagingDir, TEMPLATE_FILE_NAME), 0o444);
-    await chmod(path.join(stagingDir, `${TEMPLATE_FILE_NAME}.sha256`), 0o444);
-    const provenancePath = getWindowsOfflineInstallerTemplateProvenancePath(
-      path.join(stagingDir, TEMPLATE_FILE_NAME)
-    );
-    await writeFile(provenancePath, `${JSON.stringify(provenanceFor(config))}\n`, { mode: 0o444 });
+    await chmod(stagedTemplatePath, 0o444);
+    await chmod(stagedSidecarPath, 0o444);
+    const provenancePath = getWindowsOfflineInstallerTemplateProvenancePath(stagedTemplatePath);
+    await writeFileImpl(provenancePath, `${JSON.stringify(provenanceFor(config))}\n`, {
+      mode: 0o444,
+    });
     await chmod(provenancePath, 0o444);
+    await syncFile(stagedTemplatePath);
+    await syncFile(stagedSidecarPath);
+    await syncFile(provenancePath);
+    await syncDirectory(stagingDir);
 
     return await publishStagedTemplate(
       config,
-      templatePath,
       stagingDir,
-      options.renamePath ?? rename
+      options.renamePath ?? rename,
+      writeFileImpl
+    );
+  } catch (error) {
+    if (error instanceof WindowsOfflineInstallerProvisionError) throw error;
+    throw new WindowsOfflineInstallerProvisionError(
+      'PUBLISH_FAILED',
+      'Pinned template could not be prepared for publication'
     );
   } finally {
     await rm(stagingRoot, { recursive: true, force: true });

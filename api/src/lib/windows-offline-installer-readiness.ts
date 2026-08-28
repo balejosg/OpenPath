@@ -18,6 +18,7 @@ import {
 import {
   getWindowsOfflineInstallerTemplateProvenancePath,
   loadCachedWindowsOfflineTemplate,
+  resolveWindowsOfflineInstallerTemplatePath,
   WindowsOfflineTemplateCacheError,
   type WindowsOfflineTemplateLoaderIo,
 } from './windows-offline-installer-template.js';
@@ -113,12 +114,17 @@ function checkTemplateWithCache(
   options: WindowsOfflineInstallerReadinessOptions
 ): WindowsOfflineInstallerReadiness {
   const statTemplateFile = options.statTemplateFile ?? statSync;
-  const templatePath = path.join(
-    config.templateDir,
-    config.templateVersion,
-    config.templateCommit,
-    'OpenPath-Windows-Setup-Template.exe'
-  );
+  let templatePath: string;
+  try {
+    templatePath = resolveWindowsOfflineInstallerTemplatePath(config.templateDir, {
+      version: config.templateVersion,
+      commit: config.templateCommit,
+    });
+  } catch (error) {
+    return error instanceof WindowsOfflineTemplateCacheError
+      ? notReady(mapTemplateError(error))
+      : notReady('TEMPLATE_MISSING');
+  }
   const sidecarPath = `${templatePath}.sha256`;
   const provenancePath = getWindowsOfflineInstallerTemplateProvenancePath(templatePath);
   const templateIdentity = fileIdentity(templatePath, statTemplateFile);

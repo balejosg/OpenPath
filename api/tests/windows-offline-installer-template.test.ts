@@ -65,3 +65,47 @@ void test('template loader fails closed on a symlinked pinned path', async () =>
     await rm(outside, { recursive: true, force: true });
   }
 });
+
+void test('template loader rejects unsafe or incomplete generation pointers without legacy fallback', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'openpath-template-loader-generation-'));
+  const version = '4.1.0';
+  const commit = 'f'.repeat(40);
+  const commitDirectory = path.join(root, version, commit);
+  const templatePath = path.join(commitDirectory, 'OpenPath-Windows-Setup-Template.exe');
+  const bytes = Buffer.from('legacy bytes must not bypass pointer failure');
+  const digest = createHash('sha256').update(bytes).digest('hex');
+
+  try {
+    await mkdir(commitDirectory, { recursive: true });
+    await writeFile(templatePath, bytes);
+    await writeFile(`${templatePath}.sha256`, `${digest}  template.exe\n`);
+    await writeFile(path.join(commitDirectory, '.current'), '../escape\n');
+
+    assert.throws(
+      () => loadCachedWindowsOfflineTemplate(root, { version, commit, sha256: digest }),
+      (error: unknown) =>
+        error instanceof WindowsOfflineTemplateCacheError && error.code === 'TEMPLATE_MISSING'
+    );
+
+    await rm(path.join(commitDirectory, '.current'));
+    const outside = await mkdtemp(
+      path.join(tmpdir(), 'openpath-template-loader-generation-outside-')
+    );
+    try {
+      await mkdir(path.join(commitDirectory, 'generations'), { recursive: true });
+      const generationName = 'generation-ffffffff-ffff-ffff-ffff-ffffffffffff';
+      await symlink(outside, path.join(commitDirectory, 'generations', generationName), 'dir');
+      await writeFile(path.join(commitDirectory, '.current'), `${generationName}\n`);
+
+      assert.throws(
+        () => loadCachedWindowsOfflineTemplate(root, { version, commit, sha256: digest }),
+        (error: unknown) =>
+          error instanceof WindowsOfflineTemplateCacheError && error.code === 'TEMPLATE_MISSING'
+      );
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

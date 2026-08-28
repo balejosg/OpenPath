@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { getWindowsOfflineInstallerTemplatePath } from './windows-offline-installer-config.js';
@@ -51,6 +51,12 @@ export interface WindowsOfflineTemplateLoaderIo {
 
 export const WINDOWS_OFFLINE_TEMPLATE_PROVENANCE_FILE_NAME =
   'OpenPath-Windows-Setup-Template.exe.provenance.json';
+export const WINDOWS_OFFLINE_TEMPLATE_CURRENT_FILE_NAME = '.current';
+export const WINDOWS_OFFLINE_TEMPLATE_GENERATIONS_DIR_NAME = 'generations';
+export const WINDOWS_OFFLINE_TEMPLATE_FILE_NAME = 'OpenPath-Windows-Setup-Template.exe';
+
+const GENERATION_NAME =
+  /^generation-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 export function getWindowsOfflineInstallerTemplateProvenancePath(templatePath: string): string {
   return path.join(path.dirname(templatePath), WINDOWS_OFFLINE_TEMPLATE_PROVENANCE_FILE_NAME);
@@ -97,40 +103,94 @@ function sha256File(filePath: string, io: WindowsOfflineTemplateLoaderIo): strin
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-/**
- * Loads only the exact version/commit selected by configuration. There is no
- * latest-release fallback and no network path in this function.
- */
-export function loadCachedWindowsOfflineTemplate(
+function cacheMissing(message: string): WindowsOfflineTemplateCacheError {
+  return new WindowsOfflineTemplateCacheError('TEMPLATE_MISSING', message);
+}
+
+function readCurrentGenerationDirectory(commitDirectory: string): string | null {
+  const currentPath = path.join(commitDirectory, WINDOWS_OFFLINE_TEMPLATE_CURRENT_FILE_NAME);
+  let currentStat;
+  try {
+    currentStat = lstatSync(currentPath);
+  } catch (error) {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: unknown }).code === 'ENOENT'
+    ) {
+      return null;
+    }
+    throw cacheMissing('Pinned OpenPath Windows setup template is unavailable');
+  }
+
+  if (!currentStat.isFile() || currentStat.isSymbolicLink()) {
+    throw cacheMissing('Pinned OpenPath Windows setup template is unavailable');
+  }
+
+  let generationName: string;
+  try {
+    generationName = readFileSync(currentPath, 'utf8').trim();
+  } catch {
+    throw cacheMissing('Pinned OpenPath Windows setup template is unavailable');
+  }
+  if (!GENERATION_NAME.test(generationName)) {
+    throw cacheMissing('Pinned OpenPath Windows setup template is unavailable');
+  }
+
+  const generationsDirectory = path.join(
+    commitDirectory,
+    WINDOWS_OFFLINE_TEMPLATE_GENERATIONS_DIR_NAME
+  );
+  const generationDirectory = path.join(generationsDirectory, generationName);
+  if (containsSymbolicLink(generationsDirectory) || containsSymbolicLink(generationDirectory)) {
+    throw cacheMissing('Pinned OpenPath Windows setup template is unavailable');
+  }
+  try {
+    if (!statSync(generationDirectory).isDirectory()) {
+      throw new Error('generation is not a directory');
+    }
+  } catch {
+    throw cacheMissing('Pinned OpenPath Windows setup template is unavailable');
+  }
+  return generationDirectory;
+}
+
+export function resolveWindowsOfflineInstallerTemplatePath(
   templateDir: string,
-  expected: { version: string; commit: string; sha256: string; releaseTag?: string },
-  io: WindowsOfflineTemplateLoaderIo = {}
-): CachedWindowsOfflineTemplate {
-  const exists = io.exists ?? existsSync;
-  const templatePath = getWindowsOfflineInstallerTemplatePath({
+  expected: { version: string; commit: string }
+): string {
+  const canonicalTemplatePath = getWindowsOfflineInstallerTemplatePath({
     templateDir: path.resolve(templateDir),
     templateVersion: expected.version,
     templateCommit: expected.commit,
   });
+  const commitDirectory = path.dirname(canonicalTemplatePath);
+  const generationDirectory = readCurrentGenerationDirectory(commitDirectory);
+  return path.join(generationDirectory ?? commitDirectory, WINDOWS_OFFLINE_TEMPLATE_FILE_NAME);
+}
+
+export function loadWindowsOfflineTemplateBundle(
+  bundleDirectory: string,
+  expected: { version: string; commit: string; sha256: string; releaseTag?: string },
+  io: WindowsOfflineTemplateLoaderIo = {}
+): CachedWindowsOfflineTemplate {
+  const exists = io.exists ?? existsSync;
+  const templatePath = path.join(path.resolve(bundleDirectory), WINDOWS_OFFLINE_TEMPLATE_FILE_NAME);
   const sidecarPath = `${templatePath}.sha256`;
   const provenancePath = getWindowsOfflineInstallerTemplateProvenancePath(templatePath);
 
   if (
+    containsSymbolicLink(bundleDirectory) ||
     containsSymbolicLink(templatePath) ||
     containsSymbolicLink(sidecarPath) ||
     (expected.releaseTag !== undefined && containsSymbolicLink(provenancePath))
   ) {
-    throw new WindowsOfflineTemplateCacheError(
-      'TEMPLATE_MISSING',
-      'Pinned OpenPath Windows setup template is unavailable'
-    );
+    throw cacheMissing('Pinned OpenPath Windows setup template is unavailable');
   }
 
   if (!exists(templatePath)) {
-    throw new WindowsOfflineTemplateCacheError(
-      'TEMPLATE_MISSING',
-      'Pinned OpenPath Windows setup template is missing'
-    );
+    throw cacheMissing('Pinned OpenPath Windows setup template is missing');
   }
 
   if (!exists(sidecarPath)) {
@@ -140,10 +200,15 @@ export function loadCachedWindowsOfflineTemplate(
     );
   }
 
-  const sidecarDigest = String(readTemplateFile(sidecarPath, 'utf8', io))
-    .trim()
-    .split(/\s+/u)[0]
-    ?.toLowerCase();
+  let sidecarDigest: string | undefined;
+  try {
+    sidecarDigest = String(readTemplateFile(sidecarPath, 'utf8', io))
+      .trim()
+      .split(/\s+/u)[0]
+      ?.toLowerCase();
+  } catch {
+    sidecarDigest = undefined;
+  }
   if (!sidecarDigest || !HEX_SHA256.test(sidecarDigest)) {
     throw new WindowsOfflineTemplateCacheError(
       'SIDECAR_INVALID',
@@ -159,7 +224,15 @@ export function loadCachedWindowsOfflineTemplate(
     );
   }
 
-  const actualDigest = io.hashFile?.(templatePath) ?? sha256File(templatePath, io);
+  let actualDigest: string;
+  try {
+    actualDigest = io.hashFile?.(templatePath) ?? sha256File(templatePath, io);
+  } catch {
+    throw new WindowsOfflineTemplateCacheError(
+      'TEMPLATE_HASH_MISMATCH',
+      'Pinned Windows setup template bytes do not match configuration'
+    );
+  }
   if (actualDigest.toLowerCase() !== expectedDigest) {
     throw new WindowsOfflineTemplateCacheError(
       'TEMPLATE_HASH_MISMATCH',
@@ -206,4 +279,17 @@ export function loadCachedWindowsOfflineTemplate(
     commit: expected.commit,
     sha256: actualDigest.toLowerCase(),
   };
+}
+
+/**
+ * Loads only the exact version/commit selected by configuration. There is no
+ * latest-release fallback and no network path in this function.
+ */
+export function loadCachedWindowsOfflineTemplate(
+  templateDir: string,
+  expected: { version: string; commit: string; sha256: string; releaseTag?: string },
+  io: WindowsOfflineTemplateLoaderIo = {}
+): CachedWindowsOfflineTemplate {
+  const templatePath = resolveWindowsOfflineInstallerTemplatePath(templateDir, expected);
+  return loadWindowsOfflineTemplateBundle(path.dirname(templatePath), expected, io);
 }
