@@ -12,22 +12,22 @@ import {
 
 export function buildRulesManagerTabs(counts: ManagedRulesCounts) {
   return [
-    { id: 'all' as ManagedRulesFilterType, label: 'Todos', count: counts.all },
+    { id: 'all' as ManagedRulesFilterType, label: 'All', count: counts.all },
     {
       id: 'allowed' as ManagedRulesFilterType,
-      label: 'Permitidas',
+      label: 'Allowed',
       count: counts.allowed,
       icon: createElement(Check, { size: 14 }),
     },
     {
       id: 'blocked' as ManagedRulesFilterType,
-      label: 'Bloqueadas',
+      label: 'Blocked',
       count: counts.blocked,
       icon: createElement(Ban, { size: 14 }),
     },
     {
       id: 'disabled' as ManagedRulesFilterType,
-      label: 'Inhabilitadas',
+      label: 'Disabled',
       count: counts.disabled,
       icon: createElement(PowerOff, { size: 14 }),
     },
