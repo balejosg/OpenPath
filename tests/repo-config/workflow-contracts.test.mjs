@@ -7,6 +7,9 @@ import { resolve } from 'node:path';
 import { describe, test } from 'node:test';
 import { extractWorkflowJobBlock, projectRoot, readText } from './support.mjs';
 
+const WINDOWS_OFFLINE_INSTALLER_PATH_PATTERN =
+  "windows_offline_installer_pattern='api/(src/(lib/windows-offline-installer[^/]*|routes/windows-offline-installer\\.ts|services/windows-offline-installer-[^/]+\\.service\\.ts|server-runtime\\.ts)|tests/(windows-offline-installer-[^/]+\\.test\\.ts|server-runtime\\.test\\.ts))'";
+
 describe('repository verification contract', () => {
   test('workflow helpers pin Node 24 compatible GitHub Action majors', () => {
     const cases = [
@@ -873,6 +876,10 @@ test('Codecov coverage uploads stay wired to active workflows and the README bad
     'reusable-test.yml should upload only the coverage artifact directory for the active lane'
   );
   assert.ok(
+    reusableTestWorkflow.includes('fail_ci_if_error: true'),
+    'reusable-test.yml should fail the coverage lane when Codecov upload fails'
+  );
+  assert.ok(
     reusableTestWorkflow.includes("image: ${{ inputs.test-type == 'api' && 'postgres:16' || '' }}"),
     'reusable-test.yml should only provision PostgreSQL for the API coverage lane'
   );
@@ -1020,6 +1027,11 @@ test('required Windows CI runs Pester in an untracked child host without success
       "grep -Eq '^(windows/|tests/e2e/Windows-E2E\\.Tests\\.ps1|tests/e2e/ci/run-windows-pester-isolated\\.ps1|tests/e2e/ci/run-windows-[^/]+\\.ps1|tests/e2e/ci/acrylic-dns-spike-helpers\\.ps1|\\.github/workflows/ci\\.yml$)'"
     ),
     'ci.yml should route Windows code and Windows CI helpers to the Windows lane'
+  );
+  assert.ok(
+    ciWorkflow.includes(WINDOWS_OFFLINE_INSTALLER_PATH_PATTERN) &&
+      ciWorkflow.includes('grep -Eq "^($windows_offline_installer_pattern)$"'),
+    'ci.yml should route offline-installer API changes to Windows Pester coverage'
   );
 
   assert.ok(
@@ -1670,6 +1682,11 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
       '^(windows/|runtime/|tests/e2e/(Windows-E2E\\.Tests\\.ps1|ci/run-windows-e2e\\.ps1|ci/report-windows-processes\\.ps1|validation/)|package\\.json$|package-lock\\.json$|scripts/require-release-quality-gate\\.mjs$|\\.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\\.yml$)'
     ),
     'windows-e2e should stay focused on installer, runtime, and Windows-specific destructive paths'
+  );
+  assert.ok(
+    e2eWorkflow.includes(WINDOWS_OFFLINE_INSTALLER_PATH_PATTERN) &&
+      e2eWorkflow.includes('grep -Eq "^($windows_offline_installer_pattern)$"'),
+    'e2e-tests.yml should route offline-installer API changes to the real Windows EXE E2E'
   );
   assert.ok(
     !e2eWorkflow.includes(

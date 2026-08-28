@@ -165,7 +165,7 @@ jobs:
           files: ${{ steps.lane.outputs.coverage_file }}
           flags: ${{ steps.lane.outputs.coverage_flag }}
           name: ${{ inputs.test-type }}-coverage
-          fail_ci_if_error: false
+          fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload coverage artifact
