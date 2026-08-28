@@ -667,6 +667,16 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     /failureCode\s*=\s*\$failureCode/,
     'personalized HTTP-to-EXE failure evidence must expose only a bounded code'
   );
+  assert.match(
+    lane,
+    /\$script:TempRoot\s*=\s*\[string\]\$env:RUNNER_TEMP[\s\S]*Join-Path -Path \$script:TempRoot -ChildPath/,
+    'personalized HTTP-to-EXE lane must resolve the temp root before constructing paths'
+  );
+  assert.doesNotMatch(
+    lane,
+    /Join-Path \(\s*if \(\$env:RUNNER_TEMP\)/,
+    'PowerShell if statements must not be used as invalid Join-Path expressions'
+  );
 
   const workflow = readText('.github/workflows/release-scripts.yml');
   const templateJobStart = workflow.indexOf('  windows-offline-template:');

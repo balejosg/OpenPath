@@ -55,10 +55,14 @@ if ([string]::IsNullOrWhiteSpace($TemplateReleaseTag)) {
     $TemplateReleaseTag = "scripts-v$TemplateVersion-$($TemplateCommit.Substring(0, 7))"
 }
 
+$script:TempRoot = [string]$env:RUNNER_TEMP
+if ([string]::IsNullOrWhiteSpace($script:TempRoot)) {
+    $script:TempRoot = [System.IO.Path]::GetTempPath()
+}
+$script:TempRoot = [System.IO.Path]::GetFullPath($script:TempRoot)
+
 if ([string]::IsNullOrWhiteSpace($ArtifactsRoot)) {
-    $ArtifactsRoot = Join-Path (
-        if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
-    ) 'openpath-windows-personalized-offline-installer-e2e'
+    $ArtifactsRoot = Join-Path -Path $script:TempRoot -ChildPath 'openpath-windows-personalized-offline-installer-e2e'
 }
 
 $script:ArtifactsRoot = [System.IO.Path]::GetFullPath($ArtifactsRoot)
@@ -696,9 +700,7 @@ try {
 
     $script:CurrentStage = 'prepare'
     [System.IO.Directory]::CreateDirectory($script:ArtifactsRoot) | Out-Null
-    $script:RunRoot = Join-Path (
-        if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
-    ) "openpath-personalized-offline-installer-$([guid]::NewGuid().ToString('N'))"
+    $script:RunRoot = Join-Path -Path $script:TempRoot -ChildPath "openpath-personalized-offline-installer-$([guid]::NewGuid().ToString('N'))"
     [System.IO.Directory]::CreateDirectory($script:RunRoot) | Out-Null
 
     $script:CurrentStage = 'template-cache'
