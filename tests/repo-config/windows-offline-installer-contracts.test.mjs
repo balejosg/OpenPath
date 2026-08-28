@@ -677,6 +677,11 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     /Join-Path \(\s*if \(\$env:RUNNER_TEMP\)/,
     'PowerShell if statements must not be used as invalid Join-Path expressions'
   );
+  assert.doesNotMatch(
+    lane,
+    /New-Item[^\n]*-LiteralPath/,
+    'PowerShell New-Item must not use the unsupported -LiteralPath parameter in this lane'
+  );
 
   const workflow = readText('.github/workflows/release-scripts.yml');
   const templateJobStart = workflow.indexOf('  windows-offline-template:');

@@ -360,7 +360,7 @@ function New-VerifiedTemplateCache {
     $script:TemplateRoot = Join-Path $script:RunRoot 'templates'
     $commitDirectory = Join-Path (Join-Path $script:TemplateRoot $TemplateVersion) $TemplateCommit
     $generationDirectory = Join-Path (Join-Path $commitDirectory 'generations') "generation-$([guid]::NewGuid().ToString('N'))"
-    New-Item -ItemType Directory -LiteralPath $generationDirectory -Force | Out-Null
+    [System.IO.Directory]::CreateDirectory($generationDirectory) | Out-Null
 
     $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $TemplatePath).Hash.ToLowerInvariant()
     $sourceSidecarPath = "$TemplatePath.sha256"
@@ -412,8 +412,8 @@ function Start-Api {
     $apiErrorLog = Join-Path $script:ArtifactsRoot 'api.err.log'
     $dataDir = Join-Path $script:RunRoot 'api-data'
     $artifactRoot = Join-Path $script:RunRoot 'artifacts'
-    New-Item -ItemType Directory -LiteralPath $dataDir -Force | Out-Null
-    New-Item -ItemType Directory -LiteralPath $artifactRoot -Force | Out-Null
+    [System.IO.Directory]::CreateDirectory($dataDir) | Out-Null
+    [System.IO.Directory]::CreateDirectory($artifactRoot) | Out-Null
 
     $saved = @{}
     foreach ($name in @(
