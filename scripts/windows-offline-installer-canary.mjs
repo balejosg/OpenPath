@@ -2,6 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 
 const REPLAY_DEADLINE_MS = 2_000;
 
@@ -193,7 +194,7 @@ async function main() {
   console.log(JSON.stringify(result));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     await main();
   } catch (error) {

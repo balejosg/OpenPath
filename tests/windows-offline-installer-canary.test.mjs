@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { runWindowsOfflineInstallerCanary } from '../scripts/windows-offline-installer-canary.mjs';
@@ -10,6 +14,106 @@ import { runWindowsOfflineInstallerCanary } from '../scripts/windows-offline-ins
 function hash(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
+
+test('windows offline installer canary CLI resolves direct execution on Windows paths', async () => {
+  const source = await readFile(
+    fileURLToPath(new URL('../scripts/windows-offline-installer-canary.mjs', import.meta.url)),
+    'utf8'
+  );
+
+  assert.match(
+    source,
+    /pathToFileURL\(process\.argv\[1\]\)\.href/,
+    'the CLI guard must normalize Windows filesystem paths before comparing import.meta.url'
+  );
+});
+
+test('windows offline installer canary CLI runs the real bounded HTTP flow', async () => {
+  const bytes = Buffer.from('direct-cli-installer');
+  let downloadCount = 0;
+  const server = createServer((request, response) => {
+    if (request.url === '/trpc/windowsOfflineInstaller.generate') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          result: {
+            data: {
+              fileName: 'OpenPath-Lab-Windows-Setup.exe',
+              version: '4.1.0',
+              sha256: hash(bytes),
+              downloadUrl: '/download?ref=opaque-ref',
+            },
+          },
+        })
+      );
+      return;
+    }
+
+    downloadCount += 1;
+    if (downloadCount === 1) {
+      response.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-disposition': 'attachment; filename="OpenPath-Lab-Windows-Setup.exe"',
+        'cache-control': 'no-store',
+        'content-length': String(bytes.length),
+        'x-content-type-options': 'nosniff',
+      });
+      response.end(bytes);
+      return;
+    }
+
+    response.writeHead(410);
+    response.end();
+  });
+  await once(server.listen(0, '127.0.0.1'), 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const root = await mkdtemp(path.join(tmpdir(), 'openpath-offline-canary-cli-'));
+  const outputPath = path.join(root, 'downloaded.exe');
+  const scriptPath = fileURLToPath(
+    new URL('../scripts/windows-offline-installer-canary.mjs', import.meta.url)
+  );
+
+  try {
+    const child = spawn(process.execPath, [scriptPath], {
+      env: {
+        ...process.env,
+        OPENPATH_CANARY_BASE_URL: `http://127.0.0.1:${address.port}`,
+        OPENPATH_CANARY_DOWNLOAD_BASE_URL: `http://127.0.0.1:${address.port}`,
+        OPENPATH_CANARY_ACCESS_TOKEN: 'secret-token',
+        OPENPATH_CANARY_CLASSROOM_ID: 'classroom-1',
+        OPENPATH_CANARY_OUTPUT_PATH: outputPath,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    const timeout = setTimeout(() => child.kill('SIGTERM'), 5_000);
+    const [exitCode] = await once(child, 'close');
+    clearTimeout(timeout);
+
+    assert.equal(exitCode, 0, stderr);
+    const result = JSON.parse(stdout);
+    assert.equal(result.status, 'ok');
+    assert.equal(result.downloadStatus, 200);
+    assert.equal(result.replayStatus, 410);
+    assert.deepEqual(await readFile(outputPath), bytes);
+    assert.equal(stdout.includes('opaque-ref'), false);
+    assert.equal(stdout.includes('secret-token'), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    server.close();
+    await once(server, 'close').catch(() => undefined);
+  }
+});
 
 test('windows offline installer canary verifies bytes and bounded single-use replay', async () => {
   const bytes = Buffer.from('fake-installer');
