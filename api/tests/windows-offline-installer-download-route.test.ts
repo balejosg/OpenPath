@@ -166,13 +166,38 @@ after(async () => {
 });
 
 void describe('OpenPath Windows offline installer download route', () => {
-  void test('uses the same not-found response for missing and malformed references', async () => {
+  void test('returns 400 when the download reference is missing', async () => {
     const missing = await fetch(`${baseUrl}/api/windows-offline-installer/download`);
-    assert.equal(missing.status, 404);
+    assert.equal(missing.status, 400);
     assert.deepEqual(await missing.json(), { error: 'Download reference unavailable' });
+  });
 
+  void test('returns 400 for malformed references before lookup', async () => {
+    let lookupCalls = 0;
+    await withRouteServer(
+      {
+        consumeAttempt: () => {
+          lookupCalls += 1;
+          return Promise.reject(new DownloadReferenceError('INVALID', 'unknown'));
+        },
+        releaseAttempt: () => Promise.resolve(),
+        markConsumed: () => Promise.resolve(false),
+      },
+      (storageFileName) => path.join(artifactsDir, storageFileName),
+      async (url) => {
+        const malformed = await fetch(
+          `${url}/api/windows-offline-installer/download?ref=not-a-reference`
+        );
+        assert.equal(malformed.status, 400);
+        assert.deepEqual(await malformed.json(), { error: 'Download reference unavailable' });
+      }
+    );
+    assert.equal(lookupCalls, 0);
+  });
+
+  void test('returns 404 for an unknown well-formed reference', async () => {
     const malformed = await fetch(
-      `${baseUrl}/api/windows-offline-installer/download?ref=not-a-reference`
+      `${baseUrl}/api/windows-offline-installer/download?ref=${'b'.repeat(43)}`
     );
     assert.equal(malformed.status, 404);
     assert.deepEqual(await malformed.json(), { error: 'Download reference unavailable' });
