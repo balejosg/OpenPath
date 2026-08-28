@@ -675,6 +675,11 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
   );
   assert.match(
     lane,
+    /\$script:CanaryFailureCode\s*=\s*\$safeCanaryCode[\s\S]*throw \'canary-failed\'/,
+    'the outer PowerShell catch must preserve the child canary code without raw diagnostics'
+  );
+  assert.match(
+    lane,
     /\$script:TempRoot\s*=\s*\[string\]\$env:RUNNER_TEMP[\s\S]*Join-Path -Path \$script:TempRoot -ChildPath/,
     'personalized HTTP-to-EXE lane must resolve the temp root before constructing paths'
   );

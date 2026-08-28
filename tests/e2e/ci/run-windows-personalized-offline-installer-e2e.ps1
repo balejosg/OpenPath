@@ -41,6 +41,7 @@ $script:TemplateSha256 = $null
 $script:EvidencePath = $null
 $script:DownloadedExecutablePath = $null
 $script:PrimaryFailure = $false
+$script:CanaryFailureCode = $null
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $script:NodeCommand = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
@@ -106,6 +107,10 @@ function Get-SafeFailureCode {
     param(
         [Parameter(Mandatory = $true)][System.Management.Automation.ErrorRecord]$ErrorRecord
     )
+
+    if ($script:CanaryFailureCode -match '^canary-[a-z0-9-]+$') {
+        return $script:CanaryFailureCode
+    }
 
     $message = [string]$ErrorRecord.Exception.Message
     switch -Regex ($message) {
@@ -606,7 +611,8 @@ function Invoke-RealHttpCanary {
             $output = & $script:NodeCommand scripts/windows-offline-installer-canary.mjs 2> $canaryErrorPath
             if ($LASTEXITCODE -ne 0) {
                 $safeCanaryCode = Get-SafeCanaryFailureCode -Path $canaryErrorPath
-                throw "canary-failed:$safeCanaryCode"
+                $script:CanaryFailureCode = $safeCanaryCode
+                throw 'canary-failed'
             }
         }
         finally {
@@ -628,7 +634,8 @@ function Invoke-RealHttpCanary {
         $evidence = (($output -join [Environment]::NewLine).Trim() | ConvertFrom-Json)
     }
     catch {
-        throw 'http-canary-invalid-json'
+        $script:CanaryFailureCode = 'canary-invalid-json'
+        throw 'canary-failed'
     }
     if (
         $evidence.status -ne 'ok' -or
@@ -638,15 +645,18 @@ function Invoke-RealHttpCanary {
         -not ($evidence.downloadBytes -gt 0) -or
         [string]$evidence.downloadSha256 -notmatch '^[0-9a-f]{64}$'
     ) {
-        throw 'http-canary-contract-failed'
+        $script:CanaryFailureCode = 'canary-contract-failed'
+        throw 'canary-failed'
     }
     if (-not (Test-Path -LiteralPath $downloadPath -PathType Leaf)) {
-        throw 'http-canary-download-missing'
+        $script:CanaryFailureCode = 'canary-download-missing'
+        throw 'canary-failed'
     }
     $downloadHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $downloadPath).Hash.ToLowerInvariant()
     $downloadSize = (Get-Item -LiteralPath $downloadPath).Length
     if ($downloadHash -ne [string]$evidence.downloadSha256 -or $downloadSize -ne [int64]$evidence.downloadBytes) {
-        throw 'http-canary-file-identity-failed'
+        $script:CanaryFailureCode = 'canary-file-identity-failed'
+        throw 'canary-failed'
     }
 
     return [pscustomobject]@{
