@@ -185,32 +185,60 @@ export function createServerRuntime(
     isShuttingDown = true;
 
     deps.loggerInstance.info(`Received ${signal}, starting graceful shutdown...`);
-    deps.windowsOfflineInstallerMaintenance?.stop();
-
-    const forceShutdownTimeout = setTimeout(() => {
-      deps.loggerInstance.error('Graceful shutdown timeout exceeded, forcing exit');
-      deps.exitProcess(1);
-    }, SHUTDOWN_TIMEOUT_MS);
-
+    let finished = false;
     const finish = (exitCode: number): void => {
+      if (finished) return;
+      finished = true;
       clearTimeout(forceShutdownTimeout);
       deps.exitProcess(exitCode);
     };
+    const forceShutdownTimeout = setTimeout(() => {
+      deps.loggerInstance.error('Graceful shutdown timeout exceeded, forcing exit');
+      finish(1);
+    }, SHUTDOWN_TIMEOUT_MS);
 
-    if (server === undefined) {
-      deps.loggerInstance.info('No active server instance to close');
-      finish(0);
-      return;
+    let maintenanceStop: Promise<void> = Promise.resolve();
+    if (deps.windowsOfflineInstallerMaintenance !== undefined) {
+      try {
+        maintenanceStop = Promise.resolve(deps.windowsOfflineInstallerMaintenance.stop()).catch(
+          () => {
+            deps.loggerInstance.warn('offline_installer_maintenance_failed', {
+              code: 'SHUTDOWN_CLEANUP_FAILED',
+            });
+          }
+        );
+      } catch {
+        deps.loggerInstance.warn('offline_installer_maintenance_failed', {
+          code: 'SHUTDOWN_CLEANUP_FAILED',
+        });
+      }
     }
 
-    server.close((error) => {
-      if (error) {
-        deps.loggerInstance.error('Error during server close', { error: error.message });
-        finish(1);
+    const serverClose = new Promise<number>((resolve) => {
+      if (server === undefined) {
+        deps.loggerInstance.info('No active server instance to close');
+        resolve(0);
         return;
       }
-      deps.loggerInstance.info('Server closed, no longer accepting connections');
-      finish(0);
+
+      try {
+        server.close((error) => {
+          if (error) {
+            deps.loggerInstance.error('Error during server close', { error: error.message });
+            resolve(1);
+            return;
+          }
+          deps.loggerInstance.info('Server closed, no longer accepting connections');
+          resolve(0);
+        });
+      } catch {
+        deps.loggerInstance.error('Error during server close');
+        resolve(1);
+      }
+    });
+
+    void Promise.all([maintenanceStop, serverClose]).then(([, exitCode]) => {
+      finish(exitCode);
     });
   }
 

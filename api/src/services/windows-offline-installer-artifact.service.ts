@@ -69,6 +69,7 @@ interface ClassroomForInstaller {
 
 interface ArtifactRefs {
   invalidateReference: (rawToken: string) => Promise<void>;
+  revokeReferencesForArtifact: (artifactStorageFileName: string) => Promise<boolean>;
   mintReference: WindowsOfflineDownloadRefsService['mintReference'];
 }
 
@@ -234,7 +235,7 @@ export function createWindowsOfflineInstallerService(
       `.${String(process.pid)}-${randomUUID()}.staging.exe`
     );
     const artifactFileName = sanitizeWindowsInstallerFileName(classroom.name);
-    let publishedReference: string | undefined;
+    let artifactStorageFileName: string | undefined;
     let publishedPath: string | undefined;
 
     try {
@@ -246,7 +247,7 @@ export function createWindowsOfflineInstallerService(
 
       const artifactSha256 = await hashFileSha256(stagingPath);
       const artifactSize = (await stat(stagingPath)).size;
-      const artifactStorageFileName = validateArtifactStorageFileName(`${randomUUID()}.exe`);
+      artifactStorageFileName = validateArtifactStorageFileName(`${randomUUID()}.exe`);
       publishedPath = path.join(config.artifactsDir, artifactStorageFileName);
 
       try {
@@ -278,8 +279,6 @@ export function createWindowsOfflineInstallerService(
           'Could not mint download reference'
         );
       }
-      publishedReference = minted.rawToken;
-
       return {
         fileName: artifactFileName,
         version: template.version,
@@ -294,21 +293,31 @@ export function createWindowsOfflineInstallerService(
       };
     } catch (error) {
       await rm(stagingPath, { force: true });
-      if (publishedPath) {
+      let canRemovePublishedArtifact = true;
+      if (publishedPath && artifactStorageFileName) {
+        try {
+          canRemovePublishedArtifact =
+            await refs.revokeReferencesForArtifact(artifactStorageFileName);
+        } catch {
+          canRemovePublishedArtifact = false;
+          logger.error('offline_installer_reference_revoke_failed', {
+            code: 'REVOKE_FAILED',
+          });
+        }
+      }
+      if (publishedPath && canRemovePublishedArtifact) {
         await rm(publishedPath, { force: true }).catch(() => {
           logger.error('offline_installer_artifact_remove_failed', {
             code: 'ARTIFACT_REMOVE_FAILED',
           });
         });
-      }
-      if (publishedReference) {
-        try {
-          await refs.invalidateReference(publishedReference);
-        } catch {
-          logger.error('offline_installer_reference_invalidate_failed', {
-            code: 'INVALIDATE_FAILED',
-          });
-        }
+      } else if (publishedPath) {
+        // Keep the bytes while a reference or an uncertain database write may
+        // still protect them. Maintenance can remove them after the row/lease
+        // is gone; deleting first would create a live reference to no file.
+        logger.warn('offline_installer_artifact_retained', {
+          code: 'REFERENCE_PROTECTION_UNKNOWN',
+        });
       }
       if (error instanceof WindowsOfflineInstallerError) throw error;
       logger.error('offline_installer_generation_failed', { code: 'GENERATION_FAILED' });

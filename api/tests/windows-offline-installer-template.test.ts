@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -36,5 +36,32 @@ void test('template loader accepts only the exact version and commit with a matc
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+void test('template loader fails closed on a symlinked pinned path', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'openpath-template-loader-link-'));
+  const outside = await mkdtemp(path.join(tmpdir(), 'openpath-template-loader-outside-'));
+  const version = '4.1.0';
+  const commit = 'e'.repeat(40);
+  const bytes = Buffer.from('outside-template');
+  const digest = createHash('sha256').update(bytes).digest('hex');
+
+  try {
+    const outsideCommitDir = path.join(outside, commit);
+    await mkdir(outsideCommitDir, { recursive: true });
+    const outsideTemplatePath = path.join(outsideCommitDir, 'OpenPath-Windows-Setup-Template.exe');
+    await writeFile(outsideTemplatePath, bytes);
+    await writeFile(`${outsideTemplatePath}.sha256`, `${digest}  template.exe\n`);
+    await symlink(outside, path.join(root, version), 'dir');
+
+    assert.throws(
+      () => loadCachedWindowsOfflineTemplate(root, { version, commit, sha256: digest }),
+      (error: unknown) =>
+        error instanceof WindowsOfflineTemplateCacheError && error.code === 'TEMPLATE_MISSING'
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });

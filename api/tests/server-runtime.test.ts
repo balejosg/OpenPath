@@ -180,6 +180,7 @@ await describe('server runtime', async () => {
           },
           stop: () => {
             events.push('maintenance-stop');
+            return Promise.resolve();
           },
         },
       }
@@ -191,6 +192,67 @@ await describe('server runtime', async () => {
     assert.equal(events.indexOf('maintenance-startup') < events.indexOf('listen'), true);
     assert.equal(events.indexOf('maintenance-start') > events.indexOf('listen'), true);
     assert.equal(events.includes('maintenance-stop'), true);
+  });
+
+  await test('waits for maintenance shutdown before exiting', async () => {
+    const events: string[] = [];
+    let releaseMaintenance!: () => void;
+    const fakeServer = {
+      close: (callback: (error?: Error) => void): void => {
+        events.push('close');
+        callback();
+      },
+    };
+    const fakeApp = {
+      listen: (_port: number, _host: string, callback?: () => void): typeof fakeServer => {
+        callback?.();
+        return fakeServer;
+      },
+    };
+    const config = loadConfig({
+      ...process.env,
+      NODE_ENV: 'test',
+      JWT_SECRET: 'server-runtime-test-secret',
+      HOST: '127.0.0.1',
+      PORT: '3014',
+      ENABLE_SWAGGER: 'false',
+    });
+
+    const runtime = createServerRuntime(
+      fakeApp as never,
+      config,
+      { ...process.env, SKIP_DB_MIGRATIONS: 'true' },
+      {
+        cleanupTokenBlacklist: () => Promise.resolve(),
+        ensureDefaultAdmin: () => Promise.resolve(),
+        exitProcess: () => {
+          events.push('exit');
+        },
+        initializeSchema: () => Promise.resolve(),
+        loggerInstance: createLogger(events),
+        processApi: { on: () => undefined },
+        windowsOfflineInstallerMaintenance: {
+          runStartupCleanup: () => Promise.resolve(),
+          start: () => undefined,
+          stop: () =>
+            new Promise<void>((resolve) => {
+              releaseMaintenance = resolve;
+            }),
+        },
+      }
+    );
+
+    await runtime.startServer();
+    runtime.gracefulShutdown('SIGTERM');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(events.includes('close'), true);
+    assert.equal(events.includes('exit'), false);
+
+    releaseMaintenance();
+    for (let attempt = 0; attempt < 20 && !events.includes('exit'); attempt += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(events.includes('exit'), true);
   });
 
   await test('does not expose a public production server with an unconfigured installer', async () => {

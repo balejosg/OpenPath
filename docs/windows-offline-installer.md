@@ -59,8 +59,7 @@ artifact exists, and its size and SHA-256 match the database record. It returns:
 
 | Condition                                         | Status |
 | ------------------------------------------------- | -----: |
-| Missing or malformed `ref`                        |  `400` |
-| Unknown reference                                 |  `404` |
+| Missing, malformed, or unknown `ref`              |  `404` |
 | Expired, exhausted, or already consumed reference |  `410` |
 
 Successful responses include `Content-Type: application/octet-stream`, an
@@ -117,8 +116,15 @@ npm run provision:windows-offline-installer --workspace=@openpath/api -- --verif
 Provisioning first resolves the exact GitHub tag to its exact full source commit,
 then downloads only the exact configured release assets and sidecar, verifies
 the expected and actual SHA-256 values, writes the local provenance manifest,
-and publishes atomically. A valid target is reused; an invalid target is
-quarantined and restored if replacement verification fails. `--verify-only` is
+and publishes the verified bundle with atomic file replacements on the template
+volume. The canonical version/commit directory remains present for concurrent
+readers; until all three files verify together, readers fail closed. A valid
+target is reused and an invalid target is repaired in place. The RW provisioner
+rejects symlinked template paths and removes stale provisioning directories and
+legacy quarantine directories across all stored versions on a later
+provisioning pass after a bounded retention period. The API maintenance process
+never scans or writes the template root because its supported volume is `:ro`.
+`--verify-only` is
 local-only and never fetches or repairs files: it verifies the executable,
 sidecar, and persisted provenance. API startup performs the local readiness
 check after migrations and before listening; readiness reports the capability as

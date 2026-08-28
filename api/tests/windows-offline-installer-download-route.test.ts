@@ -166,14 +166,16 @@ after(async () => {
 });
 
 void describe('OpenPath Windows offline installer download route', () => {
-  void test('rejects missing and malformed references before lookup', async () => {
+  void test('uses the same not-found response for missing and malformed references', async () => {
     const missing = await fetch(`${baseUrl}/api/windows-offline-installer/download`);
-    assert.equal(missing.status, 400);
+    assert.equal(missing.status, 404);
+    assert.deepEqual(await missing.json(), { error: 'Download reference unavailable' });
 
     const malformed = await fetch(
       `${baseUrl}/api/windows-offline-installer/download?ref=not-a-reference`
     );
-    assert.equal(malformed.status, 400);
+    assert.equal(malformed.status, 404);
+    assert.deepEqual(await malformed.json(), { error: 'Download reference unavailable' });
   });
 
   void test('returns a no-store attachment and consumes only after the full stream', async () => {
@@ -204,13 +206,13 @@ void describe('OpenPath Windows offline installer download route', () => {
 
   void test('maps reference lookup failures to their safe HTTP statuses', async () => {
     const cases = [
-      { code: 'INVALID' as const, status: 404 },
-      { code: 'EXPIRED' as const, status: 410 },
-      { code: 'EXHAUSTED' as const, status: 410 },
-      { code: 'CONSUMED' as const, status: 410 },
+      { label: 'unknown well-formed reference', code: 'INVALID' as const, status: 404 },
+      { label: 'expired reference', code: 'EXPIRED' as const, status: 410 },
+      { label: 'exhausted reference', code: 'EXHAUSTED' as const, status: 410 },
+      { label: 'consumed reference', code: 'CONSUMED' as const, status: 410 },
     ];
 
-    for (const { code, status } of cases) {
+    for (const { label, code, status } of cases) {
       await withRouteServer(
         {
           consumeAttempt: () =>
@@ -223,11 +225,32 @@ void describe('OpenPath Windows offline installer download route', () => {
           const response = await fetch(
             `${url}/api/windows-offline-installer/download?ref=${reference}`
           );
+          assert.equal(label.length > 0, true);
           assert.equal(response.status, status);
           assert.deepEqual(await response.json(), { error: 'Download reference unavailable' });
         }
       );
     }
+  });
+
+  void test('contains a synchronous reference lookup failure as a safe JSON error', async () => {
+    await withRouteServer(
+      {
+        consumeAttempt: () => {
+          throw new Error('database secret must not escape the route');
+        },
+        releaseAttempt: () => Promise.resolve(),
+        markConsumed: () => Promise.resolve(false),
+      },
+      (storageFileName) => path.join(artifactsDir, storageFileName),
+      async (url) => {
+        const response = await fetch(
+          `${url}/api/windows-offline-installer/download?ref=${reference}`
+        );
+        assert.equal(response.status, 500);
+        assert.deepEqual(await response.json(), { error: 'Download failed' });
+      }
+    );
   });
 
   void test('returns safe errors for missing transfer leases and unexpected lookup failures', async () => {

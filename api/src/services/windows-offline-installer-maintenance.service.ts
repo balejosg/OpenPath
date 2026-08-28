@@ -10,6 +10,7 @@ import {
 } from './windows-offline-installer-download-refs.service.js';
 
 const DEFAULT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
 
 interface MaintenanceLogger {
   warn: (message: string, metadata?: Record<string, unknown>) => void;
@@ -18,7 +19,7 @@ interface MaintenanceLogger {
 export interface WindowsOfflineInstallerMaintenance {
   runStartupCleanup: () => Promise<void>;
   start: () => void;
-  stop: () => void;
+  stop: () => Promise<void>;
 }
 
 export interface WindowsOfflineInstallerMaintenanceDeps {
@@ -29,6 +30,7 @@ export interface WindowsOfflineInstallerMaintenanceDeps {
   loggerInstance?: MaintenanceLogger;
   refs?: Pick<WindowsOfflineDownloadRefsService, 'cleanupExpired'>;
   setIntervalImpl?: typeof setInterval;
+  shutdownTimeoutMs?: number;
 }
 
 export function createWindowsOfflineInstallerMaintenance(
@@ -51,10 +53,17 @@ export function createWindowsOfflineInstallerMaintenance(
   const setIntervalImpl = deps.setIntervalImpl ?? setInterval;
   const clearIntervalImpl = deps.clearIntervalImpl ?? clearInterval;
   const intervalMs = deps.intervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
+  const shutdownTimeoutMs =
+    deps.shutdownTimeoutMs !== undefined &&
+    Number.isFinite(deps.shutdownTimeoutMs) &&
+    deps.shutdownTimeoutMs >= 0
+      ? deps.shutdownTimeoutMs
+      : DEFAULT_SHUTDOWN_TIMEOUT_MS;
   let interval: ReturnType<typeof setInterval> | undefined;
   let running = false;
+  let cleanupInFlight: Promise<void> | undefined;
 
-  async function runCleanup(): Promise<void> {
+  async function performCleanup(): Promise<void> {
     if (!isWindowsOfflineInstallerConfigured(env)) return;
 
     let config;
@@ -74,6 +83,22 @@ export function createWindowsOfflineInstallerMaintenance(
     }
   }
 
+  function runCleanup(): Promise<void> {
+    if (cleanupInFlight !== undefined) return cleanupInFlight;
+
+    const current = performCleanup();
+    cleanupInFlight = current;
+    void current.then(
+      () => {
+        if (cleanupInFlight === current) cleanupInFlight = undefined;
+      },
+      () => {
+        if (cleanupInFlight === current) cleanupInFlight = undefined;
+      }
+    );
+    return current;
+  }
+
   function start(): void {
     if (interval !== undefined) return;
     running = true;
@@ -85,11 +110,35 @@ export function createWindowsOfflineInstallerMaintenance(
     if (typeof unref === 'function') unref.call(interval);
   }
 
-  function stop(): void {
-    if (interval === undefined) return;
+  async function stop(): Promise<void> {
     running = false;
-    clearIntervalImpl(interval);
-    interval = undefined;
+    if (interval !== undefined) {
+      clearIntervalImpl(interval);
+      interval = undefined;
+    }
+
+    const pendingCleanup = cleanupInFlight;
+    if (pendingCleanup === undefined) return;
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        loggerInstance.warn('offline_installer_maintenance_shutdown_timeout', {
+          code: 'SHUTDOWN_TIMEOUT',
+        });
+        resolve();
+      }, shutdownTimeoutMs);
+      const unref = (timeoutHandle as unknown as { unref?: () => void }).unref;
+      if (typeof unref === 'function') unref.call(timeoutHandle);
+    });
+
+    try {
+      await Promise.race([pendingCleanup, timeout]);
+    } catch {
+      loggerInstance.warn('offline_installer_maintenance_failed', { code: 'CLEANUP_FAILED' });
+    } finally {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    }
   }
 
   return {

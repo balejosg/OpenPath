@@ -159,6 +159,11 @@ export interface WindowsOfflineDownloadRefsService {
   /** Returns true when this completion released the final active transfer. */
   markConsumed(rawToken: string, transferId: string): Promise<boolean>;
   invalidateReference(rawToken: string): Promise<void>;
+  /**
+   * Revokes every reference for an artifact when no active transfer protects it.
+   * Returns true only when no reference remains and the artifact may be removed.
+   */
+  revokeReferencesForArtifact(artifactStorageFileName: string): Promise<boolean>;
   cleanupExpired(artifactsDir: string, options?: CleanupExpiredOptions): Promise<number>;
   readonly transferLeaseMs: number;
   now(): Date;
@@ -390,6 +395,27 @@ export function createWindowsOfflineDownloadRefsService(
       .where(eq(schema.windowsOfflineDownloadRefs.referenceHash, hashDownloadReference(rawToken)));
   }
 
+  async function revokeReferencesForArtifact(artifactStorageFileName: string): Promise<boolean> {
+    const validatedFileName = validateArtifactStorageFileName(artifactStorageFileName);
+    return database.transaction(async (transaction) => {
+      await transaction
+        .delete(schema.windowsOfflineDownloadRefs)
+        .where(
+          and(
+            eq(schema.windowsOfflineDownloadRefs.artifactStorageFileName, validatedFileName),
+            eq(schema.windowsOfflineDownloadRefs.activeTransfers, 0)
+          )
+        );
+
+      const [remaining] = await transaction
+        .select({ id: schema.windowsOfflineDownloadRefs.id })
+        .from(schema.windowsOfflineDownloadRefs)
+        .where(eq(schema.windowsOfflineDownloadRefs.artifactStorageFileName, validatedFileName))
+        .limit(1);
+      return remaining === undefined;
+    });
+  }
+
   async function recoverExpiredTransferLeases(currentTime: Date): Promise<void> {
     await database.transaction(async (transaction) => {
       const expiredLeases = await transaction
@@ -484,8 +510,6 @@ export function createWindowsOfflineDownloadRefsService(
     };
 
     if (existsSync(resolvedArtifactsDir)) {
-      for (const fileName of staleFileNames) removeArtifact(fileName);
-
       const activeFileNames = new Set(
         (
           await database
@@ -495,6 +519,14 @@ export function createWindowsOfflineDownloadRefsService(
             .from(schema.windowsOfflineDownloadRefs)
         ).map((row) => row.artifactStorageFileName)
       );
+
+      // A storage artifact may be referenced by more than one row (for
+      // example, when a caller retries issuance for an already personalized
+      // artifact). Never remove a filename returned by the stale batch if a
+      // surviving reference still points at it.
+      for (const fileName of staleFileNames) {
+        if (!activeFileNames.has(fileName)) removeArtifact(fileName);
+      }
 
       for (const fileName of readdirSync(resolvedArtifactsDir)) {
         if (
@@ -519,6 +551,7 @@ export function createWindowsOfflineDownloadRefsService(
     releaseAttempt,
     markConsumed,
     invalidateReference,
+    revokeReferencesForArtifact,
     cleanupExpired,
     renewAttempt,
     transferLeaseMs,

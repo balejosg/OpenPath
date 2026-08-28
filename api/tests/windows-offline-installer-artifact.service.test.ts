@@ -42,6 +42,7 @@ interface TestRefs {
   invalidated: string[];
   cleanupExpired: () => Promise<number>;
   invalidateReference: (rawToken: string) => Promise<void>;
+  revokeReferencesForArtifact: (artifactStorageFileName: string) => Promise<boolean>;
   mintReference: (
     input: MintWindowsOfflineDownloadReferenceInput
   ) => Promise<{ rawToken: string; ref: DownloadRefRecord }>;
@@ -57,6 +58,7 @@ function buildRefs(): TestRefs {
       invalidated.push(rawToken);
       return Promise.resolve();
     },
+    revokeReferencesForArtifact: (): Promise<boolean> => Promise.resolve(true),
     mintReference: (
       input: MintWindowsOfflineDownloadReferenceInput
     ): Promise<{ rawToken: string; ref: DownloadRefRecord }> => {
@@ -365,6 +367,142 @@ void describe('OpenPath Windows offline installer artifact service', () => {
       const publishedFile = storageFiles[0];
       assert.ok(publishedFile);
       await assert.rejects(() => stat(publishedFile));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('compensates a reference row committed before mint reports failure', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-artifact-mint-uncertain-'));
+    const templateBytes = Buffer.from('template');
+    const baseRefs = buildRefs();
+    const persistedArtifacts = new Set<string>();
+    const revokedArtifacts: string[] = [];
+
+    try {
+      const service = createWindowsOfflineInstallerService({
+        env: buildEnv(root, sha256(templateBytes)),
+        refs: {
+          ...baseRefs,
+          mintReference: (input) => {
+            assert.ok(input.artifactStorageFileName);
+            persistedArtifacts.add(input.artifactStorageFileName);
+            return Promise.reject(new Error('simulated commit acknowledgement failure'));
+          },
+          revokeReferencesForArtifact: (artifactStorageFileName) => {
+            revokedArtifacts.push(artifactStorageFileName);
+            persistedArtifacts.delete(artifactStorageFileName);
+            return Promise.resolve(true);
+          },
+        },
+        findClassroom: () =>
+          Promise.resolve({
+            id: 'classroom-11',
+            name: 'Lab Uncertain Mint',
+            displayName: 'Lab Uncertain Mint',
+            captivePortalDomains: [],
+          }),
+        issueEnrollmentTicket: () =>
+          Promise.resolve({
+            ok: true as const,
+            data: {
+              classroomId: 'classroom-11',
+              classroomName: 'Lab Uncertain Mint',
+              enrollmentToken: 'token',
+              expiresAt: tokenExpiry(),
+            },
+          }),
+        loadTemplate: () => ({
+          filePath: path.join(root, 'template.exe'),
+          version: '4.1.0',
+          commit: 'b'.repeat(40),
+          sha256: sha256(templateBytes),
+        }),
+        applyOverlay: async (_templatePath, outputPath) => {
+          await import('node:fs/promises').then(({ writeFile }) =>
+            writeFile(outputPath, 'artifact')
+          );
+        },
+      });
+
+      await assert.rejects(
+        () =>
+          service.generate({
+            apiUrl: 'https://openpath.example.test',
+            classroomId: 'classroom-11',
+            user,
+          }),
+        (error: unknown) =>
+          error instanceof WindowsOfflineInstallerError && error.code === 'REFERENCE_MINT_FAILED'
+      );
+      assert.equal(revokedArtifacts.length, 1);
+      assert.equal(persistedArtifacts.size, 0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  void test('retains published bytes when reference revocation is uncertain', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-artifact-revoke-uncertain-'));
+    const templateBytes = Buffer.from('template');
+    const baseRefs = buildRefs();
+    let publishedPath: string | undefined;
+
+    try {
+      const service = createWindowsOfflineInstallerService({
+        env: buildEnv(root, sha256(templateBytes)),
+        refs: {
+          ...baseRefs,
+          mintReference: () => Promise.reject(new Error('simulated mint acknowledgement loss')),
+          revokeReferencesForArtifact: () =>
+            Promise.reject(new Error('simulated reference store outage')),
+        },
+        findClassroom: () =>
+          Promise.resolve({
+            id: 'classroom-12',
+            name: 'Lab Retained Artifact',
+            displayName: 'Lab Retained Artifact',
+            captivePortalDomains: [],
+          }),
+        issueEnrollmentTicket: () =>
+          Promise.resolve({
+            ok: true as const,
+            data: {
+              classroomId: 'classroom-12',
+              classroomName: 'Lab Retained Artifact',
+              enrollmentToken: 'token',
+              expiresAt: tokenExpiry(),
+            },
+          }),
+        loadTemplate: () => ({
+          filePath: path.join(root, 'template.exe'),
+          version: '4.1.0',
+          commit: 'b'.repeat(40),
+          sha256: sha256(templateBytes),
+        }),
+        applyOverlay: async (_templatePath, outputPath) => {
+          await import('node:fs/promises').then(({ writeFile }) =>
+            writeFile(outputPath, 'artifact')
+          );
+        },
+        renameArtifact: async (sourcePath, targetPath) => {
+          publishedPath = targetPath;
+          await import('node:fs/promises').then(({ rename }) => rename(sourcePath, targetPath));
+        },
+      });
+
+      await assert.rejects(
+        () =>
+          service.generate({
+            apiUrl: 'https://openpath.example.test',
+            classroomId: 'classroom-12',
+            user,
+          }),
+        (error: unknown) =>
+          error instanceof WindowsOfflineInstallerError && error.code === 'REFERENCE_MINT_FAILED'
+      );
+      assert.ok(publishedPath);
+      assert.equal(await readFile(publishedPath, 'utf8'), 'artifact');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

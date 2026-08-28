@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { access, chmod, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { lstatSync } from 'node:fs';
+import { chmod, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -57,7 +58,56 @@ const GITHUB_ASSET_HOSTS = new Set([
   'release-assets.githubusercontent.com',
 ]);
 const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/u;
+const STALE_PUBLISH_RETENTION_MS = 24 * 60 * 60 * 1000;
+const STAGING_ROOT_PATTERN = /^\.openpath-windows-template-[A-Za-z0-9]+$/u;
+const LEGACY_QUARANTINE_PATTERN = /^\.[0-9a-f]{40}-[0-9a-f-]{36}\.quarantine$/u;
 const publishLocks = new Map<string, Promise<void>>();
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'ENOENT'
+  );
+}
+
+function pathContainsSymlink(filePath: string): boolean {
+  const absolutePath = path.resolve(filePath);
+  const parsed = path.parse(absolutePath);
+  let current = parsed.root;
+  const relativeParts = absolutePath.slice(parsed.root.length).split(path.sep).filter(Boolean);
+
+  for (const part of relativeParts) {
+    current = path.join(current, part);
+    try {
+      if (lstatSync(current).isSymbolicLink()) return true;
+    } catch (error) {
+      if (isMissingPathError(error)) return false;
+      return true;
+    }
+  }
+  return false;
+}
+
+function templatePathContainsSymlink(config: WindowsOfflineInstallerConfig): boolean {
+  return (
+    pathContainsSymlink(config.templateDir) ||
+    pathContainsSymlink(path.join(config.templateDir, config.templateVersion)) ||
+    pathContainsSymlink(
+      path.join(config.templateDir, config.templateVersion, config.templateCommit)
+    )
+  );
+}
+
+function assertSafeTemplatePath(config: WindowsOfflineInstallerConfig): void {
+  if (templatePathContainsSymlink(config)) {
+    throw new WindowsOfflineInstallerProvisionError(
+      'PUBLISH_FAILED',
+      'Pinned template path contains an unsupported symbolic link'
+    );
+  }
+}
 
 async function withPublishLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
   const previous = publishLocks.get(key) ?? Promise.resolve();
@@ -320,16 +370,54 @@ function provenanceFor(config: WindowsOfflineInstallerConfig): WindowsOfflineTem
   };
 }
 
-async function pathExists(filePath: string): Promise<boolean> {
+export async function cleanupStaleWindowsOfflineInstallerProvisioningDirectories(
+  config: WindowsOfflineInstallerConfig
+): Promise<void> {
+  if (pathContainsSymlink(config.templateDir)) return;
+
+  const scanDirectories = [config.templateDir];
   try {
-    await access(filePath);
-    return true;
+    const versionEntries = await readdir(config.templateDir, { withFileTypes: true });
+    for (const entry of versionEntries) {
+      if (entry.isDirectory()) scanDirectories.push(path.join(config.templateDir, entry.name));
+    }
   } catch {
-    return false;
+    return;
+  }
+  const cutoff = Date.now() - STALE_PUBLISH_RETENTION_MS;
+
+  for (const directory of scanDirectories) {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (!STAGING_ROOT_PATTERN.test(entry.name) && !LEGACY_QUARANTINE_PATTERN.test(entry.name)) {
+        continue;
+      }
+      const candidate = path.join(directory, entry.name);
+      try {
+        if (lstatSync(candidate).isSymbolicLink()) continue;
+        const metadata = await stat(candidate);
+        if (metadata.mtimeMs > cutoff) continue;
+        await rm(candidate, { recursive: true, force: true });
+      } catch {
+        // A stale recovery directory is best effort. It is never used as a
+        // published template, and a later provisioning attempt can retry it.
+        logger.warn('offline_installer_template_recovery_cleanup_failed', {
+          code: 'RECOVERY_CLEANUP_FAILED',
+        });
+      }
+    }
   }
 }
 
 function isVerifiedTemplate(config: WindowsOfflineInstallerConfig, templateDir: string): boolean {
+  if (templatePathContainsSymlink(config)) return false;
   try {
     loadCachedWindowsOfflineTemplate(templateDir, {
       version: config.templateVersion,
@@ -355,53 +443,35 @@ async function publishStagedTemplate(
       return existingTemplateResult(config, templatePath);
     }
 
-    const targetParent = path.dirname(targetDir);
-    let quarantinePath: string | undefined;
-    let published = false;
-
     try {
-      if (await pathExists(targetDir)) {
-        quarantinePath = path.join(
-          targetParent,
-          `.${config.templateCommit}-${randomUUID()}.quarantine`
-        );
+      // Keep the canonical directory in place for readers. Each replacement
+      // is atomic, and the loader/readiness code accepts the directory only
+      // after the executable, sidecar, and provenance all verify together.
+      assertSafeTemplatePath(config);
+      await mkdir(targetDir, { recursive: true, mode: 0o755 });
+      assertSafeTemplatePath(config);
+      await chmod(targetDir, 0o755);
+
+      const publishFiles = [
+        TEMPLATE_FILE_NAME,
+        `${TEMPLATE_FILE_NAME}.sha256`,
+        `${TEMPLATE_FILE_NAME}.provenance.json`,
+      ];
+      for (const fileName of publishFiles) {
         try {
-          await renamePath(targetDir, quarantinePath);
+          await renamePath(path.join(stagingDir, fileName), path.join(targetDir, fileName));
         } catch {
+          // Another process may have completed the same pinned bundle while
+          // this process was publishing. Accept only a fully verified result.
           if (isVerifiedTemplate(config, config.templateDir)) {
             return existingTemplateResult(config, templatePath);
           }
-          throw new Error('template quarantine failed');
+          throw new Error('template file publish failed');
         }
       }
-
-      try {
-        await renamePath(stagingDir, targetDir);
-      } catch {
-        // A provisioner in another process may have won the atomic rename.
-        // Re-check before treating EEXIST or an equivalent race as failure.
-        if (isVerifiedTemplate(config, config.templateDir)) {
-          return existingTemplateResult(config, templatePath);
-        }
-        throw new Error('template publish failed');
-      }
-      published = true;
       if (!isVerifiedTemplate(config, config.templateDir)) {
         throw new Error('published template verification failed');
       }
-
-      if (quarantinePath) {
-        const obsoleteQuarantinePath = quarantinePath;
-        quarantinePath = undefined;
-        await rm(obsoleteQuarantinePath, { recursive: true, force: true }).catch(() => {
-          // The new target is already verified. A failed best-effort backup
-          // removal must not roll the valid target back to an old invalid one.
-          logger.warn('offline_installer_template_quarantine_remove_failed', {
-            code: 'QUARANTINE_REMOVE_FAILED',
-          });
-        });
-      }
-
       return {
         status: 'provisioned',
         filePath: templatePath,
@@ -409,33 +479,19 @@ async function publishStagedTemplate(
         sha256: config.templateSha256,
       };
     } catch {
-      if (published) {
-        await rm(targetDir, { recursive: true, force: true });
-      }
-
-      if (quarantinePath && (await pathExists(quarantinePath))) {
-        if (isVerifiedTemplate(config, config.templateDir)) {
-          await rm(quarantinePath, { recursive: true, force: true });
-          quarantinePath = undefined;
-        } else {
-          await rm(targetDir, { recursive: true, force: true });
-          await renamePath(quarantinePath, targetDir).catch(() => undefined);
-          quarantinePath = undefined;
-        }
+      // Do not remove or roll back the canonical directory here. A failed
+      // file replacement can leave an incomplete bundle, but readers fail
+      // closed until the next complete verification. Removing the directory
+      // would reintroduce an observable missing-path window and could destroy
+      // a valid bundle published concurrently by another process.
+      if (isVerifiedTemplate(config, config.templateDir)) {
+        return existingTemplateResult(config, templatePath);
       }
 
       throw new WindowsOfflineInstallerProvisionError(
         'PUBLISH_FAILED',
         'Pinned template could not be published'
       );
-    } finally {
-      if (quarantinePath) {
-        await rm(quarantinePath, { recursive: true, force: true }).catch(() => {
-          logger.warn('offline_installer_template_quarantine_remove_failed', {
-            code: 'QUARANTINE_REMOVE_FAILED',
-          });
-        });
-      }
     }
   });
 }
@@ -454,6 +510,9 @@ export async function provisionWindowsOfflineInstallerTemplate(
   }
 
   const templatePath = getWindowsOfflineInstallerTemplatePath(config);
+  if (!options.verifyOnly) {
+    await cleanupStaleWindowsOfflineInstallerProvisioningDirectories(config);
+  }
   try {
     loadCachedWindowsOfflineTemplate(config.templateDir, {
       version: config.templateVersion,
@@ -472,6 +531,10 @@ export async function provisionWindowsOfflineInstallerTemplate(
     }
   }
 
+  // Reject an existing symlink in the configured path before any recursive
+  // mkdir can follow it into a directory outside the template root.
+  assertSafeTemplatePath(config);
+
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
 
   await resolveExactReleaseCommit(fetchImpl, config);
@@ -485,11 +548,14 @@ export async function provisionWindowsOfflineInstallerTemplate(
   verifyPinnedBytes(templateBytes, sidecarBytes, config.templateSha256);
 
   await mkdir(config.templateDir, { recursive: true, mode: 0o755 });
+  assertSafeTemplatePath(config);
   await chmod(config.templateDir, 0o755);
+  assertSafeTemplatePath(config);
   await mkdir(path.join(config.templateDir, config.templateVersion), {
     recursive: true,
     mode: 0o755,
   });
+  assertSafeTemplatePath(config);
   await chmod(path.join(config.templateDir, config.templateVersion), 0o755);
 
   // Keep staging on the mounted template volume so the final rename remains

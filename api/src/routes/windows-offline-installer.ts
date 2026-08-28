@@ -53,12 +53,15 @@ export function createWindowsOfflineInstallerDownloadHandler(
   return (req, res): void => {
     const reference = req.query.ref;
     if (typeof reference !== 'string' || !isValidWindowsOfflineDownloadReference(reference)) {
-      sendSafeError(res, 400, 'Invalid download reference');
+      // Keep syntax failures indistinguishable from an unknown opaque
+      // reference. The local check avoids unnecessary hashing/DB work without
+      // turning token shape into an existence oracle.
+      sendSafeError(res, STATUS_BY_CODE.INVALID, 'Download reference unavailable');
       return;
     }
 
-    void deps.refs
-      .consumeAttempt(reference)
+    void Promise.resolve()
+      .then(() => deps.refs.consumeAttempt(reference))
       .then(async (record) => {
         const transferId = record.transferId;
         if (!transferId) {

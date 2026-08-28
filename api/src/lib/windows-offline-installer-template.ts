@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { getWindowsOfflineInstallerTemplatePath } from './windows-offline-installer-config.js';
@@ -58,6 +58,31 @@ export function getWindowsOfflineInstallerTemplateProvenancePath(templatePath: s
 
 const HEX_SHA256 = /^[0-9a-f]{64}$/;
 
+function containsSymbolicLink(filePath: string): boolean {
+  const absolutePath = path.resolve(filePath);
+  const parsed = path.parse(absolutePath);
+  let current = parsed.root;
+  const relativeParts = absolutePath.slice(parsed.root.length).split(path.sep).filter(Boolean);
+
+  for (const part of relativeParts) {
+    current = path.join(current, part);
+    try {
+      if (lstatSync(current).isSymbolicLink()) return true;
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        (error as { code?: unknown }).code === 'ENOENT'
+      ) {
+        return false;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 function readTemplateFile(
   filePath: string,
   encoding: BufferEncoding | undefined,
@@ -87,6 +112,19 @@ export function loadCachedWindowsOfflineTemplate(
     templateVersion: expected.version,
     templateCommit: expected.commit,
   });
+  const sidecarPath = `${templatePath}.sha256`;
+  const provenancePath = getWindowsOfflineInstallerTemplateProvenancePath(templatePath);
+
+  if (
+    containsSymbolicLink(templatePath) ||
+    containsSymbolicLink(sidecarPath) ||
+    (expected.releaseTag !== undefined && containsSymbolicLink(provenancePath))
+  ) {
+    throw new WindowsOfflineTemplateCacheError(
+      'TEMPLATE_MISSING',
+      'Pinned OpenPath Windows setup template is unavailable'
+    );
+  }
 
   if (!exists(templatePath)) {
     throw new WindowsOfflineTemplateCacheError(
@@ -95,7 +133,6 @@ export function loadCachedWindowsOfflineTemplate(
     );
   }
 
-  const sidecarPath = `${templatePath}.sha256`;
   if (!exists(sidecarPath)) {
     throw new WindowsOfflineTemplateCacheError(
       'SIDECAR_MISSING',
@@ -131,7 +168,6 @@ export function loadCachedWindowsOfflineTemplate(
   }
 
   if (expected.releaseTag !== undefined) {
-    const provenancePath = getWindowsOfflineInstallerTemplateProvenancePath(templatePath);
     if (!exists(provenancePath)) {
       throw new WindowsOfflineTemplateCacheError(
         'PROVENANCE_MISSING',

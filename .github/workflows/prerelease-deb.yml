@@ -147,6 +147,7 @@ jobs:
   publish-prerelease:
     name: Publish Prerelease to APT Repository
     needs: [build-prerelease, release-quality-gate]
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     uses: ./.github/workflows/reusable-deb-publish.yml
     with:
       artifact-name: prerelease-deb-package

@@ -187,6 +187,49 @@ void describe('OpenPath Windows offline installer download references', () => {
     }
   });
 
+  void test('keeps a shared artifact while another reference still protects it', async () => {
+    const service = createWindowsOfflineDownloadRefsService();
+    const classroomId = (await harness.createClassroom()).id;
+    const artifactStorageFileName = '44444444-4444-4444-8444-444444444444.exe';
+    const first = await service.mintReference({
+      classroomId,
+      classroomName: 'Lab Shared Artifact',
+      createdBy: adminUserId(),
+      artifactFileName: 'OpenPath-Lab-Shared-Windows-Setup.exe',
+      artifactStorageFileName,
+      artifactSha256: 'a'.repeat(64),
+      artifactSize: 12,
+      ttlMinutes: 10,
+      maxAttempts: 1,
+    });
+    await service.mintReference({
+      classroomId,
+      classroomName: 'Lab Shared Artifact',
+      createdBy: adminUserId(),
+      artifactFileName: 'OpenPath-Lab-Shared-Windows-Setup.exe',
+      artifactStorageFileName,
+      artifactSha256: 'a'.repeat(64),
+      artifactSize: 12,
+      ttlMinutes: 10,
+      maxAttempts: 1,
+    });
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-shared-artifact-'));
+    const artifactPath = path.join(root, artifactStorageFileName);
+
+    try {
+      await writeFile(artifactPath, 'shared artifact');
+      const attempt = await service.consumeAttempt(first.rawToken);
+      assert.ok(attempt.transferId);
+      await service.markConsumed(first.rawToken, attempt.transferId);
+
+      await service.cleanupExpired(root);
+
+      assert.equal(await readFile(artifactPath, 'utf8'), 'shared artifact');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   void test('allows bounded concurrent reservations without letting cleanup remove the active artifact', async () => {
     const service = createWindowsOfflineDownloadRefsService();
     const classroomId = (await harness.createClassroom()).id;
@@ -432,5 +475,42 @@ void describe('OpenPath Windows offline installer download references', () => {
       () => service.consumeAttempt(minted.rawToken),
       (error: unknown) => error instanceof DownloadReferenceError && error.code === 'INVALID'
     );
+  });
+
+  void test('does not revoke an artifact protected by an active transfer', async () => {
+    const service = createWindowsOfflineDownloadRefsService();
+    const classroomId = (await harness.createClassroom()).id;
+    const artifactStorageFileName = '33333333-3333-4333-8333-333333333333.exe';
+    const minted = await service.mintReference({
+      classroomId,
+      classroomName: 'Lab Protected Artifact',
+      createdBy: adminUserId(),
+      artifactFileName: 'OpenPath-Lab-Protected-Windows-Setup.exe',
+      artifactStorageFileName,
+      artifactSha256: 'e'.repeat(64),
+      artifactSize: 12,
+      ttlMinutes: 10,
+      maxAttempts: 1,
+    });
+    const root = await mkdtemp(path.join(tmpdir(), 'openpath-ref-revoke-'));
+    const artifactPath = path.join(root, artifactStorageFileName);
+
+    try {
+      await writeFile(artifactPath, 'protected artifact');
+      const attempt = await service.consumeAttempt(minted.rawToken);
+      assert.ok(attempt.transferId);
+
+      assert.equal(await service.revokeReferencesForArtifact(artifactStorageFileName), false);
+      assert.equal(await readFile(artifactPath, 'utf8'), 'protected artifact');
+
+      await service.releaseAttempt(minted.rawToken, attempt.transferId);
+      assert.equal(await service.revokeReferencesForArtifact(artifactStorageFileName), true);
+      await assert.rejects(
+        () => service.consumeAttempt(minted.rawToken),
+        (error: unknown) => error instanceof DownloadReferenceError && error.code === 'INVALID'
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

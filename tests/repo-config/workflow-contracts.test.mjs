@@ -2010,6 +2010,37 @@ test('release artifact workflows wait for same-commit quality evidence before pu
   );
 });
 
+test('release publication jobs are manual-only while push validation remains enabled', () => {
+  const prereleaseWorkflow = readText('.github/workflows/prerelease-deb.yml');
+  const scriptsReleaseWorkflow = readText('.github/workflows/release-scripts.yml');
+  const extensionReleaseWorkflow = readText('.github/workflows/release-extension.yml');
+  const templateJob = extractWorkflowJobBlock(scriptsReleaseWorkflow, 'windows-offline-template');
+  const finalJobBlock = (workflowText, jobId) => {
+    const start = workflowText.indexOf(`  ${jobId}:\n`);
+    assert.notEqual(start, -1, `workflow should define a ${jobId} job block`);
+    return workflowText.slice(start);
+  };
+  const scriptsReleaseJob = finalJobBlock(scriptsReleaseWorkflow, 'release');
+  const prereleasePublishJob = finalJobBlock(prereleaseWorkflow, 'publish-prerelease');
+  const extensionReleaseJob = finalJobBlock(extensionReleaseWorkflow, 'release');
+  const manualOnlyCondition = "if: ${{ github.event_name == 'workflow_dispatch' }}";
+
+  assert.ok(
+    !templateJob.includes(manualOnlyCondition),
+    'the Windows offline template job must continue running on push so the real EXE E2E remains automatic'
+  );
+  for (const [jobName, jobBlock] of [
+    ['release-scripts release', scriptsReleaseJob],
+    ['prerelease deb publish', prereleasePublishJob],
+    ['Firefox extension release', extensionReleaseJob],
+  ]) {
+    assert.ok(
+      jobBlock.includes(manualOnlyCondition),
+      `${jobName} should publish only from an explicit workflow_dispatch run`
+    );
+  }
+});
+
 test('release scripts workflow triggers for every packaged installer input', () => {
   const scriptsReleaseWorkflow = readText('.github/workflows/release-scripts.yml');
 
