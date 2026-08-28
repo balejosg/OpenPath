@@ -88,9 +88,7 @@ function Write-SafeEvidence {
         [Parameter(Mandatory = $true)][object]$Payload
     )
 
-    if (-not (Test-Path -LiteralPath $script:ArtifactsRoot -PathType Container)) {
-        New-Item -ItemType Directory -LiteralPath $script:ArtifactsRoot -Force | Out-Null
-    }
+    [System.IO.Directory]::CreateDirectory($script:ArtifactsRoot) | Out-Null
 
     $json = ConvertTo-Json -InputObject $Payload -Depth 8
     [System.IO.File]::WriteAllText(
