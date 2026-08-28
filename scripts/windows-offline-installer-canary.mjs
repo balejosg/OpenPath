@@ -38,7 +38,14 @@ async function generateInstaller({ baseUrl, accessToken, classroomId, fetchImpl 
     throw new Error('generation-network-error');
   }
   const body = await parseJson(response);
-  if (!response.ok || !body.result?.data) throw new Error('generation-failed');
+  if (!response.ok) {
+    const status = Number(response.status);
+    if (Number.isInteger(status) && status >= 400 && status <= 599) {
+      throw new Error(`generation-status-${String(status)}`);
+    }
+    throw new Error('generation-failed');
+  }
+  if (!body.result?.data) throw new Error('generation-invalid-response');
   return body.result.data;
 }
 

@@ -112,12 +112,36 @@ function Get-SafeFailureCode {
         'administrator-required' { return 'administrator-required' }
         'windows-only-lane' { return 'windows-only-lane' }
         'api-exited-before-ready:(?<code>api-[a-z0-9-]+)' { return $Matches['code'] }
+        'canary-failed:(?<code>canary-[a-z0-9-]+)' { return $Matches['code'] }
         'Access is denied|UnauthorizedAccess' { return 'access-denied' }
         'cannot find the path|does not exist' { return 'path-not-found' }
         'parameter cannot be found' { return 'command-parameter-error' }
         'timed out|timeout' { return 'timeout' }
         default { return 'lane-internal-error' }
     }
+}
+
+function Get-SafeCanaryFailureCode {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return 'canary-failed'
+    }
+
+    try {
+        $payload = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json
+        $code = [string]$payload.code
+        if ($code -match '^[a-z0-9-]+$') {
+            return "canary-$code"
+        }
+    }
+    catch {
+        # Keep the child process diagnostics private and bounded.
+    }
+
+    return 'canary-failed'
 }
 
 function Get-SafeApiFailureCode {
@@ -580,7 +604,10 @@ function Invoke-RealHttpCanary {
         Push-Location $script:RepoRoot
         try {
             $output = & $script:NodeCommand scripts/windows-offline-installer-canary.mjs 2> $canaryErrorPath
-            Assert-LastExitCode 'HTTP offline installer canary'
+            if ($LASTEXITCODE -ne 0) {
+                $safeCanaryCode = Get-SafeCanaryFailureCode -Path $canaryErrorPath
+                throw "canary-failed:$safeCanaryCode"
+            }
         }
         finally {
             Pop-Location

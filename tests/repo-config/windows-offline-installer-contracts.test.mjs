@@ -635,6 +635,7 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     'Start-TestPostgres',
     'Start-Api',
     'Get-SafeFailureCode',
+    'Get-SafeCanaryFailureCode',
     'backend-harness.ts bootstrap',
     'scripts/windows-offline-installer-canary.mjs',
     'OPENPATH_CANARY_OUTPUT_PATH',
@@ -666,6 +667,11 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     lane,
     /failureCode\s*=\s*\$failureCode/,
     'personalized HTTP-to-EXE failure evidence must expose only a bounded code'
+  );
+  assert.match(
+    lane,
+    /canary-failed:\(\?<code>canary-\[a-z0-9-\]\+\)/,
+    'canary failures must be reduced to bounded status/category codes'
   );
   assert.match(
     lane,

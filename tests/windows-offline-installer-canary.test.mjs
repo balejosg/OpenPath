@@ -217,6 +217,30 @@ test('windows offline installer canary fails on unexpected replay status and net
   }
 });
 
+test('windows offline installer canary reports only the generation HTTP status', async () => {
+  const response = async () =>
+    new Response(JSON.stringify({ error: { message: 'internal details must not escape' } }), {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  await assert.rejects(
+    () =>
+      runWindowsOfflineInstallerCanary({
+        baseUrl: 'https://openpath.example.test',
+        accessToken: 'secret-token',
+        classroomId: 'classroom-1',
+        fetchImpl: response,
+      }),
+    (error) => {
+      assert.equal(error instanceof Error ? error.message : String(error), 'generation-status-503');
+      assert.equal(JSON.stringify(error).includes('internal details'), false);
+      assert.equal(JSON.stringify(error).includes('secret-token'), false);
+      return true;
+    }
+  );
+});
+
 test('windows offline installer canary evidence contains no raw references or credentials', async () => {
   const bytes = Buffer.from('safe-evidence-installer');
   let downloadCount = 0;
