@@ -2,8 +2,11 @@
 
 > Status: maintained
 > Applies to: OpenPath API and Windows agent
-> Last verified: 2026-08-27
-> Source of truth: `api/src/services/windows-offline-installer-artifact.service.ts`
+> Last verified: 2026-08-28
+> Source of truth: `api/src/routes/windows-offline-installer.ts`,
+> `api/src/services/windows-offline-installer-download-refs.service.ts`,
+> `api/src/services/windows-offline-installer-artifact.service.ts`, and
+> `api/src/services/windows-offline-installer-provision.service.ts`
 
 OpenPath provides a generic, authenticated way to create a personalized Windows
 offline installer. A caller with teacher access to a classroom uses the public
@@ -54,13 +57,27 @@ The binary route is:
 GET /api/windows-offline-installer/download?ref=<opaque-reference>
 ```
 
-It returns `200` with the executable only when the reference is valid, the
-artifact exists, and its size and SHA-256 match the database record. It returns:
+The route validates request syntax before it looks up a reference. It returns
+`200` with an attachment only when the reference is valid, the artifact exists,
+and its size and SHA-256 match the database record:
 
-| Condition                                         | Status |
-| ------------------------------------------------- | -----: |
-| Missing, malformed, or unknown `ref`              |  `404` |
-| Expired, exhausted, or already consumed reference |  `410` |
+| Condition                            |           Status | Meaning                                                          |
+| ------------------------------------ | ---------------: | ---------------------------------------------------------------- |
+| Missing `ref`                        |            `400` | Request syntax error; no reference lookup is performed.          |
+| Malformed `ref`                      |            `400` | Request syntax error; no reference lookup is performed.          |
+| Unknown, well-formed `ref`           |            `404` | The opaque reference does not exist in storage.                  |
+| Invalid, well-formed `ref`           |            `404` | The stored reference cannot be resolved as a usable reference.   |
+| Expired `ref`                        |            `410` | Terminal state of a reference that was previously valid.         |
+| Exhausted `ref`                      |            `410` | Terminal state after the bounded attempt budget was used.        |
+| Consumed `ref`                       |            `410` | Terminal state after a complete transfer consumed the reference. |
+| Valid `ref` with a verified artifact | `200 attachment` | The executable is streamed with download headers.                |
+
+Missing or malformed values are syntactic request errors. Unknown or invalid
+well-formed values are references that cannot be found or resolved. Expired,
+exhausted, and consumed values are terminal states of a previously valid
+reference. If a valid reference points to a missing or mismatched personalized
+artifact, the route fails closed with `404 Installer artifact unavailable`; that
+artifact-integrity failure is separate from the reference-state mapping above.
 
 Successful responses include `Content-Type: application/octet-stream`, an
 attachment `Content-Disposition` filename, `Cache-Control: no-store`,
@@ -90,13 +107,24 @@ response contains status codes only, never filesystem paths, tokens, or secrets.
 
 Provision the exact template before starting API traffic. There is no request-
 time `latest` lookup, branch resolution, or GitHub fetch. The immutable template
-root and writable artifact root must be separate:
+root and writable artifact root are separate. The private artifact root contains
+personalized files such as:
 
 ```text
-<templateDir>/<version>/<commit>/OpenPath-Windows-Setup-Template.exe
-<templateDir>/<version>/<commit>/OpenPath-Windows-Setup-Template.exe.sha256
-<templateDir>/<version>/<commit>/OpenPath-Windows-Setup-Template.exe.provenance.json
 <artifactsDir>/<opaque-derived-name>.exe
+```
+
+The published template uses this layout inside the exact version/commit
+directory:
+
+```text
+<templateDir>/<version>/<commit>/
+  .current
+  generations/
+    generation-<uuid>/
+      OpenPath-Windows-Setup-Template.exe
+      OpenPath-Windows-Setup-Template.exe.sha256
+      OpenPath-Windows-Setup-Template.exe.provenance.json
 ```
 
 Required configuration is documented in
@@ -115,21 +143,47 @@ npm run provision:windows-offline-installer --workspace=@openpath/api -- --verif
 
 Provisioning first resolves the exact GitHub tag to its exact full source commit,
 then downloads only the exact configured release assets and sidecar, verifies
-the expected and actual SHA-256 values, writes the local provenance manifest,
-and publishes the verified bundle with atomic file replacements on the template
-volume. The canonical version/commit directory remains present for concurrent
-readers; until all three files verify together, readers fail closed. A valid
-target is reused and an invalid target is repaired in place. The RW provisioner
-rejects symlinked template paths and removes stale provisioning directories and
-legacy quarantine directories across all stored versions on a later
-provisioning pass after a bounded retention period. The API maintenance process
-never scans or writes the template root because its supported volume is `:ro`.
-`--verify-only` is
-local-only and never fetches or repairs files: it verifies the executable,
-sidecar, and persisted provenance. API startup performs the local readiness
-check after migrations and before listening; readiness reports the capability as
-`not_configured`, `ok`, or a safe error code and caches all required file
-identities. Readiness never provisions or repairs the template.
+the expected and actual SHA-256 values, and writes the local provenance manifest
+into a staging directory on the template volume. The complete bundle is
+validated before it becomes visible. Each published generation is immutable and
+contains the executable, its `.sha256` sidecar, and its `.provenance.json`
+manifest together.
+
+After validation, staging is renamed to a complete
+`generations/generation-<uuid>/` directory on the same filesystem. The
+provisioner writes `.current` through a temporary pointer file whose textual
+content names exactly one generation, syncs it, and atomically renames it over
+`.current` in the same version/commit directory. Replacing `.current` is the
+single observable publication commit. Readers resolve that pointer and load the
+executable, sidecar, and provenance only from the selected generation; they
+never combine files from different generations.
+
+If preparation of a new generation fails, the existing `.current` pointer is
+not replaced or removed, so a previously valid generation remains valid. If a
+pointer replacement fails before it commits, the same fallback applies. If no
+valid generation has been published yet, the loader remains unavailable and
+API/readiness fail closed. A later explicit provisioning run can publish a new
+complete generation; it does not repair a published bundle by replacing its
+`.exe`, `.sha256`, and `.provenance.json` files independently. The RW
+provisioner rejects symlinked template paths. The API maintenance process never
+scans or writes the template root because its supported volume is `:ro`.
+
+`--verify-only` is local-only: it does not download, provision, repair, clean up,
+or mutate files. It verifies the configured pointer and complete published
+bundle. API startup performs the local readiness check after migrations and
+before listening; readiness reads the published state, caches required file
+identities, and fails closed for a missing, malformed, or incomplete pointer or
+bundle. Readiness never provisions or repairs the template.
+
+If a process crashes during publication, a staging root, a temporary `.current`
+pointer, or a non-current generation may remain. On a later normal provisioning
+pass, stale staging roots and pointer files, abandoned non-current generations,
+and reclaimable publish locks are eligible for bounded-age cleanup; the current
+generation is preserved. If `.current` is missing or malformed, cleanup
+conservatively preserves generations rather than guessing which one to publish,
+and API/readiness continue to fail closed until a valid publication exists. This
+is recovery/cleanup of abandoned filesystem entries, not a promise of rollback
+or automatic repair.
 
 ### Standalone Docker deployment
 
