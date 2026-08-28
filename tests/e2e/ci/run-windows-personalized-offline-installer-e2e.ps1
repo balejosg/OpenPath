@@ -149,6 +149,22 @@ function Get-SafeCanaryFailureCode {
     return 'canary-failed'
 }
 
+function Get-SafeCanaryContractFailureCode {
+    param(
+        [Parameter(Mandatory = $true)][object]$Evidence
+    )
+
+    if ($Evidence.status -ne 'ok') { return 'canary-result-status' }
+    if ($Evidence.downloadStatus -ne 200) { return 'canary-result-download-status' }
+    if ($Evidence.replayStatus -ne 410) { return 'canary-result-replay-status' }
+    if ($Evidence.headersVerified -ne $true) { return 'canary-result-headers' }
+    if (-not ($Evidence.downloadBytes -gt 0)) { return 'canary-result-bytes' }
+    if ([string]$Evidence.downloadSha256 -notmatch '^[0-9a-f]{64}$') {
+        return 'canary-result-sha256'
+    }
+    return $null
+}
+
 function Get-SafeApiFailureCode {
     param(
         [Parameter(Mandatory = $true)][string[]]$Paths
@@ -637,15 +653,9 @@ function Invoke-RealHttpCanary {
         $script:CanaryFailureCode = 'canary-invalid-json'
         throw 'canary-failed'
     }
-    if (
-        $evidence.status -ne 'ok' -or
-        $evidence.downloadStatus -ne 200 -or
-        $evidence.replayStatus -ne 410 -or
-        $evidence.headersVerified -ne $true -or
-        -not ($evidence.downloadBytes -gt 0) -or
-        [string]$evidence.downloadSha256 -notmatch '^[0-9a-f]{64}$'
-    ) {
-        $script:CanaryFailureCode = 'canary-contract-failed'
+    $contractFailureCode = Get-SafeCanaryContractFailureCode -Evidence $evidence
+    if ($null -ne $contractFailureCode) {
+        $script:CanaryFailureCode = $contractFailureCode
         throw 'canary-failed'
     }
     if (-not (Test-Path -LiteralPath $downloadPath -PathType Leaf)) {

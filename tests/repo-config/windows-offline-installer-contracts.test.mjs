@@ -636,6 +636,7 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     'Start-Api',
     'Get-SafeFailureCode',
     'Get-SafeCanaryFailureCode',
+    'Get-SafeCanaryContractFailureCode',
     'backend-harness.ts bootstrap',
     'scripts/windows-offline-installer-canary.mjs',
     'OPENPATH_CANARY_OUTPUT_PATH',
