@@ -634,6 +634,7 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
   for (const marker of [
     'Start-TestPostgres',
     'Start-Api',
+    'Get-SafeFailureCode',
     'backend-harness.ts bootstrap',
     'scripts/windows-offline-installer-canary.mjs',
     'OPENPATH_CANARY_OUTPUT_PATH',
@@ -660,6 +661,11 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     lane.slice(safeEvidenceStart, safeEvidenceEnd),
     /(?:OPENPATH_CANARY_ACCESS_TOKEN|enrollmentToken|Bearer)/i,
     'personalized HTTP-to-EXE evidence must not persist authentication material'
+  );
+  assert.match(
+    lane,
+    /failureCode\s*=\s*\$failureCode/,
+    'personalized HTTP-to-EXE failure evidence must expose only a bounded code'
   );
 
   const workflow = readText('.github/workflows/release-scripts.yml');

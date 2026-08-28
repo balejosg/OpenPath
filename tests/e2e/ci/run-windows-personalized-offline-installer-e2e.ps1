@@ -695,11 +695,11 @@ try {
     }
 
     $script:CurrentStage = 'prepare'
-    New-Item -ItemType Directory -LiteralPath $script:ArtifactsRoot -Force | Out-Null
+    [System.IO.Directory]::CreateDirectory($script:ArtifactsRoot) | Out-Null
     $script:RunRoot = Join-Path (
         if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
     ) "openpath-personalized-offline-installer-$([guid]::NewGuid().ToString('N'))"
-    New-Item -ItemType Directory -LiteralPath $script:RunRoot -Force | Out-Null
+    [System.IO.Directory]::CreateDirectory($script:RunRoot) | Out-Null
 
     $script:CurrentStage = 'template-cache'
     New-VerifiedTemplateCache
