@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import { runWindowsOfflineInstallerCanary } from '../scripts/windows-offline-installer-canary.mjs';
@@ -36,6 +39,9 @@ test('windows offline installer canary verifies bytes and bounded single-use rep
         headers: {
           'content-type': 'application/octet-stream',
           'content-disposition': 'attachment; filename="OpenPath-Lab-Windows-Setup.exe"',
+          'cache-control': 'no-store',
+          'content-length': String(bytes.length),
+          'x-content-type-options': 'nosniff',
         },
       });
     }
@@ -55,6 +61,10 @@ test('windows offline installer canary verifies bytes and bounded single-use rep
     version: '4.1.0',
     fileName: 'OpenPath-Lab-Windows-Setup.exe',
     bytesVerified: true,
+    downloadStatus: 200,
+    downloadBytes: bytes.length,
+    downloadSha256: hash(bytes),
+    headersVerified: true,
     replayStatus: 410,
   });
 });
@@ -83,6 +93,9 @@ function downloadResponse(bytes, status = 200) {
         ? {
             'content-type': 'application/octet-stream',
             'content-disposition': 'attachment; filename="OpenPath-Lab-Windows-Setup.exe"',
+            'cache-control': 'no-store',
+            'content-length': String(bytes.length),
+            'x-content-type-options': 'nosniff',
           }
         : undefined,
   });
@@ -227,4 +240,49 @@ test('windows offline installer canary evidence contains no raw references or cr
   assert.equal(evidence.includes('Authorization'), false);
   assert.equal(evidence.includes('Cookie'), false);
   assert.equal(evidence.includes('jwt'), false);
+});
+
+test('windows offline installer canary can persist the verified executable without exposing its URL', async () => {
+  const bytes = Buffer.from('persisted-safe-installer');
+  const root = await mkdtemp(path.join(tmpdir(), 'openpath-offline-canary-'));
+  const outputPath = path.join(root, 'downloaded.exe');
+  let downloadCount = 0;
+
+  try {
+    const result = await runWindowsOfflineInstallerCanary({
+      baseUrl: 'http://127.0.0.1:3201',
+      downloadBaseUrl: 'http://127.0.0.1:3201',
+      outputPath,
+      accessToken: 'secret-token',
+      classroomId: 'classroom-1',
+      fetchImpl: async (url) => {
+        if (String(url).endsWith('/trpc/windowsOfflineInstaller.generate')) {
+          return new Response(
+            JSON.stringify({
+              result: {
+                data: {
+                  fileName: 'OpenPath-Lab-Windows-Setup.exe',
+                  version: '4.1.0',
+                  sha256: hash(bytes),
+                  downloadUrl:
+                    'https://localhost:18443/api/windows-offline-installer/download?ref=opaque-ref',
+                },
+              },
+            }),
+            { status: 200 }
+          );
+        }
+        downloadCount += 1;
+        return downloadCount === 1 ? downloadResponse(bytes) : downloadResponse(bytes, 410);
+      },
+    });
+
+    assert.equal(result.downloadBytes, bytes.length);
+    assert.equal(result.downloadSha256, hash(bytes));
+    assert.deepEqual(await readFile(outputPath), bytes);
+    assert.equal(JSON.stringify(result).includes('opaque-ref'), false);
+    assert.equal(JSON.stringify(result).includes('secret-token'), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

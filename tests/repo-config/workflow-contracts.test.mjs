@@ -8,7 +8,7 @@ import { describe, test } from 'node:test';
 import { extractWorkflowJobBlock, projectRoot, readText } from './support.mjs';
 
 const WINDOWS_OFFLINE_INSTALLER_PATH_PATTERN =
-  "windows_offline_installer_pattern='api/(src/(lib/windows-offline-installer[^/]*|routes/windows-offline-installer\\.ts|services/windows-offline-installer-[^/]+\\.service\\.ts|server-runtime\\.ts)|tests/(windows-offline-installer-[^/]+\\.test\\.ts|server-runtime\\.test\\.ts))'";
+  "windows_offline_installer_pattern='(api/(src/(lib/windows-offline-installer[^/]*|routes/windows-offline-installer\\.ts|services/windows-offline-installer-[^/]+\\.service\\.ts|server-runtime\\.ts)|tests/(windows-offline-installer-[^/]+\\.test\\.ts|server-runtime\\.test\\.ts))|scripts/windows-offline-installer-canary\\.mjs|tests/windows-offline-installer-canary\\.test\\.mjs|tests/e2e/ci/run-windows-personalized-offline-installer-e2e\\.ps1)'";
 
 describe('repository verification contract', () => {
   test('workflow helpers pin Node 24 compatible GitHub Action majors', () => {

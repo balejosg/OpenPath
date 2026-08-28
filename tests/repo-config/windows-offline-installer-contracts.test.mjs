@@ -629,6 +629,55 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
 });
 
+test('Windows personalized EXE evidence must traverse the real HTTP download contract', () => {
+  const lane = readText('tests/e2e/ci/run-windows-personalized-offline-installer-e2e.ps1');
+  for (const marker of [
+    'Start-TestPostgres',
+    'Start-Api',
+    'backend-harness.ts bootstrap',
+    'scripts/windows-offline-installer-canary.mjs',
+    'OPENPATH_CANARY_OUTPUT_PATH',
+    'downloadStatus',
+    'replayStatus',
+    'run-windows-offline-installer-exe.ps1',
+    'Invoke-PhysicalExeE2E',
+    'trailerValidated',
+    'payloadManifestValidated',
+    'pendingStateObserved',
+    'pendingStateCleared',
+  ]) {
+    assert.ok(lane.includes(marker), `personalized HTTP-to-EXE lane should include ${marker}`);
+  }
+  assert.match(
+    lane,
+    /downloadSha256[\s\S]*Get-FileHash[\s\S]*downloadSize/,
+    'the lane must verify the persisted download bytes independently'
+  );
+  const safeEvidenceStart = lane.indexOf('$success =');
+  const safeEvidenceEnd = lane.indexOf('Write-SafeEvidence -Payload $success');
+  assert.ok(safeEvidenceStart >= 0 && safeEvidenceEnd > safeEvidenceStart);
+  assert.doesNotMatch(
+    lane.slice(safeEvidenceStart, safeEvidenceEnd),
+    /(?:OPENPATH_CANARY_ACCESS_TOKEN|enrollmentToken|Bearer)/i,
+    'personalized HTTP-to-EXE evidence must not persist authentication material'
+  );
+
+  const workflow = readText('.github/workflows/release-scripts.yml');
+  for (const marker of [
+    'Execute personalized HTTP download-to-EXE E2E',
+    'run-windows-personalized-offline-installer-e2e.ps1',
+    'OPENPATH_E2E_TEMPLATE_COMMIT: ${{ github.sha }}',
+    'Upload personalized HTTP-to-EXE E2E evidence',
+  ]) {
+    assert.ok(workflow.includes(marker), `release workflow should include ${marker}`);
+  }
+  assert.match(
+    workflow,
+    /Create personalized NSIS executable[\s\S]*Execute personalized HTTP download-to-EXE E2E/,
+    'the real HTTP-to-EXE lane must run after the pinned template is built'
+  );
+});
+
 test('real NSIS failures expose only a bounded installer phase for diagnosis', () => {
   const installer = readText('windows/Install-OpenPath.ps1');
   const offlineModule = readText('windows/lib/install/Installer.Offline.ps1');

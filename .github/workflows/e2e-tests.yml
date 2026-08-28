@@ -194,7 +194,7 @@ jobs:
           windows_student_policy_sse_reason="Windows Student Policy not selected; target-platform lane not required for this diff."
           release_infra_only=false
           firefox_runtime_pattern='firefox-extension/(manifest\.json|package\.json|tsconfig(\.build)?\.json|src/|blocked/|popup/|icons/)'
-          windows_offline_installer_pattern='api/(src/(lib/windows-offline-installer[^/]*|routes/windows-offline-installer\.ts|services/windows-offline-installer-[^/]+\.service\.ts|server-runtime\.ts)|tests/(windows-offline-installer-[^/]+\.test\.ts|server-runtime\.test\.ts))'
+          windows_offline_installer_pattern='(api/(src/(lib/windows-offline-installer[^/]*|routes/windows-offline-installer\.ts|services/windows-offline-installer-[^/]+\.service\.ts|server-runtime\.ts)|tests/(windows-offline-installer-[^/]+\.test\.ts|server-runtime\.test\.ts))|scripts/windows-offline-installer-canary\.mjs|tests/windows-offline-installer-canary\.test\.mjs|tests/e2e/ci/run-windows-personalized-offline-installer-e2e\.ps1)'
 
           if [ -n "$changed_files" ] && echo "$changed_files" | grep -Eq '^(.github/workflows/(installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml|scripts/(require-release-quality-gate|select-windows-student-policy-sse-group)\.mjs|tests/repo-config/)'; then
             non_release_infra_files="$(

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
 
 const REPLAY_DEADLINE_MS = 2_000;
 
@@ -41,20 +42,39 @@ async function generateInstaller({ baseUrl, accessToken, classroomId, fetchImpl 
   return body.result.data;
 }
 
-async function downloadAndVerify({ downloadUrl, expectedSha256, baseUrl, fetchImpl = fetch }) {
-  const resolvedUrl = new URL(downloadUrl, `${baseUrl}/`).href;
+async function downloadAndVerify({
+  downloadUrl,
+  expectedSha256,
+  baseUrl,
+  downloadBaseUrl,
+  outputPath,
+  fetchImpl = fetch,
+}) {
+  const publicUrl = new URL(downloadUrl, `${baseUrl}/`);
+  const resolvedUrl = downloadBaseUrl
+    ? new URL(
+        `${publicUrl.pathname}${publicUrl.search}`,
+        `${downloadBaseUrl.replace(/\/+$/u, '')}/`
+      ).href
+    : publicUrl.href;
   let response;
   try {
     response = await fetchImpl(resolvedUrl);
   } catch {
     throw new Error('download-network-error');
   }
-  if (!response.ok) throw new Error(`download-status-${String(response.status)}`);
+  if (response.status !== 200) throw new Error(`download-status-${String(response.status)}`);
   if (response.headers.get('content-type') !== 'application/octet-stream') {
     throw new Error('download-content-type');
   }
   if (!(response.headers.get('content-disposition') ?? '').toLowerCase().includes('.exe')) {
     throw new Error('download-content-disposition');
+  }
+  if (response.headers.get('cache-control') !== 'no-store') {
+    throw new Error('download-cache-control');
+  }
+  if (response.headers.get('x-content-type-options') !== 'nosniff') {
+    throw new Error('download-nosniff');
   }
   let bytes;
   try {
@@ -62,10 +82,24 @@ async function downloadAndVerify({ downloadUrl, expectedSha256, baseUrl, fetchIm
   } catch {
     throw new Error('download-body-error');
   }
-  if (bytes.length === 0 || sha256(bytes) !== expectedSha256) {
+  const contentLength = response.headers.get('content-length');
+  if (
+    contentLength !== null &&
+    (!/^\d+$/u.test(contentLength) || Number(contentLength) !== bytes.length)
+  ) {
+    throw new Error('download-content-length');
+  }
+  const actualSha256 = sha256(bytes);
+  if (bytes.length === 0 || actualSha256 !== expectedSha256) {
     throw new Error('download-checksum');
   }
-  return { bytes, resolvedUrl };
+  if (outputPath) await writeFile(outputPath, bytes, { mode: 0o600 });
+  return {
+    bytes,
+    contentLength: bytes.length,
+    actualSha256,
+    resolvedUrl,
+  };
 }
 
 async function waitForConsumed({
@@ -105,16 +139,20 @@ export async function runWindowsOfflineInstallerCanary({
   baseUrl,
   accessToken,
   classroomId,
+  downloadBaseUrl,
+  outputPath,
   fetchImpl = fetch,
   nowImpl = Date.now,
   sleepImpl = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   replayDeadlineMs = REPLAY_DEADLINE_MS,
 }) {
   const result = await generateInstaller({ baseUrl, accessToken, classroomId, fetchImpl });
-  const { resolvedUrl } = await downloadAndVerify({
+  const { resolvedUrl, contentLength, actualSha256 } = await downloadAndVerify({
     downloadUrl: result.downloadUrl,
     expectedSha256: result.sha256,
     baseUrl,
+    downloadBaseUrl,
+    outputPath,
     fetchImpl,
   });
   await waitForConsumed({
@@ -129,6 +167,10 @@ export async function runWindowsOfflineInstallerCanary({
     version: result.version,
     fileName: result.fileName,
     bytesVerified: true,
+    downloadStatus: 200,
+    downloadBytes: contentLength,
+    downloadSha256: actualSha256,
+    headersVerified: true,
     replayStatus: 410,
   };
 }
@@ -138,6 +180,8 @@ async function main() {
     baseUrl: requiredEnv('OPENPATH_CANARY_BASE_URL').replace(/\/+$/u, ''),
     accessToken: requiredEnv('OPENPATH_CANARY_ACCESS_TOKEN'),
     classroomId: requiredEnv('OPENPATH_CANARY_CLASSROOM_ID'),
+    downloadBaseUrl: process.env.OPENPATH_CANARY_DOWNLOAD_BASE_URL?.trim(),
+    outputPath: process.env.OPENPATH_CANARY_OUTPUT_PATH?.trim(),
   });
   console.log(JSON.stringify(result));
 }

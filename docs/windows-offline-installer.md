@@ -187,6 +187,14 @@ then starts a local HTTPS enrollment fixture and calls the existing retry path.
 This is the evidence required to claim that the generated `.exe` executes; it
 does not introduce a second Windows runtime.
 
+The same automatic `windows-offline-template` job also runs the end-to-end
+HTTP-to-EXE lane. It starts the real API and PostgreSQL, creates a classroom,
+generates a fresh artifact/reference, downloads the executable through the
+download route, verifies the response and SHA-256, asserts replay `410`, and
+passes that downloaded file to the physical executable lane above. Only safe
+status, size, hash, and boolean evidence is uploaded; credentials and
+references stay in process memory.
+
 For quick target-platform evidence, the read-only PowerShell helper validates the
 trailer, classroom ID, optional API URL, and file hash. It does not install or
 modify the machine unless `-Install` is explicitly supplied:

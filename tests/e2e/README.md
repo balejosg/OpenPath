@@ -18,6 +18,7 @@ This directory holds the repo's cross-platform installation, packaging, and stud
 - `ci/run-linux-installer-contracts.sh`
 - `ci/run-linux-student-flow.sh`
 - `ci/run-windows-e2e.ps1`
+- `ci/run-windows-personalized-offline-installer-e2e.ps1`
 - `ci/run-windows-student-flow.ps1`
 
 ## What These Tests Cover
@@ -26,6 +27,8 @@ This directory holds the repo's cross-platform installation, packaging, and stud
 - Windows bootstrap/runtime contracts
 - student-policy scenario reconciliation helpers
 - required artifact manifests under `validation/`
+- the release-scripts Windows lane generates, downloads, executes, and cleans
+  up a personalized offline installer through the real HTTP reference flow
 
 ## Useful Entry Points
 

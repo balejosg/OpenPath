@@ -111,7 +111,7 @@ jobs:
           linux_bound=false
           windows_bound=false
           delivery_contracts=false
-          windows_offline_installer_pattern='api/(src/(lib/windows-offline-installer[^/]*|routes/windows-offline-installer\.ts|services/windows-offline-installer-[^/]+\.service\.ts|server-runtime\.ts)|tests/(windows-offline-installer-[^/]+\.test\.ts|server-runtime\.test\.ts))'
+          windows_offline_installer_pattern='(api/(src/(lib/windows-offline-installer[^/]*|routes/windows-offline-installer\.ts|services/windows-offline-installer-[^/]+\.service\.ts|server-runtime\.ts)|tests/(windows-offline-installer-[^/]+\.test\.ts|server-runtime\.test\.ts))|scripts/windows-offline-installer-canary\.mjs|tests/windows-offline-installer-canary\.test\.mjs|tests/e2e/ci/run-windows-personalized-offline-installer-e2e\.ps1)'
 
           if echo "$changed_files" | grep -Eq '^(linux/|tests/[^/]+\.bats$|tests/e2e/agent-integration\.bats$|tests/e2e/ci/run-linux-[^/]+\.sh|tests/e2e/Dockerfile|\.github/workflows/ci\.yml$)'; then
             linux_bound=true

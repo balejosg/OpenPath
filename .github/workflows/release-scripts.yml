@@ -169,6 +169,28 @@ jobs:
             exit $LASTEXITCODE
           }
 
+      - name: Execute personalized HTTP download-to-EXE E2E
+        shell: pwsh
+        env:
+          OPENPATH_E2E_TEMPLATE_COMMIT: ${{ github.sha }}
+        run: |
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'openpath-windows-personalized-offline-installer-e2e'
+          & (Resolve-Path 'tests/e2e/ci/run-windows-personalized-offline-installer-e2e.ps1') `
+            -TemplatePath (Resolve-Path 'windows/offline-installer/build/OpenPath-Windows-Setup-Template.exe').Path `
+            -TemplateCommit $env:OPENPATH_E2E_TEMPLATE_COMMIT `
+            -ArtifactsRoot $evidenceRoot
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Upload personalized HTTP-to-EXE E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-personalized-offline-installer-e2e-evidence
+          path: ${{ runner.temp }}/openpath-windows-personalized-offline-installer-e2e/windows-personalized-offline-installer-evidence.json
+          if-no-files-found: warn
+
       - name: Upload personalized NSIS E2E evidence
         if: always()
         uses: actions/upload-artifact@v7
