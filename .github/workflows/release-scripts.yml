@@ -7,11 +7,13 @@ on:
       - 'VERSION'
       - 'package.json'
       - 'package-lock.json'
+      - 'api/**'
       - 'linux/**'
       - 'runtime/**'
       - 'firefox-extension/**'
       - 'tests/e2e/**'
       - 'tests/selenium/**'
+      - 'scripts/windows-offline-installer-canary.mjs'
       - 'windows/**'
       - '.github/workflows/release-scripts.yml'
   workflow_dispatch:

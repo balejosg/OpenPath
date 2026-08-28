@@ -2070,12 +2070,14 @@ test('release scripts workflow triggers for every packaged installer input', () 
     'VERSION',
     'package.json',
     'package-lock.json',
+    'api/**',
     'linux/**',
     'windows/**',
     'runtime/**',
     'firefox-extension/**',
     'tests/e2e/**',
     'tests/selenium/**',
+    'scripts/windows-offline-installer-canary.mjs',
     '.github/workflows/release-scripts.yml',
   ]) {
     assert.ok(
