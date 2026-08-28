@@ -98,6 +98,23 @@ function Write-SafeEvidence {
     )
 }
 
+function Get-SafeFailureCode {
+    param(
+        [Parameter(Mandatory = $true)][System.Management.Automation.ErrorRecord]$ErrorRecord
+    )
+
+    $message = [string]$ErrorRecord.Exception.Message
+    switch -Regex ($message) {
+        'administrator-required' { return 'administrator-required' }
+        'windows-only-lane' { return 'windows-only-lane' }
+        'Access is denied|UnauthorizedAccess' { return 'access-denied' }
+        'cannot find the path|does not exist' { return 'path-not-found' }
+        'parameter cannot be found' { return 'command-parameter-error' }
+        'timed out|timeout' { return 'timeout' }
+        default { return 'lane-internal-error' }
+    }
+}
+
 function Get-FreeTcpPort {
     $listener = [System.Net.Sockets.TcpListener]::new(
         [System.Net.IPAddress]::Loopback,
@@ -719,10 +736,13 @@ try {
 }
 catch {
     $script:PrimaryFailure = $true
+    $failureCode = Get-SafeFailureCode -ErrorRecord $_
+    Write-Host "Personalized offline installer E2E failed at $($script:CurrentStage) ($failureCode)" -ForegroundColor Red
     Write-SafeEvidence -Payload ([ordered]@{
         status       = 'failed'
         code         = 'windows-personalized-offline-installer-e2e-failed'
         failureStage = $script:CurrentStage
+        failureCode  = $failureCode
         runner       = if ($env:RUNNER_NAME) { $env:RUNNER_NAME } else { 'windows-runner' }
     })
 }
