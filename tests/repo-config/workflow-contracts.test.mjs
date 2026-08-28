@@ -823,6 +823,7 @@ test('WEDU cheap captive portal lanes are manual-only and cannot satisfy the ful
 test('Codecov coverage uploads stay wired to active workflows and the README badge targets the app UI', () => {
   const readme = readText('README.md');
   const reusableTestWorkflow = readText('.github/workflows/reusable-test.yml');
+  const reactSpaVitestConfig = readText('react-spa/vitest.config.ts');
 
   assert.ok(
     existsSync(resolve(projectRoot, '.github/workflows/coverage.yml')),
@@ -878,6 +879,10 @@ test('Codecov coverage uploads stay wired to active workflows and the README bad
   assert.ok(
     reusableTestWorkflow.includes('fail_ci_if_error: true'),
     'reusable-test.yml should fail the coverage lane when Codecov upload fails'
+  );
+  assert.ok(
+    reactSpaVitestConfig.includes("reporter: ['text', 'json', 'html', 'lcov']"),
+    'react-spa coverage should emit the LCOV file consumed by the Codecov workflow'
   );
   assert.ok(
     reusableTestWorkflow.includes("image: ${{ inputs.test-type == 'api' && 'postgres:16' || '' }}"),
