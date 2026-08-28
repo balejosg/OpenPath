@@ -172,7 +172,7 @@ jobs:
           }
 
       - name: Execute personalized HTTP download-to-EXE E2E
-        shell: pwsh
+        shell: powershell
         env:
           OPENPATH_E2E_TEMPLATE_COMMIT: ${{ github.sha }}
         run: |
