@@ -692,6 +692,16 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     /DO ``\$``\$/,
     'the Windows HTTP-to-EXE lane must not emit PowerShell escape characters into PostgreSQL SQL'
   );
+  assert.match(
+    lane,
+    /generation-\$\(\[guid\]::NewGuid\(\)\.ToString\(\)\)/,
+    'the Windows HTTP-to-EXE lane must use the canonical UUID generation directory format'
+  );
+  assert.doesNotMatch(
+    lane,
+    /generation-\$\(\[guid\]::NewGuid\(\)\.ToString\(\x27N\x27\)\)/,
+    'the Windows HTTP-to-EXE lane must not create loader-incompatible compact generation names'
+  );
 
   const workflow = readText('.github/workflows/release-scripts.yml');
   const templateJobStart = workflow.indexOf('  windows-offline-template:');

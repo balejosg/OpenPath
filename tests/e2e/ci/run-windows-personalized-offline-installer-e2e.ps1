@@ -359,7 +359,7 @@ function New-VerifiedTemplateCache {
     Write-Step 'Installing the verified template generation into an isolated cache...'
     $script:TemplateRoot = Join-Path $script:RunRoot 'templates'
     $commitDirectory = Join-Path (Join-Path $script:TemplateRoot $TemplateVersion) $TemplateCommit
-    $generationDirectory = Join-Path (Join-Path $commitDirectory 'generations') "generation-$([guid]::NewGuid().ToString('N'))"
+    $generationDirectory = Join-Path (Join-Path $commitDirectory 'generations') "generation-$([guid]::NewGuid().ToString())"
     [System.IO.Directory]::CreateDirectory($generationDirectory) | Out-Null
 
     $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $TemplatePath).Hash.ToLowerInvariant()
