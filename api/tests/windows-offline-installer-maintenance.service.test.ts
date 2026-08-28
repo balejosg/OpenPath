@@ -138,6 +138,13 @@ void test('serializes slow periodic cleanup and waits for the active run on shut
 void test('bounds shutdown when cleanup never settles and reports only a safe code', async () => {
   const warnings: string[] = [];
   let intervalCallback: (() => void) | undefined;
+  let releaseShutdownTimeout: (() => void) | undefined;
+  let shutdownTimeoutUnrefCalls = 0;
+  const shutdownTimeoutHandle = {
+    unref: (): void => {
+      shutdownTimeoutUnrefCalls += 1;
+    },
+  } as unknown as ReturnType<typeof setTimeout>;
   const maintenance = createWindowsOfflineInstallerMaintenance({
     env: maintenanceEnv(),
     cleanupExpired: () => {
@@ -150,6 +157,11 @@ void test('bounds shutdown when cleanup never settles and reports only a safe co
       return 1 as unknown as ReturnType<typeof setInterval>;
     },
     clearIntervalImpl: () => undefined,
+    setTimeoutImpl: (callback: () => void) => {
+      releaseShutdownTimeout = callback;
+      return shutdownTimeoutHandle;
+    },
+    clearTimeoutImpl: () => undefined,
     loggerInstance: {
       warn: (_message, metadata) => {
         warnings.push(JSON.stringify(metadata));
@@ -161,8 +173,12 @@ void test('bounds shutdown when cleanup never settles and reports only a safe co
   maintenance.start();
   intervalCallback?.();
   const startedAt = Date.now();
-  await maintenance.stop();
+  const stopPromise = maintenance.stop();
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseShutdownTimeout?.();
+  await stopPromise;
 
   assert.equal(Date.now() - startedAt < 500, true);
   assert.equal(warnings.includes(JSON.stringify({ code: 'SHUTDOWN_TIMEOUT' })), true);
+  assert.equal(shutdownTimeoutUnrefCalls, 0);
 });

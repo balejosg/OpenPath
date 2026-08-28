@@ -16,6 +16,10 @@ interface MaintenanceLogger {
   warn: (message: string, metadata?: Record<string, unknown>) => void;
 }
 
+type ShutdownTimeoutHandle = ReturnType<typeof setTimeout>;
+type SetTimeoutImpl = (callback: () => void, delay: number) => ShutdownTimeoutHandle;
+type ClearTimeoutImpl = (timeout: ShutdownTimeoutHandle) => void;
+
 export interface WindowsOfflineInstallerMaintenance {
   runStartupCleanup: () => Promise<void>;
   start: () => void;
@@ -29,7 +33,9 @@ export interface WindowsOfflineInstallerMaintenanceDeps {
   intervalMs?: number;
   loggerInstance?: MaintenanceLogger;
   refs?: Pick<WindowsOfflineDownloadRefsService, 'cleanupExpired'>;
+  setTimeoutImpl?: SetTimeoutImpl;
   setIntervalImpl?: typeof setInterval;
+  clearTimeoutImpl?: ClearTimeoutImpl;
   shutdownTimeoutMs?: number;
 }
 
@@ -52,6 +58,8 @@ export function createWindowsOfflineInstallerMaintenance(
   const loggerInstance = deps.loggerInstance ?? logger;
   const setIntervalImpl = deps.setIntervalImpl ?? setInterval;
   const clearIntervalImpl = deps.clearIntervalImpl ?? clearInterval;
+  const setTimeoutImpl = deps.setTimeoutImpl ?? setTimeout;
+  const clearTimeoutImpl = deps.clearTimeoutImpl ?? clearTimeout;
   const intervalMs = deps.intervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
   const shutdownTimeoutMs =
     deps.shutdownTimeoutMs !== undefined &&
@@ -122,14 +130,14 @@ export function createWindowsOfflineInstallerMaintenance(
 
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<void>((resolve) => {
-      timeoutHandle = setTimeout(() => {
+      timeoutHandle = setTimeoutImpl(() => {
         loggerInstance.warn('offline_installer_maintenance_shutdown_timeout', {
           code: 'SHUTDOWN_TIMEOUT',
         });
         resolve();
       }, shutdownTimeoutMs);
-      const unref = (timeoutHandle as unknown as { unref?: () => void }).unref;
-      if (typeof unref === 'function') unref.call(timeoutHandle);
+      // Keep the shutdown watchdog referenced. Unlike the periodic ticker,
+      // this timer is what guarantees that stop() resolves when cleanup hangs.
     });
 
     try {
@@ -137,7 +145,7 @@ export function createWindowsOfflineInstallerMaintenance(
     } catch {
       loggerInstance.warn('offline_installer_maintenance_failed', { code: 'CLEANUP_FAILED' });
     } finally {
-      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      if (timeoutHandle !== undefined) clearTimeoutImpl(timeoutHandle);
     }
   }
 
