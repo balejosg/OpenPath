@@ -663,6 +663,24 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
   );
 
   const workflow = readText('.github/workflows/release-scripts.yml');
+  const templateJobStart = workflow.indexOf('  windows-offline-template:');
+  const personalizedJobStart = workflow.indexOf('  windows-personalized-http-e2e:');
+  const releaseJobStart = workflow.indexOf('\n  release:', personalizedJobStart);
+  assert.ok(templateJobStart >= 0);
+  assert.ok(personalizedJobStart > templateJobStart);
+  assert.ok(releaseJobStart > personalizedJobStart);
+  const templateJob = workflow.slice(templateJobStart, personalizedJobStart);
+  const personalizedJob = workflow.slice(personalizedJobStart, releaseJobStart);
+  assert.doesNotMatch(
+    templateJob,
+    /Execute personalized HTTP download-to-EXE E2E/,
+    'the HTTP-to-EXE lane must not run after the policy-changing physical lane'
+  );
+  assert.match(
+    personalizedJob,
+    /runs-on: windows-2025[\s\S]*needs: windows-offline-template[\s\S]*actions\/download-artifact@v7[\s\S]*name: windows-offline-template/,
+    'the HTTP-to-EXE lane must use a fresh Windows runner and the pinned template artifact'
+  );
   for (const marker of [
     'Execute personalized HTTP download-to-EXE E2E',
     'run-windows-personalized-offline-installer-e2e.ps1',
@@ -672,8 +690,8 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     assert.ok(workflow.includes(marker), `release workflow should include ${marker}`);
   }
   assert.match(
-    workflow,
-    /Create personalized NSIS executable[\s\S]*Execute personalized HTTP download-to-EXE E2E/,
+    personalizedJob,
+    /Build shared workspace[\s\S]*Download verified template artifact[\s\S]*Execute personalized HTTP download-to-EXE E2E/,
     'the real HTTP-to-EXE lane must run after the pinned template is built'
   );
 });

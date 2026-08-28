@@ -187,13 +187,16 @@ then starts a local HTTPS enrollment fixture and calls the existing retry path.
 This is the evidence required to claim that the generated `.exe` executes; it
 does not introduce a second Windows runtime.
 
-The same automatic `windows-offline-template` job also runs the end-to-end
-HTTP-to-EXE lane. It starts the real API and PostgreSQL, creates a classroom,
-generates a fresh artifact/reference, downloads the executable through the
-download route, verifies the response and SHA-256, asserts replay `410`, and
-passes that downloaded file to the physical executable lane above. Only safe
-status, size, hash, and boolean evidence is uploaded; credentials and
-references stay in process memory.
+The automatic Release Installation Scripts workflow runs the end-to-end
+HTTP-to-EXE lane in a separate fresh `windows-personalized-http-e2e` Windows
+job after the pinned template artifact is built. It starts the real API and
+PostgreSQL, creates a classroom, generates a fresh artifact/reference,
+downloads the executable through the download route, verifies the response and
+SHA-256, asserts replay `410`, and passes that downloaded file to the physical
+executable lane. The separate runner is intentional: the existing physical
+installer test changes Windows policy, so it must not affect the process that
+starts the HTTP-to-EXE test. Only safe status, size, hash, and boolean evidence
+is uploaded; credentials and references stay in process memory.
 
 For quick target-platform evidence, the read-only PowerShell helper validates the
 trailer, classroom ID, optional API URL, and file hash. It does not install or
