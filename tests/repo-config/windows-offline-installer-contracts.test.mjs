@@ -702,6 +702,21 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     /generation-\$\(\[guid\]::NewGuid\(\)\.ToString\(\x27N\x27\)\)/,
     'the Windows HTTP-to-EXE lane must not create loader-incompatible compact generation names'
   );
+  assert.match(
+    lane,
+    /function Get-SafeApiFailureCode[\s\S]*switch -Regex[\s\S]*api-template-not-ready[\s\S]*api-port-in-use/,
+    'API startup failures must be reduced to bounded diagnostic codes without exposing logs'
+  );
+  assert.match(
+    lane,
+    /Wait-ForApi[\s\S]*FailureLogPaths[\s\S]*Get-SafeApiFailureCode/,
+    'API readiness failures must use bounded diagnostics from the private child logs'
+  );
+  assert.doesNotMatch(
+    lane.slice(safeEvidenceStart, safeEvidenceEnd),
+    /api\.log|api\.err\.log/,
+    'API child logs must never be persisted as evidence'
+  );
 
   const workflow = readText('.github/workflows/release-scripts.yml');
   const templateJobStart = workflow.indexOf('  windows-offline-template:');

@@ -111,11 +111,43 @@ function Get-SafeFailureCode {
     switch -Regex ($message) {
         'administrator-required' { return 'administrator-required' }
         'windows-only-lane' { return 'windows-only-lane' }
+        'api-exited-before-ready:(?<code>api-[a-z0-9-]+)' { return $Matches['code'] }
         'Access is denied|UnauthorizedAccess' { return 'access-denied' }
         'cannot find the path|does not exist' { return 'path-not-found' }
         'parameter cannot be found' { return 'command-parameter-error' }
         'timed out|timeout' { return 'timeout' }
         default { return 'lane-internal-error' }
+    }
+}
+
+function Get-SafeApiFailureCode {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Paths
+    )
+
+    $messages = foreach ($path in $Paths) {
+        if ([string]::IsNullOrWhiteSpace($path)) {
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            continue
+        }
+        try {
+            [System.IO.File]::ReadAllText($path)
+        }
+        catch {
+            continue
+        }
+    }
+
+    $message = $messages -join [Environment]::NewLine
+    switch -Regex ($message) {
+        'Windows offline installer readiness failed' { return 'api-template-not-ready' }
+        'EADDRINUSE|address already in use' { return 'api-port-in-use' }
+        'ECONNREFUSED|connection refused' { return 'api-database-unreachable' }
+        'password authentication failed|28P01' { return 'api-database-authentication-failed' }
+        'Cannot find package [\x27"]tsx|ERR_MODULE_NOT_FOUND' { return 'api-runtime-missing' }
+        default { return 'api-process-failed' }
     }
 }
 
@@ -336,12 +368,14 @@ function Invoke-ApiDatabaseSetup {
 
 function Wait-ForApi {
     param(
-        [Parameter(Mandatory = $true)][string]$Url
+        [Parameter(Mandatory = $true)][string]$Url,
+        [string[]]$FailureLogPaths = @()
     )
 
     for ($attempt = 1; $attempt -le 45; $attempt += 1) {
         if ($script:ApiProcess.HasExited) {
-            throw 'api-exited-before-ready'
+            $failureCode = Get-SafeApiFailureCode -Paths $FailureLogPaths
+            throw "api-exited-before-ready:$failureCode"
         }
         try {
             Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 3 | Out-Null
@@ -485,7 +519,9 @@ function Start-Api {
         }
     }
 
-    Wait-ForApi -Url "http://127.0.0.1:$ApiPort/trpc/healthcheck.ready"
+    Wait-ForApi `
+        -Url "http://127.0.0.1:$ApiPort/trpc/healthcheck.ready" `
+        -FailureLogPaths @($apiLog, $apiErrorLog)
 }
 
 function Get-BackendScenario {
