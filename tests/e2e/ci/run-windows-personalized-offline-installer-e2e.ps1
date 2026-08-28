@@ -287,7 +287,7 @@ function Start-TestPostgres {
     for ($attempt = 1; $attempt -le 30; $attempt += 1) {
         & $pgIsReady -h 127.0.0.1 -p $script:PostgresPort -U postgres -d postgres | Out-Null
         if ($LASTEXITCODE -eq 0) {
-            $roleSql = "DO ``$``$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openpath') THEN CREATE ROLE openpath LOGIN PASSWORD 'openpath_test'; ELSE ALTER ROLE openpath WITH LOGIN PASSWORD 'openpath_test'; END IF; END ``$``$;"
+            $roleSql = 'DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ''openpath'') THEN CREATE ROLE openpath LOGIN PASSWORD ''openpath_test''; ELSE ALTER ROLE openpath WITH LOGIN PASSWORD ''openpath_test''; END IF; END $$;'
             Invoke-PostgresSql -Sql $roleSql
             Invoke-PostgresSql -Sql 'DROP DATABASE IF EXISTS openpath_test WITH (FORCE);'
             Invoke-PostgresSql -Sql 'CREATE DATABASE openpath_test OWNER openpath;'

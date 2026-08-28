@@ -682,6 +682,16 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     /New-Item[^\n]*-LiteralPath/,
     'PowerShell New-Item must not use the unsupported -LiteralPath parameter in this lane'
   );
+  assert.match(
+    lane,
+    /\$roleSql\s*=\s*'DO \$\$[\s\S]*END \$\$;'/,
+    'the Windows HTTP-to-EXE lane must send valid PostgreSQL dollar-quoted SQL'
+  );
+  assert.doesNotMatch(
+    lane,
+    /DO ``\$``\$/,
+    'the Windows HTTP-to-EXE lane must not emit PowerShell escape characters into PostgreSQL SQL'
+  );
 
   const workflow = readText('.github/workflows/release-scripts.yml');
   const templateJobStart = workflow.indexOf('  windows-offline-template:');
