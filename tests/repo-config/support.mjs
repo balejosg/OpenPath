@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,8 +32,13 @@ export function extractWorkflowJobBlock(workflowText, jobId) {
 
 export function listStableReleaseTags() {
   const tags = new Set();
-  const tagsDir = resolve(projectRoot, '.git/refs/tags');
-  const packedRefsPath = resolve(projectRoot, '.git/packed-refs');
+  const gitDir = execFileSync('git', ['rev-parse', '--git-dir'], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+  }).trim();
+  const resolvedGitDir = resolve(projectRoot, gitDir);
+  const tagsDir = resolve(resolvedGitDir, 'refs/tags');
+  const packedRefsPath = resolve(resolvedGitDir, 'packed-refs');
 
   function collectTagRefs(directory, prefix = '') {
     if (!existsSync(directory)) {
