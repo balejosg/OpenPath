@@ -1,3 +1,5 @@
+#!/usr/bin/env sh
+
 set -e
 
 # Capture the githooks(5) pre-push ref list from stdin BEFORE anything else can consume it.
