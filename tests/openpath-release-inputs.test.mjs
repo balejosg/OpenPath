@@ -100,6 +100,37 @@ describe('canonical OpenPath release input fingerprints', () => {
     assert.ok(!files.includes('windows/CLAUDE.md'));
   });
 
+  test('refreshes ignored local files added after an earlier inventory', () => {
+    const repoRoot = createFixture('windowsOfflineInstaller');
+    execFileSync('git', ['init', '--quiet'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, '.git', 'info', 'exclude'), '**/*.log\n');
+
+    const before = listReleaseInputFiles({
+      repoRoot,
+      component: 'windowsOfflineInstaller',
+    });
+    assert.ok(!before.includes('windows/local.log'));
+
+    writeFileSync(join(repoRoot, 'windows', 'local.log'), 'local diagnostic\n');
+
+    const after = listReleaseInputFiles({
+      repoRoot,
+      component: 'windowsOfflineInstaller',
+    });
+    assert.ok(!after.includes('windows/local.log'));
+  });
+
+  test('fails closed when Git cannot enumerate ignored paths in a worktree', () => {
+    const repoRoot = createFixture('windowsOfflineInstaller');
+    execFileSync('git', ['init', '--quiet'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, '.git', 'index'), 'corrupt index\n');
+
+    assert.throws(
+      () => listReleaseInputFiles({ repoRoot, component: 'windowsOfflineInstaller' }),
+      /unable to enumerate ignored release inputs/i
+    );
+  });
+
   test('inventories include source, build, manifest, packaging, and orchestration inputs', () => {
     const expectations = {
       linuxAgent: {

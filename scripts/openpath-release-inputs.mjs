@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDir, '..');
-const ignoredPathsCache = new Map();
 
 export const RELEASE_INPUT_FINGERPRINT_SCHEMA_VERSION = 1;
 
@@ -135,11 +134,30 @@ function isExcluded(relativePath, excludes) {
   );
 }
 
-function listIgnoredPaths(repoRoot) {
-  const cached = ignoredPathsCache.get(repoRoot);
-  if (cached) return cached;
+function getGitErrorMessage(error) {
+  const stderr = error?.stderr;
+  if (stderr) return String(stderr).trim();
+  return error instanceof Error ? error.message : String(error);
+}
 
-  let ignoredPaths = [];
+function listIgnoredPaths(repoRoot) {
+  let isInsideWorktree;
+  try {
+    isInsideWorktree = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (error) {
+    const message = getGitErrorMessage(error);
+    if (/not a git repository/i.test(message)) return [];
+    throw new Error(`Unable to inspect Git worktree for release inputs: ${message}`, {
+      cause: error,
+    });
+  }
+
+  if (isInsideWorktree !== 'true') return [];
+
   try {
     const output = execFileSync(
       'git',
@@ -147,36 +165,36 @@ function listIgnoredPaths(repoRoot) {
       {
         cwd: repoRoot,
         encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
+        stdio: ['ignore', 'pipe', 'pipe'],
       }
     );
-    ignoredPaths = output
+    return output
       .split('\0')
       .filter(Boolean)
       .map((path) => normalizeRelativePath(path.replace(/\/$/, '')));
-  } catch {
-    // Temporary fixture roots used by tests are not Git repositories.
+  } catch (error) {
+    const message = getGitErrorMessage(error);
+    throw new Error(`Unable to enumerate ignored release inputs: ${message}`, {
+      cause: error,
+    });
   }
-
-  ignoredPathsCache.set(repoRoot, ignoredPaths);
-  return ignoredPaths;
 }
 
-function isIgnoredPath(repoRoot, relativePath) {
+function isIgnoredPath(relativePath, ignoredPaths) {
   const normalizedPath = normalizeRelativePath(relativePath);
-  return listIgnoredPaths(repoRoot).some(
+  return ignoredPaths.some(
     (ignoredPath) => normalizedPath === ignoredPath || normalizedPath.startsWith(`${ignoredPath}/`)
   );
 }
 
-function walkFiles(repoRoot, treePath, excludes) {
+function walkFiles(repoRoot, treePath, excludes, ignoredPaths) {
   const absoluteRoot = join(repoRoot, treePath);
   const files = [];
 
   function visit(absolutePath) {
     const relativePath = normalizeRelativePath(relative(repoRoot, absolutePath));
     if (isExcluded(relativePath, excludes)) return;
-    if (isIgnoredPath(repoRoot, relativePath)) return;
+    if (isIgnoredPath(relativePath, ignoredPaths)) return;
 
     const stats = lstatSync(absolutePath);
     if (stats.isSymbolicLink()) {
@@ -220,6 +238,7 @@ function assertRequiredTree(repoRoot, relativePath) {
 export function listReleaseInputFiles({ repoRoot = projectRoot, component }) {
   const resolvedRoot = resolve(repoRoot);
   const definition = getDefinition(component);
+  const ignoredPaths = listIgnoredPaths(resolvedRoot);
   const files = new Set();
 
   for (const relativePath of definition.files) {
@@ -229,7 +248,7 @@ export function listReleaseInputFiles({ repoRoot = projectRoot, component }) {
 
   for (const relativePath of definition.trees) {
     const normalizedPath = assertRequiredTree(resolvedRoot, relativePath);
-    for (const file of walkFiles(resolvedRoot, normalizedPath, definition.excludes)) {
+    for (const file of walkFiles(resolvedRoot, normalizedPath, definition.excludes, ignoredPaths)) {
       files.add(file);
     }
   }
