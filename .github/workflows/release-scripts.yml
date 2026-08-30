@@ -7,6 +7,10 @@ on:
       - 'VERSION'
       - 'package.json'
       - 'package-lock.json'
+      - 'patches/**'
+      - 'tsconfig.base.json'
+      - 'turbo.json'
+      - '.github/actions/**'
       - 'api/**'
       - 'linux/**'
       - 'runtime/**'
@@ -373,13 +377,94 @@ jobs:
           echo "  ✓ ${LIN_PKG}.sha256: $(cat ${LIN_PKG}.sha256)"
 
       - name: Create and push tag
-        continue-on-error: true
+        env:
+          TAG: ${{ steps.vars.outputs.tag }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
-          echo "🏷️  Creating tag: ${{ steps.vars.outputs.tag }}"
-          git tag "${{ steps.vars.outputs.tag }}"
-          git push origin "${{ steps.vars.outputs.tag }}" || echo "Tag already exists or push failed, continuing..."
+          set -euo pipefail
+          echo "🏷️  Resolving immutable tag: $TAG -> $SOURCE_SHA"
+
+          set +e
+          git ls-remote --exit-code origin "refs/tags/${{ steps.vars.outputs.tag }}" >/dev/null 2>&1
+          tag_lookup_status=$?
+          set -e
+
+          if [ "$tag_lookup_status" -eq 0 ]; then
+            git fetch --no-tags --force origin "refs/tags/${{ steps.vars.outputs.tag }}:refs/tags/${{ steps.vars.outputs.tag }}"
+            existing_target="$(git rev-parse "$TAG^{commit}")"
+            if [ "$existing_target" != "$SOURCE_SHA" ]; then
+              echo "::error title=Immutable tag conflict::Tag $TAG has a different target ($existing_target); expected $SOURCE_SHA."
+              exit 1
+            fi
+            echo "Tag $TAG already points to $SOURCE_SHA; idempotent success."
+          elif [ "$tag_lookup_status" -eq 2 ]; then
+            git tag "$TAG" "$SOURCE_SHA"
+            git push origin "refs/tags/$TAG"
+            git fetch --no-tags --force origin "refs/tags/${{ steps.vars.outputs.tag }}:refs/tags/${{ steps.vars.outputs.tag }}"
+            remote_target="$(git rev-parse "$TAG^{commit}")"
+            if [ "$remote_target" != "$SOURCE_SHA" ]; then
+              echo "::error title=Immutable tag verification failed::Tag $TAG resolves to $remote_target after push; expected $SOURCE_SHA."
+              exit 1
+            fi
+            echo "Created and verified tag $TAG -> $SOURCE_SHA."
+          else
+            echo "::error title=Tag lookup failed::Could not resolve remote tag $TAG (git exit $tag_lookup_status)."
+            exit "$tag_lookup_status"
+          fi
+
+      - name: Verify existing GitHub Release assets before idempotent success
+        id: existing-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          VERSION: ${{ steps.vars.outputs.version }}
+        run: |
+          set -euo pipefail
+          release_json="$RUNNER_TEMP/openpath-existing-release.json"
+          response_status="$(curl --silent --show-error --location \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -o "$release_json" -w '%{http_code}' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
+
+          if [ "$response_status" = "200" ]; then
+            downloaded_root="$RUNNER_TEMP/openpath-existing-release-assets"
+            mkdir -p "$downloaded_root"
+            gh release download "$TAG" \
+              --pattern "openpath-linux-v${VERSION}.tar.gz" \
+              --pattern "openpath-linux-v${VERSION}.tar.gz.sha256" \
+              --pattern "windows-v${VERSION}.zip" \
+              --pattern "windows-v${VERSION}.zip.sha256" \
+              --pattern "OpenPath-Windows-Setup-Template.exe" \
+              --pattern "OpenPath-Windows-Setup-Template.exe.sha256" \
+              --pattern "payload-manifest.json" \
+              --dir "$downloaded_root"
+
+            node scripts/verify-openpath-release-assets.mjs verify-existing-release \
+              --release-json "$release_json" \
+              --expected-tag "$TAG" \
+              --local-root . \
+              --downloaded-root "$downloaded_root" \
+              --asset "openpath-linux-v${VERSION}.tar.gz=openpath-linux-v${VERSION}.tar.gz" \
+              --asset "openpath-linux-v${VERSION}.tar.gz.sha256=openpath-linux-v${VERSION}.tar.gz.sha256" \
+              --asset "windows-v${VERSION}.zip=windows-v${VERSION}.zip" \
+              --asset "windows-v${VERSION}.zip.sha256=windows-v${VERSION}.zip.sha256" \
+              --asset "OpenPath-Windows-Setup-Template.exe=windows-offline-template-assets/OpenPath-Windows-Setup-Template.exe" \
+              --asset "OpenPath-Windows-Setup-Template.exe.sha256=windows-offline-template-assets/OpenPath-Windows-Setup-Template.exe.sha256" \
+              --asset "payload-manifest.json=windows-offline-template-assets/payload-manifest.json"
+            echo "release_exists=true" >> "$GITHUB_OUTPUT"
+          elif [ "$response_status" = "404" ]; then
+            echo "No existing GitHub Release for $TAG; creation is required."
+            echo "release_exists=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error title=GitHub Release lookup failed::Expected HTTP 200 or 404 for $TAG, got $response_status."
+            cat "$release_json"
+            exit 1
+          fi
 
       - name: Create GitHub Release
+        if: steps.existing-release.outputs.release_exists != 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.vars.outputs.tag }}

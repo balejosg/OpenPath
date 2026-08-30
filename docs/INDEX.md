@@ -2,7 +2,7 @@
 
 > Status: maintained
 > Applies to: OpenPath repository
-> Last verified: 2026-04-13
+> Last verified: 2026-08-30
 > Source of truth: `docs/INDEX.md`
 
 ## Start Here
@@ -25,6 +25,7 @@
 - Environment variable registry: [`docs/ENVIRONMENT_VARIABLES.md`](ENVIRONMENT_VARIABLES.md)
 - Agent config parity (cross-platform key mapping): [`docs/agent-config-parity.md`](agent-config-parity.md)
 - Extension <-> native host message contract: [`docs/extension-native-host-contract.md`](extension-native-host-contract.md)
+- OpenPath Promotion Contract v2: [`docs/openpath-promotion-contract-v2.md`](openpath-promotion-contract-v2.md)
 - API package guide: [`api/README.md`](../api/README.md)
 - Shared package guide: [`shared/README.md`](../shared/README.md)
 - Dashboard package guide: [`dashboard/README.md`](../dashboard/README.md)

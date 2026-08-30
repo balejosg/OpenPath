@@ -1,0 +1,172 @@
+name: Publish OpenPath Promotion Contract v2
+
+on:
+  workflow_dispatch:
+    inputs:
+      openpath_sha:
+        description: 'Exact OpenPath commit to certify'
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      openpath_sha:
+        description: 'Exact OpenPath commit to certify'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: openpath-promotion-contract-v2
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Verify and publish exact-SHA promotion contract
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      OPENPATH_SHA: ${{ inputs.openpath_sha || github.sha }}
+      PREPARATION_PATH: ${{ runner.temp }}/openpath-promotion-preparation.json
+      EVIDENCE_ROOT: ${{ runner.temp }}/openpath-promotion-evidence
+
+    steps:
+      - name: Checkout exact OpenPath SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.openpath_sha || github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Checkout gh-pages contract source
+        uses: actions/checkout@v6
+        with:
+          ref: gh-pages
+          path: gh-pages
+          fetch-depth: 0
+
+      - name: Assert exact source SHA
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$OPENPATH_SHA" ]; then
+            echo "::error title=Exact SHA mismatch::Checked out $actual_sha, expected $OPENPATH_SHA."
+            exit 1
+          fi
+
+      - name: Require exact-SHA release quality gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/require-release-quality-gate.mjs \
+            --sha "$OPENPATH_SHA" \
+            --require "CI::CI Success" \
+            --require "E2E Tests::E2E Summary" \
+            --require "Installer Contracts::Installer Contracts Success" \
+            --timeout-minutes 90 \
+            --poll-seconds 30
+
+      - name: Calculate canonical component fingerprints and resolve first-parent contract
+        id: prepare
+        run: |
+          set -euo pipefail
+          # publish-openpath-promotion-contract.mjs loads the single canonical
+          # inventory from scripts/openpath-release-inputs.mjs.
+          node scripts/publish-openpath-promotion-contract.mjs prepare \
+            --repo-root . \
+            --pages-root gh-pages \
+            --openpath-sha "$OPENPATH_SHA" \
+            --output "$PREPARATION_PATH"
+
+          echo "changed_components=$(jq -c '.changedComponents' "$PREPARATION_PATH")" >> "$GITHUB_OUTPUT"
+          for component in linuxAgent windowsOfflineInstaller browserPolicy; do
+            echo "$component=$(jq -r --arg component "$component" '.fingerprints[$component]' "$PREPARATION_PATH")"
+          done
+          echo "linux_inputs_sha256=$(jq -r '.fingerprints.linuxAgent' "$PREPARATION_PATH")" >> "$GITHUB_OUTPUT"
+          echo "windows_inputs_sha256=$(jq -r '.fingerprints.windowsOfflineInstaller' "$PREPARATION_PATH")" >> "$GITHUB_OUTPUT"
+          echo "browser_inputs_sha256=$(jq -r '.fingerprints.browserPolicy' "$PREPARATION_PATH")" >> "$GITHUB_OUTPUT"
+          for component in linuxAgent windowsOfflineInstaller browserPolicy; do
+            if jq -e --arg component "$component" '.changedComponents | index($component) != null' "$PREPARATION_PATH" >/dev/null; then
+              echo "${component}_changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "${component}_changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
+      - name: Verify changed Linux artifact physically
+        if: steps.prepare.outputs.linuxAgent_changed == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT"
+          node scripts/publish-openpath-promotion-contract.mjs verify-linux-apt \
+            --repo-root . \
+            --apt-root gh-pages/apt \
+            --v1-contract "gh-pages/promotion-contracts/${OPENPATH_SHA}.json" \
+            --source-sha "$OPENPATH_SHA" \
+            --inputs-sha256 "${{ steps.prepare.outputs.linux_inputs_sha256 }}" \
+            --output "$EVIDENCE_ROOT/linuxAgent.json"
+
+      - name: Verify changed Windows artifact physically
+        if: steps.prepare.outputs.windowsOfflineInstaller_changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d '\r\n' < VERSION)"
+          short_sha="$(git rev-parse --short "$OPENPATH_SHA")"
+          release_tag="scripts-v${version}-${short_sha}"
+          release_metadata="$EVIDENCE_ROOT/windows-release.json"
+          release_assets="$EVIDENCE_ROOT/windows-assets"
+          mkdir -p "$release_assets"
+
+          git fetch --no-tags origin "refs/tags/${release_tag}:refs/tags/${release_tag}"
+          tag_target_sha="$(git rev-parse "${release_tag}^{commit}")"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag" > "$release_metadata"
+          gh release download "$release_tag" \
+            --pattern "OpenPath-Windows-Setup-Template.exe" \
+            --pattern "OpenPath-Windows-Setup-Template.exe.sha256" \
+            --pattern "payload-manifest.json" \
+            --dir "$release_assets"
+
+          node scripts/publish-openpath-promotion-contract.mjs verify-windows-release \
+            --release-metadata "$release_metadata" \
+            --assets-root "$release_assets" \
+            --source-sha "$OPENPATH_SHA" \
+            --inputs-sha256 "${{ steps.prepare.outputs.windows_inputs_sha256 }}" \
+            --version "$version" \
+            --release-tag "$release_tag" \
+            --tag-target-sha "$tag_target_sha" \
+            --output "$EVIDENCE_ROOT/windowsOfflineInstaller.json"
+
+      - name: Build and immutably publish verified v2 contract
+        run: |
+          set -euo pipefail
+          publish_args=(
+            publish-v2
+            --repo-root .
+            --pages-root gh-pages
+            --preparation "$PREPARATION_PATH"
+          )
+          if [ -f "$EVIDENCE_ROOT/linuxAgent.json" ]; then
+            publish_args+=(--linux-evidence "$EVIDENCE_ROOT/linuxAgent.json")
+          fi
+          if [ -f "$EVIDENCE_ROOT/windowsOfflineInstaller.json" ]; then
+            publish_args+=(--windows-evidence "$EVIDENCE_ROOT/windowsOfflineInstaller.json")
+          fi
+          node scripts/publish-openpath-promotion-contract.mjs "${publish_args[@]}"
+
+          contract_path="promotion-contracts/v2/${OPENPATH_SHA}.json"
+          git -C gh-pages config user.name "github-actions[bot]"
+          git -C gh-pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C gh-pages add "$contract_path"
+          if git -C gh-pages diff --cached --quiet; then
+            echo "v2 contract already has identical immutable bytes."
+          else
+            git -C gh-pages commit -m "chore(promotion): publish v2 contract (${OPENPATH_SHA})"
+            git -C gh-pages push origin HEAD:gh-pages
+          fi

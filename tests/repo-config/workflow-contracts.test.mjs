@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, test } from 'node:test';
+import { RELEASE_INPUT_DEFINITIONS } from '../../scripts/openpath-release-inputs.mjs';
 import { extractWorkflowJobBlock, projectRoot, readText } from './support.mjs';
 
 const WINDOWS_OFFLINE_INSTALLER_PATH_PATTERN =
@@ -2139,5 +2140,122 @@ test('release scripts workflow publishes template assets while retaining the Win
     'windows-v${{ steps.vars.outputs.version }}.zip',
   ]) {
     assert.ok(assets.includes(asset), `release assets should include ${asset}`);
+  }
+});
+
+test('release-scripts tag publication is immutable and fail-closed', () => {
+  const releaseWorkflow = readText('.github/workflows/release-scripts.yml');
+  const tagStart = releaseWorkflow.indexOf('      - name: Create and push tag');
+  const releaseStart = releaseWorkflow.indexOf('      - name: Create GitHub Release', tagStart);
+  assert.notEqual(tagStart, -1, 'release-scripts.yml should define the tag publication step');
+  assert.notEqual(releaseStart, -1, 'release-scripts.yml should define the GitHub Release step');
+
+  const tagBlock = releaseWorkflow.slice(tagStart, releaseStart);
+  assert.doesNotMatch(tagBlock, /continue-on-error:\s*true/);
+  assert.doesNotMatch(tagBlock, /\|\|\s*echo/);
+  for (const required of [
+    'git rev-parse',
+    'refs/tags/${{ steps.vars.outputs.tag }}',
+    'git push origin',
+    'different target',
+  ]) {
+    assert.ok(tagBlock.includes(required), `tag publication should include ${required}`);
+  }
+});
+
+test('release-scripts verifies existing GitHub Release assets before idempotent success', () => {
+  const releaseWorkflow = readText('.github/workflows/release-scripts.yml');
+
+  for (const required of [
+    'api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG',
+    'gh release download',
+    'scripts/verify-openpath-release-assets.mjs verify-existing-release',
+    'release_exists',
+    "if: steps.existing-release.outputs.release_exists != 'true'",
+  ]) {
+    assert.ok(
+      releaseWorkflow.includes(required),
+      `release-scripts.yml should include ${required} for existing release verification`
+    );
+  }
+});
+
+test('promotion contract workflow uses canonical fingerprints and only publishes physically verified exact-SHA artifacts', () => {
+  const workflow = readText('.github/workflows/publish-promotion-contract.yml');
+
+  for (const required of [
+    'workflow_dispatch:',
+    'workflow_call:',
+    'scripts/require-release-quality-gate.mjs',
+    '--sha "$OPENPATH_SHA"',
+    '--require "CI::CI Success"',
+    '--require "E2E Tests::E2E Summary"',
+    '--require "Installer Contracts::Installer Contracts Success"',
+    'scripts/publish-openpath-promotion-contract.mjs prepare',
+    'scripts/publish-openpath-promotion-contract.mjs verify-linux-apt',
+    'scripts/publish-openpath-promotion-contract.mjs verify-windows-release',
+    'scripts/publish-openpath-promotion-contract.mjs',
+    'publish-v2',
+    'promotion-contracts/v2/',
+    'actions/checkout@v6',
+    'fetch-depth: 0',
+    'openpath-release-inputs.mjs',
+    'changed_components',
+    'physical',
+  ]) {
+    assert.ok(workflow.includes(required), `promotion workflow should include ${required}`);
+  }
+
+  for (const forbidden of [
+    'latest.json',
+    'current.json',
+    'main.json',
+    'makensis',
+    'dpkg-deb --build',
+    'tar -czf',
+    'continue-on-error: true',
+  ]) {
+    assert.ok(!workflow.includes(forbidden), `promotion workflow must not include ${forbidden}`);
+  }
+
+  assert.ok(
+    workflow.indexOf('verify-linux-apt') < workflow.indexOf('publish-v2'),
+    'Linux physical verification must precede contract publication'
+  );
+  assert.ok(
+    workflow.indexOf('verify-windows-release') < workflow.indexOf('publish-v2'),
+    'Windows physical verification must precede contract publication'
+  );
+});
+
+test('canonical release input definitions are referenced by the promotion workflow and cover producer roots', () => {
+  const workflow = readText('.github/workflows/publish-promotion-contract.yml');
+  const releaseWorkflow = readText('.github/workflows/release-scripts.yml');
+
+  assert.ok(
+    workflow.includes('scripts/openpath-release-inputs.mjs'),
+    'promotion workflow should use the canonical release-input module'
+  );
+  for (const component of Object.keys(RELEASE_INPUT_DEFINITIONS)) {
+    assert.ok(workflow.includes(component), `promotion workflow should name ${component}`);
+  }
+  for (const pathPattern of [
+    'VERSION',
+    'package.json',
+    'package-lock.json',
+    'patches/**',
+    'tsconfig.base.json',
+    'turbo.json',
+    '.github/actions/**',
+    'linux/**',
+    'windows/**',
+    'runtime/**',
+    'firefox-extension/**',
+    '.github/workflows/release-scripts.yml',
+  ]) {
+    assert.ok(
+      releaseWorkflow.includes(`- '${pathPattern}'`),
+      `release-scripts.yml should remain triggered by canonical producer root ${pathPattern}`
+    );
   }
 });
