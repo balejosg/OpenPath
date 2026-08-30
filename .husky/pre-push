@@ -16,9 +16,10 @@ bash scripts/require-main-branch.sh pre-push OpenPath
 # Git exports repository-local variables to hooks. Clear them before launching
 # nested verification processes so scratch repositories and git helpers resolve
 # their own worktrees instead of mutating this checkout's metadata.
-while IFS= read -r git_env_name; do
+git_hook_environment_names="$(git rev-parse --local-env-vars)"
+for git_env_name in $git_hook_environment_names; do
   unset "$git_env_name"
-done < <(git rev-parse --local-env-vars)
+done
 
 if [ "$ref_count" -eq 1 ]; then
   # Exactly one pushed ref: hand the range to verify-full.sh so it can path-scope the e2e
