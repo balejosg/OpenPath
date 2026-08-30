@@ -2228,6 +2228,32 @@ test('promotion contract workflow uses canonical fingerprints and only publishes
   );
 });
 
+test('promotion workflow keeps runner paths in step-level environments', () => {
+  const workflow = readText('.github/workflows/publish-promotion-contract.yml');
+  const jobs = workflow.slice(workflow.indexOf('jobs:\n') + 'jobs:\n'.length);
+  const publishJob = jobs.match(/^ {2}publish:\n[\s\S]*$/m)?.[0];
+  assert.ok(publishJob, 'workflow should define a publish job block');
+  const jobEnvStart = publishJob.indexOf('\n    env:\n');
+  const stepsStart = publishJob.indexOf('\n    steps:\n');
+
+  assert.ok(jobEnvStart >= 0 && stepsStart > jobEnvStart, 'publish job should define an env block');
+  assert.doesNotMatch(
+    publishJob.slice(jobEnvStart, stepsStart),
+    /runner\.temp/,
+    'runner context is unavailable in jobs.<job_id>.env'
+  );
+  assert.match(
+    workflow,
+    /- name: Calculate canonical component fingerprints[\s\S]*?\n {8}env:\n {10}PREPARATION_PATH: \$\{\{ runner\.temp \}\}/,
+    'preparation path should use runner.temp in step scope'
+  );
+  assert.match(
+    workflow,
+    /- name: Verify changed Linux artifact physically[\s\S]*?\n {8}env:\n {10}EVIDENCE_ROOT: \$\{\{ runner\.temp \}\}/,
+    'evidence path should use runner.temp in step scope'
+  );
+});
+
 test('canonical release input definitions are referenced by the promotion workflow and cover producer roots', () => {
   const workflow = readText('.github/workflows/publish-promotion-contract.yml');
   const releaseWorkflow = readText('.github/workflows/release-scripts.yml');

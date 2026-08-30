@@ -31,8 +31,6 @@ jobs:
       actions: read
     env:
       OPENPATH_SHA: ${{ inputs.openpath_sha || github.sha }}
-      PREPARATION_PATH: ${{ runner.temp }}/openpath-promotion-preparation.json
-      EVIDENCE_ROOT: ${{ runner.temp }}/openpath-promotion-evidence
 
     steps:
       - name: Checkout exact OpenPath SHA
@@ -73,6 +71,8 @@ jobs:
 
       - name: Calculate canonical component fingerprints and resolve first-parent contract
         id: prepare
+        env:
+          PREPARATION_PATH: ${{ runner.temp }}/openpath-promotion-preparation.json
         run: |
           set -euo pipefail
           # publish-openpath-promotion-contract.mjs loads the single canonical
@@ -100,6 +100,8 @@ jobs:
 
       - name: Verify changed Linux artifact physically
         if: steps.prepare.outputs.linuxAgent_changed == 'true'
+        env:
+          EVIDENCE_ROOT: ${{ runner.temp }}/openpath-promotion-evidence
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE_ROOT"
@@ -115,6 +117,7 @@ jobs:
         if: steps.prepare.outputs.windowsOfflineInstaller_changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          EVIDENCE_ROOT: ${{ runner.temp }}/openpath-promotion-evidence
         run: |
           set -euo pipefail
           version="$(tr -d '\r\n' < VERSION)"
@@ -144,6 +147,9 @@ jobs:
             --output "$EVIDENCE_ROOT/windowsOfflineInstaller.json"
 
       - name: Build and immutably publish verified v2 contract
+        env:
+          PREPARATION_PATH: ${{ runner.temp }}/openpath-promotion-preparation.json
+          EVIDENCE_ROOT: ${{ runner.temp }}/openpath-promotion-evidence
         run: |
           set -euo pipefail
           publish_args=(
