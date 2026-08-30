@@ -19,15 +19,22 @@ import { hashFileSha256 } from '../lib/windows-offline-installer.js';
 import { resolveWindowsOfflineInstallerArtifactsDir } from '../lib/windows-offline-installer-config.js';
 import { logger } from '../lib/logger.js';
 
+type WindowsOfflineInstallerIntervalHandle = ReturnType<typeof setInterval>;
+type WindowsOfflineInstallerSetInterval = (
+  callback: () => void,
+  delay: number
+) => WindowsOfflineInstallerIntervalHandle;
+type WindowsOfflineInstallerClearInterval = (handle: WindowsOfflineInstallerIntervalHandle) => void;
+
 export interface WindowsOfflineInstallerRouteDeps {
   refs: Pick<
     WindowsOfflineDownloadRefsService,
     'consumeAttempt' | 'releaseAttempt' | 'markConsumed'
   > &
     Partial<Pick<WindowsOfflineDownloadRefsService, 'renewAttempt' | 'transferLeaseMs'>>;
-  clearIntervalImpl?: typeof clearInterval;
+  clearIntervalImpl?: WindowsOfflineInstallerClearInterval;
   resolveArtifactPath: (artifactStorageFileName: string) => string;
-  setIntervalImpl?: typeof setInterval;
+  setIntervalImpl?: WindowsOfflineInstallerSetInterval;
 }
 
 const STATUS_BY_CODE: Record<DownloadReferenceError['code'], number> = {

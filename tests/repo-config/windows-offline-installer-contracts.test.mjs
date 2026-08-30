@@ -676,7 +676,7 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
   );
   assert.match(
     lane,
-    /\$script:CanaryFailureCode\s*=\s*\$safeCanaryCode[\s\S]*throw \'canary-failed\'/,
+    /\$script:CanaryFailureCode\s*=\s*\$safeCanaryCode[\s\S]*throw 'canary-failed'/,
     'the outer PowerShell catch must preserve the child canary code without raw diagnostics'
   );
   assert.match(

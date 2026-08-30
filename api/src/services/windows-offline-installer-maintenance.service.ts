@@ -19,6 +19,9 @@ interface MaintenanceLogger {
 type ShutdownTimeoutHandle = ReturnType<typeof setTimeout>;
 type SetTimeoutImpl = (callback: () => void, delay: number) => ShutdownTimeoutHandle;
 type ClearTimeoutImpl = (timeout: ShutdownTimeoutHandle) => void;
+type MaintenanceIntervalHandle = ReturnType<typeof setInterval>;
+type SetIntervalImpl = (callback: () => void, delay: number) => MaintenanceIntervalHandle;
+type ClearIntervalImpl = (interval: MaintenanceIntervalHandle) => void;
 
 export interface WindowsOfflineInstallerMaintenance {
   runStartupCleanup: () => Promise<void>;
@@ -28,13 +31,13 @@ export interface WindowsOfflineInstallerMaintenance {
 
 export interface WindowsOfflineInstallerMaintenanceDeps {
   cleanupExpired?: (artifactsDir: string, options?: CleanupExpiredOptions) => Promise<number>;
-  clearIntervalImpl?: typeof clearInterval;
+  clearIntervalImpl?: ClearIntervalImpl;
   env?: Readonly<Record<string, string | undefined>>;
   intervalMs?: number;
   loggerInstance?: MaintenanceLogger;
   refs?: Pick<WindowsOfflineDownloadRefsService, 'cleanupExpired'>;
   setTimeoutImpl?: SetTimeoutImpl;
-  setIntervalImpl?: typeof setInterval;
+  setIntervalImpl?: SetIntervalImpl;
   clearTimeoutImpl?: ClearTimeoutImpl;
   shutdownTimeoutMs?: number;
 }
