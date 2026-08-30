@@ -399,7 +399,7 @@ jobs:
             echo "Tag $TAG already points to $SOURCE_SHA; idempotent success."
           elif [ "$tag_lookup_status" -eq 2 ]; then
             git tag "$TAG" "$SOURCE_SHA"
-            git push origin "refs/tags/$TAG"
+            git -c core.hooksPath=/dev/null push origin "refs/tags/$TAG"
             git fetch --no-tags --force origin "refs/tags/${{ steps.vars.outputs.tag }}:refs/tags/${{ steps.vars.outputs.tag }}"
             remote_target="$(git rev-parse "$TAG^{commit}")"
             if [ "$remote_target" != "$SOURCE_SHA" ]; then

@@ -2156,11 +2156,24 @@ test('release-scripts tag publication is immutable and fail-closed', () => {
   for (const required of [
     'git rev-parse',
     'refs/tags/${{ steps.vars.outputs.tag }}',
-    'git push origin',
+    'push origin',
     'different target',
   ]) {
     assert.ok(tagBlock.includes(required), `tag publication should include ${required}`);
   }
+});
+
+test('release-scripts tag push bypasses local hooks only in automation', () => {
+  const releaseWorkflow = readText('.github/workflows/release-scripts.yml');
+  const tagStart = releaseWorkflow.indexOf('      - name: Create and push tag');
+  const releaseStart = releaseWorkflow.indexOf('      - name: Create GitHub Release', tagStart);
+  const tagBlock = releaseWorkflow.slice(tagStart, releaseStart);
+
+  assert.match(
+    tagBlock,
+    /git -c core\.hooksPath=\/dev\/null push origin "refs\/tags\/\$TAG"/,
+    'automation tag pushes should not recursively invoke the repository pre-push hook'
+  );
 });
 
 test('release-scripts verifies existing GitHub Release assets before idempotent success', () => {
