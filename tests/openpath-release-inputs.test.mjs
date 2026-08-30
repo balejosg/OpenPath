@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, test } from 'node:test';
@@ -81,6 +82,22 @@ describe('canonical OpenPath release input fingerprints', () => {
       () => computeReleaseInputFingerprint({ repoRoot, component: 'browserPolicy' }),
       /missing canonical release input/i
     );
+  });
+
+  test('ignored local files do not enter a release fingerprint inventory', () => {
+    const repoRoot = createFixture('windowsOfflineInstaller');
+    execFileSync('git', ['init', '--quiet'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, '.git', 'info', 'exclude'), '**/CLAUDE.md\n**/*.log\n');
+    writeFileSync(join(repoRoot, 'windows', 'local.log'), 'local diagnostic\n');
+    symlinkSync('AGENTS.md', join(repoRoot, 'windows', 'CLAUDE.md'));
+
+    const files = listReleaseInputFiles({
+      repoRoot,
+      component: 'windowsOfflineInstaller',
+    });
+
+    assert.ok(!files.includes('windows/local.log'));
+    assert.ok(!files.includes('windows/CLAUDE.md'));
   });
 
   test('inventories include source, build, manifest, packaging, and orchestration inputs', () => {

@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDir, '..');
+const ignoredPathsCache = new Map();
 
 export const RELEASE_INPUT_FINGERPRINT_SCHEMA_VERSION = 1;
 
@@ -133,6 +135,40 @@ function isExcluded(relativePath, excludes) {
   );
 }
 
+function listIgnoredPaths(repoRoot) {
+  const cached = ignoredPathsCache.get(repoRoot);
+  if (cached) return cached;
+
+  let ignoredPaths = [];
+  try {
+    const output = execFileSync(
+      'git',
+      ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }
+    );
+    ignoredPaths = output
+      .split('\0')
+      .filter(Boolean)
+      .map((path) => normalizeRelativePath(path.replace(/\/$/, '')));
+  } catch {
+    // Temporary fixture roots used by tests are not Git repositories.
+  }
+
+  ignoredPathsCache.set(repoRoot, ignoredPaths);
+  return ignoredPaths;
+}
+
+function isIgnoredPath(repoRoot, relativePath) {
+  const normalizedPath = normalizeRelativePath(relativePath);
+  return listIgnoredPaths(repoRoot).some(
+    (ignoredPath) => normalizedPath === ignoredPath || normalizedPath.startsWith(`${ignoredPath}/`)
+  );
+}
+
 function walkFiles(repoRoot, treePath, excludes) {
   const absoluteRoot = join(repoRoot, treePath);
   const files = [];
@@ -140,6 +176,7 @@ function walkFiles(repoRoot, treePath, excludes) {
   function visit(absolutePath) {
     const relativePath = normalizeRelativePath(relative(repoRoot, absolutePath));
     if (isExcluded(relativePath, excludes)) return;
+    if (isIgnoredPath(repoRoot, relativePath)) return;
 
     const stats = lstatSync(absolutePath);
     if (stats.isSymbolicLink()) {
