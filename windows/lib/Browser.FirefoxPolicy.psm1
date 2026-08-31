@@ -511,6 +511,22 @@ function Test-OpenPathFirefoxReleaseDisplayName {
     return $DisplayName -notmatch '(?i)(?:^|[\s(])(?:ESR|Developer(?:\s+Edition)?|Nightly|Beta|Aurora|Portable|Tor)(?:$|[\s)])'
 }
 
+function Open-OpenPathFirefoxReleaseRegistryBaseKey {
+    <#
+    .SYNOPSIS
+    Opens an HKLM registry view without inheriting the PowerShell process bitness.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [Microsoft.Win32.RegistryView]$RegistryView
+    )
+
+    return [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        [Microsoft.Win32.RegistryHive]::LocalMachine,
+        $RegistryView
+    )
+}
+
 function Get-OpenPathFirefoxReleaseRegistryCandidates {
     <#
     .SYNOPSIS
@@ -539,10 +555,7 @@ function Get-OpenPathFirefoxReleaseRegistryCandidates {
         $uninstallRoot = $null
 
         try {
-            $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
-                [Microsoft.Win32.RegistryHive]::LocalMachine,
-                $registryView.View
-            )
+            $baseKey = Open-OpenPathFirefoxReleaseRegistryBaseKey -RegistryView $registryView.View
 
             try {
                 $appPathsKey = $baseKey.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe')

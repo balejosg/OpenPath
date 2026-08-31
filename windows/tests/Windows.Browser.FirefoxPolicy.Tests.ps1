@@ -148,6 +148,94 @@ Describe "Browser Module - Firefox Policy" {
             @($discovery.RejectedCandidates | Where-Object { $_.Path -eq $unverifiedPath }).Reason | Should -Be 'registered App Paths entry lacks Firefox Release identity'
         }
 
+        It "Reads the explicit Registry64 and Registry32 views in order" {
+            $newFakeRegistryKey = {
+                param(
+                    [hashtable]$Values = @{},
+                    [hashtable]$SubKeys = @{}
+                )
+
+                $fakeKey = [PSCustomObject]@{
+                    Values = $Values
+                    SubKeys = $SubKeys
+                }
+                Add-Member -InputObject $fakeKey -MemberType ScriptMethod -Name GetValue -Value {
+                    param([string]$Name)
+                    if ($this.Values.ContainsKey($Name)) {
+                        return $this.Values[$Name]
+                    }
+
+                    return $null
+                }
+                Add-Member -InputObject $fakeKey -MemberType ScriptMethod -Name GetSubKeyNames -Value {
+                    return @($this.SubKeys.Keys)
+                }
+                Add-Member -InputObject $fakeKey -MemberType ScriptMethod -Name OpenSubKey -Value {
+                    param([string]$Name)
+                    if ($this.SubKeys.ContainsKey($Name)) {
+                        return $this.SubKeys[$Name]
+                    }
+
+                    return $null
+                }
+                Add-Member -InputObject $fakeKey -MemberType ScriptMethod -Name Close -Value {}
+                return $fakeKey
+            }
+
+            $appPaths64 = & $newFakeRegistryKey -Values @{
+                '' = 'D:\Firefox 64\firefox.exe'
+            }
+            $release64 = & $newFakeRegistryKey -Values @{
+                DisplayName = 'Mozilla Firefox'
+                InstallLocation = 'D:\Firefox 64'
+                DisplayIcon = 'D:\Firefox 64\firefox.exe,0'
+            }
+            $uninstall64 = & $newFakeRegistryKey -SubKeys @{
+                'Mozilla Firefox' = $release64
+            }
+            $base64 = & $newFakeRegistryKey -SubKeys @{
+                'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe' = $appPaths64
+                'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' = $uninstall64
+            }
+
+            $appPaths32 = & $newFakeRegistryKey -Values @{
+                '' = 'D:\Firefox 32\firefox.exe'
+            }
+            $release32 = & $newFakeRegistryKey -Values @{
+                DisplayName = 'Mozilla Firefox'
+                InstallLocation = 'D:\Firefox 32'
+                DisplayIcon = 'D:\Firefox 32\firefox.exe,0'
+            }
+            $uninstall32 = & $newFakeRegistryKey -SubKeys @{
+                'Mozilla Firefox' = $release32
+            }
+            $base32 = & $newFakeRegistryKey -SubKeys @{
+                'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe' = $appPaths32
+                'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' = $uninstall32
+            }
+
+            $fakeBases = @{
+                Registry64 = $base64
+                Registry32 = $base32
+            }
+            $script:seenFirefoxRegistryViews = @()
+
+            Mock Open-OpenPathFirefoxReleaseRegistryBaseKey {
+                param([Microsoft.Win32.RegistryView]$RegistryView)
+                $script:seenFirefoxRegistryViews += [string]$RegistryView
+                return $fakeBases[[string]$RegistryView]
+            } -ModuleName Browser.FirefoxPolicy
+
+            $candidates = InModuleScope Browser.FirefoxPolicy {
+                Get-OpenPathFirefoxReleaseRegistryCandidates
+            }
+
+            ($script:seenFirefoxRegistryViews -join ',') | Should -Be 'Registry64,Registry32'
+            $candidates[0].Source | Should -Be 'Registry64 App Paths'
+            @($candidates | Where-Object { $_.Source -like 'Registry32*' }).Count | Should -BeGreaterThan 0
+            @($candidates | Where-Object { $_.ReleaseIdentity }).Count | Should -Be 4
+        }
+
         It "Converts a registered Firefox DisplayIcon value into an executable path" {
             $resolved = InModuleScope Browser.FirefoxPolicy {
                 ConvertTo-OpenPathFirefoxReleaseExecutablePath -Value '"D:\Applications\Firefox\firefox.exe",0'
