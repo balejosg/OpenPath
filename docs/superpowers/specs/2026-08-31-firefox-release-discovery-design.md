@@ -38,16 +38,22 @@ Candidates are evaluated in this order:
 Registry access uses `Microsoft.Win32.RegistryKey.OpenBaseKey` with
 `Registry64` and `Registry32`, so lookup does not depend on the bitness of the
 PowerShell host. Normal Mozilla Firefox uninstall locations provide registered
-custom-installation candidates. App Paths is used as corroborating machine
-evidence only when its path matches that Release registration or the canonical
-`Mozilla Firefox` installation directory; an uncorroborated App Paths
-`firefox.exe` is rejected. All candidates are deduplicated case-insensitively
-before validation.
+custom-installation candidates. Because Release and Beta share the normal
+`Mozilla Firefox` branding, an uninstall entry is strong Release evidence only
+when it also has the official Release/ESR `URLUpdateInfo` registration (ESR is
+excluded by its explicit display-name suffix). Candidates without that strong
+registration, including App Paths, must expose
+`defaults\\pref\\channel-prefs.js` with `app.update.channel` set to `release`.
+All candidates are deduplicated case-insensitively before validation.
 
 Validation requires a real `firefox.exe` leaf and rejects paths identifying Tor
-Browser, Firefox Portable, or a non-Release Firefox channel. Filesystem
-fallbacks are restricted to the known Mozilla Firefox installation directory
-shape; an arbitrary `firefox.exe` is never accepted merely because it exists.
+Browser or Firefox Portable. Non-Release channel path heuristics are limited
+to components that identify a Firefox product, so an unrelated ancestor such
+as `D:\\Developer` does not invalidate a registered custom installation;
+strong Release registration governs that case. Filesystem fallbacks are
+restricted to the known Mozilla Firefox installation directory shape and must
+also verify the Release channel; an arbitrary `firefox.exe` is never accepted
+merely because it exists.
 
 When no candidate passes, readiness returns `firefox-release-missing` with a
 message containing `Firefox Release executable could not be discovered` and
@@ -63,9 +69,11 @@ native Program Files). It will expose the x64 Firefox executable only through
 the `ProgramW6432` candidate.
 
 Additional focused tests will cover registry-view priority and custom
-registered locations, deduplication, Firefox x86 fallback, Tor/Portable
-rejection, deterministic absence, and the readiness message distinction from
-machine-policy and runtime-registration failures.
+registered locations, a custom location below an unrelated `Developer`
+ancestor, Release-shaped Beta branding with a `beta` channel marker, ESR at the
+canonical path with an `esr` channel marker, deduplication, Firefox x86
+fallback, Tor/Portable rejection, deterministic absence, and the readiness
+message distinction from machine-policy and runtime-registration failures.
 
 No staging, production deployment, release, tag, promotion, or push is part of
 this issue.

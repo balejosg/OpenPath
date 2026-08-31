@@ -94,16 +94,21 @@ Implement these private helpers in the module:
   `RegistryView.Registry64` and `RegistryView.Registry32`; inspect
   `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe` and
   Mozilla Firefox uninstall subkeys; emit candidate path/source records; catch
-  inaccessible or unavailable views without failing readiness. Require a normal
-  Firefox Release uninstall identity, and accept App Paths only when it is
-  corroborated by that identity or the canonical Mozilla Firefox path.
+  inaccessible or unavailable views without failing readiness. A normal
+  `Mozilla Firefox` display name is not sufficient for Release because Beta
+  shares the branding: mark uninstall data as strong Release identity only
+  when official `URLUpdateInfo` evidence is present, while ESR remains
+  excluded by its display name. Candidates without that identity must verify
+  the installation's `defaults\pref\channel-prefs.js` channel as `release`.
 - `ConvertTo-OpenPathFirefoxReleaseExecutablePath`: normalize quoted App Paths
   and `DisplayIcon` values, remove icon indexes, and append `firefox.exe` to a
   registered install directory.
 - `Test-OpenPathFirefoxReleaseCandidate`: require a filesystem leaf named
   `firefox.exe`, reject Tor/portable path variants and non-Release Firefox
-  channel segments, and verify the candidate with `Test-Path -LiteralPath` and
-  `-PathType Leaf`.
+  product-directory segments, avoid rejecting unrelated ancestors such as
+  `Developer` when registry identity is strong, and verify the candidate with
+  `Test-Path -LiteralPath` and `-PathType Leaf`; candidates without strong
+  registry identity must also have a `release` channel marker.
 - `Get-OpenPathFirefoxReleaseDiscovery`: concatenate registry candidates before
   the `ProgramW6432`, `ProgramFiles`, and `ProgramFiles(x86)` fallbacks,
   deduplicate case-insensitively, and return `Path`, `Source`,
@@ -162,12 +167,15 @@ records, make both filesystem candidates visible, and assert the Registry64
 candidate wins, duplicates are checked once, and a registered custom
 installation path is accepted when it is a normal Firefox Release path.
 
-- [ ] **Step 2: Add product exclusion and fallback tests**
+- [ ] **Step 2: Add product exclusion, channel, and fallback tests**
 
 Cover Firefox x86 through `ProgramFiles(x86)`, reject paths containing `Tor
-Browser` and `FirefoxPortable` even when `Test-Path` reports them present, and
-return an empty string with stable rejection diagnostics when no valid
-candidate exists.
+Browser` and `FirefoxPortable` even when `Test-Path` reports them present,
+reject Beta with generic `Mozilla Firefox (x64 en-US)` branding and a `beta`
+channel marker, reject ESR at the canonical `Mozilla Firefox` path with an
+`esr` channel marker, accept a registered Release below an unrelated
+`Developer` ancestor, and return an empty string with stable rejection
+diagnostics when no valid candidate exists.
 
 - [ ] **Step 3: Add readiness diagnostic assertions**
 

@@ -44,6 +44,7 @@ Describe "Browser Module - Firefox Policy" {
                     return $candidate -eq 'C:\Program Files\Mozilla Firefox\firefox.exe'
                 } -ModuleName Browser.FirefoxPolicy
                 Mock Get-OpenPathFirefoxReleaseRegistryCandidates { @() } -ModuleName Browser.FirefoxPolicy
+                Mock Get-OpenPathFirefoxReleaseInstallationChannel { 'release' } -ModuleName Browser.FirefoxPolicy
 
                 $resolved = InModuleScope Browser.FirefoxPolicy {
                     Resolve-OpenPathFirefoxReleaseExecutable
@@ -67,10 +68,12 @@ Describe "Browser Module - Firefox Policy" {
                     [PSCustomObject]@{
                         Path = $registry64Path
                         Source = 'Registry64 Uninstall/InstallLocation'
+                        ReleaseIdentity = $true
                     },
                     [PSCustomObject]@{
                         Path = $registry32Path
                         Source = 'Registry32 Uninstall/InstallLocation'
+                        ReleaseIdentity = $true
                     }
                 )
             } -ModuleName Browser.FirefoxPolicy
@@ -100,6 +103,35 @@ Describe "Browser Module - Firefox Policy" {
                 @([PSCustomObject]@{
                         Path = $customPath
                         Source = 'Registry64 Uninstall/InstallLocation'
+                        ReleaseIdentity = $true
+                    })
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Test-Path {
+                param(
+                    [string]$Path,
+                    [string]$LiteralPath
+                )
+
+                $candidate = if ($LiteralPath) { $LiteralPath } else { $Path }
+                return $candidate -eq $customPath
+            } -ModuleName Browser.FirefoxPolicy
+
+            $discovery = InModuleScope Browser.FirefoxPolicy {
+                Get-OpenPathFirefoxReleaseDiscovery
+            }
+
+            $discovery.Path | Should -Be $customPath
+            $discovery.Source | Should -Be 'Registry64 Uninstall/InstallLocation'
+        }
+
+        It "Allows a registered Firefox Release below an unrelated Developer directory" {
+            $customPath = 'D:\Developer\Applications\Firefox\firefox.exe'
+
+            Mock Get-OpenPathFirefoxReleaseRegistryCandidates {
+                @([PSCustomObject]@{
+                        Path = $customPath
+                        Source = 'Registry64 Uninstall/InstallLocation'
+                        ReleaseIdentity = $true
                     })
             } -ModuleName Browser.FirefoxPolicy
             Mock Test-Path {
@@ -145,7 +177,7 @@ Describe "Browser Module - Firefox Policy" {
             }
 
             $discovery.Path | Should -BeNullOrEmpty
-            @($discovery.RejectedCandidates | Where-Object { $_.Path -eq $unverifiedPath }).Reason | Should -Be 'registered App Paths entry lacks Firefox Release identity'
+            @($discovery.RejectedCandidates | Where-Object { $_.Path -eq $unverifiedPath }).Reason | Should -Be 'Firefox installation channel could not be verified as Release'
         }
 
         It "Reads the explicit Registry64 and Registry32 views in order" {
@@ -189,9 +221,22 @@ Describe "Browser Module - Firefox Policy" {
                 DisplayName = 'Mozilla Firefox'
                 InstallLocation = 'D:\Firefox 64'
                 DisplayIcon = 'D:\Firefox 64\firefox.exe,0'
+                URLUpdateInfo = 'https://www.firefox.com/firefox/1/releasenotes'
+            }
+            $beta64 = & $newFakeRegistryKey -Values @{
+                DisplayName = 'Mozilla Firefox (x64 en-US)'
+                InstallLocation = 'D:\Firefox Beta'
+                DisplayIcon = 'D:\Firefox Beta\firefox.exe,0'
+            }
+            $esr64 = & $newFakeRegistryKey -Values @{
+                DisplayName = 'Mozilla Firefox ESR (x64 en-US)'
+                InstallLocation = 'D:\Firefox ESR'
+                DisplayIcon = 'D:\Firefox ESR\firefox.exe,0'
             }
             $uninstall64 = & $newFakeRegistryKey -SubKeys @{
                 'Mozilla Firefox' = $release64
+                'Mozilla Firefox Beta' = $beta64
+                'Mozilla Firefox ESR' = $esr64
             }
             $base64 = & $newFakeRegistryKey -SubKeys @{
                 'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe' = $appPaths64
@@ -205,6 +250,7 @@ Describe "Browser Module - Firefox Policy" {
                 DisplayName = 'Mozilla Firefox'
                 InstallLocation = 'D:\Firefox 32'
                 DisplayIcon = 'D:\Firefox 32\firefox.exe,0'
+                URLUpdateInfo = 'https://www.firefox.com/firefox/1/releasenotes'
             }
             $uninstall32 = & $newFakeRegistryKey -SubKeys @{
                 'Mozilla Firefox' = $release32
@@ -234,6 +280,9 @@ Describe "Browser Module - Firefox Policy" {
             $candidates[0].Source | Should -Be 'Registry64 App Paths'
             @($candidates | Where-Object { $_.Source -like 'Registry32*' }).Count | Should -BeGreaterThan 0
             @($candidates | Where-Object { $_.ReleaseIdentity }).Count | Should -Be 4
+            @($candidates | Where-Object { $_.Path -eq 'D:\Firefox Beta\firefox.exe' }).Count | Should -Be 2
+            @($candidates | Where-Object { $_.Path -eq 'D:\Firefox Beta\firefox.exe' -and $_.ReleaseIdentity }).Count | Should -Be 0
+            @($candidates | Where-Object { $_.Path -eq 'D:\Firefox ESR\firefox.exe' }).Count | Should -Be 0
         }
 
         It "Converts a registered Firefox DisplayIcon value into an executable path" {
@@ -287,6 +336,7 @@ Describe "Browser Module - Firefox Policy" {
                 [Environment]::SetEnvironmentVariable('ProgramW6432', $null, 'Process')
 
                 Mock Get-OpenPathFirefoxReleaseRegistryCandidates { @() } -ModuleName Browser.FirefoxPolicy
+                Mock Get-OpenPathFirefoxReleaseInstallationChannel { 'release' } -ModuleName Browser.FirefoxPolicy
                 Mock Test-Path {
                     param(
                         [string]$Path,
@@ -385,6 +435,103 @@ Describe "Browser Module - Firefox Policy" {
             $discovery.Path | Should -BeNullOrEmpty
             foreach ($nonReleasePath in $nonReleasePaths) {
                 @($discovery.RejectedCandidates | Where-Object { $_.Path -eq $nonReleasePath }).Reason | Should -Be 'non-Release Firefox channel is not Firefox Release'
+            }
+        }
+
+        It "Rejects a Beta installation with Release-shaped branding and path" {
+            $betaPath = 'C:\Program Files\Mozilla Firefox\firefox.exe'
+            $channelPrefsPath = 'C:\Program Files\Mozilla Firefox\defaults\pref\channel-prefs.js'
+
+            Mock Get-OpenPathFirefoxReleaseRegistryCandidates {
+                @([PSCustomObject]@{
+                        Path = $betaPath
+                        Source = 'Registry64 Uninstall/InstallLocation'
+                        DisplayName = 'Mozilla Firefox (x64 en-US)'
+                        InstallLocation = 'C:\Program Files\Mozilla Firefox'
+                        ReleaseIdentity = $false
+                    })
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Test-Path {
+                param(
+                    [string]$Path,
+                    [string]$LiteralPath,
+                    [string]$PathType
+                )
+
+                $candidate = if ($LiteralPath) { $LiteralPath } else { $Path }
+                return $candidate -in @($betaPath, $channelPrefsPath)
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Get-Content {
+                param(
+                    [string]$LiteralPath,
+                    [switch]$Raw
+                )
+
+                if ($LiteralPath -eq $channelPrefsPath) {
+                    return 'pref("app.update.channel", "beta");'
+                }
+
+                throw "Unexpected path: $LiteralPath"
+            } -ModuleName Browser.FirefoxPolicy
+
+            $discovery = InModuleScope Browser.FirefoxPolicy {
+                Get-OpenPathFirefoxReleaseDiscovery
+            }
+
+            $discovery.Path | Should -BeNullOrEmpty
+            @($discovery.RejectedCandidates | Where-Object { $_.Path -eq $betaPath }).Reason | Should -Be 'Firefox installation channel beta is not Firefox Release'
+        }
+
+        It "Rejects ESR at the canonical Mozilla Firefox path even when the executable exists" {
+            $esrPath = 'C:\Program Files\Mozilla Firefox\firefox.exe'
+            $channelPrefsPath = 'C:\Program Files\Mozilla Firefox\defaults\pref\channel-prefs.js'
+            $environmentNames = @('ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432')
+            $previousEnvironment = @{}
+
+            foreach ($name in $environmentNames) {
+                $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+            }
+
+            try {
+                [Environment]::SetEnvironmentVariable('ProgramFiles', 'C:\Program Files', 'Process')
+                [Environment]::SetEnvironmentVariable('ProgramFiles(x86)', 'C:\Missing Program Files (x86)', 'Process')
+                [Environment]::SetEnvironmentVariable('ProgramW6432', $null, 'Process')
+
+                Mock Get-OpenPathFirefoxReleaseRegistryCandidates { @() } -ModuleName Browser.FirefoxPolicy
+                Mock Test-Path {
+                    param(
+                        [string]$Path,
+                        [string]$LiteralPath,
+                        [string]$PathType
+                    )
+
+                    $candidate = if ($LiteralPath) { $LiteralPath } else { $Path }
+                    return $candidate -in @($esrPath, $channelPrefsPath)
+                } -ModuleName Browser.FirefoxPolicy
+                Mock Get-Content {
+                    param(
+                        [string]$LiteralPath,
+                        [switch]$Raw
+                    )
+
+                    if ($LiteralPath -eq $channelPrefsPath) {
+                        return 'pref("app.update.channel", "esr");'
+                    }
+
+                    throw "Unexpected path: $LiteralPath"
+                } -ModuleName Browser.FirefoxPolicy
+
+                $discovery = InModuleScope Browser.FirefoxPolicy {
+                    Get-OpenPathFirefoxReleaseDiscovery
+                }
+
+                $discovery.Path | Should -BeNullOrEmpty
+                @($discovery.RejectedCandidates | Where-Object { $_.Path -eq $esrPath }).Reason | Should -Be 'Firefox installation channel esr is not Firefox Release'
+            }
+            finally {
+                foreach ($name in $environmentNames) {
+                    [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process')
+                }
             }
         }
 

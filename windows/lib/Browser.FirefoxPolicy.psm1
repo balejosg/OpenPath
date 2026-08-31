@@ -497,7 +497,11 @@ function ConvertTo-OpenPathFirefoxReleaseExecutablePath {
 function Test-OpenPathFirefoxReleaseDisplayName {
     <#
     .SYNOPSIS
-    Checks whether an uninstall display name identifies Firefox Release.
+    Checks whether an uninstall display name identifies a Mozilla Firefox product.
+
+    .DESCRIPTION
+    Release and Beta share the normal Mozilla Firefox branding. Channel identity
+    is therefore established separately from the display name.
     #>
     param(
         [AllowNull()]
@@ -508,7 +512,44 @@ function Test-OpenPathFirefoxReleaseDisplayName {
         return $false
     }
 
-    return $DisplayName -notmatch '(?i)(?:^|[\s(])(?:ESR|Developer(?:\s+Edition)?|Nightly|Beta|Aurora|Portable|Tor)(?:$|[\s)])'
+    return $DisplayName -notmatch '(?i)(?:^|[\s(])(?:ESR|Developer(?:\s+Edition)?|Nightly|Aurora|Portable|Tor)(?:$|[\s)])'
+}
+
+function Get-OpenPathFirefoxReleaseInstallationChannel {
+    <#
+    .SYNOPSIS
+    Reads the channel marker shipped with a Firefox installation.
+
+    .DESCRIPTION
+    Firefox writes the active update channel to defaults/pref/channel-prefs.js.
+    An empty result means that the channel could not be verified.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FirefoxPath
+    )
+
+    # Split Windows paths explicitly so discovery remains testable on the
+    # non-Windows PowerShell host used by the repository's local checks.
+    $installLocation = [regex]::Replace($FirefoxPath, '[\\/][^\\/]+$', '')
+    $channelPrefsPath = "$installLocation\defaults\pref\channel-prefs.js"
+
+    try {
+        if (-not (Test-Path -LiteralPath $channelPrefsPath -PathType Leaf)) {
+            return ''
+        }
+
+        foreach ($line in @(Get-Content -LiteralPath $channelPrefsPath -ErrorAction Stop)) {
+            if ([string]$line -match '^\s*pref\(\s*"app\.update\.channel"\s*,\s*"([^"]+)"\s*\)') {
+                return ([string]$Matches[1]).Trim().ToLowerInvariant()
+            }
+        }
+    }
+    catch {
+        return ''
+    }
+
+    return ''
 }
 
 function Open-OpenPathFirefoxReleaseRegistryBaseKey {
@@ -597,6 +638,7 @@ function Get-OpenPathFirefoxReleaseRegistryCandidates {
 
                             $installLocation = [string]$uninstallKey.GetValue('InstallLocation')
                             $displayIcon = $uninstallKey.GetValue('DisplayIcon')
+                            $urlUpdateInfo = [string]$uninstallKey.GetValue('URLUpdateInfo')
                             $registeredValues = @(
                                 [PSCustomObject]@{
                                     Value = $displayIcon
@@ -616,7 +658,9 @@ function Get-OpenPathFirefoxReleaseRegistryCandidates {
                                     $candidates += [PSCustomObject]@{
                                         Path = $candidatePath
                                         Source = "$($registryView.Name) Uninstall/$($registeredValue.Source)"
-                                        ReleaseIdentity = $true
+                                        # Official Release and ESR installers publish URLUpdateInfo;
+                                        # ESR is already excluded by its explicit display-name suffix.
+                                        ReleaseIdentity = [bool]$urlUpdateInfo
                                     }
                                 }
                             }
@@ -660,7 +704,9 @@ function Test-OpenPathFirefoxReleaseCandidate {
     #>
     param(
         [AllowNull()]
-        [string]$Path = ''
+        [string]$Path = '',
+
+        [switch]$RegisteredReleaseIdentity
     )
 
     if (-not $Path -or $Path -notmatch '(?i)(?:^|[\\/])firefox\.exe$') {
@@ -686,12 +732,15 @@ function Test-OpenPathFirefoxReleaseCandidate {
         }
     }
 
-    if (@($pathComponents | Where-Object {
-                $_ -match '(?i)(?:^|[\s._()\-])(?:ESR|Developer(?:[\s._-]*Edition)?|Nightly|Beta|Aurora)(?:$|[\s._()\-])'
-            }).Count -gt 0) {
-        return [PSCustomObject]@{
-            Valid = $false
-            Reason = 'non-Release Firefox channel is not Firefox Release'
+    if (-not $RegisteredReleaseIdentity) {
+        $firefoxProductComponents = @($pathComponents | Where-Object { $_ -match '(?i)firefox' })
+        if (@($firefoxProductComponents | Where-Object {
+                    $_ -match '(?i)(?:^|[\s._()\-])(?:ESR|Developer(?:[\s._-]*Edition)?|Nightly|Beta|Aurora)(?:$|[\s._()\-])'
+                }).Count -gt 0) {
+            return [PSCustomObject]@{
+                Valid = $false
+                Reason = 'non-Release Firefox channel is not Firefox Release'
+            }
         }
     }
 
@@ -699,6 +748,23 @@ function Test-OpenPathFirefoxReleaseCandidate {
         return [PSCustomObject]@{
             Valid = $false
             Reason = 'executable path is missing or not a file'
+        }
+    }
+
+    if (-not $RegisteredReleaseIdentity) {
+        $channel = Get-OpenPathFirefoxReleaseInstallationChannel -FirefoxPath $Path
+        if (-not $channel) {
+            return [PSCustomObject]@{
+                Valid = $false
+                Reason = 'Firefox installation channel could not be verified as Release'
+            }
+        }
+
+        if ($channel -ne 'release') {
+            return [PSCustomObject]@{
+                Valid = $false
+                Reason = "Firefox installation channel $channel is not Firefox Release"
+            }
         }
     }
 
@@ -731,9 +797,6 @@ function Get-OpenPathFirefoxReleaseDiscovery {
         $hasReleaseIdentity = (
             $candidate.PSObject.Properties['ReleaseIdentity'] -and
             [bool]$candidate.ReleaseIdentity
-        ) -or (
-            $candidate.PSObject.Properties['Source'] -and
-            ([string]$candidate.Source -match '(?i)Uninstall/')
         )
         if ($hasReleaseIdentity) {
             $releaseRegistryPathKeys[$candidatePath.Trim().ToLowerInvariant()] = $true
@@ -792,20 +855,15 @@ function Get-OpenPathFirefoxReleaseDiscovery {
         else {
             'Unknown'
         }
-        $validation = Test-OpenPathFirefoxReleaseCandidate -Path $candidatePath
-        if (
-            $validation.Valid -and
-            $candidateSource -match '(?i)App Paths' -and
-            -not (
-                $releaseRegistryPathKeys.ContainsKey($candidateKey) -or
-                $candidatePath -match '(?i)(?:^|[\\/])Mozilla Firefox[\\/]firefox\.exe$'
-            )
-        ) {
-            $validation = [PSCustomObject]@{
-                Valid = $false
-                Reason = 'registered App Paths entry lacks Firefox Release identity'
-            }
+        if ($releaseRegistryPathKeys.ContainsKey($candidateKey)) {
+            $hasReleaseIdentity = $true
         }
+
+        $validationParameters = @{ Path = $candidatePath }
+        if ($hasReleaseIdentity) {
+            $validationParameters.RegisteredReleaseIdentity = $true
+        }
+        $validation = Test-OpenPathFirefoxReleaseCandidate @validationParameters
 
         $checked = [PSCustomObject]@{
             Path = $candidatePath
