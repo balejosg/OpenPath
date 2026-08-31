@@ -194,6 +194,33 @@ Describe "Browser Module - Firefox Policy" {
             @($discovery.RejectedCandidates | Where-Object { $_.Path -eq $portablePath }).Reason | Should -Be 'portable Firefox is not Firefox Release'
         }
 
+        It "Rejects registered Firefox non-Release channels" {
+            $developerPath = 'C:\Program Files\Firefox Developer Edition\firefox.exe'
+
+            Mock Get-OpenPathFirefoxReleaseRegistryCandidates {
+                @([PSCustomObject]@{
+                        Path = $developerPath
+                        Source = 'Registry64 App Paths'
+                    })
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Test-Path {
+                param(
+                    [string]$Path,
+                    [string]$LiteralPath
+                )
+
+                $candidate = if ($LiteralPath) { $LiteralPath } else { $Path }
+                return $candidate -eq $developerPath
+            } -ModuleName Browser.FirefoxPolicy
+
+            $discovery = InModuleScope Browser.FirefoxPolicy {
+                Get-OpenPathFirefoxReleaseDiscovery
+            }
+
+            $discovery.Path | Should -BeNullOrEmpty
+            @($discovery.RejectedCandidates | Where-Object { $_.Path -eq $developerPath }).Reason | Should -Be 'non-Release Firefox channel is not Firefox Release'
+        }
+
         It "Deduplicates registered Firefox candidates before validation" {
             $duplicatePath = 'D:\Applications\Firefox\firefox.exe'
 

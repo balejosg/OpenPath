@@ -645,6 +645,13 @@ function Test-OpenPathFirefoxReleaseCandidate {
         }
     }
 
+    if ($Path -match '(?i)(?:^|[\\/])(?:Mozilla Firefox (?:ESR|Beta|Nightly)|Firefox (?:ESR|Developer Edition|Nightly|Beta|Aurora))(?:[\\/]|$)') {
+        return [PSCustomObject]@{
+            Valid = $false
+            Reason = 'non-Release Firefox channel is not Firefox Release'
+        }
+    }
+
     if ($Path -match '(?i)(?:^|[\\/])FirefoxPortable(?:[\\/]|$)' -or
         $Path -match '(?i)(?:^|[\\/])PortableApps(?:[\\/]|$)') {
         return [PSCustomObject]@{
