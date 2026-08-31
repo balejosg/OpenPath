@@ -94,17 +94,20 @@ Implement these private helpers in the module:
   `RegistryView.Registry64` and `RegistryView.Registry32`; inspect
   `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe` and
   Mozilla Firefox uninstall subkeys; emit candidate path/source records; catch
-  inaccessible or unavailable views without failing readiness.
+  inaccessible or unavailable views without failing readiness. Require a normal
+  Firefox Release uninstall identity, and accept App Paths only when it is
+  corroborated by that identity or the canonical Mozilla Firefox path.
 - `ConvertTo-OpenPathFirefoxReleaseExecutablePath`: normalize quoted App Paths
   and `DisplayIcon` values, remove icon indexes, and append `firefox.exe` to a
   registered install directory.
-- `Test-OpenPathFirefoxReleaseCandidate`: require a leaf named `firefox.exe`,
-  reject `Tor Browser` and `FirefoxPortable` path segments, and verify the
-  candidate with `Test-Path -LiteralPath`.
+- `Test-OpenPathFirefoxReleaseCandidate`: require a filesystem leaf named
+  `firefox.exe`, reject Tor/portable path variants and non-Release Firefox
+  channel segments, and verify the candidate with `Test-Path -LiteralPath` and
+  `-PathType Leaf`.
 - `Get-OpenPathFirefoxReleaseDiscovery`: concatenate registry candidates before
   the `ProgramW6432`, `ProgramFiles`, and `ProgramFiles(x86)` fallbacks,
-  deduplicate case-insensitively, and return `Path`, `Source`, `Checked`, and
-  `Rejected` fields.
+  deduplicate case-insensitively, and return `Path`, `Source`,
+  `CheckedCandidates`, and `RejectedCandidates` fields.
 
 Use the uninstall display-name identity for normal Mozilla Firefox only; do not
 accept ESR, Developer Edition, Nightly, Tor, or portable entries as Firefox

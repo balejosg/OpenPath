@@ -494,6 +494,23 @@ function ConvertTo-OpenPathFirefoxReleaseExecutablePath {
     return [string]$path
 }
 
+function Test-OpenPathFirefoxReleaseDisplayName {
+    <#
+    .SYNOPSIS
+    Checks whether an uninstall display name identifies Firefox Release.
+    #>
+    param(
+        [AllowNull()]
+        [string]$DisplayName = ''
+    )
+
+    if (-not $DisplayName -or $DisplayName -notmatch '(?i)^Mozilla Firefox(?:\s+\([^)]*\))?$') {
+        return $false
+    }
+
+    return $DisplayName -notmatch '(?i)(?:^|[\s(])(?:ESR|Developer(?:\s+Edition)?|Nightly|Beta|Aurora|Portable|Tor)(?:$|[\s)])'
+}
+
 function Get-OpenPathFirefoxReleaseRegistryCandidates {
     <#
     .SYNOPSIS
@@ -536,6 +553,7 @@ function Get-OpenPathFirefoxReleaseRegistryCandidates {
                             $candidates += [PSCustomObject]@{
                                 Path = $candidatePath
                                 Source = "$($registryView.Name) App Paths"
+                                ReleaseIdentity = $false
                             }
                         }
                     }
@@ -560,7 +578,7 @@ function Get-OpenPathFirefoxReleaseRegistryCandidates {
                             }
 
                             $displayName = [string]$uninstallKey.GetValue('DisplayName')
-                            if ($displayName -notmatch '(?i)^Mozilla Firefox(?:\s+\([^)]*\))?$') {
+                            if (-not (Test-OpenPathFirefoxReleaseDisplayName -DisplayName $displayName)) {
                                 continue
                             }
 
@@ -585,6 +603,7 @@ function Get-OpenPathFirefoxReleaseRegistryCandidates {
                                     $candidates += [PSCustomObject]@{
                                         Path = $candidatePath
                                         Source = "$($registryView.Name) Uninstall/$($registeredValue.Source)"
+                                        ReleaseIdentity = $true
                                     }
                                 }
                             }
@@ -638,32 +657,35 @@ function Test-OpenPathFirefoxReleaseCandidate {
         }
     }
 
-    if ($Path -match '(?i)(?:^|[\\/])Tor Browser(?:[\\/]|$)') {
+    $pathComponents = @($Path -split '[\\/]' | Where-Object { $_ })
+
+    if (@($pathComponents | Where-Object { $_ -match '(?i)^Tor[\s._-]*Browser(?:[\s._-].*)?$' }).Count -gt 0) {
         return [PSCustomObject]@{
             Valid = $false
             Reason = 'Tor Browser is not Firefox Release'
         }
     }
 
-    if ($Path -match '(?i)(?:^|[\\/])(?:Mozilla Firefox (?:ESR|Beta|Nightly)|Firefox (?:ESR|Developer Edition|Nightly|Beta|Aurora))(?:[\\/]|$)') {
-        return [PSCustomObject]@{
-            Valid = $false
-            Reason = 'non-Release Firefox channel is not Firefox Release'
-        }
-    }
-
-    if ($Path -match '(?i)(?:^|[\\/])FirefoxPortable(?:[\\/]|$)' -or
-        $Path -match '(?i)(?:^|[\\/])PortableApps(?:[\\/]|$)') {
+    if (@($pathComponents | Where-Object { $_ -match '(?i)^(?:Firefox[\s._-]*Portable|PortableApps?|Portable)$' }).Count -gt 0) {
         return [PSCustomObject]@{
             Valid = $false
             Reason = 'portable Firefox is not Firefox Release'
         }
     }
 
-    if (-not (Test-Path -LiteralPath $Path)) {
+    if (@($pathComponents | Where-Object {
+                $_ -match '(?i)(?:^|[\s._()\-])(?:ESR|Developer(?:[\s._-]*Edition)?|Nightly|Beta|Aurora)(?:$|[\s._()\-])'
+            }).Count -gt 0) {
         return [PSCustomObject]@{
             Valid = $false
-            Reason = 'executable path does not exist'
+            Reason = 'non-Release Firefox channel is not Firefox Release'
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return [PSCustomObject]@{
+            Valid = $false
+            Reason = 'executable path is missing or not a file'
         }
     }
 
@@ -681,6 +703,29 @@ function Get-OpenPathFirefoxReleaseDiscovery {
     $candidateRecords = @(
         Get-OpenPathFirefoxReleaseRegistryCandidates
     )
+    $releaseRegistryPathKeys = @{}
+
+    foreach ($candidate in $candidateRecords) {
+        if (-not $candidate -or -not $candidate.PSObject.Properties['Path']) {
+            continue
+        }
+
+        $candidatePath = [string]$candidate.Path
+        if (-not $candidatePath) {
+            continue
+        }
+
+        $hasReleaseIdentity = (
+            $candidate.PSObject.Properties['ReleaseIdentity'] -and
+            [bool]$candidate.ReleaseIdentity
+        ) -or (
+            $candidate.PSObject.Properties['Source'] -and
+            ([string]$candidate.Source -match '(?i)Uninstall/')
+        )
+        if ($hasReleaseIdentity) {
+            $releaseRegistryPathKeys[$candidatePath.Trim().ToLowerInvariant()] = $true
+        }
+    }
 
     $filesystemRoots = @(
         [PSCustomObject]@{
@@ -735,6 +780,20 @@ function Get-OpenPathFirefoxReleaseDiscovery {
             'Unknown'
         }
         $validation = Test-OpenPathFirefoxReleaseCandidate -Path $candidatePath
+        if (
+            $validation.Valid -and
+            $candidateSource -match '(?i)App Paths' -and
+            -not (
+                $releaseRegistryPathKeys.ContainsKey($candidateKey) -or
+                $candidatePath -match '(?i)(?:^|[\\/])Mozilla Firefox[\\/]firefox\.exe$'
+            )
+        ) {
+            $validation = [PSCustomObject]@{
+                Valid = $false
+                Reason = 'registered App Paths entry lacks Firefox Release identity'
+            }
+        }
+
         $checked = [PSCustomObject]@{
             Path = $candidatePath
             Source = $candidateSource

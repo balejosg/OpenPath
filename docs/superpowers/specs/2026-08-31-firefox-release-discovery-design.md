@@ -37,14 +37,17 @@ Candidates are evaluated in this order:
 
 Registry access uses `Microsoft.Win32.RegistryKey.OpenBaseKey` with
 `Registry64` and `Registry32`, so lookup does not depend on the bitness of the
-PowerShell host. App Paths values and normal Mozilla Firefox uninstall
-locations provide registered custom-installation candidates. All candidates
-are deduplicated case-insensitively before validation.
+PowerShell host. Normal Mozilla Firefox uninstall locations provide registered
+custom-installation candidates. App Paths is used as corroborating machine
+evidence only when its path matches that Release registration or the canonical
+`Mozilla Firefox` installation directory; an uncorroborated App Paths
+`firefox.exe` is rejected. All candidates are deduplicated case-insensitively
+before validation.
 
 Validation requires a real `firefox.exe` leaf and rejects paths identifying Tor
-Browser or Firefox Portable. Filesystem fallbacks are restricted to the known
-Mozilla Firefox installation directory shape; an arbitrary `firefox.exe` is
-never accepted merely because it exists.
+Browser, Firefox Portable, or a non-Release Firefox channel. Filesystem
+fallbacks are restricted to the known Mozilla Firefox installation directory
+shape; an arbitrary `firefox.exe` is never accepted merely because it exists.
 
 When no candidate passes, readiness returns `firefox-release-missing` with a
 message containing “Firefox Release executable could not be discovered” and
