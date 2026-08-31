@@ -12,6 +12,52 @@ Describe "Browser Module - Firefox Policy" {
         Import-Module (Join-Path $modulePath "Browser.FirefoxPolicy.psm1") -Force -Global -ErrorAction Stop
     }
 
+    Context "Firefox Release executable discovery" {
+        It "Resolves 64-bit Firefox Release from ProgramW6432 under a 32-bit PowerShell process" {
+            $environmentNames = @(
+                'ProgramFiles',
+                'ProgramFiles(x86)',
+                'ProgramW6432',
+                'PROCESSOR_ARCHITECTURE',
+                'PROCESSOR_ARCHITEW6432'
+            )
+            $previousEnvironment = @{}
+
+            foreach ($name in $environmentNames) {
+                $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+            }
+
+            try {
+                [Environment]::SetEnvironmentVariable('ProgramFiles', 'C:\Program Files (x86)', 'Process')
+                [Environment]::SetEnvironmentVariable('ProgramFiles(x86)', 'C:\Program Files (x86)', 'Process')
+                [Environment]::SetEnvironmentVariable('ProgramW6432', 'C:\Program Files', 'Process')
+                [Environment]::SetEnvironmentVariable('PROCESSOR_ARCHITECTURE', 'x86', 'Process')
+                [Environment]::SetEnvironmentVariable('PROCESSOR_ARCHITEW6432', 'AMD64', 'Process')
+
+                Mock Test-Path {
+                    param(
+                        [string]$Path,
+                        [string]$LiteralPath
+                    )
+
+                    $candidate = if ($LiteralPath) { $LiteralPath } else { $Path }
+                    return $candidate -eq 'C:\Program Files\Mozilla Firefox\firefox.exe'
+                } -ModuleName Browser.FirefoxPolicy
+
+                $resolved = InModuleScope Browser.FirefoxPolicy {
+                    Resolve-OpenPathFirefoxReleaseExecutable
+                }
+
+                $resolved | Should -Be 'C:\Program Files\Mozilla Firefox\firefox.exe'
+            }
+            finally {
+                foreach ($name in $environmentNames) {
+                    [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process')
+                }
+            }
+        }
+    }
+
     Context "Sync-OpenPathFirefoxManagedExtensionPolicy" {
         It "Returns a boolean value" {
             Mock Write-OpenPathLog { } -ModuleName Browser.FirefoxPolicy
