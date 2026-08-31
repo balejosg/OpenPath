@@ -50,7 +50,7 @@ fallbacks are restricted to the known Mozilla Firefox installation directory
 shape; an arbitrary `firefox.exe` is never accepted merely because it exists.
 
 When no candidate passes, readiness returns `firefox-release-missing` with a
-message containing “Firefox Release executable could not be discovered” and
+message containing `Firefox Release executable could not be discovered` and
 the consulted source/path diagnostics. The existing policy and runtime result
 fields are preserved.
 
