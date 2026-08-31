@@ -58,6 +58,8 @@ Describe "Installer" {
             $plan.Context.ScriptDir | Should -Be 'C:\pkg\windows'
             $plan.Parameters.WhitelistUrl | Should -Be 'https://allow.example.test'
             $plan.Parameters.BrowserCleanupMode | Should -Be 'ReportOnly'
+            ($plan.Phases | Where-Object Name -eq 'firefox-managed-extension-ready').RecoveryHint |
+                Should -Be 'Check Firefox Release installation and executable discovery; inspect managed extension policy only after executable discovery succeeds.'
         }
 
         It "Returns structured success and failure results for installer phases" {

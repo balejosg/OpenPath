@@ -43,6 +43,7 @@ Describe "Browser Module - Firefox Policy" {
                     $candidate = if ($LiteralPath) { $LiteralPath } else { $Path }
                     return $candidate -eq 'C:\Program Files\Mozilla Firefox\firefox.exe'
                 } -ModuleName Browser.FirefoxPolicy
+                Mock Get-OpenPathFirefoxReleaseRegistryCandidates { @() } -ModuleName Browser.FirefoxPolicy
 
                 $resolved = InModuleScope Browser.FirefoxPolicy {
                     Resolve-OpenPathFirefoxReleaseExecutable
@@ -55,6 +56,160 @@ Describe "Browser Module - Firefox Policy" {
                     [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process')
                 }
             }
+        }
+
+        It "Prefers a Registry64 Firefox Release candidate before Registry32 and filesystem candidates" {
+            $registry64Path = 'D:\School Firefox 64\firefox.exe'
+            $registry32Path = 'D:\School Firefox 32\firefox.exe'
+
+            Mock Get-OpenPathFirefoxReleaseRegistryCandidates {
+                @(
+                    [PSCustomObject]@{
+                        Path = $registry64Path
+                        Source = 'Registry64 Uninstall/InstallLocation'
+                    },
+                    [PSCustomObject]@{
+                        Path = $registry32Path
+                        Source = 'Registry32 Uninstall/InstallLocation'
+                    }
+                )
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Test-Path {
+                param(
+                    [string]$Path,
+                    [string]$LiteralPath
+                )
+
+                $candidate = if ($LiteralPath) { $LiteralPath } else { $Path }
+                return $candidate -in @($registry64Path, $registry32Path)
+            } -ModuleName Browser.FirefoxPolicy
+
+            $discovery = InModuleScope Browser.FirefoxPolicy {
+                Get-OpenPathFirefoxReleaseDiscovery
+            }
+
+            $discovery.Path | Should -Be $registry64Path
+            $discovery.Source | Should -Be 'Registry64 Uninstall/InstallLocation'
+            @($discovery.CheckedCandidates).Count | Should -Be 1
+        }
+
+        It "Resolves a custom Firefox Release location from registered installation data" {
+            $customPath = 'D:\Applications\Firefox\firefox.exe'
+
+            Mock Get-OpenPathFirefoxReleaseRegistryCandidates {
+                @([PSCustomObject]@{
+                        Path = $customPath
+                        Source = 'Registry64 Uninstall/InstallLocation'
+                    })
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Test-Path {
+                param(
+                    [string]$Path,
+                    [string]$LiteralPath
+                )
+
+                $candidate = if ($LiteralPath) { $LiteralPath } else { $Path }
+                return $candidate -eq $customPath
+            } -ModuleName Browser.FirefoxPolicy
+
+            $discovery = InModuleScope Browser.FirefoxPolicy {
+                Get-OpenPathFirefoxReleaseDiscovery
+            }
+
+            $discovery.Path | Should -Be $customPath
+            $discovery.Source | Should -Be 'Registry64 Uninstall/InstallLocation'
+        }
+
+        It "Converts a registered Firefox DisplayIcon value into an executable path" {
+            $resolved = InModuleScope Browser.FirefoxPolicy {
+                ConvertTo-OpenPathFirefoxReleaseExecutablePath -Value '"D:\Applications\Firefox\firefox.exe",0'
+            }
+
+            $resolved | Should -Be 'D:\Applications\Firefox\firefox.exe'
+        }
+
+        It "Resolves Firefox x86 from ProgramFiles(x86) when wider paths are unavailable" {
+            $environmentNames = @('ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432')
+            $previousEnvironment = @{}
+
+            foreach ($name in $environmentNames) {
+                $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+            }
+
+            try {
+                [Environment]::SetEnvironmentVariable('ProgramFiles', 'C:\Missing Program Files', 'Process')
+                [Environment]::SetEnvironmentVariable('ProgramFiles(x86)', 'C:\Program Files (x86)', 'Process')
+                [Environment]::SetEnvironmentVariable('ProgramW6432', $null, 'Process')
+
+                Mock Get-OpenPathFirefoxReleaseRegistryCandidates { @() } -ModuleName Browser.FirefoxPolicy
+                Mock Test-Path {
+                    param(
+                        [string]$Path,
+                        [string]$LiteralPath
+                    )
+
+                    $candidate = if ($LiteralPath) { $LiteralPath } else { $Path }
+                    return $candidate -eq 'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
+                } -ModuleName Browser.FirefoxPolicy
+
+                $resolved = InModuleScope Browser.FirefoxPolicy {
+                    Resolve-OpenPathFirefoxReleaseExecutable
+                }
+
+                $resolved | Should -Be 'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
+            }
+            finally {
+                foreach ($name in $environmentNames) {
+                    [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process')
+                }
+            }
+        }
+
+        It "Rejects Tor Browser and Firefox Portable even when their executables exist" {
+            $torPath = 'C:\Program Files\Tor Browser\Browser\firefox.exe'
+            $portablePath = 'C:\Users\student\Downloads\FirefoxPortable\App\Firefox64\firefox.exe'
+
+            Mock Get-OpenPathFirefoxReleaseRegistryCandidates {
+                @(
+                    [PSCustomObject]@{ Path = $torPath; Source = 'Registry64 App Paths' },
+                    [PSCustomObject]@{ Path = $portablePath; Source = 'Registry32 Uninstall/InstallLocation' }
+                )
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Test-Path {
+                param(
+                    [string]$Path,
+                    [string]$LiteralPath
+                )
+
+                $candidate = if ($LiteralPath) { $LiteralPath } else { $Path }
+                return $candidate -in @($torPath, $portablePath)
+            } -ModuleName Browser.FirefoxPolicy
+
+            $discovery = InModuleScope Browser.FirefoxPolicy {
+                Get-OpenPathFirefoxReleaseDiscovery
+            }
+
+            $discovery.Path | Should -BeNullOrEmpty
+            @($discovery.RejectedCandidates | Where-Object { $_.Path -eq $torPath }).Reason | Should -Be 'Tor Browser is not Firefox Release'
+            @($discovery.RejectedCandidates | Where-Object { $_.Path -eq $portablePath }).Reason | Should -Be 'portable Firefox is not Firefox Release'
+        }
+
+        It "Deduplicates registered Firefox candidates before validation" {
+            $duplicatePath = 'D:\Applications\Firefox\firefox.exe'
+
+            Mock Get-OpenPathFirefoxReleaseRegistryCandidates {
+                @(
+                    [PSCustomObject]@{ Path = $duplicatePath; Source = 'Registry64 App Paths' },
+                    [PSCustomObject]@{ Path = $duplicatePath; Source = 'Registry32 Uninstall/InstallLocation' }
+                )
+            } -ModuleName Browser.FirefoxPolicy
+            Mock Test-Path { $false } -ModuleName Browser.FirefoxPolicy
+
+            $discovery = InModuleScope Browser.FirefoxPolicy {
+                Get-OpenPathFirefoxReleaseDiscovery
+            }
+
+            @($discovery.CheckedCandidates | Where-Object { $_.Path -eq $duplicatePath }).Count | Should -Be 1
         }
     }
 
@@ -574,7 +729,19 @@ Describe "Browser Module - Firefox Policy" {
         It "Fails when Firefox Release is missing" {
             $contract = Get-ContractFixtureJson -FileName 'browser-firefox-managed-extension.json'
 
-            Mock Resolve-OpenPathFirefoxReleaseExecutable { '' } -ModuleName Browser.FirefoxPolicy
+            Mock Resolve-OpenPathFirefoxReleaseExecutable {
+                param([ref]$Diagnostics)
+                $Diagnostics.Value = [PSCustomObject]@{
+                    CheckedCandidates = @([PSCustomObject]@{
+                            Path = 'D:\Firefox Release\firefox.exe'
+                            Source = 'Registry64 Uninstall/InstallLocation'
+                            Valid = $false
+                            Reason = 'executable path does not exist'
+                        })
+                    RejectedCandidates = @()
+                }
+                return ''
+            } -ModuleName Browser.FirefoxPolicy
             Mock Get-OpenPathFirefoxManagedExtensionPolicy {
                 [PSCustomObject]@{
                     ExtensionId = $contract.extensionId
@@ -594,6 +761,11 @@ Describe "Browser Module - Firefox Policy" {
             $result.ExtensionActive | Should -BeFalse
             $result.InstallUrl | Should -Be $contract.managedApiInstallUrl
             $result.PolicyPath | Should -Be 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
+            $result.Message | Should -Match 'Firefox Release executable could not be discovered'
+            $result.Message | Should -Match 'Registry64 Uninstall/InstallLocation'
+            $result.Message | Should -Match 'D:\\Firefox Release\\firefox.exe'
+            $result.Message | Should -Not -Match '(?i)managed extension policy|runtime registration'
+            $result.FirefoxDiscovery.CheckedCandidates[0].Source | Should -Be 'Registry64 Uninstall/InstallLocation'
         }
 
         It "Fails when the force-installed machine policy is missing" {

@@ -122,7 +122,7 @@ function New-OpenPathInstallPlan {
         } -RecoveryHint 'Check API URL, classroom identifier, token validity, and network connectivity.'
         New-OpenPathInstallPhase -Name 'native-host' -RecoveryHint 'Check Firefox native messaging host registry entries and request setup state.'
         New-OpenPathInstallPhase -Name 'first-update' -Step 7 -TotalSteps 7 -Status 'Running first update' -RecoveryHint 'Run OpenPath.ps1 update after enrollment and network connectivity are available.'
-        New-OpenPathInstallPhase -Name 'firefox-managed-extension-ready' -RecoveryHint 'Check Firefox policy, signed extension URL, and native host runtime registration.'
+        New-OpenPathInstallPhase -Name 'firefox-managed-extension-ready' -RecoveryHint 'Check Firefox Release installation and executable discovery; inspect managed extension policy only after executable discovery succeeds.'
         New-OpenPathInstallPhase -Name 'scheduled-tasks' -Step 6 -TotalSteps 7 -Status 'Registering scheduled tasks' -RecoveryHint 'Check Task Scheduler service and Administrator privileges.'
         New-OpenPathInstallPhase -Name 'realtime-updates' -RecoveryHint 'Check request setup state and SSE listener startup.'
         New-OpenPathInstallPhase -Name 'app-control' -RecoveryHint 'Check AppLocker support and local security policy permissions.'

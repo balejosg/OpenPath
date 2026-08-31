@@ -432,7 +432,10 @@ function New-OpenPathFirefoxManagedExtensionReadyResult {
 
         [string]$FirefoxPath = '',
 
-        [string]$ProfilePath = ''
+        [string]$ProfilePath = '',
+
+        [AllowNull()]
+        [object]$FirefoxDiscovery = $null
     )
 
     return [PSCustomObject]@{
@@ -446,6 +449,311 @@ function New-OpenPathFirefoxManagedExtensionReadyResult {
         ExtensionId = $ExtensionId
         FirefoxPath = $FirefoxPath
         ProfilePath = $ProfilePath
+        FirefoxDiscovery = $FirefoxDiscovery
+    }
+}
+
+function ConvertTo-OpenPathFirefoxReleaseExecutablePath {
+    <#
+    .SYNOPSIS
+    Converts a Firefox registry value or install directory into a firefox.exe path.
+    #>
+    param(
+        [AllowNull()]
+        [object]$Value = $null,
+
+        [AllowNull()]
+        [string]$InstallLocation = ''
+    )
+
+    $rawValue = if ($null -ne $Value) { ([string]$Value).Trim() } else { '' }
+    $path = ''
+
+    if ($rawValue) {
+        $firefoxExeIndex = $rawValue.IndexOf('firefox.exe', [System.StringComparison]::OrdinalIgnoreCase)
+        if ($firefoxExeIndex -ge 0) {
+            $path = $rawValue.Substring(0, $firefoxExeIndex + 'firefox.exe'.Length).Trim().Trim('"')
+        }
+        else {
+            $path = ($rawValue -split ',', 2)[0].Trim().Trim('"')
+        }
+    }
+
+    if (-not $path -and $InstallLocation) {
+        $path = [string]$InstallLocation
+    }
+
+    if (-not $path) {
+        return ''
+    }
+
+    if ($path -notmatch '(?i)(?:^|[\\/])firefox\.exe$') {
+        return [string]($path.TrimEnd('\', '/') + '\firefox.exe')
+    }
+
+    return [string]$path
+}
+
+function Get-OpenPathFirefoxReleaseRegistryCandidates {
+    <#
+    .SYNOPSIS
+    Reads Firefox Release executable candidates from explicit 64-bit and 32-bit HKLM views.
+
+    .DESCRIPTION
+    App Paths and the normal Mozilla Firefox uninstall registration are machine-level evidence
+    of a system Firefox installation. Explicit RegistryView selection keeps this discovery
+    independent of the bitness of the PowerShell process.
+    #>
+    $registryViews = @(
+        [PSCustomObject]@{
+            Name = 'Registry64'
+            View = [Microsoft.Win32.RegistryView]::Registry64
+        },
+        [PSCustomObject]@{
+            Name = 'Registry32'
+            View = [Microsoft.Win32.RegistryView]::Registry32
+        }
+    )
+    $candidates = @()
+
+    foreach ($registryView in $registryViews) {
+        $baseKey = $null
+        $appPathsKey = $null
+        $uninstallRoot = $null
+
+        try {
+            $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+                [Microsoft.Win32.RegistryHive]::LocalMachine,
+                $registryView.View
+            )
+
+            try {
+                $appPathsKey = $baseKey.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe')
+                if ($appPathsKey) {
+                    foreach ($valueName in @('', 'Path')) {
+                        $candidatePath = ConvertTo-OpenPathFirefoxReleaseExecutablePath -Value $appPathsKey.GetValue($valueName)
+                        if ($candidatePath) {
+                            $candidates += [PSCustomObject]@{
+                                Path = $candidatePath
+                                Source = "$($registryView.Name) App Paths"
+                            }
+                        }
+                    }
+                }
+            }
+            finally {
+                if ($appPathsKey) {
+                    $appPathsKey.Close()
+                    $appPathsKey = $null
+                }
+            }
+
+            try {
+                $uninstallRoot = $baseKey.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')
+                if ($uninstallRoot) {
+                    foreach ($subKeyName in @($uninstallRoot.GetSubKeyNames())) {
+                        $uninstallKey = $null
+                        try {
+                            $uninstallKey = $uninstallRoot.OpenSubKey($subKeyName)
+                            if (-not $uninstallKey) {
+                                continue
+                            }
+
+                            $displayName = [string]$uninstallKey.GetValue('DisplayName')
+                            if ($displayName -notmatch '(?i)^Mozilla Firefox(?:\s+\([^)]*\))?$') {
+                                continue
+                            }
+
+                            $installLocation = [string]$uninstallKey.GetValue('InstallLocation')
+                            $displayIcon = $uninstallKey.GetValue('DisplayIcon')
+                            $registeredValues = @(
+                                [PSCustomObject]@{
+                                    Value = $displayIcon
+                                    Source = 'DisplayIcon'
+                                },
+                                [PSCustomObject]@{
+                                    Value = $installLocation
+                                    Source = 'InstallLocation'
+                                }
+                            )
+
+                            foreach ($registeredValue in $registeredValues) {
+                                $candidatePath = ConvertTo-OpenPathFirefoxReleaseExecutablePath `
+                                    -Value $registeredValue.Value `
+                                    -InstallLocation $installLocation
+                                if ($candidatePath) {
+                                    $candidates += [PSCustomObject]@{
+                                        Path = $candidatePath
+                                        Source = "$($registryView.Name) Uninstall/$($registeredValue.Source)"
+                                    }
+                                }
+                            }
+                        }
+                        catch {
+                            continue
+                        }
+                        finally {
+                            if ($uninstallKey) {
+                                $uninstallKey.Close()
+                            }
+                        }
+                    }
+                }
+            }
+            finally {
+                if ($uninstallRoot) {
+                    $uninstallRoot.Close()
+                    $uninstallRoot = $null
+                }
+            }
+        }
+        catch {
+            # Registry access is best effort. Filesystem candidates still provide the
+            # architecture-aware fallback when a view is unavailable or inaccessible.
+        }
+        finally {
+            if ($baseKey) {
+                $baseKey.Close()
+            }
+        }
+    }
+
+    return @($candidates)
+}
+
+function Test-OpenPathFirefoxReleaseCandidate {
+    <#
+    .SYNOPSIS
+    Validates that a candidate is a system Firefox Release executable.
+    #>
+    param(
+        [AllowNull()]
+        [string]$Path = ''
+    )
+
+    if (-not $Path -or $Path -notmatch '(?i)(?:^|[\\/])firefox\.exe$') {
+        return [PSCustomObject]@{
+            Valid = $false
+            Reason = 'candidate is not a firefox.exe executable path'
+        }
+    }
+
+    if ($Path -match '(?i)(?:^|[\\/])Tor Browser(?:[\\/]|$)') {
+        return [PSCustomObject]@{
+            Valid = $false
+            Reason = 'Tor Browser is not Firefox Release'
+        }
+    }
+
+    if ($Path -match '(?i)(?:^|[\\/])FirefoxPortable(?:[\\/]|$)' -or
+        $Path -match '(?i)(?:^|[\\/])PortableApps(?:[\\/]|$)') {
+        return [PSCustomObject]@{
+            Valid = $false
+            Reason = 'portable Firefox is not Firefox Release'
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [PSCustomObject]@{
+            Valid = $false
+            Reason = 'executable path does not exist'
+        }
+    }
+
+    return [PSCustomObject]@{
+        Valid = $true
+        Reason = ''
+    }
+}
+
+function Get-OpenPathFirefoxReleaseDiscovery {
+    <#
+    .SYNOPSIS
+    Discovers Firefox Release with registered system evidence before filesystem fallbacks.
+    #>
+    $candidateRecords = @(
+        Get-OpenPathFirefoxReleaseRegistryCandidates
+    )
+
+    $filesystemRoots = @(
+        [PSCustomObject]@{
+            Root = $env:ProgramW6432
+            Source = 'ProgramW6432'
+        },
+        [PSCustomObject]@{
+            Root = $env:ProgramFiles
+            Source = 'ProgramFiles'
+        },
+        [PSCustomObject]@{
+            Root = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+            Source = 'ProgramFiles(x86)'
+        }
+    )
+
+    foreach ($filesystemRoot in $filesystemRoots) {
+        if (-not $filesystemRoot.Root) {
+            continue
+        }
+
+        $candidateRecords += [PSCustomObject]@{
+            Path = ([string]$filesystemRoot.Root).TrimEnd('\', '/') + '\Mozilla Firefox\firefox.exe'
+            Source = $filesystemRoot.Source
+        }
+    }
+
+    $seen = @{}
+    $checkedCandidates = @()
+    $rejectedCandidates = @()
+
+    foreach ($candidate in $candidateRecords) {
+        if (-not $candidate) {
+            continue
+        }
+
+        $candidatePath = if ($candidate.PSObject.Properties['Path']) { [string]$candidate.Path } else { [string]$candidate }
+        if (-not $candidatePath) {
+            continue
+        }
+
+        $candidateKey = $candidatePath.Trim().ToLowerInvariant()
+        if ($seen.ContainsKey($candidateKey)) {
+            continue
+        }
+        $seen[$candidateKey] = $true
+
+        $candidateSource = if ($candidate.PSObject.Properties['Source'] -and $candidate.Source) {
+            [string]$candidate.Source
+        }
+        else {
+            'Unknown'
+        }
+        $validation = Test-OpenPathFirefoxReleaseCandidate -Path $candidatePath
+        $checked = [PSCustomObject]@{
+            Path = $candidatePath
+            Source = $candidateSource
+            Valid = [bool]$validation.Valid
+            Reason = [string]$validation.Reason
+        }
+        $checkedCandidates += $checked
+
+        if (-not $validation.Valid) {
+            $rejectedCandidates += $checked
+            continue
+        }
+
+        return [PSCustomObject]@{
+            Path = $candidatePath
+            Source = $candidateSource
+            CheckedCandidates = @($checkedCandidates)
+            RejectedCandidates = @($rejectedCandidates)
+        }
+    }
+
+    return [PSCustomObject]@{
+        Path = ''
+        Source = ''
+        CheckedCandidates = @($checkedCandidates)
+        RejectedCandidates = @($rejectedCandidates)
     }
 }
 
@@ -454,18 +762,43 @@ function Resolve-OpenPathFirefoxReleaseExecutable {
     .SYNOPSIS
     Returns the path to the installed Firefox Release executable, or an empty string when not found.
     #>
-    $candidates = @(
-        "$env:ProgramFiles\Mozilla Firefox\firefox.exe",
-        "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe"
+    param(
+        [ref]$Diagnostics
     )
 
-    foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path $candidate)) {
-            return [string]$candidate
-        }
+    $discovery = Get-OpenPathFirefoxReleaseDiscovery
+    if ($PSBoundParameters.ContainsKey('Diagnostics')) {
+        $Diagnostics.Value = $discovery
     }
 
-    return ''
+    return [string]$discovery.Path
+}
+
+function Format-OpenPathFirefoxReleaseDiscoveryMessage {
+    <#
+    .SYNOPSIS
+    Formats Firefox executable discovery evidence for a readiness failure message.
+    #>
+    param(
+        [AllowNull()]
+        [object]$Discovery = $null
+    )
+
+    $details = @()
+    foreach ($candidate in @($Discovery.CheckedCandidates)) {
+        if (-not $candidate) {
+            continue
+        }
+
+        $status = if ($candidate.Valid) { 'accepted' } else { [string]$candidate.Reason }
+        $details += "$($candidate.Source): $($candidate.Path) [$status]"
+    }
+
+    if ($details.Count -eq 0) {
+        return 'Firefox Release executable could not be discovered; no registered or architecture-aware system candidates were available.'
+    }
+
+    return "Firefox Release executable could not be discovered. Consulted candidates: $($details -join '; ')."
 }
 
 function Get-OpenPathFirefoxProfileExtensionEvidence {
@@ -628,7 +961,8 @@ function Test-OpenPathFirefoxManagedExtensionReady {
 
     $extensionId = [string]$managedExtensionPolicy.ExtensionId
     $installUrl = [string]$managedExtensionPolicy.InstallUrl
-    $firefoxPath = Resolve-OpenPathFirefoxReleaseExecutable
+    $firefoxDiscovery = $null
+    $firefoxPath = Resolve-OpenPathFirefoxReleaseExecutable -Diagnostics ([ref]$firefoxDiscovery)
 
     if (-not (Test-OpenPathFirefoxMachineExtensionPolicy -ManagedExtensionPolicy $managedExtensionPolicy)) {
         return New-OpenPathFirefoxManagedExtensionReadyResult `
@@ -638,17 +972,19 @@ function Test-OpenPathFirefoxManagedExtensionReady {
             -PolicyPath $policyPath `
             -InstallUrl $installUrl `
             -ExtensionId $extensionId `
-            -FirefoxPath $firefoxPath
+            -FirefoxPath $firefoxPath `
+            -FirefoxDiscovery $firefoxDiscovery
     }
 
     if (-not $firefoxPath) {
         return New-OpenPathFirefoxManagedExtensionReadyResult `
             -Ready $false `
             -FailureCode 'firefox-release-missing' `
-            -Message 'Firefox Release is not installed. Classroom unattended installs require Mozilla Firefox Release before the managed extension can be verified.' `
+            -Message (Format-OpenPathFirefoxReleaseDiscoveryMessage -Discovery $firefoxDiscovery) `
             -PolicyPath $policyPath `
             -InstallUrl $installUrl `
-            -ExtensionId $extensionId
+            -ExtensionId $extensionId `
+            -FirefoxDiscovery $firefoxDiscovery
     }
 
     if (-not $RequireRuntimeRegistration) {
@@ -658,7 +994,8 @@ function Test-OpenPathFirefoxManagedExtensionReady {
             -PolicyPath $policyPath `
             -InstallUrl $installUrl `
             -ExtensionId $extensionId `
-            -FirefoxPath $firefoxPath
+            -FirefoxPath $firefoxPath `
+            -FirefoxDiscovery $firefoxDiscovery
     }
 
     $runtimeProbe = Invoke-OpenPathFirefoxManagedExtensionRuntimeProbe -FirefoxPath $firefoxPath -ExtensionId $extensionId
@@ -673,7 +1010,8 @@ function Test-OpenPathFirefoxManagedExtensionReady {
             -InstallUrl $installUrl `
             -ExtensionId $extensionId `
             -FirefoxPath $firefoxPath `
-            -ProfilePath ([string]$runtimeProbe.ProfilePath)
+            -ProfilePath ([string]$runtimeProbe.ProfilePath) `
+            -FirefoxDiscovery $firefoxDiscovery
     }
 
     if (-not $runtimeProbe.ExtensionActive) {
@@ -687,7 +1025,8 @@ function Test-OpenPathFirefoxManagedExtensionReady {
             -InstallUrl $installUrl `
             -ExtensionId $extensionId `
             -FirefoxPath $firefoxPath `
-            -ProfilePath ([string]$runtimeProbe.ProfilePath)
+            -ProfilePath ([string]$runtimeProbe.ProfilePath) `
+            -FirefoxDiscovery $firefoxDiscovery
     }
 
     return New-OpenPathFirefoxManagedExtensionReadyResult `
@@ -699,7 +1038,8 @@ function Test-OpenPathFirefoxManagedExtensionReady {
         -InstallUrl $installUrl `
         -ExtensionId $extensionId `
         -FirefoxPath $firefoxPath `
-        -ProfilePath ([string]$runtimeProbe.ProfilePath)
+        -ProfilePath ([string]$runtimeProbe.ProfilePath) `
+        -FirefoxDiscovery $firefoxDiscovery
 }
 
 function Remove-OpenPathFirefoxMachineExtensionPolicy {
