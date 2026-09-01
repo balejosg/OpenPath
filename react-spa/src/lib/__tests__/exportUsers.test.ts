@@ -38,7 +38,7 @@ describe('buildUsersCsvExport', () => {
     expect(result.mimeType).toBe(USERS_CSV_EXPORT_MIME_TYPE);
     expect(result.content).toBe(
       [
-        'Nombre,Email,Roles,Estado,Roles_codigo,Estado_codigo',
+        'Name,Email,Roles,Status,Roles_code,Status_code',
         'Admin QA,admin@example.com,Admin,Active,admin,Active',
         'Teacher QA,teacher@example.com,Teacher,Inactive,teacher,Inactive',
       ].join('\n')
@@ -50,7 +50,7 @@ describe('buildUsersCsvExport', () => {
 
     expect(result.content).toBe(
       [
-        'Nombre,Email,Roles,Estado',
+        'Name,Email,Roles,Status',
         'Admin QA,admin@example.com,Admin,Active',
         'Teacher QA,teacher@example.com,Teacher,Inactive',
       ].join('\n')
