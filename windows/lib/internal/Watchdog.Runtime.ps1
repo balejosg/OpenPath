@@ -52,9 +52,17 @@ function Invoke-OpenPathWatchdogPrechecks {
         [PSCustomObject]$Config
     )
 
-    if (Get-Command -Name 'Sync-OpenPathRestrictedGroup' -ErrorAction SilentlyContinue) {
+    $enableNonAdminAppControl = $true
+    if ($Config -and $Config.PSObject.Properties['enableNonAdminAppControl']) {
+        $enableNonAdminAppControl = [bool]$Config.enableNonAdminAppControl
+    }
+
+    if ($enableNonAdminAppControl -and (Get-Command -Name 'Sync-OpenPathRestrictedGroup' -ErrorAction SilentlyContinue)) {
         try {
-            Sync-OpenPathRestrictedGroup -CreateIfMissing $false | Out-Null
+            $groupSynced = [bool](Sync-OpenPathRestrictedGroup -CreateIfMissing $true)
+            if (-not $groupSynced) {
+                Write-OpenPathLog "Watchdog: OpenPath-Restricted group sync failed" -Level WARN
+            }
         }
         catch {
             Write-OpenPathLog "Watchdog: OpenPath-Restricted group sync failed: $_" -Level WARN
@@ -569,28 +577,75 @@ function Invoke-OpenPathWatchdogChecks {
     }
 
     try {
-        if (Get-Command -Name 'Test-OpenPathNonAdminAppControlActive' -ErrorAction SilentlyContinue) {
-            $enableNonAdminAppControl = $true
-            if ($Config -and $Config.PSObject.Properties['enableNonAdminAppControl']) {
-                $enableNonAdminAppControl = [bool]$Config.enableNonAdminAppControl
+        $enableNonAdminAppControl = $true
+        if ($Config -and $Config.PSObject.Properties['enableNonAdminAppControl']) {
+            $enableNonAdminAppControl = [bool]$Config.enableNonAdminAppControl
+        }
+        $mode = 'Enforced'
+        if ($Config -and $Config.PSObject.Properties['nonAdminAppControlMode'] -and $Config.nonAdminAppControlMode) {
+            $mode = [string]$Config.nonAdminAppControlMode
+        }
+        $approvedStudentBrowsers = @('Firefox')
+        if ($Config -and $Config.PSObject.Properties['approvedStudentBrowsers'] -and $Config.approvedStudentBrowsers) {
+            $approvedStudentBrowsers = @($Config.approvedStudentBrowsers)
+        }
+
+        if ($enableNonAdminAppControl) {
+            if (Get-Command -Name 'Get-LocalGroup' -ErrorAction SilentlyContinue) {
+                try {
+                    $null = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+                }
+                catch {
+                    Write-OpenPathLog "Watchdog: Required OpenPath-Restricted group missing; attempting recreation" -Level WARN
+                    $recreated = $false
+                    if (Get-Command -Name 'Sync-OpenPathRestrictedGroup' -ErrorAction SilentlyContinue) {
+                        try {
+                            $recreated = [bool](Sync-OpenPathRestrictedGroup -CreateIfMissing $true)
+                        }
+                        catch {
+                            $recreated = $false
+                        }
+                    }
+                    if (-not $recreated) {
+                        $issues += "OpenPath-Restricted local group is absent"
+                        $recoveryEligibleIssues += "OpenPath-Restricted group missing"
+                        Write-OpenPathLog "Watchdog: Failed to recreate required OpenPath-Restricted local group" -Level ERROR
+                    }
+                }
             }
-            $mode = 'Enforced'
-            if ($Config -and $Config.PSObject.Properties['nonAdminAppControlMode'] -and $Config.nonAdminAppControlMode) {
-                $mode = [string]$Config.nonAdminAppControlMode
-            }
-            $approvedStudentBrowsers = @('Firefox')
-            if ($Config -and $Config.PSObject.Properties['approvedStudentBrowsers'] -and $Config.approvedStudentBrowsers) {
-                $approvedStudentBrowsers = @($Config.approvedStudentBrowsers)
-            }
-            if ($enableNonAdminAppControl -and -not (Test-OpenPathNonAdminAppControlActive `
+
+            if (Get-Command -Name 'Test-OpenPathNonAdminAppControlActive' -ErrorAction SilentlyContinue) {
+                $appControlActive = [bool](Test-OpenPathNonAdminAppControlActive `
                         -Mode $mode `
-                        -ApprovedBrowsers $approvedStudentBrowsers)) {
-                Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers | Out-Null
+                        -ApprovedBrowsers $approvedStudentBrowsers)
+                if (-not $appControlActive) {
+                    Write-OpenPathLog "Watchdog: AppControl is not active in $mode mode; attempting repair" -Level WARN
+                    $repairResult = $false
+                    if (Get-Command -Name 'Set-OpenPathNonAdminAppControl' -ErrorAction SilentlyContinue) {
+                        try {
+                            $repairResult = [bool](Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers)
+                        }
+                        catch {
+                            $repairResult = $false
+                            Write-OpenPathLog "Watchdog: Exception during AppControl repair: $_" -Level ERROR
+                        }
+                    }
+                    if (-not $repairResult -or -not (Test-OpenPathNonAdminAppControlActive -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers)) {
+                        $issues += "AppControl repair failed; policy is not active in $mode mode"
+                        $recoveryEligibleIssues += "AppControl repair failed"
+                        Write-OpenPathLog "Watchdog: AppControl repair failed; effective policy is not active in $mode mode" -Level ERROR
+                    }
+                    else {
+                        Write-OpenPathLog "Watchdog: AppControl successfully repaired and verified in $mode mode"
+                    }
+                }
             }
         }
     }
     catch {
-        Write-OpenPathLog "Watchdog: AppLocker non-admin app control refresh failed: $_" -Level WARN
+        $issues += "AppControl watchdog check failed: $_"
+        $recoveryEligibleIssues += "AppControl watchdog check failed"
+        Write-OpenPathLog "Watchdog: AppLocker non-admin app control refresh failed: $_" -Level ERROR
     }
 
     return [PSCustomObject]@{

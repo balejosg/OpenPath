@@ -162,11 +162,48 @@ function Invoke-OpenPathInstallRollback {
     $script:OpenPathInstallerRollingBack = $true
 
     Write-InstallerWarning 'Installation failed after mutations; rolling back OpenPath-owned changes.'
-    try { Stop-OpenPathInstallerScheduledTasks } catch { Write-InstallerWarning "  Rollback task cleanup failed: $_" }
-    try { Restore-OpenPathInstallerDnsSettings } catch { Write-InstallerWarning "  Rollback DNS restore failed: $_" }
-    try { Remove-OpenPathInstallerFirewallRules } catch { Write-InstallerWarning "  Rollback firewall cleanup failed: $_" }
-    try { Remove-OpenPathInstallerAppLockerRules } catch { Write-InstallerWarning "  Rollback AppLocker cleanup failed: $_" }
-    Write-InstallerWarning 'Rollback completed; OpenPath logs were left in place for diagnosis.'
+    $rollbackErrors = @()
+    try { Stop-OpenPathInstallerScheduledTasks } catch { $rollbackErrors += "tasks: $_"; Write-InstallerWarning "  Rollback task cleanup failed: $_" }
+    try { Restore-OpenPathInstallerDnsSettings } catch { $rollbackErrors += "dns: $_"; Write-InstallerWarning "  Rollback DNS restore failed: $_" }
+    try { Remove-OpenPathInstallerFirewallRules } catch { $rollbackErrors += "firewall: $_"; Write-InstallerWarning "  Rollback firewall cleanup failed: $_" }
+    try { Remove-OpenPathInstallerAppLockerRules } catch { $rollbackErrors += "applocker: $_"; Write-InstallerWarning "  Rollback AppLocker cleanup failed: $_" }
+    try { Remove-OpenPathInstallerRestrictedGroup } catch { $rollbackErrors += "restrictedGroup: $_"; Write-InstallerWarning "  Rollback restricted group cleanup failed: $_" }
+    try { Remove-OpenPathInstallerBrowserArtifacts } catch { $rollbackErrors += "browserArtifacts: $_"; Write-InstallerWarning "  Rollback browser artifacts cleanup failed: $_" }
+    try { Stop-OpenPathInstallerAcrylicService -KeepAcrylic } catch { $rollbackErrors += "acrylic: $_"; Write-InstallerWarning "  Rollback Acrylic stop failed: $_" }
+    try {
+        $configPath = Join-Path $OpenPathRoot 'data\config.json'
+        if (Test-Path -LiteralPath $configPath) {
+            Remove-Item -LiteralPath $configPath -Force -ErrorAction Stop
+        }
+    } catch { $rollbackErrors += "config: $_"; Write-InstallerWarning "  Rollback config removal failed: $_" }
+
+    $verifiedNonOperational = $true
+    if (Test-Path -LiteralPath (Join-Path $OpenPathRoot 'data\config.json')) {
+        $verifiedNonOperational = $false
+        Write-InstallerWarning '  Rollback verification warning: config.json is still present'
+    }
+    if (Get-Command -Name Get-ScheduledTask -ErrorAction SilentlyContinue) {
+        $remainingTasks = @(Get-ScheduledTask -TaskName 'OpenPath-*' -ErrorAction SilentlyContinue)
+        if ($remainingTasks.Count -gt 0) {
+            $verifiedNonOperational = $false
+            Write-InstallerWarning "  Rollback verification warning: $($remainingTasks.Count) OpenPath scheduled task(s) still present"
+        }
+    }
+    if (Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue) {
+        if (Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue) {
+            $verifiedNonOperational = $false
+            Write-InstallerWarning '  Rollback verification warning: OpenPath-Restricted group still present'
+        }
+    }
+
+    $script:OpenPathInstallRollbackResult = [pscustomobject]@{
+        Attempted              = $true
+        Success                = ($rollbackErrors.Count -eq 0)
+        VerifiedNonOperational = $verifiedNonOperational
+        Errors                 = @($rollbackErrors)
+    }
+
+    Write-InstallerWarning "Rollback completed; verifiedNonOperational=$verifiedNonOperational errors=$($rollbackErrors.Count); OpenPath logs were left in place for diagnosis."
 }
 
 function Write-OpenPathInstallerFailureStatus {
@@ -740,6 +777,52 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'first-update' -Action {
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'scheduled-tasks' -Action {
+    Start-OpenPathInstallTimedStep -Name 'scheduled-tasks'
+    Register-OpenPathTask -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1 -WhatIf:$WhatIfPreference
+    Write-InstallerVerbose '  Tareas registradas'
+    Complete-OpenPathInstallTimedStep -Name 'scheduled-tasks'
+}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+
+$phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
+    try {
+        Start-OpenPathInstallTimedStep -Name 'app-control'
+        $enableNonAdminAppControl = [bool](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'enableNonAdminAppControl' -DefaultValue $true)
+        $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
+        $approvedStudentBrowsers = @($config.approvedStudentBrowsers)
+        if ($enableNonAdminAppControl) {
+            $groupSynced = [bool](& $script:OpenPathAppControlCommands.Sync -CreateIfMissing $true)
+            if (-not $groupSynced) {
+                throw 'Sync-OpenPathRestrictedGroup failed to create or synchronize the OpenPath-Restricted local group.'
+            }
+            $appControlApplied = [bool](& $script:OpenPathAppControlCommands.Set -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference)
+            if (-not $appControlApplied) {
+                throw 'Set-OpenPathNonAdminAppControl did not apply the required AppControl boundary.'
+            }
+            if (-not (& $script:OpenPathAppControlCommands.Test `
+                        -Mode $nonAdminAppControlMode `
+                        -ApprovedBrowsers $approvedStudentBrowsers)) {
+                throw 'OpenPath AppControl boundary did not validate after installation.'
+            }
+        }
+        else {
+            if (& $script:OpenPathAppControlCommands.Test) {
+                & $script:OpenPathAppControlCommands.Remove -Confirm:$false -WhatIf:$WhatIfPreference | Out-Null
+                Write-InstallerVerbose '  Stale OpenPath AppLocker rules removed'
+            }
+            Write-InstallerVerbose '  Managed browser boundary disabled; AppLocker boundary not applied'
+        }
+        Complete-OpenPathInstallTimedStep -Name 'app-control'
+    }
+    catch {
+        Complete-OpenPathInstallTimedStep -Name 'app-control' -Status 'failed' -ErrorMessage ([string]$_)
+        Write-InstallerError "ERROR: Could not configure required AppLocker boundary for non-admin users: $_"
+        throw
+    }
+}
+Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
+
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-ready' -Action {
     try {
         Start-OpenPathInstallTimedStep -Name 'firefox-managed-extension-ready'
@@ -769,55 +852,12 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-read
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
-$phaseResult = Invoke-OpenPathPlannedPhase -Name 'scheduled-tasks' -Action {
-    Start-OpenPathInstallTimedStep -Name 'scheduled-tasks'
-    Register-OpenPathTask -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1 -WhatIf:$WhatIfPreference
-    Write-InstallerVerbose '  Tareas registradas'
-    Complete-OpenPathInstallTimedStep -Name 'scheduled-tasks'
-}
-Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
-
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'realtime-updates' -Action {
     Start-OpenPathInstallTimedStep -Name 'realtime-updates'
     Start-OpenPathInstallerRealtimeUpdates `
         -ClassroomModeRequested:$classroomModeRequested `
         -MachineRegistered $machineRegistered | Out-Null
     Complete-OpenPathInstallTimedStep -Name 'realtime-updates'
-}
-Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
-
-$phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
-    try {
-        Start-OpenPathInstallTimedStep -Name 'app-control'
-        $enableNonAdminAppControl = [bool](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'enableNonAdminAppControl' -DefaultValue $true)
-        $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
-        $approvedStudentBrowsers = @($config.approvedStudentBrowsers)
-        if ($enableNonAdminAppControl) {
-            & $script:OpenPathAppControlCommands.Sync -CreateIfMissing $true | Out-Null
-            $appControlApplied = [bool](& $script:OpenPathAppControlCommands.Set -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference)
-            if (-not $appControlApplied) {
-                throw 'Set-OpenPathNonAdminAppControl did not apply the required AppControl boundary.'
-            }
-            if (-not (& $script:OpenPathAppControlCommands.Test `
-                        -Mode $nonAdminAppControlMode `
-                        -ApprovedBrowsers $approvedStudentBrowsers)) {
-                throw 'OpenPath AppControl boundary did not validate after installation.'
-            }
-        }
-        else {
-            if (& $script:OpenPathAppControlCommands.Test) {
-                & $script:OpenPathAppControlCommands.Remove -Confirm:$false -WhatIf:$WhatIfPreference | Out-Null
-                Write-InstallerVerbose '  Stale OpenPath AppLocker rules removed'
-            }
-            Write-InstallerVerbose '  Managed browser boundary disabled; AppLocker boundary not applied'
-        }
-        Complete-OpenPathInstallTimedStep -Name 'app-control'
-    }
-    catch {
-        Complete-OpenPathInstallTimedStep -Name 'app-control' -Status 'failed' -ErrorMessage ([string]$_)
-        Write-InstallerError "ERROR: Could not configure required AppLocker boundary for non-admin users: $_"
-        throw
-    }
 }
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 

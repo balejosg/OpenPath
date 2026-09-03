@@ -48,13 +48,13 @@ Describe "Watchdog Script" {
     }
 
     Context "AppControl repair" {
-        It "Resyncs the restricted group without creating it so legacy machines are not migrated" {
+        It "Reconciles the restricted group with CreateIfMissing when AppControl is enabled" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
             $content = Get-Content $helperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 "'Sync-OpenPathRestrictedGroup'",
-                'Sync-OpenPathRestrictedGroup -CreateIfMissing $false'
+                'Sync-OpenPathRestrictedGroup -CreateIfMissing $true'
             )
         }
 
@@ -71,6 +71,168 @@ Describe "Watchdog Script" {
                 '-ApprovedBrowsers $approvedStudentBrowsers',
                 'Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers'
             )
+        }
+
+        It "Emits health issues and does not swallow failure when Set-OpenPathNonAdminAppControl returns false" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            . $helperPath
+
+            function global:Get-LocalGroup {
+                param([string]$Name)
+                [pscustomobject]@{ Name = 'OpenPath-Restricted' }
+            }
+            function global:Test-OpenPathNonAdminAppControlActive {
+                param($Mode, $ApprovedBrowsers)
+                return $false
+            }
+            function global:Set-OpenPathNonAdminAppControl {
+                param($OpenPathRoot, $Mode, $ApprovedBrowsers)
+                return $false
+            }
+            function global:Test-OpenPathCaptivePortalModeActive { return $false }
+            function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+            function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+            function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+            function global:Test-FirewallActive { return $true }
+            function global:Test-DNSResolution { return $true }
+            function global:Test-DNSSinkhole { return $true }
+            function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+            function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
+            function global:Increment-WatchdogFailCount { return 1 }
+            function global:Reset-WatchdogFailCount { return 0 }
+            function global:Write-OpenPathLog {}
+
+            try {
+                $config = [pscustomobject]@{
+                    enableNonAdminAppControl = $true
+                    nonAdminAppControlMode = 'Enforced'
+                    approvedStudentBrowsers = @('Firefox')
+                }
+                $checkResult = Invoke-OpenPathWatchdogChecks `
+                    -Config $config `
+                    -PortalModeActive $false `
+                    -CaptiveState 'Direct' `
+                    -OpenPathRoot 'C:\OpenPath' `
+                    -StaleFailsafeStatePath 'C:\OpenPath\data\stale-failsafe-state.json'
+
+                $checkResult.Issues | Should -Contain 'AppControl repair failed; policy is not active in Enforced mode'
+                $checkResult.RecoveryEligibleIssues | Should -Contain 'AppControl repair failed'
+
+                $outcome = Get-OpenPathWatchdogOutcome `
+                    -Config $config `
+                    -Issues $checkResult.Issues `
+                    -RecoveryEligibleIssues $checkResult.RecoveryEligibleIssues `
+                    -StaleFailsafeActive $false `
+                    -IntegrityTampered $false `
+                    -FailOpenActive $false `
+                    -PortalModeActive $false `
+                    -WatchdogFailCountPath (Join-Path $TestDrive 'fails.txt') `
+                    -OpenPathRoot 'C:\OpenPath'
+
+                $outcome.Status | Should -Be 'DEGRADED'
+            }
+            finally {
+                Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathCaptivePortalModeActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathEgressFloorDrift -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-FirewallActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-DNSResolution -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathDnsFailsafeState -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
+                Remove-Item Function:\Increment-WatchdogFailCount -ErrorAction SilentlyContinue
+                Remove-Item Function:\Reset-WatchdogFailCount -ErrorAction SilentlyContinue
+                Remove-Item Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Surfaces health issue when required OpenPath-Restricted group is missing and cannot be recreated" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            . $helperPath
+
+            function global:Get-LocalGroup {
+                param([string]$Name)
+                throw "Group not found"
+            }
+            function global:Sync-OpenPathRestrictedGroup {
+                param([bool]$CreateIfMissing)
+                return $false
+            }
+            function global:Test-OpenPathNonAdminAppControlActive {
+                param($Mode, $ApprovedBrowsers)
+                return $true
+            }
+            function global:Test-OpenPathCaptivePortalModeActive { return $false }
+            function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+            function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+            function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+            function global:Test-FirewallActive { return $true }
+            function global:Test-DNSResolution { return $true }
+            function global:Test-DNSSinkhole { return $true }
+            function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+            function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
+            function global:Increment-WatchdogFailCount { return 1 }
+            function global:Reset-WatchdogFailCount { return 0 }
+            function global:Write-OpenPathLog {}
+
+            try {
+                $config = [pscustomobject]@{
+                    enableNonAdminAppControl = $true
+                    nonAdminAppControlMode = 'Enforced'
+                    approvedStudentBrowsers = @('Firefox')
+                }
+                $checkResult = Invoke-OpenPathWatchdogChecks `
+                    -Config $config `
+                    -PortalModeActive $false `
+                    -CaptiveState 'Direct' `
+                    -OpenPathRoot 'C:\OpenPath' `
+                    -StaleFailsafeStatePath 'C:\OpenPath\data\stale-failsafe-state.json'
+
+                $checkResult.Issues | Should -Contain 'OpenPath-Restricted local group is absent'
+                $checkResult.RecoveryEligibleIssues | Should -Contain 'OpenPath-Restricted group missing'
+
+                $outcome = Get-OpenPathWatchdogOutcome `
+                    -Config $config `
+                    -Issues $checkResult.Issues `
+                    -RecoveryEligibleIssues $checkResult.RecoveryEligibleIssues `
+                    -StaleFailsafeActive $false `
+                    -IntegrityTampered $false `
+                    -FailOpenActive $false `
+                    -PortalModeActive $false `
+                    -WatchdogFailCountPath (Join-Path $TestDrive 'fails.txt') `
+                    -OpenPathRoot 'C:\OpenPath'
+
+                $outcome.Status | Should -Be 'DEGRADED'
+            }
+            finally {
+                Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
+                Remove-Item Function:\Sync-OpenPathRestrictedGroup -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathCaptivePortalModeActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathEgressFloorDrift -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-FirewallActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-DNSResolution -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathDnsFailsafeState -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
+                Remove-Item Function:\Increment-WatchdogFailCount -ErrorAction SilentlyContinue
+                Remove-Item Function:\Reset-WatchdogFailCount -ErrorAction SilentlyContinue
+                Remove-Item Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+            }
         }
     }
 

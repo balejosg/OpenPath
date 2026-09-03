@@ -666,6 +666,111 @@ Describe "AppControl Module" {
                 Remove-Item Function:\Get-Service -ErrorAction SilentlyContinue
             }
         }
+
+        It "Returns false when effective AppLocker policy is empty or missing collections" {
+            function global:Set-AppLockerPolicy {}
+            function global:Get-AppLockerPolicy {
+                param([switch]$Local, [switch]$Effective, [switch]$Xml)
+                if ($Effective) {
+                    return '<AppLockerPolicy Version="1" />'
+                }
+                $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+                return (New-OpenPathAppLockerPolicyXml -Spec $spec)
+            }
+            function global:Get-Service {
+                [PSCustomObject]@{ Name = 'AppIDSvc'; Status = 'Running' }
+            }
+
+            try {
+                Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+            }
+            finally {
+                Remove-Item Function:\Set-AppLockerPolicy -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-AppLockerPolicy -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-Service -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Returns false when Test-AppLockerPolicy allows an arbitrary user-writable executable by default" {
+            function global:Set-AppLockerPolicy {}
+            function global:Get-AppLockerPolicy {
+                param([switch]$Local, [switch]$Effective, [switch]$Xml)
+                if ($Xml) {
+                    $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+                    return (New-OpenPathAppLockerPolicyXml -Spec $spec)
+                }
+                return [pscustomobject]@{
+                    RuleCollections = @([pscustomobject]@{ Type = 'Exe' }, [pscustomobject]@{ Type = 'Appx' })
+                }
+            }
+            function global:Get-Service {
+                [PSCustomObject]@{ Name = 'AppIDSvc'; Status = 'Running' }
+            }
+            function global:Test-AppLockerPolicy {
+                param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject)
+                @($Path | ForEach-Object {
+                    [pscustomobject]@{
+                        FilePath = $_
+                        PolicyDecision = 'AllowedByDefault'
+                        MatchingRule = $null
+                    }
+                })
+            }
+
+            try {
+                Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+            }
+            finally {
+                Remove-Item Function:\Set-AppLockerPolicy -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-AppLockerPolicy -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-Service -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Returns true when local and effective policies and Test-AppLockerPolicy validate expected enforcement" {
+            function global:Set-AppLockerPolicy {}
+            function global:Get-AppLockerPolicy {
+                param([switch]$Local, [switch]$Effective, [switch]$Xml)
+                if ($Xml) {
+                    $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+                    return (New-OpenPathAppLockerPolicyXml -Spec $spec)
+                }
+                return [pscustomobject]@{
+                    RuleCollections = @([pscustomobject]@{ Type = 'Exe' }, [pscustomobject]@{ Type = 'Appx' })
+                }
+            }
+            function global:Get-Service {
+                [PSCustomObject]@{ Name = 'AppIDSvc'; Status = 'Running' }
+            }
+            function global:Test-AppLockerPolicy {
+                param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject)
+                @($Path | ForEach-Object {
+                    $decision = if ($_ -like '*firefox.exe') {
+                        'Allowed'
+                    } elseif ($_ -like '*msedge.exe') {
+                        'Denied'
+                    } else {
+                        'DeniedByDefault'
+                    }
+                    [pscustomobject]@{
+                        FilePath = $_
+                        PolicyDecision = $decision
+                        MatchingRule = 'rule'
+                    }
+                })
+            }
+
+            try {
+                Test-OpenPathNonAdminAppControlActive | Should -BeTrue
+            }
+            finally {
+                Remove-Item Function:\Set-AppLockerPolicy -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-AppLockerPolicy -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-Service -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     Context "Restricted group SID and membership sync" {

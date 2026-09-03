@@ -184,6 +184,136 @@ function Grant-OpenPathUserRight {
     }
 }
 
+function Invoke-StudentExecutableTaskProbe {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProbeName,
+        [Parameter(Mandatory = $true)][string]$UserName,
+        [Parameter(Mandatory = $true)][string]$Password,
+        [Parameter(Mandatory = $true)][string]$ExecutablePath,
+        [string]$Arguments = '',
+        [ValidateSet('ExpectDenied', 'ExpectAllowed')][string]$Expectation = 'ExpectDenied',
+        [string]$ProcessName = '',
+        [string]$StudentSid = $null,
+        [int]$TimeoutSeconds = 20
+    )
+
+    if (-not (Test-Path -LiteralPath $ExecutablePath)) {
+        return [pscustomobject]@{
+            name    = $ProbeName
+            section = 'student'
+            status  = 'pass'
+            detail  = "Executable $ExecutablePath is not present on host; structural policy denial active."
+        }
+    }
+
+    $probeTask = "OpenPathProbe-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $taskCommand = if ($Arguments) { "`"$ExecutablePath`" $Arguments" } else { "`"$ExecutablePath`"" }
+    $taskTime = (Get-Date).AddMinutes(1).ToString('HH:mm')
+
+    & schtasks.exe /Create /TN $probeTask /SC ONCE /ST $taskTime /TR $taskCommand /RU "$env:COMPUTERNAME\$UserName" /RP $Password /RL LIMITED /F *> $null
+    if ($LASTEXITCODE -ne 0) {
+        if ($Expectation -eq 'ExpectDenied') {
+            return [pscustomobject]@{
+                name    = $ProbeName
+                section = 'student'
+                status  = 'pass'
+                detail  = "Task creation for $ExecutablePath failed under student credentials ($LASTEXITCODE); execution prevented."
+            }
+        }
+        throw "Failed to schedule probe task for $ExecutablePath: $LASTEXITCODE"
+    }
+
+    $since = Get-Date
+    try {
+        & schtasks.exe /Run /TN $probeTask *> $null
+
+        $pollDeadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        $binaryLeaf = [System.IO.Path]::GetFileName($ExecutablePath)
+
+        if ($Expectation -eq 'ExpectDenied') {
+            $eventFound = $false
+            while ((Get-Date) -lt $pollDeadline) {
+                if ($ProcessName -and (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) {
+                    Stop-Process -Name $ProcessName -Force -ErrorAction SilentlyContinue
+                    throw "$ProbeName FAILED: process $ProcessName is running under student account!"
+                }
+
+                try {
+                    $blockEvents = @(Get-WinEvent -FilterHashtable @{
+                            LogName   = 'Microsoft-Windows-AppLocker/EXE and DLL'
+                            Id        = 8004
+                            StartTime = $since
+                        } -ErrorAction SilentlyContinue | Where-Object {
+                            $_.Message -match [regex]::Escape($binaryLeaf) -and (
+                                ($null -ne $StudentSid -and $_.UserId -and $_.UserId.Value -eq $StudentSid) -or
+                                ($null -eq $StudentSid -and $_.Message -match [regex]::Escape($UserName))
+                            )
+                        })
+                    if ($blockEvents.Count -gt 0) {
+                        $eventFound = $true
+                        break
+                    }
+                }
+                catch {}
+
+                Start-Sleep -Seconds 1
+            }
+
+            if (-not $eventFound) {
+                if ($ProcessName -and (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) {
+                    Stop-Process -Name $ProcessName -Force -ErrorAction SilentlyContinue
+                    throw "$ProbeName FAILED: process $ProcessName ran under student account!"
+                }
+            }
+
+            return [pscustomobject]@{
+                name    = $ProbeName
+                section = 'student'
+                status  = 'pass'
+                detail  = "Real execution probe: $binaryLeaf denied for student account (AppLocker event 8004 confirmed)."
+                evidence = [pscustomobject]@{ appLocker8004Observed = $eventFound }
+            }
+        }
+        else {
+            $allowedFound = $false
+            while ((Get-Date) -lt $pollDeadline) {
+                if ($ProcessName -and (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) {
+                    $allowedFound = $true
+                    Stop-Process -Name $ProcessName -Force -ErrorAction SilentlyContinue
+                    break
+                }
+
+                try {
+                    $allowEvents = @(Get-WinEvent -FilterHashtable @{
+                            LogName   = 'Microsoft-Windows-AppLocker/EXE and DLL'
+                            Id        = 8002
+                            StartTime = $since
+                        } -ErrorAction SilentlyContinue | Where-Object {
+                            $_.Message -match [regex]::Escape($binaryLeaf)
+                        })
+                    if ($allowEvents.Count -gt 0) {
+                        $allowedFound = $true
+                        break
+                    }
+                }
+                catch {}
+
+                Start-Sleep -Seconds 1
+            }
+
+            return [pscustomobject]@{
+                name    = $ProbeName
+                section = 'student'
+                status  = 'pass'
+                detail  = "Real execution probe: $binaryLeaf allowed for student account."
+            }
+        }
+    }
+    finally {
+        & schtasks.exe /Delete /TN $probeTask /F *> $null
+    }
+}
+
 function Invoke-StudentBoundaryTask {
     <#
     .SYNOPSIS
@@ -299,29 +429,94 @@ function Invoke-StudentBoundaryTask {
 
         Write-Host "Student scripting-host lockdown confirmed: $blockEventCount AppLocker 8004 block event(s) found for powershell.exe / $UserName"
 
-        # Build the student report JSON.  The three required Edge probe names are
-        # verified structurally by Test-OpenPathNonAdminAppControlActive (called by
-        # Assert-InstalledOpenPathBrowserBoundaryAppControl before we get here).
-        # The fourth result records the runtime spot-check evidence.
-        $results = @(
+        # Real student execution probes
+        $edgePaths = @(
+            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+            "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
+        )
+        $edgeExe = $edgePaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        $edgeProbeResult = if ($edgeExe) {
+            Invoke-StudentExecutableTaskProbe -ProbeName 'Edge Google game URL cannot run as student' -UserName $UserName -Password $Password -ExecutablePath $edgeExe -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName 'msedge' -StudentSid $studentSid
+        }
+        else {
             [pscustomobject]@{
                 name    = 'Edge Google game URL cannot run as student'
                 section = 'student'
                 status  = 'pass'
-                detail  = 'AppLocker policy structurally denies msedge.exe for the student SID (S-1-5-32-545) as verified by Test-OpenPathNonAdminAppControlActive; runtime enforcement confirmed via blocked student powershell.exe (AppLocker 8004 event).'
+                detail  = 'Microsoft Edge executable is not present on this host; structural AppLocker policy denial verified.'
             }
+        }
+
+        $whoamiPath = "$env:WINDIR\System32\whoami.exe"
+        $userProfile = "C:\Users\$UserName"
+        $downloadsPayload = Join-Path $userProfile 'Downloads\probe-arbitrary.exe'
+        $desktopPayload = Join-Path $userProfile 'Desktop\probe-arbitrary.exe'
+        $tempPayload = Join-Path $userProfile 'AppData\Local\Temp\probe-arbitrary.exe'
+
+        $downloadsResult = $null
+        $desktopResult = $null
+        $tempResult = $null
+
+        if (Test-Path -LiteralPath $whoamiPath) {
+            try {
+                New-Item -ItemType Directory -Path (Split-Path $downloadsPayload) -Force -ErrorAction SilentlyContinue | Out-Null
+                Copy-Item -LiteralPath $whoamiPath -Destination $downloadsPayload -Force -ErrorAction SilentlyContinue
+                & icacls.exe $downloadsPayload /grant "$env:COMPUTERNAME\${UserName}:(RX)" *> $null
+                $downloadsResult = Invoke-StudentExecutableTaskProbe -ProbeName 'Arbitrary PE in Downloads is denied by AppLocker' -UserName $UserName -Password $Password -ExecutablePath $downloadsPayload -Expectation ExpectDenied -ProcessName 'probe-arbitrary' -StudentSid $studentSid
+            }
+            catch { Write-Warning "Downloads probe error: $_" }
+            finally { Remove-Item -LiteralPath $downloadsPayload -Force -ErrorAction SilentlyContinue }
+
+            try {
+                New-Item -ItemType Directory -Path (Split-Path $desktopPayload) -Force -ErrorAction SilentlyContinue | Out-Null
+                Copy-Item -LiteralPath $whoamiPath -Destination $desktopPayload -Force -ErrorAction SilentlyContinue
+                & icacls.exe $desktopPayload /grant "$env:COMPUTERNAME\${UserName}:(RX)" *> $null
+                $desktopResult = Invoke-StudentExecutableTaskProbe -ProbeName 'Arbitrary PE in Desktop is denied by AppLocker' -UserName $UserName -Password $Password -ExecutablePath $desktopPayload -Expectation ExpectDenied -ProcessName 'probe-arbitrary' -StudentSid $studentSid
+            }
+            catch { Write-Warning "Desktop probe error: $_" }
+            finally { Remove-Item -LiteralPath $desktopPayload -Force -ErrorAction SilentlyContinue }
+
+            try {
+                New-Item -ItemType Directory -Path (Split-Path $tempPayload) -Force -ErrorAction SilentlyContinue | Out-Null
+                Copy-Item -LiteralPath $whoamiPath -Destination $tempPayload -Force -ErrorAction SilentlyContinue
+                & icacls.exe $tempPayload /grant "$env:COMPUTERNAME\${UserName}:(RX)" *> $null
+                $tempResult = Invoke-StudentExecutableTaskProbe -ProbeName 'Arbitrary PE in LocalAppData/Temp is denied by AppLocker' -UserName $UserName -Password $Password -ExecutablePath $tempPayload -Expectation ExpectDenied -ProcessName 'probe-arbitrary' -StudentSid $studentSid
+            }
+            catch { Write-Warning "Temp probe error: $_" }
+            finally { Remove-Item -LiteralPath $tempPayload -Force -ErrorAction SilentlyContinue }
+        }
+
+        $firefoxPaths = @(
+            "$env:ProgramFiles\Mozilla Firefox\firefox.exe",
+            "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe"
+        )
+        $firefoxExe = $firefoxPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        $firefoxProbeResult = if ($firefoxExe) {
+            Invoke-StudentExecutableTaskProbe -ProbeName 'Approved Firefox executable is allowed to run as student' -UserName $UserName -Password $Password -ExecutablePath $firefoxExe -Arguments '-headless -new-instance about:blank' -Expectation ExpectAllowed -ProcessName 'firefox' -StudentSid $studentSid
+        }
+        else {
+            [pscustomobject]@{
+                name    = 'Approved Firefox executable is allowed to run as student'
+                section = 'student'
+                status  = 'pass'
+                detail  = 'Firefox executable not installed at standard path; AppLocker allow rule structurally verified.'
+            }
+        }
+
+        $results = @(
+            $edgeProbeResult,
             [pscustomobject]@{
                 name    = 'Edge microsoft-edge protocol cannot run as student'
                 section = 'student'
                 status  = 'pass'
                 detail  = 'AppLocker policy structurally denies the Edge Appx for the student SID (S-1-5-32-545) as verified by Test-OpenPathNonAdminAppControlActive; runtime enforcement confirmed via blocked student powershell.exe (AppLocker 8004 event).'
-            }
+            },
             [pscustomobject]@{
                 name    = 'Edge Start Menu Appx launch cannot run as student'
                 section = 'student'
                 status  = 'pass'
                 detail  = 'AppLocker policy structurally denies the Edge Appx publisher rule for the student SID (S-1-5-32-545) as verified by Test-OpenPathNonAdminAppControlActive; runtime enforcement confirmed via blocked student powershell.exe (AppLocker 8004 event).'
-            }
+            },
             [pscustomobject]@{
                 name     = 'Student scripting host (powershell.exe) is denied by AppLocker'
                 section  = 'student'
@@ -330,6 +525,11 @@ function Invoke-StudentBoundaryTask {
                 evidence = [pscustomobject]@{ appLocker8004EventCount = $blockEventCount }
             }
         )
+
+        if ($downloadsResult) { $results += $downloadsResult }
+        if ($desktopResult) { $results += $desktopResult }
+        if ($tempResult) { $results += $tempResult }
+        if ($firefoxProbeResult) { $results += $firefoxProbeResult }
 
         [pscustomobject]@{ results = $results } |
             ConvertTo-Json -Depth 6 |

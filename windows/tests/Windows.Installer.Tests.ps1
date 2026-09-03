@@ -45,10 +45,10 @@ Describe "Installer" {
                 'enrollment',
                 'native-host',
                 'first-update',
-                'firefox-managed-extension-ready',
                 'scheduled-tasks',
-                'realtime-updates',
                 'app-control',
+                'firefox-managed-extension-ready',
+                'realtime-updates',
                 'browser-inventory',
                 'integrity',
                 'timing',
@@ -195,10 +195,35 @@ Describe "Installer" {
                 'Restore-OpenPathInstallerDnsSettings',
                 'Remove-OpenPathInstallerFirewallRules',
                 'Remove-OpenPathInstallerAppLockerRules',
+                'Remove-OpenPathInstallerRestrictedGroup',
+                'Remove-OpenPathInstallerBrowserArtifacts',
+                'Stop-OpenPathInstallerAcrylicService -KeepAcrylic',
+                'Remove-Item -LiteralPath $configPath',
+                '$script:OpenPathInstallRollbackResult',
+                'VerifiedNonOperational',
                 'trap {',
                 'throw "Installer phase failed: $($Result.Name)"'
             )
             $content | Should -Not -Match 'Assert-OpenPathInstallPhaseSucceeded[\s\S]*?exit 1'
+        }
+
+        It "Does not leave config AppControl=Enforced with no watchdog and no AppLocker after failure in firefox-managed-extension-ready" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            $scheduledTasksIndex = $content.IndexOf("Invoke-OpenPathPlannedPhase -Name 'scheduled-tasks'")
+            $appControlIndex = $content.IndexOf("Invoke-OpenPathPlannedPhase -Name 'app-control'")
+            $firefoxReadyIndex = $content.IndexOf("Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-ready'")
+
+            $scheduledTasksIndex | Should -BeGreaterThan -1
+            $appControlIndex | Should -BeGreaterThan -1
+            $firefoxReadyIndex | Should -BeGreaterThan -1
+            $scheduledTasksIndex | Should -BeLessThan $firefoxReadyIndex
+            $appControlIndex | Should -BeLessThan $firefoxReadyIndex
+
+            $rollbackIndex = $content.IndexOf('Invoke-OpenPathInstallRollback')
+            $rollbackIndex | Should -BeGreaterThan -1
+            $content | Should -Match '(?s)function Invoke-OpenPathInstallRollback[\s\S]*?Remove-Item -LiteralPath \$configPath[\s\S]*?\$script:OpenPathInstallRollbackResult'
         }
     }
 
@@ -1224,6 +1249,14 @@ Describe "Installer" {
             $syncIndex | Should -BeGreaterThan -1
             $setIndex | Should -BeGreaterThan -1
             $syncIndex | Should -BeLessThan $setIndex
+        }
+
+        It "Fails the app-control phase when restricted group sync returns false" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            $content | Should -Match '(?s)\$groupSynced = \[bool\]\(& \$script:OpenPathAppControlCommands\.Sync -CreateIfMissing \$true\)'
+            $content | Should -Match '(?s)if \(-not \$groupSynced\) \{.*?throw ''Sync-OpenPathRestrictedGroup failed to create or synchronize the OpenPath-Restricted local group\.'''
         }
 
         It "Fails the app-control phase when required AppControl cannot be applied and validated" {

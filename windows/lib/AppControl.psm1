@@ -986,6 +986,7 @@ function Test-OpenPathNonAdminAppControlActive {
     <#
     .SYNOPSIS
     Returns true when the live AppLocker policy matches the expected OpenPath boundary policy for the given mode.
+    Validates both local and effective policies, and evaluates runtime decisions when Test-AppLockerPolicy is available.
     #>
     [CmdletBinding()]
     param(
@@ -1003,12 +1004,107 @@ function Test-OpenPathNonAdminAppControlActive {
     }
 
     try {
-        $policyXml = [xml](Get-AppLockerPolicy -Local -Xml)
-        return [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers)
+        $localXmlText = Get-AppLockerPolicy -Local -Xml
+        if ([string]::IsNullOrWhiteSpace($localXmlText)) {
+            return $false
+        }
+        $localXml = [xml]$localXmlText
+        if (-not (Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $localXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers)) {
+            return $false
+        }
     }
     catch {
         return $false
     }
+
+    try {
+        $effectiveXmlText = Get-AppLockerPolicy -Effective -Xml
+        if ([string]::IsNullOrWhiteSpace($effectiveXmlText)) {
+            return $false
+        }
+        $effectiveXml = [xml]$effectiveXmlText
+        if (-not (Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $effectiveXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers)) {
+            return $false
+        }
+    }
+    catch {
+        return $false
+    }
+
+    if (Get-Command -Name 'Test-AppLockerPolicy' -ErrorAction SilentlyContinue) {
+        try {
+            $effectivePolicy = Get-AppLockerPolicy -Effective
+            if (-not $effectivePolicy) {
+                return $false
+            }
+            if ($effectivePolicy.PSObject.Properties['RuleCollections'] -and @($effectivePolicy.RuleCollections).Count -eq 0) {
+                return $false
+            }
+
+            $restrictedSid = Get-OpenPathRestrictedGroupSid
+            $approvedSet = Get-OpenPathApprovedBrowserSet -ApprovedBrowsers $ApprovedBrowsers
+
+            $samplePaths = @(
+                'C:\Users\alumno\Downloads\probe-arbitrary.exe',
+                'C:\Users\alumno\Desktop\probe-arbitrary.exe',
+                'C:\Users\alumno\AppData\Local\Temp\probe-arbitrary.exe'
+            )
+            $testDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $samplePaths -User $restrictedSid -ErrorAction Stop)
+            if ($testDecisions.Count -eq 0) {
+                return $false
+            }
+            foreach ($decision in $testDecisions) {
+                if ($decision.PolicyDecision -notin @('Denied', 'DeniedByDefault')) {
+                    Write-OpenPathLog "AppLocker effective evaluation failed for $($decision.FilePath): expected Denied/DeniedByDefault, observed $($decision.PolicyDecision)" -Level WARN
+                    return $false
+                }
+            }
+
+            if (-not $approvedSet.Edge) {
+                $edgeSamplePaths = @(
+                    'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+                    'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+                )
+                $edgeDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $edgeSamplePaths -User $restrictedSid -ErrorAction Stop)
+                $hasEdgeDeny = $false
+                foreach ($decision in $edgeDecisions) {
+                    if ($decision.PolicyDecision -eq 'Denied') {
+                        $hasEdgeDeny = $true
+                        break
+                    }
+                }
+                if (-not $hasEdgeDeny) {
+                    Write-OpenPathLog 'AppLocker effective evaluation failed: Edge executable was not evaluated as Denied' -Level WARN
+                    return $false
+                }
+            }
+
+            if ($approvedSet.Firefox) {
+                $firefoxSamplePaths = @(
+                    'C:\Program Files\Mozilla Firefox\firefox.exe',
+                    'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
+                )
+                $firefoxDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $firefoxSamplePaths -User $restrictedSid -ErrorAction Stop)
+                $hasFirefoxAllow = $false
+                foreach ($decision in $firefoxDecisions) {
+                    if ($decision.PolicyDecision -eq 'Allowed') {
+                        $hasFirefoxAllow = $true
+                        break
+                    }
+                }
+                if (-not $hasFirefoxAllow) {
+                    Write-OpenPathLog 'AppLocker effective evaluation failed: Firefox executable was not evaluated as Allowed' -Level WARN
+                    return $false
+                }
+            }
+        }
+        catch {
+            Write-OpenPathLog "AppLocker effective runtime policy test failed: $_" -Level WARN
+            return $false
+        }
+    }
+
+    return $true
 }
 
 function Remove-OpenPathNonAdminAppControl {
