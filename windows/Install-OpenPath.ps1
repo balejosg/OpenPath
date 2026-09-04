@@ -195,6 +195,21 @@ function Invoke-OpenPathInstallRollback {
             Write-InstallerWarning '  Rollback verification warning: OpenPath-Restricted group still present'
         }
     }
+    if (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue) {
+        try {
+            $localXml = [xml](Get-AppLockerPolicy -Local -Xml -ErrorAction SilentlyContinue)
+            if ($localXml) {
+                $residualRules = @($localXml.SelectNodes("//*[@Name and starts-with(@Name, 'OpenPath non-admin app control')]"))
+                if ($residualRules.Count -gt 0) {
+                    $verifiedNonOperational = $false
+                    Write-InstallerWarning "  Rollback verification warning: $($residualRules.Count) OpenPath AppLocker rule(s) still present in local policy"
+                }
+            }
+        }
+        catch {
+            $rollbackErrors += "applockerVerify: $_"
+        }
+    }
 
     $script:OpenPathInstallRollbackResult = [pscustomobject]@{
         Attempted              = $true
@@ -805,6 +820,18 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
                         -ApprovedBrowsers $approvedStudentBrowsers)) {
                 throw 'OpenPath AppControl boundary did not validate after installation.'
             }
+
+            # Security commit point: boundary is verified active, atomically commit state
+            if ($PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Commit AppControl security boundary')) {
+                $configPath = Join-Path $OpenPathRoot 'data\config.json'
+                if (Test-Path -LiteralPath $configPath) {
+                    $committedConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+                    $committedConfig.appControlCommitState = 'committed'
+                    $committedConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
+                }
+            }
+            $config.appControlCommitState = 'committed'
+            Write-InstallerVerbose '  AppControl security boundary committed'
         }
         else {
             if (& $script:OpenPathAppControlCommands.Test) {
@@ -895,6 +922,15 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'timing' -Action {
 Assert-OpenPathInstallPhaseSucceeded -Result $phaseResult
 
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'summary' -Action {
+    if ($PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Finalize install state')) {
+        $configPath = Join-Path $OpenPathRoot 'data\config.json'
+        if (Test-Path -LiteralPath $configPath) {
+            $finalConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+            $finalConfig.installState = 'complete'
+            $finalConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
+        }
+    }
+    $config.installState = 'complete'
     Write-OpenPathInstallerSummary `
         -ClassroomModeRequested:$classroomModeRequested `
         -Classroom $Classroom `

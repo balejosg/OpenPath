@@ -147,10 +147,11 @@ function listIgnoredPaths(repoRoot) {
       cwd: repoRoot,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, LC_ALL: 'C' },
     }).trim();
   } catch (error) {
     const message = getGitErrorMessage(error);
-    if (/not a git repository/i.test(message)) return [];
+    if (/not a git repository|no es un repositorio git/i.test(message)) return [];
     throw new Error(`Unable to inspect Git worktree for release inputs: ${message}`, {
       cause: error,
     });

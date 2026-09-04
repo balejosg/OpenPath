@@ -803,7 +803,7 @@ Describe "AppControl Module" {
             function global:Get-LocalGroupMember {
                 param($Group)
                 if ($Group -eq 'Administrators') { return @([pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } }) }
-                return @()
+                return @($global:opAddedMembers | ForEach-Object { [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } } })
             }
             function global:Get-LocalUser {
                 @(
@@ -836,7 +836,11 @@ Describe "AppControl Module" {
             function global:Get-LocalGroupMember {
                 param($Group)
                 if ($Group -eq 'Administrators') { return @([pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } }) }
-                return @([pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } })
+                $members = @([pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } })
+                if ('student2' -in $global:opAddedMembers) {
+                    $members += [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1003' } }
+                }
+                return $members
             }
             function global:Get-LocalUser {
                 @(
@@ -849,6 +853,40 @@ Describe "AppControl Module" {
 
             Sync-OpenPathRestrictedGroup -CreateIfMissing $true | Should -BeTrue
             @($global:opAddedMembers) | Should -Be @('student2')
+        }
+
+        It "Returns false when Add-LocalGroupMember throws" {
+            function global:Get-LocalGroup { [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } } }
+            function global:Get-LocalGroupMember {
+                param($Group)
+                if ($Group -eq 'Administrators') { return @([pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } }) }
+                return @()
+            }
+            function global:Get-LocalUser {
+                @(
+                    [pscustomobject]@{ Name = 'student'; Enabled = $true; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } }
+                )
+            }
+            function global:Add-LocalGroupMember { throw 'access denied adding to group' }
+
+            Sync-OpenPathRestrictedGroup -CreateIfMissing $true | Should -BeFalse
+        }
+
+        It "Returns false when a non-admin user remains missing from membership postcondition" {
+            function global:Get-LocalGroup { [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } } }
+            function global:Get-LocalGroupMember {
+                param($Group)
+                # Returns empty even after Add-LocalGroupMember
+                return @()
+            }
+            function global:Get-LocalUser {
+                @(
+                    [pscustomobject]@{ Name = 'student'; Enabled = $true; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } }
+                )
+            }
+            function global:Add-LocalGroupMember { param($Group, $Member) }
+
+            Sync-OpenPathRestrictedGroup -CreateIfMissing $true | Should -BeFalse
         }
 
         It "Removes the restricted group when it exists and is silent when absent" {

@@ -40,4 +40,75 @@ Describe "Browser Module - Enforcement status" {
             'Overall'
         )
     }
+
+    Context "Get-OpenPathAppLockerStatus lifecycle gating" {
+        BeforeAll {
+            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Browser.EnforcementStatus.psm1") -Force
+        }
+
+        It "Returns Inactive when appControlCommitState is pending" {
+            InModuleScope Browser.EnforcementStatus {
+                $cfg = [pscustomobject]@{
+                    appControlCommitState = 'pending'
+                    installState = 'complete'
+                    nonAdminAppControlMode = 'Enforced'
+                }
+                Get-OpenPathAppLockerStatus -Config $cfg | Should -Be 'Inactive'
+            }
+        }
+
+        It "Returns Inactive when installState is installing or failed" {
+            InModuleScope Browser.EnforcementStatus {
+                $cfgInstalling = [pscustomobject]@{
+                    appControlCommitState = 'committed'
+                    installState = 'installing'
+                    nonAdminAppControlMode = 'Enforced'
+                }
+                Get-OpenPathAppLockerStatus -Config $cfgInstalling | Should -Be 'Inactive'
+
+                $cfgFailed = [pscustomobject]@{
+                    appControlCommitState = 'committed'
+                    installState = 'failed'
+                    nonAdminAppControlMode = 'Enforced'
+                }
+                Get-OpenPathAppLockerStatus -Config $cfgFailed | Should -Be 'Inactive'
+            }
+        }
+
+        It "Returns Inactive when Test-OpenPathNonAdminAppControlActive returns false" {
+            InModuleScope Browser.EnforcementStatus {
+                Mock Test-OpenPathNonAdminAppControlActive { return $false }
+                $cfg = [pscustomobject]@{
+                    appControlCommitState = 'committed'
+                    installState = 'complete'
+                    nonAdminAppControlMode = 'Enforced'
+                }
+                Get-OpenPathAppLockerStatus -Config $cfg | Should -Be 'Inactive'
+            }
+        }
+
+        It "Returns Enforced when committed, complete, and AppControl is active" {
+            InModuleScope Browser.EnforcementStatus {
+                Mock Test-OpenPathNonAdminAppControlActive { return $true }
+                $cfg = [pscustomobject]@{
+                    appControlCommitState = 'committed'
+                    installState = 'complete'
+                    nonAdminAppControlMode = 'Enforced'
+                }
+                Get-OpenPathAppLockerStatus -Config $cfg | Should -Be 'Enforced'
+            }
+        }
+
+        It "Returns AuditOnly when configured for AuditOnly" {
+            InModuleScope Browser.EnforcementStatus {
+                Mock Test-OpenPathNonAdminAppControlActive { return $true }
+                $cfg = [pscustomobject]@{
+                    appControlCommitState = 'committed'
+                    installState = 'complete'
+                    nonAdminAppControlMode = 'AuditOnly'
+                }
+                Get-OpenPathAppLockerStatus -Config $cfg | Should -Be 'AuditOnly'
+            }
+        }
+    }
 }

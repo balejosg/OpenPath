@@ -57,14 +57,17 @@ function Invoke-OpenPathWatchdogPrechecks {
         $enableNonAdminAppControl = [bool]$Config.enableNonAdminAppControl
     }
 
+    $groupSyncFailed = $false
     if ($enableNonAdminAppControl -and (Get-Command -Name 'Sync-OpenPathRestrictedGroup' -ErrorAction SilentlyContinue)) {
         try {
             $groupSynced = [bool](Sync-OpenPathRestrictedGroup -CreateIfMissing $true)
             if (-not $groupSynced) {
+                $groupSyncFailed = $true
                 Write-OpenPathLog "Watchdog: OpenPath-Restricted group sync failed" -Level WARN
             }
         }
         catch {
+            $groupSyncFailed = $true
             Write-OpenPathLog "Watchdog: OpenPath-Restricted group sync failed: $_" -Level WARN
         }
     }
@@ -160,6 +163,7 @@ function Invoke-OpenPathWatchdogPrechecks {
         AuthenticatedCount = $portalObservation.AuthenticatedCount
         MinimumPortalElapsed = $portalObservation.MinimumPortalElapsed
         ShouldExitPortal = $portalObservation.ShouldExitPortal
+        GroupSyncFailed = $groupSyncFailed
     }
 }
 
@@ -288,7 +292,9 @@ function Invoke-OpenPathWatchdogChecks {
         [string]$OpenPathRoot,
 
         [Parameter(Mandatory = $true)]
-        [string]$StaleFailsafeStatePath
+        [string]$StaleFailsafeStatePath,
+
+        [bool]$GroupSyncFailed = $false
     )
 
     $issues = @()
@@ -591,11 +597,14 @@ function Invoke-OpenPathWatchdogChecks {
         }
 
         if ($enableNonAdminAppControl) {
+            $groupReconciliationFailed = $false
             if (Get-Command -Name 'Get-LocalGroup' -ErrorAction SilentlyContinue) {
+                $groupMissing = $false
                 try {
                     $null = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
                 }
                 catch {
+                    $groupMissing = $true
                     Write-OpenPathLog "Watchdog: Required OpenPath-Restricted group missing; attempting recreation" -Level WARN
                     $recreated = $false
                     if (Get-Command -Name 'Sync-OpenPathRestrictedGroup' -ErrorAction SilentlyContinue) {
@@ -612,14 +621,47 @@ function Invoke-OpenPathWatchdogChecks {
                         Write-OpenPathLog "Watchdog: Failed to recreate required OpenPath-Restricted local group" -Level ERROR
                     }
                 }
+
+                if (-not $groupMissing) {
+                    $syncOk = $false
+                    if ($GroupSyncFailed) {
+                        $syncOk = $false
+                    }
+                    elseif (Get-Command -Name 'Sync-OpenPathRestrictedGroup' -ErrorAction SilentlyContinue) {
+                        try {
+                            $syncOk = [bool](Sync-OpenPathRestrictedGroup -CreateIfMissing $false)
+                        }
+                        catch {
+                            $syncOk = $false
+                        }
+                    }
+                    else {
+                        $syncOk = $true
+                    }
+
+                    if (-not $syncOk) {
+                        $groupReconciliationFailed = $true
+                        $issues += "OpenPath-Restricted group membership reconciliation failed"
+                        $recoveryEligibleIssues += "OpenPath-Restricted group membership reconciliation failed"
+                        Write-OpenPathLog "Watchdog: OpenPath-Restricted group membership reconciliation failed" -Level ERROR
+                    }
+                }
+            }
+
+            $uncommittedState = $false
+            if ($Config -and $Config.PSObject.Properties['appControlCommitState'] -and $Config.appControlCommitState -and $Config.appControlCommitState -ne 'committed') {
+                $uncommittedState = $true
+                $issues += "AppControl commit state is uncommitted ($($Config.appControlCommitState))"
+                $recoveryEligibleIssues += "AppControl uncommitted"
+                Write-OpenPathLog "Watchdog: AppControl commit state is uncommitted ($($Config.appControlCommitState))" -Level WARN
             }
 
             if (Get-Command -Name 'Test-OpenPathNonAdminAppControlActive' -ErrorAction SilentlyContinue) {
                 $appControlActive = [bool](Test-OpenPathNonAdminAppControlActive `
                         -Mode $mode `
                         -ApprovedBrowsers $approvedStudentBrowsers)
-                if (-not $appControlActive) {
-                    Write-OpenPathLog "Watchdog: AppControl is not active in $mode mode; attempting repair" -Level WARN
+                if (-not $appControlActive -or $uncommittedState) {
+                    Write-OpenPathLog "Watchdog: AppControl is not active or uncommitted in $mode mode; attempting repair" -Level WARN
                     $repairResult = $false
                     if (Get-Command -Name 'Set-OpenPathNonAdminAppControl' -ErrorAction SilentlyContinue) {
                         try {
@@ -630,10 +672,45 @@ function Invoke-OpenPathWatchdogChecks {
                             Write-OpenPathLog "Watchdog: Exception during AppControl repair: $_" -Level ERROR
                         }
                     }
-                    if (-not $repairResult -or -not (Test-OpenPathNonAdminAppControlActive -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers)) {
+                    $verifiedActive = $false
+                    if ($repairResult) {
+                        try {
+                            $verifiedActive = [bool](Test-OpenPathNonAdminAppControlActive -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers)
+                        }
+                        catch {
+                            $verifiedActive = $false
+                        }
+                    }
+
+                    if (-not $repairResult) {
                         $issues += "AppControl repair failed; policy is not active in $mode mode"
                         $recoveryEligibleIssues += "AppControl repair failed"
                         Write-OpenPathLog "Watchdog: AppControl repair failed; effective policy is not active in $mode mode" -Level ERROR
+                    }
+                    elseif (-not $verifiedActive) {
+                        $issues += "AppControl effective policy invalid"
+                        $recoveryEligibleIssues += "AppControl effective policy invalid"
+                        Write-OpenPathLog "Watchdog: AppControl repair reported success but effective policy is invalid in $mode mode" -Level ERROR
+                    }
+                    elseif ($uncommittedState -and -not $groupReconciliationFailed) {
+                        try {
+                            $configPath = Join-Path $OpenPathRoot 'data\config.json'
+                            if (Test-Path -LiteralPath $configPath) {
+                                $currentConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+                                $currentConfig.appControlCommitState = 'committed'
+                                if ($currentConfig.PSObject.Properties['installState'] -and $currentConfig.installState -eq 'installing') {
+                                    $currentConfig.installState = 'complete'
+                                }
+                                $currentConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
+                                $Config.appControlCommitState = 'committed'
+                                $issues = @($issues | Where-Object { $_ -notlike 'AppControl commit state is uncommitted*' })
+                                $recoveryEligibleIssues = @($recoveryEligibleIssues | Where-Object { $_ -ne 'AppControl uncommitted' })
+                                Write-OpenPathLog "Watchdog: AppControl converged and committed to config.json"
+                            }
+                        }
+                        catch {
+                            Write-OpenPathLog "Watchdog: Failed to persist converged AppControl commit state: $_" -Level WARN
+                        }
                     }
                     else {
                         Write-OpenPathLog "Watchdog: AppControl successfully repaired and verified in $mode mode"
@@ -666,9 +743,11 @@ function Get-OpenPathWatchdogOutcome {
         [PSCustomObject]$Config,
 
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [string[]]$Issues,
 
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [string[]]$RecoveryEligibleIssues,
 
         [Parameter(Mandatory = $true)]

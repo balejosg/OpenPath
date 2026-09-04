@@ -207,23 +207,176 @@ Describe "Installer" {
             $content | Should -Not -Match 'Assert-OpenPathInstallPhaseSucceeded[\s\S]*?exit 1'
         }
 
-        It "Does not leave config AppControl=Enforced with no watchdog and no AppLocker after failure in firefox-managed-extension-ready" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
-            $content = Get-Content $scriptPath -Raw
+        It "Executes rollback leaving host VerifiedNonOperational when firefox-managed-extension-ready fails after app-control" {
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
 
-            $scheduledTasksIndex = $content.IndexOf("Invoke-OpenPathPlannedPhase -Name 'scheduled-tasks'")
-            $appControlIndex = $content.IndexOf("Invoke-OpenPathPlannedPhase -Name 'app-control'")
-            $firefoxReadyIndex = $content.IndexOf("Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-ready'")
+            $root = Join-Path $TestDrive "rollback-lifecycle-test"
+            $dataDir = Join-Path $root "data"
+            New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+            $configPath = Join-Path $dataDir "config.json"
 
-            $scheduledTasksIndex | Should -BeGreaterThan -1
-            $appControlIndex | Should -BeGreaterThan -1
-            $firefoxReadyIndex | Should -BeGreaterThan -1
-            $scheduledTasksIndex | Should -BeLessThan $firefoxReadyIndex
-            $appControlIndex | Should -BeLessThan $firefoxReadyIndex
+            if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Get-ScheduledTask { param($TaskName) } }
+            if (-not (Get-Command Stop-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Stop-ScheduledTask { param($TaskName, $TaskPath) } }
+            if (-not (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Unregister-ScheduledTask { param($TaskName, $TaskPath, [switch]$Confirm) } }
+            if (-not (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)) { function global:Get-LocalGroup { param($Name) } }
+            if (-not (Get-Command Remove-LocalGroup -ErrorAction SilentlyContinue)) { function global:Remove-LocalGroup { param($Name) } }
+            if (-not (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue)) { function global:Get-AppLockerPolicy { param([switch]$Local, [switch]$Xml) } }
+            if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) { function global:Set-AppLockerPolicy { param($XMLPolicy) } }
 
-            $rollbackIndex = $content.IndexOf('Invoke-OpenPathInstallRollback')
-            $rollbackIndex | Should -BeGreaterThan -1
-            $content | Should -Match '(?s)function Invoke-OpenPathInstallRollback[\s\S]*?Remove-Item -LiteralPath \$configPath[\s\S]*?\$script:OpenPathInstallRollbackResult'
+            $script:mockTasks = [System.Collections.Generic.List[string]]::new()
+            $script:mockGroupPresent = $true
+            $script:mockAppLockerRules = [System.Collections.Generic.List[string]]::new()
+
+            Mock Get-ScheduledTask {
+                param($TaskName)
+                return @($script:mockTasks | ForEach-Object { [pscustomobject]@{ TaskName = $_; TaskPath = '\OpenPath\' } })
+            }
+            Mock Stop-ScheduledTask { param($TaskName, $TaskPath) }
+            Mock Unregister-ScheduledTask {
+                param($TaskName, $TaskPath, [switch]$Confirm)
+                [void]$script:mockTasks.Remove($TaskName)
+            }
+            Mock Get-LocalGroup {
+                param($Name)
+                if ($script:mockGroupPresent) { return [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
+                return $null
+            }
+            Mock Remove-LocalGroup {
+                param($Name)
+                $script:mockGroupPresent = $false
+            }
+            Mock Get-AppLockerPolicy {
+                param([switch]$Local, [switch]$Xml)
+                $ruleNodes = ($script:mockAppLockerRules | ForEach-Object { "<FilePathRule Id=`"$([guid]::NewGuid())`" Name=`"OpenPath non-admin app control - $_`" Action=`"Deny`" UserOrGroupSid=`"S-1-5-32-545`"><Conditions><FilePathCondition Path=`"%OSDRIVE%\*`" /></Conditions></FilePathRule>" }) -join ''
+                return "<AppLockerPolicy Version=`"1`"><RuleCollection Type=`"Exe`" EnforcementMode=`"Enabled`">$ruleNodes</RuleCollection></AppLockerPolicy>"
+            }
+            Mock Set-AppLockerPolicy {
+                param($XMLPolicy)
+                $script:mockAppLockerRules.Clear()
+            }
+            Mock Restore-OpenPathInstallerDnsSettings { }
+            Mock Remove-OpenPathInstallerFirewallRules { }
+            Mock Remove-OpenPathInstallerBrowserArtifacts { }
+            Mock Stop-OpenPathInstallerAcrylicService { }
+
+            $script:OpenPathInstallerRollingBack = $false
+            $script:OpenPathInstallRollbackResult = $null
+
+            # 1. Configuration phase
+            $phaseConfig = Invoke-OpenPathInstallPhase -Phase (New-OpenPathInstallPhase -Name 'configuration' -Action {
+                $initialConfig = [ordered]@{
+                    installState = 'installing'
+                    appControlCommitState = 'pending'
+                    enableNonAdminAppControl = $true
+                    nonAdminAppControlMode = 'Enforced'
+                    approvedStudentBrowsers = @('Firefox')
+                }
+                $initialConfig | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
+            })
+            $phaseConfig.Success | Should -BeTrue
+            Test-Path -LiteralPath $configPath | Should -BeTrue
+
+            # 2. Scheduled-tasks phase
+            $phaseTasks = Invoke-OpenPathInstallPhase -Phase (New-OpenPathInstallPhase -Name 'scheduled-tasks' -Action {
+                $script:mockTasks.Add('OpenPath-Update')
+                $script:mockTasks.Add('OpenPath-Watchdog')
+            })
+            $phaseTasks.Success | Should -BeTrue
+            $script:mockTasks.Count | Should -Be 2
+
+            # 3. App-control phase: configures boundary, commits security point
+            $phaseAppControl = Invoke-OpenPathInstallPhase -Phase (New-OpenPathInstallPhase -Name 'app-control' -Action {
+                $script:mockAppLockerRules.Add('BlockDownloads')
+                $committed = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+                $committed.appControlCommitState = 'committed'
+                $committed | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
+            })
+            $phaseAppControl.Success | Should -BeTrue
+            (Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json).appControlCommitState | Should -Be 'committed'
+
+            # 4. Firefox-managed-extension-ready phase: throws failure
+            $phaseFirefox = Invoke-OpenPathInstallPhase -Phase (New-OpenPathInstallPhase -Name 'firefox-managed-extension-ready' -Action {
+                throw 'Firefox managed extension policy is not ready'
+            })
+            $phaseFirefox.Success | Should -BeFalse
+
+            # 5. Rollback triggered
+            $rollbackResult = Invoke-OpenPathInstallRollback -OpenPathRoot $root
+
+            # 6. Host verified non-operational and clean
+            $rollbackResult.Attempted | Should -BeTrue
+            $rollbackResult.Success | Should -BeTrue
+            $rollbackResult.VerifiedNonOperational | Should -BeTrue
+            $rollbackResult.Errors.Count | Should -Be 0
+            Test-Path -LiteralPath $configPath | Should -BeFalse
+            $script:mockTasks.Count | Should -Be 0
+            $script:mockGroupPresent | Should -BeFalse
+            $script:mockAppLockerRules.Count | Should -Be 0
+        }
+
+        It "Refuses full health and degrades when interrupted install reboot occurs with pending commitState" {
+            . (Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1")
+            Import-Module (Join-Path $PSScriptRoot ".." "lib" "Browser.EnforcementStatus.psm1") -Force
+
+            $interruptedConfig = [pscustomobject]@{
+                installState = 'installing'
+                appControlCommitState = 'pending'
+                enableNonAdminAppControl = $true
+                nonAdminAppControlMode = 'Enforced'
+                approvedStudentBrowsers = @('Firefox')
+                enableIntegrityChecks = $false
+                enableAcrylic = $false
+                enableLocalDns = $false
+                whitelistUrl = 'https://example.com/whitelist'
+                apiUrl = ''
+                dnsHealthCheckDomain = 'example.com'
+            }
+
+            $status = InModuleScope Browser.EnforcementStatus -Parameters @{ Cfg = $interruptedConfig } {
+                Get-OpenPathAppLockerStatus -Config $Cfg
+            }
+            $status | Should -Be 'Inactive'
+
+            if (-not (Get-Command Write-OpenPathLog -ErrorAction SilentlyContinue)) { function global:Write-OpenPathLog { } }
+            if (-not (Get-Command Increment-WatchdogFailCount -ErrorAction SilentlyContinue)) { function global:Increment-WatchdogFailCount { return 1 } }
+            if (-not (Get-Command Reset-WatchdogFailCount -ErrorAction SilentlyContinue)) { function global:Reset-WatchdogFailCount { return 0 } }
+            if (-not (Get-Command Get-OpenPathEndpointPolicyState -ErrorAction SilentlyContinue)) { function global:Get-OpenPathEndpointPolicyState { return [pscustomobject]@{ FailOpenActive = $false; ProtectedModeEligible = $true } } }
+            if (-not (Get-Command Get-OpenPathWhitelistSectionsFromFile -ErrorAction SilentlyContinue)) { function global:Get-OpenPathWhitelistSectionsFromFile { return [pscustomobject]@{} } }
+            if (-not (Get-Command Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks -ErrorAction SilentlyContinue)) { function global:Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks { return [pscustomobject]@{ Issues = @() } } }
+            if (-not (Get-Command Get-Service -ErrorAction SilentlyContinue)) { function global:Get-Service { return $null } }
+            if (-not (Get-Command Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue)) { function global:Test-OpenPathNonAdminAppControlActive { } }
+            if (-not (Get-Command Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue)) { function global:Set-OpenPathNonAdminAppControl { } }
+
+            $watchdogRoot = Join-Path $TestDrive "watchdog-interrupted-root"
+            $watchdogData = Join-Path $watchdogRoot "data"
+            New-Item -ItemType Directory -Path $watchdogData -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $watchdogData "whitelist.txt") -Value "allow test.example" -Encoding UTF8
+            $staleFailsafeStatePath = Join-Path $watchdogData "stale-failsafe-state.json"
+
+            Mock Test-OpenPathNonAdminAppControlActive { return $false }
+            Mock Set-OpenPathNonAdminAppControl { return $false }
+
+            $runtimeChecks = Invoke-OpenPathWatchdogChecks `
+                -Config $interruptedConfig `
+                -PortalModeActive $false `
+                -CaptiveState 'Direct' `
+                -OpenPathRoot $watchdogRoot `
+                -StaleFailsafeStatePath $staleFailsafeStatePath `
+                -GroupSyncFailed $false
+
+            $outcome = Get-OpenPathWatchdogOutcome `
+                -Config $interruptedConfig `
+                -Issues $runtimeChecks.Issues `
+                -RecoveryEligibleIssues $runtimeChecks.RecoveryEligibleIssues `
+                -StaleFailsafeActive $false `
+                -IntegrityTampered $false `
+                -FailOpenActive $false `
+                -PortalModeActive $false `
+                -WatchdogFailCountPath (Join-Path $TestDrive 'watchdog-fails.txt') `
+                -OpenPathRoot $watchdogRoot
+
+            $outcome.Status | Should -Be 'DEGRADED'
+            @($runtimeChecks.Issues) | Should -Contain 'AppControl commit state is uncommitted (pending)'
         }
     }
 

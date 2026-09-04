@@ -98,7 +98,8 @@ $checkResult = Invoke-OpenPathWatchdogChecks `
     -PortalModeActive $portalModeActive `
     -CaptiveState $precheckResult.CaptiveState `
     -OpenPathRoot $OpenPathRoot `
-    -StaleFailsafeStatePath $staleFailsafeStatePath
+    -StaleFailsafeStatePath $staleFailsafeStatePath `
+    -GroupSyncFailed ([bool]$precheckResult.GroupSyncFailed)
 $issues += @($checkResult.Issues)
 $recoveryEligibleIssues += @($checkResult.RecoveryEligibleIssues)
 

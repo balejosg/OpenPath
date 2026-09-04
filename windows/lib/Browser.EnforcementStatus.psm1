@@ -64,6 +64,13 @@ function Get-OpenPathAppLockerStatus {
         [object]$Config
     )
 
+    if ($Config -and $Config.PSObject.Properties['appControlCommitState'] -and $Config.appControlCommitState -ne 'committed') {
+        return 'Inactive'
+    }
+    if ($Config -and $Config.PSObject.Properties['installState'] -and $Config.installState -in @('installing', 'failed')) {
+        return 'Inactive'
+    }
+
     $configuredMode = [string](Get-OpenPathBrowserStatusConfigValue -Config $Config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
     $approvedStudentBrowsers = @(Get-OpenPathApprovedStudentBrowsers -Config $Config)
     $active = $false

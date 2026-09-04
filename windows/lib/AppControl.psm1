@@ -150,7 +150,8 @@ function Sync-OpenPathRestrictedGroup {
 
     try {
         $added = 0
-        foreach ($user in @(Get-LocalUser -ErrorAction Stop)) {
+        $allUsers = @(Get-LocalUser -ErrorAction Stop)
+        foreach ($user in $allUsers) {
             if (-not $user.PSObject.Properties['Enabled'] -or -not $user.Enabled) { continue }
             if (-not $user.PSObject.Properties['SID']) { continue }
             $sid = [string]$user.SID.Value
@@ -162,6 +163,25 @@ function Sync-OpenPathRestrictedGroup {
         if ($added -gt 0) {
             Write-OpenPathLog "OpenPath-Restricted membership synced: added $added non-admin user(s)"
         }
+
+        # Verify postcondition: ensure every enabled non-admin user is actually in OpenPath-Restricted
+        $finalMembers = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop | ForEach-Object { [string]$_.SID.Value })
+        $missingMembers = @()
+        foreach ($user in $allUsers) {
+            if (-not $user.PSObject.Properties['Enabled'] -or -not $user.Enabled) { continue }
+            if (-not $user.PSObject.Properties['SID']) { continue }
+            $sid = [string]$user.SID.Value
+            if ($sid -in $adminMembers) { continue }
+            if ($sid -notin $finalMembers) {
+                $missingMembers += $user.Name
+            }
+        }
+
+        if ($missingMembers.Count -gt 0) {
+            Write-OpenPathLog "Failed to sync OpenPath-Restricted membership: users remain outside group: $($missingMembers -join ', ')" -Level WARN
+            return $false
+        }
+
         return $true
     }
     catch {

@@ -565,3 +565,84 @@ function Invoke-OpenPathInstallerExistingInstallCleanup {
     Write-InstallerVerbose '  Existing OpenPath installation cleaned'
     return $true
 }
+
+function Invoke-OpenPathInstallRollback {
+    <#
+    .SYNOPSIS
+        Rolls back OpenPath-owned changes after an installation failure and verifies non-operational state.
+    .PARAMETER OpenPathRoot
+        Root directory of the OpenPath installation.
+    #>
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$OpenPathRoot = 'C:\OpenPath'
+    )
+
+    if ($script:OpenPathInstallerRollingBack) { return $script:OpenPathInstallRollbackResult }
+    $script:OpenPathInstallerRollingBack = $true
+
+    if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) {
+        Write-InstallerWarning 'Installation failed after mutations; rolling back OpenPath-owned changes.'
+    }
+    $rollbackErrors = @()
+    try { Stop-OpenPathInstallerScheduledTasks } catch { $rollbackErrors += "tasks: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback task cleanup failed: $_" } }
+    try { Restore-OpenPathInstallerDnsSettings } catch { $rollbackErrors += "dns: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback DNS restore failed: $_" } }
+    try { Remove-OpenPathInstallerFirewallRules } catch { $rollbackErrors += "firewall: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback firewall cleanup failed: $_" } }
+    try { Remove-OpenPathInstallerAppLockerRules } catch { $rollbackErrors += "applocker: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback AppLocker cleanup failed: $_" } }
+    try { Remove-OpenPathInstallerRestrictedGroup } catch { $rollbackErrors += "restrictedGroup: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback restricted group cleanup failed: $_" } }
+    try { Remove-OpenPathInstallerBrowserArtifacts } catch { $rollbackErrors += "browserArtifacts: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback browser artifacts cleanup failed: $_" } }
+    try { Stop-OpenPathInstallerAcrylicService -KeepAcrylic } catch { $rollbackErrors += "acrylic: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback Acrylic stop failed: $_" } }
+    try {
+        $configPath = Join-Path $OpenPathRoot 'data\config.json'
+        if (Test-Path -LiteralPath $configPath) {
+            Remove-Item -LiteralPath $configPath -Force -ErrorAction Stop
+        }
+    } catch { $rollbackErrors += "config: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback config removal failed: $_" } }
+
+    $verifiedNonOperational = $true
+    if (Test-Path -LiteralPath (Join-Path $OpenPathRoot 'data\config.json')) {
+        $verifiedNonOperational = $false
+        if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning '  Rollback verification warning: config.json is still present' }
+    }
+    if (Get-Command -Name Get-ScheduledTask -ErrorAction SilentlyContinue) {
+        $remainingTasks = @(Get-ScheduledTask -TaskName 'OpenPath-*' -ErrorAction SilentlyContinue)
+        if ($remainingTasks.Count -gt 0) {
+            $verifiedNonOperational = $false
+            if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback verification warning: $($remainingTasks.Count) OpenPath scheduled task(s) still present" }
+        }
+    }
+    if (Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue) {
+        if (Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue) {
+            $verifiedNonOperational = $false
+            if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning '  Rollback verification warning: OpenPath-Restricted group still present' }
+        }
+    }
+    if (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue) {
+        try {
+            $localXml = [xml](Get-AppLockerPolicy -Local -Xml -ErrorAction SilentlyContinue)
+            if ($localXml) {
+                $residualRules = @($localXml.SelectNodes("//*[@Name and starts-with(@Name, 'OpenPath non-admin app control')]"))
+                if ($residualRules.Count -gt 0) {
+                    $verifiedNonOperational = $false
+                    if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback verification warning: $($residualRules.Count) OpenPath AppLocker rule(s) still present in local policy" }
+                }
+            }
+        }
+        catch {
+            $rollbackErrors += "applockerVerify: $_"
+        }
+    }
+
+    $script:OpenPathInstallRollbackResult = [pscustomobject]@{
+        Attempted              = $true
+        Success                = ($rollbackErrors.Count -eq 0)
+        VerifiedNonOperational = $verifiedNonOperational
+        Errors                 = @($rollbackErrors)
+    }
+
+    if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) {
+        Write-InstallerWarning "Rollback completed; verifiedNonOperational=$verifiedNonOperational errors=$($rollbackErrors.Count); OpenPath logs were left in place for diagnosis."
+    }
+
+    return $script:OpenPathInstallRollbackResult
+}

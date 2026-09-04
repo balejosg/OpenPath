@@ -77,6 +77,8 @@ function New-OpenPathInstallerConfig {
         bridgeFilterAllowlist = @()
         enableNonAdminAppControl = $EnforceManagedBrowserBoundary
         nonAdminAppControlMode = 'Enforced'
+        installState = 'installing'
+        appControlCommitState = if ($EnforceManagedBrowserBoundary) { 'pending' } else { 'none' }
         enforceManagedBrowserBoundary = $EnforceManagedBrowserBoundary
         approvedStudentBrowsers = @($ApprovedStudentBrowsers)
         browserCleanupMode = $BrowserCleanupMode
