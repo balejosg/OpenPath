@@ -58,7 +58,7 @@ function Restore-OpenPathInstallerConfigIfMissing {
         New-Item -ItemType Directory -Path $configDir -Force | Out-Null
     }
 
-    $Config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+    Write-OpenPathAtomicJsonFile -Path $configPath -Data $Config -Depth 10
     Write-InstallerWarning '  WARNING: Configuration restored after failed first update'
 }
 
@@ -246,4 +246,61 @@ function Write-OpenPathInstallerSummary {
 
     Write-Host 'Uninstall: .\Uninstall-OpenPath.ps1'
     Write-Host ''
+}
+
+function Write-OpenPathInstallerFailureStatus {
+    param(
+        [string]$Path = '',
+        [string]$Phase = 'startup',
+        [bool]$RollbackAttempted = $false,
+        [object]$RollbackResult = $null
+    )
+
+    if (-not $Path) {
+        return
+    }
+
+    $safePhase = if ($Phase -match '^[A-Za-z0-9-]{1,64}$') { $Phase } else { 'startup' }
+    try {
+        $parent = Split-Path $Path -Parent
+        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        Set-Content -LiteralPath $Path -Value $safePhase -NoNewline -Encoding ASCII -Force
+
+        $jsonPath = "$Path.json"
+        $statusObj = [pscustomobject]@{
+            Phase             = $safePhase
+            RollbackAttempted = $RollbackAttempted
+            RollbackResult    = $RollbackResult
+        }
+        Write-OpenPathAtomicJsonFile -Path $jsonPath -Data $statusObj -Depth 10
+    }
+    catch {
+        # Failure diagnostics must never replace the original installer error.
+    }
+}
+
+function Get-OpenPathInstallerFailurePhase {
+    param(
+        [string]$CurrentPhase = $script:OpenPathInstallerCurrentPhase,
+        [string]$FailureStatusPath = ''
+    )
+
+    $phase = if ($CurrentPhase) { $CurrentPhase } else { 'startup' }
+    if ($phase -notin @('acrylic-install-local', 'enrollment-save-pending') -or -not $FailureStatusPath) {
+        return $phase
+    }
+
+    try {
+        $candidate = (Get-Content -LiteralPath $FailureStatusPath -Raw -ErrorAction Stop).Trim()
+        if ($candidate -match '^[A-Za-z0-9-]{1,64}$') {
+            return $candidate
+        }
+    }
+    catch {
+        # Failure diagnostics must never replace the original installer error.
+    }
+
+    return $phase
 }

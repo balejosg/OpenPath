@@ -38,6 +38,7 @@ Export-ModuleMember -Function @(
     'Ensure-OpenPathCapabilityStorageDirectory',
     'Get-OpenPathConfig',
     'Set-OpenPathConfig',
+    'Write-OpenPathAtomicJsonFile',
     'Set-OpenPathConfigValue',
     'Get-OpenPathConfigValue',
     'ConvertTo-OpenPathNormalizedConfig',

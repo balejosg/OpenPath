@@ -379,6 +379,7 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
             function global:Increment-WatchdogFailCount { return 1 }
             function global:Reset-WatchdogFailCount { return 0 }
+            function global:Get-Service { param($DisplayName) return [pscustomobject]@{ Status = 'Running' } }
             function global:Write-OpenPathLog {}
 
             try {
@@ -418,7 +419,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
-                Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+                Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Get-Service, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
             }
         }
 
@@ -549,6 +550,191 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Pending commitState with successful repair commits commitState but leaves installState installing" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            . $helperPath
+
+            $testRoot = Join-Path $TestDrive "watchdog-commit-test-$([guid]::NewGuid().ToString('N'))"
+            $dataDir = Join-Path $testRoot "data"
+            New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+            $configPath = Join-Path $dataDir "config.json"
+
+            $initialConfig = [ordered]@{
+                enableNonAdminAppControl = $true
+                nonAdminAppControlMode = 'Enforced'
+                appControlCommitState = 'pending'
+                installState = 'installing'
+                approvedStudentBrowsers = @('Firefox')
+                enableIntegrityChecks = $false
+            }
+            $initialConfig | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+            function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
+            function global:Sync-OpenPathRestrictedGroup { param([bool]$CreateIfMissing) return $true }
+            function global:Test-OpenPathNonAdminAppControlActive { param($Mode, $ApprovedBrowsers) return $true }
+            function global:Set-OpenPathNonAdminAppControl { param($OpenPathRoot, $Mode, $ApprovedBrowsers) return $true }
+            function global:Test-OpenPathCaptivePortalModeActive { return $false }
+            function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+            function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+            function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+            function global:Test-FirewallActive { return $true }
+            function global:Test-DNSResolution { return $true }
+            function global:Test-DNSSinkhole { return $true }
+            function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+            function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
+            function global:Increment-WatchdogFailCount { return 1 }
+            function global:Reset-WatchdogFailCount { return 0 }
+            function global:Write-OpenPathLog {}
+
+            try {
+                $configObj = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+                $checkResult = Invoke-OpenPathWatchdogChecks `
+                    -Config $configObj `
+                    -PortalModeActive $false `
+                    -CaptiveState 'Direct' `
+                    -OpenPathRoot $testRoot `
+                    -StaleFailsafeStatePath (Join-Path $testRoot 'data\stale-failsafe-state.json')
+
+                $savedConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+                $savedConfig.appControlCommitState | Should -Be 'committed'
+                $savedConfig.installState | Should -Be 'installing'
+
+                $checkResult.Issues | Should -Contain 'Installation incomplete (state: installing)'
+            }
+            finally {
+                Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
+                Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Committed appControl with installing installState reports degraded status" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            . $helperPath
+
+            function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
+            function global:Sync-OpenPathRestrictedGroup { param([bool]$CreateIfMissing) return $true }
+            function global:Test-OpenPathNonAdminAppControlActive { param($Mode, $ApprovedBrowsers) return $true }
+            function global:Test-OpenPathCaptivePortalModeActive { return $false }
+            function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+            function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+            function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+            function global:Test-FirewallActive { return $true }
+            function global:Test-DNSResolution { return $true }
+            function global:Test-DNSSinkhole { return $true }
+            function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+            function global:Increment-WatchdogFailCount { return 1 }
+            function global:Reset-WatchdogFailCount { return 0 }
+            function global:Write-OpenPathLog {}
+
+            try {
+                $config = [pscustomobject]@{
+                    enableNonAdminAppControl = $true
+                    nonAdminAppControlMode = 'Enforced'
+                    appControlCommitState = 'committed'
+                    installState = 'installing'
+                    approvedStudentBrowsers = @('Firefox')
+                    enableIntegrityChecks = $false
+                }
+                $checkResult = Invoke-OpenPathWatchdogChecks `
+                    -Config $config `
+                    -PortalModeActive $false `
+                    -CaptiveState 'Direct' `
+                    -OpenPathRoot 'C:\OpenPath' `
+                    -StaleFailsafeStatePath 'C:\OpenPath\data\stale-failsafe-state.json'
+
+                $checkResult.Issues | Should -Contain 'Installation incomplete (state: installing)'
+
+                $outcome = Get-OpenPathWatchdogOutcome `
+                    -Config $config `
+                    -Issues $checkResult.Issues `
+                    -RecoveryEligibleIssues $checkResult.RecoveryEligibleIssues `
+                    -StaleFailsafeActive $false `
+                    -IntegrityTampered $false `
+                    -FailOpenActive $false `
+                    -PortalModeActive $false `
+                    -WatchdogFailCountPath (Join-Path $TestDrive 'fails-degraded.txt') `
+                    -OpenPathRoot 'C:\OpenPath'
+
+                $outcome.Status | Should -Be 'DEGRADED'
+            }
+            finally {
+                Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
+                Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Legacy config without appControlCommitState migrates to committed when group and boundary are active" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            . $helperPath
+
+            $testRoot = Join-Path $TestDrive "watchdog-legacy-test-$([guid]::NewGuid().ToString('N'))"
+            $dataDir = Join-Path $testRoot "data"
+            New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+            $configPath = Join-Path $dataDir "config.json"
+
+            $initialConfig = [ordered]@{
+                enableNonAdminAppControl = $true
+                nonAdminAppControlMode = 'Enforced'
+                approvedStudentBrowsers = @('Firefox')
+                enableIntegrityChecks = $false
+            }
+            $initialConfig | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+            function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
+            function global:Sync-OpenPathRestrictedGroup { param([bool]$CreateIfMissing) return $true }
+            function global:Test-OpenPathNonAdminAppControlActive { param($Mode, $ApprovedBrowsers) return $true }
+            function global:Test-OpenPathCaptivePortalModeActive { return $false }
+            function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+            function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+            function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+            function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+            function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+            function global:Test-FirewallActive { return $true }
+            function global:Test-DNSResolution { return $true }
+            function global:Test-DNSSinkhole { return $true }
+            function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+            function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
+            function global:Write-OpenPathLog {}
+
+            try {
+                $configObj = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+                $checkResult = Invoke-OpenPathWatchdogChecks `
+                    -Config $configObj `
+                    -PortalModeActive $false `
+                    -CaptiveState 'Direct' `
+                    -OpenPathRoot $testRoot `
+                    -StaleFailsafeStatePath (Join-Path $testRoot 'data\stale-failsafe-state.json')
+
+                $savedConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+                $savedConfig.appControlCommitState | Should -Be 'committed'
+                $savedConfig.installState | Should -Be 'complete'
+            }
+            finally {
+                Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
+                Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
+                Remove-Item Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
             }
         }
     }

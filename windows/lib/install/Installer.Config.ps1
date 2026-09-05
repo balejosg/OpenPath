@@ -107,3 +107,55 @@ function New-OpenPathInstallerConfig {
 
     return $config
 }
+
+function Write-OpenPathAtomicJsonFile {
+    <#
+    .SYNOPSIS
+        Atomically writes JSON content to disk using a temp file and Win32 atomic replace.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        $Data,
+
+        [int]$Depth = 10
+    )
+
+    $parentDir = Split-Path -Path $Path -Parent
+    if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
+        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+    }
+
+    $json = $Data | ConvertTo-Json -Depth $Depth
+    $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+    $tempPath = "$Path.tmp.$([guid]::NewGuid().ToString('N'))"
+    $backupPath = "$Path.bak.$([guid]::NewGuid().ToString('N'))"
+
+    try {
+        [System.IO.File]::WriteAllText($tempPath, $json, $utf8WithoutBom)
+
+        if (Test-Path -LiteralPath $Path) {
+            try {
+                [System.IO.File]::Replace($tempPath, $Path, $backupPath, $true)
+            }
+            catch {
+                [System.IO.File]::Copy($tempPath, $Path, $true)
+                [System.IO.File]::Delete($tempPath)
+            }
+        }
+        else {
+            [System.IO.File]::Move($tempPath, $Path)
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $tempPath) {
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $backupPath) {
+            Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}

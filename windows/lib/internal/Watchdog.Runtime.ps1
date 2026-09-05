@@ -1,3 +1,10 @@
+if (-not (Get-Command -Name 'Write-OpenPathAtomicJsonFile' -ErrorAction SilentlyContinue)) {
+    $configHelperPath = Join-Path $PSScriptRoot 'Common.Config.ps1'
+    if (Test-Path -LiteralPath $configHelperPath) {
+        . $configHelperPath
+    }
+}
+
 function Restore-CheckpointFromWatchdog {
     # rolls back to the most recent stored checkpoint when dns verification fails
     # after rollback: waits for acrylic to settle, then re-verifies resolution and sinkhole
@@ -316,6 +323,11 @@ function Invoke-OpenPathWatchdogChecks {
     }
     catch {
         Write-OpenPathLog "Watchdog: Error reading local whitelist state: $_" -Level WARN
+    }
+
+    if ($Config -and $Config.PSObject.Properties['installState'] -and $Config.installState -in @('installing', 'failed')) {
+        $issues += "Installation incomplete (state: $($Config.installState))"
+        Write-OpenPathLog "Watchdog: OpenPath installation is incomplete (state: $($Config.installState))" -Level WARN
     }
 
     $passthroughEmergency = Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks `
@@ -649,7 +661,71 @@ function Invoke-OpenPathWatchdogChecks {
             }
 
             $uncommittedState = $false
-            if ($Config -and $Config.PSObject.Properties['appControlCommitState'] -and $Config.appControlCommitState -and $Config.appControlCommitState -ne 'committed') {
+            $legacyConfig = $false
+            if ($Config -and (-not $Config.PSObject.Properties['appControlCommitState'])) {
+                $legacyConfig = $true
+                $groupExists = $false
+                if (Get-Command -Name 'Get-LocalGroup' -ErrorAction SilentlyContinue) {
+                    try {
+                        $null = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+                        $groupExists = $true
+                    }
+                    catch {
+                        $groupExists = $false
+                    }
+                }
+                $boundaryActive = $false
+                if (Get-Command -Name 'Test-OpenPathNonAdminAppControlActive' -ErrorAction SilentlyContinue) {
+                    try {
+                        $boundaryActive = [bool](Test-OpenPathNonAdminAppControlActive -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers)
+                    }
+                    catch {
+                        $boundaryActive = $false
+                    }
+                }
+
+                if ($groupExists -and $boundaryActive) {
+                    try {
+                        $configPath = Join-Path $OpenPathRoot 'data\config.json'
+                        if (Test-Path -LiteralPath $configPath) {
+                            $currentConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+                            if (Get-Command -Name 'Set-OpenPathConfigValue' -ErrorAction SilentlyContinue) {
+                                Set-OpenPathConfigValue -Config $currentConfig -Name 'appControlCommitState' -Value 'committed'
+                                if (-not $currentConfig.PSObject.Properties['installState'] -or $currentConfig.installState -eq 'installing') {
+                                    Set-OpenPathConfigValue -Config $currentConfig -Name 'installState' -Value 'complete'
+                                }
+                            }
+                            else {
+                                if ($currentConfig.PSObject.Properties['appControlCommitState']) { $currentConfig.appControlCommitState = 'committed' } else { $currentConfig | Add-Member -MemberType NoteProperty -Name 'appControlCommitState' -Value 'committed' -Force }
+                                if (-not $currentConfig.PSObject.Properties['installState'] -or $currentConfig.installState -eq 'installing') {
+                                    if ($currentConfig.PSObject.Properties['installState']) { $currentConfig.installState = 'complete' } else { $currentConfig | Add-Member -MemberType NoteProperty -Name 'installState' -Value 'complete' -Force }
+                                }
+                            }
+                            Write-OpenPathAtomicJsonFile -Path $configPath -Data $currentConfig -Depth 10
+                            Write-OpenPathLog "Watchdog: Legacy AppControl config migrated and committed to config.json"
+                        }
+                    }
+                    catch {
+                        Write-OpenPathLog "Watchdog: Failed to persist migrated legacy AppControl config: $_" -Level WARN
+                    }
+
+                    if (Get-Command -Name 'Set-OpenPathConfigValue' -ErrorAction SilentlyContinue) {
+                        Set-OpenPathConfigValue -Config $Config -Name 'appControlCommitState' -Value 'committed'
+                        Set-OpenPathConfigValue -Config $Config -Name 'installState' -Value 'complete'
+                    }
+                    else {
+                        if ($Config.PSObject.Properties['appControlCommitState']) { $Config.appControlCommitState = 'committed' } else { $Config | Add-Member -MemberType NoteProperty -Name 'appControlCommitState' -Value 'committed' -Force }
+                        if ($Config.PSObject.Properties['installState']) { $Config.installState = 'complete' } else { $Config | Add-Member -MemberType NoteProperty -Name 'installState' -Value 'complete' -Force }
+                    }
+                }
+                else {
+                    $uncommittedState = $true
+                    $issues += "AppControl legacy configuration uncommitted"
+                    $recoveryEligibleIssues += "AppControl uncommitted"
+                    Write-OpenPathLog "Watchdog: Legacy AppControl config lacks active boundary or group; marking uncommitted" -Level WARN
+                }
+            }
+            elseif ($Config -and $Config.PSObject.Properties['appControlCommitState'] -and $Config.appControlCommitState -and $Config.appControlCommitState -ne 'committed') {
                 $uncommittedState = $true
                 $issues += "AppControl commit state is uncommitted ($($Config.appControlCommitState))"
                 $recoveryEligibleIssues += "AppControl uncommitted"
@@ -697,13 +773,28 @@ function Invoke-OpenPathWatchdogChecks {
                             $configPath = Join-Path $OpenPathRoot 'data\config.json'
                             if (Test-Path -LiteralPath $configPath) {
                                 $currentConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-                                $currentConfig.appControlCommitState = 'committed'
-                                if ($currentConfig.PSObject.Properties['installState'] -and $currentConfig.installState -eq 'installing') {
-                                    $currentConfig.installState = 'complete'
+                                if (Get-Command -Name 'Set-OpenPathConfigValue' -ErrorAction SilentlyContinue) {
+                                    Set-OpenPathConfigValue -Config $currentConfig -Name 'appControlCommitState' -Value 'committed'
+                                    if ($legacyConfig) {
+                                        Set-OpenPathConfigValue -Config $currentConfig -Name 'installState' -Value 'complete'
+                                        Set-OpenPathConfigValue -Config $Config -Name 'installState' -Value 'complete'
+                                    }
                                 }
-                                $currentConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
-                                $Config.appControlCommitState = 'committed'
-                                $issues = @($issues | Where-Object { $_ -notlike 'AppControl commit state is uncommitted*' })
+                                else {
+                                    if ($currentConfig.PSObject.Properties['appControlCommitState']) { $currentConfig.appControlCommitState = 'committed' } else { $currentConfig | Add-Member -MemberType NoteProperty -Name 'appControlCommitState' -Value 'committed' -Force }
+                                    if ($legacyConfig) {
+                                        if ($currentConfig.PSObject.Properties['installState']) { $currentConfig.installState = 'complete' } else { $currentConfig | Add-Member -MemberType NoteProperty -Name 'installState' -Value 'complete' -Force }
+                                        if ($Config.PSObject.Properties['installState']) { $Config.installState = 'complete' } else { $Config | Add-Member -MemberType NoteProperty -Name 'installState' -Value 'complete' -Force }
+                                    }
+                                }
+                                Write-OpenPathAtomicJsonFile -Path $configPath -Data $currentConfig -Depth 10
+                                if (Get-Command -Name 'Set-OpenPathConfigValue' -ErrorAction SilentlyContinue) {
+                                    Set-OpenPathConfigValue -Config $Config -Name 'appControlCommitState' -Value 'committed'
+                                }
+                                else {
+                                    if ($Config.PSObject.Properties['appControlCommitState']) { $Config.appControlCommitState = 'committed' } else { $Config | Add-Member -MemberType NoteProperty -Name 'appControlCommitState' -Value 'committed' -Force }
+                                }
+                                $issues = @($issues | Where-Object { $_ -notlike 'AppControl commit state is uncommitted*' -and $_ -ne 'AppControl legacy configuration uncommitted' })
                                 $recoveryEligibleIssues = @($recoveryEligibleIssues | Where-Object { $_ -ne 'AppControl uncommitted' })
                                 Write-OpenPathLog "Watchdog: AppControl converged and committed to config.json"
                             }

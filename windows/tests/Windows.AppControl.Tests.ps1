@@ -1,11 +1,13 @@
 Import-Module (Join-Path $PSScriptRoot "TestHelpers.psm1") -Force
 
 $modulePath = Join-Path $PSScriptRoot ".." "lib"
+Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
 Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
 
 Describe "AppControl Module" {
     BeforeAll {
         $modulePath = Join-Path $PSScriptRoot ".." "lib"
+        Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
         Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
         function global:Get-LocalGroup { throw 'not found' }
     }
@@ -887,6 +889,54 @@ Describe "AppControl Module" {
             function global:Add-LocalGroupMember { param($Group, $Member) }
 
             Sync-OpenPathRestrictedGroup -CreateIfMissing $true | Should -BeFalse
+        }
+
+        It "Returns false and never calls Add-LocalGroupMember when Administrators enumeration throws" {
+            $global:opAddedMembers = @()
+            function global:Get-LocalGroup { [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } } }
+            function global:Get-LocalGroupMember {
+                param($Group)
+                throw 'RPC server unavailable enumerating Administrators'
+            }
+            function global:Get-LocalUser {
+                @(
+                    [pscustomobject]@{ Name = 'student'; Enabled = $true; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } },
+                    [pscustomobject]@{ Name = 'admin';   Enabled = $true; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } }
+                )
+            }
+            function global:Add-LocalGroupMember { param($Group, $Member) $global:opAddedMembers += [string]$Member }
+
+            $result = Sync-OpenPathRestrictedGroup -CreateIfMissing $true
+            $result | Should -BeFalse
+            @($global:opAddedMembers).Count | Should -Be 0
+        }
+
+        It "Never adds enabled admin accounts to OpenPath-Restricted" {
+            $global:opAddedMembers = @()
+            function global:Get-LocalGroup { [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } } }
+            function global:Get-LocalGroupMember {
+                param($Group)
+                if ($Group -eq 'Administrators') {
+                    return @([pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } })
+                }
+                $members = @()
+                if ('student' -in $global:opAddedMembers) {
+                    $members += [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } }
+                }
+                return $members
+            }
+            function global:Get-LocalUser {
+                @(
+                    [pscustomobject]@{ Name = 'admin';   Enabled = $true; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } },
+                    [pscustomobject]@{ Name = 'student'; Enabled = $true; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } }
+                )
+            }
+            function global:Add-LocalGroupMember { param($Group, $Member) $global:opAddedMembers += [string]$Member }
+
+            $result = Sync-OpenPathRestrictedGroup -CreateIfMissing $true
+            $result | Should -BeTrue
+            @($global:opAddedMembers) | Should -Be @('student')
+            'admin' -in @($global:opAddedMembers) | Should -BeFalse
         }
 
         It "Removes the restricted group when it exists and is silent when absent" {

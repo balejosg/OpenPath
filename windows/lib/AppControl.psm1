@@ -130,13 +130,31 @@ function Sync-OpenPathRestrictedGroup {
         }
     }
 
-    $adminMembers = @()
+    $adminGroupName = $null
     try {
-        $adminMembers = @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop | ForEach-Object { [string]$_.SID.Value })
+        if (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue) {
+            $adminGroupObj = Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction SilentlyContinue
+            if ($adminGroupObj) {
+                $adminGroupName = $adminGroupObj.Name
+            }
+        }
+    }
+    catch {}
+    if (-not $adminGroupName) {
+        $adminGroupName = 'Administrators'
+    }
+
+    $adminMembers = $null
+    try {
+        $adminMembers = @(Get-LocalGroupMember -Group $adminGroupName -ErrorAction Stop | ForEach-Object { [string]$_.SID.Value })
     }
     catch {
-        Write-OpenPathLog "Failed to enumerate Administrators for group sync: $_" -Level WARN
-        $adminMembers = @()
+        Write-OpenPathLog "Unable to reconcile OpenPath-Restricted because Administrators membership could not be enumerated: $_" -Level WARN
+        return $false
+    }
+    if ($null -eq $adminMembers) {
+        Write-OpenPathLog "Unable to reconcile OpenPath-Restricted because Administrators membership could not be enumerated" -Level WARN
+        return $false
     }
 
     $existingMembers = @()

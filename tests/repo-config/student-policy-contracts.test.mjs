@@ -769,6 +769,7 @@ describe('repository verification contract', () => {
     const windowsRunner = readText('tests/e2e/ci/run-windows-student-flow.ps1');
     const browserProbe = readText('tests/e2e/ci/windows-browser-enforcement.ps1');
     const browserBoundaryCi = readText('tests/e2e/ci/run-windows-browser-boundary-ci.ps1');
+    const browserBoundaryProbe = readText('tests/e2e/ci/BrowserBoundaryProbe.psm1');
     const e2eWorkflow = readText('.github/workflows/e2e-tests.yml');
     const contractMatrix = readText('docs/testing/student-policy-contract-matrix.md');
     const windowsReadme = readText('windows/README.md');
@@ -870,13 +871,18 @@ describe('repository verification contract', () => {
     );
     assert.match(
       browserBoundaryCi,
-      /Assert-InstalledOpenPathBrowserBoundaryAppControl[\s\S]*Set-OpenPathNonAdminAppControl[\s\S]*OpenPath AppControl boundary is still inactive after reapply/s,
+      /Assert-InstalledOpenPathBrowserBoundaryAppControl/,
       'browser-boundary CI should reassert the installed AppControl boundary before creating the temporary student user'
     );
-    assert.match(
+    assert.doesNotMatch(
       browserBoundaryCi,
+      /Assert-InstalledOpenPathBrowserBoundaryAppControl[\s\S]*Set-OpenPathNonAdminAppControl/,
+      'browser-boundary CI should never attempt repair mutations on host'
+    );
+    assert.match(
+      browserBoundaryProbe,
       /AppLockerPolicy[\s\S]*S-1-5-32-544[\s\S]*administrator allow-all rule is missing/s,
-      'browser-boundary CI should fail before student probes if the admin AppLocker allow-all rule is missing'
+      'browser-boundary probe module should fail before student probes if the admin AppLocker allow-all rule is missing'
     );
     assert.match(
       browserBoundaryCi,

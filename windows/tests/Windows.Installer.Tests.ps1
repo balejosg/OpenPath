@@ -184,12 +184,27 @@ Describe "Installer" {
             }
         }
 
-        It "Rolls back OpenPath-owned mutations through catchable installer failures" {
+        It "Rolls back OpenPath-owned mutations through catchable installer failures delegating to Installer.Cleanup.ps1" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw
 
+            # Install-OpenPath.ps1 must delegate exclusively to Installer.Cleanup.ps1 and not define its own orphaned Invoke-OpenPathInstallRollback
+            $content | Should -Not -Match '(?m)^\s*function\s+Invoke-OpenPathInstallRollback\b'
+            $content | Should -Match "Installer\.Cleanup\.ps1"
+
             Assert-ContentContainsAll -Content $content -Needles @(
                 '$script:OpenPathInstallerMutated = $false',
+                'Invoke-OpenPathInstallRollback -OpenPathRoot $OpenPathRoot',
+                'Write-OpenPathInstallerFailureStatus',
+                'trap {',
+                'throw "Installer phase failed: $($Result.Name)"'
+            )
+            $content | Should -Not -Match 'Assert-OpenPathInstallPhaseSucceeded[\s\S]*?exit 1'
+
+            # Installer.Cleanup.ps1 is the sole canonical owner of Invoke-OpenPathInstallRollback and its cleanup steps
+            $cleanupPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1"
+            $cleanupContent = Get-Content $cleanupPath -Raw
+            Assert-ContentContainsAll -Content $cleanupContent -Needles @(
                 'function Invoke-OpenPathInstallRollback',
                 'Stop-OpenPathInstallerScheduledTasks',
                 'Restore-OpenPathInstallerDnsSettings',
@@ -200,11 +215,8 @@ Describe "Installer" {
                 'Stop-OpenPathInstallerAcrylicService -KeepAcrylic',
                 'Remove-Item -LiteralPath $configPath',
                 '$script:OpenPathInstallRollbackResult',
-                'VerifiedNonOperational',
-                'trap {',
-                'throw "Installer phase failed: $($Result.Name)"'
+                'VerifiedNonOperational'
             )
-            $content | Should -Not -Match 'Assert-OpenPathInstallPhaseSucceeded[\s\S]*?exit 1'
         }
 
         It "Executes rollback leaving host VerifiedNonOperational when firefox-managed-extension-ready fails after app-control" {
@@ -377,6 +389,303 @@ Describe "Installer" {
 
             $outcome.Status | Should -Be 'DEGRADED'
             @($runtimeChecks.Issues) | Should -Contain 'AppControl commit state is uncommitted (pending)'
+        }
+    }
+
+    Context "Atomic configuration writes" {
+        BeforeAll {
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Config.ps1")
+        }
+
+        It "creates new JSON file atomically and creates parent directories" {
+            $testDir = Join-Path $TestDrive "atomic-create-test" "sub" "dir"
+            $testFile = Join-Path $testDir "config.json"
+            $data = [ordered]@{
+                installState = 'installing'
+                version = '2.5.0'
+                settings = @{ enabled = $true; count = 10 }
+            }
+
+            Write-OpenPathAtomicJsonFile -Path $testFile -Data $data
+            Test-Path -LiteralPath $testFile | Should -BeTrue
+
+            $readBack = Get-Content -LiteralPath $testFile -Raw | ConvertFrom-Json
+            $readBack.installState | Should -Be 'installing'
+            $readBack.version | Should -Be '2.5.0'
+            $readBack.settings.enabled | Should -BeTrue
+            $readBack.settings.count | Should -Be 10
+
+            # No temporary files left behind
+            $orphans = @(Get-ChildItem -LiteralPath $testDir -Filter "*.tmp.*")
+            $orphans.Count | Should -Be 0
+        }
+
+        It "atomically replaces existing JSON file without leaving orphaned files" {
+            $testDir = Join-Path $TestDrive "atomic-replace-test"
+            New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+            $testFile = Join-Path $testDir "config.json"
+
+            Write-OpenPathAtomicJsonFile -Path $testFile -Data @{ stage = 'first'; value = 1 }
+            $first = Get-Content -LiteralPath $testFile -Raw | ConvertFrom-Json
+            $first.stage | Should -Be 'first'
+
+            Write-OpenPathAtomicJsonFile -Path $testFile -Data @{ stage = 'second'; value = 2 }
+            $second = Get-Content -LiteralPath $testFile -Raw | ConvertFrom-Json
+            $second.stage | Should -Be 'second'
+            $second.value | Should -Be 2
+
+            @(Get-ChildItem -LiteralPath $testDir -Filter "*.tmp.*").Count | Should -Be 0
+            @(Get-ChildItem -LiteralPath $testDir -Filter "*.bak.*").Count | Should -Be 0
+        }
+
+        It "cleans up temporary files if write or replace fails" {
+            $testDir = Join-Path $TestDrive "atomic-fail-test"
+            New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+
+            # Attempt to write to a directory path as if it were a file
+            { Write-OpenPathAtomicJsonFile -Path $testDir -Data @{ error = $true } } | Should -Throw
+
+            @(Get-ChildItem -LiteralPath (Split-Path $testDir -Parent) -Filter "*.tmp.*").Count | Should -Be 0
+        }
+    }
+
+    Context "Installer lifecycle failure injection and rollback" {
+        BeforeAll {
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Plan.ps1")
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Config.ps1")
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
+            . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Runtime.ps1")
+        }
+
+        BeforeEach {
+            $script:mockTasks = [System.Collections.Generic.List[string]]::new()
+            $script:mockGroupPresent = $false
+            $script:mockAppLockerRules = [System.Collections.Generic.List[string]]::new()
+            $script:OpenPathInstallerRollingBack = $false
+            $script:OpenPathInstallRollbackResult = $null
+            $script:OpenPathInstallPhaseResults = @()
+
+            if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Get-ScheduledTask { param($TaskName) } }
+            if (-not (Get-Command Stop-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Stop-ScheduledTask { param($TaskName, $TaskPath) } }
+            if (-not (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Unregister-ScheduledTask { param($TaskName, $TaskPath, [switch]$Confirm) } }
+            if (-not (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)) { function global:Get-LocalGroup { param($Name) } }
+            if (-not (Get-Command Remove-LocalGroup -ErrorAction SilentlyContinue)) { function global:Remove-LocalGroup { param($Name) } }
+            if (-not (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue)) { function global:Get-AppLockerPolicy { param([switch]$Local, [switch]$Xml) } }
+            if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) { function global:Set-AppLockerPolicy { param($XMLPolicy) } }
+
+            Mock Get-ScheduledTask {
+                param($TaskName)
+                return @($script:mockTasks | ForEach-Object { [pscustomobject]@{ TaskName = $_; TaskPath = '\OpenPath\' } })
+            }
+            Mock Stop-ScheduledTask { param($TaskName, $TaskPath) }
+            Mock Unregister-ScheduledTask {
+                param($TaskName, $TaskPath, [switch]$Confirm)
+                [void]$script:mockTasks.Remove($TaskName)
+            }
+            Mock Get-LocalGroup {
+                param($Name)
+                if ($script:mockGroupPresent) { return [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
+                return $null
+            }
+            Mock Remove-LocalGroup {
+                param($Name)
+                $script:mockGroupPresent = $false
+            }
+            Mock Get-AppLockerPolicy {
+                param([switch]$Local, [switch]$Xml)
+                $ruleNodes = ($script:mockAppLockerRules | ForEach-Object { "<FilePathRule Id=`"$([guid]::NewGuid())`" Name=`"OpenPath non-admin app control - $_`" Action=`"Deny`" UserOrGroupSid=`"S-1-5-32-545`"><Conditions><FilePathCondition Path=`"%OSDRIVE%\*`" /></Conditions></FilePathRule>" }) -join ''
+                return "<AppLockerPolicy Version=`"1`"><RuleCollection Type=`"Exe`" EnforcementMode=`"Enabled`">$ruleNodes</RuleCollection></AppLockerPolicy>"
+            }
+            Mock Set-AppLockerPolicy {
+                param($XMLPolicy)
+                $script:mockAppLockerRules.Clear()
+            }
+            Mock Restore-OpenPathInstallerDnsSettings { }
+            Mock Remove-OpenPathInstallerFirewallRules { }
+            Mock Remove-OpenPathInstallerBrowserArtifacts { }
+            Mock Stop-OpenPathInstallerAcrylicService { }
+        }
+
+        AfterEach {
+            $env:OPENPATH_TEST_ENVIRONMENT = $null
+            $env:OPENPATH_TEST_FAIL_PHASE = $null
+            $env:OPENPATH_TEST_FAIL_AFTER_PHASE = $null
+        }
+
+        It "rolls back completely when failure is injected at firefox-managed-extension-ready after app-control" {
+            $root = Join-Path $TestDrive "inject-fail-firefox"
+            $dataDir = Join-Path $root "data"
+            New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+            $configPath = Join-Path $dataDir "config.json"
+            $statusPath = Join-Path $dataDir "failure-status"
+
+            $plan = New-OpenPathInstallPlan -Parameters @{ EnforceManagedBrowserBoundary = $true } -ScriptDir $PSScriptRoot -OpenPathRoot $root
+
+            # Execute configuration phase
+            Invoke-OpenPathPlannedPhase -Name 'configuration' -Plan $plan -Action {
+                Write-OpenPathAtomicJsonFile -Path $configPath -Data @{
+                    installState = 'installing'
+                    appControlCommitState = 'pending'
+                }
+            }
+
+            # Execute scheduled-tasks phase
+            Invoke-OpenPathPlannedPhase -Name 'scheduled-tasks' -Plan $plan -Action {
+                $script:mockTasks.Add('OpenPath-Update')
+                $script:mockTasks.Add('OpenPath-Watchdog')
+            }
+
+            # Execute app-control phase
+            Invoke-OpenPathPlannedPhase -Name 'app-control' -Plan $plan -Action {
+                $script:mockGroupPresent = $true
+                $script:mockAppLockerRules.Add('BlockDownloads')
+                Write-OpenPathAtomicJsonFile -Path $configPath -Data @{
+                    installState = 'installing'
+                    appControlCommitState = 'committed'
+                }
+            }
+
+            $script:mockGroupPresent | Should -BeTrue
+            $script:mockAppLockerRules.Count | Should -Be 1
+            $script:mockTasks.Count | Should -Be 2
+
+            # Inject failure at firefox-managed-extension-ready
+            $env:OPENPATH_TEST_ENVIRONMENT = '1'
+            $env:OPENPATH_TEST_FAIL_PHASE = 'firefox-managed-extension-ready'
+
+            $caughtError = $null
+            try {
+                Invoke-OpenPathPlannedPhase -Name 'firefox-managed-extension-ready' -Plan $plan -Action { }
+            }
+            catch {
+                $caughtError = $_
+                $rollback = Invoke-OpenPathInstallRollback -OpenPathRoot $root
+                Write-OpenPathInstallerFailureStatus -Path $statusPath -Phase 'firefox-managed-extension-ready' -RollbackAttempted $true -RollbackResult $rollback
+            }
+
+            $caughtError | Should -Not -BeNullOrEmpty
+            $caughtError.Exception.Message | Should -Match 'Injected test failure at phase: firefox-managed-extension-ready'
+
+            # Rollback verification
+            $script:OpenPathInstallRollbackResult.Attempted | Should -BeTrue
+            $script:OpenPathInstallRollbackResult.Success | Should -BeTrue
+            $script:OpenPathInstallRollbackResult.VerifiedNonOperational | Should -BeTrue
+            $script:OpenPathInstallRollbackResult.Errors.Count | Should -Be 0
+            Test-Path -LiteralPath $configPath | Should -BeFalse
+            $script:mockTasks.Count | Should -Be 0
+            $script:mockGroupPresent | Should -BeFalse
+            $script:mockAppLockerRules.Count | Should -Be 0
+
+            # Status file verification
+            Test-Path -LiteralPath "$statusPath.json" | Should -BeTrue
+            $statusJson = Get-Content -LiteralPath "$statusPath.json" -Raw | ConvertFrom-Json
+            $statusJson.Phase | Should -Be 'firefox-managed-extension-ready'
+            $statusJson.RollbackAttempted | Should -BeTrue
+            $statusJson.RollbackResult.VerifiedNonOperational | Should -BeTrue
+        }
+
+        It "rolls back cleanly without errors when failure is injected before app-control (scheduled-tasks)" {
+            $root = Join-Path $TestDrive "inject-fail-pre-appcontrol"
+            $dataDir = Join-Path $root "data"
+            New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+            $configPath = Join-Path $dataDir "config.json"
+            $statusPath = Join-Path $dataDir "failure-status"
+
+            $plan = New-OpenPathInstallPlan -Parameters @{ EnforceManagedBrowserBoundary = $true } -ScriptDir $PSScriptRoot -OpenPathRoot $root
+
+            Invoke-OpenPathPlannedPhase -Name 'configuration' -Plan $plan -Action {
+                Write-OpenPathAtomicJsonFile -Path $configPath -Data @{
+                    installState = 'installing'
+                    appControlCommitState = 'pending'
+                }
+            }
+
+            # Inject failure at scheduled-tasks (before app-control)
+            $env:OPENPATH_TEST_ENVIRONMENT = '1'
+            $env:OPENPATH_TEST_FAIL_PHASE = 'scheduled-tasks'
+
+            $caughtError = $null
+            try {
+                Invoke-OpenPathPlannedPhase -Name 'scheduled-tasks' -Plan $plan -Action {
+                    $script:mockTasks.Add('OpenPath-Update')
+                }
+            }
+            catch {
+                $caughtError = $_
+                $rollback = Invoke-OpenPathInstallRollback -OpenPathRoot $root
+                Write-OpenPathInstallerFailureStatus -Path $statusPath -Phase 'scheduled-tasks' -RollbackAttempted $true -RollbackResult $rollback
+            }
+
+            $caughtError | Should -Not -BeNullOrEmpty
+            $caughtError.Exception.Message | Should -Match 'Injected test failure at phase: scheduled-tasks'
+
+            $script:OpenPathInstallRollbackResult.Attempted | Should -BeTrue
+            $script:OpenPathInstallRollbackResult.Success | Should -BeTrue
+            $script:OpenPathInstallRollbackResult.VerifiedNonOperational | Should -BeTrue
+            $script:OpenPathInstallRollbackResult.Errors.Count | Should -Be 0
+            Test-Path -LiteralPath $configPath | Should -BeFalse
+            $script:mockGroupPresent | Should -BeFalse
+            $script:mockAppLockerRules.Count | Should -Be 0
+        }
+
+        It "rolls back committed security state when failure is injected immediately after app-control" {
+            $root = Join-Path $TestDrive "inject-fail-after-appcontrol"
+            $dataDir = Join-Path $root "data"
+            New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+            $configPath = Join-Path $dataDir "config.json"
+            $statusPath = Join-Path $dataDir "failure-status"
+
+            $plan = New-OpenPathInstallPlan -Parameters @{ EnforceManagedBrowserBoundary = $true } -ScriptDir $PSScriptRoot -OpenPathRoot $root
+
+            Invoke-OpenPathPlannedPhase -Name 'configuration' -Plan $plan -Action {
+                Write-OpenPathAtomicJsonFile -Path $configPath -Data @{
+                    installState = 'installing'
+                    appControlCommitState = 'pending'
+                }
+            }
+
+            Invoke-OpenPathPlannedPhase -Name 'scheduled-tasks' -Plan $plan -Action {
+                $script:mockTasks.Add('OpenPath-Update')
+            }
+
+            # Inject failure immediately AFTER app-control completes
+            $env:OPENPATH_TEST_ENVIRONMENT = '1'
+            $env:OPENPATH_TEST_FAIL_AFTER_PHASE = 'app-control'
+
+            $caughtError = $null
+            try {
+                Invoke-OpenPathPlannedPhase -Name 'app-control' -Plan $plan -Action {
+                    $script:mockGroupPresent = $true
+                    $script:mockAppLockerRules.Add('BlockDownloads')
+                    Write-OpenPathAtomicJsonFile -Path $configPath -Data @{
+                        installState = 'installing'
+                        appControlCommitState = 'committed'
+                    }
+                }
+            }
+            catch {
+                $caughtError = $_
+                $rollback = Invoke-OpenPathInstallRollback -OpenPathRoot $root
+                Write-OpenPathInstallerFailureStatus -Path $statusPath -Phase $script:OpenPathInstallerCurrentPhase -RollbackAttempted $true -RollbackResult $rollback
+            }
+
+            $caughtError | Should -Not -BeNullOrEmpty
+            $caughtError.Exception.Message | Should -Match 'Injected test failure immediately after phase: app-control'
+            $script:OpenPathInstallerCurrentPhase | Should -Be 'post-app-control'
+
+            $script:OpenPathInstallRollbackResult.Attempted | Should -BeTrue
+            $script:OpenPathInstallRollbackResult.Success | Should -BeTrue
+            $script:OpenPathInstallRollbackResult.VerifiedNonOperational | Should -BeTrue
+            $script:OpenPathInstallRollbackResult.Errors.Count | Should -Be 0
+            Test-Path -LiteralPath $configPath | Should -BeFalse
+            $script:mockGroupPresent | Should -BeFalse
+            $script:mockAppLockerRules.Count | Should -Be 0
+            $script:mockTasks.Count | Should -Be 0
+
+            $statusJson = Get-Content -LiteralPath "$statusPath.json" -Raw | ConvertFrom-Json
+            $statusJson.Phase | Should -Be 'post-app-control'
+            $statusJson.RollbackAttempted | Should -BeTrue
+            $statusJson.RollbackResult.VerifiedNonOperational | Should -BeTrue
         }
     }
 

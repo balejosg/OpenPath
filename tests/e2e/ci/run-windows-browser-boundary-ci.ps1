@@ -29,62 +29,6 @@ function New-RandomPassword {
     return ('OP!' + [Convert]::ToBase64String($bytes).Replace('+', 'A').Replace('/', 'b').Substring(0, 20) + '9z')
 }
 
-function Assert-InstalledOpenPathBrowserBoundaryAppControl {
-    $openPathRoot = 'C:\OpenPath'
-    $appControlModule = Join-Path $openPathRoot 'lib\AppControl.psm1'
-    if (-not (Test-Path -LiteralPath $appControlModule)) {
-        throw "OpenPath AppControl module is missing: $appControlModule"
-    }
-
-    Import-Module $appControlModule -Force -Global -ErrorAction Stop
-
-    $configPath = Join-Path $openPathRoot 'data\config.json'
-    if (-not (Test-Path -LiteralPath $configPath)) {
-        throw "OpenPath config is missing before browser-boundary probes: $configPath"
-    }
-
-    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-    $enableNonAdminAppControl = $true
-    if ($config.PSObject.Properties['enableNonAdminAppControl']) {
-        $enableNonAdminAppControl = [bool]$config.enableNonAdminAppControl
-    }
-    if (-not $enableNonAdminAppControl) {
-        throw 'Browser-boundary CI requires enableNonAdminAppControl=true.'
-    }
-
-    $mode = 'Enforced'
-    if ($config.PSObject.Properties['nonAdminAppControlMode'] -and $config.nonAdminAppControlMode) {
-        $mode = [string]$config.nonAdminAppControlMode
-    }
-    $approvedBrowsers = @('Firefox')
-    if ($config.PSObject.Properties['approvedStudentBrowsers'] -and $config.approvedStudentBrowsers) {
-        $approvedBrowsers = @($config.approvedStudentBrowsers)
-    }
-
-    if (-not (Test-OpenPathNonAdminAppControlActive -Mode $mode -ApprovedBrowsers $approvedBrowsers)) {
-        Write-Host 'OpenPath AppControl boundary is inactive before browser-boundary probes; reapplying once.'
-        $applied = Set-OpenPathNonAdminAppControl `
-            -OpenPathRoot $openPathRoot `
-            -Mode $mode `
-            -ApprovedBrowsers $approvedBrowsers
-        if (-not $applied) {
-            throw 'Set-OpenPathNonAdminAppControl did not report success before browser-boundary probes.'
-        }
-    }
-
-    if (-not (Test-OpenPathNonAdminAppControlActive -Mode $mode -ApprovedBrowsers $approvedBrowsers)) {
-        throw 'OpenPath AppControl boundary is still inactive after reapply.'
-    }
-
-    $policyXml = [xml](Get-AppLockerPolicy -Local -Xml)
-    $adminAllowAllRules = @($policyXml.AppLockerPolicy.RuleCollection.FilePathRule | Where-Object {
-            $_.Action -eq 'Allow' -and $_.UserOrGroupSid -eq 'S-1-5-32-544' -and $_.Conditions.FilePathCondition.Path -eq '*'
-        })
-    if ($adminAllowAllRules.Count -eq 0) {
-        throw 'OpenPath AppControl policy is active but the administrator allow-all rule is missing.'
-    }
-}
-
 function Grant-OpenPathUserRight {
     param(
         [Parameter(Mandatory = $true)][string]$Sid,
@@ -353,7 +297,23 @@ function Invoke-StudentBoundaryTask {
         if (-not $firefoxExe) {
             throw "Firefox executable is required for browser-boundary CI but was not found at standard paths."
         }
-        $firefoxProbeResult = Invoke-StudentExecutableTaskProbe -ProbeName 'Approved Firefox executable is allowed to run as student' -UserName $UserName -Password $Password -ExecutablePath $firefoxExe -Arguments '-headless -new-instance about:blank' -Expectation ExpectAllowed -ProcessName 'firefox' -StudentSid $studentSid
+        $studentProfileDir = Join-Path $userProfile "AppData\Local\Temp\ff-probe-$([guid]::NewGuid().ToString('N'))"
+        try {
+            New-Item -ItemType Directory -Path $studentProfileDir -Force -ErrorAction SilentlyContinue | Out-Null
+            & icacls.exe $studentProfileDir /grant "$env:COMPUTERNAME\${UserName}:(OI)(CI)F" *> $null
+            $firefoxProbeResult = Invoke-StudentExecutableTaskProbe `
+                -ProbeName 'Approved Firefox executable is allowed to run as student' `
+                -UserName $UserName `
+                -Password $Password `
+                -ExecutablePath $firefoxExe `
+                -Arguments "-headless -new-instance -profile `"$studentProfileDir`" about:blank" `
+                -Expectation ExpectAllowed `
+                -ProcessName 'firefox' `
+                -StudentSid $studentSid
+        }
+        finally {
+            Remove-Item -LiteralPath $studentProfileDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
 
         $results = @(
             $edgeProbeResult,

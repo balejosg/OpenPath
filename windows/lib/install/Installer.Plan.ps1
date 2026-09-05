@@ -201,3 +201,63 @@ function Invoke-OpenPathInstallPhase {
 
     return $result
 }
+
+function Get-OpenPathInstallPhaseFromPlan {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [AllowNull()]
+        [object]$Plan = $null
+    )
+
+    $targetPlan = if ($Plan) { $Plan } else { $script:installPlan }
+    if (-not $targetPlan) {
+        $targetPlan = $installPlan
+    }
+    $phase = @($targetPlan.Phases | Where-Object { $_.Name -eq $Name })[0]
+    if (-not $phase) {
+        throw "Installer phase not found: $Name"
+    }
+    return $phase
+}
+
+function Invoke-OpenPathPlannedPhase {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [scriptblock]$Action = $null,
+
+        [AllowNull()]
+        [object]$Plan = $null
+    )
+
+    $targetPlan = if ($Plan) { $Plan } else { $script:installPlan }
+    if (-not $targetPlan) {
+        $targetPlan = $installPlan
+    }
+
+    $script:OpenPathInstallerCurrentPhase = $Name
+    if (($env:OPENPATH_TEST_ENVIRONMENT -eq '1' -or $env:PSTEST_ENVIRONMENT -eq '1') -and $env:OPENPATH_TEST_FAIL_PHASE -and ($env:OPENPATH_TEST_FAIL_PHASE -eq $Name)) {
+        throw "Injected test failure at phase: $Name"
+    }
+
+    $phase = Get-OpenPathInstallPhaseFromPlan -Name $Name -Plan $targetPlan
+    if ($Action) {
+        $phase.Action = $Action
+    }
+    $context = if ($targetPlan) { $targetPlan.Context } else { $null }
+    $result = Invoke-OpenPathInstallPhase -Phase $phase -Context $context
+    if ($null -eq $script:OpenPathInstallPhaseResults) {
+        $script:OpenPathInstallPhaseResults = @()
+    }
+    $script:OpenPathInstallPhaseResults += $result
+
+    if (($env:OPENPATH_TEST_ENVIRONMENT -eq '1' -or $env:PSTEST_ENVIRONMENT -eq '1') -and $env:OPENPATH_TEST_FAIL_AFTER_PHASE -and ($env:OPENPATH_TEST_FAIL_AFTER_PHASE -eq $Name)) {
+        $script:OpenPathInstallerCurrentPhase = "post-$Name"
+        throw "Injected test failure immediately after phase: $Name"
+    }
+
+    return $result
+}

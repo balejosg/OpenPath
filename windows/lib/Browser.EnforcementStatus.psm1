@@ -71,6 +71,22 @@ function Get-OpenPathAppLockerStatus {
         return 'Inactive'
     }
 
+    if ($Config -and (-not $Config.PSObject.Properties['appControlCommitState'])) {
+        $groupExists = $false
+        if (Get-Command -Name 'Get-LocalGroup' -ErrorAction SilentlyContinue) {
+            try {
+                $null = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+                $groupExists = $true
+            }
+            catch {
+                $groupExists = $false
+            }
+        }
+        if (-not $groupExists) {
+            return 'Inactive'
+        }
+    }
+
     $configuredMode = [string](Get-OpenPathBrowserStatusConfigValue -Config $Config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
     $approvedStudentBrowsers = @(Get-OpenPathApprovedStudentBrowsers -Config $Config)
     $active = $false

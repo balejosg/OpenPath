@@ -139,10 +139,15 @@ function Invoke-StudentExecutableTaskProbe {
                             Id        = 8004
                             StartTime = $since
                         } -ErrorAction SilentlyContinue | Where-Object {
-                            $_.Message -match [regex]::Escape($binaryLeaf) -and (
-                                ($null -ne $StudentSid -and $_.UserId -and $_.UserId.Value -eq $StudentSid) -or
-                                ($null -eq $StudentSid -and $_.Message -match [regex]::Escape($UserName))
-                            )
+                            $matchesBinary = ($_.Message -match [regex]::Escape($binaryLeaf))
+                            $matchesUser = if ($StudentSid) {
+                                ($_.UserId -and $_.UserId.Value -eq $StudentSid) -or ($_.Message -match [regex]::Escape($StudentSid))
+                            } elseif ($UserName) {
+                                ($_.Message -match [regex]::Escape($UserName)) -or ($_.UserId -and $_.UserId.Value -eq $UserName)
+                            } else {
+                                $true
+                            }
+                            $matchesBinary -and $matchesUser
                         })
                     if ($blockEvents.Count -gt 0) {
                         $eventFound = $true
@@ -183,10 +188,29 @@ function Invoke-StudentExecutableTaskProbe {
                     break
                 }
 
-                if ($ProcessName -and (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) {
-                    $allowedFound = $true
-                    Stop-Process -Name $ProcessName -Force -ErrorAction SilentlyContinue
-                    break
+                if ($ProcessName) {
+                    $studentProcs = @()
+                    try {
+                        $procs = @(Get-CimInstance Win32_Process -Filter "Name LIKE '$ProcessName%'" -ErrorAction SilentlyContinue)
+                        foreach ($p in $procs) {
+                            $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+                            if ($owner -and $owner.Sid -and $StudentSid -and ($owner.Sid -eq $StudentSid)) {
+                                $studentProcs += $p
+                            }
+                            elseif (-not $StudentSid) {
+                                $studentProcs += $p
+                            }
+                        }
+                    }
+                    catch {}
+
+                    if ($studentProcs.Count -gt 0) {
+                        $allowedFound = $true
+                        foreach ($sp in $studentProcs) {
+                            Stop-Process -Id $sp.ProcessId -Force -ErrorAction SilentlyContinue
+                        }
+                        break
+                    }
                 }
 
                 try {
@@ -195,7 +219,15 @@ function Invoke-StudentExecutableTaskProbe {
                             Id        = 8002
                             StartTime = $since
                         } -ErrorAction SilentlyContinue | Where-Object {
-                            $_.Message -match [regex]::Escape($binaryLeaf)
+                            $matchesBinary = ($_.Message -match [regex]::Escape($binaryLeaf))
+                            $matchesUser = if ($StudentSid) {
+                                ($_.UserId -and $_.UserId.Value -eq $StudentSid) -or ($_.Message -match [regex]::Escape($StudentSid))
+                            } elseif ($UserName) {
+                                ($_.Message -match [regex]::Escape($UserName)) -or ($_.UserId -and $_.UserId.Value -eq $UserName)
+                            } else {
+                                $true
+                            }
+                            $matchesBinary -and $matchesUser
                         })
                     if ($allowEvents.Count -gt 0) {
                         $allowedFound = $true
@@ -208,7 +240,7 @@ function Invoke-StudentExecutableTaskProbe {
             }
 
             if (-not $allowedFound) {
-                throw "$ProbeName FAILED: Allowed execution was not observed for $binaryLeaf within timeout ($TimeoutSeconds s)."
+                throw "$ProbeName FAILED: Allowed execution was not observed for $binaryLeaf attributed to student within timeout ($TimeoutSeconds s)."
             }
 
             return [pscustomobject]@{
@@ -225,9 +257,84 @@ function Invoke-StudentExecutableTaskProbe {
     }
 }
 
+function Assert-InstalledOpenPathBrowserBoundaryAppControl {
+    <#
+    .SYNOPSIS
+        Verifies that OpenPath non-admin AppControl was installed and remains intact.
+        This is an assert-only verification: it NEVER attempts to repair or mutates the boundary.
+    #>
+    param(
+        [string]$OpenPathRoot = 'C:\OpenPath'
+    )
+
+    $configPath = Join-Path $OpenPathRoot 'data\config.json'
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        throw "OpenPath config is missing before browser-boundary probes: $configPath"
+    }
+
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    if (-not $config.PSObject.Properties['installState'] -or $config.installState -ne 'complete') {
+        throw "OpenPath installState must be 'complete' before browser-boundary probes, observed: '$($config.installState)'"
+    }
+    if (-not $config.PSObject.Properties['appControlCommitState'] -or $config.appControlCommitState -ne 'committed') {
+        throw "OpenPath appControlCommitState must be 'committed' before browser-boundary probes, observed: '$($config.appControlCommitState)'"
+    }
+    if (-not $config.PSObject.Properties['enableNonAdminAppControl'] -or -not [bool]$config.enableNonAdminAppControl) {
+        throw "OpenPath enableNonAdminAppControl must be true before browser-boundary probes."
+    }
+
+    if (Get-Command -Name Get-ScheduledTask -ErrorAction SilentlyContinue) {
+        $watchdogTask = Get-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction SilentlyContinue
+        if (-not $watchdogTask) {
+            throw "OpenPath-Watchdog scheduled task is missing before browser-boundary probes."
+        }
+    }
+
+    if (Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue) {
+        $restrictedGroup = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue
+        if (-not $restrictedGroup) {
+            throw "OpenPath-Restricted local group is missing before browser-boundary probes."
+        }
+    }
+
+    if (Get-Command -Name Get-Service -ErrorAction SilentlyContinue) {
+        $appIdSvc = Get-Service -Name 'AppIDSvc' -ErrorAction SilentlyContinue
+        if (-not $appIdSvc -or $appIdSvc.Status -ne 'Running') {
+            throw "AppIDSvc service must be Running before browser-boundary probes, observed status: '$($appIdSvc.Status)'"
+        }
+    }
+
+    $appControlModule = Join-Path $OpenPathRoot 'lib\AppControl.psm1'
+    if (-not (Test-Path -LiteralPath $appControlModule)) {
+        throw "OpenPath AppControl module is missing: $appControlModule"
+    }
+    Import-Module $appControlModule -Force -Global -ErrorAction Stop
+
+    $mode = if ($config.PSObject.Properties['nonAdminAppControlMode'] -and $config.nonAdminAppControlMode) { [string]$config.nonAdminAppControlMode } else { 'Enforced' }
+    $approvedBrowsers = if ($config.PSObject.Properties['approvedStudentBrowsers'] -and $config.approvedStudentBrowsers) { @($config.approvedStudentBrowsers) } else { @('Firefox') }
+
+    # Pure assert-only: DO NOT CALL Set-OpenPathNonAdminAppControl or repair!
+    if (-not (Test-OpenPathNonAdminAppControlActive -Mode $mode -ApprovedBrowsers $approvedBrowsers)) {
+        throw "OpenPath AppControl boundary is inactive before browser-boundary probes; installer acceptance failed."
+    }
+
+    if (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue) {
+        $policyXml = [xml](Get-AppLockerPolicy -Local -Xml -ErrorAction SilentlyContinue)
+        if ($policyXml) {
+            $adminAllowAllRules = @($policyXml.AppLockerPolicy.RuleCollection.FilePathRule | Where-Object {
+                    $_.Action -eq 'Allow' -and $_.UserOrGroupSid -eq 'S-1-5-32-544' -and $_.Conditions.FilePathCondition.Path -eq '*'
+                })
+            if ($adminAllowAllRules.Count -eq 0) {
+                throw 'OpenPath AppControl policy is active but the administrator allow-all rule is missing.'
+            }
+        }
+    }
+}
+
 Export-ModuleMember -Function @(
     'Invoke-ReportAssertNoFailures',
     'Assert-RequiredStudentProbeStatuses',
     'New-OpenPathProbePayloadBinary',
-    'Invoke-StudentExecutableTaskProbe'
+    'Invoke-StudentExecutableTaskProbe',
+    'Assert-InstalledOpenPathBrowserBoundaryAppControl'
 )

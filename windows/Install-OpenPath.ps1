@@ -157,74 +157,12 @@ if (($FirefoxExtensionId -and -not $FirefoxExtensionInstallUrl) -or ($FirefoxExt
     throw '-FirefoxExtensionId and -FirefoxExtensionInstallUrl must be provided together'
 }
 
-function Invoke-OpenPathInstallRollback {
-    if ($script:OpenPathInstallerRollingBack) { return }
-    $script:OpenPathInstallerRollingBack = $true
-
-    Write-InstallerWarning 'Installation failed after mutations; rolling back OpenPath-owned changes.'
-    $rollbackErrors = @()
-    try { Stop-OpenPathInstallerScheduledTasks } catch { $rollbackErrors += "tasks: $_"; Write-InstallerWarning "  Rollback task cleanup failed: $_" }
-    try { Restore-OpenPathInstallerDnsSettings } catch { $rollbackErrors += "dns: $_"; Write-InstallerWarning "  Rollback DNS restore failed: $_" }
-    try { Remove-OpenPathInstallerFirewallRules } catch { $rollbackErrors += "firewall: $_"; Write-InstallerWarning "  Rollback firewall cleanup failed: $_" }
-    try { Remove-OpenPathInstallerAppLockerRules } catch { $rollbackErrors += "applocker: $_"; Write-InstallerWarning "  Rollback AppLocker cleanup failed: $_" }
-    try { Remove-OpenPathInstallerRestrictedGroup } catch { $rollbackErrors += "restrictedGroup: $_"; Write-InstallerWarning "  Rollback restricted group cleanup failed: $_" }
-    try { Remove-OpenPathInstallerBrowserArtifacts } catch { $rollbackErrors += "browserArtifacts: $_"; Write-InstallerWarning "  Rollback browser artifacts cleanup failed: $_" }
-    try { Stop-OpenPathInstallerAcrylicService -KeepAcrylic } catch { $rollbackErrors += "acrylic: $_"; Write-InstallerWarning "  Rollback Acrylic stop failed: $_" }
-    try {
-        $configPath = Join-Path $OpenPathRoot 'data\config.json'
-        if (Test-Path -LiteralPath $configPath) {
-            Remove-Item -LiteralPath $configPath -Force -ErrorAction Stop
-        }
-    } catch { $rollbackErrors += "config: $_"; Write-InstallerWarning "  Rollback config removal failed: $_" }
-
-    $verifiedNonOperational = $true
-    if (Test-Path -LiteralPath (Join-Path $OpenPathRoot 'data\config.json')) {
-        $verifiedNonOperational = $false
-        Write-InstallerWarning '  Rollback verification warning: config.json is still present'
-    }
-    if (Get-Command -Name Get-ScheduledTask -ErrorAction SilentlyContinue) {
-        $remainingTasks = @(Get-ScheduledTask -TaskName 'OpenPath-*' -ErrorAction SilentlyContinue)
-        if ($remainingTasks.Count -gt 0) {
-            $verifiedNonOperational = $false
-            Write-InstallerWarning "  Rollback verification warning: $($remainingTasks.Count) OpenPath scheduled task(s) still present"
-        }
-    }
-    if (Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue) {
-        if (Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue) {
-            $verifiedNonOperational = $false
-            Write-InstallerWarning '  Rollback verification warning: OpenPath-Restricted group still present'
-        }
-    }
-    if (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue) {
-        try {
-            $localXml = [xml](Get-AppLockerPolicy -Local -Xml -ErrorAction SilentlyContinue)
-            if ($localXml) {
-                $residualRules = @($localXml.SelectNodes("//*[@Name and starts-with(@Name, 'OpenPath non-admin app control')]"))
-                if ($residualRules.Count -gt 0) {
-                    $verifiedNonOperational = $false
-                    Write-InstallerWarning "  Rollback verification warning: $($residualRules.Count) OpenPath AppLocker rule(s) still present in local policy"
-                }
-            }
-        }
-        catch {
-            $rollbackErrors += "applockerVerify: $_"
-        }
-    }
-
-    $script:OpenPathInstallRollbackResult = [pscustomobject]@{
-        Attempted              = $true
-        Success                = ($rollbackErrors.Count -eq 0)
-        VerifiedNonOperational = $verifiedNonOperational
-        Errors                 = @($rollbackErrors)
-    }
-
-    Write-InstallerWarning "Rollback completed; verifiedNonOperational=$verifiedNonOperational errors=$($rollbackErrors.Count); OpenPath logs were left in place for diagnosis."
-}
-
 function Write-OpenPathInstallerFailureStatus {
     param(
         [string]$Path = '',
-        [string]$Phase = 'startup'
+        [string]$Phase = 'startup',
+        [bool]$RollbackAttempted = $false,
+        [object]$RollbackResult = $null
     )
 
     if (-not $Path) {
@@ -238,6 +176,14 @@ function Write-OpenPathInstallerFailureStatus {
             New-Item -ItemType Directory -Path $parent -Force | Out-Null
         }
         Set-Content -LiteralPath $Path -Value $safePhase -NoNewline -Encoding ASCII -Force
+
+        $jsonPath = "$Path.json"
+        $statusObj = [pscustomobject]@{
+            Phase             = $safePhase
+            RollbackAttempted = $RollbackAttempted
+            RollbackResult    = $RollbackResult
+        }
+        Write-OpenPathAtomicJsonFile -Path $jsonPath -Data $statusObj -Depth 10
     }
     catch {
         # Failure diagnostics must never replace the original installer error.
@@ -288,12 +234,14 @@ function Set-OpenPathOfflinePayloadFailurePhase {
 
 trap {
     $failurePhase = Get-OpenPathInstallerFailurePhase
+    if ($script:OpenPathInstallerMutated) {
+        Invoke-OpenPathInstallRollback -OpenPathRoot $OpenPathRoot
+    }
     Write-OpenPathInstallerFailureStatus `
         -Path $FailureStatusPath `
-        -Phase $failurePhase
-    if ($script:OpenPathInstallerMutated) {
-        Invoke-OpenPathInstallRollback
-    }
+        -Phase $failurePhase `
+        -RollbackAttempted ([bool]$script:OpenPathInstallerMutated) `
+        -RollbackResult $script:OpenPathInstallRollbackResult
     Write-InstallerError "ERROR: $($_.Exception.Message)"
     exit 1
 }
@@ -350,12 +298,22 @@ function Invoke-OpenPathPlannedPhase {
     )
 
     $script:OpenPathInstallerCurrentPhase = $Name
+    if (($env:OPENPATH_TEST_ENVIRONMENT -eq '1' -or $env:PSTEST_ENVIRONMENT -eq '1') -and $env:OPENPATH_TEST_FAIL_PHASE -and ($env:OPENPATH_TEST_FAIL_PHASE -eq $Name)) {
+        throw "Injected test failure at phase: $Name"
+    }
+
     $phase = Get-OpenPathInstallPhaseFromPlan -Name $Name
     if ($Action) {
         $phase.Action = $Action
     }
     $result = Invoke-OpenPathInstallPhase -Phase $phase -Context $installPlan.Context
     $script:OpenPathInstallPhaseResults += $result
+
+    if (($env:OPENPATH_TEST_ENVIRONMENT -eq '1' -or $env:PSTEST_ENVIRONMENT -eq '1') -and $env:OPENPATH_TEST_FAIL_AFTER_PHASE -and ($env:OPENPATH_TEST_FAIL_AFTER_PHASE -eq $Name)) {
+        $script:OpenPathInstallerCurrentPhase = "post-$Name"
+        throw "Injected test failure immediately after phase: $Name"
+    }
+
     return $result
 }
 
@@ -593,7 +551,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'configuration' -Action {
         -ApprovedStudentBrowsers $ApprovedStudentBrowsers `
         -BrowserCleanupMode $BrowserCleanupMode
     if ($PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Write installer configuration')) {
-        $config | ConvertTo-Json -Depth 10 | Set-Content "$OpenPathRoot\data\config.json" -Encoding UTF8
+        Write-OpenPathAtomicJsonFile -Path "$OpenPathRoot\data\config.json" -Data $config -Depth 10
     }
     Set-Variable -Name primaryDNS -Scope Script -Value $primaryDNS
     Set-Variable -Name agentVersion -Scope Script -Value $agentVersion
@@ -827,7 +785,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
                 if (Test-Path -LiteralPath $configPath) {
                     $committedConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
                     $committedConfig.appControlCommitState = 'committed'
-                    $committedConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
+                    Write-OpenPathAtomicJsonFile -Path $configPath -Data $committedConfig -Depth 10
                 }
             }
             $config.appControlCommitState = 'committed'
@@ -927,7 +885,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'summary' -Action {
         if (Test-Path -LiteralPath $configPath) {
             $finalConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
             $finalConfig.installState = 'complete'
-            $finalConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
+            Write-OpenPathAtomicJsonFile -Path $configPath -Data $finalConfig -Depth 10
         }
     }
     $config.installState = 'complete'

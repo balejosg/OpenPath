@@ -11,6 +11,27 @@ Describe "Windows Browser Boundary CI Probes" {
         if (-not (Get-Command Get-WinEvent -ErrorAction SilentlyContinue)) {
             function global:Get-WinEvent { param($FilterHashtable) }
         }
+        if (-not (Get-Command Get-CimInstance -ErrorAction SilentlyContinue)) {
+            function global:Get-CimInstance { param($ClassName, $Filter) }
+        }
+        if (-not (Get-Command Invoke-CimMethod -ErrorAction SilentlyContinue)) {
+            function global:Invoke-CimMethod { param($InputObject, $MethodName) }
+        }
+        if (-not (Get-Command Stop-Process -ErrorAction SilentlyContinue)) {
+            function global:Stop-Process { param($Id, $Name, [switch]$Force) }
+        }
+        if (-not (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)) {
+            function global:Get-LocalGroup { param($Name) }
+        }
+        if (-not (Get-Command Get-Service -ErrorAction SilentlyContinue)) {
+            function global:Get-Service { param($Name) }
+        }
+        if (-not (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+            function global:Get-AppLockerPolicy { param([switch]$Local, [switch]$Xml) }
+        }
+        if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+            function global:Get-ScheduledTask { param($TaskName) }
+        }
     }
 
     Context "Invoke-StudentExecutableTaskProbe" {
@@ -161,7 +182,7 @@ Describe "Windows Browser Boundary CI Probes" {
             $result.evidence.allowedObserved | Should -BeTrue
         }
 
-        It "Passes when ExpectAllowed and 8002 allow event is observed" {
+        It "Passes when ExpectAllowed and 8002 allow event is observed with matching student SID" {
             $testExe = Join-Path $TestDrive "probe-allowed-8002.exe"
             Set-Content -LiteralPath $testExe -Value "dummy"
             $markerPath = Join-Path $TestDrive "marker-allowed-absent.txt"
@@ -172,6 +193,7 @@ Describe "Windows Browser Boundary CI Probes" {
                     [pscustomobject]@{
                         Id = 8002
                         Message = "probe-allowed-8002.exe was allowed to run"
+                        UserId = [pscustomobject]@{ Value = 'S-1-5-21-student-sid' }
                     }
                 )
             } -ModuleName BrowserBoundaryProbe
@@ -182,11 +204,94 @@ Describe "Windows Browser Boundary CI Probes" {
                 -Password "secret" `
                 -ExecutablePath $testExe `
                 -Expectation ExpectAllowed `
+                -StudentSid 'S-1-5-21-student-sid' `
                 -MarkerPath $markerPath `
                 -TimeoutSeconds 1
 
             $result.status | Should -Be 'pass'
             $result.evidence.allowedObserved | Should -BeTrue
+        }
+
+        It "Throws when ExpectAllowed and 8002 allow event has wrong SID" {
+            $testExe = Join-Path $TestDrive "probe-allowed-wrong-sid.exe"
+            Set-Content -LiteralPath $testExe -Value "dummy"
+            $markerPath = Join-Path $TestDrive "marker-allowed-wrong-sid.txt"
+
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                return @(
+                    [pscustomobject]@{
+                        Id = 8002
+                        Message = "probe-allowed-wrong-sid.exe was allowed to run"
+                        UserId = [pscustomobject]@{ Value = 'S-1-5-21-other-sid' }
+                    }
+                )
+            } -ModuleName BrowserBoundaryProbe
+
+            {
+                Invoke-StudentExecutableTaskProbe `
+                    -ProbeName "Allowed wrong SID probe" `
+                    -UserName "student01" `
+                    -Password "secret" `
+                    -ExecutablePath $testExe `
+                    -Expectation ExpectAllowed `
+                    -StudentSid 'S-1-5-21-student-sid' `
+                    -MarkerPath $markerPath `
+                    -TimeoutSeconds 1
+            } | Should -Throw "*Allowed execution was not observed*"
+        }
+
+        It "Throws when ExpectAllowed and process is observed from unrelated user (e.g. Admin)" {
+            $testExe = Join-Path $TestDrive "firefox.exe"
+            Set-Content -LiteralPath $testExe -Value "dummy"
+
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent { return @() } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance {
+                return @([pscustomobject]@{ ProcessId = 1234; Name = 'firefox.exe' })
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-CimMethod {
+                return [pscustomobject]@{ Sid = 'S-1-5-32-544' }
+            } -ModuleName BrowserBoundaryProbe
+
+            {
+                Invoke-StudentExecutableTaskProbe `
+                    -ProbeName "Allowed admin process probe" `
+                    -UserName "student01" `
+                    -Password "secret" `
+                    -ExecutablePath $testExe `
+                    -ProcessName "firefox" `
+                    -Expectation ExpectAllowed `
+                    -StudentSid 'S-1-5-21-student-sid' `
+                    -TimeoutSeconds 1
+            } | Should -Throw "*Allowed execution was not observed*"
+        }
+
+        It "Throws when ExpectDenied and 8004 block event has wrong SID" {
+            $testExe = Join-Path $TestDrive "probe-denied-wrong-sid.exe"
+            Set-Content -LiteralPath $testExe -Value "dummy"
+
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                return @(
+                    [pscustomobject]@{
+                        Id = 8004
+                        Message = "probe-denied-wrong-sid.exe was prevented from running"
+                        UserId = [pscustomobject]@{ Value = 'S-1-5-21-other-sid' }
+                    }
+                )
+            } -ModuleName BrowserBoundaryProbe
+
+            {
+                Invoke-StudentExecutableTaskProbe `
+                    -ProbeName "Denied wrong SID probe" `
+                    -UserName "student01" `
+                    -Password "secret" `
+                    -ExecutablePath $testExe `
+                    -Expectation ExpectDenied `
+                    -StudentSid 'S-1-5-21-student-sid' `
+                    -TimeoutSeconds 1
+            } | Should -Throw "*AppLocker 8004 block event was not observed*"
         }
 
         It "Throws when ExpectAllowed but no evidence is observed" {
@@ -205,6 +310,136 @@ Describe "Windows Browser Boundary CI Probes" {
                     -Expectation ExpectAllowed `
                     -TimeoutSeconds 1
             } | Should -Throw "*Allowed execution was not observed*"
+        }
+    }
+
+    Context "Assert-InstalledOpenPathBrowserBoundaryAppControl" {
+        BeforeEach {
+            $script:probeRoot = Join-Path $TestDrive "probe-root-$([guid]::NewGuid().ToString('N'))"
+            $dataDir = Join-Path $script:probeRoot "data"
+            $libDir = Join-Path $script:probeRoot "lib"
+            New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+            New-Item -ItemType Directory -Path $libDir -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $libDir "AppControl.psm1") -Value @"
+function Test-OpenPathNonAdminAppControlActive { param(`$Mode, `$ApprovedBrowsers) return `$global:mockAppControlActive }
+function Set-OpenPathNonAdminAppControl { param(`$OpenPathRoot, `$Mode, `$ApprovedBrowsers) `$global:mockSetAppControlCalled = `$true; return `$true }
+Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPathNonAdminAppControl
+"@
+            $global:mockAppControlActive = $true
+            $global:mockSetAppControlCalled = $false
+        }
+
+        AfterEach {
+            Remove-Variable -Name mockAppControlActive -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable -Name mockSetAppControlCalled -Scope Global -ErrorAction SilentlyContinue
+            Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
+        }
+
+        AfterAll {
+            Remove-Variable -Name mockAppControlActive -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable -Name mockSetAppControlCalled -Scope Global -ErrorAction SilentlyContinue
+            Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
+            $realAppControl = Join-Path $PSScriptRoot ".." "lib" "AppControl.psm1"
+            if (Test-Path $realAppControl) {
+                Import-Module $realAppControl -Force -Global -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Throws and never calls Set-OpenPathNonAdminAppControl when AppLocker boundary is inactive" {
+            $global:mockAppControlActive = $false
+            $config = [pscustomobject]@{
+                installState = 'complete'
+                appControlCommitState = 'committed'
+                enableNonAdminAppControl = $true
+                nonAdminAppControlMode = 'Enforced'
+                approvedStudentBrowsers = @('Firefox')
+            }
+            $config | ConvertTo-Json | Set-Content (Join-Path $script:probeRoot "data\config.json")
+
+            Mock Get-ScheduledTask { [pscustomobject]@{ TaskName = 'OpenPath-Watchdog' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-LocalGroup { [pscustomobject]@{ Name = 'OpenPath-Restricted' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-Service { [pscustomobject]@{ Status = 'Running' } } -ModuleName BrowserBoundaryProbe
+
+            {
+                Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $script:probeRoot
+            } | Should -Throw "*OpenPath AppControl boundary is inactive before browser-boundary probes; installer acceptance failed.*"
+
+            $global:mockSetAppControlCalled | Should -BeFalse
+        }
+
+        It "Throws when OpenPath-Watchdog scheduled task is missing" {
+            $config = [pscustomobject]@{
+                installState = 'complete'
+                appControlCommitState = 'committed'
+                enableNonAdminAppControl = $true
+            }
+            $config | ConvertTo-Json | Set-Content (Join-Path $script:probeRoot "data\config.json")
+
+            Mock Get-ScheduledTask { return $null } -ModuleName BrowserBoundaryProbe
+            Mock Get-LocalGroup { [pscustomobject]@{ Name = 'OpenPath-Restricted' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-Service { [pscustomobject]@{ Status = 'Running' } } -ModuleName BrowserBoundaryProbe
+
+            {
+                Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $script:probeRoot
+            } | Should -Throw "*OpenPath-Watchdog scheduled task is missing*"
+        }
+
+        It "Throws when appControlCommitState is pending" {
+            $config = [pscustomobject]@{
+                installState = 'complete'
+                appControlCommitState = 'pending'
+                enableNonAdminAppControl = $true
+            }
+            $config | ConvertTo-Json | Set-Content (Join-Path $script:probeRoot "data\config.json")
+
+            {
+                Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $script:probeRoot
+            } | Should -Throw "*appControlCommitState must be 'committed'*"
+        }
+
+        It "Throws when installState is installing" {
+            $config = [pscustomobject]@{
+                installState = 'installing'
+                appControlCommitState = 'committed'
+                enableNonAdminAppControl = $true
+            }
+            $config | ConvertTo-Json | Set-Content (Join-Path $script:probeRoot "data\config.json")
+
+            {
+                Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $script:probeRoot
+            } | Should -Throw "*installState must be 'complete'*"
+        }
+
+        It "Passes when complete, committed, active, watchdog present and admin allow-all rule present" {
+            $config = [pscustomobject]@{
+                installState = 'complete'
+                appControlCommitState = 'committed'
+                enableNonAdminAppControl = $true
+                nonAdminAppControlMode = 'Enforced'
+                approvedStudentBrowsers = @('Firefox')
+            }
+            $config | ConvertTo-Json | Set-Content (Join-Path $script:probeRoot "data\config.json")
+
+            Mock Get-ScheduledTask { [pscustomobject]@{ TaskName = 'OpenPath-Watchdog' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-LocalGroup { [pscustomobject]@{ Name = 'OpenPath-Restricted' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-Service { [pscustomobject]@{ Status = 'Running' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-AppLockerPolicy {
+                @"
+<AppLockerPolicy Version="1">
+    <RuleCollection Type="Exe" EnforcementMode="Enabled">
+        <FilePathRule Id="$([guid]::NewGuid())" Name="Allow all for Admins" Action="Allow" UserOrGroupSid="S-1-5-32-544">
+            <Conditions>
+                <FilePathCondition Path="*" />
+            </Conditions>
+        </FilePathRule>
+    </RuleCollection>
+</AppLockerPolicy>
+"@
+            } -ModuleName BrowserBoundaryProbe
+
+            {
+                Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $script:probeRoot
+            } | Should -Not -Throw
         }
     }
 
