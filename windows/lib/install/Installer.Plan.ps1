@@ -261,3 +261,43 @@ function Invoke-OpenPathPlannedPhase {
 
     return $result
 }
+
+function Invoke-OpenPathPlannedWarningPhase {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [scriptblock]$Action = $null,
+
+        [AllowNull()]
+        [object]$Plan = $null
+    )
+
+    $result = Invoke-OpenPathPlannedPhase -Name $Name -Action $Action -Plan $Plan
+    if (-not $result.Success) {
+        $result.Status = 'warning'
+    }
+    return $result
+}
+
+function Assert-OpenPathInstallPhaseSucceeded {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Result
+    )
+
+    if ($Result.Success) {
+        return
+    }
+
+    if (Get-Command -Name Write-InstallerError -ErrorAction SilentlyContinue) {
+        Write-InstallerError "ERROR: Installer phase failed: $($Result.Name)"
+        if ($Result.Error -and $Result.Error.Message) {
+            Write-InstallerError "  $($Result.Error.Message)"
+        }
+        if ($Result.RecoveryHint) {
+            Write-InstallerError "  Recovery: $($Result.RecoveryHint)"
+        }
+    }
+    throw "Installer phase failed: $($Result.Name)"
+}

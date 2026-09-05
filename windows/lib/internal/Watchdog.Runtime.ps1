@@ -691,15 +691,9 @@ function Invoke-OpenPathWatchdogChecks {
                             $currentConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
                             if (Get-Command -Name 'Set-OpenPathConfigValue' -ErrorAction SilentlyContinue) {
                                 Set-OpenPathConfigValue -Config $currentConfig -Name 'appControlCommitState' -Value 'committed'
-                                if (-not $currentConfig.PSObject.Properties['installState'] -or $currentConfig.installState -eq 'installing') {
-                                    Set-OpenPathConfigValue -Config $currentConfig -Name 'installState' -Value 'complete'
-                                }
                             }
                             else {
                                 if ($currentConfig.PSObject.Properties['appControlCommitState']) { $currentConfig.appControlCommitState = 'committed' } else { $currentConfig | Add-Member -MemberType NoteProperty -Name 'appControlCommitState' -Value 'committed' -Force }
-                                if (-not $currentConfig.PSObject.Properties['installState'] -or $currentConfig.installState -eq 'installing') {
-                                    if ($currentConfig.PSObject.Properties['installState']) { $currentConfig.installState = 'complete' } else { $currentConfig | Add-Member -MemberType NoteProperty -Name 'installState' -Value 'complete' -Force }
-                                }
                             }
                             Write-OpenPathAtomicJsonFile -Path $configPath -Data $currentConfig -Depth 10
                             Write-OpenPathLog "Watchdog: Legacy AppControl config migrated and committed to config.json"
@@ -711,11 +705,9 @@ function Invoke-OpenPathWatchdogChecks {
 
                     if (Get-Command -Name 'Set-OpenPathConfigValue' -ErrorAction SilentlyContinue) {
                         Set-OpenPathConfigValue -Config $Config -Name 'appControlCommitState' -Value 'committed'
-                        Set-OpenPathConfigValue -Config $Config -Name 'installState' -Value 'complete'
                     }
                     else {
                         if ($Config.PSObject.Properties['appControlCommitState']) { $Config.appControlCommitState = 'committed' } else { $Config | Add-Member -MemberType NoteProperty -Name 'appControlCommitState' -Value 'committed' -Force }
-                        if ($Config.PSObject.Properties['installState']) { $Config.installState = 'complete' } else { $Config | Add-Member -MemberType NoteProperty -Name 'installState' -Value 'complete' -Force }
                     }
                 }
                 else {
@@ -775,17 +767,9 @@ function Invoke-OpenPathWatchdogChecks {
                                 $currentConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
                                 if (Get-Command -Name 'Set-OpenPathConfigValue' -ErrorAction SilentlyContinue) {
                                     Set-OpenPathConfigValue -Config $currentConfig -Name 'appControlCommitState' -Value 'committed'
-                                    if ($legacyConfig) {
-                                        Set-OpenPathConfigValue -Config $currentConfig -Name 'installState' -Value 'complete'
-                                        Set-OpenPathConfigValue -Config $Config -Name 'installState' -Value 'complete'
-                                    }
                                 }
                                 else {
                                     if ($currentConfig.PSObject.Properties['appControlCommitState']) { $currentConfig.appControlCommitState = 'committed' } else { $currentConfig | Add-Member -MemberType NoteProperty -Name 'appControlCommitState' -Value 'committed' -Force }
-                                    if ($legacyConfig) {
-                                        if ($currentConfig.PSObject.Properties['installState']) { $currentConfig.installState = 'complete' } else { $currentConfig | Add-Member -MemberType NoteProperty -Name 'installState' -Value 'complete' -Force }
-                                        if ($Config.PSObject.Properties['installState']) { $Config.installState = 'complete' } else { $Config | Add-Member -MemberType NoteProperty -Name 'installState' -Value 'complete' -Force }
-                                    }
                                 }
                                 Write-OpenPathAtomicJsonFile -Path $configPath -Data $currentConfig -Depth 10
                                 if (Get-Command -Name 'Set-OpenPathConfigValue' -ErrorAction SilentlyContinue) {

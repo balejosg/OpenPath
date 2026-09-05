@@ -31,17 +31,22 @@ function Set-LocalDNS {
     if (-not $PSCmdlet.ShouldProcess("Network adapters", "Set DNS to 127.0.0.1")) { return }
     Write-OpenPathLog "Configuring local DNS..."
     Save-OpenPathOriginalDnsSnapshot | Out-Null
+    if (-not (Get-Command -Name 'Get-NetAdapter' -ErrorAction SilentlyContinue)) { return }
     $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
     foreach ($adapter in $adapters) {
         try {
-            Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses "127.0.0.1"
-            Write-OpenPathLog "Set DNS for adapter: $($adapter.Name)"
+            if (Get-Command -Name 'Set-DnsClientServerAddress' -ErrorAction SilentlyContinue) {
+                Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses "127.0.0.1"
+                Write-OpenPathLog "Set DNS for adapter: $($adapter.Name)"
+            }
         }
         catch {
             Write-OpenPathLog "Failed to set DNS for $($adapter.Name): $_" -Level WARN
         }
     }
-    Clear-DnsClientCache
+    if (Get-Command -Name 'Clear-DnsClientCache' -ErrorAction SilentlyContinue) {
+        Clear-DnsClientCache
+    }
     Write-OpenPathLog "DNS cache flushed"
 }
 

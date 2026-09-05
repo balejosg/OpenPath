@@ -272,85 +272,11 @@ $installerParameters = @{
     TimingOutputPath = $TimingOutputPath
 }
 $installPlan = New-OpenPathInstallPlan -Parameters $installerParameters -OpenPathRoot $OpenPathRoot -ScriptDir $scriptDir
+$script:installPlan = $installPlan
 $script:OpenPathInstallPhaseResults = @()
 $script:OpenPathInstallerMutated = $false
 $script:OpenPathInstallerRollingBack = $false
 
-function Get-OpenPathInstallPhaseFromPlan {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name
-    )
-
-    $phase = @($installPlan.Phases | Where-Object { $_.Name -eq $Name })[0]
-    if (-not $phase) {
-        throw "Installer phase not found: $Name"
-    }
-    return $phase
-}
-
-function Invoke-OpenPathPlannedPhase {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-
-        [scriptblock]$Action = $null
-    )
-
-    $script:OpenPathInstallerCurrentPhase = $Name
-    if (($env:OPENPATH_TEST_ENVIRONMENT -eq '1' -or $env:PSTEST_ENVIRONMENT -eq '1') -and $env:OPENPATH_TEST_FAIL_PHASE -and ($env:OPENPATH_TEST_FAIL_PHASE -eq $Name)) {
-        throw "Injected test failure at phase: $Name"
-    }
-
-    $phase = Get-OpenPathInstallPhaseFromPlan -Name $Name
-    if ($Action) {
-        $phase.Action = $Action
-    }
-    $result = Invoke-OpenPathInstallPhase -Phase $phase -Context $installPlan.Context
-    $script:OpenPathInstallPhaseResults += $result
-
-    if (($env:OPENPATH_TEST_ENVIRONMENT -eq '1' -or $env:PSTEST_ENVIRONMENT -eq '1') -and $env:OPENPATH_TEST_FAIL_AFTER_PHASE -and ($env:OPENPATH_TEST_FAIL_AFTER_PHASE -eq $Name)) {
-        $script:OpenPathInstallerCurrentPhase = "post-$Name"
-        throw "Injected test failure immediately after phase: $Name"
-    }
-
-    return $result
-}
-
-function Invoke-OpenPathPlannedWarningPhase {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-
-        [scriptblock]$Action = $null
-    )
-
-    $result = Invoke-OpenPathPlannedPhase -Name $Name -Action $Action
-    if (-not $result.Success) {
-        $result.Status = 'warning'
-    }
-    return $result
-}
-
-function Assert-OpenPathInstallPhaseSucceeded {
-    param(
-        [Parameter(Mandatory = $true)]
-        [object]$Result
-    )
-
-    if ($Result.Success) {
-        return
-    }
-
-    Write-InstallerError "ERROR: Installer phase failed: $($Result.Name)"
-    if ($Result.Error -and $Result.Error.Message) {
-        Write-InstallerError "  $($Result.Error.Message)"
-    }
-    if ($Result.RecoveryHint) {
-        Write-InstallerError "  Recovery: $($Result.RecoveryHint)"
-    }
-    throw "Installer phase failed: $($Result.Name)"
-}
 
 function Get-OpenPathInstallerConfigValue {
     param(

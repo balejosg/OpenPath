@@ -18,7 +18,7 @@ function Get-OpenPathConfig {
 function Write-OpenPathAtomicJsonFile {
     <#
     .SYNOPSIS
-        Atomically writes JSON content to disk using a temp file and Win32 atomic replace.
+        Atomically writes JSON content to disk using temp file, durable flush, and atomic replace/move.
     #>
     [CmdletBinding()]
     param(
@@ -38,31 +38,42 @@ function Write-OpenPathAtomicJsonFile {
 
     $json = $Data | ConvertTo-Json -Depth $Depth
     $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
-    $tempPath = "$Path.tmp.$([guid]::NewGuid().ToString('N'))"
-    $backupPath = "$Path.bak.$([guid]::NewGuid().ToString('N'))"
+    $bytes = $utf8WithoutBom.GetBytes($json)
+
+    $guid = [guid]::NewGuid().ToString('N')
+    $tempPath = "$Path.tmp.$guid"
+    $backupPath = "$Path.bak.$guid"
+
+    $fileStream = $null
+    try {
+        $fileStream = [System.IO.File]::Create($tempPath)
+        $fileStream.Write($bytes, 0, $bytes.Length)
+        $fileStream.Flush($true)
+    }
+    finally {
+        if ($fileStream) {
+            $fileStream.Dispose()
+            $fileStream = $null
+        }
+    }
 
     try {
-        [System.IO.File]::WriteAllText($tempPath, $json, $utf8WithoutBom)
-
-        if (Test-Path -LiteralPath $Path) {
-            try {
-                [System.IO.File]::Replace($tempPath, $Path, $backupPath, $true)
-            }
-            catch {
-                [System.IO.File]::Copy($tempPath, $Path, $true)
-                [System.IO.File]::Delete($tempPath)
-            }
+        if ([System.IO.File]::Exists($Path)) {
+            # Atomic swap into existing destination. If Replace fails, throws immediately;
+            # the existing destination is never partially overwritten in place.
+            [System.IO.File]::Replace($tempPath, $Path, $backupPath, $true)
         }
         else {
+            # Atomic move into non-existent destination within the same directory.
             [System.IO.File]::Move($tempPath, $Path)
         }
     }
     finally {
-        if (Test-Path -LiteralPath $tempPath) {
-            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        if ([System.IO.File]::Exists($tempPath)) {
+            try { [System.IO.File]::Delete($tempPath) } catch {}
         }
-        if (Test-Path -LiteralPath $backupPath) {
-            Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+        if ([System.IO.File]::Exists($backupPath)) {
+            try { [System.IO.File]::Delete($backupPath) } catch {}
         }
     }
 }

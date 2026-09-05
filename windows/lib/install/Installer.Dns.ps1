@@ -28,19 +28,24 @@ function Test-InstallerDisfavoredDnsServer {
 function Get-InstallerPrimaryDNS {
     # selects the best available upstream dns server from adapter addresses, default gateway,
     # and well-known fallbacks; disfavored servers (azure wire) are tried last.
-    $preferredCandidates = @(
-        Get-DnsClientServerAddress -AddressFamily IPv4 |
-            ForEach-Object { @($_.ServerAddresses) } |
-            Where-Object {
-                $_ -and
-                $_ -notin @('127.0.0.1', '0.0.0.0') -and
-                $_ -match '^\d{1,3}(?:\.\d{1,3}){3}$'
-            }
-    )
+    $preferredCandidates = @()
+    if (Get-Command -Name 'Get-DnsClientServerAddress' -ErrorAction SilentlyContinue) {
+        $preferredCandidates += @(
+            Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                ForEach-Object { @($_.ServerAddresses) } |
+                Where-Object {
+                    $_ -and
+                    $_ -notin @('127.0.0.1', '0.0.0.0') -and
+                    $_ -match '^\d{1,3}(?:\.\d{1,3}){3}$'
+                }
+        )
+    }
 
-    $gateway = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -First 1).NextHop
-    if ($gateway -and $gateway -notin @('127.0.0.1', '0.0.0.0') -and $gateway -match '^\d{1,3}(?:\.\d{1,3}){3}$') {
-        $preferredCandidates += $gateway
+    if (Get-Command -Name 'Get-NetRoute' -ErrorAction SilentlyContinue) {
+        $gateway = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Select-Object -First 1).NextHop
+        if ($gateway -and $gateway -notin @('127.0.0.1', '0.0.0.0') -and $gateway -match '^\d{1,3}(?:\.\d{1,3}){3}$') {
+            $preferredCandidates += $gateway
+        }
     }
 
     $preferredCandidates = @($preferredCandidates | Select-Object -Unique)

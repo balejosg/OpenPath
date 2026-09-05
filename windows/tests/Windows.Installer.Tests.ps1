@@ -129,7 +129,7 @@ Describe "Installer" {
                 '[string]$TimingOutputPath = ""',
                 'Installer.Plan.ps1',
                 'New-OpenPathInstallPlan',
-                'Invoke-OpenPathInstallPhase'
+                'Invoke-OpenPathPlannedPhase'
             )
         }
 
@@ -197,7 +197,7 @@ Describe "Installer" {
                 'Invoke-OpenPathInstallRollback -OpenPathRoot $OpenPathRoot',
                 'Write-OpenPathInstallerFailureStatus',
                 'trap {',
-                'throw "Installer phase failed: $($Result.Name)"'
+                'Assert-OpenPathInstallPhaseSucceeded'
             )
             $content | Should -Not -Match 'Assert-OpenPathInstallPhaseSucceeded[\s\S]*?exit 1'
 
@@ -217,6 +217,33 @@ Describe "Installer" {
                 '$script:OpenPathInstallRollbackResult',
                 'VerifiedNonOperational'
             )
+
+            # Installer.Plan.ps1 is the canonical owner of phase assertions and the phase runner
+            $planPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Plan.ps1"
+            $planContent = Get-Content $planPath -Raw
+            Assert-ContentContainsAll -Content $planContent -Needles @(
+                'function Assert-OpenPathInstallPhaseSucceeded',
+                'throw "Installer phase failed: $($Result.Name)"',
+                'function Invoke-OpenPathPlannedPhase',
+                'function Get-OpenPathInstallPhaseFromPlan'
+            )
+        }
+
+        It "Enforces that Install-OpenPath.ps1 does not duplicate phase runner functions" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $content = Get-Content $scriptPath -Raw
+
+            $content | Should -Not -Match '(?m)^\s*function\s+Invoke-OpenPathPlannedPhase\b'
+            $content | Should -Not -Match '(?m)^\s*function\s+Get-OpenPathInstallPhaseFromPlan\b'
+            $content | Should -Not -Match '(?m)^\s*function\s+Invoke-OpenPathPlannedWarningPhase\b'
+            $content | Should -Not -Match '(?m)^\s*function\s+Assert-OpenPathInstallPhaseSucceeded\b'
+        }
+
+        It "Enforces that Installer.Config.ps1 does not duplicate Write-OpenPathAtomicJsonFile" {
+            $configHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Config.ps1"
+            $content = Get-Content $configHelperPath -Raw
+
+            $content | Should -Not -Match '(?m)^\s*function\s+Write-OpenPathAtomicJsonFile\b'
         }
 
         It "Executes rollback leaving host VerifiedNonOperational when firefox-managed-extension-ready fails after app-control" {
@@ -446,6 +473,38 @@ Describe "Installer" {
             { Write-OpenPathAtomicJsonFile -Path $testDir -Data @{ error = $true } } | Should -Throw
 
             @(Get-ChildItem -LiteralPath (Split-Path $testDir -Parent) -Filter "*.tmp.*").Count | Should -Be 0
+        }
+
+        It "writes temporary files in the same directory as the target destination" {
+            $commonConfigPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Config.ps1"
+            $code = Get-Content $commonConfigPath -Raw
+            $code | Should -Match '\$tempPath\s*=\s*"\$Path\.tmp\.'
+            $code | Should -Match '\$backupPath\s*=\s*"\$Path\.bak\.'
+        }
+
+        It "does not implement non-atomic File.Copy or Copy-Item overwrite fallback" {
+            $commonConfigPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Config.ps1"
+            $code = Get-Content $commonConfigPath -Raw
+            $code | Should -Not -Match '\[System\.IO\.File\]::Copy'
+            $code | Should -Not -Match '\bCopy-Item\b'
+            $code | Should -Match '\.Flush\(\$true\)'
+        }
+
+        It "fails safely leaving old destination byte-for-byte unchanged when atomic write cannot proceed" {
+            $testDir = Join-Path $TestDrive "atomic-preserve-test"
+            New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+            $testFile = Join-Path $testDir "config.json"
+            $originalContent = '{"installState":"complete","appControlCommitState":"committed","sentinel":"ORIGINAL_DATA_12345"}'
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($testFile, $originalContent, $utf8NoBom)
+            $originalBytes = [System.IO.File]::ReadAllBytes($testFile)
+
+            $invalidTarget = Join-Path $testFile "subfile.json"
+            { Write-OpenPathAtomicJsonFile -Path $invalidTarget -Data @{ new = 'bad' } } | Should -Throw
+
+            $currentBytes = [System.IO.File]::ReadAllBytes($testFile)
+            [System.Linq.Enumerable]::SequenceEqual($originalBytes, $currentBytes) | Should -BeTrue
+            @(Get-ChildItem -LiteralPath $testDir -Filter "*.tmp.*").Count | Should -Be 0
         }
     }
 
@@ -686,6 +745,233 @@ Describe "Installer" {
             $statusJson.Phase | Should -Be 'post-app-control'
             $statusJson.RollbackAttempted | Should -BeTrue
             $statusJson.RollbackResult.VerifiedNonOperational | Should -BeTrue
+        }
+    }
+
+    Context "Real Install-OpenPath entrypoint failure injection and trap execution" {
+        It "Executes real Install-OpenPath.ps1 trap and rolls back when firefox-managed-extension-ready fails" {
+            $testDir = Join-Path $TestDrive "real-trap-firefox-$([guid]::NewGuid().ToString('N'))"
+            New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+            $installerPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1")).Path
+            $failureStatus = Join-Path $testDir "data" "failure-status"
+
+            $childScriptContent = @"
+`$ErrorActionPreference = 'Continue'
+`$env:OPENPATH_WINDOWS_ROOT = '$testDir'
+`$env:OPENPATH_TEST_ENVIRONMENT = '1'
+`$env:OPENPATH_TEST_FAIL_PHASE = 'firefox-managed-extension-ready'
+
+`$global:MockGroupExists = `$false
+`$global:MockTasks = [System.Collections.Generic.List[string]]::new()
+`$global:MockAppLockerXml = ''
+
+function global:Invoke-OpenPathInstallerFirstUpdate { param(`$OpenPathRoot, `$ClassroomModeRequested, `$MachineRegistered) }
+
+if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Get-ScheduledTask { param(`$TaskName) return @(`$global:MockTasks | Where-Object { `$TaskName -eq '*' -or `$_ -like `$TaskName } | ForEach-Object { [pscustomobject]@{ TaskName = `$_ } }) } }
+if (-not (Get-Command Stop-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Stop-ScheduledTask { param(`$TaskName, `$TaskPath) } }
+if (-not (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Unregister-ScheduledTask { param(`$TaskName, `$TaskPath, [switch]`$Confirm) [void]`$global:MockTasks.Remove(`$TaskName) } }
+if (-not (Get-Command New-ScheduledTaskAction -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskAction { param(`$Execute, `$Argument) return [pscustomobject]@{} } }
+if (-not (Get-Command New-ScheduledTaskTrigger -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskTrigger { param([switch]`$AtStartup, [switch]`$Once, `$At, `$RepetitionInterval) return [pscustomobject]@{} } }
+if (-not (Get-Command New-ScheduledTaskPrincipal -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskPrincipal { param(`$UserId, `$LogonType, `$RunLevel) return [pscustomobject]@{} } }
+if (-not (Get-Command New-ScheduledTaskSettingsSet -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskSettingsSet { param([switch]`$AllowStartIfOnBatteries, [switch]`$DontStopIfGoingOnBatteries, `$ExecutionTimeLimit, `$RestartCount, `$RestartInterval) return [pscustomobject]@{} } }
+if (-not (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Register-ScheduledTask { param(`$TaskName, `$TaskPath, `$Action, `$Trigger, `$Principal, `$Settings, `$User, [switch]`$Force) `$global:MockTasks.Add(`$TaskName); return [pscustomobject]@{} } }
+if (-not (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)) { function global:Get-LocalGroup { param(`$Name) if (`$global:MockGroupExists) { return [pscustomobject]@{ Name = `$Name } }; return `$null } }
+if (-not (Get-Command New-LocalGroup -ErrorAction SilentlyContinue)) { function global:New-LocalGroup { param(`$Name, `$Description) `$global:MockGroupExists = `$true; return [pscustomobject]@{ Name = `$Name } } }
+if (-not (Get-Command Remove-LocalGroup -ErrorAction SilentlyContinue)) { function global:Remove-LocalGroup { param(`$Name) `$global:MockGroupExists = `$false } }
+if (-not (Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue)) { function global:Get-LocalGroupMember { param(`$Group) return @() } }
+if (-not (Get-Command Add-LocalGroupMember -ErrorAction SilentlyContinue)) { function global:Add-LocalGroupMember { param(`$Group, `$Member) } }
+if (-not (Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue)) { function global:Remove-LocalGroupMember { param(`$Group, `$Member) } }
+if (-not (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+    function global:Get-AppLockerPolicy {
+        param([switch]`$Local, [switch]`$Xml)
+        if (`$global:MockAppLockerXml) { return `$global:MockAppLockerXml }
+        return '<AppLockerPolicy Version="1"></AppLockerPolicy>'
+    }
+}
+if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+    function global:Set-AppLockerPolicy {
+        param(`$XMLPolicy)
+        `$global:MockAppLockerXml = `$XMLPolicy
+    }
+}
+if (-not (Get-Command Test-AppLockerPolicy -ErrorAction SilentlyContinue)) { function global:Test-AppLockerPolicy { param(`$XmlPolicy, `$Path, `$User) return @([pscustomobject]@{ PolicyDecision = 'Allowed' }) } }
+if (-not (Get-Command Get-Service -ErrorAction SilentlyContinue)) { function global:Get-Service { param(`$Name) return [pscustomobject]@{ Name = `$Name; Status = 'Running'; StartType = 'Automatic' } } }
+if (-not (Get-Command Stop-Service -ErrorAction SilentlyContinue)) { function global:Stop-Service { param(`$Name) } }
+if (-not (Get-Command Start-Service -ErrorAction SilentlyContinue)) { function global:Start-Service { param(`$Name) } }
+if (-not (Get-Command Set-Service -ErrorAction SilentlyContinue)) { function global:Set-Service { param(`$Name, `$StartupType) } }
+
+& '$installerPath' -SkipPreflight -SkipAcrylic -FailureStatusPath '$failureStatus'
+exit `$LASTEXITCODE
+"@
+
+            $childScriptPath = Join-Path $testDir "run-installer-test.ps1"
+            Set-Content -LiteralPath $childScriptPath -Value $childScriptContent
+
+            $pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell.exe' }
+            $proc = Start-Process $pwshExe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $childScriptPath -PassThru -Wait
+            $proc.ExitCode | Should -Not -Be 0
+
+            $statusJsonPath = "$failureStatus.json"
+            Test-Path -LiteralPath $statusJsonPath | Should -BeTrue
+            $status = Get-Content -LiteralPath $statusJsonPath -Raw | ConvertFrom-Json
+            $status.Phase | Should -Be 'firefox-managed-extension-ready'
+            $status.RollbackAttempted | Should -BeTrue
+            $status.RollbackResult.Attempted | Should -BeTrue
+            $status.RollbackResult.Success | Should -BeTrue
+            $status.RollbackResult.VerifiedNonOperational | Should -BeTrue
+            $status.RollbackResult.Errors.Count | Should -Be 0
+
+            Test-Path -LiteralPath (Join-Path $testDir 'data\config.json') | Should -BeFalse
+        }
+
+        It "Executes real Install-OpenPath.ps1 trap and rolls back when failure is injected before app-control (scheduled-tasks)" {
+            $testDir = Join-Path $TestDrive "real-trap-pre-appcontrol-$([guid]::NewGuid().ToString('N'))"
+            New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+            $installerPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1")).Path
+            $failureStatus = Join-Path $testDir "data" "failure-status"
+
+            $childScriptContent = @"
+`$ErrorActionPreference = 'Continue'
+`$env:OPENPATH_WINDOWS_ROOT = '$testDir'
+`$env:OPENPATH_TEST_ENVIRONMENT = '1'
+`$env:OPENPATH_TEST_FAIL_PHASE = 'scheduled-tasks'
+
+`$global:MockGroupExists = `$false
+`$global:MockTasks = [System.Collections.Generic.List[string]]::new()
+`$global:MockAppLockerXml = ''
+
+function global:Invoke-OpenPathInstallerFirstUpdate { param(`$OpenPathRoot, `$ClassroomModeRequested, `$MachineRegistered) }
+
+if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Get-ScheduledTask { param(`$TaskName) return @(`$global:MockTasks | Where-Object { `$TaskName -eq '*' -or `$_ -like `$TaskName } | ForEach-Object { [pscustomobject]@{ TaskName = `$_ } }) } }
+if (-not (Get-Command Stop-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Stop-ScheduledTask { param(`$TaskName, `$TaskPath) } }
+if (-not (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Unregister-ScheduledTask { param(`$TaskName, `$TaskPath, [switch]`$Confirm) [void]`$global:MockTasks.Remove(`$TaskName) } }
+if (-not (Get-Command New-ScheduledTaskAction -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskAction { param(`$Execute, `$Argument) return [pscustomobject]@{} } }
+if (-not (Get-Command New-ScheduledTaskTrigger -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskTrigger { param([switch]`$AtStartup, [switch]`$Once, `$At, `$RepetitionInterval) return [pscustomobject]@{} } }
+if (-not (Get-Command New-ScheduledTaskPrincipal -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskPrincipal { param(`$UserId, `$LogonType, `$RunLevel) return [pscustomobject]@{} } }
+if (-not (Get-Command New-ScheduledTaskSettingsSet -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskSettingsSet { param([switch]`$AllowStartIfOnBatteries, [switch]`$DontStopIfGoingOnBatteries, `$ExecutionTimeLimit, `$RestartCount, `$RestartInterval) return [pscustomobject]@{} } }
+if (-not (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Register-ScheduledTask { param(`$TaskName, `$TaskPath, `$Action, `$Trigger, `$Principal, `$Settings, `$User, [switch]`$Force) `$global:MockTasks.Add(`$TaskName); return [pscustomobject]@{} } }
+if (-not (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)) { function global:Get-LocalGroup { param(`$Name) if (`$global:MockGroupExists) { return [pscustomobject]@{ Name = `$Name } }; return `$null } }
+if (-not (Get-Command New-LocalGroup -ErrorAction SilentlyContinue)) { function global:New-LocalGroup { param(`$Name, `$Description) `$global:MockGroupExists = `$true; return [pscustomobject]@{ Name = `$Name } } }
+if (-not (Get-Command Remove-LocalGroup -ErrorAction SilentlyContinue)) { function global:Remove-LocalGroup { param(`$Name) `$global:MockGroupExists = `$false } }
+if (-not (Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue)) { function global:Get-LocalGroupMember { param(`$Group) return @() } }
+if (-not (Get-Command Add-LocalGroupMember -ErrorAction SilentlyContinue)) { function global:Add-LocalGroupMember { param(`$Group, `$Member) } }
+if (-not (Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue)) { function global:Remove-LocalGroupMember { param(`$Group, `$Member) } }
+if (-not (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+    function global:Get-AppLockerPolicy {
+        param([switch]`$Local, [switch]`$Xml)
+        if (`$global:MockAppLockerXml) { return `$global:MockAppLockerXml }
+        return '<AppLockerPolicy Version="1"></AppLockerPolicy>'
+    }
+}
+if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+    function global:Set-AppLockerPolicy {
+        param(`$XMLPolicy)
+        `$global:MockAppLockerXml = `$XMLPolicy
+    }
+}
+if (-not (Get-Command Test-AppLockerPolicy -ErrorAction SilentlyContinue)) { function global:Test-AppLockerPolicy { param(`$XmlPolicy, `$Path, `$User) return @([pscustomobject]@{ PolicyDecision = 'Allowed' }) } }
+if (-not (Get-Command Get-Service -ErrorAction SilentlyContinue)) { function global:Get-Service { param(`$Name) return [pscustomobject]@{ Name = `$Name; Status = 'Running'; StartType = 'Automatic' } } }
+if (-not (Get-Command Stop-Service -ErrorAction SilentlyContinue)) { function global:Stop-Service { param(`$Name) } }
+if (-not (Get-Command Start-Service -ErrorAction SilentlyContinue)) { function global:Start-Service { param(`$Name) } }
+if (-not (Get-Command Set-Service -ErrorAction SilentlyContinue)) { function global:Set-Service { param(`$Name, `$StartupType) } }
+
+& '$installerPath' -SkipPreflight -SkipAcrylic -FailureStatusPath '$failureStatus'
+exit `$LASTEXITCODE
+"@
+
+            $childScriptPath = Join-Path $testDir "run-installer-test.ps1"
+            Set-Content -LiteralPath $childScriptPath -Value $childScriptContent
+
+            $pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell.exe' }
+            $proc = Start-Process $pwshExe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $childScriptPath -PassThru -Wait
+            $proc.ExitCode | Should -Not -Be 0
+
+            $statusJsonPath = "$failureStatus.json"
+            Test-Path -LiteralPath $statusJsonPath | Should -BeTrue
+            $status = Get-Content -LiteralPath $statusJsonPath -Raw | ConvertFrom-Json
+            $status.Phase | Should -Be 'scheduled-tasks'
+            $status.RollbackAttempted | Should -BeTrue
+            $status.RollbackResult.Attempted | Should -BeTrue
+            $status.RollbackResult.Success | Should -BeTrue
+            $status.RollbackResult.VerifiedNonOperational | Should -BeTrue
+            $status.RollbackResult.Errors.Count | Should -Be 0
+
+            Test-Path -LiteralPath (Join-Path $testDir 'data\config.json') | Should -BeFalse
+        }
+
+        It "Executes real Install-OpenPath.ps1 trap and rolls back when failure is injected immediately after app-control" {
+            $testDir = Join-Path $TestDrive "real-trap-post-appcontrol-$([guid]::NewGuid().ToString('N'))"
+            New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+            $installerPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1")).Path
+            $failureStatus = Join-Path $testDir "data" "failure-status"
+
+            $childScriptContent = @"
+`$ErrorActionPreference = 'Continue'
+`$env:OPENPATH_WINDOWS_ROOT = '$testDir'
+`$env:OPENPATH_TEST_ENVIRONMENT = '1'
+`$env:OPENPATH_TEST_FAIL_AFTER_PHASE = 'app-control'
+
+`$global:MockGroupExists = `$false
+`$global:MockTasks = [System.Collections.Generic.List[string]]::new()
+`$global:MockAppLockerXml = ''
+
+function global:Invoke-OpenPathInstallerFirstUpdate { param(`$OpenPathRoot, `$ClassroomModeRequested, `$MachineRegistered) }
+
+if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Get-ScheduledTask { param(`$TaskName) return @(`$global:MockTasks | Where-Object { `$TaskName -eq '*' -or `$_ -like `$TaskName } | ForEach-Object { [pscustomobject]@{ TaskName = `$_ } }) } }
+if (-not (Get-Command Stop-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Stop-ScheduledTask { param(`$TaskName, `$TaskPath) } }
+if (-not (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Unregister-ScheduledTask { param(`$TaskName, `$TaskPath, [switch]`$Confirm) [void]`$global:MockTasks.Remove(`$TaskName) } }
+if (-not (Get-Command New-ScheduledTaskAction -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskAction { param(`$Execute, `$Argument) return [pscustomobject]@{} } }
+if (-not (Get-Command New-ScheduledTaskTrigger -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskTrigger { param([switch]`$AtStartup, [switch]`$Once, `$At, `$RepetitionInterval) return [pscustomobject]@{} } }
+if (-not (Get-Command New-ScheduledTaskPrincipal -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskPrincipal { param(`$UserId, `$LogonType, `$RunLevel) return [pscustomobject]@{} } }
+if (-not (Get-Command New-ScheduledTaskSettingsSet -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskSettingsSet { param([switch]`$AllowStartIfOnBatteries, [switch]`$DontStopIfGoingOnBatteries, `$ExecutionTimeLimit, `$RestartCount, `$RestartInterval) return [pscustomobject]@{} } }
+if (-not (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Register-ScheduledTask { param(`$TaskName, `$TaskPath, `$Action, `$Trigger, `$Principal, `$Settings, `$User, [switch]`$Force) `$global:MockTasks.Add(`$TaskName); return [pscustomobject]@{} } }
+if (-not (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)) { function global:Get-LocalGroup { param(`$Name) if (`$global:MockGroupExists) { return [pscustomobject]@{ Name = `$Name } }; return `$null } }
+if (-not (Get-Command New-LocalGroup -ErrorAction SilentlyContinue)) { function global:New-LocalGroup { param(`$Name, `$Description) `$global:MockGroupExists = `$true; return [pscustomobject]@{ Name = `$Name } } }
+if (-not (Get-Command Remove-LocalGroup -ErrorAction SilentlyContinue)) { function global:Remove-LocalGroup { param(`$Name) `$global:MockGroupExists = `$false } }
+if (-not (Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue)) { function global:Get-LocalGroupMember { param(`$Group) return @() } }
+if (-not (Get-Command Add-LocalGroupMember -ErrorAction SilentlyContinue)) { function global:Add-LocalGroupMember { param(`$Group, `$Member) } }
+if (-not (Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue)) { function global:Remove-LocalGroupMember { param(`$Group, `$Member) } }
+if (-not (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+    function global:Get-AppLockerPolicy {
+        param([switch]`$Local, [switch]`$Xml)
+        if (`$global:MockAppLockerXml) { return `$global:MockAppLockerXml }
+        return '<AppLockerPolicy Version="1"></AppLockerPolicy>'
+    }
+}
+if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+    function global:Set-AppLockerPolicy {
+        param(`$XMLPolicy)
+        `$global:MockAppLockerXml = `$XMLPolicy
+    }
+}
+if (-not (Get-Command Test-AppLockerPolicy -ErrorAction SilentlyContinue)) { function global:Test-AppLockerPolicy { param(`$XmlPolicy, `$Path, `$User) return @([pscustomobject]@{ PolicyDecision = 'Allowed' }) } }
+if (-not (Get-Command Get-Service -ErrorAction SilentlyContinue)) { function global:Get-Service { param(`$Name) return [pscustomobject]@{ Name = `$Name; Status = 'Running'; StartType = 'Automatic' } } }
+if (-not (Get-Command Stop-Service -ErrorAction SilentlyContinue)) { function global:Stop-Service { param(`$Name) } }
+if (-not (Get-Command Start-Service -ErrorAction SilentlyContinue)) { function global:Start-Service { param(`$Name) } }
+if (-not (Get-Command Set-Service -ErrorAction SilentlyContinue)) { function global:Set-Service { param(`$Name, `$StartupType) } }
+
+& '$installerPath' -SkipPreflight -SkipAcrylic -FailureStatusPath '$failureStatus'
+exit `$LASTEXITCODE
+"@
+
+            $childScriptPath = Join-Path $testDir "run-installer-test.ps1"
+            Set-Content -LiteralPath $childScriptPath -Value $childScriptContent
+
+            $pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell.exe' }
+            $proc = Start-Process $pwshExe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $childScriptPath -PassThru -Wait
+            $proc.ExitCode | Should -Not -Be 0
+
+            $statusJsonPath = "$failureStatus.json"
+            Test-Path -LiteralPath $statusJsonPath | Should -BeTrue
+            $status = Get-Content -LiteralPath $statusJsonPath -Raw | ConvertFrom-Json
+            $status.Phase | Should -Be 'post-app-control'
+            $status.RollbackAttempted | Should -BeTrue
+            $status.RollbackResult.Attempted | Should -BeTrue
+            $status.RollbackResult.Success | Should -BeTrue
+            $status.RollbackResult.VerifiedNonOperational | Should -BeTrue
+            $status.RollbackResult.Errors.Count | Should -Be 0
+
+            Test-Path -LiteralPath (Join-Path $testDir 'data\config.json') | Should -BeFalse
         }
     }
 
