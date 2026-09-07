@@ -815,6 +815,13 @@ Set-Content -LiteralPath `$groupStatePath -Value 'absent' -Encoding ascii
 Set-Content -LiteralPath `$appLockerStatePath -Value '<AppLockerPolicy Version="1" />' -Encoding utf8
 `$global:MockGroupExists = `$false
 `$global:MockRestrictedMembers = [System.Collections.Generic.List[string]]::new()
+`$probeFixtureRoot = Join-Path (Split-Path '$TestDir' -Parent) ("appcontrol-probes-" + (Split-Path '$TestDir' -Leaf))
+`$probeProfileRoot = Join-Path `$probeFixtureRoot 'student-profile'
+`$probeSystemRoot = Join-Path `$probeFixtureRoot 'windows'
+`$probeSourcePath = Join-Path (Join-Path `$probeSystemRoot 'System32') 'cmd.exe'
+New-Item -ItemType Directory -Path `$probeProfileRoot, (Split-Path `$probeSourcePath -Parent) -Force | Out-Null
+[System.IO.File]::WriteAllBytes(`$probeSourcePath, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+`$env:SystemRoot = `$probeSystemRoot
 
 function global:Add-OpenPathInstallerTestTrace {
     param([Parameter(Mandatory = `$true)][string]`$Value)
@@ -943,6 +950,10 @@ function global:Get-LocalGroupMember {
         [pscustomobject]@{ SID = [pscustomobject]@{ Value = `$sid } }
     }
 }
+function global:Get-CimInstance {
+    param([string]`$ClassName)
+    [pscustomobject]@{ SID = `$studentSid; LocalPath = `$probeProfileRoot; Special = `$false }
+}
 function global:Get-LocalUser {
     [pscustomobject]@{ Name = 'student'; Enabled = `$true; SID = [pscustomobject]@{ Value = `$studentSid } }
     [pscustomobject]@{ Name = 'local-admin'; Enabled = `$true; SID = [pscustomobject]@{ Value = `$adminSid } }
@@ -978,7 +989,9 @@ function global:Test-AppLockerPolicy {
     )
     process {
         Add-OpenPathInstallerTestTrace 'Test'
+        if (`$User -ne `$studentSid) { throw "Unexpected AppControl validation user: `$User" }
         foreach (`$candidate in @(`$Path)) {
+            if (`$candidate -match '(?i)\\alumno\\') { throw "Unexpected hardcoded profile path: `$candidate" }
             `$decision = if (`$candidate -match '(?i)firefox\.exe$') { 'Allowed' } elseif (`$candidate -match '(?i)msedge\.exe$') { 'Denied' } else { 'DeniedByDefault' }
             [pscustomobject]@{ FilePath = `$candidate; PolicyDecision = `$decision }
         }

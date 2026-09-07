@@ -743,6 +743,16 @@ Describe "AppControl Module" {
         }
 
         It "Returns true when local and effective policies and Test-AppLockerPolicy validate expected enforcement" {
+            $global:opLegacyProbeGroupSid = 'S-1-5-21-10-20-30-4242'
+            $global:opLegacyProbeStudentSid = 'S-1-5-21-10-20-30-1001'
+            $global:opLegacyProbeProfilePath = Join-Path $TestDrive 'legacy-student'
+            $global:opLegacyProbeSystemRoot = Join-Path $TestDrive 'legacy-windows'
+            $global:opLegacyProbeSourcePath = Join-Path (Join-Path $global:opLegacyProbeSystemRoot 'System32') 'cmd.exe'
+            $global:opLegacyPreviousSystemRoot = $env:SystemRoot
+            $env:SystemRoot = $global:opLegacyProbeSystemRoot
+            New-Item -ItemType Directory -Path $global:opLegacyProbeProfilePath, (Split-Path $global:opLegacyProbeSourcePath -Parent) -Force | Out-Null
+            [System.IO.File]::WriteAllBytes($global:opLegacyProbeSourcePath, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+
             function global:Set-AppLockerPolicy {}
             function global:Get-AppLockerPolicy {
                 param([switch]$Local, [switch]$Effective, [switch]$Xml)
@@ -756,6 +766,18 @@ Describe "AppControl Module" {
             }
             function global:Get-Service {
                 [PSCustomObject]@{ Name = 'AppIDSvc'; Status = 'Running' }
+            }
+            function global:Get-LocalGroup {
+                param([string]$Name, [string]$SID)
+                [pscustomobject]@{ Name = $Name; SID = [pscustomobject]@{ Value = $global:opLegacyProbeGroupSid } }
+            }
+            function global:Get-LocalGroupMember {
+                param([string]$Group)
+                [pscustomobject]@{ SID = [pscustomobject]@{ Value = $global:opLegacyProbeStudentSid } }
+            }
+            function global:Get-CimInstance {
+                param([string]$ClassName)
+                [pscustomobject]@{ SID = $global:opLegacyProbeStudentSid; LocalPath = $global:opLegacyProbeProfilePath; Special = $false }
             }
             function global:Test-AppLockerPolicy {
                 param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject)
@@ -779,11 +801,179 @@ Describe "AppControl Module" {
                 Test-OpenPathNonAdminAppControlActive | Should -BeTrue
             }
             finally {
+                if ($null -eq $global:opLegacyPreviousSystemRoot) {
+                    Remove-Item Env:SystemRoot -ErrorAction SilentlyContinue
+                }
+                else {
+                    $env:SystemRoot = $global:opLegacyPreviousSystemRoot
+                }
                 Remove-Item Function:\Set-AppLockerPolicy -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-AppLockerPolicy -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-Service -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-LocalGroupMember -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-CimInstance -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
+                Remove-Item Variable:\opLegacyProbeGroupSid, Variable:\opLegacyProbeStudentSid, Variable:\opLegacyProbeProfilePath, Variable:\opLegacyProbeSystemRoot, Variable:\opLegacyProbeSourcePath, Variable:\opLegacyPreviousSystemRoot -ErrorAction SilentlyContinue
             }
+        }
+    }
+
+    Context "Effective AppLocker probe validation" {
+        BeforeEach {
+            $global:opProbeGroupSid = 'S-1-5-21-10-20-30-4242'
+            $global:opProbeStudentSid = 'S-1-5-21-10-20-30-1001'
+            $global:opProbeProfilePath = Join-Path $TestDrive 'different-student'
+            $global:opProbeSystemRoot = Join-Path $TestDrive 'windows'
+            $global:opProbeSourcePath = Join-Path (Join-Path $global:opProbeSystemRoot 'System32') 'cmd.exe'
+            $global:opProbeDecision = 'Denied'
+            $global:opProbeThrows = $false
+            $global:opProbeNoDecisions = $false
+            $global:opObservedProbePaths = @()
+            $global:opObservedProbeUsers = @()
+            $global:opPreviousSystemRoot = $env:SystemRoot
+            $env:SystemRoot = $global:opProbeSystemRoot
+
+            New-Item -ItemType Directory -Path $global:opProbeProfilePath, (Split-Path $global:opProbeSourcePath -Parent) -Force | Out-Null
+            [System.IO.File]::WriteAllBytes($global:opProbeSourcePath, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+
+            function global:Set-AppLockerPolicy {}
+            function global:Get-AppLockerPolicy {
+                param([switch]$Local, [switch]$Effective, [switch]$Xml)
+                if ($Xml) {
+                    $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+                    return (New-OpenPathAppLockerPolicyXml -Spec $spec)
+                }
+                return [pscustomobject]@{
+                    RuleCollections = @([pscustomobject]@{ Type = 'Exe' }, [pscustomobject]@{ Type = 'Appx' })
+                }
+            }
+            function global:Get-Service {
+                [pscustomobject]@{ Name = 'AppIDSvc'; Status = 'Running' }
+            }
+            function global:Get-LocalGroup {
+                param([string]$Name, [string]$SID)
+                [pscustomobject]@{ Name = $Name; SID = [pscustomobject]@{ Value = $global:opProbeGroupSid } }
+            }
+            function global:Get-LocalGroupMember {
+                param([string]$Group)
+                if ($Group -eq 'OpenPath-Restricted') {
+                    return [pscustomobject]@{ SID = [pscustomobject]@{ Value = $global:opProbeStudentSid } }
+                }
+                return @()
+            }
+            function global:Get-CimInstance {
+                param([string]$ClassName)
+                [pscustomobject]@{ SID = $global:opProbeStudentSid; LocalPath = $global:opProbeProfilePath; Special = $false }
+            }
+            function global:Test-AppLockerPolicy {
+                param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject)
+                $global:opObservedProbePaths += @($Path)
+                $global:opObservedProbeUsers += $User
+                if ($global:opProbeThrows) {
+                    throw 'injected Test-AppLockerPolicy failure'
+                }
+                if ($global:opProbeNoDecisions) {
+                    return
+                }
+                @($Path | ForEach-Object {
+                    $decision = if ($_ -like '*firefox.exe') { 'Allowed' } elseif ($_ -like '*msedge.exe') { 'Denied' } else { $global:opProbeDecision }
+                    [pscustomobject]@{
+                        FilePath = $_
+                        PolicyDecision = $decision
+                        MatchingRule = 'rule'
+                    }
+                })
+            }
+        }
+
+        AfterEach {
+            if ($null -eq $global:opPreviousSystemRoot) {
+                Remove-Item Env:SystemRoot -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:SystemRoot = $global:opPreviousSystemRoot
+            }
+            Remove-Item Function:\Set-AppLockerPolicy, Function:\Get-AppLockerPolicy, Function:\Get-Service, Function:\Get-LocalGroup, Function:\Get-LocalGroupMember, Function:\Get-CimInstance, Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
+            Remove-Item Variable:\opProbeGroupSid, Variable:\opProbeStudentSid, Variable:\opProbeProfilePath, Variable:\opProbeSystemRoot, Variable:\opProbeSourcePath, Variable:\opProbeDecision, Variable:\opProbeThrows, Variable:\opProbeNoDecisions, Variable:\opObservedProbePaths, Variable:\opObservedProbeUsers, Variable:\opPreviousSystemRoot -ErrorAction SilentlyContinue
+        }
+
+        It "resolves the profile of a restricted user without depending on alumno" {
+            Test-OpenPathNonAdminAppControlActive | Should -BeTrue
+            @($global:opObservedProbePaths | Where-Object { $_ -match '(?i)\\alumno\\' }) | Should -BeNullOrEmpty
+            @($global:opObservedProbePaths | Where-Object { $_ -like "$($global:opProbeProfilePath)*" }).Count | Should -BeGreaterThan 0
+            @($global:opObservedProbeUsers) | Should -Contain $global:opProbeStudentSid
+        }
+
+        It "creates initially absent probes and removes them after effective evaluation" {
+            $probeDirectories = @(
+                (Join-Path $global:opProbeProfilePath 'Downloads'),
+                (Join-Path $global:opProbeProfilePath 'Desktop'),
+                (Join-Path $global:opProbeProfilePath 'AppData\Local\Temp')
+            )
+            foreach ($directory in $probeDirectories) {
+                Test-Path -LiteralPath $directory | Should -BeFalse
+            }
+
+            Test-OpenPathNonAdminAppControlActive | Should -BeTrue
+
+            foreach ($directory in $probeDirectories) {
+                Test-Path -LiteralPath $directory | Should -BeFalse
+            }
+            @($global:opObservedProbePaths | Where-Object { Test-Path -LiteralPath $_ }) | Should -BeNullOrEmpty
+        }
+
+        It "accepts an effective Denied decision for the controlled probe" {
+            $global:opProbeDecision = 'Denied'
+            Test-OpenPathNonAdminAppControlActive | Should -BeTrue
+        }
+
+        It "rejects AllowedByDefault for the controlled probe" {
+            $global:opProbeDecision = 'AllowedByDefault'
+            Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+        }
+
+        It "fails closed when the restricted group or profile cannot be resolved" {
+            function global:Get-LocalGroup { throw 'restricted group unavailable' }
+            Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+
+            function global:Get-LocalGroup {
+                param([string]$Name, [string]$SID)
+                [pscustomobject]@{ Name = $Name; SID = $null }
+            }
+            Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+
+            function global:Get-LocalGroup {
+                param([string]$Name, [string]$SID)
+                [pscustomobject]@{ Name = $Name; SID = [pscustomobject]@{ Value = $global:opProbeGroupSid } }
+            }
+            function global:Get-CimInstance { return @() }
+            Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+        }
+
+        It "fails closed when probe preparation or policy evaluation fails" {
+            Remove-Item -LiteralPath $global:opProbeSourcePath -Force
+            Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+
+            [System.IO.File]::WriteAllBytes($global:opProbeSourcePath, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+            $global:opProbeThrows = $true
+            Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+            foreach ($directory in @(
+                    (Join-Path $global:opProbeProfilePath 'Downloads'),
+                    (Join-Path $global:opProbeProfilePath 'Desktop'),
+                    (Join-Path $global:opProbeProfilePath 'AppData\Local\Temp')
+                )) {
+                Test-Path -LiteralPath $directory | Should -BeFalse
+            }
+
+            $global:opProbeThrows = $false
+            $global:opProbeNoDecisions = $true
+            Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+        }
+
+        It "fails closed when Test-AppLockerPolicy is unavailable instead of trusting XML" {
+            Remove-Item Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
+            Test-OpenPathNonAdminAppControlActive | Should -BeFalse
         }
     }
 

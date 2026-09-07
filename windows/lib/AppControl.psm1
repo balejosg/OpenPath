@@ -886,6 +886,207 @@ function Test-OpenPathAppIdentityServiceRunning {
     }
 }
 
+function Get-OpenPathSidString {
+    param(
+        [AllowNull()]
+        [object]$Value
+    )
+
+    if ($null -eq $Value) {
+        return ''
+    }
+    if ($Value.PSObject.Properties['Value']) {
+        return [string]$Value.Value
+    }
+    return [string]$Value
+}
+
+function Get-OpenPathAppControlProbeTarget {
+    <#
+    .SYNOPSIS
+    Resolves a real profile belonging to an OpenPath-Restricted member.
+
+    The AppLocker policy is scoped to the restricted group, but
+    Test-AppLockerPolicy needs a representative user when evaluating nested/group
+    membership. This helper therefore returns both SIDs and never falls back to
+    BUILTIN\Users or a guessed profile path.
+    #>
+    [CmdletBinding()]
+    param()
+
+    foreach ($requiredCommand in @('Get-LocalGroup', 'Get-LocalGroupMember', 'Get-CimInstance')) {
+        if (-not (Get-Command -Name $requiredCommand -ErrorAction SilentlyContinue)) {
+            throw "Required AppControl target capability is unavailable: $requiredCommand"
+        }
+    }
+
+    $group = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+    $groupSid = Get-OpenPathSidString -Value $group.SID
+    if ([string]::IsNullOrWhiteSpace($groupSid)) {
+        throw 'OpenPath-Restricted has no resolvable SID'
+    }
+
+    $members = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop)
+    if ($members.Count -eq 0) {
+        throw 'OpenPath-Restricted has no members available for AppControl validation'
+    }
+
+    $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop)
+    foreach ($member in $members) {
+        $memberSid = Get-OpenPathSidString -Value $member.SID
+        if ([string]::IsNullOrWhiteSpace($memberSid)) {
+            continue
+        }
+
+        foreach ($profile in $profiles) {
+            $profileSid = [string]$profile.SID
+            $profilePath = [string]$profile.LocalPath
+            if ($profileSid -ne $memberSid -or [string]::IsNullOrWhiteSpace($profilePath)) {
+                continue
+            }
+            if ($profile.PSObject.Properties['Special'] -and [bool]$profile.Special) {
+                continue
+            }
+            if (-not [System.IO.Directory]::Exists($profilePath)) {
+                continue
+            }
+
+            return [PSCustomObject]@{
+                GroupSid = $groupSid
+                UserSid = $memberSid
+                ProfilePath = $profilePath
+            }
+        }
+    }
+
+    throw 'Unable to resolve an existing user profile for an OpenPath-Restricted member'
+}
+
+function Get-OpenPathAppControlProbeSourcePath {
+    <#
+    .SYNOPSIS
+    Finds a stable Windows PE that can be copied into a user-writable probe path.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $systemRoots = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:SystemRoot)) {
+        $systemRoots += $env:SystemRoot
+    }
+    try {
+        $systemDirectory = [Environment]::SystemDirectory
+        if (-not [string]::IsNullOrWhiteSpace($systemDirectory)) {
+            $systemRoots += (Split-Path -Path $systemDirectory -Parent)
+        }
+    }
+    catch {
+    }
+
+    foreach ($systemRoot in @($systemRoots | Select-Object -Unique)) {
+        foreach ($fileName in @('cmd.exe', 'where.exe')) {
+            $candidate = Join-Path (Join-Path $systemRoot 'System32') $fileName
+            if ([System.IO.File]::Exists($candidate)) {
+                return $candidate
+            }
+        }
+    }
+
+    throw 'Unable to locate a stable Windows PE for AppControl validation'
+}
+
+function Remove-OpenPathAppControlEvaluationProbeSet {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$ProbeSet
+    )
+
+    $cleanupSucceeded = $true
+    foreach ($probePath in @($ProbeSet.Paths)) {
+        if (-not [System.IO.File]::Exists([string]$probePath)) {
+            continue
+        }
+        try {
+            [System.IO.File]::Delete([string]$probePath)
+        }
+        catch {
+            $cleanupSucceeded = $false
+            Write-OpenPathLog "Failed to remove temporary AppControl probe $probePath`: $_" -Level WARN
+        }
+    }
+
+    foreach ($directoryPath in @($ProbeSet.CreatedDirectories | Sort-Object Length -Descending)) {
+        if (-not [System.IO.Directory]::Exists([string]$directoryPath)) {
+            continue
+        }
+        try {
+            if (@([System.IO.Directory]::GetFileSystemEntries([string]$directoryPath)).Count -eq 0) {
+                [System.IO.Directory]::Delete([string]$directoryPath)
+            }
+        }
+        catch {
+            $cleanupSucceeded = $false
+            Write-OpenPathLog "Failed to remove temporary AppControl probe directory $directoryPath`: $_" -Level WARN
+        }
+    }
+
+    return $cleanupSucceeded
+}
+
+function New-OpenPathAppControlEvaluationProbeSet {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Target
+    )
+
+    $sourcePath = Get-OpenPathAppControlProbeSourcePath
+    if (-not [System.IO.File]::Exists($sourcePath)) {
+        throw "AppControl probe source does not exist: $sourcePath"
+    }
+
+    $probePaths = [System.Collections.Generic.List[string]]::new()
+    $createdDirectories = [System.Collections.Generic.List[string]]::new()
+    $probeSet = [PSCustomObject]@{
+        Paths = $probePaths
+        CreatedDirectories = $createdDirectories
+    }
+
+    try {
+        foreach ($relativeDirectory in @('Downloads', 'Desktop', 'AppData\Local\Temp')) {
+            $directoryPath = Join-Path $Target.ProfilePath $relativeDirectory
+            $missingDirectories = [System.Collections.Generic.List[string]]::new()
+            $currentPath = $directoryPath
+            while (-not [System.IO.Directory]::Exists($currentPath)) {
+                $parentPath = Split-Path -Path $currentPath -Parent
+                if ([string]::IsNullOrWhiteSpace($parentPath) -or $parentPath -eq $currentPath) {
+                    throw "Unable to resolve parent directory for AppControl probe: $currentPath"
+                }
+                $missingDirectories.Add($currentPath)
+                $currentPath = $parentPath
+            }
+
+            if ($missingDirectories.Count -gt 0) {
+                [System.IO.Directory]::CreateDirectory($directoryPath) | Out-Null
+                foreach ($missingDirectory in $missingDirectories) {
+                    $createdDirectories.Add($missingDirectory)
+                }
+            }
+
+            $probePath = Join-Path $directoryPath "openpath-appcontrol-probe-$([guid]::NewGuid().ToString('N')).exe"
+            [System.IO.File]::Copy($sourcePath, $probePath, $false)
+            $probePaths.Add($probePath)
+        }
+
+        return $probeSet
+    }
+    catch {
+        [void](Remove-OpenPathAppControlEvaluationProbeSet -ProbeSet $probeSet)
+        throw
+    }
+}
+
 function Test-OpenPathAppLockerBoundaryPolicy {
     <#
     .SYNOPSIS
@@ -1069,80 +1270,94 @@ function Test-OpenPathNonAdminAppControlActive {
         return $false
     }
 
-    if (Get-Command -Name 'Test-AppLockerPolicy' -ErrorAction SilentlyContinue) {
-        try {
-            $effectivePolicy = Get-AppLockerPolicy -Effective
-            if (-not $effectivePolicy) {
-                return $false
-            }
-            if ($effectivePolicy.PSObject.Properties['RuleCollections'] -and @($effectivePolicy.RuleCollections).Count -eq 0) {
-                return $false
-            }
+    if (-not (Get-Command -Name 'Test-AppLockerPolicy' -ErrorAction SilentlyContinue)) {
+        Write-OpenPathLog 'AppLocker effective runtime policy test unavailable; refusing structural-only validation' -Level WARN
+        return $false
+    }
 
-            $restrictedSid = Get-OpenPathRestrictedGroupSid
-            $approvedSet = Get-OpenPathApprovedBrowserSet -ApprovedBrowsers $ApprovedBrowsers
+    $runtimeValidationSucceeded = $false
+    $probeCleanupSucceeded = $true
+    $probeSet = $null
+    try {
+        $effectivePolicy = Get-AppLockerPolicy -Effective
+        if (-not $effectivePolicy) {
+            throw 'Effective AppLocker policy is unavailable'
+        }
+        if ($effectivePolicy.PSObject.Properties['RuleCollections'] -and @($effectivePolicy.RuleCollections).Count -eq 0) {
+            throw 'Effective AppLocker policy has no rule collections'
+        }
 
-            $samplePaths = @(
-                'C:\Users\alumno\Downloads\probe-arbitrary.exe',
-                'C:\Users\alumno\Desktop\probe-arbitrary.exe',
-                'C:\Users\alumno\AppData\Local\Temp\probe-arbitrary.exe'
-            )
-            $testDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $samplePaths -User $restrictedSid -ErrorAction Stop)
-            if ($testDecisions.Count -eq 0) {
-                return $false
-            }
-            foreach ($decision in $testDecisions) {
-                if ($decision.PolicyDecision -notin @('Denied', 'DeniedByDefault')) {
-                    Write-OpenPathLog "AppLocker effective evaluation failed for $($decision.FilePath): expected Denied/DeniedByDefault, observed $($decision.PolicyDecision)" -Level WARN
-                    return $false
-                }
-            }
-
-            if (-not $approvedSet.Edge) {
-                $edgeSamplePaths = @(
-                    'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
-                    'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
-                )
-                $edgeDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $edgeSamplePaths -User $restrictedSid -ErrorAction Stop)
-                $hasEdgeDeny = $false
-                foreach ($decision in $edgeDecisions) {
-                    if ($decision.PolicyDecision -eq 'Denied') {
-                        $hasEdgeDeny = $true
-                        break
-                    }
-                }
-                if (-not $hasEdgeDeny) {
-                    Write-OpenPathLog 'AppLocker effective evaluation failed: Edge executable was not evaluated as Denied' -Level WARN
-                    return $false
-                }
-            }
-
-            if ($approvedSet.Firefox) {
-                $firefoxSamplePaths = @(
-                    'C:\Program Files\Mozilla Firefox\firefox.exe',
-                    'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
-                )
-                $firefoxDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $firefoxSamplePaths -User $restrictedSid -ErrorAction Stop)
-                $hasFirefoxAllow = $false
-                foreach ($decision in $firefoxDecisions) {
-                    if ($decision.PolicyDecision -eq 'Allowed') {
-                        $hasFirefoxAllow = $true
-                        break
-                    }
-                }
-                if (-not $hasFirefoxAllow) {
-                    Write-OpenPathLog 'AppLocker effective evaluation failed: Firefox executable was not evaluated as Allowed' -Level WARN
-                    return $false
-                }
+        $probeTarget = Get-OpenPathAppControlProbeTarget
+        $probeSet = New-OpenPathAppControlEvaluationProbeSet -Target $probeTarget
+        $probePaths = @($probeSet.Paths | ForEach-Object { [string]$_ })
+        $testDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $probePaths -User $probeTarget.UserSid -ErrorAction Stop)
+        if ($testDecisions.Count -eq 0) {
+            throw 'Test-AppLockerPolicy returned no decisions for the controlled AppControl probes'
+        }
+        foreach ($decision in $testDecisions) {
+            if ($decision.PolicyDecision -notin @('Denied', 'DeniedByDefault')) {
+                Write-OpenPathLog "AppLocker effective evaluation failed for $($decision.FilePath): expected Denied/DeniedByDefault, observed $($decision.PolicyDecision)" -Level WARN
+                throw "Controlled AppControl probe was not denied: $($decision.PolicyDecision)"
             }
         }
-        catch {
-            Write-OpenPathLog "AppLocker effective runtime policy test failed: $_" -Level WARN
-            return $false
+
+        $approvedSet = Get-OpenPathApprovedBrowserSet -ApprovedBrowsers $ApprovedBrowsers
+        if (-not $approvedSet.Edge) {
+            $edgeSamplePaths = @(
+                'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+                'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+            )
+            $edgeDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $edgeSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
+            if ($edgeDecisions.Count -eq 0) {
+                throw 'Test-AppLockerPolicy returned no decisions for the Edge probes'
+            }
+            $hasEdgeDeny = $false
+            foreach ($decision in $edgeDecisions) {
+                if ($decision.PolicyDecision -eq 'Denied') {
+                    $hasEdgeDeny = $true
+                    break
+                }
+            }
+            if (-not $hasEdgeDeny) {
+                Write-OpenPathLog 'AppLocker effective evaluation failed: Edge executable was not evaluated as Denied' -Level WARN
+                throw 'Edge executable was not evaluated as Denied'
+            }
+        }
+
+        if ($approvedSet.Firefox) {
+            $firefoxSamplePaths = @(
+                'C:\Program Files\Mozilla Firefox\firefox.exe',
+                'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
+            )
+            $firefoxDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $firefoxSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
+            if ($firefoxDecisions.Count -eq 0) {
+                throw 'Test-AppLockerPolicy returned no decisions for the Firefox probes'
+            }
+            $hasFirefoxAllow = $false
+            foreach ($decision in $firefoxDecisions) {
+                if ($decision.PolicyDecision -eq 'Allowed') {
+                    $hasFirefoxAllow = $true
+                    break
+                }
+            }
+            if (-not $hasFirefoxAllow) {
+                Write-OpenPathLog 'AppLocker effective evaluation failed: Firefox executable was not evaluated as Allowed' -Level WARN
+                throw 'Firefox executable was not evaluated as Allowed'
+            }
+        }
+
+        $runtimeValidationSucceeded = $true
+    }
+    catch {
+        Write-OpenPathLog "AppLocker effective runtime policy test failed: $_" -Level WARN
+    }
+    finally {
+        if ($null -ne $probeSet) {
+            $probeCleanupSucceeded = [bool](Remove-OpenPathAppControlEvaluationProbeSet -ProbeSet $probeSet)
         }
     }
 
-    return $true
+    return [bool]($runtimeValidationSucceeded -and $probeCleanupSucceeded)
 }
 
 function Remove-OpenPathNonAdminAppControl {
