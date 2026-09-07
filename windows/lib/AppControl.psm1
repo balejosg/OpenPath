@@ -995,6 +995,24 @@ function Get-OpenPathAppControlProbeSourcePath {
     throw 'Unable to locate a stable Windows PE for AppControl validation'
 }
 
+function Get-OpenPathAppControlExistingSamplePaths {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Paths,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    $existingPaths = @($Paths | Where-Object { [System.IO.File]::Exists([string]$_) })
+    if ($existingPaths.Count -eq 0) {
+        throw "Unable to locate an existing $Label executable for AppControl validation"
+    }
+
+    return $existingPaths
+}
+
 function Remove-OpenPathAppControlEvaluationProbeSet {
     [CmdletBinding()]
     param(
@@ -1302,11 +1320,21 @@ function Test-OpenPathNonAdminAppControlActive {
         }
 
         $approvedSet = Get-OpenPathApprovedBrowserSet -ApprovedBrowsers $ApprovedBrowsers
+        $programFilesRoots = @(
+            $env:ProgramFiles
+            ${env:ProgramFiles(x86)}
+        ) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+            Select-Object -Unique
         if (-not $approvedSet.Edge) {
-            $edgeSamplePaths = @(
+            $edgeSampleCandidates = @(
+                foreach ($programFilesRoot in $programFilesRoots) {
+                    Join-Path $programFilesRoot 'Microsoft\Edge\Application\msedge.exe'
+                }
                 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
                 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
             )
+            $edgeSamplePaths = Get-OpenPathAppControlExistingSamplePaths -Label 'Edge' -Paths $edgeSampleCandidates
             $edgeDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $edgeSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
             if ($edgeDecisions.Count -eq 0) {
                 throw 'Test-AppLockerPolicy returned no decisions for the Edge probes'
@@ -1325,10 +1353,14 @@ function Test-OpenPathNonAdminAppControlActive {
         }
 
         if ($approvedSet.Firefox) {
-            $firefoxSamplePaths = @(
+            $firefoxSampleCandidates = @(
+                foreach ($programFilesRoot in $programFilesRoots) {
+                    Join-Path $programFilesRoot 'Mozilla Firefox\firefox.exe'
+                }
                 'C:\Program Files\Mozilla Firefox\firefox.exe',
                 'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
             )
+            $firefoxSamplePaths = Get-OpenPathAppControlExistingSamplePaths -Label 'Firefox' -Paths $firefoxSampleCandidates
             $firefoxDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $firefoxSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
             if ($firefoxDecisions.Count -eq 0) {
                 throw 'Test-AppLockerPolicy returned no decisions for the Firefox probes'

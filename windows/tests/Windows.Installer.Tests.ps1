@@ -819,9 +819,18 @@ Set-Content -LiteralPath `$appLockerStatePath -Value '<AppLockerPolicy Version="
 `$probeProfileRoot = Join-Path `$probeFixtureRoot 'student-profile'
 `$probeSystemRoot = Join-Path `$probeFixtureRoot 'windows'
 `$probeSourcePath = Join-Path (Join-Path `$probeSystemRoot 'System32') 'cmd.exe'
+`$probeProgramFilesRoot = Join-Path `$probeFixtureRoot 'program-files'
+`$probeProgramFilesX86Root = Join-Path `$probeFixtureRoot 'program-files-x86'
+`$probeEdgePath = Join-Path `$probeProgramFilesRoot 'Microsoft\Edge\Application\msedge.exe'
+`$probeFirefoxPath = Join-Path `$probeProgramFilesX86Root 'Mozilla Firefox\firefox.exe'
 New-Item -ItemType Directory -Path `$probeProfileRoot, (Split-Path `$probeSourcePath -Parent) -Force | Out-Null
+New-Item -ItemType Directory -Path (Split-Path `$probeEdgePath -Parent), (Split-Path `$probeFirefoxPath -Parent) -Force | Out-Null
 [System.IO.File]::WriteAllBytes(`$probeSourcePath, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+[System.IO.File]::Copy(`$probeSourcePath, `$probeEdgePath, `$true)
+[System.IO.File]::Copy(`$probeSourcePath, `$probeFirefoxPath, `$true)
 `$env:SystemRoot = `$probeSystemRoot
+`$env:ProgramFiles = `$probeProgramFilesRoot
+`${env:ProgramFiles(x86)} = `$probeProgramFilesX86Root
 
 function global:Add-OpenPathInstallerTestTrace {
     param([Parameter(Mandatory = `$true)][string]`$Value)

@@ -798,6 +798,10 @@ Describe "AppControl Module" {
             }
 
             try {
+                Mock Get-OpenPathAppControlExistingSamplePaths {
+                    param([string[]]$Paths, [string]$Label)
+                    @($Paths | Select-Object -First 1)
+                } -ModuleName AppControl
                 Test-OpenPathNonAdminAppControlActive | Should -BeTrue
             }
             finally {
@@ -885,6 +889,11 @@ Describe "AppControl Module" {
                     }
                 })
             }
+
+            Mock Get-OpenPathAppControlExistingSamplePaths {
+                param([string[]]$Paths, [string]$Label)
+                @($Paths | Select-Object -First 1)
+            } -ModuleName AppControl
         }
 
         AfterEach {
@@ -982,6 +991,24 @@ Describe "AppControl Module" {
         It "fails closed when Test-AppLockerPolicy is unavailable instead of trusting XML" {
             Remove-Item Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
             Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+        }
+    }
+
+    Context "AppControl sample path resolution" {
+        It "uses existing executable samples and fails closed when none exist" {
+            $existingPath = Join-Path $TestDrive 'edge.exe'
+            $missingPath = Join-Path $TestDrive 'missing-edge.exe'
+            [System.IO.File]::WriteAllBytes($existingPath, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+
+            InModuleScope AppControl -Parameters @{ ExistingPath = $existingPath; MissingPath = $missingPath } {
+                param($ExistingPath, $MissingPath)
+
+                @(Get-OpenPathAppControlExistingSamplePaths -Paths @($ExistingPath, $MissingPath) -Label 'Edge') |
+                    Should -Be $ExistingPath
+                {
+                    Get-OpenPathAppControlExistingSamplePaths -Paths @($MissingPath) -Label 'Edge'
+                } | Should -Throw '*Unable to locate an existing Edge executable*'
+            }
         }
     }
 
