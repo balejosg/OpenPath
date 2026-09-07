@@ -1,5 +1,20 @@
 . (Join-Path $PSScriptRoot 'OpenPathConfig.Model.ps1')
 
+function Invoke-OpenPathAtomicFileReplace {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TempPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BackupPath
+    )
+
+    [System.IO.File]::Replace($TempPath, $DestinationPath, $BackupPath, $true)
+}
+
 function Get-OpenPathConfig {
     <#
     .SYNOPSIS
@@ -61,7 +76,10 @@ function Write-OpenPathAtomicJsonFile {
         if ([System.IO.File]::Exists($Path)) {
             # Atomic swap into existing destination. If Replace fails, throws immediately;
             # the existing destination is never partially overwritten in place.
-            [System.IO.File]::Replace($tempPath, $Path, $backupPath, $true)
+            Invoke-OpenPathAtomicFileReplace `
+                -TempPath $tempPath `
+                -DestinationPath $Path `
+                -BackupPath $backupPath
         }
         else {
             # Atomic move into non-existent destination within the same directory.

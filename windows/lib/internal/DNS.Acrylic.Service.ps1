@@ -29,25 +29,40 @@ function Set-LocalDNS {
     #>
     [CmdletBinding(SupportsShouldProcess)] param()
     if (-not $PSCmdlet.ShouldProcess("Network adapters", "Set DNS to 127.0.0.1")) { return }
+
+    foreach ($requiredCommand in @(
+            'Get-NetAdapter',
+            'Get-DnsClientServerAddress',
+            'Set-DnsClientServerAddress',
+            'Clear-DnsClientCache'
+        )) {
+        if (-not (Get-Command -Name $requiredCommand -ErrorAction SilentlyContinue)) {
+            throw "Required Windows DNS capability is unavailable: $requiredCommand"
+        }
+    }
+
     Write-OpenPathLog "Configuring local DNS..."
-    Save-OpenPathOriginalDnsSnapshot | Out-Null
-    if (-not (Get-Command -Name 'Get-NetAdapter' -ErrorAction SilentlyContinue)) { return }
-    $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
+    $adapters = @(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' })
+    if ($adapters.Count -eq 0) {
+        throw 'No active network adapter is available for local DNS redirection'
+    }
+
+    $snapshotSaved = Save-OpenPathOriginalDnsSnapshot
+    if (-not $snapshotSaved) {
+        throw 'Could not save the original DNS snapshot before redirecting adapters'
+    }
+
     foreach ($adapter in $adapters) {
-        try {
-            if (Get-Command -Name 'Set-DnsClientServerAddress' -ErrorAction SilentlyContinue) {
-                Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses "127.0.0.1"
-                Write-OpenPathLog "Set DNS for adapter: $($adapter.Name)"
-            }
-        }
-        catch {
-            Write-OpenPathLog "Failed to set DNS for $($adapter.Name): $_" -Level WARN
-        }
+        Set-DnsClientServerAddress `
+            -InterfaceIndex $adapter.ifIndex `
+            -ServerAddresses "127.0.0.1" `
+            -ErrorAction Stop
+        Write-OpenPathLog "Set DNS for adapter: $($adapter.Name)"
     }
-    if (Get-Command -Name 'Clear-DnsClientCache' -ErrorAction SilentlyContinue) {
-        Clear-DnsClientCache
-    }
+
+    Clear-DnsClientCache -ErrorAction Stop
     Write-OpenPathLog "DNS cache flushed"
+    return $true
 }
 
 function Get-OpenPathOriginalDnsSnapshotPath {

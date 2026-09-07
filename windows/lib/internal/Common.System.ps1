@@ -1,15 +1,50 @@
+function Get-OpenPathWindowsIdentity {
+    if ($null -ne $script:OpenPathWindowsIdentityFactory) {
+        return & $script:OpenPathWindowsIdentityFactory
+    }
+
+    return [Security.Principal.WindowsIdentity]::GetCurrent()
+}
+
+function New-OpenPathWindowsPrincipal {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Identity
+    )
+
+    if ($null -ne $script:OpenPathWindowsPrincipalFactory) {
+        return & $script:OpenPathWindowsPrincipalFactory $Identity
+    }
+
+    return New-Object Security.Principal.WindowsPrincipal($Identity)
+}
+
+function Test-OpenPathWindowsPrincipalAdministrator {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Principal
+    )
+
+    if ($null -ne $script:OpenPathWindowsAdminRoleProbe) {
+        return [bool](& $script:OpenPathWindowsAdminRoleProbe $Principal)
+    }
+
+    return [bool]$Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Test-AdminPrivileges {
     <#
     .SYNOPSIS
         Checks if script is running with administrator privileges
     #>
     try {
-        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        $identity = Get-OpenPathWindowsIdentity
+        $principal = New-OpenPathWindowsPrincipal -Identity $identity
+        return Test-OpenPathWindowsPrincipalAdministrator -Principal $principal
     }
     catch {
-        return $true
+        # Privilege uncertainty must never authorize a sensitive operation.
+        return $false
     }
 }
 

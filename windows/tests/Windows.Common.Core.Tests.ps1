@@ -137,11 +137,46 @@ Describe "Common Module" {
     }
 
     Context "Test-AdminPrivileges" {
-        It "Returns a boolean value" -Skip:(-not $IsWindows) {
-            $result = InModuleScope Common {
-                Test-AdminPrivileges
+        It "Returns true when the mocked identity is an administrator" {
+            InModuleScope Common {
+                Mock Get-OpenPathWindowsIdentity { [pscustomobject]@{ Name = 'mock-admin' } }
+                Mock New-OpenPathWindowsPrincipal { [pscustomobject]@{ Name = 'mock-principal' } }
+                Mock Test-OpenPathWindowsPrincipalAdministrator { $true }
+
+                Test-AdminPrivileges | Should -BeTrue
             }
-            $result | Should -BeOfType [bool]
+        }
+
+        It "Returns false when the mocked identity is not an administrator" {
+            InModuleScope Common {
+                Mock Get-OpenPathWindowsIdentity { [pscustomobject]@{ Name = 'mock-student' } }
+                Mock New-OpenPathWindowsPrincipal { [pscustomobject]@{ Name = 'mock-principal' } }
+                Mock Test-OpenPathWindowsPrincipalAdministrator { $false }
+
+                Test-AdminPrivileges | Should -BeFalse
+            }
+        }
+
+        It "Returns false when Windows identity resolution fails" {
+            InModuleScope Common {
+                Mock Get-OpenPathWindowsIdentity { throw 'identity unavailable' }
+                Mock New-OpenPathWindowsPrincipal { [pscustomobject]@{ Name = 'unused-principal' } }
+
+                Test-AdminPrivileges | Should -BeFalse
+                Should -Invoke Get-OpenPathWindowsIdentity -Times 1 -Exactly
+                Should -Invoke New-OpenPathWindowsPrincipal -Times 0 -Exactly
+            }
+        }
+
+        It "Returns false when Windows principal construction fails" {
+            InModuleScope Common {
+                Mock Get-OpenPathWindowsIdentity { [pscustomobject]@{ Name = 'mock-user' } }
+                Mock New-OpenPathWindowsPrincipal { throw 'principal unavailable' }
+
+                Test-AdminPrivileges | Should -BeFalse
+                Should -Invoke Get-OpenPathWindowsIdentity -Times 1 -Exactly
+                Should -Invoke New-OpenPathWindowsPrincipal -Times 1 -Exactly
+            }
         }
     }
 

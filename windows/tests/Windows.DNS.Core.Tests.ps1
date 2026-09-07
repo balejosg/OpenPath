@@ -20,6 +20,9 @@ Describe "DNS Module" {
         if (-not (Get-Command -Name Set-DnsClientServerAddress -ErrorAction SilentlyContinue)) {
             function global:Set-DnsClientServerAddress { }
         }
+        if (-not (Get-Command -Name Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) {
+            function global:Get-DnsClientServerAddress { param($InterfaceIndex, $AddressFamily) return [pscustomobject]@{ ServerAddresses = @('8.8.8.8') } }
+        }
         if (-not (Get-Command -Name Clear-DnsClientCache -ErrorAction SilentlyContinue)) {
             function global:Clear-DnsClientCache { }
         }
@@ -143,7 +146,7 @@ Describe "DNS Module" {
                 'Gateway = [string]$gateway',
                 'ServerAddresses = @($dns.ServerAddresses | ForEach-Object { [string]$_ })',
                 'networkFingerprint',
-                'Save-OpenPathOriginalDnsSnapshot | Out-Null'
+                '$snapshotSaved = Save-OpenPathOriginalDnsSnapshot'
             )
             $fingerprintBody | Should -Not -Match 'ServerAddresses'
         }
@@ -199,6 +202,46 @@ Describe "DNS Module" {
                 'Set-DnsClientServerAddress -InterfaceIndex $adapterInterfaceIndex -ResetServerAddresses',
                 'Clear-DnsClientCache'
             )
+        }
+    }
+
+    Context "Set-LocalDNS capability requirements" {
+        It "Fails when Get-NetAdapter is unavailable instead of reporting DNS success" {
+            Mock Get-Command {
+                return $null
+            } -ModuleName DNS -ParameterFilter { $Name -eq 'Get-NetAdapter' }
+
+            InModuleScope DNS {
+                { Set-LocalDNS -Confirm:$false } | Should -Throw '*Get-NetAdapter*'
+            }
+        }
+
+        It "Fails when Set-DnsClientServerAddress is unavailable instead of skipping mutation" {
+            Mock Get-Command {
+                return $null
+            } -ModuleName DNS -ParameterFilter { $Name -eq 'Set-DnsClientServerAddress' }
+
+            InModuleScope DNS {
+                { Set-LocalDNS -Confirm:$false } | Should -Throw '*Set-DnsClientServerAddress*'
+            }
+        }
+
+        It "Fails when Clear-DnsClientCache is unavailable instead of claiming the cache was flushed" {
+            Mock Get-Command {
+                return $null
+            } -ModuleName DNS -ParameterFilter { $Name -eq 'Clear-DnsClientCache' }
+
+            InModuleScope DNS {
+                { Set-LocalDNS -Confirm:$false } | Should -Throw '*Clear-DnsClientCache*'
+            }
+        }
+
+        It "Fails when no active adapter can be redirected" {
+            Mock Get-NetAdapter { @() } -ModuleName DNS
+
+            InModuleScope DNS {
+                { Set-LocalDNS -Confirm:$false } | Should -Throw '*active network adapter*'
+            }
         }
     }
 

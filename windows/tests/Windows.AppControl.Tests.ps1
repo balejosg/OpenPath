@@ -621,6 +621,18 @@ Describe "AppControl Module" {
             )
         }
 
+        It "Fails closed without modifying AppLocker when administrator detection is false" {
+            if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+                function global:Set-AppLockerPolicy { param($XMLPolicy) }
+            }
+
+            Mock Test-AdminPrivileges { $false } -ModuleName AppControl
+            Mock Set-AppLockerPolicy { throw 'AppLocker mutation must not be attempted' } -ModuleName AppControl
+
+            Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -Mode Enforced -ApprovedBrowsers @('Firefox') -Confirm:$false | Should -BeFalse
+            Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 0 -Exactly
+        }
+
         It "Does not treat a partial managed AppLocker policy as an active browser boundary" {
             function global:Set-AppLockerPolicy {}
             function global:Get-AppLockerPolicy {
