@@ -1110,11 +1110,11 @@ exit `$installerExitCode
         It "Executes the real installer trap and rolls back before app-control" {
             $testDir = Join-Path $TestDrive "real-trap-pre-appcontrol-$([guid]::NewGuid().ToString('N'))"
             $evidenceDir = Join-Path $TestDrive "real-trap-pre-appcontrol-evidence-$([guid]::NewGuid().ToString('N'))"
-            New-Item -ItemType Directory -Path $testDir, $evidenceDir -Force | Out-Null
+            New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
             $installerPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1")).Path
             $failureStatus = Join-Path $testDir "data" "failure-status"
             $childScript = New-OpenPathRealInstallerFailureChildScript -TestDir $testDir -InstallerPath $installerPath -FailureStatus $failureStatus -EvidenceDir $evidenceDir -FailurePhase 'scheduled-tasks'
-            $childScriptPath = Join-Path $testDir 'run-installer-test.ps1'
+            $childScriptPath = Join-Path $evidenceDir 'run-installer-test.ps1'
             Set-Content -LiteralPath $childScriptPath -Value $childScript -Encoding utf8
 
             $pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell.exe' }
@@ -1130,11 +1130,11 @@ exit `$installerExitCode
         It "Executes Sync, Set, Test, commit before the real post-app-control trap rollback" {
             $testDir = Join-Path $TestDrive "real-trap-post-appcontrol-$([guid]::NewGuid().ToString('N'))"
             $evidenceDir = Join-Path $TestDrive "real-trap-post-appcontrol-evidence-$([guid]::NewGuid().ToString('N'))"
-            New-Item -ItemType Directory -Path $testDir, $evidenceDir -Force | Out-Null
+            New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
             $installerPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1")).Path
             $failureStatus = Join-Path $testDir "data" "failure-status"
             $childScript = New-OpenPathRealInstallerFailureChildScript -TestDir $testDir -InstallerPath $installerPath -FailureStatus $failureStatus -EvidenceDir $evidenceDir -FailureAfterPhase 'app-control'
-            $childScriptPath = Join-Path $testDir 'run-installer-test.ps1'
+            $childScriptPath = Join-Path $evidenceDir 'run-installer-test.ps1'
             Set-Content -LiteralPath $childScriptPath -Value $childScript -Encoding utf8
 
             $pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell.exe' }
@@ -1146,11 +1146,11 @@ exit `$installerExitCode
         It "Executes AppControl before the real Firefox-readiness trap rollback" {
             $testDir = Join-Path $TestDrive "real-trap-firefox-$([guid]::NewGuid().ToString('N'))"
             $evidenceDir = Join-Path $TestDrive "real-trap-firefox-evidence-$([guid]::NewGuid().ToString('N'))"
-            New-Item -ItemType Directory -Path $testDir, $evidenceDir -Force | Out-Null
+            New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
             $installerPath = (Resolve-Path (Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1")).Path
             $failureStatus = Join-Path $testDir "data" "failure-status"
             $childScript = New-OpenPathRealInstallerFailureChildScript -TestDir $testDir -InstallerPath $installerPath -FailureStatus $failureStatus -EvidenceDir $evidenceDir -FailurePhase 'firefox-managed-extension-ready'
-            $childScriptPath = Join-Path $testDir 'run-installer-test.ps1'
+            $childScriptPath = Join-Path $evidenceDir 'run-installer-test.ps1'
             Set-Content -LiteralPath $childScriptPath -Value $childScript -Encoding utf8
 
             $pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell.exe' }

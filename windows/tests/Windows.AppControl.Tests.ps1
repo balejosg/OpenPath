@@ -920,7 +920,12 @@ Describe "AppControl Module" {
             foreach ($directory in $probeDirectories) {
                 Test-Path -LiteralPath $directory | Should -BeFalse
             }
-            @($global:opObservedProbePaths | Where-Object { Test-Path -LiteralPath $_ }) | Should -BeNullOrEmpty
+            $controlledProbePaths = @(
+                $global:opObservedProbePaths |
+                    Where-Object { $_ -match '(?i)(?:\\|/)openpath-appcontrol-probe-[^\\/]+\.exe$' }
+            )
+            $controlledProbePaths.Count | Should -Be 3
+            @($controlledProbePaths | Where-Object { Test-Path -LiteralPath $_ }) | Should -BeNullOrEmpty
         }
 
         It "accepts an effective Denied decision for the controlled probe" {
@@ -951,11 +956,14 @@ Describe "AppControl Module" {
             Test-OpenPathNonAdminAppControlActive | Should -BeFalse
         }
 
-        It "fails closed when probe preparation or policy evaluation fails" {
-            Remove-Item -LiteralPath $global:opProbeSourcePath -Force
+        It "fails closed when probe preparation fails" {
+            Mock Get-OpenPathAppControlProbeSourcePath {
+                throw 'injected AppControl probe source failure'
+            } -ModuleName AppControl
             Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+        }
 
-            [System.IO.File]::WriteAllBytes($global:opProbeSourcePath, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+        It "fails closed when policy evaluation fails or returns no decisions" {
             $global:opProbeThrows = $true
             Test-OpenPathNonAdminAppControlActive | Should -BeFalse
             foreach ($directory in @(
