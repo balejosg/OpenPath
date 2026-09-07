@@ -813,6 +813,11 @@ Set-Content -LiteralPath `$tracePath -Value '' -Encoding ascii
 Set-Content -LiteralPath `$taskStatePath -Value '' -Encoding ascii
 Set-Content -LiteralPath `$groupStatePath -Value 'absent' -Encoding ascii
 Set-Content -LiteralPath `$appLockerStatePath -Value '<AppLockerPolicy Version="1" />' -Encoding utf8
+`$hostGlobalStatePath = Join-Path '$EvidenceDir' 'host-global-state.json'
+`$hostGlobalStateHashPath = Join-Path '$EvidenceDir' 'host-global-state.sha256'
+`$hostGlobalStateContent = '{"scheduledTasks":["OpenPath-Host-Sentinel"],"firewallRules":["OpenPath-DNS-Host-Sentinel"],"appLockerRules":["OpenPath non-admin app control host-sentinel"],"registryKeys":["HKLM\\SOFTWARE\\OpenPath\\Host-Sentinel"],"dns":"host-state-preserved"}'
+Set-Content -LiteralPath `$hostGlobalStatePath -Value `$hostGlobalStateContent -Encoding utf8
+(Get-FileHash -LiteralPath `$hostGlobalStatePath -Algorithm SHA256).Hash | Set-Content -LiteralPath `$hostGlobalStateHashPath -Encoding ascii
 `$global:MockGroupExists = `$false
 `$global:MockRestrictedMembers = [System.Collections.Generic.List[string]]::new()
 `$probeFixtureRoot = Join-Path (Split-Path '$TestDir' -Parent) ("appcontrol-probes-" + (Split-Path '$TestDir' -Leaf))
@@ -857,6 +862,74 @@ function global:Set-OpenPathInstallerTestState {
     }
 }
 
+function global:Test-Path {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [string]`$Path,
+        [string]`$LiteralPath,
+        [ValidateSet('Any', 'Container', 'Leaf')]
+        [string]`$PathType,
+        [switch]`$IsValid
+    )
+
+    `$candidate = if (`$PSBoundParameters.ContainsKey('LiteralPath')) { `$LiteralPath } else { `$Path }
+    `$protectedGlobalPath = [string]`$candidate
+    `$isProtectedGlobalPath =
+        `$protectedGlobalPath -match '(?i)^Registry::HKEY_LOCAL_MACHINE\\' -or
+        `$protectedGlobalPath -match '(?i)^C:\\OpenPath\\data\\(firewall-rules|original-dns)\.json$'
+    if (`$isProtectedGlobalPath) {
+        Add-OpenPathInstallerTestTrace "probe:protected-path:`$protectedGlobalPath"
+        return `$false
+    }
+
+    & Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
+}
+
+function global:Get-DnsClientServerAddress {
+    [CmdletBinding()]
+    param([string]`$AddressFamily, [int]`$InterfaceIndex)
+    Add-OpenPathInstallerTestTrace "probe:dns-servers:family=`$(`$AddressFamily):ifIndex=`$(`$InterfaceIndex)"
+    [pscustomobject]@{
+        InterfaceAlias = 'Fixture Ethernet'
+        InterfaceIndex = 9
+        AddressFamily = 'IPv4'
+        ServerAddresses = @('192.0.2.1')
+    }
+}
+function global:Get-NetRoute {
+    [CmdletBinding()]
+    param([string]`$DestinationPrefix)
+    Add-OpenPathInstallerTestTrace "probe:route:destination=`$DestinationPrefix"
+    [pscustomobject]@{ DestinationPrefix = '0.0.0.0/0'; NextHop = '192.0.2.1' }
+}
+function global:Resolve-DnsName {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = `$true)][string]`$Name, [string]`$Server, [string]`$Type)
+    Add-OpenPathInstallerTestTrace "probe:resolve-dns:name=`$(`$Name):server=`$(`$Server):type=`$(`$Type)"
+    [pscustomobject]@{ Name = `$Name; Type = if (`$Type) { `$Type } else { 'A' }; IPAddress = '192.0.2.1' }
+}
+function global:Get-NetAdapter {
+    [CmdletBinding()]
+    param([int]`$InterfaceIndex)
+    Add-OpenPathInstallerTestTrace "probe:adapter:ifIndex=`$(`$InterfaceIndex)"
+    [pscustomobject]@{
+        Name = 'Fixture Ethernet'
+        ifIndex = 9
+        InterfaceIndex = 9
+        InterfaceGuid = '{00000000-0000-0000-0000-000000000009}'
+        Status = 'Up'
+    }
+}
+function global:Set-DnsClientServerAddress {
+    [CmdletBinding()]
+    param([int]`$InterfaceIndex, [string[]]`$ServerAddresses, [switch]`$ResetServerAddresses)
+    Add-OpenPathInstallerTestTrace "mutate:dns:ifIndex=`$(`$InterfaceIndex):servers=`$(`$ServerAddresses -join ','):reset=`$(`$ResetServerAddresses)"
+}
+function global:Clear-DnsClientCache {
+    Add-OpenPathInstallerTestTrace 'mutate:dns:clear-cache'
+}
+
 function global:powershell.exe {
     param(
         [switch]`$NoProfile,
@@ -898,7 +971,10 @@ function global:Trace-OpenPathInstallerTestConfig {
 
 function global:Get-ScheduledTask {
     param([string]`$TaskName)
-    foreach (`$name in @(Get-OpenPathInstallerTestState -Path `$taskStatePath)) {
+    Add-OpenPathInstallerTestTrace "probe:scheduled-task:`$TaskName"
+    `$fixtureTaskNames = @(Get-OpenPathInstallerTestState -Path `$taskStatePath)
+    Add-OpenPathInstallerTestTrace "fixture:scheduled-task-count=`$(`$fixtureTaskNames.Count)"
+    foreach (`$name in `$fixtureTaskNames) {
         if (`$TaskName -eq '*' -or `$name -like `$TaskName) {
             [pscustomobject]@{ TaskName = `$name; TaskPath = '\'; State = 'Ready' }
         }
@@ -979,7 +1055,9 @@ function global:Remove-LocalGroupMember { param([string]`$Group, [string]`$Membe
 
 function global:Get-AppLockerPolicy {
     param([switch]`$Local, [switch]`$Effective, [switch]`$Xml)
+    Add-OpenPathInstallerTestTrace "probe:applocker:local=`$(`$Local):effective=`$(`$Effective):xml=`$(`$Xml)"
     `$policyText = Get-Content -LiteralPath `$appLockerStatePath -Raw
+    Add-OpenPathInstallerTestTrace "fixture:applocker-has-openpath=`$([bool](`$policyText -match 'OpenPath non-admin app control'))"
     if (`$Xml) { return `$policyText }
     return [pscustomobject]@{ RuleCollections = @([pscustomobject]@{ Type = 'Exe' }) }
 }
@@ -988,6 +1066,22 @@ function global:Set-AppLockerPolicy {
     `$policyText = Get-Content -LiteralPath `$XMLPolicy -Raw
     Set-Content -LiteralPath `$appLockerStatePath -Value `$policyText -Encoding utf8
     Add-OpenPathInstallerTestTrace 'Set'
+}
+function global:Get-NetFirewallRule {
+    [CmdletBinding()]
+    param(
+        [string]`$DisplayName,
+        [string]`$Group
+    )
+    Add-OpenPathInstallerTestTrace "probe:firewall:display=`$(`$DisplayName):group=`$(`$Group)"
+    Add-OpenPathInstallerTestTrace 'fixture:firewall-count=0'
+}
+function global:Remove-NetFirewallRule {
+    [CmdletBinding()]
+    param([Parameter(ValueFromPipeline = `$true)]`$InputObject)
+    process {
+        Add-OpenPathInstallerTestTrace 'mutate:firewall:remove'
+    }
 }
 function global:Test-AppLockerPolicy {
     [CmdletBinding()]
@@ -1050,6 +1144,10 @@ function global:Set-Service { param([string]`$Name, `$StartupType) }
     EnforceManagedBrowserBoundary = `$true
     ApprovedStudentBrowsers = @('Firefox')
 }
+Add-OpenPathInstallerTestTrace "root-exists-before-installer=`$(Test-Path -LiteralPath `$env:OPENPATH_WINDOWS_ROOT)"
+Add-OpenPathInstallerTestTrace "command:Get-ScheduledTask=`$((Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue).CommandType)"
+Add-OpenPathInstallerTestTrace "command:Get-NetFirewallRule=`$((Get-Command Get-NetFirewallRule -ErrorAction SilentlyContinue).CommandType)"
+Add-OpenPathInstallerTestTrace "command:Get-AppLockerPolicy=`$((Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue).CommandType)"
 Add-OpenPathInstallerTestTrace "entrypoint-enforce=`$(`$installerArguments['EnforceManagedBrowserBoundary'])"
 Add-OpenPathInstallerTestTrace "entrypoint-approved=`$(`$installerArguments['ApprovedStudentBrowsers'] -join ',')"
 
@@ -1081,6 +1179,20 @@ exit `$installerExitCode
 
                 Test-Path -LiteralPath "$FailureStatus.json" | Should -BeTrue
                 $status = Get-Content -LiteralPath "$FailureStatus.json" -Raw | ConvertFrom-Json
+                if ($status.Phase -ne $ExpectedPhase) {
+                    $persistentEvidenceDir = Join-Path $env:TEMP "openpath-253-child-evidence-$ExpectedPhase"
+                    New-Item -ItemType Directory -Path $persistentEvidenceDir -Force | Out-Null
+                    foreach ($evidenceName in @('trace.log', 'child.stdout.log', 'child.stderr.log')) {
+                        $sourceEvidencePath = Join-Path $EvidenceDir $evidenceName
+                        if (Test-Path -LiteralPath $sourceEvidencePath) {
+                            Copy-Item -LiteralPath $sourceEvidencePath -Destination (Join-Path $persistentEvidenceDir $evidenceName) -Force -ErrorAction SilentlyContinue
+                        }
+                    }
+                    Write-Host "persistent-child-evidence: $persistentEvidenceDir"
+                    Write-Host "child-trace: $((Get-Content -LiteralPath (Join-Path $EvidenceDir 'trace.log') -Raw -ErrorAction SilentlyContinue).Trim())"
+                    Write-Host "child-stdout: $((Get-Content -LiteralPath (Join-Path $EvidenceDir 'child.stdout.log') -Raw -ErrorAction SilentlyContinue).Trim())"
+                    Write-Host "child-stderr: $((Get-Content -LiteralPath (Join-Path $EvidenceDir 'child.stderr.log') -Raw -ErrorAction SilentlyContinue).Trim())"
+                }
                 $status.Phase | Should -Be $ExpectedPhase
                 $status.RollbackAttempted | Should -BeTrue
                 $status.RollbackResult.Attempted | Should -BeTrue
@@ -1096,6 +1208,23 @@ exit `$installerExitCode
                 (Get-Content -LiteralPath (Join-Path $EvidenceDir 'applocker.xml') -Raw) | Should -Not -Match 'OpenPath non-admin app control'
 
                 $trace = @(Get-Content -LiteralPath (Join-Path $EvidenceDir 'trace.log'))
+                $hostGlobalStatePath = Join-Path $EvidenceDir 'host-global-state.json'
+                $hostGlobalStateHashPath = Join-Path $EvidenceDir 'host-global-state.sha256'
+                Test-Path -LiteralPath $hostGlobalStatePath | Should -BeTrue
+                Test-Path -LiteralPath $hostGlobalStateHashPath | Should -BeTrue
+                (Get-FileHash -LiteralPath $hostGlobalStatePath -Algorithm SHA256).Hash | Should -Be (Get-Content -LiteralPath $hostGlobalStateHashPath -Raw).Trim()
+                $hostGlobalState = Get-Content -LiteralPath $hostGlobalStatePath -Raw | ConvertFrom-Json
+                $hostGlobalState.scheduledTasks | Should -Contain 'OpenPath-Host-Sentinel'
+                $hostGlobalState.firewallRules | Should -Contain 'OpenPath-DNS-Host-Sentinel'
+                $hostGlobalState.appLockerRules | Should -Contain 'OpenPath non-admin app control host-sentinel'
+                $hostGlobalState.registryKeys | Should -Contain 'HKLM\SOFTWARE\OpenPath\Host-Sentinel'
+                $hostGlobalState.dns | Should -Be 'host-state-preserved'
+                $trace | Should -Contain 'root-exists-before-installer=False'
+                $trace | Should -Contain 'command:Get-ScheduledTask=Function'
+                $trace | Should -Contain 'command:Get-NetFirewallRule=Function'
+                $trace | Should -Contain 'command:Get-AppLockerPolicy=Function'
+                $trace | Should -Contain 'fixture:firewall-count=0'
+                @($trace | Where-Object { $_ -like 'probe:protected-path:Registry::HKEY_LOCAL_MACHINE*' }).Count | Should -BeGreaterThan 0
                 $trace | Should -Contain 'entrypoint-enforce=True'
                 $trace | Should -Contain 'entrypoint-approved=Firefox'
                 $trace | Should -Contain 'admin-probe=True'
@@ -1127,7 +1256,7 @@ exit `$installerExitCode
             Set-Content -LiteralPath $childScriptPath -Value $childScript -Encoding utf8
 
             $pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell.exe' }
-            $proc = Start-Process $pwshExe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $childScriptPath -PassThru -Wait
+            $proc = Start-Process $pwshExe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $childScriptPath -RedirectStandardOutput (Join-Path $evidenceDir 'child.stdout.log') -RedirectStandardError (Join-Path $evidenceDir 'child.stderr.log') -PassThru -Wait
             $proc.ExitCode | Should -Not -Be 0
             $trace = Assert-OpenPathRealInstallerRollbackEvidence -TestDir $testDir -FailureStatus $failureStatus -EvidenceDir $evidenceDir -ExpectedPhase 'scheduled-tasks'
             $trace | Should -Not -Contain 'Sync'
@@ -1147,7 +1276,7 @@ exit `$installerExitCode
             Set-Content -LiteralPath $childScriptPath -Value $childScript -Encoding utf8
 
             $pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell.exe' }
-            $proc = Start-Process $pwshExe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $childScriptPath -PassThru -Wait
+            $proc = Start-Process $pwshExe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $childScriptPath -RedirectStandardOutput (Join-Path $evidenceDir 'child.stdout.log') -RedirectStandardError (Join-Path $evidenceDir 'child.stderr.log') -PassThru -Wait
             $proc.ExitCode | Should -Not -Be 0
             Assert-OpenPathRealInstallerRollbackEvidence -TestDir $testDir -FailureStatus $failureStatus -EvidenceDir $evidenceDir -ExpectedPhase 'post-app-control' -RequireCommittedAppControl | Out-Null
         }
@@ -1163,7 +1292,7 @@ exit `$installerExitCode
             Set-Content -LiteralPath $childScriptPath -Value $childScript -Encoding utf8
 
             $pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell.exe' }
-            $proc = Start-Process $pwshExe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $childScriptPath -PassThru -Wait
+            $proc = Start-Process $pwshExe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $childScriptPath -RedirectStandardOutput (Join-Path $evidenceDir 'child.stdout.log') -RedirectStandardError (Join-Path $evidenceDir 'child.stderr.log') -PassThru -Wait
             $proc.ExitCode | Should -Not -Be 0
             Assert-OpenPathRealInstallerRollbackEvidence -TestDir $testDir -FailureStatus $failureStatus -EvidenceDir $evidenceDir -ExpectedPhase 'firefox-managed-extension-ready' -RequireCommittedAppControl | Out-Null
         }
