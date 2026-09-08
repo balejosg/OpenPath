@@ -117,6 +117,34 @@ test('OpenPath workflows target main only', () => {
   }
 });
 
+test('Windows browser-boundary probes run under Windows PowerShell', () => {
+  for (const relativePath of [
+    '.github/workflows/e2e-tests.yml',
+    '.github/workflows/e2e-hosted-pilot.yml',
+  ]) {
+    const workflow = readText(relativePath);
+    const marker = '- name: Run Windows browser boundary probes';
+    const markerIndex = workflow.indexOf(marker);
+    const nextStepIndex = workflow.indexOf('\n      - name:', markerIndex + marker.length);
+    const step =
+      markerIndex >= 0
+        ? workflow.slice(markerIndex, nextStepIndex >= 0 ? nextStepIndex : workflow.length)
+        : '';
+
+    assert.ok(step, `${relativePath} should define the browser-boundary step`);
+    assert.match(
+      step,
+      /powershell\.exe -NoProfile -ExecutionPolicy Bypass -File tests\/e2e\/ci\/run-windows-browser-boundary-ci\.ps1/,
+      `${relativePath} should invoke the boundary harness with Windows PowerShell`
+    );
+    assert.doesNotMatch(
+      step,
+      /pwsh -NoProfile -ExecutionPolicy Bypass -File tests\/e2e\/ci\/run-windows-browser-boundary-ci\.ps1/,
+      `${relativePath} should not invoke the AppLocker boundary harness through PowerShell 7`
+    );
+  }
+});
+
 test('verify trailers workflow exempts dependency and release bots while enforcing human pushes', () => {
   const workflow = readText('.github/workflows/verify-trailers.yml');
 

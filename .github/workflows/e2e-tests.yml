@@ -477,7 +477,10 @@ jobs:
       - name: Run Windows browser boundary probes
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-browser-boundary-ci.ps1
+          # Test-AppLockerPolicy exposes the PolicyObject pipeline parameter only
+          # from the native Windows PowerShell AppLocker cmdlet. PowerShell 7
+          # imports it as an implicit-remoting function without that binding.
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-browser-boundary-ci.ps1
 
       - name: Restore self-hosted Windows runner state
         if: always()
