@@ -1364,6 +1364,7 @@ foreach (`$commandName in @(
         'Get-AppLockerPolicy',
         'Set-AppLockerPolicy',
         'Get-LocalGroup',
+        'Get-LocalGroupMember',
         'Remove-LocalGroup',
         'Get-ItemProperty',
         'New-Item',
