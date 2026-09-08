@@ -390,8 +390,10 @@ function Initialize-OpenPathNegativeHealthRuntime {
 
     Import-Module $commonModule -Force -Global -ErrorAction Stop
     Import-Module $appControlModule -Force -Global -ErrorAction Stop
-    . $watchdogRuntime
+    return $watchdogRuntime
+}
 
+function Assert-OpenPathNegativeHealthRuntimeCommands {
     foreach ($commandName in @(
             'Get-OpenPathWatchdogTaskHealth',
             'Get-OpenPathNonAdminAppControlHealth',
@@ -738,7 +740,9 @@ New-Item -ItemType Directory -Path $adminArtifacts -Force | Out-Null
 
 $installedOpenPathRoot = 'C:\OpenPath'
 Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $installedOpenPathRoot
-Initialize-OpenPathNegativeHealthRuntime -OpenPathRoot $installedOpenPathRoot
+$watchdogRuntimePath = Initialize-OpenPathNegativeHealthRuntime -OpenPathRoot $installedOpenPathRoot
+. $watchdogRuntimePath
+Assert-OpenPathNegativeHealthRuntimeCommands
 $installedOpenPathConfig = Get-OpenPathBrowserBoundaryConfig -OpenPathRoot $installedOpenPathRoot
 
 $securePassword = ConvertTo-SecureString $studentPassword -AsPlainText -Force

@@ -1062,6 +1062,35 @@ describe('repository verification contract', () => {
     );
   });
 
+  test('Windows browser boundary loads watchdog runtime in caller scope', () => {
+    const browserBoundaryCi = readText('tests/e2e/ci/run-windows-browser-boundary-ci.ps1');
+
+    assert.match(
+      browserBoundaryCi,
+      /function Assert-OpenPathNegativeHealthRuntimeCommands[\s\S]*?Get-OpenPathWatchdogTaskHealth[\s\S]*?Sync-OpenPathRestrictedGroup/s,
+      'browser-boundary CI should validate all negative health commands after caller-scope runtime loading'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /\$watchdogRuntimePath\s*=\s*Initialize-OpenPathNegativeHealthRuntime[\s\S]*?\.\s*\$watchdogRuntimePath[\s\S]*?Assert-OpenPathNegativeHealthRuntimeCommands/s,
+      'browser-boundary CI should dot-source Watchdog.Runtime in caller scope before using health commands'
+    );
+    const runtimeInitializer =
+      browserBoundaryCi.match(
+        /function Initialize-OpenPathNegativeHealthRuntime[\s\S]*?(?=\nfunction |\nif \(-not \(Test-OpenPathWindowsHost\))/
+      )?.[0] ?? '';
+    assert.doesNotMatch(
+      runtimeInitializer,
+      /\.\s*\$watchdogRuntime\b/,
+      'runtime initializer must not dot-source Watchdog.Runtime in function-local scope'
+    );
+    assert.match(
+      runtimeInitializer,
+      /return\s+\$watchdogRuntime/,
+      'runtime initializer should return the installed Watchdog.Runtime path'
+    );
+  });
+
   test('Firefox approval-max removes the Google game student-policy SSE gate', () => {
     const workflow = readText('.github/workflows/e2e-tests.yml');
     const selector = readText('scripts/select-windows-student-policy-sse-group.mjs');
