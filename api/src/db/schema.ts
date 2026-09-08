@@ -390,6 +390,7 @@ export const healthReports = pgTable(
     healthReportFailStreak: integer('health_report_fail_streak'), // null=not reported
     failCount: integer('fail_count').default(0),
     actions: text('actions'),
+    reasonCodes: text('reason_codes').array(), // null for pre-migration reports
     version: varchar('version', { length: 50 }),
     reportedAt: timestamp('reported_at', { withTimezone: true }).defaultNow(),
   },

@@ -359,8 +359,9 @@ calls:
 -ReasonCodes @($checkResult.ReasonCodes)
 ```
 
-The first occurrence is on `Get-OpenPathWatchdogOutcome`; the second is on
-`Send-OpenPathHealthReport`. Add a behavioral assertion that an unresolved
+Pass this value to `Get-OpenPathWatchdogOutcome`, then pass
+`-ReasonCodes @($outcome.ReasonCodes)` to `Send-OpenPathHealthReport`.
+Add a behavioral assertion that an unresolved
 effective-policy or watchdog-task code produces a non-`HEALTHY` report.
 
 - [ ] **Step 2: Wire the entrypoint and rerun focused Windows tests**
@@ -377,8 +378,8 @@ Expected: all focused tests pass.
 - [ ] **Step 3: Run repository-local validation**
 
 ```bash
-../scripts/validate-hypothesis.sh openpath local --dry-run
-../scripts/validate-hypothesis.sh openpath windows-direct --dry-run
+/datos_nvme/run0/Whitelist/scripts/validate-hypothesis.sh openpath local --dry-run
+/datos_nvme/run0/Whitelist/scripts/validate-hypothesis.sh openpath windows-direct --dry-run
 npm run verify:quick
 npm run verify:affected
 ```
@@ -409,9 +410,13 @@ is on the intended exact SHA, run:
 ```bash
 npm run diagnostics:windows:direct -- \
   --mode browser-boundary \
-  --source-mode runner-checkout \
+  --source-mode local-overlay \
   --artifact-dir ../.opencode/tmp/openpath-186-browser-boundary
 ```
+
+The local overlay archives committed HEAD, so commit the reviewed changes and
+verify a clean checkout before running it. Do not substitute the runner's older
+checkout for the unpushed implementation.
 
 Capture exact SHA and artifacts proving Firefox allowed, Edge denied, and an
 arbitrary PE denied. Extend or run the physical negative-health harness so

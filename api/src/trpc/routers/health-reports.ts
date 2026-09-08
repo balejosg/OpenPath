@@ -117,6 +117,7 @@ export const healthReportsRouter = router({
         firefoxRegistration: resolvedFirefoxRegistration,
         failCount: input.failCount ?? 0,
         actions: input.actions ?? '',
+        reasonCodes: input.reasonCodes ?? [],
         version: resolvedVersion,
       }) as Omit<HealthReport, 'timestamp'>
     );

@@ -176,7 +176,29 @@ Get-LocalGroupMember -Group 'OpenPath-Restricted' | Select-Object Name, SID
 
 The watchdog sync only adds members and never removes them, so a manually added admin stays until removed. Remove the admin from the group with `Remove-LocalGroupMember -Group 'OpenPath-Restricted' -Member '<admin-user>'`, or reinstall to rebuild the group. A fresh install also recreates the group if it was deleted by hand.
 
-**Restricted group missing (policy falls back to `BUILTIN\Users`):** machines installed before the restricted-group model keep the legacy `BUILTIN\Users` scope and log a WARN (`OpenPath-Restricted group not found; falling back to BUILTIN\Users`). Admins on those machines can remain limited by the boundary; reinstall OpenPath (or run `Sync-OpenPathRestrictedGroup -CreateIfMissing $true` from an elevated shell with the AppControl module loaded) to adopt the group model.
+**Restricted group missing:** the watchdog attempts to recreate and synchronize
+`OpenPath-Restricted`. The historical `BUILTIN\Users` fallback does not establish
+healthy current targeting. Failed synchronization or post-repair verification
+keeps health non-healthy. From an elevated shell with the AppControl module
+loaded, inspect group membership and the effective policy before retrying
+`Sync-OpenPathRestrictedGroup -CreateIfMissing $true`.
+
+AppControl observations are available from
+`Get-OpenPathNonAdminAppControlHealth`. Inspect `Healthy`, `ReasonCodes`, and
+the individual policy/runtime booleans. A running `AppIDSvc` alone is not proof
+of enforcement. OpenPath supports Group Policy AppLocker; effective-policy
+inspection does not include CSP policy, and CSP-only management cannot satisfy
+this health contract.
+
+Health reports also carry a bounded `reasonCodes` array, alongside the legacy
+`actions` text. For example, `appcontrol_effective_policy_invalid` identifies an
+invalid effective boundary, while `watchdog_task_missing`,
+`watchdog_task_disabled`, and `watchdog_task_not_runnable` identify scheduling
+problems. These codes contain no usernames, paths, tokens, or exception text.
+`status` observes the required boundary without repairing it; `health` runs the
+watchdog's repair cycle and must verify the result before reporting healthy.
+A missing watchdog cannot send its own heartbeat: server-side stale-report
+detection remains necessary even when the last received report was healthy.
 
 ### Browser Doctor Report
 

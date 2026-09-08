@@ -94,9 +94,9 @@ function Sync-OpenPathRestrictedGroup {
     Ensures the OpenPath-Restricted local group contains every enabled non-administrator local user.
     .DESCRIPTION
     Idempotent, additive-only membership sync (never removes members). With
-    -CreateIfMissing the group is created when absent (installer path); without it a
-    missing group is a no-op (watchdog path), so machines deployed before the
-    restricted-group model keep the legacy BUILTIN\Users policy until reinstall.
+    -CreateIfMissing the group is created when absent. Without it a missing group is
+    a no-op; callers that require the restricted-group model should opt into creation
+    explicitly.
     Returns $true when the group is present after the call.
     #>
     [CmdletBinding()]
@@ -1005,7 +1005,15 @@ function Get-OpenPathAppControlExistingSamplePaths {
         [string]$Label
     )
 
-    $existingPaths = @($Paths | Where-Object { [System.IO.File]::Exists([string]$_) })
+    $seenPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $existingPaths = @(
+        foreach ($path in @($Paths)) {
+            $candidate = [string]$path
+            if ([System.IO.File]::Exists($candidate) -and $seenPaths.Add($candidate)) {
+                $candidate
+            }
+        }
+    )
     if ($existingPaths.Count -eq 0) {
         throw "Unable to locate an existing $Label executable for AppControl validation"
     }
@@ -1114,6 +1122,46 @@ function New-OpenPathAppControlEvaluationProbeSet {
         }
         throw
     }
+}
+
+function Test-OpenPathAppControlEvaluationDecisionCoverage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$RequestedPaths,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object[]]$Decisions
+    )
+
+    $requested = @($RequestedPaths | ForEach-Object { [string]$_ })
+    if ($requested.Count -eq 0 -or $Decisions.Count -ne $requested.Count) {
+        return $false
+    }
+
+    $requestedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($requestedPath in $requested) {
+        if ([string]::IsNullOrWhiteSpace($requestedPath) -or -not $requestedSet.Add($requestedPath)) {
+            return $false
+        }
+    }
+
+    $observedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($decision in @($Decisions)) {
+        if ($null -eq $decision -or $null -eq $decision.PSObject.Properties['FilePath']) {
+            return $false
+        }
+        $observedPath = [string]$decision.FilePath
+        if ([string]::IsNullOrWhiteSpace($observedPath) -or
+            -not $requestedSet.Contains($observedPath) -or
+            -not $observedSet.Add($observedPath)) {
+            return $false
+        }
+    }
+
+    return ($observedSet.Count -eq $requestedSet.Count)
 }
 
 function Test-OpenPathAppLockerBoundaryPolicy {
@@ -1304,7 +1352,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                 $probeSet = New-OpenPathAppControlEvaluationProbeSet -Target $probeTarget -CleanupSucceeded ([ref]$probeCleanupSucceeded)
                 $probePaths = @($probeSet.Paths | ForEach-Object { [string]$_ })
                 $testDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $probePaths -User $probeTarget.UserSid -ErrorAction Stop)
-                if ($testDecisions.Count -eq 0 -or $testDecisions.Count -ne $probePaths.Count) {
+                if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths $probePaths -Decisions $testDecisions)) {
                     throw 'Test-AppLockerPolicy did not return one decision for every controlled AppControl probe'
                 }
 
@@ -1337,10 +1385,10 @@ function Get-OpenPathNonAdminAppControlHealth {
                     )
                     $edgeSamplePaths = Get-OpenPathAppControlExistingSamplePaths -Label 'Edge' -Paths $edgeSampleCandidates
                     $edgeDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $edgeSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
-                    if ($edgeDecisions.Count -eq 0 -or $edgeDecisions.Count -ne $edgeSamplePaths.Count) {
+                    if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths $edgeSamplePaths -Decisions $edgeDecisions)) {
                         throw 'Test-AppLockerPolicy did not return one decision for every Edge probe'
                     }
-                    $edgeAllowedDecisions = @($edgeDecisions | Where-Object { $_.PolicyDecision -ne 'Denied' })
+                    $edgeAllowedDecisions = @($edgeDecisions | Where-Object { $_.PolicyDecision -notin @('Denied', 'DeniedByDefault') })
                     if ($edgeAllowedDecisions.Count -gt 0) {
                         $runtimeBoundaryValid = $false
                         & $addReasonCode 'appcontrol_runtime_edge_allowed'
@@ -1359,7 +1407,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                     )
                     $firefoxSamplePaths = Get-OpenPathAppControlExistingSamplePaths -Label 'Firefox' -Paths $firefoxSampleCandidates
                     $firefoxDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $firefoxSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
-                    if ($firefoxDecisions.Count -eq 0 -or $firefoxDecisions.Count -ne $firefoxSamplePaths.Count) {
+                    if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths $firefoxSamplePaths -Decisions $firefoxDecisions)) {
                         throw 'Test-AppLockerPolicy did not return one decision for every Firefox probe'
                     }
                     $firefoxNotAllowedDecisions = @($firefoxDecisions | Where-Object { $_.PolicyDecision -ne 'Allowed' })

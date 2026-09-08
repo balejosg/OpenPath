@@ -136,6 +136,8 @@ export const OneOffSchedule = z.object({
   updatedAt: z.string().optional(),
 });
 
+const HealthReasonCode = z.string().regex(/^[a-z][a-z0-9_]{2,63}$/);
+
 export const HealthReport = z.object({
   id: z.string(),
   hostname: z.string(),
@@ -144,6 +146,7 @@ export const HealthReport = z.object({
   dnsResolving: z.number().nullable().optional(), // 1=true, 0=false, null=unknown
   failCount: z.number().default(0),
   actions: z.string().nullable().optional(),
+  reasonCodes: z.array(HealthReasonCode).max(32).optional(),
   version: z.string().nullable().optional(),
   reportedAt: z.string(),
 });
@@ -268,6 +271,8 @@ export const HealthReportSubmitInput = z.looseObject({
   configPosture: ConfigPosture.optional(),
   /** Consecutive failed health-report deliveries before this (successful) one. */
   healthReportFailStreak: z.number().int().nonnegative().optional(),
+  /** Stable, non-secret endpoint health findings (bounded for the wire contract). */
+  reasonCodes: z.array(HealthReasonCode).max(32).optional(),
 
   // ── legacy fields kept for backward-compat with deployed agents ──────────
   // Both Linux and Windows already send these exact names; do NOT remove.

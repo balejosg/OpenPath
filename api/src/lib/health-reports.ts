@@ -26,6 +26,7 @@ export interface HealthReport {
   captivePortalMode: boolean | null;
   failCount: number;
   actions: string;
+  reasonCodes?: string[] | null;
   version: string;
   configPosture?: Record<string, string> | null;
   healthReportFailStreak?: number | null;
@@ -74,6 +75,7 @@ export async function saveHealthReport(
       reportData.captivePortalMode === null ? null : reportData.captivePortalMode ? 1 : 0,
     failCount: reportData.failCount,
     actions: normalizedActions,
+    reasonCodes: reportData.reasonCodes ?? [],
     version: reportData.version,
     healthReportFailStreak: reportData.healthReportFailStreak ?? null,
     reportedAt: now,
@@ -159,6 +161,7 @@ export async function getAllReports(): Promise<ReportsData> {
       failCount: report.failCount ?? 0,
       healthReportFailStreak: report.healthReportFailStreak ?? null,
       actions: report.actions ?? '',
+      reasonCodes: report.reasonCodes ?? [],
       version: report.version ?? '',
     });
 
@@ -200,6 +203,7 @@ export async function getHostReports(hostname: string): Promise<HostData | null>
       failCount: report.failCount ?? 0,
       healthReportFailStreak: report.healthReportFailStreak ?? null,
       actions: report.actions ?? '',
+      reasonCodes: report.reasonCodes ?? [],
       version: report.version ?? '',
     })),
     lastSeen: firstReport?.reportedAt?.toISOString() ?? null,

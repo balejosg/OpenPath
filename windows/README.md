@@ -43,9 +43,17 @@ User-scoped rules are applied to the local `OpenPath-Restricted` group instead
 of `BUILTIN\Users`, so local administrators are never limited by the boundary.
 The installer creates this group and keeps it in sync with all enabled
 non-administrator local users (membership is additive only; the watchdog
-repeats the sync without creating the group, and it never removes members).
-Machines installed before this model keep the legacy `BUILTIN\Users` scope
-until they are reinstalled; the watchdog intentionally does not migrate them.
+repeats the sync, recreates a missing group, and never removes members).
+The historical `BUILTIN\Users` fallback is not proof of a healthy current
+installation. Migration requires the restricted group and a verified effective
+boundary before `appControlCommitState` can become `committed`.
+
+AppControl health verifies Application Identity, the restricted student target,
+local and effective AppLocker policy, and representative policy decisions.
+OpenPath uses Group Policy AppLocker: `Get-AppLockerPolicy -Effective` does not
+include CSP-delivered policy. CSP-only enforcement is not a supported substitute
+for this health contract. Policy evaluation is complemented by real standard-user
+execution tests; a healthy XML structure alone is insufficient evidence.
 
 Before enabling enforcement on real student PCs, inventory the software teachers
 need, install required classroom applications through IT-managed locations such

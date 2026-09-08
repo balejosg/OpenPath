@@ -1012,6 +1012,7 @@ Describe "AppControl Module" {
             $global:opHealthTargetMissing = $false
             $global:opHealthRuntimeEffectiveObjectState = 'valid'
             $global:opHealthRuntimeEvaluatorState = 'valid'
+            $global:opHealthRuntimeDecisionCoverageState = 'complete'
             $global:opHealthSampleCount = 1
             $global:opHealthSampleFailureLabel = ''
             $global:opHealthPreviousSystemRoot = $env:SystemRoot
@@ -1100,6 +1101,17 @@ Describe "AppControl Module" {
                         MatchingRule = 'health-test-rule'
                     }
                 })
+                if ($global:opHealthRuntimeDecisionCoverageState -eq 'duplicate') {
+                    return @(for ($index = 0; $index -lt $decisions.Count; $index++) { $decisions[0] })
+                }
+                if ($global:opHealthRuntimeDecisionCoverageState -eq 'unknown') {
+                    $unknownDecision = [pscustomobject]@{
+                        FilePath = 'C:\unexpected\openpath-probe.exe'
+                        PolicyDecision = $decisions[0].PolicyDecision
+                        MatchingRule = 'health-test-rule'
+                    }
+                    return @($unknownDecision) + @($decisions | Select-Object -Skip 1)
+                }
                 if ($global:opHealthRuntimeEvaluatorState -eq 'partial') {
                     return @($decisions | Select-Object -First 1)
                 }
@@ -1123,7 +1135,7 @@ Describe "AppControl Module" {
                 $env:SystemRoot = $global:opHealthPreviousSystemRoot
             }
             Remove-Item Function:\Set-AppLockerPolicy, Function:\Get-AppLockerPolicy, Function:\Get-Service, Function:\Get-LocalGroup, Function:\Get-LocalGroupMember, Function:\Get-CimInstance, Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
-            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthPreviousSystemRoot -ErrorAction SilentlyContinue
+            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthPreviousSystemRoot -ErrorAction SilentlyContinue
         }
 
         It "returns a deterministic healthy contract and keeps the boolean compatibility seam" {
@@ -1230,6 +1242,15 @@ Describe "AppControl Module" {
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
+        It "accepts DeniedByDefault as a valid denied Edge decision" {
+            $global:opHealthEdgeDecision = 'DeniedByDefault'
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeTrue
+            $health.RuntimeBoundaryValid | Should -BeTrue
+            @($health.ReasonCodes) | Should -BeNullOrEmpty
+        }
+
         It "reports an approved Firefox executable that is not allowed by the effective evaluator" {
             $global:opHealthFirefoxDecision = 'Denied'
             $health = Get-OpenPathNonAdminAppControlHealth
@@ -1274,6 +1295,19 @@ Describe "AppControl Module" {
             $health.RuntimeBoundaryValid | Should -BeFalse
             @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_evaluation_failed'
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
+        }
+
+        It "reports generic runtime failure for equal-count duplicate or unknown decisions" {
+            foreach ($state in @('duplicate', 'unknown')) {
+                $global:opHealthRuntimeDecisionCoverageState = $state
+                $health = Get-OpenPathNonAdminAppControlHealth
+
+                $health.Healthy | Should -BeFalse
+                $health.RuntimeEvaluationAvailable | Should -BeTrue
+                $health.RuntimeBoundaryValid | Should -BeFalse
+                @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_evaluation_failed'
+                @($health.ReasonCodes).Count | Should -BeGreaterThan 0
+            }
         }
 
         It "reports generic runtime failure when Edge or Firefox samples cannot be resolved" {
@@ -1431,6 +1465,26 @@ Describe "AppControl Module" {
                 {
                     Get-OpenPathAppControlExistingSamplePaths -Paths @($MissingPath) -Label 'Edge'
                 } | Should -Throw '*Unable to locate an existing Edge executable*'
+            }
+        }
+
+        It "deduplicates existing executable samples case-insensitively while preserving order" {
+            $firstPath = Join-Path $TestDrive 'edge-first.exe'
+            $secondPath = Join-Path $TestDrive 'edge-second.exe'
+            [System.IO.File]::WriteAllBytes($firstPath, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+            [System.IO.File]::WriteAllBytes($secondPath, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+
+            $caseVariant = Join-Path $TestDrive 'EDGE-FIRST.EXE'
+            if (-not [System.IO.File]::Exists($caseVariant)) {
+                [System.IO.File]::WriteAllBytes($caseVariant, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+            }
+            $duplicatePaths = @($firstPath, $caseVariant, $firstPath, $secondPath, $secondPath)
+
+            InModuleScope AppControl -Parameters @{ Paths = $duplicatePaths; First = $firstPath; Second = $secondPath } {
+                param($Paths, $First, $Second)
+
+                @(Get-OpenPathAppControlExistingSamplePaths -Paths $Paths -Label 'Edge') |
+                    Should -Be @($First, $Second)
             }
         }
     }

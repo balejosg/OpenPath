@@ -1,0 +1,1 @@
+ALTER TABLE "health_reports" ADD COLUMN "reason_codes" text[];

@@ -579,7 +579,7 @@ download.mozilla.org/firefox/releases
             try {
                 $env:COMPUTERNAME = 'OPENPATH-TEST'
 
-                $result = Send-OpenPathHealthReport -Status 'DEGRADED' -DnsServiceRunning:$true -DnsResolving:$false -FailCount 2 -Actions 'watchdog_repair' -Version '4.1.0'
+                $result = Send-OpenPathHealthReport -Status 'DEGRADED' -DnsServiceRunning:$true -DnsResolving:$false -FailCount 2 -Actions 'watchdog_repair' -ReasonCodes @('appcontrol_effective_policy_absent', 'watchdog_task_missing', 'appcontrol_effective_policy_absent') -Version '4.1.0'
                 $result | Should -BeTrue
 
                 $script:capturedUri | Should -Be 'https://api.example.com/trpc/healthReports.submit'
@@ -593,10 +593,80 @@ download.mozilla.org/firefox/releases
                 $payload.json.failCount | Should -Be 2
                 $payload.json.actions | Should -Be 'watchdog_repair'
                 $payload.json.version | Should -Be '4.1.0'
+                @($payload.json.reasonCodes) | Should -Be @('appcontrol_effective_policy_absent', 'watchdog_task_missing')
             }
             finally {
                 $env:COMPUTERNAME = $previousComputerName
             }
+        }
+
+        It "Omits reasonCodes when no stable codes are supplied" {
+            $script:capturedBody = $null
+
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl = 'https://api.example.com'
+                    version = '4.1.0'
+                }
+            } -ModuleName Common
+            Mock Invoke-RestMethod {
+                param([string]$Uri, [string]$Method, [hashtable]$Headers, [string]$Body)
+                $script:capturedBody = $Body
+                return @{ result = @{ data = @{ json = @{ ok = $true } } } }
+            } -ModuleName Common
+
+            Send-OpenPathHealthReport -Status 'HEALTHY' -ReasonCodes @() -Version '4.1.0' | Should -BeTrue
+
+            $payload = $script:capturedBody | ConvertFrom-Json
+            $payload.json.PSObject.Properties.Name | Should -Not -Contain 'reasonCodes'
+        }
+
+        It "preserves the legacy positional Version argument when no reason codes are supplied" {
+            $script:capturedBody = $null
+
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl = 'https://api.example.com'
+                    version = 'config-version'
+                }
+            } -ModuleName Common
+            Mock Invoke-RestMethod {
+                param([string]$Uri, [string]$Method, [hashtable]$Headers, [string]$Body)
+                $script:capturedBody = $Body
+                return @{ result = @{ data = @{ json = @{ ok = $true } } } }
+            } -ModuleName Common
+
+            Send-OpenPathHealthReport 'HEALTHY' $true $true 0 'legacy_action' '4.1.0' | Should -BeTrue
+
+            $payload = $script:capturedBody | ConvertFrom-Json
+            $payload.json.actions | Should -Be 'legacy_action'
+            $payload.json.version | Should -Be '4.1.0'
+            $payload.json.PSObject.Properties.Name | Should -Not -Contain 'reasonCodes'
+        }
+
+        It "Filters invalid reasonCodes and keeps the first 32 unique stable codes" {
+            $script:capturedBody = $null
+
+            Mock Get-OpenPathConfig {
+                [PSCustomObject]@{
+                    apiUrl = 'https://api.example.com'
+                    version = '4.1.0'
+                }
+            } -ModuleName Common
+            Mock Invoke-RestMethod {
+                param([string]$Uri, [string]$Method, [hashtable]$Headers, [string]$Body)
+                $script:capturedBody = $Body
+                return @{ result = @{ data = @{ json = @{ ok = $true } } } }
+            } -ModuleName Common
+
+            $codes = @('BadCode', 'watchdog_task_missing', 'watchdog_task_missing') +
+                (1..32 | ForEach-Object { "stable_code_$_" })
+            Send-OpenPathHealthReport -Status 'DEGRADED' -ReasonCodes $codes -Version '4.1.0' | Should -BeTrue
+
+            $payload = $script:capturedBody | ConvertFrom-Json
+            @($payload.json.reasonCodes) | Should -HaveCount 32
+            @($payload.json.reasonCodes)[0] | Should -Be 'watchdog_task_missing'
+            @($payload.json.reasonCodes) | Should -Not -Contain 'BadCode'
         }
 
         It "Returns false when apiUrl is missing in config" {

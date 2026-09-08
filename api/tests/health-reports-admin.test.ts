@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { sql } from 'drizzle-orm';
+
+import { db } from '../src/db/index.js';
+import { getAllReports } from '../src/lib/health-reports.js';
 
 import {
   getAdminBearerAuth,
@@ -193,6 +197,76 @@ await describe('health-reports admin procedures', async () => {
 
     const result = await parseTRPC(response);
     assert.ok(result.code === 'NOT_FOUND', `Expected NOT_FOUND code, got ${String(result.code)}`);
+  });
+
+  await test('submit persists reasonCodes and normalizes omitted legacy values to an empty array', async () => {
+    const suffix = `reason-codes-${Date.now().toString()}`;
+    const reported = await provisionMachineAccess({
+      classroomName: `health-reason-room-${suffix}`,
+      groupName: `health-reason-group-${suffix}`,
+      hostname: `health-reason-host-${suffix}`,
+    });
+    const legacy = await provisionMachineAccess({
+      classroomName: `health-reason-legacy-room-${suffix}`,
+      groupName: `health-reason-legacy-group-${suffix}`,
+      hostname: `health-reason-legacy-host-${suffix}`,
+    });
+
+    const reportedResponse = await trpcMutate(
+      'healthReports.submit',
+      {
+        hostname: reported.machineHostname,
+        status: 'DEGRADED',
+        reasonCodes: ['appcontrol_effective_policy_absent', 'watchdog_task_missing'],
+      },
+      { Authorization: `Bearer ${reported.machineToken}` }
+    );
+    assert.equal(reportedResponse.status, 200, 'reason-code report should submit');
+
+    const legacyResponse = await trpcMutate(
+      'healthReports.submit',
+      { hostname: legacy.machineHostname, status: 'HEALTHY' },
+      { Authorization: `Bearer ${legacy.machineToken}` }
+    );
+    assert.equal(legacyResponse.status, 200, 'legacy report should submit');
+
+    // Simulate a pre-migration row: the nullable column is NULL until an old
+    // agent submits a report carrying reasonCodes.
+    await db.execute(
+      sql`UPDATE health_reports SET reason_codes = NULL WHERE hostname = ${legacy.machineHostname}`
+    );
+
+    const reportedQuery = await trpcQuery(
+      'healthReports.getByHost',
+      { hostname: reported.machineHostname },
+      getAdminBearerAuth()
+    );
+    assert.equal(reportedQuery.status, 200);
+    const reportedResult = (await parseTRPC(reportedQuery)).data as {
+      reports: { reasonCodes?: string[] }[];
+    };
+    assert.deepEqual(reportedResult.reports[0]?.reasonCodes, [
+      'appcontrol_effective_policy_absent',
+      'watchdog_task_missing',
+    ]);
+
+    const legacyQuery = await trpcQuery(
+      'healthReports.getByHost',
+      { hostname: legacy.machineHostname },
+      getAdminBearerAuth()
+    );
+    assert.equal(legacyQuery.status, 200);
+    const legacyResult = (await parseTRPC(legacyQuery)).data as {
+      reports: { reasonCodes?: string[] }[];
+    };
+    assert.deepEqual(legacyResult.reports[0]?.reasonCodes, []);
+
+    const allReports = await getAllReports();
+    assert.deepEqual(allReports.hosts[reported.machineHostname]?.reports[0]?.reasonCodes, [
+      'appcontrol_effective_policy_absent',
+      'watchdog_task_missing',
+    ]);
+    assert.deepEqual(allReports.hosts[legacy.machineHostname]?.reports[0]?.reasonCodes, []);
   });
 
   // ──────────────────────────────────────────────────────────────────────────

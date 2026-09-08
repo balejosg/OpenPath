@@ -96,6 +96,7 @@ async function ensureHealthReportsSchema(): Promise<void> {
     'ALTER TABLE "health_reports" ADD COLUMN IF NOT EXISTS "firewall_active" integer;',
     'ALTER TABLE "health_reports" ADD COLUMN IF NOT EXISTS "whitelist_age_hours" integer;',
     'ALTER TABLE "health_reports" ADD COLUMN IF NOT EXISTS "captive_portal_mode" integer;',
+    'ALTER TABLE "health_reports" ADD COLUMN IF NOT EXISTS "reason_codes" text[];',
   ];
 
   for (const stmt of statements) {

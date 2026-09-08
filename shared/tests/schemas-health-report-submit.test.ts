@@ -101,6 +101,51 @@ describe('HealthReportSubmitInput schema', () => {
     );
   });
 
+  it('accepts an omitted or bounded stable reasonCodes array', () => {
+    assert.deepStrictEqual(
+      HealthReportSubmitInput.parse({ hostname: 'pc-01', status: 'DEGRADED' }).reasonCodes,
+      undefined
+    );
+    assert.deepStrictEqual(
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'DEGRADED',
+        reasonCodes: ['appcontrol_effective_policy_absent', 'watchdog_task_missing'],
+      }).reasonCodes,
+      ['appcontrol_effective_policy_absent', 'watchdog_task_missing']
+    );
+  });
+
+  it('rejects invalid or oversized reasonCodes values', () => {
+    const invalidValues = [
+      'BadCode',
+      'code with spaces',
+      'path/to/code',
+      'code:detail',
+      'https://example.test/code',
+      'ab',
+      'a'.repeat(65),
+    ];
+
+    for (const reasonCode of invalidValues) {
+      assert.throws(() =>
+        HealthReportSubmitInput.parse({
+          hostname: 'pc-01',
+          status: 'DEGRADED',
+          reasonCodes: [reasonCode],
+        })
+      );
+    }
+
+    assert.throws(() =>
+      HealthReportSubmitInput.parse({
+        hostname: 'pc-01',
+        status: 'DEGRADED',
+        reasonCodes: Array.from({ length: 33 }, (_, index) => `reason_code_${index}`),
+      })
+    );
+  });
+
   it('rejects unknown platform value', () => {
     assert.throws(() =>
       HealthReportSubmitInput.parse({ hostname: 'pc-01', status: 'HEALTHY', platform: 'darwin' })

@@ -66,9 +66,7 @@ Describe "Watchdog Script" {
                 '$approvedStudentBrowsers = @(''Firefox'')',
                 '$Config.PSObject.Properties[''approvedStudentBrowsers'']',
                 '$approvedStudentBrowsers = @($Config.approvedStudentBrowsers)',
-                'Test-OpenPathNonAdminAppControlActive `',
-                '-Mode $mode `',
-                '-ApprovedBrowsers $approvedStudentBrowsers',
+                'Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers',
                 'Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers'
             )
         }
@@ -365,6 +363,8 @@ Describe "Watchdog Script" {
 
             function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
             function global:Sync-OpenPathRestrictedGroup { param([bool]$CreateIfMissing) return $true }
+            function global:Get-OpenPathNonAdminAppControlHealth { param($Mode, $ApprovedBrowsers) [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
+            Mock Get-OpenPathWatchdogTaskHealth { [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
             function global:Test-OpenPathNonAdminAppControlActive { param($Mode, $ApprovedBrowsers) return $true }
             function global:Test-OpenPathCaptivePortalModeActive { return $false }
             function global:Test-OpenPathCaptivePortalState { return 'Direct' }
@@ -405,6 +405,7 @@ Describe "Watchdog Script" {
                     nonAdminAppControlMode = 'Enforced'
                     approvedStudentBrowsers = @('Firefox')
                     enableIntegrityChecks = $false
+                    appControlCommitState = 'committed'
                 }
                 $checkResult = Invoke-OpenPathWatchdogChecks `
                     -Config $config `
@@ -427,10 +428,10 @@ Describe "Watchdog Script" {
                     -WatchdogFailCountPath (Join-Path $TestDrive 'fails.txt') `
                     -OpenPathRoot 'C:\OpenPath'
 
-                $outcome.Status | Should -Be 'HEALTHY'
+                $outcome.Status | Should -Be 'HEALTHY' -Because ($checkResult | ConvertTo-Json -Depth 5)
             }
             finally {
-                Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Get-OpenPathNonAdminAppControlHealth, Function:\Get-OpenPathWatchdogTaskHealth, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
@@ -445,6 +446,7 @@ Describe "Watchdog Script" {
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
             . $helperPath
 
+            function global:Get-OpenPathNonAdminAppControlHealth { [pscustomobject]@{ Healthy = $false; ReasonCodes = @('appcontrol_effective_policy_invalid') } }
             function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
             function global:Sync-OpenPathRestrictedGroup { param([bool]$CreateIfMissing) return $true }
             function global:Test-OpenPathNonAdminAppControlActive { param($Mode, $ApprovedBrowsers) return $false }
@@ -494,7 +496,7 @@ Describe "Watchdog Script" {
                 $outcome.Status | Should -Be 'DEGRADED'
             }
             finally {
-                Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathNonAdminAppControlHealth, Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
                 Remove-Item Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
@@ -592,6 +594,8 @@ Describe "Watchdog Script" {
 
             function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
             function global:Sync-OpenPathRestrictedGroup { param([bool]$CreateIfMissing) return $true }
+            function global:Get-OpenPathNonAdminAppControlHealth { param($Mode, $ApprovedBrowsers) [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
+            function global:Get-OpenPathWatchdogTaskHealth { param($OpenPathRoot) [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
             function global:Test-OpenPathNonAdminAppControlActive { param($Mode, $ApprovedBrowsers) return $true }
             function global:Set-OpenPathNonAdminAppControl { param($OpenPathRoot, $Mode, $ApprovedBrowsers) return $true }
             function global:Test-OpenPathCaptivePortalModeActive { return $false }
@@ -625,7 +629,7 @@ Describe "Watchdog Script" {
                 $checkResult.Issues | Should -Contain 'Installation incomplete (state: installing)'
             }
             finally {
-                Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Get-OpenPathNonAdminAppControlHealth, Function:\Get-OpenPathWatchdogTaskHealth, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
                 Remove-Item Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
@@ -716,6 +720,7 @@ Describe "Watchdog Script" {
             }
             $initialConfig | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
 
+            function global:Get-OpenPathNonAdminAppControlHealth { [pscustomobject]@{ Healthy = $true; ReasonCodes = @() } }
             function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = 'OpenPath-Restricted' } }
             function global:Sync-OpenPathRestrictedGroup { param([bool]$CreateIfMissing) return $true }
             function global:Test-OpenPathNonAdminAppControlActive { param($Mode, $ApprovedBrowsers) return $true }
@@ -746,7 +751,7 @@ Describe "Watchdog Script" {
                 $savedConfig.PSObject.Properties['installState'] | Should -BeNullOrEmpty
             }
             finally {
-                Remove-Item Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-OpenPathNonAdminAppControlHealth, Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Test-OpenPathNonAdminAppControlActive -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
                 Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
@@ -2626,5 +2631,573 @@ Describe "Bridged VM networking neutralization wiring" {
             -PrimaryDNS '8.8.8.8'
 
         $config.blockBridgedAdapters | Should -BeTrue
+    }
+}
+
+Describe "AppControl and watchdog health contract" {
+    BeforeAll {
+        $script:watchdogRuntimePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+    }
+
+    It "accepts a SYSTEM Highest recurring watchdog task only when its canonical action is exact" {
+        . $script:watchdogRuntimePath
+        $expectedAction = 'C:\OpenPath\scripts\Test-DNSHealth.ps1'
+
+        function global:Get-OpenPathScheduledTaskSpec {
+            param([string]$TaskType)
+            [pscustomobject]@{
+                Name = 'OpenPath-Watchdog'
+                Script = 'scripts\Test-DNSHealth.ps1'
+            }
+        }
+        function global:Get-ScheduledTask {
+            param([string]$TaskName)
+            [pscustomobject]@{
+                TaskName = $TaskName
+                State = 'Ready'
+                Actions = @([pscustomobject]@{
+                    Execute = 'PowerShell.exe'
+                    Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$expectedAction`""
+                })
+                Principal = [pscustomobject]@{ UserId = 'SYSTEM'; RunLevel = 'Highest' }
+                Triggers = @([pscustomobject]@{
+                    Enabled = $true
+                    Repetition = [pscustomobject]@{ Interval = 'PT1M' }
+                })
+            }
+        }
+        function global:Test-Path {
+            param([string]$LiteralPath, [string]$PathType)
+            return $true
+        }
+
+        try {
+            $result = Get-OpenPathWatchdogTaskHealth -OpenPathRoot 'C:\OpenPath'
+
+            $result.Healthy | Should -BeTrue
+            $result.Present | Should -BeTrue
+            $result.Enabled | Should -BeTrue
+            $result.Runnable | Should -BeTrue
+            $result.ReasonCodes | Should -BeNullOrEmpty
+        }
+        finally {
+            Remove-Item Function:\Get-OpenPathScheduledTaskSpec, Function:\Get-ScheduledTask, Function:\Test-Path -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "rejects -File text embedded inside a -Command argument" {
+        . $script:watchdogRuntimePath
+        $expectedAction = 'C:\OpenPath\scripts\Test-DNSHealth.ps1'
+        function global:Get-OpenPathScheduledTaskSpec {
+            param([string]$TaskType)
+            [pscustomobject]@{ Name = 'OpenPath-Watchdog'; Script = 'scripts\Test-DNSHealth.ps1' }
+        }
+        function global:Get-ScheduledTask {
+            param([string]$TaskName)
+            [pscustomobject]@{
+                TaskName = $TaskName
+                State = 'Ready'
+                Actions = @([pscustomobject]@{
+                    Execute = 'PowerShell.exe'
+                    Arguments = "-Command `"Write-Output '-File $expectedAction'`""
+                })
+                Principal = [pscustomobject]@{ UserId = 'S-1-5-18'; RunLevel = 'Highest' }
+                Triggers = @([pscustomobject]@{
+                    Enabled = $true
+                    Repetition = [pscustomobject]@{ Interval = 'PT1M' }
+                })
+            }
+        }
+        function global:Test-Path {
+            param([string]$LiteralPath, [string]$PathType)
+            return $true
+        }
+
+        try {
+            $result = Get-OpenPathWatchdogTaskHealth -OpenPathRoot 'C:\OpenPath'
+
+            $result.Healthy | Should -BeFalse
+            $result.ReasonCodes | Should -Contain 'watchdog_task_not_runnable'
+        }
+        finally {
+            Remove-Item Function:\Get-OpenPathScheduledTaskSpec, Function:\Get-ScheduledTask, Function:\Test-Path -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "rejects a watchdog task whose canonical health script is missing" {
+        . $script:watchdogRuntimePath
+        $expectedAction = 'C:\OpenPath\scripts\Test-DNSHealth.ps1'
+        function global:Get-OpenPathScheduledTaskSpec {
+            param([string]$TaskType)
+            [pscustomobject]@{ Name = 'OpenPath-Watchdog'; Script = 'scripts\Test-DNSHealth.ps1' }
+        }
+        function global:Get-ScheduledTask {
+            param([string]$TaskName)
+            [pscustomobject]@{
+                TaskName = $TaskName
+                State = 'Ready'
+                Actions = @([pscustomobject]@{
+                    Execute = 'PowerShell.exe'
+                    Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$expectedAction`""
+                })
+                Principal = [pscustomobject]@{ UserId = 'S-1-5-18'; RunLevel = 'Highest' }
+                Triggers = @([pscustomobject]@{
+                    Enabled = $true
+                    Repetition = [pscustomobject]@{ Interval = 'PT1M' }
+                })
+            }
+        }
+        function global:Test-Path {
+            param([string]$LiteralPath, [string]$PathType)
+            return $false
+        }
+
+        try {
+            $result = Get-OpenPathWatchdogTaskHealth -OpenPathRoot 'C:\OpenPath'
+
+            $result.Healthy | Should -BeFalse
+            $result.ReasonCodes | Should -Contain 'watchdog_task_not_runnable'
+        }
+        finally {
+            Remove-Item Function:\Get-OpenPathScheduledTaskSpec, Function:\Get-ScheduledTask, Function:\Test-Path -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "rejects an expired recurring watchdog trigger" {
+        . $script:watchdogRuntimePath
+        $expectedAction = 'C:\OpenPath\scripts\Test-DNSHealth.ps1'
+        function global:Get-OpenPathScheduledTaskSpec {
+            param([string]$TaskType)
+            [pscustomobject]@{ Name = 'OpenPath-Watchdog'; Script = 'scripts\Test-DNSHealth.ps1' }
+        }
+        function global:Get-ScheduledTask {
+            param([string]$TaskName)
+            [pscustomobject]@{
+                TaskName = $TaskName
+                State = 'Ready'
+                Actions = @([pscustomobject]@{
+                    Execute = 'PowerShell.exe'
+                    Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$expectedAction`""
+                })
+                Principal = [pscustomobject]@{ UserId = 'SYSTEM'; RunLevel = 'Highest' }
+                Triggers = @([pscustomobject]@{
+                    Enabled = $true
+                    StartBoundary = [DateTime]::UtcNow.AddMinutes(-5).ToString('o')
+                    EndBoundary = [DateTime]::UtcNow.AddMinutes(-1).ToString('o')
+                    Repetition = [pscustomobject]@{ Interval = 'PT1M' }
+                })
+            }
+        }
+        function global:Test-Path {
+            param([string]$LiteralPath, [string]$PathType)
+            return $true
+        }
+
+        try {
+            $result = Get-OpenPathWatchdogTaskHealth -OpenPathRoot 'C:\OpenPath'
+
+            $result.Healthy | Should -BeFalse
+            $result.ReasonCodes | Should -Contain 'watchdog_task_not_runnable'
+        }
+        finally {
+            Remove-Item Function:\Get-OpenPathScheduledTaskSpec, Function:\Get-ScheduledTask, Function:\Test-Path -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "accepts the SYSTEM SID for a live recurring watchdog task" {
+        . $script:watchdogRuntimePath
+        $global:opWatchdogActionCount = 1
+        $expectedAction = 'C:\OpenPath\scripts\Test-DNSHealth.ps1'
+        function global:Get-OpenPathScheduledTaskSpec {
+            param([string]$TaskType)
+            [pscustomobject]@{ Name = 'OpenPath-Watchdog'; Script = 'scripts\Test-DNSHealth.ps1' }
+        }
+        function global:Get-ScheduledTask {
+            param([string]$TaskName)
+            [pscustomobject]@{
+                TaskName = $TaskName
+                State = 'Running'
+                Actions = @([pscustomobject]@{
+                    Execute = 'PowerShell.exe'
+                    Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$expectedAction`""
+                }) * $global:opWatchdogActionCount
+                Principal = [pscustomobject]@{ UserId = 'S-1-5-18'; RunLevel = 'Highest' }
+                Triggers = @([pscustomobject]@{
+                    Enabled = $true
+                    Repetition = [pscustomobject]@{ Interval = 'PT1M' }
+                })
+            }
+        }
+        function global:Test-Path {
+            param([string]$LiteralPath, [string]$PathType)
+            return $true
+        }
+
+        try {
+            $result = Get-OpenPathWatchdogTaskHealth -OpenPathRoot 'C:\OpenPath'
+
+            $result.Healthy | Should -BeTrue
+            $result.Runnable | Should -BeTrue
+            $global:opWatchdogActionCount = 2
+            $extraActions = Get-OpenPathWatchdogTaskHealth -OpenPathRoot 'C:\OpenPath'
+            $extraActions.Healthy | Should -BeFalse
+            $extraActions.Runnable | Should -BeFalse
+        }
+        finally {
+            Remove-Variable -Name opWatchdogActionCount -Scope Global -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-OpenPathScheduledTaskSpec, Function:\Get-ScheduledTask, Function:\Test-Path -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "treats an empty commit state as uncommitted and durably commits after verification" {
+        . $script:watchdogRuntimePath
+        $testRoot = Join-Path $TestDrive "watchdog-empty-commit-$([guid]::NewGuid().ToString('N'))"
+        $dataDir = Join-Path $testRoot 'data'
+        New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+        $configPath = Join-Path $dataDir 'config.json'
+        [ordered]@{
+            enableNonAdminAppControl = $true
+            nonAdminAppControlMode = 'Enforced'
+            appControlCommitState = ''
+            approvedStudentBrowsers = @('Firefox')
+            enableIntegrityChecks = $false
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+        function global:Get-OpenPathWatchdogTaskHealth {
+            param([string]$OpenPathRoot)
+            [pscustomobject]@{ Healthy = $true; ReasonCodes = @() }
+        }
+        function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = $Name } }
+        function global:Sync-OpenPathRestrictedGroup { param([bool]$CreateIfMissing) return $true }
+        function global:Get-OpenPathNonAdminAppControlHealth {
+            param($Mode, $ApprovedBrowsers)
+            [pscustomobject]@{ Healthy = $true; ReasonCodes = @() }
+        }
+        function global:Set-OpenPathNonAdminAppControl { param($OpenPathRoot, $Mode, $ApprovedBrowsers) return $true }
+        function global:Test-OpenPathCaptivePortalModeActive { return $false }
+        function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+        function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+        function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+        function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+        function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+        function global:Test-FirewallActive { return $true }
+        function global:Test-DNSResolution { return $true }
+        function global:Test-DNSSinkhole { return $true }
+        function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+        function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
+        function global:Increment-WatchdogFailCount { return 1 }
+        function global:Reset-WatchdogFailCount { return 0 }
+        function global:Write-OpenPathLog {}
+
+        try {
+            $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+            $result = Invoke-OpenPathWatchdogChecks `
+                -Config $config `
+                -PortalModeActive $false `
+                -CaptiveState 'Direct' `
+                -OpenPathRoot $testRoot `
+                -StaleFailsafeStatePath (Join-Path $testRoot 'data\stale-failsafe-state.json')
+
+            $savedConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+            $savedConfig.appControlCommitState | Should -Be 'committed'
+            $result.ReasonCodes | Should -Not -Contain 'appcontrol_uncommitted'
+        }
+        finally {
+            Remove-Item Function:\Get-OpenPathWatchdogTaskHealth, Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-OpenPathNonAdminAppControlHealth, Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
+            Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "uses only the post-repair AppControl observation after a verified repair" {
+        . $script:watchdogRuntimePath
+        $testRoot = Join-Path $TestDrive "watchdog-post-repair-$([guid]::NewGuid().ToString('N'))"
+        $dataDir = Join-Path $testRoot 'data'
+        New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+        $configPath = Join-Path $dataDir 'config.json'
+        [ordered]@{
+            enableNonAdminAppControl = $true
+            nonAdminAppControlMode = 'Enforced'
+            appControlCommitState = 'pending'
+            approvedStudentBrowsers = @('Firefox')
+            enableIntegrityChecks = $false
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+        $script:appControlHealthCalls = 0
+        function global:Get-OpenPathWatchdogTaskHealth {
+            param([string]$OpenPathRoot)
+            [pscustomobject]@{ Healthy = $true; ReasonCodes = @() }
+        }
+        function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = $Name } }
+        function global:Sync-OpenPathRestrictedGroup { param([bool]$CreateIfMissing) return $true }
+        function global:Get-OpenPathNonAdminAppControlHealth {
+            param($Mode, $ApprovedBrowsers)
+            $script:appControlHealthCalls++
+            if ($script:appControlHealthCalls -eq 1) {
+                return [pscustomobject]@{ Healthy = $false; ReasonCodes = @('appcontrol_effective_policy_absent') }
+            }
+            return [pscustomobject]@{ Healthy = $true; ReasonCodes = @() }
+        }
+        function global:Set-OpenPathNonAdminAppControl { param($OpenPathRoot, $Mode, $ApprovedBrowsers) return $true }
+        function global:Test-OpenPathCaptivePortalModeActive { return $false }
+        function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+        function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+        function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+        function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+        function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+        function global:Test-FirewallActive { return $true }
+        function global:Test-DNSResolution { return $true }
+        function global:Test-DNSSinkhole { return $true }
+        function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+        function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
+        function global:Increment-WatchdogFailCount { return 1 }
+        function global:Reset-WatchdogFailCount { return 0 }
+        function global:Write-OpenPathLog {}
+
+        try {
+            $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+            $result = Invoke-OpenPathWatchdogChecks `
+                -Config $config `
+                -PortalModeActive $false `
+                -CaptiveState 'Direct' `
+                -OpenPathRoot $testRoot `
+                -StaleFailsafeStatePath (Join-Path $testRoot 'data\stale-failsafe-state.json')
+
+            $result.ReasonCodes | Should -Not -Contain 'appcontrol_effective_policy_absent'
+            $result.ReasonCodes | Should -Not -Contain 'appcontrol_repair_unverified'
+            (Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json).appControlCommitState | Should -Be 'committed'
+            $script:appControlHealthCalls | Should -Be 2
+        }
+        finally {
+            Remove-Item Function:\Get-OpenPathWatchdogTaskHealth, Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-OpenPathNonAdminAppControlHealth, Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
+            Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+            Remove-Variable -Scope Script -Name appControlHealthCalls -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "rejects a leaf-only watchdog action spoof and reports watchdog_task_not_runnable" {
+        . $script:watchdogRuntimePath
+        function global:Get-OpenPathScheduledTaskSpec {
+            param([string]$TaskType)
+            [pscustomobject]@{ Name = 'OpenPath-Watchdog'; Script = 'scripts\Test-DNSHealth.ps1' }
+        }
+        function global:Get-ScheduledTask {
+            param([string]$TaskName)
+            [pscustomobject]@{
+                TaskName = $TaskName
+                State = 'Ready'
+                Actions = @([pscustomobject]@{
+                    Execute = 'PowerShell.exe'
+                    Arguments = '-File "C:\Attacker\scripts\Test-DNSHealth.ps1"'
+                })
+                Principal = [pscustomobject]@{ UserId = 'SYSTEM'; RunLevel = 'Highest' }
+                Triggers = @([pscustomobject]@{
+                    Enabled = $true
+                    Repetition = [pscustomobject]@{ Interval = 'PT1M' }
+                })
+            }
+        }
+
+        try {
+            $result = Get-OpenPathWatchdogTaskHealth -OpenPathRoot 'C:\OpenPath'
+
+            $result.Healthy | Should -BeFalse
+            $result.ReasonCodes | Should -Contain 'watchdog_task_not_runnable'
+        }
+        finally {
+            Remove-Item Function:\Get-OpenPathScheduledTaskSpec, Function:\Get-ScheduledTask -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "distinguishes missing and disabled watchdog tasks" {
+        . $script:watchdogRuntimePath
+        function global:Get-OpenPathScheduledTaskSpec {
+            param([string]$TaskType)
+            [pscustomobject]@{ Name = 'OpenPath-Watchdog'; Script = 'scripts\Test-DNSHealth.ps1' }
+        }
+
+        try {
+            function global:Get-ScheduledTask { param([string]$TaskName) return $null }
+            $missing = Get-OpenPathWatchdogTaskHealth -OpenPathRoot 'C:\OpenPath'
+            $missing.ReasonCodes | Should -Contain 'watchdog_task_missing'
+
+            function global:Get-ScheduledTask {
+                param([string]$TaskName)
+                [pscustomobject]@{ TaskName = $TaskName; State = 'Disabled' }
+            }
+            $disabled = Get-OpenPathWatchdogTaskHealth -OpenPathRoot 'C:\OpenPath'
+            $disabled.ReasonCodes | Should -Contain 'watchdog_task_disabled'
+        }
+        finally {
+            Remove-Item Function:\Get-OpenPathScheduledTaskSpec, Function:\Get-ScheduledTask -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "never returns HEALTHY when reason codes are unresolved" {
+        . $script:watchdogRuntimePath
+        function global:Reset-WatchdogFailCount { return 0 }
+        try {
+            $outcome = Get-OpenPathWatchdogOutcome `
+                -Config ([pscustomobject]@{}) `
+                -Issues @() `
+                -ReasonCodes @('watchdog_task_missing') `
+                -RecoveryEligibleIssues @() `
+                -StaleFailsafeActive $false `
+                -IntegrityTampered $false `
+                -FailOpenActive $false `
+                -PortalModeActive $false `
+                -WatchdogFailCountPath (Join-Path $TestDrive 'watchdog-fails.txt') `
+                -OpenPathRoot 'C:\OpenPath'
+
+            $outcome.Status | Should -Not -Be 'HEALTHY'
+            $outcome.ReasonCodes | Should -Contain 'watchdog_task_missing'
+        }
+        finally {
+            Remove-Item Function:\Reset-WatchdogFailCount -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "fails closed when structured AppControl health is unavailable" {
+        . $script:watchdogRuntimePath
+        function global:Get-OpenPathWatchdogTaskHealth {
+            param([string]$OpenPathRoot)
+            [pscustomobject]@{ Healthy = $true; ReasonCodes = @() }
+        }
+        function global:Get-LocalGroup { param([string]$Name) [pscustomobject]@{ Name = $Name } }
+        function global:Sync-OpenPathRestrictedGroup { param([bool]$CreateIfMissing) return $true }
+        function global:Test-OpenPathNonAdminAppControlActive { param($Mode, $ApprovedBrowsers) return $true }
+        function global:Test-OpenPathCaptivePortalModeActive { return $false }
+        function global:Test-OpenPathCaptivePortalState { return 'Direct' }
+        function global:Get-OpenPathConfiguredCaptivePortalDomains { return @() }
+        function global:Test-OpenPathIntegrity { return [pscustomobject]@{ Tampered = $false } }
+        function global:Test-OpenPathEgressFloorDrift { return [pscustomobject]@{ Drifted = $false } }
+        function global:Test-OpenPathRuntimeDependencyQueue { return [pscustomobject]@{ Issues = @() } }
+        function global:Test-FirewallActive { return $true }
+        function global:Test-DNSResolution { return $true }
+        function global:Test-DNSSinkhole { return $true }
+        function global:Test-OpenPathDnsFailsafeState { return [pscustomobject]@{ StaleFailsafeActive = $false } }
+        function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
+        function global:Increment-WatchdogFailCount { return 1 }
+        function global:Reset-WatchdogFailCount { return 0 }
+        function global:Write-OpenPathLog {}
+
+        try {
+            $result = Invoke-OpenPathWatchdogChecks `
+                -Config ([pscustomobject]@{ enableNonAdminAppControl = $true; nonAdminAppControlMode = 'Enforced' }) `
+                -PortalModeActive $false `
+                -CaptiveState 'Direct' `
+                -OpenPathRoot (Join-Path $TestDrive 'appcontrol-unavailable') `
+                -StaleFailsafeStatePath (Join-Path $TestDrive 'stale.json')
+
+            $result.ReasonCodes | Should -Contain 'appcontrol_health_check_unavailable'
+            $result.Issues | Should -Not -BeNullOrEmpty
+        }
+        finally {
+            Remove-Item Function:\Get-OpenPathWatchdogTaskHealth, Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-OpenPathNonAdminAppControlActive, Function:\Test-OpenPathCaptivePortalModeActive, Function:\Test-OpenPathCaptivePortalState -ErrorAction SilentlyContinue
+            Remove-Item Function:\Get-OpenPathConfiguredCaptivePortalDomains, Function:\Test-OpenPathIntegrity, Function:\Test-OpenPathEgressFloorDrift, Function:\Test-OpenPathRuntimeDependencyQueue -ErrorAction SilentlyContinue
+            Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole, Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
+            Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "passes aggregate reason codes from checks to outcome and the real health report" {
+        $scriptPath = Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1"
+        $content = Get-Content $scriptPath -Raw
+
+        Assert-ContentContainsAll -Content $content -Needles @(
+            '-ReasonCodes @($checkResult.ReasonCodes)',
+            '-ReasonCodes @($outcome.ReasonCodes)'
+        )
+        $content.IndexOf('-ReasonCodes @($checkResult.ReasonCodes)') | Should -BeGreaterThan -1
+        $content.IndexOf('-ReasonCodes @($outcome.ReasonCodes)') | Should -BeGreaterThan -1
+    }
+}
+
+Describe 'AppControl transaction final findings' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '..\lib\internal\Watchdog.Runtime.ps1')
+    }
+    BeforeEach {
+        $global:opTransactionHealthCalls = 0
+        $global:opTransactionRepairCalls = 0
+        $global:opTransactionInitiallyHealthy = $true
+        $global:opTransactionGroupMissing = $false
+        function global:Write-OpenPathLog {}
+        function global:Get-LocalGroup {
+            if ($global:opTransactionGroupMissing) { throw 'missing group' }
+            [pscustomobject]@{ Name = 'OpenPath-Restricted' }
+        }
+        function global:Sync-OpenPathRestrictedGroup { return (-not $global:opTransactionGroupMissing) }
+        function global:Get-OpenPathNonAdminAppControlHealth {
+            $global:opTransactionHealthCalls++
+            if (-not $global:opTransactionInitiallyHealthy -and $global:opTransactionHealthCalls -eq 1) {
+                return [pscustomobject]@{ Healthy = $false; ReasonCodes = @('appcontrol_effective_policy_absent') }
+            }
+            [pscustomobject]@{ Healthy = $true; ReasonCodes = @() }
+        }
+        function global:Set-OpenPathNonAdminAppControl {
+            $global:opTransactionRepairCalls++
+            return $true
+        }
+    }
+    AfterEach {
+        Remove-Item Function:\Write-OpenPathLog, Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup, Function:\Get-OpenPathNonAdminAppControlHealth, Function:\Set-OpenPathNonAdminAppControl -ErrorAction SilentlyContinue
+        Remove-Variable -Name opTransactionHealthCalls, opTransactionRepairCalls, opTransactionInitiallyHealthy, opTransactionGroupMissing -Scope Global -ErrorAction SilentlyContinue
+    }
+    It 'preserves group sync failure after a successful policy repair' {
+        $global:opTransactionInitiallyHealthy = $false
+        $result = Invoke-OpenPathWatchdogAppControlHealth -Config ([pscustomobject]@{ appControlCommitState = 'committed' }) -OpenPathRoot $TestDrive -GroupSyncFailed $true
+        $result.Healthy | Should -BeFalse
+        $result.ReasonCodes | Should -Contain 'appcontrol_group_sync_failed'
+    }
+    It 'preserves a missing group after a successful policy repair' {
+        $global:opTransactionInitiallyHealthy = $false
+        $global:opTransactionGroupMissing = $true
+        $result = Invoke-OpenPathWatchdogAppControlHealth -Config ([pscustomobject]@{ appControlCommitState = 'committed' }) -OpenPathRoot $TestDrive
+        $result.Healthy | Should -BeFalse
+        $result.ReasonCodes | Should -Contain 'appcontrol_restricted_target_missing'
+    }
+    It 'commits a verified legacy boundary without unnecessarily rewriting policy' {
+        $root = Join-Path $TestDrive 'legacy'
+        New-Item -ItemType Directory -Path (Join-Path $root 'data') -Force | Out-Null
+        $config = [pscustomobject]@{ enableNonAdminAppControl = $true; installState = 'complete' }
+        $path = Join-Path $root 'data\config.json'
+        $config | ConvertTo-Json | Set-Content -LiteralPath $path
+        $result = Invoke-OpenPathWatchdogAppControlHealth -Config $config -OpenPathRoot $root
+        $result.Healthy | Should -BeTrue
+        $config.appControlCommitState | Should -Be 'committed'
+        (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json).appControlCommitState | Should -Be 'committed'
+        $global:opTransactionRepairCalls | Should -Be 0
+    }
+    It 'does not mutate in-memory state when the durable configuration is missing' {
+        $config = [pscustomobject]@{ appControlCommitState = 'pending' }
+        $result = Invoke-OpenPathWatchdogAppControlHealth -Config $config -OpenPathRoot (Join-Path $TestDrive 'missing-config')
+        $result.Healthy | Should -BeFalse
+        $config.appControlCommitState | Should -Be 'pending'
+        $result.ReasonCodes | Should -Contain 'appcontrol_commit_persist_failed'
+    }
+    It 'does not inspect or repair explicitly disabled AppControl' {
+        $result = Invoke-OpenPathWatchdogAppControlHealth -Config ([pscustomobject]@{ enableNonAdminAppControl = $false }) -OpenPathRoot $TestDrive
+        $result.Healthy | Should -BeTrue
+        $global:opTransactionHealthCalls | Should -Be 0
+        $global:opTransactionRepairCalls | Should -Be 0
+    }
+    It 'does not repair from an unknown configuration' {
+        $result = Invoke-OpenPathWatchdogAppControlHealth -Config $null -OpenPathRoot $TestDrive
+        $result.Healthy | Should -BeFalse
+        $result.ReasonCodes | Should -Contain 'configuration_unavailable'
+        $global:opTransactionRepairCalls | Should -Be 0
     }
 }

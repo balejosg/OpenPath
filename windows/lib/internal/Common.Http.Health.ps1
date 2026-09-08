@@ -88,7 +88,9 @@ function Send-OpenPathHealthReport {
 
         [string]$Actions = '',
 
-        [string]$Version = 'unknown'
+        [string]$Version = 'unknown',
+
+        [string[]]$ReasonCodes = @()
     )
 
     $config = $null
@@ -124,6 +126,17 @@ function Send-OpenPathHealthReport {
     # the legacy version field so old API versions also accept the payload.
     # dnsState mirrors dnsResolving for the canonical schema.
     $failStreak = Get-OpenPathHealthReportFailStreak
+    $normalizedReasonCodes = @()
+    $seenReasonCodes = @{}
+    foreach ($reasonCode in @($ReasonCodes)) {
+        $candidate = [string]$reasonCode
+        if ($candidate -cmatch '^[a-z][a-z0-9_]{2,63}$' -and -not $seenReasonCodes.ContainsKey($candidate)) {
+            $seenReasonCodes[$candidate] = $true
+            if ($normalizedReasonCodes.Count -lt 32) {
+                $normalizedReasonCodes += $candidate
+            }
+        }
+    }
     $reportBody = @{
         hostname       = Get-OpenPathMachineName
         status         = $Status
@@ -136,6 +149,9 @@ function Send-OpenPathHealthReport {
         agentVersion   = [string]$versionToSend
         platform       = 'windows'
         configPosture  = Get-OpenPathConfigPosture -Config $config
+    }
+    if ($normalizedReasonCodes.Count -gt 0) {
+        $reportBody['reasonCodes'] = $normalizedReasonCodes
     }
     if ($failStreak -gt 0) {
         $reportBody['healthReportFailStreak'] = [int]$failStreak

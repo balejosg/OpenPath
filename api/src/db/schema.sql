@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS "health_reports" (
 	"dns_resolving" integer,
 	"fail_count" integer DEFAULT 0,
 	"actions" text,
+	"reason_codes" text[],
 	"version" varchar(50),
 	"reported_at" timestamp with time zone DEFAULT now()
 );

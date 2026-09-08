@@ -102,10 +102,10 @@ $checkResult = Invoke-OpenPathWatchdogChecks `
     -GroupSyncFailed ([bool]$precheckResult.GroupSyncFailed)
 $issues += @($checkResult.Issues)
 $recoveryEligibleIssues += @($checkResult.RecoveryEligibleIssues)
-
 $outcome = Get-OpenPathWatchdogOutcome `
     -Config $config `
     -Issues @($issues) `
+    -ReasonCodes @($checkResult.ReasonCodes) `
     -RecoveryEligibleIssues @($recoveryEligibleIssues) `
     -StaleFailsafeActive $checkResult.StaleFailsafeActive `
     -IntegrityTampered $checkResult.IntegrityTampered `
@@ -119,7 +119,8 @@ Send-OpenPathHealthReport -Status $outcome.Status `
     -DnsServiceRunning $runtimeHealth.DnsServiceRunning `
     -DnsResolving $runtimeHealth.DnsResolving `
     -FailCount $outcome.WatchdogFailCount `
-    -Actions $outcome.Actions | Out-Null
+    -Actions $outcome.Actions `
+    -ReasonCodes @($outcome.ReasonCodes) | Out-Null
 
 if ($outcome.Status -ne 'HEALTHY') {
     Write-OpenPathLog "Watchdog status=$($outcome.Status) failCount=$($outcome.WatchdogFailCount) actions=$($outcome.Actions)"

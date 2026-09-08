@@ -209,6 +209,68 @@ function Show-OpenPathStatus {
 
     $staleFailsafe = Test-Path $staleStatePath
 
+    $watchdogTaskHealth = $null
+    try {
+        $watchdogTaskHealth = Get-OpenPathWatchdogTaskHealth -OpenPathRoot $OpenPathRoot
+    }
+    catch {
+        $watchdogTaskHealth = [pscustomobject]@{
+            Healthy = $false
+            ReasonCodes = @('watchdog_task_not_runnable')
+        }
+    }
+
+    $appControlRequired = $true
+    if ($config -and $config.PSObject.Properties['enableNonAdminAppControl']) {
+        $appControlRequired = [bool]$config.enableNonAdminAppControl
+    }
+    $appControlHealth = [pscustomobject]@{ Healthy = $true; ReasonCodes = @() }
+    if ($appControlRequired) {
+        if (Get-Command -Name 'Get-OpenPathNonAdminAppControlHealth' -ErrorAction SilentlyContinue) {
+            try {
+                $appControlMode = if ($config -and $config.PSObject.Properties['nonAdminAppControlMode'] -and $config.nonAdminAppControlMode) { [string]$config.nonAdminAppControlMode } else { 'Enforced' }
+                $approvedBrowsers = if ($config -and $config.PSObject.Properties['approvedStudentBrowsers'] -and $config.approvedStudentBrowsers) { @($config.approvedStudentBrowsers) } else { @('Firefox') }
+                $appControlHealth = Get-OpenPathNonAdminAppControlHealth `
+                    -Mode $appControlMode `
+                    -ApprovedBrowsers $approvedBrowsers
+                if (-not $appControlHealth -or -not $appControlHealth.PSObject.Properties['Healthy']) {
+                    throw 'structured AppControl health result is invalid'
+                }
+            }
+            catch {
+                $appControlHealth = [pscustomobject]@{
+                    Healthy = $false
+                    ReasonCodes = @('appcontrol_health_check_unavailable')
+                }
+            }
+        }
+        else {
+            $appControlHealth = [pscustomobject]@{
+                Healthy = $false
+                ReasonCodes = @('appcontrol_health_check_unavailable')
+            }
+        }
+    }
+
+    $configurationReasonCodes = @()
+    if (-not $config) {
+        $configurationReasonCodes += 'configuration_unavailable'
+    }
+    else {
+        if ($config.PSObject.Properties['installState'] -and $config.installState -in @('installing', 'failed')) {
+            $configurationReasonCodes += 'installation_incomplete'
+        }
+        if ($appControlRequired -and (
+            -not $config.PSObject.Properties['appControlCommitState'] -or
+            [string]$config.appControlCommitState -ne 'committed'
+        )) {
+            # Status is an observer: only the watchdog/installer may perform the
+            # verified legacy migration and durable commit.
+            $configurationReasonCodes += 'appcontrol_uncommitted'
+        }
+    }
+    $requiredBoundaryHealthy = [bool]($watchdogTaskHealth.Healthy -and $appControlHealth.Healthy -and $configurationReasonCodes.Count -eq 0)
+
     $overallStatus = if ($acrylicState -eq 'Running' -and $dnsResolving -and $sinkholeWorking) {
         'HEALTHY'
     }
@@ -222,6 +284,9 @@ function Show-OpenPathStatus {
     if ($staleFailsafe) {
         $overallStatus = 'STALE_FAILSAFE'
     }
+    elseif (-not $requiredBoundaryHealthy -and $overallStatus -eq 'HEALTHY') {
+        $overallStatus = 'DEGRADED'
+    }
 
     Write-Host '==========================================' -ForegroundColor Cyan
     Write-Host '  OpenPath Windows Status' -ForegroundColor Cyan
@@ -231,6 +296,18 @@ function Show-OpenPathStatus {
     Write-Host "DNS resolving: $dnsResolving"
     Write-Host "Sinkhole active: $sinkholeWorking"
     Write-Host "Firewall active: $firewallActive"
+    Write-Host "Watchdog task healthy: $($watchdogTaskHealth.Healthy)"
+    Write-Host "AppControl health required: $appControlRequired"
+    Write-Host "AppControl healthy: $($appControlHealth.Healthy)"
+    if (@($watchdogTaskHealth.ReasonCodes).Count -gt 0) {
+        Write-Host "Watchdog reason codes: $(@($watchdogTaskHealth.ReasonCodes) -join ', ')"
+    }
+    if (@($appControlHealth.ReasonCodes).Count -gt 0) {
+        Write-Host "AppControl reason codes: $(@($appControlHealth.ReasonCodes) -join ', ')"
+    }
+    if ($configurationReasonCodes.Count -gt 0) {
+        Write-Host "Configuration reason codes: $($configurationReasonCodes -join ', ')"
+    }
     Write-Host "Stale failsafe: $staleFailsafe"
     Write-Host "Watchdog fail count: $watchdogFails"
 
@@ -265,6 +342,8 @@ try {
     Import-Module "$openPathRoot\lib\Browser.psm1" -Force -Global
     Import-Module "$openPathRoot\lib\Common.psm1" -Force -Global
     . "$openPathRoot\lib\internal\Common.Redaction.ps1"
+    Import-Module "$openPathRoot\lib\AppControl.psm1" -Force -Global -ErrorAction SilentlyContinue
+    . "$openPathRoot\lib\internal\Watchdog.Runtime.ps1"
 
     $requiredCommonCommands = @(
         'Get-OpenPathConfig',
