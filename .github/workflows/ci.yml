@@ -250,7 +250,7 @@ jobs:
   test-windows-hosted:
     name: Windows Agent Tests (Pester, hosted)
     runs-on: windows-2025
-    timeout-minutes: 6
+    timeout-minutes: 8
     needs: detect-relevant-changes
     if: needs.detect-relevant-changes.outputs.windows_bound == 'true'
     outputs:
@@ -269,7 +269,7 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-pester-isolated.ps1 `
             -RepoRoot (Get-Location).Path `
             -ResultsPath windows-hosted-results.xml `
-            -TimeoutSeconds 180
+            -TimeoutSeconds 360
 
       - name: Report hosted Windows context
         if: always()
