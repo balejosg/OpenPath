@@ -599,7 +599,8 @@ Describe "AppControl Module" {
 
             $moduleContent | Should -Match '(?s)function Test-OpenPathFilePathRulePresent.*?Test-OpenPathAppLockerRuleManaged -Rule \$_'
             $moduleContent | Should -Match '(?s)function Test-OpenPathFilePublisherRulePresent.*?Test-OpenPathAppLockerRuleManaged -Rule \$_'
-            $moduleContent | Should -Match '(?s)function Test-OpenPathNonAdminAppControlActive.*?Test-OpenPathAppLockerBoundaryPolicy'
+            $moduleContent | Should -Match '(?s)function Get-OpenPathNonAdminAppControlHealth.*?Test-OpenPathAppLockerBoundaryPolicy'
+            $moduleContent | Should -Match '(?s)function Test-OpenPathNonAdminAppControlActive.*?Get-OpenPathNonAdminAppControlHealth'
             $moduleContent | Should -Match '(?s)function Remove-OpenPathNonAdminAppControl.*?if \(Test-OpenPathAppLockerRuleManaged -Rule \$rule\)'
             $moduleContent | Should -Not -Match '\$rule\.Name -like "\$script:OpenPathAppControlRulePrefix\*"'
             $moduleContent | Should -Not -Match '\$_\.Name -like "\$script:OpenPathAppControlRulePrefix\*"'
@@ -991,6 +992,250 @@ Describe "AppControl Module" {
         It "fails closed when Test-AppLockerPolicy is unavailable instead of trusting XML" {
             Remove-Item Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
             Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+        }
+    }
+
+    Context "Structured AppControl health contract" {
+        BeforeEach {
+            $global:opHealthGroupSid = 'S-1-5-21-10-20-30-4242'
+            $global:opHealthStudentSid = 'S-1-5-21-10-20-30-1001'
+            $global:opHealthProfilePath = Join-Path $TestDrive 'health-student'
+            $global:opHealthSystemRoot = Join-Path $TestDrive 'health-windows'
+            $global:opHealthSourcePath = Join-Path (Join-Path $global:opHealthSystemRoot 'System32') 'cmd.exe'
+            $global:opHealthLocalPolicyState = 'valid'
+            $global:opHealthEffectivePolicyState = 'valid'
+            $global:opHealthAppIdStatus = 'Running'
+            $global:opHealthArbitraryDecision = 'DeniedByDefault'
+            $global:opHealthEdgeDecision = 'Denied'
+            $global:opHealthFirefoxDecision = 'Allowed'
+            $global:opHealthPolicyMode = 'Enforced'
+            $global:opHealthTargetMissing = $false
+            $global:opHealthPreviousSystemRoot = $env:SystemRoot
+            $env:SystemRoot = $global:opHealthSystemRoot
+
+            New-Item -ItemType Directory -Path $global:opHealthProfilePath, (Split-Path $global:opHealthSourcePath -Parent) -Force | Out-Null
+            [System.IO.File]::WriteAllBytes($global:opHealthSourcePath, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+
+            function global:Set-AppLockerPolicy {}
+            function global:Get-AppLockerPolicy {
+                param([switch]$Local, [switch]$Effective, [switch]$Xml)
+                if ($Xml) {
+                    $state = if ($Local) { $global:opHealthLocalPolicyState } else { $global:opHealthEffectivePolicyState }
+                    if ($state -eq 'absent') {
+                        return $null
+                    }
+                    if ($state -eq 'invalid') {
+                        return '<AppLockerPolicy'
+                    }
+                    $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -Mode $global:opHealthPolicyMode
+                    return (New-OpenPathAppLockerPolicyXml -Spec $spec)
+                }
+
+                if ($Effective -and $global:opHealthEffectivePolicyState -eq 'absent') {
+                    return $null
+                }
+                return [pscustomobject]@{
+                    RuleCollections = @([pscustomobject]@{ Type = 'Exe' }, [pscustomobject]@{ Type = 'Appx' })
+                }
+            }
+            function global:Get-Service {
+                [pscustomobject]@{ Name = 'AppIDSvc'; Status = $global:opHealthAppIdStatus }
+            }
+            function global:Get-LocalGroup {
+                param([string]$Name, [string]$SID)
+                if ($global:opHealthTargetMissing) {
+                    throw 'OpenPath-Restricted group unavailable'
+                }
+                [pscustomobject]@{ Name = $Name; SID = [pscustomobject]@{ Value = $global:opHealthGroupSid } }
+            }
+            function global:Get-LocalGroupMember {
+                param([string]$Group)
+                [pscustomobject]@{ SID = [pscustomobject]@{ Value = $global:opHealthStudentSid } }
+            }
+            function global:Get-CimInstance {
+                param([string]$ClassName)
+                [pscustomobject]@{ SID = $global:opHealthStudentSid; LocalPath = $global:opHealthProfilePath; Special = $false }
+            }
+            function global:Test-AppLockerPolicy {
+                param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject)
+                @($Path | ForEach-Object {
+                    $pathText = [string]$_
+                    $decision = if ($pathText -match '(?i)firefox\.exe$') {
+                        $global:opHealthFirefoxDecision
+                    }
+                    elseif ($pathText -match '(?i)msedge\.exe$') {
+                        $global:opHealthEdgeDecision
+                    }
+                    else {
+                        $global:opHealthArbitraryDecision
+                    }
+                    [pscustomobject]@{
+                        FilePath = $pathText
+                        PolicyDecision = $decision
+                        MatchingRule = 'health-test-rule'
+                    }
+                })
+            }
+
+            Mock Get-OpenPathAppControlExistingSamplePaths {
+                param([string[]]$Paths, [string]$Label)
+                @($Paths | Select-Object -First 1)
+            } -ModuleName AppControl
+        }
+
+        AfterEach {
+            if ($null -eq $global:opHealthPreviousSystemRoot) {
+                Remove-Item Env:SystemRoot -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:SystemRoot = $global:opHealthPreviousSystemRoot
+            }
+            Remove-Item Function:\Set-AppLockerPolicy, Function:\Get-AppLockerPolicy, Function:\Get-Service, Function:\Get-LocalGroup, Function:\Get-LocalGroupMember, Function:\Get-CimInstance, Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
+            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthPreviousSystemRoot -ErrorAction SilentlyContinue
+        }
+
+        It "returns a deterministic healthy contract and keeps the boolean compatibility seam" {
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeTrue
+            $health.Mode | Should -Be 'Enforced'
+            @($health.ReasonCodes).Count | Should -Be 0
+            $health.CapabilityAvailable | Should -BeTrue
+            $health.RestrictedTargetValid | Should -BeTrue
+            $health.AppIdentityServiceRunning | Should -BeTrue
+            $health.LocalPolicyPresent | Should -BeTrue
+            $health.LocalPolicyValid | Should -BeTrue
+            $health.EffectivePolicyPresent | Should -BeTrue
+            $health.EffectivePolicyValid | Should -BeTrue
+            $health.RuntimeEvaluationAvailable | Should -BeTrue
+            $health.RuntimeBoundaryValid | Should -BeTrue
+            Test-OpenPathNonAdminAppControlActive | Should -BeTrue
+        }
+
+        It "reports unavailable AppLocker management capability" {
+            Remove-Item Function:\Set-AppLockerPolicy, Function:\Get-AppLockerPolicy -ErrorAction SilentlyContinue
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeFalse
+            $health.CapabilityAvailable | Should -BeFalse
+            @($health.ReasonCodes) | Should -Be @('appcontrol_capability_unavailable')
+        }
+
+        It "preserves the requested AuditOnly mode in the health contract" {
+            $global:opHealthPolicyMode = 'AuditOnly'
+            $health = Get-OpenPathNonAdminAppControlHealth -Mode AuditOnly
+
+            $health.Mode | Should -Be 'AuditOnly'
+            $health.Healthy | Should -BeTrue
+        }
+
+        It "distinguishes local policy absence from invalidity" {
+            $global:opHealthLocalPolicyState = 'absent'
+            $absent = Get-OpenPathNonAdminAppControlHealth
+            $absent.LocalPolicyPresent | Should -BeFalse
+            $absent.LocalPolicyValid | Should -BeFalse
+            @($absent.ReasonCodes) | Should -Contain 'appcontrol_local_policy_absent'
+            @($absent.ReasonCodes) | Should -Not -Contain 'appcontrol_local_policy_invalid'
+
+            $global:opHealthLocalPolicyState = 'invalid'
+            $invalid = Get-OpenPathNonAdminAppControlHealth
+            $invalid.LocalPolicyPresent | Should -BeTrue
+            $invalid.LocalPolicyValid | Should -BeFalse
+            @($invalid.ReasonCodes) | Should -Contain 'appcontrol_local_policy_invalid'
+            @($invalid.ReasonCodes) | Should -Not -Contain 'appcontrol_local_policy_absent'
+        }
+
+        It "distinguishes effective policy absence from invalidity" {
+            $global:opHealthEffectivePolicyState = 'absent'
+            $absent = Get-OpenPathNonAdminAppControlHealth
+            $absent.EffectivePolicyPresent | Should -BeFalse
+            $absent.EffectivePolicyValid | Should -BeFalse
+            @($absent.ReasonCodes) | Should -Contain 'appcontrol_effective_policy_absent'
+            @($absent.ReasonCodes) | Should -Not -Contain 'appcontrol_effective_policy_invalid'
+
+            $global:opHealthEffectivePolicyState = 'invalid'
+            $invalid = Get-OpenPathNonAdminAppControlHealth
+            $invalid.EffectivePolicyPresent | Should -BeTrue
+            $invalid.EffectivePolicyValid | Should -BeFalse
+            @($invalid.ReasonCodes) | Should -Contain 'appcontrol_effective_policy_invalid'
+            @($invalid.ReasonCodes) | Should -Not -Contain 'appcontrol_effective_policy_absent'
+        }
+
+        It "reports a missing current OpenPath restricted target instead of trusting the BUILTIN Users fallback" {
+            $global:opHealthTargetMissing = $true
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeFalse
+            $health.RestrictedTargetValid | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_restricted_target_missing'
+        }
+
+        It "reports a stopped Application Identity service" {
+            $global:opHealthAppIdStatus = 'Stopped'
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeFalse
+            $health.AppIdentityServiceRunning | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_appidsvc_not_running'
+        }
+
+        It "reports an arbitrary executable allowed by the effective evaluator" {
+            $global:opHealthArbitraryDecision = 'AllowedByDefault'
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.RuntimeEvaluationAvailable | Should -BeTrue
+            $health.RuntimeBoundaryValid | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_arbitrary_exe_allowed'
+        }
+
+        It "reports an unapproved Edge executable allowed by the effective evaluator" {
+            $global:opHealthEdgeDecision = 'Allowed'
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.RuntimeBoundaryValid | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_edge_allowed'
+        }
+
+        It "reports an approved Firefox executable that is not allowed by the effective evaluator" {
+            $global:opHealthFirefoxDecision = 'Denied'
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.RuntimeBoundaryValid | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_firefox_not_allowed'
+        }
+
+        It "reports unavailable runtime evaluation" {
+            Remove-Item Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.RuntimeEvaluationAvailable | Should -BeFalse
+            $health.RuntimeBoundaryValid | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_evaluation_unavailable'
+        }
+
+        It "reports failed probe cleanup independently of valid runtime decisions" {
+            Mock Remove-OpenPathAppControlEvaluationProbeSet { $false } -ModuleName AppControl
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.RuntimeBoundaryValid | Should -BeTrue
+            $health.Healthy | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_probe_cleanup_failed'
+        }
+
+        It "deduplicates reasons in stable observation order without diagnostic values" {
+            $global:opHealthAppIdStatus = 'Stopped'
+            $global:opHealthLocalPolicyState = 'absent'
+            $global:opHealthEffectivePolicyState = 'absent'
+            $health = Get-OpenPathNonAdminAppControlHealth
+            $codes = @($health.ReasonCodes)
+
+            $codes | Should -Be @(
+                'appcontrol_appidsvc_not_running',
+                'appcontrol_local_policy_absent',
+                'appcontrol_effective_policy_absent'
+            )
+            @($codes | Select-Object -Unique).Count | Should -Be $codes.Count
+            ($codes -join ' ') | Should -Not -Match '[\\/:]|https?://|S-1-|[A-Za-z]:\\'
         }
     }
 
