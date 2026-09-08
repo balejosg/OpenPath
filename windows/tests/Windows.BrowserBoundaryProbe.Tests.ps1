@@ -93,6 +93,51 @@ Describe "Windows Browser Boundary CI Probes" {
             } | Should -Throw "*Task execution for * failed*"
         }
 
+        It "Preserves quotes around executable paths with spaces for schtasks /TR" {
+            $testDirectory = Join-Path $TestDrive "Program Files\OpenPath Probe"
+            New-Item -ItemType Directory -Path $testDirectory -Force | Out-Null
+            $testExe = Join-Path $testDirectory "probe.exe"
+            Set-Content -LiteralPath $testExe -Value "dummy"
+            $global:openPathCapturedTaskCreateArguments = $null
+
+            Mock schtasks.exe {
+                if ($args -contains '/Create') {
+                    $global:openPathCapturedTaskCreateArguments = @($args)
+                }
+                $global:LASTEXITCODE = 0
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                return @(
+                    [pscustomobject]@{
+                        Id = 8004
+                        Message = "probe.exe was prevented from running"
+                        UserId = [pscustomobject]@{ Value = 'S-1-5-21-student-sid' }
+                    }
+                )
+            } -ModuleName BrowserBoundaryProbe
+
+            try {
+                $result = Invoke-StudentExecutableTaskProbe `
+                    -ProbeName "Quoted path probe" `
+                    -UserName "student01" `
+                    -Password "secret" `
+                    -ExecutablePath $testExe `
+                    -Arguments '--new-window about:blank' `
+                    -Expectation ExpectDenied `
+                    -StudentSid 'S-1-5-21-student-sid' `
+                    -TimeoutSeconds 1
+
+                $result.status | Should -Be 'pass'
+                $trIndex = [array]::IndexOf($global:openPathCapturedTaskCreateArguments, '/TR')
+                $trIndex | Should -BeGreaterThan -1
+                $global:openPathCapturedTaskCreateArguments[$trIndex + 1] |
+                    Should -Be ('\"' + $testExe + '\" --new-window about:blank')
+            }
+            finally {
+                Remove-Variable -Name openPathCapturedTaskCreateArguments -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Throws when ExpectDenied but no 8004 event and no process observed" {
             $testExe = Join-Path $TestDrive "probe-no-8004.exe"
             Set-Content -LiteralPath $testExe -Value "dummy"

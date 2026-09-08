@@ -103,7 +103,11 @@ function Invoke-StudentExecutableTaskProbe {
     }
 
     $probeTask = "OpenPathProbe-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
-    $taskCommand = if ($Arguments) { "`"$ExecutablePath`" $Arguments" } else { "`"$ExecutablePath`"" }
+    # Windows PowerShell removes ordinary embedded quotes when binding native
+    # command arguments. Prefix them with backslashes so schtasks.exe receives
+    # a quoted /TR executable path instead of splitting paths at spaces.
+    $quotedExecutablePath = '\"' + $ExecutablePath + '\"'
+    $taskCommand = if ($Arguments) { "$quotedExecutablePath $Arguments" } else { $quotedExecutablePath }
     $taskTime = (Get-Date).AddMinutes(1).ToString('HH:mm')
 
     & schtasks.exe /Create /TN $probeTask /SC ONCE /ST $taskTime /TR $taskCommand /RU "$env:COMPUTERNAME\$UserName" /RP $Password /RL LIMITED /F *> $null
