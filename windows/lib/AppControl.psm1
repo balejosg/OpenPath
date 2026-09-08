@@ -1056,7 +1056,9 @@ function New-OpenPathAppControlEvaluationProbeSet {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [object]$Target
+        [object]$Target,
+
+        [ref]$CleanupSucceeded
     )
 
     $sourcePath = Get-OpenPathAppControlProbeSourcePath
@@ -1100,7 +1102,16 @@ function New-OpenPathAppControlEvaluationProbeSet {
         return $probeSet
     }
     catch {
-        [void](Remove-OpenPathAppControlEvaluationProbeSet -ProbeSet $probeSet)
+        $cleanupResult = $true
+        try {
+            $cleanupResult = [bool](Remove-OpenPathAppControlEvaluationProbeSet -ProbeSet $probeSet)
+        }
+        catch {
+            $cleanupResult = $false
+        }
+        if ($PSBoundParameters.ContainsKey('CleanupSucceeded')) {
+            $CleanupSucceeded.Value = $cleanupResult
+        }
         throw
     }
 }
@@ -1175,6 +1186,8 @@ function Get-OpenPathNonAdminAppControlHealth {
     Observes capability, restricted-target, service, local-policy, effective-policy, and
     runtime-evaluation state independently. Reason codes are stable contract values; the
     detailed paths and exceptions remain in the existing operational log messages.
+    The appcontrol_runtime_evaluation_failed code identifies an available runtime evaluator
+    that could not complete a trustworthy observation.
     #>
     [CmdletBinding()]
     param(
@@ -1288,11 +1301,11 @@ function Get-OpenPathNonAdminAppControlHealth {
                     throw 'Effective AppLocker policy has no rule collections'
                 }
 
-                $probeSet = New-OpenPathAppControlEvaluationProbeSet -Target $probeTarget
+                $probeSet = New-OpenPathAppControlEvaluationProbeSet -Target $probeTarget -CleanupSucceeded ([ref]$probeCleanupSucceeded)
                 $probePaths = @($probeSet.Paths | ForEach-Object { [string]$_ })
                 $testDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $probePaths -User $probeTarget.UserSid -ErrorAction Stop)
-                if ($testDecisions.Count -eq 0) {
-                    throw 'Test-AppLockerPolicy returned no decisions for the controlled AppControl probes'
+                if ($testDecisions.Count -eq 0 -or $testDecisions.Count -ne $probePaths.Count) {
+                    throw 'Test-AppLockerPolicy did not return one decision for every controlled AppControl probe'
                 }
 
                 $runtimeBoundaryValid = $true
@@ -1324,11 +1337,11 @@ function Get-OpenPathNonAdminAppControlHealth {
                     )
                     $edgeSamplePaths = Get-OpenPathAppControlExistingSamplePaths -Label 'Edge' -Paths $edgeSampleCandidates
                     $edgeDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $edgeSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
-                    if ($edgeDecisions.Count -eq 0) {
-                        throw 'Test-AppLockerPolicy returned no decisions for the Edge probes'
+                    if ($edgeDecisions.Count -eq 0 -or $edgeDecisions.Count -ne $edgeSamplePaths.Count) {
+                        throw 'Test-AppLockerPolicy did not return one decision for every Edge probe'
                     }
-                    $hasEdgeDeny = [bool](@($edgeDecisions | Where-Object { $_.PolicyDecision -eq 'Denied' }).Count -gt 0)
-                    if (-not $hasEdgeDeny) {
+                    $edgeAllowedDecisions = @($edgeDecisions | Where-Object { $_.PolicyDecision -ne 'Denied' })
+                    if ($edgeAllowedDecisions.Count -gt 0) {
                         $runtimeBoundaryValid = $false
                         & $addReasonCode 'appcontrol_runtime_edge_allowed'
                         Write-OpenPathLog 'AppLocker effective evaluation failed: Edge executable was not evaluated as Denied' -Level WARN
@@ -1346,11 +1359,11 @@ function Get-OpenPathNonAdminAppControlHealth {
                     )
                     $firefoxSamplePaths = Get-OpenPathAppControlExistingSamplePaths -Label 'Firefox' -Paths $firefoxSampleCandidates
                     $firefoxDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $firefoxSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
-                    if ($firefoxDecisions.Count -eq 0) {
-                        throw 'Test-AppLockerPolicy returned no decisions for the Firefox probes'
+                    if ($firefoxDecisions.Count -eq 0 -or $firefoxDecisions.Count -ne $firefoxSamplePaths.Count) {
+                        throw 'Test-AppLockerPolicy did not return one decision for every Firefox probe'
                     }
-                    $hasFirefoxAllow = [bool](@($firefoxDecisions | Where-Object { $_.PolicyDecision -eq 'Allowed' }).Count -gt 0)
-                    if (-not $hasFirefoxAllow) {
+                    $firefoxNotAllowedDecisions = @($firefoxDecisions | Where-Object { $_.PolicyDecision -ne 'Allowed' })
+                    if ($firefoxNotAllowedDecisions.Count -gt 0) {
                         $runtimeBoundaryValid = $false
                         & $addReasonCode 'appcontrol_runtime_firefox_not_allowed'
                         Write-OpenPathLog 'AppLocker effective evaluation failed: Firefox executable was not evaluated as Allowed' -Level WARN
@@ -1360,6 +1373,7 @@ function Get-OpenPathNonAdminAppControlHealth {
             }
             catch {
                 $runtimeBoundaryValid = $false
+                & $addReasonCode 'appcontrol_runtime_evaluation_failed'
                 Write-OpenPathLog "AppLocker effective runtime policy test failed: $_" -Level WARN
             }
             finally {
@@ -1371,9 +1385,9 @@ function Get-OpenPathNonAdminAppControlHealth {
                         $probeCleanupSucceeded = $false
                         Write-OpenPathLog "Failed to remove temporary AppControl probes: $_" -Level WARN
                     }
-                    if (-not $probeCleanupSucceeded) {
-                        & $addReasonCode 'appcontrol_probe_cleanup_failed'
-                    }
+                }
+                if (-not $probeCleanupSucceeded) {
+                    & $addReasonCode 'appcontrol_probe_cleanup_failed'
                 }
             }
         }

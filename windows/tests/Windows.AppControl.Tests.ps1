@@ -1010,6 +1010,10 @@ Describe "AppControl Module" {
             $global:opHealthFirefoxDecision = 'Allowed'
             $global:opHealthPolicyMode = 'Enforced'
             $global:opHealthTargetMissing = $false
+            $global:opHealthRuntimeEffectiveObjectState = 'valid'
+            $global:opHealthRuntimeEvaluatorState = 'valid'
+            $global:opHealthSampleCount = 1
+            $global:opHealthSampleFailureLabel = ''
             $global:opHealthPreviousSystemRoot = $env:SystemRoot
             $env:SystemRoot = $global:opHealthSystemRoot
 
@@ -1031,8 +1035,13 @@ Describe "AppControl Module" {
                     return (New-OpenPathAppLockerPolicyXml -Spec $spec)
                 }
 
-                if ($Effective -and $global:opHealthEffectivePolicyState -eq 'absent') {
-                    return $null
+                if ($Effective) {
+                    if ($global:opHealthRuntimeEffectiveObjectState -eq 'absent') {
+                        return $null
+                    }
+                    if ($global:opHealthRuntimeEffectiveObjectState -eq 'empty') {
+                        return [pscustomobject]@{ RuleCollections = @() }
+                    }
                 }
                 return [pscustomobject]@{
                     RuleCollections = @([pscustomobject]@{ Type = 'Exe' }, [pscustomobject]@{ Type = 'Appx' })
@@ -1058,13 +1067,29 @@ Describe "AppControl Module" {
             }
             function global:Test-AppLockerPolicy {
                 param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject)
-                @($Path | ForEach-Object {
+                if ($global:opHealthRuntimeEvaluatorState -eq 'throw') {
+                    throw 'injected runtime evaluator failure'
+                }
+                if ($global:opHealthRuntimeEvaluatorState -eq 'no-decisions') {
+                    return
+                }
+                $decisions = @($Path | ForEach-Object {
                     $pathText = [string]$_
                     $decision = if ($pathText -match '(?i)firefox\.exe$') {
-                        $global:opHealthFirefoxDecision
+                        if ($global:opHealthFirefoxDecision -eq 'mixed') {
+                            if ($pathText -match '(?i)\(x86\)') { 'Denied' } else { 'Allowed' }
+                        }
+                        else {
+                            $global:opHealthFirefoxDecision
+                        }
                     }
                     elseif ($pathText -match '(?i)msedge\.exe$') {
-                        $global:opHealthEdgeDecision
+                        if ($global:opHealthEdgeDecision -eq 'mixed') {
+                            if ($pathText -match '(?i)\(x86\)') { 'Allowed' } else { 'Denied' }
+                        }
+                        else {
+                            $global:opHealthEdgeDecision
+                        }
                     }
                     else {
                         $global:opHealthArbitraryDecision
@@ -1075,11 +1100,18 @@ Describe "AppControl Module" {
                         MatchingRule = 'health-test-rule'
                     }
                 })
+                if ($global:opHealthRuntimeEvaluatorState -eq 'partial') {
+                    return @($decisions | Select-Object -First 1)
+                }
+                return $decisions
             }
 
             Mock Get-OpenPathAppControlExistingSamplePaths {
                 param([string[]]$Paths, [string]$Label)
-                @($Paths | Select-Object -First 1)
+                if ($global:opHealthSampleFailureLabel -eq $Label) {
+                    throw "injected $Label sample lookup failure"
+                }
+                @($Paths | Select-Object -First $global:opHealthSampleCount)
             } -ModuleName AppControl
         }
 
@@ -1091,7 +1123,7 @@ Describe "AppControl Module" {
                 $env:SystemRoot = $global:opHealthPreviousSystemRoot
             }
             Remove-Item Function:\Set-AppLockerPolicy, Function:\Get-AppLockerPolicy, Function:\Get-Service, Function:\Get-LocalGroup, Function:\Get-LocalGroupMember, Function:\Get-CimInstance, Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
-            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthPreviousSystemRoot -ErrorAction SilentlyContinue
+            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthPreviousSystemRoot -ErrorAction SilentlyContinue
         }
 
         It "returns a deterministic healthy contract and keeps the boolean compatibility seam" {
@@ -1186,6 +1218,7 @@ Describe "AppControl Module" {
             $health.RuntimeEvaluationAvailable | Should -BeTrue
             $health.RuntimeBoundaryValid | Should -BeFalse
             @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_arbitrary_exe_allowed'
+            @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
         It "reports an unapproved Edge executable allowed by the effective evaluator" {
@@ -1194,6 +1227,7 @@ Describe "AppControl Module" {
 
             $health.RuntimeBoundaryValid | Should -BeFalse
             @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_edge_allowed'
+            @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
         It "reports an approved Firefox executable that is not allowed by the effective evaluator" {
@@ -1202,6 +1236,79 @@ Describe "AppControl Module" {
 
             $health.RuntimeBoundaryValid | Should -BeFalse
             @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_firefox_not_allowed'
+            @($health.ReasonCodes).Count | Should -BeGreaterThan 0
+        }
+
+        It "reports generic runtime failure for an unavailable or empty effective policy object" {
+            foreach ($state in @('absent', 'empty')) {
+                $global:opHealthRuntimeEffectiveObjectState = $state
+                $health = Get-OpenPathNonAdminAppControlHealth
+
+                $health.Healthy | Should -BeFalse
+                $health.RuntimeEvaluationAvailable | Should -BeTrue
+                $health.RuntimeBoundaryValid | Should -BeFalse
+                @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_evaluation_failed'
+                @($health.ReasonCodes).Count | Should -BeGreaterThan 0
+            }
+        }
+
+        It "reports generic runtime failure when Test-AppLockerPolicy throws or returns no decisions" {
+            foreach ($state in @('throw', 'no-decisions')) {
+                $global:opHealthRuntimeEvaluatorState = $state
+                $health = Get-OpenPathNonAdminAppControlHealth
+
+                $health.Healthy | Should -BeFalse
+                $health.RuntimeEvaluationAvailable | Should -BeTrue
+                $health.RuntimeBoundaryValid | Should -BeFalse
+                @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_evaluation_failed'
+                @($health.ReasonCodes).Count | Should -BeGreaterThan 0
+            }
+        }
+
+        It "reports generic runtime failure when a probe decision is missing" {
+            $global:opHealthRuntimeEvaluatorState = 'partial'
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeFalse
+            $health.RuntimeEvaluationAvailable | Should -BeTrue
+            $health.RuntimeBoundaryValid | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_evaluation_failed'
+            @($health.ReasonCodes).Count | Should -BeGreaterThan 0
+        }
+
+        It "reports generic runtime failure when Edge or Firefox samples cannot be resolved" {
+            foreach ($label in @('Edge', 'Firefox')) {
+                $global:opHealthSampleFailureLabel = $label
+                $health = Get-OpenPathNonAdminAppControlHealth
+
+                $health.Healthy | Should -BeFalse
+                $health.RuntimeEvaluationAvailable | Should -BeTrue
+                $health.RuntimeBoundaryValid | Should -BeFalse
+                @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_evaluation_failed'
+                @($health.ReasonCodes).Count | Should -BeGreaterThan 0
+            }
+        }
+
+        It "requires every sampled Edge decision to be Denied" {
+            $global:opHealthSampleCount = 2
+            $global:opHealthEdgeDecision = 'mixed'
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeFalse
+            $health.RuntimeBoundaryValid | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_edge_allowed'
+            @($health.ReasonCodes).Count | Should -BeGreaterThan 0
+        }
+
+        It "requires every sampled approved Firefox decision to be Allowed" {
+            $global:opHealthSampleCount = 2
+            $global:opHealthFirefoxDecision = 'mixed'
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeFalse
+            $health.RuntimeBoundaryValid | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_firefox_not_allowed'
+            @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
         It "reports unavailable runtime evaluation" {
@@ -1211,15 +1318,86 @@ Describe "AppControl Module" {
             $health.RuntimeEvaluationAvailable | Should -BeFalse
             $health.RuntimeBoundaryValid | Should -BeFalse
             @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_evaluation_unavailable'
+            @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
         It "reports failed probe cleanup independently of valid runtime decisions" {
-            Mock Remove-OpenPathAppControlEvaluationProbeSet { $false } -ModuleName AppControl
+            Mock Remove-OpenPathAppControlEvaluationProbeSet {
+                param([object]$ProbeSet)
+                foreach ($probePath in @($ProbeSet.Paths)) {
+                    if ([System.IO.File]::Exists([string]$probePath)) {
+                        [System.IO.File]::Delete([string]$probePath)
+                    }
+                }
+                foreach ($directoryPath in @($ProbeSet.CreatedDirectories | Sort-Object Length -Descending)) {
+                    if ([System.IO.Directory]::Exists([string]$directoryPath) -and @([System.IO.Directory]::GetFileSystemEntries([string]$directoryPath)).Count -eq 0) {
+                        [System.IO.Directory]::Delete([string]$directoryPath)
+                    }
+                }
+                return $false
+            } -ModuleName AppControl
             $health = Get-OpenPathNonAdminAppControlHealth
 
             $health.RuntimeBoundaryValid | Should -BeTrue
             $health.Healthy | Should -BeFalse
             @($health.ReasonCodes) | Should -Contain 'appcontrol_probe_cleanup_failed'
+            @($health.ReasonCodes).Count | Should -BeGreaterThan 0
+        }
+
+        It "reports and cleans a partial probe creation cleanup failure" {
+            $blockedDirectory = Join-Path $global:opHealthProfilePath 'Desktop'
+            if (Test-Path -LiteralPath $blockedDirectory) {
+                Remove-Item -LiteralPath $blockedDirectory -Recurse -Force
+            }
+            New-Item -ItemType File -Path $blockedDirectory -Force | Out-Null
+            Mock Remove-OpenPathAppControlEvaluationProbeSet {
+                param([object]$ProbeSet)
+                foreach ($probePath in @($ProbeSet.Paths)) {
+                    if ([System.IO.File]::Exists([string]$probePath)) {
+                        [System.IO.File]::Delete([string]$probePath)
+                    }
+                }
+                foreach ($directoryPath in @($ProbeSet.CreatedDirectories | Sort-Object Length -Descending)) {
+                    if ([System.IO.Directory]::Exists([string]$directoryPath) -and @([System.IO.Directory]::GetFileSystemEntries([string]$directoryPath)).Count -eq 0) {
+                        [System.IO.Directory]::Delete([string]$directoryPath)
+                    }
+                }
+                return $false
+            } -ModuleName AppControl
+
+            $health = Get-OpenPathNonAdminAppControlHealth
+            $health.Healthy | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_probe_cleanup_failed'
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_evaluation_failed'
+            @($health.ReasonCodes).Count | Should -BeGreaterThan 0
+
+            $remainingProbeFiles = @(Get-ChildItem -LiteralPath $global:opHealthProfilePath -Filter 'openpath-appcontrol-probe-*.exe' -Recurse -File -ErrorAction SilentlyContinue)
+            $remainingProbeFiles.Count | Should -Be 0
+            Remove-Item -LiteralPath $blockedDirectory -Force -ErrorAction SilentlyContinue
+        }
+
+        It "always includes a reason when a covered runtime health check is unhealthy" {
+            $assertHasReason = {
+                param([object]$Snapshot)
+                $Snapshot.Healthy | Should -BeFalse
+                @($Snapshot.ReasonCodes).Count | Should -BeGreaterThan 0
+            }
+
+            $global:opHealthRuntimeEffectiveObjectState = 'absent'
+            & $assertHasReason (Get-OpenPathNonAdminAppControlHealth)
+
+            $global:opHealthRuntimeEffectiveObjectState = 'valid'
+            $global:opHealthRuntimeEvaluatorState = 'no-decisions'
+            & $assertHasReason (Get-OpenPathNonAdminAppControlHealth)
+
+            $global:opHealthRuntimeEvaluatorState = 'valid'
+            $global:opHealthSampleFailureLabel = 'Edge'
+            & $assertHasReason (Get-OpenPathNonAdminAppControlHealth)
+
+            $global:opHealthSampleFailureLabel = ''
+            $global:opHealthEdgeDecision = 'mixed'
+            $global:opHealthSampleCount = 2
+            & $assertHasReason (Get-OpenPathNonAdminAppControlHealth)
         }
 
         It "deduplicates reasons in stable observation order without diagnostic values" {
