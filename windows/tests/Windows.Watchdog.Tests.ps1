@@ -379,6 +379,23 @@ Describe "Watchdog Script" {
             function global:Test-OpenPathPolicyFailOpenMarker { return [pscustomobject]@{ FailOpenActive = $false } }
             function global:Increment-WatchdogFailCount { return 1 }
             function global:Reset-WatchdogFailCount { return 0 }
+            function global:Get-NetAdapter {
+                [CmdletBinding()]
+                param()
+                [pscustomobject]@{
+                    Name = 'OpenPath-test-adapter'
+                    Status = 'Up'
+                    ifIndex = 1
+                }
+            }
+            function global:Get-DnsClientServerAddress {
+                [CmdletBinding()]
+                param(
+                    [int]$AddressFamily,
+                    [int]$InterfaceIndex
+                )
+                [pscustomobject]@{ ServerAddresses = @('127.0.0.1') }
+            }
             function global:Get-Service { param($DisplayName) return [pscustomobject]@{ Status = 'Running' } }
             function global:Write-OpenPathLog {}
 
@@ -420,6 +437,7 @@ Describe "Watchdog Script" {
                 Remove-Item Function:\Test-FirewallActive, Function:\Test-DNSResolution, Function:\Test-DNSSinkhole -ErrorAction SilentlyContinue
                 Remove-Item Function:\Test-OpenPathDnsFailsafeState, Function:\Test-OpenPathPolicyFailOpenMarker -ErrorAction SilentlyContinue
                 Remove-Item Function:\Increment-WatchdogFailCount, Function:\Reset-WatchdogFailCount, Function:\Get-Service, Function:\Write-OpenPathLog -ErrorAction SilentlyContinue
+                Remove-Item Function:\Get-NetAdapter, Function:\Get-DnsClientServerAddress -ErrorAction SilentlyContinue
             }
         }
 
