@@ -1347,6 +1347,7 @@ Add-OpenPathInstallerTestTrace "fixture:unrelated-registry-result=`$unrelatedReg
 
 `$installerArguments = @{
     WhitelistUrl = 'https://allow.example.test'
+    ApiUrl = 'https://bootstrap.example.test'
     SkipPreflight = `$true
     SkipAcrylic = `$true
     FailureStatusPath = '$FailureStatus'
