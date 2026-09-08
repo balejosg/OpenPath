@@ -68,6 +68,26 @@ const BROWSER_ENFORCEMENT_ARTIFACTS = [
   'admin\\windows-browser-enforcement-report.json',
   'admin\\windows-browser-enforcement-report.txt',
 ];
+const REQUIRED_BROWSER_ENFORCEMENT_ARTIFACTS = new Set([
+  'browser-boundary-summary.json',
+  'student\\windows-browser-enforcement-report.json',
+  'admin\\windows-browser-enforcement-report.json',
+]);
+const BROWSER_BOUNDARY_ROOT_ARTIFACTS = [
+  'direct-browser-boundary-completion.json',
+  'direct-student-flow.out.log',
+  'direct-student-flow.err.log',
+  'direct-browser-boundary.out.log',
+  'direct-browser-boundary.err.log',
+  'direct-final-reset.out.log',
+  'direct-final-reset.err.log',
+  'windows-user-profile-evidence.json',
+  'windows-student-policy-timings.json',
+];
+const REQUIRED_BROWSER_BOUNDARY_ROOT_ARTIFACTS = new Set([
+  'direct-browser-boundary-completion.json',
+  'windows-user-profile-evidence.json',
+]);
 const BROWSER_ENFORCEMENT_REPORT_ARTIFACTS = [
   'windows-browser-enforcement-report.json',
   'windows-browser-enforcement-report.txt',
@@ -1152,16 +1172,31 @@ function Invoke-OpenPathDirectChildPowerShell {
     PassThru = $true
   }
   $process = Start-Process @startInfo
+  try {
+    # Windows PowerShell can return a Process wrapper that loses ExitCode once
+    # the child exits unless its native handle is opened while it is running.
+    $processHandle = $process.Handle
+    if ($processHandle -eq [IntPtr]::Zero) {
+      throw 'Start-Process returned an invalid process handle'
+    }
+  }
+  catch {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "$LogName process handle could not be retained: $_"
+  }
 
   if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
     throw "$LogName timed out after $TimeoutSeconds seconds"
   }
 
+  # The timed overload can return before redirected streams and process state
+  # are fully finalized. Complete that wait before reading ExitCode.
+  $process.WaitForExit()
   $process.Refresh()
   $exitCode = $process.ExitCode
   if ($null -eq $exitCode) {
-    $exitCode = 0
+    throw "$LogName completed without an observable exit code"
   }
   if ($exitCode -ne 0) {
     $maxFailureLogChars = 12000
@@ -1193,6 +1228,16 @@ try {
 
   New-Item -ItemType Directory -Path $boundaryArtifactsRoot -Force | Out-Null
   Invoke-OpenPathDirectChildPowerShell -ScriptPath $boundaryScriptPath -ExtraArguments @('-ArtifactsRoot', $boundaryArtifactsRoot) -LogName 'direct-browser-boundary' -TimeoutSeconds 600
+
+  foreach ($requiredArtifact in @(
+    (Join-Path $boundaryArtifactsRoot 'browser-boundary-summary.json'),
+    (Join-Path $boundaryArtifactsRoot 'student\\windows-browser-enforcement-report.json'),
+    (Join-Path $boundaryArtifactsRoot 'admin\\windows-browser-enforcement-report.json')
+  )) {
+    if (-not (Test-Path -LiteralPath $requiredArtifact -PathType Leaf)) {
+      throw "Required browser-boundary evidence was not produced: $requiredArtifact"
+    }
+  }
 }
 catch {
   $primaryFailure = $_
@@ -2581,8 +2626,8 @@ function getWindowsDirectArtifactSpecsForModes(
 ) {
   const specs = [];
   const modeSet = new Set(expandArtifactCollectionModes(modes));
-  const addText = (sourcePath, localName, maxChars = 500000) => {
-    specs.push({ kind: 'text', sourcePath, localName, maxChars });
+  const addText = (sourcePath, localName, maxChars = 500000, required = false) => {
+    specs.push({ kind: 'text', sourcePath, localName, maxChars, required });
   };
   const addArtifact = (artifactRoot, artifactName, maxBytes = 64 * 1024 * 1024) => {
     specs.push({
@@ -2633,10 +2678,21 @@ function getWindowsDirectArtifactSpecsForModes(
   }
 
   if (modeSet.has('browser-boundary')) {
+    const artifactRoot = `${runnerRoot}\\tests\\e2e\\artifacts\\windows-student-policy`;
+    for (const artifactName of BROWSER_BOUNDARY_ROOT_ARTIFACTS) {
+      addText(
+        `${artifactRoot}\\${artifactName}`,
+        artifactName,
+        500000,
+        REQUIRED_BROWSER_BOUNDARY_ROOT_ARTIFACTS.has(artifactName)
+      );
+    }
     for (const artifactName of BROWSER_ENFORCEMENT_ARTIFACTS) {
       addText(
-        `${runnerRoot}\\tests\\e2e\\artifacts\\windows-student-policy\\browser-boundary\\${artifactName}`,
-        artifactName.replace(/\\/g, '-')
+        `${artifactRoot}\\browser-boundary\\${artifactName}`,
+        artifactName.replace(/\\/g, '-'),
+        500000,
+        REQUIRED_BROWSER_ENFORCEMENT_ARTIFACTS.has(artifactName)
       );
     }
   }
@@ -2717,6 +2773,8 @@ function collectArtifacts(options, artifactDir, runnerRoot, modesToRun = []) {
       const content = readGuestFile(options, spec.sourcePath, spec.maxChars);
       if (content.trim()) {
         writeFileSync(resolve(artifactDir, spec.localName), content, 'utf8');
+      } else if (spec.required) {
+        throw new Error(`Required Windows artifact is missing or empty: ${spec.sourcePath}`);
       }
       continue;
     }
@@ -2839,6 +2897,8 @@ async function main() {
   let windowsOverlayRoot = '';
   let runnerRepoRoot = DRY_RUN ? options.runnerRepoRoot || '' : '';
   let modesToRun = [];
+  let diagnosticSucceeded = false;
+  let requiredArtifactCollectionError;
 
   try {
     if (options.sourceMode === 'local-overlay') {
@@ -2902,16 +2962,21 @@ async function main() {
       console.log('step=run-browser-enforcement-report');
       runBrowserEnforcementReport(options, runnerRepoRoot || options.runnerRepoRoot);
     }
+    diagnosticSucceeded = true;
   } finally {
     if (!DRY_RUN && runnerRepoRoot) {
       try {
         collectArtifacts(options, artifactDir, runnerRepoRoot, modesToRun);
       } catch (error) {
-        console.warn(
-          `warning: failed to collect Windows direct artifacts: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
+        if (diagnosticSucceeded && modesToRun.includes('browser-boundary')) {
+          requiredArtifactCollectionError = error;
+        } else {
+          console.warn(
+            `warning: failed to collect Windows direct artifacts: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
       }
     }
     try {
@@ -2926,6 +2991,9 @@ async function main() {
     await stopOverlayServer(overlayServer);
     if (!DRY_RUN && options.sourceMode === 'local-overlay') {
       rmSync(resolve(artifactDir, OVERLAY_ZIP_NAME), { force: true });
+    }
+    if (requiredArtifactCollectionError) {
+      throw requiredArtifactCollectionError;
     }
   }
 

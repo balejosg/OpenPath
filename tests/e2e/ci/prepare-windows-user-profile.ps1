@@ -93,18 +93,22 @@ using System.Text;
 
 public static class OpenPathUserProfileNative
 {
-    [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport("userenv.dll", EntryPoint = "CreateProfile", SetLastError = false, ExactSpelling = true)]
     public static extern int CreateProfile(
-        string userSid,
-        string userName,
-        StringBuilder profilePath,
-        int profilePathCapacity);
+        [MarshalAs(UnmanagedType.LPWStr)] string userSid,
+        [MarshalAs(UnmanagedType.LPWStr)] string userName,
+        [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder profilePath,
+        uint cchProfilePath);
 }
 '@
     }
 
-    $profilePathBuffer = New-Object System.Text.StringBuilder 32768
-    $result = [OpenPathUserProfileNative]::CreateProfile($Sid, $UserName, $profilePathBuffer, $profilePathBuffer.Capacity)
+    $profilePathBuffer = New-Object System.Text.StringBuilder 260
+    $result = [OpenPathUserProfileNative]::CreateProfile(
+        $Sid,
+        $UserName,
+        $profilePathBuffer,
+        [uint32]$profilePathBuffer.Capacity)
     if ($result -ne 0) {
         throw ('CreateProfile failed for {0} (HRESULT 0x{1:X8})' -f $UserName, $result)
     }

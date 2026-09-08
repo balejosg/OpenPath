@@ -359,6 +359,46 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(script, /browser-boundary-summary\.json/);
   });
 
+  test('browser-boundary direct child execution and evidence fail closed', () => {
+    const script = readText('scripts/run-windows-runner-direct.mjs');
+    const directChildMatch = script.match(
+      /function Invoke-OpenPathDirectChildPowerShell \{([\s\S]*?)\n\}\n\n\$primaryFailure/
+    );
+
+    assert.ok(directChildMatch, 'the browser-boundary direct child helper should remain defined');
+    const directChild = directChildMatch[1];
+
+    assert.match(
+      directChild,
+      /\$processHandle\s*=\s*\$process\.Handle[\s\S]*?WaitForExit\(\$TimeoutSeconds \* 1000\)[\s\S]*?\$process\.WaitForExit\(\)[\s\S]*?if \(\$null -eq \$exitCode\) \{[\s\S]*?throw/s,
+      'the direct child should retain its process handle, flush completion, and reject an unavailable exit code'
+    );
+    assert.doesNotMatch(
+      directChild,
+      /if \(\$null -eq \$exitCode\) \{\s*\$exitCode = 0\s*\}/,
+      'an unavailable direct child exit code must never be converted to success'
+    );
+    for (const artifactName of [
+      'direct-browser-boundary-completion.json',
+      'direct-student-flow.out.log',
+      'direct-student-flow.err.log',
+      'direct-browser-boundary.out.log',
+      'direct-browser-boundary.err.log',
+      'windows-user-profile-evidence.json',
+    ]) {
+      assert.match(
+        script,
+        new RegExp(artifactName.replaceAll('.', '\\.')),
+        `direct browser-boundary diagnostics should collect ${artifactName}`
+      );
+    }
+    assert.match(
+      script,
+      /REQUIRED_BROWSER_ENFORCEMENT_ARTIFACTS\s*=\s*new Set\(\[[\s\S]*?browser-boundary-summary\.json[\s\S]*?student\\\\windows-browser-enforcement-report\.json[\s\S]*?admin\\\\windows-browser-enforcement-report\.json[\s\S]*?REQUIRED_BROWSER_ENFORCEMENT_ARTIFACTS\.has\(artifactName\)/s,
+      'browser-boundary completion evidence should be required after a successful diagnostic'
+    );
+  });
+
   test('dns-discovery-spike mode runs the local-overlay spike and collects artifacts', () => {
     const result = runDirectDiagnostic([
       '--mode',

@@ -1894,6 +1894,11 @@ describe('repository verification contract', () => {
     );
     assert.match(
       helper,
+      /DllImport\(["']userenv\.dll["'][\s\S]*?EntryPoint\s*=\s*["']CreateProfile["'][\s\S]*?ExactSpelling\s*=\s*true[\s\S]*?MarshalAs\(UnmanagedType\.LPWStr\)[\s\S]*?StringBuilder\s+profilePath[\s\S]*?uint\s+cchProfilePath/i,
+      'profile preparation should use the exact CreateProfile ABI exposed by userenv.dll'
+    );
+    assert.match(
+      helper,
       /createdProfiles\.Count\s*-ne\s*1/i,
       'profile creation should reject ambiguous profile records'
     );
