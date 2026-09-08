@@ -129,6 +129,17 @@ catch {
     Write-Warning "Unable to remove OpenPath-Restricted group during runner reset: $_"
 }
 
+
+$profileEvidencePath = if (-not [string]::IsNullOrWhiteSpace($env:OPENPATH_WINDOWS_PROFILE_EVIDENCE_PATH)) {
+    [System.IO.Path]::GetFullPath($env:OPENPATH_WINDOWS_PROFILE_EVIDENCE_PATH)
+}
+elseif (-not [string]::IsNullOrWhiteSpace($env:OPENPATH_STUDENT_ARTIFACTS_DIR)) {
+    Join-Path ([System.IO.Path]::GetFullPath($env:OPENPATH_STUDENT_ARTIFACTS_DIR)) 'windows-user-profile-evidence.json'
+}
+else {
+    Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Path 'tests\e2e\artifacts\windows-student-policy\windows-user-profile-evidence.json'
+}
+
 $currentRepoRoot = $null
 try {
     $currentRepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Path
@@ -174,5 +185,99 @@ if (-not $activeAdapters) {
 }
 
 Clear-DnsClientCache -ErrorAction SilentlyContinue
+
+
+$profileCleanupFailure = $null
+if (Test-Path -LiteralPath $profileEvidencePath -PathType Leaf) {
+    $profileEvidence = $null
+    $cleanupStatus = 'error'
+    $cleanupError = $null
+    try {
+        $profileEvidence = Get-Content -LiteralPath $profileEvidencePath -Raw | ConvertFrom-Json
+        if ($profileEvidence.createdByHarness -ne $true) {
+            $cleanupStatus = 'not-owned'
+        }
+        else {
+            $expectedSid = [string]$profileEvidence.SID
+            $expectedLocalPath = [string]$profileEvidence.LocalPath
+            if ([string]::IsNullOrWhiteSpace($expectedSid) -or [string]::IsNullOrWhiteSpace($expectedLocalPath)) {
+                $cleanupStatus = 'refused'
+                $cleanupError = 'Harness-owned evidence is missing SID or LocalPath.'
+            }
+            else {
+                $profilesForSid = @(
+                    Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
+                        Where-Object { [string]$_.SID -ceq $expectedSid }
+                )
+                if ($profilesForSid.Count -eq 0) {
+                    $cleanupStatus = 'already-absent'
+                }
+                elseif ($profilesForSid.Count -ne 1) {
+                    $cleanupStatus = 'refused'
+                    $cleanupError = "SID $expectedSid has $($profilesForSid.Count) Win32_UserProfile records."
+                }
+                else {
+                    $profile = $profilesForSid[0]
+                    if ([string]$profile.LocalPath -cne $expectedLocalPath) {
+                        $cleanupStatus = 'refused'
+                        $cleanupError = 'Win32_UserProfile LocalPath does not match evidence.'
+                    }
+                    elseif ($profile.Special -ne $false) {
+                        $cleanupStatus = 'refused'
+                        $cleanupError = 'Win32_UserProfile Special is not false.'
+                    }
+                    elseif ($profile.Loaded -ne $false) {
+                        $cleanupStatus = 'refused'
+                        $cleanupError = 'Win32_UserProfile is loaded.'
+                    }
+                    else {
+                        Remove-CimInstance -InputObject $profile -ErrorAction Stop
+                        $cleanupStatus = 'removed'
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        $cleanupStatus = 'error'
+        $cleanupError = $_.Exception.Message
+    }
+    finally {
+        if ($null -eq $profileEvidence) {
+            $profileEvidence = [pscustomobject]@{
+                createdByHarness = $null
+                SID              = $null
+                UserName         = $null
+                LocalPath        = $null
+            }
+        }
+        foreach ($propertyName in @('createdByHarness', 'SID', 'UserName', 'LocalPath')) {
+            if ($null -eq $profileEvidence.PSObject.Properties[$propertyName]) {
+                $profileEvidence | Add-Member -NotePropertyName $propertyName -NotePropertyValue $null
+            }
+        }
+        $profileEvidence | Add-Member -NotePropertyName cleanupStatus -NotePropertyValue $cleanupStatus -Force
+        $profileEvidence | Add-Member -NotePropertyName cleanupAt -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force
+        if ([string]::IsNullOrWhiteSpace($cleanupError)) {
+            $profileEvidence.PSObject.Properties.Remove('cleanupError')
+        }
+        else {
+            $profileEvidence | Add-Member -NotePropertyName cleanupError -NotePropertyValue $cleanupError -Force
+        }
+        $profileEvidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $profileEvidencePath -Encoding UTF8 -ErrorAction Stop
+    }
+
+    if ($cleanupStatus -in @('refused', 'error')) {
+        $profileCleanupFailure = "Windows profile cleanup {0}: {1}" -f $cleanupStatus, $cleanupError
+        Write-Warning $profileCleanupFailure
+    }
+    else {
+        Write-Host "Windows profile cleanup status: $cleanupStatus"
+    }
+}
+
+if ($profileCleanupFailure) {
+    throw $profileCleanupFailure
+}
 
 Write-Host 'Self-hosted Windows runner reset complete.'

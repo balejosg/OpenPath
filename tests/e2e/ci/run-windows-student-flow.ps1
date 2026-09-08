@@ -21,6 +21,12 @@ $script:ArtifactsRoot = if ($env:OPENPATH_STUDENT_ARTIFACTS_DIR) {
 else {
     [System.IO.Path]::GetFullPath((Join-Path $script:RepoRoot 'tests\e2e\artifacts\windows-student-policy'))
 }
+$script:WindowsProfileEvidencePath = if ($env:OPENPATH_WINDOWS_PROFILE_EVIDENCE_PATH) {
+    [System.IO.Path]::GetFullPath($env:OPENPATH_WINDOWS_PROFILE_EVIDENCE_PATH)
+}
+else {
+    Join-Path $script:ArtifactsRoot 'windows-user-profile-evidence.json'
+}
 
 $script:ApiPort = if ($env:OPENPATH_STUDENT_API_PORT) { [int]$env:OPENPATH_STUDENT_API_PORT } else { 3201 }
 $script:FixturePort = if ($env:OPENPATH_STUDENT_FIXTURE_PORT) { [int]$env:OPENPATH_STUDENT_FIXTURE_PORT } else { 18082 }
@@ -479,6 +485,40 @@ function Wait-ForHttp {
 function Ensure-ArtifactsDirectory {
     if (-not (Test-Path $script:ArtifactsRoot)) {
         New-Item -ItemType Directory -Path $script:ArtifactsRoot -Force | Out-Null
+    }
+}
+
+function Prepare-WindowsUserProfile {
+    $helperPath = Join-Path $script:RepoRoot 'tests\e2e\ci\prepare-windows-user-profile.ps1'
+    if (-not (Test-Path -LiteralPath $helperPath -PathType Leaf)) {
+        throw "Windows profile preparation helper was not found: $helperPath"
+    }
+
+    $env:OPENPATH_WINDOWS_PROFILE_EVIDENCE_PATH = $script:WindowsProfileEvidencePath
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $helperPath -EvidencePath $script:WindowsProfileEvidencePath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Windows profile preparation failed with exit code $LASTEXITCODE"
+    }
+
+    if (-not (Test-Path -LiteralPath $script:WindowsProfileEvidencePath -PathType Leaf)) {
+        throw "Windows profile preparation did not write evidence: $script:WindowsProfileEvidencePath"
+    }
+
+    $evidence = Get-Content -LiteralPath $script:WindowsProfileEvidencePath -Raw | ConvertFrom-Json
+    foreach ($propertyName in @('SID', 'UserName', 'LocalPath', 'createdByHarness')) {
+        if (-not $evidence.PSObject.Properties[$propertyName]) {
+            throw "Windows profile preparation evidence is missing '$propertyName'"
+        }
+    }
+    foreach ($propertyName in @('SID', 'UserName', 'LocalPath')) {
+        if ([string]::IsNullOrWhiteSpace([string]$evidence.$propertyName)) {
+            throw "Windows profile preparation evidence has an empty '$propertyName'"
+        }
+    }
+
+    Write-DiagnosticNote "Windows profile prepared for $($evidence.UserName) ($($evidence.SID)) at $($evidence.LocalPath); createdByHarness=$($evidence.createdByHarness)"
+    if ($env:GITHUB_ENV) {
+        Add-Content -LiteralPath $env:GITHUB_ENV -Value "OPENPATH_WINDOWS_PROFILE_EVIDENCE_PATH=$script:WindowsProfileEvidencePath"
     }
 }
 
@@ -1702,6 +1742,7 @@ try {
     $extensionArchivePath = Invoke-TimedStep -Name 'Package Firefox extension' -ScriptBlock { New-FirefoxExtensionArchive }
     Invoke-TimedStep -Name 'Ensure Firefox and geckodriver' -ScriptBlock { Ensure-FirefoxAndGeckodriver }
     Invoke-TimedStep -Name 'Enable Firefox unsigned addon support' -ScriptBlock { Enable-FirefoxUnsignedAddonSupport }
+    Invoke-TimedStep -Name 'Prepare Windows user profile' -ScriptBlock { Prepare-WindowsUserProfile }
     Invoke-TimedStep -Name 'Install and enroll client (sse)' -ScriptBlock { Install-AndEnrollClient -Scenario $scenario -InstallClient $true }
     $windowsStudentSseGroup = if ([string]::IsNullOrWhiteSpace($env:OPENPATH_WINDOWS_STUDENT_SSE_GROUP)) {
         Resolve-WindowsStudentSseGroup

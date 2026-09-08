@@ -1853,6 +1853,148 @@ describe('repository verification contract', () => {
     );
   });
 
+  test('Windows student-policy prepares a real non-admin profile before installation', () => {
+    const helperPath = resolve(projectRoot, 'tests/e2e/ci/prepare-windows-user-profile.ps1');
+    const helper = existsSync(helperPath)
+      ? readText('tests/e2e/ci/prepare-windows-user-profile.ps1')
+      : '';
+    const windowsRunner = readText('tests/e2e/ci/run-windows-student-flow.ps1');
+
+    assert.ok(existsSync(helperPath), 'Windows student-policy profile helper should exist');
+    assert.match(
+      helper,
+      /Get-LocalGroup\s+-SID\s+['"]S-1-5-32-544['"]/,
+      'profile preparation should resolve the Administrators group by its well-known SID'
+    );
+    assert.match(
+      helper,
+      /Get-LocalGroupMember[\s\S]*?-ErrorAction\s+Stop[\s\S]*?admin/i,
+      'Administrators membership enumeration should fail closed'
+    );
+    assert.match(
+      helper,
+      /Get-LocalUser[\s\S]*?Enabled[\s\S]*?SID[\s\S]*?admin/i,
+      'profile preparation should select an enabled local user outside direct Administrators membership'
+    );
+    assert.match(
+      helper,
+      /Get-CimInstance\s+-ClassName\s+Win32_UserProfile/i,
+      'profile preparation should inspect the real profile provider'
+    );
+    assert.match(helper, /Special/i, 'profile preparation should reject special profiles');
+    assert.match(
+      helper,
+      /Directory\]::Exists/i,
+      'profile preparation should require an existing profile directory'
+    );
+    assert.match(
+      helper,
+      /CreateProfile[\s\S]*?Get-CimInstance\s+-ClassName\s+Win32_UserProfile/i,
+      'profile preparation should verify the profile created by userenv'
+    );
+    assert.match(
+      helper,
+      /createdProfiles\.Count\s*-ne\s*1/i,
+      'profile creation should reject ambiguous profile records'
+    );
+    assert.match(
+      helper,
+      /PSObject\.Properties\[['"]Special['"]\]/i,
+      'profile validation should require the Special field to exist'
+    );
+    assert.match(
+      helper,
+      /Remove-OpenPathCreatedProfileAfterFailure/i,
+      'profile creation failures should trigger bounded compensating cleanup'
+    );
+    assert.match(
+      helper,
+      /\$createSucceeded\s*=\s*\$true/i,
+      'the helper should record only a successful CreateProfile return'
+    );
+    assert.match(
+      helper,
+      /if\s*\(-not\s+\$createSucceeded\)\s*\{\s*throw/i,
+      'cleanup must not delete a profile unless CreateProfile returned success'
+    );
+    assert.match(
+      windowsRunner,
+      /Prepare-WindowsUserProfile[\s\S]*?Install-AndEnrollClient\s+-Scenario\s+\$scenario\s+-InstallClient\s+\$true/s,
+      'the real installer should run only after the profile preparation step'
+    );
+  });
+
+  test('Windows profile preparation has no account creation or unrelated hardening side effects', () => {
+    const helper = readText('tests/e2e/ci/prepare-windows-user-profile.ps1');
+
+    assert.doesNotMatch(
+      helper,
+      /New-LocalUser|Remove-LocalUser/i,
+      'the helper must reuse existing users'
+    );
+    assert.doesNotMatch(
+      helper,
+      /Password|SecureString|ProgramData|icacls|Set-Acl|nonce|atomic/i,
+      'the helper must not add unrelated account or evidence hardening'
+    );
+    assert.match(
+      helper,
+      /createdByHarness\s*=/i,
+      'profile evidence should record ownership explicitly'
+    );
+    assert.match(
+      helper,
+      /\bSID\b[\s\S]*?\bUserName\b[\s\S]*?\bLocalPath\b/i,
+      'profile evidence should identify the selected user and profile'
+    );
+    assert.match(
+      helper,
+      /OPENPATH_WINDOWS_PROFILE_EVIDENCE_PATH|EvidencePath/i,
+      'profile evidence should be written under the artifact/env contract'
+    );
+  });
+
+  test('Windows runner reset removes only an owned exact unloaded profile and preserves outcome evidence', () => {
+    const reset = readText('tests/e2e/ci/reset-self-hosted-windows-runner.ps1');
+
+    assert.match(
+      reset,
+      /ConvertFrom-Json[\s\S]*?createdByHarness/i,
+      'reset should inspect profile ownership evidence'
+    );
+    assert.match(
+      reset,
+      /Get-CimInstance\s+-ClassName\s+Win32_UserProfile/i,
+      'reset should inspect the Windows profile provider'
+    );
+    assert.match(
+      reset,
+      /SID[\s\S]*?LocalPath[\s\S]*?Special[\s\S]*?Loaded/i,
+      'reset should validate exact SID/path and safe profile state'
+    );
+    assert.match(
+      reset,
+      /Remove-CimInstance[\s\S]*?ErrorAction\s+Stop/i,
+      'reset should remove only the exact owned CIM profile'
+    );
+    assert.match(
+      reset,
+      /not-owned|already-absent|removed|refused|error/i,
+      'reset should record explicit cleanup outcomes'
+    );
+    assert.match(
+      reset,
+      /cleanupStatus[\s\S]*?cleanupAt[\s\S]*?cleanupError/i,
+      'reset should preserve cleanup evidence'
+    );
+    assert.match(
+      reset,
+      /Set-Content[^\r\n]*-ErrorAction\s+Stop/i,
+      'cleanup evidence persistence must fail visibly'
+    );
+    assert.doesNotMatch(reset, /Remove-LocalUser/i, 'reset must never remove the local account');
+  });
+
   test('root tooling can resolve drizzle-orm for hoisted drizzle-kit commands', () => {
     const packageJson = readPackageJson();
     const packageLock = readJson('package-lock.json');
