@@ -361,6 +361,356 @@ function Test-OpenPathWindowsHost {
     return $env:OS -eq 'Windows_NT'
 }
 
+function Get-OpenPathBrowserBoundaryConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot
+    )
+
+    $configPath = Join-Path (Join-Path $OpenPathRoot 'data') 'config.json'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+        throw 'OpenPath browser-boundary config is missing'
+    }
+
+    return (Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
+}
+
+function Initialize-OpenPathNegativeHealthRuntime {
+    param(
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot
+    )
+
+    $commonModule = Join-Path $OpenPathRoot 'lib\Common.psm1'
+    $appControlModule = Join-Path $OpenPathRoot 'lib\AppControl.psm1'
+    $watchdogRuntime = Join-Path $OpenPathRoot 'lib\internal\Watchdog.Runtime.ps1'
+    if (-not (Test-Path -LiteralPath $commonModule -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $appControlModule -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $watchdogRuntime -PathType Leaf)) {
+        throw 'OpenPath health runtime modules are missing'
+    }
+
+    Import-Module $commonModule -Force -Global -ErrorAction Stop
+    Import-Module $appControlModule -Force -Global -ErrorAction Stop
+    . $watchdogRuntime
+
+    foreach ($commandName in @(
+            'Get-OpenPathWatchdogTaskHealth',
+            'Get-OpenPathNonAdminAppControlHealth',
+            'Invoke-OpenPathWatchdogAppControlHealth',
+            'Write-OpenPathLog',
+            'Set-OpenPathNonAdminAppControl',
+            'Remove-OpenPathNonAdminAppControl',
+            'Sync-OpenPathRestrictedGroup'
+        )) {
+        if (-not (Get-Command -Name $commandName -ErrorAction SilentlyContinue)) {
+            throw "OpenPath health runtime command is unavailable: $commandName"
+        }
+    }
+}
+
+function Assert-OpenPathNegativeHealthEvidence {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Probes
+    )
+
+    $requiredProbes = @(
+        [pscustomobject]@{
+            Name = 'Watchdog scheduled task disabled'
+            ReasonCodes = @('watchdog_task_disabled')
+        },
+        [pscustomobject]@{
+            Name = 'OpenPath AppControl policy removed'
+            ReasonCodes = @(
+                'appcontrol_local_policy_absent',
+                'appcontrol_local_policy_invalid',
+                'appcontrol_effective_policy_absent',
+                'appcontrol_effective_policy_invalid'
+            )
+        },
+        [pscustomobject]@{
+            Name = 'OpenPath restricted target missing'
+            ReasonCodes = @('appcontrol_restricted_target_missing')
+        },
+        [pscustomobject]@{
+            Name = 'Watchdog AppControl repair failed'
+            ReasonCodes = @('appcontrol_repair_failed')
+        }
+    )
+
+    if (@($Probes).Count -ne $requiredProbes.Count) {
+        throw 'OpenPath negative health evidence did not contain exactly four probes'
+    }
+
+    foreach ($requiredProbe in $requiredProbes) {
+        $observed = @($Probes | Where-Object { $_.name -eq $requiredProbe.Name })
+        if ($observed.Count -ne 1 -or $observed[0].status -ne 'pass') {
+            throw 'OpenPath negative health evidence contained a missing or failed probe'
+        }
+        $observedCodes = @($observed[0].reasonCodes | ForEach-Object { [string]$_ } | Where-Object { $_ })
+        if (@($observedCodes | Where-Object { $_ -in $requiredProbe.ReasonCodes }).Count -eq 0) {
+            throw 'OpenPath negative health evidence omitted an expected reason code'
+        }
+    }
+
+    return @($Probes)
+}
+
+function Assert-OpenPathNegativeHealthProbe {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][object]$Health,
+        [Parameter(Mandatory = $true)][string[]]$ExpectedReasonCodes
+    )
+
+    if (-not $Health -or -not $Health.PSObject.Properties['Healthy'] -or [bool]$Health.Healthy) {
+        throw "$Name did not observe an unhealthy state"
+    }
+
+    $reasonCodes = @()
+    if ($Health.PSObject.Properties['ReasonCodes']) {
+        $reasonCodes = @($Health.ReasonCodes | ForEach-Object { [string]$_ } | Where-Object { $_ })
+    }
+    $expectedCodeObserved = @($reasonCodes | Where-Object { $_ -in $ExpectedReasonCodes }).Count -gt 0
+    if (-not $expectedCodeObserved) {
+        throw "$Name did not observe an expected health reason code"
+    }
+
+    return [pscustomobject][ordered]@{
+        name        = $Name
+        status      = 'pass'
+        reasonCodes = $reasonCodes
+    }
+}
+
+function Assert-OpenPathRestoredHealth {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][object]$Health
+    )
+
+    if (-not $Health -or -not $Health.PSObject.Properties['Healthy'] -or -not [bool]$Health.Healthy) {
+        throw "$Name restoration did not return to a healthy state"
+    }
+    if ($Health.PSObject.Properties['ReasonCodes'] -and @($Health.ReasonCodes).Count -gt 0) {
+        throw "$Name restoration returned health reason codes"
+    }
+}
+
+function Get-OpenPathNegativeHealthRestoration {
+    param(
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [Parameter(Mandatory = $true)][string[]]$ApprovedBrowsers
+    )
+
+    Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $OpenPathRoot
+    $watchdogHealth = Get-OpenPathWatchdogTaskHealth -OpenPathRoot $OpenPathRoot
+    $appControlHealth = Get-OpenPathNonAdminAppControlHealth -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers
+    Assert-OpenPathRestoredHealth -Name 'OpenPath watchdog task' -Health $watchdogHealth
+    Assert-OpenPathRestoredHealth -Name 'OpenPath AppControl' -Health $appControlHealth
+
+    return [pscustomobject][ordered]@{
+        Healthy             = $true
+        WatchdogHealthy     = [bool]$watchdogHealth.Healthy
+        AppControlHealthy   = [bool]$appControlHealth.Healthy
+        ReasonCodes         = @()
+    }
+}
+
+function Invoke-OpenPathNegativeHealthProbes {
+    param(
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+        [Parameter(Mandatory = $true)][object]$Config
+    )
+
+    $mode = if ($Config.PSObject.Properties['nonAdminAppControlMode'] -and $Config.nonAdminAppControlMode) {
+        [string]$Config.nonAdminAppControlMode
+    }
+    else {
+        'Enforced'
+    }
+    $approvedBrowsers = if ($Config.PSObject.Properties['approvedStudentBrowsers'] -and $Config.approvedStudentBrowsers) {
+        @($Config.approvedStudentBrowsers)
+    }
+    else {
+        @('Firefox')
+    }
+
+    $probeResults = [System.Collections.Generic.List[object]]::new()
+
+    # Negative probe 1: a disabled watchdog task must be visible to the read-only health observer.
+    $initialWatchdogHealth = Get-OpenPathWatchdogTaskHealth -OpenPathRoot $OpenPathRoot
+    Assert-OpenPathRestoredHealth -Name 'OpenPath watchdog task before negative probe' -Health $initialWatchdogHealth
+    $watchdogMutationApplied = $true
+    try {
+        Disable-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction Stop | Out-Null
+        $disabledWatchdogHealth = Get-OpenPathWatchdogTaskHealth -OpenPathRoot $OpenPathRoot
+        [void]$probeResults.Add((Assert-OpenPathNegativeHealthProbe `
+                -Name 'Watchdog scheduled task disabled' `
+                -Health $disabledWatchdogHealth `
+                -ExpectedReasonCodes @('watchdog_task_disabled')))
+    }
+    finally {
+        if ($watchdogMutationApplied) {
+            try {
+                Enable-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction Stop | Out-Null
+                $restoredWatchdogHealth = Get-OpenPathWatchdogTaskHealth -OpenPathRoot $OpenPathRoot
+                Assert-OpenPathRestoredHealth -Name 'Watchdog scheduled task' -Health $restoredWatchdogHealth
+            }
+            catch {
+                throw 'Watchdog task restoration failed'
+            }
+        }
+    }
+
+    # Negative probe 2: remove the managed policy rules and observe local/effective policy failure.
+    $appControlPolicyMutationApplied = $true
+    try {
+        if (-not (Remove-OpenPathNonAdminAppControl)) {
+            throw 'OpenPath AppControl policy removal failed'
+        }
+        $removedPolicyHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+        [void]$probeResults.Add((Assert-OpenPathNegativeHealthProbe `
+                -Name 'OpenPath AppControl policy removed' `
+                -Health $removedPolicyHealth `
+                -ExpectedReasonCodes @(
+                    'appcontrol_local_policy_absent',
+                    'appcontrol_local_policy_invalid',
+                    'appcontrol_effective_policy_absent',
+                    'appcontrol_effective_policy_invalid'
+                )))
+    }
+    finally {
+        if ($appControlPolicyMutationApplied) {
+            try {
+                if (-not (Set-OpenPathNonAdminAppControl `
+                        -OpenPathRoot $OpenPathRoot `
+                        -Mode $mode `
+                        -ApprovedBrowsers $approvedBrowsers)) {
+                    throw 'OpenPath AppControl policy apply returned false'
+                }
+                $restoredPolicyHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+                Assert-OpenPathRestoredHealth -Name 'OpenPath AppControl policy' -Health $restoredPolicyHealth
+            }
+            catch {
+                throw 'OpenPath AppControl policy restoration failed'
+            }
+        }
+    }
+
+    # Negative probe 3: remove the actual restricted target and require real group reconciliation.
+    $restrictedGroupMutationApplied = $false
+    $originalRestrictedMembers = @()
+    try {
+        $restrictedGroup = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+        if (-not $restrictedGroup) {
+            throw 'OpenPath-Restricted group is missing before negative probe'
+        }
+        $originalRestrictedMembers = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop | ForEach-Object { [string]$_.Name })
+        $restrictedGroupMutationApplied = $true
+        Remove-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+        if (Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue) {
+            throw 'OpenPath-Restricted group removal did not take effect'
+        }
+        $missingTargetHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+        [void]$probeResults.Add((Assert-OpenPathNegativeHealthProbe `
+                -Name 'OpenPath restricted target missing' `
+                -Health $missingTargetHealth `
+                -ExpectedReasonCodes @('appcontrol_restricted_target_missing')))
+    }
+    finally {
+        if ($restrictedGroupMutationApplied) {
+            try {
+                if (-not (Sync-OpenPathRestrictedGroup -CreateIfMissing $true)) {
+                    throw 'OpenPath-Restricted group reconciliation returned false'
+                }
+                foreach ($memberName in @($originalRestrictedMembers)) {
+                    $currentMemberNames = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop | ForEach-Object { [string]$_.Name })
+                    if ($memberName -and $memberName -notin $currentMemberNames) {
+                        Add-LocalGroupMember -Group 'OpenPath-Restricted' -Member $memberName -ErrorAction Stop
+                    }
+                }
+                if (-not (Set-OpenPathNonAdminAppControl `
+                        -OpenPathRoot $OpenPathRoot `
+                        -Mode $mode `
+                        -ApprovedBrowsers $approvedBrowsers)) {
+                    throw 'OpenPath AppControl policy apply returned false'
+                }
+                $restoredGroupHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+                Assert-OpenPathRestoredHealth -Name 'OpenPath restricted target' -Health $restoredGroupHealth
+            }
+            catch {
+                throw 'OpenPath-Restricted group restoration failed'
+            }
+        }
+    }
+
+    # Negative probe 4: keep the real unhealthy policy, then force only Set-* to fail.
+    $repairPolicyMutationApplied = $true
+    $repairShadowInstalled = $false
+    try {
+        if (-not (Remove-OpenPathNonAdminAppControl)) {
+            throw 'OpenPath AppControl policy removal for repair probe failed'
+        }
+        $unhealthyPolicyHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+        if (-not $unhealthyPolicyHealth -or [bool]$unhealthyPolicyHealth.Healthy) {
+            throw 'Repair-failure probe did not establish an unhealthy AppControl state'
+        }
+
+        $repairShadowInstalled = $true
+        Set-Item -Path Function:\global:Set-OpenPathNonAdminAppControl -Value {
+            param(
+                [string]$OpenPathRoot,
+                [string]$Mode,
+                [string[]]$ApprovedBrowsers
+            )
+            return $false
+        }
+        $repairFailureHealth = Invoke-OpenPathWatchdogAppControlHealth `
+            -Config $Config `
+            -OpenPathRoot $OpenPathRoot
+        [void]$probeResults.Add((Assert-OpenPathNegativeHealthProbe `
+                -Name 'Watchdog AppControl repair failed' `
+                -Health $repairFailureHealth `
+                -ExpectedReasonCodes @('appcontrol_repair_failed')))
+    }
+    finally {
+        if ($repairShadowInstalled) {
+            try {
+                Remove-Item -Path Function:\global:Set-OpenPathNonAdminAppControl -ErrorAction Stop
+                Import-Module (Join-Path $OpenPathRoot 'lib\AppControl.psm1') -Force -Global -ErrorAction Stop
+            }
+            catch {
+                throw 'OpenPath AppControl repair shadow cleanup failed'
+            }
+        }
+        if ($repairPolicyMutationApplied) {
+            try {
+                if (-not (Set-OpenPathNonAdminAppControl `
+                        -OpenPathRoot $OpenPathRoot `
+                        -Mode $mode `
+                        -ApprovedBrowsers $approvedBrowsers)) {
+                    throw 'OpenPath AppControl policy apply returned false'
+                }
+                $restoredRepairHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+                Assert-OpenPathRestoredHealth -Name 'OpenPath AppControl repair' -Health $restoredRepairHealth
+            }
+            catch {
+                throw 'OpenPath AppControl repair restoration failed'
+            }
+        }
+    }
+
+    $restoration = Get-OpenPathNegativeHealthRestoration `
+        -OpenPathRoot $OpenPathRoot `
+        -Mode $mode `
+        -ApprovedBrowsers $approvedBrowsers
+
+    return [pscustomobject][ordered]@{
+        Probes       = Assert-OpenPathNegativeHealthEvidence -Probes @($probeResults.ToArray())
+        Restoration  = $restoration
+    }
+}
+
 if (-not (Test-OpenPathWindowsHost)) {
     throw 'Windows browser boundary CI must run on Windows.'
 }
@@ -373,7 +723,10 @@ $adminArtifacts = Join-Path $ArtifactsRoot 'admin'
 New-Item -ItemType Directory -Path $studentArtifacts -Force | Out-Null
 New-Item -ItemType Directory -Path $adminArtifacts -Force | Out-Null
 
-Assert-InstalledOpenPathBrowserBoundaryAppControl
+$installedOpenPathRoot = 'C:\OpenPath'
+Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $installedOpenPathRoot
+Initialize-OpenPathNegativeHealthRuntime -OpenPathRoot $installedOpenPathRoot
+$installedOpenPathConfig = Get-OpenPathBrowserBoundaryConfig -OpenPathRoot $installedOpenPathRoot
 
 $securePassword = ConvertTo-SecureString $studentPassword -AsPlainText -Force
 $localUser = $null
@@ -437,6 +790,10 @@ try {
         -Report $studentReport `
         -ProbeNames $script:RequiredEdgeBrowserBoundaryProbeNames
 
+    $negativeHealthEvidence = Invoke-OpenPathNegativeHealthProbes `
+        -OpenPathRoot $installedOpenPathRoot `
+        -Config $installedOpenPathConfig
+
     [pscustomobject]@{
         studentUser = $studentUserName
         studentFailures = 0
@@ -444,6 +801,8 @@ try {
         edgeProbeStatuses = $edgeProbeStatuses
         studentProbeStatuses = $studentProbeStatuses
         adminProbeStatuses = $adminProbeStatuses
+        negativeHealthProbes = @($negativeHealthEvidence.Probes)
+        negativeHealthRestoration = $negativeHealthEvidence.Restoration
         artifactsRoot = $ArtifactsRoot
         timestamp = (Get-Date).ToString('o')
     } | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $ArtifactsRoot 'browser-boundary-summary.json') -Encoding UTF8

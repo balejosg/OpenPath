@@ -874,10 +874,14 @@ describe('repository verification contract', () => {
       /Assert-InstalledOpenPathBrowserBoundaryAppControl/,
       'browser-boundary CI should reassert the installed AppControl boundary before creating the temporary student user'
     );
+    const positiveBoundaryAssertion =
+      browserBoundaryProbe.match(
+        /function Assert-InstalledOpenPathBrowserBoundaryAppControl[\s\S]*?(?=\nfunction |\nExport-ModuleMember)/
+      )?.[0] ?? '';
     assert.doesNotMatch(
-      browserBoundaryCi,
-      /Assert-InstalledOpenPathBrowserBoundaryAppControl[\s\S]*Set-OpenPathNonAdminAppControl/,
-      'browser-boundary CI should never attempt repair mutations on host'
+      positiveBoundaryAssertion.replace(/#.*$/gm, ''),
+      /Set-OpenPathNonAdminAppControl/,
+      'the positive browser-boundary assertion must never attempt repair mutations on host'
     );
     assert.match(
       browserBoundaryProbe,
@@ -954,6 +958,102 @@ describe('repository verification contract', () => {
       windowsReadme,
       /reset runner[\s\S]*snapshot VM[\s\S]*rollback VM/s,
       'Windows README should document the reversible runner lab flow'
+    );
+  });
+
+  test('Windows browser boundary records real negative watchdog and AppControl health probes', () => {
+    const browserBoundaryCi = readText('tests/e2e/ci/run-windows-browser-boundary-ci.ps1');
+
+    for (const marker of [
+      'Get-OpenPathWatchdogTaskHealth',
+      'Disable-ScheduledTask',
+      'watchdog_task_disabled',
+      'Enable-ScheduledTask',
+      'Common.psm1',
+      'Write-OpenPathLog',
+      'Remove-OpenPathNonAdminAppControl',
+      'Get-OpenPathNonAdminAppControlHealth',
+      'appcontrol_local_policy_invalid',
+      'appcontrol_effective_policy_invalid',
+      'Remove-LocalGroup',
+      'appcontrol_restricted_target_missing',
+      'Sync-OpenPathRestrictedGroup',
+      'Set-OpenPathNonAdminAppControl',
+      'Invoke-OpenPathWatchdogAppControlHealth',
+      'appcontrol_repair_failed',
+    ]) {
+      assert.ok(
+        browserBoundaryCi.includes(marker),
+        `browser-boundary CI should exercise the real negative health case marker: ${marker}`
+      );
+    }
+
+    assert.match(
+      browserBoundaryCi,
+      /try \{[\s\S]*?Disable-ScheduledTask[\s\S]*?Get-OpenPathWatchdogTaskHealth[\s\S]*?\}[\s\S]*?finally \{[\s\S]*?Enable-ScheduledTask/s,
+      'watchdog task negative health mutation must restore the task in finally'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /try \{[\s\S]*?Remove-OpenPathNonAdminAppControl[\s\S]*?Get-OpenPathNonAdminAppControlHealth[\s\S]*?\}[\s\S]*?finally \{[\s\S]*?Set-OpenPathNonAdminAppControl/s,
+      'AppControl policy negative health mutation must restore the policy in finally'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /try \{[\s\S]*?Remove-LocalGroup[\s\S]*?appcontrol_restricted_target_missing[\s\S]*?\}[\s\S]*?finally \{[\s\S]*?Sync-OpenPathRestrictedGroup/s,
+      'restricted-target negative health mutation must restore the group in finally'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /Set-Item -Path Function:\\global:Set-OpenPathNonAdminAppControl[\s\S]*?Invoke-OpenPathWatchdogAppControlHealth[\s\S]*?finally \{[\s\S]*?Remove-Item -Path Function:\\global:Set-OpenPathNonAdminAppControl/s,
+      'repair-failure probe must use and remove a scoped Set-OpenPathNonAdminAppControl shadow'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /Remove-Item -Path Function:\\global:Set-OpenPathNonAdminAppControl[\s\S]*?Import-Module[\s\S]*?Set-OpenPathNonAdminAppControl/s,
+      'repair-failure cleanup must reload the production AppControl command before real restoration'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /Get-OpenPathWatchdogTaskHealth -OpenPathRoot \$OpenPathRoot[\s\S]*?Assert-OpenPathRestoredHealth -Name 'OpenPath watchdog task before negative probe'[\s\S]*?\$watchdogMutationApplied = \$true[\s\S]*?Disable-ScheduledTask/s,
+      'watchdog negative health probe must verify a healthy baseline before disabling the task'
+    );
+  });
+
+  test('Windows browser boundary serializes negative health and restoration evidence', () => {
+    const browserBoundaryCi = readText('tests/e2e/ci/run-windows-browser-boundary-ci.ps1');
+
+    for (const probeName of [
+      'Watchdog scheduled task disabled',
+      'OpenPath AppControl policy removed',
+      'OpenPath restricted target missing',
+      'Watchdog AppControl repair failed',
+    ]) {
+      assert.ok(
+        browserBoundaryCi.includes(probeName),
+        `browser-boundary summary should name the negative health probe: ${probeName}`
+      );
+    }
+
+    assert.match(
+      browserBoundaryCi,
+      /name\s*=\s*\$Name[\s\S]*?status\s*=\s*'pass'[\s\S]*?reasonCodes\s*=\s*\$reasonCodes/s,
+      'browser-boundary summary should serialize each negative probe name, status, and reasonCodes'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /Healthy\s*=\s*\$true[\s\S]*?negativeHealthRestoration/s,
+      'browser-boundary summary should serialize a healthy final restoration result'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /Get-OpenPathWatchdogTaskHealth[\s\S]*?Get-OpenPathNonAdminAppControlHealth[\s\S]*?negativeHealthRestoration/s,
+      'browser-boundary CI should verify both final health surfaces before writing the summary'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /function Assert-OpenPathNegativeHealthEvidence[\s\S]*?exactly four probes[\s\S]*?status -ne 'pass'[\s\S]*?reasonCodes/s,
+      'browser-boundary CI should validate exactly four passing probes with reasonCodes before serialization'
     );
   });
 
