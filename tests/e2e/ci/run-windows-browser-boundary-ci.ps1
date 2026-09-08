@@ -623,11 +623,24 @@ function Invoke-OpenPathNegativeHealthProbes {
                 if (-not (Sync-OpenPathRestrictedGroup -CreateIfMissing $true)) {
                     throw 'OpenPath-Restricted group reconciliation returned false'
                 }
+                $currentMemberNames = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop | ForEach-Object { [string]$_.Name })
+                $extraMemberNames = @($currentMemberNames | Where-Object { $_ -notin $originalRestrictedMembers })
+                foreach ($memberName in $extraMemberNames) {
+                    if ($memberName) {
+                        Remove-LocalGroupMember -Group 'OpenPath-Restricted' -Member $memberName -ErrorAction Stop
+                    }
+                }
+                $currentMemberNames = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop | ForEach-Object { [string]$_.Name })
                 foreach ($memberName in @($originalRestrictedMembers)) {
-                    $currentMemberNames = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop | ForEach-Object { [string]$_.Name })
                     if ($memberName -and $memberName -notin $currentMemberNames) {
                         Add-LocalGroupMember -Group 'OpenPath-Restricted' -Member $memberName -ErrorAction Stop
                     }
+                }
+                $restoredMemberNames = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop | ForEach-Object { [string]$_.Name })
+                $unexpectedMemberNames = @($restoredMemberNames | Where-Object { $_ -notin $originalRestrictedMembers })
+                $missingMemberNames = @($originalRestrictedMembers | Where-Object { $_ -notin $restoredMemberNames })
+                if ($unexpectedMemberNames.Count -gt 0 -or $missingMemberNames.Count -gt 0 -or $restoredMemberNames.Count -ne $originalRestrictedMembers.Count) {
+                    throw 'OpenPath-Restricted membership did not restore the exact snapshot'
                 }
                 if (-not (Set-OpenPathNonAdminAppControl `
                         -OpenPathRoot $OpenPathRoot `

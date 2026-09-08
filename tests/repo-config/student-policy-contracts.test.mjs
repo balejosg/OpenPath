@@ -1005,6 +1005,11 @@ describe('repository verification contract', () => {
     );
     assert.match(
       browserBoundaryCi,
+      /finally \{[\s\S]*?if \(\$restrictedGroupMutationApplied\)[\s\S]*?Sync-OpenPathRestrictedGroup[\s\S]*?\$currentMemberNames[\s\S]*?\$originalRestrictedMembers[\s\S]*?Remove-LocalGroupMember[\s\S]*?Add-LocalGroupMember/s,
+      'restricted-target restoration must remove extra members and re-add missing snapshot members'
+    );
+    assert.match(
+      browserBoundaryCi,
       /Set-Item -Path Function:\\global:Set-OpenPathNonAdminAppControl[\s\S]*?Invoke-OpenPathWatchdogAppControlHealth[\s\S]*?finally \{[\s\S]*?Remove-Item -Path Function:\\global:Set-OpenPathNonAdminAppControl/s,
       'repair-failure probe must use and remove a scoped Set-OpenPathNonAdminAppControl shadow'
     );
