@@ -240,6 +240,12 @@ function Invoke-OpenPathPlannedPhase {
 
     $script:OpenPathInstallerCurrentPhase = $Name
     if (($env:OPENPATH_TEST_ENVIRONMENT -eq '1' -or $env:PSTEST_ENVIRONMENT -eq '1') -and $env:OPENPATH_TEST_FAIL_PHASE -and ($env:OPENPATH_TEST_FAIL_PHASE -eq $Name)) {
+        if ($env:OPENPATH_TEST_POST_PHASE_CONFIG_EVIDENCE -and $env:OPENPATH_WINDOWS_ROOT) {
+            $persistedConfigPath = Join-Path $env:OPENPATH_WINDOWS_ROOT 'data\config.json'
+            if (Test-Path -LiteralPath $persistedConfigPath -PathType Leaf) {
+                Copy-Item -LiteralPath $persistedConfigPath -Destination $env:OPENPATH_TEST_POST_PHASE_CONFIG_EVIDENCE -Force
+            }
+        }
         throw "Injected test failure at phase: $Name"
     }
 
@@ -255,6 +261,12 @@ function Invoke-OpenPathPlannedPhase {
     $script:OpenPathInstallPhaseResults += $result
 
     if (($env:OPENPATH_TEST_ENVIRONMENT -eq '1' -or $env:PSTEST_ENVIRONMENT -eq '1') -and $env:OPENPATH_TEST_FAIL_AFTER_PHASE -and ($env:OPENPATH_TEST_FAIL_AFTER_PHASE -eq $Name)) {
+        if ($env:OPENPATH_TEST_POST_PHASE_CONFIG_EVIDENCE -and $env:OPENPATH_WINDOWS_ROOT) {
+            $persistedConfigPath = Join-Path $env:OPENPATH_WINDOWS_ROOT 'data\config.json'
+            if (Test-Path -LiteralPath $persistedConfigPath -PathType Leaf) {
+                Copy-Item -LiteralPath $persistedConfigPath -Destination $env:OPENPATH_TEST_POST_PHASE_CONFIG_EVIDENCE -Force
+            }
+        }
         $script:OpenPathInstallerCurrentPhase = "post-$Name"
         throw "Injected test failure immediately after phase: $Name"
     }

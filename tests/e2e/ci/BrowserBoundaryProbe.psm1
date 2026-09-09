@@ -84,6 +84,25 @@ class Program {
     }
 }
 
+function Invoke-OpenPathSchtasksCommand {
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Command
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # schtasks can emit a warning on stderr while returning success. Preserve
+        # its native exit code instead of promoting that warning to a PowerShell
+        # terminating error when the caller uses ErrorActionPreference=Stop.
+        $ErrorActionPreference = 'Continue'
+        & $Command *> $null
+        return [int]$LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
 function Invoke-StudentExecutableTaskProbe {
     param(
         [Parameter(Mandatory = $true)][string]$ProbeName,
@@ -103,23 +122,42 @@ function Invoke-StudentExecutableTaskProbe {
     }
 
     $probeTask = "OpenPathProbe-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
-    # Windows PowerShell removes ordinary embedded quotes when binding native
-    # command arguments. Prefix them with backslashes so schtasks.exe receives
-    # a quoted /TR executable path instead of splitting paths at spaces.
+    $useScheduledTaskCmdlets = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and $env:OPENPATH_TEST_FORCE_SCHTASKS -ne '1'
     $quotedExecutablePath = '\"' + $ExecutablePath + '\"'
     $taskCommand = if ($Arguments) { "$quotedExecutablePath $Arguments" } else { $quotedExecutablePath }
     $taskTime = (Get-Date).AddMinutes(1).ToString('HH:mm')
 
-    & schtasks.exe /Create /TN $probeTask /SC ONCE /ST $taskTime /TR $taskCommand /RU "$env:COMPUTERNAME\$UserName" /RP $Password /RL LIMITED /F *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "$ProbeName FAILED: Task creation for $ExecutablePath failed under student credentials ($LASTEXITCODE); cannot verify AppLocker boundary."
+    if ($useScheduledTaskCmdlets) {
+        $taskAction = if ($Arguments) {
+            New-ScheduledTaskAction -Execute $ExecutablePath -Argument $Arguments
+        }
+        else {
+            New-ScheduledTaskAction -Execute $ExecutablePath
+        }
+        $taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
+        Register-ScheduledTask -TaskName $probeTask -Action $taskAction -Trigger $taskTrigger -User "$env:COMPUTERNAME\$UserName" -Password $Password -RunLevel Limited -Force | Out-Null
+        $createExitCode = 0
+    }
+    else {
+        $createExitCode = Invoke-OpenPathSchtasksCommand -Command {
+            & schtasks.exe /Create /TN $probeTask /SC ONCE /ST $taskTime /TR $taskCommand /RU "$env:COMPUTERNAME\$UserName" /RP $Password /RL LIMITED /F
+        }
+    }
+    if ($createExitCode -ne 0) {
+        throw "$ProbeName FAILED: Task creation for $ExecutablePath failed under student credentials ($createExitCode); cannot verify AppLocker boundary."
     }
 
     $since = Get-Date
     try {
-        & schtasks.exe /Run /TN $probeTask *> $null
-        if ($LASTEXITCODE -ne 0) {
-            throw "$ProbeName FAILED: Task execution for $ExecutablePath failed ($LASTEXITCODE)."
+        if ($useScheduledTaskCmdlets) {
+            Start-ScheduledTask -TaskName $probeTask
+            $runExitCode = 0
+        }
+        else {
+            $runExitCode = Invoke-OpenPathSchtasksCommand -Command { & schtasks.exe /Run /TN $probeTask }
+        }
+        if ($runExitCode -ne 0) {
+            throw "$ProbeName FAILED: Task execution for $ExecutablePath failed ($runExitCode)."
         }
 
         $pollDeadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -257,7 +295,12 @@ function Invoke-StudentExecutableTaskProbe {
         }
     }
     finally {
-        & schtasks.exe /Delete /TN $probeTask /F *> $null
+        if ($useScheduledTaskCmdlets) {
+            Unregister-ScheduledTask -TaskName $probeTask -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        else {
+            Invoke-OpenPathSchtasksCommand -Command { & schtasks.exe /Delete /TN $probeTask /F } | Out-Null
+        }
     }
 }
 

@@ -217,7 +217,7 @@ Describe "AppControl Module" {
                 $xml | Should -Not -Match ([regex]::Escape('S-1-5-32-545'))
             }
             finally {
-                Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
+                function global:Get-LocalGroup { throw 'not found' }
             }
         }
 

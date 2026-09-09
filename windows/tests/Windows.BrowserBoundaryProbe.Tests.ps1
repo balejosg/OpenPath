@@ -5,6 +5,7 @@ Import-Module (Join-Path $PSScriptRoot "..\..\tests\e2e\ci\BrowserBoundaryProbe.
 
 Describe "Windows Browser Boundary CI Probes" {
     BeforeAll {
+        $env:OPENPATH_TEST_FORCE_SCHTASKS = '1'
         if (-not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) {
             function global:schtasks.exe { }
         }
@@ -32,6 +33,10 @@ Describe "Windows Browser Boundary CI Probes" {
         if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
             function global:Get-ScheduledTask { param($TaskName) }
         }
+    }
+
+    AfterAll {
+        Remove-Item Env:OPENPATH_TEST_FORCE_SCHTASKS -ErrorAction SilentlyContinue
     }
 
     Context "Invoke-StudentExecutableTaskProbe" {
@@ -91,6 +96,43 @@ Describe "Windows Browser Boundary CI Probes" {
                     -ExecutablePath $testExe `
                     -Expectation ExpectDenied
             } | Should -Throw "*Task execution for * failed*"
+        }
+
+        It "Does not treat a successful schtasks warning as task-registration failure" {
+            $testExe = Join-Path $TestDrive "probe-create-warning.exe"
+            Set-Content -LiteralPath $testExe -Value "dummy"
+
+            Mock schtasks.exe {
+                if ($args -contains '/Create') {
+                    & (Get-Process -Id $PID).Path -NoLogo -NoProfile -NonInteractive -Command "[Console]::Error.WriteLine('WARNING: Batch logon privilege needs to be enabled for the task principal.')"
+                }
+                $global:LASTEXITCODE = 0
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                [pscustomobject]@{
+                    Id = 8004
+                    Message = 'probe-create-warning.exe was prevented from running'
+                    UserId = [pscustomobject]@{ Value = 'S-1-5-21-student-sid' }
+                }
+            } -ModuleName BrowserBoundaryProbe
+
+            $previousErrorActionPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Stop'
+                $result = Invoke-StudentExecutableTaskProbe `
+                    -ProbeName 'Create warning probe' `
+                    -UserName 'student01' `
+                    -Password 'secret' `
+                    -ExecutablePath $testExe `
+                    -Expectation ExpectDenied `
+                    -StudentSid 'S-1-5-21-student-sid' `
+                    -TimeoutSeconds 1
+            }
+            finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
+
+            $result.status | Should -Be 'pass'
         }
 
         It "Preserves quotes around executable paths with spaces for schtasks /TR" {

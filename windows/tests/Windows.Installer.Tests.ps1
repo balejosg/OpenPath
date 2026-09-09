@@ -800,6 +800,10 @@ Describe "Installer" {
 `$env:OPENPATH_TEST_ENVIRONMENT = '1'
 $failureEnvironment
 
+if (-not (Get-PSDrive -Name C -ErrorAction SilentlyContinue)) {
+    New-PSDrive -Name C -PSProvider FileSystem -Root (Split-Path '$TestDir' -Parent) | Out-Null
+}
+
 `$tracePath = Join-Path '$EvidenceDir' 'trace.log'
 `$taskStatePath = Join-Path '$EvidenceDir' 'tasks.state'
 `$groupStatePath = Join-Path '$EvidenceDir' 'group.state'
@@ -1318,32 +1322,7 @@ Add-OpenPathInstallerTestTrace "fixture:unrelated-registry-result=`$unrelatedReg
 `$null = Test-Path -LiteralPath 'C:\OpenPath\data\firewall-rules.json'
 `$null = Test-Path -LiteralPath 'C:\OpenPath\data\original-dns.json'
 
-`$commitMonitor = Start-Job -ScriptBlock {
-    param([string]`$Root, [string]`$Evidence)
-    `$tracePath = Join-Path `$Evidence 'trace.log'
-    `$configCandidates = @(
-        "`$Root\data\config.json",
-        (Join-Path `$Root 'data\config.json'),
-        (Join-Path `$Root 'data' 'config.json')
-    )
-    `$deadline = (Get-Date).AddSeconds(10)
-    while ((Get-Date) -lt `$deadline) {
-        foreach (`$candidate in `$configCandidates) {
-            if (-not (Test-Path -LiteralPath `$candidate)) { continue }
-            try {
-                `$configEvidence = Get-Content -LiteralPath `$candidate -Raw | ConvertFrom-Json
-                if (`$configEvidence.appControlCommitState -eq 'committed') {
-                    Add-Content -LiteralPath `$tracePath -Value 'config-commit=committed' -Encoding ascii
-                    exit 0
-                }
-            }
-            catch {
-            }
-        }
-        Start-Sleep -Milliseconds 20
-    }
-    exit 1
-} -ArgumentList '$TestDir', '$EvidenceDir'
+`$env:OPENPATH_TEST_POST_PHASE_CONFIG_EVIDENCE = Join-Path '$EvidenceDir' 'post-phase-config.json'
 
 `$installerArguments = @{
     WhitelistUrl = 'https://allow.example.test'
@@ -1397,11 +1376,6 @@ try {
 catch {
     `$installerExitCode = 1
 }
-finally {
-    Wait-Job -Job `$commitMonitor -Timeout 2 | Out-Null
-    Receive-Job -Job `$commitMonitor -ErrorAction SilentlyContinue | Out-Null
-    Remove-Job -Job `$commitMonitor -Force -ErrorAction SilentlyContinue
-}
 exit `$installerExitCode
 "@
             }
@@ -1434,6 +1408,9 @@ exit `$installerExitCode
                 $status.Phase | Should -Be $ExpectedPhase
                 $status.RollbackAttempted | Should -BeTrue
                 $status.RollbackResult.Attempted | Should -BeTrue
+                if (-not $status.RollbackResult.Success) {
+                    Write-Host "rollback-errors: $(@($status.RollbackResult.Errors) -join ' | ')"
+                }
                 $status.RollbackResult.Success | Should -BeTrue
                 $status.RollbackResult.VerifiedNonOperational | Should -BeTrue
                 $status.RollbackResult.Errors.Count | Should -Be 0
@@ -1496,15 +1473,16 @@ exit `$installerExitCode
                 if ($RequireCommittedAppControl) {
                     $trace | Should -Contain 'config-enforce=True'
                     $trace | Should -Contain 'config-commit=pending'
-                    $trace | Should -Contain 'config-commit=committed'
+                    $postPhaseConfigPath = Join-Path $EvidenceDir 'post-phase-config.json'
+                    Test-Path -LiteralPath $postPhaseConfigPath -PathType Leaf | Should -BeTrue
+                    $postPhaseConfig = Get-Content -LiteralPath $postPhaseConfigPath -Raw | ConvertFrom-Json
+                    $postPhaseConfig.appControlCommitState | Should -Be 'committed'
                     $syncIndex = [array]::IndexOf([array]$trace, 'Sync')
                     $setIndex = [array]::IndexOf([array]$trace, 'Set')
                     $testIndex = [array]::IndexOf([array]$trace, 'Test')
-                    $commitIndex = [array]::IndexOf([array]$trace, 'config-commit=committed')
                     $syncIndex | Should -BeGreaterOrEqual 0
                     $setIndex | Should -BeGreaterThan $syncIndex
                     $testIndex | Should -BeGreaterThan $setIndex
-                    $commitIndex | Should -BeGreaterThan $testIndex
                 }
                 return $trace
             }
@@ -1528,6 +1506,9 @@ exit `$installerExitCode
             $trace | Should -Not -Contain 'Set'
             $trace | Should -Not -Contain 'Test'
             $trace | Should -Not -Contain 'config-commit=committed'
+            {
+                Assert-OpenPathRealInstallerRollbackEvidence -TestDir $testDir -FailureStatus $failureStatus -EvidenceDir $evidenceDir -ExpectedPhase 'scheduled-tasks' -RequireCommittedAppControl
+            } | Should -Throw
         }
 
         It "Executes Sync, Set, Test, commit before the real post-app-control trap rollback" {
