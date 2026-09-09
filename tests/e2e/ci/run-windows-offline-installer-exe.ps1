@@ -174,6 +174,215 @@ function Get-SafeInstallerFailurePhase {
     return 'invalid'
 }
 
+function Get-SafeDiagnosticObservationValue {
+    param(
+        [AllowNull()]
+        [object]$Object,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PropertyName
+    )
+
+    if ($null -eq $Object -or $null -eq $Object.PSObject.Properties[$PropertyName]) {
+        return 'not-observed'
+    }
+    $value = $Object.$PropertyName
+    if ($value -is [bool]) {
+        return $value
+    }
+    if ([string]$value -eq 'not-observed') {
+        return 'not-observed'
+    }
+    throw "invalid observed diagnostic field: $PropertyName"
+}
+
+function Get-SafeInstallerFailureDiagnostic {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $notObserved = [ordered]@{
+        status = 'not-observed'
+        stage = 'not-observed'
+        substep = 'not-observed'
+        reasonCodes = @()
+        detail = 'not-observed'
+        targetSid = ''
+        groupSid = ''
+        profilePath = ''
+        expected = $null
+        observed = $null
+        appControlCommitState = 'not-observed'
+        internalRollbackAttempted = 'not-observed'
+        internalRollbackSucceeded = 'not-observed'
+        installerRollbackAttempted = 'not-observed'
+        installerRollbackSucceeded = 'not-observed'
+        installerRollbackVerifiedNonOperational = 'not-observed'
+        installerRollbackErrorCount = 'not-observed'
+        cleanupAttempted = 'not-observed'
+        cleanupSucceeded = 'not-observed'
+        validationErrorCode = 'not-observed'
+        powerShellProcessArchitecture = 'not-observed'
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return [pscustomobject]$notObserved
+    }
+
+    try {
+        $document = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $documentPhase = [string]$document.Phase
+        if ($documentPhase -notmatch '^[A-Za-z0-9-]{1,64}$') {
+            throw 'invalid diagnostic envelope'
+        }
+        $appControl = $document.AppControlDiagnostic
+        if ($null -eq $appControl -and $documentPhase -ne 'app-control') {
+            return [pscustomobject]$notObserved
+        }
+        if ($null -eq $appControl) {
+            throw 'missing AppControl diagnostic'
+        }
+
+        $reasonCodes = @($appControl.ReasonCodes | ForEach-Object { [string]$_ })
+        if (@($reasonCodes | Where-Object { $_ -notmatch '^appcontrol_[a-z0-9_]{1,80}$' }).Count -gt 0) {
+            throw 'invalid AppControl reason code'
+        }
+        $detail = [string]$appControl.Detail
+        if ($detail -notmatch '^(not-observed|resolved|group-missing|group-sid-unresolvable|group-empty|member-sid-unresolvable|member-profile-unavailable)$') {
+            throw 'invalid AppControl detail'
+        }
+        foreach ($sid in @([string]$appControl.TargetSid, [string]$appControl.GroupSid)) {
+            if ($sid -and $sid -notmatch '^S-1-(?:\d+-){1,14}\d+$') {
+                throw 'invalid SID diagnostic'
+            }
+        }
+        $profilePath = [string]$appControl.ProfilePath
+        if ($profilePath.Length -gt 512 -or $profilePath -match '[\x00-\x1f]') {
+            throw 'invalid profile path diagnostic'
+        }
+        $stage = [string]$appControl.Stage
+        $substep = [string]$appControl.Substep
+        if ($stage -ne 'app-control' -or $substep -notmatch '^[a-z][a-z0-9-]{0,63}$') {
+            throw 'invalid AppControl stage diagnostic'
+        }
+
+        $expected = [ordered]@{
+            restrictedTarget = [string]$appControl.Expected.RestrictedTarget
+            appIdentityService = [string]$appControl.Expected.AppIdentityService
+            localPolicy = [string]$appControl.Expected.LocalPolicy
+            effectivePolicy = [string]$appControl.Expected.EffectivePolicy
+            runtimeBoundary = [string]$appControl.Expected.RuntimeBoundary
+        }
+        foreach ($value in $expected.Values) {
+            if ($value.Length -gt 96 -or $value -match '[^A-Za-z0-9-]') {
+                throw 'invalid expected diagnostic value'
+            }
+        }
+
+        $safeRuntimeDecisions = @()
+        foreach ($decision in @($appControl.Observed.RuntimeDecisions)) {
+            $decisionPath = [string]$decision.FilePath
+            if ([string]$decision.Kind -notmatch '^(arbitrary-executable|edge|firefox)$' -or
+                [string]$decision.Expected -notmatch '^(DeniedOrDeniedByDefault|Allowed)$' -or
+                [string]$decision.Observed -notmatch '^[A-Za-z]{1,40}$' -or
+                $decisionPath.Length -gt 512 -or $decisionPath -match '[\x00-\x1f]') {
+                throw 'invalid runtime decision diagnostic'
+            }
+            $safeRuntimeDecisions += [ordered]@{
+                kind = [string]$decision.Kind
+                filePath = $decisionPath
+                expected = [string]$decision.Expected
+                observed = [string]$decision.Observed
+            }
+        }
+        if ($safeRuntimeDecisions.Count -gt 16) {
+            throw 'too many runtime decision diagnostics'
+        }
+        $observedRestrictedTarget = [string]$appControl.Observed.RestrictedTarget
+        $observedAppIdentityService = [string]$appControl.Observed.AppIdentityService
+        if ($observedRestrictedTarget -notmatch '^(not-observed|resolved|group-missing|group-sid-unresolvable|group-empty|member-sid-unresolvable|member-profile-unavailable)$' -or
+            $observedAppIdentityService -notmatch '^(not-observed|Running|not-running-or-unavailable)$') {
+            throw 'invalid observed AppControl state'
+        }
+        $observed = [ordered]@{
+            restrictedTarget = $observedRestrictedTarget
+            appIdentityService = $observedAppIdentityService
+            localPolicyPresent = Get-SafeDiagnosticObservationValue -Object $appControl.Observed -PropertyName 'LocalPolicyPresent'
+            localPolicyValid = Get-SafeDiagnosticObservationValue -Object $appControl.Observed -PropertyName 'LocalPolicyValid'
+            effectivePolicyPresent = Get-SafeDiagnosticObservationValue -Object $appControl.Observed -PropertyName 'EffectivePolicyPresent'
+            effectivePolicyValid = Get-SafeDiagnosticObservationValue -Object $appControl.Observed -PropertyName 'EffectivePolicyValid'
+            runtimeDecisions = $safeRuntimeDecisions
+        }
+
+        $rollbackAttempted = Get-SafeDiagnosticObservationValue -Object $document -PropertyName 'RollbackAttempted'
+        $rollbackSucceeded = 'not-observed'
+        $rollbackVerified = 'not-observed'
+        $rollbackErrorCount = 'not-observed'
+        if ($document.RollbackResult) {
+            $rollbackSucceeded = Get-SafeDiagnosticObservationValue -Object $document.RollbackResult -PropertyName 'Success'
+            $rollbackVerified = Get-SafeDiagnosticObservationValue -Object $document.RollbackResult -PropertyName 'VerifiedNonOperational'
+            $rollbackErrorCount = @($document.RollbackResult.Errors).Count
+        }
+        $appControlCommitState = [string]$appControl.AppControlCommitState
+        if ($appControlCommitState -notmatch '^(not-observed|not-committed|committed)$') {
+            throw 'invalid AppControl commit state'
+        }
+        $powerShellProcessArchitecture = [string]$appControl.PowerShellProcessArchitecture
+        if ($powerShellProcessArchitecture -notmatch '^(32-bit|64-bit)$') {
+            throw 'invalid PowerShell process architecture'
+        }
+
+        return [pscustomobject][ordered]@{
+            status = 'observed'
+            stage = $stage
+            substep = $substep
+            reasonCodes = $reasonCodes
+            detail = $detail
+            targetSid = [string]$appControl.TargetSid
+            groupSid = [string]$appControl.GroupSid
+            profilePath = $profilePath
+            expected = $expected
+            observed = $observed
+            appControlCommitState = $appControlCommitState
+            internalRollbackAttempted = Get-SafeDiagnosticObservationValue -Object $appControl -PropertyName 'InternalRollbackAttempted'
+            internalRollbackSucceeded = Get-SafeDiagnosticObservationValue -Object $appControl -PropertyName 'InternalRollbackSucceeded'
+            installerRollbackAttempted = $rollbackAttempted
+            installerRollbackSucceeded = $rollbackSucceeded
+            installerRollbackVerifiedNonOperational = $rollbackVerified
+            installerRollbackErrorCount = $rollbackErrorCount
+            cleanupAttempted = Get-SafeDiagnosticObservationValue -Object $appControl -PropertyName 'CleanupAttempted'
+            cleanupSucceeded = Get-SafeDiagnosticObservationValue -Object $appControl -PropertyName 'CleanupSucceeded'
+            validationErrorCode = 'not-observed'
+            powerShellProcessArchitecture = $powerShellProcessArchitecture
+        }
+    }
+    catch {
+        $notObserved.status = 'invalid'
+        $safeValidationErrors = @(
+            'invalid diagnostic envelope',
+            'missing AppControl diagnostic',
+            'invalid AppControl reason code',
+            'invalid AppControl detail',
+            'invalid SID diagnostic',
+            'invalid profile path diagnostic',
+            'invalid AppControl stage diagnostic',
+            'invalid expected diagnostic value',
+            'invalid runtime decision diagnostic',
+            'too many runtime decision diagnostics',
+            'invalid observed AppControl state',
+            'invalid AppControl commit state',
+            'invalid PowerShell process architecture'
+        )
+        $notObserved.validationErrorCode = if ($_.Exception.Message -in $safeValidationErrors) {
+            $_.Exception.Message -replace ' ', '-'
+        }
+        else {
+            'invalid-diagnostic-field'
+        }
+        return [pscustomobject]$notObserved
+    }
+}
+
 function Get-SafeTrailerDiagnosticStatus {
     param(
         [Parameter(Mandatory = $true)]
@@ -323,9 +532,11 @@ $trailerConfigFile = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-exe-t
 $installerStatusPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-status.txt"
 $trailerDiagnosticPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-trailer-status.txt"
 $failurePhasePath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-installer-failure-phase.txt"
+$failureDiagnosticPath = "$failurePhasePath.json"
 $installerStatus = 'missing'
 $installerStatusSnapshot = @()
 $installerFailurePhase = 'missing'
+$installerFailureDiagnostic = Get-SafeInstallerFailureDiagnostic -Path $failureDiagnosticPath
 $trailerDiagnosticStatus = 'missing'
 $trailerDiagnosticSource = 'installer-child'
 $result = $null
@@ -338,6 +549,7 @@ try {
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
     $installerStatusSnapshot = Get-SafeInstallerStatusSnapshot
     $installerFailurePhase = Get-SafeInstallerFailurePhase -Path $failurePhasePath
+    $installerFailureDiagnostic = Get-SafeInstallerFailureDiagnostic -Path $failureDiagnosticPath
     $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
     $script:CurrentStage = 'validate-installer-exit'
     if ($installExitCode -ne 60) {
@@ -422,6 +634,7 @@ try {
         installerExitCode = $installExitCode
         installerStatus = $installerStatus
         installerFailurePhase = $installerFailurePhase
+        installerFailureDiagnostic = $installerFailureDiagnostic
         trailerDiagnosticStatus = $trailerDiagnosticStatus
         trailerDiagnosticSource = $trailerDiagnosticSource
         trailerValidated = $true
@@ -429,6 +642,8 @@ try {
         pendingStateObserved = $true
         retryOutcome = [string]$retry.Outcome
         pendingStateCleared = $true
+        cleanupAttempted = 'not-observed'
+        cleanupSucceeded = 'not-observed'
     }
     Write-SafeEvidence -Payload $result -Path $EvidencePath
     $result | ConvertTo-Json -Compress
@@ -438,6 +653,7 @@ catch {
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
     $installerStatusSnapshot = Get-SafeInstallerStatusSnapshot
     $installerFailurePhase = Get-SafeInstallerFailurePhase -Path $failurePhasePath
+    $installerFailureDiagnostic = Get-SafeInstallerFailureDiagnostic -Path $failureDiagnosticPath
     $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
     if ($trailerDiagnosticStatus -eq 'missing') {
         $reader = Join-Path $PSScriptRoot '..\..\..\windows\offline-installer\scripts\Read-Trailer.ps1'
@@ -464,14 +680,25 @@ catch {
         installerStatus = $installerStatus
         installerStatusSnapshot = $installerStatusSnapshot
         installerFailurePhase = $installerFailurePhase
+        installerFailureDiagnostic = $installerFailureDiagnostic
         trailerDiagnosticStatus = $trailerDiagnosticStatus
         trailerDiagnosticSource = $trailerDiagnosticSource
+        cleanupAttempted = 'not-observed'
+        cleanupSucceeded = 'not-observed'
     }
-    Write-SafeEvidence -Payload $failure -Path $EvidencePath
+    $result = $failure
+    try {
+        Write-SafeEvidence -Payload $failure -Path $EvidencePath
+    }
+    catch {
+        # Evidence serialization is secondary; preserve the original failure
+        # object and exit contract on the console even when the sink is broken.
+    }
     $failure | ConvertTo-Json -Compress
     exit 1
 }
 finally {
+    $e2eCleanupAttempted = $true
     if ($stubJob) {
         Stop-Job -Job $stubJob -ErrorAction SilentlyContinue
         Remove-Job -Job $stubJob -Force -ErrorAction SilentlyContinue
@@ -501,6 +728,9 @@ finally {
     if (Test-Path -LiteralPath $failurePhasePath) {
         Remove-Item -LiteralPath $failurePhasePath -Force -ErrorAction SilentlyContinue
     }
+    if (Test-Path -LiteralPath $failureDiagnosticPath) {
+        Remove-Item -LiteralPath $failureDiagnosticPath -Force -ErrorAction SilentlyContinue
+    }
     Get-ChildItem -LiteralPath ([System.IO.Path]::GetTempPath()) -Filter 'OpenPathOfflineSetup-*-status*.txt' -File -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
     $uninstaller = Join-Path $OpenPathRoot 'Uninstall-OpenPath.ps1'
@@ -515,6 +745,23 @@ finally {
     }
     else {
         $env:OPENPATH_WINDOWS_ROOT = $previousOpenPathRoot
+    }
+    $e2eCleanupSucceeded = [bool](-not (Test-Path -LiteralPath $OpenPathRoot) -and
+        -not (Test-Path -LiteralPath $installerStatusPath) -and
+        -not (Test-Path -LiteralPath $trailerDiagnosticPath) -and
+        -not (Test-Path -LiteralPath $failurePhasePath) -and
+        -not (Test-Path -LiteralPath $failureDiagnosticPath))
+    if ($null -ne $result) {
+        $result.cleanupAttempted = $e2eCleanupAttempted
+        $result.cleanupSucceeded = $e2eCleanupSucceeded
+        if ($evidencePathWasSupplied) {
+            try {
+                Write-SafeEvidence -Payload $result -Path $EvidencePath
+            }
+            catch {
+                # Cleanup evidence is best-effort and cannot replace the primary installer result.
+            }
+        }
     }
     if (-not $evidencePathWasSupplied -and (Test-Path -LiteralPath $EvidencePath)) {
         Remove-Item -LiteralPath $EvidencePath -Force -ErrorAction SilentlyContinue

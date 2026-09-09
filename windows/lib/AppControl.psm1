@@ -101,10 +101,13 @@ function Sync-OpenPathRestrictedGroup {
     #>
     [CmdletBinding()]
     param(
-        [bool]$CreateIfMissing = $false
+        [bool]$CreateIfMissing = $false,
+        [string]$DiagnosticStatusPath = ''
     )
 
     if (-not (Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue)) {
+        Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
+            New-OpenPathAppControlPreconditionDiagnostic -Substep 'restricted-group-capability' -ReasonCode 'appcontrol_restricted_group_capability_unavailable')
         Write-OpenPathLog 'OpenPath-Restricted group sync unavailable; AppLocker policy falls back to BUILTIN\Users' -Level WARN
         return $false
     }
@@ -120,6 +123,8 @@ function Sync-OpenPathRestrictedGroup {
                 Write-OpenPathLog 'Created local group OpenPath-Restricted'
             }
             catch {
+                Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
+                    New-OpenPathAppControlPreconditionDiagnostic -Substep 'restricted-group-create' -ReasonCode 'appcontrol_restricted_group_create_failed')
                 Write-OpenPathLog "Failed to create OpenPath-Restricted group: $_" -Level WARN
                 return $false
             }
@@ -149,6 +154,8 @@ function Sync-OpenPathRestrictedGroup {
         $adminMembers = @(Get-LocalGroupMember -Group $adminGroupName -ErrorAction Stop | ForEach-Object { [string]$_.SID.Value })
     }
     catch {
+        Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
+            New-OpenPathAppControlPreconditionDiagnostic -Substep 'administrator-inventory' -ReasonCode 'appcontrol_administrator_inventory_failed')
         Write-OpenPathLog "Unable to reconcile OpenPath-Restricted because Administrators membership could not be enumerated: $_" -Level WARN
         return $false
     }
@@ -203,6 +210,8 @@ function Sync-OpenPathRestrictedGroup {
         return $true
     }
     catch {
+        Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
+            New-OpenPathAppControlPreconditionDiagnostic -Substep 'restricted-user-inventory' -ReasonCode 'appcontrol_restricted_user_inventory_failed')
         Write-OpenPathLog "Failed to sync OpenPath-Restricted membership: $_" -Level WARN
         return $false
     }
@@ -901,6 +910,27 @@ function Get-OpenPathSidString {
     return [string]$Value
 }
 
+function New-OpenPathAppControlTargetException {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('group-missing', 'group-sid-unresolvable', 'group-empty', 'member-sid-unresolvable', 'member-profile-unavailable')]
+        [string]$Detail,
+
+        [string]$GroupSid = '',
+
+        [string]$TargetSid = ''
+    )
+
+    $exception = [System.InvalidOperationException]::new($Message)
+    $exception.Data['OpenPathDetail'] = $Detail
+    $exception.Data['OpenPathGroupSid'] = $GroupSid
+    $exception.Data['OpenPathTargetSid'] = $TargetSid
+    return $exception
+}
+
 function Get-OpenPathAppControlProbeTarget {
     <#
     .SYNOPSIS
@@ -920,22 +950,31 @@ function Get-OpenPathAppControlProbeTarget {
         }
     }
 
-    $group = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+    try {
+        $group = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+    }
+    catch {
+        throw (New-OpenPathAppControlTargetException -Message 'OpenPath-Restricted group is unavailable for AppControl validation' -Detail 'group-missing')
+    }
     $groupSid = Get-OpenPathSidString -Value $group.SID
     if ([string]::IsNullOrWhiteSpace($groupSid)) {
-        throw 'OpenPath-Restricted has no resolvable SID'
+        throw (New-OpenPathAppControlTargetException -Message 'OpenPath-Restricted has no resolvable SID' -Detail 'group-sid-unresolvable')
     }
 
     $members = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop)
     if ($members.Count -eq 0) {
-        throw 'OpenPath-Restricted has no members available for AppControl validation'
+        throw (New-OpenPathAppControlTargetException -Message 'OpenPath-Restricted has no members available for AppControl validation' -Detail 'group-empty' -GroupSid $groupSid)
     }
 
     $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop)
+    $firstResolvableMemberSid = ''
     foreach ($member in $members) {
         $memberSid = Get-OpenPathSidString -Value $member.SID
         if ([string]::IsNullOrWhiteSpace($memberSid)) {
             continue
+        }
+        if ([string]::IsNullOrWhiteSpace($firstResolvableMemberSid)) {
+            $firstResolvableMemberSid = $memberSid
         }
 
         foreach ($profile in $profiles) {
@@ -959,7 +998,10 @@ function Get-OpenPathAppControlProbeTarget {
         }
     }
 
-    throw 'Unable to resolve an existing user profile for an OpenPath-Restricted member'
+    if ([string]::IsNullOrWhiteSpace($firstResolvableMemberSid)) {
+        throw (New-OpenPathAppControlTargetException -Message 'OpenPath-Restricted members have no resolvable SID' -Detail 'member-sid-unresolvable' -GroupSid $groupSid)
+    }
+    throw (New-OpenPathAppControlTargetException -Message 'Unable to resolve an existing user profile for an OpenPath-Restricted member' -Detail 'member-profile-unavailable' -GroupSid $groupSid -TargetSid $firstResolvableMemberSid)
 }
 
 function Get-OpenPathAppControlProbeSourcePath {
@@ -1263,8 +1305,14 @@ function Get-OpenPathNonAdminAppControlHealth {
     $runtimeEvaluationAvailable = $false
     $runtimeBoundaryValid = $false
     $probeCleanupSucceeded = $true
+    $probeCleanupAttempted = $false
     $probeTarget = $null
     $probeTargetError = $null
+    $restrictedTargetDetail = 'not-observed'
+    $groupSid = ''
+    $targetSid = ''
+    $profilePath = ''
+    $runtimeDecisions = [System.Collections.Generic.List[object]]::new()
 
     $capabilityAvailable = [bool](Test-OpenPathAppControlAvailable)
     if (-not $capabilityAvailable) {
@@ -1274,9 +1322,17 @@ function Get-OpenPathNonAdminAppControlHealth {
         try {
             $probeTarget = Get-OpenPathAppControlProbeTarget
             $restrictedTargetValid = $true
+            $restrictedTargetDetail = 'resolved'
+            $groupSid = [string]$probeTarget.GroupSid
+            $targetSid = [string]$probeTarget.UserSid
+            $profilePath = [string]$probeTarget.ProfilePath
         }
         catch {
             $probeTargetError = $_
+            $exceptionData = $_.Exception.Data
+            $restrictedTargetDetail = if ($exceptionData -and $exceptionData['OpenPathDetail']) { [string]$exceptionData['OpenPathDetail'] } else { 'not-observed' }
+            $groupSid = if ($exceptionData -and $exceptionData['OpenPathGroupSid']) { [string]$exceptionData['OpenPathGroupSid'] } else { '' }
+            $targetSid = if ($exceptionData -and $exceptionData['OpenPathTargetSid']) { [string]$exceptionData['OpenPathTargetSid'] } else { '' }
             & $addReasonCode 'appcontrol_restricted_target_missing'
         }
 
@@ -1349,6 +1405,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                     throw 'Effective AppLocker policy has no rule collections'
                 }
 
+                $probeCleanupAttempted = $true
                 $probeSet = New-OpenPathAppControlEvaluationProbeSet -Target $probeTarget -CleanupSucceeded ([ref]$probeCleanupSucceeded)
                 $probePaths = @($probeSet.Paths | ForEach-Object { [string]$_ })
                 $testDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $probePaths -User $probeTarget.UserSid -ErrorAction Stop)
@@ -1358,6 +1415,12 @@ function Get-OpenPathNonAdminAppControlHealth {
 
                 $runtimeBoundaryValid = $true
                 foreach ($decision in $testDecisions) {
+                    [void]$runtimeDecisions.Add([pscustomobject][ordered]@{
+                            Kind = 'arbitrary-executable'
+                            FilePath = [string]$decision.FilePath
+                            Expected = 'DeniedOrDeniedByDefault'
+                            Observed = [string]$decision.PolicyDecision
+                        })
                     if ($decision.PolicyDecision -in @('Denied', 'DeniedByDefault')) {
                         continue
                     }
@@ -1389,6 +1452,14 @@ function Get-OpenPathNonAdminAppControlHealth {
                         throw 'Test-AppLockerPolicy did not return one decision for every Edge probe'
                     }
                     $edgeAllowedDecisions = @($edgeDecisions | Where-Object { $_.PolicyDecision -notin @('Denied', 'DeniedByDefault') })
+                    foreach ($decision in $edgeDecisions) {
+                        [void]$runtimeDecisions.Add([pscustomobject][ordered]@{
+                                Kind = 'edge'
+                                FilePath = [string]$decision.FilePath
+                                Expected = 'DeniedOrDeniedByDefault'
+                                Observed = [string]$decision.PolicyDecision
+                            })
+                    }
                     if ($edgeAllowedDecisions.Count -gt 0) {
                         $runtimeBoundaryValid = $false
                         & $addReasonCode 'appcontrol_runtime_edge_allowed'
@@ -1411,6 +1482,14 @@ function Get-OpenPathNonAdminAppControlHealth {
                         throw 'Test-AppLockerPolicy did not return one decision for every Firefox probe'
                     }
                     $firefoxNotAllowedDecisions = @($firefoxDecisions | Where-Object { $_.PolicyDecision -ne 'Allowed' })
+                    foreach ($decision in $firefoxDecisions) {
+                        [void]$runtimeDecisions.Add([pscustomobject][ordered]@{
+                                Kind = 'firefox'
+                                FilePath = [string]$decision.FilePath
+                                Expected = 'Allowed'
+                                Observed = [string]$decision.PolicyDecision
+                            })
+                    }
                     if ($firefoxNotAllowedDecisions.Count -gt 0) {
                         $runtimeBoundaryValid = $false
                         & $addReasonCode 'appcontrol_runtime_firefox_not_allowed'
@@ -1468,7 +1547,136 @@ function Get-OpenPathNonAdminAppControlHealth {
         EffectivePolicyValid = $effectivePolicyValid
         RuntimeEvaluationAvailable = $runtimeEvaluationAvailable
         RuntimeBoundaryValid = $runtimeBoundaryValid
+        RestrictedTargetDetail = $restrictedTargetDetail
+        GroupSid = $groupSid
+        TargetSid = $targetSid
+        ProfilePath = $profilePath
+        Expected = [pscustomobject][ordered]@{
+            RestrictedTarget = 'group-member-with-materialized-non-special-profile'
+            AppIdentityService = 'Running'
+            LocalPolicy = 'present-valid'
+            EffectivePolicy = 'present-valid'
+            RuntimeBoundary = 'valid'
+        }
+        Observed = [pscustomobject][ordered]@{
+            RestrictedTarget = $restrictedTargetDetail
+            AppIdentityService = if (-not $capabilityAvailable) { 'not-observed' } elseif ($appIdentityServiceRunning) { 'Running' } else { 'not-running-or-unavailable' }
+            LocalPolicyPresent = if ($capabilityAvailable) { $localPolicyPresent } else { 'not-observed' }
+            LocalPolicyValid = if ($capabilityAvailable) { $localPolicyValid } else { 'not-observed' }
+            EffectivePolicyPresent = if ($capabilityAvailable) { $effectivePolicyPresent } else { 'not-observed' }
+            EffectivePolicyValid = if ($capabilityAvailable) { $effectivePolicyValid } else { 'not-observed' }
+            RuntimeDecisions = @($runtimeDecisions.ToArray())
+        }
+        CleanupAttempted = if ($probeCleanupAttempted) { $true } else { 'not-observed' }
+        CleanupSucceeded = if ($probeCleanupAttempted) { $probeCleanupSucceeded } else { 'not-observed' }
     }
+}
+
+function Write-OpenPathAppControlDiagnosticFile {
+    param(
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [object]$Diagnostic
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+
+    try {
+        if (-not (Get-Command -Name Write-OpenPathAtomicJsonFile -ErrorAction SilentlyContinue)) {
+            throw 'shared atomic JSON writer unavailable'
+        }
+        Write-OpenPathAtomicJsonFile -Path $Path -Data $Diagnostic -Depth 12
+        return
+    }
+    catch {
+        # Diagnostic transport must survive a failed Common.psm1 import without
+        # changing the AppControl decision. Keep this fallback self-contained,
+        # atomic, bounded by the caller's schema, and private to SYSTEM,
+        # Administrators, and the current principal.
+        $tempPath = "$Path.tmp-$([guid]::NewGuid().ToString('N'))"
+        try {
+            $parent = Split-Path -Parent $Path -ErrorAction SilentlyContinue
+            if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+                New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            }
+            $json = $Diagnostic | ConvertTo-Json -Depth 12
+            [IO.File]::WriteAllText($tempPath, $json, [Text.UTF8Encoding]::new($false))
+            Move-Item -LiteralPath $tempPath -Destination $Path -Force
+            $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$currentSid`:F" | Out-Null
+        }
+        catch {
+            if (Get-Command -Name Write-OpenPathLog -ErrorAction SilentlyContinue) {
+                Write-OpenPathLog 'Unable to persist bounded AppControl diagnostic status' -Level WARN
+            }
+        }
+        finally {
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function New-OpenPathAppControlFailureDiagnostic {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Health,
+
+        [string]$Substep = 'validation'
+    )
+
+    return [pscustomobject][ordered]@{
+        Stage = 'app-control'
+        Substep = $Substep
+        ReasonCodes = @($Health.ReasonCodes)
+        Detail = [string]$Health.RestrictedTargetDetail
+        TargetSid = [string]$Health.TargetSid
+        GroupSid = [string]$Health.GroupSid
+        ProfilePath = [string]$Health.ProfilePath
+        Expected = $Health.Expected
+        Observed = $Health.Observed
+        AppControlCommitState = 'not-committed'
+        InternalRollbackAttempted = $false
+        InternalRollbackSucceeded = 'not-observed'
+        CleanupAttempted = $Health.CleanupAttempted
+        CleanupSucceeded = $Health.CleanupSucceeded
+        PowerShellProcessArchitecture = "$(8 * [IntPtr]::Size)-bit"
+    }
+}
+
+function New-OpenPathAppControlPreconditionDiagnostic {
+    param(
+        [Parameter(Mandatory = $true)][string]$Substep,
+        [Parameter(Mandatory = $true)][string]$ReasonCode
+    )
+
+    $health = [pscustomobject][ordered]@{
+        ReasonCodes = @($ReasonCode)
+        RestrictedTargetDetail = 'not-observed'
+        TargetSid = ''
+        GroupSid = ''
+        ProfilePath = ''
+        Expected = [pscustomobject][ordered]@{
+            RestrictedTarget = 'group-member-with-materialized-non-special-profile'
+            AppIdentityService = 'Running'
+            LocalPolicy = 'present-valid'
+            EffectivePolicy = 'present-valid'
+            RuntimeBoundary = 'valid'
+        }
+        Observed = [pscustomobject][ordered]@{
+            RestrictedTarget = 'not-observed'
+            AppIdentityService = 'not-observed'
+            LocalPolicyPresent = 'not-observed'
+            LocalPolicyValid = 'not-observed'
+            EffectivePolicyPresent = 'not-observed'
+            EffectivePolicyValid = 'not-observed'
+            RuntimeDecisions = @()
+        }
+        CleanupAttempted = 'not-observed'
+        CleanupSucceeded = 'not-observed'
+    }
+    return New-OpenPathAppControlFailureDiagnostic -Health $health -Substep $Substep
 }
 
 function Set-OpenPathNonAdminAppControl {
@@ -1487,21 +1695,36 @@ function Set-OpenPathNonAdminAppControl {
         [ValidateSet('AuditOnly', 'Enforced')]
         [string]$Mode = 'Enforced',
 
-        [string[]]$ApprovedBrowsers = @('Firefox')
+        [string[]]$ApprovedBrowsers = @('Firefox'),
+
+        [string]$DiagnosticStatusPath = ''
     )
 
+    if (-not (Get-Command -Name Test-AdminPrivileges -ErrorAction SilentlyContinue)) {
+        Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
+            New-OpenPathAppControlPreconditionDiagnostic -Substep 'dependency-check' -ReasonCode 'appcontrol_capability_unavailable')
+        return $false
+    }
     if (-not (Test-AdminPrivileges)) {
+        Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
+            New-OpenPathAppControlPreconditionDiagnostic -Substep 'privilege-check' -ReasonCode 'appcontrol_admin_required')
         Write-OpenPathLog 'Administrator privileges required for AppLocker configuration' -Level ERROR
         return $false
     }
     if (-not (Test-OpenPathAppControlAvailable)) {
+        Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
+            New-OpenPathAppControlPreconditionDiagnostic -Substep 'capability-check' -ReasonCode 'appcontrol_capability_unavailable')
         Write-OpenPathLog 'AppLocker cmdlets unavailable; non-admin app control not applied' -Level WARN
         return $false
     }
     if (-not $PSCmdlet.ShouldProcess('Windows AppLocker', "Configure OpenPath non-admin app control in $Mode mode")) {
+        Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
+            New-OpenPathAppControlPreconditionDiagnostic -Substep 'should-process' -ReasonCode 'appcontrol_apply_not_authorized')
         return $false
     }
 
+    $diagnosticSubstep = 'policy-backup'
+    $failureDiagnostic = $null
     try {
         $appLockerBackupPath = Join-Path (Join-Path $OpenPathRoot 'data') 'applocker-backup.xml'
         $backupDir = Split-Path $appLockerBackupPath -Parent
@@ -1512,14 +1735,17 @@ function Set-OpenPathNonAdminAppControl {
         $currentPolicyText = Get-AppLockerPolicy -Local -Xml
         Set-Content -Path $appLockerBackupPath -Value $currentPolicyText -Encoding UTF8
 
+        $diagnosticSubstep = 'policy-generation'
         $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers
         $policyXml = New-OpenPathAppLockerPolicyXml -Spec $spec
         $mergedPolicyXml = Merge-OpenPathAppLockerPolicyXml -CurrentPolicy ([xml]$currentPolicyText) -OpenPathPolicy ([xml]$policyXml)
         $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-applocker-$([guid]::NewGuid()).xml"
         $mergedPolicyXml.Save($policyPath)
+        $diagnosticSubstep = 'policy-apply'
         Set-AppLockerPolicy -XMLPolicy $policyPath
         Remove-Item $policyPath -Force -ErrorAction SilentlyContinue
 
+        $diagnosticSubstep = 'service-start'
         try {
             Set-Service -Name AppIDSvc -StartupType Automatic -ErrorAction SilentlyContinue
             Start-Service -Name AppIDSvc -ErrorAction SilentlyContinue
@@ -1528,9 +1754,36 @@ function Set-OpenPathNonAdminAppControl {
             Write-OpenPathLog "AppLocker policy applied but AppIDSvc could not be started: $_" -Level WARN
         }
 
+        $diagnosticSubstep = 'validation'
         if (-not (Test-OpenPathNonAdminAppControlActive -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers)) {
-            Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath
-            Write-OpenPathLog 'AppLocker validation failed after OpenPath policy apply; restored previous policy backup' -Level WARN
+            $health = $script:OpenPathLastAppControlHealth
+            if ($null -eq $health) {
+                $health = [pscustomobject]@{
+                    ReasonCodes = @('appcontrol_health_evaluation_failed')
+                    RestrictedTargetDetail = 'not-observed'
+                    TargetSid = ''
+                    GroupSid = ''
+                    ProfilePath = ''
+                    Expected = [pscustomobject]@{}
+                    Observed = [pscustomobject]@{}
+                    CleanupAttempted = 'not-observed'
+                    CleanupSucceeded = 'not-observed'
+                }
+            }
+            $failureDiagnostic = New-OpenPathAppControlFailureDiagnostic -Health $health
+            Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic $failureDiagnostic
+
+            $failureDiagnostic.InternalRollbackAttempted = $true
+            try {
+                Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath -ErrorAction Stop
+                $failureDiagnostic.InternalRollbackSucceeded = $true
+                Write-OpenPathLog 'AppLocker validation failed after OpenPath policy apply; restored previous policy backup' -Level WARN
+            }
+            catch {
+                $failureDiagnostic.InternalRollbackSucceeded = $false
+                Write-OpenPathLog 'AppLocker validation failed and the previous policy backup could not be restored' -Level WARN
+            }
+            Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic $failureDiagnostic
             return $false
         }
 
@@ -1538,6 +1791,46 @@ function Set-OpenPathNonAdminAppControl {
         return $true
     }
     catch {
+        if ($null -eq $failureDiagnostic) {
+            $reasonCode = switch ($diagnosticSubstep) {
+                'policy-backup' { 'appcontrol_policy_backup_failed' }
+                'policy-generation' { 'appcontrol_policy_generation_failed' }
+                'policy-apply' { 'appcontrol_policy_apply_failed' }
+                default { 'appcontrol_health_evaluation_failed' }
+            }
+            $failureDiagnostic = [pscustomobject][ordered]@{
+                Stage = 'app-control'
+                Substep = $diagnosticSubstep
+                ReasonCodes = @($reasonCode)
+                Detail = 'not-observed'
+                TargetSid = ''
+                GroupSid = ''
+                ProfilePath = ''
+                Expected = [pscustomobject][ordered]@{
+                    RestrictedTarget = 'group-member-with-materialized-non-special-profile'
+                    AppIdentityService = 'Running'
+                    LocalPolicy = 'present-valid'
+                    EffectivePolicy = 'present-valid'
+                    RuntimeBoundary = 'valid'
+                }
+                Observed = [pscustomobject][ordered]@{
+                    RestrictedTarget = 'not-observed'
+                    AppIdentityService = 'not-observed'
+                    LocalPolicyPresent = 'not-observed'
+                    LocalPolicyValid = 'not-observed'
+                    EffectivePolicyPresent = 'not-observed'
+                    EffectivePolicyValid = 'not-observed'
+                    RuntimeDecisions = @()
+                }
+                AppControlCommitState = 'not-committed'
+                InternalRollbackAttempted = 'not-observed'
+                InternalRollbackSucceeded = 'not-observed'
+                CleanupAttempted = 'not-observed'
+                CleanupSucceeded = 'not-observed'
+                PowerShellProcessArchitecture = "$(8 * [IntPtr]::Size)-bit"
+            }
+            Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic $failureDiagnostic
+        }
         Write-OpenPathLog "Failed to configure OpenPath non-admin app control: $_" -Level WARN
         return $false
     }
@@ -1559,6 +1852,7 @@ function Test-OpenPathNonAdminAppControlActive {
     )
 
     $health = Get-OpenPathNonAdminAppControlHealth -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers
+    $script:OpenPathLastAppControlHealth = $health
     return [bool]$health.Healthy
 }
 

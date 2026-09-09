@@ -162,7 +162,8 @@ function Write-OpenPathInstallerFailureStatus {
         [string]$Path = '',
         [string]$Phase = 'startup',
         [bool]$RollbackAttempted = $false,
-        [object]$RollbackResult = $null
+        [object]$RollbackResult = $null,
+        [object]$AppControlDiagnostic = $null
     )
 
     if (-not $Path) {
@@ -182,6 +183,7 @@ function Write-OpenPathInstallerFailureStatus {
             Phase             = $safePhase
             RollbackAttempted = $RollbackAttempted
             RollbackResult    = $RollbackResult
+            AppControlDiagnostic = $AppControlDiagnostic
         }
         Write-OpenPathAtomicJsonFile -Path $jsonPath -Data $statusObj -Depth 10
     }
@@ -241,7 +243,8 @@ trap {
         -Path $FailureStatusPath `
         -Phase $failurePhase `
         -RollbackAttempted ([bool]$script:OpenPathInstallerMutated) `
-        -RollbackResult $script:OpenPathInstallRollbackResult
+        -RollbackResult $script:OpenPathInstallRollbackResult `
+        -AppControlDiagnostic $script:OpenPathAppControlDiagnostic
     Write-InstallerError "ERROR: $($_.Exception.Message)"
     exit 1
 }
@@ -276,6 +279,7 @@ $script:installPlan = $installPlan
 $script:OpenPathInstallPhaseResults = @()
 $script:OpenPathInstallerMutated = $false
 $script:OpenPathInstallerRollingBack = $false
+$script:OpenPathAppControlDiagnostic = $null
 
 
 function Get-OpenPathInstallerConfigValue {
@@ -691,11 +695,35 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
         $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
         $approvedStudentBrowsers = @($config.approvedStudentBrowsers)
         if ($enableNonAdminAppControl) {
-            $groupSynced = [bool](& $script:OpenPathAppControlCommands.Sync -CreateIfMissing $true)
+            $appControlDiagnosticPath = if ($FailureStatusPath) { "$FailureStatusPath.appcontrol.json" } else { '' }
+            $groupSynced = [bool](& $script:OpenPathAppControlCommands.Sync `
+                    -CreateIfMissing $true `
+                    -DiagnosticStatusPath $appControlDiagnosticPath)
+            if ($appControlDiagnosticPath -and (Test-Path -LiteralPath $appControlDiagnosticPath -PathType Leaf)) {
+                try {
+                    $script:OpenPathAppControlDiagnostic = Get-Content -LiteralPath $appControlDiagnosticPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                }
+                catch {
+                    # Diagnostic transport must never replace the restricted-group result.
+                }
+            }
             if (-not $groupSynced) {
                 throw 'Sync-OpenPathRestrictedGroup failed to create or synchronize the OpenPath-Restricted local group.'
             }
-            $appControlApplied = [bool](& $script:OpenPathAppControlCommands.Set -OpenPathRoot $OpenPathRoot -Mode $nonAdminAppControlMode -ApprovedBrowsers $approvedStudentBrowsers -WhatIf:$WhatIfPreference)
+            $appControlApplied = [bool](& $script:OpenPathAppControlCommands.Set `
+                    -OpenPathRoot $OpenPathRoot `
+                    -Mode $nonAdminAppControlMode `
+                    -ApprovedBrowsers $approvedStudentBrowsers `
+                    -DiagnosticStatusPath $appControlDiagnosticPath `
+                    -WhatIf:$WhatIfPreference)
+            if ($appControlDiagnosticPath -and (Test-Path -LiteralPath $appControlDiagnosticPath -PathType Leaf)) {
+                try {
+                    $script:OpenPathAppControlDiagnostic = Get-Content -LiteralPath $appControlDiagnosticPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                }
+                catch {
+                    # Diagnostic transport must never replace the AppControl result.
+                }
+            }
             if (-not $appControlApplied) {
                 throw 'Set-OpenPathNonAdminAppControl did not apply the required AppControl boundary.'
             }
@@ -715,6 +743,9 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
                 }
             }
             $config.appControlCommitState = 'committed'
+            if ($script:OpenPathAppControlDiagnostic) {
+                $script:OpenPathAppControlDiagnostic.AppControlCommitState = 'committed'
+            }
             Write-InstallerVerbose '  AppControl security boundary committed'
         }
         else {

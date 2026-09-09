@@ -70,6 +70,7 @@ Function .onInit
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-status-*.txt"
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt"
+    Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt.json"
 FunctionEnd
 
 Function NormalizeOfflineStatusByte
@@ -253,6 +254,7 @@ Section "RunInstaller" SEC02
     ; output, paths, and error text never leave the temporary evidence root.
     ClearErrors
     CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt" "$TEMP"
+    CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt.json" "$TEMP"
     ClearErrors
     SetErrorLevel $1
     Goto installer_done

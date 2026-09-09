@@ -634,6 +634,97 @@ Describe "AppControl Module" {
             Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 0 -Exactly
         }
 
+        It "preserves the first health cause when internal policy restore succeeds or fails" {
+            foreach ($restoreFails in @($false, $true)) {
+                $diagnosticPath = Join-Path $TestDrive "appcontrol-diagnostic-$restoreFails.json"
+                $global:opSetPolicyCalls = 0
+                $global:opRestoreFails = $restoreFails
+                function global:Get-AppLockerPolicy { param([switch]$Local, [switch]$Effective, [switch]$Xml) }
+                function global:Set-AppLockerPolicy { param($XMLPolicy, $ErrorAction) }
+
+                Mock Test-AdminPrivileges { $true } -ModuleName AppControl
+                Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
+                Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
+                Mock New-OpenPathNonAdminAppLockerPolicySpec { [pscustomobject]@{} } -ModuleName AppControl
+                Mock New-OpenPathAppLockerPolicyXml { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
+                Mock Merge-OpenPathAppLockerPolicyXml { [xml]'<AppLockerPolicy Version="1" />' } -ModuleName AppControl
+                Mock Set-AppLockerPolicy {
+                    $global:opSetPolicyCalls++
+                    if ($global:opSetPolicyCalls -eq 2 -and $global:opRestoreFails) {
+                        throw 'injected restore failure'
+                    }
+                } -ModuleName AppControl
+                Mock Get-OpenPathNonAdminAppControlHealth {
+                    [pscustomobject][ordered]@{
+                        Healthy = $false
+                        Mode = 'Enforced'
+                        ReasonCodes = @('appcontrol_restricted_target_missing')
+                        RestrictedTargetDetail = 'group-empty'
+                        GroupSid = 'S-1-5-21-10-20-30-4242'
+                        TargetSid = ''
+                        ProfilePath = ''
+                        CapabilityAvailable = $true
+                        RestrictedTargetValid = $false
+                        AppIdentityServiceRunning = $true
+                        LocalPolicyPresent = $true
+                        LocalPolicyValid = $true
+                        EffectivePolicyPresent = $true
+                        EffectivePolicyValid = $true
+                        RuntimeEvaluationAvailable = $true
+                        RuntimeBoundaryValid = $false
+                        CleanupAttempted = $false
+                        CleanupSucceeded = 'not-observed'
+                    }
+                } -ModuleName AppControl
+                function global:Set-Service {}
+                function global:Start-Service {}
+
+                try {
+                    $result = Set-OpenPathNonAdminAppControl `
+                        -OpenPathRoot $TestDrive `
+                        -Mode Enforced `
+                        -ApprovedBrowsers @('Firefox') `
+                        -DiagnosticStatusPath $diagnosticPath `
+                        -Confirm:$false
+
+                    $result | Should -BeFalse
+                    $diagnostic = Get-Content -LiteralPath $diagnosticPath -Raw | ConvertFrom-Json
+                    @($diagnostic.reasonCodes) | Should -Be @('appcontrol_restricted_target_missing')
+                    $diagnostic.detail | Should -Be 'group-empty'
+                    $diagnostic.internalRollbackAttempted | Should -BeTrue
+                    $diagnostic.internalRollbackSucceeded | Should -Be (-not $restoreFails)
+                    $diagnostic.targetSid | Should -Be ''
+                    $diagnostic.groupSid | Should -Be 'S-1-5-21-10-20-30-4242'
+                }
+                finally {
+                    Remove-Item Function:\Get-AppLockerPolicy, Function:\Set-AppLockerPolicy, Function:\Set-Service, Function:\Start-Service -ErrorAction SilentlyContinue
+                    Remove-Item Variable:\opSetPolicyCalls, Variable:\opRestoreFails -ErrorAction SilentlyContinue
+                }
+            }
+        }
+
+        It "records a bounded capability precondition failure without changing the boolean result" {
+            $diagnosticPath = Join-Path $TestDrive 'appcontrol-capability-diagnostic.json'
+            Mock Test-AdminPrivileges { $true } -ModuleName AppControl
+            Mock Test-OpenPathAppControlAvailable { $false } -ModuleName AppControl
+            Mock Write-OpenPathAtomicJsonFile { throw 'injected diagnostic serialization failure' } -ModuleName AppControl
+
+            $result = Set-OpenPathNonAdminAppControl `
+                -OpenPathRoot $TestDrive `
+                -DiagnosticStatusPath $diagnosticPath `
+                -Confirm:$false
+
+            $result | Should -BeFalse
+            $diagnostic = Get-Content -LiteralPath $diagnosticPath -Raw | ConvertFrom-Json
+            $diagnostic.stage | Should -Be 'app-control'
+            $diagnostic.substep | Should -Be 'capability-check'
+            @($diagnostic.reasonCodes) | Should -Be @('appcontrol_capability_unavailable')
+            $diagnostic.detail | Should -Be 'not-observed'
+            $diagnostic.powerShellProcessArchitecture | Should -Match '^(32-bit|64-bit)$'
+            $diagnostic.internalRollbackAttempted | Should -BeFalse
+            $diagnostic.internalRollbackSucceeded | Should -Be 'not-observed'
+        }
+
         It "Does not treat a partial managed AppLocker policy as an active browser boundary" {
             function global:Set-AppLockerPolicy {}
             function global:Get-AppLockerPolicy {
@@ -1012,6 +1103,7 @@ Describe "AppControl Module" {
             $global:opHealthFirefoxDecision = 'Allowed'
             $global:opHealthPolicyMode = 'Enforced'
             $global:opHealthTargetMissing = $false
+            $global:opHealthTargetState = 'valid'
             $global:opHealthRuntimeEffectiveObjectState = 'valid'
             $global:opHealthRuntimeEvaluatorState = 'valid'
             $global:opHealthRuntimeDecisionCoverageState = 'complete'
@@ -1058,14 +1150,22 @@ Describe "AppControl Module" {
                 if ($global:opHealthTargetMissing) {
                     throw 'OpenPath-Restricted group unavailable'
                 }
-                [pscustomobject]@{ Name = $Name; SID = [pscustomobject]@{ Value = $global:opHealthGroupSid } }
+                $resolvedSid = if ($global:opHealthTargetState -eq 'group-sid-missing') { '' } else { $global:opHealthGroupSid }
+                [pscustomobject]@{ Name = $Name; SID = [pscustomobject]@{ Value = $resolvedSid } }
             }
             function global:Get-LocalGroupMember {
                 param([string]$Group)
-                [pscustomobject]@{ SID = [pscustomobject]@{ Value = $global:opHealthStudentSid } }
+                if ($global:opHealthTargetState -eq 'group-empty') {
+                    return
+                }
+                $resolvedSid = if ($global:opHealthTargetState -eq 'member-sid-missing') { '' } else { $global:opHealthStudentSid }
+                [pscustomobject]@{ SID = [pscustomobject]@{ Value = $resolvedSid } }
             }
             function global:Get-CimInstance {
                 param([string]$ClassName)
+                if ($global:opHealthTargetState -eq 'profile-missing') {
+                    return
+                }
                 [pscustomobject]@{ SID = $global:opHealthStudentSid; LocalPath = $global:opHealthProfilePath; Special = $false }
             }
             function global:Test-AppLockerPolicy {
@@ -1137,7 +1237,7 @@ Describe "AppControl Module" {
                 $env:SystemRoot = $global:opHealthPreviousSystemRoot
             }
             Remove-Item Function:\Set-AppLockerPolicy, Function:\Get-AppLockerPolicy, Function:\Get-Service, Function:\Get-LocalGroup, Function:\Get-LocalGroupMember, Function:\Get-CimInstance, Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
-            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthPreviousSystemRoot -ErrorAction SilentlyContinue
+            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthTargetState, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthPreviousSystemRoot -ErrorAction SilentlyContinue
         }
 
         It "returns a deterministic healthy contract and keeps the boolean compatibility seam" {
@@ -1216,6 +1316,27 @@ Describe "AppControl Module" {
             $health.Healthy | Should -BeFalse
             $health.RestrictedTargetValid | Should -BeFalse
             @($health.ReasonCodes) | Should -Contain 'appcontrol_restricted_target_missing'
+        }
+
+        It "distinguishes empty group, unresolved SID, and missing admissible profile" {
+            $cases = @(
+                @{ State = 'group-empty'; Detail = 'group-empty'; GroupSid = $global:opHealthGroupSid; TargetSid = '' },
+                @{ State = 'group-sid-missing'; Detail = 'group-sid-unresolvable'; GroupSid = ''; TargetSid = '' },
+                @{ State = 'member-sid-missing'; Detail = 'member-sid-unresolvable'; GroupSid = $global:opHealthGroupSid; TargetSid = '' },
+                @{ State = 'profile-missing'; Detail = 'member-profile-unavailable'; GroupSid = $global:opHealthGroupSid; TargetSid = $global:opHealthStudentSid }
+            )
+
+            foreach ($case in $cases) {
+                $global:opHealthTargetState = $case.State
+                $health = Get-OpenPathNonAdminAppControlHealth
+
+                $health.Healthy | Should -BeFalse
+                @($health.ReasonCodes) | Should -Contain 'appcontrol_restricted_target_missing'
+                $health.RestrictedTargetDetail | Should -Be $case.Detail
+                $health.GroupSid | Should -Be $case.GroupSid
+                $health.TargetSid | Should -Be $case.TargetSid
+                $health.ProfilePath | Should -Be ''
+            }
         }
 
         It "reports a stopped Application Identity service" {
@@ -1410,6 +1531,8 @@ Describe "AppControl Module" {
             @($health.ReasonCodes) | Should -Contain 'appcontrol_probe_cleanup_failed'
             @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_evaluation_failed'
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
+            $health.CleanupAttempted | Should -BeTrue
+            $health.CleanupSucceeded | Should -BeFalse
 
             $remainingProbeFiles = @(Get-ChildItem -LiteralPath $global:opHealthProfilePath -Filter 'openpath-appcontrol-probe-*.exe' -Recurse -File -ErrorAction SilentlyContinue)
             $remainingProbeFiles.Count | Should -Be 0
@@ -1510,6 +1633,21 @@ Describe "AppControl Module" {
         It "Falls back to BUILTIN\Users SID when the restricted group is missing" {
             function global:Get-LocalGroup { throw 'not found' }
             (Get-OpenPathRestrictedGroupSid) | Should -Be 'S-1-5-32-545'
+        }
+
+        It "preserves the missing restricted-group capability as the primary sync failure" {
+            $diagnosticPath = Join-Path $TestDrive 'restricted-group-capability.json'
+            Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
+
+            $result = Sync-OpenPathRestrictedGroup -CreateIfMissing $true -DiagnosticStatusPath $diagnosticPath
+
+            $result | Should -BeFalse
+            $diagnostic = Get-Content -LiteralPath $diagnosticPath -Raw | ConvertFrom-Json
+            $diagnostic.stage | Should -Be 'app-control'
+            $diagnostic.substep | Should -Be 'restricted-group-capability'
+            @($diagnostic.reasonCodes) | Should -Be @('appcontrol_restricted_group_capability_unavailable')
+            $diagnostic.powerShellProcessArchitecture | Should -Match '^(32-bit|64-bit)$'
+            $diagnostic.internalRollbackAttempted | Should -BeFalse
         }
 
         It "Returns the restricted group SID when the group exists" {

@@ -764,7 +764,7 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
   );
 });
 
-test('real NSIS failures expose only a bounded installer phase for diagnosis', () => {
+test('real NSIS failures preserve bounded structured AppControl diagnosis', () => {
   const installer = readText('windows/Install-OpenPath.ps1');
   const offlineModule = readText('windows/lib/install/Installer.Offline.ps1');
   const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
@@ -776,8 +776,8 @@ test('real NSIS failures expose only a bounded installer phase for diagnosis', (
   );
   assert.match(
     installer,
-    /Write-OpenPathInstallerFailureStatus[\s\S]*\$script:OpenPathInstallerCurrentPhase/,
-    'installer failures should write only the current phase, never raw diagnostics'
+    /Write-OpenPathInstallerFailureStatus[\s\S]*AppControlDiagnostic/,
+    'installer failures should include the bounded first AppControl observation'
   );
   assert.match(
     installer,
@@ -792,12 +792,43 @@ test('real NSIS failures expose only a bounded installer phase for diagnosis', (
   assert.match(
     nsiSource,
     /CopyFiles \/SILENT "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-installer-failure-phase\.txt" "\$TEMP"/,
-    'NSIS should publish only the bounded failure-phase marker to the evidence temp root'
+    'NSIS should publish the bounded failure-phase marker to the evidence temp root'
+  );
+  assert.match(
+    nsiSource,
+    /CopyFiles \/SILENT "\$INSTDIR\\OpenPathOfflineSetup-\$EXEFILE-installer-failure-phase\.txt\.json" "\$TEMP"/,
+    'NSIS should publish the structured installer diagnostic before its private extraction root is deleted'
   );
   assert.match(
     nsiSource,
     /Delete "\$TEMP\\OpenPathOfflineSetup-\$EXEFILE-installer-failure-phase\.txt"/,
     'NSIS should remove a stale installer failure-phase marker before a new run'
+  );
+  assert.match(
+    nsiSource,
+    /Delete "\$TEMP\\OpenPathOfflineSetup-\$EXEFILE-installer-failure-phase\.txt\.json"/,
+    'NSIS should remove a stale structured diagnostic before a new run'
+  );
+  const executableLane = readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1');
+  assert.match(
+    executableLane,
+    /Get-SafeInstallerFailureDiagnostic[\s\S]*reasonCodes[\s\S]*rollbackAttempted[\s\S]*cleanupAttempted/,
+    'the E2E lane should validate and retain only the bounded diagnostic schema'
+  );
+  assert.match(
+    executableLane,
+    /installerFailureDiagnostic\s*=\s*\$installerFailureDiagnostic/,
+    'the final evidence should include the structured first-cause diagnostic'
+  );
+  assert.match(
+    executableLane,
+    /\$result = \$failure\s+try \{\s+Write-SafeEvidence[\s\S]*?catch \{[\s\S]*?\$failure \| ConvertTo-Json -Compress\s+exit 1/,
+    'a broken evidence sink must not replace the original failure object or exit contract'
+  );
+  assert.doesNotMatch(
+    executableLane,
+    /expected\s*=\s*\$appControl\.Expected|observed\s*=\s*\$appControl\.Observed/,
+    'the evidence transport must project allowlisted fields instead of copying arbitrary nested diagnostic data'
   );
   assert.match(
     installer,

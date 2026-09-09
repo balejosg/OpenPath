@@ -2579,8 +2579,10 @@ exit `$installerExitCode
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw
 
-            $content | Should -Match '(?s)\$script:OpenPathAppControlCommands\.Sync -CreateIfMissing \$true'
-            $syncIndex = $content.IndexOf('$script:OpenPathAppControlCommands.Sync -CreateIfMissing $true')
+            $content | Should -Match '(?s)\$script:OpenPathAppControlCommands\.Sync\s+`?\s*-CreateIfMissing \$true'
+            $syncIndex = [regex]::Match(
+                $content,
+                '(?s)\$script:OpenPathAppControlCommands\.Sync\s+`?\s*-CreateIfMissing \$true').Index
             $setIndex = $content.IndexOf('$appControlApplied = [bool](& $script:OpenPathAppControlCommands.Set')
             $syncIndex | Should -BeGreaterThan -1
             $setIndex | Should -BeGreaterThan -1
@@ -2591,7 +2593,7 @@ exit `$installerExitCode
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw
 
-            $content | Should -Match '(?s)\$groupSynced = \[bool\]\(& \$script:OpenPathAppControlCommands\.Sync -CreateIfMissing \$true\)'
+            $content | Should -Match '(?s)\$groupSynced = \[bool\]\(& \$script:OpenPathAppControlCommands\.Sync\s+`?\s*-CreateIfMissing \$true\s+`?\s*-DiagnosticStatusPath \$appControlDiagnosticPath\)'
             $content | Should -Match '(?s)if \(-not \$groupSynced\) \{.*?throw ''Sync-OpenPathRestrictedGroup failed to create or synchronize the OpenPath-Restricted local group\.'''
         }
 
