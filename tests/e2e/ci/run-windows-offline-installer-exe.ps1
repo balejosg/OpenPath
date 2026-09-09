@@ -99,6 +99,10 @@ function Get-SafeInstallerStatus {
     $stage = [int]$bytes[0]
     $exitCode = [int]$bytes[1]
     switch ($stage) {
+        5 {
+            if ($exitCode -eq 1) { return 'native-powershell-context-error' }
+            if ($exitCode -eq 2) { return 'native-powershell-missing' }
+        }
         10 {
             if ($exitCode -eq 255) { return 'read-trailer-start' }
         }
@@ -142,12 +146,75 @@ function Get-SafeInstallerStatus {
 }
 
 function Get-SafeInstallerStatusSnapshot {
-    $tempPath = [System.IO.Path]::GetTempPath()
+    param([Parameter(Mandatory = $true)][string]$NamePrefix)
+
+    $transportRoots = Get-InstallerTransportRoots
     return @(
-        Get-ChildItem -LiteralPath $tempPath -Filter 'OpenPathOfflineSetup-*-status*.txt' -File -ErrorAction SilentlyContinue |
+        $transportRoots | ForEach-Object {
+            Get-ChildItem -LiteralPath $_ -Filter "$NamePrefix-status*.txt" -File -ErrorAction SilentlyContinue
+        } |
             Sort-Object -Property Name |
             ForEach-Object { Get-SafeInstallerStatus -Path $_.FullName }
     )
+}
+
+function Get-InstallerTransportRoots {
+    return @(
+        [System.IO.Path]::GetTempPath()
+        (Join-Path $env:WINDIR 'Temp')
+    ) | Select-Object -Unique
+}
+
+function Resolve-InstallerTransportPath {
+    param([Parameter(Mandatory = $true)][string]$FileName)
+
+    foreach ($root in (Get-InstallerTransportRoots)) {
+        $candidate = Join-Path $root $FileName
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $candidate
+        }
+    }
+    return Join-Path ([System.IO.Path]::GetTempPath()) $FileName
+}
+
+function Get-InstallerTransportPaths {
+    param([Parameter(Mandatory = $true)][string]$FileName)
+
+    return @(Get-InstallerTransportRoots | ForEach-Object { Join-Path $_ $FileName })
+}
+
+function Get-SafeInstallerChildRuntime {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $notObserved = [pscustomobject][ordered]@{
+        status = 'not-observed'
+        powerShellProcessArchitecture = 'not-observed'
+        localAccountsCapability = 'not-observed'
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $notObserved
+    }
+
+    try {
+        $runtime = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ([int]$runtime.SchemaVersion -ne 1 -or
+            [string]$runtime.PowerShellProcessArchitecture -notmatch '^(32-bit|64-bit)$' -or
+            [string]$runtime.LocalAccountsCapability -notmatch '^(available|unavailable)$') {
+            throw 'invalid installer child runtime status'
+        }
+        return [pscustomobject][ordered]@{
+            status = 'observed'
+            powerShellProcessArchitecture = [string]$runtime.PowerShellProcessArchitecture
+            localAccountsCapability = [string]$runtime.LocalAccountsCapability
+        }
+    }
+    catch {
+        return [pscustomobject][ordered]@{
+            status = 'invalid'
+            powerShellProcessArchitecture = 'not-observed'
+            localAccountsCapability = 'not-observed'
+        }
+    }
 }
 
 function Get-SafeInstallerFailurePhase {
@@ -529,28 +596,57 @@ $urlAclAdded = $false
 $sslAppId = '{4c9e7d9c-2d7c-4e4e-bb3e-2f5f0b7e7c42}'
 $urlAcl = "https://localhost:$ConnectivityPort/"
 $trailerConfigFile = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-exe-trailer-$([guid]::NewGuid().ToString('N')).json"
-$installerStatusPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-status.txt"
-$trailerDiagnosticPath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-trailer-status.txt"
-$failurePhasePath = Join-Path ([System.IO.Path]::GetTempPath()) "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))-installer-failure-phase.txt"
+$transportNamePrefix = "OpenPathOfflineSetup-$([System.IO.Path]::GetFileName($resolvedExecutable))"
+$installerStatusPath = Join-Path ([System.IO.Path]::GetTempPath()) "$transportNamePrefix-status.txt"
+$trailerDiagnosticPath = Join-Path ([System.IO.Path]::GetTempPath()) "$transportNamePrefix-trailer-status.txt"
+$failurePhasePath = Join-Path ([System.IO.Path]::GetTempPath()) "$transportNamePrefix-installer-failure-phase.txt"
 $failureDiagnosticPath = "$failurePhasePath.json"
+$installerChildRuntimePath = Join-Path ([System.IO.Path]::GetTempPath()) "$transportNamePrefix-installer-runtime.json"
 $installerStatus = 'missing'
 $installerStatusSnapshot = @()
 $installerFailurePhase = 'missing'
 $installerFailureDiagnostic = Get-SafeInstallerFailureDiagnostic -Path $failureDiagnosticPath
+$installerChildRuntime = Get-SafeInstallerChildRuntime -Path $installerChildRuntimePath
 $trailerDiagnosticStatus = 'missing'
 $trailerDiagnosticSource = 'installer-child'
 $result = $null
+
+foreach ($transportFileName in @(
+    "$transportNamePrefix-status.txt",
+    "$transportNamePrefix-trailer-status.txt",
+    "$transportNamePrefix-installer-failure-phase.txt",
+    "$transportNamePrefix-installer-failure-phase.txt.json",
+    "$transportNamePrefix-installer-runtime.json"
+)) {
+    Get-InstallerTransportPaths -FileName $transportFileName |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
 
 try {
     $script:CurrentStage = 'launch-executable'
     $env:OPENPATH_WINDOWS_ROOT = $OpenPathRoot
     $installProcess = Start-Process -FilePath $resolvedExecutable -ArgumentList @('/S') -Wait -PassThru
     $installExitCode = [int]$installProcess.ExitCode
+    $installerStatusPath = Resolve-InstallerTransportPath -FileName "$transportNamePrefix-status.txt"
+    $trailerDiagnosticPath = Resolve-InstallerTransportPath -FileName "$transportNamePrefix-trailer-status.txt"
+    $failurePhasePath = Resolve-InstallerTransportPath -FileName "$transportNamePrefix-installer-failure-phase.txt"
+    $failureDiagnosticPath = Resolve-InstallerTransportPath -FileName "$transportNamePrefix-installer-failure-phase.txt.json"
+    $installerChildRuntimePath = Resolve-InstallerTransportPath -FileName "$transportNamePrefix-installer-runtime.json"
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
-    $installerStatusSnapshot = Get-SafeInstallerStatusSnapshot
+    $installerStatusSnapshot = Get-SafeInstallerStatusSnapshot -NamePrefix $transportNamePrefix
     $installerFailurePhase = Get-SafeInstallerFailurePhase -Path $failurePhasePath
     $installerFailureDiagnostic = Get-SafeInstallerFailureDiagnostic -Path $failureDiagnosticPath
+    $installerChildRuntime = Get-SafeInstallerChildRuntime -Path $installerChildRuntimePath
     $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
+    $script:CurrentStage = 'validate-installer-child-runtime'
+    $installerChildPowerShellArchitecture = [string]$installerChildRuntime.powerShellProcessArchitecture
+    if ($installerChildPowerShellArchitecture -ne '64-bit') {
+        throw 'installer-child-powershell-not-64-bit'
+    }
+    $installerChildLocalAccountsCapability = [string]$installerChildRuntime.localAccountsCapability
+    if ($installerChildLocalAccountsCapability -ne 'available') {
+        throw 'installer-child-localaccounts-unavailable'
+    }
     $script:CurrentStage = 'validate-installer-exit'
     if ($installExitCode -ne 60) {
         throw 'offline-install-did-not-reach-pending-state'
@@ -635,6 +731,7 @@ try {
         installerStatus = $installerStatus
         installerFailurePhase = $installerFailurePhase
         installerFailureDiagnostic = $installerFailureDiagnostic
+        installerChildRuntime = $installerChildRuntime
         trailerDiagnosticStatus = $trailerDiagnosticStatus
         trailerDiagnosticSource = $trailerDiagnosticSource
         trailerValidated = $true
@@ -651,9 +748,10 @@ try {
 }
 catch {
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
-    $installerStatusSnapshot = Get-SafeInstallerStatusSnapshot
+    $installerStatusSnapshot = Get-SafeInstallerStatusSnapshot -NamePrefix $transportNamePrefix
     $installerFailurePhase = Get-SafeInstallerFailurePhase -Path $failurePhasePath
     $installerFailureDiagnostic = Get-SafeInstallerFailureDiagnostic -Path $failureDiagnosticPath
+    $installerChildRuntime = Get-SafeInstallerChildRuntime -Path $installerChildRuntimePath
     $trailerDiagnosticStatus = Get-SafeTrailerDiagnosticStatus -Path $trailerDiagnosticPath
     if ($trailerDiagnosticStatus -eq 'missing') {
         $reader = Join-Path $PSScriptRoot '..\..\..\windows\offline-installer\scripts\Read-Trailer.ps1'
@@ -681,6 +779,7 @@ catch {
         installerStatusSnapshot = $installerStatusSnapshot
         installerFailurePhase = $installerFailurePhase
         installerFailureDiagnostic = $installerFailureDiagnostic
+        installerChildRuntime = $installerChildRuntime
         trailerDiagnosticStatus = $trailerDiagnosticStatus
         trailerDiagnosticSource = $trailerDiagnosticSource
         cleanupAttempted = 'not-observed'
@@ -731,8 +830,12 @@ finally {
     if (Test-Path -LiteralPath $failureDiagnosticPath) {
         Remove-Item -LiteralPath $failureDiagnosticPath -Force -ErrorAction SilentlyContinue
     }
-    Get-ChildItem -LiteralPath ([System.IO.Path]::GetTempPath()) -Filter 'OpenPathOfflineSetup-*-status*.txt' -File -ErrorAction SilentlyContinue |
-        Remove-Item -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $installerChildRuntimePath) {
+        Remove-Item -LiteralPath $installerChildRuntimePath -Force -ErrorAction SilentlyContinue
+    }
+    Get-InstallerTransportRoots | ForEach-Object {
+        Get-ChildItem -LiteralPath $_ -Filter "$transportNamePrefix-status*.txt" -File -ErrorAction SilentlyContinue
+    } | Remove-Item -Force -ErrorAction SilentlyContinue
     $uninstaller = Join-Path $OpenPathRoot 'Uninstall-OpenPath.ps1'
     if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
         & $shell -NoProfile -ExecutionPolicy Bypass -File $uninstaller *> $null

@@ -49,6 +49,9 @@ ManifestDPIAware true
 !define OFFLINE_STAGE_RUN_INSTALLER_EXIT 31
 !define OFFLINE_STATUS_EXEC_TIMEOUT 253
 !define OFFLINE_STATUS_EXEC_ERROR 254
+!define OFFLINE_STAGE_NATIVE_POWERSHELL_EXIT 5
+
+Var NativePowerShellPath
 
 Name "${PRODUCT_NAME}"
 OutFile "${BUILD_DIR}\OpenPath-Windows-Setup.exe"
@@ -71,6 +74,47 @@ Function .onInit
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt"
     Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt.json"
+    Delete "$TEMP\OpenPathOfflineSetup-$EXEFILE-installer-runtime.json"
+    Call ResolveNativeWindowsPowerShell
+FunctionEnd
+
+Function ResolveNativeWindowsPowerShell
+    ; NSIS 3.10 produces a 32-bit launcher. On x64 Windows, $SYSDIR is therefore
+    ; redirected to SysWOW64. Detect the launcher context explicitly and use the
+    ; Sysnative alias only when this process is actually running under WOW64.
+    ; A same-bitness process keeps its native $SYSDIR path. Never search PATH or
+    ; fall back to the redirected 32-bit shell.
+    ; System.dll writes r0/r1 directly to NSIS $0/$1.
+    System::Call 'kernel32::IsWow64Process(p -1, *i .r0)i .r1'
+    StrCmp $1 "0" native_powershell_context_error
+    StrCmp $0 "0" native_powershell_same_bitness
+    StrCpy $NativePowerShellPath "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    Goto native_powershell_require_file
+native_powershell_same_bitness:
+    StrCpy $NativePowerShellPath "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+native_powershell_require_file:
+    ; Query the path through the same Win32 view as the launcher. NSIS
+    ; IfFileExists does not reliably recognize the Sysnative virtual alias.
+    System::Call 'kernel32::GetFileAttributesW(w "$NativePowerShellPath")i .r2'
+    IntCmp $2 -1 native_powershell_missing native_powershell_require_regular_file native_powershell_require_regular_file
+native_powershell_require_regular_file:
+    IntOp $3 $2 & 0x10
+    IntCmp $3 0 native_powershell_ready native_powershell_missing native_powershell_missing
+native_powershell_context_error:
+    Push "${OFFLINE_STAGE_NATIVE_POWERSHELL_EXIT}"
+    Push "1"
+    Call WriteOfflineStage
+    DetailPrint "Could not determine the native Windows PowerShell process context"
+    SetErrorLevel 12
+    Abort
+native_powershell_missing:
+    Push "${OFFLINE_STAGE_NATIVE_POWERSHELL_EXIT}"
+    Push "2"
+    Call WriteOfflineStage
+    DetailPrint "Native Windows PowerShell executable is unavailable"
+    SetErrorLevel 12
+    Abort
+native_powershell_ready:
 FunctionEnd
 
 Function NormalizeOfflineStatusByte
@@ -140,7 +184,7 @@ Section "ReadTrailer" SEC00
     ; commits its validated configuration by creating this file.
     Delete "$INSTDIR\offline-config.json"
     ClearErrors
-    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$INSTDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json" -StatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"' $0
+    ExecWait '"$NativePowerShellPath" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\Read-Trailer.ps1" -ExecutablePath "$INSTDIR\$EXEFILE" -OutputConfigPath "$INSTDIR\offline-config.json" -StatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt"' $0
     IfErrors trailer_exec_error
     IfFileExists "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-trailer-status.txt" trailer_marker_present trailer_marker_missing
 trailer_marker_missing:
@@ -245,7 +289,7 @@ Section "RunInstaller" SEC02
     Push "${OFFLINE_STATUS_SENTINEL}"
     Call WriteOfflineStage
     ClearErrors
-    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -FailureStatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt" -Unattended' $1
+    ExecWait '"$NativePowerShellPath" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-OpenPath.ps1" -OfflineConfigPath "$INSTDIR\offline-config.json" -FailureStatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt" -RuntimeStatusPath "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-runtime.json" -Unattended' $1
     IfErrors installer_exec_error
     Push "${OFFLINE_STAGE_RUN_INSTALLER_EXIT}"
     Push $1
@@ -253,6 +297,7 @@ Section "RunInstaller" SEC02
     ; Keep only the bounded phase name for safe CI diagnostics. The child
     ; output, paths, and error text never leave the temporary evidence root.
     ClearErrors
+    CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-runtime.json" "$TEMP"
     CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt" "$TEMP"
     CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt.json" "$TEMP"
     ClearErrors

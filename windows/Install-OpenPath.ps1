@@ -47,7 +47,8 @@ param(
     [string]$BrowserCleanupMode = 'ReportOnly',
     [string]$OfflineConfigPath = "",
     [string]$TimingOutputPath = "",
-    [string]$FailureStatusPath = ""
+    [string]$FailureStatusPath = "",
+    [string]$RuntimeStatusPath = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -211,6 +212,38 @@ function Get-OpenPathInstallerFailurePhase {
     return $phase
 }
 
+function Write-OpenPathInstallerRuntimeStatus {
+    param([string]$Path = '')
+
+    if (-not $Path) {
+        return
+    }
+
+    try {
+        $requiredLocalAccountsCommands = @(
+            'Get-LocalGroup',
+            'New-LocalGroup',
+            'Get-LocalUser',
+            'Get-LocalGroupMember',
+            'Add-LocalGroupMember'
+        )
+        $missingLocalAccountsCommands = @(
+            $requiredLocalAccountsCommands | Where-Object {
+                -not (Get-Command -Name $_ -ErrorAction SilentlyContinue)
+            }
+        )
+        $status = [pscustomobject][ordered]@{
+            SchemaVersion = 1
+            PowerShellProcessArchitecture = "$(8 * [IntPtr]::Size)-bit"
+            LocalAccountsCapability = if ($missingLocalAccountsCommands.Count -eq 0) { 'available' } else { 'unavailable' }
+        }
+        Write-OpenPathAtomicJsonFile -Path $Path -Data $status -Depth 3
+    }
+    catch {
+        # Runtime evidence is secondary and must never replace installer behavior.
+    }
+}
+
 function Set-OpenPathOfflinePayloadFailurePhase {
     param(
         [AllowNull()]
@@ -248,6 +281,8 @@ trap {
     Write-InstallerError "ERROR: $($_.Exception.Message)"
     exit 1
 }
+
+Write-OpenPathInstallerRuntimeStatus -Path $RuntimeStatusPath
 
 $usesEnrollmentToken = [bool]$EnrollmentToken
 $usesRegistrationToken = [bool]$RegistrationToken

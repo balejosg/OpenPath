@@ -381,12 +381,12 @@ test('Windows release evidence executes the personalized NSIS executable and its
     assert.ok(executableLane.includes(marker), `Windows executable lane should include ${marker}`);
   }
   assert.match(
-    executableLane,
+    readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1'),
     /Write-SafeEvidence[\s\S]*payloadManifestValidated = \$true/,
     'Windows executable evidence must report manifest validation without writing credentials'
   );
   assert.doesNotMatch(
-    executableLane,
+    readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1'),
     /Write-SafeEvidence[\s\S]*(?:enrollmentToken|Bearer|accessToken)/i,
     'Windows executable evidence must not contain auth material'
   );
@@ -488,8 +488,8 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     executableLane,
-    /Get-ChildItem[\s\S]*OpenPathOfflineSetup-\*-status\*\.txt[\s\S]*Get-SafeInstallerStatus/,
-    'Windows EXE failure evidence must inspect all bounded stage markers without uploading paths or logs'
+    /Get-ChildItem[\s\S]*"\$NamePrefix-status\*\.txt"[\s\S]*Get-SafeInstallerStatus/,
+    "Windows EXE failure evidence must inspect only this executable's bounded stage markers without uploading paths or logs"
   );
   const failureEvidenceBlock = executableLane.slice(
     executableLane.lastIndexOf('catch {'),
@@ -542,9 +542,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
   const trailerEvidenceOffset = readTrailerSection.indexOf(
     'Push "${OFFLINE_STAGE_READ_TRAILER_EXIT}"'
   );
-  const trailerExecOffset = readTrailerSection.indexOf(
-    'ExecWait \'"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"'
-  );
+  const trailerExecOffset = readTrailerSection.indexOf('ExecWait \'"$NativePowerShellPath"');
   const trailerOutputCleanupOffset = readTrailerSection.indexOf(
     'Delete "$INSTDIR\\offline-config.json"'
   );
@@ -576,7 +574,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     readTrailerSection,
-    /ExecWait '"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe" -NoProfile[^']*' \$0/,
+    /ExecWait '"\$NativePowerShellPath" -NoProfile[^']*' \$0/,
     'NSIS must synchronously invoke the built-in Windows PowerShell executable with an explicit quoted path'
   );
   assert.doesNotMatch(
@@ -590,7 +588,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
   );
   assert.match(
     runInstallerSection,
-    /ExecWait '"\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe" -NoProfile[^']*' \$1/,
+    /ExecWait '"\$NativePowerShellPath" -NoProfile[^']*' \$1/,
     'NSIS must synchronously invoke the offline installer through the same explicit PowerShell path'
   );
   assert.doesNotMatch(
@@ -761,6 +759,102 @@ test('Windows personalized EXE evidence must traverse the real HTTP download con
     personalizedJob,
     /Build shared workspace[\s\S]*Download verified template artifact[\s\S]*Execute personalized HTTP download-to-EXE E2E/,
     'the real HTTP-to-EXE lane must run after the pinned template is built'
+  );
+});
+
+test('NSIS resolves one native Windows PowerShell path from the launcher process context', () => {
+  const nsiSource = readText('windows/offline-installer/OpenPath-Windows-Setup.nsi');
+  const resolver = nsiSource.slice(
+    nsiSource.indexOf('Function ResolveNativeWindowsPowerShell'),
+    nsiSource.indexOf('FunctionEnd', nsiSource.indexOf('Function ResolveNativeWindowsPowerShell'))
+  );
+
+  assert.match(
+    resolver,
+    /IsWow64Process\(p -1, \*i \.r0\)i \.r1/,
+    'the launcher must inspect whether its own process is running under WOW64'
+  );
+  assert.match(
+    resolver,
+    /StrCmp \$0 "0" native_powershell_same_bitness/,
+    'Sysnative must be selected only for a WOW64 launcher process'
+  );
+  assert.match(
+    resolver,
+    /StrCpy \$NativePowerShellPath "\$WINDIR\\Sysnative\\WindowsPowerShell\\v1\.0\\powershell\.exe"/,
+    'a WOW64 launcher on x64 Windows must cross redirection through Sysnative explicitly'
+  );
+  assert.match(
+    resolver,
+    /native_powershell_same_bitness:[\s\S]*StrCpy \$NativePowerShellPath "\$SYSDIR\\WindowsPowerShell\\v1\.0\\powershell\.exe"/,
+    'a native launcher context must use its native system directory without Sysnative'
+  );
+  assert.match(
+    resolver,
+    /GetFileAttributesW\(w "\$NativePowerShellPath"\)[\s\S]*IntCmp \$2 -1 native_powershell_missing[\s\S]*IntOp \$3 \$2 & 0x10[\s\S]*IntCmp \$3 0 native_powershell_ready/,
+    'the resolved absolute shell must be a real file before either child is launched'
+  );
+  assert.match(
+    resolver,
+    /native_powershell_context_error:[\s\S]*SetErrorLevel 12[\s\S]*Abort/,
+    'an unknown launcher context must fail closed with a precise installer exit code'
+  );
+  assert.match(
+    resolver,
+    /native_powershell_missing:[\s\S]*SetErrorLevel 12[\s\S]*Abort/,
+    'a missing native shell must fail closed instead of falling back to 32-bit PowerShell'
+  );
+  assert.match(
+    readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1'),
+    /5\s*\{[\s\S]*native-powershell-context-error[\s\S]*native-powershell-missing/,
+    'the evidence reader must preserve both fail-closed native shell selection reasons'
+  );
+  assert.doesNotMatch(
+    resolver,
+    /SearchPath|GetFullPathName/,
+    'the shell path must not be discovered through a user-influenceable search path'
+  );
+
+  const invocations = [
+    ...nsiSource.matchAll(/ExecWait '\"\$NativePowerShellPath\"([^']*)' \$[01]/g),
+  ];
+  assert.equal(invocations.length, 2, 'trailer validation and installation must share one shell');
+  for (const [, argumentsText] of invocations) {
+    assert.match(argumentsText, / -NoProfile -ExecutionPolicy Bypass -File "/);
+  }
+  assert.match(invocations[0][1], /-File "\$INSTDIR\\scripts\\Read-Trailer\.ps1"/);
+  assert.match(invocations[1][1], /-File "\$INSTDIR\\Install-OpenPath\.ps1"/);
+  assert.match(invocations[1][1], /-FailureStatusPath /);
+  assert.match(invocations[1][1], /-Unattended/);
+});
+
+test('physical personalized-EXE lane asserts architecture and LocalAccounts inside the installer child', () => {
+  const executableLane = readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1');
+
+  assert.match(
+    executableLane,
+    /installerChildPowerShellArchitecture[\s\S]*64-bit/,
+    'the physical lane must require the architecture reported by the real installer child'
+  );
+  assert.match(
+    executableLane,
+    /installerChildLocalAccountsCapability[\s\S]*available/,
+    'the physical lane must require LocalAccounts capability reported by the real installer child'
+  );
+  assert.doesNotMatch(
+    executableLane,
+    /Get-Command\s+(?:-Name\s+)?Get-LocalGroup/,
+    'the harness process must not substitute its own LocalAccounts observation for the child result'
+  );
+  assert.match(
+    executableLane,
+    /Get-InstallerTransportRoots[\s\S]*GetTempPath\(\)[\s\S]*Join-Path \$env:WINDIR 'Temp'/,
+    'the harness must inspect both trusted TEMP roots used across an elevation boundary'
+  );
+  assert.match(
+    executableLane,
+    /Resolve-InstallerTransportPath -FileName "\$transportNamePrefix-installer-runtime\.json"/,
+    'the child runtime observation must be resolved by its exact bounded file name'
   );
 });
 

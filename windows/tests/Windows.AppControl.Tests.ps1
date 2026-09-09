@@ -1637,7 +1637,9 @@ Describe "AppControl Module" {
 
         It "preserves the missing restricted-group capability as the primary sync failure" {
             $diagnosticPath = Join-Path $TestDrive 'restricted-group-capability.json'
-            Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
+            Mock Get-Command {
+                return $null
+            } -ModuleName AppControl -ParameterFilter { $Name -eq 'Get-LocalGroup' }
 
             $result = Sync-OpenPathRestrictedGroup -CreateIfMissing $true -DiagnosticStatusPath $diagnosticPath
 
