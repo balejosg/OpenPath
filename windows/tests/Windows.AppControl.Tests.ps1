@@ -990,7 +990,9 @@ Describe "AppControl Module" {
         }
 
         It "fails closed when Test-AppLockerPolicy is unavailable instead of trusting XML" {
-            Remove-Item Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
+            Mock Get-Command {
+                return $null
+            } -ModuleName AppControl -ParameterFilter { $Name -eq 'Test-AppLockerPolicy' }
             Test-OpenPathNonAdminAppControlActive | Should -BeFalse
         }
     }
@@ -1157,7 +1159,9 @@ Describe "AppControl Module" {
         }
 
         It "reports unavailable AppLocker management capability" {
-            Remove-Item Function:\Set-AppLockerPolicy, Function:\Get-AppLockerPolicy -ErrorAction SilentlyContinue
+            Mock Get-Command {
+                return $null
+            } -ModuleName AppControl -ParameterFilter { $Name -in @('Set-AppLockerPolicy', 'Get-AppLockerPolicy') }
             $health = Get-OpenPathNonAdminAppControlHealth
 
             $health.Healthy | Should -BeFalse
@@ -1346,7 +1350,9 @@ Describe "AppControl Module" {
         }
 
         It "reports unavailable runtime evaluation" {
-            Remove-Item Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
+            Mock Get-Command {
+                return $null
+            } -ModuleName AppControl -ParameterFilter { $Name -eq 'Test-AppLockerPolicy' }
             $health = Get-OpenPathNonAdminAppControlHealth
 
             $health.RuntimeEvaluationAvailable | Should -BeFalse
