@@ -163,10 +163,35 @@ function Invoke-OpenPathWatchdogProbe {
     }
 }
 
+function Invoke-OpenPathNativePolicyProbe {
+    param(
+        [Parameter(Mandatory = $true)][object]$Target,
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+        [Parameter(Mandatory = $true)][string]$FirefoxPath,
+        [Parameter(Mandatory = $true)][string]$EdgePath,
+        [Parameter(Mandatory = $true)][string]$ProbePath
+    )
+    if (-not [Environment]::Is64BitProcess) { throw 'boundary-harness-process-not-64-bit' }
+    $nativeShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $nativeShell -PathType Leaf)) { throw 'boundary-native-powershell-missing' }
+    $outputPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-native-policy-$([guid]::NewGuid().ToString('N')).json"
+    try {
+        & $nativeShell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-InstalledBoundaryNative.ps1') `
+            -OpenPathRoot $OpenPathRoot -StudentSid $Target.Sid -FirefoxPath $FirefoxPath -EdgePath $EdgePath `
+            -ProbePath $ProbePath -OutputPath $outputPath *> $null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
+            throw "boundary-native-policy-probe-failed-$LASTEXITCODE"
+        }
+        return Get-Content -LiteralPath $outputPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    }
+    finally {
+        Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-OpenPathInstalledBoundaryProbes {
     param([Parameter(Mandatory = $true)][object]$Target, [string]$OpenPathRoot = 'C:\OpenPath')
     Import-Module (Join-Path $PSScriptRoot 'BrowserBoundaryProbe.psm1') -Force -ErrorAction Stop
-    Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $OpenPathRoot
     $firefox = @("$env:ProgramFiles\Mozilla Firefox\firefox.exe", "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe") | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     $edge = @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe") | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $firefox) { throw 'boundary-firefox-missing' }
@@ -174,16 +199,7 @@ function Invoke-OpenPathInstalledBoundaryProbes {
     $probeExe = Join-Path $Target.ProfilePath 'openpath-e2e-probe.exe'
     $probeMarker = Join-Path $Target.ProfilePath 'openpath-e2e-probe.marker'
     New-OpenPathProbePayloadBinary -OutputPath $probeExe
-    $account = "$env:COMPUTERNAME\$($Target.UserName)"
-    $effective = Get-AppLockerPolicy -Effective -ErrorAction Stop
-    $policy = [ordered]@{
-        firefox = [string](Test-AppLockerPolicy -PolicyObject $effective -Path $firefox -User $account).PolicyDecision
-        edge = [string](Test-AppLockerPolicy -PolicyObject $effective -Path $edge -User $account).PolicyDecision
-        benignPe = [string](Test-AppLockerPolicy -PolicyObject $effective -Path $probeExe -User $account).PolicyDecision
-    }
-    if ($policy.firefox -ne 'Allowed') { throw "boundary-firefox-policy-$($policy.firefox)" }
-    if ($policy.edge -notin @('Denied', 'DeniedByDefault')) { throw "boundary-edge-policy-$($policy.edge)" }
-    if ($policy.benignPe -notin @('Denied', 'DeniedByDefault')) { throw "boundary-benign-pe-policy-$($policy.benignPe)" }
+    $policy = Invoke-OpenPathNativePolicyProbe -Target $Target -OpenPathRoot $OpenPathRoot -FirefoxPath $firefox -EdgePath $edge -ProbePath $probeExe
     $firefoxRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Firefox allow' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $firefox -Expectation ExpectAllowed -ProcessName firefox -StudentSid $Target.Sid
     $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid
     $peRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probeExe -Arguments "`"$probeMarker`"" -Expectation ExpectDenied -StudentSid $Target.Sid -MarkerPath $probeMarker

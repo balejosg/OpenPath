@@ -877,6 +877,12 @@ test('canonical personalized-EXE lane owns a real disposable standard target lif
     /Invoke-OpenPathInstalledBoundaryProbes\s+-Target\s+\$disposableTarget/
   );
   assert.match(targetHelper, /Invoke-StudentExecutableTaskProbe[\s\S]*-StudentSid\s+\$Target\.Sid/);
+  assert.match(targetHelper, /Invoke-OpenPathNativePolicyProbe/);
+  assert.match(targetHelper, /System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe/);
+  assert.match(
+    readText('tests/e2e/ci/Test-InstalledBoundaryNative.ps1'),
+    /Assert-InstalledOpenPathBrowserBoundaryAppControl[\s\S]*Get-AppLockerPolicy -Effective[\s\S]*Test-AppLockerPolicy/
+  );
   assert.match(executableLane, /finally[\s\S]*Remove-OpenPathDisposableStandardTarget/);
   assert.doesNotMatch(
     executableLane,
