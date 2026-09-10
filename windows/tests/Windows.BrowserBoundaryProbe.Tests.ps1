@@ -315,9 +315,7 @@ Describe "Windows Browser Boundary CI Probes" {
         It 'does not attribute an unrelated admin process to the denied student launch' {
             $testExe = Join-Path $TestDrive 'msedge.exe'
             Set-Content -LiteralPath $testExe -Value 'dummy'
-            $testProcess = if (Get-Command New-CimInstance -ErrorAction SilentlyContinue) {
-                New-CimInstance -ClassName Win32_Process -Namespace root/cimv2 -ClientOnly -Property @{ ProcessId = 1234; Name = 'msedge.exe' }
-            } else { [pscustomobject]@{ ProcessId = 1234; Name = 'msedge.exe' } }
+            $testProcess = [pscustomobject]@{ ProcessId = 1234; Name = 'msedge.exe'; ExecutablePath = '' }
             Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
             Mock Get-Process { [pscustomobject]@{ Id = 1234; ProcessName = 'msedge' } } -ModuleName BrowserBoundaryProbe
             Mock Get-CimInstance { $testProcess } -ModuleName BrowserBoundaryProbe
@@ -367,8 +365,8 @@ Describe "Windows Browser Boundary CI Probes" {
                 Should -Throw '*AppLocker 8004/8022 block event was not observed*'
         }
 
-        It 'rejects a denied launch when the observed process belongs to the student SID' {
-            $testExe = Join-Path $TestDrive 'msedge-student.exe'
+        It 'does not classify an owned process without a matching executable path as the requested launch' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
             Set-Content -LiteralPath $testExe -Value 'dummy'
             $testProcess = if (Get-Command New-CimInstance -ErrorAction SilentlyContinue) {
                 New-CimInstance -ClassName Win32_Process -Namespace root/cimv2 -ClientOnly -Property @{ ProcessId = 1234; Name = 'msedge.exe' }
@@ -381,10 +379,40 @@ Describe "Windows Browser Boundary CI Probes" {
             Mock Write-Host {} -ModuleName BrowserBoundaryProbe
 
             { Invoke-StudentExecutableTaskProbe -ProbeName 'Denied student ownership probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName msedge -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 } |
-                Should -Throw '*process msedge is running under student account*'
-            Should -Invoke Write-Host -ModuleName BrowserBoundaryProbe -ParameterFilter {
-                $Object -eq 'OPENPATH_BOUNDARY_PROBE_FAILURE reason=student-process-observed'
-            } -Times 1
+                Should -Throw '*AppLocker 8004 block event was not observed*'
+            Should -Invoke Stop-Process -ModuleName BrowserBoundaryProbe -Times 0
+        }
+
+        It 'does not treat an owned msedgewebview2 process as the requested msedge executable' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            $testProcess = [pscustomobject]@{ ProcessId = 1234; Name = 'msedgewebview2.exe'; ExecutablePath = (Join-Path $TestDrive 'msedgewebview2.exe') }
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { $testProcess } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-CimMethod { [pscustomobject]@{ Sid = 'S-1-5-21-student-sid' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent { @() } -ModuleName BrowserBoundaryProbe
+            Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+
+            { Invoke-StudentExecutableTaskProbe -ProbeName 'Exact Edge identity probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName msedge -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 } |
+                Should -Throw '*AppLocker 8004 block event was not observed*'
+            Should -Invoke Stop-Process -ModuleName BrowserBoundaryProbe -Times 0
+        }
+
+        It 'collects the correlated block event before classifying a transient exact process' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            $testProcess = [pscustomobject]@{ ProcessId = 1234; Name = 'msedge.exe'; ExecutablePath = $testExe }
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { $testProcess } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-CimMethod { [pscustomobject]@{ Sid = 'S-1-5-21-student-sid' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                [pscustomobject]@{ Id = 8004; Message = "msedge.exe was prevented from running"; UserId = [pscustomobject]@{ Value = 'S-1-5-21-student-sid' } }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+
+            $result = Invoke-StudentExecutableTaskProbe -ProbeName 'Transient Edge block probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName msedge -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1
+            $result.status | Should -Be 'pass'
+            $result.evidence.blockEventId | Should -Be 8004
         }
 
         It "Passes when ExpectAllowed and marker file is present" {

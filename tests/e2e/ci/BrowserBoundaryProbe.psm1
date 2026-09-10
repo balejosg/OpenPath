@@ -104,7 +104,7 @@ function Invoke-OpenPathSchtasksCommand {
 }
 
 function Get-OpenPathProbeProcessesForStudent {
-    param([string]$ProcessName, [string]$StudentSid)
+    param([string]$ProcessName, [string]$StudentSid, [string]$ExpectedExecutablePath = '')
     if ([string]::IsNullOrWhiteSpace($ProcessName)) { return @() }
     if ([string]::IsNullOrWhiteSpace($StudentSid)) {
         return @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | ForEach-Object {
@@ -113,7 +113,11 @@ function Get-OpenPathProbeProcessesForStudent {
     }
     $studentProcesses = @()
     try {
+        $expectedLeaf = if ($ExpectedExecutablePath) { [System.IO.Path]::GetFileName($ExpectedExecutablePath) } else { "$ProcessName.exe" }
         foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name LIKE '$ProcessName%'" -ErrorAction SilentlyContinue)) {
+            if ([string]$process.Name -ine $expectedLeaf) { continue }
+            if ($ExpectedExecutablePath -and ([string]::IsNullOrWhiteSpace([string]$process.ExecutablePath) -or
+                -not [string]::Equals([System.IO.Path]::GetFullPath([string]$process.ExecutablePath), [System.IO.Path]::GetFullPath($ExpectedExecutablePath), [System.StringComparison]::OrdinalIgnoreCase))) { continue }
             $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction SilentlyContinue
             if ($owner -and [string]$owner.Sid -eq $StudentSid) { $studentProcesses += $process }
         }
@@ -187,16 +191,15 @@ function Invoke-StudentExecutableTaskProbe {
         if ($Expectation -eq 'ExpectDenied') {
             $eventFound = $false
             $blockEventId = 0
+            $observedExactProcesses = @()
             while ((Get-Date) -lt $pollDeadline) {
                 if ($MarkerPath -and (Test-Path -LiteralPath $MarkerPath)) {
                     throw "$ProbeName FAILED: executable ran and created marker file $MarkerPath under student account!"
                 }
 
-                $studentProcesses = @(Get-OpenPathProbeProcessesForStudent -ProcessName $ProcessName -StudentSid $StudentSid)
+                $studentProcesses = @(Get-OpenPathProbeProcessesForStudent -ProcessName $ProcessName -StudentSid $StudentSid -ExpectedExecutablePath $ExecutablePath)
                 if ($studentProcesses.Count -gt 0) {
-                    foreach ($studentProcess in $studentProcesses) { Stop-Process -Id $studentProcess.ProcessId -Force -ErrorAction SilentlyContinue }
-                    Write-Host 'OPENPATH_BOUNDARY_PROBE_FAILURE reason=student-process-observed'
-                    throw "$ProbeName FAILED: process $ProcessName is running under student account!"
+                    $observedExactProcesses += @($studentProcesses)
                 }
 
                 try {
@@ -252,11 +255,16 @@ function Invoke-StudentExecutableTaskProbe {
                 throw "$ProbeName FAILED: executable ran and created marker file $MarkerPath under student account!"
             }
 
-            $studentProcesses = @(Get-OpenPathProbeProcessesForStudent -ProcessName $ProcessName -StudentSid $StudentSid)
+            $studentProcesses = @(Get-OpenPathProbeProcessesForStudent -ProcessName $ProcessName -StudentSid $StudentSid -ExpectedExecutablePath $ExecutablePath)
             if ($studentProcesses.Count -gt 0) {
-                foreach ($studentProcess in $studentProcesses) { Stop-Process -Id $studentProcess.ProcessId -Force -ErrorAction SilentlyContinue }
-                Write-Host 'OPENPATH_BOUNDARY_PROBE_FAILURE reason=student-process-observed'
-                throw "$ProbeName FAILED: process $ProcessName is running under student account!"
+                $observedExactProcesses += @($studentProcesses)
+            }
+            if ($observedExactProcesses.Count -gt 0) {
+                foreach ($studentProcess in @($observedExactProcesses | Sort-Object ProcessId -Unique)) { Stop-Process -Id $studentProcess.ProcessId -Force -ErrorAction SilentlyContinue }
+                if (-not $eventFound) {
+                    Write-Host 'OPENPATH_BOUNDARY_PROBE_FAILURE reason=exact-student-process-observed-without-block-event'
+                    throw "$ProbeName FAILED: exact executable $binaryLeaf ran under the student SID and no correlated AppLocker block event was observed."
+                }
             }
 
             if (-not $eventFound) {
