@@ -10,23 +10,34 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'BrowserBoundaryProbe.psm1') -Force -ErrorAction Stop
-Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $OpenPathRoot
-
-$effective = Get-AppLockerPolicy -Effective -ErrorAction Stop
-$paths = @($FirefoxPath, $EdgePath, $ProbePath)
-$decisions = @($effective | Test-AppLockerPolicy -Path $paths -User $StudentSid -ErrorAction Stop)
-$byPath = @{}
-foreach ($decision in $decisions) {
-    $byPath[[System.IO.Path]::GetFullPath([string]$decision.FilePath)] = [string]$decision.PolicyDecision
+$nativeStage = 'load-boundary-contract'
+try {
+    Import-Module (Join-Path $PSScriptRoot 'BrowserBoundaryProbe.psm1') -Force -ErrorAction Stop
+    $nativeStage = 'assert-installed-boundary'
+    Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $OpenPathRoot
+    $nativeStage = 'read-effective-policy'
+    $effective = Get-AppLockerPolicy -Effective -ErrorAction Stop
+    $nativeStage = 'evaluate-policy'
+    $paths = @($FirefoxPath, $EdgePath, $ProbePath)
+    $decisions = @($effective | Test-AppLockerPolicy -Path $paths -User $StudentSid -ErrorAction Stop)
+    $byPath = @{}
+    foreach ($decision in $decisions) {
+        $byPath[[System.IO.Path]::GetFullPath([string]$decision.FilePath)] = [string]$decision.PolicyDecision
+    }
+    $policy = [ordered]@{
+        status = 'ok'
+        firefox = [string]$byPath[[System.IO.Path]::GetFullPath($FirefoxPath)]
+        edge = [string]$byPath[[System.IO.Path]::GetFullPath($EdgePath)]
+        benignPe = [string]$byPath[[System.IO.Path]::GetFullPath($ProbePath)]
+    }
+    if ($policy.firefox -ne 'Allowed') { throw 'unexpected-firefox-decision' }
+    if ($policy.edge -notin @('Denied', 'DeniedByDefault')) { throw 'unexpected-edge-decision' }
+    if ($policy.benignPe -notin @('Denied', 'DeniedByDefault')) { throw 'unexpected-benign-pe-decision' }
+    $policy | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath -Encoding UTF8 -ErrorAction Stop
 }
-$policy = [ordered]@{
-    firefox = [string]$byPath[[System.IO.Path]::GetFullPath($FirefoxPath)]
-    edge = [string]$byPath[[System.IO.Path]::GetFullPath($EdgePath)]
-    benignPe = [string]$byPath[[System.IO.Path]::GetFullPath($ProbePath)]
+catch {
+    [ordered]@{ status = 'failed'; code = "boundary-native-$nativeStage-failed" } |
+        ConvertTo-Json -Compress |
+        Set-Content -LiteralPath $OutputPath -Encoding UTF8 -ErrorAction Stop
+    exit 1
 }
-if ($policy.firefox -ne 'Allowed') { throw "boundary-firefox-policy-$($policy.firefox)" }
-if ($policy.edge -notin @('Denied', 'DeniedByDefault')) { throw "boundary-edge-policy-$($policy.edge)" }
-if ($policy.benignPe -notin @('Denied', 'DeniedByDefault')) { throw "boundary-benign-pe-policy-$($policy.benignPe)" }
-$policy | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputPath -Encoding UTF8 -ErrorAction Stop
-

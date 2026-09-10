@@ -179,10 +179,15 @@ function Invoke-OpenPathNativePolicyProbe {
         & $nativeShell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-InstalledBoundaryNative.ps1') `
             -OpenPathRoot $OpenPathRoot -StudentSid $Target.Sid -FirefoxPath $FirefoxPath -EdgePath $EdgePath `
             -ProbePath $ProbePath -OutputPath $outputPath *> $null
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
-            throw "boundary-native-policy-probe-failed-$LASTEXITCODE"
+        if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
+            throw 'boundary-native-policy-probe-no-result'
         }
-        return Get-Content -LiteralPath $outputPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $nativeResult = Get-Content -LiteralPath $outputPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($LASTEXITCODE -ne 0 -or $nativeResult.status -ne 'ok') {
+            if ([string]$nativeResult.code -match '^boundary-native-[a-z-]{1,80}-failed$') { throw [string]$nativeResult.code }
+            throw 'boundary-native-policy-probe-failed'
+        }
+        return $nativeResult
     }
     finally {
         Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
@@ -200,11 +205,11 @@ function Invoke-OpenPathInstalledBoundaryProbes {
     $probeMarker = Join-Path $Target.ProfilePath 'openpath-e2e-probe.marker'
     New-OpenPathProbePayloadBinary -OutputPath $probeExe
     $policy = Invoke-OpenPathNativePolicyProbe -Target $Target -OpenPathRoot $OpenPathRoot -FirefoxPath $firefox -EdgePath $edge -ProbePath $probeExe
-    $firefoxRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Firefox allow' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $firefox -Expectation ExpectAllowed -ProcessName firefox -StudentSid $Target.Sid
-    $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid
-    $peRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probeExe -Arguments "`"$probeMarker`"" -Expectation ExpectDenied -StudentSid $Target.Sid -MarkerPath $probeMarker
-    $recovery = Invoke-OpenPathSystemRecoveryProbe -MarkerPath (Join-Path $env:ProgramData "OpenPathRecoveryProbe-$([guid]::NewGuid().ToString('N')).marker")
-    $watchdog = Invoke-OpenPathWatchdogProbe
+    try { $firefoxRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Firefox allow' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $firefox -Expectation ExpectAllowed -ProcessName firefox -StudentSid $Target.Sid } catch { throw 'boundary-firefox-execution-failed' }
+    try { $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid } catch { throw 'boundary-edge-execution-failed' }
+    try { $peRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probeExe -Arguments "`"$probeMarker`"" -Expectation ExpectDenied -StudentSid $Target.Sid -MarkerPath $probeMarker } catch { throw 'boundary-benign-pe-execution-failed' }
+    try { $recovery = Invoke-OpenPathSystemRecoveryProbe -MarkerPath (Join-Path $env:ProgramData "OpenPathRecoveryProbe-$([guid]::NewGuid().ToString('N')).marker") } catch { throw 'boundary-system-recovery-failed' }
+    try { $watchdog = Invoke-OpenPathWatchdogProbe } catch { throw 'boundary-watchdog-execution-failed' }
     Remove-Item -LiteralPath $probeExe,$probeMarker -Force -ErrorAction SilentlyContinue
     return [pscustomobject]@{ policyEvaluation = $policy; firefoxExecution = $firefoxRun; edgeExecution = $edgeRun; benignPeExecution = $peRun; recovery = $recovery; watchdog = $watchdog }
 }

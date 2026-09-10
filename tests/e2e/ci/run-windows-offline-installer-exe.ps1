@@ -780,6 +780,12 @@ try {
     exit 0
 }
 catch {
+    $boundaryFailureCode = if ($script:CurrentStage -eq 'run-installed-boundary-probes' -and $_.Exception.Message -match '^boundary-[a-z0-9-]{1,96}$') {
+        [string]$_.Exception.Message
+    }
+    else {
+        'not-observed'
+    }
     $installerStatus = Get-SafeInstallerStatus -Path $installerStatusPath
     $installerStatusSnapshot = Get-SafeInstallerStatusSnapshot -NamePrefix $transportNamePrefix
     $installerFailurePhase = Get-SafeInstallerFailurePhase -Path $failurePhasePath
@@ -807,6 +813,7 @@ catch {
         status = 'failed'
         code = 'windows-offline-installer-exe-e2e-failed'
         failureStage = $script:CurrentStage
+        failureDetailCode = $boundaryFailureCode
         installerExitCode = $installExitCode
         installerStatus = $installerStatus
         installerStatusSnapshot = $installerStatusSnapshot

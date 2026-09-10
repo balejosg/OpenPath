@@ -884,6 +884,7 @@ test('canonical personalized-EXE lane owns a real disposable standard target lif
     /Assert-InstalledOpenPathBrowserBoundaryAppControl[\s\S]*Get-AppLockerPolicy -Effective[\s\S]*Test-AppLockerPolicy/
   );
   assert.match(executableLane, /finally[\s\S]*Remove-OpenPathDisposableStandardTarget/);
+  assert.match(executableLane, /boundary-\[a-z0-9-\][\s\S]*failureDetailCode/);
   assert.doesNotMatch(
     executableLane,
     /Password\s*=\s*\$disposableTarget\.Password/,
