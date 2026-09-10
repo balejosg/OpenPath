@@ -103,6 +103,25 @@ function Invoke-OpenPathSchtasksCommand {
     }
 }
 
+function Get-OpenPathProbeProcessesForStudent {
+    param([string]$ProcessName, [string]$StudentSid)
+    if ([string]::IsNullOrWhiteSpace($ProcessName)) { return @() }
+    if ([string]::IsNullOrWhiteSpace($StudentSid)) {
+        return @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | ForEach-Object {
+            [pscustomobject]@{ ProcessId = $_.Id }
+        })
+    }
+    $studentProcesses = @()
+    try {
+        foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name LIKE '$ProcessName%'" -ErrorAction SilentlyContinue)) {
+            $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+            if ($owner -and [string]$owner.Sid -eq $StudentSid) { $studentProcesses += $process }
+        }
+    }
+    catch {}
+    return @($studentProcesses)
+}
+
 function Invoke-StudentExecutableTaskProbe {
     param(
         [Parameter(Mandatory = $true)][string]$ProbeName,
@@ -171,8 +190,9 @@ function Invoke-StudentExecutableTaskProbe {
                     throw "$ProbeName FAILED: executable ran and created marker file $MarkerPath under student account!"
                 }
 
-                if ($ProcessName -and (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) {
-                    Stop-Process -Name $ProcessName -Force -ErrorAction SilentlyContinue
+                $studentProcesses = @(Get-OpenPathProbeProcessesForStudent -ProcessName $ProcessName -StudentSid $StudentSid)
+                if ($studentProcesses.Count -gt 0) {
+                    foreach ($studentProcess in $studentProcesses) { Stop-Process -Id $studentProcess.ProcessId -Force -ErrorAction SilentlyContinue }
                     throw "$ProbeName FAILED: process $ProcessName is running under student account!"
                 }
 
@@ -206,8 +226,9 @@ function Invoke-StudentExecutableTaskProbe {
                 throw "$ProbeName FAILED: executable ran and created marker file $MarkerPath under student account!"
             }
 
-            if ($ProcessName -and (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) {
-                Stop-Process -Name $ProcessName -Force -ErrorAction SilentlyContinue
+            $studentProcesses = @(Get-OpenPathProbeProcessesForStudent -ProcessName $ProcessName -StudentSid $StudentSid)
+            if ($studentProcesses.Count -gt 0) {
+                foreach ($studentProcess in $studentProcesses) { Stop-Process -Id $studentProcess.ProcessId -Force -ErrorAction SilentlyContinue }
                 throw "$ProbeName FAILED: process $ProcessName is running under student account!"
             }
 
