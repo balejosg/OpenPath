@@ -133,6 +133,7 @@ function Invoke-StudentExecutableTaskProbe {
         [string]$ProcessName = '',
         [string]$StudentSid = $null,
         [string]$MarkerPath = '',
+        [string]$PackagedAppPattern = '',
         [int]$TimeoutSeconds = 20
     )
 
@@ -185,6 +186,7 @@ function Invoke-StudentExecutableTaskProbe {
 
         if ($Expectation -eq 'ExpectDenied') {
             $eventFound = $false
+            $blockEventId = 0
             while ((Get-Date) -lt $pollDeadline) {
                 if ($MarkerPath -and (Test-Path -LiteralPath $MarkerPath)) {
                     throw "$ProbeName FAILED: executable ran and created marker file $MarkerPath under student account!"
@@ -214,10 +216,33 @@ function Invoke-StudentExecutableTaskProbe {
                         })
                     if ($blockEvents.Count -gt 0) {
                         $eventFound = $true
+                        $blockEventId = 8004
                         break
                     }
                 }
                 catch {}
+
+                if (-not $eventFound -and -not [string]::IsNullOrWhiteSpace($PackagedAppPattern)) {
+                    try {
+                        $packagedBlockEvents = @(Get-WinEvent -FilterHashtable @{
+                                LogName   = 'Microsoft-Windows-AppLocker/Packaged app-Execution'
+                                Id        = 8022
+                                StartTime = $since
+                            } -ErrorAction SilentlyContinue | Where-Object {
+                                $matchesPackage = $_.Message -match $PackagedAppPattern
+                                $matchesUser = if ($StudentSid) {
+                                    ($_.UserId -and $_.UserId.Value -eq $StudentSid) -or ($_.Message -match [regex]::Escape($StudentSid))
+                                } else { $true }
+                                $matchesPackage -and $matchesUser
+                            })
+                        if ($packagedBlockEvents.Count -gt 0) {
+                            $eventFound = $true
+                            $blockEventId = 8022
+                            break
+                        }
+                    }
+                    catch {}
+                }
 
                 Start-Sleep -Seconds 1
             }
@@ -233,15 +258,16 @@ function Invoke-StudentExecutableTaskProbe {
             }
 
             if (-not $eventFound) {
-                throw "$ProbeName FAILED: AppLocker 8004 block event was not observed for $binaryLeaf within timeout ($TimeoutSeconds s)."
+                $expectedEvent = if ($PackagedAppPattern) { '8004/8022 block event' } else { '8004 block event' }
+                throw "$ProbeName FAILED: AppLocker $expectedEvent was not observed for $binaryLeaf within timeout ($TimeoutSeconds s)."
             }
 
             return [pscustomobject]@{
                 name     = $ProbeName
                 section  = 'student'
                 status   = 'pass'
-                detail   = "Real execution probe: $binaryLeaf denied for student account (AppLocker event 8004 confirmed)."
-                evidence = [pscustomobject]@{ appLocker8004Observed = $true }
+                detail   = "Real execution probe: $binaryLeaf denied for student account (AppLocker event $blockEventId confirmed)."
+                evidence = [pscustomobject]@{ appLocker8004Observed = ($blockEventId -eq 8004); appLocker8022Observed = ($blockEventId -eq 8022); blockEventId = $blockEventId }
             }
         }
         else {

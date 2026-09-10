@@ -305,6 +305,40 @@ Describe "Windows Browser Boundary CI Probes" {
             Should -Invoke Stop-Process -ModuleName BrowserBoundaryProbe -Times 0
         }
 
+        It 'accepts a matching packaged-app 8022 denial for Edge under the student SID' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { @() } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                if ($FilterHashtable.LogName -eq 'Microsoft-Windows-AppLocker/Packaged app-Execution') {
+                    return [pscustomobject]@{ Id = 8022; Message = 'Microsoft.MicrosoftEdge.Stable was prevented from running'; UserId = [pscustomobject]@{ Value = 'S-1-5-21-student-sid' } }
+                }
+                return @()
+            } -ModuleName BrowserBoundaryProbe
+
+            $result = Invoke-StudentExecutableTaskProbe -ProbeName 'Denied packaged Edge probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName msedge -StudentSid 'S-1-5-21-student-sid' -PackagedAppPattern 'MicrosoftEdge|Edge' -TimeoutSeconds 1
+
+            $result.status | Should -Be 'pass'
+            $result.evidence.appLocker8022Observed | Should -BeTrue
+        }
+
+        It 'rejects a matching packaged-app 8022 denial attributed to another SID' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { @() } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                if ($FilterHashtable.LogName -eq 'Microsoft-Windows-AppLocker/Packaged app-Execution') {
+                    return [pscustomobject]@{ Id = 8022; Message = 'Microsoft.MicrosoftEdge.Stable was prevented from running'; UserId = [pscustomobject]@{ Value = 'S-1-5-21-other-sid' } }
+                }
+                return @()
+            } -ModuleName BrowserBoundaryProbe
+
+            { Invoke-StudentExecutableTaskProbe -ProbeName 'Denied packaged Edge wrong SID probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName msedge -StudentSid 'S-1-5-21-student-sid' -PackagedAppPattern 'MicrosoftEdge|Edge' -TimeoutSeconds 1 } |
+                Should -Throw '*AppLocker 8004/8022 block event was not observed*'
+        }
+
         It 'rejects a denied launch when the observed process belongs to the student SID' {
             $testExe = Join-Path $TestDrive 'msedge-student.exe'
             Set-Content -LiteralPath $testExe -Value 'dummy'
