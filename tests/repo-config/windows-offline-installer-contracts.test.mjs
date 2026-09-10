@@ -858,6 +858,41 @@ test('physical personalized-EXE lane asserts architecture and LocalAccounts insi
   );
 });
 
+test('canonical personalized-EXE lane owns a real disposable standard target lifecycle', () => {
+  const executableLane = readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1');
+  const targetHelper = readText('tests/e2e/ci/DisposableWindowsTarget.psm1');
+
+  assert.match(targetHelper, /New-LocalUser/);
+  assert.match(targetHelper, /Enabled/);
+  assert.match(targetHelper, /Get-LocalGroupMember/);
+  assert.match(targetHelper, /CreateProfile[\s\S]*Win32_UserProfile[\s\S]*Special/);
+  assert.match(targetHelper, /Remove-CimInstance[\s\S]*Remove-LocalUser/);
+  assert.doesNotMatch(targetHelper, /Add-LocalGroupMember[\s\S]*OpenPath-Restricted/);
+  assert.match(
+    executableLane,
+    /New-OpenPathDisposableStandardTarget[\s\S]*Start-Process[\s\S]*Assert-OpenPathPreparedTargetInstalled/
+  );
+  assert.match(
+    executableLane,
+    /Invoke-OpenPathInstalledBoundaryProbes\s+-Target\s+\$disposableTarget/
+  );
+  assert.match(targetHelper, /Invoke-StudentExecutableTaskProbe[\s\S]*-StudentSid\s+\$Target\.Sid/);
+  assert.match(executableLane, /finally[\s\S]*Remove-OpenPathDisposableStandardTarget/);
+  assert.doesNotMatch(
+    executableLane,
+    /Password\s*=\s*\$disposableTarget\.Password/,
+    'serialized evidence must never contain the ephemeral credential'
+  );
+});
+
+test('canonical personalized-EXE lane cannot accept an absent or unmaterialized target', () => {
+  const targetHelper = readText('tests/e2e/ci/DisposableWindowsTarget.psm1');
+  assert.match(targetHelper, /disposable-target-user-missing/);
+  assert.match(targetHelper, /disposable-target-profile-not-materialized/);
+  assert.match(targetHelper, /disposable-target-is-administrator/);
+  assert.match(targetHelper, /preparedTarget[\s\S]*profileMaterialized\s*=\s*\$true/);
+});
+
 test('real NSIS failures preserve bounded structured AppControl diagnosis', () => {
   const installer = readText('windows/Install-OpenPath.ps1');
   const offlineModule = readText('windows/lib/install/Installer.Offline.ps1');

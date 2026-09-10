@@ -287,6 +287,7 @@ function Get-SafeInstallerFailureDiagnostic {
         installerRollbackSucceeded = 'not-observed'
         installerRollbackVerifiedNonOperational = 'not-observed'
         installerRollbackErrorCount = 'not-observed'
+        installerRollbackErrorCategories = @()
         cleanupAttempted = 'not-observed'
         cleanupSucceeded = 'not-observed'
         validationErrorCode = 'not-observed'
@@ -385,10 +386,18 @@ function Get-SafeInstallerFailureDiagnostic {
         $rollbackSucceeded = 'not-observed'
         $rollbackVerified = 'not-observed'
         $rollbackErrorCount = 'not-observed'
+        $rollbackErrorCategories = @()
         if ($document.RollbackResult) {
             $rollbackSucceeded = Get-SafeDiagnosticObservationValue -Object $document.RollbackResult -PropertyName 'Success'
             $rollbackVerified = Get-SafeDiagnosticObservationValue -Object $document.RollbackResult -PropertyName 'VerifiedNonOperational'
             $rollbackErrorCount = @($document.RollbackResult.Errors).Count
+            foreach ($rollbackError in @($document.RollbackResult.Errors)) {
+                $category = ([string]$rollbackError -split ':', 2)[0]
+                if ($category -notin @('tasks', 'dns', 'firewall', 'applocker', 'restrictedGroup', 'browserArtifacts', 'acrylic', 'config', 'applockerVerify')) {
+                    throw 'invalid rollback error category'
+                }
+                $rollbackErrorCategories += $category
+            }
         }
         $appControlCommitState = [string]$appControl.AppControlCommitState
         if ($appControlCommitState -notmatch '^(not-observed|not-committed|committed)$') {
@@ -417,6 +426,7 @@ function Get-SafeInstallerFailureDiagnostic {
             installerRollbackSucceeded = $rollbackSucceeded
             installerRollbackVerifiedNonOperational = $rollbackVerified
             installerRollbackErrorCount = $rollbackErrorCount
+            installerRollbackErrorCategories = @($rollbackErrorCategories)
             cleanupAttempted = Get-SafeDiagnosticObservationValue -Object $appControl -PropertyName 'CleanupAttempted'
             cleanupSucceeded = Get-SafeDiagnosticObservationValue -Object $appControl -PropertyName 'CleanupSucceeded'
             validationErrorCode = 'not-observed'
@@ -439,6 +449,7 @@ function Get-SafeInstallerFailureDiagnostic {
             'invalid observed AppControl state',
             'invalid AppControl commit state',
             'invalid PowerShell process architecture'
+            'invalid rollback error category'
         )
         $notObserved.validationErrorCode = if ($_.Exception.Message -in $safeValidationErrors) {
             $_.Exception.Message -replace ' ', '-'
@@ -610,6 +621,9 @@ $installerChildRuntime = Get-SafeInstallerChildRuntime -Path $installerChildRunt
 $trailerDiagnosticStatus = 'missing'
 $trailerDiagnosticSource = 'installer-child'
 $result = $null
+$disposableTarget = $null
+$targetCleanup = $null
+$boundaryEvidence = $null
 
 foreach ($transportFileName in @(
     "$transportNamePrefix-status.txt",
@@ -623,6 +637,10 @@ foreach ($transportFileName in @(
 }
 
 try {
+    $script:CurrentStage = 'prepare-disposable-standard-target'
+    Import-Module (Join-Path $PSScriptRoot 'DisposableWindowsTarget.psm1') -Force -ErrorAction Stop
+    $disposableTarget = New-OpenPathDisposableStandardTarget
+
     $script:CurrentStage = 'launch-executable'
     $env:OPENPATH_WINDOWS_ROOT = $OpenPathRoot
     $installProcess = Start-Process -FilePath $resolvedExecutable -ArgumentList @('/S') -Wait -PassThru
@@ -725,6 +743,11 @@ try {
         throw 'completed-whitelist-url-missing'
     }
 
+    $script:CurrentStage = 'validate-prepared-target-installed'
+    $installedTarget = Assert-OpenPathPreparedTargetInstalled -Target $disposableTarget
+    $script:CurrentStage = 'run-installed-boundary-probes'
+    $boundaryEvidence = Invoke-OpenPathInstalledBoundaryProbes -Target $disposableTarget -OpenPathRoot $OpenPathRoot
+
     $result = [ordered]@{
         status = 'ok'
         installerExitCode = $installExitCode
@@ -739,6 +762,16 @@ try {
         pendingStateObserved = $true
         retryOutcome = [string]$retry.Outcome
         pendingStateCleared = $true
+        preparedTarget = [ordered]@{
+            sid = [string]$installedTarget.Sid
+            profilePath = [string]$installedTarget.profilePath
+            enabled = [bool]$installedTarget.enabled
+            administrator = [bool]$installedTarget.administrator
+            profileMaterialized = [bool]$installedTarget.profileMaterialized
+            profileSpecial = [bool]$installedTarget.profileSpecial
+            restrictedGroupMember = [bool]$installedTarget.restrictedGroupMember
+        }
+        boundary = $boundaryEvidence
         cleanupAttempted = 'not-observed'
         cleanupSucceeded = 'not-observed'
     }
@@ -798,6 +831,7 @@ catch {
 }
 finally {
     $e2eCleanupAttempted = $true
+    $targetCleanupSucceeded = $null -eq $disposableTarget
     if ($stubJob) {
         Stop-Job -Job $stubJob -ErrorAction SilentlyContinue
         Remove-Job -Job $stubJob -Force -ErrorAction SilentlyContinue
@@ -807,6 +841,15 @@ finally {
     }
     if ($urlAclAdded) {
         & netsh http delete urlacl "url=$urlAcl" *> $null
+    }
+    if ($null -ne $disposableTarget) {
+        try {
+            $targetCleanup = Remove-OpenPathDisposableStandardTarget -Target $disposableTarget
+            $targetCleanupSucceeded = [bool]($targetCleanup.profileRemoved -and $targetCleanup.userRemoved -and $targetCleanup.credentialDestroyed)
+        }
+        catch {
+            $targetCleanupSucceeded = $false
+        }
     }
     if ($certificate) {
         Remove-Item -LiteralPath "Cert:\LocalMachine\My\$($certificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
@@ -849,7 +892,8 @@ finally {
     else {
         $env:OPENPATH_WINDOWS_ROOT = $previousOpenPathRoot
     }
-    $e2eCleanupSucceeded = [bool](-not (Test-Path -LiteralPath $OpenPathRoot) -and
+    $e2eCleanupSucceeded = [bool]($targetCleanupSucceeded -and
+        -not (Test-Path -LiteralPath $OpenPathRoot) -and
         -not (Test-Path -LiteralPath $installerStatusPath) -and
         -not (Test-Path -LiteralPath $trailerDiagnosticPath) -and
         -not (Test-Path -LiteralPath $failurePhasePath) -and
@@ -857,6 +901,9 @@ finally {
     if ($null -ne $result) {
         $result.cleanupAttempted = $e2eCleanupAttempted
         $result.cleanupSucceeded = $e2eCleanupSucceeded
+        if ($null -ne $targetCleanup) {
+            $result.targetCleanup = $targetCleanup
+        }
         if ($evidencePathWasSupplied) {
             try {
                 Write-SafeEvidence -Payload $result -Path $EvidencePath
