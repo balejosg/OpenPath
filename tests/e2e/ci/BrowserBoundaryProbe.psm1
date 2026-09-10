@@ -195,6 +195,7 @@ function Invoke-StudentExecutableTaskProbe {
                 $studentProcesses = @(Get-OpenPathProbeProcessesForStudent -ProcessName $ProcessName -StudentSid $StudentSid)
                 if ($studentProcesses.Count -gt 0) {
                     foreach ($studentProcess in $studentProcesses) { Stop-Process -Id $studentProcess.ProcessId -Force -ErrorAction SilentlyContinue }
+                    Write-Host 'OPENPATH_BOUNDARY_PROBE_FAILURE reason=student-process-observed'
                     throw "$ProbeName FAILED: process $ProcessName is running under student account!"
                 }
 
@@ -254,6 +255,7 @@ function Invoke-StudentExecutableTaskProbe {
             $studentProcesses = @(Get-OpenPathProbeProcessesForStudent -ProcessName $ProcessName -StudentSid $StudentSid)
             if ($studentProcesses.Count -gt 0) {
                 foreach ($studentProcess in $studentProcesses) { Stop-Process -Id $studentProcess.ProcessId -Force -ErrorAction SilentlyContinue }
+                Write-Host 'OPENPATH_BOUNDARY_PROBE_FAILURE reason=student-process-observed'
                 throw "$ProbeName FAILED: process $ProcessName is running under student account!"
             }
 

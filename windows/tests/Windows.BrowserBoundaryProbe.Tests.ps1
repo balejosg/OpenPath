@@ -378,9 +378,13 @@ Describe "Windows Browser Boundary CI Probes" {
             Mock Get-CimInstance { $testProcess } -ModuleName BrowserBoundaryProbe
             Mock Invoke-CimMethod { [pscustomobject]@{ Sid = 'S-1-5-21-student-sid' } } -ModuleName BrowserBoundaryProbe
             Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+            Mock Write-Host {} -ModuleName BrowserBoundaryProbe
 
             { Invoke-StudentExecutableTaskProbe -ProbeName 'Denied student ownership probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName msedge -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 } |
                 Should -Throw '*process msedge is running under student account*'
+            Should -Invoke Write-Host -ModuleName BrowserBoundaryProbe -ParameterFilter {
+                $Object -eq 'OPENPATH_BOUNDARY_PROBE_FAILURE reason=student-process-observed'
+            } -Times 1
         }
 
         It "Passes when ExpectAllowed and marker file is present" {
