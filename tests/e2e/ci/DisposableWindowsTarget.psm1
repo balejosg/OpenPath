@@ -36,6 +36,68 @@ public static class OpenPathDisposableProfileNative {
     return $buffer.ToString()
 }
 
+function Set-OpenPathDisposableTargetUserRight {
+    param(
+        [Parameter(Mandatory = $true)][string]$Sid,
+        [Parameter(Mandatory = $true)][string]$Right,
+        [Parameter(Mandatory = $true)][bool]$Present
+    )
+    $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-user-right-$([guid]::NewGuid().ToString('N'))"
+    $cfgPath = Join-Path $workRoot 'rights.inf'
+    $dbPath = Join-Path $workRoot 'rights.sdb'
+    $entry = "*$Sid"
+    try {
+        New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
+        & secedit.exe /export /cfg $cfgPath /areas USER_RIGHTS *> $null
+        if ($LASTEXITCODE -ne 0) { throw "disposable-target-user-right-export-failed-$LASTEXITCODE" }
+
+        $lines = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in Get-Content -LiteralPath $cfgPath) { $lines.Add([string]$line) }
+        $rightPattern = '^\s*' + [regex]::Escape($Right) + '\s*='
+        $rightIndex = -1
+        for ($index = 0; $index -lt $lines.Count; $index++) {
+            if ($lines[$index] -match $rightPattern) { $rightIndex = $index; break }
+        }
+
+        $members = [System.Collections.Generic.List[string]]::new()
+        if ($rightIndex -ge 0) {
+            $value = ($lines[$rightIndex] -split '=', 2)[1]
+            foreach ($member in ($value -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+                if ($member -ne $entry) { $members.Add($member) }
+            }
+        }
+        if ($Present) { $members.Add($entry) }
+        $replacement = "$Right = $($members -join ',')"
+        if ($rightIndex -ge 0) {
+            $lines[$rightIndex] = $replacement
+        }
+        elseif ($Present) {
+            if ($lines.IndexOf('[Privilege Rights]') -lt 0) { $lines.Add('[Privilege Rights]') }
+            $lines.Add($replacement)
+        }
+        else {
+            return
+        }
+
+        $lines | Set-Content -LiteralPath $cfgPath -Encoding Unicode
+        & secedit.exe /configure /db $dbPath /cfg $cfgPath /areas USER_RIGHTS *> $null
+        if ($LASTEXITCODE -ne 0) { throw "disposable-target-user-right-configure-failed-$LASTEXITCODE" }
+    }
+    finally {
+        Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Grant-OpenPathDisposableTargetUserRight {
+    param([string]$Sid, [string]$Right)
+    Set-OpenPathDisposableTargetUserRight -Sid $Sid -Right $Right -Present $true
+}
+
+function Revoke-OpenPathDisposableTargetUserRight {
+    param([string]$Sid, [string]$Right)
+    Set-OpenPathDisposableTargetUserRight -Sid $Sid -Right $Right -Present $false
+}
+
 function Assert-OpenPathDisposableTarget {
     param([Parameter(Mandatory = $true)][object]$Target)
     $user = Get-LocalUser -Name $Target.UserName -ErrorAction SilentlyContinue
@@ -82,7 +144,8 @@ function New-OpenPathDisposableStandardTarget {
         Enable-LocalUser -Name $userName -ErrorAction Stop
         $sid = ConvertTo-OpenPathTargetSidString $user.SID
         $profilePath = Invoke-OpenPathCreateDisposableProfile -Sid $sid -UserName $userName
-        $target = [pscustomobject]@{ UserName = $userName; Sid = $sid; ProfilePath = $profilePath; Password = $password }
+        Grant-OpenPathDisposableTargetUserRight -Sid $sid -Right 'SeBatchLogonRight'
+        $target = [pscustomobject]@{ UserName = $userName; Sid = $sid; ProfilePath = $profilePath; Password = $password; BatchLogonRightGranted = $true }
         $null = Assert-OpenPathDisposableTarget -Target $target
         return $target
     }
@@ -228,13 +291,33 @@ function Invoke-OpenPathInstalledBoundaryProbes {
 
 function Remove-OpenPathDisposableStandardTarget {
     param([Parameter(Mandatory = $true)][object]$Target)
-    $profile = @(Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$($Target.Sid)'" -ErrorAction SilentlyContinue)
-    foreach ($record in $profile) {
-        if ($record.Special -eq $false -and $record.Loaded -eq $false) { Remove-CimInstance -InputObject $record -ErrorAction Stop }
+    $userRightRemoved = -not ($Target.PSObject.Properties['BatchLogonRightGranted'] -and $Target.BatchLogonRightGranted)
+    if ($Target.PSObject.Properties['BatchLogonRightGranted'] -and $Target.BatchLogonRightGranted) {
+        try {
+            Revoke-OpenPathDisposableTargetUserRight -Sid $Target.Sid -Right 'SeBatchLogonRight'
+            $Target.BatchLogonRightGranted = $false
+            $userRightRemoved = $true
+        }
+        catch { $userRightRemoved = $false }
     }
-    Remove-LocalUser -Name $Target.UserName -ErrorAction SilentlyContinue
+    $profileRemoved = $false
+    try {
+        $profileDeadline = (Get-Date).AddSeconds(20)
+        do {
+            $profile = @(Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$($Target.Sid)'" -ErrorAction SilentlyContinue)
+            if ($profile.Count -eq 0 -or @($profile | Where-Object { $_.Loaded }).Count -eq 0) { break }
+            Start-Sleep -Milliseconds 250
+        } while ((Get-Date) -lt $profileDeadline)
+        foreach ($record in $profile) {
+            if ($record.Special -eq $false -and $record.Loaded -eq $false) { Remove-CimInstance -InputObject $record -ErrorAction Stop }
+        }
+        $profileRemoved = @(Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$($Target.Sid)'" -ErrorAction SilentlyContinue).Count -eq 0
+    }
+    catch { $profileRemoved = $false }
+    try { Remove-LocalUser -Name $Target.UserName -ErrorAction SilentlyContinue } catch {}
+    $userRemoved = -not (Get-LocalUser -Name $Target.UserName -ErrorAction SilentlyContinue)
     $Target.Password = $null
-    return [pscustomobject]@{ profileRemoved = (@(Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$($Target.Sid)'" -ErrorAction SilentlyContinue).Count -eq 0); userRemoved = (-not (Get-LocalUser -Name $Target.UserName -ErrorAction SilentlyContinue)); credentialDestroyed = ($null -eq $Target.Password) }
+    return [pscustomobject]@{ userRightRemoved = $userRightRemoved; profileRemoved = $profileRemoved; userRemoved = $userRemoved; credentialDestroyed = ($null -eq $Target.Password) }
 }
 
 Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Remove-OpenPathDisposableStandardTarget

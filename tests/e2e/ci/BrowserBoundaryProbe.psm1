@@ -122,7 +122,8 @@ function Invoke-StudentExecutableTaskProbe {
     }
 
     $probeTask = "OpenPathProbe-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
-    $useScheduledTaskCmdlets = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and $env:OPENPATH_TEST_FORCE_SCHTASKS -ne '1'
+    $useScheduledTaskCmdlets = ($env:OPENPATH_TEST_FORCE_SCHEDULED_TASK_CMDLETS -eq '1') -or
+        ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and $env:OPENPATH_TEST_FORCE_SCHTASKS -ne '1')
     $quotedExecutablePath = '\"' + $ExecutablePath + '\"'
     $taskCommand = if ($Arguments) { "$quotedExecutablePath $Arguments" } else { $quotedExecutablePath }
     $taskTime = (Get-Date).AddMinutes(1).ToString('HH:mm')
@@ -296,6 +297,15 @@ function Invoke-StudentExecutableTaskProbe {
     }
     finally {
         if ($useScheduledTaskCmdlets) {
+            $registeredProbe = Get-ScheduledTask -TaskName $probeTask -ErrorAction SilentlyContinue
+            if ($registeredProbe -and [string]$registeredProbe.State -eq 'Running') {
+                Stop-ScheduledTask -TaskName $probeTask -ErrorAction SilentlyContinue
+                $stopDeadline = (Get-Date).AddSeconds(10)
+                do {
+                    Start-Sleep -Milliseconds 100
+                    $registeredProbe = Get-ScheduledTask -TaskName $probeTask -ErrorAction SilentlyContinue
+                } while ($registeredProbe -and [string]$registeredProbe.State -eq 'Running' -and (Get-Date) -lt $stopDeadline)
+            }
             Unregister-ScheduledTask -TaskName $probeTask -Confirm:$false -ErrorAction SilentlyContinue
         }
         else {

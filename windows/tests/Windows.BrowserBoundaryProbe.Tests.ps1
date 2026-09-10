@@ -33,6 +33,12 @@ Describe "Windows Browser Boundary CI Probes" {
         if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
             function global:Get-ScheduledTask { param($TaskName) }
         }
+        if (-not (Get-Command New-ScheduledTaskAction -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskAction { param($Execute, $Argument) } }
+        if (-not (Get-Command New-ScheduledTaskTrigger -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskTrigger { param([switch]$Once, $At) } }
+        if (-not (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Register-ScheduledTask { param($TaskName, $Action, $Trigger, $User, $Password, $RunLevel, [switch]$Force) } }
+        if (-not (Get-Command Start-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Start-ScheduledTask { param($TaskName) } }
+        if (-not (Get-Command Stop-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Stop-ScheduledTask { param($TaskName) } }
+        if (-not (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Unregister-ScheduledTask { param($TaskName, [switch]$Confirm) } }
     }
 
     AfterAll {
@@ -40,6 +46,36 @@ Describe "Windows Browser Boundary CI Probes" {
     }
 
     Context "Invoke-StudentExecutableTaskProbe" {
+        It 'stops an active credentialed probe task before unregistering it' {
+            $testExe = Join-Path $TestDrive 'probe-task-cleanup.exe'
+            $markerPath = Join-Path $TestDrive 'probe-task-cleanup.marker'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            Set-Content -LiteralPath $markerPath -Value 'ran'
+            $env:OPENPATH_TEST_FORCE_SCHTASKS = '0'
+            $env:OPENPATH_TEST_FORCE_SCHEDULED_TASK_CMDLETS = '1'
+            Mock Register-ScheduledTask {} -ModuleName BrowserBoundaryProbe
+            Mock Start-ScheduledTask {} -ModuleName BrowserBoundaryProbe
+            $script:taskStateQueryCount = 0
+            Mock Get-ScheduledTask {
+                $script:taskStateQueryCount++
+                [pscustomobject]@{ State = $(if ($script:taskStateQueryCount -eq 1) { 'Running' } else { 'Ready' }) }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Start-Sleep {} -ModuleName BrowserBoundaryProbe
+            Mock Stop-ScheduledTask {} -ModuleName BrowserBoundaryProbe
+            Mock Unregister-ScheduledTask {} -ModuleName BrowserBoundaryProbe
+            try {
+                $result = Invoke-StudentExecutableTaskProbe -ProbeName 'Task cleanup probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectAllowed -MarkerPath $markerPath -TimeoutSeconds 1
+                $result.status | Should -Be 'pass'
+                Should -Invoke Stop-ScheduledTask -ModuleName BrowserBoundaryProbe -Times 1
+                Should -Invoke Start-Sleep -ModuleName BrowserBoundaryProbe -Times 1
+                Should -Invoke Unregister-ScheduledTask -ModuleName BrowserBoundaryProbe -Times 1
+            }
+            finally {
+                Remove-Item Env:OPENPATH_TEST_FORCE_SCHEDULED_TASK_CMDLETS -ErrorAction SilentlyContinue
+                $env:OPENPATH_TEST_FORCE_SCHTASKS = '1'
+            }
+        }
+
         It "Throws when probe executable does not exist on host (fail preparation, no silent pass)" {
             $nonExistentExe = Join-Path $TestDrive "missing-test-binary.exe"
             {

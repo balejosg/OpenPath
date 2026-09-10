@@ -852,7 +852,7 @@ finally {
     if ($null -ne $disposableTarget) {
         try {
             $targetCleanup = Remove-OpenPathDisposableStandardTarget -Target $disposableTarget
-            $targetCleanupSucceeded = [bool]($targetCleanup.profileRemoved -and $targetCleanup.userRemoved -and $targetCleanup.credentialDestroyed)
+            $targetCleanupSucceeded = [bool]($targetCleanup.userRightRemoved -and $targetCleanup.profileRemoved -and $targetCleanup.userRemoved -and $targetCleanup.credentialDestroyed)
         }
         catch {
             $targetCleanupSucceeded = $false

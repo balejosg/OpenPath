@@ -36,9 +36,12 @@ Describe 'Canonical offline installer disposable target' {
         Mock New-LocalUser { [pscustomobject]@{ Name = 'op-e2e-test'; SID = $script:testSid } } -ModuleName DisposableWindowsTarget
         Mock Enable-LocalUser {} -ModuleName DisposableWindowsTarget
         Mock Invoke-OpenPathCreateDisposableProfile { $script:testPath } -ModuleName DisposableWindowsTarget
+        Mock Grant-OpenPathDisposableTargetUserRight {} -ModuleName DisposableWindowsTarget
+        Mock Revoke-OpenPathDisposableTargetUserRight {} -ModuleName DisposableWindowsTarget
         Mock Remove-CimInstance {} -ModuleName DisposableWindowsTarget
         Mock Remove-LocalUser {} -ModuleName DisposableWindowsTarget
         Mock Add-LocalGroupMember {} -ModuleName DisposableWindowsTarget
+        Mock Start-Sleep {} -ModuleName DisposableWindowsTarget
     }
 
     It 'creates an enabled non-admin account with a materialized non-special profile without pre-populating the restricted group' {
@@ -48,6 +51,9 @@ Describe 'Canonical offline installer disposable target' {
         [string]::IsNullOrWhiteSpace($target.Password) | Should -BeFalse
         Should -Invoke New-LocalUser -ModuleName DisposableWindowsTarget -Times 1
         Should -Invoke Enable-LocalUser -ModuleName DisposableWindowsTarget -Times 1
+        Should -Invoke Grant-OpenPathDisposableTargetUserRight -ModuleName DisposableWindowsTarget -Times 1 -ParameterFilter {
+            $Sid -eq $script:testSid -and $Right -eq 'SeBatchLogonRight'
+        }
         Should -Invoke Add-LocalGroupMember -ModuleName DisposableWindowsTarget -Times 0
     }
 
@@ -73,13 +79,45 @@ Describe 'Canonical offline installer disposable target' {
             return @()
         } -ModuleName DisposableWindowsTarget
         Mock Get-LocalUser { $null } -ModuleName DisposableWindowsTarget
-        $target = [pscustomobject]@{ UserName = 'op-e2e-test'; Sid = $script:testSid; ProfilePath = $script:testPath; Password = 'not-serialized' }
+        $target = [pscustomobject]@{ UserName = 'op-e2e-test'; Sid = $script:testSid; ProfilePath = $script:testPath; Password = 'not-serialized'; BatchLogonRightGranted = $true }
         $cleanup = Remove-OpenPathDisposableStandardTarget -Target $target
         $cleanup.profileRemoved | Should -BeTrue
         $cleanup.userRemoved | Should -BeTrue
         $cleanup.credentialDestroyed | Should -BeTrue
         $target.Password | Should -BeNullOrEmpty
         Should -Invoke Remove-CimInstance -ModuleName DisposableWindowsTarget -Times 1
+        Should -Invoke Revoke-OpenPathDisposableTargetUserRight -ModuleName DisposableWindowsTarget -Times 1 -ParameterFilter {
+            $Sid -eq $script:testSid -and $Right -eq 'SeBatchLogonRight'
+        }
         Should -Invoke Remove-LocalUser -ModuleName DisposableWindowsTarget -Times 1
+    }
+
+    It 'waits for a task-loaded disposable profile to unload before removing it' {
+        $loadedProfile = if (Get-Command New-CimInstance -ErrorAction SilentlyContinue) {
+            New-CimInstance -ClassName Win32_UserProfile -Namespace root/cimv2 -ClientOnly -Property @{
+                SID = $script:testSid
+                LocalPath = $script:testPath
+                Special = $false
+                Loaded = $true
+            }
+        }
+        else {
+            [pscustomobject]@{ SID = $script:testSid; LocalPath = $script:testPath; Special = $false; Loaded = $true }
+        }
+        $script:profileQueryCount = 0
+        Mock Get-CimInstance {
+            $script:profileQueryCount++
+            if ($script:profileQueryCount -eq 1) { return $loadedProfile }
+            if ($script:profileQueryCount -eq 2) { return $script:testProfile }
+            return @()
+        } -ModuleName DisposableWindowsTarget
+        Mock Get-LocalUser { $null } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName = 'op-e2e-test'; Sid = $script:testSid; ProfilePath = $script:testPath; Password = 'not-serialized'; BatchLogonRightGranted = $true }
+
+        $cleanup = Remove-OpenPathDisposableStandardTarget -Target $target
+
+        $cleanup.profileRemoved | Should -BeTrue
+        Should -Invoke Start-Sleep -ModuleName DisposableWindowsTarget -Times 1
+        Should -Invoke Remove-CimInstance -ModuleName DisposableWindowsTarget -Times 1
     }
 }
