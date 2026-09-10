@@ -654,6 +654,43 @@ Describe "Windows Browser Boundary CI Probes" {
             $correlation.candidates[0].expected.executablePath | Should -Be 'C:\\Expected\\msedge.exe'
         }
 
+        It 'correlates AppLocker RuleAndFileData leaves case-insensitively and prefers FullFilePath' {
+            $event = [pscustomobject]@{
+                Id = 8004
+                Xml = @'
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+  <System><EventID>8004</EventID><Execution ProcessID="9999" /></System>
+  <UserData>
+    <RuleAndFileData>
+      <rUlEiD>rule-edge</rUlEiD>
+      <rUlEnAmE>Edge deny</rUlEnAmE>
+      <TaRgEtUsEr>S-1-5-21-student-sid</TaRgEtUsEr>
+      <TaRgEtPrOcEsSiD>5436</TaRgEtPrOcEsSiD>
+      <TaRgEtLoGoNId>0xedge</TaRgEtLoGoNId>
+      <FilePath>%PROGRAMFILES%\Microsoft Edge\Application\msedge.exe</FilePath>
+      <FuLlFiLePaTh>C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe</FuLlFiLePaTh>
+      <IgnoredLeaf>must-not-become-evidence</IgnoredLeaf>
+    </RuleAndFileData>
+  </UserData>
+</Event>
+'@
+            }
+            Add-Member -InputObject $event -MemberType ScriptMethod -Name ToXml -Value { $this.Xml }
+
+            $expectedPath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+            $correlation = Get-OpenPathCorrelatedAppLockerEvent -Events @($event) -AllowedEventIds @(8004) -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -BinaryLeaf 'msedge.exe' -ExpectedExecutablePath $expectedPath -StudentSid 'S-1-5-21-student-sid' -ProcessIds @(5436)
+
+            $correlation.matched | Should -BeTrue
+            $correlation.event.observationSource | Should -Be 'event-xml'
+            $correlation.event.observedPath | Should -Be $expectedPath
+            $correlation.event.observedProcessId | Should -Be 5436
+            $correlation.event.observedUserSid | Should -Be 'S-1-5-21-student-sid'
+            $correlation.event.observedRuleId | Should -Be 'rule-edge'
+            $correlation.event.observedRuleName | Should -Be 'Edge deny'
+            $correlation.event.observedTargetLogonId | Should -Be '0xedge'
+            ($correlation.event | ConvertTo-Json -Depth 8) | Should -Not -Match 'must-not-become-evidence'
+        }
+
         It 'does not correlate an AppLocker event whose PID belongs to another process' {
             $testExe = Join-Path $TestDrive 'msedge.exe'
             Set-Content -LiteralPath $testExe -Value 'dummy'
@@ -779,7 +816,8 @@ Describe "Windows Browser Boundary CI Probes" {
             Assert-ContentContainsAll -Content $probeModule -Needles @(
                 'taskIdentity',
                 'principal',
-                'logonType',
+                'taskLogonType',
+                'securityLogonType',
                 'runLevel',
                 'TaskScheduler/Operational',
                 '129',
@@ -814,8 +852,8 @@ Describe "Windows Browser Boundary CI Probes" {
             $taskEvidence.taskLogonType | Should -Be 'Password'
             $taskEvidence.expectedStudentSid | Should -Be 'S-1-5-21-student-sid'
             $taskEvidence.principal | Should -Be 'CONTOSO\student01'
-            $taskEvidence.logonType | Should -Be 'Password'
-            $taskEvidence.securityLogons[0].logonType | Should -Be '4'
+            $taskEvidence.PSObject.Properties.Name | Should -Not -Contain 'logonType'
+            $taskEvidence.securityLogons[0].securityLogonType | Should -Be '4'
             $taskEvidence.securityLogons[0].logonId | Should -Be '0x123'
         }
 

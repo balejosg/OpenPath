@@ -460,6 +460,29 @@ function Get-OpenPathEventXmlFields {
     param([Parameter(Mandatory = $true)][object]$Event)
 
     $fields = [ordered]@{}
+    $allowedFieldNames = @(
+        'filepath',
+        'fullfilepath',
+        'path',
+        'package',
+        'packagename',
+        'packagefullname',
+        'ruleid',
+        'rulename',
+        'usersid',
+        'user_sid',
+        'targetuser',
+        'targetusersid',
+        'targetusername',
+        'processid',
+        'pid',
+        'targetprocessid',
+        'targetlogonid',
+        'logonid',
+        'logontype',
+        'taskname',
+        'taskpath'
+    )
     $eventXml = $null
     try {
         if ($Event.PSObject.Methods['ToXml']) {
@@ -476,12 +499,38 @@ function Get-OpenPathEventXmlFields {
         return [pscustomobject][ordered]@{ available = $false; fields = $fields }
     }
 
+    # EventData uses <Data Name="..."> while AppLocker 8002/8004 can use
+    # UserData/RuleAndFileData leaves. Read only the fields needed for bounded
+    # correlation and task/logon identity evidence; never serialize arbitrary XML.
     foreach ($dataNode in @($eventXml.SelectNodes('//*[local-name()="Data"]'))) {
-        $name = ([string]$dataNode.Name).ToLowerInvariant()
+        $nameAttribute = $dataNode.Attributes['Name']
+        if (-not $nameAttribute) { continue }
+        $name = ([string]$nameAttribute.Value).ToLowerInvariant()
+        if ($allowedFieldNames -notcontains $name) { continue }
         if (-not $fields.Contains($name)) {
             $fields[$name] = [string]$dataNode.InnerText
         }
     }
+
+    foreach ($leafNode in @($eventXml.SelectNodes('//*[local-name()="RuleAndFileData"]//*[not(*)]'))) {
+        $name = ([string]$leafNode.LocalName).ToLowerInvariant()
+        if ($allowedFieldNames -notcontains $name) { continue }
+        $value = [string]$leafNode.InnerText
+        switch ($name) {
+            'targetuser' {
+                if (-not $fields.Contains('targetuser')) { $fields.targetuser = $value }
+                if (-not $fields.Contains('usersid')) { $fields.usersid = $value }
+            }
+            'targetprocessid' {
+                if (-not $fields.Contains('targetprocessid')) { $fields.targetprocessid = $value }
+                if (-not $fields.Contains('processid')) { $fields.processid = $value }
+            }
+            default {
+                if (-not $fields.Contains($name)) { $fields[$name] = $value }
+            }
+        }
+    }
+
     $execution = $eventXml.SelectSingleNode('//*[local-name()="Execution"]')
     if ($execution -and -not $fields.Contains('processid')) {
         foreach ($attributeName in @('ProcessID', 'ProcessId', 'PID', 'Pid')) {
@@ -517,8 +566,6 @@ function Get-OpenPathTaskIdentityEvidence {
         taskRunLevel = $null
         principal = $null
         principalSource = 'unknown'
-        logonType = $null
-        logonTypeSource = 'unknown'
         runLevel = $null
         runLevelSource = 'unknown'
         registeredAtUtc = if ($RegisteredAtUtc) { $RegisteredAtUtc } else { $null }
@@ -542,8 +589,6 @@ function Get-OpenPathTaskIdentityEvidence {
                 }
                 if ($task.Principal -and $task.Principal.LogonType) {
                     $taskEvidence.taskLogonType = [string]$task.Principal.LogonType
-                    $taskEvidence.logonType = $taskEvidence.taskLogonType
-                    $taskEvidence.logonTypeSource = 'task-definition'
                 }
                 if ($task.Principal -and $task.Principal.RunLevel) {
                     $taskEvidence.taskRunLevel = [string]$task.Principal.RunLevel
@@ -629,7 +674,7 @@ function Get-OpenPathTaskIdentityEvidence {
                 $taskEvidence.securityLogons += [pscustomobject][ordered]@{
                     id = 4624
                     targetUserSid = $targetSid
-                    logonType = $securityLogonType
+                    securityLogonType = $securityLogonType
                     logonId = $securityLogonId
                 }
             }
@@ -694,58 +739,54 @@ function Get-OpenPathAppLockerEventData {
         ruleName = $null
         userSid = $null
         processId = $null
+        targetLogonId = $null
         messageFallback = $null
     }
-    $eventXml = $null
-    try {
-        if ($Event.PSObject.Methods['ToXml']) {
-            $eventXml = [xml]$Event.ToXml()
-        }
-        elseif ($Event.PSObject.Properties['Xml'] -and $Event.Xml) {
-            $eventXml = [xml]$Event.Xml
-        }
-    }
-    catch {
-        $eventXml = $null
-    }
-
-    if ($eventXml) {
+    $xmlFields = Get-OpenPathEventXmlFields -Event $Event
+    if ($xmlFields.available) {
         $observed.source = 'event-xml'
-        foreach ($dataNode in @($eventXml.SelectNodes('//*[local-name()="Data"]'))) {
-            $dataName = ([string]$dataNode.Name).ToLowerInvariant()
-            $dataValue = [string]$dataNode.InnerText
-            switch ($dataName) {
-                'filepath' { $observed.path = $dataValue }
-                'path' { $observed.path = $dataValue }
-                'package' { $observed.package = $dataValue }
-                'packagename' { $observed.package = $dataValue }
-                'packagefullname' { $observed.package = $dataValue }
-                'ruleid' { $observed.ruleId = $dataValue }
-                'rulename' { $observed.ruleName = $dataValue }
-                'usersid' { $observed.userSid = $dataValue }
-                'user_sid' { $observed.userSid = $dataValue }
-                'processid' {
-                    $parsedProcessId = 0L
-                    if ([long]::TryParse($dataValue, [ref]$parsedProcessId) -and $parsedProcessId -gt 0) { $observed.processId = [int]$parsedProcessId }
-                }
-                'pid' {
-                    $parsedProcessId = 0L
-                    if ([long]::TryParse($dataValue, [ref]$parsedProcessId) -and $parsedProcessId -gt 0) { $observed.processId = [int]$parsedProcessId }
-                }
+        $fields = $xmlFields.fields
+        if ($fields.Contains('fullfilepath') -and -not [string]::IsNullOrWhiteSpace([string]$fields.fullfilepath)) {
+            $observed.path = [string]$fields.fullfilepath
+        }
+        elseif ($fields.Contains('filepath')) {
+            $observed.path = [string]$fields.filepath
+        }
+        elseif ($fields.Contains('path')) {
+            $observed.path = [string]$fields.path
+        }
+        foreach ($fieldName in @('packagefullname', 'packagename', 'package')) {
+            if ($fields.Contains($fieldName) -and -not [string]::IsNullOrWhiteSpace([string]$fields[$fieldName])) {
+                $observed.package = [string]$fields[$fieldName]
+                break
             }
         }
-        $execution = $eventXml.SelectSingleNode('//*[local-name()="Execution"]')
-        if ($execution -and $null -eq $observed.processId) {
-            foreach ($attributeName in @('ProcessID', 'ProcessId', 'PID', 'Pid')) {
-                $attribute = $execution.Attributes[$attributeName]
-                if ($attribute) {
-                    $parsedProcessId = 0L
-                    if ([long]::TryParse([string]$attribute.Value, [ref]$parsedProcessId) -and $parsedProcessId -gt 0) {
-                        $observed.processId = [int]$parsedProcessId
-                        break
-                    }
-                }
+        if ($fields.Contains('ruleid')) { $observed.ruleId = [string]$fields.ruleid }
+        if ($fields.Contains('rulename')) { $observed.ruleName = [string]$fields.rulename }
+        foreach ($fieldName in @('targetuser', 'usersid', 'user_sid')) {
+            if ($fields.Contains($fieldName) -and -not [string]::IsNullOrWhiteSpace([string]$fields[$fieldName])) {
+                $observed.userSid = [string]$fields[$fieldName]
+                break
             }
+        }
+        $processIdText = $null
+        foreach ($fieldName in @('targetprocessid', 'processid', 'pid')) {
+            if ($fields.Contains($fieldName) -and -not [string]::IsNullOrWhiteSpace([string]$fields[$fieldName])) {
+                $processIdText = [string]$fields[$fieldName]
+                break
+            }
+        }
+        if ($processIdText) {
+            $parsedProcessId = 0L
+            if ([long]::TryParse($processIdText, [ref]$parsedProcessId) -and $parsedProcessId -gt 0) {
+                $observed.processId = [int]$parsedProcessId
+            }
+        }
+        if ($fields.Contains('targetlogonid')) {
+            $observed.targetLogonId = [string]$fields.targetlogonid
+        }
+        elseif ($fields.Contains('logonid')) {
+            $observed.targetLogonId = [string]$fields.logonid
         }
     }
     else {
@@ -770,6 +811,12 @@ function Get-OpenPathAppLockerEventData {
         if ($Event.PSObject.Properties['RuleName'] -and $Event.RuleName) { $observed.ruleName = [string]$Event.RuleName }
         if ($Event.PSObject.Properties['UserSid'] -and $Event.UserSid) { $observed.userSid = [string]$Event.UserSid }
         elseif ($Event.UserId -and $Event.UserId.Value) { $observed.userSid = [string]$Event.UserId.Value }
+        foreach ($propertyName in @('TargetLogonId', 'LogonId')) {
+            if ($Event.PSObject.Properties[$propertyName] -and $Event.$propertyName) {
+                $observed.targetLogonId = [string]$Event.$propertyName
+                break
+            }
+        }
         foreach ($propertyName in @('ProcessId', 'ProcessID', 'Pid', 'PID')) {
             if ($Event.PSObject.Properties[$propertyName]) {
                 $parsedProcessId = 0L
@@ -816,6 +863,7 @@ function Get-OpenPathSafeAppLockerEvent {
         observedRuleName = [string]$observed.ruleName
         observedUserSid = [string]$observed.userSid
         observedProcessId = $observed.processId
+        observedTargetLogonId = [string]$observed.targetLogonId
         pidStatus = if ($null -eq $observed.processId) { 'unavailable' } else { 'observed' }
         observationSource = [string]$observed.source
         expected = [pscustomobject][ordered]@{
@@ -845,7 +893,8 @@ function Get-OpenPathCorrelatedAppLockerEvent {
         $observed = Get-OpenPathAppLockerEventData -Event $event
         $messageFallback = [string]$observed.messageFallback
         $matchesName = if ($observed.path) {
-            [string]::Equals([System.IO.Path]::GetFileName([string]$observed.path), $BinaryLeaf, [System.StringComparison]::OrdinalIgnoreCase)
+            $observedLeaf = ([string]$observed.path -split '[\\/]')[-1]
+            [string]::Equals($observedLeaf, $BinaryLeaf, [System.StringComparison]::OrdinalIgnoreCase)
         }
         elseif ($PackagedAppPattern -and $observed.package) {
             $observed.package -match $PackagedAppPattern
@@ -931,7 +980,7 @@ function Merge-OpenPathBoundedEvidence {
             "$($item.processId)|$($item.executablePath)"
         }
         else {
-            "$($item.id)|$($item.timeCreatedUtc)|$($item.observedProcessId)|$($item.observedPath)|$($item.observedPackage)|$($item.observedRuleId)|$($item.observedUserSid)"
+            "$($item.id)|$($item.timeCreatedUtc)|$($item.observedProcessId)|$($item.observedPath)|$($item.observedPackage)|$($item.observedRuleId)|$($item.observedUserSid)|$($item.observedTargetLogonId)"
         }
         if (-not $seen.ContainsKey($key)) {
             $seen[$key] = $true
