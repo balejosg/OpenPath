@@ -183,4 +183,99 @@ Describe 'Canonical offline installer disposable target' {
         $repeat = Invoke-OpenPathDisposableEdgeBoundaryDiagnostic -UserName $target.UserName -Password $target.Password -ExecutablePath $edgeEvidence.executablePath -StudentSid $target.Sid
         $repeat.status | Should -Be 'pass'
     }
+
+    It 'resolves transported Edge evidence before running bounded diagnostics' {
+        $initial = [pscustomobject][ordered]@{
+            probeName = 'Canonical Edge deny'; executableName = 'msedge.exe'
+            executablePath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+            studentSid = $script:testSid; failureCode = 'exact-student-process-observed-without-block-event'
+            expectedEventIds = @(8004, 8022); samGroupName = 'OpenPath-Restricted'
+            samGroupSid = 'S-1-5-21-100-200-300-401'; samGroupMemberPresent = $true
+            processes = @([pscustomobject]@{ processId = 5436; restrictedGroupPresent = $null; restrictedGroupQueryStatus = 'unavailable' })
+            events = @(); matchedEvent = $null; appLocker8002 = $null; appLocker8004 = $null; appLocker8020 = $false; appLocker8022 = $false
+            testAppLockerPolicyDecision = [pscustomobject]@{ status = 'observed'; decision = 'Denied' }
+        }
+        $exception = [InvalidOperationException]::new('boundary-edge-execution-failed')
+        $exception.Data['OpenPathEdgeBoundaryEvidence'] = $initial
+        $target = [pscustomobject]@{ UserName = 'op-e2e-test'; Password = 'must-not-serialize'; Sid = $script:testSid }
+        Mock Get-OpenPathDisposableBoundaryFailureEvidence { throw 'transported-capture-must-win' } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableEdgeBoundaryDiagnostic {
+            [pscustomobject]@{ status = 'complete'; policyReapplied = $false; attempts = @(
+                [pscustomobject]@{ label = 'T0'; offsetSeconds = 0; elapsedSeconds = 0.3; taskName = 'edge-t0'; evidence = [pscustomobject]@{ appLocker8004 = $null; queryStatus = 'failed' } },
+                [pscustomobject]@{ label = 'T+5'; offsetSeconds = 5; elapsedSeconds = 5.4; taskName = 'edge-t5'; evidence = [pscustomobject]@{ appLocker8004 = $true; queryStatus = 'observed' } }
+            ) }
+        } -ModuleName DisposableWindowsTarget
+        Mock Get-OpenPathDisposableFlatEdgeBoundaryFailureContract {
+            param($Evidence, $Diagnostic)
+            [pscustomobject]@{ edgeFailureCode = $Evidence.failureCode; edgeAttempts = @($Diagnostic.attempts); edge = [pscustomobject]@{ restrictedGroupTokenMember = $null } }
+        } -ModuleName DisposableWindowsTarget
+
+        $resolved = Resolve-OpenPathDisposableEdgeBoundaryFailure -Exception $exception -Target $target
+
+        $resolved.initial.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
+        $resolved.initial.processes[0].restrictedGroupPresent | Should -BeNullOrEmpty
+        $resolved.repeat.attempts[1].elapsedSeconds | Should -Be 5.4
+        $resolved.contract.edgeFailureCode | Should -Be 'exact-student-process-observed-without-block-event'
+        ($resolved | ConvertTo-Json -Depth 12) | Should -Not -Match 'must-not-serialize|Password|UserName'
+    }
+
+    It 'exposes the real nested Browser getter flat contract and diagnostic through the disposable module' {
+        $browserPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1'
+        InModuleScope DisposableWindowsTarget -Parameters @{ BrowserPath = $browserPath } {
+            Import-Module $BrowserPath -Force
+        }
+        $browserModule = Get-Module BrowserBoundaryProbe -All | Select-Object -Last 1
+        $browserModule | Should -Not -BeNullOrEmpty
+        & $browserModule {
+            Set-OpenPathBoundaryProbeFailureEvidence `
+                -ProbeName 'Canonical Edge deny' `
+                -ExecutablePath 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' `
+                -StudentSid 'S-1-5-21-100-200-300-400' `
+                -FailureCode 'exact-student-process-observed-without-block-event' `
+                -Processes @([pscustomobject]@{ processId = 5436; restrictedGroupPresent = $null; restrictedGroupQueryStatus = 'unavailable' }) `
+                -ExpectedEventIds @(8004, 8022) | Out-Null
+        }
+
+        $retrieved = Get-OpenPathDisposableBoundaryFailureEvidence
+        $flat = Get-OpenPathDisposableFlatEdgeBoundaryFailureContract -Evidence $retrieved
+        $retrieved.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
+        $flat.edgeFailureCode | Should -Be 'exact-student-process-observed-without-block-event'
+
+        Mock Start-Sleep {} -ModuleName BrowserBoundaryProbe
+        Mock Invoke-StudentExecutableTaskProbe {
+            [pscustomobject]@{ evidence = [pscustomobject]@{ failureCode = 'appLocker-block-event-observed' } }
+        } -ModuleName BrowserBoundaryProbe
+        $diagnostic = Invoke-OpenPathDisposableEdgeBoundaryDiagnostic `
+            -UserName 'op-e2e-test' -Password 'must-not-serialize' `
+            -ExecutablePath $retrieved.executablePath -StudentSid $retrieved.studentSid
+        $diagnostic.policyReapplied | Should -BeFalse
+        @($diagnostic.attempts).Count | Should -Be 4
+        @($diagnostic.attempts | ForEach-Object offsetSeconds) | Should -Be @(0, 5, 15, 30)
+        ($diagnostic | ConvertTo-Json -Depth 12) | Should -Not -Match 'must-not-serialize|Password|UserName'
+
+        $translated = New-OpenPathDisposableEdgeBoundaryException
+        $translated.Message | Should -Be 'boundary-edge-execution-failed'
+        $translated.Data.Contains('OpenPathEdgeBoundaryEvidence') | Should -BeTrue
+        $target = [pscustomobject]@{ UserName = 'op-e2e-test'; Password = 'must-not-serialize'; Sid = $retrieved.studentSid }
+        Mock Invoke-OpenPathDisposableEdgeBoundaryDiagnostic { $diagnostic } -ModuleName DisposableWindowsTarget
+        $resolved = Resolve-OpenPathDisposableEdgeBoundaryFailure -Exception $translated -Target $target
+        $path = Join-Path $TestDrive 'cross-module-edge-failure.json'
+        $payload = [ordered]@{
+            status = 'failed'; failureDetailCode = $translated.Message
+            edgeBoundaryEvidence = [ordered]@{ initial = $resolved.initial; repeat = $resolved.repeat }
+            cleanupAttempted = $true; cleanupSucceeded = $false
+        }
+        Write-OpenPathOfflineInstallerEvidence -Payload $payload -Path $path
+        $roundTrip = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        $roundTrip.status | Should -Be 'failed'
+        $roundTrip.failureDetailCode | Should -Be 'boundary-edge-execution-failed'
+        $roundTrip.edgeBoundaryEvidence.initial.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
+        $roundTrip.edgeBoundaryEvidence.repeat.attempts[3].offsetSeconds | Should -Be 30
+        $roundTrip.cleanupSucceeded | Should -BeFalse
+        (Get-Content -LiteralPath $path -Raw) | Should -Not -Match 'must-not-serialize|Password|UserName'
+        # Discovery imports the Browser module globally for its own suite. The
+        # nested import above mirrors the canonical caller, so restore the
+        # independent suite's global command surface before Pester advances.
+        Import-Module $browserPath -Force -Global
+    }
 }

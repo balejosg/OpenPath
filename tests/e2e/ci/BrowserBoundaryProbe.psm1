@@ -1454,6 +1454,7 @@ function Invoke-OpenPathEdgeBoundaryDiagnostic {
     }
 
     $diagnosticStart = Get-Date
+    $diagnosticStartedAtUtc = $diagnosticStart.ToUniversalTime().ToString('o')
     $attempts = @()
     for ($index = 0; $index -lt $requiredOffsets.Count; $index++) {
         $offset = [int]$requiredOffsets[$index]
@@ -1482,6 +1483,7 @@ function Invoke-OpenPathEdgeBoundaryDiagnostic {
                 offsetSeconds = $offset
                 status = 'pass'
                 observedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+                elapsedSeconds = [Math]::Round(((Get-Date) - $diagnosticStart).TotalSeconds, 3)
                 evidence = $probe.evidence
             }
         }
@@ -1492,6 +1494,7 @@ function Invoke-OpenPathEdgeBoundaryDiagnostic {
                 offsetSeconds = $offset
                 status = 'fail'
                 observedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+                elapsedSeconds = [Math]::Round(((Get-Date) - $diagnosticStart).TotalSeconds, 3)
                 failureCode = if ($attemptEvidence) { [string]$attemptEvidence.failureCode } else { 'edge-boundary-diagnostic-attempt-failed' }
                 evidence = $attemptEvidence
             }
@@ -1504,6 +1507,7 @@ function Invoke-OpenPathEdgeBoundaryDiagnostic {
         executableName = [System.IO.Path]::GetFileName($ExecutablePath)
         executablePath = $ExecutablePath
         studentSid = $StudentSid
+        diagnosticStartedAtUtc = $diagnosticStartedAtUtc
         attemptOffsetsSeconds = @($requiredOffsets)
         policyReapplied = $false
         attempts = @($attempts)

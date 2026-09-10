@@ -949,6 +949,9 @@ Describe "Windows Browser Boundary CI Probes" {
             $script:diagnosticCalls | Should -Be 4
             @($diagnostic.attempts).Count | Should -Be 4
             @($diagnostic.attempts | ForEach-Object { $_.offsetSeconds }) | Should -Be @(0, 5, 15, 30)
+            $diagnostic.diagnosticStartedAtUtc | Should -Not -BeNullOrEmpty
+            @($diagnostic.attempts | Where-Object { $null -eq $_.elapsedSeconds }).Count | Should -Be 0
+            @($diagnostic.attempts | ForEach-Object { $_.elapsedSeconds })[0] | Should -BeGreaterOrEqual 0
             $diagnostic.policyReapplied | Should -BeFalse
             ($diagnostic | ConvertTo-Json -Depth 10) | Should -Not -Match 'student01|secret|Password'
         }

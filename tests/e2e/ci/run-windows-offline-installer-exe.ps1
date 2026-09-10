@@ -51,11 +51,14 @@ function Write-SafeEvidence {
         [string]$Path
     )
 
-    $parent = Split-Path -Parent $Path
-    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    $writer = Get-Command -Name Write-OpenPathOfflineInstallerEvidence -ErrorAction SilentlyContinue
+    if ($writer) {
+        & $writer -Payload $Payload -Path $Path
+        return
     }
-    $Payload | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding UTF8
+    $parent = Split-Path -Parent $Path
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+    $Payload | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
 function Assert-EqualValue {
@@ -819,11 +822,20 @@ catch {
     }
     $edgeBoundaryEvidence = $null
     $edgeFailureContract = $null
+    $resolvedEdgeFailure = $null
+    $resolveEdgeFailure = Get-Command -Name Resolve-OpenPathDisposableEdgeBoundaryFailure -ErrorAction SilentlyContinue
+    if ($script:CurrentStage -eq 'run-installed-boundary-probes' -and $resolveEdgeFailure) {
+        try { $resolvedEdgeFailure = & $resolveEdgeFailure -Exception $boundaryException -Target $disposableTarget } catch {}
+    }
+    if ($resolvedEdgeFailure) {
+        $edgeBoundaryEvidence = [ordered]@{ initial = $resolvedEdgeFailure.initial; repeat = $resolvedEdgeFailure.repeat }
+        $edgeFailureContract = $resolvedEdgeFailure.contract
+    }
     $getBoundaryFailureEvidence = Get-Command -Name Get-OpenPathDisposableBoundaryFailureEvidence -ErrorAction SilentlyContinue
     if (-not $getBoundaryFailureEvidence) {
         $getBoundaryFailureEvidence = Get-Command -Name Get-OpenPathLastBoundaryProbeFailureEvidence -ErrorAction SilentlyContinue
     }
-    if ($script:CurrentStage -eq 'run-installed-boundary-probes') {
+    if ($script:CurrentStage -eq 'run-installed-boundary-probes' -and -not $resolvedEdgeFailure) {
         $initialBoundaryEvidence = $null
         if ($getBoundaryFailureEvidence) {
             try { $initialBoundaryEvidence = & $getBoundaryFailureEvidence } catch {}

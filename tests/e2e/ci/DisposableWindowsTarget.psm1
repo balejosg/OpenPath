@@ -292,6 +292,72 @@ function Invoke-OpenPathDisposableEdgeBoundaryDiagnostic {
     return & $diagnostic @PSBoundParameters
 }
 
+function Resolve-OpenPathDisposableEdgeBoundaryFailure {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][System.Exception]$Exception,
+        [object]$Target = $null
+    )
+
+    $initial = $null
+    try {
+        if ($Exception.Data -and $Exception.Data.Contains('OpenPathEdgeBoundaryEvidence')) {
+            $initial = $Exception.Data['OpenPathEdgeBoundaryEvidence']
+        }
+    }
+    catch {}
+    if (-not $initial) {
+        try { $initial = Get-OpenPathDisposableBoundaryFailureEvidence } catch {}
+    }
+    if (-not $initial -or [string]$initial.probeName -ne 'Canonical Edge deny') { return $null }
+
+    # Detach the primary observation before any later diagnostic can mutate
+    # module-scoped probe state. This object contains only the bounded fields
+    # already allowlisted by BrowserBoundaryProbe.
+    $initialSnapshot = $initial | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    $repeat = $null
+    if ($Target -and $Target.UserName -and $Target.Password) {
+        try {
+            $repeat = Invoke-OpenPathDisposableEdgeBoundaryDiagnostic `
+                -UserName $Target.UserName `
+                -Password $Target.Password `
+                -ExecutablePath $initialSnapshot.executablePath `
+                -StudentSid $initialSnapshot.studentSid
+        }
+        catch {
+            $repeat = [pscustomobject][ordered]@{ status = 'unavailable'; code = 'edge-boundary-diagnostic-failed' }
+        }
+    }
+    $contract = $null
+    try {
+        $contract = Get-OpenPathDisposableFlatEdgeBoundaryFailureContract -Evidence $initialSnapshot -Diagnostic $repeat
+    }
+    catch {}
+    return [pscustomobject][ordered]@{ initial = $initialSnapshot; repeat = $repeat; contract = $contract }
+}
+
+function Write-OpenPathOfflineInstallerEvidence {
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $parent = Split-Path -Parent $Path
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    $Payload | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function New-OpenPathDisposableEdgeBoundaryException {
+    $failure = [System.InvalidOperationException]::new('boundary-edge-execution-failed')
+    try {
+        $evidence = Get-OpenPathDisposableBoundaryFailureEvidence
+        if ($evidence) { $failure.Data['OpenPathEdgeBoundaryEvidence'] = $evidence }
+    }
+    catch {}
+    return $failure
+}
+
 function Invoke-OpenPathInstalledBoundaryProbes {
     param([Parameter(Mandatory = $true)][object]$Target, [string]$OpenPathRoot = 'C:\OpenPath')
     Import-Module (Join-Path $PSScriptRoot 'BrowserBoundaryProbe.psm1') -Force -ErrorAction Stop
@@ -320,15 +386,7 @@ function Invoke-OpenPathInstalledBoundaryProbes {
         $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid -PackagedAppPattern 'MicrosoftEdge|Microsoft\.MicrosoftEdge|msedge'
     }
     catch {
-        $edgeFailure = [System.InvalidOperationException]::new('boundary-edge-execution-failed')
-        try {
-            $edgeEvidence = Get-OpenPathDisposableBoundaryFailureEvidence
-            if ($edgeEvidence) {
-                $edgeFailure.Data['OpenPathEdgeBoundaryEvidence'] = $edgeEvidence
-            }
-        }
-        catch {}
-        throw $edgeFailure
+        throw (New-OpenPathDisposableEdgeBoundaryException)
     }
     try { $peRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probeExe -Arguments "`"$probeMarker`"" -Expectation ExpectDenied -StudentSid $Target.Sid -MarkerPath $probeMarker } catch { throw 'boundary-benign-pe-execution-failed' }
     try { $recovery = Invoke-OpenPathSystemRecoveryProbe -MarkerPath (Join-Path $env:ProgramData "OpenPathRecoveryProbe-$([guid]::NewGuid().ToString('N')).marker") } catch { throw 'boundary-system-recovery-failed' }
@@ -368,4 +426,4 @@ function Remove-OpenPathDisposableStandardTarget {
     return [pscustomobject]@{ userRightRemoved = $userRightRemoved; profileRemoved = $profileRemoved; userRemoved = $userRemoved; credentialDestroyed = ($null -eq $Target.Password) }
 }
 
-Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, Remove-OpenPathDisposableStandardTarget
+Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, New-OpenPathDisposableEdgeBoundaryException, Resolve-OpenPathDisposableEdgeBoundaryFailure, Write-OpenPathOfflineInstallerEvidence, Remove-OpenPathDisposableStandardTarget

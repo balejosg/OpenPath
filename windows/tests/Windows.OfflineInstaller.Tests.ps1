@@ -502,6 +502,39 @@ Describe "Offline installer" {
             $diagnosticBody = [regex]::Match($probeModule, 'function Invoke-OpenPathEdgeBoundaryDiagnostic\s*\{[\s\S]*?\n\}').Value
             $diagnosticBody | Should -Not -Match 'Set-OpenPathNonAdminAppControl|Get-AppLockerPolicy|Set-AppLockerPolicy'
         }
+
+        It "round-trips nested Edge and cleanup failures through the real evidence writer" {
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\DisposableWindowsTarget.psm1') -Force
+            $evidencePath = Join-Path $TestDrive 'edge-failure-roundtrip.json'
+            $payload = [ordered]@{
+                status = 'failed'; failureDetailCode = 'boundary-edge-execution-failed'
+                edgeBoundaryEvidence = [ordered]@{
+                    initial = [ordered]@{
+                        failureCode = 'exact-student-process-observed-without-block-event'
+                        executablePath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+                        studentSid = 'S-1-5-21-100-200-300-400'
+                        processes = @([ordered]@{ processId = 5436; restrictedGroupPresent = $null; restrictedGroupAttributes = $null; restrictedGroupQueryStatus = 'unavailable' })
+                    }
+                    repeat = [ordered]@{ attempts = @([ordered]@{ label = 'T+5'; elapsedSeconds = 5.7; taskName = 'edge-t5'; evidence = [ordered]@{ appLocker8004 = $null; queryStatus = 'failed' } }) }
+                }
+                cleanupAttempted = $true; cleanupSucceeded = $false
+                targetCleanup = [ordered]@{ profileRemoved = $false; credentialDestroyed = $true }
+            }
+
+            Write-OpenPathOfflineInstallerEvidence -Payload $payload -Path $evidencePath
+            $roundTrip = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+
+            $roundTrip.status | Should -Be 'failed'
+            $roundTrip.failureDetailCode | Should -Be 'boundary-edge-execution-failed'
+            $roundTrip.edgeBoundaryEvidence.initial.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
+            $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupPresent | Should -BeNullOrEmpty
+            $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupQueryStatus | Should -Be 'unavailable'
+            $roundTrip.edgeBoundaryEvidence.repeat.attempts[0].elapsedSeconds | Should -Be 5.7
+            $roundTrip.edgeBoundaryEvidence.repeat.attempts[0].evidence.queryStatus | Should -Be 'failed'
+            $roundTrip.cleanupSucceeded | Should -BeFalse
+            $roundTrip.targetCleanup.profileRemoved | Should -BeFalse
+            (Get-Content -LiteralPath $evidencePath -Raw) | Should -Not -Match 'Password|must-not-serialize'
+        }
     }
 
     Context "Uninstall deletion" {
