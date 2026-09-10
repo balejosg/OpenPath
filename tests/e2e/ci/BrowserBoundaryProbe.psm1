@@ -1407,12 +1407,13 @@ function Invoke-StudentExecutableTaskProbe {
                 throw "$ProbeName FAILED: Allowed execution was not observed for $binaryLeaf attributed to student within timeout ($TimeoutSeconds s)."
             }
 
+            $firstObservedExactProcessEvidence = @($observedExactProcessEvidence | Select-Object -First 1)
             return [pscustomobject]@{
                 name     = $ProbeName
                 section  = 'student'
                 status   = 'pass'
                 detail   = "Real execution probe: $binaryLeaf allowed for student account."
-                evidence = [pscustomobject][ordered]@{ allowedObserved = $true; allowEventId = $allowEventId; appLocker8002Observed = ($allowEventId -eq 8002); appLocker8020Observed = ($allowEventId -eq 8020); correlatedEvent = $allowEventEvidence; samBoundary = $samBoundaryEvidence; taskRegisteredAtUtc = $taskRegisteredAtUtc }
+                evidence = [pscustomobject][ordered]@{ allowedObserved = $true; allowEventId = $allowEventId; appLocker8002Observed = ($allowEventId -eq 8002); appLocker8020Observed = ($allowEventId -eq 8020); correlatedEvent = $allowEventEvidence; observedExactProcess = $firstObservedExactProcessEvidence; samBoundary = $samBoundaryEvidence; taskIdentity = $taskIdentityEvidence; taskRegisteredAtUtc = $taskRegisteredAtUtc }
             }
         }
     }

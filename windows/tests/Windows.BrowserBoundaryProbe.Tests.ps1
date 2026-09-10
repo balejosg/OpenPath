@@ -472,6 +472,50 @@ Describe "Windows Browser Boundary CI Probes" {
             $result.evidence.allowedObserved | Should -BeTrue
         }
 
+        It 'preserves only the first bounded exact process and task identity on an allowed launch' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            $testProcess = [pscustomobject]@{ ProcessId = 4242; Name = 'msedge.exe'; ExecutablePath = $testExe }
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { $testProcess } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-CimMethod { [pscustomobject]@{ Sid = 'S-1-5-21-sam-owner' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathSamBoundaryEvidence {
+                [pscustomobject]@{
+                    status = 'observed'
+                    groupName = 'OpenPath-Restricted'
+                    groupSid = 'S-1-5-21-openpath-restricted'
+                    targetMemberPresent = $true
+                    memberCount = 1
+                }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathProcessTokenBoundaryEvidence {
+                [pscustomobject]@{
+                    status = 'ok'
+                    tokenUserSid = 'S-1-5-21-student-sid'
+                    restrictedGroupSid = 'S-1-5-21-openpath-restricted'
+                    restrictedGroupPresent = $true
+                    restrictedGroupAttributes = 4
+                    restrictedGroupEnabled = $true
+                    restrictedGroupDenyOnly = $false
+                    restrictedGroupDisabled = $false
+                }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent { @() } -ModuleName BrowserBoundaryProbe
+            Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+
+            $result = Invoke-StudentExecutableTaskProbe -ProbeName 'Allowed process evidence probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectAllowed -ProcessName 'msedge' -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1
+
+            $result.status | Should -Be 'pass'
+            $result.evidence.observedExactProcess.Count | Should -Be 1
+            $result.evidence.observedExactProcess[0].processId | Should -Be 4242
+            $result.evidence.observedExactProcess[0].tokenUserSid | Should -Be 'S-1-5-21-student-sid'
+            $result.evidence.observedExactProcess[0].restrictedGroupSid | Should -Be 'S-1-5-21-openpath-restricted'
+            $result.evidence.observedExactProcess[0].restrictedGroupPresent | Should -BeTrue
+            $result.evidence.observedExactProcess[0].restrictedGroupAttributes | Should -Be 4
+            $result.evidence.taskIdentity.taskName | Should -Match '^OpenPathProbe-'
+            $result.evidence.taskIdentity.registeredAtUtc | Should -Not -BeNullOrEmpty
+        }
+
         It "Throws when ExpectAllowed and 8002 allow event has wrong SID" {
             $testExe = Join-Path $TestDrive "probe-allowed-wrong-sid.exe"
             Set-Content -LiteralPath $testExe -Value "dummy"
