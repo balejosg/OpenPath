@@ -455,6 +455,45 @@ Describe "Offline installer" {
         }
     }
 
+    Context "Browser boundary failure evidence contract" {
+        It "preserves sanitized failed Edge evidence before writing the offline E2E artifact" {
+            $offlineE2e = Get-Content (Join-Path $PSScriptRoot ".." ".." "tests" "e2e" "ci" "run-windows-offline-installer-exe.ps1") -Raw
+
+            Assert-ContentContainsAll -Content $offlineE2e -Needles @(
+                'Get-OpenPathLastBoundaryProbeFailureEvidence',
+                'edgeBoundaryEvidence',
+                'edge = if ($edgeFailureContract)',
+                'edgeName',
+                'edgeStudentSid',
+                'edgeExecutablePath',
+                'edgeSamGroupSid',
+                'edgeRestrictedGroupAttributes',
+                'testAppLockerPolicyDecision',
+                'edgeTaskRegisteredAtUtc',
+                'edgeEventId',
+                'Write-SafeEvidence -Payload $failure -Path $EvidencePath'
+            )
+            $offlineE2e | Should -Not -Match '\$failure\.edgeBoundaryEvidence\s*=\s*\$disposableTarget\.Password'
+        }
+
+        It "uses bounded Edge diagnostic attempts at T0, plus 5, 15, and 30 seconds without policy reapply" {
+            $probeModule = Get-Content (Join-Path $PSScriptRoot ".." ".." "tests" "e2e" "ci" "BrowserBoundaryProbe.psm1") -Raw
+            $offlineE2e = Get-Content (Join-Path $PSScriptRoot ".." ".." "tests" "e2e" "ci" "run-windows-offline-installer-exe.ps1") -Raw
+
+            Assert-ContentContainsAll -Content $probeModule -Needles @(
+                'AttemptOffsetsSeconds = @(0, 5, 15, 30)',
+                'policyReapplied = $false',
+                'offsetSeconds'
+            )
+            Assert-ContentContainsAll -Content $offlineE2e -Needles @(
+                'Invoke-OpenPathEdgeBoundaryDiagnostic',
+                'edgeBoundaryEvidence'
+            )
+            $diagnosticBody = [regex]::Match($probeModule, 'function Invoke-OpenPathEdgeBoundaryDiagnostic\s*\{[\s\S]*?\n\}').Value
+            $diagnosticBody | Should -Not -Match 'Set-OpenPathNonAdminAppControl|Get-AppLockerPolicy|Set-AppLockerPolicy'
+        }
+    }
+
     Context "Uninstall deletion" {
         It "Explicitly removes pending enrollment state files during uninstall" {
             $uninstall = Get-Content (Join-Path $PSScriptRoot ".." "Uninstall-OpenPath.ps1") -Raw

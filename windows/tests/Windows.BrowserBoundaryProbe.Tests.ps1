@@ -18,6 +18,9 @@ Describe "Windows Browser Boundary CI Probes" {
         if (-not (Get-Command Invoke-CimMethod -ErrorAction SilentlyContinue)) {
             function global:Invoke-CimMethod { param($InputObject, $MethodName) }
         }
+        if (-not (Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue)) {
+            function global:Get-LocalGroupMember { param($Group) }
+        }
         if (-not (Get-Command Stop-Process -ErrorAction SilentlyContinue)) {
             function global:Stop-Process { param($Id, $Name, [switch]$Force) }
         }
@@ -29,6 +32,9 @@ Describe "Windows Browser Boundary CI Probes" {
         }
         if (-not (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue)) {
             function global:Get-AppLockerPolicy { param([switch]$Local, [switch]$Xml) }
+        }
+        if (-not (Get-Command Test-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+            function global:Test-AppLockerPolicy { param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject) }
         }
         if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
             function global:Get-ScheduledTask { param($TaskName) }
@@ -564,6 +570,305 @@ Describe "Windows Browser Boundary CI Probes" {
                     -Expectation ExpectAllowed `
                     -TimeoutSeconds 1
             } | Should -Throw "*Allowed execution was not observed*"
+        }
+
+        It 'records exact Edge identity while distinguishing the SAM owner from the process token and restricted group attributes' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            $testProcess = [pscustomobject]@{
+                ProcessId = 4242
+                Name = 'msedge.exe'
+                ExecutablePath = $testExe
+            }
+
+            Mock Get-CimInstance { $testProcess } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-CimMethod { [pscustomobject]@{ Sid = 'S-1-5-21-sam-owner' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathProcessTokenBoundaryEvidence {
+                [pscustomobject]@{
+                    status = 'ok'
+                    tokenUserSid = 'S-1-5-21-token-owner'
+                    restrictedGroupSid = 'S-1-5-21-openpath-restricted'
+                    restrictedGroupPresent = $true
+                    restrictedGroupAttributes = 4
+                    restrictedGroupEnabled = $true
+                    restrictedGroupDenyOnly = $false
+                    restrictedGroupDisabled = $false
+                }
+            } -ModuleName BrowserBoundaryProbe
+
+            $evidence = @(Get-OpenPathExactProcessBoundaryEvidence -ProcessName 'msedge' -StudentSid 'S-1-5-21-student-sid' -RestrictedGroupSid 'S-1-5-21-openpath-restricted' -ExpectedExecutablePath $testExe)
+
+            $evidence.Count | Should -Be 1
+            $evidence[0].name | Should -Be 'msedge.exe'
+            $evidence[0].studentSid | Should -Be 'S-1-5-21-student-sid'
+            $evidence[0].executablePath | Should -Be $testExe
+            $evidence[0].samSid | Should -Be 'S-1-5-21-sam-owner'
+            $evidence[0].tokenUserSid | Should -Be 'S-1-5-21-token-owner'
+            $evidence[0].samTokenSidMatch | Should -BeFalse
+            $evidence[0].restrictedGroupSid | Should -Be 'S-1-5-21-openpath-restricted'
+            $evidence[0].restrictedGroupPresent | Should -BeTrue
+            $evidence[0].restrictedGroupAttributes | Should -Be 4
+            $evidence[0].restrictedGroupEnabled | Should -BeTrue
+            $evidence[0].restrictedGroupDenyOnly | Should -BeFalse
+            $evidence[0].restrictedGroupDisabled | Should -BeFalse
+        }
+
+        It 'captures the SAM group SID and membership before registering the task' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            Mock Get-LocalGroup { [pscustomobject]@{ Name = 'OpenPath-Restricted'; SID = 'S-1-5-21-openpath-restricted' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-LocalGroupMember { @([pscustomobject]@{ SID = 'S-1-5-21-student-sid' }) } -ModuleName BrowserBoundaryProbe
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { @() } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent { @() } -ModuleName BrowserBoundaryProbe
+            Mock Start-Sleep {} -ModuleName BrowserBoundaryProbe
+
+            {
+                Invoke-StudentExecutableTaskProbe -ProbeName 'SAM evidence Edge probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName 'msedge' -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 -SuppressFailureDiagnostics
+            } | Should -Throw
+
+            $failureEvidence = Get-OpenPathLastBoundaryProbeFailureEvidence
+            $failureEvidence.samGroupName | Should -Be 'OpenPath-Restricted'
+            $failureEvidence.samGroupSid | Should -Be 'S-1-5-21-openpath-restricted'
+            $failureEvidence.samGroupMemberPresent | Should -BeTrue
+            $failureEvidence.samGroupMemberCount | Should -Be 1
+            $failureEvidence.taskRegisteredAtUtc | Should -Not -BeNullOrEmpty
+        }
+
+        It 'correlates observed AppLocker XML fields without substituting expected path or SID' {
+            $event = [pscustomobject]@{
+                Id = 8004
+                Xml = '<Event><System><Execution ProcessID="4242" /></System><EventData><Data Name="FilePath">C:\\Other\\msedge.exe</Data><Data Name="RuleId">rule-1</Data><Data Name="RuleName">wrong-path</Data><Data Name="UserSid">S-1-5-21-student-sid</Data></EventData></Event>'
+                UserId = [pscustomobject]@{ Value = 'S-1-5-21-other-fallback' }
+            }
+            Add-Member -InputObject $event -MemberType ScriptMethod -Name ToXml -Value { $this.Xml }
+
+            $correlation = Get-OpenPathCorrelatedAppLockerEvent -Events @($event) -AllowedEventIds @(8004) -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -BinaryLeaf 'msedge.exe' -ExpectedExecutablePath 'C:\\Expected\\msedge.exe' -StudentSid 'S-1-5-21-student-sid' -ProcessIds @(4242)
+
+            $correlation.matched | Should -BeFalse
+            $correlation.candidates[0].observedPath | Should -Be 'C:\\Other\\msedge.exe'
+            $correlation.candidates[0].observedUserSid | Should -Be 'S-1-5-21-student-sid'
+            $correlation.candidates[0].observedProcessId | Should -Be 4242
+            $correlation.candidates[0].observedRuleId | Should -Be 'rule-1'
+            $correlation.candidates[0].observedRuleName | Should -Be 'wrong-path'
+            $correlation.candidates[0].expected.executablePath | Should -Be 'C:\\Expected\\msedge.exe'
+        }
+
+        It 'does not correlate an AppLocker event whose PID belongs to another process' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            $testProcess = [pscustomobject]@{ ProcessId = 4242; Name = 'msedge.exe'; ExecutablePath = $testExe }
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { $testProcess } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-CimMethod { [pscustomobject]@{ Sid = 'S-1-5-21-student-sid' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathProcessTokenBoundaryEvidence {
+                [pscustomobject]@{
+                    status = 'ok'
+                    tokenUserSid = 'S-1-5-21-student-sid'
+                    restrictedGroupSid = $null
+                    restrictedGroupPresent = $null
+                    restrictedGroupQueryStatus = 'not-requested'
+                }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                [pscustomobject]@{
+                    Id = 8004
+                    ProcessId = 9999
+                    Message = "msedge.exe was prevented from running"
+                    UserId = [pscustomobject]@{ Value = 'S-1-5-21-student-sid' }
+                }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+            Mock Start-Sleep {} -ModuleName BrowserBoundaryProbe
+
+            {
+                Invoke-StudentExecutableTaskProbe -ProbeName 'PID mismatch Edge probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName 'msedge' -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 -SuppressFailureDiagnostics
+            } | Should -Throw '*exact executable msedge.exe ran under the student SID and no correlated AppLocker block event was observed*'
+            Should -Invoke Stop-Process -ModuleName BrowserBoundaryProbe -Times 1
+        }
+
+        It 'accepts the packaged-app 8020 allow event and keeps the evidence credential-free' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { @() } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                if ($FilterHashtable.LogName -eq 'Microsoft-Windows-AppLocker/Packaged app-Execution' -and $FilterHashtable.Id -eq 8020) {
+                    return [pscustomobject]@{
+                        Id = 8020
+                        ProcessId = 4242
+                        Message = 'Microsoft.MicrosoftEdge.Stable was allowed to run'
+                        UserId = [pscustomobject]@{ Value = 'S-1-5-21-student-sid' }
+                    }
+                }
+                return @()
+            } -ModuleName BrowserBoundaryProbe
+
+            $result = Invoke-StudentExecutableTaskProbe -ProbeName 'Allowed packaged Edge probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectAllowed -ProcessName 'msedge' -StudentSid 'S-1-5-21-student-sid' -PackagedAppPattern 'MicrosoftEdge|Edge' -TimeoutSeconds 1
+
+            $result.status | Should -Be 'pass'
+            $result.evidence.allowEventId | Should -Be 8020
+            ($result | ConvertTo-Json -Depth 8) | Should -Not -Match 'secret|Password'
+        }
+
+        It 'preserves failed Edge evidence before throwing without serializing credentials' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            $testProcess = [pscustomobject]@{ ProcessId = 4242; Name = 'msedge.exe'; ExecutablePath = $testExe }
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { $testProcess } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-CimMethod { [pscustomobject]@{ Sid = 'S-1-5-21-student-sid' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathProcessTokenBoundaryEvidence {
+                [pscustomobject]@{
+                    status = 'ok'
+                    tokenUserSid = 'S-1-5-21-student-sid'
+                    restrictedGroupSid = $null
+                    restrictedGroupPresent = $null
+                    restrictedGroupQueryStatus = 'not-requested'
+                }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent { @() } -ModuleName BrowserBoundaryProbe
+            Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+            Mock Start-Sleep {} -ModuleName BrowserBoundaryProbe
+
+            {
+                Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName 'msedge' -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 -SuppressFailureDiagnostics
+            } | Should -Throw
+
+            $failureEvidence = Get-OpenPathLastBoundaryProbeFailureEvidence
+            $failureEvidence.probeName | Should -Be 'Canonical Edge deny'
+            $failureEvidence.executablePath | Should -Be $testExe
+            $failureEvidence.processes[0].name | Should -Be 'msedge.exe'
+            ($failureEvidence | ConvertTo-Json -Depth 10) | Should -Not -Match 'student01|secret|Password'
+        }
+
+        It 'uses ABI-aligned SID_AND_ATTRIBUTES parsing for x64 token groups' {
+            $probeModule = Get-Content (Join-Path $PSScriptRoot ".." ".." "tests" "e2e" "ci" "BrowserBoundaryProbe.psm1") -Raw
+
+            $probeModule | Should -Not -Match '\$groupStride\s*=\s*\[IntPtr\]::Size\s*\+\s*4'
+            Assert-ContentContainsAll -Content $probeModule -Needles @(
+                'StructLayout(LayoutKind.Sequential)',
+                'SID_AND_ATTRIBUTES',
+                'Marshal.SizeOf'
+            )
+        }
+
+        It 'keeps unavailable token group membership unknown instead of false' {
+            $tokenEvidence = Get-OpenPathProcessTokenBoundaryEvidence -ProcessId 0 -RestrictedGroupSid 'S-1-5-21-openpath-restricted'
+
+            $tokenEvidence.restrictedGroupPresent | Should -Be $null
+            $tokenEvidence.restrictedGroupQueryStatus | Should -BeIn @('unavailable', 'not-observed')
+        }
+
+        It 'captures a Test-AppLockerPolicy decision as observed or explicitly unknown' {
+            Mock Get-AppLockerPolicy { [pscustomobject]@{ RuleCollections = @([pscustomobject]@{ Type = 'Exe' }) } } -ModuleName BrowserBoundaryProbe
+            Mock Test-AppLockerPolicy {
+                [pscustomobject]@{ FilePath = 'C:\msedge.exe'; PolicyDecision = 'Denied' }
+            } -ModuleName BrowserBoundaryProbe
+
+            $decision = Get-OpenPathTestAppLockerPolicyDecision -ExecutablePath 'C:\msedge.exe' -StudentSid 'S-1-5-21-student-sid'
+
+            $decision.status | Should -Be 'observed'
+            $decision.decision | Should -Be 'Denied'
+            $decision.userSid | Should -Be 'S-1-5-21-student-sid'
+        }
+
+        It 'keeps task identity and bounded TaskScheduler/Security logon evidence explicit' {
+            $probeModule = Get-Content (Join-Path $PSScriptRoot ".." ".." "tests" "e2e" "ci" "BrowserBoundaryProbe.psm1") -Raw
+
+            Assert-ContentContainsAll -Content $probeModule -Needles @(
+                'taskIdentity',
+                'principal',
+                'logonType',
+                'runLevel',
+                'TaskScheduler/Operational',
+                '129',
+                '200',
+                '201',
+                "LogName = 'Security'",
+                '4624',
+                'logonId',
+                'unknown'
+            )
+        }
+
+        It 'does not conflate Task Scheduler logon enums with Security 4624 logon types' {
+            $securityEvent = [pscustomobject]@{
+                Id = 4624
+                Xml = '<Event><EventData><Data Name="TargetUserSid">S-1-5-21-student-sid</Data><Data Name="TargetUserName">student01</Data><Data Name="LogonType">4</Data><Data Name="TargetLogonId">0x123</Data></EventData></Event>'
+            }
+            Add-Member -InputObject $securityEvent -MemberType ScriptMethod -Name ToXml -Value { $this.Xml }
+            Mock Get-ScheduledTask {
+                [pscustomobject]@{
+                    Principal = [pscustomobject]@{ UserId = 'CONTOSO\student01'; LogonType = 'Password'; RunLevel = 'Limited' }
+                }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                if ($FilterHashtable.LogName -eq 'Security') { return $securityEvent }
+                return @()
+            } -ModuleName BrowserBoundaryProbe
+
+            $taskEvidence = Get-OpenPathTaskIdentityEvidence -TaskName 'OpenPathProbe-test' -StudentSid 'S-1-5-21-student-sid' -UserName 'student01'
+
+            $taskEvidence.taskDefinitionPrincipal | Should -Be 'CONTOSO\student01'
+            $taskEvidence.taskLogonType | Should -Be 'Password'
+            $taskEvidence.expectedStudentSid | Should -Be 'S-1-5-21-student-sid'
+            $taskEvidence.principal | Should -Be 'CONTOSO\student01'
+            $taskEvidence.logonType | Should -Be 'Password'
+            $taskEvidence.securityLogons[0].logonType | Should -Be '4'
+            $taskEvidence.securityLogons[0].logonId | Should -Be '0x123'
+        }
+
+        It 'exposes the requested nested Edge failure contract without credentials' {
+            $testExe = Join-Path $TestDrive 'msedge.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            $evidence = [pscustomobject][ordered]@{
+                executableName = 'msedge.exe'
+                executablePath = $testExe
+                studentSid = 'S-1-5-21-student-sid'
+                failureCode = 'test-failure'
+                expectedEventIds = @(8002, 8004, 8020, 8022)
+                samGroupName = 'OpenPath-Restricted'
+                samGroupSid = 'S-1-5-21-openpath-restricted'
+                samGroupMemberPresent = $true
+                samGroupMemberCount = 1
+                taskRegisteredAtUtc = '2026-09-10T00:00:00.0000000Z'
+                processes = @([pscustomobject]@{
+                        processId = 4242
+                        name = 'msedge.exe'
+                        executablePath = $testExe
+                        samSid = 'S-1-5-21-sam-owner'
+                        tokenUserSid = 'S-1-5-21-token-owner'
+                        restrictedGroupSid = 'S-1-5-21-openpath-restricted'
+                        restrictedGroupPresent = $true
+                    })
+                events = @()
+                matchedEvent = $null
+            }
+
+            $contract = Get-OpenPathFlatEdgeBoundaryFailureContract -Evidence $evidence
+            $contract.edge | Should -Not -BeNullOrEmpty
+            @('expectedPath', 'observedExactProcess', 'observedPid', 'studentSid', 'restrictedGroupSid', 'restrictedGroupSamMember', 'restrictedGroupTokenMember', 'testAppLockerPolicyDecision', 'appLocker8002', 'appLocker8004', 'appLocker8020', 'appLocker8022') | ForEach-Object {
+                $contract.edge.PSObject.Properties.Name | Should -Contain $_
+            }
+            ($contract | ConvertTo-Json -Depth 10) | Should -Not -Match 'secret|Password'
+        }
+
+        It 'uses exactly T0, T+5, T+15 and T+30 attempts without reapplying policy' {
+            $script:diagnosticCalls = 0
+            Mock Invoke-StudentExecutableTaskProbe {
+                $script:diagnosticCalls++
+                [pscustomobject]@{ status = 'pass'; evidence = [pscustomobject]@{ allowEventId = 8020 } }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Start-Sleep {} -ModuleName BrowserBoundaryProbe
+
+            $diagnostic = Invoke-OpenPathEdgeBoundaryDiagnostic -UserName 'student01' -Password 'secret' -ExecutablePath 'C:\msedge.exe' -StudentSid 'S-1-5-21-student-sid' -AttemptOffsetsSeconds @(0, 5, 15, 30)
+
+            $script:diagnosticCalls | Should -Be 4
+            @($diagnostic.attempts).Count | Should -Be 4
+            @($diagnostic.attempts | ForEach-Object { $_.offsetSeconds }) | Should -Be @(0, 5, 15, 30)
+            $diagnostic.policyReapplied | Should -BeFalse
+            ($diagnostic | ConvertTo-Json -Depth 10) | Should -Not -Match 'student01|secret|Password'
         }
     }
 

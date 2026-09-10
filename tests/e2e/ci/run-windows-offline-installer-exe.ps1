@@ -809,6 +809,55 @@ catch {
             $trailerDiagnosticSource = 'post-process'
         }
     }
+    $edgeBoundaryEvidence = $null
+    $edgeFailureContract = $null
+    $getBoundaryFailureEvidence = Get-Command -Name Get-OpenPathLastBoundaryProbeFailureEvidence -ErrorAction SilentlyContinue
+    if ($script:CurrentStage -eq 'run-installed-boundary-probes' -and $getBoundaryFailureEvidence) {
+        $initialBoundaryEvidence = & $getBoundaryFailureEvidence
+        if ($initialBoundaryEvidence -and [string]$initialBoundaryEvidence.probeName -eq 'Canonical Edge deny') {
+            $edgeBoundaryEvidence = [ordered]@{
+                initial = $initialBoundaryEvidence
+                repeat = $null
+            }
+            $runBoundaryDiagnostic = Get-Command -Name Invoke-OpenPathEdgeBoundaryDiagnostic -ErrorAction SilentlyContinue
+            if ($runBoundaryDiagnostic -and $disposableTarget -and $disposableTarget.UserName -and $disposableTarget.Password) {
+                try {
+                    $edgeBoundaryEvidence.repeat = & $runBoundaryDiagnostic `
+                        -UserName $disposableTarget.UserName `
+                        -Password $disposableTarget.Password `
+                        -ExecutablePath $initialBoundaryEvidence.executablePath `
+                        -StudentSid $initialBoundaryEvidence.studentSid
+                }
+                catch {
+                    $edgeBoundaryEvidence.repeat = [ordered]@{
+                        status = 'unavailable'
+                        code = 'edge-boundary-diagnostic-failed'
+                    }
+                }
+            }
+            $getEdgeFailureContract = Get-Command -Name Get-OpenPathFlatEdgeBoundaryFailureContract -ErrorAction SilentlyContinue
+            if ($getEdgeFailureContract) {
+                $edgeFailureContract = & $getEdgeFailureContract -Evidence $initialBoundaryEvidence -Diagnostic $edgeBoundaryEvidence.repeat
+            }
+        }
+    }
+    $edge = if ($edgeFailureContract) {
+        [ordered]@{
+            expectedPath = $edgeFailureContract.edge.expectedPath
+            observedExactProcess = $edgeFailureContract.edge.observedExactProcess
+            observedPid = $edgeFailureContract.edge.observedPid
+            studentSid = $edgeFailureContract.edge.studentSid
+            restrictedGroupSid = $edgeFailureContract.edge.restrictedGroupSid
+            restrictedGroupSamMember = $edgeFailureContract.edge.restrictedGroupSamMember
+            restrictedGroupTokenMember = $edgeFailureContract.edge.restrictedGroupTokenMember
+            testAppLockerPolicyDecision = $edgeFailureContract.edge.testAppLockerPolicyDecision
+            appLocker8002 = $edgeFailureContract.edge.appLocker8002
+            appLocker8004 = $edgeFailureContract.edge.appLocker8004
+            appLocker8020 = $edgeFailureContract.edge.appLocker8020
+            appLocker8022 = $edgeFailureContract.edge.appLocker8022
+        }
+    }
+    else { $null }
     $failure = [ordered]@{
         status = 'failed'
         code = 'windows-offline-installer-exe-e2e-failed'
@@ -822,6 +871,35 @@ catch {
         installerChildRuntime = $installerChildRuntime
         trailerDiagnosticStatus = $trailerDiagnosticStatus
         trailerDiagnosticSource = $trailerDiagnosticSource
+        edgeBoundaryEvidence = $edgeBoundaryEvidence
+        edge = $edge
+        edgeName = if ($edgeFailureContract) { $edgeFailureContract.edgeName } else { $null }
+        edgeStudentSid = if ($edgeFailureContract) { $edgeFailureContract.edgeStudentSid } else { $null }
+        edgeExecutablePath = if ($edgeFailureContract) { $edgeFailureContract.edgeExecutablePath } else { $null }
+        edgeFailureCode = if ($edgeFailureContract) { $edgeFailureContract.edgeFailureCode } else { $null }
+        edgeExpectedEventIds = if ($edgeFailureContract) { $edgeFailureContract.edgeExpectedEventIds } else { @() }
+        edgeSamSid = if ($edgeFailureContract) { $edgeFailureContract.edgeSamSid } else { $null }
+        edgeTokenUserSid = if ($edgeFailureContract) { $edgeFailureContract.edgeTokenUserSid } else { $null }
+        edgeSamGroupName = if ($edgeFailureContract) { $edgeFailureContract.edgeSamGroupName } else { $null }
+        edgeSamGroupSid = if ($edgeFailureContract) { $edgeFailureContract.edgeSamGroupSid } else { $null }
+        edgeSamGroupMemberPresent = if ($edgeFailureContract) { $edgeFailureContract.edgeSamGroupMemberPresent } else { $null }
+        edgeSamGroupMemberCount = if ($edgeFailureContract) { $edgeFailureContract.edgeSamGroupMemberCount } else { $null }
+        edgeRestrictedGroupSid = if ($edgeFailureContract) { $edgeFailureContract.edgeRestrictedGroupSid } else { $null }
+        edgeRestrictedGroupPresent = if ($edgeFailureContract) { $edgeFailureContract.edgeRestrictedGroupPresent } else { $null }
+        edgeRestrictedGroupAttributes = if ($edgeFailureContract) { $edgeFailureContract.edgeRestrictedGroupAttributes } else { $null }
+        edgeRestrictedGroupEnabled = if ($edgeFailureContract) { $edgeFailureContract.edgeRestrictedGroupEnabled } else { $null }
+        edgeRestrictedGroupDenyOnly = if ($edgeFailureContract) { $edgeFailureContract.edgeRestrictedGroupDenyOnly } else { $null }
+        edgeRestrictedGroupDisabled = if ($edgeFailureContract) { $edgeFailureContract.edgeRestrictedGroupDisabled } else { $null }
+        edgeTaskRegisteredAtUtc = if ($edgeFailureContract) { $edgeFailureContract.edgeTaskRegisteredAtUtc } else { $null }
+        edgeEventId = if ($edgeFailureContract) { $edgeFailureContract.edgeEventId } else { $null }
+        edgeEventProcessId = if ($edgeFailureContract) { $edgeFailureContract.edgeEventProcessId } else { $null }
+        edgeEventPidStatus = if ($edgeFailureContract) { $edgeFailureContract.edgeEventPidStatus } else { 'unavailable' }
+        edgeObservedPath = if ($edgeFailureContract) { $edgeFailureContract.edgeObservedPath } else { $null }
+        edgeObservedPackage = if ($edgeFailureContract) { $edgeFailureContract.edgeObservedPackage } else { $null }
+        edgeObservedRuleId = if ($edgeFailureContract) { $edgeFailureContract.edgeObservedRuleId } else { $null }
+        edgeObservedRuleName = if ($edgeFailureContract) { $edgeFailureContract.edgeObservedRuleName } else { $null }
+        edgeObservedUserSid = if ($edgeFailureContract) { $edgeFailureContract.edgeObservedUserSid } else { $null }
+        edgeAttempts = if ($edgeFailureContract) { $edgeFailureContract.edgeAttempts } else { @() }
         cleanupAttempted = 'not-observed'
         cleanupSucceeded = 'not-observed'
     }
