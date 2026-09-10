@@ -33,6 +33,9 @@ Describe "Windows Browser Boundary CI Probes" {
         if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
             function global:Get-ScheduledTask { param($TaskName) }
         }
+        if (-not (Get-Command Get-ScheduledTaskInfo -ErrorAction SilentlyContinue)) {
+            function global:Get-ScheduledTaskInfo { param($TaskName) }
+        }
         if (-not (Get-Command New-ScheduledTaskAction -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskAction { param($Execute, $Argument) } }
         if (-not (Get-Command New-ScheduledTaskTrigger -ErrorAction SilentlyContinue)) { function global:New-ScheduledTaskTrigger { param([switch]$Once, $At) } }
         if (-not (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) { function global:Register-ScheduledTask { param($TaskName, $Action, $Trigger, $User, $Password, $RunLevel, [switch]$Force) } }
@@ -232,6 +235,31 @@ Describe "Windows Browser Boundary CI Probes" {
                     -Expectation ExpectDenied `
                     -TimeoutSeconds 1
             } | Should -Throw "*AppLocker 8004 block event was not observed*"
+        }
+
+        It 'emits bounded scheduled-task state when a denied probe has no correlated event' {
+            $testExe = Join-Path $TestDrive 'probe-no-event.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            $env:OPENPATH_TEST_FORCE_SCHTASKS = '0'
+            $env:OPENPATH_TEST_FORCE_SCHEDULED_TASK_CMDLETS = '1'
+            Mock Register-ScheduledTask {} -ModuleName BrowserBoundaryProbe
+            Mock Start-ScheduledTask {} -ModuleName BrowserBoundaryProbe
+            Mock Get-ScheduledTask { [pscustomobject]@{ State = 'Ready' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-ScheduledTaskInfo { [pscustomobject]@{ LastTaskResult = 3221225506; LastRunTime = [datetime]'2026-09-10T08:00:00Z' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent { @() } -ModuleName BrowserBoundaryProbe
+            Mock Unregister-ScheduledTask {} -ModuleName BrowserBoundaryProbe
+            Mock Write-Host {} -ModuleName BrowserBoundaryProbe
+            try {
+                { Invoke-StudentExecutableTaskProbe -ProbeName 'No event probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 } |
+                    Should -Throw '*AppLocker 8004 block event was not observed*'
+                Should -Invoke Write-Host -ModuleName BrowserBoundaryProbe -ParameterFilter {
+                    $Object -match '^OPENPATH_BOUNDARY_PROBE_FAILURE state=Ready lastTaskResult=0xC0000022 lastRunObserved=true$'
+                } -Times 1
+            }
+            finally {
+                Remove-Item Env:OPENPATH_TEST_FORCE_SCHEDULED_TASK_CMDLETS -ErrorAction SilentlyContinue
+                $env:OPENPATH_TEST_FORCE_SCHTASKS = '1'
+            }
         }
 
         It "Throws immediately when ExpectDenied but payload marker file is created" {

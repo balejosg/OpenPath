@@ -258,6 +258,22 @@ function Invoke-StudentExecutableTaskProbe {
             }
 
             if (-not $eventFound) {
+                if ($useScheduledTaskCmdlets) {
+                    $taskState = 'unknown'
+                    $lastTaskResult = 'unknown'
+                    $lastRunObserved = 'unknown'
+                    try {
+                        $registeredTask = Get-ScheduledTask -TaskName $probeTask -ErrorAction SilentlyContinue
+                        if ($registeredTask) { $taskState = [string]$registeredTask.State }
+                        $taskInfo = Get-ScheduledTaskInfo -TaskName $probeTask -ErrorAction SilentlyContinue
+                        if ($taskInfo) {
+                            $lastTaskResult = '0x{0:X8}' -f [uint32]$taskInfo.LastTaskResult
+                            $lastRunObserved = ([datetime]$taskInfo.LastRunTime -gt [datetime]::MinValue).ToString().ToLowerInvariant()
+                        }
+                    }
+                    catch {}
+                    Write-Host "OPENPATH_BOUNDARY_PROBE_FAILURE state=$taskState lastTaskResult=$lastTaskResult lastRunObserved=$lastRunObserved"
+                }
                 $expectedEvent = if ($PackagedAppPattern) { '8004/8022 block event' } else { '8004 block event' }
                 throw "$ProbeName FAILED: AppLocker $expectedEvent was not observed for $binaryLeaf within timeout ($TimeoutSeconds s)."
             }
