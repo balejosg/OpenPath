@@ -461,6 +461,8 @@ Describe "Offline installer" {
 
             Assert-ContentContainsAll -Content $offlineE2e -Needles @(
                 'Get-OpenPathLastBoundaryProbeFailureEvidence',
+                'Get-OpenPathDisposableBoundaryFailureEvidence',
+                'OpenPathEdgeBoundaryEvidence',
                 'edgeBoundaryEvidence',
                 'edge = if ($edgeFailureContract)',
                 'edgeName',
@@ -472,6 +474,13 @@ Describe "Offline installer" {
                 'edgeTaskRegisteredAtUtc',
                 'edgeEventId',
                 'Write-SafeEvidence -Payload $failure -Path $EvidencePath'
+            )
+            $disposableTarget = Get-Content (Join-Path $PSScriptRoot '..' '..' 'tests' 'e2e' 'ci' 'DisposableWindowsTarget.psm1') -Raw
+            Assert-ContentContainsAll -Content $disposableTarget -Needles @(
+                'Get-OpenPathDisposableBoundaryFailureEvidence',
+                'Get-OpenPathDisposableFlatEdgeBoundaryFailureContract',
+                'Invoke-OpenPathDisposableEdgeBoundaryDiagnostic',
+                "Data['OpenPathEdgeBoundaryEvidence']"
             )
             $offlineE2e | Should -Not -Match '\$failure\.edgeBoundaryEvidence\s*=\s*\$disposableTarget\.Password'
         }
@@ -487,6 +496,7 @@ Describe "Offline installer" {
             )
             Assert-ContentContainsAll -Content $offlineE2e -Needles @(
                 'Invoke-OpenPathEdgeBoundaryDiagnostic',
+                'Invoke-OpenPathDisposableEdgeBoundaryDiagnostic',
                 'edgeBoundaryEvidence'
             )
             $diagnosticBody = [regex]::Match($probeModule, 'function Invoke-OpenPathEdgeBoundaryDiagnostic\s*\{[\s\S]*?\n\}').Value

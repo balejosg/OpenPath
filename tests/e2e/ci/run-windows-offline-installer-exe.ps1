@@ -780,8 +780,16 @@ try {
     exit 0
 }
 catch {
-    $boundaryFailureCode = if ($script:CurrentStage -eq 'run-installed-boundary-probes' -and $_.Exception.Message -match '^boundary-[a-z0-9-]{1,96}$') {
-        [string]$_.Exception.Message
+    $boundaryException = $_.Exception
+    $transportedBoundaryEvidence = $null
+    try {
+        if ($boundaryException.Data -and $boundaryException.Data.Contains('OpenPathEdgeBoundaryEvidence')) {
+            $transportedBoundaryEvidence = $boundaryException.Data['OpenPathEdgeBoundaryEvidence']
+        }
+    }
+    catch {}
+    $boundaryFailureCode = if ($script:CurrentStage -eq 'run-installed-boundary-probes' -and $boundaryException.Message -match '^boundary-[a-z0-9-]{1,96}$') {
+        [string]$boundaryException.Message
     }
     else {
         'not-observed'
@@ -811,15 +819,25 @@ catch {
     }
     $edgeBoundaryEvidence = $null
     $edgeFailureContract = $null
-    $getBoundaryFailureEvidence = Get-Command -Name Get-OpenPathLastBoundaryProbeFailureEvidence -ErrorAction SilentlyContinue
-    if ($script:CurrentStage -eq 'run-installed-boundary-probes' -and $getBoundaryFailureEvidence) {
-        $initialBoundaryEvidence = & $getBoundaryFailureEvidence
+    $getBoundaryFailureEvidence = Get-Command -Name Get-OpenPathDisposableBoundaryFailureEvidence -ErrorAction SilentlyContinue
+    if (-not $getBoundaryFailureEvidence) {
+        $getBoundaryFailureEvidence = Get-Command -Name Get-OpenPathLastBoundaryProbeFailureEvidence -ErrorAction SilentlyContinue
+    }
+    if ($script:CurrentStage -eq 'run-installed-boundary-probes') {
+        $initialBoundaryEvidence = $null
+        if ($getBoundaryFailureEvidence) {
+            try { $initialBoundaryEvidence = & $getBoundaryFailureEvidence } catch {}
+        }
+        if (-not $initialBoundaryEvidence) { $initialBoundaryEvidence = $transportedBoundaryEvidence }
         if ($initialBoundaryEvidence -and [string]$initialBoundaryEvidence.probeName -eq 'Canonical Edge deny') {
             $edgeBoundaryEvidence = [ordered]@{
                 initial = $initialBoundaryEvidence
                 repeat = $null
             }
-            $runBoundaryDiagnostic = Get-Command -Name Invoke-OpenPathEdgeBoundaryDiagnostic -ErrorAction SilentlyContinue
+            $runBoundaryDiagnostic = Get-Command -Name Invoke-OpenPathDisposableEdgeBoundaryDiagnostic -ErrorAction SilentlyContinue
+            if (-not $runBoundaryDiagnostic) {
+                $runBoundaryDiagnostic = Get-Command -Name Invoke-OpenPathEdgeBoundaryDiagnostic -ErrorAction SilentlyContinue
+            }
             if ($runBoundaryDiagnostic -and $disposableTarget -and $disposableTarget.UserName -and $disposableTarget.Password) {
                 try {
                     $edgeBoundaryEvidence.repeat = & $runBoundaryDiagnostic `
@@ -835,7 +853,10 @@ catch {
                     }
                 }
             }
-            $getEdgeFailureContract = Get-Command -Name Get-OpenPathFlatEdgeBoundaryFailureContract -ErrorAction SilentlyContinue
+            $getEdgeFailureContract = Get-Command -Name Get-OpenPathDisposableFlatEdgeBoundaryFailureContract -ErrorAction SilentlyContinue
+            if (-not $getEdgeFailureContract) {
+                $getEdgeFailureContract = Get-Command -Name Get-OpenPathFlatEdgeBoundaryFailureContract -ErrorAction SilentlyContinue
+            }
             if ($getEdgeFailureContract) {
                 $edgeFailureContract = & $getEdgeFailureContract -Evidence $initialBoundaryEvidence -Diagnostic $edgeBoundaryEvidence.repeat
             }

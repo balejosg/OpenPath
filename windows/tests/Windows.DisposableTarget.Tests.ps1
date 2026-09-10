@@ -120,4 +120,67 @@ Describe 'Canonical offline installer disposable target' {
         Should -Invoke Start-Sleep -ModuleName DisposableWindowsTarget -Times 1
         Should -Invoke Remove-CimInstance -ModuleName DisposableWindowsTarget -Times 1
     }
+
+    It 'transports sanitized Edge failure evidence across the nested Browser module boundary' {
+        if (-not (Get-Command icacls.exe -ErrorAction SilentlyContinue)) {
+            Set-Item -Path Function:global:icacls.exe -Value { $global:LASTEXITCODE = 0 }
+        }
+        if (-not (Get-Command New-OpenPathProbePayloadBinary -ErrorAction SilentlyContinue)) {
+            Set-Item -Path Function:global:New-OpenPathProbePayloadBinary -Value { }
+        }
+        foreach ($commandName in @('Get-OpenPathLastBoundaryProbeFailureEvidence', 'Invoke-StudentExecutableTaskProbe', 'Invoke-OpenPathEdgeBoundaryDiagnostic')) {
+            if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
+                Set-Item -Path "Function:global:$commandName" -Value { param() }
+            }
+        }
+        $target = [pscustomobject]@{
+            UserName = 'op-e2e-test'
+            Password = 'not-serialized'
+            Sid = $script:testSid
+            ProfilePath = $script:testPath
+        }
+        $edgeEvidence = [pscustomobject][ordered]@{
+            probeName = 'Canonical Edge deny'
+            executablePath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+            studentSid = $script:testSid
+            processes = @([pscustomobject]@{ processId = 5436; tokenUserSid = $script:testSid; restrictedGroupPresent = $true })
+        }
+        Mock Test-Path {
+            param($LiteralPath, $PathType)
+            if ([string]$LiteralPath -match '(?i)(firefox|msedge)\.exe$') { return $true }
+            return $false
+        } -ModuleName DisposableWindowsTarget
+        Mock Import-Module {} -ModuleName DisposableWindowsTarget -ParameterFilter {
+            [string]$Name -like '*BrowserBoundaryProbe.psm1'
+        }
+        Mock New-OpenPathProbePayloadBinary {} -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathNativePolicyProbe { [pscustomobject]@{ status = 'ok' } } -ModuleName DisposableWindowsTarget
+        Mock Get-OpenPathLastBoundaryProbeFailureEvidence { $edgeEvidence } -ModuleName DisposableWindowsTarget
+        $script:boundaryProbeCallCount = 0
+        Mock Invoke-StudentExecutableTaskProbe {
+            $script:boundaryProbeCallCount++
+            if ($script:boundaryProbeCallCount -eq 2) { throw 'simulated-edge-boundary-failure' }
+            [pscustomobject]@{ status = 'pass'; evidence = [pscustomobject]@{} }
+        } -ModuleName DisposableWindowsTarget
+
+        $capturedException = $null
+        try {
+            Invoke-OpenPathInstalledBoundaryProbes -Target $target -OpenPathRoot 'C:\OpenPath'
+        }
+        catch {
+            $capturedException = $_.Exception
+        }
+
+        $capturedException | Should -Not -BeNullOrEmpty
+        $capturedException.Message | Should -Be 'boundary-edge-execution-failed'
+        $capturedException.Data.Contains('OpenPathEdgeBoundaryEvidence') | Should -BeTrue
+        $transportedEvidence = $capturedException.Data['OpenPathEdgeBoundaryEvidence']
+        $transportedEvidence.probeName | Should -Be 'Canonical Edge deny'
+        $transportedEvidence.processes[0].processId | Should -Be 5436
+        ($transportedEvidence | ConvertTo-Json -Depth 8) | Should -Not -Match 'not-serialized|Password'
+
+        Mock Invoke-OpenPathEdgeBoundaryDiagnostic { [pscustomobject]@{ status = 'pass'; attempts = @() } } -ModuleName DisposableWindowsTarget
+        $repeat = Invoke-OpenPathDisposableEdgeBoundaryDiagnostic -UserName $target.UserName -Password $target.Password -ExecutablePath $edgeEvidence.executablePath -StudentSid $target.Sid
+        $repeat.status | Should -Be 'pass'
+    }
 }
