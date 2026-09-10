@@ -232,8 +232,12 @@ Describe 'Canonical offline installer disposable target' {
                 -ExecutablePath 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' `
                 -StudentSid 'S-1-5-21-100-200-300-400' `
                 -FailureCode 'exact-student-process-observed-without-block-event' `
-                -Processes @([pscustomobject]@{ processId = 5436; restrictedGroupPresent = $null; restrictedGroupQueryStatus = 'unavailable' }) `
-                -ExpectedEventIds @(8004, 8022) | Out-Null
+                -Processes @([pscustomobject]@{ processId = 5436; restrictedGroupSid = 'S-1-5-21-100-200-300-401'; restrictedGroupPresent = $null; restrictedGroupAttributes = $null; restrictedGroupQueryStatus = 'unavailable' }) `
+                -Events @([pscustomobject]@{ id = 8002; observedProcessId = 5436; observedPath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'; observedUserSid = 'S-1-5-21-100-200-300-400'; pidStatus = 'matched' }) `
+                -ExpectedEventIds @(8004, 8022) `
+                -SamEvidence ([pscustomobject]@{ groupName = 'OpenPath-Restricted'; groupSid = 'S-1-5-21-100-200-300-401'; targetMemberPresent = $true; memberCount = 1; status = 'observed' }) `
+                -TestAppLockerPolicyDecision ([pscustomobject]@{ status = 'observed'; decision = 'Denied' }) `
+                -AppLockerQueryStatuses @{ '8002' = 'observed'; '8004' = 'failed'; '8020' = 'observed'; '8022' = 'observed' } | Out-Null
         }
 
         $retrieved = Get-OpenPathDisposableBoundaryFailureEvidence
@@ -270,6 +274,13 @@ Describe 'Canonical offline installer disposable target' {
         $roundTrip.status | Should -Be 'failed'
         $roundTrip.failureDetailCode | Should -Be 'boundary-edge-execution-failed'
         $roundTrip.edgeBoundaryEvidence.initial.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
+        $roundTrip.edgeBoundaryEvidence.initial.samGroupMemberPresent | Should -BeTrue
+        $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupPresent | Should -BeNullOrEmpty
+        $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupQueryStatus | Should -Be 'unavailable'
+        $roundTrip.edgeBoundaryEvidence.initial.testAppLockerPolicyDecision.decision | Should -Be 'Denied'
+        $roundTrip.edgeBoundaryEvidence.initial.appLocker8002 | Should -BeTrue
+        $roundTrip.edgeBoundaryEvidence.initial.appLocker8004 | Should -BeNullOrEmpty
+        $roundTrip.edgeBoundaryEvidence.initial.appLockerQueryStatuses.'8004' | Should -Be 'failed'
         $roundTrip.edgeBoundaryEvidence.repeat.attempts[3].offsetSeconds | Should -Be 30
         $roundTrip.cleanupSucceeded | Should -BeFalse
         (Get-Content -LiteralPath $path -Raw) | Should -Not -Match 'must-not-serialize|Password|UserName'
