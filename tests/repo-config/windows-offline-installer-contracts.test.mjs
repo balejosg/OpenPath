@@ -877,6 +877,8 @@ test('canonical personalized-EXE lane owns a real disposable standard target lif
     /Invoke-OpenPathInstalledBoundaryProbes\s+-Target\s+\$disposableTarget/
   );
   assert.match(targetHelper, /Invoke-StudentExecutableTaskProbe[\s\S]*-StudentSid\s+\$Target\.Sid/);
+  assert.match(targetHelper, /-headless -new-instance -profile/);
+  assert.match(targetHelper, /icacls\.exe[\s\S]*studentFirefoxProfile/);
   assert.match(targetHelper, /Invoke-OpenPathNativePolicyProbe/);
   assert.match(targetHelper, /System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe/);
   assert.match(

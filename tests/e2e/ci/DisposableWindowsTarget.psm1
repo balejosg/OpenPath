@@ -205,7 +205,19 @@ function Invoke-OpenPathInstalledBoundaryProbes {
     $probeMarker = Join-Path $Target.ProfilePath 'openpath-e2e-probe.marker'
     New-OpenPathProbePayloadBinary -OutputPath $probeExe
     $policy = Invoke-OpenPathNativePolicyProbe -Target $Target -OpenPathRoot $OpenPathRoot -FirefoxPath $firefox -EdgePath $edge -ProbePath $probeExe
-    try { $firefoxRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Firefox allow' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $firefox -Expectation ExpectAllowed -ProcessName firefox -StudentSid $Target.Sid } catch { throw 'boundary-firefox-execution-failed' }
+    $studentFirefoxProfile = Join-Path $Target.ProfilePath "AppData\Local\Temp\ff-probe-$([guid]::NewGuid().ToString('N'))"
+    try {
+        New-Item -ItemType Directory -Path $studentFirefoxProfile -Force | Out-Null
+        & icacls.exe $studentFirefoxProfile /grant "$env:COMPUTERNAME\$($Target.UserName):(OI)(CI)F" *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'student-firefox-profile-acl-failed' }
+        $firefoxRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Firefox allow' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $firefox -Arguments "-headless -new-instance -profile `"$studentFirefoxProfile`" about:blank" -Expectation ExpectAllowed -ProcessName firefox -StudentSid $Target.Sid
+    }
+    catch {
+        throw 'boundary-firefox-execution-failed'
+    }
+    finally {
+        Remove-Item -LiteralPath $studentFirefoxProfile -Recurse -Force -ErrorAction SilentlyContinue
+    }
     try { $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid } catch { throw 'boundary-edge-execution-failed' }
     try { $peRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probeExe -Arguments "`"$probeMarker`"" -Expectation ExpectDenied -StudentSid $Target.Sid -MarkerPath $probeMarker } catch { throw 'boundary-benign-pe-execution-failed' }
     try { $recovery = Invoke-OpenPathSystemRecoveryProbe -MarkerPath (Join-Path $env:ProgramData "OpenPathRecoveryProbe-$([guid]::NewGuid().ToString('N')).marker") } catch { throw 'boundary-system-recovery-failed' }
