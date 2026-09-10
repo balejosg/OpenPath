@@ -16,11 +16,22 @@ Describe 'Canonical offline installer disposable target' {
         $script:testSid = 'S-1-5-21-100-200-300-400'
         $script:testPath = Join-Path $TestDrive 'op-e2e-test'
         New-Item -ItemType Directory -Path $script:testPath -Force | Out-Null
+        $script:testProfile = if (Get-Command New-CimInstance -ErrorAction SilentlyContinue) {
+            New-CimInstance -ClassName Win32_UserProfile -Namespace root/cimv2 -ClientOnly -Property @{
+                SID = $script:testSid
+                LocalPath = $script:testPath
+                Special = $false
+                Loaded = $false
+            }
+        }
+        else {
+            [pscustomobject]@{ SID = $script:testSid; LocalPath = $script:testPath; Special = $false; Loaded = $false }
+        }
         Mock Get-LocalUser { [pscustomobject]@{ Name = 'op-e2e-test'; Enabled = $true; SID = $script:testSid } } -ModuleName DisposableWindowsTarget
         Mock Get-LocalGroup { [pscustomobject]@{ Name = 'Administrators' } } -ModuleName DisposableWindowsTarget
         Mock Get-LocalGroupMember { @([pscustomobject]@{ SID = 'S-1-5-21-1-2-3-500' }) } -ModuleName DisposableWindowsTarget
         Mock Get-CimInstance {
-            [pscustomobject]@{ SID = $script:testSid; LocalPath = $script:testPath; Special = $false; Loaded = $false }
+            $script:testProfile
         } -ModuleName DisposableWindowsTarget
         Mock New-LocalUser { [pscustomobject]@{ Name = 'op-e2e-test'; SID = $script:testSid } } -ModuleName DisposableWindowsTarget
         Mock Enable-LocalUser {} -ModuleName DisposableWindowsTarget
@@ -57,7 +68,7 @@ Describe 'Canonical offline installer disposable target' {
         Mock Get-CimInstance {
             $script:profileQueryCount++
             if ($script:profileQueryCount -eq 1) {
-                return [pscustomobject]@{ SID = $script:testSid; LocalPath = $script:testPath; Special = $false; Loaded = $false }
+                return $script:testProfile
             }
             return @()
         } -ModuleName DisposableWindowsTarget
