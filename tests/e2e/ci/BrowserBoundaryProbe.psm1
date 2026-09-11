@@ -282,6 +282,12 @@ function Get-OpenPathTokenObserverFailureReason {
     return 'unexpected-native-error'
 }
 
+function ConvertTo-OpenPathSecurityIdentifierValue {
+    param([Parameter(Mandatory = $true)][IntPtr]$SidPointer)
+
+    return ([System.Security.Principal.SecurityIdentifier]::new($SidPointer)).Value
+}
+
 function Get-OpenPathProcessTokenBoundaryEvidence {
     param(
         [Parameter(Mandatory = $true)][int]$ProcessId,
@@ -296,6 +302,7 @@ function Get-OpenPathProcessTokenBoundaryEvidence {
     $errorCode = $null
     $errorName = $null
     $failureStage = $null
+    $exception = $null
     $recordStage = {
         param([string]$Stage, [bool]$Succeeded, [int]$Code, [string]$AccessMask = '', [string]$InformationClass = '')
         $nativeStages.Add([pscustomobject][ordered]@{
@@ -333,6 +340,7 @@ function Get-OpenPathProcessTokenBoundaryEvidence {
             observerPid = [int]$runtime.processId
             observerEdition = [string]$runtime.edition
             observerVersion = [string]$runtime.version
+            exception = $exception
             nativeStages = @($nativeStages)
         }
     }
@@ -420,7 +428,7 @@ function Get-OpenPathProcessTokenBoundaryEvidence {
                     if ($tokenUserReadSuccess) {
                         $sidPointer = [Runtime.InteropServices.Marshal]::ReadIntPtr($tokenUserBuffer)
                         if ($sidPointer -ne [IntPtr]::Zero) {
-                            $tokenUserSid = (New-Object System.Security.Principal.SecurityIdentifier($sidPointer, $null)).Value
+                            $tokenUserSid = ConvertTo-OpenPathSecurityIdentifierValue -SidPointer $sidPointer
                         }
                     }
                     else {
@@ -460,7 +468,7 @@ function Get-OpenPathProcessTokenBoundaryEvidence {
                                 $sidPointer = $record.Sid
                                 if ($sidPointer -eq [IntPtr]::Zero) { continue }
                                 try {
-                                    $groupSid = (New-Object System.Security.Principal.SecurityIdentifier($sidPointer, $null)).Value
+                                    $groupSid = ConvertTo-OpenPathSecurityIdentifierValue -SidPointer $sidPointer
                                     if ([string]::Equals($groupSid, $RestrictedGroupSid, [System.StringComparison]::OrdinalIgnoreCase)) {
                                         $restrictedGroupPresent = $true
                                         $restrictedGroupAttributes = [uint32]$record.Attributes
@@ -514,6 +522,7 @@ function Get-OpenPathProcessTokenBoundaryEvidence {
                 observerPid = [int]$runtime.processId
                 observerEdition = [string]$runtime.edition
                 observerVersion = [string]$runtime.version
+                exception = $exception
                 nativeStages = @($nativeStages)
             }
         }
@@ -528,6 +537,7 @@ function Get-OpenPathProcessTokenBoundaryEvidence {
         if (-not $errorName) {
             $errorName = if ($null -ne $errorCode) { Get-OpenPathWin32ErrorName -Code $errorCode } else { 'ERROR_UNKNOWN' }
         }
+        $exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'token-observation-failed'
         return & $unavailable 'unexpected-native-error'
     }
     finally {
@@ -1537,6 +1547,10 @@ function Get-OpenPathSafeTokenObserverEvidence {
         observerPid = if ($null -ne $Observer.observerPid) { try { [int]$Observer.observerPid } catch { $null } } else { $null }
         observerEdition = [string]$Observer.observerEdition
         observerVersion = [string]$Observer.observerVersion
+        exception = if ($Observer.PSObject.Properties['exception']) {
+            Get-OpenPathSafeObserverExceptionEvidence -Exception $Observer.exception
+        }
+        else { $null }
         nativeStages = $safeStages
     }
 }

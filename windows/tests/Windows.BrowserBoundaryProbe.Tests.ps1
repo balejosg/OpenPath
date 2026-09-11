@@ -1285,6 +1285,78 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
             $observation.nativeStages[2].win32Name | Should -Be 'ERROR_INVALID_PARAMETER'
             ($observation | ConvertTo-Json -Depth 12) | Should -Not -Match 'handle|tokenHandle|processHandle|secret|Password'
         }
+
+        It 'uses the IntPtr SID conversion seam and preserves the TokenUser SID' {
+            Mock Invoke-OpenPathNativeOpenProcess {
+                [pscustomobject]@{ success = $true; handle = [IntPtr]::new(62); win32Code = 0 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativeOpenProcessToken {
+                [pscustomobject]@{ success = $true; tokenHandle = [IntPtr]::new(63); win32Code = 0 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativeGetTokenInformation {
+                param($TokenHandle, $InformationClass, $Buffer, $BufferLength, $ProcessId)
+                if ($Buffer -eq [IntPtr]::Zero) {
+                    [pscustomobject]@{ success = $false; returnLength = 16; win32Code = 122 }
+                }
+                else {
+                    [Runtime.InteropServices.Marshal]::WriteIntPtr($Buffer, [IntPtr]::new(1))
+                    [pscustomobject]@{ success = $true; returnLength = 16; win32Code = 0 }
+                }
+            } -ModuleName BrowserBoundaryProbe
+            Mock ConvertTo-OpenPathSecurityIdentifierValue {
+                param([IntPtr]$SidPointer)
+                'S-1-5-18'
+            } -ModuleName BrowserBoundaryProbe
+            Mock Close-OpenPathNativeHandle {} -ModuleName BrowserBoundaryProbe
+
+            $observation = Get-OpenPathProcessTokenBoundaryEvidence `
+                -ProcessId 4747 `
+                -RuntimeOverride $script:observerRuntime
+
+            $observation.status | Should -Be 'ok'
+            $observation.tokenUserSid | Should -Be 'S-1-5-18'
+            @($observation.nativeStages).Count | Should -Be 4
+            $observation.nativeStages[2].informationClass | Should -Be 'TokenUser'
+            $observation.nativeStages[3].informationClass | Should -Be 'TokenUser'
+            $observation.exception | Should -Be $null
+            ($observation | ConvertTo-Json -Depth 12) | Should -Not -Match 'handle|tokenHandle|processHandle|secret|Password'
+        }
+
+        It 'preserves bounded metadata when TokenUser SID conversion throws' {
+            Mock Invoke-OpenPathNativeOpenProcess {
+                [pscustomobject]@{ success = $true; handle = [IntPtr]::new(72); win32Code = 0 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativeOpenProcessToken {
+                [pscustomobject]@{ success = $true; tokenHandle = [IntPtr]::new(73); win32Code = 0 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativeGetTokenInformation {
+                param($TokenHandle, $InformationClass, $Buffer, $BufferLength, $ProcessId)
+                if ($Buffer -eq [IntPtr]::Zero) {
+                    [pscustomobject]@{ success = $false; returnLength = 16; win32Code = 122 }
+                }
+                else {
+                    [Runtime.InteropServices.Marshal]::WriteIntPtr($Buffer, [IntPtr]::new(1))
+                    [pscustomobject]@{ success = $true; returnLength = 16; win32Code = 0 }
+                }
+            } -ModuleName BrowserBoundaryProbe
+            Mock ConvertTo-OpenPathSecurityIdentifierValue {
+                throw [System.InvalidOperationException]::new('token-constructor-password-secret')
+            } -ModuleName BrowserBoundaryProbe
+            Mock Close-OpenPathNativeHandle {} -ModuleName BrowserBoundaryProbe
+
+            $observation = Get-OpenPathProcessTokenBoundaryEvidence `
+                -ProcessId 4848 `
+                -RuntimeOverride $script:observerRuntime
+
+            $observation.status | Should -Be 'unavailable'
+            $observation.reason | Should -Be 'unexpected-native-error'
+            $observation.failureStage | Should -Be 'unexpected'
+            $observation.exception.type | Should -Match 'InvalidOperationException'
+            $observation.exception.fullyQualifiedErrorId | Should -Not -BeNullOrEmpty
+            $observation.exception.hResult | Should -Not -BeNullOrEmpty
+            $observation.exception.safeReason | Should -Be 'token-observation-failed'
+            ($observation | ConvertTo-Json -Depth 12) | Should -Not -Match 'token-constructor-password-secret|handle|tokenHandle|processHandle|Password'
+        }
     }
 
     Context "Test-AppLockerPolicy observer" {
@@ -1557,6 +1629,13 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
                     failureStage = 'OpenProcessToken'
                     observerArchitecture = '64-bit'
                     observerPid = 9882
+                    exception = [pscustomobject][ordered]@{
+                        type = 'System.InvalidOperationException'
+                        fullyQualifiedErrorId = 'TokenObserverFailure'
+                        hResult = -2146233079
+                        safeReason = 'token-observation-failed'
+                        Message = 'must-not-leak-token-exception-password-secret'
+                    }
                     secret = 'must-not-leak-token-password-secret'
                     nativeStages = @([pscustomobject]@{ stage = 'OpenProcessToken'; processId = 5436; accessMask = '0x00000008'; win32Code = 87; win32Name = 'ERROR_INVALID_PARAMETER' })
                 }
@@ -1608,15 +1687,19 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
                 $evidence.appLockerEventQueries['8004'].PSObject.Properties['events'] | Should -Be $null
                 $evidence.processes[0].tokenObserver.PSObject.Properties['secret'] | Should -Be $null
                 $evidence.policyObserver.PSObject.Properties['secret'] | Should -Be $null
+                $evidence.processes[0].tokenObserver.exception.safeReason | Should -Be 'token-observation-failed'
+                $evidence.processes[0].tokenObserver.exception.PSObject.Properties['Message'] | Should -Be $null
                 $flat = Get-OpenPathFlatEdgeBoundaryFailureContract -Evidence $evidence
                 ($flat | ConvertTo-Json -Depth 20) | Should -Not -Match 'must-not-leak-(token|policy|event|query)-password-secret'
                 [pscustomobject]@{ evidence = $evidence; flat = $flat }
             }
 
             $transport.evidence.processes[0].tokenObserver.failureStage | Should -Be 'OpenProcessToken'
+            $transport.evidence.processes[0].tokenObserver.exception.safeReason | Should -Be 'token-observation-failed'
             $transport.evidence.testAppLockerPolicyDecision.runtime.edition | Should -Be 'Core'
             $transport.evidence.appLockerEventQueries.'8004'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
             $transport.flat.edge.tokenObserver.failureStage | Should -Be 'OpenProcessToken'
+            $transport.flat.edge.tokenObserver.exception.fullyQualifiedErrorId | Should -Be 'TokenObserverFailure'
             $transport.flat.edge.policyObserver.runtime.processId | Should -Be 9883
             $transport.flat.edge.eventQueries.'8004'.eventCount | Should -Be 0
             ($transport | ConvertTo-Json -Depth 12) | Should -Not -Match 'secret|Password'
@@ -1625,22 +1708,18 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
 
     Context "Direct Windows observer evidence" {
         It '[Windows direct] observes the current process token with native stage evidence' -Skip:($script:OpenPathWindowsDirect -ne $true) {
+            $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
             $observation = Get-OpenPathProcessTokenBoundaryEvidence -ProcessId $PID
 
             $observation.processId | Should -Be $PID
-            $observation.status | Should -BeIn @('ok', 'partial', 'unavailable')
-            if ($observation.status -eq 'unavailable') {
-                $observation.reason | Should -BeIn @(
-                    'process-exited-before-observation',
-                    'access-denied',
-                    'invalid-handle',
-                    'open-token-failed',
-                    'token-information-failed',
-                    'unexpected-native-error'
-                )
-            }
+            $observation.status | Should -Be 'ok'
+            $observation.tokenUserSid | Should -Be $currentSid
+            $observation.processExists | Should -BeTrue
+            $observation.processExistsStatus | Should -Be 'observed'
             @($observation.nativeStages).Count | Should -BeGreaterThan 0
             @($observation.nativeStages | Where-Object { $_.stage -eq 'OpenProcess' -and $_.accessMask -eq '0x00001000' }).Count | Should -BeGreaterThan 0
+            @($observation.nativeStages | Where-Object { $_.stage -eq 'OpenProcessToken' -and $_.accessMask -eq '0x00000008' }).Count | Should -BeGreaterThan 0
+            @($observation.nativeStages | Where-Object { $_.stage -eq 'GetTokenInformation' -and $_.informationClass -eq 'TokenUser' -and $_.succeeded }).Count | Should -BeGreaterThan 0
             $observation.observerArchitecture | Should -Not -BeNullOrEmpty
             $observation.observerEdition | Should -Not -BeNullOrEmpty
             $observation.observerVersion | Should -Not -BeNullOrEmpty
