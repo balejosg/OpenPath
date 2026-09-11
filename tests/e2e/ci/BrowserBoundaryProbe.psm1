@@ -1624,6 +1624,16 @@ function Get-OpenPathSafeAppLockerEventQueryEvidence {
     }
 }
 
+function Test-OpenPathNoMatchingEventsError {
+    param([Parameter(Mandatory = $true)][object]$ErrorRecord)
+
+    $fqid = if ($ErrorRecord.PSObject.Properties['FullyQualifiedErrorId']) {
+        [string]$ErrorRecord.FullyQualifiedErrorId
+    }
+    else { '' }
+    return [bool]($fqid -match '(?i)(?:^|,)\s*NoMatchingEventsFound(?:,|$)')
+}
+
 function Get-OpenPathAppLockerEventChannel {
     param([Parameter(Mandatory = $true)][string]$LogName)
 
@@ -1786,16 +1796,25 @@ catch {
     $fqid = [string]$_.FullyQualifiedErrorId
     if ([string]::IsNullOrWhiteSpace($fqid)) { $fqid = 'unknown' }
     if (($exception.Message -and $fqid -eq [string]$exception.Message) -or $fqid -match '(?i)password|secret|credential|access.token') { $fqid = 'redacted' }
-    $result.status = 'QUERY_FAILED'
-    $result.exception = [ordered]@{
-        type = if ($exception) { [string]$exception.GetType().FullName } else { 'System.Exception' }
-        exceptionType = if ($exception) { [string]$exception.GetType().FullName } else { 'System.Exception' }
-        fullyQualifiedErrorId = $fqid
-        fqid = $fqid
-        hResult = if ($exception -and $exception.PSObject.Properties['HResult']) { [int]$exception.HResult } else { $null }
-        safeReason = 'event-query-failed'
+    if ($result.queryAttempted -and $fqid -match '(?i)(?:^|,)\s*NoMatchingEventsFound(?:,|$)') {
+        $result.status = 'QUERY_SUCCEEDED_NO_MATCHES'
+        $result.querySucceeded = $true
+        $result.eventCount = 0
+        $result.exception = $null
+        $result.reason = $null
     }
-    $result.reason = 'event-log-unreadable'
+    else {
+        $result.status = 'QUERY_FAILED'
+        $result.exception = [ordered]@{
+            type = if ($exception) { [string]$exception.GetType().FullName } else { 'System.Exception' }
+            exceptionType = if ($exception) { [string]$exception.GetType().FullName } else { 'System.Exception' }
+            fullyQualifiedErrorId = $fqid
+            fqid = $fqid
+            hResult = if ($exception -and $exception.PSObject.Properties['HResult']) { [int]$exception.HResult } else { $null }
+            safeReason = 'event-query-failed'
+        }
+        $result.reason = 'event-log-unreadable'
+    }
 }
 [pscustomobject]$result | ConvertTo-Json -Compress -Depth 12
 '@
@@ -1876,9 +1895,18 @@ function Get-OpenPathAppLockerEventQuery {
         }
     }
     catch {
-        $result.status = 'QUERY_FAILED'
-        $result.reason = 'event-log-unreadable'
-        $result.exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'event-query-failed'
+        if ($result.queryAttempted -and (Test-OpenPathNoMatchingEventsError -ErrorRecord $_)) {
+            $result.status = 'QUERY_SUCCEEDED_NO_MATCHES'
+            $result.querySucceeded = $true
+            $result.eventCount = 0
+            $result.exception = $null
+            $result.reason = $null
+        }
+        else {
+            $result.status = 'QUERY_FAILED'
+            $result.reason = 'event-log-unreadable'
+            $result.exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'event-query-failed'
+        }
     }
 
     $runNativeComparison = $IncludeNativePowerShellComparison -or $result.status -in @('QUERY_FAILED', 'CHANNEL_UNAVAILABLE')

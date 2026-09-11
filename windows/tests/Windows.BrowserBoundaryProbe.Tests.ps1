@@ -1425,6 +1425,60 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
             ($failed | ConvertTo-Json -Depth 12) | Should -Not -Match 'event-secret-not-serializable|Password'
         }
 
+        It 'treats NoMatchingEventsFound from a filtered query as a successful empty result' {
+            Mock Get-OpenPathAppLockerEventChannel {
+                param([string]$LogName)
+                [pscustomobject]@{ channel = $LogName; channelExists = $true; status = 'observed' }
+            } -ModuleName BrowserBoundaryProbe
+            $noMatchError = [System.Management.Automation.ErrorRecord]::new(
+                [System.InvalidOperationException]::new('no matching events'),
+                'NoMatchingEventsFound',
+                [System.Management.Automation.ErrorCategory]::ObjectNotFound,
+                $null
+            )
+            Mock Get-WinEvent { throw $noMatchError } -ModuleName BrowserBoundaryProbe
+
+            $query = Get-OpenPathAppLockerEventQuery `
+                -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' `
+                -EventId 8004 `
+                -StartTime $script:eventStartTime `
+                -RuntimeOverride $script:eventObserverRuntime `
+                -IncludeNativePowerShellComparison:$false
+
+            $query.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            $query.queryAttempted | Should -BeTrue
+            $query.querySucceeded | Should -BeTrue
+            $query.eventCount | Should -Be 0
+            $query.exception | Should -Be $null
+            $query.reason | Should -Be $null
+        }
+
+        It 'uses the bounded no-match classifier for the native PowerShell script path' {
+            $classification = InModuleScope BrowserBoundaryProbe {
+                $noMatch = [System.Management.Automation.ErrorRecord]::new(
+                    [System.InvalidOperationException]::new('no matching events'),
+                    'NoMatchingEventsFound',
+                    [System.Management.Automation.ErrorCategory]::ObjectNotFound,
+                    $null
+                )
+                $failure = [System.Management.Automation.ErrorRecord]::new(
+                    [System.InvalidOperationException]::new('event provider failed'),
+                    'EventProviderFailed',
+                    [System.Management.Automation.ErrorCategory]::ReadError,
+                    $null
+                )
+                [pscustomobject]@{
+                    noMatch = Test-OpenPathNoMatchingEventsError -ErrorRecord $noMatch
+                    failure = Test-OpenPathNoMatchingEventsError -ErrorRecord $failure
+                }
+            }
+
+            $classification.noMatch | Should -BeTrue
+            $classification.failure | Should -BeFalse
+            $moduleContent = Get-Content (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1') -Raw
+            $moduleContent | Should -Match '(?s)queryAttempted.*NoMatchingEventsFound'
+        }
+
         It 'reports unsupported observer runtime without attempting channel discovery' {
             $unsupportedRuntime = [pscustomobject]@{
                 supported = $false
