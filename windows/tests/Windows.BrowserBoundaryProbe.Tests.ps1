@@ -626,7 +626,7 @@ Describe "Windows Browser Boundary CI Probes" {
             }
 
             Mock Get-CimInstance { $testProcess } -ModuleName BrowserBoundaryProbe
-            Mock Invoke-CimMethod { [pscustomobject]@{ Sid = 'S-1-5-21-sam-owner' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathProcessOwnerSid { 'S-1-5-21-sam-owner' } -ModuleName BrowserBoundaryProbe
             Mock Get-OpenPathProcessTokenBoundaryEvidence {
                 [pscustomobject]@{
                     status = 'ok'

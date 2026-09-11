@@ -361,6 +361,17 @@ function Get-OpenPathSamBoundaryEvidence {
     }
 }
 
+function Get-OpenPathProcessOwnerSid {
+    param([Parameter(Mandatory = $true)][object]$Process)
+
+    try {
+        $owner = Invoke-CimMethod -InputObject $Process -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+        if ($owner) { return [string]$owner.Sid }
+    }
+    catch {}
+    return $null
+}
+
 function Get-OpenPathExactProcessBoundaryEvidence {
     param(
         [Parameter(Mandatory = $true)][string]$ProcessName,
@@ -402,12 +413,7 @@ function Get-OpenPathExactProcessBoundaryEvidence {
                 continue
             }
 
-            $samSid = $null
-            try {
-                $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction SilentlyContinue
-                if ($owner) { $samSid = [string]$owner.Sid }
-            }
-            catch {}
+            $samSid = Get-OpenPathProcessOwnerSid -Process $process
 
             $processId = [int]$process.ProcessId
             $token = Get-OpenPathProcessTokenBoundaryEvidence -ProcessId $processId -RestrictedGroupSid $RestrictedGroupSid
@@ -1594,6 +1600,7 @@ Export-ModuleMember -Function @(
     'New-OpenPathProbePayloadBinary',
     'Get-OpenPathProcessTokenBoundaryEvidence',
     'Get-OpenPathSamBoundaryEvidence',
+    'Get-OpenPathProcessOwnerSid',
     'Get-OpenPathExactProcessBoundaryEvidence',
     'Get-OpenPathCorrelatedAppLockerEvent',
     'Get-OpenPathTaskIdentityEvidence',

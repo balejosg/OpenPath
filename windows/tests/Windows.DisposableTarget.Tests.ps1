@@ -125,6 +125,7 @@ Describe 'Canonical offline installer disposable target' {
         if (-not (Get-Command icacls.exe -ErrorAction SilentlyContinue)) {
             Set-Item -Path Function:global:icacls.exe -Value { $global:LASTEXITCODE = 0 }
         }
+        Mock icacls.exe { $global:LASTEXITCODE = 0 } -ModuleName DisposableWindowsTarget
         if (-not (Get-Command New-OpenPathProbePayloadBinary -ErrorAction SilentlyContinue)) {
             Set-Item -Path Function:global:New-OpenPathProbePayloadBinary -Value { }
         }
@@ -156,10 +157,11 @@ Describe 'Canonical offline installer disposable target' {
         Mock New-OpenPathProbePayloadBinary {} -ModuleName DisposableWindowsTarget
         Mock Invoke-OpenPathNativePolicyProbe { [pscustomobject]@{ status = 'ok' } } -ModuleName DisposableWindowsTarget
         Mock Get-OpenPathLastBoundaryProbeFailureEvidence { $edgeEvidence } -ModuleName DisposableWindowsTarget
-        $script:boundaryProbeCallCount = 0
         Mock Invoke-StudentExecutableTaskProbe {
-            $script:boundaryProbeCallCount++
-            if ($script:boundaryProbeCallCount -eq 2) { throw 'simulated-edge-boundary-failure' }
+            param([string]$ProbeName)
+            if ($ProbeName -eq 'Canonical Edge deny') {
+                throw 'simulated-edge-boundary-failure'
+            }
             [pscustomobject]@{ status = 'pass'; evidence = [pscustomobject]@{} }
         } -ModuleName DisposableWindowsTarget
 
