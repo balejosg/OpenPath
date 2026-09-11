@@ -105,50 +105,81 @@ function Invoke-OpenPathSchtasksCommand {
     }
 }
 
-function Get-OpenPathProcessTokenBoundaryEvidence {
-    param(
-        [Parameter(Mandatory = $true)][int]$ProcessId,
-        [string]$RestrictedGroupSid = ''
-    )
+function Get-OpenPathObserverRuntime {
+    param([object]$RuntimeOverride = $null)
 
-    $unavailable = {
-        param([string]$Reason)
+    if ($RuntimeOverride) {
         return [pscustomobject][ordered]@{
-            status = 'unavailable'
-            reason = $Reason
-            processId = $ProcessId
-            tokenUserSid = $null
-            restrictedGroupSid = $RestrictedGroupSid
-            restrictedGroupPresent = $null
-            restrictedGroupAttributes = $null
-            restrictedGroupEnabled = $null
-            restrictedGroupDenyOnly = $null
-            restrictedGroupDisabled = $null
-            restrictedGroupQueryStatus = 'unavailable'
+            supported = [bool]$RuntimeOverride.supported
+            edition = [string]$RuntimeOverride.edition
+            version = [string]$RuntimeOverride.version
+            bitness = [string]$RuntimeOverride.bitness
+            processId = [int]$RuntimeOverride.processId
         }
     }
 
-    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
-        return & $unavailable 'windows-only'
+    return [pscustomobject][ordered]@{
+        supported = ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT)
+        edition = if ($PSVersionTable.PSEdition) { [string]$PSVersionTable.PSEdition } else { 'Desktop' }
+        version = [string]$PSVersionTable.PSVersion
+        bitness = if ([Environment]::Is64BitProcess) { '64-bit' } else { '32-bit' }
+        processId = [int]$PID
     }
+}
+
+function Get-OpenPathWin32ErrorName {
+    param([int]$Code)
+
+    $names = @{
+        0 = 'ERROR_SUCCESS'
+        2 = 'ERROR_FILE_NOT_FOUND'
+        3 = 'ERROR_PATH_NOT_FOUND'
+        5 = 'ERROR_ACCESS_DENIED'
+        6 = 'ERROR_INVALID_HANDLE'
+        87 = 'ERROR_INVALID_PARAMETER'
+        122 = 'ERROR_INSUFFICIENT_BUFFER'
+        1168 = 'ERROR_NOT_FOUND'
+        1314 = 'ERROR_PRIVILEGE_NOT_HELD'
+    }
+    if ($names.ContainsKey($Code)) { return $names[$Code] }
+    return 'ERROR_UNKNOWN'
+}
+
+function Get-OpenPathProcessExistence {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
 
     try {
-        if (-not ([System.Management.Automation.PSTypeName]'OpenPathTokenBoundaryNative').Type) {
-            Add-Type -TypeDefinition @'
+        $process = Get-Process -Id $ProcessId -ErrorAction Stop
+        if ($process) {
+            return [pscustomobject][ordered]@{ processExists = $true; processExistsStatus = 'observed' }
+        }
+        return [pscustomobject][ordered]@{ processExists = $null; processExistsStatus = 'unknown' }
+    }
+    catch {
+        if ([string]$_.FullyQualifiedErrorId -like '*NoProcessFoundForGivenId*') {
+            return [pscustomobject][ordered]@{ processExists = $false; processExistsStatus = 'observed' }
+        }
+        return [pscustomobject][ordered]@{ processExists = $null; processExistsStatus = 'unknown' }
+    }
+}
+
+function Ensure-OpenPathTokenBoundaryNative {
+    if (([System.Management.Automation.PSTypeName]'OpenPathTokenBoundaryNative').Type) { return }
+    Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
-[StructLayout(LayoutKind.Sequential)]
-public struct SID_AND_ATTRIBUTES {
-    public IntPtr Sid;
-    public uint Attributes;
-}
+ [StructLayout(LayoutKind.Sequential)]
+ public struct SID_AND_ATTRIBUTES {
+     public IntPtr Sid;
+     public uint Attributes;
+ }
 
-[StructLayout(LayoutKind.Sequential)]
-public struct TOKEN_GROUPS_HEADER {
-    public uint GroupCount;
-    public SID_AND_ATTRIBUTES Groups;
-}
+ [StructLayout(LayoutKind.Sequential)]
+ public struct TOKEN_GROUPS_HEADER {
+     public uint GroupCount;
+     public SID_AND_ATTRIBUTES Groups;
+ }
 
 public static class OpenPathTokenBoundaryNative {
     public const uint ProcessQueryLimitedInformation = 0x1000;
@@ -181,23 +212,185 @@ public static class OpenPathTokenBoundaryNative {
     }
 }
 '@ -ErrorAction Stop
-        }
+}
 
-        $processHandle = [OpenPathTokenBoundaryNative]::OpenProcess(
-            [OpenPathTokenBoundaryNative]::ProcessQueryLimitedInformation,
-            $false,
-            [uint32]$ProcessId)
-        if ($processHandle -eq [IntPtr]::Zero) {
-            return & $unavailable 'open-process-failed'
+function Invoke-OpenPathNativeOpenProcess {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+    Ensure-OpenPathTokenBoundaryNative
+    $handle = [OpenPathTokenBoundaryNative]::OpenProcess(
+        [OpenPathTokenBoundaryNative]::ProcessQueryLimitedInformation,
+        $false,
+        [uint32]$ProcessId)
+    $code = if ($handle -eq [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::GetLastWin32Error() } else { 0 }
+    return [pscustomobject]@{ success = ($handle -ne [IntPtr]::Zero); handle = $handle; win32Code = [int]$code }
+}
+
+function Invoke-OpenPathNativeOpenProcessToken {
+    param(
+        [Parameter(Mandatory = $true)][IntPtr]$ProcessHandle,
+        [Parameter(Mandatory = $true)][int]$ProcessId
+    )
+    Ensure-OpenPathTokenBoundaryNative
+    $tokenHandle = [IntPtr]::Zero
+    $success = [OpenPathTokenBoundaryNative]::OpenProcessToken(
+        $ProcessHandle,
+        [OpenPathTokenBoundaryNative]::TokenQuery,
+        [ref]$tokenHandle)
+    $code = if ($success) { 0 } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+    return [pscustomobject]@{ success = [bool]$success; tokenHandle = $tokenHandle; win32Code = [int]$code; processId = $ProcessId }
+}
+
+function Invoke-OpenPathNativeGetTokenInformation {
+    param(
+        [Parameter(Mandatory = $true)][IntPtr]$TokenHandle,
+        [Parameter(Mandatory = $true)][int]$InformationClass,
+        [Parameter(Mandatory = $true)][IntPtr]$Buffer,
+        [Parameter(Mandatory = $true)][uint32]$BufferLength,
+        [Parameter(Mandatory = $true)][int]$ProcessId
+    )
+    Ensure-OpenPathTokenBoundaryNative
+    [uint32]$returnLength = 0
+    $success = [OpenPathTokenBoundaryNative]::GetTokenInformation(
+        $TokenHandle,
+        $InformationClass,
+        $Buffer,
+        $BufferLength,
+        [ref]$returnLength)
+    $code = if ($success) { 0 } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+    return [pscustomobject]@{
+        success = [bool]$success
+        returnLength = [uint32]$returnLength
+        win32Code = [int]$code
+        informationClass = $InformationClass
+        processId = $ProcessId
+    }
+}
+
+function Close-OpenPathNativeHandle {
+    param([Parameter(Mandatory = $true)][IntPtr]$Handle)
+    Ensure-OpenPathTokenBoundaryNative
+    [OpenPathTokenBoundaryNative]::CloseHandle($Handle) | Out-Null
+}
+
+function Get-OpenPathTokenObserverFailureReason {
+    param([Parameter(Mandatory = $true)][string]$Stage, [int]$Win32Code)
+
+    if ($Win32Code -eq 5) { return 'access-denied' }
+    if ($Win32Code -eq 6) { return 'invalid-handle' }
+    if ($Stage -eq 'OpenProcessToken') { return 'open-token-failed' }
+    if ($Stage -eq 'GetTokenInformation') { return 'token-information-failed' }
+    return 'unexpected-native-error'
+}
+
+function Get-OpenPathProcessTokenBoundaryEvidence {
+    param(
+        [Parameter(Mandatory = $true)][int]$ProcessId,
+        [string]$RestrictedGroupSid = '',
+        [object]$RuntimeOverride = $null
+    )
+
+    $runtime = Get-OpenPathObserverRuntime -RuntimeOverride $RuntimeOverride
+    $nativeStages = [System.Collections.Generic.List[object]]::new()
+    $processExists = $null
+    $processExistsStatus = 'unknown'
+    $errorCode = $null
+    $errorName = $null
+    $failureStage = $null
+    $recordStage = {
+        param([string]$Stage, [bool]$Succeeded, [int]$Code, [string]$AccessMask = '', [string]$InformationClass = '')
+        $nativeStages.Add([pscustomobject][ordered]@{
+                stage = $Stage
+                attempted = $true
+                succeeded = $Succeeded
+                processId = $ProcessId
+                accessMask = if ($AccessMask) { $AccessMask } else { $null }
+                informationClass = if ($InformationClass) { $InformationClass } else { $null }
+                win32Code = $Code
+                win32Name = Get-OpenPathWin32ErrorName -Code $Code
+            })
+    }
+
+    $unavailable = {
+        param([string]$Reason)
+        return [pscustomobject][ordered]@{
+            status = 'unavailable'
+            reason = $Reason
+            processId = $ProcessId
+            tokenUserSid = $null
+            restrictedGroupSid = $RestrictedGroupSid
+            restrictedGroupPresent = $null
+            restrictedGroupAttributes = $null
+            restrictedGroupEnabled = $null
+            restrictedGroupDenyOnly = $null
+            restrictedGroupDisabled = $null
+            restrictedGroupQueryStatus = 'unavailable'
+            processExists = $processExists
+            processExistsStatus = $processExistsStatus
+            errorCode = $errorCode
+            errorName = $errorName
+            failureStage = $failureStage
+            observerArchitecture = [string]$runtime.bitness
+            observerPid = [int]$runtime.processId
+            observerEdition = [string]$runtime.edition
+            observerVersion = [string]$runtime.version
+            nativeStages = @($nativeStages)
         }
+    }
+
+    if (-not $runtime.supported) {
+        return & $unavailable 'windows-only'
+    }
+
+    try {
+        Ensure-OpenPathTokenBoundaryNative
+
+        $processOpen = Invoke-OpenPathNativeOpenProcess -ProcessId $ProcessId
+        $processOpenCode = [int]$processOpen.win32Code
+        $processOpenSuccess = [bool]$processOpen.success
+        & $recordStage 'OpenProcess' $processOpenSuccess $processOpenCode '0x00001000'
+        $processHandle = if ($processOpen.PSObject.Properties['handle']) { $processOpen.handle } else { [IntPtr]::Zero }
+        if (-not $processOpenSuccess) {
+            $existence = Get-OpenPathProcessExistence -ProcessId $ProcessId
+            $processExists = $existence.processExists
+            $processExistsStatus = [string]$existence.processExistsStatus
+            $failureStage = 'OpenProcess'
+            $errorCode = $processOpenCode
+            $errorName = Get-OpenPathWin32ErrorName -Code $processOpenCode
+            $failureReason = if ($processOpenCode -in @(2, 3, 87, 1168) -and $processExists -eq $false) {
+                'process-exited-before-observation'
+            }
+            else {
+                Get-OpenPathTokenObserverFailureReason -Stage 'OpenProcess' -Win32Code $processOpenCode
+            }
+            return & $unavailable $failureReason
+        }
+        if ($processHandle -eq [IntPtr]::Zero -or $processHandle -eq [IntPtr]::new(-1)) {
+            $failureStage = 'OpenProcess'
+            $errorCode = 6
+            $errorName = Get-OpenPathWin32ErrorName -Code 6
+            return & $unavailable 'invalid-handle'
+        }
+        $processExists = $true
+        $processExistsStatus = 'observed'
 
         $tokenHandle = [IntPtr]::Zero
         try {
-            if (-not [OpenPathTokenBoundaryNative]::OpenProcessToken(
-                    $processHandle,
-                    [OpenPathTokenBoundaryNative]::TokenQuery,
-                    [ref]$tokenHandle)) {
-                return & $unavailable 'open-token-failed'
+            $tokenOpen = Invoke-OpenPathNativeOpenProcessToken -ProcessHandle $processHandle -ProcessId $ProcessId
+            $tokenOpenCode = [int]$tokenOpen.win32Code
+            $tokenOpenSuccess = [bool]$tokenOpen.success
+            & $recordStage 'OpenProcessToken' $tokenOpenSuccess $tokenOpenCode '0x00000008'
+            $tokenHandle = if ($tokenOpen.PSObject.Properties['tokenHandle']) { $tokenOpen.tokenHandle } else { [IntPtr]::Zero }
+            if (-not $tokenOpenSuccess) {
+                $failureStage = 'OpenProcessToken'
+                $errorCode = $tokenOpenCode
+                $errorName = Get-OpenPathWin32ErrorName -Code $tokenOpenCode
+                return & $unavailable (Get-OpenPathTokenObserverFailureReason -Stage 'OpenProcessToken' -Win32Code $tokenOpenCode)
+            }
+            if ($tokenHandle -eq [IntPtr]::Zero -or $tokenHandle -eq [IntPtr]::new(-1)) {
+                $failureStage = 'OpenProcessToken'
+                $errorCode = 6
+                $errorName = Get-OpenPathWin32ErrorName -Code 6
+                return & $unavailable 'invalid-handle'
             }
 
             $tokenUserSid = $null
@@ -207,44 +400,56 @@ public static class OpenPathTokenBoundaryNative {
             $tokenUserBuffer = [IntPtr]::Zero
             $groupsBuffer = [IntPtr]::Zero
             try {
-                [uint32]$requiredLength = 0
-                [OpenPathTokenBoundaryNative]::GetTokenInformation(
-                    $tokenHandle,
-                    [OpenPathTokenBoundaryNative]::TokenUser,
-                    [IntPtr]::Zero,
-                    0,
-                    [ref]$requiredLength) | Out-Null
+                $tokenUserQuery = Invoke-OpenPathNativeGetTokenInformation -TokenHandle $tokenHandle -InformationClass 1 -Buffer ([IntPtr]::Zero) -BufferLength 0 -ProcessId $ProcessId
+                $tokenUserCode = [int]$tokenUserQuery.win32Code
+                $tokenUserSuccess = [bool]$tokenUserQuery.success
+                & $recordStage 'GetTokenInformation' $tokenUserSuccess $tokenUserCode '' 'TokenUser'
+                [uint32]$requiredLength = [uint32]$tokenUserQuery.returnLength
+                if (-not $tokenUserSuccess -and $tokenUserCode -ne 122) {
+                    $failureStage = 'GetTokenInformation'
+                    $errorCode = $tokenUserCode
+                    $errorName = Get-OpenPathWin32ErrorName -Code $tokenUserCode
+                    return & $unavailable (Get-OpenPathTokenObserverFailureReason -Stage 'GetTokenInformation' -Win32Code $tokenUserCode)
+                }
                 if ($requiredLength -gt 0) {
                     $tokenUserBuffer = [Runtime.InteropServices.Marshal]::AllocHGlobal([int]$requiredLength)
-                    if ([OpenPathTokenBoundaryNative]::GetTokenInformation(
-                            $tokenHandle,
-                            [OpenPathTokenBoundaryNative]::TokenUser,
-                            $tokenUserBuffer,
-                            $requiredLength,
-                            [ref]$requiredLength)) {
+                    $tokenUserRead = Invoke-OpenPathNativeGetTokenInformation -TokenHandle $tokenHandle -InformationClass 1 -Buffer $tokenUserBuffer -BufferLength $requiredLength -ProcessId $ProcessId
+                    $tokenUserReadCode = [int]$tokenUserRead.win32Code
+                    $tokenUserReadSuccess = [bool]$tokenUserRead.success
+                    & $recordStage 'GetTokenInformation' $tokenUserReadSuccess $tokenUserReadCode '' 'TokenUser'
+                    if ($tokenUserReadSuccess) {
                         $sidPointer = [Runtime.InteropServices.Marshal]::ReadIntPtr($tokenUserBuffer)
                         if ($sidPointer -ne [IntPtr]::Zero) {
                             $tokenUserSid = (New-Object System.Security.Principal.SecurityIdentifier($sidPointer, $null)).Value
                         }
                     }
+                    else {
+                        $failureStage = 'GetTokenInformation'
+                        $errorCode = $tokenUserReadCode
+                        $errorName = Get-OpenPathWin32ErrorName -Code $tokenUserReadCode
+                        return & $unavailable (Get-OpenPathTokenObserverFailureReason -Stage 'GetTokenInformation' -Win32Code $tokenUserReadCode)
+                    }
                 }
 
                 if ($RestrictedGroupSid) {
-                    [uint32]$requiredLength = 0
-                    [OpenPathTokenBoundaryNative]::GetTokenInformation(
-                        $tokenHandle,
-                        [OpenPathTokenBoundaryNative]::TokenGroups,
-                        [IntPtr]::Zero,
-                        0,
-                        [ref]$requiredLength) | Out-Null
+                    $groupsQuery = Invoke-OpenPathNativeGetTokenInformation -TokenHandle $tokenHandle -InformationClass 2 -Buffer ([IntPtr]::Zero) -BufferLength 0 -ProcessId $ProcessId
+                    $groupsCode = [int]$groupsQuery.win32Code
+                    $groupsSuccess = [bool]$groupsQuery.success
+                    & $recordStage 'GetTokenInformation' $groupsSuccess $groupsCode '' 'TokenGroups'
+                    [uint32]$requiredLength = [uint32]$groupsQuery.returnLength
+                    if (-not $groupsSuccess -and $groupsCode -ne 122) {
+                        $failureStage = 'GetTokenInformation'
+                        $errorCode = $groupsCode
+                        $errorName = Get-OpenPathWin32ErrorName -Code $groupsCode
+                        return & $unavailable (Get-OpenPathTokenObserverFailureReason -Stage 'GetTokenInformation' -Win32Code $groupsCode)
+                    }
                     if ($requiredLength -gt 0) {
                         $groupsBuffer = [Runtime.InteropServices.Marshal]::AllocHGlobal([int]$requiredLength)
-                        if ([OpenPathTokenBoundaryNative]::GetTokenInformation(
-                                $tokenHandle,
-                                [OpenPathTokenBoundaryNative]::TokenGroups,
-                                $groupsBuffer,
-                                $requiredLength,
-                                [ref]$requiredLength)) {
+                        $groupsRead = Invoke-OpenPathNativeGetTokenInformation -TokenHandle $tokenHandle -InformationClass 2 -Buffer $groupsBuffer -BufferLength $requiredLength -ProcessId $ProcessId
+                        $groupsReadCode = [int]$groupsRead.win32Code
+                        $groupsReadSuccess = [bool]$groupsRead.success
+                        & $recordStage 'GetTokenInformation' $groupsReadSuccess $groupsReadCode '' 'TokenGroups'
+                        if ($groupsReadSuccess) {
                             $groupCount = [Runtime.InteropServices.Marshal]::ReadInt32($groupsBuffer)
                             $groupsOffset = [OpenPathTokenBoundaryNative]::TokenGroupsFirstGroupOffset()
                             $groupStride = [OpenPathTokenBoundaryNative]::SidAndAttributesSize()
@@ -265,6 +470,12 @@ public static class OpenPathTokenBoundaryNative {
                                 catch {}
                             }
                             $restrictedGroupQueryStatus = 'ok'
+                        }
+                        else {
+                            $failureStage = 'GetTokenInformation'
+                            $errorCode = $groupsReadCode
+                            $errorName = Get-OpenPathWin32ErrorName -Code $groupsReadCode
+                            return & $unavailable (Get-OpenPathTokenObserverFailureReason -Stage 'GetTokenInformation' -Win32Code $groupsReadCode)
                         }
                     }
                 }
@@ -294,20 +505,34 @@ public static class OpenPathTokenBoundaryNative {
                 restrictedGroupDenyOnly = $restrictedGroupDenyOnly
                 restrictedGroupDisabled = $restrictedGroupDisabled
                 restrictedGroupQueryStatus = $restrictedGroupQueryStatus
+                processExists = $processExists
+                processExistsStatus = $processExistsStatus
+                errorCode = $errorCode
+                errorName = $errorName
+                failureStage = $failureStage
+                observerArchitecture = [string]$runtime.bitness
+                observerPid = [int]$runtime.processId
+                observerEdition = [string]$runtime.edition
+                observerVersion = [string]$runtime.version
+                nativeStages = @($nativeStages)
             }
         }
         finally {
             if ($tokenHandle -ne [IntPtr]::Zero) {
-                [OpenPathTokenBoundaryNative]::CloseHandle($tokenHandle) | Out-Null
+                Close-OpenPathNativeHandle -Handle $tokenHandle
             }
         }
     }
     catch {
-        return & $unavailable 'token-query-failed'
+        $failureStage = if ($failureStage) { $failureStage } else { 'unexpected' }
+        if (-not $errorName) {
+            $errorName = if ($null -ne $errorCode) { Get-OpenPathWin32ErrorName -Code $errorCode } else { 'ERROR_UNKNOWN' }
+        }
+        return & $unavailable 'unexpected-native-error'
     }
     finally {
         if ($processHandle -and $processHandle -ne [IntPtr]::Zero) {
-            [OpenPathTokenBoundaryNative]::CloseHandle($processHandle) | Out-Null
+            Close-OpenPathNativeHandle -Handle $processHandle
         }
     }
 }
@@ -429,6 +654,7 @@ function Get-OpenPathExactProcessBoundaryEvidence {
                 studentSid = $StudentSid
                 samSid = $samSid
                 tokenUserSid = $tokenUserSid
+                tokenObserver = Get-OpenPathSafeTokenObserverEvidence -Observer $token
                 samTokenSidMatch = if ($samSid -and $tokenUserSid) { [string]::Equals($samSid, $tokenUserSid, [System.StringComparison]::OrdinalIgnoreCase) } else { $null }
                 tokenQueryStatus = [string]$token.status
                 tokenIdentityVerified = $tokenSidMatches
@@ -698,24 +924,265 @@ function Get-OpenPathTaskIdentityEvidence {
     return [pscustomobject]$taskEvidence
 }
 
-function Get-OpenPathTestAppLockerPolicyDecision {
+function Get-OpenPathSafePolicyErrorId {
+    param(
+        [Parameter(Mandatory = $true)][object]$ErrorRecord,
+        [object]$Exception = $null
+    )
+
+    $candidate = if ($ErrorRecord.PSObject.Properties['FullyQualifiedErrorId']) {
+        [string]$ErrorRecord.FullyQualifiedErrorId
+    }
+    else {
+        ''
+    }
+    if ([string]::IsNullOrWhiteSpace($candidate)) { return 'unknown' }
+    $message = if ($Exception) { [string]$Exception.Message } else { '' }
+    if (($message -and $candidate -eq $message) -or $candidate -match '(?i)password|secret|credential|access.token') {
+        return 'redacted'
+    }
+    return $candidate
+}
+
+function Get-OpenPathSafePolicyExceptionEvidence {
+    param(
+        [Parameter(Mandatory = $true)][object]$ErrorRecord,
+        [Parameter(Mandatory = $true)][string]$SafeReason
+    )
+
+    $exception = if ($ErrorRecord.PSObject.Properties['Exception']) { $ErrorRecord.Exception } else { $ErrorRecord }
+    $exceptionType = if ($exception) { [string]$exception.GetType().FullName } else { 'System.Exception' }
+    $fullyQualifiedErrorId = Get-OpenPathSafePolicyErrorId -ErrorRecord $ErrorRecord -Exception $exception
+    $hResult = $null
+    if ($exception -and $exception.PSObject.Properties['HResult']) {
+        try { $hResult = [int]$exception.HResult } catch { $hResult = $null }
+    }
+
+    return [pscustomobject][ordered]@{
+        type = $exceptionType
+        exceptionType = $exceptionType
+        fullyQualifiedErrorId = $fullyQualifiedErrorId
+        fqid = $fullyQualifiedErrorId
+        hResult = $hResult
+        safeReason = $SafeReason
+    }
+}
+
+function Invoke-OpenPathAppLockerModuleImport {
+    Import-Module -Name AppLocker -ErrorAction Stop
+}
+
+function Invoke-OpenPathNativePowerShellPolicyComparison {
     param(
         [Parameter(Mandatory = $true)][string]$ExecutablePath,
         [Parameter(Mandatory = $true)][string]$StudentSid
     )
 
+    $comparison = [ordered]@{
+        status = 'unavailable'
+        path = $ExecutablePath
+        userSid = $StudentSid
+        runtime = $null
+        command = [ordered]@{
+            getAppLockerPolicy = [ordered]@{ available = $false; source = $null; commandType = $null }
+            testAppLockerPolicy = [ordered]@{ available = $false; source = $null; commandType = $null }
+        }
+        exception = $null
+        reason = $null
+    }
+
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        $comparison.status = 'observer-runtime-unsupported'
+        $comparison.reason = 'windows-only'
+        return [pscustomobject]$comparison
+    }
+
+    $windowsRoot = if ($env:WINDIR) { [string]$env:WINDIR } else { [string]$env:SystemRoot }
+    $nativeShell = Join-Path $windowsRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $nativeShell)) {
+        $comparison.reason = 'native-powershell-missing'
+        return [pscustomobject]$comparison
+    }
+
+    $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-policy-$([guid]::NewGuid().ToString('N')).ps1"
+    try {
+        $nativeScript = @'
+param(
+    [Parameter(Mandatory = $true)][string]$ExecutablePath,
+    [Parameter(Mandatory = $true)][string]$StudentSid
+)
+
+$runtime = [ordered]@{
+    edition = if ($PSVersionTable.PSEdition) { [string]$PSVersionTable.PSEdition } else { 'Desktop' }
+    version = [string]$PSVersionTable.PSVersion
+    bitness = if ([Environment]::Is64BitProcess) { '64-bit' } else { '32-bit' }
+    processId = [int]$PID
+}
+$result = [ordered]@{
+    status = 'unavailable'
+    path = $ExecutablePath
+    userSid = $StudentSid
+    runtime = $runtime
+    command = [ordered]@{
+        getAppLockerPolicy = [ordered]@{ available = $false; source = $null; commandType = $null }
+        testAppLockerPolicy = [ordered]@{ available = $false; source = $null; commandType = $null }
+    }
+    exception = $null
+    reason = $null
+}
+$getCommand = Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue
+$testCommand = Get-Command -Name Test-AppLockerPolicy -ErrorAction SilentlyContinue
+foreach ($entry in @(@('getAppLockerPolicy', $getCommand), @('testAppLockerPolicy', $testCommand))) {
+    $key = [string]$entry[0]
+    $command = $entry[1]
+    $result.command[$key].available = [bool]$command
+    if ($command) {
+        $result.command[$key].source = if ($command.Source) { [string]$command.Source } else { 'AppLocker' }
+        $result.command[$key].commandType = [string]$command.CommandType
+    }
+}
+if (-not $getCommand -or -not $testCommand) {
+    $result.reason = 'policy-command-unavailable'
+    [pscustomobject]$result | ConvertTo-Json -Compress -Depth 12
+    exit 0
+}
+try {
+    $effectivePolicy = Get-AppLockerPolicy -Effective -ErrorAction Stop
+    if (-not $effectivePolicy) { throw 'effective-policy-unavailable' }
+    $decisions = @($effectivePolicy | Test-AppLockerPolicy -Path @($ExecutablePath) -User $StudentSid -ErrorAction Stop)
+    $expectedPath = [System.IO.Path]::GetFullPath($ExecutablePath)
+    $matchingDecision = $decisions | Where-Object {
+        try { [string]::Equals([System.IO.Path]::GetFullPath([string]$_.FilePath), $expectedPath, [System.StringComparison]::OrdinalIgnoreCase) } catch { $false }
+    } | Select-Object -First 1
+    if (-not $matchingDecision) { throw 'policy-decision-unavailable' }
+    $result.status = 'observed'
+    $result.decision = if ($matchingDecision.PolicyDecision) { [string]$matchingDecision.PolicyDecision } else { 'unknown' }
+}
+catch {
+    $exception = $_.Exception
+    $fqid = [string]$_.FullyQualifiedErrorId
+    if ([string]::IsNullOrWhiteSpace($fqid)) { $fqid = 'unknown' }
+    if (($exception.Message -and $fqid -eq [string]$exception.Message) -or $fqid -match '(?i)password|secret|credential|access.token') {
+        $fqid = 'redacted'
+    }
+    $result.exception = [ordered]@{
+        type = if ($exception) { [string]$exception.GetType().FullName } else { 'System.Exception' }
+        exceptionType = if ($exception) { [string]$exception.GetType().FullName } else { 'System.Exception' }
+        fullyQualifiedErrorId = $fqid
+        fqid = $fqid
+        hResult = if ($exception -and $exception.PSObject.Properties['HResult']) { [int]$exception.HResult } else { $null }
+        safeReason = 'policy-evaluation-failed'
+    }
+    $result.reason = 'policy-evaluation-unavailable'
+}
+[pscustomobject]$result | ConvertTo-Json -Compress -Depth 12
+'@
+        Set-Content -LiteralPath $scriptPath -Value $nativeScript -Encoding UTF8
+        $output = @(& $nativeShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scriptPath -ExecutablePath $ExecutablePath -StudentSid $StudentSid 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) {
+            $comparison.reason = 'native-powershell-failed'
+            return [pscustomobject]$comparison
+        }
+        $parsed = $output | ConvertFrom-Json -ErrorAction Stop
+        return $parsed
+    }
+    catch {
+        $comparison.exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'native-comparison-failed'
+        $comparison.reason = 'native-powershell-failed'
+        return [pscustomobject]$comparison
+    }
+    finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-OpenPathTestAppLockerPolicyDecision {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExecutablePath,
+        [Parameter(Mandatory = $true)][string]$StudentSid,
+        [object]$RuntimeOverride = $null,
+        [switch]$IncludeNativePowerShellComparison = $true
+    )
+
+    $runtime = Get-OpenPathObserverRuntime -RuntimeOverride $RuntimeOverride
     $decision = [ordered]@{
         status = 'unknown'
         decision = 'unknown'
         path = $ExecutablePath
+        executablePath = $ExecutablePath
+        exactPath = $ExecutablePath
         userSid = $StudentSid
+        exactSid = $StudentSid
+        runtime = $runtime
+        testAppLockerPolicy = [ordered]@{
+            available = $false
+            source = $null
+            commandType = $null
+            name = 'Test-AppLockerPolicy'
+        }
+        import = [ordered]@{ attempted = $false; result = 'not-required' }
+        exception = $null
+        nativePowerShellComparison = $null
         reason = $null
     }
-    if (-not (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue) -or
-        -not (Get-Command -Name Test-AppLockerPolicy -ErrorAction SilentlyContinue)) {
-        $decision.reason = 'policy-command-unavailable'
+
+    $testCommand = Get-Command -Name Test-AppLockerPolicy -ErrorAction SilentlyContinue
+    $getCommand = Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue
+    $setPolicyCommandEvidence = {
+        param([object]$Command)
+        $decision.testAppLockerPolicy.available = [bool]$Command
+        if ($Command) {
+            $decision.testAppLockerPolicy.source = if ($Command.Source) {
+                [string]$Command.Source
+            }
+            elseif ($Command.ModuleName) {
+                [string]$Command.ModuleName
+            }
+            else {
+                'session'
+            }
+            $decision.testAppLockerPolicy.commandType = [string]$Command.CommandType
+        }
+    }
+    & $setPolicyCommandEvidence $testCommand
+
+    if (-not $testCommand -or -not $getCommand) {
+        $decision.import.attempted = $true
+        try {
+            Invoke-OpenPathAppLockerModuleImport
+            $decision.import.result = 'succeeded'
+            $testCommand = Get-Command -Name Test-AppLockerPolicy -ErrorAction SilentlyContinue
+            $getCommand = Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue
+            & $setPolicyCommandEvidence $testCommand
+        }
+        catch {
+            $decision.import.result = 'failed'
+            $decision.exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'module-import-failed'
+            $decision.reason = 'policy-command-unavailable'
+        }
+    }
+
+    if (-not $testCommand -or -not $getCommand) {
+        if ($decision.import.result -eq 'failed') { $decision.status = 'unavailable' }
+        else { $decision.reason = 'policy-command-unavailable' }
+        if ($IncludeNativePowerShellComparison) {
+            try {
+                $decision.nativePowerShellComparison = Invoke-OpenPathNativePowerShellPolicyComparison -ExecutablePath $ExecutablePath -StudentSid $StudentSid
+            }
+            catch {
+                $decision.nativePowerShellComparison = [pscustomobject][ordered]@{
+                    status = 'unavailable'
+                    path = $ExecutablePath
+                    userSid = $StudentSid
+                    runtime = $null
+                    exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'native-comparison-failed'
+                    reason = 'native-powershell-failed'
+                }
+            }
+        }
         return [pscustomobject]$decision
     }
+
     try {
         $effectivePolicy = Get-AppLockerPolicy -Effective -ErrorAction Stop
         if (-not $effectivePolicy) { throw 'effective-policy-unavailable' }
@@ -729,7 +1196,24 @@ function Get-OpenPathTestAppLockerPolicyDecision {
         $decision.decision = if ($matchingDecision.PolicyDecision) { [string]$matchingDecision.PolicyDecision } else { 'unknown' }
     }
     catch {
+        $decision.exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'policy-evaluation-failed'
         $decision.reason = 'policy-evaluation-unavailable'
+    }
+
+    if ($IncludeNativePowerShellComparison) {
+        try {
+            $decision.nativePowerShellComparison = Invoke-OpenPathNativePowerShellPolicyComparison -ExecutablePath $ExecutablePath -StudentSid $StudentSid
+        }
+        catch {
+            $decision.nativePowerShellComparison = [pscustomobject][ordered]@{
+                status = 'unavailable'
+                path = $ExecutablePath
+                userSid = $StudentSid
+                runtime = $null
+                exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'native-comparison-failed'
+                reason = 'native-powershell-failed'
+            }
+        }
     }
     return [pscustomobject]$decision
 }
@@ -947,26 +1431,478 @@ function Get-OpenPathCorrelatedAppLockerEvent {
     }
 }
 
-function Get-OpenPathAppLockerEventQuery {
+function Get-OpenPathSafeMetadataString {
+    param([object]$Value, [object]$Exception = $null)
+
+    if ($null -eq $Value) { return $null }
+    $candidate = [string]$Value
+    $message = if ($Exception -and $Exception.PSObject.Properties['Message']) { [string]$Exception.Message } else { '' }
+    if (($message -and $candidate -eq $message) -or $candidate -match '(?i)password|secret|credential|access.token') {
+        return 'redacted'
+    }
+    return $candidate
+}
+
+function Get-OpenPathSafeObserverRuntimeEvidence {
+    param([object]$Runtime)
+
+    if (-not $Runtime) { return $null }
+    $safe = [ordered]@{}
+    if ($Runtime.PSObject.Properties['supported']) { $safe.supported = [bool]$Runtime.supported }
+    $safe.edition = if ($Runtime.PSObject.Properties['edition']) { [string]$Runtime.edition } else { $null }
+    $safe.version = if ($Runtime.PSObject.Properties['version']) { [string]$Runtime.version } else { $null }
+    $safe.bitness = if ($Runtime.PSObject.Properties['bitness']) { [string]$Runtime.bitness } else { $null }
+    $safe.processId = if ($Runtime.PSObject.Properties['processId'] -and $null -ne $Runtime.processId) {
+        try { [int]$Runtime.processId } catch { $null }
+    }
+    else { $null }
+    return [pscustomobject]$safe
+}
+
+function Get-OpenPathSafeObserverExceptionEvidence {
+    param([object]$Exception)
+
+    if (-not $Exception) { return $null }
+    $exceptionValue = if ($Exception.PSObject.Properties['Exception'] -and $Exception.Exception) { $Exception.Exception } else { $Exception }
+    $exceptionType = if ($Exception.PSObject.Properties['exceptionType'] -and $Exception.exceptionType) {
+        [string]$Exception.exceptionType
+    }
+    elseif ($Exception.PSObject.Properties['type'] -and $Exception.type) {
+        [string]$Exception.type
+    }
+    elseif ($exceptionValue) {
+        [string]$exceptionValue.GetType().FullName
+    }
+    else { 'System.Exception' }
+    $fqidValue = if ($Exception.PSObject.Properties['fullyQualifiedErrorId']) {
+        $Exception.fullyQualifiedErrorId
+    }
+    elseif ($Exception.PSObject.Properties['fqid']) {
+        $Exception.fqid
+    }
+    else { $null }
+    $fqid = Get-OpenPathSafeMetadataString -Value $fqidValue -Exception $exceptionValue
+    if ([string]::IsNullOrWhiteSpace($fqid)) { $fqid = 'unknown' }
+    $hResult = if ($Exception.PSObject.Properties['hResult'] -and $null -ne $Exception.hResult) {
+        try { [int]$Exception.hResult } catch { $null }
+    }
+    else { $null }
+    return [pscustomobject][ordered]@{
+        type = $exceptionType
+        exceptionType = $exceptionType
+        fullyQualifiedErrorId = $fqid
+        fqid = $fqid
+        hResult = $hResult
+        safeReason = Get-OpenPathSafeMetadataString -Value $Exception.safeReason -Exception $exceptionValue
+    }
+}
+
+function Get-OpenPathSafeTokenObserverEvidence {
+    param([object]$Observer)
+
+    if (-not $Observer) { return $null }
+    $safeStages = @()
+    if ($Observer.PSObject.Properties['nativeStages'] -and $null -ne $Observer.nativeStages) {
+        $safeStages = @($Observer.nativeStages | ForEach-Object {
+                [pscustomobject][ordered]@{
+                    stage = [string]$_.stage
+                    attempted = if ($_.PSObject.Properties['attempted']) { [bool]$_.attempted } else { $null }
+                    succeeded = if ($_.PSObject.Properties['succeeded']) { [bool]$_.succeeded } else { $null }
+                    processId = if ($null -ne $_.processId) { try { [int]$_.processId } catch { $null } } else { $null }
+                    accessMask = if ($_.PSObject.Properties['accessMask']) { [string]$_.accessMask } else { $null }
+                    informationClass = if ($_.PSObject.Properties['informationClass']) { [string]$_.informationClass } else { $null }
+                    win32Code = if ($null -ne $_.win32Code) { try { [int]$_.win32Code } catch { $null } } else { $null }
+                    win32Name = [string]$_.win32Name
+                }
+            })
+    }
+    return [pscustomobject][ordered]@{
+        status = [string]$Observer.status
+        reason = [string]$Observer.reason
+        processId = if ($null -ne $Observer.processId) { try { [int]$Observer.processId } catch { $null } } else { $null }
+        tokenUserSid = [string]$Observer.tokenUserSid
+        restrictedGroupSid = [string]$Observer.restrictedGroupSid
+        restrictedGroupPresent = $Observer.restrictedGroupPresent
+        restrictedGroupAttributes = $Observer.restrictedGroupAttributes
+        restrictedGroupEnabled = $Observer.restrictedGroupEnabled
+        restrictedGroupDenyOnly = $Observer.restrictedGroupDenyOnly
+        restrictedGroupDisabled = $Observer.restrictedGroupDisabled
+        restrictedGroupQueryStatus = [string]$Observer.restrictedGroupQueryStatus
+        processExists = $Observer.processExists
+        processExistsStatus = [string]$Observer.processExistsStatus
+        errorCode = if ($null -ne $Observer.errorCode) { try { [int]$Observer.errorCode } catch { $null } } else { $null }
+        errorName = [string]$Observer.errorName
+        failureStage = [string]$Observer.failureStage
+        observerArchitecture = [string]$Observer.observerArchitecture
+        observerPid = if ($null -ne $Observer.observerPid) { try { [int]$Observer.observerPid } catch { $null } } else { $null }
+        observerEdition = [string]$Observer.observerEdition
+        observerVersion = [string]$Observer.observerVersion
+        nativeStages = $safeStages
+    }
+}
+
+function Get-OpenPathSafePolicyComparisonEvidence {
+    param([object]$Comparison)
+
+    if (-not $Comparison) { return $null }
+    $safeCommands = [ordered]@{}
+    if ($Comparison.PSObject.Properties['command'] -and $Comparison.command) {
+        foreach ($name in @('getAppLockerPolicy', 'testAppLockerPolicy')) {
+            $command = $Comparison.command.$name
+            $safeCommands[$name] = [pscustomobject][ordered]@{
+                available = if ($command -and $command.PSObject.Properties['available']) { [bool]$command.available } else { $false }
+                source = if ($command -and $command.PSObject.Properties['source']) { [string]$command.source } else { $null }
+                commandType = if ($command -and $command.PSObject.Properties['commandType']) { [string]$command.commandType } else { $null }
+            }
+        }
+    }
+    return [pscustomobject][ordered]@{
+        status = [string]$Comparison.status
+        path = [string]$Comparison.path
+        userSid = [string]$Comparison.userSid
+        runtime = Get-OpenPathSafeObserverRuntimeEvidence -Runtime $Comparison.runtime
+        command = [pscustomobject]$safeCommands
+        exception = Get-OpenPathSafeObserverExceptionEvidence -Exception $Comparison.exception
+        reason = Get-OpenPathSafeMetadataString -Value $Comparison.reason
+    }
+}
+
+function Get-OpenPathSafePolicyObserverEvidence {
+    param([object]$Observer)
+
+    if (-not $Observer) { return $null }
+    $command = $Observer.testAppLockerPolicy
+    $import = $Observer.import
+    return [pscustomobject][ordered]@{
+        status = [string]$Observer.status
+        decision = [string]$Observer.decision
+        path = [string]$Observer.path
+        executablePath = [string]$Observer.executablePath
+        exactPath = [string]$Observer.exactPath
+        userSid = [string]$Observer.userSid
+        exactSid = [string]$Observer.exactSid
+        runtime = Get-OpenPathSafeObserverRuntimeEvidence -Runtime $Observer.runtime
+        testAppLockerPolicy = [pscustomobject][ordered]@{
+            available = if ($command -and $command.PSObject.Properties['available']) { [bool]$command.available } else { $false }
+            source = if ($command -and $command.PSObject.Properties['source']) { [string]$command.source } else { $null }
+            commandType = if ($command -and $command.PSObject.Properties['commandType']) { [string]$command.commandType } else { $null }
+            name = if ($command -and $command.PSObject.Properties['name']) { [string]$command.name } else { 'Test-AppLockerPolicy' }
+        }
+        import = [pscustomobject][ordered]@{
+            attempted = if ($import -and $import.PSObject.Properties['attempted']) { [bool]$import.attempted } else { $false }
+            result = if ($import -and $import.PSObject.Properties['result']) { [string]$import.result } else { 'not-required' }
+        }
+        exception = Get-OpenPathSafeObserverExceptionEvidence -Exception $Observer.exception
+        nativePowerShellComparison = Get-OpenPathSafePolicyComparisonEvidence -Comparison $Observer.nativePowerShellComparison
+        reason = Get-OpenPathSafeMetadataString -Value $Observer.reason
+    }
+}
+
+function Get-OpenPathSafeAppLockerEventQueryEvidence {
+    param(
+        [object]$Query,
+        [switch]$NoNativeComparison
+    )
+
+    if (-not $Query) { return $null }
+    return [pscustomobject][ordered]@{
+        status = [string]$Query.status
+        channel = [string]$Query.channel
+        logName = [string]$Query.logName
+        eventId = if ($null -ne $Query.eventId) { try { [int]$Query.eventId } catch { $null } } else { $null }
+        startTime = $Query.startTime
+        channelExists = $Query.channelExists
+        queryAttempted = $Query.queryAttempted
+        querySucceeded = $Query.querySucceeded
+        eventCount = if ($null -ne $Query.eventCount) { try { [int]$Query.eventCount } catch { 0 } } else { 0 }
+        exception = Get-OpenPathSafeObserverExceptionEvidence -Exception $Query.exception
+        reason = Get-OpenPathSafeMetadataString -Value $Query.reason
+        runtime = Get-OpenPathSafeObserverRuntimeEvidence -Runtime $Query.runtime
+        nativePowerShellComparison = if ($NoNativeComparison) { $null } else {
+            Get-OpenPathSafeAppLockerEventQueryEvidence -Query $Query.nativePowerShellComparison -NoNativeComparison
+        }
+    }
+}
+
+function Get-OpenPathAppLockerEventChannel {
+    param([Parameter(Mandatory = $true)][string]$LogName)
+
+    $command = Get-Command -Name Get-WinEvent -ErrorAction SilentlyContinue
+    if (-not $command) {
+        return [pscustomobject][ordered]@{
+            channel = $LogName
+            logName = $LogName
+            channelExists = $null
+            status = 'unavailable'
+            reason = 'event-log-cmdlet-unavailable'
+            exception = $null
+        }
+    }
+    if ($command.CommandType -in @('Function', 'Filter') -or -not $command.Parameters.ContainsKey('ListLog')) {
+        # Test doubles and older compatibility shims may expose only the
+        # filtered query parameter. Keep channel presence unknown and let the
+        # real query provide the next bounded observation.
+        return [pscustomobject][ordered]@{
+            channel = $LogName
+            logName = $LogName
+            channelExists = $null
+            status = 'not-observed'
+            reason = 'event-channel-not-observed'
+            exception = $null
+        }
+    }
+    try {
+        $channel = @(Get-WinEvent -ListLog $LogName -ErrorAction Stop) | Select-Object -First 1
+        if ($channel) {
+            return [pscustomobject][ordered]@{
+                channel = $LogName
+                logName = $LogName
+                channelExists = $true
+                status = 'observed'
+                reason = $null
+                exception = $null
+            }
+        }
+        return [pscustomobject][ordered]@{
+            channel = $LogName
+            logName = $LogName
+            channelExists = $null
+            status = 'not-observed'
+            reason = 'event-channel-not-observed'
+            exception = $null
+        }
+    }
+    catch {
+        if ($_.Exception -is [System.Management.Automation.ParameterBindingException] -or
+            [string]$_.FullyQualifiedErrorId -match '(?i)named.parameter|parameter.*not.*found') {
+            return [pscustomobject][ordered]@{
+                channel = $LogName
+                logName = $LogName
+                channelExists = $null
+                status = 'not-observed'
+                reason = 'event-channel-not-observed'
+                exception = $null
+            }
+        }
+        $isMissing = [string]$_.FullyQualifiedErrorId -match '(?i)notfound|not.found|nomatching|no.such|channel'
+        return [pscustomobject][ordered]@{
+            channel = $LogName
+            logName = $LogName
+            channelExists = if ($isMissing) { $false } else { $null }
+            status = 'unavailable'
+            reason = if ($isMissing) { 'event-channel-missing' } else { 'event-channel-query-failed' }
+            exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'event-channel-query-failed'
+        }
+    }
+}
+
+function Invoke-OpenPathNativePowerShellEventQuery {
     param(
         [Parameter(Mandatory = $true)][string]$LogName,
         [Parameter(Mandatory = $true)][int]$EventId,
         [Parameter(Mandatory = $true)][datetime]$StartTime
     )
 
-    $result = [ordered]@{ status = 'unknown'; events = @(); reason = $null }
-    if (-not (Get-Command -Name Get-WinEvent -ErrorAction SilentlyContinue)) {
-        $result.status = 'unavailable'
-        $result.reason = 'event-log-cmdlet-unavailable'
-        return [pscustomobject]$result
+    $comparison = [ordered]@{
+        status = 'OBSERVER_RUNTIME_UNSUPPORTED'
+        channel = $LogName
+        logName = $LogName
+        eventId = $EventId
+        startTime = $StartTime
+        channelExists = $null
+        queryAttempted = $false
+        querySucceeded = $false
+        eventCount = 0
+        exception = $null
+        reason = $null
+        runtime = $null
     }
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        $comparison.reason = 'windows-only'
+        $comparison.runtime = Get-OpenPathObserverRuntime
+        return [pscustomobject]$comparison
+    }
+
+    $comparison.runtime = [pscustomobject][ordered]@{
+        edition = 'Desktop'
+        version = $null
+        bitness = $null
+        processId = $null
+    }
+    $windowsRoot = if ($env:WINDIR) { [string]$env:WINDIR } else { [string]$env:SystemRoot }
+    $nativeShell = Join-Path $windowsRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $nativeShell)) {
+        $comparison.status = 'QUERY_FAILED'
+        $comparison.reason = 'native-powershell-missing'
+        return [pscustomobject]$comparison
+    }
+
+    $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-event-$([guid]::NewGuid().ToString('N')).ps1"
     try {
-        $result.events = @(Get-WinEvent -FilterHashtable @{ LogName = $LogName; Id = $EventId; StartTime = $StartTime } -ErrorAction Stop)
-        $result.status = 'observed'
+        $nativeScript = @'
+param(
+    [Parameter(Mandatory = $true)][string]$LogName,
+    [Parameter(Mandatory = $true)][int]$EventId,
+    [Parameter(Mandatory = $true)][datetime]$StartTime
+)
+
+$result = [ordered]@{
+    status = 'OBSERVER_RUNTIME_UNSUPPORTED'
+    channel = $LogName
+    logName = $LogName
+    eventId = $EventId
+    startTime = $StartTime
+    channelExists = $null
+    queryAttempted = $false
+    querySucceeded = $false
+    eventCount = 0
+    exception = $null
+    reason = $null
+    runtime = [ordered]@{
+        edition = if ($PSVersionTable.PSEdition) { [string]$PSVersionTable.PSEdition } else { 'Desktop' }
+        version = [string]$PSVersionTable.PSVersion
+        bitness = if ([Environment]::Is64BitProcess) { '64-bit' } else { '32-bit' }
+        processId = [int]$PID
+    }
+}
+try {
+    $channel = @(Get-WinEvent -ListLog $LogName -ErrorAction Stop) | Select-Object -First 1
+    if (-not $channel) {
+        $result.status = 'CHANNEL_UNAVAILABLE'
+        $result.channelExists = $false
+        $result.reason = 'event-channel-missing'
+        [pscustomobject]$result | ConvertTo-Json -Compress -Depth 12
+        exit 0
+    }
+    $result.channelExists = $true
+    $result.queryAttempted = $true
+    $events = @(Get-WinEvent -FilterHashtable @{ LogName = $LogName; Id = $EventId; StartTime = $StartTime } -ErrorAction Stop)
+    $result.querySucceeded = $true
+    $result.eventCount = $events.Count
+    $result.status = if ($events.Count -gt 0) { 'QUERY_SUCCEEDED_MATCHES' } else { 'QUERY_SUCCEEDED_NO_MATCHES' }
+}
+catch {
+    $exception = $_.Exception
+    $fqid = [string]$_.FullyQualifiedErrorId
+    if ([string]::IsNullOrWhiteSpace($fqid)) { $fqid = 'unknown' }
+    if (($exception.Message -and $fqid -eq [string]$exception.Message) -or $fqid -match '(?i)password|secret|credential|access.token') { $fqid = 'redacted' }
+    $result.status = 'QUERY_FAILED'
+    $result.exception = [ordered]@{
+        type = if ($exception) { [string]$exception.GetType().FullName } else { 'System.Exception' }
+        exceptionType = if ($exception) { [string]$exception.GetType().FullName } else { 'System.Exception' }
+        fullyQualifiedErrorId = $fqid
+        fqid = $fqid
+        hResult = if ($exception -and $exception.PSObject.Properties['HResult']) { [int]$exception.HResult } else { $null }
+        safeReason = 'event-query-failed'
+    }
+    $result.reason = 'event-log-unreadable'
+}
+[pscustomobject]$result | ConvertTo-Json -Compress -Depth 12
+'@
+        Set-Content -LiteralPath $scriptPath -Value $nativeScript -Encoding UTF8
+        $output = @(& $nativeShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scriptPath -LogName $LogName -EventId $EventId -StartTime $StartTime 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) {
+            $comparison.status = 'QUERY_FAILED'
+            $comparison.reason = 'native-powershell-failed'
+            return [pscustomobject]$comparison
+        }
+        return $output | ConvertFrom-Json -ErrorAction Stop
     }
     catch {
-        $result.status = 'unavailable'
+        $comparison.status = 'QUERY_FAILED'
+        $comparison.exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'native-comparison-failed'
+        $comparison.reason = 'native-powershell-failed'
+        return [pscustomobject]$comparison
+    }
+    finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-OpenPathAppLockerEventQuery {
+    param(
+        [Parameter(Mandatory = $true)][string]$LogName,
+        [Parameter(Mandatory = $true)][int]$EventId,
+        [Parameter(Mandatory = $true)][datetime]$StartTime,
+        [object]$RuntimeOverride = $null,
+        [switch]$IncludeNativePowerShellComparison
+    )
+
+    $runtime = Get-OpenPathObserverRuntime -RuntimeOverride $RuntimeOverride
+    $runtimeUsable = $runtime.supported
+    if (-not $runtimeUsable -and $null -eq $RuntimeOverride -and (Get-Command -Name Get-WinEvent -ErrorAction SilentlyContinue)) {
+        # The Linux Pester lane supplies a bounded Get-WinEvent shim; retain
+        # the real runtime metadata while allowing that seam to exercise query
+        # correlation. Native Windows has supported=$true and is unchanged.
+        $runtimeUsable = $true
+    }
+    $result = [ordered]@{
+        status = if ($runtimeUsable) { 'CHANNEL_UNAVAILABLE' } else { 'OBSERVER_RUNTIME_UNSUPPORTED' }
+        channel = $LogName
+        logName = $LogName
+        eventId = $EventId
+        startTime = $StartTime
+        channelExists = $null
+        queryAttempted = $false
+        querySucceeded = $false
+        eventCount = 0
+        events = @()
+        exception = $null
+        reason = if ($runtime.supported) { $null } else { 'windows-only' }
+        runtime = $runtime
+        nativePowerShellComparison = $null
+    }
+    if (-not $runtimeUsable) {
+        return [pscustomobject]$result
+    }
+
+    try {
+        $channel = Get-OpenPathAppLockerEventChannel -LogName $LogName
+        $result.channelExists = if ($channel.PSObject.Properties['channelExists']) { $channel.channelExists } else { $null }
+        $channelUnavailable = $result.channelExists -eq $false -or
+            ($result.channelExists -ne $true -and [string]$channel.status -ne 'not-observed')
+        if ($channelUnavailable) {
+            $result.status = 'CHANNEL_UNAVAILABLE'
+            $result.reason = if ($channel.reason) { [string]$channel.reason } else { 'event-channel-unavailable' }
+            if ($channel.PSObject.Properties['exception']) { $result.exception = $channel.exception }
+        }
+        else {
+            $result.queryAttempted = $true
+            $events = @(Get-WinEvent -FilterHashtable @{ LogName = $LogName; Id = $EventId; StartTime = $StartTime } -ErrorAction Stop)
+            $result.querySucceeded = $true
+            $result.eventCount = $events.Count
+            $result.events = @($events | Select-Object -First 32)
+            $result.status = if ($events.Count -gt 0) { 'QUERY_SUCCEEDED_MATCHES' } else { 'QUERY_SUCCEEDED_NO_MATCHES' }
+        }
+    }
+    catch {
+        $result.status = 'QUERY_FAILED'
         $result.reason = 'event-log-unreadable'
+        $result.exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'event-query-failed'
+    }
+
+    $runNativeComparison = $IncludeNativePowerShellComparison -or $result.status -in @('QUERY_FAILED', 'CHANNEL_UNAVAILABLE')
+    if ($runNativeComparison) {
+        try {
+            $nativeComparison = Invoke-OpenPathNativePowerShellEventQuery -LogName $LogName -EventId $EventId -StartTime $StartTime
+            $result.nativePowerShellComparison = Get-OpenPathSafeAppLockerEventQueryEvidence -Query $nativeComparison -NoNativeComparison
+        }
+        catch {
+            $result.nativePowerShellComparison = [pscustomobject][ordered]@{
+                status = 'QUERY_FAILED'
+                channel = $LogName
+                logName = $LogName
+                eventId = $EventId
+                startTime = $StartTime
+                channelExists = $null
+                queryAttempted = $false
+                querySucceeded = $false
+                eventCount = 0
+                exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'native-comparison-failed'
+                reason = 'native-powershell-failed'
+                runtime = $null
+            }
+        }
     }
     return [pscustomobject]$result
 }
@@ -1010,15 +1946,24 @@ function Set-OpenPathBoundaryProbeFailureEvidence {
         [object]$MatchedEvent = $null,
         [object]$TaskIdentity = $null,
         [object]$TestAppLockerPolicyDecision = $null,
-        [hashtable]$AppLockerQueryStatuses = @{}
+        [hashtable]$AppLockerQueryStatuses = @{},
+        [hashtable]$AppLockerEventQueries = @{}
     )
 
+    $safeAppLockerEventQueries = @{}
+    foreach ($queryKey in @($AppLockerEventQueries.Keys)) {
+        $safeAppLockerEventQueries[[string]$queryKey] = Get-OpenPathSafeAppLockerEventQueryEvidence -Query $AppLockerEventQueries[$queryKey]
+    }
     $safeProcesses = @($Processes | ForEach-Object {
             [pscustomobject][ordered]@{
                 processId = [int]$_.processId
                 name = [string]$_.name
                 executablePath = [string]$_.executablePath
                 studentSid = [string]$_.studentSid
+                tokenObserver = if ($_.PSObject.Properties['tokenObserver']) {
+                    Get-OpenPathSafeTokenObserverEvidence -Observer $_.tokenObserver
+                }
+                else { $null }
                 samSid = [string]$_.samSid
                 tokenUserSid = [string]$_.tokenUserSid
                 samTokenSidMatch = $_.samTokenSidMatch
@@ -1038,9 +1983,13 @@ function Set-OpenPathBoundaryProbeFailureEvidence {
     foreach ($eventId in @(8002, 8004, 8020, 8022)) {
         $eventObserved = @($Events | Where-Object { [int]$_.id -eq $eventId }).Count -gt 0
         $queryStatus = if ($AppLockerQueryStatuses.ContainsKey([string]$eventId)) { [string]$AppLockerQueryStatuses[[string]$eventId] } else { 'unknown' }
-        $appLockerFlags["appLocker$eventId"] = if ($eventObserved) { $true } elseif ($queryStatus -eq 'observed') { $false } else { $null }
+        $querySucceeded = $queryStatus -in @('observed', 'QUERY_SUCCEEDED_NO_MATCHES', 'QUERY_SUCCEEDED_MATCHES')
+        $appLockerFlags["appLocker$eventId"] = if ($eventObserved) { $true } elseif ($querySucceeded) { $false } else { $null }
     }
-    $policyDecision = if ($TestAppLockerPolicyDecision) { $TestAppLockerPolicyDecision } else {
+    $policyDecision = if ($TestAppLockerPolicyDecision) {
+        Get-OpenPathSafePolicyObserverEvidence -Observer $TestAppLockerPolicyDecision
+    }
+    else {
         [pscustomobject][ordered]@{ status = 'unknown'; decision = 'unknown'; path = $ExecutablePath; userSid = $StudentSid; reason = 'not-observed' }
     }
     $script:OpenPathLastBoundaryProbeFailureEvidence = [pscustomobject][ordered]@{
@@ -1062,7 +2011,9 @@ function Set-OpenPathBoundaryProbeFailureEvidence {
         matchedEvent = $MatchedEvent
         taskIdentity = $TaskIdentity
         testAppLockerPolicyDecision = $policyDecision
+        policyObserver = $policyDecision
         appLockerQueryStatuses = $AppLockerQueryStatuses
+        appLockerEventQueries = $safeAppLockerEventQueries
     }
     $script:OpenPathLastBoundaryProbeFailureEvidence | Add-Member -NotePropertyName appLocker8002 -NotePropertyValue $appLockerFlags.appLocker8002
     $script:OpenPathLastBoundaryProbeFailureEvidence | Add-Member -NotePropertyName appLocker8004 -NotePropertyValue $appLockerFlags.appLocker8004
@@ -1082,6 +2033,9 @@ function Get-OpenPathEdgeBoundaryContract {
     $processes = @($Evidence.processes | Select-Object -First 32)
     $firstProcess = if ($processes.Count -gt 0) { $processes[0] } else { $null }
     $policy = if ($Evidence.testAppLockerPolicyDecision) { [string]$Evidence.testAppLockerPolicyDecision.decision } else { 'unknown' }
+    $tokenObserver = if ($firstProcess -and $firstProcess.PSObject.Properties['tokenObserver']) { $firstProcess.tokenObserver } else { $null }
+    $policyObserver = if ($Evidence.PSObject.Properties['policyObserver']) { $Evidence.policyObserver } else { $Evidence.testAppLockerPolicyDecision }
+    $eventQueries = if ($Evidence.PSObject.Properties['appLockerEventQueries']) { $Evidence.appLockerEventQueries } else { @{} }
     return [pscustomobject][ordered]@{
         expectedPath = [string]$Evidence.executablePath
         observedExactProcess = @($processes)
@@ -1091,6 +2045,9 @@ function Get-OpenPathEdgeBoundaryContract {
         restrictedGroupSamMember = $Evidence.samGroupMemberPresent
         restrictedGroupTokenMember = if ($firstProcess) { $firstProcess.restrictedGroupPresent } else { $null }
         testAppLockerPolicyDecision = $policy
+        tokenObserver = $tokenObserver
+        policyObserver = $policyObserver
+        eventQueries = $eventQueries
         appLocker8002 = $Evidence.appLocker8002
         appLocker8004 = $Evidence.appLocker8004
         appLocker8020 = $Evidence.appLocker8020
@@ -1107,8 +2064,12 @@ function Get-OpenPathFlatEdgeBoundaryFailureContract {
     $process = @($Evidence.processes | Select-Object -First 1)
     $process = if ($process.Count -gt 0) { $process[0] } else { $null }
     $event = if ($Evidence.matchedEvent) { $Evidence.matchedEvent } else { @($Evidence.events | Select-Object -First 1)[0] }
+    $edgeContract = Get-OpenPathEdgeBoundaryContract -Evidence $Evidence
+    $tokenObserver = if ($process -and $process.PSObject.Properties['tokenObserver']) { $process.tokenObserver } else { $null }
+    $policyObserver = if ($Evidence.PSObject.Properties['policyObserver']) { $Evidence.policyObserver } else { $Evidence.testAppLockerPolicyDecision }
+    $eventQueries = if ($Evidence.PSObject.Properties['appLockerEventQueries']) { $Evidence.appLockerEventQueries } else { @{} }
     return [pscustomobject][ordered]@{
-        edge = Get-OpenPathEdgeBoundaryContract -Evidence $Evidence
+        edge = $edgeContract
         edgeName = [string]$Evidence.executableName
         edgeStudentSid = [string]$Evidence.studentSid
         edgeExecutablePath = [string]$Evidence.executablePath
@@ -1136,6 +2097,9 @@ function Get-OpenPathFlatEdgeBoundaryFailureContract {
         edgeObservedRuleName = if ($event) { [string]$event.observedRuleName } else { $null }
         edgeObservedUserSid = if ($event) { [string]$event.observedUserSid } else { $null }
         edgeAttempts = if ($Diagnostic) { @($Diagnostic.attempts) } else { @() }
+        edgeTokenObserver = $tokenObserver
+        edgePolicyObserver = $policyObserver
+        edgeAppLockerEventQueries = $eventQueries
     }
 }
 
@@ -1177,6 +2141,7 @@ function Invoke-StudentExecutableTaskProbe {
         '8020' = 'unknown'
         '8022' = 'unknown'
     }
+    $appLockerEventQueries = @{}
     $deniedEventIds = if ($PackagedAppPattern) { @(8004, 8022) } else { @(8004) }
     $allowedEventIds = if ($PackagedAppPattern) { @(8002, 8020) } else { @(8002) }
     $probeTask = "OpenPathProbe-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
@@ -1236,7 +2201,7 @@ function Invoke-StudentExecutableTaskProbe {
             $matchedEventEvidence = $null
             while ((Get-Date) -lt $pollDeadline) {
                 if ($MarkerPath -and (Test-Path -LiteralPath $MarkerPath)) {
-                    Set-OpenPathBoundaryProbeFailureEvidence -ProbeName $ProbeName -ExecutablePath $ExecutablePath -StudentSid $StudentSid -FailureCode 'marker-created' -Processes $observedExactProcessEvidence -Events $observedEventEvidence -ExpectedEventIds @(8004, 8022) -SamEvidence $samBoundaryEvidence -TaskRegisteredAtUtc $taskRegisteredAtUtc -TaskIdentity $taskIdentityEvidence -TestAppLockerPolicyDecision $testAppLockerPolicyDecision -AppLockerQueryStatuses $appLockerQueryStatuses | Out-Null
+                    Set-OpenPathBoundaryProbeFailureEvidence -ProbeName $ProbeName -ExecutablePath $ExecutablePath -StudentSid $StudentSid -FailureCode 'marker-created' -Processes $observedExactProcessEvidence -Events $observedEventEvidence -ExpectedEventIds @(8004, 8022) -SamEvidence $samBoundaryEvidence -TaskRegisteredAtUtc $taskRegisteredAtUtc -TaskIdentity $taskIdentityEvidence -TestAppLockerPolicyDecision $testAppLockerPolicyDecision -AppLockerQueryStatuses $appLockerQueryStatuses -AppLockerEventQueries $appLockerEventQueries | Out-Null
                     throw "$ProbeName FAILED: executable ran and created marker file $MarkerPath under student account!"
                 }
 
@@ -1255,6 +2220,7 @@ function Invoke-StudentExecutableTaskProbe {
                 try {
                     $blockQuery = Get-OpenPathAppLockerEventQuery -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -EventId 8004 -StartTime $since
                     $appLockerQueryStatuses['8004'] = $blockQuery.status
+                    $appLockerEventQueries['8004'] = $blockQuery
                     $blockEvents = @($blockQuery.events)
                     $blockEvidence = Get-OpenPathCorrelatedAppLockerEvent -Events $blockEvents -AllowedEventIds @(8004) -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -BinaryLeaf $binaryLeaf -ExpectedExecutablePath $ExecutablePath -StudentSid $StudentSid -ProcessIds @($observedExactProcesses | ForEach-Object { [int]$_.processId })
                     $observedEventEvidence = Merge-OpenPathBoundedEvidence -Existing $observedEventEvidence -Incoming @($blockEvidence.candidates) -Kind event
@@ -1271,6 +2237,7 @@ function Invoke-StudentExecutableTaskProbe {
                     try {
                         $packagedBlockQuery = Get-OpenPathAppLockerEventQuery -LogName 'Microsoft-Windows-AppLocker/Packaged app-Execution' -EventId 8022 -StartTime $since
                         $appLockerQueryStatuses['8022'] = $packagedBlockQuery.status
+                        $appLockerEventQueries['8022'] = $packagedBlockQuery
                         $packagedBlockEvents = @($packagedBlockQuery.events)
                         $packagedBlockEvidence = Get-OpenPathCorrelatedAppLockerEvent -Events $packagedBlockEvents -AllowedEventIds @(8022) -LogName 'Microsoft-Windows-AppLocker/Packaged app-Execution' -BinaryLeaf $binaryLeaf -ExpectedExecutablePath $ExecutablePath -StudentSid $StudentSid -ProcessIds @($observedExactProcesses | ForEach-Object { [int]$_.processId }) -PackagedAppPattern $PackagedAppPattern
                         $observedEventEvidence = Merge-OpenPathBoundedEvidence -Existing $observedEventEvidence -Incoming @($packagedBlockEvidence.candidates) -Kind event
@@ -1288,7 +2255,7 @@ function Invoke-StudentExecutableTaskProbe {
             }
 
             if ($MarkerPath -and (Test-Path -LiteralPath $MarkerPath)) {
-                Set-OpenPathBoundaryProbeFailureEvidence -ProbeName $ProbeName -ExecutablePath $ExecutablePath -StudentSid $StudentSid -FailureCode 'marker-created' -Processes $observedExactProcessEvidence -Events $observedEventEvidence -ExpectedEventIds @(8004, 8022) -SamEvidence $samBoundaryEvidence -TaskRegisteredAtUtc $taskRegisteredAtUtc -TaskIdentity $taskIdentityEvidence -TestAppLockerPolicyDecision $testAppLockerPolicyDecision -AppLockerQueryStatuses $appLockerQueryStatuses | Out-Null
+                Set-OpenPathBoundaryProbeFailureEvidence -ProbeName $ProbeName -ExecutablePath $ExecutablePath -StudentSid $StudentSid -FailureCode 'marker-created' -Processes $observedExactProcessEvidence -Events $observedEventEvidence -ExpectedEventIds @(8004, 8022) -SamEvidence $samBoundaryEvidence -TaskRegisteredAtUtc $taskRegisteredAtUtc -TaskIdentity $taskIdentityEvidence -TestAppLockerPolicyDecision $testAppLockerPolicyDecision -AppLockerQueryStatuses $appLockerQueryStatuses -AppLockerEventQueries $appLockerEventQueries | Out-Null
                 throw "$ProbeName FAILED: executable ran and created marker file $MarkerPath under student account!"
             }
 
@@ -1307,7 +2274,7 @@ function Invoke-StudentExecutableTaskProbe {
                 foreach ($studentProcess in @($observedExactProcesses | Sort-Object processId -Unique)) { Stop-Process -Id $studentProcess.processId -Force -ErrorAction SilentlyContinue }
                 if (-not $eventFound) {
                     Write-Host 'OPENPATH_BOUNDARY_PROBE_FAILURE reason=exact-student-process-observed-without-block-event'
-                    Set-OpenPathBoundaryProbeFailureEvidence -ProbeName $ProbeName -ExecutablePath $ExecutablePath -StudentSid $StudentSid -FailureCode 'exact-student-process-observed-without-block-event' -Processes $observedExactProcessEvidence -Events $observedEventEvidence -ExpectedEventIds @(8004, 8022) -SamEvidence $samBoundaryEvidence -TaskRegisteredAtUtc $taskRegisteredAtUtc -TaskIdentity $taskIdentityEvidence -TestAppLockerPolicyDecision $testAppLockerPolicyDecision -AppLockerQueryStatuses $appLockerQueryStatuses | Out-Null
+                    Set-OpenPathBoundaryProbeFailureEvidence -ProbeName $ProbeName -ExecutablePath $ExecutablePath -StudentSid $StudentSid -FailureCode 'exact-student-process-observed-without-block-event' -Processes $observedExactProcessEvidence -Events $observedEventEvidence -ExpectedEventIds @(8004, 8022) -SamEvidence $samBoundaryEvidence -TaskRegisteredAtUtc $taskRegisteredAtUtc -TaskIdentity $taskIdentityEvidence -TestAppLockerPolicyDecision $testAppLockerPolicyDecision -AppLockerQueryStatuses $appLockerQueryStatuses -AppLockerEventQueries $appLockerEventQueries | Out-Null
                     throw "$ProbeName FAILED: exact executable $binaryLeaf ran under the student SID and no correlated AppLocker block event was observed."
                 }
             }
@@ -1330,7 +2297,7 @@ function Invoke-StudentExecutableTaskProbe {
                     Write-Host "OPENPATH_BOUNDARY_PROBE_FAILURE state=$taskState lastTaskResult=$lastTaskResult lastRunObserved=$lastRunObserved"
                 }
                 $expectedEvent = if ($PackagedAppPattern) { '8004/8022 block event' } else { '8004 block event' }
-                Set-OpenPathBoundaryProbeFailureEvidence -ProbeName $ProbeName -ExecutablePath $ExecutablePath -StudentSid $StudentSid -FailureCode 'appLocker-block-event-not-observed' -Processes $observedExactProcessEvidence -Events $observedEventEvidence -ExpectedEventIds $deniedEventIds -SamEvidence $samBoundaryEvidence -TaskRegisteredAtUtc $taskRegisteredAtUtc -TaskIdentity $taskIdentityEvidence -TestAppLockerPolicyDecision $testAppLockerPolicyDecision -AppLockerQueryStatuses $appLockerQueryStatuses | Out-Null
+                Set-OpenPathBoundaryProbeFailureEvidence -ProbeName $ProbeName -ExecutablePath $ExecutablePath -StudentSid $StudentSid -FailureCode 'appLocker-block-event-not-observed' -Processes $observedExactProcessEvidence -Events $observedEventEvidence -ExpectedEventIds $deniedEventIds -SamEvidence $samBoundaryEvidence -TaskRegisteredAtUtc $taskRegisteredAtUtc -TaskIdentity $taskIdentityEvidence -TestAppLockerPolicyDecision $testAppLockerPolicyDecision -AppLockerQueryStatuses $appLockerQueryStatuses -AppLockerEventQueries $appLockerEventQueries | Out-Null
                 throw "$ProbeName FAILED: AppLocker $expectedEvent was not observed for $binaryLeaf within timeout ($TimeoutSeconds s)."
             }
 
@@ -1376,6 +2343,7 @@ function Invoke-StudentExecutableTaskProbe {
                 try {
                     $allowQuery = Get-OpenPathAppLockerEventQuery -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -EventId 8002 -StartTime $since
                     $appLockerQueryStatuses['8002'] = $allowQuery.status
+                    $appLockerEventQueries['8002'] = $allowQuery
                     $allowEvents = @($allowQuery.events)
                     $allowEvidence = Get-OpenPathCorrelatedAppLockerEvent -Events $allowEvents -AllowedEventIds @(8002) -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -BinaryLeaf $binaryLeaf -ExpectedExecutablePath $ExecutablePath -StudentSid $StudentSid -ProcessIds @($observedExactProcessEvidence | ForEach-Object { [int]$_.processId })
                     $observedEventEvidence = Merge-OpenPathBoundedEvidence -Existing $observedEventEvidence -Incoming @($allowEvidence.candidates) -Kind event
@@ -1392,6 +2360,7 @@ function Invoke-StudentExecutableTaskProbe {
                     try {
                         $packagedAllowQuery = Get-OpenPathAppLockerEventQuery -LogName 'Microsoft-Windows-AppLocker/Packaged app-Execution' -EventId 8020 -StartTime $since
                         $appLockerQueryStatuses['8020'] = $packagedAllowQuery.status
+                        $appLockerEventQueries['8020'] = $packagedAllowQuery
                         $packagedAllowEvents = @($packagedAllowQuery.events)
                         $packagedAllowEvidence = Get-OpenPathCorrelatedAppLockerEvent -Events $packagedAllowEvents -AllowedEventIds @(8020) -LogName 'Microsoft-Windows-AppLocker/Packaged app-Execution' -BinaryLeaf $binaryLeaf -ExpectedExecutablePath $ExecutablePath -StudentSid $StudentSid -ProcessIds @($observedExactProcessEvidence | ForEach-Object { [int]$_.processId }) -PackagedAppPattern $PackagedAppPattern
                         $observedEventEvidence = Merge-OpenPathBoundedEvidence -Existing $observedEventEvidence -Incoming @($packagedAllowEvidence.candidates) -Kind event
@@ -1409,7 +2378,7 @@ function Invoke-StudentExecutableTaskProbe {
             }
 
             if (-not $allowedFound) {
-                Set-OpenPathBoundaryProbeFailureEvidence -ProbeName $ProbeName -ExecutablePath $ExecutablePath -StudentSid $StudentSid -FailureCode 'appLocker-allow-event-not-observed' -Processes $observedExactProcessEvidence -Events $observedEventEvidence -ExpectedEventIds $allowedEventIds -SamEvidence $samBoundaryEvidence -TaskRegisteredAtUtc $taskRegisteredAtUtc -TaskIdentity $taskIdentityEvidence -TestAppLockerPolicyDecision $testAppLockerPolicyDecision -AppLockerQueryStatuses $appLockerQueryStatuses | Out-Null
+                Set-OpenPathBoundaryProbeFailureEvidence -ProbeName $ProbeName -ExecutablePath $ExecutablePath -StudentSid $StudentSid -FailureCode 'appLocker-allow-event-not-observed' -Processes $observedExactProcessEvidence -Events $observedEventEvidence -ExpectedEventIds $allowedEventIds -SamEvidence $samBoundaryEvidence -TaskRegisteredAtUtc $taskRegisteredAtUtc -TaskIdentity $taskIdentityEvidence -TestAppLockerPolicyDecision $testAppLockerPolicyDecision -AppLockerQueryStatuses $appLockerQueryStatuses -AppLockerEventQueries $appLockerEventQueries | Out-Null
                 throw "$ProbeName FAILED: Allowed execution was not observed for $binaryLeaf attributed to student within timeout ($TimeoutSeconds s)."
             }
 
@@ -1602,6 +2571,7 @@ Export-ModuleMember -Function @(
     'Get-OpenPathSamBoundaryEvidence',
     'Get-OpenPathProcessOwnerSid',
     'Get-OpenPathExactProcessBoundaryEvidence',
+    'Get-OpenPathAppLockerEventQuery',
     'Get-OpenPathCorrelatedAppLockerEvent',
     'Get-OpenPathTaskIdentityEvidence',
     'Get-OpenPathTestAppLockerPolicyDecision',

@@ -2,6 +2,7 @@
 
 Import-Module (Join-Path $PSScriptRoot "TestHelpers.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1") -Force
+$script:OpenPathWindowsDirect = ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT)
 
 Describe "Windows Browser Boundary CI Probes" {
     BeforeAll {
@@ -1151,6 +1152,500 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
             {
                 Invoke-ReportAssertNoFailures -ReportPath $reportPath -Scope "Student"
             } | Should -Throw "*Student browser-boundary probes failed: 1: Probe 1*"
+        }
+    }
+
+    Context "Process token observer" {
+        BeforeEach {
+            $script:observerRuntime = [pscustomobject]@{
+                supported = $true
+                edition = 'Core'
+                version = '7.6.5'
+                bitness = '64-bit'
+                processId = 9876
+            }
+        }
+
+        It 'records process-exited before observation with native stage evidence' {
+            Mock Invoke-OpenPathNativeOpenProcess {
+                [pscustomobject]@{ success = $false; handle = [IntPtr]::Zero; win32Code = 87 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathProcessExistence {
+                [pscustomobject]@{ processExists = $false; processExistsStatus = 'observed' }
+            } -ModuleName BrowserBoundaryProbe
+
+            $observation = Get-OpenPathProcessTokenBoundaryEvidence `
+                -ProcessId 4242 `
+                -RuntimeOverride $script:observerRuntime
+
+            $observation.reason | Should -Be 'process-exited-before-observation'
+            $observation.processId | Should -Be 4242
+            $observation.processExists | Should -BeFalse
+            $observation.processExistsStatus | Should -Be 'observed'
+            $observation.observerArchitecture | Should -Be '64-bit'
+            $observation.observerPid | Should -Be 9876
+            $observation.observerEdition | Should -Be 'Core'
+            $observation.observerVersion | Should -Be '7.6.5'
+            $observation.nativeStages[0].stage | Should -Be 'OpenProcess'
+            $observation.nativeStages[0].accessMask | Should -Be '0x00001000'
+            $observation.nativeStages[0].win32Code | Should -Be 87
+            $observation.nativeStages[0].win32Name | Should -Be 'ERROR_INVALID_PARAMETER'
+            ($observation | ConvertTo-Json -Depth 12) | Should -Not -Match 'handle|tokenHandle|processHandle|secret|Password'
+        }
+
+        It 'records access denied with unknown process existence and exact native stage evidence' {
+            Mock Invoke-OpenPathNativeOpenProcess {
+                [pscustomobject]@{ success = $false; handle = [IntPtr]::Zero; win32Code = 5 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathProcessExistence {
+                [pscustomobject]@{ processExists = $true; processExistsStatus = 'observed' }
+            } -ModuleName BrowserBoundaryProbe
+
+            $observation = Get-OpenPathProcessTokenBoundaryEvidence `
+                -ProcessId 4343 `
+                -RuntimeOverride $script:observerRuntime
+
+            $observation.reason | Should -Be 'access-denied'
+            $observation.processId | Should -Be 4343
+            $observation.processExists | Should -BeTrue
+            $observation.processExistsStatus | Should -Be 'observed'
+            $observation.observerArchitecture | Should -Be '64-bit'
+            $observation.observerPid | Should -Be 9876
+            $observation.nativeStages[0].stage | Should -Be 'OpenProcess'
+            $observation.nativeStages[0].accessMask | Should -Be '0x00001000'
+            $observation.nativeStages[0].win32Code | Should -Be 5
+            $observation.nativeStages[0].win32Name | Should -Be 'ERROR_ACCESS_DENIED'
+            ($observation | ConvertTo-Json -Depth 12) | Should -Not -Match 'handle|tokenHandle|processHandle|secret|Password'
+        }
+
+        It 'does not call an ambiguous invalid parameter an exited process when the PID is still present' {
+            Mock Invoke-OpenPathNativeOpenProcess {
+                [pscustomobject]@{ success = $false; handle = [IntPtr]::Zero; win32Code = 87 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathProcessExistence {
+                [pscustomobject]@{ processExists = $true; processExistsStatus = 'observed' }
+            } -ModuleName BrowserBoundaryProbe
+
+            $observation = Get-OpenPathProcessTokenBoundaryEvidence `
+                -ProcessId 4646 `
+                -RuntimeOverride $script:observerRuntime
+
+            $observation.reason | Should -Be 'unexpected-native-error'
+            $observation.processExists | Should -BeTrue
+            $observation.processExistsStatus | Should -Be 'observed'
+            $observation.errorCode | Should -Be 87
+            $observation.nativeStages[0].win32Name | Should -Be 'ERROR_INVALID_PARAMETER'
+        }
+
+        It 'records an OpenProcessToken failure after observing the process' {
+            Mock Invoke-OpenPathNativeOpenProcess {
+                [pscustomobject]@{ success = $true; handle = [IntPtr]::new(42); win32Code = 0 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativeOpenProcessToken {
+                [pscustomobject]@{ success = $false; tokenHandle = [IntPtr]::Zero; win32Code = 87 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Close-OpenPathNativeHandle {} -ModuleName BrowserBoundaryProbe
+
+            $observation = Get-OpenPathProcessTokenBoundaryEvidence `
+                -ProcessId 4444 `
+                -RuntimeOverride $script:observerRuntime
+
+            $observation.reason | Should -Be 'open-token-failed'
+            $observation.processExists | Should -BeTrue
+            $observation.failureStage | Should -Be 'OpenProcessToken'
+            $observation.nativeStages[1].stage | Should -Be 'OpenProcessToken'
+            $observation.nativeStages[1].accessMask | Should -Be '0x00000008'
+            $observation.nativeStages[1].win32Code | Should -Be 87
+            $observation.nativeStages[1].win32Name | Should -Be 'ERROR_INVALID_PARAMETER'
+            ($observation | ConvertTo-Json -Depth 12) | Should -Not -Match 'handle|tokenHandle|processHandle|secret|Password'
+        }
+
+        It 'records a GetTokenInformation failure after observing process and token stages' {
+            Mock Invoke-OpenPathNativeOpenProcess {
+                [pscustomobject]@{ success = $true; handle = [IntPtr]::new(52); win32Code = 0 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativeOpenProcessToken {
+                [pscustomobject]@{ success = $true; tokenHandle = [IntPtr]::new(53); win32Code = 0 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativeGetTokenInformation {
+                [pscustomobject]@{ success = $false; returnLength = 0; win32Code = 87 }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Close-OpenPathNativeHandle {} -ModuleName BrowserBoundaryProbe
+
+            $observation = Get-OpenPathProcessTokenBoundaryEvidence `
+                -ProcessId 4545 `
+                -RuntimeOverride $script:observerRuntime
+
+            $observation.reason | Should -Be 'token-information-failed'
+            $observation.processExists | Should -BeTrue
+            $observation.failureStage | Should -Be 'GetTokenInformation'
+            $observation.nativeStages[2].stage | Should -Be 'GetTokenInformation'
+            $observation.nativeStages[2].informationClass | Should -Be 'TokenUser'
+            $observation.nativeStages[2].win32Code | Should -Be 87
+            $observation.nativeStages[2].win32Name | Should -Be 'ERROR_INVALID_PARAMETER'
+            ($observation | ConvertTo-Json -Depth 12) | Should -Not -Match 'handle|tokenHandle|processHandle|secret|Password'
+        }
+    }
+
+    Context "Test-AppLockerPolicy observer" {
+        BeforeEach {
+            $script:policyObserverRuntime = [pscustomobject]@{
+                supported = $true
+                edition = 'Core'
+                version = '7.6.5'
+                bitness = '64-bit'
+                processId = 9877
+            }
+        }
+
+        It 'records current policy runtime and a separate native PowerShell comparison' {
+            Mock Get-AppLockerPolicy { [pscustomobject]@{ RuleCollections = @() } } -ModuleName BrowserBoundaryProbe
+            Mock Test-AppLockerPolicy {
+                [pscustomobject]@{ FilePath = 'C:\msedge.exe'; PolicyDecision = 'Denied' }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativePowerShellPolicyComparison {
+                [pscustomobject]@{
+                    status = 'observed'
+                    path = 'C:\msedge.exe'
+                    userSid = 'S-1-5-21-policy-user'
+                    runtime = [pscustomobject]@{ edition = 'Desktop'; version = '5.1.26100'; bitness = '64-bit'; processId = 7777 }
+                }
+            } -ModuleName BrowserBoundaryProbe
+
+            $observation = Get-OpenPathTestAppLockerPolicyDecision `
+                -ExecutablePath 'C:\msedge.exe' `
+                -StudentSid 'S-1-5-21-policy-user' `
+                -RuntimeOverride $script:policyObserverRuntime `
+                -IncludeNativePowerShellComparison
+
+            $observation.status | Should -Be 'observed'
+            $observation.decision | Should -Be 'Denied'
+            $observation.path | Should -Be 'C:\msedge.exe'
+            $observation.userSid | Should -Be 'S-1-5-21-policy-user'
+            $observation.runtime.edition | Should -Be 'Core'
+            $observation.runtime.version | Should -Be '7.6.5'
+            $observation.runtime.bitness | Should -Be '64-bit'
+            $observation.runtime.processId | Should -Be 9877
+            $observation.testAppLockerPolicy.available | Should -BeTrue
+            $observation.testAppLockerPolicy.source | Should -Not -BeNullOrEmpty
+            $observation.import.attempted | Should -BeFalse
+            $observation.nativePowerShellComparison.status | Should -Be 'observed'
+            $observation.nativePowerShellComparison.runtime.edition | Should -Be 'Desktop'
+        }
+
+        It 'preserves policy import and exception metadata without raw exception text' {
+            Mock Get-Command {
+                param([string]$Name)
+                if ($Name -eq 'Test-AppLockerPolicy') { return $null }
+                if ($Name -eq 'Get-AppLockerPolicy') {
+                    return [pscustomobject]@{ Name = $Name; Source = 'AppLocker'; CommandType = 'Cmdlet' }
+                }
+                Microsoft.PowerShell.Core\Get-Command @PSBoundParameters
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathAppLockerModuleImport {
+                throw [System.InvalidOperationException]::new('policy-secret-not-serializable')
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativePowerShellPolicyComparison {
+                [pscustomobject]@{ status = 'unavailable'; path = 'C:\msedge.exe'; userSid = 'S-1-5-21-policy-user'; reason = 'test-fixture' }
+            } -ModuleName BrowserBoundaryProbe
+
+            $observation = Get-OpenPathTestAppLockerPolicyDecision `
+                -ExecutablePath 'C:\msedge.exe' `
+                -StudentSid 'S-1-5-21-policy-user' `
+                -RuntimeOverride $script:policyObserverRuntime
+
+            $observation.status | Should -Be 'unavailable'
+            $observation.testAppLockerPolicy.available | Should -BeFalse
+            $observation.import.attempted | Should -BeTrue
+            $observation.import.result | Should -Be 'failed'
+            $observation.exception.type | Should -Match 'InvalidOperationException'
+            $observation.exception.fullyQualifiedErrorId | Should -Not -BeNullOrEmpty
+            $observation.exception.hResult | Should -Not -BeNullOrEmpty
+            $observation.exception.safeReason | Should -Be 'module-import-failed'
+            ($observation | ConvertTo-Json -Depth 12) | Should -Not -Match 'policy-secret-not-serializable|Password'
+        }
+    }
+
+    Context "AppLocker event observer" {
+        BeforeEach {
+            $script:eventObserverRuntime = [pscustomobject]@{
+                supported = $true
+                edition = 'Core'
+                version = '7.6.5'
+                bitness = '64-bit'
+                processId = 9880
+            }
+            $script:eventStartTime = [datetime]'2026-09-11T10:11:12Z'
+        }
+
+        It 'distinguishes a valid empty query from a failed query without raw exception text' {
+            Mock Get-OpenPathAppLockerEventChannel {
+                param([string]$LogName)
+                [pscustomobject]@{ channel = $LogName; channelExists = $true; status = 'observed' }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent { @() } -ModuleName BrowserBoundaryProbe
+
+            $empty = Get-OpenPathAppLockerEventQuery `
+                -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' `
+                -EventId 8004 `
+                -StartTime $script:eventStartTime `
+                -RuntimeOverride $script:eventObserverRuntime `
+                -IncludeNativePowerShellComparison:$false
+
+            $empty.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            $empty.channel | Should -Be 'Microsoft-Windows-AppLocker/EXE and DLL'
+            $empty.logName | Should -Be 'Microsoft-Windows-AppLocker/EXE and DLL'
+            $empty.channelExists | Should -BeTrue
+            $empty.queryAttempted | Should -BeTrue
+            $empty.querySucceeded | Should -BeTrue
+            $empty.eventCount | Should -Be 0
+            @($empty.events).Count | Should -Be 0
+            $empty.runtime.edition | Should -Be 'Core'
+            $empty.runtime.version | Should -Be '7.6.5'
+            $empty.runtime.bitness | Should -Be '64-bit'
+            $empty.runtime.processId | Should -Be 9880
+
+            Mock Get-WinEvent { throw [System.InvalidOperationException]::new('event-secret-not-serializable') } -ModuleName BrowserBoundaryProbe
+            $failed = Get-OpenPathAppLockerEventQuery `
+                -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' `
+                -EventId 8004 `
+                -StartTime $script:eventStartTime `
+                -RuntimeOverride $script:eventObserverRuntime `
+                -IncludeNativePowerShellComparison:$false
+
+            $failed.status | Should -Be 'QUERY_FAILED'
+            $failed.channelExists | Should -BeTrue
+            $failed.queryAttempted | Should -BeTrue
+            $failed.querySucceeded | Should -BeFalse
+            $failed.eventCount | Should -Be 0
+            $failed.exception.type | Should -Match 'InvalidOperationException'
+            $failed.exception.fullyQualifiedErrorId | Should -Not -BeNullOrEmpty
+            $failed.exception.hResult | Should -Not -BeNullOrEmpty
+            $failed.exception.safeReason | Should -Be 'event-query-failed'
+            ($failed | ConvertTo-Json -Depth 12) | Should -Not -Match 'event-secret-not-serializable|Password'
+        }
+
+        It 'reports unsupported observer runtime without attempting channel discovery' {
+            $unsupportedRuntime = [pscustomobject]@{
+                supported = $false
+                edition = 'Core'
+                version = '7.6.5'
+                bitness = '64-bit'
+                processId = 9881
+            }
+
+            $query = Get-OpenPathAppLockerEventQuery `
+                -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' `
+                -EventId 8004 `
+                -StartTime $script:eventStartTime `
+                -RuntimeOverride $unsupportedRuntime `
+                -IncludeNativePowerShellComparison:$false
+
+            $query.status | Should -Be 'OBSERVER_RUNTIME_UNSUPPORTED'
+            $query.channelExists | Should -Be $null
+            $query.queryAttempted | Should -BeFalse
+            $query.querySucceeded | Should -BeFalse
+            $query.eventCount | Should -Be 0
+        }
+
+        It 'keeps native Windows PowerShell event comparison separate and exact' {
+            Mock Get-OpenPathAppLockerEventChannel {
+                param([string]$LogName)
+                [pscustomobject]@{ channel = $LogName; channelExists = $true; status = 'observed' }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent { throw [System.InvalidOperationException]::new('query-failed-secret') } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativePowerShellEventQuery {
+                param([string]$LogName, [int]$EventId, [datetime]$StartTime)
+                [pscustomobject]@{
+                    status = 'QUERY_SUCCEEDED_MATCHES'
+                    channel = $LogName
+                    logName = $LogName
+                    eventId = $EventId
+                    startTime = $StartTime
+                    runtime = [pscustomobject]@{ edition = 'Desktop'; version = '5.1.26100'; bitness = '64-bit'; processId = 7780 }
+                    eventCount = 1
+                    events = @([pscustomobject]@{ Message = 'must-not-leak-password-secret' })
+                }
+            } -ModuleName BrowserBoundaryProbe
+
+            $query = Get-OpenPathAppLockerEventQuery `
+                -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' `
+                -EventId 8004 `
+                -StartTime $script:eventStartTime `
+                -RuntimeOverride $script:eventObserverRuntime `
+                -IncludeNativePowerShellComparison
+
+            $query.status | Should -Be 'QUERY_FAILED'
+            $query.nativePowerShellComparison.status | Should -Be 'QUERY_SUCCEEDED_MATCHES'
+            $query.nativePowerShellComparison.channel | Should -Be 'Microsoft-Windows-AppLocker/EXE and DLL'
+            $query.nativePowerShellComparison.eventId | Should -Be 8004
+            $query.nativePowerShellComparison.runtime.edition | Should -Be 'Desktop'
+            $query.nativePowerShellComparison.runtime.version | Should -Be '5.1.26100'
+            $query.nativePowerShellComparison.PSObject.Properties['events'] | Should -Be $null
+            Should -Invoke Invoke-OpenPathNativePowerShellEventQuery -ModuleName BrowserBoundaryProbe -Times 1 -ParameterFilter {
+                $LogName -eq 'Microsoft-Windows-AppLocker/EXE and DLL' -and $EventId -eq 8004 -and $StartTime -eq $script:eventStartTime
+            }
+            ($query | ConvertTo-Json -Depth 12) | Should -Not -Match 'query-failed-secret|Password'
+        }
+    }
+
+    Context "Observer evidence transport" {
+        It 'retains token, policy, and event observer evidence in the real nested and flat contracts' {
+            $transport = InModuleScope BrowserBoundaryProbe {
+                $tokenObserver = [pscustomobject][ordered]@{
+                    status = 'unavailable'
+                    reason = 'open-token-failed'
+                    processId = 5436
+                    processExists = $true
+                    processExistsStatus = 'observed'
+                    errorCode = 87
+                    errorName = 'ERROR_INVALID_PARAMETER'
+                    failureStage = 'OpenProcessToken'
+                    observerArchitecture = '64-bit'
+                    observerPid = 9882
+                    secret = 'must-not-leak-token-password-secret'
+                    nativeStages = @([pscustomobject]@{ stage = 'OpenProcessToken'; processId = 5436; accessMask = '0x00000008'; win32Code = 87; win32Name = 'ERROR_INVALID_PARAMETER' })
+                }
+                $policyObserver = [pscustomobject][ordered]@{
+                    status = 'observed'
+                    decision = 'Denied'
+                    path = 'C:\msedge.exe'
+                    userSid = 'S-1-5-21-policy-user'
+                    runtime = [pscustomobject]@{ edition = 'Core'; version = '7.6.5'; bitness = '64-bit'; processId = 9883 }
+                    testAppLockerPolicy = [pscustomobject]@{ available = $true; source = 'AppLocker' }
+                    import = [pscustomobject]@{ attempted = $false; result = 'not-required' }
+                    secret = 'must-not-leak-policy-password-secret'
+                }
+                $eventQuery = [pscustomobject][ordered]@{
+                    status = 'QUERY_SUCCEEDED_NO_MATCHES'
+                    channel = 'Microsoft-Windows-AppLocker/EXE and DLL'
+                    logName = 'Microsoft-Windows-AppLocker/EXE and DLL'
+                    eventId = 8004
+                    channelExists = $true
+                    queryAttempted = $true
+                    querySucceeded = $true
+                    eventCount = 0
+                    events = @([pscustomobject]@{ Id = 8004; Message = 'must-not-leak-event-password-secret' })
+                    secret = 'must-not-leak-query-password-secret'
+                }
+                $process = [pscustomobject][ordered]@{
+                    processId = 5436
+                    name = 'msedge.exe'
+                    executablePath = 'C:\msedge.exe'
+                    studentSid = 'S-1-5-21-policy-user'
+                    tokenObserver = $tokenObserver
+                    restrictedGroupSid = 'S-1-5-21-restricted'
+                    restrictedGroupPresent = $null
+                    restrictedGroupQueryStatus = 'unavailable'
+                }
+                $evidence = Set-OpenPathBoundaryProbeFailureEvidence `
+                    -ProbeName 'Canonical Edge deny' `
+                    -ExecutablePath 'C:\msedge.exe' `
+                    -StudentSid 'S-1-5-21-policy-user' `
+                    -FailureCode 'appLocker-block-event-not-observed' `
+                    -Processes @($process) `
+                    -Events @() `
+                    -ExpectedEventIds @(8004) `
+                    -TestAppLockerPolicyDecision $policyObserver `
+                    -AppLockerQueryStatuses @{ '8004' = 'QUERY_SUCCEEDED_NO_MATCHES' } `
+                    -AppLockerEventQueries @{ '8004' = $eventQuery }
+                $serialized = $evidence | ConvertTo-Json -Depth 20
+                $serialized | Should -Not -Match 'must-not-leak-(token|policy|event|query)-password-secret'
+                $evidence.appLockerEventQueries['8004'].PSObject.Properties['events'] | Should -Be $null
+                $evidence.processes[0].tokenObserver.PSObject.Properties['secret'] | Should -Be $null
+                $evidence.policyObserver.PSObject.Properties['secret'] | Should -Be $null
+                $flat = Get-OpenPathFlatEdgeBoundaryFailureContract -Evidence $evidence
+                ($flat | ConvertTo-Json -Depth 20) | Should -Not -Match 'must-not-leak-(token|policy|event|query)-password-secret'
+                [pscustomobject]@{ evidence = $evidence; flat = $flat }
+            }
+
+            $transport.evidence.processes[0].tokenObserver.failureStage | Should -Be 'OpenProcessToken'
+            $transport.evidence.testAppLockerPolicyDecision.runtime.edition | Should -Be 'Core'
+            $transport.evidence.appLockerEventQueries.'8004'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            $transport.flat.edge.tokenObserver.failureStage | Should -Be 'OpenProcessToken'
+            $transport.flat.edge.policyObserver.runtime.processId | Should -Be 9883
+            $transport.flat.edge.eventQueries.'8004'.eventCount | Should -Be 0
+            ($transport | ConvertTo-Json -Depth 12) | Should -Not -Match 'secret|Password'
+        }
+    }
+
+    Context "Direct Windows observer evidence" {
+        It '[Windows direct] observes the current process token with native stage evidence' -Skip:($script:OpenPathWindowsDirect -ne $true) {
+            $observation = Get-OpenPathProcessTokenBoundaryEvidence -ProcessId $PID
+
+            $observation.processId | Should -Be $PID
+            $observation.status | Should -BeIn @('ok', 'partial', 'unavailable')
+            if ($observation.status -eq 'unavailable') {
+                $observation.reason | Should -BeIn @(
+                    'process-exited-before-observation',
+                    'access-denied',
+                    'invalid-handle',
+                    'open-token-failed',
+                    'token-information-failed',
+                    'unexpected-native-error'
+                )
+            }
+            @($observation.nativeStages).Count | Should -BeGreaterThan 0
+            @($observation.nativeStages | Where-Object { $_.stage -eq 'OpenProcess' -and $_.accessMask -eq '0x00001000' }).Count | Should -BeGreaterThan 0
+            $observation.observerArchitecture | Should -Not -BeNullOrEmpty
+            $observation.observerEdition | Should -Not -BeNullOrEmpty
+            $observation.observerVersion | Should -Not -BeNullOrEmpty
+            $observation.observerPid | Should -Be $PID
+            ($observation | ConvertTo-Json -Depth 12) | Should -Not -Match 'handle|tokenHandle|processHandle|secret|Password'
+        }
+
+        It '[Windows direct] records policy evidence for a real System32 PE and a separate native comparison' -Skip:($script:OpenPathWindowsDirect -ne $true) {
+            $systemPe = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\cmd.exe'
+            $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            Test-Path -LiteralPath $systemPe | Should -BeTrue
+            $decision = Get-OpenPathTestAppLockerPolicyDecision -ExecutablePath $systemPe -StudentSid $currentSid
+
+            $decision.path | Should -Be $systemPe
+            $decision.exactPath | Should -Be $systemPe
+            $decision.userSid | Should -Be $currentSid
+            $decision.exactSid | Should -Be $currentSid
+            $decision.runtime.edition | Should -Not -BeNullOrEmpty
+            $decision.runtime.version | Should -Not -BeNullOrEmpty
+            $decision.runtime.bitness | Should -Not -BeNullOrEmpty
+            $decision.runtime.processId | Should -Be $PID
+            $decision.status | Should -BeIn @('observed', 'unknown', 'unavailable')
+            if ($decision.status -ne 'observed') {
+                $decision.reason | Should -BeIn @('policy-command-unavailable', 'policy-evaluation-unavailable', 'windows-only')
+            }
+            $decision.nativePowerShellComparison | Should -Not -BeNull
+            $decision.nativePowerShellComparison.status | Should -Not -BeNullOrEmpty
+            if ($decision.nativePowerShellComparison.status -eq 'unavailable') {
+                $decision.nativePowerShellComparison.reason | Should -BeIn @('policy-command-unavailable', 'native-powershell-missing', 'native-powershell-failed', 'windows-only')
+            }
+            ($decision | ConvertTo-Json -Depth 12) | Should -Not -Match 'secret|Password|Exception\.Message'
+        }
+
+        It '[Windows direct] queries recent AppLocker 8004 evidence with current and native runtime metadata' -Skip:($script:OpenPathWindowsDirect -ne $true) {
+            $logName = 'Microsoft-Windows-AppLocker/EXE and DLL'
+            $startTime = (Get-Date).AddMinutes(-1)
+            $query = Get-OpenPathAppLockerEventQuery -LogName $logName -EventId 8004 -StartTime $startTime -IncludeNativePowerShellComparison
+
+            $query.status | Should -BeIn @('QUERY_SUCCEEDED_NO_MATCHES', 'QUERY_FAILED', 'CHANNEL_UNAVAILABLE', 'OBSERVER_RUNTIME_UNSUPPORTED')
+            $query.channel | Should -Be $logName
+            $query.logName | Should -Be $logName
+            $query.eventId | Should -Be 8004
+            $query.startTime | Should -Not -BeNullOrEmpty
+            $query.runtime.edition | Should -Not -BeNullOrEmpty
+            $query.runtime.version | Should -Not -BeNullOrEmpty
+            $query.runtime.bitness | Should -Not -BeNullOrEmpty
+            $query.runtime.processId | Should -Be $PID
+            $query.nativePowerShellComparison | Should -Not -BeNull
+            $query.nativePowerShellComparison.status | Should -Not -BeNullOrEmpty
+            if ($query.nativePowerShellComparison.runtime) {
+                $query.nativePowerShellComparison.runtime.edition | Should -Not -BeNullOrEmpty
+                $query.nativePowerShellComparison.runtime.version | Should -Not -BeNullOrEmpty
+                $query.nativePowerShellComparison.runtime.bitness | Should -Not -BeNullOrEmpty
+                $query.nativePowerShellComparison.runtime.processId | Should -BeGreaterThan 0
+            }
+            else {
+                $query.nativePowerShellComparison.reason | Should -Not -BeNullOrEmpty
+            }
+            ($query | ConvertTo-Json -Depth 12) | Should -Not -Match 'secret|Password|Exception\.Message'
         }
     }
 }

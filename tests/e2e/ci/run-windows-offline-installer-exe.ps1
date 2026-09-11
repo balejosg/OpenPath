@@ -884,6 +884,9 @@ catch {
             restrictedGroupSamMember = $edgeFailureContract.edge.restrictedGroupSamMember
             restrictedGroupTokenMember = $edgeFailureContract.edge.restrictedGroupTokenMember
             testAppLockerPolicyDecision = $edgeFailureContract.edge.testAppLockerPolicyDecision
+            tokenObserver = $edgeFailureContract.edge.tokenObserver
+            policyObserver = $edgeFailureContract.edge.policyObserver
+            eventQueries = $edgeFailureContract.edge.eventQueries
             appLocker8002 = $edgeFailureContract.edge.appLocker8002
             appLocker8004 = $edgeFailureContract.edge.appLocker8004
             appLocker8020 = $edgeFailureContract.edge.appLocker8020
@@ -923,6 +926,9 @@ catch {
         edgeRestrictedGroupEnabled = if ($edgeFailureContract) { $edgeFailureContract.edgeRestrictedGroupEnabled } else { $null }
         edgeRestrictedGroupDenyOnly = if ($edgeFailureContract) { $edgeFailureContract.edgeRestrictedGroupDenyOnly } else { $null }
         edgeRestrictedGroupDisabled = if ($edgeFailureContract) { $edgeFailureContract.edgeRestrictedGroupDisabled } else { $null }
+        edgeTokenObserver = if ($edgeFailureContract) { $edgeFailureContract.edgeTokenObserver } else { $null }
+        edgePolicyObserver = if ($edgeFailureContract) { $edgeFailureContract.edgePolicyObserver } else { $null }
+        edgeAppLockerEventQueries = if ($edgeFailureContract) { $edgeFailureContract.edgeAppLockerEventQueries } else { $null }
         edgeTaskRegisteredAtUtc = if ($edgeFailureContract) { $edgeFailureContract.edgeTaskRegisteredAtUtc } else { $null }
         edgeEventId = if ($edgeFailureContract) { $edgeFailureContract.edgeEventId } else { $null }
         edgeEventProcessId = if ($edgeFailureContract) { $edgeFailureContract.edgeEventProcessId } else { $null }

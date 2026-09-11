@@ -473,6 +473,9 @@ Describe "Offline installer" {
                 'testAppLockerPolicyDecision',
                 'edgeTaskRegisteredAtUtc',
                 'edgeEventId',
+                'edgeTokenObserver',
+                'edgePolicyObserver',
+                'edgeAppLockerEventQueries',
                 'Write-SafeEvidence -Payload $failure -Path $EvidencePath'
             )
             $disposableTarget = Get-Content (Join-Path $PSScriptRoot '..' '..' 'tests' 'e2e' 'ci' 'DisposableWindowsTarget.psm1') -Raw
@@ -513,7 +516,43 @@ Describe "Offline installer" {
                         failureCode = 'exact-student-process-observed-without-block-event'
                         executablePath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
                         studentSid = 'S-1-5-21-100-200-300-400'
-                        processes = @([ordered]@{ processId = 5436; restrictedGroupPresent = $null; restrictedGroupAttributes = $null; restrictedGroupQueryStatus = 'unavailable' })
+                        processes = @([ordered]@{
+                                processId = 5436
+                                restrictedGroupPresent = $null
+                                restrictedGroupAttributes = $null
+                                restrictedGroupQueryStatus = 'unavailable'
+                                tokenObserver = [ordered]@{
+                                    processExists = $true
+                                    processExistsStatus = 'observed'
+                                    errorCode = 87
+                                    errorName = 'ERROR_INVALID_PARAMETER'
+                                    failureStage = 'OpenProcessToken'
+                                    observerArchitecture = '64-bit'
+                                    observerPid = 9882
+                                    nativeStages = @([ordered]@{ stage = 'OpenProcessToken'; accessMask = '0x00000008'; win32Code = 87; win32Name = 'ERROR_INVALID_PARAMETER' })
+                                }
+                            })
+                        testAppLockerPolicyDecision = [ordered]@{
+                            status = 'observed'
+                            decision = 'Denied'
+                            path = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+                            userSid = 'S-1-5-21-100-200-300-400'
+                            runtime = [ordered]@{ edition = 'Core'; version = '7.6.5'; bitness = '64-bit'; processId = 9883 }
+                            testAppLockerPolicy = [ordered]@{ available = $true; source = 'AppLocker' }
+                            import = [ordered]@{ attempted = $false; result = 'not-required' }
+                        }
+                        appLockerEventQueries = [ordered]@{
+                            '8004' = [ordered]@{
+                                status = 'QUERY_SUCCEEDED_NO_MATCHES'
+                                channel = 'Microsoft-Windows-AppLocker/EXE and DLL'
+                                eventId = 8004
+                                channelExists = $true
+                                queryAttempted = $true
+                                querySucceeded = $true
+                                eventCount = 0
+                                events = @()
+                            }
+                        }
                     }
                     repeat = [ordered]@{ attempts = @([ordered]@{ label = 'T+5'; elapsedSeconds = 5.7; taskName = 'edge-t5'; evidence = [ordered]@{ appLocker8004 = $null; queryStatus = 'failed' } }) }
                 }
@@ -529,6 +568,9 @@ Describe "Offline installer" {
             $roundTrip.edgeBoundaryEvidence.initial.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
             $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupPresent | Should -BeNullOrEmpty
             $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupQueryStatus | Should -Be 'unavailable'
+            $roundTrip.edgeBoundaryEvidence.initial.processes[0].tokenObserver.failureStage | Should -Be 'OpenProcessToken'
+            $roundTrip.edgeBoundaryEvidence.initial.testAppLockerPolicyDecision.runtime.edition | Should -Be 'Core'
+            $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8004'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
             $roundTrip.edgeBoundaryEvidence.repeat.attempts[0].elapsedSeconds | Should -Be 5.7
             $roundTrip.edgeBoundaryEvidence.repeat.attempts[0].evidence.queryStatus | Should -Be 'failed'
             $roundTrip.cleanupSucceeded | Should -BeFalse

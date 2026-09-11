@@ -234,18 +234,54 @@ Describe 'Canonical offline installer disposable target' {
                 -ExecutablePath 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' `
                 -StudentSid 'S-1-5-21-100-200-300-400' `
                 -FailureCode 'exact-student-process-observed-without-block-event' `
-                -Processes @([pscustomobject]@{ processId = 5436; restrictedGroupSid = 'S-1-5-21-100-200-300-401'; restrictedGroupPresent = $null; restrictedGroupAttributes = $null; restrictedGroupQueryStatus = 'unavailable' }) `
+                -Processes @([pscustomobject]@{
+                        processId = 5436
+                        restrictedGroupSid = 'S-1-5-21-100-200-300-401'
+                        restrictedGroupPresent = $null
+                        restrictedGroupAttributes = $null
+                        restrictedGroupQueryStatus = 'unavailable'
+                        tokenObserver = [pscustomobject]@{
+                            processId = 5436
+                            processExists = $true
+                            processExistsStatus = 'observed'
+                            errorCode = 87
+                            errorName = 'ERROR_INVALID_PARAMETER'
+                            failureStage = 'OpenProcessToken'
+                            observerArchitecture = '64-bit'
+                            observerPid = 9882
+                            nativeStages = @([pscustomobject]@{ stage = 'OpenProcessToken'; accessMask = '0x00000008'; win32Code = 87; win32Name = 'ERROR_INVALID_PARAMETER' })
+                        }
+                    }) `
                 -Events @([pscustomobject]@{ id = 8002; observedProcessId = 5436; observedPath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'; observedUserSid = 'S-1-5-21-100-200-300-400'; pidStatus = 'matched' }) `
                 -ExpectedEventIds @(8004, 8022) `
                 -SamEvidence ([pscustomobject]@{ groupName = 'OpenPath-Restricted'; groupSid = 'S-1-5-21-100-200-300-401'; targetMemberPresent = $true; memberCount = 1; status = 'observed' }) `
-                -TestAppLockerPolicyDecision ([pscustomobject]@{ status = 'observed'; decision = 'Denied' }) `
-                -AppLockerQueryStatuses @{ '8002' = 'observed'; '8004' = 'failed'; '8020' = 'observed'; '8022' = 'observed' } | Out-Null
+                -TestAppLockerPolicyDecision ([pscustomobject]@{
+                        status = 'observed'
+                        decision = 'Denied'
+                        runtime = [pscustomobject]@{ edition = 'Core'; version = '7.6.5'; bitness = '64-bit'; processId = 9883 }
+                        testAppLockerPolicy = [pscustomobject]@{ available = $true; source = 'AppLocker' }
+                        import = [pscustomobject]@{ attempted = $false; result = 'not-required' }
+                    }) `
+                -AppLockerQueryStatuses @{ '8002' = 'observed'; '8004' = 'failed'; '8020' = 'observed'; '8022' = 'observed' } `
+                -AppLockerEventQueries @{ '8004' = [pscustomobject]@{
+                        status = 'QUERY_FAILED'
+                        channel = 'Microsoft-Windows-AppLocker/EXE and DLL'
+                        eventId = 8004
+                        channelExists = $true
+                        queryAttempted = $true
+                        querySucceeded = $false
+                        eventCount = 0
+                        exception = [pscustomobject]@{ type = 'System.InvalidOperationException'; fullyQualifiedErrorId = 'event-query-failed'; hResult = -1; safeReason = 'event-query-failed' }
+                    } } | Out-Null
         }
 
         $retrieved = Get-OpenPathDisposableBoundaryFailureEvidence
         $flat = Get-OpenPathDisposableFlatEdgeBoundaryFailureContract -Evidence $retrieved
         $retrieved.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
         $flat.edgeFailureCode | Should -Be 'exact-student-process-observed-without-block-event'
+        $flat.edge.tokenObserver.failureStage | Should -Be 'OpenProcessToken'
+        $flat.edge.policyObserver.runtime.edition | Should -Be 'Core'
+        $flat.edge.eventQueries.'8004'.status | Should -Be 'QUERY_FAILED'
 
         Mock Start-Sleep {} -ModuleName BrowserBoundaryProbe
         Mock Invoke-StudentExecutableTaskProbe {
@@ -280,6 +316,9 @@ Describe 'Canonical offline installer disposable target' {
         $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupPresent | Should -BeNullOrEmpty
         $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupQueryStatus | Should -Be 'unavailable'
         $roundTrip.edgeBoundaryEvidence.initial.testAppLockerPolicyDecision.decision | Should -Be 'Denied'
+        $roundTrip.edgeBoundaryEvidence.initial.processes[0].tokenObserver.failureStage | Should -Be 'OpenProcessToken'
+        $roundTrip.edgeBoundaryEvidence.initial.testAppLockerPolicyDecision.runtime.processId | Should -Be 9883
+        $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8004'.status | Should -Be 'QUERY_FAILED'
         $roundTrip.edgeBoundaryEvidence.initial.appLocker8002 | Should -BeTrue
         $roundTrip.edgeBoundaryEvidence.initial.appLocker8004 | Should -BeNullOrEmpty
         $roundTrip.edgeBoundaryEvidence.initial.appLockerQueryStatuses.'8004' | Should -Be 'failed'
