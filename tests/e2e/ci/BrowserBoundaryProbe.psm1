@@ -1555,6 +1555,19 @@ function Get-OpenPathSafeTokenObserverEvidence {
     }
 }
 
+function Write-OpenPathBrowserBoundaryReport {
+    param(
+        [Parameter(Mandatory = $true)][object]$Report,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $parent = Split-Path -Parent $Path
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    $Report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
 function Get-OpenPathSafePolicyComparisonEvidence {
     param([object]$Comparison)
 
@@ -2613,6 +2626,7 @@ Export-ModuleMember -Function @(
     'Get-OpenPathSamBoundaryEvidence',
     'Get-OpenPathProcessOwnerSid',
     'Get-OpenPathExactProcessBoundaryEvidence',
+    'Write-OpenPathBrowserBoundaryReport',
     'Get-OpenPathAppLockerEventQuery',
     'Get-OpenPathCorrelatedAppLockerEvent',
     'Get-OpenPathTaskIdentityEvidence',

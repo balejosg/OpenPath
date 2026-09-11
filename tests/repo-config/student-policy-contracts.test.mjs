@@ -920,7 +920,7 @@ describe('repository verification contract', () => {
     );
     assert.match(
       browserBoundaryCi,
-      /Student scripting host \(powershell\.exe\) is denied by AppLocker[\s\S]*ConvertTo-Json[\s\S]*Set-Content -LiteralPath \$reportPath/s,
+      /Student scripting host \(powershell\.exe\) is denied by AppLocker[\s\S]*Write-OpenPathBrowserBoundaryReport[\s\S]*-Path \$reportPath/s,
       'browser-boundary CI should record the scripting-host lockdown result in the serialized student report'
     );
     assert.match(

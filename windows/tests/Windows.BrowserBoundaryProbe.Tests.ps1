@@ -1648,13 +1648,18 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
                     })
             }
 
-            $json = $report | ConvertTo-Json -Depth 12
-            $roundTrip = $json | ConvertFrom-Json
+            $reportPath = Join-Path $TestDrive 'browser-boundary-report.json'
+            Write-OpenPathBrowserBoundaryReport -Report $report -Path $reportPath
+            Test-Path -LiteralPath $reportPath | Should -BeTrue
+            $roundTrip = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
             $nativeStages = $roundTrip.results[0].evidence.observedExactProcess[0].tokenObserver.nativeStages
 
             ($nativeStages -is [array]) | Should -BeTrue
             @($nativeStages).Count | Should -Be 2
             $nativeStages[0].stage | Should -Be 'OpenProcess'
+
+            $runner = Get-Content (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\run-windows-browser-boundary-ci.ps1') -Raw
+            $runner | Should -Match 'Write-OpenPathBrowserBoundaryReport[\s\S]*\$reportPath'
         }
 
         It 'retains token, policy, and event observer evidence in the real nested and flat contracts' {

@@ -343,9 +343,9 @@ function Invoke-StudentBoundaryTask {
         if ($tempResult) { $results += $tempResult }
         if ($firefoxProbeResult) { $results += $firefoxProbeResult }
 
-        [pscustomobject]@{ results = $results } |
-            ConvertTo-Json -Depth 12 |
-            Set-Content -LiteralPath $reportPath -Encoding UTF8
+        Write-OpenPathBrowserBoundaryReport `
+            -Report ([pscustomobject]@{ results = $results }) `
+            -Path $reportPath
     }
     finally {
         & schtasks.exe /Delete /TN $taskName /F *> $null
