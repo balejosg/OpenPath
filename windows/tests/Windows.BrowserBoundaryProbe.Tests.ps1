@@ -1616,6 +1616,47 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
     }
 
     Context "Observer evidence transport" {
+        It 'preserves bounded token stages through the browser report JSON roundtrip' {
+            $tokenObserver = InModuleScope BrowserBoundaryProbe {
+                $stage = [pscustomobject][ordered]@{
+                    stage = 'OpenProcess'
+                    attempted = $true
+                    succeeded = $true
+                    processId = 5437
+                    accessMask = '0x00001000'
+                    informationClass = $null
+                    win32Code = 0
+                    win32Name = 'ERROR_SUCCESS'
+                }
+                $secondStage = $stage | Select-Object * | ForEach-Object {
+                    $_.stage = 'OpenProcessToken'
+                    $_.processId = 5437
+                    $_.accessMask = '0x00000008'
+                    $_
+                }
+                Get-OpenPathSafeTokenObserverEvidence -Observer ([pscustomobject][ordered]@{
+                        status = 'ok'
+                        nativeStages = @($stage, $secondStage)
+                    })
+            }
+            $report = [pscustomobject][ordered]@{
+                results = @([pscustomobject][ordered]@{
+                        name = 'Approved Firefox executable is allowed to run as student'
+                        evidence = [pscustomobject][ordered]@{
+                            observedExactProcess = @([pscustomobject][ordered]@{ tokenObserver = $tokenObserver })
+                        }
+                    })
+            }
+
+            $json = $report | ConvertTo-Json -Depth 12
+            $roundTrip = $json | ConvertFrom-Json
+            $nativeStages = $roundTrip.results[0].evidence.observedExactProcess[0].tokenObserver.nativeStages
+
+            ($nativeStages -is [array]) | Should -BeTrue
+            @($nativeStages).Count | Should -Be 2
+            $nativeStages[0].stage | Should -Be 'OpenProcess'
+        }
+
         It 'retains token, policy, and event observer evidence in the real nested and flat contracts' {
             $transport = InModuleScope BrowserBoundaryProbe {
                 $tokenObserver = [pscustomobject][ordered]@{

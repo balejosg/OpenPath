@@ -344,7 +344,7 @@ function Invoke-StudentBoundaryTask {
         if ($firefoxProbeResult) { $results += $firefoxProbeResult }
 
         [pscustomobject]@{ results = $results } |
-            ConvertTo-Json -Depth 6 |
+            ConvertTo-Json -Depth 12 |
             Set-Content -LiteralPath $reportPath -Encoding UTF8
     }
     finally {
