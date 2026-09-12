@@ -271,6 +271,24 @@ Describe "Windows Browser Boundary CI Probes" {
             } -ModuleName BrowserBoundaryProbe
             Mock Get-OpenPathExactProcessBoundaryEvidence { $studentProcess } -ModuleName BrowserBoundaryProbe
             Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathEnforcementObserverSnapshot {
+                param($Phase, $WindowStart, $WindowEnd, [switch]$IncludeEventQueries)
+                [pscustomobject][ordered]@{
+                    phase = $Phase
+                    status = 'observed'
+                    appLocker = [pscustomobject]@{
+                        queries = if ($IncludeEventQueries) {
+                            [ordered]@{
+                                '8002' = [pscustomobject]@{ status = 'QUERY_SUCCEEDED_MATCHES' }
+                                '8004' = [pscustomobject]@{ status = 'QUERY_SUCCEEDED_NO_MATCHES' }
+                                '8020' = [pscustomobject]@{ status = 'QUERY_SUCCEEDED_MATCHES' }
+                                '8022' = [pscustomobject]@{ status = 'QUERY_SUCCEEDED_NO_MATCHES' }
+                            }
+                        }
+                        else { [ordered]@{} }
+                    }
+                }
+            } -ModuleName BrowserBoundaryProbe
             Mock Get-OpenPathAppLockerEventQuery {
                 param([int]$EventId, [string]$LogName, [datetime]$StartTime)
                 [void]$queryIds.Add($EventId)
@@ -308,7 +326,8 @@ Describe "Windows Browser Boundary CI Probes" {
                     -ProcessName msedge `
                     -StudentSid 'S-1-5-21-student-sid' `
                     -PackagedAppPattern 'MicrosoftEdge|Edge' `
-                    -TimeoutSeconds 1
+                    -TimeoutSeconds 1 `
+                    -CaptureEnforcementDiagnostics
             } | Should -Throw '*no correlated AppLocker block event was observed*'
 
             @($queryIds | Sort-Object -Unique) | Should -Be @(8002, 8004, 8020, 8022)
@@ -318,6 +337,7 @@ Describe "Windows Browser Boundary CI Probes" {
             $failureEvidence.appLockerEventQueries.'8020'.status | Should -Be 'QUERY_SUCCEEDED_MATCHES'
             $failureEvidence.appLockerEventQueries.'8004'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
             $failureEvidence.appLockerEventQueries.'8022'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            $failureEvidence.enforcementObservation.after.appLocker.queries.'8002'.status | Should -Be 'QUERY_SUCCEEDED_MATCHES'
             @($failureEvidence.events | Where-Object {
                     $_.id -in @(8002, 8020) -and $_.pidMatched -and $_.pathMatched -and $_.sidMatched -and $_.packageMatched
                 }).Count | Should -Be 2
@@ -1171,6 +1191,215 @@ Describe "Windows Browser Boundary CI Probes" {
             $decision.userSid | Should -Be 'S-1-5-21-student-sid'
         }
 
+        It 'captures read-only enforcement state with explicit tri-state fields' {
+            $startTime = [datetime]'2026-09-12T19:45:52Z'
+            $endTime = [datetime]'2026-09-12T19:45:53Z'
+            $policyXml = @'
+<AppLockerPolicy Version="1"><RuleCollection Type="Exe" EnforcementMode="NotConfigured"><FilePathRule Id="rule-1" Action="Allow" /><RuleCollectionExtensions><RuleCollectionExtension Id="extension-1" /></RuleCollectionExtensions></RuleCollection><RuleCollection Type="Appx" EnforcementMode="Enabled"><FilePublisherRule Id="rule-2" Action="Deny" /></RuleCollection></AppLockerPolicy>
+'@
+            Mock Get-Service { [pscustomobject]@{ Status = 'Stopped' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { @() } -ModuleName BrowserBoundaryProbe
+            Mock Get-AppLockerPolicy { $policyXml } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathAppLockerEventChannel {
+                [pscustomobject][ordered]@{
+                    channelExists = $true
+                    channelEnabled = $false
+                    status = 'observed'
+                    reason = $null
+                    exception = $null
+                }
+            } -ModuleName BrowserBoundaryProbe
+
+            $snapshot = InModuleScope BrowserBoundaryProbe -Parameters @{ StartTime = $startTime; EndTime = $endTime } {
+                param($StartTime, $EndTime)
+                $command = Get-Command -Name Get-OpenPathEnforcementObserverSnapshot -ErrorAction SilentlyContinue
+                if (-not $command) { return $null }
+                & $command -Phase 'before-launch' -WindowStart $StartTime -WindowEnd $EndTime
+            }
+
+            $snapshot | Should -Not -BeNullOrEmpty
+            $snapshot.phase | Should -Be 'before-launch'
+            $snapshot.window.startUtc | Should -Be $startTime.ToUniversalTime().ToString('o')
+            $snapshot.window.endUtc | Should -Be $endTime.ToUniversalTime().ToString('o')
+            $snapshot.appIdSvc.serviceState | Should -Be 'Stopped'
+            $snapshot.appIdSvc.running | Should -BeFalse
+            $snapshot.drivers[0].status | Should -Be 'unknown'
+            $snapshot.drivers[0].running | Should -Be $null
+            $snapshot.appLocker.policy.source | Should -Be 'Get-AppLockerPolicy -Effective -Xml'
+            $snapshot.appLocker.policy.hashAlgorithm | Should -Be 'SHA256'
+            $snapshot.appLocker.policy.hashScope | Should -Be 'UTF8-AppLockerPolicy-OuterXml'
+            $snapshot.appLocker.policy.policySha256 | Should -Match '^[0-9a-f]{64}$'
+            $snapshot.appLocker.policy.ruleCollections | Where-Object { $_.type -eq 'Exe' } | Select-Object -ExpandProperty enforcementMode | Should -Be 'NotConfigured'
+            $snapshot.appLocker.policy.ruleCollections | Where-Object { $_.type -eq 'Exe' } | Select-Object -ExpandProperty ruleCount | Should -Be 1
+            $snapshot.appLocker.channels.exeAndDll.channelExists | Should -BeTrue
+            $snapshot.appLocker.channels.exeAndDll.channelEnabled | Should -BeFalse
+            @($snapshot.appLocker.queries.Keys).Count | Should -Be 0
+            $snapshot.captureStartedAtUtc | Should -Match 'Z$'
+            $snapshot.captureCompletedAtUtc | Should -Match 'Z$'
+            $snapshot.captureElapsedMilliseconds | Should -BeGreaterOrEqual 0
+            ($snapshot | ConvertTo-Json -Depth 12) | Should -Not -Match '<AppLockerPolicy|<RuleCollection|Message|secret|Password'
+        }
+
+        It 'records an empty effective policy as a successful observed snapshot' {
+            $startTime = [datetime]'2026-09-12T19:45:52Z'
+            $endTime = [datetime]'2026-09-12T19:45:53Z'
+            Mock Get-Service { [pscustomobject]@{ Status = 'Running' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { @() } -ModuleName BrowserBoundaryProbe
+            Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathAppLockerEventChannel {
+                [pscustomobject][ordered]@{ channelExists = $true; channelEnabled = $null; status = 'observed'; reason = $null; exception = $null }
+            } -ModuleName BrowserBoundaryProbe
+
+            $snapshot = InModuleScope BrowserBoundaryProbe -Parameters @{ StartTime = $startTime; EndTime = $endTime } {
+                param($StartTime, $EndTime)
+                Get-OpenPathEnforcementObserverSnapshot -Phase 'before-launch' -WindowStart $StartTime -WindowEnd $EndTime
+            }
+
+            $snapshot.appLocker.policy.status | Should -Be 'observed'
+            $snapshot.appLocker.policy.querySucceeded | Should -BeTrue
+            @($snapshot.appLocker.policy.ruleCollections).Count | Should -Be 0
+            $snapshot.appLocker.policy.policySha256 | Should -Match '^[0-9a-f]{64}$'
+        }
+
+        It 'retains before and after diagnostics on the real denied failure transport' {
+            $testExe = Join-Path $TestDrive 'diagnostic-transport.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            Mock Get-OpenPathSamBoundaryEvidence {
+                [pscustomobject][ordered]@{ status = 'unknown'; groupName = 'OpenPath-Restricted'; groupSid = $null }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathTestAppLockerPolicyDecision {
+                [pscustomobject][ordered]@{ status = 'unknown'; decision = $null; path = $testExe; userSid = 'S-1-5-21-student-sid'; reason = 'not-observed' }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathTaskIdentityEvidence {
+                [pscustomobject][ordered]@{ status = 'unknown'; principal = 'student01'; taskLogonType = '4' }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathEnforcementObserverSnapshot {
+                param($Phase, $WindowStart, $WindowEnd, [switch]$IncludeEventQueries)
+                [pscustomobject][ordered]@{
+                    phase = $Phase
+                    window = [pscustomobject]@{ startUtc = $WindowStart.ToUniversalTime().ToString('o'); endUtc = $WindowEnd.ToUniversalTime().ToString('o') }
+                    appLocker = [pscustomobject]@{ queries = if ($IncludeEventQueries) { [ordered]@{ '8002' = [pscustomobject]@{ status = 'QUERY_SUCCEEDED_MATCHES' } } } else { [ordered]@{} } }
+                }
+            } -ModuleName BrowserBoundaryProbe
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+
+            {
+                Invoke-StudentExecutableTaskProbe -ProbeName 'Diagnostic transport failure' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 0 -CaptureEnforcementDiagnostics
+            } | Should -Throw '*block event*'
+
+            $failure = Get-OpenPathLastBoundaryProbeFailureEvidence
+            $failure.failureCode | Should -Be 'appLocker-block-event-not-observed'
+            $failure.enforcementObservation.before.phase | Should -Be 'before-launch'
+            $failure.enforcementObservation.after.phase | Should -Be 'after-launch'
+            $failure.edge.enforcementObservation.after.appLocker.queries.'8002'.status | Should -Be 'QUERY_SUCCEEDED_MATCHES'
+            $flat = Get-OpenPathFlatEdgeBoundaryFailureContract -Evidence $failure
+            $flat.edgeEnforcementObservation.before.phase | Should -Be 'before-launch'
+            $reportPath = Join-Path $TestDrive 'diagnostic-transport.json'
+            Write-OpenPathBrowserBoundaryReport -Report $flat -Path $reportPath
+            $roundTrip = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+            $roundTrip.edge.enforcementObservation.after.phase | Should -Be 'after-launch'
+            $roundTrip.edgeEnforcementObservation.after.appLocker.queries.'8002'.status | Should -Be 'QUERY_SUCCEEDED_MATCHES'
+            Should -Invoke Get-OpenPathEnforcementObserverSnapshot -ModuleName BrowserBoundaryProbe -Times 2
+            ($roundTrip | ConvertTo-Json -Depth 12) | Should -Not -Match 'secret|Password|Message'
+        }
+
+        It 'keeps the denied outcome and records unknown diagnostics when capture throws' {
+            $testExe = Join-Path $TestDrive 'diagnostic-collector-failure.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            Mock Get-OpenPathSamBoundaryEvidence { $null } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathTestAppLockerPolicyDecision { [pscustomobject]@{ status = 'unknown'; decision = $null; path = $testExe; userSid = 'S-1-5-21-student-sid' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathTaskIdentityEvidence { [pscustomobject]@{ status = 'unknown' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathEnforcementObserverSnapshot {
+                Start-Sleep -Milliseconds 100
+                throw 'collector-secret'
+            } -ModuleName BrowserBoundaryProbe
+            Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
+
+            {
+                Invoke-StudentExecutableTaskProbe -ProbeName 'Diagnostic collector failure' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 0 -CaptureEnforcementDiagnostics
+            } | Should -Throw '*block event*'
+
+            $failure = Get-OpenPathLastBoundaryProbeFailureEvidence
+            $failure.failureCode | Should -Be 'appLocker-block-event-not-observed'
+            $failure.enforcementObservation.before.status | Should -Be 'unknown'
+            $failure.enforcementObservation.before.reason | Should -Be 'enforcement-observer-failed'
+            $failure.enforcementObservation.before.captureStartedAtUtc | Should -Not -BeNullOrEmpty
+            $failure.enforcementObservation.before.captureCompletedAtUtc | Should -Not -BeNullOrEmpty
+            $failure.enforcementObservation.before.captureElapsedMilliseconds | Should -BeGreaterOrEqual 50
+            $failure.enforcementObservation.after.status | Should -Be 'unknown'
+            $failure.enforcementObservation.after.reason | Should -Be 'enforcement-observer-failed'
+            $failure.enforcementObservation.after.captureStartedAtUtc | Should -Not -BeNullOrEmpty
+            $failure.enforcementObservation.after.captureCompletedAtUtc | Should -Not -BeNullOrEmpty
+            $failure.enforcementObservation.after.captureElapsedMilliseconds | Should -BeGreaterOrEqual 50
+            ($failure | ConvertTo-Json -Depth 14) | Should -Not -Match 'collector-secret|Password|Message'
+        }
+
+        It 'captures paired current and native queries once in one fixed window without changing outcome' {
+            $startTime = [datetime]'2026-09-12T19:45:52Z'
+            $endTime = [datetime]'2026-09-12T19:46:03Z'
+            Mock Get-Service { [pscustomobject]@{ Status = 'Running' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-CimInstance { [pscustomobject]@{ Name = 'appid'; State = 'Running'; StartMode = 'Auto'; Status = 'OK' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-AppLockerPolicy { $null } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathAppLockerEventChannel {
+                [pscustomobject][ordered]@{ channelExists = $true; channelEnabled = $true; status = 'observed'; reason = $null; exception = $null }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                param($FilterHashtable, $ListLog)
+                if ($PSBoundParameters.ContainsKey('ListLog')) {
+                    return [pscustomobject]@{ IsEnabled = $true }
+                }
+                return @()
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativePowerShellEventQuery {
+                param($LogName, $EventId, $StartTime, $EndTime)
+                [pscustomobject][ordered]@{
+                    status = if ($EventId -eq 8020) { 'QUERY_FAILED' } else { 'QUERY_SUCCEEDED_NO_MATCHES' }
+                    channel = $LogName
+                    logName = $LogName
+                    eventId = $EventId
+                    startTime = $StartTime
+                    endTime = $EndTime
+                    channelExists = $true
+                    queryAttempted = $true
+                    querySucceeded = $EventId -ne 8020
+                    eventCount = 0
+                    exception = if ($EventId -eq 8020) { [pscustomobject]@{ type = 'System.TimeoutException'; fullyQualifiedErrorId = 'native-query-timeout'; hResult = -1; safeReason = 'event-query-failed' } } else { $null }
+                    reason = if ($EventId -eq 8020) { 'event-log-unreadable' } else { $null }
+                    runtime = [pscustomobject]@{ edition = 'Core'; version = '7.6.5'; bitness = '64-bit'; processId = 4321 }
+                }
+            } -ModuleName BrowserBoundaryProbe
+
+            $snapshot = InModuleScope BrowserBoundaryProbe -Parameters @{ StartTime = $startTime; EndTime = $endTime } {
+                param($StartTime, $EndTime)
+                $command = Get-Command -Name Get-OpenPathEnforcementObserverSnapshot -ErrorAction SilentlyContinue
+                if (-not $command) { return $null }
+                & $command -Phase 'after-launch' -WindowStart $StartTime -WindowEnd $EndTime -IncludeEventQueries
+            }
+
+            $snapshot | Should -Not -BeNullOrEmpty
+            @($snapshot.appLocker.queries.Keys | Sort-Object) | Should -Be @('8002', '8004', '8020', '8022')
+            foreach ($eventId in @('8002', '8004', '8020', '8022')) {
+                $snapshot.appLocker.queries[$eventId].startTime | Should -Be $startTime.ToUniversalTime().ToString('o')
+                $snapshot.appLocker.queries[$eventId].endTime | Should -Be $endTime.ToUniversalTime().ToString('o')
+                $snapshot.appLocker.queries[$eventId].nativePowerShellComparison.startTime | Should -Be $startTime.ToUniversalTime().ToString('o')
+                $snapshot.appLocker.queries[$eventId].nativePowerShellComparison.endTime | Should -Be $endTime.ToUniversalTime().ToString('o')
+            }
+            $snapshot.appLocker.queries.'8002'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            $snapshot.appLocker.queries.'8002'.nativePowerShellComparison.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            $snapshot.appLocker.queries.'8020'.nativePowerShellComparison.status | Should -Be 'QUERY_FAILED'
+            $snapshot.appLocker.queries.'8020'.nativePowerShellComparison.querySucceeded | Should -BeFalse
+            Should -Invoke Get-WinEvent -ModuleName BrowserBoundaryProbe -Times 4 -ParameterFilter {
+                $FilterHashtable -and
+                    $FilterHashtable.StartTime -eq ([datetime]'2026-09-12T19:45:52Z') -and
+                    $FilterHashtable.EndTime -eq ([datetime]'2026-09-12T19:46:03Z')
+            }
+            Should -Invoke Invoke-OpenPathNativePowerShellEventQuery -ModuleName BrowserBoundaryProbe -Times 4 -ParameterFilter {
+                $StartTime -eq ([datetime]'2026-09-12T19:45:52Z') -and
+                    $EndTime -eq ([datetime]'2026-09-12T19:46:03Z')
+            }
+            ($snapshot | ConvertTo-Json -Depth 12) | Should -Not -Match 'Message|secret|Password'
+        }
+
         It 'keeps task identity and bounded TaskScheduler/Security logon evidence explicit' {
             $probeModule = Get-Content (Join-Path $PSScriptRoot ".." ".." "tests" "e2e" "ci" "BrowserBoundaryProbe.psm1") -Raw
 
@@ -1251,6 +1480,130 @@ Describe "Windows Browser Boundary CI Probes" {
                 $contract.edge.PSObject.Properties.Name | Should -Contain $_
             }
             ($contract | ConvertTo-Json -Depth 10) | Should -Not -Match 'secret|Password'
+        }
+
+        It 'preserves enforcement observations through flat and real writer JSON roundtrips' {
+            $enforcementObservation = [pscustomobject][ordered]@{
+                before = [pscustomobject][ordered]@{
+                    phase = 'before-launch'
+                    appIdSvc = [pscustomobject][ordered]@{ serviceState = 'Running'; running = $true }
+                }
+                after = [pscustomobject][ordered]@{
+                    phase = 'after-launch'
+                    appLocker = [pscustomobject][ordered]@{
+                        queries = [ordered]@{
+                            '8002' = [pscustomobject][ordered]@{ status = 'QUERY_SUCCEEDED_NO_MATCHES'; querySucceeded = $true }
+                        }
+                    }
+                }
+            }
+            $evidence = [pscustomobject][ordered]@{
+                executableName = 'msedge.exe'
+                executablePath = 'C:\msedge.exe'
+                studentSid = 'S-1-5-21-student-sid'
+                failureCode = 'exact-student-process-observed-without-block-event'
+                expectedEventIds = @(8004)
+                samGroupName = 'OpenPath-Restricted'
+                samGroupSid = 'S-1-5-21-openpath-restricted'
+                samGroupMemberPresent = $true
+                samGroupMemberCount = 1
+                processes = @()
+                events = @()
+                matchedEvent = $null
+                enforcementObservation = $enforcementObservation
+            }
+
+            $contract = Get-OpenPathFlatEdgeBoundaryFailureContract -Evidence $evidence
+            $contract.edge.enforcementObservation.before.appIdSvc.running | Should -BeTrue
+            $contract.edgeEnforcementObservation.after.appLocker.queries.'8002'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+
+            $reportPath = Join-Path $TestDrive 'enforcement-observation-roundtrip.json'
+            Write-OpenPathBrowserBoundaryReport -Report ([pscustomobject]@{ edge = $contract.edge; edgeEnforcementObservation = $contract.edgeEnforcementObservation }) -Path $reportPath
+            $roundTrip = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+            $roundTrip.edge.enforcementObservation.before.appIdSvc.running | Should -BeTrue
+            $roundTrip.edgeEnforcementObservation.after.appLocker.queries.'8002'.querySucceeded | Should -BeTrue
+            ($roundTrip | ConvertTo-Json -Depth 12) | Should -Not -Match 'Message|secret|Password|<AppLockerPolicy'
+        }
+
+        It 'preserves deep repeat enforcement evidence through the real browser writer' {
+            $nativeComparison = [pscustomobject][ordered]@{
+                status = 'QUERY_SUCCEEDED_NO_MATCHES'
+                runtime = [pscustomobject][ordered]@{ edition = 'Desktop'; version = '5.1.26100'; bitness = '64-bit'; processId = 7780 }
+                exception = [pscustomobject][ordered]@{ type = 'System.InvalidOperationException'; fullyQualifiedErrorId = 'event-query-failed'; hResult = -1; safeReason = 'event-query-failed' }
+            }
+            $observation = [pscustomobject][ordered]@{
+                before = [pscustomobject][ordered]@{ phase = 'before-launch' }
+                after = [pscustomobject][ordered]@{
+                    phase = 'after-launch'
+                    appLocker = [pscustomobject][ordered]@{
+                        queries = [ordered]@{
+                            '8002' = [pscustomobject][ordered]@{
+                                status = 'QUERY_SUCCEEDED_NO_MATCHES'
+                                nativePowerShellComparison = $nativeComparison
+                            }
+                        }
+                    }
+                }
+            }
+            $report = [pscustomobject][ordered]@{
+                edgeBoundaryEvidence = [pscustomobject][ordered]@{
+                    initial = [pscustomobject][ordered]@{ enforcementObservation = $observation }
+                    repeat = [pscustomobject][ordered]@{
+                        attempts = @([pscustomobject][ordered]@{
+                                evidence = [pscustomobject][ordered]@{
+                                    edge = [pscustomobject][ordered]@{ enforcementObservation = $observation }
+                                }
+                            })
+                    }
+                }
+            }
+            $reportPath = Join-Path $TestDrive 'deep-enforcement-observation.json'
+            Write-OpenPathBrowserBoundaryReport -Report $report -Path $reportPath
+            $roundTrip = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+            $roundTrip.edgeBoundaryEvidence.repeat.attempts[0].evidence.edge.enforcementObservation.after.appLocker.queries.'8002'.nativePowerShellComparison.runtime.edition | Should -Be 'Desktop'
+            $roundTrip.edgeBoundaryEvidence.repeat.attempts[0].evidence.edge.enforcementObservation.after.appLocker.queries.'8002'.nativePowerShellComparison.exception.safeReason | Should -Be 'event-query-failed'
+            (Get-Content -LiteralPath $reportPath -Raw) | Should -Not -Match 'Message|secret|Password'
+        }
+
+        It 'does not emit the native process cleanup wait result' {
+            $sourcePath = Join-Path $PSScriptRoot "..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1"
+            $tokens = $parseErrors = $null
+            $moduleAst = [System.Management.Automation.Language.Parser]::ParseFile($sourcePath, [ref]$tokens, [ref]$parseErrors)
+            $functionAst = $moduleAst.Find({
+                    param($node)
+                    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                        $node.Name -eq 'Invoke-OpenPathNativePowerShellEventQuery'
+                }, $true)
+            $tryAst = $functionAst.Find({
+                    param($node)
+                    $node -is [System.Management.Automation.Language.TryStatementAst]
+                }, $true)
+            $cleanupText = $tryAst.Finally.Extent.Text.Trim()
+            $cleanupScript = [scriptblock]::Create($cleanupText.Substring(1, $cleanupText.Length - 2))
+            $nativeProcess = [pscustomobject]@{ HasExited = $true; WaitForExitCalls = 0; Disposed = $false }
+            Add-Member -InputObject $nativeProcess -MemberType ScriptMethod -Name WaitForExit -Value {
+                param($Milliseconds)
+                $this.WaitForExitCalls++
+                return $true
+            }
+            Add-Member -InputObject $nativeProcess -MemberType ScriptMethod -Name Dispose -Value {
+                [void]($this.Disposed = $true)
+            }
+            $scriptPath = Join-Path $TestDrive 'native-cleanup.ps1'
+            $stdoutPath = Join-Path $TestDrive 'native-cleanup.out.json'
+            $stderrPath = Join-Path $TestDrive 'native-cleanup.err.log'
+            Set-Content -LiteralPath $scriptPath -Value 'temporary'
+            Set-Content -LiteralPath $stdoutPath -Value '{}'
+            Set-Content -LiteralPath $stderrPath -Value 'temporary'
+
+            $emitted = @(& $cleanupScript)
+
+            $emitted.Count | Should -Be 0
+            $nativeProcess.WaitForExitCalls | Should -Be 1
+            $nativeProcess.Disposed | Should -BeTrue
+            Test-Path -LiteralPath $scriptPath | Should -BeFalse
+            Test-Path -LiteralPath $stdoutPath | Should -BeFalse
+            Test-Path -LiteralPath $stderrPath | Should -BeFalse
         }
 
         It 'uses exactly T0, T+5, T+15 and T+30 attempts without reapplying policy' {
@@ -2173,32 +2526,73 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
             ($decision | ConvertTo-Json -Depth 12) | Should -Not -Match 'secret|Password|Exception\.Message'
         }
 
-        It '[Windows direct] queries recent AppLocker 8004 evidence with current and native runtime metadata' -Skip:($script:OpenPathWindowsDirect -ne $true) {
-            $logName = 'Microsoft-Windows-AppLocker/EXE and DLL'
-            $startTime = (Get-Date).AddMinutes(-1)
-            $query = Get-OpenPathAppLockerEventQuery -LogName $logName -EventId 8004 -StartTime $startTime -IncludeNativePowerShellComparison
+        It '[Windows direct] captures effective policy shape and tri-state channel state without raw XML' -Skip:($script:OpenPathWindowsDirect -ne $true) {
+            $startTime = [datetime]::UtcNow.AddSeconds(-1)
+            $endTime = [datetime]::UtcNow
+            $snapshot = InModuleScope BrowserBoundaryProbe -Parameters @{ StartTime = $startTime; EndTime = $endTime } {
+                param($StartTime, $EndTime)
+                Get-OpenPathEnforcementObserverSnapshot -Phase 'before-launch' -WindowStart $StartTime -WindowEnd $EndTime
+            }
 
-            $query.status | Should -BeIn @('QUERY_SUCCEEDED_NO_MATCHES', 'QUERY_FAILED', 'CHANNEL_UNAVAILABLE', 'OBSERVER_RUNTIME_UNSUPPORTED')
-            $query.channel | Should -Be $logName
-            $query.logName | Should -Be $logName
-            $query.eventId | Should -Be 8004
-            $query.startTime | Should -Not -BeNullOrEmpty
-            $query.runtime.edition | Should -Not -BeNullOrEmpty
-            $query.runtime.version | Should -Not -BeNullOrEmpty
-            $query.runtime.bitness | Should -Not -BeNullOrEmpty
-            $query.runtime.processId | Should -Be $PID
-            $query.nativePowerShellComparison | Should -Not -BeNull
-            $query.nativePowerShellComparison.status | Should -Not -BeNullOrEmpty
-            if ($query.nativePowerShellComparison.runtime) {
-                $query.nativePowerShellComparison.runtime.edition | Should -Not -BeNullOrEmpty
-                $query.nativePowerShellComparison.runtime.version | Should -Not -BeNullOrEmpty
-                $query.nativePowerShellComparison.runtime.bitness | Should -Not -BeNullOrEmpty
-                $query.nativePowerShellComparison.runtime.processId | Should -BeGreaterThan 0
+            $snapshot.status | Should -BeIn @('observed', 'unknown')
+            $snapshot.phase | Should -Be 'before-launch'
+            $snapshot.captureStartedAtUtc | Should -Not -BeNullOrEmpty
+            $snapshot.captureCompletedAtUtc | Should -Not -BeNullOrEmpty
+            $snapshot.captureElapsedMilliseconds | Should -BeGreaterOrEqual 0
+            $snapshot.appLocker.policy.source | Should -Be 'Get-AppLockerPolicy -Effective -Xml'
+            $snapshot.appLocker.policy.hashAlgorithm | Should -Be 'SHA256'
+            $snapshot.appLocker.policy.hashScope | Should -Be 'UTF8-AppLockerPolicy-OuterXml'
+            $snapshot.appLocker.policy.querySucceeded | Should -BeIn @($true, $false)
+            if ($snapshot.appLocker.policy.status -eq 'observed') {
+                $snapshot.appLocker.policy.policySha256 | Should -Match '^[0-9a-f]{64}$'
+                @($snapshot.appLocker.policy.ruleCollections).Count | Should -BeGreaterOrEqual 0
             }
-            else {
-                $query.nativePowerShellComparison.reason | Should -Not -BeNullOrEmpty
+            foreach ($channel in @($snapshot.appLocker.channels.exeAndDll, $snapshot.appLocker.channels.packagedAppExecution)) {
+                $channel.channelEnabled | Should -BeIn @($true, $false, $null)
             }
-            ($query | ConvertTo-Json -Depth 12) | Should -Not -Match 'secret|Password|Exception\.Message'
+            ($snapshot | ConvertTo-Json -Depth 14) | Should -Not -Match '<AppLockerPolicy|<RuleCollection|Message|secret|Password'
+        }
+
+        It '[Windows direct] queries both AppLocker channels with a fixed window and preserves the default open end' -Skip:($script:OpenPathWindowsDirect -ne $true) {
+            $startTime = [datetime]'2099-01-01T00:00:00Z'
+            $endTime = [datetime]'2099-01-01T00:01:00Z'
+            $queries = foreach ($logName in @('Microsoft-Windows-AppLocker/EXE and DLL', 'Microsoft-Windows-AppLocker/Packaged app-Execution')) {
+                $eventIds = if ($logName -like '*Packaged*') { @(8020, 8022) } else { @(8002, 8004) }
+                foreach ($eventId in $eventIds) {
+                    $query = Get-OpenPathAppLockerEventQuery -LogName $logName -EventId $eventId -StartTime $startTime -EndTime $endTime -IncludeNativePowerShellComparison
+                    $query.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+                    $query.querySucceeded | Should -BeTrue
+                    $query.channel | Should -Be $logName
+                    $query.logName | Should -Be $logName
+                    $query.eventId | Should -Be $eventId
+                    $query.startTime | Should -Be $startTime
+                    $query.endTime | Should -Be $endTime
+                    $query.runtime.edition | Should -Not -BeNullOrEmpty
+                    $query.runtime.version | Should -Not -BeNullOrEmpty
+                    $query.runtime.bitness | Should -Not -BeNullOrEmpty
+                    $query.runtime.processId | Should -Be $PID
+                    $native = $query.nativePowerShellComparison
+                    $native | Should -Not -BeNull
+                    @($native).Count | Should -Be 1
+                    $native.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+                    $native.querySucceeded | Should -BeTrue
+                    $native.channel | Should -Be $logName
+                    ([datetime]$native.startTime).ToUniversalTime() | Should -Be $startTime
+                    ([datetime]$native.endTime).ToUniversalTime() | Should -Be $endTime
+                    $native.runtime.edition | Should -Be 'Desktop'
+                    $native.runtime.bitness | Should -Be '64-bit'
+                    $native.runtime.processId | Should -BeGreaterThan 0
+                    $query
+                }
+            }
+            @($queries).Count | Should -Be 4
+            $defaultQuery = Get-OpenPathAppLockerEventQuery -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -EventId 8004 -StartTime $startTime -IncludeNativePowerShellComparison
+            $defaultQuery.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            $defaultQuery.querySucceeded | Should -BeTrue
+            $defaultQuery.endTime | Should -BeNullOrEmpty
+            $defaultQuery.nativePowerShellComparison.endTime | Should -BeNullOrEmpty
+            $defaultQuery.nativePowerShellComparison.querySucceeded | Should -BeTrue
+            ($queries + $defaultQuery | ConvertTo-Json -Depth 12) | Should -Not -Match 'secret|Password|Exception\.Message'
         }
     }
 }

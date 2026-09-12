@@ -196,6 +196,10 @@ Describe 'Canonical offline installer disposable target' {
             processes = @([pscustomobject]@{ processId = 5436; restrictedGroupPresent = $null; restrictedGroupQueryStatus = 'unavailable' })
             events = @(); matchedEvent = $null; appLocker8002 = $null; appLocker8004 = $null; appLocker8020 = $false; appLocker8022 = $false
             testAppLockerPolicyDecision = [pscustomobject]@{ status = 'observed'; decision = 'Denied' }
+            enforcementObservation = [pscustomobject][ordered]@{
+                before = [pscustomobject][ordered]@{ phase = 'before-launch'; status = 'observed'; appIdSvc = [pscustomobject]@{ running = $true } }
+                after = [pscustomobject][ordered]@{ phase = 'after-launch'; status = 'unknown'; reason = 'enforcement-observer-failed' }
+            }
         }
         $exception = [InvalidOperationException]::new('boundary-edge-execution-failed')
         $exception.Data['OpenPathEdgeBoundaryEvidence'] = $initial
@@ -216,6 +220,8 @@ Describe 'Canonical offline installer disposable target' {
 
         $resolved.initial.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
         $resolved.initial.processes[0].restrictedGroupPresent | Should -BeNullOrEmpty
+        $resolved.initial.enforcementObservation.before.phase | Should -Be 'before-launch'
+        $resolved.initial.enforcementObservation.after.reason | Should -Be 'enforcement-observer-failed'
         $resolved.repeat.attempts[1].elapsedSeconds | Should -Be 5.4
         $resolved.contract.edgeFailureCode | Should -Be 'exact-student-process-observed-without-block-event'
         ($resolved | ConvertTo-Json -Depth 12) | Should -Not -Match 'must-not-serialize|Password|UserName'
@@ -313,6 +319,26 @@ Describe 'Canonical offline installer disposable target' {
                         eventCount = 0
                         exception = $null
                     }
+                }) `
+                -EnforcementObservation ([pscustomobject][ordered]@{
+                    before = [pscustomobject][ordered]@{
+                        phase = 'before-launch'
+                        status = 'observed'
+                        appIdSvc = [pscustomobject]@{ running = $false }
+                    }
+                    after = [pscustomobject][ordered]@{
+                        phase = 'after-launch'
+                        status = 'observed'
+                        appLocker = [pscustomobject][ordered]@{
+                            policy = [pscustomobject]@{ hashAlgorithm = 'SHA256'; hashScope = 'UTF8-AppLockerPolicy-OuterXml' }
+                            queries = [ordered]@{
+                                '8004' = [pscustomobject][ordered]@{
+                                    status = 'QUERY_SUCCEEDED_NO_MATCHES'
+                                    nativePowerShellComparison = [pscustomobject]@{ status = 'QUERY_SUCCEEDED_NO_MATCHES' }
+                                }
+                            }
+                        }
+                    }
                 }) | Out-Null
         }
 
@@ -327,6 +353,8 @@ Describe 'Canonical offline installer disposable target' {
         $flat.edge.eventQueries.'8020'.correlationStatus | Should -Be 'CORRELATION_FAILED'
         $flat.edge.eventQueries.'8020'.correlationException.safeReason | Should -Be 'event-correlation-failed'
         $flat.edge.appLocker8020 | Should -BeNullOrEmpty
+        $flat.edge.enforcementObservation.before.appIdSvc.running | Should -BeFalse
+        $flat.edgeEnforcementObservation.after.appLocker.queries.'8004'.nativePowerShellComparison.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
         @($flat.edge.eventQueries.Keys | Sort-Object) | Should -Be @('8002', '8004', '8020', '8022')
 
         Mock Start-Sleep {} -ModuleName BrowserBoundaryProbe
@@ -374,6 +402,8 @@ Describe 'Canonical offline installer disposable target' {
         $roundTrip.edgeBoundaryEvidence.initial.appLocker8002 | Should -BeTrue
         $roundTrip.edgeBoundaryEvidence.initial.appLocker8004 | Should -BeNullOrEmpty
         $roundTrip.edgeBoundaryEvidence.initial.appLocker8020 | Should -BeNullOrEmpty
+        $roundTrip.edgeBoundaryEvidence.initial.enforcementObservation.before.appIdSvc.running | Should -BeFalse
+        $roundTrip.edgeBoundaryEvidence.initial.enforcementObservation.after.appLocker.queries.'8004'.nativePowerShellComparison.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
         $roundTrip.edgeBoundaryEvidence.initial.appLockerQueryStatuses.'8004' | Should -Be 'failed'
         $roundTrip.edgeBoundaryEvidence.repeat.attempts[3].offsetSeconds | Should -Be 30
         $roundTrip.cleanupSucceeded | Should -BeFalse

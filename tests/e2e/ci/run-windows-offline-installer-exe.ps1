@@ -58,7 +58,7 @@ function Write-SafeEvidence {
     }
     $parent = Split-Path -Parent $Path
     if ($parent -and -not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-    $Payload | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $Path -Encoding UTF8
+    $Payload | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
 function Assert-EqualValue {
@@ -891,6 +891,7 @@ catch {
             appLocker8004 = $edgeFailureContract.edge.appLocker8004
             appLocker8020 = $edgeFailureContract.edge.appLocker8020
             appLocker8022 = $edgeFailureContract.edge.appLocker8022
+            enforcementObservation = $edgeFailureContract.edge.enforcementObservation
         }
     }
     else { $null }
@@ -929,6 +930,7 @@ catch {
         edgeTokenObserver = if ($edgeFailureContract) { $edgeFailureContract.edgeTokenObserver } else { $null }
         edgePolicyObserver = if ($edgeFailureContract) { $edgeFailureContract.edgePolicyObserver } else { $null }
         edgeAppLockerEventQueries = if ($edgeFailureContract) { $edgeFailureContract.edgeAppLockerEventQueries } else { $null }
+        edgeEnforcementObservation = if ($edgeFailureContract) { $edgeFailureContract.edgeEnforcementObservation } else { $null }
         edgeTaskRegisteredAtUtc = if ($edgeFailureContract) { $edgeFailureContract.edgeTaskRegisteredAtUtc } else { $null }
         edgeEventId = if ($edgeFailureContract) { $edgeFailureContract.edgeEventId } else { $null }
         edgeEventProcessId = if ($edgeFailureContract) { $edgeFailureContract.edgeEventProcessId } else { $null }

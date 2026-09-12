@@ -476,6 +476,8 @@ Describe "Offline installer" {
                 'edgeTokenObserver',
                 'edgePolicyObserver',
                 'edgeAppLockerEventQueries',
+                'enforcementObservation',
+                'edgeEnforcementObservation',
                 'Write-SafeEvidence -Payload $failure -Path $EvidencePath'
             )
             $disposableTarget = Get-Content (Join-Path $PSScriptRoot '..' '..' 'tests' 'e2e' 'ci' 'DisposableWindowsTarget.psm1') -Raw
@@ -592,6 +594,16 @@ Describe "Offline installer" {
                                 events = @()
                             }
                         }
+                        enforcementObservation = [ordered]@{
+                            before = [ordered]@{ phase = 'before-launch'; status = 'observed'; appIdSvc = [ordered]@{ running = $true } }
+                            after = [ordered]@{
+                                phase = 'after-launch'; status = 'unknown'; reason = 'enforcement-observer-failed'
+                                appLocker = [ordered]@{
+                                    policy = [ordered]@{ hashAlgorithm = 'SHA256'; hashScope = 'UTF8-AppLockerPolicy-OuterXml' }
+                                    queries = [ordered]@{ '8004' = [ordered]@{ status = 'QUERY_SUCCEEDED_NO_MATCHES'; querySucceeded = $true; nativePowerShellComparison = [ordered]@{ status = 'QUERY_SUCCEEDED_NO_MATCHES' } } }
+                                }
+                            }
+                        }
                     }
                     repeat = [ordered]@{ attempts = @([ordered]@{ label = 'T+5'; elapsedSeconds = 5.7; taskName = 'edge-t5'; evidence = [ordered]@{ appLocker8004 = $null; queryStatus = 'failed' } }) }
                 }
@@ -617,6 +629,8 @@ Describe "Offline installer" {
             $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8002'.correlationException.safeReason | Should -Be 'event-correlation-failed'
             $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8020'.status | Should -Be 'QUERY_FAILED'
             $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8022'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            $roundTrip.edgeBoundaryEvidence.initial.enforcementObservation.before.appIdSvc.running | Should -BeTrue
+            $roundTrip.edgeBoundaryEvidence.initial.enforcementObservation.after.appLocker.queries.'8004'.nativePowerShellComparison.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
             $roundTrip.edgeBoundaryEvidence.repeat.attempts[0].elapsedSeconds | Should -Be 5.7
             $roundTrip.edgeBoundaryEvidence.repeat.attempts[0].evidence.queryStatus | Should -Be 'failed'
             $roundTrip.cleanupSucceeded | Should -BeFalse

@@ -314,7 +314,7 @@ function Resolve-OpenPathDisposableEdgeBoundaryFailure {
     # Detach the primary observation before any later diagnostic can mutate
     # module-scoped probe state. This object contains only the bounded fields
     # already allowlisted by BrowserBoundaryProbe.
-    $initialSnapshot = $initial | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    $initialSnapshot = $initial | ConvertTo-Json -Depth 14 | ConvertFrom-Json
     $repeat = $null
     if ($Target -and $Target.UserName -and $Target.Password) {
         try {
@@ -345,7 +345,7 @@ function Write-OpenPathOfflineInstallerEvidence {
     if ($parent -and -not (Test-Path -LiteralPath $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    $Payload | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $Path -Encoding UTF8
+    $Payload | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
 function New-OpenPathDisposableEdgeBoundaryException {
@@ -383,7 +383,7 @@ function Invoke-OpenPathInstalledBoundaryProbes {
         Remove-Item -LiteralPath $studentFirefoxProfile -Recurse -Force -ErrorAction SilentlyContinue
     }
     try {
-        $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid -PackagedAppPattern 'MicrosoftEdge|Microsoft\.MicrosoftEdge|msedge'
+    $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid -PackagedAppPattern 'MicrosoftEdge|Microsoft\.MicrosoftEdge|msedge' -CaptureEnforcementDiagnostics
     }
     catch {
         throw (New-OpenPathDisposableEdgeBoundaryException)

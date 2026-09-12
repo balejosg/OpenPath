@@ -212,7 +212,7 @@ function Invoke-StudentBoundaryTask {
         if (-not $edgeExe) {
             throw "Microsoft Edge executable is required on Windows platform but was not found."
         }
-        $edgeProbeResult = Invoke-StudentExecutableTaskProbe -ProbeName 'Edge Google game URL cannot run as student' -UserName $UserName -Password $Password -ExecutablePath $edgeExe -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName 'msedge' -StudentSid $studentSid
+        $edgeProbeResult = Invoke-StudentExecutableTaskProbe -ProbeName 'Edge Google game URL cannot run as student' -UserName $UserName -Password $Password -ExecutablePath $edgeExe -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName 'msedge' -StudentSid $studentSid -CaptureEnforcementDiagnostics
 
         $compiledPayloadPath = Join-Path $StudentArtifacts 'compiled-probe-arbitrary.exe'
         New-OpenPathProbePayloadBinary -OutputPath $compiledPayloadPath
