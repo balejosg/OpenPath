@@ -1978,9 +1978,27 @@ function Merge-OpenPathBoundedEvidence {
         [ValidateSet('process', 'event')][string]$Kind = 'event'
     )
 
+    $allItems = @($Existing) + @($Incoming)
+    $priorityItems = @()
+    if ($Kind -eq 'event') {
+        $reservedEventIds = @{}
+        foreach ($item in $allItems) {
+            $fullyCorrelated = $item.PSObject.Properties['pidMatched'] -and [bool]$item.pidMatched -and
+                $item.PSObject.Properties['nameMatched'] -and [bool]$item.nameMatched -and
+                $item.PSObject.Properties['pathMatched'] -and [bool]$item.pathMatched -and
+                $item.PSObject.Properties['sidMatched'] -and [bool]$item.sidMatched -and
+                $item.PSObject.Properties['packageMatched'] -and [bool]$item.packageMatched
+            $eventId = if ($item.PSObject.Properties['id']) { [string]$item.id } else { '' }
+            if ($fullyCorrelated -and $eventId -and -not $reservedEventIds.ContainsKey($eventId)) {
+                $reservedEventIds[$eventId] = $true
+                $priorityItems += $item
+            }
+        }
+    }
+
     $merged = @()
     $seen = @{}
-    foreach ($item in @($Existing) + @($Incoming)) {
+    foreach ($item in @($priorityItems) + $allItems) {
         if ($merged.Count -ge 32) { break }
         $key = if ($Kind -eq 'process') {
             "$($item.processId)|$($item.executablePath)"

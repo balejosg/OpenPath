@@ -960,6 +960,131 @@ Describe "Windows Browser Boundary CI Probes" {
             Should -Invoke Stop-Process -ModuleName BrowserBoundaryProbe -Times 1
         }
 
+        It 'retains one correlated 8002 and 8020 event through a saturated bounded report' {
+            $expectedPath = 'C:\msedge.exe'
+            $studentSid = 'S-1-5-21-student-sid'
+            $noise8002 = @(0..31 | ForEach-Object {
+                    [pscustomobject]@{
+                        Id = 8002
+                        FilePath = "C:\noise\allow-$_.exe"
+                        UserSid = 'S-1-5-21-other-sid'
+                        ProcessId = 6000 + $_
+                        PackageName = 'Other.Package'
+                        RuleId = "noise-8002-$_"
+                    }
+                })
+            $noise8020 = @(0..31 | ForEach-Object {
+                    [pscustomobject]@{
+                        Id = 8020
+                        FilePath = "C:\noise\package-$_.exe"
+                        UserSid = 'S-1-5-21-other-sid'
+                        ProcessId = 7000 + $_
+                        PackageName = 'Other.Package'
+                        RuleId = "noise-8020-$_"
+                    }
+                })
+            $exact8002 = [pscustomobject]@{
+                Id = 8002
+                FilePath = $expectedPath
+                UserSid = $studentSid
+                ProcessId = 4242
+                PackageName = 'Microsoft.MicrosoftEdge.Stable'
+                RuleId = 'exact-8002'
+            }
+            $exact8020 = [pscustomobject]@{
+                Id = 8020
+                FilePath = $expectedPath
+                UserSid = $studentSid
+                ProcessId = 4242
+                PackageName = 'Microsoft.MicrosoftEdge.Stable'
+                RuleId = 'exact-8020'
+            }
+            $reportPath = Join-Path $TestDrive 'saturated-browser-boundary-report.json'
+
+            $transport = InModuleScope BrowserBoundaryProbe -Parameters @{
+                Noise8002 = $noise8002
+                Noise8020 = $noise8020
+                Exact8002 = $exact8002
+                Exact8020 = $exact8020
+                ExpectedPath = $expectedPath
+                StudentSid = $studentSid
+            } {
+                param($Noise8002, $Noise8020, $Exact8002, $Exact8020, $ExpectedPath, $StudentSid)
+
+                $correlation8002 = Get-OpenPathCorrelatedAppLockerEvent `
+                    -Events @($Noise8002 + $Exact8002) `
+                    -AllowedEventIds @(8002) `
+                    -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' `
+                    -BinaryLeaf 'msedge.exe' `
+                    -ExpectedExecutablePath $ExpectedPath `
+                    -StudentSid $StudentSid `
+                    -ProcessIds @(4242)
+                $correlation8020 = Get-OpenPathCorrelatedAppLockerEvent `
+                    -Events @($Noise8020 + $Exact8020) `
+                    -AllowedEventIds @(8020) `
+                    -LogName 'Microsoft-Windows-AppLocker/Packaged app-Execution' `
+                    -BinaryLeaf 'msedge.exe' `
+                    -ExpectedExecutablePath $ExpectedPath `
+                    -StudentSid $StudentSid `
+                    -ProcessIds @(4242) `
+                    -PackagedAppPattern 'MicrosoftEdge|Edge'
+
+                $cachedUncorrelated = $correlation8002.candidates[-1] | Select-Object *
+                $cachedUncorrelated.sidMatched = $false
+                $existing = @(@($correlation8002.candidates | Select-Object -First 31) + @($cachedUncorrelated))
+                $merged = Merge-OpenPathBoundedEvidence `
+                    -Existing $existing `
+                    -Incoming @($correlation8002.candidates) `
+                    -Kind event
+                $merged = Merge-OpenPathBoundedEvidence `
+                    -Existing $merged `
+                    -Incoming @($correlation8020.candidates) `
+                    -Kind event
+
+                $evidence = Set-OpenPathBoundaryProbeFailureEvidence `
+                    -ProbeName 'Saturated event evidence probe' `
+                    -ExecutablePath $ExpectedPath `
+                    -StudentSid $StudentSid `
+                    -FailureCode 'appLocker-allow-event-not-observed' `
+                    -Events $merged `
+                    -ExpectedEventIds @(8002, 8020) `
+                    -AppLockerQueryStatuses @{ '8002' = 'QUERY_SUCCEEDED_MATCHES'; '8020' = 'QUERY_SUCCEEDED_MATCHES' } `
+                    -AppLockerEventQueries @{
+                        '8002' = [pscustomobject]@{ status = 'QUERY_SUCCEEDED_MATCHES' }
+                        '8020' = [pscustomobject]@{ status = 'QUERY_SUCCEEDED_MATCHES' }
+                    }
+                [pscustomobject]@{
+                    evidence = $evidence
+                    merged = $merged
+                    correlation8002 = $correlation8002
+                    correlation8020 = $correlation8020
+                }
+            }
+
+            $transport.correlation8002.matched | Should -BeTrue
+            $transport.correlation8020.matched | Should -BeTrue
+            $transport.correlation8002.candidates.Count | Should -Be 33
+            $transport.correlation8020.candidates.Count | Should -Be 33
+            $transport.merged.Count | Should -Be 32
+            @($transport.merged | Where-Object { $_.id -eq 8002 -and $_.pidMatched -and $_.nameMatched -and $_.pathMatched -and $_.sidMatched -and $_.packageMatched }).Count | Should -Be 1
+            @($transport.merged | Where-Object { $_.id -eq 8020 -and $_.pidMatched -and $_.nameMatched -and $_.pathMatched -and $_.sidMatched -and $_.packageMatched }).Count | Should -Be 1
+            $transport.evidence.appLocker8002 | Should -BeTrue
+            $transport.evidence.appLocker8020 | Should -BeTrue
+
+            $report = [pscustomobject][ordered]@{
+                results = @([pscustomobject][ordered]@{
+                        name = 'Saturated event evidence probe'
+                        status = 'fail'
+                        evidence = $transport.evidence
+                    })
+            }
+            Write-OpenPathBrowserBoundaryReport -Report $report -Path $reportPath
+            $roundTrip = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+            $roundTrip.results[0].evidence.appLocker8002 | Should -BeTrue
+            $roundTrip.results[0].evidence.appLocker8020 | Should -BeTrue
+            @($roundTrip.results[0].evidence.events | Where-Object { $_.id -in @(8002, 8020) -and $_.sidMatched -and $_.pathMatched }).Count | Should -Be 2
+        }
+
         It 'accepts the packaged-app 8020 allow event and keeps the evidence credential-free' {
             $testExe = Join-Path $TestDrive 'msedge.exe'
             Set-Content -LiteralPath $testExe -Value 'dummy'
