@@ -610,10 +610,15 @@ Describe "Windows Browser Boundary CI Probes" {
             Mock Invoke-CimMethod { [pscustomobject]@{ Sid = 'S-1-5-21-student-sid' } } -ModuleName BrowserBoundaryProbe
             Mock Get-WinEvent { @() } -ModuleName BrowserBoundaryProbe
             Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathEnforcementObserverSnapshot {
+                param($Phase)
+                [pscustomobject][ordered]@{ phase = $Phase; appLocker = [pscustomobject]@{ queries = [ordered]@{} } }
+            } -ModuleName BrowserBoundaryProbe
 
-            { Invoke-StudentExecutableTaskProbe -ProbeName 'Exact Edge identity probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName msedge -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 } |
+            { Invoke-StudentExecutableTaskProbe -ProbeName 'Exact Edge identity probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName msedge -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 -CaptureEnforcementDiagnostics } |
                 Should -Throw '*AppLocker 8004 block event was not observed*'
             Should -Invoke Stop-Process -ModuleName BrowserBoundaryProbe -Times 0
+            (Get-OpenPathLastBoundaryProbeFailureEvidence).enforcementObservation.after.captureContext | Should -Be 'post-outcome'
         }
 
         It 'collects the correlated block event before classifying a transient exact process' {
@@ -627,10 +632,15 @@ Describe "Windows Browser Boundary CI Probes" {
                 [pscustomobject]@{ Id = 8004; Message = "msedge.exe was prevented from running"; UserId = [pscustomobject]@{ Value = 'S-1-5-21-student-sid' } }
             } -ModuleName BrowserBoundaryProbe
             Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathEnforcementObserverSnapshot {
+                param($Phase)
+                [pscustomobject][ordered]@{ phase = $Phase; appLocker = [pscustomobject]@{ queries = [ordered]@{} } }
+            } -ModuleName BrowserBoundaryProbe
 
-            $result = Invoke-StudentExecutableTaskProbe -ProbeName 'Transient Edge block probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName msedge -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1
+            $result = Invoke-StudentExecutableTaskProbe -ProbeName 'Transient Edge block probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName msedge -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 -CaptureEnforcementDiagnostics
             $result.status | Should -Be 'pass'
             $result.evidence.blockEventId | Should -Be 8004
+            $result.evidence.enforcementObservation.after.captureContext | Should -Be 'after-process-termination-attempt'
         }
 
         It "Passes when ExpectAllowed and marker file is present" {
@@ -973,11 +983,16 @@ Describe "Windows Browser Boundary CI Probes" {
             } -ModuleName BrowserBoundaryProbe
             Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
             Mock Start-Sleep {} -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathEnforcementObserverSnapshot {
+                param($Phase)
+                [pscustomobject][ordered]@{ phase = $Phase; appLocker = [pscustomobject]@{ queries = [ordered]@{} } }
+            } -ModuleName BrowserBoundaryProbe
 
             {
-                Invoke-StudentExecutableTaskProbe -ProbeName 'PID mismatch Edge probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName 'msedge' -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 -SuppressFailureDiagnostics
+                Invoke-StudentExecutableTaskProbe -ProbeName 'PID mismatch Edge probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -ProcessName 'msedge' -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 -SuppressFailureDiagnostics -CaptureEnforcementDiagnostics
             } | Should -Throw '*exact executable msedge.exe ran under the student SID and no correlated AppLocker block event was observed*'
             Should -Invoke Stop-Process -ModuleName BrowserBoundaryProbe -Times 1
+            (Get-OpenPathLastBoundaryProbeFailureEvidence).enforcementObservation.after.captureContext | Should -Be 'after-process-termination-attempt'
         }
 
         It 'retains one correlated 8002 and 8020 event through a saturated bounded report' {

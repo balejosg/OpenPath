@@ -2687,6 +2687,7 @@ function Invoke-StudentExecutableTaskProbe {
 
         if ($Expectation -eq 'ExpectDenied') {
             $eventFound = $false
+            $processTerminationAttempted = $false
             $blockEventId = 0
             $observedExactProcesses = @()
             $observedExactProcessEvidence = @()
@@ -2812,10 +2813,11 @@ function Invoke-StudentExecutableTaskProbe {
                 $observedExactProcesses += @($studentProcesses)
             }
             if ($observedExactProcesses.Count -gt 0) {
+                $processTerminationAttempted = $true
                 foreach ($studentProcess in @($observedExactProcesses | Sort-Object processId -Unique)) { Stop-Process -Id $studentProcess.processId -Force -ErrorAction SilentlyContinue }
                 if (-not $eventFound) {
                     Write-Host 'OPENPATH_BOUNDARY_PROBE_FAILURE reason=exact-student-process-observed-without-block-event'
-                    $enforcementObservation = & $captureEnforcementObservation 'after-process-terminated'
+                    $enforcementObservation = & $captureEnforcementObservation 'after-process-termination-attempt'
                     Set-OpenPathBoundaryProbeFailureEvidence -ProbeName $ProbeName -ExecutablePath $ExecutablePath -StudentSid $StudentSid -FailureCode 'exact-student-process-observed-without-block-event' -Processes $observedExactProcessEvidence -Events $observedEventEvidence -ExpectedEventIds @(8004, 8022) -SamEvidence $samBoundaryEvidence -TaskRegisteredAtUtc $taskRegisteredAtUtc -TaskIdentity $taskIdentityEvidence -TestAppLockerPolicyDecision $testAppLockerPolicyDecision -AppLockerQueryStatuses $appLockerQueryStatuses -AppLockerEventQueries $appLockerEventQueries -EnforcementObservation $enforcementObservation | Out-Null
                     throw "$ProbeName FAILED: exact executable $binaryLeaf ran under the student SID and no correlated AppLocker block event was observed."
                 }
@@ -2844,7 +2846,8 @@ function Invoke-StudentExecutableTaskProbe {
                 throw "$ProbeName FAILED: AppLocker $expectedEvent was not observed for $binaryLeaf within timeout ($TimeoutSeconds s)."
             }
 
-            $enforcementObservation = & $captureEnforcementObservation
+            $enforcementObservationContext = if ($processTerminationAttempted) { 'after-process-termination-attempt' } else { 'post-outcome' }
+            $enforcementObservation = & $captureEnforcementObservation $enforcementObservationContext
             return [pscustomobject]@{
                 name     = $ProbeName
                 section  = 'student'
