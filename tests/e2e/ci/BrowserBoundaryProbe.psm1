@@ -1647,6 +1647,11 @@ function Get-OpenPathSafeAppLockerEventQueryEvidence {
         querySucceeded = $Query.querySucceeded
         eventCount = if ($null -ne $Query.eventCount) { try { [int]$Query.eventCount } catch { 0 } } else { 0 }
         exception = Get-OpenPathSafeObserverExceptionEvidence -Exception $Query.exception
+        correlationStatus = if ($Query.PSObject.Properties['correlationStatus']) { [string]$Query.correlationStatus } else { $null }
+        correlationException = if ($Query.PSObject.Properties['correlationException']) {
+            Get-OpenPathSafeObserverExceptionEvidence -Exception $Query.correlationException
+        }
+        else { $null }
         reason = Get-OpenPathSafeMetadataString -Value $Query.reason
         runtime = Get-OpenPathSafeObserverRuntimeEvidence -Runtime $Query.runtime
         nativePowerShellComparison = if ($NoNativeComparison) { $null } else {
@@ -2016,6 +2021,21 @@ function New-OpenPathAppLockerEventQueryFailure {
     }
 }
 
+function New-OpenPathAppLockerCorrelationFailure {
+    param(
+        [Parameter(Mandatory = $true)][object]$Query,
+        [Parameter(Mandatory = $true)][object]$ErrorRecord
+    )
+
+    $result = [ordered]@{}
+    foreach ($property in $Query.PSObject.Properties) {
+        $result[$property.Name] = $property.Value
+    }
+    $result.correlationStatus = 'CORRELATION_FAILED'
+    $result.correlationException = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $ErrorRecord -SafeReason 'event-correlation-failed'
+    return [pscustomobject]$result
+}
+
 function Set-OpenPathBoundaryProbeFailureEvidence {
     param(
         [Parameter(Mandatory = $true)][string]$ProbeName,
@@ -2065,10 +2085,19 @@ function Set-OpenPathBoundaryProbeFailureEvidence {
         })
     $appLockerFlags = [ordered]@{}
     foreach ($eventId in @(8002, 8004, 8020, 8022)) {
-        $eventObserved = @($Events | Where-Object { [int]$_.id -eq $eventId }).Count -gt 0
+        $eventObserved = @($Events | Where-Object {
+                [int]$_.id -eq $eventId -and
+                $_.PSObject.Properties['pidMatched'] -and [bool]$_.pidMatched -and
+                $_.PSObject.Properties['nameMatched'] -and [bool]$_.nameMatched -and
+                $_.PSObject.Properties['pathMatched'] -and [bool]$_.pathMatched -and
+                $_.PSObject.Properties['sidMatched'] -and [bool]$_.sidMatched -and
+                $_.PSObject.Properties['packageMatched'] -and [bool]$_.packageMatched
+            }).Count -gt 0
         $queryStatus = if ($AppLockerQueryStatuses.ContainsKey([string]$eventId)) { [string]$AppLockerQueryStatuses[[string]$eventId] } else { 'unknown' }
         $querySucceeded = $queryStatus -in @('observed', 'QUERY_SUCCEEDED_NO_MATCHES', 'QUERY_SUCCEEDED_MATCHES')
-        $appLockerFlags["appLocker$eventId"] = if ($eventObserved) { $true } elseif ($querySucceeded) { $false } else { $null }
+        $query = if ($AppLockerEventQueries.ContainsKey([string]$eventId)) { $AppLockerEventQueries[[string]$eventId] } else { $null }
+        $correlationFailed = $query -and $query.PSObject.Properties['correlationStatus'] -and [string]$query.correlationStatus -eq 'CORRELATION_FAILED'
+        $appLockerFlags["appLocker$eventId"] = if ($eventObserved) { $true } elseif ($correlationFailed) { $null } elseif ($querySucceeded) { $false } else { $null }
     }
     $policyDecision = if ($TestAppLockerPolicyDecision) {
         Get-OpenPathSafePolicyObserverEvidence -Observer $TestAppLockerPolicyDecision
@@ -2341,8 +2370,16 @@ function Invoke-StudentExecutableTaskProbe {
                         $appLockerQueryStatuses['8002'] = $allowQuery.status
                         $appLockerEventQueries['8002'] = $allowQuery
                         $allowEvents = @($allowQuery.events)
-                        $allowEvidence = Get-OpenPathCorrelatedAppLockerEvent -Events $allowEvents -AllowedEventIds @(8002) -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -BinaryLeaf $binaryLeaf -ExpectedExecutablePath $ExecutablePath -StudentSid $StudentSid -ProcessIds @($observedExactProcesses | ForEach-Object { [int]$_.processId })
-                        $observedEventEvidence = Merge-OpenPathBoundedEvidence -Existing $observedEventEvidence -Incoming @($allowEvidence.candidates) -Kind event
+                        if ($allowEvents.Count -gt 0) {
+                            try {
+                                $allowEvidence = Get-OpenPathCorrelatedAppLockerEvent -Events $allowEvents -AllowedEventIds @(8002) -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -BinaryLeaf $binaryLeaf -ExpectedExecutablePath $ExecutablePath -StudentSid $StudentSid -ProcessIds @($observedExactProcesses | ForEach-Object { [int]$_.processId })
+                                $observedEventEvidence = Merge-OpenPathBoundedEvidence -Existing $observedEventEvidence -Incoming @($allowEvidence.candidates) -Kind event
+                            }
+                            catch {
+                                $allowQuery = New-OpenPathAppLockerCorrelationFailure -Query $allowQuery -ErrorRecord $_
+                                $appLockerEventQueries['8002'] = $allowQuery
+                            }
+                        }
                     }
                     catch {
                         $appLockerQueryStatuses['8002'] = 'QUERY_FAILED'
@@ -2356,8 +2393,16 @@ function Invoke-StudentExecutableTaskProbe {
                         $appLockerQueryStatuses['8020'] = $packagedAllowQuery.status
                         $appLockerEventQueries['8020'] = $packagedAllowQuery
                         $packagedAllowEvents = @($packagedAllowQuery.events)
-                        $packagedAllowEvidence = Get-OpenPathCorrelatedAppLockerEvent -Events $packagedAllowEvents -AllowedEventIds @(8020) -LogName 'Microsoft-Windows-AppLocker/Packaged app-Execution' -BinaryLeaf $binaryLeaf -ExpectedExecutablePath $ExecutablePath -StudentSid $StudentSid -ProcessIds @($observedExactProcesses | ForEach-Object { [int]$_.processId }) -PackagedAppPattern $PackagedAppPattern
-                        $observedEventEvidence = Merge-OpenPathBoundedEvidence -Existing $observedEventEvidence -Incoming @($packagedAllowEvidence.candidates) -Kind event
+                        if ($packagedAllowEvents.Count -gt 0) {
+                            try {
+                                $packagedAllowEvidence = Get-OpenPathCorrelatedAppLockerEvent -Events $packagedAllowEvents -AllowedEventIds @(8020) -LogName 'Microsoft-Windows-AppLocker/Packaged app-Execution' -BinaryLeaf $binaryLeaf -ExpectedExecutablePath $ExecutablePath -StudentSid $StudentSid -ProcessIds @($observedExactProcesses | ForEach-Object { [int]$_.processId }) -PackagedAppPattern $PackagedAppPattern
+                                $observedEventEvidence = Merge-OpenPathBoundedEvidence -Existing $observedEventEvidence -Incoming @($packagedAllowEvidence.candidates) -Kind event
+                            }
+                            catch {
+                                $packagedAllowQuery = New-OpenPathAppLockerCorrelationFailure -Query $packagedAllowQuery -ErrorRecord $_
+                                $appLockerEventQueries['8020'] = $packagedAllowQuery
+                            }
+                        }
                     }
                     catch {
                         $appLockerQueryStatuses['8020'] = 'QUERY_FAILED'

@@ -323,6 +323,113 @@ Describe "Windows Browser Boundary CI Probes" {
                 }).Count | Should -Be 2
         }
 
+        It 'does not mark uncorrelated AppLocker candidates as observed' {
+            $candidateEvents = @(
+                [pscustomobject]@{ id = 8002; pidMatched = $true; nameMatched = $true; pathMatched = $true; sidMatched = $false; packageMatched = $true }
+                [pscustomobject]@{ id = 8004; pidMatched = $true; nameMatched = $true; pathMatched = $false; sidMatched = $true; packageMatched = $true }
+                [pscustomobject]@{ id = 8020; pidMatched = $false; nameMatched = $true; pathMatched = $true; sidMatched = $true; packageMatched = $true }
+                [pscustomobject]@{ id = 8022; pidMatched = $true; nameMatched = $false; pathMatched = $true; sidMatched = $true; packageMatched = $true }
+            )
+            $queryStatuses = @{
+                '8002' = 'QUERY_SUCCEEDED_MATCHES'
+                '8004' = 'QUERY_SUCCEEDED_MATCHES'
+                '8020' = 'QUERY_SUCCEEDED_MATCHES'
+                '8022' = 'QUERY_SUCCEEDED_MATCHES'
+            }
+            $evidence = InModuleScope BrowserBoundaryProbe -Parameters @{ CandidateEvents = $candidateEvents; QueryStatuses = $queryStatuses } {
+                param($CandidateEvents, $QueryStatuses)
+                Set-OpenPathBoundaryProbeFailureEvidence `
+                    -ProbeName 'Uncorrelated candidate probe' `
+                    -ExecutablePath 'C:\msedge.exe' `
+                    -StudentSid 'S-1-5-21-student-sid' `
+                    -FailureCode 'appLocker-block-event-not-observed' `
+                    -Events $CandidateEvents `
+                    -AppLockerQueryStatuses $QueryStatuses
+            }
+
+            $evidence.appLocker8002 | Should -BeFalse
+            $evidence.appLocker8004 | Should -BeFalse
+            $evidence.appLocker8020 | Should -BeFalse
+            $evidence.appLocker8022 | Should -BeFalse
+        }
+
+        It 'preserves successful allow queries when allow-event correlation fails' {
+            $testExe = Join-Path $TestDrive 'probe-allow-correlation-failure.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            $queryIds = [System.Collections.Generic.List[int]]::new()
+            $studentProcess = [pscustomobject]@{
+                processId = 4242
+                name = 'msedge.exe'
+                executablePath = $testExe
+                matchesStudentSid = $true
+                tokenIdentityVerified = $true
+            }
+
+            Mock Invoke-OpenPathSchtasksCommand { 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathSamBoundaryEvidence { $null } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathTaskIdentityEvidence { [pscustomobject]@{ status = 'unknown' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathTestAppLockerPolicyDecision {
+                [pscustomobject]@{ status = 'unknown'; decision = 'unknown'; path = $testExe; userSid = 'S-1-5-21-student-sid' }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathExactProcessBoundaryEvidence { $studentProcess } -ModuleName BrowserBoundaryProbe
+            Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathAppLockerEventQuery {
+                param([int]$EventId, [string]$LogName, [datetime]$StartTime)
+                [void]$queryIds.Add($EventId)
+                $events = if ($EventId -in @(8002, 8020)) {
+                    @([pscustomobject]@{ Id = $EventId; FilePath = $testExe; PackageName = 'Microsoft.MicrosoftEdge.Stable'; UserSid = 'S-1-5-21-student-sid'; ProcessId = 4242 })
+                }
+                else { @() }
+                [pscustomobject]@{
+                    status = if ($events.Count -gt 0) { 'QUERY_SUCCEEDED_MATCHES' } else { 'QUERY_SUCCEEDED_NO_MATCHES' }
+                    channel = $LogName
+                    logName = $LogName
+                    eventId = $EventId
+                    startTime = $StartTime
+                    channelExists = $true
+                    queryAttempted = $true
+                    querySucceeded = $true
+                    eventCount = $events.Count
+                    events = $events
+                }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathCorrelatedAppLockerEvent {
+                param($AllowedEventIds)
+                if ($AllowedEventIds -contains 8002 -or $AllowedEventIds -contains 8020) {
+                    throw [System.InvalidOperationException]::new('correlation-secret-message')
+                }
+                [pscustomobject]@{ matched = $false; event = $null; candidates = @() }
+            } -ModuleName BrowserBoundaryProbe
+
+            {
+                Invoke-StudentExecutableTaskProbe `
+                    -ProbeName 'Allow correlation failure probe' `
+                    -UserName 'student01' `
+                    -Password 'secret' `
+                    -ExecutablePath $testExe `
+                    -Expectation ExpectDenied `
+                    -ProcessName msedge `
+                    -StudentSid 'S-1-5-21-student-sid' `
+                    -PackagedAppPattern 'MicrosoftEdge|Edge' `
+                    -TimeoutSeconds 1
+            } | Should -Throw '*no correlated AppLocker block event was observed*'
+
+            $failureEvidence = Get-OpenPathLastBoundaryProbeFailureEvidence
+            $failureEvidence.appLockerEventQueries.'8002'.status | Should -Be 'QUERY_SUCCEEDED_MATCHES'
+            $failureEvidence.appLockerEventQueries.'8002'.querySucceeded | Should -BeTrue
+            $failureEvidence.appLockerEventQueries.'8002'.correlationStatus | Should -Be 'CORRELATION_FAILED'
+            $failureEvidence.appLockerEventQueries.'8002'.correlationException.safeReason | Should -Be 'event-correlation-failed'
+            $failureEvidence.appLockerEventQueries.'8002'.correlationException.PSObject.Properties['Message'] | Should -Be $null
+            ($failureEvidence | ConvertTo-Json -Depth 20) | Should -Not -Match 'correlation-secret-message|Password|Message'
+            $failureEvidence.appLockerEventQueries.'8020'.status | Should -Be 'QUERY_SUCCEEDED_MATCHES'
+            $failureEvidence.appLockerEventQueries.'8020'.querySucceeded | Should -BeTrue
+            $failureEvidence.appLockerEventQueries.'8020'.correlationStatus | Should -Be 'CORRELATION_FAILED'
+            $failureEvidence.appLockerEventQueries.'8020'.correlationException.safeReason | Should -Be 'event-correlation-failed'
+            $failureEvidence.appLocker8002 | Should -BeNullOrEmpty
+            $failureEvidence.appLocker8020 | Should -BeNullOrEmpty
+            @($queryIds | Sort-Object -Unique) | Should -Be @(8002, 8004, 8020, 8022)
+        }
+
         It 'emits bounded scheduled-task state when a denied probe has no correlated event' {
             $testExe = Join-Path $TestDrive 'probe-no-event.exe'
             Set-Content -LiteralPath $testExe -Value 'dummy'
@@ -336,11 +443,16 @@ Describe "Windows Browser Boundary CI Probes" {
             Mock Unregister-ScheduledTask {} -ModuleName BrowserBoundaryProbe
             Mock Write-Host {} -ModuleName BrowserBoundaryProbe
             try {
-                { Invoke-StudentExecutableTaskProbe -ProbeName 'No event probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -StudentSid 'S-1-5-21-student-sid' -TimeoutSeconds 1 } |
-                    Should -Throw '*AppLocker 8004 block event was not observed*'
+                { Invoke-StudentExecutableTaskProbe -ProbeName 'No event probe' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -Expectation ExpectDenied -StudentSid 'S-1-5-21-student-sid' -PackagedAppPattern 'MicrosoftEdge|Edge' -TimeoutSeconds 1 } |
+                    Should -Throw '*AppLocker 8004/8022 block event was not observed*'
                 Should -Invoke Write-Host -ModuleName BrowserBoundaryProbe -ParameterFilter {
                     $Object -match '^OPENPATH_BOUNDARY_PROBE_FAILURE state=Ready lastTaskResult=0xC0000022 lastRunObserved=true$'
                 } -Times 1
+                $failureEvidence = Get-OpenPathLastBoundaryProbeFailureEvidence
+                $failureEvidence.appLockerEventQueries.'8002'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+                $failureEvidence.appLockerEventQueries.'8020'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+                $failureEvidence.appLocker8002 | Should -BeFalse
+                $failureEvidence.appLocker8020 | Should -BeFalse
             }
             finally {
                 Remove-Item Env:OPENPATH_TEST_FORCE_SCHEDULED_TASK_CMDLETS -ErrorAction SilentlyContinue

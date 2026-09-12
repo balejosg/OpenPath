@@ -252,7 +252,7 @@ Describe 'Canonical offline installer disposable target' {
                             nativeStages = @([pscustomobject]@{ stage = 'OpenProcessToken'; accessMask = '0x00000008'; win32Code = 87; win32Name = 'ERROR_INVALID_PARAMETER' })
                         }
                     }) `
-                -Events @([pscustomobject]@{ id = 8002; observedProcessId = 5436; observedPath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'; observedUserSid = 'S-1-5-21-100-200-300-400'; pidStatus = 'matched' }) `
+                -Events @([pscustomobject]@{ id = 8002; observedProcessId = 5436; observedPath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'; observedUserSid = 'S-1-5-21-100-200-300-400'; pidStatus = 'matched'; pidMatched = $true; nameMatched = $true; pathMatched = $true; sidMatched = $true; packageMatched = $true }) `
                 -ExpectedEventIds @(8004, 8022) `
                 -SamEvidence ([pscustomobject]@{ groupName = 'OpenPath-Restricted'; groupSid = 'S-1-5-21-100-200-300-401'; targetMemberPresent = $true; memberCount = 1; status = 'observed' }) `
                 -TestAppLockerPolicyDecision ([pscustomobject]@{
@@ -300,6 +300,8 @@ Describe 'Canonical offline installer disposable target' {
                         querySucceeded = $true
                         eventCount = 1
                         exception = $null
+                        correlationStatus = 'CORRELATION_FAILED'
+                        correlationException = [pscustomobject]@{ type = 'System.InvalidOperationException'; fullyQualifiedErrorId = 'correlation-failed'; hResult = -1; safeReason = 'event-correlation-failed' }
                     }
                     '8022' = [pscustomobject]@{
                         status = 'QUERY_SUCCEEDED_NO_MATCHES'
@@ -322,6 +324,9 @@ Describe 'Canonical offline installer disposable target' {
         $flat.edge.policyObserver.runtime.edition | Should -Be 'Core'
         $flat.edge.policyObserver.nativePowerShellComparison.decision | Should -Be 'Allowed'
         $flat.edge.eventQueries.'8004'.status | Should -Be 'QUERY_FAILED'
+        $flat.edge.eventQueries.'8020'.correlationStatus | Should -Be 'CORRELATION_FAILED'
+        $flat.edge.eventQueries.'8020'.correlationException.safeReason | Should -Be 'event-correlation-failed'
+        $flat.edge.appLocker8020 | Should -BeNullOrEmpty
         @($flat.edge.eventQueries.Keys | Sort-Object) | Should -Be @('8002', '8004', '8020', '8022')
 
         Mock Start-Sleep {} -ModuleName BrowserBoundaryProbe
@@ -364,8 +369,11 @@ Describe 'Canonical offline installer disposable target' {
         @($roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.PSObject.Properties.Name | Sort-Object) | Should -Be @('8002', '8004', '8020', '8022')
         $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8002'.eventCount | Should -Be 1
         $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8020'.eventCount | Should -Be 1
+        $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8020'.correlationStatus | Should -Be 'CORRELATION_FAILED'
+        $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8020'.correlationException.safeReason | Should -Be 'event-correlation-failed'
         $roundTrip.edgeBoundaryEvidence.initial.appLocker8002 | Should -BeTrue
         $roundTrip.edgeBoundaryEvidence.initial.appLocker8004 | Should -BeNullOrEmpty
+        $roundTrip.edgeBoundaryEvidence.initial.appLocker8020 | Should -BeNullOrEmpty
         $roundTrip.edgeBoundaryEvidence.initial.appLockerQueryStatuses.'8004' | Should -Be 'failed'
         $roundTrip.edgeBoundaryEvidence.repeat.attempts[3].offsetSeconds | Should -Be 30
         $roundTrip.cleanupSucceeded | Should -BeFalse
