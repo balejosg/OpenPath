@@ -2554,8 +2554,8 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
         }
 
         It '[Windows direct] queries both AppLocker channels with a fixed window and preserves the default open end' -Skip:($script:OpenPathWindowsDirect -ne $true) {
-            $startTime = [datetime]'2099-01-01T00:00:00Z'
-            $endTime = [datetime]'2099-01-01T00:01:00Z'
+            $startTime = ([datetime]'2099-01-01T00:00:00Z').ToUniversalTime()
+            $endTime = ([datetime]'2099-01-01T00:01:00Z').ToUniversalTime()
             $queries = foreach ($logName in @('Microsoft-Windows-AppLocker/EXE and DLL', 'Microsoft-Windows-AppLocker/Packaged app-Execution')) {
                 $eventIds = if ($logName -like '*Packaged*') { @(8020, 8022) } else { @(8002, 8004) }
                 foreach ($eventId in $eventIds) {
