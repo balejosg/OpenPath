@@ -1400,6 +1400,15 @@ Describe "Windows Browser Boundary CI Probes" {
             ($snapshot | ConvertTo-Json -Depth 12) | Should -Not -Match 'Message|secret|Password'
         }
 
+        It 'preserves seven-digit UTC precision in native query windows' {
+            $probeModule = Get-Content (Join-Path $PSScriptRoot "..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1") -Raw
+
+            Assert-ContentContainsAll -Content $probeModule -Needles @(
+                "startTime = `$StartTime.ToUniversalTime().ToString('o')",
+                "endTime = if (`$null -ne `$endTimeValue) { `$endTimeValue.ToUniversalTime().ToString('o') } else { `$null }"
+            )
+        }
+
         It 'keeps task identity and bounded TaskScheduler/Security logon evidence explicit' {
             $probeModule = Get-Content (Join-Path $PSScriptRoot ".." ".." "tests" "e2e" "ci" "BrowserBoundaryProbe.psm1") -Raw
 
@@ -2554,8 +2563,8 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
         }
 
         It '[Windows direct] queries both AppLocker channels with a fixed window and preserves the default open end' -Skip:($script:OpenPathWindowsDirect -ne $true) {
-            $startTime = ([datetime]'2099-01-01T00:00:00Z').ToUniversalTime()
-            $endTime = ([datetime]'2099-01-01T00:01:00Z').ToUniversalTime()
+            $startTime = ([datetime]'2099-01-01T00:00:00.1234567Z').ToUniversalTime()
+            $endTime = ([datetime]'2099-01-01T00:01:00.7654321Z').ToUniversalTime()
             $queries = foreach ($logName in @('Microsoft-Windows-AppLocker/EXE and DLL', 'Microsoft-Windows-AppLocker/Packaged app-Execution')) {
                 $eventIds = if ($logName -like '*Packaged*') { @(8020, 8022) } else { @(8002, 8004) }
                 foreach ($eventId in $eventIds) {
@@ -2577,8 +2586,8 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
                     $native.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
                     $native.querySucceeded | Should -BeTrue
                     $native.channel | Should -Be $logName
-                    ([datetime]$native.startTime).ToUniversalTime() | Should -Be $startTime
-                    ([datetime]$native.endTime).ToUniversalTime() | Should -Be $endTime
+                    $native.startTime | Should -Be $startTime.ToString('o')
+                    $native.endTime | Should -Be $endTime.ToString('o')
                     $native.runtime.edition | Should -Be 'Desktop'
                     $native.runtime.bitness | Should -Be '64-bit'
                     $native.runtime.processId | Should -BeGreaterThan 0
