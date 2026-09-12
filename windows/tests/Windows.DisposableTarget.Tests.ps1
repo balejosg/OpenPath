@@ -258,12 +258,30 @@ Describe 'Canonical offline installer disposable target' {
                 -TestAppLockerPolicyDecision ([pscustomobject]@{
                         status = 'observed'
                         decision = 'Denied'
-                        runtime = [pscustomobject]@{ edition = 'Core'; version = '7.6.5'; bitness = '64-bit'; processId = 9883 }
-                        testAppLockerPolicy = [pscustomobject]@{ available = $true; source = 'AppLocker' }
-                        import = [pscustomobject]@{ attempted = $false; result = 'not-required' }
-                    }) `
+                    runtime = [pscustomobject]@{ edition = 'Core'; version = '7.6.5'; bitness = '64-bit'; processId = 9883 }
+                    testAppLockerPolicy = [pscustomobject]@{ available = $true; source = 'AppLocker' }
+                    import = [pscustomobject]@{ attempted = $false; result = 'not-required' }
+                    nativePowerShellComparison = [pscustomobject]@{
+                        status = 'observed'
+                        decision = 'Allowed'
+                        path = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+                        userSid = 'S-1-5-21-100-200-300-400'
+                        runtime = [pscustomobject]@{ edition = 'Desktop'; version = '5.1.26100'; bitness = '64-bit'; processId = 7780 }
+                    }
+                }) `
                 -AppLockerQueryStatuses @{ '8002' = 'observed'; '8004' = 'failed'; '8020' = 'observed'; '8022' = 'observed' } `
-                -AppLockerEventQueries @{ '8004' = [pscustomobject]@{
+                -AppLockerEventQueries ([ordered]@{
+                    '8002' = [pscustomobject]@{
+                        status = 'QUERY_SUCCEEDED_MATCHES'
+                        channel = 'Microsoft-Windows-AppLocker/EXE and DLL'
+                        eventId = 8002
+                        channelExists = $true
+                        queryAttempted = $true
+                        querySucceeded = $true
+                        eventCount = 1
+                        exception = $null
+                    }
+                    '8004' = [pscustomobject]@{
                         status = 'QUERY_FAILED'
                         channel = 'Microsoft-Windows-AppLocker/EXE and DLL'
                         eventId = 8004
@@ -272,7 +290,28 @@ Describe 'Canonical offline installer disposable target' {
                         querySucceeded = $false
                         eventCount = 0
                         exception = [pscustomobject]@{ type = 'System.InvalidOperationException'; fullyQualifiedErrorId = 'event-query-failed'; hResult = -1; safeReason = 'event-query-failed' }
-                    } } | Out-Null
+                    }
+                    '8020' = [pscustomobject]@{
+                        status = 'QUERY_SUCCEEDED_MATCHES'
+                        channel = 'Microsoft-Windows-AppLocker/Packaged app-Execution'
+                        eventId = 8020
+                        channelExists = $true
+                        queryAttempted = $true
+                        querySucceeded = $true
+                        eventCount = 1
+                        exception = $null
+                    }
+                    '8022' = [pscustomobject]@{
+                        status = 'QUERY_SUCCEEDED_NO_MATCHES'
+                        channel = 'Microsoft-Windows-AppLocker/Packaged app-Execution'
+                        eventId = 8022
+                        channelExists = $true
+                        queryAttempted = $true
+                        querySucceeded = $true
+                        eventCount = 0
+                        exception = $null
+                    }
+                }) | Out-Null
         }
 
         $retrieved = Get-OpenPathDisposableBoundaryFailureEvidence
@@ -281,7 +320,9 @@ Describe 'Canonical offline installer disposable target' {
         $flat.edgeFailureCode | Should -Be 'exact-student-process-observed-without-block-event'
         $flat.edge.tokenObserver.failureStage | Should -Be 'OpenProcessToken'
         $flat.edge.policyObserver.runtime.edition | Should -Be 'Core'
+        $flat.edge.policyObserver.nativePowerShellComparison.decision | Should -Be 'Allowed'
         $flat.edge.eventQueries.'8004'.status | Should -Be 'QUERY_FAILED'
+        @($flat.edge.eventQueries.Keys | Sort-Object) | Should -Be @('8002', '8004', '8020', '8022')
 
         Mock Start-Sleep {} -ModuleName BrowserBoundaryProbe
         Mock Invoke-StudentExecutableTaskProbe {
@@ -316,9 +357,13 @@ Describe 'Canonical offline installer disposable target' {
         $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupPresent | Should -BeNullOrEmpty
         $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupQueryStatus | Should -Be 'unavailable'
         $roundTrip.edgeBoundaryEvidence.initial.testAppLockerPolicyDecision.decision | Should -Be 'Denied'
+        $roundTrip.edgeBoundaryEvidence.initial.testAppLockerPolicyDecision.nativePowerShellComparison.decision | Should -Be 'Allowed'
         $roundTrip.edgeBoundaryEvidence.initial.processes[0].tokenObserver.failureStage | Should -Be 'OpenProcessToken'
         $roundTrip.edgeBoundaryEvidence.initial.testAppLockerPolicyDecision.runtime.processId | Should -Be 9883
         $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8004'.status | Should -Be 'QUERY_FAILED'
+        @($roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.PSObject.Properties.Name | Sort-Object) | Should -Be @('8002', '8004', '8020', '8022')
+        $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8002'.eventCount | Should -Be 1
+        $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8020'.eventCount | Should -Be 1
         $roundTrip.edgeBoundaryEvidence.initial.appLocker8002 | Should -BeTrue
         $roundTrip.edgeBoundaryEvidence.initial.appLocker8004 | Should -BeNullOrEmpty
         $roundTrip.edgeBoundaryEvidence.initial.appLockerQueryStatuses.'8004' | Should -Be 'failed'

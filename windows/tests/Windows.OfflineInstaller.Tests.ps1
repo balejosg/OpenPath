@@ -540,12 +540,49 @@ Describe "Offline installer" {
                             runtime = [ordered]@{ edition = 'Core'; version = '7.6.5'; bitness = '64-bit'; processId = 9883 }
                             testAppLockerPolicy = [ordered]@{ available = $true; source = 'AppLocker' }
                             import = [ordered]@{ attempted = $false; result = 'not-required' }
+                            nativePowerShellComparison = [ordered]@{
+                                status = 'observed'
+                                decision = 'Allowed'
+                                path = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+                                userSid = 'S-1-5-21-100-200-300-400'
+                                runtime = [ordered]@{ edition = 'Desktop'; version = '5.1.26100'; bitness = '64-bit'; processId = 7780 }
+                            }
                         }
                         appLockerEventQueries = [ordered]@{
+                            '8002' = [ordered]@{
+                                status = 'QUERY_SUCCEEDED_MATCHES'
+                                channel = 'Microsoft-Windows-AppLocker/EXE and DLL'
+                                eventId = 8002
+                                channelExists = $true
+                                queryAttempted = $true
+                                querySucceeded = $true
+                                eventCount = 1
+                                events = @()
+                            }
                             '8004' = [ordered]@{
                                 status = 'QUERY_SUCCEEDED_NO_MATCHES'
                                 channel = 'Microsoft-Windows-AppLocker/EXE and DLL'
                                 eventId = 8004
+                                channelExists = $true
+                                queryAttempted = $true
+                                querySucceeded = $true
+                                eventCount = 0
+                                events = @()
+                            }
+                            '8020' = [ordered]@{
+                                status = 'QUERY_FAILED'
+                                channel = 'Microsoft-Windows-AppLocker/Packaged app-Execution'
+                                eventId = 8020
+                                channelExists = $true
+                                queryAttempted = $true
+                                querySucceeded = $false
+                                eventCount = 0
+                                exception = [ordered]@{ type = 'System.InvalidOperationException'; fullyQualifiedErrorId = 'event-query-failed'; hResult = -1; safeReason = 'event-query-failed' }
+                            }
+                            '8022' = [ordered]@{
+                                status = 'QUERY_SUCCEEDED_NO_MATCHES'
+                                channel = 'Microsoft-Windows-AppLocker/Packaged app-Execution'
+                                eventId = 8022
                                 channelExists = $true
                                 queryAttempted = $true
                                 querySucceeded = $true
@@ -570,7 +607,12 @@ Describe "Offline installer" {
             $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupQueryStatus | Should -Be 'unavailable'
             $roundTrip.edgeBoundaryEvidence.initial.processes[0].tokenObserver.failureStage | Should -Be 'OpenProcessToken'
             $roundTrip.edgeBoundaryEvidence.initial.testAppLockerPolicyDecision.runtime.edition | Should -Be 'Core'
+            $roundTrip.edgeBoundaryEvidence.initial.testAppLockerPolicyDecision.nativePowerShellComparison.decision | Should -Be 'Allowed'
             $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8004'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            @($roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.PSObject.Properties.Name | Sort-Object) | Should -Be @('8002', '8004', '8020', '8022')
+            $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8002'.status | Should -Be 'QUERY_SUCCEEDED_MATCHES'
+            $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8020'.status | Should -Be 'QUERY_FAILED'
+            $roundTrip.edgeBoundaryEvidence.initial.appLockerEventQueries.'8022'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
             $roundTrip.edgeBoundaryEvidence.repeat.attempts[0].elapsedSeconds | Should -Be 5.7
             $roundTrip.edgeBoundaryEvidence.repeat.attempts[0].evidence.queryStatus | Should -Be 'failed'
             $roundTrip.cleanupSucceeded | Should -BeFalse

@@ -244,6 +244,85 @@ Describe "Windows Browser Boundary CI Probes" {
             } | Should -Throw "*AppLocker 8004 block event was not observed*"
         }
 
+        It 'collects 8002 and 8020 correlation diagnostics without weakening the denied gate' {
+            $testExe = Join-Path $TestDrive 'probe-denied-allow-diagnostics.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            $queryIds = [System.Collections.Generic.List[int]]::new()
+            $studentProcess = [pscustomobject]@{
+                processId = 4242
+                name = 'msedge.exe'
+                executablePath = $testExe
+                matchesStudentSid = $true
+                tokenIdentityVerified = $true
+            }
+            $allowEvent = [pscustomobject]@{
+                Id = 8002
+                FilePath = $testExe
+                PackageName = 'Microsoft.MicrosoftEdge.Stable'
+                UserSid = 'S-1-5-21-student-sid'
+                ProcessId = 4242
+            }
+
+            Mock Invoke-OpenPathSchtasksCommand { 0 } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathSamBoundaryEvidence { $null } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathTaskIdentityEvidence { [pscustomobject]@{ status = 'unknown' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathTestAppLockerPolicyDecision {
+                [pscustomobject]@{ status = 'unknown'; decision = 'unknown'; path = $testExe; userSid = 'S-1-5-21-student-sid' }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathExactProcessBoundaryEvidence { $studentProcess } -ModuleName BrowserBoundaryProbe
+            Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathAppLockerEventQuery {
+                param([int]$EventId, [string]$LogName, [datetime]$StartTime)
+                [void]$queryIds.Add($EventId)
+                $events = if ($EventId -in @(8002, 8020)) {
+                    @([pscustomobject]@{
+                            Id = $EventId
+                            FilePath = $allowEvent.FilePath
+                            PackageName = $allowEvent.PackageName
+                            UserSid = $allowEvent.UserSid
+                            ProcessId = $allowEvent.ProcessId
+                        })
+                }
+                else { @() }
+                [pscustomobject]@{
+                    status = if ($events.Count -gt 0) { 'QUERY_SUCCEEDED_MATCHES' } else { 'QUERY_SUCCEEDED_NO_MATCHES' }
+                    channel = $LogName
+                    logName = $LogName
+                    eventId = $EventId
+                    startTime = $StartTime
+                    channelExists = $true
+                    queryAttempted = $true
+                    querySucceeded = $true
+                    eventCount = $events.Count
+                    events = $events
+                }
+            } -ModuleName BrowserBoundaryProbe
+
+            {
+                Invoke-StudentExecutableTaskProbe `
+                    -ProbeName 'Denied allow diagnostics probe' `
+                    -UserName 'student01' `
+                    -Password 'secret' `
+                    -ExecutablePath $testExe `
+                    -Expectation ExpectDenied `
+                    -ProcessName msedge `
+                    -StudentSid 'S-1-5-21-student-sid' `
+                    -PackagedAppPattern 'MicrosoftEdge|Edge' `
+                    -TimeoutSeconds 1
+            } | Should -Throw '*no correlated AppLocker block event was observed*'
+
+            @($queryIds | Sort-Object -Unique) | Should -Be @(8002, 8004, 8020, 8022)
+            $failureEvidence = Get-OpenPathLastBoundaryProbeFailureEvidence
+            @($failureEvidence.appLockerEventQueries.Keys | Sort-Object) | Should -Be @('8002', '8004', '8020', '8022')
+            $failureEvidence.appLockerEventQueries.'8002'.status | Should -Be 'QUERY_SUCCEEDED_MATCHES'
+            $failureEvidence.appLockerEventQueries.'8020'.status | Should -Be 'QUERY_SUCCEEDED_MATCHES'
+            $failureEvidence.appLockerEventQueries.'8004'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            $failureEvidence.appLockerEventQueries.'8022'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            @($failureEvidence.events | Where-Object {
+                    $_.id -in @(8002, 8020) -and $_.pidMatched -and $_.pathMatched -and $_.sidMatched -and $_.packageMatched
+                }).Count | Should -Be 2
+        }
+
         It 'emits bounded scheduled-task state when a denied probe has no correlated event' {
             $testExe = Join-Path $TestDrive 'probe-no-event.exe'
             Set-Content -LiteralPath $testExe -Value 'dummy'
@@ -1381,6 +1460,7 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
                     path = 'C:\msedge.exe'
                     userSid = 'S-1-5-21-policy-user'
                     runtime = [pscustomobject]@{ edition = 'Desktop'; version = '5.1.26100'; bitness = '64-bit'; processId = 7777 }
+                    decision = 'Allowed'
                 }
             } -ModuleName BrowserBoundaryProbe
 
@@ -1402,7 +1482,37 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
             $observation.testAppLockerPolicy.source | Should -Not -BeNullOrEmpty
             $observation.import.attempted | Should -BeFalse
             $observation.nativePowerShellComparison.status | Should -Be 'observed'
+            $observation.nativePowerShellComparison.decision | Should -Be 'Allowed'
             $observation.nativePowerShellComparison.runtime.edition | Should -Be 'Desktop'
+
+            $safeComparison = InModuleScope BrowserBoundaryProbe -Parameters @{ Comparison = $observation.nativePowerShellComparison } {
+                Get-OpenPathSafePolicyComparisonEvidence -Comparison $Comparison
+            }
+            $safeComparison.decision | Should -Be 'Allowed'
+        }
+
+        It 'preserves an unknown or null native policy decision distinctly' {
+            $unknown = InModuleScope BrowserBoundaryProbe {
+                Get-OpenPathSafePolicyComparisonEvidence -Comparison ([pscustomobject][ordered]@{
+                        status = 'observed'
+                        path = 'C:\msedge.exe'
+                        userSid = 'S-1-5-21-policy-user'
+                        decision = 'unknown'
+                    })
+            }
+            $nullDecision = InModuleScope BrowserBoundaryProbe {
+                Get-OpenPathSafePolicyComparisonEvidence -Comparison ([pscustomobject][ordered]@{
+                        status = 'unavailable'
+                        path = 'C:\msedge.exe'
+                        userSid = 'S-1-5-21-policy-user'
+                        decision = $null
+                    })
+            }
+
+            $unknown.PSObject.Properties['decision'] | Should -Not -BeNullOrEmpty
+            $unknown.decision | Should -Be 'unknown'
+            $nullDecision.PSObject.Properties['decision'] | Should -Not -BeNullOrEmpty
+            $nullDecision.decision | Should -Be $null
         }
 
         It 'preserves policy import and exception metadata without raw exception text' {
@@ -1693,6 +1803,13 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
                     runtime = [pscustomobject]@{ edition = 'Core'; version = '7.6.5'; bitness = '64-bit'; processId = 9883 }
                     testAppLockerPolicy = [pscustomobject]@{ available = $true; source = 'AppLocker' }
                     import = [pscustomobject]@{ attempted = $false; result = 'not-required' }
+                    nativePowerShellComparison = [pscustomobject]@{
+                        status = 'observed'
+                        decision = 'Allowed'
+                        path = 'C:\msedge.exe'
+                        userSid = 'S-1-5-21-policy-user'
+                        runtime = [pscustomobject]@{ edition = 'Desktop'; version = '5.1.26100'; bitness = '64-bit'; processId = 7780 }
+                    }
                     secret = 'must-not-leak-policy-password-secret'
                 }
                 $eventQuery = [pscustomobject][ordered]@{
@@ -1705,7 +1822,23 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
                     querySucceeded = $true
                     eventCount = 0
                     events = @([pscustomobject]@{ Id = 8004; Message = 'must-not-leak-event-password-secret' })
+                    exception = $null
+                    reason = $null
+                    runtime = [pscustomobject]@{ edition = 'Core'; version = '7.6.5'; bitness = '64-bit'; processId = 9880 }
                     secret = 'must-not-leak-query-password-secret'
+                }
+                $eventQueries = [ordered]@{}
+                foreach ($eventId in @(8002, 8004, 8020, 8022)) {
+                    $query = $eventQuery | Select-Object *
+                    $query.eventId = $eventId
+                    $query.status = if ($eventId -eq 8004) { 'QUERY_SUCCEEDED_NO_MATCHES' } else { 'QUERY_FAILED' }
+                    $query.eventCount = 0
+                    $query.events = @()
+                    $query.exception = if ($eventId -in @(8002, 8020)) {
+                        [pscustomobject]@{ type = 'System.InvalidOperationException'; fullyQualifiedErrorId = 'event-query-failed'; hResult = -1; safeReason = 'event-query-failed' }
+                    }
+                    else { $null }
+                    $eventQueries[[string]$eventId] = $query
                 }
                 $process = [pscustomobject][ordered]@{
                     processId = 5436
@@ -1726,8 +1859,8 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
                     -Events @() `
                     -ExpectedEventIds @(8004) `
                     -TestAppLockerPolicyDecision $policyObserver `
-                    -AppLockerQueryStatuses @{ '8004' = 'QUERY_SUCCEEDED_NO_MATCHES' } `
-                    -AppLockerEventQueries @{ '8004' = $eventQuery }
+                    -AppLockerQueryStatuses @{ '8002' = 'QUERY_FAILED'; '8004' = 'QUERY_SUCCEEDED_NO_MATCHES'; '8020' = 'QUERY_FAILED'; '8022' = 'QUERY_SUCCEEDED_NO_MATCHES' } `
+                    -AppLockerEventQueries $eventQueries
                 $serialized = $evidence | ConvertTo-Json -Depth 20
                 $serialized | Should -Not -Match 'must-not-leak-(token|policy|event|query)-password-secret'
                 $evidence.appLockerEventQueries['8004'].PSObject.Properties['events'] | Should -Be $null
@@ -1743,11 +1876,15 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
             $transport.evidence.processes[0].tokenObserver.failureStage | Should -Be 'OpenProcessToken'
             $transport.evidence.processes[0].tokenObserver.exception.safeReason | Should -Be 'token-observation-failed'
             $transport.evidence.testAppLockerPolicyDecision.runtime.edition | Should -Be 'Core'
+            $transport.evidence.testAppLockerPolicyDecision.nativePowerShellComparison.decision | Should -Be 'Allowed'
             $transport.evidence.appLockerEventQueries.'8004'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            @($transport.evidence.appLockerEventQueries.Keys | Sort-Object) | Should -Be @('8002', '8004', '8020', '8022')
             $transport.flat.edge.tokenObserver.failureStage | Should -Be 'OpenProcessToken'
             $transport.flat.edge.tokenObserver.exception.fullyQualifiedErrorId | Should -Be 'TokenObserverFailure'
             $transport.flat.edge.policyObserver.runtime.processId | Should -Be 9883
+            $transport.flat.edge.policyObserver.nativePowerShellComparison.decision | Should -Be 'Allowed'
             $transport.flat.edge.eventQueries.'8004'.eventCount | Should -Be 0
+            @($transport.flat.edge.eventQueries.Keys | Sort-Object) | Should -Be @('8002', '8004', '8020', '8022')
             ($transport | ConvertTo-Json -Depth 12) | Should -Not -Match 'secret|Password'
         }
     }
