@@ -461,6 +461,239 @@ function ConvertTo-OpenPathDisposableNativePolicyProjection {
     }
 }
 
+function Get-OpenPathDisposableFieldValue {
+    param([object]$InputObject, [Parameter(Mandatory = $true)][string]$Name)
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        foreach ($key in $InputObject.Keys) {
+            if ([string]::Equals([string]$key, $Name, [StringComparison]::OrdinalIgnoreCase)) {
+                return $InputObject[$key]
+            }
+        }
+        return $null
+    }
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($property) { return $property.Value }
+    return $null
+}
+
+function Invoke-OpenPathDisposablePostApplicationPair {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][object]$FailureResult,
+        [Parameter(Mandatory = $true)][object]$Target,
+        [Parameter(Mandatory = $true)][object]$Lifecycle
+    )
+
+    $notStarted = {
+        param([string]$Reason)
+        [pscustomobject][ordered]@{
+            status = 'not-started'
+            reason = $Reason
+            trigger = $null
+            anchor = $null
+            startedAtUtc = $null
+            endedAtUtc = $null
+            policyReapplied = $false
+            edge = $null
+            deniedPeControl = $null
+        }
+    }
+    $failureDetailCode = Get-OpenPathDisposableFieldValue -InputObject $FailureResult -Name 'failureDetailCode'
+    if ([string]$failureDetailCode -ne 'boundary-edge-execution-failed') {
+        return & $notStarted 'original-failure-not-edge-boundary'
+    }
+    $edgeBoundaryEvidence = Get-OpenPathDisposableFieldValue -InputObject $FailureResult -Name 'edgeBoundaryEvidence'
+    $initial = Get-OpenPathDisposableFieldValue -InputObject $edgeBoundaryEvidence -Name 'initial'
+    if (-not $initial) {
+        return & $notStarted 'original-edge-evidence-unavailable'
+    }
+    $initialProbeName = [string](Get-OpenPathDisposableFieldValue -InputObject $initial -Name 'probeName')
+    $edgePath = [string](Get-OpenPathDisposableFieldValue -InputObject $initial -Name 'executablePath')
+    $studentSid = [string](Get-OpenPathDisposableFieldValue -InputObject $initial -Name 'studentSid')
+    if ($initialProbeName -ne 'Canonical Edge deny' -or
+        [string]::IsNullOrWhiteSpace($edgePath) -or [string]::IsNullOrWhiteSpace($studentSid) -or
+        -not $Target.PSObject.Properties['Sid'] -or
+        -not [string]::Equals([string]$Target.Sid, $studentSid, [StringComparison]::OrdinalIgnoreCase) -or
+        -not $Target.PSObject.Properties['UserName'] -or -not $Target.UserName -or
+        -not $Target.PSObject.Properties['Password'] -or -not $Target.Password) {
+        return & $notStarted 'original-edge-subject-unavailable'
+    }
+    $lifecycleStatus = Get-OpenPathDisposableFieldValue -InputObject $Lifecycle -Name 'status'
+    $window = Get-OpenPathDisposableFieldValue -InputObject $Lifecycle -Name 'window'
+    $queries = Get-OpenPathDisposableFieldValue -InputObject $Lifecycle -Name 'queries'
+    $query = Get-OpenPathDisposableFieldValue -InputObject $queries -Name '8001'
+    if ([string]$lifecycleStatus -ne 'observed' -or -not $window -or -not $query) {
+        return & $notStarted 'lifecycle-8001-unavailable'
+    }
+    $native = Get-OpenPathDisposableFieldValue -InputObject $query -Name 'nativePowerShellComparison'
+    $queryStatus = Get-OpenPathDisposableFieldValue -InputObject $query -Name 'status'
+    $querySucceeded = Get-OpenPathDisposableFieldValue -InputObject $query -Name 'querySucceeded'
+    $queryEventCount = Get-OpenPathDisposableFieldValue -InputObject $query -Name 'eventCount'
+    $nativeStatus = Get-OpenPathDisposableFieldValue -InputObject $native -Name 'status'
+    $nativeSucceeded = Get-OpenPathDisposableFieldValue -InputObject $native -Name 'querySucceeded'
+    $nativeEventCount = Get-OpenPathDisposableFieldValue -InputObject $native -Name 'eventCount'
+    if ([string]$queryStatus -ne 'QUERY_SUCCEEDED_MATCHES' -or -not [bool]$querySucceeded -or [int]$queryEventCount -lt 1 -or
+        -not $native -or [string]$nativeStatus -ne 'QUERY_SUCCEEDED_MATCHES' -or -not [bool]$nativeSucceeded -or [int]$nativeEventCount -lt 1) {
+        return & $notStarted 'lifecycle-8001-native-match-unavailable'
+    }
+    $windowStart = $null
+    $windowEnd = $null
+    try {
+        $windowStart = [datetime](Get-OpenPathDisposableFieldValue -InputObject $window -Name 'launchRequestedAtUtc')
+        $windowEnd = [datetime](Get-OpenPathDisposableFieldValue -InputObject $window -Name 'captureEndedAtUtc')
+    }
+    catch {}
+    if (-not $windowStart -or -not $windowEnd -or $windowEnd -lt $windowStart) {
+        return & $notStarted 'lifecycle-window-invalid'
+    }
+    $validAnchors = @()
+    foreach ($event in @((Get-OpenPathDisposableFieldValue -InputObject $query -Name 'events'))) {
+        $observedEventId = Get-OpenPathDisposableFieldValue -InputObject $event -Name 'id'
+        $observedRecordId = Get-OpenPathDisposableFieldValue -InputObject $event -Name 'recordId'
+        $observedTime = Get-OpenPathDisposableFieldValue -InputObject $event -Name 'timeCreatedUtc'
+        $parsingStatus = Get-OpenPathDisposableFieldValue -InputObject $event -Name 'parsingStatus'
+        if (-not $event -or $null -eq $observedEventId -or $null -eq $observedRecordId -or
+            -not $observedTime -or [string]$parsingStatus -ne 'fieldless') { continue }
+        $eventId = $null
+        $recordId = $null
+        $eventTime = $null
+        try {
+            $eventId = [int]$observedEventId
+            $recordId = [long]$observedRecordId
+            $eventTime = [datetime]$observedTime
+        }
+        catch { continue }
+        if ($eventId -eq 8001 -and $recordId -gt 0 -and $eventTime -ge $windowStart -and $eventTime -le $windowEnd) {
+            $validAnchors += [pscustomobject]@{ id=$eventId; recordId=$recordId; time=$eventTime }
+        }
+    }
+    $selectedAnchor = $validAnchors | Sort-Object time, recordId | Select-Object -Last 1
+    if (-not $selectedAnchor) { return & $notStarted 'lifecycle-8001-anchor-invalid' }
+
+    $startedAt = Get-Date
+    if ($selectedAnchor.time -gt $startedAt) { return & $notStarted 'lifecycle-8001-anchor-future' }
+    $startedAtUtc = $startedAt.ToUniversalTime().ToString('o')
+    $anchorTimeUtc = $selectedAnchor.time.ToUniversalTime().ToString('o')
+    $edge = $null
+    $deniedPeControl = $null
+    try {
+        try {
+            $run = Invoke-StudentExecutableTaskProbe `
+                -ProbeName 'Post-application Edge deny' `
+                -UserName $Target.UserName `
+                -Password $Target.Password `
+                -ExecutablePath $edgePath `
+                -Arguments '--new-window about:blank' `
+                -Expectation ExpectDenied `
+                -ProcessName 'msedge' `
+                -StudentSid $studentSid `
+                -PackagedAppPattern 'MicrosoftEdge|Microsoft\.MicrosoftEdge|msedge' `
+                -TimeoutSeconds 5 `
+                -SuppressFailureDiagnostics `
+                -CaptureEnforcementDiagnostics
+            $correlated = if ($run.evidence -and $run.evidence.PSObject.Properties['correlatedEvent']) { $run.evidence.correlatedEvent } else { $null }
+            $denyObserved = $false
+            if ($correlated -and $correlated.PSObject.Properties['id'] -and
+                $correlated.PSObject.Properties['observedPath'] -and $correlated.observedPath -and
+                $correlated.PSObject.Properties['observedUserSid'] -and $correlated.observedUserSid) {
+                $denyId = $null
+                try { $denyId = [int]$correlated.id } catch {}
+                $denyObserved = $denyId -in @(8004, 8022) -and
+                    [string]::Equals([string]$correlated.observedPath, $edgePath, [StringComparison]::OrdinalIgnoreCase) -and
+                    [string]::Equals([string]$correlated.observedUserSid, $studentSid, [StringComparison]::OrdinalIgnoreCase)
+            }
+            $edge = [pscustomobject][ordered]@{
+                status = 'observed'
+                outcome = if ($denyObserved) { 'blocked' } else { 'inconclusive' }
+                executablePath = $edgePath
+                studentSid = $studentSid
+                evidence = $run.evidence
+            }
+        }
+        catch {
+            $edgeFailedAt = Get-Date
+            $failureEvidence = $null
+            try { $failureEvidence = Get-OpenPathDisposableBoundaryFailureEvidence } catch {}
+            $registeredAt = $null
+            if ($failureEvidence -and $failureEvidence.PSObject.Properties['taskRegisteredAtUtc'] -and $failureEvidence.taskRegisteredAtUtc) {
+                try { $registeredAt = [datetime]$failureEvidence.taskRegisteredAtUtc } catch {}
+            }
+            $evidenceMatches = $failureEvidence -and
+                $failureEvidence.PSObject.Properties['probeName'] -and [string]$failureEvidence.probeName -eq 'Post-application Edge deny' -and
+                $failureEvidence.PSObject.Properties['executablePath'] -and [string]::Equals([string]$failureEvidence.executablePath, $edgePath, [StringComparison]::OrdinalIgnoreCase) -and
+                $failureEvidence.PSObject.Properties['studentSid'] -and [string]::Equals([string]$failureEvidence.studentSid, $studentSid, [StringComparison]::OrdinalIgnoreCase) -and
+                $registeredAt -and $registeredAt -ge $startedAt -and $registeredAt -le $edgeFailedAt
+            if ($evidenceMatches) {
+                $snapshot = $failureEvidence | ConvertTo-Json -Depth 14 | ConvertFrom-Json
+                $executionObserved = $false
+                if ($snapshot.PSObject.Properties['failureCode'] -and [string]$snapshot.failureCode -eq 'exact-student-process-observed-without-block-event') {
+                    foreach ($process in @($snapshot.processes)) {
+                        $tokenMatch = $process.PSObject.Properties['tokenUserSid'] -and $process.tokenUserSid -and
+                            [string]::Equals([string]$process.tokenUserSid, $studentSid, [StringComparison]::OrdinalIgnoreCase)
+                        $samFallback = $process.PSObject.Properties['tokenUserSid'] -and $null -eq $process.tokenUserSid -and
+                            $process.PSObject.Properties['samSid'] -and [string]::Equals([string]$process.samSid, $studentSid, [StringComparison]::OrdinalIgnoreCase) -and
+                            $process.PSObject.Properties['samTokenSidMatch'] -and ($null -eq $process.samTokenSidMatch -or [bool]$process.samTokenSidMatch)
+                        if ($process.PSObject.Properties['matchesStudentSid'] -and [bool]$process.matchesStudentSid -and
+                            $process.PSObject.Properties['executablePath'] -and [string]::Equals([string]$process.executablePath, $edgePath, [StringComparison]::OrdinalIgnoreCase) -and
+                            ($tokenMatch -or $samFallback)) {
+                            $executionObserved = $true
+                            break
+                        }
+                    }
+                }
+                $edge = [pscustomobject][ordered]@{
+                    status = 'observed'
+                    outcome = if ($executionObserved) { 'execution-observed' } else { 'inconclusive' }
+                    executablePath = $edgePath
+                    studentSid = $studentSid
+                    evidence = $snapshot
+                }
+            }
+            else {
+                $edge = [pscustomobject][ordered]@{
+                    status = 'unavailable'
+                    code = 'post-application-edge-evidence-unavailable'
+                    outcome = 'inconclusive'
+                    executablePath = $edgePath
+                    studentSid = $studentSid
+                }
+            }
+        }
+    }
+    finally {
+        $peStartedAt = Get-Date
+        try {
+            $deniedPeControl = Invoke-OpenPathDisposableDeniedPeControl -Target $Target
+        }
+        catch {
+            $peEndedAt = Get-Date
+            $peStartedAtUtc = $peStartedAt.ToUniversalTime().ToString('o')
+            $peEndedAtUtc = $peEndedAt.ToUniversalTime().ToString('o')
+            $deniedPeControl = [pscustomobject][ordered]@{
+                status = 'unavailable'
+                code = 'benign-pe-control-failed'
+                outcome = 'inconclusive'
+                startedAtUtc = $peStartedAtUtc
+                endedAtUtc = $peEndedAtUtc
+                policyReapplied = $false
+            }
+        }
+    }
+    $endedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+    return [pscustomobject][ordered]@{
+        status = 'observed'
+        reason = $null
+        trigger = 'actual-8001-with-native-match'
+        anchor = [pscustomobject][ordered]@{ id=[int]$selectedAnchor.id; recordId=[long]$selectedAnchor.recordId; timeCreatedUtc=$anchorTimeUtc }
+        startedAtUtc = $startedAtUtc
+        endedAtUtc = $endedAtUtc
+        policyReapplied = $false
+        edge = $edge
+        deniedPeControl = $deniedPeControl
+    }
+}
+
 function Invoke-OpenPathDisposableDeniedPeControl {
     param([Parameter(Mandatory = $true)][object]$Target)
     $start = (Get-Date).ToUniversalTime().ToString('o')
@@ -539,4 +772,4 @@ function Invoke-OpenPathDisposableDeniedPeControl {
     finally { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue }
 }
 
-Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, Invoke-OpenPathDisposableDeniedPeControl, New-OpenPathDisposableEdgeBoundaryException, Resolve-OpenPathDisposableEdgeBoundaryFailure, Write-OpenPathOfflineInstallerEvidence, Remove-OpenPathDisposableStandardTarget
+Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, Invoke-OpenPathDisposableDeniedPeControl, Invoke-OpenPathDisposablePostApplicationPair, New-OpenPathDisposableEdgeBoundaryException, Resolve-OpenPathDisposableEdgeBoundaryFailure, Write-OpenPathOfflineInstallerEvidence, Remove-OpenPathDisposableStandardTarget

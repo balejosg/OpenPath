@@ -671,6 +671,24 @@ Describe "Offline installer" {
             $offlineE2e | Should -Not -Match 'appLockerPolicyLifecycle[^\r\n]*(Assert|throw|exit)'
         }
 
+        It 'attaches one best-effort post-8001 diagnostic pair after lifecycle capture and before cleanup' {
+            $offlineE2e = Get-Content (Join-Path $PSScriptRoot '..' '..' 'tests' 'e2e' 'ci' 'run-windows-offline-installer-exe.ps1') -Raw
+            $finallyIndex = $offlineE2e.LastIndexOf('finally {')
+            $lifecycleIndex = $offlineE2e.IndexOf("`$result['appLockerPolicyLifecycle'] = `$appLockerPolicyLifecycle")
+            $pairCallIndex = $offlineE2e.IndexOf('Invoke-OpenPathDisposablePostApplicationPair')
+            $pairAttachIndex = $offlineE2e.IndexOf("`$result['postApplicationPair'] = `$postApplicationPair")
+            $cleanupIndex = $offlineE2e.IndexOf('$e2eCleanupAttempted = $true')
+
+            $pairCallIndex | Should -BeGreaterThan $lifecycleIndex
+            $pairAttachIndex | Should -BeGreaterThan $pairCallIndex
+            $pairAttachIndex | Should -BeLessThan $cleanupIndex
+            ([regex]::Matches($offlineE2e, 'Invoke-OpenPathDisposablePostApplicationPair')).Count | Should -Be 1
+            ([regex]::Matches($offlineE2e, "\['postApplicationPair'\]")).Count | Should -Be 1
+            $offlineE2e.Substring($finallyIndex, $cleanupIndex - $finallyIndex) | Should -Match "(?s)try\s*\{.*Invoke-OpenPathDisposablePostApplicationPair.*\}\s*catch\s*\{.*post-application-pair-failed"
+            $offlineE2e.Substring($finallyIndex, $cleanupIndex - $finallyIndex) | Should -Not -Match '\bthrow\b|\bexit\b'
+            $offlineE2e | Should -Not -Match 'postApplicationPair[^\r\n]*(Assert|throw|exit|status\s*=\s*success)'
+        }
+
         It 'round-trips real lifecycle helper projection with exact timestamps and no unsafe event payload' {
             Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1') -Force
             Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\DisposableWindowsTarget.psm1') -Force

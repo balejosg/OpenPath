@@ -2,7 +2,8 @@ BeforeAll {
     foreach ($commandName in @(
         'Get-LocalUser', 'New-LocalUser', 'Enable-LocalUser', 'Remove-LocalUser',
         'Get-LocalGroup', 'Get-LocalGroupMember', 'Add-LocalGroupMember',
-        'Get-CimInstance', 'Remove-CimInstance'
+        'Get-CimInstance', 'Remove-CimInstance',
+        'Invoke-StudentExecutableTaskProbe'
     )) {
         if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
             Set-Item -Path "Function:global:$commandName" -Value { param() }
@@ -58,6 +59,181 @@ Describe 'Canonical offline installer disposable target' {
         $resolved.initial.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
         $resolved.deniedPeControl.outcome | Should -Be 'blocked'
         $resolved.deniedPeControl.policyReapplied | Should -BeFalse
+    }
+
+    It 'runs one direct Edge probe and one PE control after an actual native-observed 8001' {
+        $edgePath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='must-not-serialize'; Sid=$script:testSid; ProfilePath=$script:testPath }
+        $failure = [ordered]@{
+            failureDetailCode = 'boundary-edge-execution-failed'
+            edgeBoundaryEvidence = [ordered]@{ initial = [ordered]@{ probeName='Canonical Edge deny'; executablePath=$edgePath; studentSid=$script:testSid } }
+        }
+        $lifecycle = [ordered]@{
+            status='observed'
+            window=[ordered]@{ launchRequestedAtUtc='2026-09-13T10:11:12.1234567Z'; captureEndedAtUtc='2026-09-13T10:12:02.7891234Z' }
+            queries=[ordered]@{
+                '8001'=[ordered]@{
+                    status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1
+                    events=@([ordered]@{ id=8001; recordId=201; timeCreatedUtc='2026-09-13T10:11:43.4567891Z'; parsingStatus='fieldless' })
+                    nativePowerShellComparison=[ordered]@{ status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1; runtime=[ordered]@{ edition='Desktop'; version='5.1.26100'; bitness='64-bit'; processId=7722 } }
+                }
+            }
+        }
+        $script:postProbeArgs = $null
+        Mock Invoke-StudentExecutableTaskProbe {
+            param($ProbeName, $ExecutablePath, $StudentSid, $ProcessName, $Expectation, $SuppressFailureDiagnostics)
+            $script:postProbeArgs = [pscustomobject]@{ ProbeName=$ProbeName; ExecutablePath=$ExecutablePath; StudentSid=$StudentSid; ProcessName=$ProcessName; Expectation=$Expectation; SuppressFailureDiagnostics=$SuppressFailureDiagnostics }
+            [pscustomobject]@{ status='pass'; evidence=[pscustomobject]@{ correlatedEvent=[pscustomobject]@{ id=8004; observedPath=$edgePath; observedUserSid=$script:testSid } } }
+        } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { [pscustomobject]@{ status='observed'; outcome='execution-observed'; studentSid=$script:testSid } } -ModuleName DisposableWindowsTarget
+
+        $pair = Invoke-OpenPathDisposablePostApplicationPair -FailureResult $failure -Target $target -Lifecycle $lifecycle
+
+        $pair.status | Should -Be 'observed'
+        $pair.trigger | Should -Be 'actual-8001-with-native-match'
+        $pair.anchor.id | Should -Be 8001
+        $pair.anchor.recordId | Should -Be 201
+        $pair.anchor.timeCreatedUtc | Should -Be '2026-09-13T10:11:43.4567891Z'
+        $pair.edge.outcome | Should -Be 'blocked'
+        $pair.deniedPeControl.outcome | Should -Be 'execution-observed'
+        $pair.policyReapplied | Should -BeFalse
+        Should -Invoke Invoke-StudentExecutableTaskProbe -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        $script:postProbeArgs.ProbeName | Should -Be 'Post-application Edge deny'
+        $script:postProbeArgs.ExecutablePath | Should -Be $edgePath
+        $script:postProbeArgs.StudentSid | Should -Be $script:testSid
+        $script:postProbeArgs.ProcessName | Should -Be 'msedge'
+        $script:postProbeArgs.Expectation | Should -Be 'ExpectDenied'
+        $script:postProbeArgs.SuppressFailureDiagnostics | Should -BeTrue
+        Should -Invoke Invoke-OpenPathDisposableDeniedPeControl -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        ($pair | ConvertTo-Json -Depth 14) | Should -Not -Match 'must-not-serialize|Password|UserName|rawMessage'
+        $evidencePath = Join-Path $TestDrive 'post-application-pair.json'
+        Write-OpenPathOfflineInstallerEvidence -Payload ([ordered]@{ failureDetailCode=$failure.failureDetailCode; appLockerPolicyLifecycle=$lifecycle; postApplicationPair=$pair; explicitNull=$null }) -Path $evidencePath
+        $raw = Get-Content -LiteralPath $evidencePath -Raw
+        $roundTrip = $raw | ConvertFrom-Json
+        $raw | Should -Match '2026-09-13T10:11:43\.4567891Z'
+        $roundTrip.postApplicationPair.anchor.recordId | Should -Be 201
+        $roundTrip.appLockerPolicyLifecycle.queries.'8001'.nativePowerShellComparison.runtime.version | Should -Be '5.1.26100'
+        $roundTrip.appLockerPolicyLifecycle.queries.'8001'.nativePowerShellComparison.runtime.PSObject.Properties['supported'] | Should -BeNullOrEmpty
+        $roundTrip.explicitNull | Should -BeNullOrEmpty
+    }
+
+    It 'does not call a non-deny or mismatched returned Edge correlation blocked' -ForEach @(
+        @{ case='absent'; id=$null; path=$null; sid=$null }
+        @{ case='allow audit'; id=8002; path='C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'; sid='S-1-5-21-100-200-300-400' }
+        @{ case='wrong path'; id=8004; path='C:\other\msedge.exe'; sid='S-1-5-21-100-200-300-400' }
+        @{ case='wrong sid'; id=8004; path='C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'; sid='S-1-5-21-wrong' }
+    ) {
+        param($case, $id, $path, $sid)
+        $edgePath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='must-not-serialize'; Sid=$script:testSid; ProfilePath=$script:testPath }
+        $failure = [ordered]@{ failureDetailCode='boundary-edge-execution-failed'; edgeBoundaryEvidence=[ordered]@{ initial=[ordered]@{ probeName='Canonical Edge deny'; executablePath=$edgePath; studentSid=$script:testSid } } }
+        $lifecycle = [ordered]@{ status='observed'; window=[ordered]@{ launchRequestedAtUtc='2026-09-13T10:11:12.1234567Z'; captureEndedAtUtc='2026-09-13T10:12:02.7891234Z' }; queries=[ordered]@{ '8001'=[ordered]@{ status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1; events=@([ordered]@{ id=8001; recordId=201; timeCreatedUtc='2026-09-13T10:11:43.4567891Z'; parsingStatus='fieldless' }); nativePowerShellComparison=[ordered]@{ status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1 } } } }
+        $script:postCorrelation = if ($null -eq $id) { $null } else { [pscustomobject]@{ id=$id; observedPath=$path; observedUserSid=$sid } }
+        Mock Invoke-StudentExecutableTaskProbe { [pscustomobject]@{ status='pass'; evidence=[pscustomobject]@{ correlatedEvent=$script:postCorrelation } } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { [pscustomobject]@{ status='observed'; outcome='blocked' } } -ModuleName DisposableWindowsTarget
+
+        $pair = Invoke-OpenPathDisposablePostApplicationPair -FailureResult $failure -Target $target -Lifecycle $lifecycle
+
+        $pair.edge.outcome | Should -Be 'inconclusive' -Because $case
+        Should -Invoke Invoke-StudentExecutableTaskProbe -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        Should -Invoke Invoke-OpenPathDisposableDeniedPeControl -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+    }
+
+    It 'records distinct bounded PE fallback timestamps without replacing the pair result' {
+        $edgePath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='must-not-serialize'; Sid=$script:testSid; ProfilePath=$script:testPath }
+        $failure = [ordered]@{ failureDetailCode='boundary-edge-execution-failed'; edgeBoundaryEvidence=[ordered]@{ initial=[ordered]@{ probeName='Canonical Edge deny'; executablePath=$edgePath; studentSid=$script:testSid } } }
+        $lifecycle = [ordered]@{ status='observed'; window=[ordered]@{ launchRequestedAtUtc='2026-09-13T10:11:12.1234567Z'; captureEndedAtUtc='2026-09-13T10:12:02.7891234Z' }; queries=[ordered]@{ '8001'=[ordered]@{ status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1; events=@([ordered]@{ id=8001; recordId=201; timeCreatedUtc='2026-09-13T10:11:43.4567891Z'; parsingStatus='fieldless' }); nativePowerShellComparison=[ordered]@{ status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1 } } } }
+        Mock Invoke-StudentExecutableTaskProbe { [pscustomobject]@{ status='pass'; evidence=[pscustomobject]@{ correlatedEvent=$null } } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { throw 'unsafe-pe-error' } -ModuleName DisposableWindowsTarget
+
+        $pair = Invoke-OpenPathDisposablePostApplicationPair -FailureResult $failure -Target $target -Lifecycle $lifecycle
+
+        $pair.status | Should -Be 'observed'
+        $pair.deniedPeControl.status | Should -Be 'unavailable'
+        [datetime]$pair.deniedPeControl.startedAtUtc | Should -BeLessOrEqual ([datetime]$pair.deniedPeControl.endedAtUtc)
+        ($pair | ConvertTo-Json -Depth 14) | Should -Not -Match 'unsafe-pe-error'
+    }
+
+    It 'still runs PE once when the single post-application Edge probe fails' {
+        $edgePath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='must-not-serialize'; Sid=$script:testSid; ProfilePath=$script:testPath }
+        $failure = [pscustomobject]@{ failureDetailCode='boundary-edge-execution-failed'; edgeBoundaryEvidence=[pscustomobject]@{ initial=[pscustomobject]@{ probeName='Canonical Edge deny'; executablePath=$edgePath; studentSid=$script:testSid } } }
+        $lifecycle = [pscustomobject]@{ status='observed'; window=[pscustomobject]@{ launchRequestedAtUtc='2026-09-13T10:11:12.1234567Z'; captureEndedAtUtc='2026-09-13T10:12:02.7891234Z' }; queries=[pscustomobject]@{ '8001'=[pscustomobject]@{ status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1; events=@([pscustomobject]@{ id=8001; recordId=201; timeCreatedUtc='2026-09-13T10:11:43.4567891Z'; parsingStatus='fieldless' }); nativePowerShellComparison=[pscustomobject]@{ status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1 } } } }
+        Mock Invoke-StudentExecutableTaskProbe { $script:postRegisteredAt = [DateTime]::UtcNow.ToString('o'); throw 'unsafe simulated edge detail' } -ModuleName DisposableWindowsTarget
+        Mock Get-OpenPathDisposableBoundaryFailureEvidence { [pscustomobject]@{ probeName='Post-application Edge deny'; executablePath=$edgePath; studentSid=$script:testSid; taskRegisteredAtUtc=$script:postRegisteredAt; failureCode='exact-student-process-observed-without-block-event'; processes=@([pscustomobject]@{ executablePath=$edgePath; matchesStudentSid=$true; tokenUserSid=$script:testSid; samSid=$script:testSid; samTokenSidMatch=$true }) } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { [pscustomobject]@{ status='observed'; outcome='blocked'; studentSid=$script:testSid } } -ModuleName DisposableWindowsTarget
+
+        $pair = Invoke-OpenPathDisposablePostApplicationPair -FailureResult $failure -Target $target -Lifecycle $lifecycle
+
+        $pair.edge.outcome | Should -Be 'execution-observed'
+        $pair.edge.evidence.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
+        $pair.deniedPeControl.outcome | Should -Be 'blocked'
+        Should -Invoke Invoke-StudentExecutableTaskProbe -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        Should -Invoke Invoke-OpenPathDisposableDeniedPeControl -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        ($pair | ConvertTo-Json -Depth 14) | Should -Not -Match 'unsafe simulated edge detail|must-not-serialize'
+    }
+
+    It 'does not infer Edge execution from a failure label without an observed matching token' {
+        $edgePath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='must-not-serialize'; Sid=$script:testSid; ProfilePath=$script:testPath }
+        $failure = [ordered]@{ failureDetailCode='boundary-edge-execution-failed'; edgeBoundaryEvidence=[ordered]@{ initial=[ordered]@{ probeName='Canonical Edge deny'; executablePath=$edgePath; studentSid=$script:testSid } } }
+        $lifecycle = [ordered]@{ status='observed'; window=[ordered]@{ launchRequestedAtUtc='2026-09-13T10:11:12.1234567Z'; captureEndedAtUtc='2026-09-13T10:12:02.7891234Z' }; queries=[ordered]@{ '8001'=[ordered]@{ status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1; events=@([ordered]@{ id=8001; recordId=201; timeCreatedUtc='2026-09-13T10:11:43.4567891Z'; parsingStatus='fieldless' }); nativePowerShellComparison=[ordered]@{ status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1 } } } }
+        Mock Invoke-StudentExecutableTaskProbe { $script:postRegisteredAt = [DateTime]::UtcNow.ToString('o'); throw 'edge-failed' } -ModuleName DisposableWindowsTarget
+        Mock Get-OpenPathDisposableBoundaryFailureEvidence { [pscustomobject]@{ probeName='Post-application Edge deny'; executablePath=$edgePath; studentSid=$script:testSid; taskRegisteredAtUtc=$script:postRegisteredAt; failureCode='exact-student-process-observed-without-block-event'; processes=@([pscustomobject]@{ executablePath=$edgePath; matchesStudentSid=$true; tokenUserSid='S-1-5-21-wrong'; samSid='S-1-5-21-wrong'; samTokenSidMatch=$false }) } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { [pscustomobject]@{ status='observed'; outcome='blocked' } } -ModuleName DisposableWindowsTarget
+
+        $pair = Invoke-OpenPathDisposablePostApplicationPair -FailureResult $failure -Target $target -Lifecycle $lifecycle
+
+        $pair.status | Should -Be 'observed'
+        $pair.edge.outcome | Should -Be 'inconclusive'
+        $pair.anchor.timeCreatedUtc | Should -Be '2026-09-13T10:11:43.4567891Z'
+        Should -Invoke Invoke-StudentExecutableTaskProbe -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        Should -Invoke Invoke-OpenPathDisposableDeniedPeControl -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+    }
+
+    It 'rejects stale post-application Edge evidence without serializing it' {
+        $edgePath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='must-not-serialize'; Sid=$script:testSid; ProfilePath=$script:testPath }
+        $failure = [pscustomobject]@{ failureDetailCode='boundary-edge-execution-failed'; edgeBoundaryEvidence=[pscustomobject]@{ initial=[pscustomobject]@{ probeName='Canonical Edge deny'; executablePath=$edgePath; studentSid=$script:testSid } } }
+        $lifecycle = [pscustomobject]@{ status='observed'; window=[pscustomobject]@{ launchRequestedAtUtc='2026-09-13T10:11:12.1234567Z'; captureEndedAtUtc='2026-09-13T10:12:02.7891234Z' }; queries=[pscustomobject]@{ '8001'=[pscustomobject]@{ status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1; events=@([pscustomobject]@{ id=8001; recordId=201; timeCreatedUtc='2026-09-13T10:11:43.4567891Z'; parsingStatus='fieldless' }); nativePowerShellComparison=[pscustomobject]@{ status='QUERY_SUCCEEDED_MATCHES'; querySucceeded=$true; eventCount=1 } } } }
+        Mock Invoke-StudentExecutableTaskProbe { throw 'edge-failed' } -ModuleName DisposableWindowsTarget
+        Mock Get-OpenPathDisposableBoundaryFailureEvidence { [pscustomobject]@{ probeName='Canonical Edge deny'; executablePath='C:\stale\msedge.exe'; studentSid=$script:testSid; failureCode='stale-must-not-serialize' } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { [pscustomobject]@{ status='observed'; outcome='blocked' } } -ModuleName DisposableWindowsTarget
+
+        $pair = Invoke-OpenPathDisposablePostApplicationPair -FailureResult $failure -Target $target -Lifecycle $lifecycle
+
+        $pair.edge.status | Should -Be 'unavailable'
+        $pair.edge.code | Should -Be 'post-application-edge-evidence-unavailable'
+        $pair.edge.PSObject.Properties['evidence'] | Should -BeNullOrEmpty
+        Should -Invoke Invoke-OpenPathDisposableDeniedPeControl -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        ($pair | ConvertTo-Json -Depth 14) | Should -Not -Match 'stale-must-not-serialize'
+    }
+
+    It 'does not start the pair for invalid or unsupported lifecycle anchors' -ForEach @(
+        @{ case='wrong primary failure'; failureCode='different-failure'; queryStatus='QUERY_SUCCEEDED_MATCHES'; primarySucceeded=$true; nativeStatus='QUERY_SUCCEEDED_MATCHES'; nativeSucceeded=$true; nativeCount=1; eventId=8001; recordId=201; eventTime='2026-09-13T10:11:43.4567891Z'; parsingStatus='fieldless' }
+        @{ case='primary query failed'; failureCode='boundary-edge-execution-failed'; queryStatus='QUERY_FAILED'; primarySucceeded=$false; nativeStatus='QUERY_SUCCEEDED_MATCHES'; nativeSucceeded=$true; nativeCount=1; eventId=8001; recordId=201; eventTime='2026-09-13T10:11:43.4567891Z'; parsingStatus='fieldless' }
+        @{ case='native query empty'; failureCode='boundary-edge-execution-failed'; queryStatus='QUERY_SUCCEEDED_MATCHES'; primarySucceeded=$true; nativeStatus='QUERY_SUCCEEDED_NO_MATCHES'; nativeSucceeded=$true; nativeCount=0; eventId=8001; recordId=201; eventTime='2026-09-13T10:11:43.4567891Z'; parsingStatus='fieldless' }
+        @{ case='missing actual id'; failureCode='boundary-edge-execution-failed'; queryStatus='QUERY_SUCCEEDED_MATCHES'; primarySucceeded=$true; nativeStatus='QUERY_SUCCEEDED_MATCHES'; nativeSucceeded=$true; nativeCount=1; eventId=$null; recordId=201; eventTime='2026-09-13T10:11:43.4567891Z'; parsingStatus='fieldless' }
+        @{ case='future event'; failureCode='boundary-edge-execution-failed'; queryStatus='QUERY_SUCCEEDED_MATCHES'; primarySucceeded=$true; nativeStatus='QUERY_SUCCEEDED_MATCHES'; nativeSucceeded=$true; nativeCount=1; eventId=8001; recordId=201; eventTime='2099-09-13T10:11:43.4567891Z'; parsingStatus='fieldless' }
+        @{ case='out of window'; failureCode='boundary-edge-execution-failed'; queryStatus='QUERY_SUCCEEDED_MATCHES'; primarySucceeded=$true; nativeStatus='QUERY_SUCCEEDED_MATCHES'; nativeSucceeded=$true; nativeCount=1; eventId=8001; recordId=201; eventTime='2026-09-13T10:10:43.4567891Z'; parsingStatus='fieldless' }
+        @{ case='malformed fieldless observation'; failureCode='boundary-edge-execution-failed'; queryStatus='QUERY_SUCCEEDED_MATCHES'; primarySucceeded=$true; nativeStatus='QUERY_SUCCEEDED_MATCHES'; nativeSucceeded=$true; nativeCount=1; eventId=8001; recordId=201; eventTime='2026-09-13T10:11:43.4567891Z'; parsingStatus='unavailable' }
+    ) {
+        param($case, $failureCode, $queryStatus, $primarySucceeded, $nativeStatus, $nativeSucceeded, $nativeCount, $eventId, $recordId, $eventTime, $parsingStatus)
+        $edgePath = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='must-not-serialize'; Sid=$script:testSid; ProfilePath=$script:testPath }
+        $failure = [pscustomobject]@{ failureDetailCode=$failureCode; edgeBoundaryEvidence=[pscustomobject]@{ initial=[pscustomobject]@{ probeName='Canonical Edge deny'; executablePath=$edgePath; studentSid=$script:testSid } } }
+        $event = [pscustomobject]@{ recordId=$recordId; timeCreatedUtc=$eventTime; parsingStatus=$parsingStatus }
+        if ($null -ne $eventId) { $event | Add-Member -NotePropertyName id -NotePropertyValue $eventId }
+        $lifecycle = [pscustomobject]@{ status='observed'; window=[pscustomobject]@{ launchRequestedAtUtc='2026-09-13T10:11:12.1234567Z'; captureEndedAtUtc='2026-09-13T10:12:02.7891234Z' }; queries=[pscustomobject]@{ '8001'=[pscustomobject]@{ status=$queryStatus; querySucceeded=$primarySucceeded; eventCount=1; events=@($event); nativePowerShellComparison=[pscustomobject]@{ status=$nativeStatus; querySucceeded=$nativeSucceeded; eventCount=$nativeCount } } } }
+        Mock Invoke-StudentExecutableTaskProbe { throw 'must-not-run' } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { throw 'must-not-run' } -ModuleName DisposableWindowsTarget
+
+        $pair = Invoke-OpenPathDisposablePostApplicationPair -FailureResult $failure -Target $target -Lifecycle $lifecycle
+
+        $pair.status | Should -Be 'not-started' -Because $case
+        Should -Invoke Invoke-StudentExecutableTaskProbe -ModuleName DisposableWindowsTarget -Times 0 -Exactly
+        Should -Invoke Invoke-OpenPathDisposableDeniedPeControl -ModuleName DisposableWindowsTarget -Times 0 -Exactly
     }
 
     It 'returns an unavailable PE control when the target PE is missing' {

@@ -995,6 +995,28 @@ finally {
     if ($null -ne $result) {
         $result['appLockerPolicyLifecycle'] = $appLockerPolicyLifecycle
     }
+    try {
+        $postApplicationPair = Invoke-OpenPathDisposablePostApplicationPair `
+            -FailureResult $result `
+            -Target $disposableTarget `
+            -Lifecycle $appLockerPolicyLifecycle
+    }
+    catch {
+        $postApplicationPair = [pscustomobject][ordered]@{
+            status = 'unavailable'
+            reason = 'post-application-pair-failed'
+            trigger = $null
+            anchor = $null
+            startedAtUtc = $null
+            endedAtUtc = $null
+            policyReapplied = $false
+            edge = $null
+            deniedPeControl = $null
+        }
+    }
+    if ($null -ne $result) {
+        $result['postApplicationPair'] = $postApplicationPair
+    }
     $e2eCleanupAttempted = $true
     $targetCleanupSucceeded = $null -eq $disposableTarget
     if ($stubJob) {
