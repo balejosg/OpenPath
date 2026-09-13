@@ -2,6 +2,16 @@
 
 This repository is the standalone OpenPath OSS core: Linux and Windows endpoint agents plus a Node.js/TypeScript monorepo for the API, dashboard proxy, shared contracts, React SPA, and browser extension.
 
+## Workflow Proportionality
+
+Use direct work for bounded changes; delegate only when isolation, specialist work
+or independent judgment adds value. Keep one writer. Use skills when explicitly
+requested or clearly applicable; generic workflow guidelines do not require extra
+design documents, commits or repeat approval for an already-approved narrow change.
+Use fuller design work when requirements, architecture or material risks remain
+unresolved. Read applicable instructions fully when required and reuse unchanged
+context. None of this waives safety checks, required review or final acceptance.
+
 ## Dependency Rule
 
 OpenPath must remain agnostic of downstream wrappers, managed distributions, and tenant-specific overlays.
@@ -22,7 +32,7 @@ These rules have no exceptions for agent work:
 - Do not use `@ts-ignore` or broad lint disables as a shortcut around a real problem.
 - Do not reintroduce repo-side cleanup hacks for the historical hosted Windows Pester teardown cancellation.
 
-If a hook fails, fix the issue and retry. Do not bypass the workflow.
+If a hook fails, diagnose it and fix only within authorized scope; report unrelated blockers. Do not bypass the workflow.
 
 ## Hosted Windows Pester Teardown History
 
@@ -50,10 +60,11 @@ runner health instead of relying on informal timing notes.
 
 OpenPath uses a trunk-based workflow. (canonical: workspace root AGENTS.md "Workspace Rules > Trunk-Based Only")
 
-- Work on `main`.
-- Do not create feature branches or PR branches.
-- Do not push from detached HEAD.
-- If you need an isolated checkout, use a detached worktree based on `main`.
+- Write and commit on `main`; do not create feature branches or PR branches.
+- Use an isolated writable checkout on `main` for concurrent implementation.
+- Detached worktrees are for read-only inspection; do not commit or push from them.
+- Never stash, discard changes or switch a user's checkout automatically to meet
+  branch policy. Preserve unexpected state and resolve ownership/authority first.
 
 Technical enforcement lives in `.husky/pre-commit`, `.husky/pre-push`, and `scripts/require-main-branch.sh`.
 
@@ -217,6 +228,9 @@ A pre-built knowledge graph for OpenPath lives at the workspace root:
 | `../graphify-out/graph.html`      | Interactive community view -- open in browser          |
 | `../graphify-out/GRAPH_REPORT.md` | Full audit report: god nodes, surprises, import cycles |
 
+For an exact file or known symbol, read it directly or use targeted `rg`.
+Use the graph for unknown relationships or broad navigation; its absence is not a
+blocker and does not authorize a rebuild during read-only work.
 **Query with code identifiers (function/file/symbol names), not prose questions** -- start-node
 matching is literal substring matching on node labels, so a prose question collapses to noise.
 Always pass `--graph` explicitly; the default depends on the current working directory.
