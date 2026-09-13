@@ -44,6 +44,251 @@ Describe 'Canonical offline installer disposable target' {
         Mock Start-Sleep {} -ModuleName DisposableWindowsTarget
     }
 
+    It 'stores the denied PE control under edge boundary evidence without replacing the Edge cause' {
+        $primary = [pscustomobject]@{ probeName='Canonical Edge deny'; failureCode='exact-student-process-observed-without-block-event'; executablePath='C:\Edge\msedge.exe'; studentSid=$script:testSid }
+        $exception = [System.InvalidOperationException]::new('boundary-edge-execution-failed')
+        $exception.Data['OpenPathEdgeBoundaryEvidence'] = $primary
+        $control = [pscustomobject]@{ status='observed'; outcome='blocked'; executablePath='C:\Target\openpath-e2e-probe.exe'; studentSid=$script:testSid; policyReapplied=$false }
+        Mock Invoke-OpenPathDisposableEdgeBoundaryDiagnostic { [pscustomobject]@{ attempts=@() } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { $control } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid }
+
+        $resolved = Resolve-OpenPathDisposableEdgeBoundaryFailure -Exception $exception -Target $target
+
+        $resolved.initial.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
+        $resolved.deniedPeControl.outcome | Should -Be 'blocked'
+        $resolved.deniedPeControl.policyReapplied | Should -BeFalse
+    }
+
+    It 'returns an unavailable PE control when the target PE is missing' {
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid; ProfilePath=$script:testPath }
+        $control = Invoke-OpenPathDisposableDeniedPeControl -Target $target
+        $control.status | Should -Be 'unavailable'
+        $control.code | Should -Be 'benign-pe-missing'
+    }
+
+    It 'keeps PE control inconclusive for null or unrelated process evidence' {
+        $probe = Join-Path $script:testPath 'openpath-e2e-probe.exe'
+        Set-Content -LiteralPath $probe -Value 'fixture' -Encoding ASCII
+        Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1') -Force
+        Mock Get-OpenPathTestAppLockerPolicyDecision { [pscustomobject]@{ status='unknown'; decision='unknown'; exactPath=$probe; exactSid=$script:testSid; runtime=$null; nativePowerShellComparison=$null } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-StudentExecutableTaskProbe { throw 'probe-failed' } -ModuleName BrowserBoundaryProbe
+        Mock Invoke-StudentExecutableTaskProbe { throw 'probe-failed' } -ModuleName DisposableWindowsTarget
+        Mock Get-OpenPathLastBoundaryProbeFailureEvidence { [pscustomobject]@{ failureCode='exact-student-process-observed-without-block-event'; processes=@([pscustomobject]@{ executablePath='C:\other.exe'; studentSid='S-1-5-21-other' }) } } -ModuleName BrowserBoundaryProbe
+        Mock Get-OpenPathLastBoundaryProbeFailureEvidence { [pscustomobject]@{ failureCode='exact-student-process-observed-without-block-event'; processes=@([pscustomobject]@{ executablePath='C:\other.exe'; studentSid='S-1-5-21-other' }) } } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid; ProfilePath=$script:testPath }
+
+        $control = Invoke-OpenPathDisposableDeniedPeControl -Target $target
+
+        $control.outcome | Should -Be 'inconclusive'
+        $control.markerObserved | Should -BeFalse
+        $control.testAppLockerPolicyDecision.decision | Should -Be 'unknown'
+        Should -Invoke Get-OpenPathTestAppLockerPolicyDecision -ModuleName DisposableWindowsTarget -Times 1
+        Should -Invoke Invoke-StudentExecutableTaskProbe -ModuleName DisposableWindowsTarget -Times 1
+    }
+
+    It 'passes the marker only as an argument so exact target process evidence is retained' {
+        $probe = Join-Path $script:testPath 'openpath-e2e-probe.exe'
+        Set-Content -LiteralPath $probe -Value 'fixture' -Encoding ASCII
+        Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1') -Force
+        $script:capturedMarkerArgument = $null
+        $script:capturedMarkerParameter = $null
+        Mock Get-OpenPathTestAppLockerPolicyDecision { [pscustomobject]@{ status='observed'; decision='Allowed'; exactPath=$probe; exactSid=$script:testSid; runtime=$null; nativePowerShellComparison=$null } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-StudentExecutableTaskProbe {
+            param($Arguments, $MarkerPath)
+            $script:capturedMarkerArgument = [string]$Arguments
+            $script:capturedMarkerParameter = [string]$MarkerPath
+            $marker = ([string]$Arguments).Trim('"')
+            Set-Content -LiteralPath $marker -Value 'executed' -Encoding ASCII
+            throw 'exact-process-observed'
+        } -ModuleName DisposableWindowsTarget
+        Mock Get-OpenPathLastBoundaryProbeFailureEvidence {
+            [pscustomobject]@{
+                failureCode='exact-student-process-observed-without-block-event'
+                processes=@([pscustomobject]@{
+                    executablePath=$probe; matchesStudentSid=$true; tokenUserSid=$script:testSid
+                    samSid=$script:testSid; samTokenSidMatch=$true; processId=4242
+                })
+            }
+        } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid; ProfilePath=$script:testPath }
+
+        $control = Invoke-OpenPathDisposableDeniedPeControl -Target $target
+
+        $script:capturedMarkerParameter | Should -BeNullOrEmpty
+        $script:capturedMarkerArgument | Should -Match 'openpath-e2e-probe-[0-9a-f]{32}\.marker'
+        $control.outcome | Should -Be 'execution-observed'
+        $control.markerObserved | Should -BeTrue
+        $control.evidence.processes[0].tokenUserSid | Should -Be $script:testSid
+    }
+
+    It 'lets a fresh marker override a simultaneous block-shaped result' {
+        $probe = Join-Path $script:testPath 'openpath-e2e-probe.exe'
+        Set-Content -LiteralPath $probe -Value 'fixture' -Encoding ASCII
+        Mock Get-OpenPathTestAppLockerPolicyDecision { [pscustomobject]@{ status='observed'; decision='Denied'; exactPath=$probe; exactSid=$script:testSid; runtime=$null; nativePowerShellComparison=$null } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-StudentExecutableTaskProbe {
+            param($Arguments)
+            Set-Content -LiteralPath ([string]$Arguments).Trim('"') -Value 'executed' -Encoding ASCII
+            [pscustomobject]@{ evidence=[pscustomobject]@{ correlatedEvent=[pscustomobject]@{ id=8004; observedPath=$probe; observedUserSid=$script:testSid } } }
+        } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid; ProfilePath=$script:testPath }
+
+        $control = Invoke-OpenPathDisposableDeniedPeControl -Target $target
+
+        $control.markerObserved | Should -BeTrue
+        $control.outcome | Should -Be 'execution-observed'
+    }
+
+    It 'does not call allow audit or mismatched event evidence a PE block' -TestCases @(
+        @{ EventId=8002; EventPath='exact'; EventSid='exact' }
+        @{ EventId=8003; EventPath='exact'; EventSid='exact' }
+        @{ EventId=8004; EventPath='other'; EventSid='exact' }
+        @{ EventId=8004; EventPath='exact'; EventSid='other' }
+    ) {
+        param($EventId, $EventPath, $EventSid)
+        $probe = Join-Path $script:testPath 'openpath-e2e-probe.exe'
+        Set-Content -LiteralPath $probe -Value 'fixture' -Encoding ASCII
+        $observedPath = if ($EventPath -eq 'exact') { $probe } else { 'C:\other.exe' }
+        $observedSid = if ($EventSid -eq 'exact') { $script:testSid } else { 'S-1-5-21-other' }
+        Mock Get-OpenPathTestAppLockerPolicyDecision { [pscustomobject]@{ status='observed'; decision='Denied'; exactPath=$probe; exactSid=$script:testSid; runtime=$null; nativePowerShellComparison=$null } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-StudentExecutableTaskProbe { [pscustomobject]@{ evidence=[pscustomobject]@{ correlatedEvent=[pscustomobject]@{ id=$EventId; observedPath=$observedPath; observedUserSid=$observedSid } } } } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid; ProfilePath=$script:testPath }
+
+        $control = Invoke-OpenPathDisposableDeniedPeControl -Target $target
+
+        $control.markerObserved | Should -BeFalse
+        $control.outcome | Should -Be 'inconclusive'
+    }
+
+    It 'does not treat the expected studentSid field as an observed process token' {
+        $probe = Join-Path $script:testPath 'openpath-e2e-probe.exe'
+        Set-Content -LiteralPath $probe -Value 'fixture' -Encoding ASCII
+        Mock Get-OpenPathTestAppLockerPolicyDecision { [pscustomobject]@{ status='unknown'; decision='unknown'; exactPath=$probe; exactSid=$script:testSid; runtime=$null; nativePowerShellComparison=$null } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-StudentExecutableTaskProbe { throw 'probe-failed' } -ModuleName DisposableWindowsTarget
+        Mock Get-OpenPathLastBoundaryProbeFailureEvidence {
+            [pscustomobject]@{ failureCode='exact-student-process-observed-without-block-event'; processes=@([pscustomobject]@{ executablePath=$probe; studentSid=$script:testSid; matchesStudentSid=$true }) }
+        } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid; ProfilePath=$script:testPath }
+
+        $control = Invoke-OpenPathDisposableDeniedPeControl -Target $target
+
+        $control.outcome | Should -Be 'inconclusive'
+    }
+
+    It 'classifies an exact observed target token as execution without a marker' {
+        $probe = Join-Path $script:testPath 'openpath-e2e-probe.exe'
+        Set-Content -LiteralPath $probe -Value 'fixture' -Encoding ASCII
+        Mock Get-OpenPathTestAppLockerPolicyDecision { [pscustomobject]@{ status='unknown'; decision='unknown'; exactPath=$probe; exactSid=$script:testSid; runtime=$null; nativePowerShellComparison=$null } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-StudentExecutableTaskProbe { throw 'probe-failed' } -ModuleName DisposableWindowsTarget
+        Mock Get-OpenPathLastBoundaryProbeFailureEvidence {
+            [pscustomobject]@{ failureCode='exact-student-process-observed-without-block-event'; processes=@([pscustomobject]@{ executablePath=$probe; studentSid=$script:testSid; matchesStudentSid=$true; tokenUserSid=$script:testSid; processId=4242 }) }
+        } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid; ProfilePath=$script:testPath }
+
+        $control = Invoke-OpenPathDisposableDeniedPeControl -Target $target
+
+        $control.markerObserved | Should -BeFalse
+        $control.outcome | Should -Be 'execution-observed'
+        $control.evidence.processes[0].tokenUserSid | Should -Be $script:testSid
+    }
+
+    It 'rejects an expected SID label when the observed token belongs to another SID' {
+        $probe = Join-Path $script:testPath 'openpath-e2e-probe.exe'
+        Set-Content -LiteralPath $probe -Value 'fixture' -Encoding ASCII
+        Mock Get-OpenPathTestAppLockerPolicyDecision { [pscustomobject]@{ status='unknown'; decision='unknown'; exactPath=$probe; exactSid=$script:testSid; runtime=$null; nativePowerShellComparison=$null } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-StudentExecutableTaskProbe { throw 'probe-failed' } -ModuleName DisposableWindowsTarget
+        Mock Get-OpenPathLastBoundaryProbeFailureEvidence {
+            [pscustomobject]@{ failureCode='exact-student-process-observed-without-block-event'; processes=@([pscustomobject]@{ executablePath=$probe; studentSid=$script:testSid; matchesStudentSid=$true; tokenUserSid='S-1-5-21-other'; processId=4242 }) }
+        } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid; ProfilePath=$script:testPath }
+
+        $control = Invoke-OpenPathDisposableDeniedPeControl -Target $target
+
+        $control.markerObserved | Should -BeFalse
+        $control.outcome | Should -Be 'inconclusive'
+    }
+
+    It 'keeps the original Edge cause when the PE control itself throws' {
+        $primary = [pscustomobject]@{ probeName='Canonical Edge deny'; failureCode='exact-student-process-observed-without-block-event'; executablePath='C:\Edge\msedge.exe'; studentSid=$script:testSid }
+        $exception = [System.InvalidOperationException]::new('boundary-edge-execution-failed')
+        $exception.Data['OpenPathEdgeBoundaryEvidence'] = $primary
+        Mock Invoke-OpenPathDisposableEdgeBoundaryDiagnostic { [pscustomobject]@{ attempts=@() } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { throw 'control-infrastructure-failed' } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid }
+
+        $resolved = Resolve-OpenPathDisposableEdgeBoundaryFailure -Exception $exception -Target $target
+
+        $resolved.initial.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
+        $resolved.deniedPeControl.status | Should -Be 'unavailable'
+        $resolved.deniedPeControl.code | Should -Be 'benign-pe-control-failed'
+    }
+
+    It 'projects a producer-shaped native runtime through the real helper and writer' {
+        $path = Join-Path $TestDrive 'successful-pe-control.json'
+        $probe = Join-Path $script:testPath 'openpath-e2e-probe.exe'
+        Set-Content -LiteralPath $probe -Value 'fixture' -Encoding ASCII
+        Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1') -Force
+        Mock Get-OpenPathTestAppLockerPolicyDecision {
+            [pscustomobject]@{
+                status='observed'; decision='Denied'; exactPath=$probe; exactSid=$script:testSid
+                runtime=[pscustomobject]@{ supported=$true; edition='Core'; version='7.6.0'; bitness='64-bit'; processId=4200; rawMessage='drop-me'; credential='drop-me'; XML='<drop />' }
+                nativePowerShellComparison=[pscustomobject]@{
+                    status='observed'; decision='DeniedByDefault'; path=$probe; userSid=$script:testSid; rawMessage='drop-me'; credential='drop-me'; XML='<drop />'
+                    runtime=[pscustomobject]@{ edition='Desktop'; version='5.1.26100'; bitness='64-bit'; processId=5100; rawMessage='drop-me'; credential='drop-me'; XML='<drop />' }
+                }
+            }
+        } -ModuleName DisposableWindowsTarget
+        Mock Invoke-StudentExecutableTaskProbe {
+            [pscustomobject]@{ evidence=[pscustomobject]@{ correlatedEvent=[pscustomobject]@{ id=8004; observedPath=$probe; observedUserSid=$script:testSid } } }
+        } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid; ProfilePath=$script:testPath }
+        $control = Invoke-OpenPathDisposableDeniedPeControl -Target $target
+
+        Write-OpenPathOfflineInstallerEvidence -Payload ([ordered]@{ edgeBoundaryEvidence=[ordered]@{ deniedPeControl=$control } }) -Path $path
+        $rawRoundTrip = Get-Content -LiteralPath $path -Raw
+        $roundTrip = $rawRoundTrip | ConvertFrom-Json
+
+        $roundTrip.edgeBoundaryEvidence.deniedPeControl.outcome | Should -Be 'blocked'
+        $roundTrip.edgeBoundaryEvidence.deniedPeControl.testAppLockerPolicyDecision.nativePowerShellComparison.decision | Should -Be 'DeniedByDefault'
+        $roundTrip.edgeBoundaryEvidence.deniedPeControl.testAppLockerPolicyDecision.nativePowerShellComparison.runtime.PSObject.Properties['supported'] | Should -BeNullOrEmpty
+        $rawRoundTrip | Should -Match ([regex]::Escape($control.startedAtUtc))
+        $rawRoundTrip | Should -Match ([regex]::Escape($control.endedAtUtc))
+        ($roundTrip | ConvertTo-Json -Depth 14) | Should -Not -Match 'Password|not-serialized|rawMessage|credential|<drop'
+    }
+
+    It 'retains an explicitly present null runtime field without adding absent fields' {
+        $projection = InModuleScope DisposableWindowsTarget {
+            ConvertTo-OpenPathDisposableRuntimeProjection -Runtime ([pscustomobject]@{ supported=$null; edition='Desktop' })
+        }
+
+        $projection.PSObject.Properties['supported'] | Should -Not -BeNullOrEmpty
+        $projection.supported | Should -BeNullOrEmpty
+        $projection.PSObject.Properties['edition'] | Should -Not -BeNullOrEmpty
+        $projection.PSObject.Properties['version'] | Should -BeNullOrEmpty
+    }
+
+    It 'recognizes the producer safe event shape for a correlated PE block' {
+        $probe = Join-Path $script:testPath 'openpath-e2e-probe.exe'
+        Set-Content -LiteralPath $probe -Value 'fixture' -Encoding ASCII
+        Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1') -Force
+        $event = [pscustomobject]@{ Id=8004; Xml=@"
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event"><System><EventID>8004</EventID></System><UserData><RuleAndFileData><TargetUser>$($script:testSid)</TargetUser><FullFilePath>$probe</FullFilePath></RuleAndFileData></UserData></Event>
+"@ }
+        Add-Member -InputObject $event -MemberType ScriptMethod -Name ToXml -Value { $this.Xml }
+        $correlation = Get-OpenPathCorrelatedAppLockerEvent -Events @($event) -AllowedEventIds @(8004) -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -BinaryLeaf 'openpath-e2e-probe.exe' -ExpectedExecutablePath $probe -StudentSid $script:testSid
+        $correlation.matched | Should -BeTrue
+        Mock Get-OpenPathTestAppLockerPolicyDecision { return [pscustomobject]@{ status='observed'; decision='DeniedByDefault'; exactPath=$probe; exactSid=$script:testSid; runtime=[pscustomobject]@{ supported=$true; edition='Desktop'; version='5.1'; bitness='64-bit'; processId=1 }; nativePowerShellComparison=[pscustomobject]@{ status='unavailable'; runtime=$null; path=$probe; userSid=$script:testSid } } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-StudentExecutableTaskProbe { return [pscustomobject]@{ status='pass'; evidence=[pscustomobject]@{ correlatedEvent=$correlation.event } } } -ModuleName DisposableWindowsTarget
+        $target = [pscustomobject]@{ UserName='op-e2e-test'; Password='not-serialized'; Sid=$script:testSid; ProfilePath=$script:testPath }
+
+        $control = Invoke-OpenPathDisposableDeniedPeControl -Target $target
+
+        $control.outcome | Should -Be 'blocked'
+        $control.testAppLockerPolicyDecision.decision | Should -Be 'DeniedByDefault'
+        $control.testAppLockerPolicyDecision.nativePowerShellComparison.decision | Should -BeNullOrEmpty
+        $control.executableSha256 | Should -Not -BeNullOrEmpty
+    }
+
     It 'creates an enabled non-admin account with a materialized non-special profile without pre-populating the restricted group' {
         $target = New-OpenPathDisposableStandardTarget
         $target.Sid | Should -Be $script:testSid
@@ -378,7 +623,7 @@ Describe 'Canonical offline installer disposable target' {
         $path = Join-Path $TestDrive 'cross-module-edge-failure.json'
         $payload = [ordered]@{
             status = 'failed'; failureDetailCode = $translated.Message
-            edgeBoundaryEvidence = [ordered]@{ initial = $resolved.initial; repeat = $resolved.repeat }
+            edgeBoundaryEvidence = [ordered]@{ initial = $resolved.initial; repeat = $resolved.repeat; deniedPeControl = $resolved.deniedPeControl }
             cleanupAttempted = $true; cleanupSucceeded = $false
         }
         Write-OpenPathOfflineInstallerEvidence -Payload $payload -Path $path
@@ -386,6 +631,7 @@ Describe 'Canonical offline installer disposable target' {
         $roundTrip.status | Should -Be 'failed'
         $roundTrip.failureDetailCode | Should -Be 'boundary-edge-execution-failed'
         $roundTrip.edgeBoundaryEvidence.initial.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
+        $roundTrip.edgeBoundaryEvidence.deniedPeControl.status | Should -Be 'unavailable'
         $roundTrip.edgeBoundaryEvidence.initial.samGroupMemberPresent | Should -BeTrue
         $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupPresent | Should -BeNullOrEmpty
         $roundTrip.edgeBoundaryEvidence.initial.processes[0].restrictedGroupQueryStatus | Should -Be 'unavailable'

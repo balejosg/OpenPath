@@ -328,12 +328,23 @@ function Resolve-OpenPathDisposableEdgeBoundaryFailure {
             $repeat = [pscustomobject][ordered]@{ status = 'unavailable'; code = 'edge-boundary-diagnostic-failed' }
         }
     }
+    try {
+        $deniedPeControl = Invoke-OpenPathDisposableDeniedPeControl -Target $Target
+    }
+    catch {
+        $deniedPeControl = [pscustomobject]@{
+            status = 'unavailable'
+            code = 'benign-pe-control-failed'
+            outcome = 'inconclusive'
+            policyReapplied = $false
+        }
+    }
     $contract = $null
     try {
         $contract = Get-OpenPathDisposableFlatEdgeBoundaryFailureContract -Evidence $initialSnapshot -Diagnostic $repeat
     }
     catch {}
-    return [pscustomobject][ordered]@{ initial = $initialSnapshot; repeat = $repeat; contract = $contract }
+    return [pscustomobject][ordered]@{ initial = $initialSnapshot; repeat = $repeat; deniedPeControl = $deniedPeControl; contract = $contract }
 }
 
 function Write-OpenPathOfflineInstallerEvidence {
@@ -426,4 +437,106 @@ function Remove-OpenPathDisposableStandardTarget {
     return [pscustomobject]@{ userRightRemoved = $userRightRemoved; profileRemoved = $profileRemoved; userRemoved = $userRemoved; credentialDestroyed = ($null -eq $Target.Password) }
 }
 
-Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, New-OpenPathDisposableEdgeBoundaryException, Resolve-OpenPathDisposableEdgeBoundaryFailure, Write-OpenPathOfflineInstallerEvidence, Remove-OpenPathDisposableStandardTarget
+function ConvertTo-OpenPathDisposableRuntimeProjection {
+    param([object]$Runtime)
+    if (-not $Runtime) { return $null }
+    $projection = [ordered]@{}
+    foreach ($propertyName in @('supported','edition','version','bitness','processId')) {
+        if ($Runtime.PSObject.Properties[$propertyName]) {
+            $projection[$propertyName] = $Runtime.$propertyName
+        }
+    }
+    return [pscustomobject]$projection
+}
+
+function ConvertTo-OpenPathDisposableNativePolicyProjection {
+    param([object]$Native)
+    if (-not $Native) { return $null }
+    return [pscustomobject][ordered]@{
+        status = if ($Native.PSObject.Properties['status']) { $Native.status } else { $null }
+        decision = if ($Native.PSObject.Properties['decision']) { $Native.decision } else { $null }
+        path = if ($Native.PSObject.Properties['path']) { $Native.path } else { $null }
+        userSid = if ($Native.PSObject.Properties['userSid']) { $Native.userSid } else { $null }
+        runtime = ConvertTo-OpenPathDisposableRuntimeProjection -Runtime $(if ($Native.PSObject.Properties['runtime']) { $Native.runtime })
+    }
+}
+
+function Invoke-OpenPathDisposableDeniedPeControl {
+    param([Parameter(Mandatory = $true)][object]$Target)
+    $start = (Get-Date).ToUniversalTime().ToString('o')
+    $probePath = if ($Target.ProfilePath) { Join-Path $Target.ProfilePath 'openpath-e2e-probe.exe' }
+    if (-not $probePath -or -not (Test-Path -LiteralPath $probePath -PathType Leaf)) {
+        return [pscustomobject][ordered]@{ status='unavailable'; code='benign-pe-missing'; outcome='inconclusive'; policyReapplied=$false; startedAtUtc=$start; endedAtUtc=(Get-Date).ToUniversalTime().ToString('o') }
+    }
+    $marker = Join-Path $Target.ProfilePath ("openpath-e2e-probe-$([guid]::NewGuid().ToString('N')).marker")
+    try {
+        $policyCommand = Get-Command -Name Get-OpenPathTestAppLockerPolicyDecision -ErrorAction SilentlyContinue
+        $policy = if ($policyCommand) {
+            & $policyCommand -ExecutablePath $probePath -StudentSid $Target.Sid
+        }
+        else {
+            [pscustomobject][ordered]@{ status='unknown'; decision='unknown'; exactPath=$probePath; exactSid=$Target.Sid; runtime=$null; nativePowerShellComparison=$null }
+        }
+        $policyProjection = [pscustomobject][ordered]@{
+            status = $policy.status
+            decision = $policy.decision
+            exactPath = $policy.exactPath
+            exactSid = $policy.exactSid
+            runtime = ConvertTo-OpenPathDisposableRuntimeProjection -Runtime $(if ($policy.PSObject.Properties['runtime']) { $policy.runtime })
+            nativePowerShellComparison = ConvertTo-OpenPathDisposableNativePolicyProjection -Native $(if ($policy.PSObject.Properties['nativePowerShellComparison']) { $policy.nativePowerShellComparison })
+        }
+        try {
+            $peHash = (Get-FileHash -LiteralPath $probePath -Algorithm SHA256).Hash
+            $run = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny control' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probePath -Arguments "`"$marker`"" -Expectation ExpectDenied -ProcessName 'openpath-e2e-probe' -StudentSid $Target.Sid -CaptureEnforcementDiagnostics
+            $correlated = if ($run.evidence.PSObject.Properties['correlatedEvent']) { $run.evidence.correlatedEvent } else { $null }
+            $blocked = $false
+            if ($correlated -and $correlated.PSObject.Properties['id'] -and $correlated.PSObject.Properties['observedPath'] -and $correlated.PSObject.Properties['observedUserSid'] -and [int]$correlated.id -eq 8004) {
+                $blocked = [string]::Equals([string]$correlated.observedPath, $probePath, [StringComparison]::OrdinalIgnoreCase) -and [string]::Equals([string]$correlated.observedUserSid, [string]$Target.Sid, [StringComparison]::OrdinalIgnoreCase)
+            }
+            $markerObserved = Test-Path -LiteralPath $marker
+            return [pscustomobject][ordered]@{
+                status = 'observed'
+                outcome = if ($markerObserved) { 'execution-observed' } elseif ($blocked) { 'blocked' } else { 'inconclusive' }
+                executablePath = $probePath
+                executableSha256 = $peHash
+                studentSid = $Target.Sid
+                markerObserved = $markerObserved
+                startedAtUtc = $start
+                endedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+                policyReapplied = $false
+                testAppLockerPolicyDecision = $policyProjection
+                evidence = $run.evidence
+            }
+        }
+        catch {
+            $evidence = Get-OpenPathLastBoundaryProbeFailureEvidence
+            $exactProcess = $false
+            if ($evidence -and $evidence.PSObject.Properties['failureCode'] -and [string]$evidence.failureCode -eq 'exact-student-process-observed-without-block-event') {
+                foreach ($process in @($evidence.processes)) {
+                    $tokenMatch = $process -and $process.PSObject.Properties['tokenUserSid'] -and [string]::Equals([string]$process.tokenUserSid, [string]$Target.Sid, [StringComparison]::OrdinalIgnoreCase)
+                    $samFallback = $process -and $process.PSObject.Properties['tokenUserSid'] -and $null -eq $process.tokenUserSid -and $process.PSObject.Properties['samSid'] -and [string]::Equals([string]$process.samSid, [string]$Target.Sid, [StringComparison]::OrdinalIgnoreCase) -and $process.PSObject.Properties['samTokenSidMatch'] -and ($null -eq $process.samTokenSidMatch -or [bool]$process.samTokenSidMatch)
+                    if ($process -and $process.PSObject.Properties['matchesStudentSid'] -and [bool]$process.matchesStudentSid -and [string]::Equals([string]$process.executablePath, $probePath, [StringComparison]::OrdinalIgnoreCase) -and ($tokenMatch -or $samFallback)) { $exactProcess = $true; break }
+                }
+            }
+            return [pscustomobject][ordered]@{
+                status = 'observed'
+                outcome = if ((Test-Path -LiteralPath $marker) -or $exactProcess) { 'execution-observed' } else { 'inconclusive' }
+                executablePath = $probePath
+                executableSha256 = $peHash
+                studentSid = $Target.Sid
+                markerObserved = Test-Path -LiteralPath $marker
+                startedAtUtc = $start
+                endedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+                policyReapplied = $false
+                testAppLockerPolicyDecision = $policyProjection
+                evidence = $evidence
+            }
+        }
+    }
+    catch {
+        return [pscustomobject][ordered]@{ status='unavailable'; code='benign-pe-control-failed'; outcome='inconclusive'; executablePath=$probePath; studentSid=$Target.Sid; startedAtUtc=$start; endedAtUtc=(Get-Date).ToUniversalTime().ToString('o'); policyReapplied=$false }
+    }
+    finally { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue }
+}
+
+Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, Invoke-OpenPathDisposableDeniedPeControl, New-OpenPathDisposableEdgeBoundaryException, Resolve-OpenPathDisposableEdgeBoundaryFailure, Write-OpenPathOfflineInstallerEvidence, Remove-OpenPathDisposableStandardTarget

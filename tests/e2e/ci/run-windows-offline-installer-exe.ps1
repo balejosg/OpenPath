@@ -828,7 +828,7 @@ catch {
         try { $resolvedEdgeFailure = & $resolveEdgeFailure -Exception $boundaryException -Target $disposableTarget } catch {}
     }
     if ($resolvedEdgeFailure) {
-        $edgeBoundaryEvidence = [ordered]@{ initial = $resolvedEdgeFailure.initial; repeat = $resolvedEdgeFailure.repeat }
+        $edgeBoundaryEvidence = [ordered]@{ initial = $resolvedEdgeFailure.initial; repeat = $resolvedEdgeFailure.repeat; deniedPeControl = $resolvedEdgeFailure.deniedPeControl }
         $edgeFailureContract = $resolvedEdgeFailure.contract
     }
     $getBoundaryFailureEvidence = Get-Command -Name Get-OpenPathDisposableBoundaryFailureEvidence -ErrorAction SilentlyContinue
@@ -845,6 +845,7 @@ catch {
             $edgeBoundaryEvidence = [ordered]@{
                 initial = $initialBoundaryEvidence
                 repeat = $null
+                deniedPeControl = $null
             }
             $runBoundaryDiagnostic = Get-Command -Name Invoke-OpenPathDisposableEdgeBoundaryDiagnostic -ErrorAction SilentlyContinue
             if (-not $runBoundaryDiagnostic) {
@@ -864,6 +865,11 @@ catch {
                         code = 'edge-boundary-diagnostic-failed'
                     }
                 }
+            }
+            $runPeControl = Get-Command -Name Invoke-OpenPathDisposableDeniedPeControl -ErrorAction SilentlyContinue
+            if ($runPeControl -and $disposableTarget) {
+                try { $edgeBoundaryEvidence.deniedPeControl = & $runPeControl -Target $disposableTarget }
+                catch { $edgeBoundaryEvidence.deniedPeControl = [ordered]@{ status='unavailable'; code='benign-pe-control-failed'; outcome='inconclusive'; policyReapplied=$false } }
             }
             $getEdgeFailureContract = Get-Command -Name Get-OpenPathDisposableFlatEdgeBoundaryFailureContract -ErrorAction SilentlyContinue
             if (-not $getEdgeFailureContract) {
