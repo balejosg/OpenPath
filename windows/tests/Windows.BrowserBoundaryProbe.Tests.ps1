@@ -2913,4 +2913,155 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
             ($queries + $defaultQuery | ConvertTo-Json -Depth 12) | Should -Not -Match 'secret|Password|Exception\.Message'
         }
     }
+
+    Context "AppLocker policy lifecycle observer" {
+        BeforeEach {
+            $script:lifecycleRuntime = [pscustomobject]@{
+                supported = $true
+                edition = 'Core'
+                version = '7.6.5'
+                bitness = '64-bit'
+                processId = 9880
+            }
+            $script:lifecycleStart = [datetime]'2026-09-13T10:11:12.1234567Z'
+            $script:lifecycleExit = [datetime]'2026-09-13T10:11:42.4567891Z'
+            $script:lifecycleEnd = [datetime]'2026-09-13T10:12:02.7891234Z'
+            Mock Get-OpenPathAppLockerEventChannel {
+                param([string]$LogName)
+                [pscustomobject]@{ channel = $LogName; channelExists = $true; channelEnabled = $true; status = 'observed' }
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativePowerShellEventQuery {
+                param($LogName, $EventId, $StartTime, $EndTime)
+                [pscustomobject]@{
+                    status = 'QUERY_SUCCEEDED_NO_MATCHES'; channel = $LogName; logName = $LogName
+                    eventId = $EventId; startTime = $StartTime; endTime = $EndTime
+                    channelEnabled = $true; channelExists = $true; queryAttempted = $true
+                    querySucceeded = $true; eventCount = 0; exception = $null; reason = $null
+                    runtime = [pscustomobject]@{ edition = 'Desktop'; version = '5.1.26100'; bitness = '64-bit'; processId = 7700 }
+                }
+            } -ModuleName BrowserBoundaryProbe
+        }
+
+        It 'projects bounded safe lifecycle fields and labels native evidence as counts-only' {
+            $eventsById = @{
+                8000 = @(
+                    [pscustomobject]@{ Id = 8000; RecordId = 101; TimeCreated = [datetime]'2026-09-13T10:11:13Z'; Message = 'unsafe-message'; XmlText = '<Event><EventData><Data Name="Status">0x80070005</Data><Data Name="credential">unsafe</Data></EventData></Event>'; credential = 'unsafe' },
+                    [pscustomobject]@{ Id = 8000; RecordId = 104; TimeCreated = [datetime]'2026-09-13T10:11:13.5Z'; XmlText = '<Event><UserData><PolicyConversionEvent><Status>2147942405</Status></PolicyConversionEvent></UserData></Event>' }
+                )
+                8001 = @([pscustomobject]@{ Id = 8001; RecordId = 102; TimeCreated = [datetime]'2026-09-13T10:11:14Z'; Message = 'unsafe-message'; XmlText = '<Event><System /></Event>'; rawXml = 'unsafe' })
+                8008 = @(
+                    [pscustomobject]@{ Id = 8008; RecordId = 103; TimeCreated = [datetime]'2026-09-13T10:11:15Z'; Message = 'unsafe-message'; XmlText = '<Event><EventData><Data Name="FilePathLength">31</Data><Data Name="FilePathBuffer">C:\Program Files\OpenPath\agent.exe</Data></EventData></Event>'; Password = 'unsafe' },
+                    [pscustomobject]@{ Id = 8008; RecordId = 105; TimeCreated = [datetime]'2026-09-13T10:11:16Z'; XmlText = '<Event><UserData><PolicyConversionEvent><FilePath>C:\OpenPath\policy.xml</FilePath></PolicyConversionEvent></UserData></Event>' }
+                )
+            }
+            foreach ($event in @($eventsById.Values | ForEach-Object { $_ })) {
+                Add-Member -InputObject $event -MemberType ScriptMethod -Name ToXml -Value { $this.XmlText }
+            }
+            Mock Get-WinEvent { @($eventsById[[int]$FilterHashtable.Id]) } -ModuleName BrowserBoundaryProbe
+
+            $result = Get-OpenPathAppLockerPolicyLifecycleEvidence -LaunchRequestedAt $script:lifecycleStart -InstallerExitedAt $script:lifecycleExit -CaptureEndedAt $script:lifecycleEnd -RuntimeOverride $script:lifecycleRuntime
+
+            $result.status | Should -Be 'observed'
+            $result.window.launchRequestedAtUtc | Should -Be '2026-09-13T10:11:12.1234567Z'
+            $result.window.installerExitedAtUtc | Should -Be '2026-09-13T10:11:42.4567891Z'
+            $result.window.captureEndedAtUtc | Should -Be '2026-09-13T10:12:02.7891234Z'
+            $result.queries.'8000'.eventCount | Should -Be 2
+            $result.queries.'8000'.retainedEventCount | Should -Be 2
+            $result.queries.'8000'.events[0].status | Should -Be '0x80070005'
+            $result.queries.'8000'.events[0].parsingStatus | Should -Be 'observed'
+            $result.queries.'8000'.events[1].status | Should -Be '2147942405'
+            $result.queries.'8001'.events[0].parsingStatus | Should -Be 'fieldless'
+            $result.queries.'8001'.events[0].PSObject.Properties['filePath'] | Should -BeNullOrEmpty
+            $result.queries.'8008'.events[0].filePath | Should -Be 'C:\Program Files\OpenPath\agent.exe'
+            $result.queries.'8008'.events[0].parsingStatus | Should -Be 'observed'
+            $result.queries.'8008'.events[1].filePath | Should -Be 'C:\OpenPath\policy.xml'
+            $result.queries.'8000'.nativePowerShellComparison.projection | Should -Be 'counts-only'
+            $result.queries.'8000'.nativePowerShellComparison.eventCount | Should -Be 0
+            $result.queries.'8000'.nativePowerShellComparison.PSObject.Properties['events'] | Should -BeNullOrEmpty
+            $result.runtime.edition | Should -Be 'Core'
+            $json = $result | ConvertTo-Json -Depth 14
+            $json | Should -Not -Match 'unsafe-message|unsafe|credential|Password|rawXml|XmlText|Message'
+        }
+
+        It 'bounds retained events independently from the exact query count' {
+            $many = 1..40 | ForEach-Object {
+                $event = [pscustomobject]@{ Id = 8001; RecordId = $_; TimeCreated = $script:lifecycleStart.AddMilliseconds($_); XmlText = '<Event><System /></Event>' }
+                Add-Member -InputObject $event -MemberType ScriptMethod -Name ToXml -Value { $this.XmlText }
+                $event
+            }
+            Mock Get-WinEvent { if ([int]$FilterHashtable.Id -eq 8001) { @($many) } else { @() } } -ModuleName BrowserBoundaryProbe
+
+            $result = Get-OpenPathAppLockerPolicyLifecycleEvidence -LaunchRequestedAt $script:lifecycleStart -CaptureEndedAt $script:lifecycleEnd -RuntimeOverride $script:lifecycleRuntime
+
+            $result.window.installerExitedAtUtc | Should -BeNullOrEmpty
+            $result.queries.'8001'.eventCount | Should -Be 40
+            $result.queries.'8001'.retainedEventCount | Should -Be 32
+            @($result.queries.'8001'.events).Count | Should -Be 32
+        }
+
+        It 'distinguishes unsupported, channel failure, successful empty, and malformed event parsing' {
+            $unsupported = Get-OpenPathAppLockerPolicyLifecycleEvidence -LaunchRequestedAt $script:lifecycleStart -CaptureEndedAt $script:lifecycleEnd -RuntimeOverride ([pscustomobject]@{ supported = $false; edition = 'Core'; version = '7.6.5'; bitness = '64-bit'; processId = 9880 })
+            $unsupported.queries.'8000'.status | Should -Be 'OBSERVER_RUNTIME_UNSUPPORTED'
+            $unsupported.queries.'8000'.querySucceeded | Should -BeFalse
+
+            Mock Get-OpenPathAppLockerEventChannel { [pscustomobject]@{ channelExists = $false; channelEnabled = $null; status = 'unavailable'; reason = 'event-channel-unavailable' } } -ModuleName BrowserBoundaryProbe
+            $channelFailure = Get-OpenPathAppLockerPolicyLifecycleEvidence -LaunchRequestedAt $script:lifecycleStart -CaptureEndedAt $script:lifecycleEnd -RuntimeOverride $script:lifecycleRuntime
+            $channelFailure.queries.'8000'.status | Should -Be 'CHANNEL_UNAVAILABLE'
+            $channelFailure.queries.'8000'.querySucceeded | Should -BeFalse
+
+            Mock Get-OpenPathAppLockerEventChannel { [pscustomobject]@{ channelExists = $true; channelEnabled = $true; status = 'observed' } } -ModuleName BrowserBoundaryProbe
+            $queryError = [System.Management.Automation.ErrorRecord]::new(
+                [System.InvalidOperationException]::new('unsafe-query-detail'),
+                'LifecycleQueryFailed',
+                [System.Management.Automation.ErrorCategory]::ReadError,
+                $null
+            )
+            Mock Get-WinEvent { throw $queryError } -ModuleName BrowserBoundaryProbe
+            $queryFailure = Get-OpenPathAppLockerPolicyLifecycleEvidence -LaunchRequestedAt $script:lifecycleStart -CaptureEndedAt $script:lifecycleEnd -RuntimeOverride $script:lifecycleRuntime
+            $queryFailure.queries.'8000'.status | Should -Be 'QUERY_FAILED'
+            $queryFailure.queries.'8000'.querySucceeded | Should -BeFalse
+            ($queryFailure | ConvertTo-Json -Depth 14) | Should -Not -Match 'unsafe-query-detail'
+
+            Mock Get-WinEvent { @() } -ModuleName BrowserBoundaryProbe
+            $empty = Get-OpenPathAppLockerPolicyLifecycleEvidence -LaunchRequestedAt $script:lifecycleStart -CaptureEndedAt $script:lifecycleEnd -RuntimeOverride $script:lifecycleRuntime
+            $empty.queries.'8001'.status | Should -Be 'QUERY_SUCCEEDED_NO_MATCHES'
+            $empty.queries.'8001'.querySucceeded | Should -BeTrue
+            $empty.queries.'8001'.eventCount | Should -Be 0
+
+            $malformed = [pscustomobject]@{ Id = 8000; RecordId = 104; TimeCreated = $script:lifecycleStart; XmlText = '<Event><EventData><Data Name="Status">not-numeric</Data></EventData></Event>' }
+            Add-Member -InputObject $malformed -MemberType ScriptMethod -Name ToXml -Value { $this.XmlText }
+            $noXml = [pscustomobject]@{ Id = 8008; RecordId = 106; TimeCreated = $script:lifecycleStart; Message = 'unsafe-no-xml' }
+            $missingId = [pscustomobject]@{ RecordId = 107; TimeCreated = $script:lifecycleStart; XmlText = '<Event><System /></Event>' }
+            $wrongId = [pscustomobject]@{ Id = 8000; RecordId = 108; TimeCreated = $script:lifecycleStart; XmlText = '<Event><System /></Event>' }
+            Add-Member -InputObject $missingId -MemberType ScriptMethod -Name ToXml -Value { $this.XmlText }
+            Add-Member -InputObject $wrongId -MemberType ScriptMethod -Name ToXml -Value { $this.XmlText }
+            Mock Get-WinEvent {
+                if ([int]$FilterHashtable.Id -eq 8000) { @($malformed) }
+                elseif ([int]$FilterHashtable.Id -eq 8008) { @($noXml) }
+                else { @($missingId, $wrongId) }
+            } -ModuleName BrowserBoundaryProbe
+            $parsed = Get-OpenPathAppLockerPolicyLifecycleEvidence -LaunchRequestedAt $script:lifecycleStart -CaptureEndedAt $script:lifecycleEnd -RuntimeOverride $script:lifecycleRuntime
+            $parsed.queries.'8000'.events[0].parsingStatus | Should -Be 'unavailable'
+            $parsed.queries.'8000'.events[0].PSObject.Properties['status'] | Should -BeNullOrEmpty
+            $parsed.queries.'8008'.events[0].parsingStatus | Should -Be 'unavailable'
+            $parsed.queries.'8008'.events[0].PSObject.Properties['filePath'] | Should -BeNullOrEmpty
+            $parsed.queries.'8001'.events[0].id | Should -BeNullOrEmpty
+            $parsed.queries.'8001'.events[0].parsingStatus | Should -Be 'unavailable'
+            $parsed.queries.'8001'.events[1].id | Should -Be 8000
+            $parsed.queries.'8001'.events[1].parsingStatus | Should -Be 'unavailable'
+            ($parsed | ConvertTo-Json -Depth 14) | Should -Not -Match 'unsafe-no-xml'
+        }
+
+        It 'does not invent a time window when installer launch was not requested' {
+            Mock Get-WinEvent { throw 'must-not-query' } -ModuleName BrowserBoundaryProbe
+            $result = Get-OpenPathAppLockerPolicyLifecycleEvidence -CaptureEndedAt $script:lifecycleEnd -RuntimeOverride $script:lifecycleRuntime
+
+            $result.status | Should -Be 'not-started'
+            $result.reason | Should -Be 'installer-launch-not-requested'
+            $result.window.launchRequestedAtUtc | Should -BeNullOrEmpty
+            $result.window.installerExitedAtUtc | Should -BeNullOrEmpty
+            @($result.queries.PSObject.Properties).Count | Should -Be 0
+            Should -Invoke Get-WinEvent -ModuleName BrowserBoundaryProbe -Times 0
+        }
+    }
 }

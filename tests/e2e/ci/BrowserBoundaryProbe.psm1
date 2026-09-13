@@ -2064,6 +2064,221 @@ function Get-OpenPathAppLockerEventQuery {
     return [pscustomobject]$result
 }
 
+function Get-OpenPathLifecycleEventXmlField {
+    param(
+        [Parameter(Mandatory = $true)][object]$Event,
+        [Parameter(Mandatory = $true)][string[]]$FieldNames
+    )
+
+    $document = $null
+    try {
+        if (-not $Event.PSObject.Methods['ToXml']) {
+            return [pscustomobject][ordered]@{ xmlAvailable = $false; fieldObserved = $false; value = $null }
+        }
+        $document = [xml]$Event.ToXml()
+    }
+    catch {
+        return [pscustomobject][ordered]@{ xmlAvailable = $false; fieldObserved = $false; value = $null }
+    }
+    if (-not $document) {
+        return [pscustomobject][ordered]@{ xmlAvailable = $false; fieldObserved = $false; value = $null }
+    }
+
+    foreach ($fieldName in $FieldNames) {
+        foreach ($dataNode in @($document.SelectNodes('//*[local-name()="Data"]'))) {
+            $nameAttribute = $dataNode.Attributes['Name']
+            if (-not $nameAttribute) { $nameAttribute = $dataNode.Attributes['name'] }
+            if ($nameAttribute -and [string]$nameAttribute.Value -ieq $fieldName) {
+                return [pscustomobject][ordered]@{ xmlAvailable = $true; fieldObserved = $true; value = [string]$dataNode.InnerText }
+            }
+        }
+        foreach ($leafNode in @($document.SelectNodes('//*[local-name()="UserData"]//*[not(*)]'))) {
+            if ([string]$leafNode.LocalName -ieq $fieldName) {
+                return [pscustomobject][ordered]@{ xmlAvailable = $true; fieldObserved = $true; value = [string]$leafNode.InnerText }
+            }
+        }
+    }
+    return [pscustomobject][ordered]@{ xmlAvailable = $true; fieldObserved = $false; value = $null }
+}
+
+function Get-OpenPathSafeAppLockerLifecycleEvent {
+    param(
+        [Parameter(Mandatory = $true)][object]$Event,
+        [Parameter(Mandatory = $true)][ValidateSet(8000, 8001, 8008)][int]$ExpectedEventId
+    )
+
+    $eventId = $null
+    if ($Event.PSObject.Properties['Id'] -and $null -ne $Event.Id) {
+        try { $eventId = [int]$Event.Id } catch {}
+    }
+    $recordId = $null
+    if ($Event.PSObject.Properties['RecordId'] -and $null -ne $Event.RecordId) {
+        try { $recordId = [long]$Event.RecordId } catch {}
+    }
+    $timeCreatedUtc = $null
+    if ($Event.PSObject.Properties['TimeCreated'] -and $null -ne $Event.TimeCreated) {
+        try { $timeCreatedUtc = ([datetime]$Event.TimeCreated).ToUniversalTime().ToString('o') } catch {}
+    }
+    $safe = [ordered]@{
+        id = $eventId
+        recordId = $recordId
+        timeCreatedUtc = $timeCreatedUtc
+        parsingStatus = 'unavailable'
+    }
+    if ($null -eq $eventId -or $eventId -ne $ExpectedEventId) {
+        return [pscustomobject]$safe
+    }
+
+    if ($ExpectedEventId -eq 8001) {
+        $xmlState = Get-OpenPathLifecycleEventXmlField -Event $Event -FieldNames @('__fieldless__')
+        if ($xmlState.xmlAvailable) { $safe.parsingStatus = 'fieldless' }
+        return [pscustomobject]$safe
+    }
+    if ($ExpectedEventId -eq 8000) {
+        $statusField = Get-OpenPathLifecycleEventXmlField -Event $Event -FieldNames @('Status')
+        $statusText = if ($statusField.fieldObserved) { ([string]$statusField.value).Trim() } else { '' }
+        $numericStatus = 0L
+        $validStatus = $false
+        if ($statusText -match '^0[xX][0-9a-fA-F]{1,8}$') {
+            $validStatus = [long]::TryParse($statusText.Substring(2), [Globalization.NumberStyles]::HexNumber, [Globalization.CultureInfo]::InvariantCulture, [ref]$numericStatus)
+        }
+        elseif ($statusText -match '^[0-9]{1,10}$') {
+            $validStatus = [long]::TryParse($statusText, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref]$numericStatus)
+        }
+        if ($validStatus -and $numericStatus -ge 0 -and $numericStatus -le [uint32]::MaxValue) {
+            $safe.parsingStatus = 'observed'
+            $safe.status = $statusText
+        }
+        return [pscustomobject]$safe
+    }
+
+    $pathField = Get-OpenPathLifecycleEventXmlField -Event $Event -FieldNames @('FilePathBuffer', 'FilePath')
+    $pathText = if ($pathField.fieldObserved) { ([string]$pathField.value).Trim() } else { '' }
+    if ($pathText.Length -le 32767 -and $pathText -match '^(?:[A-Za-z]:\\|\\\\)[^\u0000-\u001f]+$') {
+        $safe.parsingStatus = 'observed'
+        $safe.filePath = $pathText
+    }
+    return [pscustomobject]$safe
+}
+
+function Get-OpenPathSafeAppLockerLifecycleQuery {
+    param(
+        [Parameter(Mandatory = $true)][object]$Query,
+        [Parameter(Mandatory = $true)][ValidateSet(8000, 8001, 8008)][int]$EventId
+    )
+
+    $base = Get-OpenPathSafeAppLockerEventQueryEvidence -Query $Query -NoNativeComparison
+    $safeEvents = @()
+    if ($Query.PSObject.Properties['events'] -and $null -ne $Query.events) {
+        $safeEvents = @($Query.events | Select-Object -First 32 | ForEach-Object {
+                Get-OpenPathSafeAppLockerLifecycleEvent -Event $_ -ExpectedEventId $EventId
+            })
+    }
+    $native = $null
+    if ($Query.PSObject.Properties['nativePowerShellComparison'] -and $Query.nativePowerShellComparison) {
+        $nativeBase = Get-OpenPathSafeAppLockerEventQueryEvidence -Query $Query.nativePowerShellComparison -NoNativeComparison
+        $native = [pscustomobject][ordered]@{
+            projection = 'counts-only'
+            status = $nativeBase.status
+            channel = $nativeBase.channel
+            logName = $nativeBase.logName
+            eventId = $nativeBase.eventId
+            startTime = $nativeBase.startTime
+            endTime = $nativeBase.endTime
+            channelEnabled = $nativeBase.channelEnabled
+            channelExists = $nativeBase.channelExists
+            queryAttempted = $nativeBase.queryAttempted
+            querySucceeded = $nativeBase.querySucceeded
+            eventCount = $nativeBase.eventCount
+            exception = $nativeBase.exception
+            reason = $nativeBase.reason
+            runtime = $nativeBase.runtime
+        }
+    }
+    return [pscustomobject][ordered]@{
+        status = $base.status
+        channel = $base.channel
+        logName = $base.logName
+        eventId = $base.eventId
+        startTime = $base.startTime
+        endTime = $base.endTime
+        channelEnabled = $base.channelEnabled
+        channelExists = $base.channelExists
+        queryAttempted = $base.queryAttempted
+        querySucceeded = $base.querySucceeded
+        eventCount = $base.eventCount
+        retainedEventCount = $safeEvents.Count
+        events = $safeEvents
+        exception = $base.exception
+        reason = $base.reason
+        runtime = $base.runtime
+        nativePowerShellComparison = $native
+    }
+}
+
+function Get-OpenPathAppLockerPolicyLifecycleEvidence {
+    param(
+        [object]$LaunchRequestedAt = $null,
+        [object]$InstallerExitedAt = $null,
+        [object]$CaptureEndedAt = $null,
+        [object]$RuntimeOverride = $null
+    )
+
+    $captureEnded = if ($null -ne $CaptureEndedAt) { [datetime]$CaptureEndedAt } else { Get-Date }
+    $launchRequested = $null
+    if ($null -ne $LaunchRequestedAt -and -not [string]::IsNullOrWhiteSpace([string]$LaunchRequestedAt)) {
+        try { $launchRequested = [datetime]$LaunchRequestedAt } catch { $launchRequested = $null }
+    }
+    $installerExited = $null
+    if ($null -ne $InstallerExitedAt -and -not [string]::IsNullOrWhiteSpace([string]$InstallerExitedAt)) {
+        try { $installerExited = [datetime]$InstallerExitedAt } catch { $installerExited = $null }
+    }
+    $runtime = Get-OpenPathObserverRuntime -RuntimeOverride $RuntimeOverride
+    $launchRequestedAtUtc = if ($launchRequested) { $launchRequested.ToUniversalTime().ToString('o') } else { $null }
+    $installerExitedAtUtc = if ($installerExited) { $installerExited.ToUniversalTime().ToString('o') } else { $null }
+    $captureEndedAtUtc = $captureEnded.ToUniversalTime().ToString('o')
+    $window = [pscustomobject][ordered]@{
+        launchRequestedAtUtc = $launchRequestedAtUtc
+        installerExitedAtUtc = $installerExitedAtUtc
+        captureEndedAtUtc = $captureEndedAtUtc
+    }
+    if (-not $launchRequested) {
+        return [pscustomobject][ordered]@{
+            schemaVersion = 1
+            status = 'not-started'
+            reason = 'installer-launch-not-requested'
+            window = $window
+            runtime = Get-OpenPathSafeObserverRuntimeEvidence -Runtime $runtime
+            queries = [pscustomobject][ordered]@{}
+        }
+    }
+
+    $queries = [ordered]@{}
+    foreach ($eventId in @(8000, 8001, 8008)) {
+        try {
+            $query = Get-OpenPathAppLockerEventQuery -LogName 'Microsoft-Windows-AppLocker/EXE and DLL' -EventId $eventId -StartTime $launchRequested -EndTime $captureEnded -RuntimeOverride $RuntimeOverride -IncludeNativePowerShellComparison
+        }
+        catch {
+            $query = [pscustomobject][ordered]@{
+                status = 'QUERY_FAILED'; channel = 'Microsoft-Windows-AppLocker/EXE and DLL'; logName = 'Microsoft-Windows-AppLocker/EXE and DLL'
+                eventId = $eventId; startTime = $launchRequested; endTime = $captureEnded; channelEnabled = $null; channelExists = $null
+                queryAttempted = $false; querySucceeded = $false; eventCount = 0; events = @()
+                exception = Get-OpenPathSafePolicyExceptionEvidence -ErrorRecord $_ -SafeReason 'lifecycle-query-failed'
+                reason = 'lifecycle-query-failed'; runtime = $runtime; nativePowerShellComparison = $null
+            }
+        }
+        $queries[[string]$eventId] = Get-OpenPathSafeAppLockerLifecycleQuery -Query $query -EventId $eventId
+    }
+    return [pscustomobject][ordered]@{
+        schemaVersion = 1
+        status = 'observed'
+        reason = $null
+        window = $window
+        runtime = Get-OpenPathSafeObserverRuntimeEvidence -Runtime $runtime
+        queries = [pscustomobject]$queries
+    }
+}
+
 function New-OpenPathEnforcementObserverFailureSnapshot {
     param(
         [Parameter(Mandatory = $true)][ValidateSet('before-launch', 'after-launch')][string]$Phase,
@@ -3127,6 +3342,7 @@ Export-ModuleMember -Function @(
     'Get-OpenPathExactProcessBoundaryEvidence',
     'Write-OpenPathBrowserBoundaryReport',
     'Get-OpenPathAppLockerEventQuery',
+    'Get-OpenPathAppLockerPolicyLifecycleEvidence',
     'Get-OpenPathCorrelatedAppLockerEvent',
     'Get-OpenPathTaskIdentityEvidence',
     'Get-OpenPathTestAppLockerPolicyDecision',

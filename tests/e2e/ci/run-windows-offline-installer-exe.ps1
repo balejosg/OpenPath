@@ -627,6 +627,9 @@ $result = $null
 $disposableTarget = $null
 $targetCleanup = $null
 $boundaryEvidence = $null
+$launchRequestedAt = $null
+$installerExitedAt = $null
+$appLockerPolicyLifecycle = $null
 
 foreach ($transportFileName in @(
     "$transportNamePrefix-status.txt",
@@ -646,7 +649,9 @@ try {
 
     $script:CurrentStage = 'launch-executable'
     $env:OPENPATH_WINDOWS_ROOT = $OpenPathRoot
+    $launchRequestedAt = Get-Date
     $installProcess = Start-Process -FilePath $resolvedExecutable -ArgumentList @('/S') -Wait -PassThru
+    $installerExitedAt = Get-Date
     $installExitCode = [int]$installProcess.ExitCode
     $installerStatusPath = Resolve-InstallerTransportPath -FileName "$transportNamePrefix-status.txt"
     $trailerDiagnosticPath = Resolve-InstallerTransportPath -FileName "$transportNamePrefix-trailer-status.txt"
@@ -962,6 +967,34 @@ catch {
     exit 1
 }
 finally {
+    $lifecycleCaptureEndedAt = Get-Date
+    try {
+        Import-Module (Join-Path $PSScriptRoot 'BrowserBoundaryProbe.psm1') -Force -ErrorAction Stop
+        $appLockerPolicyLifecycle = Get-OpenPathAppLockerPolicyLifecycleEvidence `
+            -LaunchRequestedAt $launchRequestedAt `
+            -InstallerExitedAt $installerExitedAt `
+            -CaptureEndedAt $lifecycleCaptureEndedAt
+    }
+    catch {
+        $lifecycleLaunchRequestedAtUtc = if ($launchRequestedAt) { $launchRequestedAt.ToUniversalTime().ToString('o') } else { $null }
+        $lifecycleInstallerExitedAtUtc = if ($installerExitedAt) { $installerExitedAt.ToUniversalTime().ToString('o') } else { $null }
+        $lifecycleCaptureEndedAtUtc = $lifecycleCaptureEndedAt.ToUniversalTime().ToString('o')
+        $appLockerPolicyLifecycle = [pscustomobject][ordered]@{
+            schemaVersion = 1
+            status = 'unavailable'
+            reason = 'lifecycle-observer-failed'
+            window = [pscustomobject][ordered]@{
+                launchRequestedAtUtc = $lifecycleLaunchRequestedAtUtc
+                installerExitedAtUtc = $lifecycleInstallerExitedAtUtc
+                captureEndedAtUtc = $lifecycleCaptureEndedAtUtc
+            }
+            runtime = $null
+            queries = [pscustomobject][ordered]@{}
+        }
+    }
+    if ($null -ne $result) {
+        $result['appLockerPolicyLifecycle'] = $appLockerPolicyLifecycle
+    }
     $e2eCleanupAttempted = $true
     $targetCleanupSucceeded = $null -eq $disposableTarget
     if ($stubJob) {

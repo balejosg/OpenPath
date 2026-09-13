@@ -8,11 +8,19 @@ Describe "Offline installer" {
 
         $script:OfflineTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-offline-tests-" + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $script:OfflineTestRoot -Force | Out-Null
+        $script:CreatedOfflineGetWinEventShim = $false
+        if (-not (Get-Command Get-WinEvent -ErrorAction SilentlyContinue)) {
+            function global:Get-WinEvent { param($FilterHashtable) }
+            $script:CreatedOfflineGetWinEventShim = $true
+        }
     }
 
     AfterAll {
         if (Test-Path $script:OfflineTestRoot) {
             Remove-Item $script:OfflineTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        if ($script:CreatedOfflineGetWinEventShim) {
+            Remove-Item Function:\Get-WinEvent -ErrorAction SilentlyContinue
         }
     }
 
@@ -636,6 +644,75 @@ Describe "Offline installer" {
             $roundTrip.cleanupSucceeded | Should -BeFalse
             $roundTrip.targetCleanup.profileRemoved | Should -BeFalse
             (Get-Content -LiteralPath $evidencePath -Raw) | Should -Not -Match 'Password|must-not-serialize'
+        }
+
+        It 'captures one lifecycle interval before cleanup without changing installer acceptance' {
+            $offlineE2e = Get-Content (Join-Path $PSScriptRoot '..' '..' 'tests' 'e2e' 'ci' 'run-windows-offline-installer-exe.ps1') -Raw
+
+            Assert-ContentContainsAll -Content $offlineE2e -Needles @(
+                "Import-Module (Join-Path `$PSScriptRoot 'BrowserBoundaryProbe.psm1') -Force -ErrorAction Stop",
+                '$launchRequestedAt = Get-Date',
+                '$installerExitedAt = Get-Date',
+                'Get-OpenPathAppLockerPolicyLifecycleEvidence',
+                "`$result['appLockerPolicyLifecycle'] = `$appLockerPolicyLifecycle"
+            )
+            $offlineE2e.IndexOf('$launchRequestedAt = Get-Date') | Should -BeLessThan $offlineE2E.IndexOf('Start-Process -FilePath $resolvedExecutable')
+            $offlineE2e.IndexOf('$installerExitedAt = Get-Date') | Should -BeGreaterThan $offlineE2e.IndexOf('Start-Process -FilePath $resolvedExecutable')
+            $finallyIndex = $offlineE2e.LastIndexOf('finally {')
+            $observerImportIndex = $offlineE2e.IndexOf("Import-Module (Join-Path `$PSScriptRoot 'BrowserBoundaryProbe.psm1')")
+            $observerIndex = $offlineE2e.IndexOf('Get-OpenPathAppLockerPolicyLifecycleEvidence')
+            $cleanupIndex = $offlineE2e.IndexOf('$e2eCleanupAttempted = $true')
+            $observerImportIndex | Should -BeGreaterThan $finallyIndex
+            $observerIndex | Should -BeGreaterThan $observerImportIndex
+            $observerIndex | Should -BeLessThan $cleanupIndex
+            $offlineE2e.Substring($finallyIndex, $cleanupIndex - $finallyIndex) | Should -Match "(?s)try\s*\{.*Import-Module.*Get-OpenPathAppLockerPolicyLifecycleEvidence.*\}\s*catch\s*\{.*lifecycle-observer-failed"
+            $offlineE2e.Substring($finallyIndex, $cleanupIndex - $finallyIndex) | Should -Not -Match '\bthrow\b|\bexit\b'
+            ([regex]::Matches($offlineE2e, "\['appLockerPolicyLifecycle'\]")).Count | Should -Be 1
+            $offlineE2e | Should -Not -Match 'appLockerPolicyLifecycle[^\r\n]*(Assert|throw|exit)'
+        }
+
+        It 'round-trips real lifecycle helper projection with exact timestamps and no unsafe event payload' {
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1') -Force
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\DisposableWindowsTarget.psm1') -Force
+            $runtime = [pscustomobject]@{ supported = $true; edition = 'Core'; version = '7.6.5'; bitness = '64-bit'; processId = 9911 }
+            $start = [datetime]'2026-09-13T10:11:12.1234567Z'
+            $exited = [datetime]'2026-09-13T10:11:42.4567891Z'
+            $ended = [datetime]'2026-09-13T10:12:02.7891234Z'
+            Mock Get-OpenPathAppLockerEventChannel { [pscustomobject]@{ channelExists = $true; channelEnabled = $true; status = 'observed' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-WinEvent {
+                if ([int]$FilterHashtable.Id -ne 8000) { return @() }
+                $event = [pscustomobject]@{
+                    Id = 8000; RecordId = 201; TimeCreated = [datetime]'2026-09-13T10:11:13.1111111Z'
+                    XmlText = '<Event><EventData><Data Name="Status">5</Data></EventData></Event>'
+                    Message = 'must-not-serialize'; credential = 'must-not-serialize'
+                }
+                Add-Member -InputObject $event -MemberType ScriptMethod -Name ToXml -Value { $this.XmlText }
+                @($event)
+            } -ModuleName BrowserBoundaryProbe
+            Mock Invoke-OpenPathNativePowerShellEventQuery {
+                param($LogName, $EventId, $StartTime, $EndTime)
+                [pscustomobject]@{
+                    status = 'QUERY_SUCCEEDED_NO_MATCHES'; channel = $LogName; logName = $LogName; eventId = $EventId
+                    startTime = $StartTime; endTime = $EndTime; channelEnabled = $true; channelExists = $true
+                    queryAttempted = $true; querySucceeded = $true; eventCount = 0; exception = $null; reason = $null
+                    runtime = [pscustomobject]@{ edition = 'Desktop'; version = '5.1.26100'; bitness = '64-bit'; processId = 7722; rawMessage = 'must-not-serialize' }
+                }
+            } -ModuleName BrowserBoundaryProbe
+
+            $lifecycle = Get-OpenPathAppLockerPolicyLifecycleEvidence -LaunchRequestedAt $start -InstallerExitedAt $exited -CaptureEndedAt $ended -RuntimeOverride $runtime
+            $evidencePath = Join-Path $TestDrive 'lifecycle-roundtrip.json'
+            Write-OpenPathOfflineInstallerEvidence -Payload ([ordered]@{ status = 'failed'; failureDetailCode = 'boundary-edge-execution-failed'; appLockerPolicyLifecycle = $lifecycle }) -Path $evidencePath
+            $rawEvidence = Get-Content -LiteralPath $evidencePath -Raw
+            $roundTrip = $rawEvidence | ConvertFrom-Json
+
+            $roundTrip.failureDetailCode | Should -Be 'boundary-edge-execution-failed'
+            $rawEvidence | Should -Match '"launchRequestedAtUtc"\s*:\s*"2026-09-13T10:11:12\.1234567Z"'
+            $rawEvidence | Should -Match '"installerExitedAtUtc"\s*:\s*"2026-09-13T10:11:42\.4567891Z"'
+            $rawEvidence | Should -Match '"captureEndedAtUtc"\s*:\s*"2026-09-13T10:12:02\.7891234Z"'
+            $roundTrip.appLockerPolicyLifecycle.queries.'8000'.events[0].status | Should -Be '5'
+            $rawEvidence | Should -Match '"timeCreatedUtc"\s*:\s*"2026-09-13T10:11:13\.1111111Z"'
+            $roundTrip.appLockerPolicyLifecycle.queries.'8000'.nativePowerShellComparison.runtime.PSObject.Properties['supported'] | Should -BeNullOrEmpty
+            $rawEvidence | Should -Not -Match 'must-not-serialize|rawMessage|credential|XmlText|Message'
         }
     }
 
