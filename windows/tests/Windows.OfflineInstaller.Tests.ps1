@@ -689,6 +689,114 @@ Describe "Offline installer" {
             $offlineE2e | Should -Not -Match 'postApplicationPair[^\r\n]*(Assert|throw|exit|status\s*=\s*success)'
         }
 
+        It 'captures PolicyConverter state before launch and boundary probes on both result paths' {
+            $offlineE2e = Get-Content (Join-Path $PSScriptRoot '..' '..' 'tests' 'e2e' 'ci' 'run-windows-offline-installer-exe.ps1') -Raw
+            $launchIndex = $offlineE2e.IndexOf('$installProcess = Start-Process')
+            $boundaryIndex = $offlineE2e.IndexOf('$boundaryEvidence = Invoke-OpenPathInstalledBoundaryProbes')
+            $captureIndexes = @([regex]::Matches($offlineE2e, 'Get-OpenPathDisposablePolicyConverterObservation') | ForEach-Object Index)
+            $successAttachIndex = $offlineE2e.IndexOf('policyConverterObservation = $policyConverterObservation')
+            $failureAttachIndex = $offlineE2e.IndexOf('policyConverterObservation = $policyConverterObservation', $successAttachIndex + 1)
+
+            $captureIndexes.Count | Should -Be 2
+            $captureIndexes[0] | Should -BeLessThan $launchIndex
+            $captureIndexes[1] | Should -BeLessThan $boundaryIndex
+            $captureIndexes[1] | Should -BeGreaterThan $launchIndex
+            $successAttachIndex | Should -BeGreaterThan $boundaryIndex
+            $failureAttachIndex | Should -BeGreaterThan $successAttachIndex
+            $offlineE2e | Should -Not -Match 'Start-ScheduledTask|Restart-Service|Start-Service|Set-AppLockerPolicy|gpupdate|appidpolicyconverter\.exe'
+        }
+
+        It 'executes the real failure-path capture assembly and writer without replacing the first failure' {
+            $harnessPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\run-windows-offline-installer-exe.ps1'
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($harnessPath, [ref]$tokens, [ref]$parseErrors)
+            $parseErrors.Count | Should -Be 0
+
+            $writerFunction = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Write-SafeEvidence' }, $true)
+            $observationInitialization = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                    $node.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                    $node.Left.VariablePath.UserPath -eq 'policyConverterObservation'
+            }, $true)
+            $captureBlocks = @($ast.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.TryStatementAst] -and
+                    ([regex]::Matches($node.Extent.Text, 'Get-OpenPathDisposablePolicyConverterObservation')).Count -eq 1
+            }, $true))
+            $failureAssignment = @($ast.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                    $node.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                    $node.Left.VariablePath.UserPath -eq 'failure'
+            }, $true)) | Select-Object -Last 1
+            $writeFailureCommand = @($ast.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.CommandAst] -and
+                    $node.GetCommandName() -eq 'Write-SafeEvidence' -and
+                    $node.Extent.Text -match '-Payload\s+\$failure'
+            }, $true)) | Select-Object -Last 1
+
+            $writerFunction | Should -Not -BeNullOrEmpty
+            $observationInitialization | Should -Not -BeNullOrEmpty
+            $captureBlocks.Count | Should -Be 2
+            $failureAssignment | Should -Not -BeNullOrEmpty
+            $writeFailureCommand | Should -Not -BeNullOrEmpty
+
+            Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\DisposableWindowsTarget.psm1') -Force
+            $EvidencePath = Join-Path $TestDrive 'real-harness-failure-roundtrip.json'
+            $script:observerTestCallCount = 0
+            function Get-OpenPathDisposablePolicyConverterObservation {
+                param([string]$Context)
+                $script:observerTestCallCount++
+                if ($script:observerTestCallCount -eq 1) {
+                    return [pscustomobject][ordered]@{
+                        status='observed'; context=$Context; capturedAtUtc='2026-09-13T16:10:11.1234567Z'; runtime=$null
+                        task=[pscustomobject][ordered]@{ queryStatus='observed'; enabled=$false }
+                        taskInfo=[pscustomobject][ordered]@{ queryStatus='observed'; lastTaskResult=0 }
+                        service=$null; process=$null
+                    }
+                }
+                throw 'unsafe-observer-detail'
+            }
+
+            $installExitCode = 7
+            $installerStatus = 'failed'
+            $installerStatusSnapshot = @('first-failure')
+            $installerFailurePhase = 'apply-policy'
+            $installerFailureDiagnostic = $null
+            $installerChildRuntime = $null
+            $trailerDiagnosticStatus = 'missing'
+            $trailerDiagnosticSource = 'installer-child'
+            $edgeBoundaryEvidence = $null
+            $edge = $null
+            $edgeFailureContract = [pscustomobject]@{ edgeFailureCode='exact-student-process-observed-without-block-event' }
+            $boundaryFailureCode = 'boundary-edge-execution-failed'
+            $script:CurrentStage = 'run-installed-boundary-probes'
+
+            $extractedSource = @(
+                $writerFunction.Extent.Text
+                $observationInitialization.Extent.Text
+                $captureBlocks[0].Extent.Text
+                $captureBlocks[1].Extent.Text
+                $failureAssignment.Extent.Text
+                $writeFailureCommand.Extent.Text
+                '$failure'
+            ) -join [Environment]::NewLine
+            $failure = & ([scriptblock]::Create($extractedSource))
+            $raw = Get-Content -LiteralPath $EvidencePath -Raw
+            $roundTrip = $raw | ConvertFrom-Json
+
+            $failure.failureDetailCode | Should -Be 'boundary-edge-execution-failed'
+            $roundTrip.edgeFailureCode | Should -Be 'exact-student-process-observed-without-block-event'
+            $roundTrip.policyConverterObservation.beforeExeLaunch.task.enabled | Should -BeFalse
+            $roundTrip.policyConverterObservation.beforeExeLaunch.taskInfo.lastTaskResult | Should -Be 0
+            $roundTrip.policyConverterObservation.beforeBoundaryProbes.status | Should -Be 'unavailable'
+            $roundTrip.policyConverterObservation.beforeBoundaryProbes.reason | Should -Be 'policy-converter-observer-failed'
+            $raw | Should -Not -Match 'unsafe-observer-detail|rawMessage|XmlText|Password'
+        }
+
         It 'round-trips real lifecycle helper projection with exact timestamps and no unsafe event payload' {
             Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1') -Force
             Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\DisposableWindowsTarget.psm1') -Force

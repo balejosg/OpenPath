@@ -630,6 +630,10 @@ $boundaryEvidence = $null
 $launchRequestedAt = $null
 $installerExitedAt = $null
 $appLockerPolicyLifecycle = $null
+$policyConverterObservation = [ordered]@{
+    beforeExeLaunch = [pscustomobject][ordered]@{ status='not-observed'; context='before-exe-launch'; reason='phase-not-reached'; capturedAtUtc=$null; runtime=$null; task=$null; taskInfo=$null; service=$null; process=$null }
+    beforeBoundaryProbes = [pscustomobject][ordered]@{ status='not-observed'; context='before-boundary-probes'; reason='phase-not-reached'; capturedAtUtc=$null; runtime=$null; task=$null; taskInfo=$null; service=$null; process=$null }
+}
 
 foreach ($transportFileName in @(
     "$transportNamePrefix-status.txt",
@@ -649,6 +653,13 @@ try {
 
     $script:CurrentStage = 'launch-executable'
     $env:OPENPATH_WINDOWS_ROOT = $OpenPathRoot
+    try {
+        $policyConverterObservation['beforeExeLaunch'] = Get-OpenPathDisposablePolicyConverterObservation -Context 'before-exe-launch'
+    }
+    catch {
+        $observerFailureAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        $policyConverterObservation['beforeExeLaunch'] = [pscustomobject][ordered]@{ status='unavailable'; context='before-exe-launch'; reason='policy-converter-observer-failed'; capturedAtUtc=$observerFailureAtUtc; runtime=$null; task=$null; taskInfo=$null; service=$null; process=$null }
+    }
     $launchRequestedAt = Get-Date
     $installProcess = Start-Process -FilePath $resolvedExecutable -ArgumentList @('/S') -Wait -PassThru
     $installerExitedAt = Get-Date
@@ -753,6 +764,13 @@ try {
 
     $script:CurrentStage = 'validate-prepared-target-installed'
     $installedTarget = Assert-OpenPathPreparedTargetInstalled -Target $disposableTarget
+    try {
+        $policyConverterObservation['beforeBoundaryProbes'] = Get-OpenPathDisposablePolicyConverterObservation -Context 'before-boundary-probes'
+    }
+    catch {
+        $observerFailureAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        $policyConverterObservation['beforeBoundaryProbes'] = [pscustomobject][ordered]@{ status='unavailable'; context='before-boundary-probes'; reason='policy-converter-observer-failed'; capturedAtUtc=$observerFailureAtUtc; runtime=$null; task=$null; taskInfo=$null; service=$null; process=$null }
+    }
     $script:CurrentStage = 'run-installed-boundary-probes'
     $boundaryEvidence = Invoke-OpenPathInstalledBoundaryProbes -Target $disposableTarget -OpenPathRoot $OpenPathRoot
 
@@ -780,6 +798,7 @@ try {
             restrictedGroupMember = [bool]$installedTarget.restrictedGroupMember
         }
         boundary = $boundaryEvidence
+        policyConverterObservation = $policyConverterObservation
         cleanupAttempted = 'not-observed'
         cleanupSucceeded = 'not-observed'
     }
@@ -952,6 +971,7 @@ catch {
         edgeObservedRuleName = if ($edgeFailureContract) { $edgeFailureContract.edgeObservedRuleName } else { $null }
         edgeObservedUserSid = if ($edgeFailureContract) { $edgeFailureContract.edgeObservedUserSid } else { $null }
         edgeAttempts = if ($edgeFailureContract) { $edgeFailureContract.edgeAttempts } else { @() }
+        policyConverterObservation = $policyConverterObservation
         cleanupAttempted = 'not-observed'
         cleanupSucceeded = 'not-observed'
     }

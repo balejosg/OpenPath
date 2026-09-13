@@ -243,6 +243,146 @@ Describe 'Canonical offline installer disposable target' {
         $control.code | Should -Be 'benign-pe-missing'
     }
 
+    Context 'read-only PolicyConverter observation' {
+        BeforeEach {
+            Mock Get-OpenPathDisposablePolicyConverterClock { [datetime]'2026-09-13T16:10:11.1234567Z' } -ModuleName DisposableWindowsTarget
+            Mock Get-OpenPathDisposableRuntimeContext { [pscustomobject]@{ edition='Core'; version='7.6.5'; bitness='64-bit'; processId=1234; identitySid='S-1-5-18'; isSystem=$true; isAdministrator=$true } } -ModuleName DisposableWindowsTarget
+            Mock Get-OpenPathDisposablePolicyConverterTaskQuery {
+                [pscustomobject]@{ TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\'; State='Disabled'; Settings=[pscustomobject]@{ Enabled=$false } }
+            } -ModuleName DisposableWindowsTarget
+            Mock Get-OpenPathDisposablePolicyConverterTaskInfoQuery {
+                [pscustomobject]@{ LastRunTime=[datetime]'2026-09-13T15:01:02.7654321Z'; LastTaskResult=0 }
+            } -ModuleName DisposableWindowsTarget
+            Mock Get-OpenPathDisposableAppIdServiceQuery {
+                [pscustomobject]@{ State='Running'; StartMode='Auto'; ProcessId=4321 }
+            } -ModuleName DisposableWindowsTarget
+            Mock Get-OpenPathDisposableAppIdProcessQuery {
+                [pscustomobject]@{ Id=4321; StartTime=[datetime]'2026-09-13T14:02:03.4567891Z' }
+            } -ModuleName DisposableWindowsTarget
+        }
+
+        It 'preserves disabled false, result zero, and exact UTC precision' {
+            $observation = Get-OpenPathDisposablePolicyConverterObservation -Context 'before-exe-launch'
+
+            $observation.status | Should -Be 'observed'
+            $observation.context | Should -Be 'before-exe-launch'
+            $observation.capturedAtUtc | Should -Be '2026-09-13T16:10:11.1234567Z'
+            $observation.task.queryStatus | Should -Be 'observed'
+            $observation.task.exists | Should -BeTrue
+            $observation.task.enabled | Should -BeFalse
+            $observation.taskInfo.queryStatus | Should -Be 'observed'
+            $observation.taskInfo.lastRunTimeUtc | Should -Be '2026-09-13T15:01:02.7654321Z'
+            $observation.taskInfo.lastTaskResult | Should -Be 0
+            $observation.service.queryStatus | Should -Be 'observed'
+            $observation.service.processId | Should -Be 4321
+            $observation.process.queryStatus | Should -Be 'observed'
+            $observation.process.creationTimeUtc | Should -Be '2026-09-13T14:02:03.4567891Z'
+        }
+
+        It 'reports successful task absence without inventing task-info values' {
+            Mock Get-OpenPathDisposablePolicyConverterTaskQuery { @() } -ModuleName DisposableWindowsTarget
+
+            $observation = Get-OpenPathDisposablePolicyConverterObservation -Context 'before-boundary-probes'
+
+            $observation.task.queryStatus | Should -Be 'absent'
+            $observation.task.exists | Should -BeFalse
+            $observation.task.enabled | Should -BeNullOrEmpty
+            $observation.taskInfo.queryStatus | Should -Be 'not-observed-task-absent'
+            $observation.taskInfo.lastRunTimeUtc | Should -BeNullOrEmpty
+            $observation.taskInfo.lastTaskResult | Should -BeNullOrEmpty
+            Should -Invoke Get-OpenPathDisposablePolicyConverterTaskInfoQuery -ModuleName DisposableWindowsTarget -Times 0 -Exactly
+        }
+
+        It 'does not misclassify a missing cmdlet ObjectNotFound error as task absence' {
+            try { & 'Get-DefinitelyMissingPolicyConverterCommand' } catch { $script:missingCommandError = $_ }
+            Mock Get-OpenPathDisposablePolicyConverterTaskQuery { throw $script:missingCommandError } -ModuleName DisposableWindowsTarget
+
+            $observation = Get-OpenPathDisposablePolicyConverterObservation -Context 'before-exe-launch'
+
+            $observation.task.queryStatus | Should -Be 'failed'
+            $observation.task.code | Should -Be 'policy-converter-task-query-failed'
+            $observation.task.exists | Should -BeNullOrEmpty
+            $observation.taskInfo.queryStatus | Should -Be 'not-observed-task-unavailable'
+        }
+
+        It 'classifies the native missing scheduled task FQID as task absence' {
+            $script:nativeMissingTask = [Management.Automation.ErrorRecord]::new(
+                [Exception]::new('must-not-serialize'),
+                'CmdletizationQuery_NotFound,Get-ScheduledTask',
+                [Management.Automation.ErrorCategory]::ObjectNotFound,
+                $null
+            )
+            Mock Get-OpenPathDisposablePolicyConverterTaskQuery { throw $script:nativeMissingTask } -ModuleName DisposableWindowsTarget
+
+            $observation = Get-OpenPathDisposablePolicyConverterObservation -Context 'before-exe-launch'
+
+            $observation.task.queryStatus | Should -Be 'absent'
+            $observation.task.code | Should -Be 'policy-converter-task-not-found'
+            $observation.taskInfo.queryStatus | Should -Be 'not-observed-task-absent'
+            ($observation | ConvertTo-Json -Depth 8) | Should -Not -Match 'must-not-serialize'
+        }
+
+        It 'preserves missing enabled and process id properties as null' {
+            Mock Get-OpenPathDisposablePolicyConverterTaskQuery {
+                [pscustomobject]@{ TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\'; State='Ready'; Settings=[pscustomobject]@{} }
+            } -ModuleName DisposableWindowsTarget
+            Mock Get-OpenPathDisposableAppIdServiceQuery {
+                [pscustomobject]@{ State='Stopped'; StartMode='Manual' }
+            } -ModuleName DisposableWindowsTarget
+
+            $observation = Get-OpenPathDisposablePolicyConverterObservation -Context 'before-exe-launch'
+
+            $observation.task.queryStatus | Should -Be 'observed'
+            $observation.task.enabled | Should -BeNullOrEmpty
+            $observation.service.queryStatus | Should -Be 'observed'
+            $observation.service.processId | Should -BeNullOrEmpty
+            $observation.process.queryStatus | Should -Be 'not-observed-service-pid-unavailable'
+            $observation.process.processId | Should -BeNullOrEmpty
+            Should -Invoke Get-OpenPathDisposableAppIdProcessQuery -ModuleName DisposableWindowsTarget -Times 0 -Exactly
+        }
+
+        It 'preserves an explicitly null task enabled value as null' {
+            Mock Get-OpenPathDisposablePolicyConverterTaskQuery {
+                [pscustomobject]@{ TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\'; State='Ready'; Settings=[pscustomobject]@{ Enabled=$null } }
+            } -ModuleName DisposableWindowsTarget
+
+            $observation = Get-OpenPathDisposablePolicyConverterObservation -Context 'before-exe-launch'
+
+            $observation.task.queryStatus | Should -Be 'observed'
+            $observation.task.enabled | Should -BeNullOrEmpty
+        }
+
+        It 'keeps access-denied service failure distinct from a real absent service' {
+            $script:accessDenied = [Management.Automation.ErrorRecord]::new([UnauthorizedAccessException]::new('unsafe-access-detail'), 'CimAccessDenied', [Management.Automation.ErrorCategory]::PermissionDenied, $null)
+            Mock Get-OpenPathDisposableAppIdServiceQuery { throw $script:accessDenied } -ModuleName DisposableWindowsTarget
+
+            $observation = Get-OpenPathDisposablePolicyConverterObservation -Context 'before-boundary-probes'
+            $json = $observation | ConvertTo-Json -Depth 10
+
+            $observation.service.queryStatus | Should -Be 'failed'
+            $observation.service.code | Should -Be 'appid-service-query-failed'
+            $observation.process.queryStatus | Should -Be 'not-observed-service-unavailable'
+            $json | Should -Not -Match 'unsafe-access-detail'
+        }
+
+        It 'keeps task-info and process failures separate and sanitized' {
+            Mock Get-OpenPathDisposablePolicyConverterTaskInfoQuery { throw 'unsafe-task-info-detail' } -ModuleName DisposableWindowsTarget
+            Mock Get-OpenPathDisposableAppIdProcessQuery { throw 'unsafe-process-detail' } -ModuleName DisposableWindowsTarget
+
+            $observation = Get-OpenPathDisposablePolicyConverterObservation -Context 'before-boundary-probes'
+            $json = $observation | ConvertTo-Json -Depth 10
+
+            $observation.task.queryStatus | Should -Be 'observed'
+            $observation.taskInfo.queryStatus | Should -Be 'failed'
+            $observation.taskInfo.code | Should -Be 'policy-converter-task-info-query-failed'
+            $observation.service.queryStatus | Should -Be 'observed'
+            $observation.process.queryStatus | Should -Be 'failed'
+            $observation.process.code | Should -Be 'appid-process-query-failed'
+            $json | Should -Not -Match 'unsafe-task-info-detail|unsafe-process-detail|rawMessage|XmlText|Password'
+        }
+
+    }
+
     It 'keeps PE control inconclusive for null or unrelated process evidence' {
         $probe = Join-Path $script:testPath 'openpath-e2e-probe.exe'
         Set-Content -LiteralPath $probe -Value 'fixture' -Encoding ASCII

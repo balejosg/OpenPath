@@ -477,6 +477,167 @@ function Get-OpenPathDisposableFieldValue {
     return $null
 }
 
+function Get-OpenPathDisposablePolicyConverterClock { Get-Date }
+
+function Get-OpenPathDisposableRuntimeContext {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    [pscustomobject][ordered]@{
+        edition = [string]$PSVersionTable.PSEdition
+        version = [string]$PSVersionTable.PSVersion
+        bitness = if ([Environment]::Is64BitProcess) { '64-bit' } else { '32-bit' }
+        processId = [int]$PID
+        identitySid = if ($identity.User) { [string]$identity.User.Value } else { $null }
+        isSystem = [bool]($identity.User -and $identity.User.Value -eq 'S-1-5-18')
+        isAdministrator = [bool]$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+}
+
+function Get-OpenPathDisposablePolicyConverterTaskQuery {
+    @(Get-ScheduledTask -TaskName 'PolicyConverter' -TaskPath '\Microsoft\Windows\AppID\' -ErrorAction Stop)
+}
+
+function Get-OpenPathDisposablePolicyConverterTaskInfoQuery {
+    param([Parameter(Mandatory = $true)][object]$Task)
+    Get-ScheduledTaskInfo -TaskName $Task.TaskName -TaskPath $Task.TaskPath -ErrorAction Stop
+}
+
+function Get-OpenPathDisposableAppIdServiceQuery {
+    @(Get-CimInstance -ClassName Win32_Service -Filter "Name='AppIDSvc'" -ErrorAction Stop)
+}
+
+function Get-OpenPathDisposableAppIdProcessQuery {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+    Get-Process -Id $ProcessId -ErrorAction Stop
+}
+
+function Test-OpenPathDisposableNotFoundError {
+    param([Parameter(Mandatory = $true)][object]$ErrorRecord)
+    $errorId = [string]$ErrorRecord.FullyQualifiedErrorId
+    return $errorId -match '^(NoMatchingMSFT_ScheduledTask|CmdletizationQuery_NotFound|NoProcessFoundForGivenId)(,|$)'
+}
+
+function Get-OpenPathDisposablePolicyConverterObservation {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][ValidateSet('before-exe-launch','before-boundary-probes')][string]$Context)
+
+    $capturedAt = Get-OpenPathDisposablePolicyConverterClock
+    $capturedAtUtc = $capturedAt.ToUniversalTime().ToString('o')
+    $runtime = Get-OpenPathDisposableRuntimeContext
+
+    $taskObject = $null
+    try {
+        $tasks = @(Get-OpenPathDisposablePolicyConverterTaskQuery)
+        if ($tasks.Count -eq 0) {
+            $task = [pscustomobject][ordered]@{ queryStatus='absent'; code=$null; exists=$false; name='PolicyConverter'; path='\Microsoft\Windows\AppID\'; state=$null; enabled=$null }
+        }
+        elseif ($tasks.Count -eq 1) {
+            $taskObject = $tasks[0]
+            $taskEnabled = if ($taskObject.PSObject.Properties['Settings'] -and $taskObject.Settings -and $taskObject.Settings.PSObject.Properties['Enabled'] -and $null -ne $taskObject.Settings.Enabled) { [bool]$taskObject.Settings.Enabled } else { $null }
+            $task = [pscustomobject][ordered]@{ queryStatus='observed'; code=$null; exists=$true; name=[string]$taskObject.TaskName; path=[string]$taskObject.TaskPath; state=[string]$taskObject.State; enabled=$taskEnabled }
+        }
+        else {
+            $task = [pscustomobject][ordered]@{ queryStatus='failed'; code='policy-converter-task-query-ambiguous'; exists=$null; name='PolicyConverter'; path='\Microsoft\Windows\AppID\'; state=$null; enabled=$null }
+        }
+    }
+    catch {
+        if (Test-OpenPathDisposableNotFoundError $_) {
+            $task = [pscustomobject][ordered]@{ queryStatus='absent'; code='policy-converter-task-not-found'; exists=$false; name='PolicyConverter'; path='\Microsoft\Windows\AppID\'; state=$null; enabled=$null }
+        }
+        else {
+            $task = [pscustomobject][ordered]@{ queryStatus='failed'; code='policy-converter-task-query-failed'; exists=$null; name='PolicyConverter'; path='\Microsoft\Windows\AppID\'; state=$null; enabled=$null }
+        }
+    }
+
+    if (-not $taskObject) {
+        $taskInfoStatus = if ($task.queryStatus -eq 'absent') { 'not-observed-task-absent' } else { 'not-observed-task-unavailable' }
+        $taskInfo = [pscustomobject][ordered]@{ queryStatus=$taskInfoStatus; code=$null; lastRunTimeUtc=$null; lastTaskResult=$null }
+    }
+    else {
+        try {
+            $info = Get-OpenPathDisposablePolicyConverterTaskInfoQuery -Task $taskObject
+            $lastRunTimeUtc = if ($null -ne $info.LastRunTime) { ([datetime]$info.LastRunTime).ToUniversalTime().ToString('o') } else { $null }
+            $lastTaskResult = if ($null -ne $info.LastTaskResult) { [long]$info.LastTaskResult } else { $null }
+            $taskInfo = [pscustomobject][ordered]@{ queryStatus='observed'; code=$null; lastRunTimeUtc=$lastRunTimeUtc; lastTaskResult=$lastTaskResult }
+        }
+        catch {
+            if (Test-OpenPathDisposableNotFoundError $_) {
+                $taskInfo = [pscustomobject][ordered]@{ queryStatus='absent'; code='policy-converter-task-info-not-found'; lastRunTimeUtc=$null; lastTaskResult=$null }
+            }
+            else {
+                $taskInfo = [pscustomobject][ordered]@{ queryStatus='failed'; code='policy-converter-task-info-query-failed'; lastRunTimeUtc=$null; lastTaskResult=$null }
+            }
+        }
+    }
+
+    $serviceObject = $null
+    try {
+        $services = @(Get-OpenPathDisposableAppIdServiceQuery)
+        if ($services.Count -eq 0) {
+            $service = [pscustomobject][ordered]@{ queryStatus='absent'; code=$null; name='AppIDSvc'; state=$null; startMode=$null; processId=$null }
+        }
+        elseif ($services.Count -eq 1) {
+            $serviceObject = $services[0]
+            $servicePid = if ($serviceObject.PSObject.Properties['ProcessId'] -and $null -ne $serviceObject.ProcessId) { [int]$serviceObject.ProcessId } else { $null }
+            $service = [pscustomobject][ordered]@{ queryStatus='observed'; code=$null; name='AppIDSvc'; state=[string]$serviceObject.State; startMode=[string]$serviceObject.StartMode; processId=$servicePid }
+        }
+        else {
+            $service = [pscustomobject][ordered]@{ queryStatus='failed'; code='appid-service-query-ambiguous'; name='AppIDSvc'; state=$null; startMode=$null; processId=$null }
+        }
+    }
+    catch {
+        if (Test-OpenPathDisposableNotFoundError $_) {
+            $service = [pscustomobject][ordered]@{ queryStatus='absent'; code='appid-service-not-found'; name='AppIDSvc'; state=$null; startMode=$null; processId=$null }
+        }
+        else {
+            $service = [pscustomobject][ordered]@{ queryStatus='failed'; code='appid-service-query-failed'; name='AppIDSvc'; state=$null; startMode=$null; processId=$null }
+        }
+    }
+
+    if (-not $serviceObject) {
+        $processStatus = if ($service.queryStatus -eq 'absent') { 'not-observed-service-absent' } else { 'not-observed-service-unavailable' }
+        $process = [pscustomobject][ordered]@{ queryStatus=$processStatus; code=$null; processId=$null; creationTimeUtc=$null }
+    }
+    elseif ($null -eq $service.processId) {
+        $process = [pscustomobject][ordered]@{ queryStatus='not-observed-service-pid-unavailable'; code=$null; processId=$null; creationTimeUtc=$null }
+    }
+    elseif ([int]$service.processId -le 0) {
+        $process = [pscustomobject][ordered]@{ queryStatus='not-observed-service-pid-zero'; code=$null; processId=[int]$service.processId; creationTimeUtc=$null }
+    }
+    else {
+        try {
+            $processObject = Get-OpenPathDisposableAppIdProcessQuery -ProcessId ([int]$service.processId)
+            $creationTimeUtc = if ($processObject -and $null -ne $processObject.StartTime) { ([datetime]$processObject.StartTime).ToUniversalTime().ToString('o') } else { $null }
+            if ($processObject) {
+                $process = [pscustomobject][ordered]@{ queryStatus='observed'; code=$null; processId=[int]$service.processId; creationTimeUtc=$creationTimeUtc }
+            }
+            else {
+                $process = [pscustomobject][ordered]@{ queryStatus='absent'; code=$null; processId=[int]$service.processId; creationTimeUtc=$null }
+            }
+        }
+        catch {
+            if (Test-OpenPathDisposableNotFoundError $_) {
+                $process = [pscustomobject][ordered]@{ queryStatus='absent'; code='appid-process-not-found'; processId=[int]$service.processId; creationTimeUtc=$null }
+            }
+            else {
+                $process = [pscustomobject][ordered]@{ queryStatus='failed'; code='appid-process-query-failed'; processId=[int]$service.processId; creationTimeUtc=$null }
+            }
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        schemaVersion = 1
+        status = 'observed'
+        context = $Context
+        capturedAtUtc = $capturedAtUtc
+        runtime = $runtime
+        task = $task
+        taskInfo = $taskInfo
+        service = $service
+        process = $process
+    }
+}
+
 function Invoke-OpenPathDisposablePostApplicationPair {
     [CmdletBinding()]
     param(
@@ -772,4 +933,4 @@ function Invoke-OpenPathDisposableDeniedPeControl {
     finally { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue }
 }
 
-Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, Invoke-OpenPathDisposableDeniedPeControl, Invoke-OpenPathDisposablePostApplicationPair, New-OpenPathDisposableEdgeBoundaryException, Resolve-OpenPathDisposableEdgeBoundaryFailure, Write-OpenPathOfflineInstallerEvidence, Remove-OpenPathDisposableStandardTarget
+Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, Invoke-OpenPathDisposableDeniedPeControl, Invoke-OpenPathDisposablePostApplicationPair, Get-OpenPathDisposablePolicyConverterObservation, New-OpenPathDisposableEdgeBoundaryException, Resolve-OpenPathDisposableEdgeBoundaryFailure, Write-OpenPathOfflineInstallerEvidence, Remove-OpenPathDisposableStandardTarget
