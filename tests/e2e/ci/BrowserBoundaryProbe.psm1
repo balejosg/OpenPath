@@ -1636,17 +1636,21 @@ function Get-OpenPathSafeAppLockerEventQueryEvidence {
     )
 
     if (-not $Query) { return $null }
+    $safeStartTime = $null
+    if ($Query.PSObject.Properties['startTime'] -and $null -ne $Query.startTime) {
+        try { $safeStartTime = ([datetime]$Query.startTime).ToUniversalTime().ToString('o') } catch {}
+    }
+    $safeEndTime = $null
+    if ($Query.PSObject.Properties['endTime'] -and $null -ne $Query.endTime) {
+        try { $safeEndTime = ([datetime]$Query.endTime).ToUniversalTime().ToString('o') } catch {}
+    }
     return [pscustomobject][ordered]@{
         status = [string]$Query.status
         channel = [string]$Query.channel
         logName = [string]$Query.logName
         eventId = if ($null -ne $Query.eventId) { try { [int]$Query.eventId } catch { $null } } else { $null }
-        startTime = if ($null -ne $Query.startTime) {
-            try { ([datetime]$Query.startTime).ToUniversalTime().ToString('o') } catch { $null }
-        }
-        endTime = if ($Query.PSObject.Properties['endTime'] -and $null -ne $Query.endTime) {
-            try { ([datetime]$Query.endTime).ToUniversalTime().ToString('o') } catch { $null }
-        }
+        startTime = $safeStartTime
+        endTime = $safeEndTime
         channelEnabled = if ($Query.PSObject.Properties['channelEnabled']) { $Query.channelEnabled } else { $null }
         channelExists = $Query.channelExists
         queryAttempted = $Query.queryAttempted

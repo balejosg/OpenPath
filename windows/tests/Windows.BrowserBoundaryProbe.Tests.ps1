@@ -627,7 +627,23 @@ Describe "Windows Browser Boundary CI Probes" {
             $testProcess = [pscustomobject]@{ ProcessId = 1234; Name = 'msedge.exe'; ExecutablePath = $testExe }
             Mock schtasks.exe { $global:LASTEXITCODE = 0 } -ModuleName BrowserBoundaryProbe
             Mock Get-CimInstance { $testProcess } -ModuleName BrowserBoundaryProbe
-            Mock Invoke-CimMethod { [pscustomobject]@{ Sid = 'S-1-5-21-student-sid' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathProcessOwnerSid { 'S-1-5-21-student-sid' } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathProcessTokenBoundaryEvidence {
+                param([int]$ProcessId, [string]$RestrictedGroupSid)
+                [pscustomobject][ordered]@{
+                    status = 'ok'
+                    reason = $null
+                    processId = $ProcessId
+                    tokenUserSid = 'S-1-5-21-student-sid'
+                    restrictedGroupSid = $RestrictedGroupSid
+                    restrictedGroupPresent = $null
+                    restrictedGroupAttributes = $null
+                    restrictedGroupEnabled = $null
+                    restrictedGroupDenyOnly = $null
+                    restrictedGroupDisabled = $null
+                    restrictedGroupQueryStatus = 'not-requested'
+                }
+            } -ModuleName BrowserBoundaryProbe
             Mock Get-WinEvent {
                 [pscustomobject]@{ Id = 8004; Message = "msedge.exe was prevented from running"; UserId = [pscustomobject]@{ Value = 'S-1-5-21-student-sid' } }
             } -ModuleName BrowserBoundaryProbe
@@ -641,6 +657,8 @@ Describe "Windows Browser Boundary CI Probes" {
             $result.status | Should -Be 'pass'
             $result.evidence.blockEventId | Should -Be 8004
             $result.evidence.enforcementObservation.after.captureContext | Should -Be 'after-process-termination-attempt'
+            Should -Invoke Get-OpenPathProcessTokenBoundaryEvidence -ModuleName BrowserBoundaryProbe -Times 1 -ParameterFilter { $ProcessId -eq 1234 }
+            Should -Invoke Stop-Process -ModuleName BrowserBoundaryProbe -Times 1 -ParameterFilter { $Id -eq 1234 -and $Force }
         }
 
         It "Passes when ExpectAllowed and marker file is present" {
@@ -1422,6 +1440,282 @@ Describe "Windows Browser Boundary CI Probes" {
                 "startTime = `$StartTime.ToUniversalTime().ToString('o')",
                 "endTime = if (`$null -ne `$endTimeValue) { `$endTimeValue.ToUniversalTime().ToString('o') } else { `$null }"
             )
+        }
+
+        It 'projects missing, null, invalid, and fractional query timestamps safely' {
+            $startTime = ([datetime]'2099-01-01T00:00:00.1234567Z').ToUniversalTime()
+            $endTime = ([datetime]'2099-01-01T00:01:00.7654321Z').ToUniversalTime()
+            $newQuery = {
+                param($StartTime, $EndTime, [switch]$IncludeStartTime, [switch]$IncludeEndTime)
+                $query = [ordered]@{
+                    status = 'QUERY_SUCCEEDED_NO_MATCHES'
+                    channel = 'test-channel'
+                    logName = 'test-channel'
+                    eventId = 8004
+                    channelEnabled = $null
+                    channelExists = $true
+                    queryAttempted = $true
+                    querySucceeded = $true
+                    eventCount = 0
+                    exception = $null
+                    correlationStatus = $null
+                    correlationException = $null
+                    reason = $null
+                    runtime = $null
+                    nativePowerShellComparison = $null
+                }
+                if ($IncludeStartTime) { $query.startTime = $StartTime }
+                if ($IncludeEndTime) { $query.endTime = $EndTime }
+                [pscustomobject]$query
+            }
+            $cases = @(
+                [pscustomobject]@{
+                    name = 'fractional'
+                    query = & $newQuery $startTime $endTime -IncludeStartTime -IncludeEndTime
+                    expectedStart = $startTime.ToString('o')
+                    expectedEnd = $endTime.ToString('o')
+                },
+                [pscustomobject]@{
+                    name = 'explicit-null'
+                    query = & $newQuery $startTime $null -IncludeStartTime -IncludeEndTime
+                    expectedStart = $startTime.ToString('o')
+                    expectedEnd = $null
+                },
+                [pscustomobject]@{
+                    name = 'missing-end'
+                    query = & $newQuery $startTime $null -IncludeStartTime
+                    expectedStart = $startTime.ToString('o')
+                    expectedEnd = $null
+                },
+                [pscustomobject]@{
+                    name = 'missing-start'
+                    query = & $newQuery $null $null -IncludeEndTime
+                    expectedStart = $null
+                    expectedEnd = $null
+                },
+                [pscustomobject]@{
+                    name = 'invalid'
+                    query = & $newQuery 'not-a-date' 'also-not-a-date' -IncludeStartTime -IncludeEndTime
+                    expectedStart = $null
+                    expectedEnd = $null
+                }
+            )
+            foreach ($case in $cases) {
+                $projected = InModuleScope BrowserBoundaryProbe -Parameters @{ Query = $case.query } {
+                    param($Query)
+                    & {
+                        Set-StrictMode -Version Latest
+                        $ErrorActionPreference = 'Stop'
+                        Get-OpenPathSafeAppLockerEventQueryEvidence -Query $Query
+                    }
+                }
+                $projected.startTime | Should -Be $case.expectedStart -Because $case.name
+                $projected.endTime | Should -Be $case.expectedEnd -Because $case.name
+            }
+        }
+
+        It '[Windows direct] imports the full boundary module under PS5.1 and PS7 and round-trips safe timestamps' -Skip:($script:OpenPathWindowsDirect -ne $true) {
+            $modulePath = Join-Path $PSScriptRoot "..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1"
+            $nativePowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $powerShell7 = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+            Test-Path -LiteralPath $nativePowerShell | Should -BeTrue
+            $powerShell7 | Should -Not -BeNullOrEmpty
+            $childPath = Join-Path $TestDrive 'browser-boundary-full-import.ps1'
+            @'
+param(
+    [Parameter(Mandatory = $true)][string]$ModulePath,
+    [Parameter(Mandatory = $true)][string]$RuntimeName
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$result = [ordered]@{
+    runtime = $RuntimeName
+    edition = [string]$PSVersionTable.PSEdition
+    version = [string]$PSVersionTable.PSVersion
+    languageMode = [string]$ExecutionContext.SessionState.LanguageMode
+    status = 'failed'
+    exportedCommandCount = 0
+    timestampProjection = 'not-run'
+    cases = @()
+    exception = $null
+}
+
+function New-TestQuery {
+    param(
+        [object]$StartTime,
+        [object]$EndTime,
+        [bool]$IncludeStartTime,
+        [bool]$IncludeEndTime
+    )
+
+    $query = [ordered]@{
+        status = 'QUERY_SUCCEEDED_NO_MATCHES'
+        channel = 'test-channel'
+        logName = 'test-channel'
+        eventId = 8004
+        channelEnabled = $null
+        channelExists = $true
+        queryAttempted = $true
+        querySucceeded = $true
+        eventCount = 0
+        exception = $null
+        correlationStatus = $null
+        correlationException = $null
+        reason = $null
+        runtime = $null
+        nativePowerShellComparison = $null
+    }
+    if ($IncludeStartTime) { $query.startTime = $StartTime }
+    if ($IncludeEndTime) { $query.endTime = $EndTime }
+    return [pscustomobject]$query
+}
+
+function Invoke-TestRoundTrip {
+    param(
+        [Parameter(Mandatory = $true)][object]$InputQuery,
+        [Parameter(Mandatory = $true)][string]$CaseName,
+        [object]$ExpectedStart,
+        [object]$ExpectedEnd
+    )
+
+    $projected = & $module {
+        param($Query)
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        Get-OpenPathSafeAppLockerEventQueryEvidence -Query $Query
+    } $InputQuery
+    $reportPath = Join-Path ([IO.Path]::GetTempPath()) "openpath-import-roundtrip-$([guid]::NewGuid().ToString('N')).json"
+    try {
+        Write-OpenPathBrowserBoundaryReport -Report ([pscustomobject][ordered]@{ query = $projected }) -Path $reportPath
+        $roundTrip = Get-Content -LiteralPath $reportPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $actualStart = $null
+        $actualEnd = $null
+        if ($roundTrip.query.PSObject.Properties['startTime']) { $actualStart = $roundTrip.query.startTime }
+        if ($roundTrip.query.PSObject.Properties['endTime']) { $actualEnd = $roundTrip.query.endTime }
+        $actualStartCanonical = $null
+        if ($null -ne $actualStart) {
+            try { $actualStartCanonical = ([datetime]$actualStart).ToUniversalTime().ToString('o') } catch {}
+        }
+        $actualEndCanonical = $null
+        if ($null -ne $actualEnd) {
+            try { $actualEndCanonical = ([datetime]$actualEnd).ToUniversalTime().ToString('o') } catch {}
+        }
+        $startMatches = if ($null -eq $ExpectedStart) {
+            $null -eq $actualStart
+        }
+        else {
+            [string]::Equals([string]$ExpectedStart, $actualStartCanonical, [System.StringComparison]::Ordinal)
+        }
+        $endMatches = if ($null -eq $ExpectedEnd) {
+            $null -eq $actualEnd
+        }
+        else {
+            [string]::Equals([string]$ExpectedEnd, $actualEndCanonical, [System.StringComparison]::Ordinal)
+        }
+        return [pscustomobject][ordered]@{
+            name = $CaseName
+            passed = $startMatches -and $endMatches
+            startTime = $actualStart
+            endTime = $actualEnd
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $reportPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+try {
+    $module = Import-Module -Name $ModulePath -Force -PassThru -ErrorAction Stop
+    $required = @('Get-OpenPathAppLockerEventQuery', 'Invoke-StudentExecutableTaskProbe', 'Write-OpenPathBrowserBoundaryReport')
+    if (@($required | Where-Object { -not $module.ExportedCommands.ContainsKey($_) }).Count -gt 0) {
+        throw 'required-exports-missing'
+    }
+    $result.exportedCommandCount = [int]$module.ExportedCommands.Count
+
+    $startTime = ([datetime]'2099-01-01T00:00:00.1234567Z').ToUniversalTime()
+    $endTime = ([datetime]'2099-01-01T00:01:00.7654321Z').ToUniversalTime()
+    $expectedStart = $startTime.ToString('o')
+    $expectedEnd = $endTime.ToString('o')
+    $cases = @(
+        [pscustomobject][ordered]@{
+            name = 'fractional'
+            query = New-TestQuery $startTime $endTime $true $true
+            expectedStart = $expectedStart
+            expectedEnd = $expectedEnd
+        }
+        [pscustomobject][ordered]@{
+            name = 'null-end'
+            query = New-TestQuery $startTime $null $true $true
+            expectedStart = $expectedStart
+            expectedEnd = $null
+        }
+        [pscustomobject][ordered]@{
+            name = 'invalid'
+            query = New-TestQuery 'not-a-date' 'also-not-a-date' $true $true
+            expectedStart = $null
+            expectedEnd = $null
+        }
+        [pscustomobject][ordered]@{
+            name = 'missing-start'
+            query = New-TestQuery $null $null $false $false
+            expectedStart = $null
+            expectedEnd = $null
+        }
+        [pscustomobject][ordered]@{
+            name = 'missing-end'
+            query = New-TestQuery $startTime $null $true $false
+            expectedStart = $expectedStart
+            expectedEnd = $null
+        }
+    )
+    foreach ($case in $cases) {
+        $caseResult = Invoke-TestRoundTrip -InputQuery $case.query -CaseName $case.name -ExpectedStart $case.expectedStart -ExpectedEnd $case.expectedEnd
+        $result.cases += $caseResult
+        if (-not $caseResult.passed) { throw "timestamp-roundtrip-mismatch-$($case.name)" }
+    }
+    $result.timestampProjection = 'passed'
+    $result.status = 'imported'
+}
+catch {
+    $exceptionType = [string]$_.Exception.GetType().FullName
+    $fullyQualifiedErrorId = [string]$_.FullyQualifiedErrorId
+    $hResult = $null
+    try { $hResult = '0x{0:X8}' -f ([uint32]$_.Exception.HResult) } catch {}
+    $line = $null
+    $column = $null
+    if ($_.InvocationInfo.ScriptLineNumber -gt 0) { $line = [int]$_.InvocationInfo.ScriptLineNumber }
+    if ($_.InvocationInfo.OffsetInLine -gt 0) { $column = [int]$_.InvocationInfo.OffsetInLine }
+    $result.exception = [ordered]@{
+        type = $exceptionType
+        fullyQualifiedErrorId = $fullyQualifiedErrorId
+        hResult = $hResult
+        line = $line
+        column = $column
+    }
+}
+
+$result | ConvertTo-Json -Compress -Depth 8
+if ($result.status -ne 'imported') { exit 1 }
+'@ | Set-Content -LiteralPath $childPath -Encoding UTF8
+
+            foreach ($runtime in @(
+                    [pscustomobject]@{ name = 'WindowsPowerShell5.1'; path = $nativePowerShell }
+                    [pscustomobject]@{ name = 'PowerShell7'; path = $powerShell7 }
+                )) {
+                $runtimePath = [string]$runtime.path
+                $output = @(& $runtimePath -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $childPath -ModulePath $modulePath -RuntimeName $runtime.name 2>$null)
+                $exitCode = [int]$LASTEXITCODE
+                $json = ($output -join [Environment]::NewLine).Trim()
+                $json | Should -Not -BeNullOrEmpty -Because "$($runtime.name) must return a bounded result"
+                $json | Should -Not -Match '(?i)Message|secret|Password|<AppLockerPolicy|<RuleCollection'
+                try { $result = $json | ConvertFrom-Json -ErrorAction Stop } catch { throw "safe-$($runtime.name)-result-invalid" }
+                $exitCode | Should -Be 0 -Because "$($runtime.name) full import"
+                $result.status | Should -Be 'imported' -Because "$($runtime.name) full import"
+                $result.timestampProjection | Should -Be 'passed' -Because "$($runtime.name) real writer roundtrip"
+                $result.cases.Count | Should -Be 5 -Because "$($runtime.name) timestamp matrix"
+                $result.exportedCommandCount | Should -BeGreaterThan 0
+            }
         }
 
         It 'keeps task identity and bounded TaskScheduler/Security logon evidence explicit' {
