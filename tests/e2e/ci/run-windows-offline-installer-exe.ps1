@@ -24,7 +24,11 @@ param(
 
     [int]$ConnectivityPort = 18443,
 
-    [string]$EvidencePath = ''
+    [string]$EvidencePath = '',
+
+    [string]$ProbePayloadPath = '',
+
+    [string]$TargetUserName = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -585,6 +589,8 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 $shell = Get-AvailablePowerShell
 $resolvedExecutable = (Resolve-Path -LiteralPath $ExecutablePath).Path
+$resolvedProbePayload = if ($ProbePayloadPath) { (Resolve-Path -LiteralPath $ProbePayloadPath).Path } else { '' }
+$probePayloadSha256 = if ($resolvedProbePayload) { (Get-FileHash -LiteralPath $resolvedProbePayload -Algorithm SHA256).Hash } else { $null }
 $expectedApiUri = [System.Uri]$ExpectedApiUrl
 if ($expectedApiUri.Port -ne $ConnectivityPort) {
     throw 'ExpectedApiUrl port must match ConnectivityPort'
@@ -649,7 +655,7 @@ foreach ($transportFileName in @(
 try {
     $script:CurrentStage = 'prepare-disposable-standard-target'
     Import-Module (Join-Path $PSScriptRoot 'DisposableWindowsTarget.psm1') -Force -ErrorAction Stop
-    $disposableTarget = New-OpenPathDisposableStandardTarget
+    $disposableTarget = New-OpenPathDisposableStandardTarget -UserName $TargetUserName
 
     $script:CurrentStage = 'launch-executable'
     $env:OPENPATH_WINDOWS_ROOT = $OpenPathRoot
@@ -772,7 +778,7 @@ try {
         $policyConverterObservation['beforeBoundaryProbes'] = [pscustomobject][ordered]@{ status='unavailable'; context='before-boundary-probes'; reason='policy-converter-observer-failed'; capturedAtUtc=$observerFailureAtUtc; runtime=$null; task=$null; taskInfo=$null; service=$null; process=$null }
     }
     $script:CurrentStage = 'run-installed-boundary-probes'
-    $boundaryEvidence = Invoke-OpenPathInstalledBoundaryProbes -Target $disposableTarget -OpenPathRoot $OpenPathRoot
+    $boundaryEvidence = Invoke-OpenPathInstalledBoundaryProbes -Target $disposableTarget -OpenPathRoot $OpenPathRoot -ProbePayloadPath $resolvedProbePayload
 
     $result = [ordered]@{
         status = 'ok'
@@ -799,6 +805,7 @@ try {
         }
         boundary = $boundaryEvidence
         policyConverterObservation = $policyConverterObservation
+        probePayloadSha256 = $probePayloadSha256
         cleanupAttempted = 'not-observed'
         cleanupSucceeded = 'not-observed'
     }
@@ -972,6 +979,7 @@ catch {
         edgeObservedUserSid = if ($edgeFailureContract) { $edgeFailureContract.edgeObservedUserSid } else { $null }
         edgeAttempts = if ($edgeFailureContract) { $edgeFailureContract.edgeAttempts } else { @() }
         policyConverterObservation = $policyConverterObservation
+        probePayloadSha256 = $probePayloadSha256
         cleanupAttempted = 'not-observed'
         cleanupSucceeded = 'not-observed'
     }

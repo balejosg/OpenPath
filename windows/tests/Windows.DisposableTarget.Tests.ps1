@@ -1,12 +1,24 @@
 BeforeAll {
     foreach ($commandName in @(
-        'Get-LocalUser', 'New-LocalUser', 'Enable-LocalUser', 'Remove-LocalUser',
+        'Get-LocalUser', 'Enable-LocalUser', 'Remove-LocalUser',
         'Get-LocalGroup', 'Get-LocalGroupMember', 'Add-LocalGroupMember',
         'Get-CimInstance', 'Remove-CimInstance',
         'Invoke-StudentExecutableTaskProbe'
     )) {
         if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
             Set-Item -Path "Function:global:$commandName" -Value { param() }
+        }
+    }
+    if (-not (Get-Command New-LocalUser -ErrorAction SilentlyContinue)) {
+        function global:New-LocalUser {
+            [CmdletBinding()]
+            param(
+                [string]$Name,
+                [securestring]$Password,
+                [switch]$AccountNeverExpires,
+                [switch]$PasswordNeverExpires,
+                [switch]$UserMayNotChangePassword
+            )
         }
     }
     Import-Module (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\DisposableWindowsTarget.psm1') -Force
@@ -43,6 +55,20 @@ Describe 'Canonical offline installer disposable target' {
         Mock Remove-LocalUser {} -ModuleName DisposableWindowsTarget
         Mock Add-LocalGroupMember {} -ModuleName DisposableWindowsTarget
         Mock Start-Sleep {} -ModuleName DisposableWindowsTarget
+    }
+
+    It 'uses the requested fresh account name and rejects a pre-existing account without removing it' {
+        $global:requestedOpenPathAccountName = $null
+        Mock New-LocalUser { param($Name) $global:requestedOpenPathAccountName = $Name; throw [System.InvalidOperationException]::new('account-exists') } -ModuleName DisposableWindowsTarget
+
+        $captured = $null
+        try { $null = New-OpenPathDisposableStandardTarget -UserName 'op-e2e-converter' } catch { $captured = $_ }
+
+        $captured.Exception.Message | Should -Be 'account-exists'
+        Should -Invoke New-LocalUser -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        $global:requestedOpenPathAccountName | Should -Be 'op-e2e-converter'
+        Remove-Variable -Name requestedOpenPathAccountName -Scope Global -ErrorAction SilentlyContinue
+        Should -Invoke Remove-LocalUser -ModuleName DisposableWindowsTarget -Times 0 -Exactly
     }
 
     It 'stores the denied PE control under edge boundary evidence without replacing the Edge cause' {
@@ -745,6 +771,32 @@ Describe 'Canonical offline installer disposable target' {
         Mock Invoke-OpenPathEdgeBoundaryDiagnostic { [pscustomobject]@{ status = 'pass'; attempts = @() } } -ModuleName DisposableWindowsTarget
         $repeat = Invoke-OpenPathDisposableEdgeBoundaryDiagnostic -UserName $target.UserName -Password $target.Password -ExecutablePath $edgeEvidence.executablePath -StudentSid $target.Sid
         $repeat.status | Should -Be 'pass'
+    }
+
+    It 'copies a supplied benign PE payload instead of compiling another payload' {
+        if (-not (Get-Command icacls.exe -ErrorAction SilentlyContinue)) { Set-Item -Path Function:global:icacls.exe -Value { $global:LASTEXITCODE = 0 } }
+        foreach ($commandName in @('New-OpenPathProbePayloadBinary', 'Invoke-StudentExecutableTaskProbe')) {
+            if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) { Set-Item -Path "Function:global:$commandName" -Value { param() } }
+        }
+        $payload = Join-Path $TestDrive 'shared-probe.exe'
+        $env:ProgramData = $TestDrive
+        Set-Content -LiteralPath $payload -Value 'same-bytes'
+        $target = [pscustomobject]@{ UserName='op-e2e-converter'; Password='secret'; Sid=$script:testSid; ProfilePath=$script:testPath }
+        Mock Test-Path { return $true } -ModuleName DisposableWindowsTarget
+        Mock Import-Module {} -ModuleName DisposableWindowsTarget
+        Mock Copy-Item {} -ModuleName DisposableWindowsTarget
+        Mock New-OpenPathProbePayloadBinary {} -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathNativePolicyProbe { [pscustomobject]@{ status='ok' } } -ModuleName DisposableWindowsTarget
+        Mock New-Item {} -ModuleName DisposableWindowsTarget
+        Mock icacls.exe { $global:LASTEXITCODE = 0 } -ModuleName DisposableWindowsTarget
+        Mock Invoke-StudentExecutableTaskProbe { [pscustomobject]@{ status='pass'; evidence=[pscustomobject]@{} } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathSystemRecoveryProbe { [pscustomobject]@{ executed=$true } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathWatchdogProbe { [pscustomobject]@{ lastTaskResult=0 } } -ModuleName DisposableWindowsTarget
+
+        $null = Invoke-OpenPathInstalledBoundaryProbes -Target $target -OpenPathRoot 'C:\OpenPath' -ProbePayloadPath $payload
+
+        Should -Invoke Copy-Item -ModuleName DisposableWindowsTarget -Times 1 -Exactly -ParameterFilter { $LiteralPath -eq $payload }
+        Should -Invoke New-OpenPathProbePayloadBinary -ModuleName DisposableWindowsTarget -Times 0 -Exactly
     }
 
     It 'resolves transported Edge evidence before running bounded diagnostics' {

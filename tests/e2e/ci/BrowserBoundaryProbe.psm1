@@ -3346,6 +3346,7 @@ Export-ModuleMember -Function @(
     'Get-OpenPathCorrelatedAppLockerEvent',
     'Get-OpenPathTaskIdentityEvidence',
     'Get-OpenPathTestAppLockerPolicyDecision',
+    'Get-OpenPathEnforcementObserverSnapshot',
     'Get-OpenPathLastBoundaryProbeFailureEvidence',
     'Get-OpenPathFlatEdgeBoundaryFailureContract',
     'Invoke-StudentExecutableTaskProbe',

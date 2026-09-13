@@ -1154,3 +1154,66 @@ test('release template workflow prepares signed Firefox artifacts through the ca
     'template workflow must inspect the standard hosted Edge installation path'
   );
 });
+
+test('release workflow isolates a non-gating serialized PolicyConverter contrast over identical payload bytes', () => {
+  const workflow = readText('.github/workflows/release-scripts.yml');
+  const validate = workflow.indexOf('Validate personalized trailer with PowerShell');
+  const diagnosticUpload = workflow.indexOf('Upload PolicyConverter contrast inputs');
+  const canonicalExecute = workflow.indexOf('Execute the personalized NSIS executable E2E');
+
+  assert.ok(validate >= 0 && diagnosticUpload > validate && diagnosticUpload < canonicalExecute);
+  assert.match(workflow, /name: windows-policy-converter-contrast-inputs/);
+  assert.match(
+    workflow,
+    /contrast-artifact-id:.*steps\.contrast-input-upload\.outputs\.artifact-id/
+  );
+  assert.match(workflow, /probePayloadSha256/);
+  assert.match(workflow, /executableSha256/);
+  assert.match(workflow, /policy-converter-contrast:[\s\S]*needs: windows-offline-template/);
+  assert.match(workflow, /if:.*always\(\).*contrast-artifact-id != ''/);
+  assert.match(workflow, /matrix:[\s\S]*mode: \[Disabled, Enabled\]/);
+  assert.match(workflow, /fail-fast: false[\s\S]*max-parallel: 1/);
+  assert.match(workflow, /continue-on-error: true/);
+  assert.match(workflow, /run-windows-policy-converter-contrast\.ps1/);
+  assert.match(workflow, /Upload PolicyConverter contrast evidence[\s\S]*if: always\(\)/);
+
+  const prepareBlock = workflow.slice(
+    workflow.indexOf('- name: Prepare PolicyConverter contrast inputs'),
+    workflow.indexOf('- name: Upload PolicyConverter contrast inputs')
+  );
+  const uploadBlock = workflow.slice(
+    workflow.indexOf('- name: Upload PolicyConverter contrast inputs'),
+    workflow.indexOf('- name: Execute the personalized NSIS executable E2E')
+  );
+  const canonicalBlock = workflow.slice(
+    workflow.indexOf('- name: Execute the personalized NSIS executable E2E'),
+    workflow.indexOf('- name: Upload personalized NSIS E2E evidence')
+  );
+  assert.match(prepareBlock, /continue-on-error: true/);
+  assert.match(uploadBlock, /if: steps\.contrast-inputs\.outcome == 'success'/);
+  assert.match(uploadBlock, /continue-on-error: true/);
+  assert.doesNotMatch(canonicalBlock, /continue-on-error: true/);
+});
+
+test('offline executable harness accepts one prebuilt PE payload without changing its default path', () => {
+  const lane = readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1');
+  const target = readText('tests/e2e/ci/DisposableWindowsTarget.psm1');
+
+  assert.match(lane, /\[string\]\$ProbePayloadPath = ''/);
+  assert.match(lane, /\[string\]\$TargetUserName = ''/);
+  assert.match(lane, /New-OpenPathDisposableStandardTarget -UserName \$TargetUserName/);
+  assert.match(
+    lane,
+    /Invoke-OpenPathInstalledBoundaryProbes[\s\S]*-ProbePayloadPath \$resolvedProbePayload/
+  );
+  assert.match(target, /if \(\$ProbePayloadPath\)[\s\S]*Copy-Item -LiteralPath \$ProbePayloadPath/);
+  assert.match(target, /else \{[\s\S]*New-OpenPathProbePayloadBinary -OutputPath \$probeExe/);
+});
+
+test('PolicyConverter contrast transports child paths through an encoded environment-bound command', () => {
+  const wrapper = readText('tests/e2e/ci/run-windows-policy-converter-contrast.ps1');
+  assert.match(wrapper, /OPENPATH_CONTRAST_EXECUTABLE/);
+  assert.match(wrapper, /ToBase64String\(\[Text\.Encoding\]::Unicode\.GetBytes\(\$command\)\)/);
+  assert.match(wrapper, /'-EncodedCommand',\$encoded/);
+  assert.doesNotMatch(wrapper, /ArgumentList[^\n]*\$ExecutablePath/);
+});

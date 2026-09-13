@@ -33,6 +33,8 @@ jobs:
   windows-offline-template:
     name: Build Windows Offline Installer Template
     runs-on: windows-2025
+    outputs:
+      contrast-artifact-id: ${{ steps.contrast-input-upload.outputs.artifact-id }}
 
     steps:
       - name: Checkout code
@@ -160,6 +162,38 @@ jobs:
             exit 1
           }
 
+      - name: Prepare PolicyConverter contrast inputs
+        id: contrast-inputs
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-inputs'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $executable = Join-Path $env:RUNNER_TEMP 'OpenPath-Windows-Setup-E2E.exe'
+          $copiedExecutable = Join-Path $root 'OpenPath-Windows-Setup-E2E.exe'
+          $probe = Join-Path $root 'openpath-e2e-probe.exe'
+          Copy-Item -LiteralPath $executable -Destination $copiedExecutable -Force
+          Import-Module (Resolve-Path 'tests/e2e/ci/BrowserBoundaryProbe.psm1') -Force -ErrorAction Stop
+          New-OpenPathProbePayloadBinary -OutputPath $probe
+          @{
+            schemaVersion = 1
+            executableFile = 'OpenPath-Windows-Setup-E2E.exe'
+            executableSha256 = (Get-FileHash -LiteralPath $copiedExecutable -Algorithm SHA256).Hash
+            probePayloadFile = 'openpath-e2e-probe.exe'
+            probePayloadSha256 = (Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash
+            sourceSha = '${{ github.sha }}'
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'sha256-manifest.json') -Encoding UTF8
+
+      - name: Upload PolicyConverter contrast inputs
+        id: contrast-input-upload
+        if: steps.contrast-inputs.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-policy-converter-contrast-inputs
+          path: ${{ runner.temp }}/openpath-policy-converter-contrast-inputs
+          if-no-files-found: error
+
       - name: Execute the personalized NSIS executable E2E
         shell: pwsh
         run: |
@@ -192,6 +226,71 @@ jobs:
             windows/offline-installer/build/OpenPath-Windows-Setup-Template.exe.sha256
             windows/offline-installer/build/payload-manifest.json
           if-no-files-found: error
+
+  policy-converter-contrast:
+    name: PolicyConverter ${{ matrix.mode }} contrast
+    needs: windows-offline-template
+    if: ${{ always() && needs.windows-offline-template.outputs.contrast-artifact-id != '' }}
+    runs-on: windows-2025
+    timeout-minutes: 25
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        mode: [Disabled, Enabled]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Download identical PolicyConverter contrast inputs
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-policy-converter-contrast-inputs
+          path: ${{ runner.temp }}/openpath-policy-converter-contrast-inputs
+
+      - name: Verify PolicyConverter contrast input hashes
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-inputs'
+          $manifest = Get-Content -LiteralPath (Join-Path $root 'sha256-manifest.json') -Raw | ConvertFrom-Json
+          if ($manifest.sourceSha -ne '${{ github.sha }}') { throw 'contrast-source-sha-mismatch' }
+          foreach ($input in @(
+            @{ File = $manifest.executableFile; Hash = $manifest.executableSha256 },
+            @{ File = $manifest.probePayloadFile; Hash = $manifest.probePayloadSha256 }
+          )) {
+            $actual = (Get-FileHash -LiteralPath (Join-Path $root $input.File) -Algorithm SHA256).Hash
+            if ($actual -ne $input.Hash) { throw 'contrast-input-hash-mismatch' }
+          }
+
+      - name: Run PolicyConverter contrast
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $inputs = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-inputs'
+          $manifest = Get-Content -LiteralPath (Join-Path $inputs 'sha256-manifest.json') -Raw | ConvertFrom-Json
+          $evidence = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-${{ matrix.mode }}.json'
+          $childEvidence = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-${{ matrix.mode }}-child.json'
+          & (Resolve-Path 'tests/e2e/ci/run-windows-policy-converter-contrast.ps1') `
+            -Mode '${{ matrix.mode }}' `
+            -ExecutablePath (Join-Path $inputs 'OpenPath-Windows-Setup-E2E.exe') `
+            -ProbePayloadPath (Join-Path $inputs 'openpath-e2e-probe.exe') `
+            -ExpectedExecutableSha256 $manifest.executableSha256 `
+            -ExpectedProbePayloadSha256 $manifest.probePayloadSha256 `
+            -ChildEvidencePath $childEvidence `
+            -EvidencePath $evidence `
+            -TargetUserName 'op-e2e-converter'
+
+      - name: Upload PolicyConverter contrast evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-policy-converter-contrast-${{ matrix.mode }}-evidence
+          path: |
+            ${{ runner.temp }}/openpath-policy-converter-contrast-${{ matrix.mode }}.json
+            ${{ runner.temp }}/openpath-policy-converter-contrast-${{ matrix.mode }}-child.json
+          if-no-files-found: warn
 
   # Run the HTTP-to-EXE path on a fresh runner. The physical NSIS lane above
   # changes Windows policy while testing the installer and must not poison the

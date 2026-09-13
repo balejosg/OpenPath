@@ -132,20 +132,23 @@ function Assert-OpenPathDisposableTarget {
 }
 
 function New-OpenPathDisposableStandardTarget {
-    $suffix = [guid]::NewGuid().ToString('N').Substring(0, 10)
-    $userName = "op-e2e-$suffix"
+    param([string]$UserName = '')
+    if ([string]::IsNullOrWhiteSpace($UserName)) {
+        $suffix = [guid]::NewGuid().ToString('N').Substring(0, 10)
+        $UserName = "op-e2e-$suffix"
+    }
     $password = New-OpenPathDisposablePassword
     $securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
     $created = $false
     $target = $null
     try {
-        $user = New-LocalUser -Name $userName -Password $securePassword -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword -ErrorAction Stop
+        $user = New-LocalUser -Name $UserName -Password $securePassword -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword -ErrorAction Stop
         $created = $true
-        Enable-LocalUser -Name $userName -ErrorAction Stop
+        Enable-LocalUser -Name $UserName -ErrorAction Stop
         $sid = ConvertTo-OpenPathTargetSidString $user.SID
-        $profilePath = Invoke-OpenPathCreateDisposableProfile -Sid $sid -UserName $userName
+        $profilePath = Invoke-OpenPathCreateDisposableProfile -Sid $sid -UserName $UserName
         Grant-OpenPathDisposableTargetUserRight -Sid $sid -Right 'SeBatchLogonRight'
-        $target = [pscustomobject]@{ UserName = $userName; Sid = $sid; ProfilePath = $profilePath; Password = $password; BatchLogonRightGranted = $true }
+        $target = [pscustomobject]@{ UserName = $UserName; Sid = $sid; ProfilePath = $profilePath; Password = $password; BatchLogonRightGranted = $true }
         $null = Assert-OpenPathDisposableTarget -Target $target
         return $target
     }
@@ -154,7 +157,7 @@ function New-OpenPathDisposableStandardTarget {
             try { Remove-OpenPathDisposableStandardTarget -Target $target | Out-Null } catch {}
         }
         elseif ($created) {
-            Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue
+            Remove-LocalUser -Name $UserName -ErrorAction SilentlyContinue
         }
         throw
     }
@@ -370,7 +373,7 @@ function New-OpenPathDisposableEdgeBoundaryException {
 }
 
 function Invoke-OpenPathInstalledBoundaryProbes {
-    param([Parameter(Mandatory = $true)][object]$Target, [string]$OpenPathRoot = 'C:\OpenPath')
+    param([Parameter(Mandatory = $true)][object]$Target, [string]$OpenPathRoot = 'C:\OpenPath', [string]$ProbePayloadPath = '')
     Import-Module (Join-Path $PSScriptRoot 'BrowserBoundaryProbe.psm1') -Force -ErrorAction Stop
     $firefox = @("$env:ProgramFiles\Mozilla Firefox\firefox.exe", "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe") | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     $edge = @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe") | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
@@ -378,7 +381,13 @@ function Invoke-OpenPathInstalledBoundaryProbes {
     if (-not $edge) { throw 'boundary-edge-missing' }
     $probeExe = Join-Path $Target.ProfilePath 'openpath-e2e-probe.exe'
     $probeMarker = Join-Path $Target.ProfilePath 'openpath-e2e-probe.marker'
-    New-OpenPathProbePayloadBinary -OutputPath $probeExe
+    if ($ProbePayloadPath) {
+        if (-not (Test-Path -LiteralPath $ProbePayloadPath -PathType Leaf)) { throw 'boundary-probe-payload-missing' }
+        Copy-Item -LiteralPath $ProbePayloadPath -Destination $probeExe -Force
+    }
+    else {
+        New-OpenPathProbePayloadBinary -OutputPath $probeExe
+    }
     $policy = Invoke-OpenPathNativePolicyProbe -Target $Target -OpenPathRoot $OpenPathRoot -FirefoxPath $firefox -EdgePath $edge -ProbePath $probeExe
     $studentFirefoxProfile = Join-Path $Target.ProfilePath "AppData\Local\Temp\ff-probe-$([guid]::NewGuid().ToString('N'))"
     try {
@@ -519,7 +528,7 @@ function Test-OpenPathDisposableNotFoundError {
 
 function Get-OpenPathDisposablePolicyConverterObservation {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][ValidateSet('before-exe-launch','before-boundary-probes')][string]$Context)
+    param([Parameter(Mandatory = $true)][ValidateSet('before-exe-launch','before-boundary-probes','contrast-before-intervention','contrast-after-intervention','contrast-after-child','contrast-after-restoration')][string]$Context)
 
     $capturedAt = Get-OpenPathDisposablePolicyConverterClock
     $capturedAtUtc = $capturedAt.ToUniversalTime().ToString('o')
