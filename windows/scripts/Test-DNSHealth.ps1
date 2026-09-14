@@ -14,7 +14,6 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Watchdog script to verify DNS health and auto-recover
@@ -23,9 +22,15 @@
     Attempts auto-recovery if problems are detected.
 #>
 
+#Requires -RunAsAdministrator
+param([string]$OpenPathRoot = '')
+
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot '..\lib\internal\WindowsRoot.ps1')
-$OpenPathRoot = Resolve-OpenPathWindowsRoot
+if ([string]::IsNullOrWhiteSpace($OpenPathRoot)) {
+    $OpenPathRoot = Split-Path $PSScriptRoot -Parent
+}
+$OpenPathRoot = Resolve-OpenPathWindowsRoot -OpenPathRoot $OpenPathRoot
 . (Join-Path $OpenPathRoot 'lib\internal\Watchdog.FailCount.ps1')
 . (Join-Path $OpenPathRoot 'lib\internal\Watchdog.Runtime.ps1')
 

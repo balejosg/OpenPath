@@ -20,6 +20,21 @@ Describe "Watchdog Script" {
                 '''Restore-OpenPathCaptivePortalDNS'''
             )
         }
+
+        It "accepts an explicit root and defaults relative to the script" {
+            $content = Get-Content (Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1") -Raw
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'param([string]$OpenPathRoot',
+                'if ([string]::IsNullOrWhiteSpace($OpenPathRoot)) {',
+                '    $OpenPathRoot = Split-Path $PSScriptRoot -Parent',
+                'Resolve-OpenPathWindowsRoot -OpenPathRoot $OpenPathRoot'
+            )
+        }
+
+        It "preserves the script synopsis through Get-Help" {
+            $help = Get-Help (Join-Path $PSScriptRoot ".." "scripts" "Test-DNSHealth.ps1")
+            $help.Synopsis | Should -Be 'Watchdog script to verify DNS health and auto-recover'
+        }
     }
 
     Context "Firefox managed extension refresh" {
