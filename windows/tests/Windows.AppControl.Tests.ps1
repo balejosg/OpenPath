@@ -170,7 +170,7 @@ Describe "AppControl Module" {
             }
         }
 
-        It 'fails with a policy activation diagnostic before health validation' {
+        It 'continues to health validation when activation is inconclusive and health is true' {
             Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
             Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
             $diagnosticPath = Join-Path $TestDrive 'activation-failure.json'
@@ -178,6 +178,7 @@ Describe "AppControl Module" {
             $global:opExpectedActivationBackupPath = $backupPath
             $script:activationSetPolicyCalls = 0
             $script:activationSetPolicyArgs = [System.Collections.Generic.List[object]]::new()
+            $script:activationWarnings = [System.Collections.Generic.List[object]]::new()
             Mock Test-AdminPrivileges { $true } -ModuleName AppControl
             Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
             Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
@@ -189,22 +190,18 @@ Describe "AppControl Module" {
             Mock Set-Service {} -ModuleName AppControl
             Mock Start-Service {} -ModuleName AppControl
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { [pscustomobject]@{status='inconclusive';code='task-run-not-confirmed'} } -ModuleName AppControl
-            Mock Test-OpenPathNonAdminAppControlActive { throw 'health must not run' } -ModuleName AppControl
-            Mock Write-OpenPathLog {} -ModuleName AppControl
+            Mock Test-OpenPathNonAdminAppControlActive { $true } -ModuleName AppControl
+            Mock Write-OpenPathLog { param($Message, $Level) $script:activationWarnings.Add([pscustomobject]@{Message=$Message;Level=$Level}) } -ModuleName AppControl
 
-            Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $diagnosticPath -Confirm:$false | Should -BeFalse
-            $diagnostic = Get-Content -LiteralPath $diagnosticPath -Raw | ConvertFrom-Json
-            $diagnostic.substep | Should -Be 'policy-activation'
-            @($diagnostic.reasonCodes) | Should -Be @('appcontrol_policy_activation_failed')
-            $diagnostic.internalRollbackAttempted | Should -BeTrue
-            $diagnostic.internalRollbackSucceeded | Should -BeTrue
-            Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 2 -Exactly
-            $script:activationSetPolicyArgs[1].XMLPolicy | Should -Be $backupPath
-            $script:activationSetPolicyArgs[1].ErrorAction | Should -Be 'Stop'
-            Should -Invoke Test-OpenPathNonAdminAppControlActive -ModuleName AppControl -Times 0 -Exactly
+            Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $diagnosticPath -Confirm:$false | Should -BeTrue
+            Test-Path $diagnosticPath | Should -BeFalse
+            Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 1 -Exactly
+            Should -Invoke Test-OpenPathNonAdminAppControlActive -ModuleName AppControl -Times 1 -Exactly
+            @($script:activationWarnings | Where-Object Message -eq 'AppLocker policy activation was inconclusive; continuing with validation').Count | Should -Be 1
+            ($script:activationWarnings | Where-Object Message -eq 'AppLocker policy activation was inconclusive; continuing with validation')[0].Level | Should -Be 'WARN'
         }
 
-        It 'preserves the activation reason when rollback fails' {
+        It 'rolls back when inconclusive activation is followed by unhealthy validation' {
             Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
             Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
             $diagnosticPath = Join-Path $TestDrive 'activation-rollback-failure.json'
@@ -219,6 +216,30 @@ Describe "AppControl Module" {
             Mock Set-Service {} -ModuleName AppControl
             Mock Start-Service {} -ModuleName AppControl
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { [pscustomobject]@{status='inconclusive';code='task-run-not-confirmed'} } -ModuleName AppControl
+            Mock Test-OpenPathNonAdminAppControlActive { $false } -ModuleName AppControl
+            Mock Write-OpenPathLog {} -ModuleName AppControl
+
+            Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $diagnosticPath -Confirm:$false | Should -BeFalse
+            $diagnostic = Get-Content -LiteralPath $diagnosticPath -Raw | ConvertFrom-Json
+            $diagnostic.substep | Should -Be 'validation'
+            @($diagnostic.reasonCodes) | Should -Be @('appcontrol_health_evaluation_failed')
+            $diagnostic.internalRollbackAttempted | Should -BeTrue
+            $diagnostic.internalRollbackSucceeded | Should -BeFalse
+            Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 2 -Exactly
+            Should -Invoke Test-OpenPathNonAdminAppControlActive -ModuleName AppControl -Times 1 -Exactly
+        }
+
+        It 'keeps the activation failure path when the helper throws' {
+            Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
+            Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
+            $diagnosticPath = Join-Path $TestDrive 'activation-throws.json'
+            $script:activationSetPolicyCalls = 0
+            Mock Test-AdminPrivileges { $true } -ModuleName AppControl
+            Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
+            Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
+            Mock Set-AppLockerPolicy { $script:activationSetPolicyCalls++ } -ModuleName AppControl
+            Mock Set-Service {} -ModuleName AppControl; Mock Start-Service {} -ModuleName AppControl
+            Mock Invoke-OpenPathAppControlPolicyConverterActivation { throw 'injected helper exception' } -ModuleName AppControl
             Mock Test-OpenPathNonAdminAppControlActive { throw 'health must not run' } -ModuleName AppControl
             Mock Write-OpenPathLog {} -ModuleName AppControl
 
@@ -227,8 +248,8 @@ Describe "AppControl Module" {
             $diagnostic.substep | Should -Be 'policy-activation'
             @($diagnostic.reasonCodes) | Should -Be @('appcontrol_policy_activation_failed')
             $diagnostic.internalRollbackAttempted | Should -BeTrue
-            $diagnostic.internalRollbackSucceeded | Should -BeFalse
-            Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 2 -Exactly
+            $diagnostic.internalRollbackSucceeded | Should -BeTrue
+            $script:activationSetPolicyCalls | Should -Be 2
             Should -Invoke Test-OpenPathNonAdminAppControlActive -ModuleName AppControl -Times 0 -Exactly
         }
     }

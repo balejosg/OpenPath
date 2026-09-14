@@ -1890,7 +1890,7 @@ function Set-OpenPathNonAdminAppControl {
         $diagnosticSubstep = 'policy-activation'
         $activation = Invoke-OpenPathAppControlPolicyConverterActivation
         if ($activation.status -ne 'observed') {
-            throw 'appcontrol_policy_activation_failed'
+            Write-OpenPathLog 'AppLocker policy activation was inconclusive; continuing with validation' -Level WARN
         }
 
         $diagnosticSubstep = 'validation'
