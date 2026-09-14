@@ -347,7 +347,7 @@ jobs:
   release:
     name: Build and Release Scripts
     runs-on: ubuntu-latest
-    needs: [windows-offline-template, windows-personalized-http-e2e]
+    needs: [windows-offline-template, policy-converter-contrast, windows-personalized-http-e2e]
     if: ${{ github.event_name == 'workflow_dispatch' }}
 
     steps:
@@ -653,3 +653,14 @@ jobs:
           echo "- windows-v${{ steps.vars.outputs.version }}.zip.sha256" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🔗 [View Release](https://github.com/${{ github.repository }}/releases/tag/${{ steps.vars.outputs.tag }})" >> $GITHUB_STEP_SUMMARY
+
+  release-scripts-success:
+    name: Release Scripts Success
+    runs-on: ubuntu-latest
+    needs:
+      [windows-offline-template, policy-converter-contrast, windows-personalized-http-e2e, release]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.windows-offline-template.result == 'success' && needs.policy-converter-contrast.result == 'success' && needs.windows-personalized-http-e2e.result == 'success' && needs.release.result == 'success' }}
+
+    steps:
+      - name: Record the complete canonical release chain
+        run: echo "Canonical same-SHA Windows release proof is green."

@@ -2269,6 +2269,64 @@ test('promotion contract workflow uses canonical fingerprints and only publishes
   );
 });
 
+test('promotion contract publication requires the canonical same-SHA Windows release proof', () => {
+  const promotionWorkflow = readText('.github/workflows/publish-promotion-contract.yml');
+  const releaseWorkflow = readText('.github/workflows/release-scripts.yml');
+  const releaseChecklist = readText('.github/RELEASE_CHECKLIST.md');
+  const releaseJob = extractWorkflowJobBlock(releaseWorkflow, 'release');
+  const successJobStart = releaseWorkflow.indexOf('  release-scripts-success:\n');
+  assert.notEqual(successJobStart, -1, 'workflow should define a release-scripts-success job');
+  const successJob = releaseWorkflow.slice(successJobStart);
+
+  assert.ok(
+    promotionWorkflow.includes('--require "Release Installation Scripts::Release Scripts Success"'),
+    'promotion publication must require the canonical release workflow summary for the exact target SHA'
+  );
+  assert.ok(successJob.includes('name: Release Scripts Success'));
+  for (const requiredJob of [
+    'windows-offline-template',
+    'policy-converter-contrast',
+    'windows-personalized-http-e2e',
+    'release',
+  ]) {
+    assert.ok(
+      successJob.includes(requiredJob),
+      `the canonical release summary must depend on ${requiredJob}`
+    );
+  }
+  assert.match(
+    releaseWorkflow,
+    /release-scripts-success:\n[\s\S]*?if: \$\{\{ always\(\) && github\.event_name == 'workflow_dispatch'[\s\S]*?needs\.windows-offline-template\.result == 'success'[\s\S]*?needs\.policy-converter-contrast\.result == 'success'[\s\S]*?needs\.windows-personalized-http-e2e\.result == 'success'[\s\S]*?needs\.release\.result == 'success'/,
+    'the canonical release summary must fail closed unless every required same-run result succeeded'
+  );
+  assert.ok(
+    releaseJob.includes(
+      'needs: [windows-offline-template, policy-converter-contrast, windows-personalized-http-e2e]'
+    ),
+    'release publication must wait for the same-run PolicyConverter contrast as well as both executable lanes'
+  );
+  for (const requiredState of ['SOURCE FIXED', 'PROMOTED', 'DOWNSTREAM SHIPPED']) {
+    assert.ok(
+      releaseChecklist.includes(requiredState),
+      `release completion reporting must distinguish ${requiredState}`
+    );
+  }
+  for (const requiredIdentity of [
+    'OpenPath target SHA',
+    'promotion contract URL',
+    'contract SHA-256',
+    'Windows component source SHA',
+    'Windows release tag',
+    'Windows template SHA-256',
+    'payload manifest SHA-256',
+  ]) {
+    assert.ok(
+      releaseChecklist.includes(requiredIdentity),
+      `promoted completion reporting must record ${requiredIdentity}`
+    );
+  }
+});
+
 test('promotion workflow keeps runner paths in step-level environments', () => {
   const workflow = readText('.github/workflows/publish-promotion-contract.yml');
   const jobs = workflow.slice(workflow.indexOf('jobs:\n') + 'jobs:\n'.length);

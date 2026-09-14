@@ -66,6 +66,7 @@ jobs:
             --require "CI::CI Success" \
             --require "E2E Tests::E2E Summary" \
             --require "Installer Contracts::Installer Contracts Success" \
+            --require "Release Installation Scripts::Release Scripts Success" \
             --timeout-minutes 90 \
             --poll-seconds 30
 
