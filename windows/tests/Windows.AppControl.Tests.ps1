@@ -182,8 +182,9 @@ Describe "AppControl Module" {
             Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
             Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
             Mock Set-AppLockerPolicy {
+                param($XMLPolicy, $ErrorAction)
                 $script:activationSetPolicyCalls++
-                $script:activationSetPolicyArgs.Add([pscustomobject]@{ XMLPolicy=$XMLPolicy; ErrorAction=$PSBoundParameters['ErrorAction'] })
+                $script:activationSetPolicyArgs.Add([pscustomobject]@{ XMLPolicy=$XMLPolicy; ErrorAction=[string]$ErrorAction })
             } -ModuleName AppControl
             Mock Set-Service {} -ModuleName AppControl
             Mock Start-Service {} -ModuleName AppControl
@@ -198,9 +199,8 @@ Describe "AppControl Module" {
             $diagnostic.internalRollbackAttempted | Should -BeTrue
             $diagnostic.internalRollbackSucceeded | Should -BeTrue
             Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 2 -Exactly
-            Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 1 -Exactly -ParameterFilter {
-                $XMLPolicy -eq $global:opExpectedActivationBackupPath -and [string]$ErrorAction -eq 'Stop'
-            }
+            $script:activationSetPolicyArgs[1].XMLPolicy | Should -Be $backupPath
+            $script:activationSetPolicyArgs[1].ErrorAction | Should -Be 'Stop'
             Should -Invoke Test-OpenPathNonAdminAppControlActive -ModuleName AppControl -Times 0 -Exactly
         }
 

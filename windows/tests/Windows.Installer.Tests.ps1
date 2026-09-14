@@ -819,6 +819,9 @@ Set-Content -LiteralPath `$groupStatePath -Value 'absent' -Encoding ascii
 Set-Content -LiteralPath `$appLockerStatePath -Value '<AppLockerPolicy Version="1" />' -Encoding utf8
 `$global:MockGroupExists = `$false
 `$global:MockRestrictedMembers = [System.Collections.Generic.List[string]]::new()
+`$global:MockPolicyConverterEnabled = `$false
+`$global:MockPolicyConverterLastRunTime = [datetime]'2026-09-14T10:00:00Z'
+`$global:MockPolicyConverterLastTaskResult = 0
 `$probeFixtureRoot = Join-Path (Split-Path '$TestDir' -Parent) ("appcontrol-probes-" + (Split-Path '$TestDir' -Leaf))
 `$probeProfileRoot = Join-Path `$probeFixtureRoot 'student-profile'
 `$probeSystemRoot = Join-Path `$probeFixtureRoot 'windows'
@@ -1124,8 +1127,17 @@ function global:Trace-OpenPathInstallerTestConfig {
 }
 
 function global:Get-ScheduledTask {
-    param([string]`$TaskName)
+    [CmdletBinding()]
+    param([string]`$TaskName, [string]`$TaskPath)
     Add-OpenPathInstallerTestTrace "probe:scheduled-task:`$TaskName"
+    if (`$TaskName -eq 'PolicyConverter' -and `$TaskPath -eq '\Microsoft\Windows\AppID\') {
+        return [pscustomobject]@{
+            TaskName = 'PolicyConverter'
+            TaskPath = '\Microsoft\Windows\AppID\'
+            State = 'Ready'
+            Settings = [pscustomobject]@{ Enabled = `$global:MockPolicyConverterEnabled }
+        }
+    }
     `$fixtureTaskNames = @(Get-OpenPathInstallerTestState -Path `$taskStatePath)
     Add-OpenPathInstallerTestTrace "fixture:scheduled-task-count=`$(`$fixtureTaskNames.Count)"
     foreach (`$name in `$fixtureTaskNames) {
@@ -1133,6 +1145,33 @@ function global:Get-ScheduledTask {
             [pscustomobject]@{ TaskName = `$name; TaskPath = '\'; State = 'Ready' }
         }
     }
+}
+function global:Get-ScheduledTaskInfo {
+    [CmdletBinding()]
+    param([string]`$TaskName, [string]`$TaskPath)
+    [pscustomobject]@{
+        LastRunTime = `$global:MockPolicyConverterLastRunTime
+        LastTaskResult = `$global:MockPolicyConverterLastTaskResult
+    }
+}
+function global:Enable-ScheduledTask {
+    [CmdletBinding()]
+    param([string]`$TaskName, [string]`$TaskPath)
+    Add-OpenPathInstallerTestTrace 'mutate:policy-converter:enable'
+    `$global:MockPolicyConverterEnabled = `$true
+}
+function global:Start-ScheduledTask {
+    [CmdletBinding()]
+    param([string]`$TaskName, [string]`$TaskPath)
+    Add-OpenPathInstallerTestTrace 'mutate:policy-converter:start'
+    `$global:MockPolicyConverterLastRunTime = `$global:MockPolicyConverterLastRunTime.AddSeconds(1)
+    `$global:MockPolicyConverterLastTaskResult = 0
+}
+function global:Disable-ScheduledTask {
+    [CmdletBinding()]
+    param([string]`$TaskName, [string]`$TaskPath)
+    Add-OpenPathInstallerTestTrace 'mutate:policy-converter:disable'
+    `$global:MockPolicyConverterEnabled = `$false
 }
 function global:Stop-ScheduledTask {
     [CmdletBinding()]
