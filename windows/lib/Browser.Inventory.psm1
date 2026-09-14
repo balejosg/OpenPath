@@ -1,6 +1,7 @@
 # OpenPath browser inventory for Windows
 
 Import-Module "$PSScriptRoot\Browser.EnforcementDecision.psm1" -Force -ErrorAction Stop
+$script:OpenPathBrowserInventoryDiscoveryErrors = @()
 
 function Get-OpenPathBrowserInventoryUninstallEntries {
     <#
@@ -26,9 +27,10 @@ function Get-OpenPathBrowserInventoryUninstallEntries {
 
     foreach ($registryPath in $RegistryPaths) {
         try {
-            $items = @(Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue)
+            $items = @(Get-ItemProperty -Path $registryPath -ErrorAction Stop)
         }
         catch {
+            if ($env:OS -eq 'Windows_NT') { $script:OpenPathBrowserInventoryDiscoveryErrors += "Uninstall registry read failed: $registryPath" }
             $items = @()
         }
 
@@ -41,6 +43,7 @@ function Get-OpenPathBrowserInventoryUninstallEntries {
                 DisplayName = [string]$item.DisplayName
                 DisplayVersion = if ($item.DisplayVersion) { [string]$item.DisplayVersion } else { '' }
                 InstallLocation = if ($item.InstallLocation) { [string]$item.InstallLocation } else { '' }
+                DisplayIcon = if ($item.DisplayIcon) { [string]$item.DisplayIcon } else { '' }
                 UninstallString = if ($item.UninstallString) { [string]$item.UninstallString } else { '' }
                 QuietUninstallString = if ($item.QuietUninstallString) { [string]$item.QuietUninstallString } else { '' }
                 RegistryPath = $registryPath
@@ -170,6 +173,32 @@ function Get-OpenPathBrowserInventoryFileCandidates {
     return @($candidates)
 }
 
+function Get-OpenPathBrowserInventoryAppPathEntries {
+    [CmdletBinding()]
+    param([AllowNull()][object[]]$Items = $null)
+    if ($null -eq $Items) {
+        $Items = @()
+        foreach ($registryPath in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\*', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\*')) {
+            $registryRoot = $registryPath.TrimEnd('*').TrimEnd('\')
+            try {
+                if (Test-Path -LiteralPath $registryRoot -ErrorAction Stop) {
+                    $Items += @(Get-ItemProperty -Path $registryPath -ErrorAction Stop)
+                }
+            }
+            catch {
+                if ($env:OS -eq 'Windows_NT') { $script:OpenPathBrowserInventoryDiscoveryErrors += "App Paths read failed: $registryPath" }
+            }
+        }
+    }
+    return @($Items | ForEach-Object {
+            $path = if ($_.'(default)') { [string]$_.'(default)' } elseif ($_.ExecutablePath) { [string]$_.ExecutablePath } else { '' }
+            $name = Resolve-OpenPathBrowserInventoryName -Text '' -Path $path
+            if ($name -and $path -match '\.exe$') {
+                [pscustomobject]@{ DisplayName=$name; DisplayVersion=''; InstallLocation=''; DisplayIcon=$path; UninstallString=''; QuietUninstallString=''; IdentitySource='AppPaths' }
+            }
+        })
+}
+
 function New-OpenPathBrowserInventoryFinding {
     <#
     .SYNOPSIS
@@ -292,21 +321,52 @@ function Get-OpenPathBrowserInventory {
         [object[]]$UninstallEntries = $null,
 
         [AllowNull()]
-        [object[]]$FileCandidates = $null
+        [object[]]$FileCandidates = $null,
+
+        [AllowNull()][object[]]$AppPathEntries = $null,
+
+        [string[]]$DiscoveryErrors = @()
     )
 
+    $script:OpenPathBrowserInventoryDiscoveryErrors = @()
     if (-not $PSBoundParameters.ContainsKey('UninstallEntries')) {
         $UninstallEntries = Get-OpenPathBrowserInventoryUninstallEntries
     }
     if (-not $PSBoundParameters.ContainsKey('FileCandidates')) {
         $FileCandidates = Get-OpenPathBrowserInventoryFileCandidates
     }
+    if (-not $PSBoundParameters.ContainsKey('AppPathEntries')) {
+        $AppPathEntries = if ($PSBoundParameters.ContainsKey('UninstallEntries') -or $PSBoundParameters.ContainsKey('FileCandidates')) { @() } else { Get-OpenPathBrowserInventoryAppPathEntries }
+    }
+    $DiscoveryErrors = @($DiscoveryErrors) + @($script:OpenPathBrowserInventoryDiscoveryErrors)
 
+    $UninstallEntries = @($UninstallEntries) + @($AppPathEntries)
     $approved = @{}
     $unmanaged = @{}
     $portableRisks = @{}
     $webRenderingSurfaces = @{}
     $removalCandidates = @{}
+    $executableIdentities = @{}
+
+    $executableNames = @{
+        'Mozilla Firefox' = 'firefox.exe'; 'Microsoft Edge' = 'msedge.exe'; 'Google Chrome' = 'chrome.exe'
+        'Brave' = 'brave.exe'; 'Opera' = 'opera.exe'; 'Vivaldi' = 'vivaldi.exe'
+        'Tor Browser' = 'firefox.exe'; 'Internet Explorer' = 'iexplore.exe'; 'Chromium' = 'chrome.exe'
+    }
+
+    $addIdentity = {
+        param([string]$Name, [string]$Path, [string]$Source, [bool]$IsApproved)
+        if ([string]::IsNullOrWhiteSpace($Path) -or -not $executableNames.ContainsKey($Name)) { return }
+        $normalizedPath = $Path.Trim().Trim('"') -replace ',\s*-?\d+$', ''
+        if (-not $normalizedPath.EndsWith('.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $normalizedPath = "$($normalizedPath.TrimEnd('\'))\$($executableNames[$Name])"
+        }
+        $family = switch ($Name) {
+            'Mozilla Firefox' { 'Firefox' }; 'Microsoft Edge' { 'Edge' }; 'Google Chrome' { 'Chrome' }; default { $Name }
+        }
+        $key = $normalizedPath.ToLowerInvariant()
+        $executableIdentities[$key] = [pscustomobject]@{ Family=$family; ExecutablePath=$normalizedPath; Source=$Source; IsApproved=$IsApproved }
+    }
 
     foreach ($entry in @($UninstallEntries)) {
         if (-not $entry -or -not $entry.DisplayName) {
@@ -326,6 +386,14 @@ function Get-OpenPathBrowserInventory {
         $isUnmanaged = @('Brave', 'Opera', 'Vivaldi', 'Tor Browser', 'Internet Explorer', 'Chromium') -contains $name
         $automaticallyRemovable = [bool]($Mode -eq 'RemoveKnownInstallers' -and $isUnmanaged -and $hasUninstall -and -not $isWebView2)
         $action = if ($automaticallyRemovable) { 'RemoveKnownInstaller' } else { 'ReportOnly' }
+
+        if ($entry.PSObject.Properties['DisplayIcon'] -and $entry.DisplayIcon) {
+            $identitySource = if ($entry.PSObject.Properties['IdentitySource'] -and $entry.IdentitySource) { [string]$entry.IdentitySource } else { 'RegistryDisplayIcon' }
+            & $addIdentity $name ([string]$entry.DisplayIcon) $identitySource $isApproved
+        }
+        elseif ($entry.InstallLocation) {
+            & $addIdentity $name ([string]$entry.InstallLocation) 'RegistryInstallLocation' $isApproved
+        }
 
         $finding = New-OpenPathBrowserInventoryFinding `
             -Name $name `
@@ -371,6 +439,7 @@ function Get-OpenPathBrowserInventory {
         $isWebView2 = $name -eq 'Microsoft Edge WebView2 Runtime'
         $isApproved = @('Mozilla Firefox', 'Microsoft Edge', 'Google Chrome') -contains $name
         $isUnmanaged = @('Brave', 'Opera', 'Vivaldi', 'Tor Browser', 'Internet Explorer', 'Chromium') -contains $name
+        & $addIdentity $name $path $sourceRoot $isApproved
 
         if ($isWebView2) {
             Add-OpenPathBrowserInventoryFinding -Target $webRenderingSurfaces -Finding (New-OpenPathBrowserInventoryFinding `
@@ -449,11 +518,15 @@ function Get-OpenPathBrowserInventory {
         PortableBrowserRisks = $portableBrowserRisks
         WebRenderingSurfaces = $webSurfaces
         RemovalCandidates = $removable
+        ExecutableIdentities = @($executableIdentities.Values | Sort-Object Family, ExecutablePath)
+        DiscoveryStatus = if (@($DiscoveryErrors).Count -gt 0) { 'Degraded' } else { 'Complete' }
+        DiscoveryErrors = @($DiscoveryErrors)
     }
 }
 
 Export-ModuleMember -Function @(
     'Get-OpenPathBrowserInventory',
     'Get-OpenPathBrowserInventoryUninstallEntries',
-    'Get-OpenPathBrowserInventoryFileCandidates'
+    'Get-OpenPathBrowserInventoryFileCandidates',
+    'Get-OpenPathBrowserInventoryAppPathEntries'
 )

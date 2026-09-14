@@ -12,6 +12,39 @@ Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
 Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
 
 Describe "AppControl Module" {
+    Context 'issue 254 compatibility policy' {
+        It 'denies a discovered custom Edge executable while retaining managed application allows' {
+            $inventory = [pscustomobject]@{
+                DiscoveryStatus = 'Complete'; DiscoveryErrors = @()
+                ExecutableIdentities = @([pscustomobject]@{ Family='Edge'; ExecutablePath='D:\ManagedApps\Microsoft Edge\Application\msedge.exe'; IsApproved=$false })
+            }
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -ApprovedBrowsers @('Firefox') -BrowserInventory $inventory
+
+            $spec.UnapprovedBrowserDenyPaths | Should -Contain 'D:\ManagedApps\Microsoft Edge\Application\msedge.exe'
+            $spec.AllowPaths | Should -Contain '%PROGRAMFILES%\*'
+        }
+
+        It 'uses only documented AppLocker variables and denies portable execution roots' {
+            $inventory = [pscustomobject]@{ DiscoveryStatus='Complete'; DiscoveryErrors=@(); ExecutableIdentities=@() }
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -BrowserInventory $inventory
+            $allPaths = @($spec.AllowPaths) + @($spec.UserWritableDenyPaths) + @($spec.UnapprovedBrowserDenyPaths) + @($spec.BlockedWindowsTools)
+
+            ($allPaths -join "`n") | Should -Not -Match '%(?:USERPROFILE|LOCALAPPDATA|TEMP|PROGRAMFILES\(X86\))%'
+            $spec.UserWritableDenyPaths | Should -Contain '%OSDRIVE%\Users\*\Downloads\*'
+            $spec.UserWritableDenyPaths | Should -Contain '%OSDRIVE%\Users\*\Desktop\*'
+            $spec.UserWritableDenyPaths | Should -Contain '%OSDRIVE%\Users\*\AppData\Local\Temp\*'
+            $spec.UserWritableDenyPaths | Should -Contain '%REMOVABLE%\*'
+            $spec.UserWritableDenyPaths | Should -Contain '%HOT%\*'
+        }
+
+        It 'uses a stable narrow wildcard for a versioned discovered browser path' {
+            $inventory = [pscustomobject]@{ DiscoveryStatus='Complete'; DiscoveryErrors=@(); ExecutableIdentities=@(
+                    [pscustomobject]@{ Family='Brave'; ExecutablePath='D:\ManagedApps\Brave\140.2.1\brave.exe' }
+                ) }
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -BrowserInventory $inventory
+            $spec.UnapprovedBrowserDenyPaths | Should -Contain 'D:\ManagedApps\Brave\*\brave.exe'
+        }
+    }
     Context 'PolicyConverter activation boundary' {
         It 'enables starts restores and verifies an initially disabled task in order' {
             InModuleScope AppControl {
@@ -267,56 +300,55 @@ Describe "AppControl Module" {
                 '%WINDIR%\*',
                 'C:\OpenPath\*',
                 '%PROGRAMFILES%\*',
-                '%PROGRAMFILES(X86)%\*',
-                'C:\Program Files\*',
-                'C:\Program Files (x86)\*',
+                '%PROGRAMFILES%\*',
                 '%PROGRAMFILES%\WindowsApps\Microsoft.*\*',
                 '%PROGRAMFILES%\WindowsApps\MicrosoftWindows.*\*',
                 'C:\Program Files\WindowsApps\Microsoft.*\*',
                 'C:\Program Files\WindowsApps\MicrosoftWindows.*\*',
                 '%PROGRAMFILES%\Mozilla Firefox\firefox.exe',
-                '%PROGRAMFILES(X86)%\Mozilla Firefox\firefox.exe'
+                '%PROGRAMFILES%\Mozilla Firefox\firefox.exe'
             )
             $expectedDenyPaths = @(
-                '%USERPROFILE%\Downloads\*',
-                '%USERPROFILE%\Desktop\*',
-                '%LOCALAPPDATA%\Temp\*',
-                '%TEMP%\*'
+                '%OSDRIVE%\Users\*\Downloads\*',
+                '%OSDRIVE%\Users\*\Desktop\*',
+                '%OSDRIVE%\Users\*\AppData\Local\Temp\*',
+                '%REMOVABLE%\*',
+                '%HOT%\*'
             )
             $expectedAlwaysDeniedBrowsers = @(
                 '%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe',
-                '%PROGRAMFILES(X86)%\BraveSoftware\Brave-Browser\Application\brave.exe',
+                '%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe',
                 'C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe',
                 'C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe',
-                '%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe',
+                '%OSDRIVE%\Users\*\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe',
                 '%PROGRAMFILES%\Opera\launcher.exe',
-                '%PROGRAMFILES(X86)%\Opera\launcher.exe',
-                '%LOCALAPPDATA%\Programs\Opera\launcher.exe',
+                '%PROGRAMFILES%\Opera\launcher.exe',
+                '%OSDRIVE%\Users\*\AppData\Local\Programs\Opera\launcher.exe',
                 '%PROGRAMFILES%\Opera\opera.exe',
-                '%PROGRAMFILES(X86)%\Opera\opera.exe',
-                '%LOCALAPPDATA%\Programs\Opera\opera.exe',
+                '%PROGRAMFILES%\Opera\opera.exe',
+                '%OSDRIVE%\Users\*\AppData\Local\Programs\Opera\opera.exe',
                 '%PROGRAMFILES%\Vivaldi\Application\vivaldi.exe',
-                '%PROGRAMFILES(X86)%\Vivaldi\Application\vivaldi.exe',
-                '%LOCALAPPDATA%\Vivaldi\Application\vivaldi.exe',
+                '%PROGRAMFILES%\Vivaldi\Application\vivaldi.exe',
+                '%OSDRIVE%\Users\*\AppData\Local\Vivaldi\Application\vivaldi.exe',
                 '%PROGRAMFILES%\Tor Browser\Browser\firefox.exe',
-                '%PROGRAMFILES(X86)%\Tor Browser\Browser\firefox.exe',
+                '%PROGRAMFILES%\Tor Browser\Browser\firefox.exe',
                 '%PROGRAMFILES%\Chromium\Application\chrome.exe',
-                '%PROGRAMFILES(X86)%\Chromium\Application\chrome.exe',
-                '%LOCALAPPDATA%\Chromium\Application\chrome.exe',
+                '%PROGRAMFILES%\Chromium\Application\chrome.exe',
+                '%OSDRIVE%\Users\*\AppData\Local\Chromium\Application\chrome.exe',
                 '%PROGRAMFILES%\Chromium\Application\chromium.exe',
-                '%PROGRAMFILES(X86)%\Chromium\Application\chromium.exe',
-                '%LOCALAPPDATA%\Chromium\Application\chromium.exe',
+                '%PROGRAMFILES%\Chromium\Application\chromium.exe',
+                '%OSDRIVE%\Users\*\AppData\Local\Chromium\Application\chromium.exe',
                 '%PROGRAMFILES%\Ungoogled Chromium\Application\chrome.exe',
-                '%PROGRAMFILES(X86)%\Ungoogled Chromium\Application\chrome.exe',
-                '%LOCALAPPDATA%\Ungoogled Chromium\Application\chrome.exe',
+                '%PROGRAMFILES%\Ungoogled Chromium\Application\chrome.exe',
+                '%OSDRIVE%\Users\*\AppData\Local\Ungoogled Chromium\Application\chrome.exe',
                 '%PROGRAMFILES%\Ungoogled Chromium\Application\chromium.exe',
-                '%PROGRAMFILES(X86)%\Ungoogled Chromium\Application\chromium.exe',
-                '%LOCALAPPDATA%\Ungoogled Chromium\Application\chromium.exe',
+                '%PROGRAMFILES%\Ungoogled Chromium\Application\chromium.exe',
+                '%OSDRIVE%\Users\*\AppData\Local\Ungoogled Chromium\Application\chromium.exe',
                 '%PROGRAMFILES%\Floorp\floorp.exe',
-                '%PROGRAMFILES(X86)%\Floorp\floorp.exe',
-                '%LOCALAPPDATA%\Floorp\floorp.exe',
+                '%PROGRAMFILES%\Floorp\floorp.exe',
+                '%OSDRIVE%\Users\*\AppData\Local\Floorp\floorp.exe',
                 '%PROGRAMFILES%\Internet Explorer\iexplore.exe',
-                '%PROGRAMFILES(X86)%\Internet Explorer\iexplore.exe',
+                '%PROGRAMFILES%\Internet Explorer\iexplore.exe',
                 'C:\Program Files\Internet Explorer\iexplore.exe',
                 'C:\Program Files (x86)\Internet Explorer\iexplore.exe'
             )
@@ -332,31 +364,31 @@ Describe "AppControl Module" {
             @($spec.ApprovedBrowsers) | Should -Not -Contain 'Edge'
             @($spec.ApprovedBrowsers) | Should -Not -Contain 'Chrome'
             @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
-            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
             @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
             @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
             @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
-            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
+            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
             @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files\Google\Chrome\Application\chrome.exe'
             @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
-            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
-            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files\Google\Chrome\Application\chrome.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
             @($spec.UserWritableDenyPaths) | Should -Not -Contain '%USERPROFILE%\AppData\Local\*'
             @($spec.UserWritableDenyPaths) | Should -Not -Contain '%APPDATA%\*'
-            @($spec.AllowPaths) | Should -Not -Contain '%LOCALAPPDATA%\*'
+            @($spec.AllowPaths) | Should -Not -Contain '%OSDRIVE%\Users\*\AppData\Local\*'
             foreach ($path in $expectedAlwaysDeniedBrowsers) {
                 @($spec.UnapprovedBrowserDenyPaths) | Should -Contain $path
             }
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\curl.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\nslookup.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\ssh.exe'
-            @($spec.BlockedWindowsTools) | Should -Contain '%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%OSDRIVE%\Users\*\AppData\Local\Microsoft\WindowsApps\winget.exe'
             # W-1(a): the inbox scripting/transfer hosts that can open a raw socket to an
             # IP literal must be blocked because enforcement is name-only with no transport
             # floor by default. Windows PowerShell lives under WindowsPowerShell\v1.0, so
@@ -366,7 +398,7 @@ Describe "AppControl Module" {
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%PROGRAMFILES%\PowerShell\7\pwsh.exe'
-            @($spec.BlockedWindowsTools) | Should -Contain '%PROGRAMFILES(X86)%\PowerShell\7\pwsh.exe'
+            @($spec.BlockedWindowsTools) | Should -Contain '%PROGRAMFILES%\PowerShell\7\pwsh.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\ftp.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\SysWOW64\ftp.exe'
             @($spec.BlockedWindowsTools) | Should -Contain '%WINDIR%\System32\tftp.exe'
@@ -398,9 +430,7 @@ Describe "AppControl Module" {
             $allowedPaths | Should -Contain 'C:\Program Files\WindowsApps\Microsoft.*\*'
             $allowedPaths | Should -Contain 'C:\Program Files\WindowsApps\MicrosoftWindows.*\*'
             $allowedPaths | Should -Contain '%PROGRAMFILES%\*'
-            $allowedPaths | Should -Contain '%PROGRAMFILES(X86)%\*'
-            $allowedPaths | Should -Contain 'C:\Program Files\*'
-            $allowedPaths | Should -Contain 'C:\Program Files (x86)\*'
+            $allowedPaths | Should -Contain '%PROGRAMFILES%\*'
 
             $denyRules = @($exeCollection.FilePathRule | Where-Object {
                     $_.GetAttribute('Action') -eq 'Deny' -and
@@ -418,19 +448,19 @@ Describe "AppControl Module" {
             @($spec.ApprovedBrowsers) | Should -Contain 'Edge'
             @($spec.ApprovedBrowsers) | Should -Not -Contain 'Chrome'
             @($spec.AllowPaths) | Should -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
-            @($spec.AllowPaths) | Should -Contain '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.AllowPaths) | Should -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
             @($spec.AllowPaths) | Should -Contain 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
             @($spec.AllowPaths) | Should -Contain 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
             @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
-            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
+            @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
             @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files\Google\Chrome\Application\chrome.exe'
             @($spec.AllowPaths) | Should -Not -Contain 'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Not -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
-            @($spec.UnapprovedBrowserDenyPaths) | Should -Not -Contain '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Not -Contain '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Not -Contain 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Not -Contain 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
-            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files\Google\Chrome\Application\chrome.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
         }
@@ -442,7 +472,7 @@ Describe "AppControl Module" {
             @($spec.ApprovedBrowsers) | Should -Not -Contain 'Firefox'
             @($spec.AllowPaths) | Should -Not -Contain '%PROGRAMFILES%\Mozilla Firefox\firefox.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Mozilla Firefox\firefox.exe'
-            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES(X86)%\Mozilla Firefox\firefox.exe'
+            @($spec.UnapprovedBrowserDenyPaths) | Should -Contain '%PROGRAMFILES%\Mozilla Firefox\firefox.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files\Mozilla Firefox\firefox.exe'
             @($spec.UnapprovedBrowserDenyPaths) | Should -Contain 'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
         }
@@ -594,7 +624,7 @@ Describe "AppControl Module" {
                     '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe',
                     '%WINDIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe',
                     '%PROGRAMFILES%\PowerShell\7\pwsh.exe',
-                    '%PROGRAMFILES(X86)%\PowerShell\7\pwsh.exe',
+                    '%PROGRAMFILES%\PowerShell\7\pwsh.exe',
                     '%WINDIR%\System32\ftp.exe',
                     '%WINDIR%\System32\tftp.exe',
                     '%WINDIR%\System32\curl.exe'

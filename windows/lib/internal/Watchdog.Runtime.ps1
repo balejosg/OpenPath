@@ -649,6 +649,7 @@ function Invoke-OpenPathWatchdogAppControlHealth {
     }
     $reasonToIssue = @{
         appcontrol_capability_unavailable = 'AppControl capability unavailable'
+        appcontrol_browser_inventory_degraded = 'Browser inventory is degraded'
         appcontrol_restricted_target_missing = 'OpenPath-Restricted target is missing'
         appcontrol_appidsvc_not_running = 'AppIDSvc is not running'
         appcontrol_local_policy_absent = 'AppControl local policy is absent'

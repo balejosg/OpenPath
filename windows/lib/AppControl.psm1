@@ -6,6 +6,7 @@ if (Test-Path (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')) {
 }
 $script:OpenPathRoot = if (Get-Command -Name Resolve-OpenPathWindowsRoot -ErrorAction SilentlyContinue) { Resolve-OpenPathWindowsRoot } else { "C:\OpenPath" }
 Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction SilentlyContinue
+Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction SilentlyContinue
 
 $script:OpenPathAppControlRulePrefix = 'OpenPath non-admin app control'
 $script:OpenPathAppLockerBackupPath = "$script:OpenPathRoot\data\applocker-backup.xml"
@@ -337,7 +338,10 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         [ValidateSet('AuditOnly', 'Enforced')]
         [string]$Mode = 'Enforced',
 
-        [string[]]$ApprovedBrowsers = @('Firefox')
+        [string[]]$ApprovedBrowsers = @('Firefox'),
+
+        [AllowNull()]
+        [object]$BrowserInventory = $null
     )
 
     $openPathRuntimePath = "$($OpenPathRoot.TrimEnd('\'))\*"
@@ -345,88 +349,88 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
 
     $firefoxPaths = @(
         '%PROGRAMFILES%\Mozilla Firefox\firefox.exe',
-        '%PROGRAMFILES(X86)%\Mozilla Firefox\firefox.exe',
+        '%PROGRAMFILES%\Mozilla Firefox\firefox.exe',
         'C:\Program Files\Mozilla Firefox\firefox.exe',
         'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
     )
     $firefoxUserWritablePaths = @(
-        '%LOCALAPPDATA%\Mozilla Firefox\firefox.exe'
+        '%OSDRIVE%\Users\*\AppData\Local\Mozilla Firefox\firefox.exe'
     )
     $edgePaths = @(
         '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe',
-        '%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe',
+        '%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe',
         'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
         'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
     )
     $edgeUserWritablePaths = @(
-        '%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe'
+        '%OSDRIVE%\Users\*\AppData\Local\Microsoft\Edge\Application\msedge.exe'
     )
     $chromePaths = @(
         '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe',
-        '%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe',
+        '%PROGRAMFILES%\Google\Chrome\Application\chrome.exe',
         'C:\Program Files\Google\Chrome\Application\chrome.exe',
         'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
     )
     $chromeUserWritablePaths = @(
-        '%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe'
+        '%OSDRIVE%\Users\*\AppData\Local\Google\Chrome\Application\chrome.exe'
     )
     $alwaysDeniedBrowserPaths = @(
         '%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe',
-        '%PROGRAMFILES(X86)%\BraveSoftware\Brave-Browser\Application\brave.exe',
+        '%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe',
         'C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe',
         'C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe',
-        '%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe',
+        '%OSDRIVE%\Users\*\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe',
         '%PROGRAMFILES%\Opera\launcher.exe',
-        '%PROGRAMFILES(X86)%\Opera\launcher.exe',
+        '%PROGRAMFILES%\Opera\launcher.exe',
         'C:\Program Files\Opera\launcher.exe',
         'C:\Program Files (x86)\Opera\launcher.exe',
-        '%LOCALAPPDATA%\Programs\Opera\launcher.exe',
+        '%OSDRIVE%\Users\*\AppData\Local\Programs\Opera\launcher.exe',
         '%PROGRAMFILES%\Opera\opera.exe',
-        '%PROGRAMFILES(X86)%\Opera\opera.exe',
+        '%PROGRAMFILES%\Opera\opera.exe',
         'C:\Program Files\Opera\opera.exe',
         'C:\Program Files (x86)\Opera\opera.exe',
-        '%LOCALAPPDATA%\Programs\Opera\opera.exe',
+        '%OSDRIVE%\Users\*\AppData\Local\Programs\Opera\opera.exe',
         '%PROGRAMFILES%\Opera GX\launcher.exe',
-        '%PROGRAMFILES(X86)%\Opera GX\launcher.exe',
+        '%PROGRAMFILES%\Opera GX\launcher.exe',
         'C:\Program Files\Opera GX\launcher.exe',
         'C:\Program Files (x86)\Opera GX\launcher.exe',
-        '%LOCALAPPDATA%\Programs\Opera GX\launcher.exe',
+        '%OSDRIVE%\Users\*\AppData\Local\Programs\Opera GX\launcher.exe',
         '%PROGRAMFILES%\Vivaldi\Application\vivaldi.exe',
-        '%PROGRAMFILES(X86)%\Vivaldi\Application\vivaldi.exe',
+        '%PROGRAMFILES%\Vivaldi\Application\vivaldi.exe',
         'C:\Program Files\Vivaldi\Application\vivaldi.exe',
         'C:\Program Files (x86)\Vivaldi\Application\vivaldi.exe',
-        '%LOCALAPPDATA%\Vivaldi\Application\vivaldi.exe',
+        '%OSDRIVE%\Users\*\AppData\Local\Vivaldi\Application\vivaldi.exe',
         '%PROGRAMFILES%\Tor Browser\Browser\firefox.exe',
-        '%PROGRAMFILES(X86)%\Tor Browser\Browser\firefox.exe',
+        '%PROGRAMFILES%\Tor Browser\Browser\firefox.exe',
         'C:\Program Files\Tor Browser\Browser\firefox.exe',
         'C:\Program Files (x86)\Tor Browser\Browser\firefox.exe',
         '%PROGRAMFILES%\Chromium\Application\chrome.exe',
-        '%PROGRAMFILES(X86)%\Chromium\Application\chrome.exe',
+        '%PROGRAMFILES%\Chromium\Application\chrome.exe',
         'C:\Program Files\Chromium\Application\chrome.exe',
         'C:\Program Files (x86)\Chromium\Application\chrome.exe',
-        '%LOCALAPPDATA%\Chromium\Application\chrome.exe',
+        '%OSDRIVE%\Users\*\AppData\Local\Chromium\Application\chrome.exe',
         '%PROGRAMFILES%\Chromium\Application\chromium.exe',
-        '%PROGRAMFILES(X86)%\Chromium\Application\chromium.exe',
+        '%PROGRAMFILES%\Chromium\Application\chromium.exe',
         'C:\Program Files\Chromium\Application\chromium.exe',
         'C:\Program Files (x86)\Chromium\Application\chromium.exe',
-        '%LOCALAPPDATA%\Chromium\Application\chromium.exe',
+        '%OSDRIVE%\Users\*\AppData\Local\Chromium\Application\chromium.exe',
         '%PROGRAMFILES%\Ungoogled Chromium\Application\chrome.exe',
-        '%PROGRAMFILES(X86)%\Ungoogled Chromium\Application\chrome.exe',
+        '%PROGRAMFILES%\Ungoogled Chromium\Application\chrome.exe',
         'C:\Program Files\Ungoogled Chromium\Application\chrome.exe',
         'C:\Program Files (x86)\Ungoogled Chromium\Application\chrome.exe',
-        '%LOCALAPPDATA%\Ungoogled Chromium\Application\chrome.exe',
+        '%OSDRIVE%\Users\*\AppData\Local\Ungoogled Chromium\Application\chrome.exe',
         '%PROGRAMFILES%\Ungoogled Chromium\Application\chromium.exe',
-        '%PROGRAMFILES(X86)%\Ungoogled Chromium\Application\chromium.exe',
+        '%PROGRAMFILES%\Ungoogled Chromium\Application\chromium.exe',
         'C:\Program Files\Ungoogled Chromium\Application\chromium.exe',
         'C:\Program Files (x86)\Ungoogled Chromium\Application\chromium.exe',
-        '%LOCALAPPDATA%\Ungoogled Chromium\Application\chromium.exe',
+        '%OSDRIVE%\Users\*\AppData\Local\Ungoogled Chromium\Application\chromium.exe',
         '%PROGRAMFILES%\Floorp\floorp.exe',
-        '%PROGRAMFILES(X86)%\Floorp\floorp.exe',
+        '%PROGRAMFILES%\Floorp\floorp.exe',
         'C:\Program Files\Floorp\floorp.exe',
         'C:\Program Files (x86)\Floorp\floorp.exe',
-        '%LOCALAPPDATA%\Floorp\floorp.exe',
+        '%OSDRIVE%\Users\*\AppData\Local\Floorp\floorp.exe',
         '%PROGRAMFILES%\Internet Explorer\iexplore.exe',
-        '%PROGRAMFILES(X86)%\Internet Explorer\iexplore.exe',
+        '%PROGRAMFILES%\Internet Explorer\iexplore.exe',
         'C:\Program Files\Internet Explorer\iexplore.exe',
         'C:\Program Files (x86)\Internet Explorer\iexplore.exe'
     )
@@ -440,10 +444,7 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
     $allowPaths = @(
         '%WINDIR%\*',
         $openPathRuntimePath,
-        '%PROGRAMFILES%\*',
-        '%PROGRAMFILES(X86)%\*',
-        'C:\Program Files\*',
-        'C:\Program Files (x86)\*'
+        '%PROGRAMFILES%\*'
     )
     $allowPaths += $windowsAppsPaths
     if ($approvedBrowserSet.Firefox) {
@@ -455,6 +456,9 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
     if ($approvedBrowserSet.Chrome) {
         $allowPaths += $chromePaths
     }
+    $allowPaths = @($allowPaths | ForEach-Object {
+            ([string]$_).Replace('%PROGRAMFILES%', '%PROGRAMFILES%').Replace('%OSDRIVE%\Users\*\AppData\Local', '%OSDRIVE%\Users\*\AppData\Local')
+        } | Sort-Object -Unique)
 
     $unapprovedBrowserDenyPaths = @()
     if (-not $approvedBrowserSet.Firefox) {
@@ -470,6 +474,22 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
     }
     $unapprovedBrowserDenyPaths += $chromeUserWritablePaths
     $unapprovedBrowserDenyPaths += $alwaysDeniedBrowserPaths
+    if ($null -eq $BrowserInventory) {
+        $BrowserInventory = Get-OpenPathBrowserInventory
+    }
+    foreach ($identity in @($BrowserInventory.ExecutableIdentities)) {
+        if (-not $identity -or -not $identity.ExecutablePath) { continue }
+        $familyApproved = $approvedBrowserSet.ContainsKey([string]$identity.Family)
+        if (-not $familyApproved) {
+            $denyPath = [string]$identity.ExecutablePath
+            $denyPath = $denyPath -replace '\\\d+(?:\.\d+)+\\([^\\]+\.exe)$', '\*\$1'
+            $unapprovedBrowserDenyPaths += $denyPath
+        }
+    }
+    $unapprovedBrowserDenyPaths = @($unapprovedBrowserDenyPaths |
+        ForEach-Object {
+            ([string]$_).Replace('%PROGRAMFILES%', '%PROGRAMFILES%').Replace('%OSDRIVE%\Users\*\AppData\Local', '%OSDRIVE%\Users\*\AppData\Local')
+        } | Sort-Object -Unique)
     $unapprovedBrowserDenyAppxProducts = @()
     if (-not $approvedBrowserSet.Edge) {
         $unapprovedBrowserDenyAppxProducts = @(Get-OpenPathEdgeAppxProductNames)
@@ -486,14 +506,14 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         UnapprovedBrowserDenyPaths = @($unapprovedBrowserDenyPaths)
         UnapprovedBrowserDenyAppxProducts = @($unapprovedBrowserDenyAppxProducts)
         AlwaysDeniedAppxProducts = @(Get-OpenPathAlwaysDeniedAppxProductNames)
-        BlockedWindowsTools = @(
+        BlockedWindowsTools = @(@(
             '%WINDIR%\System32\curl.exe',
             '%WINDIR%\SysWOW64\curl.exe',
             '%WINDIR%\System32\nslookup.exe',
             '%WINDIR%\SysWOW64\nslookup.exe',
             '%WINDIR%\System32\ssh.exe',
             '%WINDIR%\SysWOW64\ssh.exe',
-            '%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe',
+            '%OSDRIVE%\Users\*\AppData\Local\Microsoft\WindowsApps\winget.exe',
             '%PROGRAMFILES%\WindowsApps\Microsoft.DesktopAppInstaller_*\winget.exe',
             '%WINDIR%\System32\certutil.exe',
             '%WINDIR%\SysWOW64\certutil.exe',
@@ -515,18 +535,21 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
             '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe',
             '%WINDIR%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe',
             '%PROGRAMFILES%\PowerShell\7\pwsh.exe',
-            '%PROGRAMFILES(X86)%\PowerShell\7\pwsh.exe',
+            '%PROGRAMFILES%\PowerShell\7\pwsh.exe',
             '%WINDIR%\System32\ftp.exe',
             '%WINDIR%\SysWOW64\ftp.exe',
             '%WINDIR%\System32\tftp.exe',
             '%WINDIR%\SysWOW64\tftp.exe'
-        )
+        ) | ForEach-Object { ([string]$_).Replace('%PROGRAMFILES%', '%PROGRAMFILES%').Replace('%OSDRIVE%\Users\*\AppData\Local', '%OSDRIVE%\Users\*\AppData\Local') } | Sort-Object -Unique)
         UserWritableDenyPaths = @(
-            '%USERPROFILE%\Downloads\*',
-            '%USERPROFILE%\Desktop\*',
-            '%LOCALAPPDATA%\Temp\*',
-            '%TEMP%\*'
+            '%OSDRIVE%\Users\*\Downloads\*',
+            '%OSDRIVE%\Users\*\Desktop\*',
+            '%OSDRIVE%\Users\*\AppData\Local\Temp\*',
+            '%REMOVABLE%\*',
+            '%HOT%\*'
         )
+        BrowserInventoryStatus = if ($BrowserInventory.PSObject.Properties['DiscoveryStatus']) { [string]$BrowserInventory.DiscoveryStatus } else { 'Degraded' }
+        BrowserInventoryErrors = if ($BrowserInventory.PSObject.Properties['DiscoveryErrors']) { @($BrowserInventory.DiscoveryErrors) } else { @('browser inventory diagnostics unavailable') }
     }
 }
 
@@ -1293,6 +1316,11 @@ function Get-OpenPathNonAdminAppControlHealth {
         if (-not $reasonCodes.Contains($Code)) {
             [void]$reasonCodes.Add($Code)
         }
+    }
+
+    $browserInventory = Get-OpenPathBrowserInventory
+    if (-not $browserInventory -or $browserInventory.DiscoveryStatus -ne 'Complete') {
+        & $addReasonCode 'appcontrol_browser_inventory_degraded'
     }
 
     $capabilityAvailable = $false

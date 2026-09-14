@@ -164,4 +164,40 @@ Describe "Browser Module - Inventory" {
         @($inventory.RemovalCandidates).Count | Should -Be 0
         @($inventory.UnmanagedBrowsers | Where-Object { $_.Name -eq "Brave" }).AutomaticallyRemovable | Should -BeFalse
     }
+
+    It "returns normalized executable identities for a registered custom browser location" {
+        $entries = @([pscustomobject]@{
+                DisplayName = 'Microsoft Edge'
+                DisplayVersion = '140.0'
+                InstallLocation = 'D:\ManagedApps\Microsoft Edge\Application'
+                DisplayIcon = 'D:\ManagedApps\Microsoft Edge\Application\msedge.exe,0'
+                UninstallString = ''
+                QuietUninstallString = ''
+                RegistryPath = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Edge'
+            })
+
+        $inventory = Get-OpenPathBrowserInventory -UninstallEntries $entries -FileCandidates @()
+
+        $identity = @($inventory.ExecutableIdentities | Where-Object Family -eq 'Edge')[0]
+        $identity.ExecutablePath | Should -Be 'D:\ManagedApps\Microsoft Edge\Application\msedge.exe'
+        $identity.Source | Should -Be 'RegistryDisplayIcon'
+        $inventory.DiscoveryStatus | Should -Be 'Complete'
+    }
+
+    It "marks injected discovery errors as degraded rather than browser absent" {
+        $inventory = Get-OpenPathBrowserInventory -UninstallEntries @() -FileCandidates @() -DiscoveryErrors @('registry access denied')
+
+        $inventory.DiscoveryStatus | Should -Be 'Degraded'
+        $inventory.DiscoveryErrors | Should -Contain 'registry access denied'
+    }
+
+    It "uses App Paths as a canonical executable identity source" {
+        $appPaths = Get-OpenPathBrowserInventoryAppPathEntries -Items @([pscustomobject]@{ '(default)'='D:\Browsers\Brave\brave.exe' })
+        $inventory = Get-OpenPathBrowserInventory -UninstallEntries @() -FileCandidates @() -AppPathEntries $appPaths
+
+        $identity = @($inventory.ExecutableIdentities)[0]
+        $identity.Family | Should -Be 'Brave'
+        $identity.Source | Should -Be 'AppPaths'
+        $identity.ExecutablePath | Should -Be 'D:\Browsers\Brave\brave.exe'
+    }
 }

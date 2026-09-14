@@ -55,6 +55,15 @@ include CSP-delivered policy. CSP-only enforcement is not a supported substitute
 for this health contract. Policy evaluation is complemented by real standard-user
 execution tests; a healthy XML structure alone is insufficient evidence.
 
+The default is a compatibility policy, not a complete application allowlist.
+`%PROGRAMFILES%` remains trusted for centrally installed classroom software;
+deployments must verify that restricted users cannot create or replace executable
+content below that root. Browser denies combine deterministic static fallbacks
+with executable identities returned by `Browser.Inventory.psm1`, including
+registered custom locations. Executable and script launch is denied from user
+Downloads, Desktop, Local Temp, removable (`%REMOVABLE%`), and hot-plug
+(`%HOT%`) roots; ordinary file access on those media is unaffected.
+
 Before enabling enforcement on real student PCs, inventory the software teachers
 need, install required classroom applications through IT-managed locations such
 as Program Files, and validate the exact student account flow on a limited pilot
