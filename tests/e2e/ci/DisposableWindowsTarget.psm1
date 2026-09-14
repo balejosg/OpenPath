@@ -207,18 +207,96 @@ function Invoke-OpenPathSystemRecoveryProbe {
     }
 }
 
+function ConvertTo-OpenPathWatchdogTaskSnapshot {
+    param([AllowNull()][object]$Task, [AllowNull()][object]$TaskInfo)
+    if ($null -eq $Task -and $null -eq $TaskInfo) { return $null }
+    $state = if ($null -ne $Task) { [string]$Task.State } else { $null }
+    $lastRunTimeUtc = $null
+    if ($null -ne $TaskInfo -and $null -ne $TaskInfo.LastRunTime) {
+        $lastRunTimeUtc = ([datetime]$TaskInfo.LastRunTime).ToUniversalTime().ToString('o')
+    }
+    $lastTaskResult = if ($null -ne $TaskInfo -and $null -ne $TaskInfo.LastTaskResult) { [uint32]$TaskInfo.LastTaskResult } else { $null }
+    return [pscustomobject][ordered]@{
+        state = $state
+        lastRunTimeUtc = $lastRunTimeUtc
+        lastTaskResult = $lastTaskResult
+    }
+}
+
+function New-OpenPathWatchdogFailureEvidence {
+    param(
+        [Parameter(Mandatory = $true)][string]$Code,
+        [AllowNull()][object]$Initial,
+        [AllowNull()][object]$Final,
+        [Parameter(Mandatory = $true)][bool]$StartRequested
+    )
+    return [pscustomobject][ordered]@{
+        status = 'failed'
+        code = $Code
+        initial = $Initial
+        final = $Final
+        startRequested = $StartRequested
+    }
+}
+
+function ConvertTo-OpenPathWatchdogBoundaryProjection {
+    param([Parameter(Mandatory = $true)][object]$Evidence)
+    $initial = ConvertTo-OpenPathWatchdogTaskSnapshot -Task $(if ($Evidence.initial) { [pscustomobject]@{ State=$Evidence.initial.state } }) -TaskInfo $(if ($Evidence.initial) { [pscustomobject]@{ LastRunTime=$(if($Evidence.initial.lastRunTimeUtc){[datetime]$Evidence.initial.lastRunTimeUtc}); LastTaskResult=$Evidence.initial.lastTaskResult } })
+    $final = ConvertTo-OpenPathWatchdogTaskSnapshot -Task $(if ($Evidence.final) { [pscustomobject]@{ State=$Evidence.final.state } }) -TaskInfo $(if ($Evidence.final) { [pscustomobject]@{ LastRunTime=$(if($Evidence.final.lastRunTimeUtc){[datetime]$Evidence.final.lastRunTimeUtc}); LastTaskResult=$Evidence.final.lastTaskResult } })
+    return [pscustomobject][ordered]@{
+        status = [string]$Evidence.status
+        code = [string]$Evidence.code
+        initial = $initial
+        final = $final
+        startRequested = [bool]$Evidence.startRequested
+    }
+}
+
+function New-OpenPathDisposableWatchdogBoundaryException {
+    param([Parameter(Mandatory = $true)][object]$Evidence)
+    $failure = [System.InvalidOperationException]::new('boundary-watchdog-execution-failed')
+    $failure.Data['OpenPathWatchdogBoundaryEvidence'] = ConvertTo-OpenPathWatchdogBoundaryProjection -Evidence $Evidence
+    return $failure
+}
+
 function Invoke-OpenPathWatchdogProbe {
-    $task = Get-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction Stop
-    $before = Get-ScheduledTaskInfo -TaskName 'OpenPath-Watchdog' -ErrorAction Stop
-    Start-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction Stop
+    $task = $null
+    $before = $null
+    try {
+        $task = Get-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction Stop
+        $before = Get-ScheduledTaskInfo -TaskName 'OpenPath-Watchdog' -ErrorAction Stop
+    }
+    catch {
+        return New-OpenPathWatchdogFailureEvidence -Code 'task-query-failed' -Initial $null -Final $null -StartRequested:$false
+    }
+    $initial = ConvertTo-OpenPathWatchdogTaskSnapshot -Task $task -TaskInfo $before
+    try {
+        Start-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction Stop
+    }
+    catch {
+        return New-OpenPathWatchdogFailureEvidence -Code 'task-start-failed' -Initial $initial -Final $null -StartRequested:$true
+    }
     $deadline = (Get-Date).AddSeconds(30)
+    $after = $null
+    $currentTask = $null
     do {
         Start-Sleep -Milliseconds 500
-        $after = Get-ScheduledTaskInfo -TaskName 'OpenPath-Watchdog' -ErrorAction Stop
-        $currentTask = Get-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction Stop
+        try {
+            $after = Get-ScheduledTaskInfo -TaskName 'OpenPath-Watchdog' -ErrorAction Stop
+            $currentTask = Get-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction Stop
+        }
+        catch {
+            $queryFailureFinal = ConvertTo-OpenPathWatchdogTaskSnapshot -Task $currentTask -TaskInfo $after
+            return New-OpenPathWatchdogFailureEvidence -Code 'task-query-failed' -Initial $initial -Final $queryFailureFinal -StartRequested:$true
+        }
     } while ((Get-Date) -lt $deadline -and ($after.LastRunTime -le $before.LastRunTime -or [string]$currentTask.State -eq 'Running'))
-    if ($after.LastRunTime -le $before.LastRunTime) { throw 'watchdog-last-run-time-did-not-advance' }
-    if ([uint32]$after.LastTaskResult -ne 0) { throw "watchdog-task-result-$([uint32]$after.LastTaskResult)" }
+    $final = ConvertTo-OpenPathWatchdogTaskSnapshot -Task $currentTask -TaskInfo $after
+    if ($after.LastRunTime -le $before.LastRunTime) {
+        return New-OpenPathWatchdogFailureEvidence -Code 'last-run-time-did-not-advance' -Initial $initial -Final $final -StartRequested:$true
+    }
+    if ([uint32]$after.LastTaskResult -ne 0) {
+        return New-OpenPathWatchdogFailureEvidence -Code 'task-result-nonzero' -Initial $initial -Final $final -StartRequested:$true
+    }
     return [pscustomobject]@{
         taskPath = [string]$task.TaskPath
         execute = [string]$task.Actions.Execute
@@ -450,6 +528,7 @@ function Invoke-OpenPathInstalledBoundaryProbes {
     try { $peRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probeExe -Arguments "`"$probeMarker`"" -Expectation ExpectDenied -StudentSid $Target.Sid -MarkerPath $probeMarker } catch { throw 'boundary-benign-pe-execution-failed' }
     try { $recovery = Invoke-OpenPathSystemRecoveryProbe -MarkerPath (Join-Path $env:ProgramData "OpenPathRecoveryProbe-$([guid]::NewGuid().ToString('N')).marker") } catch { throw 'boundary-system-recovery-failed' }
     try { $watchdog = Invoke-OpenPathWatchdogProbe } catch { throw 'boundary-watchdog-execution-failed' }
+    if ($watchdog.PSObject.Properties['status'] -and $watchdog.status -eq 'failed') { throw (New-OpenPathDisposableWatchdogBoundaryException -Evidence $watchdog) }
     Remove-Item -LiteralPath $probeExe,$probeMarker -Force -ErrorAction SilentlyContinue
     return [pscustomobject]@{ policyEvaluation = $policy; firefoxExecution = $firefoxRun; edgeExecution = $edgeRun; benignPeExecution = $peRun; recovery = $recovery; watchdog = $watchdog }
 }

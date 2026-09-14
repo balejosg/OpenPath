@@ -887,6 +887,11 @@ test('canonical personalized-EXE lane owns a real disposable standard target lif
   );
   assert.match(executableLane, /finally[\s\S]*Remove-OpenPathDisposableStandardTarget/);
   assert.match(executableLane, /boundary-\[a-z0-9-\][\s\S]*failureDetailCode/);
+  assert.match(
+    executableLane,
+    /OpenPathWatchdogBoundaryEvidence[\s\S]*watchdogBoundaryEvidence\s*=\s*\$watchdogBoundaryEvidence/,
+    'watchdog failures must project their bounded task observation into the main failure artifact'
+  );
   assert.doesNotMatch(
     executableLane,
     /Password\s*=\s*\$disposableTarget\.Password/,

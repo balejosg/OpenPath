@@ -886,6 +886,102 @@ Describe 'Canonical offline installer disposable target' {
         Should -Invoke New-OpenPathProbePayloadBinary -ModuleName DisposableWindowsTarget -Times 0 -Exactly
     }
 
+    It 'bounds a watchdog task query failure without serializing the exception' {
+        InModuleScope DisposableWindowsTarget {
+            Mock Get-ScheduledTask { throw 'raw query Password=secret <Xml>unsafe</Xml>' }
+            Mock Start-ScheduledTask {}
+
+            $result = Invoke-OpenPathWatchdogProbe
+
+            $result.status | Should -Be 'failed'
+            $result.code | Should -Be 'task-query-failed'
+            $result.startRequested | Should -BeFalse
+            $result.initial | Should -BeNullOrEmpty
+            $result.final | Should -BeNullOrEmpty
+            ($result | ConvertTo-Json -Depth 6) | Should -Not -Match 'raw query|Password|secret|Xml|unsafe'
+            Should -Invoke Start-ScheduledTask -Times 0 -Exactly
+        }
+    }
+
+    It 'preserves the initial watchdog snapshot when the start request fails' {
+        InModuleScope DisposableWindowsTarget {
+            Mock Get-ScheduledTask { [pscustomobject]@{ State='Ready'; Message='unsafe' } }
+            Mock Get-ScheduledTaskInfo { [pscustomobject]@{ LastRunTime=[datetime]'2026-09-14T10:11:12.1234567Z'; LastTaskResult=0; XmlText='unsafe' } }
+            Mock Start-ScheduledTask { throw 'raw start credential=secret' }
+
+            $result = Invoke-OpenPathWatchdogProbe
+
+            $result.status | Should -Be 'failed'
+            $result.code | Should -Be 'task-start-failed'
+            $result.startRequested | Should -BeTrue
+            $result.initial.state | Should -Be 'Ready'
+            $result.initial.lastRunTimeUtc | Should -Be '2026-09-14T10:11:12.1234567Z'
+            $result.initial.lastTaskResult | Should -Be 0
+            $result.final | Should -BeNullOrEmpty
+            ($result | ConvertTo-Json -Depth 6) | Should -Not -Match 'raw start|credential|secret|Message|XmlText|unsafe'
+        }
+    }
+
+    It 'reports a bounded watchdog snapshot when LastRunTime does not advance' {
+        InModuleScope DisposableWindowsTarget {
+            $script:watchdogClockCalls = 0
+            Mock Get-Date { $script:watchdogClockCalls++; if($script:watchdogClockCalls -eq 1){[datetime]'2026-09-14T10:12:00Z'}else{[datetime]'2026-09-14T10:12:31Z'} }
+            Mock Get-ScheduledTask { [pscustomobject]@{ State='Ready' } }
+            Mock Get-ScheduledTaskInfo { [pscustomobject]@{ LastRunTime=[datetime]'2026-09-14T10:11:12.1234567Z'; LastTaskResult=0 } }
+            Mock Start-ScheduledTask {}
+            Mock Start-Sleep {}
+
+            $result = Invoke-OpenPathWatchdogProbe
+
+            $result.status | Should -Be 'failed'
+            $result.code | Should -Be 'last-run-time-did-not-advance'
+            $result.startRequested | Should -BeTrue
+            $result.final.state | Should -Be 'Ready'
+            $result.final.lastRunTimeUtc | Should -Be '2026-09-14T10:11:12.1234567Z'
+            Should -Invoke Start-ScheduledTask -Times 1 -Exactly
+        }
+    }
+
+    It 'retains only the uint32 result for a completed nonzero watchdog run' {
+        InModuleScope DisposableWindowsTarget {
+            $script:watchdogInfoCalls = 0
+            Mock Get-Date { [datetime]'2026-09-14T10:12:00Z' }
+            Mock Get-ScheduledTask { [pscustomobject]@{ State='Ready'; Arguments='must-not-serialize' } }
+            Mock Get-ScheduledTaskInfo {
+                $script:watchdogInfoCalls++
+                if($script:watchdogInfoCalls -eq 1){[pscustomobject]@{LastRunTime=[datetime]'2026-09-14T10:11:12.1234567Z';LastTaskResult=0}}
+                else{[pscustomobject]@{LastRunTime=[datetime]'2026-09-14T10:11:13.7654321Z';LastTaskResult=[uint32]2147942401;Message='must-not-serialize'}}
+            }
+            Mock Start-ScheduledTask {}
+            Mock Start-Sleep {}
+
+            $result = Invoke-OpenPathWatchdogProbe
+            $path = Join-Path $TestDrive 'watchdog-boundary.json'
+            Write-OpenPathOfflineInstallerEvidence -Payload ([ordered]@{ watchdogBoundaryEvidence=$result }) -Path $path
+            $raw = Get-Content -LiteralPath $path -Raw
+            $roundTrip = $raw | ConvertFrom-Json
+
+            $roundTrip.watchdogBoundaryEvidence.status | Should -Be 'failed'
+            $roundTrip.watchdogBoundaryEvidence.code | Should -Be 'task-result-nonzero'
+            $roundTrip.watchdogBoundaryEvidence.startRequested | Should -BeTrue
+            $raw | Should -Match '"lastRunTimeUtc"\s*:\s*"2026-09-14T10:11:13\.7654321Z"'
+            $roundTrip.watchdogBoundaryEvidence.final.lastTaskResult | Should -Be 2147942401
+            $raw | Should -Not -Match 'must-not-serialize|Arguments|Message|Password|credential|Xml'
+        }
+    }
+
+    It 'transports watchdog evidence while preserving the outer boundary failure code' {
+        InModuleScope DisposableWindowsTarget {
+            $evidence = [pscustomobject][ordered]@{ status='failed'; code='task-result-nonzero'; initial=$null; final=[pscustomobject]@{state='Ready';lastRunTimeUtc='2026-09-14T10:11:13.7654321Z';lastTaskResult=[uint32]7;Message='must-not-serialize'}; startRequested=$true;Password='must-not-serialize' }
+            $exception = New-OpenPathDisposableWatchdogBoundaryException -Evidence $evidence
+
+            $exception.Message | Should -Be 'boundary-watchdog-execution-failed'
+            $exception.Data.Contains('OpenPathWatchdogBoundaryEvidence') | Should -BeTrue
+            $exception.Data['OpenPathWatchdogBoundaryEvidence'].code | Should -Be 'task-result-nonzero'
+            ($exception.Data['OpenPathWatchdogBoundaryEvidence'] | ConvertTo-Json -Depth 6) | Should -Not -Match 'must-not-serialize|Message|Password'
+        }
+    }
+
     It 'resolves transported Edge evidence before running bounded diagnostics' {
         $initial = [pscustomobject][ordered]@{
             probeName = 'Canonical Edge deny'; executableName = 'msedge.exe'

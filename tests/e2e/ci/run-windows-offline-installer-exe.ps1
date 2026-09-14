@@ -819,9 +819,16 @@ try {
 catch {
     $boundaryException = $_.Exception
     $transportedBoundaryEvidence = $null
+    $watchdogBoundaryEvidence = $null
     try {
         if ($boundaryException.Data -and $boundaryException.Data.Contains('OpenPathEdgeBoundaryEvidence')) {
             $transportedBoundaryEvidence = $boundaryException.Data['OpenPathEdgeBoundaryEvidence']
+        }
+    }
+    catch {}
+    try {
+        if ($boundaryException.Data -and $boundaryException.Data.Contains('OpenPathWatchdogBoundaryEvidence')) {
+            $watchdogBoundaryEvidence = $boundaryException.Data['OpenPathWatchdogBoundaryEvidence']
         }
     }
     catch {}
@@ -949,6 +956,7 @@ catch {
         trailerDiagnosticStatus = $trailerDiagnosticStatus
         trailerDiagnosticSource = $trailerDiagnosticSource
         edgeBoundaryEvidence = $edgeBoundaryEvidence
+        watchdogBoundaryEvidence = $watchdogBoundaryEvidence
         edge = $edge
         edgeName = if ($edgeFailureContract) { $edgeFailureContract.edgeName } else { $null }
         edgeStudentSid = if ($edgeFailureContract) { $edgeFailureContract.edgeStudentSid } else { $null }
