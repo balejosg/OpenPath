@@ -505,7 +505,7 @@ function Get-OpenPathBrowserInventory {
     $portableBrowserRisks = @($portableRisks.Values | Sort-Object Name, Path)
     $webSurfaces = @($webRenderingSurfaces.Values | Sort-Object Name, Path, DisplayName)
     $removable = @($removalCandidates.Values | Sort-Object Name, DisplayName, Path)
-    $decision = Browser.EnforcementDecision\Get-OpenPathBrowserInventoryDecision `
+    $decision = Get-OpenPathBrowserInventoryDecision `
         -UnmanagedBrowsers $unmanagedBrowsers `
         -PortableBrowserRisks $portableBrowserRisks
 
