@@ -2799,6 +2799,7 @@ public static class OpenPathNativeStudentProcess {
  [DllImport("userenv.dll",SetLastError=true)]public static extern bool CreateEnvironmentBlock(out IntPtr e,IntPtr t,bool i);
  [DllImport("userenv.dll",SetLastError=true)]public static extern bool DestroyEnvironmentBlock(IntPtr e);
  [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)]public static extern bool CreateProcessAsUserW(IntPtr t,string a,StringBuilder c,IntPtr pa,IntPtr ta,bool inherit,int f,IntPtr e,string d,ref SI s,out PI p);
+ [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)]public static extern bool CreateProcessWithTokenW(IntPtr t,uint lf,string a,StringBuilder c,uint f,IntPtr e,string d,ref SI s,out PI p);
  [DllImport("kernel32.dll",SetLastError=true)]public static extern uint WaitForSingleObject(IntPtr h,uint ms);
  [DllImport("kernel32.dll",SetLastError=true)]public static extern bool TerminateProcess(IntPtr h,uint code);
  [DllImport("kernel32.dll",SetLastError=true)]public static extern bool GetExitCodeProcess(IntPtr h,out uint code);
@@ -2819,8 +2820,17 @@ function Invoke-OpenPathNativeStudentProcess {
         if(-not [OpenPathNativeStudentProcess]::CreateEnvironmentBlock([ref]$envBlock,$token,$false)){throw 'native-environment-failed'}
         $si=New-Object OpenPathNativeStudentProcess+SI;$si.cb=[Runtime.InteropServices.Marshal]::SizeOf($si);$cmd=New-Object Text.StringBuilder ('"{0}" {1}' -f $ExecutablePath,$Arguments);$pi=New-Object OpenPathNativeStudentProcess+PI
         $created=[OpenPathNativeStudentProcess]::CreateProcessAsUserW($token,$ExecutablePath,$cmd,[IntPtr]::Zero,[IntPtr]::Zero,$false,0x400,$envBlock,$profilePath,[ref]$si,[ref]$pi)
-        $createCode = if ($created) { 0 } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
-        return [pscustomobject]@{launchStatus=if($created){'created'}else{'not-created'};win32Code=[int]$createCode;processId=if($created){$pi.pid}else{0};processHandle=if($created){$pi.p}else{[IntPtr]::Zero};threadHandle=if($created){$pi.t}else{[IntPtr]::Zero};tokenHandle=$token;environmentHandle=$envBlock;profileHandle=$profile;profileLoaded=$profileLoaded;tokenLoaded=$true}
+        $primaryCode = if ($created) { 0 } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+        $launchMethod = 'create-process-as-user'
+        $finalCode = $primaryCode
+        if (-not $created -and $primaryCode -eq 1314) {
+            $cmd = New-Object Text.StringBuilder ('"{0}" {1}' -f $ExecutablePath,$Arguments)
+            $pi=New-Object OpenPathNativeStudentProcess+PI
+            $created=[OpenPathNativeStudentProcess]::CreateProcessWithTokenW($token,0,$ExecutablePath,$cmd,0x08000400,$envBlock,$profilePath,[ref]$si,[ref]$pi)
+            $launchMethod = 'create-process-with-token'
+            $finalCode = if ($created) { 0 } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+        }
+        return [pscustomobject]@{launchStatus=if($created){'created'}else{'not-created'};launchMethod=$launchMethod;primaryWin32Code=[int]$primaryCode;win32Code=[int]$finalCode;processId=if($created){$pi.pid}else{0};processHandle=if($created){$pi.p}else{[IntPtr]::Zero};threadHandle=if($created){$pi.t}else{[IntPtr]::Zero};tokenHandle=$token;environmentHandle=$envBlock;profileHandle=$profile;profileLoaded=$profileLoaded;tokenLoaded=$true}
     } catch {
         $cleanupState=[pscustomobject]@{processHandle=[IntPtr]::Zero;threadHandle=[IntPtr]::Zero;tokenHandle=$token;environmentHandle=$envBlock;profileHandle=$profile;profileLoaded=$profileLoaded}
         try { Close-OpenPathNativeStudentProcess -State $cleanupState | Out-Null } catch {}
@@ -2837,10 +2847,10 @@ function Close-OpenPathNativeStudentProcess {
         if($process -ne [IntPtr]::Zero){
             $wait=[OpenPathNativeStudentProcess]::WaitForSingleObject($process,2000)
             if($wait -ne 0){
-                if(-not [OpenPathNativeStudentProcess]::TerminateProcess($process,1)){$finalized=$false}
+                $terminated=[OpenPathNativeStudentProcess]::TerminateProcess($process,1)
                 if([OpenPathNativeStudentProcess]::WaitForSingleObject($process,2000) -ne 0){$finalized=$false}
             }
-            [uint32]$code=0;if([OpenPathNativeStudentProcess]::GetExitCodeProcess($process,[ref]$code)){$exitCode=[int]$code}else{$finalized=$false}
+            [uint32]$code=0;if([OpenPathNativeStudentProcess]::GetExitCodeProcess($process,[ref]$code)){$exitCode=[int64]$code}else{$finalized=$false}
         }
     } catch {$finalized=$false}
     foreach($h in @('threadHandle','processHandle')){try{if($State.PSObject.Properties[$h] -and $State.$h -ne [IntPtr]::Zero){if(-not [OpenPathNativeStudentProcess]::CloseHandle($State.$h)){$finalized=$false}}}catch{$finalized=$false}}
@@ -2934,7 +2944,7 @@ function Invoke-StudentExecutableTaskProbe {
     $taskRegisteredAt = if ($UseNativeStudentProcess) { $null } else { Get-Date }
     $taskRegisteredAtUtc = if ($taskRegisteredAt) { $taskRegisteredAt.ToUniversalTime().ToString('o') } else { $null }
     $since = if ($UseNativeStudentProcess) { Get-Date } else { $taskRegisteredAt }
-    $taskIdentityEvidence = if ($UseNativeStudentProcess) { [pscustomobject]@{ status='not-applicable'; mode='native'; taskName=$null; registeredAtUtc=$null; attemptedAtUtc=$null; launchStatus=$null; win32Code=$null } } else { Get-OpenPathTaskIdentityEvidence -TaskName $probeTask -Principal $StudentSid -RunLevel 'Limited' -StudentSid $StudentSid -UserName $UserName -StartTime $since -RegisteredAtUtc $taskRegisteredAtUtc -LogonType '4' -SkipTaskDefinition }
+    $taskIdentityEvidence = if ($UseNativeStudentProcess) { [pscustomobject]@{ status='not-applicable'; mode='native'; taskName=$null; registeredAtUtc=$null; attemptedAtUtc=$null; launchStatus=$null; launchMethod=$null; primaryWin32Code=$null; win32Code=$null } } else { Get-OpenPathTaskIdentityEvidence -TaskName $probeTask -Principal $StudentSid -RunLevel 'Limited' -StudentSid $StudentSid -UserName $UserName -StartTime $since -RegisteredAtUtc $taskRegisteredAtUtc -LogonType '4' -SkipTaskDefinition }
     $captureEnforcementDiagnostics = $CaptureEnforcementDiagnostics -and $Expectation -eq 'ExpectDenied'
     $enforcementObservationBefore = $null
     if ($captureEnforcementDiagnostics) {
@@ -2977,6 +2987,8 @@ function Invoke-StudentExecutableTaskProbe {
             }
             $taskIdentityEvidence.attemptedAtUtc = $taskRegisteredAtUtc
             $taskIdentityEvidence.launchStatus = [string]$nativeState.launchStatus
+            $taskIdentityEvidence.launchMethod = [string]$nativeState.launchMethod
+            $taskIdentityEvidence.primaryWin32Code = [int]$nativeState.primaryWin32Code
             $taskIdentityEvidence.win32Code = [int]$nativeState.win32Code
             $runExitCode = 0
         }

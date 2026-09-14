@@ -147,6 +147,15 @@ Describe "Windows Browser Boundary CI Probes" {
             $content | Should -Match 'for\(\$attempt=0;\$attempt -lt 20'
         }
 
+        It 'uses the CreateProcessWithToken fallback only for primary error 1314' {
+            $content = Get-Content (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1') -Raw
+            $content | Should -Match 'CreateProcessWithTokenW'
+            $content | Should -Match 'primaryWin32Code'
+            $content | Should -Match 'launchMethod'
+            $content | Should -Match '1314'
+            $content | Should -Match '0x08000400'
+        }
+
         It 'stops an active credentialed probe task before unregistering it' {
             $testExe = Join-Path $TestDrive 'probe-task-cleanup.exe'
             $markerPath = Join-Path $TestDrive 'probe-task-cleanup.marker'
