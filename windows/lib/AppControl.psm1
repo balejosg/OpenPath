@@ -1679,6 +1679,139 @@ function New-OpenPathAppControlPreconditionDiagnostic {
     return New-OpenPathAppControlFailureDiagnostic -Health $health -Substep $Substep
 }
 
+function Invoke-OpenPathAppControlPolicyConverterActivation {
+    $taskPath = '\Microsoft\Windows\AppID\'
+    $taskName = 'PolicyConverter'
+    $result = [ordered]@{
+        status = 'inconclusive'
+        code = 'task-query-failed'
+        initialEnabled = $null
+        finalEnabled = $null
+        restoreStatus = 'not-required'
+        startRunObserved = $false
+    }
+
+    try {
+        $initialTask = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+        $initialInfo = Get-ScheduledTaskInfo -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+    }
+    catch {
+        return [pscustomobject]$result
+    }
+
+    $initialEnabled = if ($initialTask.Settings.PSObject.Properties['Enabled']) {
+        $initialTask.Settings.Enabled
+    }
+    else {
+        $null
+    }
+    $result.initialEnabled = $initialEnabled
+    if ($null -eq $initialEnabled -or
+        $null -eq $initialTask.State -or
+        $null -eq $initialInfo.LastRunTime -or
+        $null -eq $initialInfo.LastTaskResult) {
+        $result.code = 'task-snapshot-unknown'
+        return [pscustomobject]$result
+    }
+    if ([string]$initialTask.State -eq 'Running') {
+        $result.code = 'task-already-running'
+        return [pscustomobject]$result
+    }
+
+    $restoreRequired = -not [bool]$initialEnabled
+    $activationObserved = $false
+    try {
+        if ($restoreRequired) {
+            try {
+                Enable-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop | Out-Null
+            }
+            catch {
+                $result.code = 'task-enable-failed'
+                return [pscustomobject]$result
+            }
+        }
+
+        try {
+            Start-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop | Out-Null
+        }
+        catch {
+            $result.code = 'task-start-failed'
+            return [pscustomobject]$result
+        }
+
+        $deadline = (Get-Date).AddSeconds(20)
+        do {
+            Start-Sleep -Milliseconds 250
+            try {
+                $currentTask = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+                $currentInfo = Get-ScheduledTaskInfo -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+            }
+            catch {
+                $result.code = 'task-query-failed'
+                return [pscustomobject]$result
+            }
+
+            $newRun = $currentInfo.LastRunTime -gt $initialInfo.LastRunTime
+            $ready = [string]$currentTask.State -eq 'Ready'
+            if ($newRun -and $ready -and $currentInfo.LastTaskResult -eq 0) {
+                $activationObserved = $true
+                $result.startRunObserved = $true
+                $result.code = 'task-run-observed'
+                break
+            }
+        } while ((Get-Date) -lt $deadline)
+
+        if (-not $activationObserved) {
+            $result.code = 'task-run-not-confirmed'
+        }
+    }
+    finally {
+        if ($restoreRequired) {
+            $result.restoreStatus = 'not-observed'
+            try {
+                Disable-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop | Out-Null
+            }
+            catch {
+                if ($activationObserved) {
+                    $result.code = 'task-restore-failed'
+                }
+                $activationObserved = $false
+            }
+
+            if ($result.code -ne 'task-restore-failed') {
+                try {
+                    $finalTask = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+                    $finalEnabled = if ($finalTask.Settings.PSObject.Properties['Enabled']) {
+                        $finalTask.Settings.Enabled
+                    }
+                    else {
+                        $null
+                    }
+                    $result.finalEnabled = $finalEnabled
+                    if ($null -ne $finalEnabled -and -not [bool]$finalEnabled) {
+                        $result.restoreStatus = 'observed'
+                    }
+                    elseif ($activationObserved) {
+                        $result.code = 'task-restore-not-confirmed'
+                        $activationObserved = $false
+                    }
+                }
+                catch {
+                    if ($activationObserved) {
+                        $result.code = 'task-restore-not-confirmed'
+                        $activationObserved = $false
+                    }
+                }
+            }
+        }
+    }
+
+    if ($activationObserved) {
+        $result.status = 'observed'
+    }
+    return [pscustomobject]$result
+}
+
 function Set-OpenPathNonAdminAppControl {
     <#
     .SYNOPSIS
@@ -1754,6 +1887,12 @@ function Set-OpenPathNonAdminAppControl {
             Write-OpenPathLog "AppLocker policy applied but AppIDSvc could not be started: $_" -Level WARN
         }
 
+        $diagnosticSubstep = 'policy-activation'
+        $activation = Invoke-OpenPathAppControlPolicyConverterActivation
+        if ($activation.status -ne 'observed') {
+            throw 'appcontrol_policy_activation_failed'
+        }
+
         $diagnosticSubstep = 'validation'
         if (-not (Test-OpenPathNonAdminAppControlActive -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers)) {
             $health = $script:OpenPathLastAppControlHealth
@@ -1796,6 +1935,7 @@ function Set-OpenPathNonAdminAppControl {
                 'policy-backup' { 'appcontrol_policy_backup_failed' }
                 'policy-generation' { 'appcontrol_policy_generation_failed' }
                 'policy-apply' { 'appcontrol_policy_apply_failed' }
+                'policy-activation' { 'appcontrol_policy_activation_failed' }
                 default { 'appcontrol_health_evaluation_failed' }
             }
             $failureDiagnostic = [pscustomobject][ordered]@{
@@ -1828,6 +1968,18 @@ function Set-OpenPathNonAdminAppControl {
                 CleanupAttempted = 'not-observed'
                 CleanupSucceeded = 'not-observed'
                 PowerShellProcessArchitecture = "$(8 * [IntPtr]::Size)-bit"
+            }
+            if ($diagnosticSubstep -eq 'policy-activation') {
+                $failureDiagnostic.InternalRollbackAttempted = $true
+                try {
+                    Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath -ErrorAction Stop
+                    $failureDiagnostic.InternalRollbackSucceeded = $true
+                    Write-OpenPathLog 'AppLocker activation failed after policy apply; restored previous policy backup' -Level WARN
+                }
+                catch {
+                    $failureDiagnostic.InternalRollbackSucceeded = $false
+                    Write-OpenPathLog 'AppLocker activation failed and the previous policy backup could not be restored' -Level WARN
+                }
             }
             Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic $failureDiagnostic
         }

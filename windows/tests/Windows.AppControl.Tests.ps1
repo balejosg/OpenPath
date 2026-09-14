@@ -1,10 +1,237 @@
 Import-Module (Join-Path $PSScriptRoot "TestHelpers.psm1") -Force
+foreach ($name in @('Get-ScheduledTask','Get-ScheduledTaskInfo','Enable-ScheduledTask','Start-ScheduledTask','Disable-ScheduledTask')) {
+    if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { Set-Item -Path "Function:global:$name" -Value { param() } }
+}
+if (-not (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue)) { function global:Get-AppLockerPolicy { param([switch]$Local, [switch]$Effective, [switch]$Xml) } }
+if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) { function global:Set-AppLockerPolicy { [CmdletBinding()] param($XMLPolicy) } }
+if (-not (Get-Command Set-Service -ErrorAction SilentlyContinue)) { function global:Set-Service { param($Name, $StartupType, $ErrorAction) } }
+if (-not (Get-Command Start-Service -ErrorAction SilentlyContinue)) { function global:Start-Service { param($Name, $ErrorAction) } }
 
 $modulePath = Join-Path $PSScriptRoot ".." "lib"
 Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
 Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
 
 Describe "AppControl Module" {
+    Context 'PolicyConverter activation boundary' {
+        It 'enables starts restores and verifies an initially disabled task in order' {
+            InModuleScope AppControl {
+                $script:activationTrace = [System.Collections.Generic.List[string]]::new()
+                $script:taskCalls = 0
+                $script:infoCalls = 0
+                Mock Get-ScheduledTask {
+                    $script:taskCalls++
+                    $enabled = if ($script:taskCalls -ge 3) { $false } else { $script:taskCalls -gt 1 }
+                    [pscustomobject]@{ State='Ready'; Settings=[pscustomobject]@{ Enabled=$enabled }; TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\' }
+                }
+                Mock Get-ScheduledTaskInfo {
+                    $script:infoCalls++
+                    [pscustomobject]@{ LastRunTime=if($script:infoCalls -eq 1){[datetime]'2026-09-14T10:00:00Z'}else{[datetime]'2026-09-14T10:00:01Z'}; LastTaskResult=0 }
+                }
+                Mock Enable-ScheduledTask { $script:activationTrace.Add('enable') }
+                Mock Start-ScheduledTask { $script:activationTrace.Add('start') }
+                Mock Disable-ScheduledTask { $script:activationTrace.Add('disable') }
+
+                $result = Invoke-OpenPathAppControlPolicyConverterActivation
+
+                $result.status | Should -Be 'observed'
+                $result.restoreStatus | Should -Be 'observed'
+                $result.finalEnabled | Should -BeFalse
+                $script:activationTrace | Should -Be @('enable','start','disable')
+                Should -Invoke Start-ScheduledTask -Times 1 -Exactly
+            }
+        }
+
+        It 'starts an initially enabled task without toggling its enabled state' {
+            InModuleScope AppControl {
+                $script:infoCalls = 0
+                Mock Get-ScheduledTask { [pscustomobject]@{ State='Ready'; Settings=[pscustomobject]@{ Enabled=$true }; TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\' } }
+                Mock Get-ScheduledTaskInfo { $script:infoCalls++; [pscustomobject]@{ LastRunTime=if($script:infoCalls -eq 1){[datetime]'2026-09-14T10:00:00Z'}else{[datetime]'2026-09-14T10:00:01Z'}; LastTaskResult=0 } }
+                Mock Enable-ScheduledTask {}
+                Mock Start-ScheduledTask {}
+                Mock Disable-ScheduledTask {}
+
+                (Invoke-OpenPathAppControlPolicyConverterActivation).status | Should -Be 'observed'
+                Should -Invoke Start-ScheduledTask -Times 1 -Exactly
+                Should -Invoke Enable-ScheduledTask -Times 0 -Exactly
+                Should -Invoke Disable-ScheduledTask -Times 0 -Exactly
+            }
+        }
+
+        It 'bounds an already running task without starting it' {
+            InModuleScope AppControl {
+                Mock Get-ScheduledTask { [pscustomobject]@{ State='Running'; Settings=[pscustomobject]@{ Enabled=$true }; TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\' } }
+                Mock Get-ScheduledTaskInfo { [pscustomobject]@{ LastRunTime=[datetime]'2026-09-14T10:00:00Z'; LastTaskResult=0 } }
+                Mock Start-ScheduledTask {}
+
+                $result = Invoke-OpenPathAppControlPolicyConverterActivation
+
+                $result.status | Should -Be 'inconclusive'
+                $result.code | Should -Be 'task-already-running'
+                Should -Invoke Start-ScheduledTask -Times 0 -Exactly
+            }
+        }
+
+        It 'bounds missing and unknown task snapshots without mutation' {
+            InModuleScope AppControl {
+                foreach ($case in @('missing','unknown')) {
+                    if ($case -eq 'missing') {
+                        Mock Get-ScheduledTask { throw 'injected sensitive missing detail' }
+                    }
+                    else {
+                        Mock Get-ScheduledTask { [pscustomobject]@{ State=$null; Settings=[pscustomobject]@{ Enabled=$null }; TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\' } }
+                    }
+                    Mock Get-ScheduledTaskInfo { [pscustomobject]@{ LastRunTime=$null; LastTaskResult=$null } }
+                    Mock Start-ScheduledTask {}
+
+                    $result = Invoke-OpenPathAppControlPolicyConverterActivation
+                    $result.status | Should -Be 'inconclusive'
+                    $result.code | Should -Be $(if($case -eq 'missing'){'task-query-failed'}else{'task-snapshot-unknown'})
+                    ($result | ConvertTo-Json -Depth 6) | Should -Not -Match 'sensitive|injected'
+                    Should -Invoke Start-ScheduledTask -Times 0 -Exactly
+                }
+            }
+        }
+
+        It 'bounds query and start failures and still restores an enabled-by-helper task' {
+            InModuleScope AppControl {
+                foreach ($failurePoint in @('poll','start')) {
+                    $script:taskCalls = 0
+                    Mock Get-ScheduledTask {
+                        $script:taskCalls++
+                        if ($failurePoint -eq 'poll' -and $script:taskCalls -eq 2) { throw 'injected raw query detail' }
+                        [pscustomobject]@{ State='Ready'; Settings=[pscustomobject]@{ Enabled=($script:taskCalls -gt 1) }; TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\' }
+                    }
+                    Mock Get-ScheduledTaskInfo { [pscustomobject]@{ LastRunTime=[datetime]'2026-09-14T10:00:00Z'; LastTaskResult=0 } }
+                    Mock Enable-ScheduledTask {}
+                    Mock Start-ScheduledTask { if ($failurePoint -eq 'start') { throw 'injected raw start detail' } }
+                    Mock Disable-ScheduledTask {}
+
+                    $result = Invoke-OpenPathAppControlPolicyConverterActivation
+                    $result.status | Should -Be 'inconclusive'
+                    $result.code | Should -Be $(if($failurePoint -eq 'start'){'task-start-failed'}else{'task-query-failed'})
+                    ($result | ConvertTo-Json -Depth 6) | Should -Not -Match 'raw|injected'
+                }
+                Should -Invoke Disable-ScheduledTask -Times 2 -Exactly
+            }
+        }
+
+        It 'times out through a mocked clock without a fixed activation wait' {
+            InModuleScope AppControl {
+                $script:clockCalls = 0
+                Mock Get-Date { $script:clockCalls++; if($script:clockCalls -ge 2){[datetime]'2026-09-14T10:00:21Z'}else{[datetime]'2026-09-14T10:00:00Z'} }
+                Mock Get-ScheduledTask { [pscustomobject]@{ State='Ready'; Settings=[pscustomobject]@{ Enabled=$true }; TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\' } }
+                Mock Get-ScheduledTaskInfo { [pscustomobject]@{ LastRunTime=[datetime]'2026-09-14T10:00:00Z'; LastTaskResult=0 } }
+                Mock Start-ScheduledTask {}
+                Mock Start-Sleep {}
+
+                $result = Invoke-OpenPathAppControlPolicyConverterActivation
+                $result.status | Should -Be 'inconclusive'
+                $result.code | Should -Be 'task-run-not-confirmed'
+                Should -Invoke Start-Sleep -Times 1 -Exactly
+            }
+        }
+
+        It 'does not report observation when restore command or final-state verification fails' {
+            InModuleScope AppControl {
+                foreach ($failurePoint in @('restore-command','restore-state')) {
+                    $script:taskCalls = 0; $script:infoCalls = 0
+                    Mock Get-ScheduledTask {
+                        $script:taskCalls++
+                        $enabled = if($script:taskCalls -eq 1){$false}else{$true}
+                        [pscustomobject]@{ State='Ready'; Settings=[pscustomobject]@{ Enabled=$enabled }; TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\' }
+                    }
+                    Mock Get-ScheduledTaskInfo { $script:infoCalls++; [pscustomobject]@{ LastRunTime=if($script:infoCalls -eq 1){[datetime]'2026-09-14T10:00:00Z'}else{[datetime]'2026-09-14T10:00:01Z'}; LastTaskResult=0 } }
+                    Mock Enable-ScheduledTask {}; Mock Start-ScheduledTask {}
+                    Mock Disable-ScheduledTask { if($failurePoint -eq 'restore-command'){throw 'injected restore detail'} }
+
+                    $result = Invoke-OpenPathAppControlPolicyConverterActivation
+                    $result.status | Should -Be 'inconclusive'
+                    $result.code | Should -Be $(if($failurePoint -eq 'restore-command'){'task-restore-failed'}else{'task-restore-not-confirmed'})
+                    $result.restoreStatus | Should -Be 'not-observed'
+                }
+            }
+        }
+
+        It 'orders policy apply service activation and health validation' {
+            Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
+            Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
+            InModuleScope AppControl {
+                $script:setTrace = [System.Collections.Generic.List[string]]::new()
+                Mock Test-AdminPrivileges { $true }; Mock Test-OpenPathAppControlAvailable { $true }
+                Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' }
+                Mock Set-AppLockerPolicy { $script:setTrace.Add('policy') }
+                Mock Set-Service { $script:setTrace.Add('service') }; Mock Start-Service {}
+                Mock Invoke-OpenPathAppControlPolicyConverterActivation { $script:setTrace.Add('activation'); [pscustomobject]@{status='observed';code='task-run-observed'} }
+                Mock Test-OpenPathNonAdminAppControlActive { $script:setTrace.Add('health'); $true }
+                Mock Write-OpenPathLog {}
+
+                Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -Confirm:$false | Should -BeTrue
+                $script:setTrace | Should -Be @('policy','service','activation','health')
+            }
+        }
+
+        It 'fails with a policy activation diagnostic before health validation' {
+            Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
+            Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
+            $diagnosticPath = Join-Path $TestDrive 'activation-failure.json'
+            $backupPath = Join-Path (Join-Path $TestDrive 'data') 'applocker-backup.xml'
+            $global:opExpectedActivationBackupPath = $backupPath
+            $script:activationSetPolicyCalls = 0
+            $script:activationSetPolicyArgs = [System.Collections.Generic.List[object]]::new()
+            Mock Test-AdminPrivileges { $true } -ModuleName AppControl
+            Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
+            Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
+            Mock Set-AppLockerPolicy {
+                $script:activationSetPolicyCalls++
+                $script:activationSetPolicyArgs.Add([pscustomobject]@{ XMLPolicy=$XMLPolicy; ErrorAction=$PSBoundParameters['ErrorAction'] })
+            } -ModuleName AppControl
+            Mock Set-Service {} -ModuleName AppControl
+            Mock Start-Service {} -ModuleName AppControl
+            Mock Invoke-OpenPathAppControlPolicyConverterActivation { [pscustomobject]@{status='inconclusive';code='task-run-not-confirmed'} } -ModuleName AppControl
+            Mock Test-OpenPathNonAdminAppControlActive { throw 'health must not run' } -ModuleName AppControl
+            Mock Write-OpenPathLog {} -ModuleName AppControl
+
+            Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $diagnosticPath -Confirm:$false | Should -BeFalse
+            $diagnostic = Get-Content -LiteralPath $diagnosticPath -Raw | ConvertFrom-Json
+            $diagnostic.substep | Should -Be 'policy-activation'
+            @($diagnostic.reasonCodes) | Should -Be @('appcontrol_policy_activation_failed')
+            $diagnostic.internalRollbackAttempted | Should -BeTrue
+            $diagnostic.internalRollbackSucceeded | Should -BeTrue
+            Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 2 -Exactly
+            Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 1 -Exactly -ParameterFilter {
+                $XMLPolicy -eq $global:opExpectedActivationBackupPath -and [string]$ErrorAction -eq 'Stop'
+            }
+            Should -Invoke Test-OpenPathNonAdminAppControlActive -ModuleName AppControl -Times 0 -Exactly
+        }
+
+        It 'preserves the activation reason when rollback fails' {
+            Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
+            Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
+            $diagnosticPath = Join-Path $TestDrive 'activation-rollback-failure.json'
+            $script:activationSetPolicyCalls = 0
+            Mock Test-AdminPrivileges { $true } -ModuleName AppControl
+            Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
+            Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
+            Mock Set-AppLockerPolicy {
+                $script:activationSetPolicyCalls++
+                if ($script:activationSetPolicyCalls -eq 2) { throw 'injected rollback detail' }
+            } -ModuleName AppControl
+            Mock Set-Service {} -ModuleName AppControl
+            Mock Start-Service {} -ModuleName AppControl
+            Mock Invoke-OpenPathAppControlPolicyConverterActivation { [pscustomobject]@{status='inconclusive';code='task-run-not-confirmed'} } -ModuleName AppControl
+            Mock Test-OpenPathNonAdminAppControlActive { throw 'health must not run' } -ModuleName AppControl
+            Mock Write-OpenPathLog {} -ModuleName AppControl
+
+            Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $diagnosticPath -Confirm:$false | Should -BeFalse
+            $diagnostic = Get-Content -LiteralPath $diagnosticPath -Raw | ConvertFrom-Json
+            $diagnostic.substep | Should -Be 'policy-activation'
+            @($diagnostic.reasonCodes) | Should -Be @('appcontrol_policy_activation_failed')
+            $diagnostic.internalRollbackAttempted | Should -BeTrue
+            $diagnostic.internalRollbackSucceeded | Should -BeFalse
+            Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 2 -Exactly
+            Should -Invoke Test-OpenPathNonAdminAppControlActive -ModuleName AppControl -Times 0 -Exactly
+        }
+    }
     BeforeAll {
         $modulePath = Join-Path $PSScriptRoot ".." "lib"
         Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
@@ -648,6 +875,9 @@ Describe "AppControl Module" {
                 Mock New-OpenPathNonAdminAppLockerPolicySpec { [pscustomobject]@{} } -ModuleName AppControl
                 Mock New-OpenPathAppLockerPolicyXml { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
                 Mock Merge-OpenPathAppLockerPolicyXml { [xml]'<AppLockerPolicy Version="1" />' } -ModuleName AppControl
+                Mock Invoke-OpenPathAppControlPolicyConverterActivation {
+                    [pscustomobject]@{ status = 'observed'; code = 'task-run-observed' }
+                } -ModuleName AppControl
                 Mock Set-AppLockerPolicy {
                     $global:opSetPolicyCalls++
                     if ($global:opSetPolicyCalls -eq 2 -and $global:opRestoreFails) {
