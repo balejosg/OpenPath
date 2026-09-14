@@ -56,6 +56,97 @@ Describe "Windows Browser Boundary CI Probes" {
     }
 
     Context "Invoke-StudentExecutableTaskProbe" {
+        It 'keeps scheduled-task default and exposes native lifecycle opt-in' {
+            $command = Get-Command Invoke-StudentExecutableTaskProbe
+            $command.Parameters.ContainsKey('UseNativeStudentProcess') | Should -BeTrue
+            $content = Get-Content (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1') -Raw
+            $content | Should -Match 'if \(\$UseNativeStudentProcess\)'
+            $content | Should -Match 'native-profile-unload-failed'
+        }
+
+        It 'continues denied observation when native launch is not-created without using a task' {
+            $testExe = Join-Path $TestDrive 'native-denied.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            $script:nativeLaunchAt = $null
+            $script:beforeSnapshotAt = $null
+            $script:eventQueryStart = $null
+            Mock Invoke-OpenPathNativeStudentProcess { $script:nativeLaunchAt = Get-Date; [pscustomobject]@{ launchStatus = 'not-created'; win32Code = 5; processHandle = [IntPtr]::Zero; threadHandle = [IntPtr]::Zero; tokenHandle = [IntPtr]::Zero; environmentHandle = [IntPtr]::Zero; profileHandle = [IntPtr]::Zero; profileLoaded = $false } } -ModuleName BrowserBoundaryProbe
+            Mock Close-OpenPathNativeStudentProcess { [pscustomobject]@{ status = 'observed'; finalized = $true; unloaded = $true } } -ModuleName BrowserBoundaryProbe
+            Mock Register-ScheduledTask {} -ModuleName BrowserBoundaryProbe
+            Mock Start-ScheduledTask {} -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathEnforcementObserverSnapshot { param($Phase); if ($Phase -eq 'before-launch') { $script:beforeSnapshotAt = Get-Date }; [pscustomobject]@{ status = 'observed' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathAppLockerEventQuery { param($StartTime); $script:eventQueryStart = $StartTime; [pscustomobject]@{ status = 'QUERY_SUCCEEDED_MATCHES'; events = @([pscustomobject]@{ Id = 8004 }) } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathCorrelatedAppLockerEvent { [pscustomobject]@{ matched = $true; event = [pscustomobject]@{ id = 8004 }; candidates = @() } } -ModuleName BrowserBoundaryProbe
+            $result = Invoke-StudentExecutableTaskProbe -ProbeName 'Native denied' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -StudentSid 'S-1-5-21-1' -Expectation ExpectDenied -UseNativeStudentProcess -CaptureEnforcementDiagnostics -TimeoutSeconds 1
+            $result.status | Should -Be 'pass'
+            $script:beforeSnapshotAt | Should -Not -BeNullOrEmpty
+            $script:nativeLaunchAt | Should -Not -BeNullOrEmpty
+            $script:beforeSnapshotAt | Should -BeLessOrEqual $script:nativeLaunchAt
+            $script:eventQueryStart | Should -BeLessOrEqual $script:nativeLaunchAt
+            $result.evidence.taskIdentity.launchStatus | Should -Be 'not-created'
+            $result.evidence.taskIdentity.win32Code | Should -Be 5
+            Should -Invoke Register-ScheduledTask -ModuleName BrowserBoundaryProbe -Times 0
+            Should -Invoke Start-ScheduledTask -ModuleName BrowserBoundaryProbe -Times 0
+            Should -Invoke Close-OpenPathNativeStudentProcess -ModuleName BrowserBoundaryProbe -Times 1
+        }
+
+        It 'fails the native probe when finalization reports unload failure' {
+            $testExe = Join-Path $TestDrive 'native-close-fail.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            Mock Invoke-OpenPathNativeStudentProcess { [pscustomobject]@{ launchStatus = 'created'; processHandle = [IntPtr]::Zero; threadHandle = [IntPtr]::Zero; tokenHandle = [IntPtr]::Zero; environmentHandle = [IntPtr]::Zero; profileHandle = [IntPtr]::Zero; profileLoaded = $false } } -ModuleName BrowserBoundaryProbe
+            Mock Close-OpenPathNativeStudentProcess { [pscustomobject]@{ status = 'failed'; finalized = $false; unloaded = $false } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathExactProcessBoundaryEvidence { @([pscustomobject]@{ processId = 4; matchesStudentSid = $true }) } -ModuleName BrowserBoundaryProbe
+            { Invoke-StudentExecutableTaskProbe -ProbeName 'Native close failure' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -StudentSid 'S-1-5-21-1' -ProcessName 'student-probe' -Expectation ExpectAllowed -UseNativeStudentProcess -TimeoutSeconds 1 } | Should -Throw 'native-profile-unload-failed'
+        }
+
+        It 'uses the exact native student process as the allowed execution authority' {
+            $testExe = Join-Path $TestDrive 'native-allowed.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            Mock Invoke-OpenPathNativeStudentProcess { [pscustomobject]@{ launchStatus = 'created'; processId = 4242; processHandle = [IntPtr]::Zero; threadHandle = [IntPtr]::Zero; tokenHandle = [IntPtr]::Zero; environmentHandle = [IntPtr]::Zero; profileHandle = [IntPtr]::Zero; profileLoaded = $false } } -ModuleName BrowserBoundaryProbe
+            Mock Close-OpenPathNativeStudentProcess { [pscustomobject]@{ status = 'observed'; finalized = $true; unloaded = $true } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathExactProcessBoundaryEvidence { @([pscustomobject]@{ processId = 4242; matchesStudentSid = $true; executablePath = $testExe; name = 'student-probe' }) } -ModuleName BrowserBoundaryProbe
+            Mock Stop-Process {} -ModuleName BrowserBoundaryProbe
+            $result = Invoke-StudentExecutableTaskProbe -ProbeName 'Native allowed' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -StudentSid 'S-1-5-21-1' -ProcessName 'student-probe' -Expectation ExpectAllowed -UseNativeStudentProcess -TimeoutSeconds 1
+            $result.status | Should -Be 'pass'
+            $result.evidence.observedExactProcess.processId | Should -Be 4242
+            Should -Invoke Close-OpenPathNativeStudentProcess -ModuleName BrowserBoundaryProbe -Times 1
+        }
+
+        It 'rejects invalid native launch states and zero-code not-created results' {
+            $testExe = Join-Path $TestDrive 'native-invalid.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            Mock Close-OpenPathNativeStudentProcess { [pscustomobject]@{ status = 'observed' } } -ModuleName BrowserBoundaryProbe
+            $script:invalidState = $null
+            Mock Invoke-OpenPathNativeStudentProcess { $script:invalidState } -ModuleName BrowserBoundaryProbe
+            foreach ($state in @(
+                    [pscustomobject]@{ launchStatus = 'unexpected'; win32Code = 5 },
+                    [pscustomobject]@{ launchStatus = 'not-created'; win32Code = 0 })) {
+                $script:invalidState = $state
+                { Invoke-StudentExecutableTaskProbe -ProbeName 'Native invalid' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -StudentSid 'S-1-5-21-1' -Expectation ExpectDenied -UseNativeStudentProcess } | Should -Throw '*native launch state was invalid*'
+            }
+            Should -Invoke Close-OpenPathNativeStudentProcess -ModuleName BrowserBoundaryProbe -Times 2
+        }
+
+        It 'does not pass allowed execution when native launch was not-created' {
+            $testExe = Join-Path $TestDrive 'native-allowed-not-created.exe'
+            Set-Content -LiteralPath $testExe -Value 'dummy'
+            Mock Invoke-OpenPathNativeStudentProcess { [pscustomobject]@{ launchStatus = 'not-created'; win32Code = 5; processHandle = [IntPtr]::Zero; threadHandle = [IntPtr]::Zero; tokenHandle = [IntPtr]::Zero; environmentHandle = [IntPtr]::Zero; profileHandle = [IntPtr]::Zero; profileLoaded = $false } } -ModuleName BrowserBoundaryProbe
+            Mock Close-OpenPathNativeStudentProcess { [pscustomobject]@{ status = 'observed' } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathAppLockerEventQuery { [pscustomobject]@{ status = 'QUERY_SUCCEEDED_MATCHES'; events = @([pscustomobject]@{ Id = 8002 }) } } -ModuleName BrowserBoundaryProbe
+            Mock Get-OpenPathCorrelatedAppLockerEvent { [pscustomobject]@{ matched = $true; event = [pscustomobject]@{ id = 8002 }; candidates = @() } } -ModuleName BrowserBoundaryProbe
+            { Invoke-StudentExecutableTaskProbe -ProbeName 'Native allowed not-created' -UserName 'student01' -Password 'secret' -ExecutablePath $testExe -StudentSid 'S-1-5-21-1' -Expectation ExpectAllowed -UseNativeStudentProcess } | Should -Throw '*not-created*'
+        }
+
+        It 'loads the native lifecycle ABI once without duplicate declarations' {
+            { InModuleScope BrowserBoundaryProbe { Ensure-OpenPathNativeStudentProcess } } | Should -Not -Throw
+        }
+
+        It 'reuses bounded native cleanup when preparation fails after profile load' {
+            $content = Get-Content (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\BrowserBoundaryProbe.psm1') -Raw
+            $content | Should -Match 'Close-OpenPathNativeStudentProcess -State \$cleanupState'
+            $content | Should -Match 'for\(\$attempt=0;\$attempt -lt 20'
+        }
+
         It 'stops an active credentialed probe task before unregistering it' {
             $testExe = Join-Path $TestDrive 'probe-task-cleanup.exe'
             $markerPath = Join-Path $TestDrive 'probe-task-cleanup.marker'

@@ -26,6 +26,11 @@ BeforeAll {
 }
 
 Describe 'Canonical offline installer disposable target' {
+    It 'opts all canonical student probes into native lifecycle mode' {
+        $content = Get-Content (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\DisposableWindowsTarget.psm1') -Raw
+        @([regex]::Matches($content, '-UseNativeStudentProcess').Count) | Should -Be 5
+    }
+
     BeforeEach {
         $script:testSid = 'S-1-5-21-100-200-300-400'
         $script:testPath = Join-Path $TestDrive 'op-e2e-test'

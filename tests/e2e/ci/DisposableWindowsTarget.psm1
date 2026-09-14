@@ -511,7 +511,7 @@ function Invoke-OpenPathInstalledBoundaryProbes {
         New-Item -ItemType Directory -Path $studentFirefoxProfile -Force | Out-Null
         & icacls.exe $studentFirefoxProfile /grant "$env:COMPUTERNAME\$($Target.UserName):(OI)(CI)F" *> $null
         if ($LASTEXITCODE -ne 0) { throw 'student-firefox-profile-acl-failed' }
-        $firefoxRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Firefox allow' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $firefox -Arguments "-headless -new-instance -profile `"$studentFirefoxProfile`" about:blank" -Expectation ExpectAllowed -ProcessName firefox -StudentSid $Target.Sid
+        $firefoxRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Firefox allow' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $firefox -Arguments "-headless -new-instance -profile `"$studentFirefoxProfile`" about:blank" -Expectation ExpectAllowed -ProcessName firefox -StudentSid $Target.Sid -UseNativeStudentProcess
     }
     catch {
         throw 'boundary-firefox-execution-failed'
@@ -520,12 +520,12 @@ function Invoke-OpenPathInstalledBoundaryProbes {
         Remove-Item -LiteralPath $studentFirefoxProfile -Recurse -Force -ErrorAction SilentlyContinue
     }
     try {
-    $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid -PackagedAppPattern 'MicrosoftEdge|Microsoft\.MicrosoftEdge|msedge' -CaptureEnforcementDiagnostics
+    $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid -PackagedAppPattern 'MicrosoftEdge|Microsoft\.MicrosoftEdge|msedge' -CaptureEnforcementDiagnostics -UseNativeStudentProcess
     }
     catch {
         throw (New-OpenPathDisposableEdgeBoundaryException)
     }
-    try { $peRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probeExe -Arguments "`"$probeMarker`"" -Expectation ExpectDenied -StudentSid $Target.Sid -MarkerPath $probeMarker } catch { throw 'boundary-benign-pe-execution-failed' }
+    try { $peRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probeExe -Arguments "`"$probeMarker`"" -Expectation ExpectDenied -StudentSid $Target.Sid -MarkerPath $probeMarker -UseNativeStudentProcess } catch { throw 'boundary-benign-pe-execution-failed' }
     try { $recovery = Invoke-OpenPathSystemRecoveryProbe -MarkerPath (Join-Path $env:ProgramData "OpenPathRecoveryProbe-$([guid]::NewGuid().ToString('N')).marker") } catch { throw 'boundary-system-recovery-failed' }
     try { $watchdog = Invoke-OpenPathWatchdogProbe } catch { throw 'boundary-watchdog-execution-failed' }
     if ($watchdog.PSObject.Properties['status'] -and $watchdog.status -eq 'failed') { throw (New-OpenPathDisposableWatchdogBoundaryException -Evidence $watchdog) }
@@ -879,7 +879,8 @@ function Invoke-OpenPathDisposablePostApplicationPair {
                 -PackagedAppPattern 'MicrosoftEdge|Microsoft\.MicrosoftEdge|msedge' `
                 -TimeoutSeconds 5 `
                 -SuppressFailureDiagnostics `
-                -CaptureEnforcementDiagnostics
+                -CaptureEnforcementDiagnostics `
+                -UseNativeStudentProcess
             $correlated = if ($run.evidence -and $run.evidence.PSObject.Properties['correlatedEvent']) { $run.evidence.correlatedEvent } else { $null }
             $denyObserved = $false
             if ($correlated -and $correlated.PSObject.Properties['id'] -and
@@ -1008,7 +1009,7 @@ function Invoke-OpenPathDisposableDeniedPeControl {
         }
         try {
             $peHash = (Get-FileHash -LiteralPath $probePath -Algorithm SHA256).Hash
-            $run = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny control' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probePath -Arguments "`"$marker`"" -Expectation ExpectDenied -ProcessName 'openpath-e2e-probe' -StudentSid $Target.Sid -CaptureEnforcementDiagnostics
+            $run = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny control' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probePath -Arguments "`"$marker`"" -Expectation ExpectDenied -ProcessName 'openpath-e2e-probe' -StudentSid $Target.Sid -CaptureEnforcementDiagnostics -UseNativeStudentProcess
             $correlated = if ($run.evidence.PSObject.Properties['correlatedEvent']) { $run.evidence.correlatedEvent } else { $null }
             $blocked = $false
             if ($correlated -and $correlated.PSObject.Properties['id'] -and $correlated.PSObject.Properties['observedPath'] -and $correlated.PSObject.Properties['observedUserSid'] -and [int]$correlated.id -eq 8004) {

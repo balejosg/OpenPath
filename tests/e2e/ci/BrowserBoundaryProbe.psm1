@@ -2785,6 +2785,78 @@ function Get-OpenPathFlatEdgeBoundaryFailureContract {
     }
 }
 
+function Ensure-OpenPathNativeStudentProcess {
+    if (([System.Management.Automation.PSTypeName]'OpenPathNativeStudentProcess').Type) { return }
+    Add-Type @'
+using System;using System.Text;using System.Runtime.InteropServices;
+public static class OpenPathNativeStudentProcess {
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] public struct PROFILEINFO {public int dwSize;public int dwFlags;public string lpUserName;public string lpProfilePath;public string lpDefaultPath;public string lpServerName;public string lpPolicyPath;public IntPtr hProfile;}
+ [StructLayout(LayoutKind.Sequential)] public struct SI {public int cb;public string r;public string d;public string t;public int x;public int y;public int xs;public int ys;public int xc;public int yc;public int fill;public int flags;public short show;public short r2;public IntPtr r3;public IntPtr stdin;public IntPtr stdout;public IntPtr stderr;}
+ [StructLayout(LayoutKind.Sequential)] public struct PI {public IntPtr p;public IntPtr t;public int pid;public int tid;}
+ [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)]public static extern bool LogonUser(string u,string d,string p,int t,int pr,out IntPtr h);
+ [DllImport("userenv.dll",SetLastError=true,CharSet=CharSet.Unicode)]public static extern bool LoadUserProfile(IntPtr t,ref PROFILEINFO i);
+ [DllImport("userenv.dll",SetLastError=true)]public static extern bool UnloadUserProfile(IntPtr t,IntPtr p);
+ [DllImport("userenv.dll",SetLastError=true)]public static extern bool CreateEnvironmentBlock(out IntPtr e,IntPtr t,bool i);
+ [DllImport("userenv.dll",SetLastError=true)]public static extern bool DestroyEnvironmentBlock(IntPtr e);
+ [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)]public static extern bool CreateProcessAsUserW(IntPtr t,string a,StringBuilder c,IntPtr pa,IntPtr ta,bool inherit,int f,IntPtr e,string d,ref SI s,out PI p);
+ [DllImport("kernel32.dll",SetLastError=true)]public static extern uint WaitForSingleObject(IntPtr h,uint ms);
+ [DllImport("kernel32.dll",SetLastError=true)]public static extern bool TerminateProcess(IntPtr h,uint code);
+ [DllImport("kernel32.dll",SetLastError=true)]public static extern bool GetExitCodeProcess(IntPtr h,out uint code);
+ [DllImport("kernel32.dll",SetLastError=true)]public static extern bool CloseHandle(IntPtr h);
+}
+'@ -ErrorAction Stop
+}
+
+function Invoke-OpenPathNativeStudentProcess {
+    param([string]$UserName,[string]$Password,[string]$ExecutablePath,[string]$Arguments,[string]$StudentSid)
+    Ensure-OpenPathNativeStudentProcess
+    $token=[IntPtr]::Zero;$envBlock=[IntPtr]::Zero;$profile=[IntPtr]::Zero;$pi=$null;$profilePath=$null;$profileLoaded=$false
+    try {
+        $profilePath=(Get-CimInstance Win32_UserProfile -Filter "SID='$StudentSid'" -ErrorAction Stop | Select-Object -First 1).LocalPath
+        if(-not [OpenPathNativeStudentProcess]::LogonUser($UserName,$env:COMPUTERNAME,$Password,4,0,[ref]$token)){throw 'native-logon-failed'}
+        $profileInfo=New-Object OpenPathNativeStudentProcess+PROFILEINFO;$profileInfo.dwSize=[Runtime.InteropServices.Marshal]::SizeOf($profileInfo);$profileInfo.lpUserName=$UserName
+        if(-not [OpenPathNativeStudentProcess]::LoadUserProfile($token,[ref]$profileInfo)){throw 'native-profile-load-failed'};$profile=$profileInfo.hProfile;$profileLoaded=$true
+        if(-not [OpenPathNativeStudentProcess]::CreateEnvironmentBlock([ref]$envBlock,$token,$false)){throw 'native-environment-failed'}
+        $si=New-Object OpenPathNativeStudentProcess+SI;$si.cb=[Runtime.InteropServices.Marshal]::SizeOf($si);$cmd=New-Object Text.StringBuilder ('"{0}" {1}' -f $ExecutablePath,$Arguments);$pi=New-Object OpenPathNativeStudentProcess+PI
+        $created=[OpenPathNativeStudentProcess]::CreateProcessAsUserW($token,$ExecutablePath,$cmd,[IntPtr]::Zero,[IntPtr]::Zero,$false,0x400,$envBlock,$profilePath,[ref]$si,[ref]$pi)
+        $createCode = if ($created) { 0 } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+        return [pscustomobject]@{launchStatus=if($created){'created'}else{'not-created'};win32Code=[int]$createCode;processId=if($created){$pi.pid}else{0};processHandle=if($created){$pi.p}else{[IntPtr]::Zero};threadHandle=if($created){$pi.t}else{[IntPtr]::Zero};tokenHandle=$token;environmentHandle=$envBlock;profileHandle=$profile;profileLoaded=$profileLoaded;tokenLoaded=$true}
+    } catch {
+        $cleanupState=[pscustomobject]@{processHandle=[IntPtr]::Zero;threadHandle=[IntPtr]::Zero;tokenHandle=$token;environmentHandle=$envBlock;profileHandle=$profile;profileLoaded=$profileLoaded}
+        try { Close-OpenPathNativeStudentProcess -State $cleanupState | Out-Null } catch {}
+        throw
+    }
+}
+
+function Close-OpenPathNativeStudentProcess {
+    param([object]$State)
+    if(-not $State){return [pscustomobject]@{status='not-applicable'}}
+    $finalized=$true;$unloaded=$true;$exitCode=$null
+    $process = if($State.PSObject.Properties['processHandle']){$State.processHandle}else{[IntPtr]::Zero}
+    try {
+        if($process -ne [IntPtr]::Zero){
+            $wait=[OpenPathNativeStudentProcess]::WaitForSingleObject($process,2000)
+            if($wait -ne 0){
+                if(-not [OpenPathNativeStudentProcess]::TerminateProcess($process,1)){$finalized=$false}
+                if([OpenPathNativeStudentProcess]::WaitForSingleObject($process,2000) -ne 0){$finalized=$false}
+            }
+            [uint32]$code=0;if([OpenPathNativeStudentProcess]::GetExitCodeProcess($process,[ref]$code)){$exitCode=[int]$code}else{$finalized=$false}
+        }
+    } catch {$finalized=$false}
+    foreach($h in @('threadHandle','processHandle')){try{if($State.PSObject.Properties[$h] -and $State.$h -ne [IntPtr]::Zero){if(-not [OpenPathNativeStudentProcess]::CloseHandle($State.$h)){$finalized=$false}}}catch{$finalized=$false}}
+    try{if($State.PSObject.Properties['environmentHandle'] -and $State.environmentHandle -ne [IntPtr]::Zero -and -not [OpenPathNativeStudentProcess]::DestroyEnvironmentBlock($State.environmentHandle)){$finalized=$false}}catch{$finalized=$false}
+    if($State.PSObject.Properties['profileLoaded'] -and $State.profileLoaded -and $State.profileHandle -ne [IntPtr]::Zero){
+        $unloaded=$false
+        for($attempt=0;$attempt -lt 20 -and -not $unloaded;$attempt++){
+            try{$unloaded=[OpenPathNativeStudentProcess]::UnloadUserProfile($State.tokenHandle,$State.profileHandle)}catch{$unloaded=$false}
+            if(-not $unloaded -and $attempt -lt 19){Start-Sleep -Milliseconds 250}
+        }
+        if(-not $unloaded){$finalized=$false}
+    }
+    try{if($State.PSObject.Properties['tokenHandle'] -and $State.tokenHandle -ne [IntPtr]::Zero -and -not [OpenPathNativeStudentProcess]::CloseHandle($State.tokenHandle)){$finalized=$false}}catch{$finalized=$false}
+    [pscustomobject]@{status=if($finalized -and $unloaded){'observed'}else{'failed'};unloaded=$unloaded;finalized=$finalized;exitCode=$exitCode}
+}
+
 function Invoke-StudentExecutableTaskProbe {
     param(
         [Parameter(Mandatory = $true)][string]$ProbeName,
@@ -2799,7 +2871,8 @@ function Invoke-StudentExecutableTaskProbe {
         [string]$PackagedAppPattern = '',
         [int]$TimeoutSeconds = 20,
         [switch]$SuppressFailureDiagnostics,
-        [switch]$CaptureEnforcementDiagnostics
+        [switch]$CaptureEnforcementDiagnostics,
+        [switch]$UseNativeStudentProcess
     )
 
     $script:OpenPathLastBoundaryProbeFailureEvidence = $null
@@ -2828,6 +2901,7 @@ function Invoke-StudentExecutableTaskProbe {
     $deniedEventIds = if ($PackagedAppPattern) { @(8004, 8022) } else { @(8004) }
     $allowedEventIds = if ($PackagedAppPattern) { @(8002, 8020) } else { @(8002) }
     $probeTask = "OpenPathProbe-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $nativeState = $null
     $taskPrincipal = if ($env:COMPUTERNAME) { "$env:COMPUTERNAME\$UserName" } else { $UserName }
     $useScheduledTaskCmdlets = ($env:OPENPATH_TEST_FORCE_SCHEDULED_TASK_CMDLETS -eq '1') -or
         ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and $env:OPENPATH_TEST_FORCE_SCHTASKS -ne '1')
@@ -2835,7 +2909,10 @@ function Invoke-StudentExecutableTaskProbe {
     $taskCommand = if ($Arguments) { "$quotedExecutablePath $Arguments" } else { $quotedExecutablePath }
     $taskTime = (Get-Date).AddMinutes(1).ToString('HH:mm')
 
-    if ($useScheduledTaskCmdlets) {
+    if ($UseNativeStudentProcess) {
+        $createExitCode = 0
+    }
+    elseif ($useScheduledTaskCmdlets) {
         $taskAction = if ($Arguments) {
             New-ScheduledTaskAction -Execute $ExecutablePath -Argument $Arguments
         }
@@ -2854,10 +2931,10 @@ function Invoke-StudentExecutableTaskProbe {
     if ($createExitCode -ne 0) {
         throw "$ProbeName FAILED: Task creation for $ExecutablePath failed under student credentials ($createExitCode); cannot verify AppLocker boundary."
     }
-    $taskRegisteredAt = Get-Date
-    $taskRegisteredAtUtc = $taskRegisteredAt.ToUniversalTime().ToString('o')
-    $since = $taskRegisteredAt
-    $taskIdentityEvidence = Get-OpenPathTaskIdentityEvidence -TaskName $probeTask -Principal $StudentSid -RunLevel 'Limited' -StudentSid $StudentSid -UserName $UserName -StartTime $since -RegisteredAtUtc $taskRegisteredAtUtc -LogonType '4' -SkipTaskDefinition
+    $taskRegisteredAt = if ($UseNativeStudentProcess) { $null } else { Get-Date }
+    $taskRegisteredAtUtc = if ($taskRegisteredAt) { $taskRegisteredAt.ToUniversalTime().ToString('o') } else { $null }
+    $since = if ($UseNativeStudentProcess) { Get-Date } else { $taskRegisteredAt }
+    $taskIdentityEvidence = if ($UseNativeStudentProcess) { [pscustomobject]@{ status='not-applicable'; mode='native'; taskName=$null; registeredAtUtc=$null; attemptedAtUtc=$null; launchStatus=$null; win32Code=$null } } else { Get-OpenPathTaskIdentityEvidence -TaskName $probeTask -Principal $StudentSid -RunLevel 'Limited' -StudentSid $StudentSid -UserName $UserName -StartTime $since -RegisteredAtUtc $taskRegisteredAtUtc -LogonType '4' -SkipTaskDefinition }
     $captureEnforcementDiagnostics = $CaptureEnforcementDiagnostics -and $Expectation -eq 'ExpectDenied'
     $enforcementObservationBefore = $null
     if ($captureEnforcementDiagnostics) {
@@ -2865,12 +2942,11 @@ function Invoke-StudentExecutableTaskProbe {
         $beforeWindowEnd = Get-Date
         try {
             $enforcementObservationBefore = Get-OpenPathEnforcementObserverSnapshot -Phase 'before-launch' -WindowStart $since -WindowEnd $beforeWindowEnd
-            $enforcementObservationBefore | Add-Member -NotePropertyName captureContext -NotePropertyValue 'pre-launch' -Force
         }
         catch {
             $enforcementObservationBefore = New-OpenPathEnforcementObserverFailureSnapshot -Phase 'before-launch' -WindowStart $since -WindowEnd $beforeWindowEnd -ErrorRecord $_ -CaptureStartedAt $beforeCaptureStartedAt
-            $enforcementObservationBefore | Add-Member -NotePropertyName captureContext -NotePropertyValue 'pre-launch' -Force
         }
+        if ($enforcementObservationBefore) { $enforcementObservationBefore | Add-Member -NotePropertyName captureContext -NotePropertyValue 'pre-launch' -Force }
     }
     $captureEnforcementObservation = {
         param([string]$CaptureContext = 'post-outcome')
@@ -2888,7 +2964,23 @@ function Invoke-StudentExecutableTaskProbe {
         return [pscustomobject][ordered]@{ before = $enforcementObservationBefore; after = $after; afterCaptureContext = $CaptureContext }
     }
     try {
-        if ($useScheduledTaskCmdlets) {
+        if ($UseNativeStudentProcess) {
+            $since = Get-Date
+            $taskRegisteredAt = $since
+            $taskRegisteredAtUtc = $since.ToUniversalTime().ToString('o')
+            $nativeState = Invoke-OpenPathNativeStudentProcess -UserName $UserName -Password $Password -ExecutablePath $ExecutablePath -Arguments $Arguments -StudentSid $StudentSid
+            if (-not $nativeState -or [string]$nativeState.launchStatus -notin @('created', 'not-created') -or ([string]$nativeState.launchStatus -eq 'not-created' -and [int]$nativeState.win32Code -eq 0)) {
+                throw "$ProbeName FAILED: native launch state was invalid."
+            }
+            if ([string]$nativeState.launchStatus -eq 'not-created' -and $Expectation -ne 'ExpectDenied') {
+                throw "$ProbeName FAILED: native launch was not-created for an allowed expectation."
+            }
+            $taskIdentityEvidence.attemptedAtUtc = $taskRegisteredAtUtc
+            $taskIdentityEvidence.launchStatus = [string]$nativeState.launchStatus
+            $taskIdentityEvidence.win32Code = [int]$nativeState.win32Code
+            $runExitCode = 0
+        }
+        elseif ($useScheduledTaskCmdlets) {
             Start-ScheduledTask -TaskName $probeTask
             $runExitCode = 0
         }
@@ -2899,7 +2991,9 @@ function Invoke-StudentExecutableTaskProbe {
             throw "$ProbeName FAILED: Task execution for $ExecutablePath failed ($runExitCode)."
         }
 
-        $taskIdentityEvidence = Get-OpenPathTaskIdentityEvidence -TaskName $probeTask -Principal $StudentSid -RunLevel 'Limited' -StudentSid $StudentSid -UserName $UserName -StartTime $since -RegisteredAtUtc $taskRegisteredAtUtc -LogonType '4' -SkipTaskDefinition
+        if (-not $UseNativeStudentProcess) {
+            $taskIdentityEvidence = Get-OpenPathTaskIdentityEvidence -TaskName $probeTask -Principal $StudentSid -RunLevel 'Limited' -StudentSid $StudentSid -UserName $UserName -StartTime $since -RegisteredAtUtc $taskRegisteredAtUtc -LogonType '4' -SkipTaskDefinition
+        }
 
         $pollDeadline = (Get-Date).AddSeconds($TimeoutSeconds)
         $binaryLeaf = [System.IO.Path]::GetFileName($ExecutablePath)
@@ -3072,7 +3166,7 @@ function Invoke-StudentExecutableTaskProbe {
                 section  = 'student'
                 status   = 'pass'
                 detail   = "Real execution probe: $binaryLeaf denied for student account (AppLocker event $blockEventId confirmed)."
-                evidence = [pscustomobject][ordered]@{ appLocker8002Observed = $false; appLocker8004Observed = ($blockEventId -eq 8004); appLocker8020Observed = $false; appLocker8022Observed = ($blockEventId -eq 8022); blockEventId = $blockEventId; correlatedEvent = $matchedEventEvidence; samBoundary = $samBoundaryEvidence; taskRegisteredAtUtc = $taskRegisteredAtUtc; enforcementObservation = $enforcementObservation }
+                evidence = [pscustomobject][ordered]@{ appLocker8002Observed = $false; appLocker8004Observed = ($blockEventId -eq 8004); appLocker8020Observed = $false; appLocker8022Observed = ($blockEventId -eq 8022); blockEventId = $blockEventId; correlatedEvent = $matchedEventEvidence; samBoundary = $samBoundaryEvidence; taskIdentity = $taskIdentityEvidence; taskRegisteredAtUtc = $taskRegisteredAtUtc; enforcementObservation = $enforcementObservation }
             }
         }
         else {
@@ -3161,7 +3255,11 @@ function Invoke-StudentExecutableTaskProbe {
         }
     }
     finally {
-        if ($useScheduledTaskCmdlets) {
+        if ($UseNativeStudentProcess -and $null -ne $nativeState) {
+            $nativeCleanup = Close-OpenPathNativeStudentProcess -State $nativeState
+            if ($nativeCleanup.status -ne 'observed') { throw 'native-profile-unload-failed' }
+        }
+        elseif ($useScheduledTaskCmdlets) {
             $registeredProbe = Get-ScheduledTask -TaskName $probeTask -ErrorAction SilentlyContinue
             if ($registeredProbe -and [string]$registeredProbe.State -eq 'Running') {
                 Stop-ScheduledTask -TaskName $probeTask -ErrorAction SilentlyContinue
