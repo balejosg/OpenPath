@@ -902,7 +902,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(helper, /function Copy-OpenPathDirectRunnerNativeArtifact/);
     assert.match(helper, /NativeHost\.ArtifactCatalog\.ps1/);
     assert.match(helper, /Get-OpenPathNativeHostArtifactNames/);
-    assert.match(helper, /Register-OpenPathTask/);
+    assert.match(helper, /Register-OpenPathTask -OpenPathRoot \$InstalledOpenPathRoot/);
 
     for (const scriptText of [captiveScript, weduScript]) {
       assert.match(scriptText, /windows-direct-runtime-staging\.ps1/);

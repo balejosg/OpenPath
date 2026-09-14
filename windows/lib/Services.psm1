@@ -53,7 +53,8 @@ function Register-OpenPathTask {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [int]$UpdateIntervalMinutes = 15,
-        [int]$WatchdogIntervalMinutes = 1
+        [int]$WatchdogIntervalMinutes = 1,
+        [string]$OpenPathRoot = 'C:\OpenPath'
     )
 
     if (-not $PSCmdlet.ShouldProcess("Task Scheduler", "Register OpenPath scheduled tasks")) {
@@ -62,7 +63,6 @@ function Register-OpenPathTask {
 
     Write-OpenPathLog "Registering scheduled tasks..."
 
-    $openPathRoot = "C:\OpenPath"
     $updatePrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
     $updateSettings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
@@ -72,7 +72,7 @@ function Register-OpenPathTask {
         -RestartInterval (New-TimeSpan -Minutes 1)
 
     $updateDefinition = New-OpenPathUpdateTaskDefinition `
-        -OpenPathRoot $openPathRoot `
+        -OpenPathRoot $OpenPathRoot `
         -UpdateIntervalMinutes $UpdateIntervalMinutes `
         -Principal $updatePrincipal `
         -DefaultSettings $updateSettings
@@ -81,14 +81,14 @@ function Register-OpenPathTask {
     Write-OpenPathLog "Registered: $($updateDefinition.TaskName) (every $UpdateIntervalMinutes min)"
 
     $runtimeDependencyDefinition = New-OpenPathRuntimeDependencyApplyTaskDefinition `
-        -OpenPathRoot $openPathRoot `
+        -OpenPathRoot $OpenPathRoot `
         -Principal $updatePrincipal
     Register-OpenPathTaskDefinition -Definition $runtimeDependencyDefinition
     Grant-OpenPathTaskRunAccessToUsers -TaskName $runtimeDependencyDefinition.TaskName | Out-Null
     Write-OpenPathLog "Registered: $($runtimeDependencyDefinition.TaskName) (on demand runtime dependencies)"
 
     $captivePortalRecoverySpec = Get-OpenPathScheduledTaskSpec -TaskType CaptivePortalRecovery
-    $captivePortalRecoveryAction = New-OpenPathTaskAction -Target (Join-OpenPathTaskScriptPath -OpenPathRoot $openPathRoot -RelativePath $captivePortalRecoverySpec.Script)
+    $captivePortalRecoveryAction = New-OpenPathTaskAction -Target (Join-OpenPathTaskScriptPath -OpenPathRoot $OpenPathRoot -RelativePath $captivePortalRecoverySpec.Script)
     $captivePortalRecoveryTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(10)
     $captivePortalRecoverySettings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
@@ -108,7 +108,7 @@ function Register-OpenPathTask {
     Write-OpenPathLog "Registered: $($captivePortalRecoveryDefinition.TaskName) (on demand captive portal recovery)"
 
     $watchdogDefinition = New-OpenPathWatchdogTaskDefinition `
-        -OpenPathRoot $openPathRoot `
+        -OpenPathRoot $OpenPathRoot `
         -WatchdogIntervalMinutes $WatchdogIntervalMinutes `
         -Principal $updatePrincipal `
         -DefaultSettings $updateSettings
@@ -116,20 +116,20 @@ function Register-OpenPathTask {
     Write-OpenPathLog "Registered: $($watchdogDefinition.TaskName) (every $WatchdogIntervalMinutes min)"
 
     $startupDefinition = New-OpenPathStartupTaskDefinition `
-        -OpenPathRoot $openPathRoot `
+        -OpenPathRoot $OpenPathRoot `
         -Principal $updatePrincipal `
         -DefaultSettings $updateSettings
     Register-OpenPathTaskDefinition -Definition $startupDefinition
     Write-OpenPathLog "Registered: $($startupDefinition.TaskName) (at boot)"
 
     $sseDefinition = New-OpenPathSseTaskDefinition `
-        -OpenPathRoot $openPathRoot `
+        -OpenPathRoot $OpenPathRoot `
         -Principal $updatePrincipal
     Register-OpenPathTaskDefinition -Definition $sseDefinition
     Write-OpenPathLog "Registered: $($sseDefinition.TaskName) (persistent SSE listener)"
 
     $agentUpdateDefinition = New-OpenPathAgentUpdateTaskDefinition `
-        -OpenPathRoot $openPathRoot `
+        -OpenPathRoot $OpenPathRoot `
         -Principal $updatePrincipal
     Register-OpenPathTaskDefinition -Definition $agentUpdateDefinition
     Write-OpenPathLog "Registered: $($agentUpdateDefinition.TaskName) (daily silent software update)"

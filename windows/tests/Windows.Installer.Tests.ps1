@@ -2638,7 +2638,7 @@ exit `$installerExitCode
             $runtimeHelper = Get-Content $runtimeHelperPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
-                'Register-OpenPathTask -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1',
+                'Register-OpenPathTask -OpenPathRoot $OpenPathRoot -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1',
                 'Invoke-OpenPathInstallerFirstUpdate',
                 'Start-OpenPathInstallerRealtimeUpdates'
             )
@@ -2649,8 +2649,8 @@ exit `$installerExitCode
                 'Start-OpenPathTask -TaskType SSE'
             )
 
-            $content | Should -Match '(?s)Invoke-OpenPathInstallerEnrollment.*Invoke-OpenPathInstallerFirstUpdate.*Register-OpenPathTask -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1.*Start-OpenPathInstallerRealtimeUpdates'
-            $content | Should -Not -Match '(?s)Register-OpenPathTask -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1.*Start-OpenPathTask -TaskType SSE.*Invoke-OpenPathInstallerEnrollment'
+            $content | Should -Match '(?s)Invoke-OpenPathInstallerEnrollment.*Invoke-OpenPathInstallerFirstUpdate.*Register-OpenPathTask -OpenPathRoot \$OpenPathRoot -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1.*Start-OpenPathInstallerRealtimeUpdates'
+            $content | Should -Not -Match '(?s)Register-OpenPathTask -OpenPathRoot \$OpenPathRoot -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1.*Start-OpenPathTask -TaskType SSE.*Invoke-OpenPathInstallerEnrollment'
         }
     }
 

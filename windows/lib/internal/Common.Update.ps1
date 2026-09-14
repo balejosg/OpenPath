@@ -314,7 +314,7 @@ function Invoke-OpenPathAgentSelfUpdate {
         }
 
         if (Get-Command -Name 'Register-OpenPathTask' -ErrorAction SilentlyContinue) {
-            Register-OpenPathTask -UpdateIntervalMinutes $updateInterval -WatchdogIntervalMinutes $watchdogInterval | Out-Null
+            Register-OpenPathTask -OpenPathRoot $script:OpenPathRoot -UpdateIntervalMinutes $updateInterval -WatchdogIntervalMinutes $watchdogInterval | Out-Null
         }
         if (Get-Command -Name 'Enable-OpenPathTask' -ErrorAction SilentlyContinue) {
             Enable-OpenPathTask | Out-Null

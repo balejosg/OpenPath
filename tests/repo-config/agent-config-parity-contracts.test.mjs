@@ -46,7 +46,7 @@ describe('agent-config-parity: documented defaults match source values', () => {
     const installer = readText('windows/Install-OpenPath.ps1');
     assert.ok(
       installer.includes(
-        'Register-OpenPathTask -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1'
+        'Register-OpenPathTask -OpenPathRoot $OpenPathRoot -UpdateIntervalMinutes 5 -WatchdogIntervalMinutes 1'
       ),
       'windows/Install-OpenPath.ps1 must call Register-OpenPathTask with -UpdateIntervalMinutes 5'
     );

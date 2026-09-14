@@ -70,5 +70,5 @@ function Stage-OpenPathDirectRunnerRuntime {
     }
 
     Import-Module (Join-Path $RepoRoot 'windows\lib\Services.psm1') -Force
-    Register-OpenPathTask | Out-Null
+    Register-OpenPathTask -OpenPathRoot $InstalledOpenPathRoot | Out-Null
 }

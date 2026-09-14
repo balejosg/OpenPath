@@ -105,6 +105,14 @@ Describe "Services Module" {
             { Register-OpenPathTask -UpdateIntervalMinutes 15 -WatchdogIntervalMinutes 2 -WhatIf } | Should -Not -Throw
         }
 
+        It "Accepts an explicit installation root for scheduled task actions" {
+            $servicesPath = Join-Path $PSScriptRoot ".." "lib" "Services.psm1"
+            $content = Get-Content $servicesPath -Raw
+
+            $content | Should -Match '\[string\]\$OpenPathRoot\s*=\s*''C:\\OpenPath'''
+            ([regex]::Matches($content, '-OpenPathRoot \$OpenPathRoot')).Count | Should -Be 7
+        }
+
         It "Includes daily silent agent update task" {
             $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "ScheduledTaskCatalog.ps1"
             $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Services.TaskBuilders.ps1"
@@ -199,7 +207,7 @@ Describe "Services Module" {
             $modulePath = Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Update.ps1"
             $content = Get-Content $modulePath -Raw
 
-            $content | Should -Match '(?s)Register-OpenPathTask.*?Enable-OpenPathTask.*?Register-OpenPathFirefoxNativeHost.*?Restore-OpenPathProtectedMode -Config \$config.*?Start-OpenPathTask -TaskType SSE'
+            $content | Should -Match '(?s)Register-OpenPathTask -OpenPathRoot \$script:OpenPathRoot.*?Enable-OpenPathTask.*?Register-OpenPathFirefoxNativeHost.*?Restore-OpenPathProtectedMode -Config \$config.*?Start-OpenPathTask -TaskType SSE'
         }
     }
 
