@@ -1171,7 +1171,11 @@ test('release workflow isolates a non-gating serialized PolicyConverter contrast
   assert.match(workflow, /executableSha256/);
   assert.match(workflow, /policy-converter-contrast:[\s\S]*needs: windows-offline-template/);
   assert.match(workflow, /if:.*always\(\).*contrast-artifact-id != ''/);
-  assert.match(workflow, /matrix:[\s\S]*mode: \[Disabled, Enabled\]/);
+  assert.match(workflow, /matrix:[\s\S]*mode: \[Untouched, Started\]/);
+  assert.match(
+    workflow,
+    /-EvidencePath \$evidencePath `[\r\n]+\s+-PolicyConverterMode 'Untouched'/
+  );
   assert.match(workflow, /fail-fast: false[\s\S]*max-parallel: 1/);
   assert.match(workflow, /continue-on-error: true/);
   assert.match(workflow, /run-windows-policy-converter-contrast\.ps1/);

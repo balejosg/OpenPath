@@ -28,7 +28,10 @@ param(
 
     [string]$ProbePayloadPath = '',
 
-    [string]$TargetUserName = ''
+    [string]$TargetUserName = '',
+
+    [ValidateSet('Untouched','Started')]
+    [string]$PolicyConverterMode = 'Untouched'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -856,10 +859,10 @@ catch {
     $resolvedEdgeFailure = $null
     $resolveEdgeFailure = Get-Command -Name Resolve-OpenPathDisposableEdgeBoundaryFailure -ErrorAction SilentlyContinue
     if ($script:CurrentStage -eq 'run-installed-boundary-probes' -and $resolveEdgeFailure) {
-        try { $resolvedEdgeFailure = & $resolveEdgeFailure -Exception $boundaryException -Target $disposableTarget } catch {}
+        try { $resolvedEdgeFailure = & $resolveEdgeFailure -Exception $boundaryException -Target $disposableTarget -PolicyConverterMode $PolicyConverterMode } catch {}
     }
     if ($resolvedEdgeFailure) {
-        $edgeBoundaryEvidence = [ordered]@{ initial = $resolvedEdgeFailure.initial; repeat = $resolvedEdgeFailure.repeat; deniedPeControl = $resolvedEdgeFailure.deniedPeControl }
+        $edgeBoundaryEvidence = [ordered]@{ initial = $resolvedEdgeFailure.initial; repeat = $resolvedEdgeFailure.repeat; deniedPeControl = $resolvedEdgeFailure.deniedPeControl; policyConverter = $resolvedEdgeFailure.policyConverter }
         $edgeFailureContract = $resolvedEdgeFailure.contract
     }
     $getBoundaryFailureEvidence = Get-Command -Name Get-OpenPathDisposableBoundaryFailureEvidence -ErrorAction SilentlyContinue

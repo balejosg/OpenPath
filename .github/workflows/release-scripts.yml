@@ -204,7 +204,8 @@ jobs:
             -ExecutablePath $personalizedPath `
             -ExpectedClassroomId 'release-e2e-classroom' `
             -ExpectedApiUrl 'https://localhost:18443' `
-            -EvidencePath $evidencePath
+            -EvidencePath $evidencePath `
+            -PolicyConverterMode 'Untouched'
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
@@ -238,7 +239,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        mode: [Disabled, Enabled]
+        mode: [Untouched, Started]
 
     steps:
       - name: Checkout code

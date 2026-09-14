@@ -295,11 +295,51 @@ function Invoke-OpenPathDisposableEdgeBoundaryDiagnostic {
     return & $diagnostic @PSBoundParameters
 }
 
+function Invoke-OpenPathDisposablePolicyConverterStart {
+    $result = [ordered]@{ status='inconclusive'; code=$null; action='none'; startedAtUtc=$null; completedAtUtc=$null; restored=$null; restoreRequired=$false; startRunObserved=$false; preAction=$null; postAction=$null }
+    $task = Get-ScheduledTask -TaskName 'PolicyConverter' -TaskPath '\Microsoft\Windows\AppID\' -ErrorAction Stop
+    $info = Get-ScheduledTaskInfo -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop
+    $beforeEnabled = if ($task.Settings.PSObject.Properties['Enabled']) { $task.Settings.Enabled } else { $null }
+    $beforeLastRun = $info.LastRunTime
+    $beforeLastRunUtc = if ($null -ne $beforeLastRun) { $beforeLastRun.ToUniversalTime().ToString('o') } else { $null }
+    $result.preAction = [ordered]@{ state=[string]$task.State; enabled=$beforeEnabled; lastRunTimeUtc=$beforeLastRunUtc; lastTaskResult=$info.LastTaskResult }
+    if ($null -eq $beforeEnabled -or $null -eq $task.State -or $null -eq $info.LastRunTime -or $null -eq $info.LastTaskResult) { $result.code='task-snapshot-unknown'; return $result }
+    if ([string]$task.State -eq 'Running') { $result.code='task-already-running'; return $result }
+    $changedEnabled = $false
+    try {
+        if (-not [bool]$beforeEnabled) {
+            Enable-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop | Out-Null
+            $changedEnabled = $true
+        }
+        $result.action='start'
+        $result.startedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        Start-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop | Out-Null
+        $deadline = (Get-Date).AddSeconds(20)
+        do {
+            Start-Sleep -Milliseconds 250
+            $currentTask = Get-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop
+            $currentInfo = Get-ScheduledTaskInfo -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop
+            $newRun = $null -ne $currentInfo.LastRunTime -and ($null -eq $beforeLastRun -or $currentInfo.LastRunTime -gt $beforeLastRun)
+            if ($newRun -and [string]$currentTask.State -ne 'Running' -and $currentInfo.LastTaskResult -eq 0) {
+                $result.status='observed'; $result.code='task-run-observed'; $result.startRunObserved=$true; $result.postAction=[ordered]@{ state=[string]$currentTask.State; enabled=$currentTask.Settings.Enabled; lastRunTimeUtc=$currentInfo.LastRunTime.ToUniversalTime().ToString('o'); lastTaskResult=$currentInfo.LastTaskResult }; $result.completedAtUtc=(Get-Date).ToUniversalTime().ToString('o'); break
+            }
+        } while ((Get-Date) -lt $deadline)
+        if ($result.status -ne 'observed') { $result.code='task-run-not-confirmed' }
+    } catch { $result.code='task-start-query-failed' }
+    $result.restoreRequired = $changedEnabled
+    return [pscustomobject]$result
+}
+
+function Restore-OpenPathDisposablePolicyConverterTask {
+    try { Disable-ScheduledTask -TaskName 'PolicyConverter' -TaskPath '\Microsoft\Windows\AppID\' -ErrorAction Stop | Out-Null; return $true } catch { return $false }
+}
+
 function Resolve-OpenPathDisposableEdgeBoundaryFailure {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][System.Exception]$Exception,
-        [object]$Target = $null
+        [object]$Target = $null,
+        [ValidateSet('Untouched','Started')][string]$PolicyConverterMode = 'Untouched'
     )
 
     $initial = $null
@@ -319,35 +359,34 @@ function Resolve-OpenPathDisposableEdgeBoundaryFailure {
     # already allowlisted by BrowserBoundaryProbe.
     $initialSnapshot = $initial | ConvertTo-Json -Depth 14 | ConvertFrom-Json
     $repeat = $null
-    if ($Target -and $Target.UserName -and $Target.Password) {
-        try {
-            $repeat = Invoke-OpenPathDisposableEdgeBoundaryDiagnostic `
-                -UserName $Target.UserName `
-                -Password $Target.Password `
-                -ExecutablePath $initialSnapshot.executablePath `
-                -StudentSid $initialSnapshot.studentSid
-        }
-        catch {
-            $repeat = [pscustomobject][ordered]@{ status = 'unavailable'; code = 'edge-boundary-diagnostic-failed' }
-        }
-    }
+    $policyConverter = [ordered]@{ status='not-started'; code='untouched'; action='none'; restored=$null; restoreRequired=$false; startRunObserved=$false }
     try {
-        $deniedPeControl = Invoke-OpenPathDisposableDeniedPeControl -Target $Target
-    }
-    catch {
-        $deniedPeControl = [pscustomobject]@{
-            status = 'unavailable'
-            code = 'benign-pe-control-failed'
-            outcome = 'inconclusive'
-            policyReapplied = $false
+        if ($Target -and $Target.UserName -and $Target.Password) {
+            if ($PolicyConverterMode -eq 'Started') {
+                try { $policyConverter = Invoke-OpenPathDisposablePolicyConverterStart } catch { $policyConverter = [ordered]@{ status='inconclusive'; code='task-start-query-failed'; action='none'; restored=$false; restoreRequired=$false; startRunObserved=$false } }
+            }
+            if ($PolicyConverterMode -eq 'Started' -and $policyConverter.status -ne 'observed') {
+                return [pscustomobject][ordered]@{ initial = $initialSnapshot; repeat = $null; deniedPeControl = $null; contract = $null; policyConverter = $policyConverter }
+            }
+            try {
+                $repeat = Invoke-OpenPathDisposableEdgeBoundaryDiagnostic `
+                    -UserName $Target.UserName `
+                    -Password $Target.Password `
+                    -ExecutablePath $initialSnapshot.executablePath `
+                    -StudentSid $initialSnapshot.studentSid
+            }
+            catch {
+                $repeat = [pscustomobject][ordered]@{ status = 'unavailable'; code = 'edge-boundary-diagnostic-failed' }
+            }
         }
+        try { $deniedPeControl = Invoke-OpenPathDisposableDeniedPeControl -Target $Target }
+        catch { $deniedPeControl = [pscustomobject]@{ status='unavailable'; code='benign-pe-control-failed'; outcome='inconclusive'; policyReapplied=$false } }
+        try { $contract = Get-OpenPathDisposableFlatEdgeBoundaryFailureContract -Evidence $initialSnapshot -Diagnostic $repeat } catch {}
+        return [pscustomobject][ordered]@{ initial = $initialSnapshot; repeat = $repeat; deniedPeControl = $deniedPeControl; contract = $contract; policyConverter = $policyConverter }
     }
-    $contract = $null
-    try {
-        $contract = Get-OpenPathDisposableFlatEdgeBoundaryFailureContract -Evidence $initialSnapshot -Diagnostic $repeat
+    finally {
+        if ($policyConverter.restoreRequired) { $policyConverter.restored = Restore-OpenPathDisposablePolicyConverterTask }
     }
-    catch {}
-    return [pscustomobject][ordered]@{ initial = $initialSnapshot; repeat = $repeat; deniedPeControl = $deniedPeControl; contract = $contract }
 }
 
 function Write-OpenPathOfflineInstallerEvidence {

@@ -3,7 +3,8 @@ BeforeAll {
         'Get-LocalUser', 'Enable-LocalUser', 'Remove-LocalUser',
         'Get-LocalGroup', 'Get-LocalGroupMember', 'Add-LocalGroupMember',
         'Get-CimInstance', 'Remove-CimInstance',
-        'Invoke-StudentExecutableTaskProbe'
+        'Invoke-StudentExecutableTaskProbe', 'Enable-ScheduledTask', 'Disable-ScheduledTask',
+        'Start-ScheduledTask', 'Get-ScheduledTask', 'Get-ScheduledTaskInfo'
     )) {
         if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
             Set-Item -Path "Function:global:$commandName" -Value { param() }
@@ -85,6 +86,92 @@ Describe 'Canonical offline installer disposable target' {
         $resolved.initial.failureCode | Should -Be 'exact-student-process-observed-without-block-event'
         $resolved.deniedPeControl.outcome | Should -Be 'blocked'
         $resolved.deniedPeControl.policyReapplied | Should -BeFalse
+    }
+
+    It 'keeps Untouched mode free of task intervention before the repeat diagnostic' {
+        $primary = [pscustomobject]@{ probeName='Canonical Edge deny'; failureCode='exact-student-process-observed-without-block-event'; executablePath='C:\Edge\msedge.exe'; studentSid=$script:testSid }
+        $exception = [System.InvalidOperationException]::new('boundary-edge-execution-failed')
+        $exception.Data['OpenPathEdgeBoundaryEvidence'] = $primary
+        $script:contrastTrace = [System.Collections.Generic.List[string]]::new()
+        Mock Invoke-OpenPathDisposableEdgeBoundaryDiagnostic { $script:contrastTrace.Add('diagnostic'); [pscustomobject]@{ attempts=@() } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { $script:contrastTrace.Add('pe'); [pscustomobject]@{ status='observed'; outcome='blocked' } } -ModuleName DisposableWindowsTarget
+        Mock Enable-ScheduledTask { $script:contrastTrace.Add('enable') } -ModuleName DisposableWindowsTarget
+        Mock Start-ScheduledTask { $script:contrastTrace.Add('start') } -ModuleName DisposableWindowsTarget
+        Mock Disable-ScheduledTask { $script:contrastTrace.Add('restore') } -ModuleName DisposableWindowsTarget
+
+        $resolved = Resolve-OpenPathDisposableEdgeBoundaryFailure -Exception $exception -Target ([pscustomobject]@{ UserName='op-e2e-test'; Password='secret'; Sid=$script:testSid }) -PolicyConverterMode Untouched
+
+        $resolved.policyConverter.action | Should -Be 'none'
+        $script:contrastTrace | Should -Be @('diagnostic','pe')
+        Should -Invoke Start-ScheduledTask -ModuleName DisposableWindowsTarget -Times 0 -Exactly
+    }
+
+    It 'starts PolicyConverter exactly once after the initial Edge failure and before diagnostics' {
+        $primary = [pscustomobject]@{ probeName='Canonical Edge deny'; failureCode='exact-student-process-observed-without-block-event'; executablePath='C:\Edge\msedge.exe'; studentSid=$script:testSid }
+        $exception = [System.InvalidOperationException]::new('boundary-edge-execution-failed')
+        $exception.Data['OpenPathEdgeBoundaryEvidence'] = $primary
+        $script:contrastTrace = [System.Collections.Generic.List[string]]::new()
+        $script:taskInfoCalls = 0
+        Mock Get-ScheduledTask { [pscustomobject]@{ TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\'; State='Ready'; Settings=[pscustomobject]@{ Enabled=$false } } } -ModuleName DisposableWindowsTarget
+        Mock Get-ScheduledTaskInfo { $script:taskInfoCalls++; if($script:taskInfoCalls -eq 1){[pscustomobject]@{LastRunTime=[datetime]'2026-09-14T10:00:00Z';LastTaskResult=0}}else{[pscustomobject]@{LastRunTime=[datetime]'2026-09-14T10:00:01Z';LastTaskResult=0}} } -ModuleName DisposableWindowsTarget
+        Mock Enable-ScheduledTask { $script:contrastTrace.Add('enable') } -ModuleName DisposableWindowsTarget
+        Mock Start-ScheduledTask { $script:contrastTrace.Add('start') } -ModuleName DisposableWindowsTarget
+        Mock Disable-ScheduledTask { $script:contrastTrace.Add('restore') } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableEdgeBoundaryDiagnostic { $script:contrastTrace.Add('diagnostic'); [pscustomobject]@{ attempts=@() } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { $script:contrastTrace.Add('pe'); [pscustomobject]@{ status='observed'; outcome='blocked' } } -ModuleName DisposableWindowsTarget
+
+        $resolved = Resolve-OpenPathDisposableEdgeBoundaryFailure -Exception $exception -Target ([pscustomobject]@{ UserName='op-e2e-test'; Password='secret'; Sid=$script:testSid }) -PolicyConverterMode Started
+
+        $resolved.policyConverter.action | Should -Be 'start'
+        $resolved.policyConverter.startRunObserved | Should -BeTrue
+        $script:contrastTrace[0..2] | Should -Be @('enable','start','diagnostic')
+        Should -Invoke Start-ScheduledTask -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        Should -Invoke Disable-ScheduledTask -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        $resolved.policyConverter.preAction.lastRunTimeUtc | Should -Match 'Z$'
+        $resolved.policyConverter.postAction.lastRunTimeUtc | Should -Match 'Z$'
+        $resolved.policyConverter.postAction.lastTaskResult | Should -Be 0
+    }
+
+    It 'does not start or diagnose when PolicyConverter is already running' {
+        $exception = [System.InvalidOperationException]::new('boundary-edge-execution-failed')
+        $exception.Data['OpenPathEdgeBoundaryEvidence'] = [pscustomobject]@{ probeName='Canonical Edge deny' }
+        Mock Get-ScheduledTask { [pscustomobject]@{ State='Running'; Settings=[pscustomobject]@{ Enabled=$false }; TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\' } } -ModuleName DisposableWindowsTarget
+        Mock Get-ScheduledTaskInfo { [pscustomobject]@{ LastRunTime=[datetime]'2026-09-14T10:00:00Z'; LastTaskResult=0 } } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableEdgeBoundaryDiagnostic {} -ModuleName DisposableWindowsTarget
+        $result = Resolve-OpenPathDisposableEdgeBoundaryFailure -Exception $exception -Target ([pscustomobject]@{UserName='u';Password='p'}) -PolicyConverterMode Started
+        $result.policyConverter.code | Should -Be 'task-already-running'
+        $result.repeat | Should -BeNullOrEmpty
+    }
+
+    It 'marks an unconfirmed run inconclusive and restores without waiting twenty seconds' {
+        $exception = [System.InvalidOperationException]::new('boundary-edge-execution-failed')
+        $exception.Data['OpenPathEdgeBoundaryEvidence'] = [pscustomobject]@{ probeName='Canonical Edge deny' }
+        $script:clockCalls = 0
+        Mock Get-Date { $script:clockCalls++; if ($script:clockCalls -ge 3) { [datetime]'2026-09-14T10:00:21Z' } else { [datetime]'2026-09-14T10:00:00Z' } } -ModuleName DisposableWindowsTarget
+        Mock Get-ScheduledTask { [pscustomobject]@{ State='Ready'; Settings=[pscustomobject]@{ Enabled=$false }; TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\' } } -ModuleName DisposableWindowsTarget
+        Mock Get-ScheduledTaskInfo { [pscustomobject]@{ LastRunTime=[datetime]'2026-09-14T10:00:00Z'; LastTaskResult=0 } } -ModuleName DisposableWindowsTarget
+        Mock Enable-ScheduledTask {} -ModuleName DisposableWindowsTarget
+        Mock Start-ScheduledTask {} -ModuleName DisposableWindowsTarget
+        Mock Disable-ScheduledTask {} -ModuleName DisposableWindowsTarget
+        $result = Resolve-OpenPathDisposableEdgeBoundaryFailure -Exception $exception -Target ([pscustomobject]@{UserName='u';Password='p'}) -PolicyConverterMode Started
+        $result.policyConverter.code | Should -Be 'task-run-not-confirmed'
+        Should -Invoke Start-ScheduledTask -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        Should -Invoke Disable-ScheduledTask -ModuleName DisposableWindowsTarget -Times 1 -Exactly
+        $result.repeat | Should -BeNullOrEmpty
+    }
+
+    It 'restores after both repeat diagnostics fail' {
+        $exception = [System.InvalidOperationException]::new('boundary-edge-execution-failed')
+        $exception.Data['OpenPathEdgeBoundaryEvidence'] = [pscustomobject]@{ probeName='Canonical Edge deny' }
+        Mock Get-ScheduledTask { [pscustomobject]@{ State='Ready'; Settings=[pscustomobject]@{ Enabled=$false }; TaskName='PolicyConverter'; TaskPath='\Microsoft\Windows\AppID\' } } -ModuleName DisposableWindowsTarget
+        Mock Get-ScheduledTaskInfo { if($script:taskInfoCalls++ -eq 0){[pscustomobject]@{LastRunTime=[datetime]'2026-09-14T10:00:00Z';LastTaskResult=0}}else{[pscustomobject]@{LastRunTime=[datetime]'2026-09-14T10:00:01Z';LastTaskResult=0}} } -ModuleName DisposableWindowsTarget
+        Mock Enable-ScheduledTask {} -ModuleName DisposableWindowsTarget; Mock Start-ScheduledTask {} -ModuleName DisposableWindowsTarget; Mock Disable-ScheduledTask {} -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableEdgeBoundaryDiagnostic { throw 'diagnostic-failed' } -ModuleName DisposableWindowsTarget
+        Mock Invoke-OpenPathDisposableDeniedPeControl { throw 'pe-failed' } -ModuleName DisposableWindowsTarget
+        $script:taskInfoCalls=0
+        $result = Resolve-OpenPathDisposableEdgeBoundaryFailure -Exception $exception -Target ([pscustomobject]@{UserName='u';Password='p'}) -PolicyConverterMode Started
+        $result.repeat.status | Should -Be 'unavailable'; $result.deniedPeControl.status | Should -Be 'unavailable'
+        Should -Invoke Disable-ScheduledTask -ModuleName DisposableWindowsTarget -Times 1 -Exactly
     }
 
     It 'runs one direct Edge probe and one PE control after an actual native-observed 8001' {
