@@ -1170,15 +1170,15 @@ test('required Windows CI runs Pester in an untracked child host without success
       ) &&
       windowsHostedJobBlock.includes('-TimeoutSeconds 360') &&
       windowsHostedJobBlock.includes('-ShardIndex ${{ matrix.shard }}') &&
-      windowsHostedJobBlock.includes('-ShardCount 4'),
+      windowsHostedJobBlock.includes('-ShardCount 5'),
     'ci.yml should run deterministic isolated Pester shards in hosted mode with distinct result paths'
   );
   assert.ok(
-    windowsJobBlock.includes('shard: [1, 2, 3, 4]') &&
-      windowsHostedJobBlock.includes('shard: [1, 2, 3, 4]') &&
+    windowsJobBlock.includes('shard: [1, 2, 3, 4, 5]') &&
+      windowsHostedJobBlock.includes('shard: [1, 2, 3, 4, 5]') &&
       windowsJobBlock.includes('-ShardIndex ${{ matrix.shard }}') &&
-      windowsJobBlock.includes('-ShardCount 4'),
-    'both required Windows gates should cover the same four deterministic shards'
+      windowsJobBlock.includes('-ShardCount 5'),
+    'both required Windows gates should cover the same five deterministic shards'
   );
   assert.ok(
     windowsHostedJobBlock.includes(

@@ -199,7 +199,7 @@ jobs:
   # Job 2: Windows Agent Tests
   # ============================================
   test-windows:
-    name: Windows Agent Tests (Pester, shard ${{ matrix.shard }}/4)
+    name: Windows Agent Tests (Pester, shard ${{ matrix.shard }}/5)
     runs-on: [self-hosted, Windows, X64, proxmox, openpath]
     timeout-minutes: 25
     needs: detect-relevant-changes
@@ -209,7 +209,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5]
 
     steps:
       - name: Checkout code
@@ -231,7 +231,7 @@ jobs:
             -ResultsPath windows-test-results-${{ matrix.shard }}.xml `
             -TimeoutSeconds 840 `
             -ShardIndex ${{ matrix.shard }} `
-            -ShardCount 4
+            -ShardCount 5
 
       - name: Record Windows lane outcome
         id: job-status
@@ -254,7 +254,7 @@ jobs:
   # This runs the same isolated Pester suite on GitHub-hosted Windows capacity
   # without replacing the pinned self-hosted target-platform lane.
   test-windows-hosted:
-    name: Windows Agent Tests (Pester, hosted, shard ${{ matrix.shard }}/4)
+    name: Windows Agent Tests (Pester, hosted, shard ${{ matrix.shard }}/5)
     runs-on: windows-2025
     timeout-minutes: 8
     needs: detect-relevant-changes
@@ -264,7 +264,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5]
 
     steps:
       - name: Checkout code
@@ -281,7 +281,7 @@ jobs:
             -ResultsPath windows-hosted-results-${{ matrix.shard }}.xml `
             -TimeoutSeconds 360 `
             -ShardIndex ${{ matrix.shard }} `
-            -ShardCount 4
+            -ShardCount 5
 
       - name: Report hosted Windows context
         if: always()
