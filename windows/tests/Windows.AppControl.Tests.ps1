@@ -1334,6 +1334,9 @@ Describe "AppControl Module" {
 
         BeforeEach {
             Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
+            Mock Get-Command { [pscustomobject]@{ Name = 'Test-AppLockerPolicy' } } `
+                -ModuleName AppControl `
+                -ParameterFilter { $Name -eq 'Test-AppLockerPolicy' }
             $global:opProbeGroupSid = 'S-1-5-21-10-20-30-4242'
             $global:opProbeStudentSid = 'S-1-5-21-10-20-30-1001'
             $global:opProbeProfilePath = Join-Path $TestDrive 'different-student'
@@ -1523,6 +1526,9 @@ Describe "AppControl Module" {
 
         BeforeEach {
             Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
+            Mock Get-Command { [pscustomobject]@{ Name = 'Test-AppLockerPolicy' } } `
+                -ModuleName AppControl `
+                -ParameterFilter { $Name -eq 'Test-AppLockerPolicy' }
             $global:opHealthGroupSid = 'S-1-5-21-10-20-30-4242'
             $global:opHealthStudentSid = 'S-1-5-21-10-20-30-1001'
             $global:opHealthProfilePath = Join-Path $TestDrive 'health-student'
