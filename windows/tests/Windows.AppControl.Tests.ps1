@@ -1337,6 +1337,9 @@ Describe "AppControl Module" {
             Mock Get-Command { [pscustomobject]@{ Name = 'Test-AppLockerPolicy' } } `
                 -ModuleName AppControl `
                 -ParameterFilter { $Name -eq 'Test-AppLockerPolicy' }
+            Mock Get-Command { [pscustomobject]@{ Name = $Name } } `
+                -ModuleName AppControl `
+                -ParameterFilter { $Name -in @('Get-LocalGroup', 'Get-LocalGroupMember', 'Get-CimInstance') }
             $global:opProbeGroupSid = 'S-1-5-21-10-20-30-4242'
             $global:opProbeStudentSid = 'S-1-5-21-10-20-30-1001'
             $global:opProbeProfilePath = Join-Path $TestDrive 'different-student'
@@ -1529,6 +1532,9 @@ Describe "AppControl Module" {
             Mock Get-Command { [pscustomobject]@{ Name = 'Test-AppLockerPolicy' } } `
                 -ModuleName AppControl `
                 -ParameterFilter { $Name -eq 'Test-AppLockerPolicy' }
+            Mock Get-Command { [pscustomobject]@{ Name = $Name } } `
+                -ModuleName AppControl `
+                -ParameterFilter { $Name -in @('Get-LocalGroup', 'Get-LocalGroupMember', 'Get-CimInstance') }
             $global:opHealthGroupSid = 'S-1-5-21-10-20-30-4242'
             $global:opHealthStudentSid = 'S-1-5-21-10-20-30-1001'
             $global:opHealthProfilePath = Join-Path $TestDrive 'health-student'
