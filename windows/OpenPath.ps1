@@ -230,9 +230,13 @@ function Show-OpenPathStatus {
             try {
                 $appControlMode = if ($config -and $config.PSObject.Properties['nonAdminAppControlMode'] -and $config.nonAdminAppControlMode) { [string]$config.nonAdminAppControlMode } else { 'Enforced' }
                 $approvedBrowsers = if ($config -and $config.PSObject.Properties['approvedStudentBrowsers'] -and $config.approvedStudentBrowsers) { @($config.approvedStudentBrowsers) } else { @('Firefox') }
+                $appControlProfile = if ($config -and $config.PSObject.Properties['appControlProfile'] -and $config.appControlProfile) { [string]$config.appControlProfile } else { 'ManagedBrowserCompatibility' }
+                $approvedApplicationCatalog = if ($config -and $config.PSObject.Properties['approvedApplicationCatalog']) { $config.approvedApplicationCatalog } else { $null }
                 $appControlHealth = Get-OpenPathNonAdminAppControlHealth `
                     -Mode $appControlMode `
-                    -ApprovedBrowsers $approvedBrowsers
+                    -ApprovedBrowsers $approvedBrowsers `
+                    -Profile $appControlProfile `
+                    -ApplicationCatalog $approvedApplicationCatalog
                 if (-not $appControlHealth -or -not $appControlHealth.PSObject.Properties['Healthy']) {
                     throw 'structured AppControl health result is invalid'
                 }

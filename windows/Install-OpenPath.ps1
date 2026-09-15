@@ -729,6 +729,8 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
         $enableNonAdminAppControl = [bool](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'enableNonAdminAppControl' -DefaultValue $true)
         $nonAdminAppControlMode = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
         $approvedStudentBrowsers = @($config.approvedStudentBrowsers)
+        $appControlProfile = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'appControlProfile' -DefaultValue 'ManagedBrowserCompatibility')
+        $approvedApplicationCatalog = Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'approvedApplicationCatalog' -DefaultValue $null
         if ($enableNonAdminAppControl) {
             $appControlDiagnosticPath = if ($FailureStatusPath) { "$FailureStatusPath.appcontrol.json" } else { '' }
             $groupSynced = [bool](& $script:OpenPathAppControlCommands.Sync `
@@ -749,6 +751,8 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
                     -OpenPathRoot $OpenPathRoot `
                     -Mode $nonAdminAppControlMode `
                     -ApprovedBrowsers $approvedStudentBrowsers `
+                    -Profile $appControlProfile `
+                    -ApplicationCatalog $approvedApplicationCatalog `
                     -DiagnosticStatusPath $appControlDiagnosticPath `
                     -WhatIf:$WhatIfPreference)
             if ($appControlDiagnosticPath -and (Test-Path -LiteralPath $appControlDiagnosticPath -PathType Leaf)) {
@@ -764,7 +768,9 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
             }
             if (-not (& $script:OpenPathAppControlCommands.Test `
                         -Mode $nonAdminAppControlMode `
-                        -ApprovedBrowsers $approvedStudentBrowsers)) {
+                        -ApprovedBrowsers $approvedStudentBrowsers `
+                        -Profile $appControlProfile `
+                        -ApplicationCatalog $approvedApplicationCatalog)) {
                 throw 'OpenPath AppControl boundary did not validate after installation.'
             }
 
@@ -774,10 +780,17 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
                 if (Test-Path -LiteralPath $configPath) {
                     $committedConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
                     $committedConfig.appControlCommitState = 'committed'
+                    if ($committedConfig.PSObject.Properties['activeAppControlProfile']) {
+                        $committedConfig.activeAppControlProfile = $appControlProfile
+                    }
+                    else {
+                        $committedConfig | Add-Member -MemberType NoteProperty -Name 'activeAppControlProfile' -Value $appControlProfile -Force
+                    }
                     Write-OpenPathAtomicJsonFile -Path $configPath -Data $committedConfig -Depth 10
                 }
             }
             $config.appControlCommitState = 'committed'
+            $config.activeAppControlProfile = $appControlProfile
             if ($script:OpenPathAppControlDiagnostic) {
                 $script:OpenPathAppControlDiagnostic.AppControlCommitState = 'committed'
             }

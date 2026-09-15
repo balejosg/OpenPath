@@ -52,6 +52,12 @@ function New-OpenPathInstallerConfig {
 
         [string[]]$ApprovedStudentBrowsers = @('Firefox'),
 
+        [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
+        [string]$AppControlProfile = 'ManagedBrowserCompatibility',
+
+        [AllowNull()]
+        [object]$ApprovedApplicationCatalog = $null,
+
         [ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]
         [string]$BrowserCleanupMode = 'ReportOnly'
     )
@@ -77,6 +83,9 @@ function New-OpenPathInstallerConfig {
         bridgeFilterAllowlist = @()
         enableNonAdminAppControl = $EnforceManagedBrowserBoundary
         nonAdminAppControlMode = 'Enforced'
+        appControlProfile = $AppControlProfile
+        activeAppControlProfile = 'none'
+        approvedApplicationCatalog = $ApprovedApplicationCatalog
         installState = 'installing'
         appControlCommitState = if ($EnforceManagedBrowserBoundary) { 'pending' } else { 'none' }
         enforceManagedBrowserBoundary = $EnforceManagedBrowserBoundary
@@ -114,4 +123,3 @@ if (-not (Get-Command -Name 'Write-OpenPathAtomicJsonFile' -ErrorAction Silently
         . $commonConfigPath
     }
 }
-

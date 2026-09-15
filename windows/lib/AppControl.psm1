@@ -261,6 +261,67 @@ function Get-OpenPathApprovedBrowserSet {
     return $approvedBrowserSet
 }
 
+function Test-OpenPathApplicationApprovalCatalog {
+    <#
+    .SYNOPSIS
+    Validates the versioned operator-managed application approval catalog.
+    #>
+    [CmdletBinding()]
+    param(
+        [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
+        [string]$Profile = 'ManagedBrowserCompatibility',
+
+        [AllowNull()]
+        [object]$Catalog = $null
+    )
+
+    if ($Profile -eq 'ManagedBrowserCompatibility') {
+        return $true
+    }
+    if (-not $Catalog -or -not $Catalog.PSObject.Properties['schemaVersion'] -or
+        [int]$Catalog.schemaVersion -ne 1 -or -not $Catalog.PSObject.Properties['applications']) {
+        return $false
+    }
+
+    $ids = @{}
+    foreach ($application in @($Catalog.applications)) {
+        if (-not $application -or -not $application.PSObject.Properties['id'] -or
+            [string]::IsNullOrWhiteSpace([string]$application.id) -or $ids.ContainsKey([string]$application.id) -or
+            -not $application.PSObject.Properties['identity'] -or -not $application.identity) {
+            return $false
+        }
+        $ids[[string]$application.id] = $true
+        $identity = $application.identity
+        $type = if ($identity.PSObject.Properties['type']) { [string]$identity.type } else { '' }
+        switch ($type) {
+            'Publisher' {
+                foreach ($property in @('publisherName', 'productName', 'binaryName')) {
+                    if (-not $identity.PSObject.Properties[$property] -or
+                        [string]::IsNullOrWhiteSpace([string]$identity.$property) -or [string]$identity.$property -match '[*?]') {
+                        return $false
+                    }
+                }
+            }
+            'Path' {
+                $path = if ($identity.PSObject.Properties['path']) { [string]$identity.path } else { '' }
+                if ($path -notmatch '^(?i)(?:[A-Z]:\\Program Files(?: \(x86\))?|%PROGRAMFILES%)\\[^*?]+\\[^*?]+$' -or
+                    $path -match '(?i)\\Users\\|AppData|\.\.') {
+                    return $false
+                }
+            }
+            'Hash' {
+                $hash = if ($identity.PSObject.Properties['sha256']) { [string]$identity.sha256 } else { '' }
+                $fileName = if ($identity.PSObject.Properties['fileName']) { [string]$identity.fileName } else { '' }
+                if ($hash -notmatch '^[0-9a-fA-F]{64}$' -or $fileName -notmatch '^[^\\/:*?"<>|]+\.(?i:exe|com|dll|ps1|bat|cmd|msi)$') {
+                    return $false
+                }
+            }
+            default { return $false }
+        }
+    }
+    return $true
+}
+
 function Get-OpenPathEdgeAppxProductNames {
     <#
     .SYNOPSIS
@@ -340,12 +401,21 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
 
         [string[]]$ApprovedBrowsers = @('Firefox'),
 
+        [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
+        [string]$Profile = 'ManagedBrowserCompatibility',
+
+        [AllowNull()]
+        [object]$ApplicationCatalog = $null,
+
         [AllowNull()]
         [object]$BrowserInventory = $null
     )
 
     $openPathRuntimePath = "$($OpenPathRoot.TrimEnd('\'))\*"
     $approvedBrowserSet = Get-OpenPathApprovedBrowserSet -ApprovedBrowsers $ApprovedBrowsers
+    if (-not (Test-OpenPathApplicationApprovalCatalog -Profile $Profile -Catalog $ApplicationCatalog)) {
+        throw 'strict-catalog-invalid'
+    }
 
     $firefoxPaths = @(
         '%PROGRAMFILES%\Mozilla Firefox\firefox.exe',
@@ -441,20 +511,13 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         'C:\Program Files\WindowsApps\MicrosoftWindows.*\*'
     )
 
-    $allowPaths = @(
-        '%WINDIR%\*',
-        $openPathRuntimePath,
-        '%PROGRAMFILES%\*'
-    )
-    $allowPaths += $windowsAppsPaths
-    if ($approvedBrowserSet.Firefox) {
-        $allowPaths += $firefoxPaths
-    }
-    if ($approvedBrowserSet.Edge) {
-        $allowPaths += $edgePaths
-    }
-    if ($approvedBrowserSet.Chrome) {
-        $allowPaths += $chromePaths
+    $allowPaths = @('%WINDIR%\*', $openPathRuntimePath)
+    if ($Profile -eq 'ManagedBrowserCompatibility') {
+        $allowPaths += '%PROGRAMFILES%\*'
+        $allowPaths += $windowsAppsPaths
+        if ($approvedBrowserSet.Firefox) { $allowPaths += $firefoxPaths }
+        if ($approvedBrowserSet.Edge) { $allowPaths += $edgePaths }
+        if ($approvedBrowserSet.Chrome) { $allowPaths += $chromePaths }
     }
     $allowPaths = @($allowPaths | ForEach-Object {
             ([string]$_).Replace('%PROGRAMFILES%', '%PROGRAMFILES%').Replace('%OSDRIVE%\Users\*\AppData\Local', '%OSDRIVE%\Users\*\AppData\Local')
@@ -477,6 +540,14 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
     if ($null -eq $BrowserInventory) {
         $BrowserInventory = Get-OpenPathBrowserInventory
     }
+    if ($Profile -eq 'StrictApplicationAllowlist') {
+        foreach ($identity in @($BrowserInventory.ExecutableIdentities)) {
+            if (-not $identity -or -not $identity.ExecutablePath -or -not $identity.IsApproved) { continue }
+            if ($approvedBrowserSet.ContainsKey([string]$identity.Family)) {
+                $allowPaths += [string]$identity.ExecutablePath
+            }
+        }
+    }
     foreach ($identity in @($BrowserInventory.ExecutableIdentities)) {
         if (-not $identity -or -not $identity.ExecutablePath) { continue }
         $familyApproved = $approvedBrowserSet.ContainsKey([string]$identity.Family)
@@ -495,7 +566,34 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         $unapprovedBrowserDenyAppxProducts = @(Get-OpenPathEdgeAppxProductNames)
     }
 
+    $approvedApplicationPublishers = @()
+    $approvedApplicationHashes = @()
+    if ($Profile -eq 'StrictApplicationAllowlist') {
+        foreach ($application in @($ApplicationCatalog.applications)) {
+            switch ([string]$application.identity.type) {
+                'Path' { $allowPaths += [string]$application.identity.path }
+                'Publisher' {
+                    $approvedApplicationPublishers += [pscustomobject]@{
+                        Id = [string]$application.id
+                        PublisherName = [string]$application.identity.publisherName
+                        ProductName = [string]$application.identity.productName
+                        BinaryName = [string]$application.identity.binaryName
+                    }
+                }
+                'Hash' {
+                    $approvedApplicationHashes += [pscustomobject]@{
+                        Id = [string]$application.id
+                        Sha256 = ([string]$application.identity.sha256).ToUpperInvariant()
+                        FileName = [string]$application.identity.fileName
+                    }
+                }
+            }
+        }
+        $allowPaths = @($allowPaths | Sort-Object -Unique)
+    }
+
     return [PSCustomObject]@{
+        Profile = $Profile
         Mode = $Mode
         EnforcementMode = if ($Mode -eq 'AuditOnly') { 'AuditOnly' } else { 'Enabled' }
         RestrictedSid = Get-OpenPathRestrictedGroupSid
@@ -503,6 +601,8 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         SystemSid = 'S-1-5-18'
         ApprovedBrowsers = @($approvedBrowserSet.Keys | Sort-Object)
         AllowPaths = @($allowPaths)
+        ApprovedApplicationPublishers = @($approvedApplicationPublishers)
+        ApprovedApplicationHashes = @($approvedApplicationHashes)
         UnapprovedBrowserDenyPaths = @($unapprovedBrowserDenyPaths)
         UnapprovedBrowserDenyAppxProducts = @($unapprovedBrowserDenyAppxProducts)
         AlwaysDeniedAppxProducts = @(Get-OpenPathAlwaysDeniedAppxProductNames)
@@ -640,6 +740,24 @@ function New-OpenPathFilePublisherRuleXml {
     return $xml
 }
 
+function New-OpenPathFileHashRuleXml {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Sid,
+        [Parameter(Mandatory = $true)][string]$Action,
+        [Parameter(Mandatory = $true)][string]$Sha256,
+        [Parameter(Mandatory = $true)][string]$FileName
+    )
+
+    $id = [guid]::NewGuid().ToString()
+    $escapedName = ConvertTo-OpenPathXmlAttribute -Value $Name
+    $escapedSid = ConvertTo-OpenPathXmlAttribute -Value $Sid
+    $escapedAction = ConvertTo-OpenPathXmlAttribute -Value $Action
+    $escapedFileName = ConvertTo-OpenPathXmlAttribute -Value $FileName
+    $hashData = '0x' + $Sha256.ToUpperInvariant()
+    return "      <FileHashRule Id=`"$id`" Name=`"$escapedName`" Description=`"Managed by OpenPath`" UserOrGroupSid=`"$escapedSid`" Action=`"$escapedAction`">`n        <Conditions>`n          <FileHashCondition>`n            <FileHash Type=`"SHA256`" Data=`"$hashData`" SourceFileName=`"$escapedFileName`" SourceFileLength=`"0`" />`n          </FileHashCondition>`n        </Conditions>`n      </FileHashRule>"
+}
+
 function New-OpenPathAppLockerPolicyXml {
     <#
     .SYNOPSIS
@@ -684,6 +802,18 @@ function New-OpenPathAppLockerPolicyXml {
             $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType users allow $pathId" -Sid $Spec.RestrictedSid -Action 'Allow' -Path $path -Exceptions $exceptions
         }
 
+        if ($collectionType -eq 'Exe') {
+            foreach ($publisher in @($Spec.ApprovedApplicationPublishers)) {
+                $rules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Exe users allow approved app $($publisher.Id)" `
+                    -Sid $Spec.RestrictedSid -Action 'Allow' -PublisherName $publisher.PublisherName `
+                    -ProductName $publisher.ProductName -BinaryName $publisher.BinaryName
+            }
+            foreach ($hash in @($Spec.ApprovedApplicationHashes)) {
+                $rules += New-OpenPathFileHashRuleXml -Name "$script:OpenPathAppControlRulePrefix Exe users allow approved app $($hash.Id)" `
+                    -Sid $Spec.RestrictedSid -Action 'Allow' -Sha256 $hash.Sha256 -FileName $hash.FileName
+            }
+        }
+
         $ruleCollections += "    <RuleCollection Type=`"$collectionType`" EnforcementMode=`"$($Spec.EnforcementMode)`">`n$($rules -join "`n")`n    </RuleCollection>"
     }
 
@@ -707,7 +837,9 @@ function New-OpenPathAppLockerPolicyXml {
     # (Windows inbox, Store-distributed Edge, Teams, etc.) without opening the door to third-party
     # sideloaded packages.  SID S-1-1-0 (Everyone) is kept so the rule applies to all users
     # including non-admins, matching the original intent.
-    $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow Microsoft signed packaged apps" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION*' -ProductName '*' -BinaryName '*'
+    if (-not $Spec.PSObject.Properties['Profile'] -or $Spec.Profile -eq 'ManagedBrowserCompatibility') {
+        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow Microsoft signed packaged apps" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION*' -ProductName '*' -BinaryName '*'
+    }
     $ruleCollections += "    <RuleCollection Type=`"Appx`" EnforcementMode=`"$($Spec.EnforcementMode)`">`n$($appxRules -join "`n")`n    </RuleCollection>"
 
     return @"
@@ -1241,10 +1373,16 @@ function Test-OpenPathAppLockerBoundaryPolicy {
         [ValidateSet('AuditOnly', 'Enforced')]
         [string]$Mode = 'Enforced',
 
-        [string[]]$ApprovedBrowsers = @('Firefox')
+        [string[]]$ApprovedBrowsers = @('Firefox'),
+
+        [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
+        [string]$Profile = 'ManagedBrowserCompatibility',
+
+        [AllowNull()]
+        [object]$ApplicationCatalog = $null
     )
 
-    $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $script:OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers
+    $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $script:OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog
     $expectedMode = $spec.EnforcementMode
     $exeCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Exe'
     $scriptCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Script'
@@ -1264,7 +1402,7 @@ function Test-OpenPathAppLockerBoundaryPolicy {
         }
     }
 
-    if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid 'S-1-1-0' -ProductName '*' -PublisherName 'O=MICROSOFT CORPORATION*')) {
+    if ($Profile -eq 'ManagedBrowserCompatibility' -and -not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid 'S-1-1-0' -ProductName '*' -PublisherName 'O=MICROSOFT CORPORATION*')) {
         return $false
     }
 
@@ -1307,8 +1445,37 @@ function Get-OpenPathNonAdminAppControlHealth {
         [ValidateSet('AuditOnly', 'Enforced')]
         [string]$Mode = 'Enforced',
 
-        [string[]]$ApprovedBrowsers = @('Firefox')
+        [string[]]$ApprovedBrowsers = @('Firefox'),
+
+        [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
+        [string]$Profile = 'ManagedBrowserCompatibility',
+
+        [AllowNull()]
+        [object]$ApplicationCatalog = $null
     )
+
+    if (-not (Test-OpenPathApplicationApprovalCatalog -Profile $Profile -Catalog $ApplicationCatalog)) {
+        return [pscustomobject][ordered]@{
+            Healthy = $false
+            Mode = $Mode
+            Profile = $Profile
+            ReasonCodes = @('strict-catalog-invalid')
+            CapabilityAvailable = $false
+            RestrictedTargetValid = $false
+            AppIdentityServiceRunning = $false
+            LocalPolicyPresent = $false
+            LocalPolicyValid = $false
+            EffectivePolicyPresent = $false
+            EffectivePolicyValid = $false
+            RuntimeEvaluationAvailable = $false
+            RuntimeBoundaryValid = $false
+            RestrictedTargetDetail = 'not-observed'
+            GroupSid = ''; TargetSid = ''; ProfilePath = ''
+            Expected = [pscustomobject]@{}
+            Observed = [pscustomobject]@{}
+            CleanupAttempted = 'not-observed'; CleanupSucceeded = 'not-observed'
+        }
+    }
 
     $reasonCodes = [System.Collections.Generic.List[string]]::new()
     $addReasonCode = {
@@ -1379,7 +1546,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                 $localPolicyPresent = $true
                 try {
                     $localPolicyXml = [xml]$localPolicyText
-                    $localPolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $localPolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers)
+                    $localPolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $localPolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog)
                 }
                 catch {
                     $localPolicyValid = $false
@@ -1403,7 +1570,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                 $effectivePolicyPresent = $true
                 try {
                     $effectivePolicyXml = [xml]$effectivePolicyText
-                    $effectivePolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $effectivePolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers)
+                    $effectivePolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $effectivePolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog)
                 }
                 catch {
                     $effectivePolicyValid = $false
@@ -1565,6 +1732,7 @@ function Get-OpenPathNonAdminAppControlHealth {
     return [PSCustomObject][ordered]@{
         Healthy = $healthy
         Mode = $Mode
+        Profile = $Profile
         ReasonCodes = @($reasonCodes.ToArray())
         CapabilityAvailable = $capabilityAvailable
         RestrictedTargetValid = $restrictedTargetValid
@@ -1858,8 +2026,20 @@ function Set-OpenPathNonAdminAppControl {
 
         [string[]]$ApprovedBrowsers = @('Firefox'),
 
+        [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
+        [string]$Profile = 'ManagedBrowserCompatibility',
+
+        [AllowNull()]
+        [object]$ApplicationCatalog = $null,
+
         [string]$DiagnosticStatusPath = ''
     )
+
+    if (-not (Test-OpenPathApplicationApprovalCatalog -Profile $Profile -Catalog $ApplicationCatalog)) {
+        Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
+            New-OpenPathAppControlPreconditionDiagnostic -Substep 'catalog-validation' -ReasonCode 'strict-catalog-invalid')
+        return $false
+    }
 
     if (-not (Get-Command -Name Test-AdminPrivileges -ErrorAction SilentlyContinue)) {
         Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
@@ -1897,7 +2077,7 @@ function Set-OpenPathNonAdminAppControl {
         Set-Content -Path $appLockerBackupPath -Value $currentPolicyText -Encoding UTF8
 
         $diagnosticSubstep = 'policy-generation'
-        $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers
+        $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog
         $policyXml = New-OpenPathAppLockerPolicyXml -Spec $spec
         $mergedPolicyXml = Merge-OpenPathAppLockerPolicyXml -CurrentPolicy ([xml]$currentPolicyText) -OpenPathPolicy ([xml]$policyXml)
         $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-applocker-$([guid]::NewGuid()).xml"
@@ -1922,7 +2102,7 @@ function Set-OpenPathNonAdminAppControl {
         }
 
         $diagnosticSubstep = 'validation'
-        if (-not (Test-OpenPathNonAdminAppControlActive -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers)) {
+        if (-not (Test-OpenPathNonAdminAppControlActive -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog)) {
             $health = $script:OpenPathLastAppControlHealth
             if ($null -eq $health) {
                 $health = [pscustomobject]@{
@@ -2028,10 +2208,16 @@ function Test-OpenPathNonAdminAppControlActive {
         [ValidateSet('AuditOnly', 'Enforced')]
         [string]$Mode = 'Enforced',
 
-        [string[]]$ApprovedBrowsers = @('Firefox')
+        [string[]]$ApprovedBrowsers = @('Firefox'),
+
+        [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
+        [string]$Profile = 'ManagedBrowserCompatibility',
+
+        [AllowNull()]
+        [object]$ApplicationCatalog = $null
     )
 
-    $health = Get-OpenPathNonAdminAppControlHealth -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers
+    $health = Get-OpenPathNonAdminAppControlHealth -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog
     $script:OpenPathLastAppControlHealth = $health
     return [bool]$health.Healthy
 }
@@ -2098,6 +2284,7 @@ function Remove-OpenPathRestrictedGroup {
 
 Export-ModuleMember -Function @(
     'Get-OpenPathAlwaysDeniedAppxProductNames',
+    'Test-OpenPathApplicationApprovalCatalog',
     'New-OpenPathNonAdminAppLockerPolicySpec',
     'New-OpenPathAppLockerPolicyXml',
     'Merge-OpenPathAppLockerPolicyXml',

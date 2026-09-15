@@ -662,6 +662,11 @@ function Invoke-OpenPathWatchdogAppControlHealth {
         appcontrol_runtime_edge_allowed = 'AppControl Edge executable is allowed'
         appcontrol_runtime_firefox_not_allowed = 'AppControl Firefox executable is not allowed'
         appcontrol_probe_cleanup_failed = 'AppControl probe cleanup failed'
+        strict_catalog_invalid = 'Strict application approval catalog is invalid'
+        strict_required_rule_missing = 'Strict AppControl required rule is missing'
+        strict_effective_policy_mismatch = 'Strict AppControl effective policy does not match the configured profile'
+        strict_runtime_probe_failed = 'Strict AppControl runtime probe failed'
+        strict_transition_failed = 'Strict AppControl transition failed'
         appcontrol_health_check_unavailable = 'AppControl structured health check unavailable'
     }
     $addHealthObservation = {
@@ -741,13 +746,15 @@ function Invoke-OpenPathWatchdogAppControlHealth {
     if ($Config -and $Config.PSObject.Properties['approvedStudentBrowsers'] -and $Config.approvedStudentBrowsers) {
         $approvedStudentBrowsers = @($Config.approvedStudentBrowsers)
     }
+    $appControlProfile = if ($Config.PSObject.Properties['appControlProfile'] -and $Config.appControlProfile) { [string]$Config.appControlProfile } else { 'ManagedBrowserCompatibility' }
+    $approvedApplicationCatalog = if ($Config.PSObject.Properties['approvedApplicationCatalog']) { $Config.approvedApplicationCatalog } else { $null }
 
     $healthCommandAvailable = [bool](Get-Command -Name 'Get-OpenPathNonAdminAppControlHealth' -ErrorAction SilentlyContinue)
     $initialHealthHealthy = $false
     $initialHealthCodes = @()
     if ($healthCommandAvailable) {
         try {
-            $initialHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers
+            $initialHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers -Profile $appControlProfile -ApplicationCatalog $approvedApplicationCatalog
             if (-not $initialHealth -or -not $initialHealth.PSObject.Properties['Healthy']) {
                 throw 'structured AppControl health result is invalid'
             }
@@ -793,7 +800,7 @@ function Invoke-OpenPathWatchdogAppControlHealth {
         $repairResult = $false
         if (Get-Command -Name 'Set-OpenPathNonAdminAppControl' -ErrorAction SilentlyContinue) {
             try {
-                $repairResult = [bool](Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers)
+                $repairResult = [bool](Set-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers -Profile $appControlProfile -ApplicationCatalog $approvedApplicationCatalog)
             }
             catch {
                 $repairResult = $false
@@ -813,7 +820,7 @@ function Invoke-OpenPathWatchdogAppControlHealth {
                 if (-not $healthCommandAvailable) {
                     throw 'structured AppControl health check unavailable after repair'
                 }
-                $postRepairHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers
+                $postRepairHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers -Profile $appControlProfile -ApplicationCatalog $approvedApplicationCatalog
                 if (-not $postRepairHealth -or -not $postRepairHealth.PSObject.Properties['Healthy']) {
                     throw 'structured AppControl post-repair health result is invalid'
                 }
@@ -875,12 +882,16 @@ function Invoke-OpenPathWatchdogAppControlHealth {
             $currentConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
             if (Get-Command -Name 'Set-OpenPathConfigValue' -ErrorAction SilentlyContinue) {
                 Set-OpenPathConfigValue -Config $currentConfig -Name 'appControlCommitState' -Value 'committed'
+                Set-OpenPathConfigValue -Config $currentConfig -Name 'activeAppControlProfile' -Value $appControlProfile
             }
             elseif ($currentConfig.PSObject.Properties['appControlCommitState']) {
                 $currentConfig.appControlCommitState = 'committed'
+                if ($currentConfig.PSObject.Properties['activeAppControlProfile']) { $currentConfig.activeAppControlProfile = $appControlProfile }
+                else { $currentConfig | Add-Member -MemberType NoteProperty -Name 'activeAppControlProfile' -Value $appControlProfile -Force }
             }
             else {
                 $currentConfig | Add-Member -MemberType NoteProperty -Name 'appControlCommitState' -Value 'committed' -Force
+                $currentConfig | Add-Member -MemberType NoteProperty -Name 'activeAppControlProfile' -Value $appControlProfile -Force
             }
             Write-OpenPathAtomicJsonFile -Path $configPath -Data $currentConfig -Depth 10
             $persisted = $true
@@ -892,12 +903,16 @@ function Invoke-OpenPathWatchdogAppControlHealth {
         if ($persisted) {
             if (Get-Command -Name 'Set-OpenPathConfigValue' -ErrorAction SilentlyContinue) {
                 Set-OpenPathConfigValue -Config $Config -Name 'appControlCommitState' -Value 'committed'
+                Set-OpenPathConfigValue -Config $Config -Name 'activeAppControlProfile' -Value $appControlProfile
             }
             elseif ($Config.PSObject.Properties['appControlCommitState']) {
                 $Config.appControlCommitState = 'committed'
+                if ($Config.PSObject.Properties['activeAppControlProfile']) { $Config.activeAppControlProfile = $appControlProfile }
+                else { $Config | Add-Member -MemberType NoteProperty -Name 'activeAppControlProfile' -Value $appControlProfile -Force }
             }
             else {
                 $Config | Add-Member -MemberType NoteProperty -Name 'appControlCommitState' -Value 'committed' -Force
+                $Config | Add-Member -MemberType NoteProperty -Name 'activeAppControlProfile' -Value $appControlProfile -Force
             }
             $reasonCodes.Clear()
             $issues.Clear()

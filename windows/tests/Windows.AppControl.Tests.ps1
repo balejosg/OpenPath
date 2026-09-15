@@ -12,6 +12,128 @@ Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
 Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
 
 Describe "AppControl Module" {
+    Context 'issue 256 strict application allowlist' {
+        BeforeAll {
+            $strictCatalog = [pscustomobject]@{
+                schemaVersion = 1
+                applications = @(
+                    [pscustomobject]@{
+                        id = 'signed-classroom-app'
+                        identity = [pscustomobject]@{
+                            type = 'Publisher'
+                            publisherName = 'O=CLASSROOM TOOLS LTD, L=MADRID, C=ES'
+                            productName = 'Classroom Tools'
+                            binaryName = 'classroom.exe'
+                        }
+                    },
+                    [pscustomobject]@{
+                        id = 'pinned-helper'
+                        identity = [pscustomobject]@{
+                            type = 'Hash'
+                            sha256 = ('ab' * 32)
+                            fileName = 'helper.exe'
+                        }
+                    },
+                    [pscustomobject]@{
+                        id = 'admin-path-tool'
+                        identity = [pscustomobject]@{
+                            type = 'Path'
+                            path = 'C:\Program Files\Approved Tool\tool.exe'
+                        }
+                    }
+                )
+            }
+        }
+
+        It 'accepts compatibility without a catalog and valid strict catalog version 1' {
+            Test-OpenPathApplicationApprovalCatalog -Profile ManagedBrowserCompatibility -Catalog $null | Should -BeTrue
+            Test-OpenPathApplicationApprovalCatalog -Profile StrictApplicationAllowlist -Catalog $strictCatalog | Should -BeTrue
+        }
+
+        It 'rejects strict unsafe writable path approvals' {
+            $catalog = [pscustomobject]@{
+                schemaVersion = 1
+                applications = @([pscustomobject]@{
+                    id = 'unsafe'
+                    identity = [pscustomobject]@{ type = 'Path'; path = 'C:\Users\student\Downloads\tool.exe' }
+                })
+            }
+            Test-OpenPathApplicationApprovalCatalog -Profile StrictApplicationAllowlist -Catalog $catalog | Should -BeFalse
+        }
+
+        It 'rejects malformed publisher and hash identities' {
+            foreach ($identity in @(
+                [pscustomobject]@{ type = 'Publisher'; publisherName = '*'; productName = '*'; binaryName = '*' },
+                [pscustomobject]@{ type = 'Hash'; sha256 = '1234'; fileName = 'tool.exe' }
+            )) {
+                $catalog = [pscustomobject]@{ schemaVersion = 1; applications = @([pscustomobject]@{ id = 'bad'; identity = $identity }) }
+                Test-OpenPathApplicationApprovalCatalog -Profile StrictApplicationAllowlist -Catalog $catalog | Should -BeFalse
+            }
+        }
+
+        It 'omits blanket Program Files and emits approved application identities in strict mode' {
+            $inventory = [pscustomobject]@{
+                DiscoveryStatus = 'Complete'; DiscoveryErrors = @()
+                ExecutableIdentities = @([pscustomobject]@{
+                    Family = 'Firefox'; Channel = 'Release'
+                    ExecutablePath = 'C:\Program Files\Mozilla Firefox\firefox.exe'
+                    IsApproved = $true
+                })
+            }
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' `
+                -Profile StrictApplicationAllowlist -ApprovedBrowsers @('Firefox') `
+                -ApplicationCatalog $strictCatalog -BrowserInventory $inventory
+
+            $spec.Profile | Should -Be 'StrictApplicationAllowlist'
+            $spec.AllowPaths | Should -Not -Contain '%PROGRAMFILES%\*'
+            $spec.AllowPaths | Should -Contain 'C:\Program Files\Mozilla Firefox\firefox.exe'
+            ($spec.AllowPaths -join "`n") | Should -Not -Match 'FutureBrowser'
+            $spec.ApprovedApplicationPublishers.Count | Should -Be 1
+            $spec.ApprovedApplicationHashes.Count | Should -Be 1
+            $spec.AllowPaths | Should -Contain 'C:\Program Files\Approved Tool\tool.exe'
+
+            $xml = [xml](New-OpenPathAppLockerPolicyXml -Spec $spec)
+            @($xml.AppLockerPolicy.RuleCollection.FilePublisherRule | Where-Object Name -Like '*signed-classroom-app*').Count | Should -Be 1
+            @($xml.AppLockerPolicy.RuleCollection.FileHashRule | Where-Object Name -Like '*pinned-helper*').Count | Should -Be 1
+        }
+
+        It 'does not let Firefox Release approval widen to Tor Browser' {
+            $inventory = [pscustomobject]@{
+                DiscoveryStatus = 'Complete'; DiscoveryErrors = @()
+                ExecutableIdentities = @(
+                    [pscustomobject]@{ Family='Firefox'; Channel='Release'; ExecutablePath='C:\Program Files\Mozilla Firefox\firefox.exe'; IsApproved=$true },
+                    [pscustomobject]@{ Family='Tor'; Channel='Stable'; ExecutablePath='C:\Program Files\Tor Browser\Browser\firefox.exe'; IsApproved=$false }
+                )
+            }
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -Profile StrictApplicationAllowlist `
+                -ApprovedBrowsers @('Firefox') -ApplicationCatalog $strictCatalog -BrowserInventory $inventory
+
+            $spec.AllowPaths | Should -Contain 'C:\Program Files\Mozilla Firefox\firefox.exe'
+            $spec.AllowPaths | Should -Not -Contain 'C:\Program Files\Tor Browser\Browser\firefox.exe'
+        }
+
+        It 'reports an invalid strict catalog before claiming policy health' {
+            $health = Get-OpenPathNonAdminAppControlHealth -Profile StrictApplicationAllowlist `
+                -ApplicationCatalog ([pscustomobject]@{ schemaVersion = 99; applications = @() })
+
+            $health.Healthy | Should -BeFalse
+            $health.Profile | Should -Be 'StrictApplicationAllowlist'
+            $health.ReasonCodes | Should -Contain 'strict-catalog-invalid'
+        }
+
+        It 'refuses to apply an invalid strict catalog without touching AppLocker' {
+            InModuleScope AppControl {
+                Mock Set-AppLockerPolicy {}
+                $result = Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive `
+                    -Profile StrictApplicationAllowlist `
+                    -ApplicationCatalog ([pscustomobject]@{ schemaVersion = 99; applications = @() })
+
+                $result | Should -BeFalse
+                Should -Invoke Set-AppLockerPolicy -Times 0 -Exactly
+            }
+        }
+    }
+
     Context 'issue 254 compatibility policy' {
         It 'denies a discovered custom Edge executable while retaining managed application allows' {
             $inventory = [pscustomobject]@{
