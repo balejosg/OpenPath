@@ -208,13 +208,32 @@ function Invoke-WindowsPesterSuite {
         throw "Invalid Pester shard $ShardIndex of $ShardCount."
     }
 
-    $suitePaths = @(
-        for ($index = 0; $index -lt $allSuitePaths.Count; $index++) {
-            if (($index % $ShardCount) -eq ($ShardIndex - 1)) {
-                $allSuitePaths[$index]
-            }
+    $heavySuiteName = 'Windows.AppControl.Tests.ps1'
+    $heavySuitePath = @($allSuitePaths | Where-Object { (Split-Path $_ -Leaf) -eq $heavySuiteName })
+    $remainingSuitePaths = @($allSuitePaths | Where-Object { (Split-Path $_ -Leaf) -ne $heavySuiteName })
+    $suitePaths = if ($ShardCount -gt 1 -and $heavySuitePath.Count -eq 1) {
+        if ($ShardIndex -eq 1) {
+            @($heavySuitePath)
         }
-    )
+        else {
+            @(
+                for ($index = 0; $index -lt $remainingSuitePaths.Count; $index++) {
+                    if (($index % ($ShardCount - 1)) -eq ($ShardIndex - 2)) {
+                        $remainingSuitePaths[$index]
+                    }
+                }
+            )
+        }
+    }
+    else {
+        @(
+            for ($index = 0; $index -lt $allSuitePaths.Count; $index++) {
+                if (($index % $ShardCount) -eq ($ShardIndex - 1)) {
+                    $allSuitePaths[$index]
+                }
+            }
+        )
+    }
     if ($suitePaths.Count -eq 0) {
         throw "Pester shard $ShardIndex of $ShardCount selected no test files."
     }

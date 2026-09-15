@@ -1330,6 +1330,12 @@ test('required Windows CI runs Pester in an untracked child host without success
     'the isolated Pester runner should exclude local-only Windows aggregator suites from the CI Pester path set'
   );
   assert.ok(
+    windowsPesterRunner.includes("$heavySuiteName = 'Windows.AppControl.Tests.ps1'") &&
+      windowsPesterRunner.includes('$remainingSuitePaths') &&
+      windowsPesterRunner.includes('$ShardCount - 1'),
+    'the isolated Pester runner should reserve the heavy AppControl suite and balance the remaining leaf suites separately'
+  );
+  assert.ok(
     windowsPesterRunner.includes('$config.Run.Path = $suitePaths'),
     'the isolated Pester runner should point at the discovered leaf suite paths instead of the whole directory'
   );
