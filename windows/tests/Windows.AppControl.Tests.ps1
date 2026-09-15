@@ -1398,6 +1398,17 @@ Describe "AppControl Module" {
                 })
             }
 
+            Mock New-OpenPathAppControlEvaluationProbeSet {
+                param($Target, [ref]$CleanupSucceeded)
+                $CleanupSucceeded.Value = $true
+                [pscustomobject]@{
+                    Paths = @('Downloads', 'Desktop', 'AppData\Local\Temp' | ForEach-Object {
+                            Join-Path (Join-Path $Target.ProfilePath $_) 'openpath-appcontrol-probe-test.exe'
+                        })
+                    CreatedDirectories = @()
+                }
+            } -ModuleName AppControl
+
             Mock Get-OpenPathAppControlExistingSamplePaths {
                 param([string[]]$Paths, [string]$Label)
                 @($Paths | Select-Object -First 1)
@@ -1474,7 +1485,7 @@ Describe "AppControl Module" {
         }
 
         It "fails closed when probe preparation fails" {
-            Mock Get-OpenPathAppControlProbeSourcePath {
+            Mock New-OpenPathAppControlEvaluationProbeSet {
                 throw 'injected AppControl probe source failure'
             } -ModuleName AppControl
             Test-OpenPathNonAdminAppControlActive | Should -BeFalse
@@ -1639,6 +1650,17 @@ Describe "AppControl Module" {
                 }
                 return $decisions
             }
+
+            Mock New-OpenPathAppControlEvaluationProbeSet {
+                param($Target, [ref]$CleanupSucceeded)
+                $CleanupSucceeded.Value = $true
+                [pscustomobject]@{
+                    Paths = @('Downloads', 'Desktop', 'AppData\Local\Temp' | ForEach-Object {
+                            Join-Path (Join-Path $Target.ProfilePath $_) 'openpath-appcontrol-probe-test.exe'
+                        })
+                    CreatedDirectories = @()
+                }
+            } -ModuleName AppControl
 
             Mock Get-OpenPathAppControlExistingSamplePaths {
                 param([string[]]$Paths, [string]$Label)
@@ -1925,25 +1947,11 @@ Describe "AppControl Module" {
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
-        It "reports and cleans a partial probe creation cleanup failure" {
-            $blockedDirectory = Join-Path $global:opHealthProfilePath 'Desktop'
-            if (Test-Path -LiteralPath $blockedDirectory) {
-                Remove-Item -LiteralPath $blockedDirectory -Recurse -Force
-            }
-            New-Item -ItemType File -Path $blockedDirectory -Force | Out-Null
-            Mock Remove-OpenPathAppControlEvaluationProbeSet {
-                param([object]$ProbeSet)
-                foreach ($probePath in @($ProbeSet.Paths)) {
-                    if ([System.IO.File]::Exists([string]$probePath)) {
-                        [System.IO.File]::Delete([string]$probePath)
-                    }
-                }
-                foreach ($directoryPath in @($ProbeSet.CreatedDirectories | Sort-Object Length -Descending)) {
-                    if ([System.IO.Directory]::Exists([string]$directoryPath) -and @([System.IO.Directory]::GetFileSystemEntries([string]$directoryPath)).Count -eq 0) {
-                        [System.IO.Directory]::Delete([string]$directoryPath)
-                    }
-                }
-                return $false
+        It "reports a partial probe creation cleanup failure" {
+            Mock New-OpenPathAppControlEvaluationProbeSet {
+                param($Target, [ref]$CleanupSucceeded)
+                $CleanupSucceeded.Value = $false
+                throw 'injected partial AppControl probe creation failure'
             } -ModuleName AppControl
 
             $health = Get-OpenPathNonAdminAppControlHealth
@@ -1956,7 +1964,6 @@ Describe "AppControl Module" {
 
             $remainingProbeFiles = @(Get-ChildItem -LiteralPath $global:opHealthProfilePath -Filter 'openpath-appcontrol-probe-*.exe' -Recurse -File -ErrorAction SilentlyContinue)
             $remainingProbeFiles.Count | Should -Be 0
-            Remove-Item -LiteralPath $blockedDirectory -Force -ErrorAction SilentlyContinue
         }
 
         It "always includes a reason when a covered runtime health check is unhealthy" {
