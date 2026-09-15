@@ -17,6 +17,18 @@ function Invoke-NativeHostCheckAction {
         }
     }
 
+    # The native host is the browser-side policy authority. Its decision must
+    # include the same static connectivity floor that DNS keeps reachable in
+    # every mode; otherwise Firefox can redirect a captive-portal probe to the
+    # blocked page even though DNS and the network both allow it.
+    if (Get-Command -Name 'Get-OpenPathRuntimeDependencyProtectedHosts' -ErrorAction SilentlyContinue) {
+        foreach ($domain in @(Get-OpenPathRuntimeDependencyProtectedHosts)) {
+            if ($domain) {
+                $null = $whitelistSet.Add([string]$domain)
+            }
+        }
+    }
+
     Invoke-NativeHostAuthenticatedCaptivePortalRestoreIfNeeded
 
     $results = foreach ($domain in $validDomains) {

@@ -1784,6 +1784,39 @@ Describe "Browser Module - Native Host" {
             $script:ResolveDomainIpCallCount | Should -Be 1
         }
 
+        It "Allows static connectivity hosts through native policy when the mirrored whitelist omits them" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+            . $nativeHostActionsPath
+            $script:ResolveDomainIpCallCount = 0
+
+            function Resolve-DomainIp {
+                param([string]$Domain)
+                $script:ResolveDomainIpCallCount += 1
+                return '203.0.113.10'
+            }
+            function Get-NativeHostPortalRecoverySignal {
+                param([string]$Domain, [object]$Message)
+                return 'none'
+            }
+            function Invoke-NativeHostAuthenticatedCaptivePortalRestoreIfNeeded {}
+
+            $result = Invoke-NativeHostCheckAction `
+                -Message ([PSCustomObject]@{ domains = @('detectportal.firefox.com', 'www.msftconnecttest.com', 'blocked.example') }) `
+                -Sections ([PSCustomObject]@{ Whitelist = @() })
+
+            $detectPortal = $result.results | Where-Object { $_.domain -eq 'detectportal.firefox.com' }
+            $msftConnectTest = $result.results | Where-Object { $_.domain -eq 'www.msftconnecttest.com' }
+            $blocked = $result.results | Where-Object { $_.domain -eq 'blocked.example' }
+
+            $detectPortal.in_whitelist | Should -BeTrue
+            $detectPortal.resolved_ip | Should -Be '203.0.113.10'
+            $msftConnectTest.in_whitelist | Should -BeTrue
+            $msftConnectTest.resolved_ip | Should -Be '203.0.113.10'
+            $blocked.in_whitelist | Should -BeFalse
+            $blocked.resolved_ip | Should -BeNullOrEmpty
+            $script:ResolveDomainIpCallCount | Should -Be 2
+        }
+
         It "Exposes portal recovery eligibility in native check results" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             . $nativeHostActionsPath
