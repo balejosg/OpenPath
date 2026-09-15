@@ -199,13 +199,17 @@ jobs:
   # Job 2: Windows Agent Tests
   # ============================================
   test-windows:
-    name: Windows Agent Tests (Pester)
+    name: Windows Agent Tests (Pester, shard ${{ matrix.shard }}/4)
     runs-on: [self-hosted, Windows, X64, proxmox, openpath]
     timeout-minutes: 25
     needs: detect-relevant-changes
     if: needs.detect-relevant-changes.outputs.windows_bound == 'true'
     outputs:
       tests_passed: ${{ steps.job-status.outputs.tests_passed }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     steps:
       - name: Checkout code
@@ -224,8 +228,10 @@ jobs:
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-pester-isolated.ps1 `
             -RepoRoot (Get-Location).Path `
-            -ResultsPath windows-test-results.xml `
-            -TimeoutSeconds 840
+            -ResultsPath windows-test-results-${{ matrix.shard }}.xml `
+            -TimeoutSeconds 840 `
+            -ShardIndex ${{ matrix.shard }} `
+            -ShardCount 4
 
       - name: Record Windows lane outcome
         id: job-status
@@ -248,13 +254,17 @@ jobs:
   # This runs the same isolated Pester suite on GitHub-hosted Windows capacity
   # without replacing the pinned self-hosted target-platform lane.
   test-windows-hosted:
-    name: Windows Agent Tests (Pester, hosted)
+    name: Windows Agent Tests (Pester, hosted, shard ${{ matrix.shard }}/4)
     runs-on: windows-2025
     timeout-minutes: 8
     needs: detect-relevant-changes
     if: needs.detect-relevant-changes.outputs.windows_bound == 'true'
     outputs:
       tests_passed: ${{ steps.job-status.outputs.tests_passed }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     steps:
       - name: Checkout code
@@ -268,8 +278,10 @@ jobs:
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-pester-isolated.ps1 `
             -RepoRoot (Get-Location).Path `
-            -ResultsPath windows-hosted-results.xml `
-            -TimeoutSeconds 360
+            -ResultsPath windows-hosted-results-${{ matrix.shard }}.xml `
+            -TimeoutSeconds 360 `
+            -ShardIndex ${{ matrix.shard }} `
+            -ShardCount 4
 
       - name: Report hosted Windows context
         if: always()
@@ -459,7 +471,7 @@ jobs:
               echo "Treat this as runner teardown or infrastructure failure, not a Pester assertion failure."
               exit 1
             else
-              echo "Windows Agent Tests (Pester) failed before reporting successful Pester output"
+              echo "One or more Windows Agent Tests (Pester) shards failed"
               exit 1
             fi
           fi
@@ -473,7 +485,7 @@ jobs:
               echo "Treat this as hosted runner teardown or infrastructure failure."
               exit 1
             else
-              echo "Hosted Windows Agent Tests (Pester) failed before reporting successful Pester output"
+              echo "One or more hosted Windows Agent Tests (Pester) shards failed"
               exit 1
             fi
           fi

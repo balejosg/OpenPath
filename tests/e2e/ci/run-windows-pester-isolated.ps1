@@ -3,7 +3,9 @@ param(
     [switch]$Child,
     [string]$RepoRoot = (Join-Path $PSScriptRoot '..' '..' '..'),
     [string]$ResultsPath = 'windows-test-results.xml',
-    [int]$TimeoutSeconds = 840
+    [int]$TimeoutSeconds = 840,
+    [int]$ShardIndex = 1,
+    [int]$ShardCount = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,7 +36,13 @@ function Invoke-IsolatedPesterHost {
         [string]$ResultsPath,
 
         [Parameter(Mandatory = $true)]
-        [int]$TimeoutSeconds
+        [int]$TimeoutSeconds,
+
+        [Parameter(Mandatory = $true)]
+        [int]$ShardIndex,
+
+        [Parameter(Mandatory = $true)]
+        [int]$ShardCount
     )
 
     function Receive-CompletedStream {
@@ -82,7 +90,11 @@ function Invoke-IsolatedPesterHost {
             '-ResultsPath',
             $ResultsPath,
             '-TimeoutSeconds',
-            [string]$TimeoutSeconds
+            [string]$TimeoutSeconds,
+            '-ShardIndex',
+            [string]$ShardIndex,
+            '-ShardCount',
+            [string]$ShardCount
         )) {
         [void]$startInfo.ArgumentList.Add($argument)
     }
@@ -149,7 +161,13 @@ function Invoke-WindowsPesterSuite {
         [string]$RepoRoot,
 
         [Parameter(Mandatory = $true)]
-        [string]$ResultsPath
+        [string]$ResultsPath,
+
+        [Parameter(Mandatory = $true)]
+        [int]$ShardIndex,
+
+        [Parameter(Mandatory = $true)]
+        [int]$ShardCount
     )
 
     Set-StrictMode -Off
@@ -175,16 +193,33 @@ function Invoke-WindowsPesterSuite {
         'Windows.Common.Tests.ps1',
         'Windows.DNS.Tests.ps1'
     )
-    $suitePaths = @(
+    $allSuitePaths = @(
         Get-ChildItem -Path 'windows/tests' -Filter '*.Tests.ps1' -File |
             Where-Object { $_.Name -notin $aggregatorSuites } |
             Sort-Object FullName |
             ForEach-Object { $_.FullName }
     )
 
-    if ($suitePaths.Count -eq 0) {
+    if ($allSuitePaths.Count -eq 0) {
         throw 'Windows Pester suite discovery returned no leaf test files.'
     }
+
+    if ($ShardCount -lt 1 -or $ShardIndex -lt 1 -or $ShardIndex -gt $ShardCount) {
+        throw "Invalid Pester shard $ShardIndex of $ShardCount."
+    }
+
+    $suitePaths = @(
+        for ($index = 0; $index -lt $allSuitePaths.Count; $index++) {
+            if (($index % $ShardCount) -eq ($ShardIndex - 1)) {
+                $allSuitePaths[$index]
+            }
+        }
+    )
+    if ($suitePaths.Count -eq 0) {
+        throw "Pester shard $ShardIndex of $ShardCount selected no test files."
+    }
+
+    Write-Host ("Running Windows Pester shard {0}/{1}: {2}/{3} files" -f $ShardIndex, $ShardCount, $suitePaths.Count, $allSuitePaths.Count)
 
     $config = New-PesterConfiguration
     $config.Run.Path = $suitePaths
@@ -228,7 +263,8 @@ if ($resultsDirectory -and -not (Test-Path $resultsDirectory)) {
 }
 
 if ($Child) {
-    Invoke-WindowsPesterSuite -RepoRoot $RepoRoot -ResultsPath $ResultsPath
+    Invoke-WindowsPesterSuite -RepoRoot $RepoRoot -ResultsPath $ResultsPath `
+        -ShardIndex $ShardIndex -ShardCount $ShardCount
     return
 }
 
@@ -236,7 +272,9 @@ Invoke-IsolatedPesterHost `
     -ScriptPath $MyInvocation.MyCommand.Path `
     -RepoRoot $RepoRoot `
     -ResultsPath $ResultsPath `
-    -TimeoutSeconds $TimeoutSeconds
+    -TimeoutSeconds $TimeoutSeconds `
+    -ShardIndex $ShardIndex `
+    -ShardCount $ShardCount
 
 if (-not (Test-Path $ResultsPath)) {
     throw 'Windows Pester suite did not produce windows-test-results.xml.'
