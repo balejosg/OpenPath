@@ -430,6 +430,20 @@ Describe "AppControl Module" {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
         }
 
+        BeforeEach {
+            Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
+            Mock Get-Command { [pscustomobject]@{ Name = $Name } } `
+                -ModuleName AppControl `
+                -ParameterFilter {
+                    $Name -in @(
+                        'Test-AppLockerPolicy',
+                        'Get-LocalGroup',
+                        'Get-LocalGroupMember',
+                        'Get-CimInstance'
+                    )
+                }
+        }
+
         It "Defaults non-admin users to Firefox-only browser approval plus admin-managed install paths and user-writable deny paths" {
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
             $expectedAllowPaths = @(
