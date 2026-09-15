@@ -14,6 +14,8 @@ Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
 Describe "AppControl Module" {
     Context 'issue 256 strict application allowlist' {
         BeforeAll {
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
+
             $strictCatalog = [pscustomobject]@{
                 schemaVersion = 1
                 applications = @(
@@ -135,6 +137,10 @@ Describe "AppControl Module" {
     }
 
     Context 'issue 254 compatibility policy' {
+        BeforeAll {
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
+        }
+
         It 'denies a discovered custom Edge executable while retaining managed application allows' {
             $inventory = [pscustomobject]@{
                 DiscoveryStatus = 'Complete'; DiscoveryErrors = @()
@@ -168,6 +174,10 @@ Describe "AppControl Module" {
         }
     }
     Context 'PolicyConverter activation boundary' {
+        BeforeAll {
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
+        }
+
         It 'enables starts restores and verifies an initially disabled task in order' {
             InModuleScope AppControl {
                 $script:activationTrace = [System.Collections.Generic.List[string]]::new()
@@ -416,6 +426,10 @@ Describe "AppControl Module" {
     }
 
     Context "New-OpenPathNonAdminAppLockerPolicySpec" {
+        BeforeAll {
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
+        }
+
         It "Defaults non-admin users to Firefox-only browser approval plus admin-managed install paths and user-writable deny paths" {
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
             $expectedAllowPaths = @(
@@ -607,18 +621,13 @@ Describe "AppControl Module" {
         }
 
         It "Scopes user Deny and Allow rules to the restricted group SID when the group exists" {
-            function global:Get-LocalGroup { [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-10-20-30-4242' } } }
-            try {
-                $spec = New-OpenPathNonAdminAppLockerPolicySpec
-                $spec.RestrictedSid | Should -Be 'S-1-5-21-10-20-30-4242'
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' } -ModuleName AppControl
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec
+            $spec.RestrictedSid | Should -Be 'S-1-5-21-10-20-30-4242'
 
-                $xml = New-OpenPathAppLockerPolicyXml -Spec $spec
-                $xml | Should -Match 'S-1-5-21-10-20-30-4242'
-                $xml | Should -Not -Match ([regex]::Escape('S-1-5-32-545'))
-            }
-            finally {
-                function global:Get-LocalGroup { throw 'not found' }
-            }
+            $xml = New-OpenPathAppLockerPolicyXml -Spec $spec
+            $xml | Should -Match 'S-1-5-21-10-20-30-4242'
+            $xml | Should -Not -Match ([regex]::Escape('S-1-5-32-545'))
         }
 
         It "Generates AppLocker rule ids without braces for GuidType compatibility" {
@@ -1319,6 +1328,10 @@ Describe "AppControl Module" {
     }
 
     Context "Effective AppLocker probe validation" {
+        BeforeAll {
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
+        }
+
         BeforeEach {
             $global:opProbeGroupSid = 'S-1-5-21-10-20-30-4242'
             $global:opProbeStudentSid = 'S-1-5-21-10-20-30-1001'
@@ -1492,6 +1505,10 @@ Describe "AppControl Module" {
     }
 
     Context "Structured AppControl health contract" {
+        BeforeAll {
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
+        }
+
         BeforeEach {
             $global:opHealthGroupSid = 'S-1-5-21-10-20-30-4242'
             $global:opHealthStudentSid = 'S-1-5-21-10-20-30-1001'
@@ -1984,6 +2001,10 @@ Describe "AppControl Module" {
     }
 
     Context "AppControl sample path resolution" {
+        BeforeAll {
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
+        }
+
         It "uses existing executable samples and fails closed when none exist" {
             $existingPath = Join-Path $TestDrive 'edge.exe'
             $missingPath = Join-Path $TestDrive 'missing-edge.exe'
