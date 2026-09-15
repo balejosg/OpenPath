@@ -1333,6 +1333,7 @@ Describe "AppControl Module" {
         }
 
         BeforeEach {
+            Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
             $global:opProbeGroupSid = 'S-1-5-21-10-20-30-4242'
             $global:opProbeStudentSid = 'S-1-5-21-10-20-30-1001'
             $global:opProbeProfilePath = Join-Path $TestDrive 'different-student'
@@ -1521,6 +1522,7 @@ Describe "AppControl Module" {
         }
 
         BeforeEach {
+            Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
             $global:opHealthGroupSid = 'S-1-5-21-10-20-30-4242'
             $global:opHealthStudentSid = 'S-1-5-21-10-20-30-1001'
             $global:opHealthProfilePath = Join-Path $TestDrive 'health-student'
@@ -1701,9 +1703,7 @@ Describe "AppControl Module" {
         }
 
         It "reports unavailable AppLocker management capability" {
-            Mock Get-Command {
-                return $null
-            } -ModuleName AppControl -ParameterFilter { $Name -in @('Set-AppLockerPolicy', 'Get-AppLockerPolicy') }
+            Mock Test-OpenPathAppControlAvailable { $false } -ModuleName AppControl
             $health = Get-OpenPathNonAdminAppControlHealth
 
             $health.Healthy | Should -BeFalse
