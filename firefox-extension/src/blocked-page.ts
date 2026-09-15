@@ -477,7 +477,6 @@ export function main(): void {
   localizeDocument();
   const context = buildBlockedScreenContextFromSearch(window.location.search);
 
-  setText('blocked-domain', context.blockedDomain);
   setText('blocked-error', context.error);
   setText('blocked-origin', context.displayOrigin);
 
@@ -600,6 +599,8 @@ export function main(): void {
       }
     })();
   });
+
+  setText('blocked-domain', context.blockedDomain);
 }
 
 if (typeof document !== 'undefined' && typeof window !== 'undefined') {

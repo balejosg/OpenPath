@@ -4,11 +4,25 @@ import { describe, test } from 'node:test';
 import { main } from '../src/blocked-page.js';
 
 class MockElement {
-  textContent = '';
+  private currentTextContent = '';
   value = '';
   disabled = false;
   readonly classes = new Set<string>();
   private readonly listeners = new Map<string, (() => void)[]>();
+
+  constructor(
+    private readonly onTextContentSet: ((value: string) => void) | null = null,
+    private readonly onListenerAdded: ((event: string) => void) | null = null
+  ) {}
+
+  get textContent(): string {
+    return this.currentTextContent;
+  }
+
+  set textContent(value: string) {
+    this.currentTextContent = value;
+    this.onTextContentSet?.(value);
+  }
 
   readonly classList = {
     add: (className: string): void => {
@@ -25,6 +39,7 @@ class MockElement {
     const listeners = this.listeners.get(event) ?? [];
     listeners.push(listener);
     this.listeners.set(event, listeners);
+    this.onListenerAdded?.(event);
   }
 
   click(): void {
@@ -113,6 +128,48 @@ void describe('blocked page entrypoint', () => {
     assert.equal(elements.get('blocked-domain')?.textContent, 'learning.example');
     assert.equal(elements.get('blocked-error')?.textContent, 'NS_ERROR_UNKNOWN_HOST');
     assert.equal(elements.get('blocked-origin')?.textContent, 'unknown');
+  });
+
+  void test('publishes the blocked domain only after the submit handler is registered', () => {
+    clearBlockedPageGlobals();
+    const events: string[] = [];
+    const elements = new Map<string, MockElement>([
+      ['blocked-domain', new MockElement((value) => events.push(`domain:${value}`))],
+      ['blocked-error', new MockElement()],
+      ['blocked-origin', new MockElement()],
+      ['go-back', new MockElement()],
+      ['copy-domain', new MockElement()],
+      ['request-reason', new MockElement()],
+      [
+        'submit-unblock-request',
+        new MockElement(null, (event) => events.push(`submit-listener:${event}`)),
+      ],
+    ]);
+
+    Object.defineProperties(globalThis, {
+      document: {
+        configurable: true,
+        value: { getElementById: (id: string): MockElement | null => elements.get(id) ?? null },
+      },
+      navigator: {
+        configurable: true,
+        value: { clipboard: { writeText: (): Promise<void> => Promise.resolve() } },
+      },
+      window: {
+        configurable: true,
+        value: {
+          history: { length: 1, back: (): void => undefined },
+          location: {
+            replace: (): void => undefined,
+            search: '?blockedUrl=https%3A%2F%2Fready.example%2Flesson',
+          },
+        },
+      },
+    });
+
+    main();
+
+    assert.ok(events.indexOf('submit-listener:click') < events.indexOf('domain:ready.example'));
   });
 
   void test('submits unblock requests directly through native messaging when available', async () => {
