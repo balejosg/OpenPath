@@ -1797,7 +1797,8 @@ function Get-OpenPathNonAdminAppControlHealth {
     }
 
     $browserInventory = Get-OpenPathBrowserInventory
-    if (-not $browserInventory -or $browserInventory.DiscoveryStatus -ne 'Complete') {
+    if ($Profile -eq 'StrictApplicationAllowlist' -and
+        (-not $browserInventory -or $browserInventory.DiscoveryStatus -ne 'Complete')) {
         & $addReasonCode 'appcontrol_browser_inventory_degraded'
     }
 

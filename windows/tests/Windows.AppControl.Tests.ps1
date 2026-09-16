@@ -1905,6 +1905,20 @@ Describe "AppControl Module" {
             Test-OpenPathNonAdminAppControlActive | Should -BeTrue
         }
 
+        It "keeps degraded browser inventory fail-closed only for strict profile" {
+            Mock Get-OpenPathBrowserInventory {
+                [pscustomobject]@{ DiscoveryStatus = 'Degraded' }
+            } -ModuleName AppControl
+
+            $compatibility = Get-OpenPathNonAdminAppControlHealth
+            @($compatibility.ReasonCodes) | Should -Not -Contain 'appcontrol_browser_inventory_degraded'
+
+            $strictCatalogForHealth = [pscustomobject]@{ schemaVersion = 1; applications = @() }
+            $strict = Get-OpenPathNonAdminAppControlHealth -Profile StrictApplicationAllowlist `
+                -ApplicationCatalog $strictCatalogForHealth
+            @($strict.ReasonCodes) | Should -Contain 'appcontrol_browser_inventory_degraded'
+        }
+
         It "reports unavailable AppLocker management capability" {
             Mock Test-OpenPathAppControlAvailable { $false } -ModuleName AppControl
             $health = Get-OpenPathNonAdminAppControlHealth
