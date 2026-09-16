@@ -86,8 +86,14 @@ test('WEDU lab quiesces pre-existing OpenPath task writers before its proof', ()
   assert.match(quiesceBody, /Get-CimInstance[\s\S]*Win32_Process/);
   assert.match(quiesceBody, /Stop-Process/);
   assert.match(quiesceBody, /Test-DNSHealth\.ps1/);
+  assert.doesNotMatch(quiesceBody, /KeepWatchdog/);
   assert.match(harness, /Stop-WeduConcurrentOpenPathTasks/);
+  assert.doesNotMatch(harness, /Stop-WeduConcurrentOpenPathTasks -KeepWatchdog/);
   assert.match(harness, /Enable-ScheduledTask -TaskName \$script:WatchdogTaskName/);
+  const protectedCheckBody =
+    harness.match(/function Invoke-WeduSplitDnsProtectedCheck[\s\S]*?\n}\n\nfunction /)?.[0] ?? '';
+  assert.match(protectedCheckBody, /finally[\s\S]*Stop-WeduConcurrentOpenPathTasks/);
+  assert.doesNotMatch(protectedCheckBody, /Enable-ScheduledTask -TaskName 'OpenPath-Update'/);
 });
 
 test('captive portal evidence contract keeps discovery diagnostic-only', () => {

@@ -1261,11 +1261,11 @@ function Invoke-WeduSplitDnsProtectedCheck {
     }
 
     # === Phase 2: split DNS resolves (deterministic, contenders quiesced) ===
-    $watchdogDisabled = $false
-    $updateDisabled = $false
     try {
-        try { Disable-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop | Out-Null; $watchdogDisabled = $true } catch { $runError = ($runError + " | disable watchdog: $_").Trim(' |') }
-        try { Disable-ScheduledTask -TaskName 'OpenPath-Update' -ErrorAction Stop | Out-Null; $updateDisabled = $true } catch { }
+        # Stop and drain every scheduled writer again after the suppression cycles.
+        # A task can be recreated or an old child can survive while phase 1 runs;
+        # split-DNS application must start from an empty writer set.
+        Stop-WeduConcurrentOpenPathTasks
         # Let any in-flight run of those tasks finish so it cannot rewrite the
         # config after we apply split DNS below.
         Start-Sleep -Seconds 5
@@ -1327,8 +1327,10 @@ function Invoke-WeduSplitDnsProtectedCheck {
         }
     }
     finally {
-        if ($updateDisabled) { try { Enable-ScheduledTask -TaskName 'OpenPath-Update' -ErrorAction Stop | Out-Null } catch { } }
-        if ($watchdogDisabled) { try { Enable-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop | Out-Null } catch { $runError = ($runError + " | re-enable watchdog: $_").Trim(' |') } }
+        # Keep the lab isolated through browser/auth/protection assertions. The
+        # controller rolls the VM back to its pre-lab snapshot, so re-enabling a
+        # writer here would only reintroduce the race before final evidence is saved.
+        Stop-WeduConcurrentOpenPathTasks
     }
 
     $portalResolvesInProtectedMode = [bool]$resolvedAtLeastOnce
@@ -1450,21 +1452,15 @@ function Stop-WeduConcurrentOpenPathTasks {
     the lab is observing split DNS. The controller snapshot restores the VM
     after the run, so this isolation is scoped to the canary transaction.
     #>
-    param(
-        [switch]$KeepWatchdog
-    )
-
     $taskNames = @(
         'OpenPath-Update',
         'OpenPath-RuntimeDependencyApply',
         'OpenPath-CaptivePortalRecovery',
         'OpenPath-Startup',
         'OpenPath-SSE',
-        'OpenPath-AgentUpdate'
+        'OpenPath-AgentUpdate',
+        $script:WatchdogTaskName
     )
-    if (-not $KeepWatchdog) {
-        $taskNames += $script:WatchdogTaskName
-    }
 
     foreach ($taskName in $taskNames) {
         try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
@@ -1474,7 +1470,7 @@ function Stop-WeduConcurrentOpenPathTasks {
     # Stop-ScheduledTask does not reliably terminate a PowerShell child that was
     # detached by a prior runner invocation. Find only the known OpenPath writer
     # scripts under the installed root; never match this WEDU harness or another
-    # checkout. Keep the watchdog process when the staged proof owns it.
+    # checkout. The staged watchdog is enabled only after this drain completes.
     $writerScriptNames = @(
         'Update-OpenPath.ps1',
         'Apply-RuntimeDependencyQueue.ps1',
@@ -1482,9 +1478,7 @@ function Stop-WeduConcurrentOpenPathTasks {
         'Start-SSEListener.ps1',
         'OpenPath.ps1'
     )
-    if (-not $KeepWatchdog) {
-        $writerScriptNames += 'Test-DNSHealth.ps1'
-    }
+    $writerScriptNames += 'Test-DNSHealth.ps1'
     $writerScriptPaths = @(
         $writerScriptNames | ForEach-Object {
             Join-Path (Join-Path $script:InstalledOpenPathRoot 'scripts') $_
@@ -1619,10 +1613,10 @@ function Invoke-WeduLabRun {
     # upstream that cannot resolve the portal host.
     $runnerConfig = Ensure-WeduDirectRunnerConfig
 
-    # Register-OpenPathTask recreates all tasks enabled. Quiesce every writer
-    # except the staged watchdog before its suppression proof begins; this also
-    # drains any task that was started by the runner baseline before staging.
-    Stop-WeduConcurrentOpenPathTasks -KeepWatchdog
+    # Register-OpenPathTask recreates all tasks enabled. Quiesce every writer,
+    # including any watchdog left alive by that replacement, before enabling the
+    # staged watchdog for its suppression proof.
+    Stop-WeduConcurrentOpenPathTasks
     Enable-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop | Out-Null
 
     # Negative control: the configured (stale/public) upstream must NOT resolve the
