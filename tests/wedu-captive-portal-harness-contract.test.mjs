@@ -66,6 +66,27 @@ test('WEDU lab proves split-DNS protected resolution before any portal-mode phas
   assert.match(successExpression, /splitDnsProtected\.markerNeverPresent/);
 });
 
+test('WEDU lab quiesces pre-existing OpenPath task writers before its proof', () => {
+  assert.match(harness, /function Stop-WeduConcurrentOpenPathTasks/);
+  const quiesceBody =
+    harness.match(/function Stop-WeduConcurrentOpenPathTasks[\s\S]*?\n}\n\nfunction /)?.[0] ?? '';
+
+  for (const taskName of [
+    'OpenPath-Update',
+    'OpenPath-RuntimeDependencyApply',
+    'OpenPath-CaptivePortalRecovery',
+    'OpenPath-Startup',
+    'OpenPath-SSE',
+    'OpenPath-AgentUpdate',
+  ]) {
+    assert.match(quiesceBody, new RegExp(taskName));
+  }
+  assert.match(quiesceBody, /Disable-ScheduledTask/);
+  assert.match(quiesceBody, /Stop-ScheduledTask/);
+  assert.match(harness, /Stop-WeduConcurrentOpenPathTasks/);
+  assert.match(harness, /Enable-ScheduledTask -TaskName \$script:WatchdogTaskName/);
+});
+
 test('captive portal evidence contract keeps discovery diagnostic-only', () => {
   const module = readSource('windows/lib/CaptivePortal.psm1');
   const diagnosticsModule = readSource(

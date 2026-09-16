@@ -1442,10 +1442,60 @@ function Invoke-WeduSplitDnsPrime {
     }
 }
 
+function Stop-WeduConcurrentOpenPathTasks {
+    <#
+    Stops and disables OpenPath scheduled-task writers left by the runner's
+    baseline installation. The WEDU harness owns the watchdog proof, but the
+    update, SSE, startup, and agent-update tasks must not rewrite Acrylic while
+    the lab is observing split DNS. The controller snapshot restores the VM
+    after the run, so this isolation is scoped to the canary transaction.
+    #>
+    param(
+        [switch]$KeepWatchdog
+    )
+
+    $taskNames = @(
+        'OpenPath-Update',
+        'OpenPath-RuntimeDependencyApply',
+        'OpenPath-CaptivePortalRecovery',
+        'OpenPath-Startup',
+        'OpenPath-SSE',
+        'OpenPath-AgentUpdate'
+    )
+    if (-not $KeepWatchdog) {
+        $taskNames += $script:WatchdogTaskName
+    }
+
+    foreach ($taskName in $taskNames) {
+        try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
+        try { Disable-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null } catch { }
+    }
+
+    $deadline = (Get-Date).AddSeconds(120)
+    do {
+        $runningTasks = @(
+            Get-ScheduledTask -TaskName $taskNames -ErrorAction SilentlyContinue |
+                Where-Object { $_.State -eq 'Running' } |
+                Select-Object -ExpandProperty TaskName
+        )
+        if ($runningTasks.Count -eq 0) {
+            return
+        }
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $deadline)
+
+    throw "WEDU lab could not quiesce OpenPath scheduled tasks: $($runningTasks -join ', ')"
+}
+
 function Invoke-WeduLabRun {
     Ensure-ArtifactRoot
     $config = Get-WeduLabConfig
 
+    # A VM snapshot preserves the installed OpenPath tasks, and a previous
+    # watchdog/update process can still be alive when the lab subnet comes up.
+    # Quiesce that baseline before the first probe; otherwise the later staged
+    # watchdog would race an unrelated writer and the evidence would be invalid.
+    Stop-WeduConcurrentOpenPathTasks
     Invoke-WeduSplitDnsPrime
 
     $networkBefore = Get-WeduNetworkSnapshot
@@ -1514,6 +1564,12 @@ function Invoke-WeduLabRun {
     # upstream so the watchdog has captivePortalDomains declared and a configured
     # upstream that cannot resolve the portal host.
     $runnerConfig = Ensure-WeduDirectRunnerConfig
+
+    # Register-OpenPathTask recreates all tasks enabled. Quiesce every writer
+    # except the staged watchdog before its suppression proof begins; this also
+    # drains any task that was started by the runner baseline before staging.
+    Stop-WeduConcurrentOpenPathTasks -KeepWatchdog
+    Enable-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop | Out-Null
 
     # Negative control: the configured (stale/public) upstream must NOT resolve the
     # portal host -- otherwise the lab is not reproducing the production condition.
