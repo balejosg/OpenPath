@@ -83,6 +83,9 @@ test('WEDU lab quiesces pre-existing OpenPath task writers before its proof', ()
   }
   assert.match(quiesceBody, /Disable-ScheduledTask/);
   assert.match(quiesceBody, /Stop-ScheduledTask/);
+  assert.match(quiesceBody, /Get-CimInstance[\s\S]*Win32_Process/);
+  assert.match(quiesceBody, /Stop-Process/);
+  assert.match(quiesceBody, /Test-DNSHealth\.ps1/);
   assert.match(harness, /Stop-WeduConcurrentOpenPathTasks/);
   assert.match(harness, /Enable-ScheduledTask -TaskName \$script:WatchdogTaskName/);
 });

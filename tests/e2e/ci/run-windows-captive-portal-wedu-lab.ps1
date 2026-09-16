@@ -1471,6 +1471,26 @@ function Stop-WeduConcurrentOpenPathTasks {
         try { Disable-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null } catch { }
     }
 
+    # Stop-ScheduledTask does not reliably terminate a PowerShell child that was
+    # detached by a prior runner invocation. Find only the known OpenPath writer
+    # scripts under the installed root; never match this WEDU harness or another
+    # checkout. Keep the watchdog process when the staged proof owns it.
+    $writerScriptNames = @(
+        'Update-OpenPath.ps1',
+        'Apply-RuntimeDependencyQueue.ps1',
+        'Recover-CaptivePortal.ps1',
+        'Start-SSEListener.ps1',
+        'OpenPath.ps1'
+    )
+    if (-not $KeepWatchdog) {
+        $writerScriptNames += 'Test-DNSHealth.ps1'
+    }
+    $writerScriptPaths = @(
+        $writerScriptNames | ForEach-Object {
+            Join-Path (Join-Path $script:InstalledOpenPathRoot 'scripts') $_
+        }
+    )
+
     $deadline = (Get-Date).AddSeconds(120)
     do {
         $runningTasks = @(
@@ -1478,13 +1498,47 @@ function Stop-WeduConcurrentOpenPathTasks {
                 Where-Object { $_.State -eq 'Running' } |
                 Select-Object -ExpandProperty TaskName
         )
-        if ($runningTasks.Count -eq 0) {
+
+        $writerProcesses = @(
+            Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+                Where-Object {
+                    $commandLine = [string]$_.CommandLine
+                    @(
+                        $writerScriptPaths | Where-Object {
+                            $commandLine.IndexOf($_, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+                        }
+                    ).Count -gt 0
+                }
+        )
+        foreach ($writerProcess in $writerProcesses) {
+            try {
+                Stop-Process -Id ([int]$writerProcess.ProcessId) -Force -ErrorAction Stop
+            }
+            catch {
+                # Re-scan until the deadline; an already-exited process is harmless,
+                # while a surviving writer causes the fail-closed throw below.
+            }
+        }
+
+        if ($runningTasks.Count -eq 0 -and $writerProcesses.Count -eq 0) {
             return
         }
         Start-Sleep -Seconds 1
     } while ((Get-Date) -lt $deadline)
 
-    throw "WEDU lab could not quiesce OpenPath scheduled tasks: $($runningTasks -join ', ')"
+    $remainingWriters = @(
+        Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $commandLine = [string]$_.CommandLine
+                @(
+                    $writerScriptPaths | Where-Object {
+                        $commandLine.IndexOf($_, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+                    }
+                ).Count -gt 0
+            } |
+            ForEach-Object { "$($_.ProcessId):$($_.CommandLine)" }
+    )
+    throw "WEDU lab could not quiesce OpenPath writers: tasks=[$($runningTasks -join ', ')] processes=[$($remainingWriters -join ' | ')]"
 }
 
 function Invoke-WeduLabRun {
