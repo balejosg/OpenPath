@@ -2874,6 +2874,7 @@ Describe "AppControl and watchdog health contract" {
             enableNonAdminAppControl = $true
             nonAdminAppControlMode = 'Enforced'
             appControlCommitState = ''
+            activeAppControlProfile = 'StrictApplicationAllowlist'
             approvedStudentBrowsers = @('Firefox')
             enableIntegrityChecks = $false
         } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
@@ -2915,7 +2916,9 @@ Describe "AppControl and watchdog health contract" {
 
             $savedConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
             $savedConfig.appControlCommitState | Should -Be 'committed'
+            $savedConfig.activeAppControlProfile | Should -Be 'ManagedBrowserCompatibility'
             $result.ReasonCodes | Should -Not -Contain 'appcontrol_uncommitted'
+            $result.ReasonCodes | Should -Not -Contain 'appcontrol_profile_mismatch'
         }
         finally {
             Remove-Item Function:\Get-OpenPathWatchdogTaskHealth, Function:\Get-LocalGroup, Function:\Sync-OpenPathRestrictedGroup -ErrorAction SilentlyContinue

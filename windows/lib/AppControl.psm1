@@ -278,48 +278,108 @@ function Test-OpenPathApplicationApprovalCatalog {
     if ($Profile -eq 'ManagedBrowserCompatibility') {
         return $true
     }
-    if (-not $Catalog -or -not $Catalog.PSObject.Properties['schemaVersion'] -or
-        [int]$Catalog.schemaVersion -ne 1 -or -not $Catalog.PSObject.Properties['applications']) {
-        return $false
-    }
 
-    $ids = @{}
-    foreach ($application in @($Catalog.applications)) {
-        if (-not $application -or -not $application.PSObject.Properties['id'] -or
-            [string]::IsNullOrWhiteSpace([string]$application.id) -or $ids.ContainsKey([string]$application.id) -or
-            -not $application.PSObject.Properties['identity'] -or -not $application.identity) {
+    try {
+        if (-not $Catalog -or -not $Catalog.PSObject.Properties['schemaVersion'] -or
+            [int]$Catalog.schemaVersion -ne 1 -or -not $Catalog.PSObject.Properties['applications']) {
             return $false
         }
-        $ids[[string]$application.id] = $true
-        $identity = $application.identity
-        $type = if ($identity.PSObject.Properties['type']) { [string]$identity.type } else { '' }
-        switch ($type) {
-            'Publisher' {
-                foreach ($property in @('publisherName', 'productName', 'binaryName')) {
-                    if (-not $identity.PSObject.Properties[$property] -or
-                        [string]::IsNullOrWhiteSpace([string]$identity.$property) -or [string]$identity.$property -match '[*?]') {
+
+        $applicationsValue = $Catalog.PSObject.Properties['applications'].Value
+        if ($null -eq $applicationsValue -or $applicationsValue -isnot [System.Array]) {
+            return $false
+        }
+
+        $ids = @{}
+        $knownExtensions = @('.exe', '.com', '.dll', '.ps1', '.bat', '.cmd', '.vbs', '.js', '.wsf', '.msi', '.msp', '.mst')
+        foreach ($application in @($applicationsValue)) {
+            if (-not $application -or -not $application.PSObject.Properties['id'] -or
+                [string]::IsNullOrWhiteSpace([string]$application.id) -or
+                [string]$application.id -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' -or
+                $ids.ContainsKey([string]$application.id) -or
+                -not $application.PSObject.Properties['identity'] -or -not $application.identity) {
+                return $false
+            }
+            $ids[[string]$application.id] = $true
+            $identity = $application.identity
+            $type = if ($identity.PSObject.Properties['type']) { [string]$identity.type } else { '' }
+            switch ($type) {
+                { $_ -in @('Publisher', 'AppxPublisher') } {
+                    foreach ($property in @('publisherName', 'productName')) {
+                        if (-not $identity.PSObject.Properties[$property] -or
+                            [string]::IsNullOrWhiteSpace([string]$identity.$property) -or
+                            [string]$identity.$property -match '[*?]' -or
+                            [string]$identity.$property -match '[\\/\x00-\x1F]') {
+                            return $false
+                        }
+                    }
+                    $binaryWildcardAllowed = $type -eq 'AppxPublisher' -and [string]$identity.binaryName -eq '*'
+                    if (-not $identity.PSObject.Properties['binaryName'] -or
+                        [string]::IsNullOrWhiteSpace([string]$identity.binaryName) -or
+                        ([string]$identity.binaryName -match '[*?]' -and -not $binaryWildcardAllowed) -or
+                        [string]$identity.binaryName -match '[\\/:<>|\x00-\x1F]') {
+                        return $false
+                    }
+                    if ($type -eq 'Publisher' -and $knownExtensions -notcontains ([IO.Path]::GetExtension([string]$identity.binaryName).ToLowerInvariant())) {
                         return $false
                     }
                 }
-            }
-            'Path' {
-                $path = if ($identity.PSObject.Properties['path']) { [string]$identity.path } else { '' }
-                if ($path -notmatch '^(?i)(?:[A-Z]:\\Program Files(?: \(x86\))?|%PROGRAMFILES%)\\[^*?]+\\[^*?]+$' -or
-                    $path -match '(?i)\\Users\\|AppData|\.\.') {
-                    return $false
+                'Path' {
+                    $path = if ($identity.PSObject.Properties['path']) { ([string]$identity.path).Trim() } else { '' }
+                    $pathPattern = '^(?i)(?:[A-Z]:\\Program Files(?: \(x86\))?|%PROGRAMFILES%)\\[^*?\\/:<>|]+(?:\\[^*?\\/:<>|]+)*$'
+                    if ($path -notmatch $pathPattern -or $path -match '(?i)\\Users\\|AppData|\.\.' -or
+                        $knownExtensions -notcontains ([IO.Path]::GetExtension($path).ToLowerInvariant())) {
+                        return $false
+                    }
                 }
-            }
-            'Hash' {
-                $hash = if ($identity.PSObject.Properties['sha256']) { [string]$identity.sha256 } else { '' }
-                $fileName = if ($identity.PSObject.Properties['fileName']) { [string]$identity.fileName } else { '' }
-                if ($hash -notmatch '^[0-9a-fA-F]{64}$' -or $fileName -notmatch '^[^\\/:*?"<>|]+\.(?i:exe|com|dll|ps1|bat|cmd|msi)$') {
-                    return $false
+                'Hash' {
+                    $hash = if ($identity.PSObject.Properties['sha256']) { [string]$identity.sha256 } else { '' }
+                    $fileName = if ($identity.PSObject.Properties['fileName']) { ([string]$identity.fileName).Trim() } else { '' }
+                    if ($hash -notmatch '^[0-9a-fA-F]{64}$' -or
+                        $fileName -notmatch '^[^\\/:*?"<>|\x00-\x1F]+$' -or
+                        $knownExtensions -notcontains ([IO.Path]::GetExtension($fileName).ToLowerInvariant())) {
+                        return $false
+                    }
                 }
+                default { return $false }
             }
-            default { return $false }
         }
+        return $true
     }
-    return $true
+    catch {
+        return $false
+    }
+}
+
+function Get-OpenPathApplicationCatalogCollection {
+    <#
+    .SYNOPSIS
+    Maps a validated catalog identity to the AppLocker collection it can affect.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Identity
+    )
+
+    $type = if ($Identity.PSObject.Properties['type']) { [string]$Identity.type } else { '' }
+    if ($type -eq 'AppxPublisher') {
+        return 'Appx'
+    }
+
+    $fileName = switch ($type) {
+        'Publisher' { [string]$Identity.binaryName }
+        'Path' { [string]$Identity.path }
+        'Hash' { [string]$Identity.fileName }
+        default { '' }
+    }
+    $extension = [IO.Path]::GetExtension($fileName).ToLowerInvariant()
+    switch ($extension) {
+        { $_ -in @('.exe', '.com') } { return 'Exe' }
+        { $_ -in @('.ps1', '.bat', '.cmd', '.vbs', '.js', '.wsf') } { return 'Script' }
+        { $_ -in @('.msi', '.msp', '.mst') } { return 'Msi' }
+        '.dll' { return 'Dll' }
+        default { return '' }
+    }
 }
 
 function Get-OpenPathEdgeAppxProductNames {
@@ -523,6 +583,30 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
             ([string]$_).Replace('%PROGRAMFILES%', '%PROGRAMFILES%').Replace('%OSDRIVE%\Users\*\AppData\Local', '%OSDRIVE%\Users\*\AppData\Local')
         } | Sort-Object -Unique)
 
+    # Keep collection-specific baselines separate.  A path that is safe for an
+    # executable is not automatically safe for scripts, installers, or DLLs.
+    # Compatibility retains the historical broad executable/script contract;
+    # strict mode only gives restricted users the protected OpenPath runtime
+    # script root and catalog entries in their matching collection.
+    $allowPathsByCollection = @{
+        Exe = @('%WINDIR%\*', $openPathRuntimePath)
+        Script = @($openPathRuntimePath)
+        Msi = @()
+        # OpenPath ships native dependencies alongside its protected runtime.
+        # Keep that allowance scoped to the exact install root; never widen DLL
+        # approval to all of Program Files.
+        # Enabling DLL enforcement must still permit the administrator-owned
+        # Windows runtime that every approved process loads.  The student
+        # cannot write this root; executable/script escape surfaces remain
+        # governed by their own collections and explicit denies.
+        Dll = @('%WINDIR%\*', $openPathRuntimePath)
+        Appx = @()
+    }
+    if ($Profile -eq 'ManagedBrowserCompatibility') {
+        $allowPathsByCollection.Exe = @($allowPaths)
+        $allowPathsByCollection.Script = @($allowPaths)
+    }
+
     $unapprovedBrowserDenyPaths = @()
     if (-not $approvedBrowserSet.Firefox) {
         $unapprovedBrowserDenyPaths += $firefoxPaths
@@ -545,6 +629,18 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
             if (-not $identity -or -not $identity.ExecutablePath -or -not $identity.IsApproved) { continue }
             if ($approvedBrowserSet.ContainsKey([string]$identity.Family)) {
                 $allowPaths += [string]$identity.ExecutablePath
+                $allowPathsByCollection.Exe += [string]$identity.ExecutablePath
+                # An approved browser is a process plus its administrator-owned
+                # native DLL directory.  Keep the DLL allowance scoped to the
+                # exact discovered installation root; never widen it to all of
+                # Program Files.
+                # Avoid provider normalization here: inventory paths are
+                # Windows AppLocker paths even when the policy is unit-tested
+                # under PowerShell Core on a non-Windows host.
+                $browserDirectory = ([string]$identity.ExecutablePath) -replace '[\\/][^\\/]+$', ''
+                if ($browserDirectory) {
+                    $allowPathsByCollection.Dll += "$($browserDirectory -replace '[\\/]+$', '')\*"
+                }
             }
         }
     }
@@ -568,41 +664,85 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
 
     $approvedApplicationPublishers = @()
     $approvedApplicationHashes = @()
+    $approvedApplicationPublishersByCollection = @{
+        Exe = @(); Script = @(); Msi = @(); Dll = @(); Appx = @()
+    }
+    $approvedApplicationHashesByCollection = @{
+        Exe = @(); Script = @(); Msi = @(); Dll = @(); Appx = @()
+    }
     if ($Profile -eq 'StrictApplicationAllowlist') {
         foreach ($application in @($ApplicationCatalog.applications)) {
+            $collection = Get-OpenPathApplicationCatalogCollection -Identity $application.identity
+            if (-not $collection) {
+                throw 'strict-catalog-invalid'
+            }
             switch ([string]$application.identity.type) {
-                'Path' { $allowPaths += [string]$application.identity.path }
+                'Path' {
+                    $allowPaths += [string]$application.identity.path
+                    $allowPathsByCollection[$collection] += [string]$application.identity.path
+                }
                 'Publisher' {
-                    $approvedApplicationPublishers += [pscustomobject]@{
+                    $publisher = [pscustomobject]@{
                         Id = [string]$application.id
                         PublisherName = [string]$application.identity.publisherName
                         ProductName = [string]$application.identity.productName
                         BinaryName = [string]$application.identity.binaryName
                     }
+                    $approvedApplicationPublishers += $publisher
+                    $approvedApplicationPublishersByCollection[$collection] += $publisher
+                }
+                'AppxPublisher' {
+                    $publisher = [pscustomobject]@{
+                        Id = [string]$application.id
+                        PublisherName = [string]$application.identity.publisherName
+                        ProductName = [string]$application.identity.productName
+                        BinaryName = [string]$application.identity.binaryName
+                    }
+                    $approvedApplicationPublishersByCollection.Appx += $publisher
                 }
                 'Hash' {
-                    $approvedApplicationHashes += [pscustomobject]@{
+                    $hash = [pscustomobject]@{
                         Id = [string]$application.id
                         Sha256 = ([string]$application.identity.sha256).ToUpperInvariant()
                         FileName = [string]$application.identity.fileName
                     }
+                    $approvedApplicationHashes += $hash
+                    $approvedApplicationHashesByCollection[$collection] += $hash
                 }
             }
         }
         $allowPaths = @($allowPaths | Sort-Object -Unique)
+        foreach ($collection in @('Exe', 'Script', 'Msi', 'Dll', 'Appx')) {
+            $allowPathsByCollection[$collection] = @($allowPathsByCollection[$collection] | Sort-Object -Unique)
+            $approvedApplicationPublishersByCollection[$collection] = @($approvedApplicationPublishersByCollection[$collection])
+            $approvedApplicationHashesByCollection[$collection] = @($approvedApplicationHashesByCollection[$collection])
+        }
+    }
+
+    $approvedAppxBrowserProducts = if ($Profile -eq 'StrictApplicationAllowlist' -and $approvedBrowserSet.Edge) {
+        @(Get-OpenPathEdgeAppxProductNames)
+    }
+    else {
+        @()
     }
 
     return [PSCustomObject]@{
         Profile = $Profile
         Mode = $Mode
         EnforcementMode = if ($Mode -eq 'AuditOnly') { 'AuditOnly' } else { 'Enabled' }
+        EnforcedCollections = if ($Profile -eq 'StrictApplicationAllowlist') { @('Exe', 'Script', 'Msi', 'Appx', 'Dll') } else { @('Exe', 'Script', 'Appx') }
         RestrictedSid = Get-OpenPathRestrictedGroupSid
         AdminSid = 'S-1-5-32-544'
         SystemSid = 'S-1-5-18'
         ApprovedBrowsers = @($approvedBrowserSet.Keys | Sort-Object)
         AllowPaths = @($allowPaths)
+        AllowPathsByCollection = $allowPathsByCollection
         ApprovedApplicationPublishers = @($approvedApplicationPublishers)
         ApprovedApplicationHashes = @($approvedApplicationHashes)
+        ApprovedApplicationPublishersByCollection = $approvedApplicationPublishersByCollection
+        ApprovedApplicationHashesByCollection = $approvedApplicationHashesByCollection
+        ApprovedAppxBrowserProducts = @($approvedAppxBrowserProducts)
+        BrowserInventory = $BrowserInventory
         UnapprovedBrowserDenyPaths = @($unapprovedBrowserDenyPaths)
         UnapprovedBrowserDenyAppxProducts = @($unapprovedBrowserDenyAppxProducts)
         AlwaysDeniedAppxProducts = @(Get-OpenPathAlwaysDeniedAppxProductNames)
@@ -645,6 +785,10 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
             '%OSDRIVE%\Users\*\Downloads\*',
             '%OSDRIVE%\Users\*\Desktop\*',
             '%OSDRIVE%\Users\*\AppData\Local\Temp\*',
+            # Windows Temp is writable by standard users on supported images;
+            # keep the broad system-root baseline from turning it into an
+            # execution escape hatch.
+            '%WINDIR%\Temp\*',
             '%REMOVABLE%\*',
             '%HOT%\*'
         )
@@ -770,7 +914,9 @@ function New-OpenPathAppLockerPolicyXml {
     )
 
     $ruleCollections = @()
-    foreach ($collectionType in @('Exe', 'Script')) {
+    $strictProfile = $Spec.PSObject.Properties['Profile'] -and $Spec.Profile -eq 'StrictApplicationAllowlist'
+    $fileCollectionTypes = if ($strictProfile) { @('Exe', 'Script', 'Msi', 'Dll') } else { @('Exe', 'Script') }
+    foreach ($collectionType in $fileCollectionTypes) {
         $rules = @()
         $denyPaths = @($Spec.UserWritableDenyPaths)
         if ($collectionType -eq 'Exe') {
@@ -792,7 +938,11 @@ function New-OpenPathAppLockerPolicyXml {
         $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType administrators allow all" -Sid $Spec.AdminSid -Action 'Allow' -Path '*'
         $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType system allow all" -Sid $Spec.SystemSid -Action 'Allow' -Path '*'
 
-        foreach ($path in @($Spec.AllowPaths)) {
+        $collectionAllowPaths = @($Spec.AllowPaths)
+        if ($Spec.PSObject.Properties['AllowPathsByCollection'] -and $Spec.AllowPathsByCollection.ContainsKey($collectionType)) {
+            $collectionAllowPaths = @($Spec.AllowPathsByCollection[$collectionType])
+        }
+        foreach ($path in $collectionAllowPaths) {
             $exceptions = @()
             if ($collectionType -eq 'Exe' -and $path -eq '%WINDIR%\*') {
                 $exceptions = @($Spec.BlockedWindowsTools)
@@ -802,14 +952,16 @@ function New-OpenPathAppLockerPolicyXml {
             $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType users allow $pathId" -Sid $Spec.RestrictedSid -Action 'Allow' -Path $path -Exceptions $exceptions
         }
 
-        if ($collectionType -eq 'Exe') {
-            foreach ($publisher in @($Spec.ApprovedApplicationPublishers)) {
-                $rules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Exe users allow approved app $($publisher.Id)" `
+        if ($Spec.PSObject.Properties['ApprovedApplicationPublishersByCollection'] -and $Spec.ApprovedApplicationPublishersByCollection.ContainsKey($collectionType)) {
+            foreach ($publisher in @($Spec.ApprovedApplicationPublishersByCollection[$collectionType])) {
+                $rules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix $collectionType users allow approved app $($publisher.Id)" `
                     -Sid $Spec.RestrictedSid -Action 'Allow' -PublisherName $publisher.PublisherName `
                     -ProductName $publisher.ProductName -BinaryName $publisher.BinaryName
             }
-            foreach ($hash in @($Spec.ApprovedApplicationHashes)) {
-                $rules += New-OpenPathFileHashRuleXml -Name "$script:OpenPathAppControlRulePrefix Exe users allow approved app $($hash.Id)" `
+        }
+        if ($Spec.PSObject.Properties['ApprovedApplicationHashesByCollection'] -and $Spec.ApprovedApplicationHashesByCollection.ContainsKey($collectionType)) {
+            foreach ($hash in @($Spec.ApprovedApplicationHashesByCollection[$collectionType])) {
+                $rules += New-OpenPathFileHashRuleXml -Name "$script:OpenPathAppControlRulePrefix $collectionType users allow approved app $($hash.Id)" `
                     -Sid $Spec.RestrictedSid -Action 'Allow' -Sha256 $hash.Sha256 -FileName $hash.FileName
             }
         }
@@ -830,6 +982,21 @@ function New-OpenPathAppLockerPolicyXml {
         $productId = ($productName -replace '[^0-9A-Za-z]+', '-').Trim('-')
         $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users deny parallel network stack $productId" -Sid $Spec.RestrictedSid -Action 'Deny' -PublisherName '*' -ProductName $productName -BinaryName '*'
     }
+    if ($strictProfile) {
+        # Appx has no useful path rule. Keep recovery scoped to administrators
+        # and SYSTEM, while restricted users receive only catalog publishers.
+        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx administrators allow all" -Sid $Spec.AdminSid -Action 'Allow' -PublisherName '*' -ProductName '*' -BinaryName '*'
+        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx system allow all" -Sid $Spec.SystemSid -Action 'Allow' -PublisherName '*' -ProductName '*' -BinaryName '*'
+        foreach ($productName in @($Spec.ApprovedAppxBrowserProducts)) {
+            $productId = ($productName -replace '[^0-9A-Za-z]+', '-').Trim('-')
+            $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow approved Edge $productId" -Sid $Spec.RestrictedSid -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION*' -ProductName $productName -BinaryName '*'
+        }
+        if ($Spec.PSObject.Properties['ApprovedApplicationPublishersByCollection'] -and $Spec.ApprovedApplicationPublishersByCollection.ContainsKey('Appx')) {
+            foreach ($publisher in @($Spec.ApprovedApplicationPublishersByCollection.Appx)) {
+                $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow approved app $($publisher.Id)" -Sid $Spec.RestrictedSid -Action 'Allow' -PublisherName $publisher.PublisherName -ProductName $publisher.ProductName -BinaryName $publisher.BinaryName
+            }
+        }
+    }
     # Allow only Microsoft-signed packaged apps (OS inbox and Store-distributed Microsoft apps).
     # A global ProductName='*' allow lets any publisher's Appx run, including sideloaded alternate
     # browsers with non-Edge ProductNames that would bypass the per-product Edge denies above.
@@ -837,16 +1004,21 @@ function New-OpenPathAppLockerPolicyXml {
     # (Windows inbox, Store-distributed Edge, Teams, etc.) without opening the door to third-party
     # sideloaded packages.  SID S-1-1-0 (Everyone) is kept so the rule applies to all users
     # including non-admins, matching the original intent.
-    if (-not $Spec.PSObject.Properties['Profile'] -or $Spec.Profile -eq 'ManagedBrowserCompatibility') {
+    if (-not $strictProfile) {
         $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow Microsoft signed packaged apps" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION*' -ProductName '*' -BinaryName '*'
     }
     $ruleCollections += "    <RuleCollection Type=`"Appx`" EnforcementMode=`"$($Spec.EnforcementMode)`">`n$($appxRules -join "`n")`n    </RuleCollection>"
 
+    $emptyCollections = if (-not $strictProfile) {
+        "    <RuleCollection Type=`"Dll`" EnforcementMode=`"NotConfigured`" />`n    <RuleCollection Type=`"Msi`" EnforcementMode=`"NotConfigured`" />"
+    }
+    else {
+        ''
+    }
     return @"
 <AppLockerPolicy Version="1">
 $($ruleCollections -join "`n")
-    <RuleCollection Type="Dll" EnforcementMode="NotConfigured" />
-    <RuleCollection Type="Msi" EnforcementMode="NotConfigured" />
+$emptyCollections
 </AppLockerPolicy>
 "@
 }
@@ -870,7 +1042,7 @@ function Merge-OpenPathAppLockerPolicyXml {
     )
 
     foreach ($sourceCollection in @($OpenPathPolicy.AppLockerPolicy.RuleCollection)) {
-        if (@($sourceCollection.ChildNodes).Count -eq 0) {
+        if ($null -eq $sourceCollection) {
             continue
         }
 
@@ -888,16 +1060,29 @@ function Merge-OpenPathAppLockerPolicyXml {
             [void]$CurrentPolicy.AppLockerPolicy.AppendChild($targetCollection)
         }
 
-        if ($sourceCollection.HasAttribute('EnforcementMode')) {
-            $targetCollection.SetAttribute('EnforcementMode', $sourceCollection.GetAttribute('EnforcementMode'))
-        }
-
         foreach ($rule in @($targetCollection.ChildNodes)) {
             if (Test-OpenPathAppLockerRuleManaged -Rule $rule) {
                 [void]$targetCollection.RemoveChild($rule)
             }
         }
 
+        if (@($sourceCollection.ChildNodes).Count -eq 0) {
+            # An empty managed collection clears stale OpenPath rules.  Preserve
+            # an administrator-owned collection's enforcement mode when it still
+            # contains unrelated rules; otherwise apply the source mode (for
+            # example NotConfigured when leaving strict mode).
+            $unmanagedRuleCount = @($targetCollection.ChildNodes | Where-Object {
+                    $_.NodeType -eq [System.Xml.XmlNodeType]::Element -and
+                    -not (Test-OpenPathAppLockerRuleManaged -Rule $_)
+                }).Count
+            if ($unmanagedRuleCount -eq 0 -and $sourceCollection.HasAttribute('EnforcementMode')) {
+                $targetCollection.SetAttribute('EnforcementMode', $sourceCollection.GetAttribute('EnforcementMode'))
+            }
+            continue
+        }
+        if ($sourceCollection.HasAttribute('EnforcementMode')) {
+            $targetCollection.SetAttribute('EnforcementMode', $sourceCollection.GetAttribute('EnforcementMode'))
+        }
         foreach ($rule in @($sourceCollection.ChildNodes)) {
             $importedRule = $CurrentPolicy.ImportNode($rule, $true)
             [void]$targetCollection.AppendChild($importedRule)
@@ -1012,7 +1197,9 @@ function Test-OpenPathFilePublisherRulePresent {
         [Parameter(Mandatory = $true)]
         [string]$ProductName,
 
-        [string]$PublisherName = $null
+        [string]$PublisherName = $null,
+
+        [string]$BinaryName = '*'
     )
 
     if (-not $Collection) {
@@ -1023,8 +1210,44 @@ function Test-OpenPathFilePublisherRulePresent {
                 $_.GetAttribute('Action') -eq $Action -and
                 $_.GetAttribute('UserOrGroupSid') -eq $Sid -and
                 $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq $ProductName -and
-                $_.Conditions.FilePublisherCondition.GetAttribute('BinaryName') -eq '*' -and
+                $_.Conditions.FilePublisherCondition.GetAttribute('BinaryName') -eq $BinaryName -and
                 (-not $PublisherName -or $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq $PublisherName) -and
+                (Test-OpenPathAppLockerRuleManaged -Rule $_)
+            }).Count -gt 0)
+}
+
+function Test-OpenPathFileHashRulePresent {
+    <#
+    .SYNOPSIS
+    Returns true when a managed SHA-256 file-hash rule is present in a collection.
+    #>
+    param(
+        [AllowNull()]
+        [object]$Collection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Action,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Sid,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Sha256,
+
+        [Parameter(Mandatory = $true)]
+        [string]$FileName
+    )
+
+    if (-not $Collection) {
+        return $false
+    }
+
+    $expectedData = '0x' + $Sha256.ToUpperInvariant()
+    return [bool](@($Collection.FileHashRule | Where-Object {
+                $_.GetAttribute('Action') -eq $Action -and
+                $_.GetAttribute('UserOrGroupSid') -eq $Sid -and
+                $_.Conditions.FileHashCondition.FileHash.GetAttribute('Data') -eq $expectedData -and
+                $_.Conditions.FileHashCondition.FileHash.GetAttribute('SourceFileName') -eq $FileName -and
                 (Test-OpenPathAppLockerRuleManaged -Rule $_)
             }).Count -gt 0)
 }
@@ -1379,25 +1602,112 @@ function Test-OpenPathAppLockerBoundaryPolicy {
         [string]$Profile = 'ManagedBrowserCompatibility',
 
         [AllowNull()]
-        [object]$ApplicationCatalog = $null
+        [object]$ApplicationCatalog = $null,
+
+        [AllowNull()]
+        [object]$BrowserInventory = $null,
+
+        [string]$OpenPathRoot = $script:OpenPathRoot
     )
 
-    $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $script:OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog
+    $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $BrowserInventory
     $expectedMode = $spec.EnforcementMode
     $exeCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Exe'
     $scriptCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Script'
+    $msiCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Msi'
+    $dllCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Dll'
     $appxCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Appx'
 
-    foreach ($collection in @($exeCollection, $appxCollection)) {
+    $requiredCollections = if ($Profile -eq 'StrictApplicationAllowlist') {
+        @($exeCollection, $scriptCollection, $msiCollection, $dllCollection, $appxCollection)
+    }
+    else {
+        @($exeCollection, $scriptCollection, $appxCollection)
+    }
+    foreach ($collection in $requiredCollections) {
         if (-not (Test-OpenPathAppLockerCollectionMode -Collection $collection -ExpectedMode $expectedMode)) {
             return $false
         }
     }
 
-    foreach ($collection in @($exeCollection, $scriptCollection)) {
+    $adminFileCollections = if ($Profile -eq 'StrictApplicationAllowlist') {
+        @($exeCollection, $scriptCollection, $msiCollection, $dllCollection)
+    }
+    else {
+        @($exeCollection, $scriptCollection)
+    }
+    foreach ($collection in $adminFileCollections) {
         foreach ($sid in @($spec.AdminSid, $spec.SystemSid)) {
             if (-not (Test-OpenPathFilePathRulePresent -Collection $collection -Action 'Allow' -Sid $sid -Path '*')) {
                 return $false
+            }
+        }
+    }
+
+    if ($Profile -eq 'StrictApplicationAllowlist') {
+        foreach ($sid in @($spec.AdminSid, $spec.SystemSid)) {
+            if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid $sid -ProductName '*' -PublisherName '*' -BinaryName '*')) {
+                return $false
+            }
+        }
+        foreach ($productName in @($spec.ApprovedAppxBrowserProducts)) {
+            if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid $spec.RestrictedSid -ProductName $productName -PublisherName 'O=MICROSOFT CORPORATION*' -BinaryName '*')) {
+                return $false
+            }
+        }
+
+        # Strict mode must be default-deny for arbitrary managed locations and
+        # packaged apps.  A brand-specific deny would not prove the invariant.
+        if (@($exeCollection.FilePathRule | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Allow' -and
+                    $_.GetAttribute('UserOrGroupSid') -eq $spec.RestrictedSid -and
+                    $_.Conditions.FilePathCondition.GetAttribute('Path') -eq '%PROGRAMFILES%\*'
+                }).Count -gt 0) {
+            return $false
+        }
+        if (@($appxCollection.FilePublisherRule | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Allow' -and
+                    $_.GetAttribute('UserOrGroupSid') -in @('S-1-1-0', $spec.RestrictedSid) -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq 'O=MICROSOFT CORPORATION*' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
+                }).Count -gt 0) {
+            return $false
+        }
+
+        foreach ($application in @($ApplicationCatalog.applications)) {
+            $collection = Get-OpenPathApplicationCatalogCollection -Identity $application.identity
+            $targetCollection = switch ($collection) {
+                'Exe' { $exeCollection }
+                'Script' { $scriptCollection }
+                'Msi' { $msiCollection }
+                'Dll' { $dllCollection }
+                'Appx' { $appxCollection }
+                default { $null }
+            }
+            if (-not $targetCollection) {
+                return $false
+            }
+            switch ([string]$application.identity.type) {
+                'Path' {
+                    if (-not (Test-OpenPathFilePathRulePresent -Collection $targetCollection -Action 'Allow' -Sid $spec.RestrictedSid -Path ([string]$application.identity.path))) {
+                        return $false
+                    }
+                }
+                'Publisher' {
+                    if (-not (Test-OpenPathFilePublisherRulePresent -Collection $targetCollection -Action 'Allow' -Sid $spec.RestrictedSid -ProductName ([string]$application.identity.productName) -PublisherName ([string]$application.identity.publisherName) -BinaryName ([string]$application.identity.binaryName))) {
+                        return $false
+                    }
+                }
+                'AppxPublisher' {
+                    if (-not (Test-OpenPathFilePublisherRulePresent -Collection $targetCollection -Action 'Allow' -Sid $spec.RestrictedSid -ProductName ([string]$application.identity.productName) -PublisherName ([string]$application.identity.publisherName) -BinaryName ([string]$application.identity.binaryName))) {
+                        return $false
+                    }
+                }
+                'Hash' {
+                    if (-not (Test-OpenPathFileHashRulePresent -Collection $targetCollection -Action 'Allow' -Sid $spec.RestrictedSid -Sha256 ([string]$application.identity.sha256) -FileName ([string]$application.identity.fileName))) {
+                        return $false
+                    }
+                }
             }
         }
     }
@@ -1469,6 +1779,7 @@ function Get-OpenPathNonAdminAppControlHealth {
             EffectivePolicyValid = $false
             RuntimeEvaluationAvailable = $false
             RuntimeBoundaryValid = $false
+            ExpectedProfile = $Profile
             RestrictedTargetDetail = 'not-observed'
             GroupSid = ''; TargetSid = ''; ProfilePath = ''
             Expected = [pscustomobject]@{}
@@ -1546,18 +1857,24 @@ function Get-OpenPathNonAdminAppControlHealth {
                 $localPolicyPresent = $true
                 try {
                     $localPolicyXml = [xml]$localPolicyText
-                    $localPolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $localPolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog)
+                        $localPolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $localPolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $browserInventory)
                 }
                 catch {
                     $localPolicyValid = $false
                 }
                 if (-not $localPolicyValid) {
                     & $addReasonCode 'appcontrol_local_policy_invalid'
+                    if ($Profile -eq 'StrictApplicationAllowlist') {
+                        & $addReasonCode 'strict-required-rule-missing'
+                    }
                 }
             }
         }
         catch {
             & $addReasonCode 'appcontrol_local_policy_invalid'
+            if ($Profile -eq 'StrictApplicationAllowlist') {
+                & $addReasonCode 'strict-required-rule-missing'
+            }
         }
 
         $effectivePolicyText = $null
@@ -1570,24 +1887,33 @@ function Get-OpenPathNonAdminAppControlHealth {
                 $effectivePolicyPresent = $true
                 try {
                     $effectivePolicyXml = [xml]$effectivePolicyText
-                    $effectivePolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $effectivePolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog)
+                        $effectivePolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $effectivePolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $browserInventory)
                 }
                 catch {
                     $effectivePolicyValid = $false
                 }
                 if (-not $effectivePolicyValid) {
                     & $addReasonCode 'appcontrol_effective_policy_invalid'
+                    if ($Profile -eq 'StrictApplicationAllowlist') {
+                        & $addReasonCode 'strict-effective-policy-mismatch'
+                    }
                 }
             }
         }
         catch {
             & $addReasonCode 'appcontrol_effective_policy_invalid'
+            if ($Profile -eq 'StrictApplicationAllowlist') {
+                & $addReasonCode 'strict-effective-policy-mismatch'
+            }
         }
 
         $runtimeEvaluationAvailable = [bool](Get-Command -Name 'Test-AppLockerPolicy' -ErrorAction SilentlyContinue)
         if (-not $runtimeEvaluationAvailable) {
             Write-OpenPathLog 'AppLocker effective runtime policy test unavailable; refusing structural-only validation' -Level WARN
             & $addReasonCode 'appcontrol_runtime_evaluation_unavailable'
+            if ($Profile -eq 'StrictApplicationAllowlist') {
+                & $addReasonCode 'strict-runtime-probe-failed'
+            }
         }
         elseif ($restrictedTargetValid) {
             $probeSet = $null
@@ -1621,8 +1947,32 @@ function Get-OpenPathNonAdminAppControlHealth {
                     }
                     $runtimeBoundaryValid = $false
                     & $addReasonCode 'appcontrol_runtime_arbitrary_exe_allowed'
+                    if ($Profile -eq 'StrictApplicationAllowlist') {
+                        & $addReasonCode 'strict-runtime-probe-failed'
+                    }
                     Write-OpenPathLog "AppLocker effective evaluation failed for $($decision.FilePath): expected Denied/DeniedByDefault, observed $($decision.PolicyDecision)" -Level WARN
                     Write-OpenPathLog "AppLocker effective runtime policy test failed: Controlled AppControl probe was not denied: $($decision.PolicyDecision)" -Level WARN
+                }
+
+                if ($Profile -eq 'StrictApplicationAllowlist') {
+                    $futureBrowserPath = 'C:\Program Files\FutureBrowser\future.exe'
+                    $futureDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path @($futureBrowserPath) -User $probeTarget.UserSid -ErrorAction Stop)
+                    if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths @($futureBrowserPath) -Decisions $futureDecisions)) {
+                        throw 'Test-AppLockerPolicy did not return a decision for the strict FutureBrowser probe'
+                    }
+                    foreach ($decision in $futureDecisions) {
+                        [void]$runtimeDecisions.Add([pscustomobject][ordered]@{
+                                Kind = 'strict-unknown-program-files-executable'
+                                FilePath = [string]$decision.FilePath
+                                Expected = 'DeniedOrDeniedByDefault'
+                                Observed = [string]$decision.PolicyDecision
+                            })
+                        if ($decision.PolicyDecision -notin @('Denied', 'DeniedByDefault')) {
+                            $runtimeBoundaryValid = $false
+                            & $addReasonCode 'strict-runtime-probe-failed'
+                            Write-OpenPathLog "Strict AppLocker evaluation failed for unknown FutureBrowser path: observed $($decision.PolicyDecision)" -Level WARN
+                        }
+                    }
                 }
 
                 $approvedSet = Get-OpenPathApprovedBrowserSet -ApprovedBrowsers $ApprovedBrowsers
@@ -1658,6 +2008,9 @@ function Get-OpenPathNonAdminAppControlHealth {
                     if ($edgeAllowedDecisions.Count -gt 0) {
                         $runtimeBoundaryValid = $false
                         & $addReasonCode 'appcontrol_runtime_edge_allowed'
+                        if ($Profile -eq 'StrictApplicationAllowlist') {
+                            & $addReasonCode 'strict-runtime-probe-failed'
+                        }
                         Write-OpenPathLog 'AppLocker effective evaluation failed: Edge executable was not evaluated as Denied' -Level WARN
                         Write-OpenPathLog 'AppLocker effective runtime policy test failed: Edge executable was not evaluated as Denied' -Level WARN
                     }
@@ -1688,6 +2041,9 @@ function Get-OpenPathNonAdminAppControlHealth {
                     if ($firefoxNotAllowedDecisions.Count -gt 0) {
                         $runtimeBoundaryValid = $false
                         & $addReasonCode 'appcontrol_runtime_firefox_not_allowed'
+                        if ($Profile -eq 'StrictApplicationAllowlist') {
+                            & $addReasonCode 'strict-runtime-probe-failed'
+                        }
                         Write-OpenPathLog 'AppLocker effective evaluation failed: Firefox executable was not evaluated as Allowed' -Level WARN
                         Write-OpenPathLog 'AppLocker effective runtime policy test failed: Firefox executable was not evaluated as Allowed' -Level WARN
                     }
@@ -1696,6 +2052,9 @@ function Get-OpenPathNonAdminAppControlHealth {
             catch {
                 $runtimeBoundaryValid = $false
                 & $addReasonCode 'appcontrol_runtime_evaluation_failed'
+                if ($Profile -eq 'StrictApplicationAllowlist') {
+                    & $addReasonCode 'strict-runtime-probe-failed'
+                }
                 Write-OpenPathLog "AppLocker effective runtime policy test failed: $_" -Level WARN
             }
             finally {
@@ -1743,6 +2102,7 @@ function Get-OpenPathNonAdminAppControlHealth {
         EffectivePolicyValid = $effectivePolicyValid
         RuntimeEvaluationAvailable = $runtimeEvaluationAvailable
         RuntimeBoundaryValid = $runtimeBoundaryValid
+        ExpectedProfile = $Profile
         RestrictedTargetDetail = $restrictedTargetDetail
         GroupSid = $groupSid
         TargetSid = $targetSid
@@ -1762,6 +2122,7 @@ function Get-OpenPathNonAdminAppControlHealth {
             EffectivePolicyPresent = if ($capabilityAvailable) { $effectivePolicyPresent } else { 'not-observed' }
             EffectivePolicyValid = if ($capabilityAvailable) { $effectivePolicyValid } else { 'not-observed' }
             RuntimeDecisions = @($runtimeDecisions.ToArray())
+            Profile = $Profile
         }
         CleanupAttempted = if ($probeCleanupAttempted) { $true } else { 'not-observed' }
         CleanupSucceeded = if ($probeCleanupAttempted) { $probeCleanupSucceeded } else { 'not-observed' }
@@ -2080,6 +2441,14 @@ function Set-OpenPathNonAdminAppControl {
         $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog
         $policyXml = New-OpenPathAppLockerPolicyXml -Spec $spec
         $mergedPolicyXml = Merge-OpenPathAppLockerPolicyXml -CurrentPolicy ([xml]$currentPolicyText) -OpenPathPolicy ([xml]$policyXml)
+        # Validate the candidate in memory before crossing the AppLocker
+        # mutation boundary.  The backup remains available for failures after
+        # apply, but malformed strict candidates must never be applied first.
+        $diagnosticSubstep = 'policy-preflight'
+        if ($Profile -eq 'StrictApplicationAllowlist' -and
+            -not (Test-OpenPathAppLockerBoundaryPolicy -PolicyXml ([xml]$mergedPolicyXml) -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $spec.BrowserInventory -OpenPathRoot $OpenPathRoot)) {
+            throw 'strict-required-rule-missing'
+        }
         $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-applocker-$([guid]::NewGuid()).xml"
         $mergedPolicyXml.Save($policyPath)
         $diagnosticSubstep = 'policy-apply'
@@ -2118,6 +2487,10 @@ function Set-OpenPathNonAdminAppControl {
                 }
             }
             $failureDiagnostic = New-OpenPathAppControlFailureDiagnostic -Health $health
+            if ($Profile -eq 'StrictApplicationAllowlist' -and
+                @($failureDiagnostic.ReasonCodes) -notcontains 'strict-transition-failed') {
+                $failureDiagnostic.ReasonCodes = @($failureDiagnostic.ReasonCodes) + 'strict-transition-failed'
+            }
             Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic $failureDiagnostic
 
             $failureDiagnostic.InternalRollbackAttempted = $true
@@ -2142,6 +2515,7 @@ function Set-OpenPathNonAdminAppControl {
             $reasonCode = switch ($diagnosticSubstep) {
                 'policy-backup' { 'appcontrol_policy_backup_failed' }
                 'policy-generation' { 'appcontrol_policy_generation_failed' }
+                'policy-preflight' { if ($Profile -eq 'StrictApplicationAllowlist') { 'strict-required-rule-missing' } else { 'appcontrol_policy_generation_failed' } }
                 'policy-apply' { 'appcontrol_policy_apply_failed' }
                 'policy-activation' { 'appcontrol_policy_activation_failed' }
                 default { 'appcontrol_health_evaluation_failed' }
@@ -2176,6 +2550,9 @@ function Set-OpenPathNonAdminAppControl {
                 CleanupAttempted = 'not-observed'
                 CleanupSucceeded = 'not-observed'
                 PowerShellProcessArchitecture = "$(8 * [IntPtr]::Size)-bit"
+            }
+            if ($Profile -eq 'StrictApplicationAllowlist') {
+                $failureDiagnostic.ReasonCodes = @($failureDiagnostic.ReasonCodes) + 'strict-transition-failed'
             }
             if ($diagnosticSubstep -eq 'policy-activation') {
                 $failureDiagnostic.InternalRollbackAttempted = $true

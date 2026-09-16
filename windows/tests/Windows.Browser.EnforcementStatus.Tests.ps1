@@ -114,6 +114,54 @@ Describe "Browser Module - Enforcement status" {
             }
         }
 
+        It "Returns Inactive when the committed active profile differs from configuration" {
+            InModuleScope Browser.EnforcementStatus {
+                Mock Test-OpenPathNonAdminAppControlActive { $true }
+                $cfg = [pscustomobject]@{
+                    appControlCommitState = 'committed'
+                    installState = 'complete'
+                    nonAdminAppControlMode = 'Enforced'
+                    appControlProfile = 'StrictApplicationAllowlist'
+                    activeAppControlProfile = 'ManagedBrowserCompatibility'
+                }
+                Get-OpenPathAppLockerStatus -Config $cfg | Should -Be 'Inactive'
+                Should -Invoke Test-OpenPathNonAdminAppControlActive -Times 0 -Exactly
+            }
+        }
+
+        It "Returns Inactive when strict mode has no committed active profile identity" {
+            InModuleScope Browser.EnforcementStatus {
+                Mock Test-OpenPathNonAdminAppControlActive { $true }
+                $cfg = [pscustomobject]@{
+                    appControlCommitState = 'committed'
+                    installState = 'complete'
+                    nonAdminAppControlMode = 'Enforced'
+                    appControlProfile = 'StrictApplicationAllowlist'
+                }
+                Get-OpenPathAppLockerStatus -Config $cfg | Should -Be 'Inactive'
+                Should -Invoke Test-OpenPathNonAdminAppControlActive -Times 0 -Exactly
+            }
+        }
+
+        It "Forwards the configured strict profile and catalog to active AppControl validation" {
+            InModuleScope Browser.EnforcementStatus {
+                $catalog = [pscustomobject]@{ schemaVersion = 1; applications = @() }
+                Mock Test-OpenPathNonAdminAppControlActive { $true }
+                $cfg = [pscustomobject]@{
+                    appControlCommitState = 'committed'
+                    installState = 'complete'
+                    nonAdminAppControlMode = 'Enforced'
+                    appControlProfile = 'StrictApplicationAllowlist'
+                    activeAppControlProfile = 'StrictApplicationAllowlist'
+                    approvedApplicationCatalog = $catalog
+                }
+                Get-OpenPathAppLockerStatus -Config $cfg | Should -Be 'Enforced'
+                Should -Invoke Test-OpenPathNonAdminAppControlActive -Times 1 -Exactly -ParameterFilter {
+                    $Profile -eq 'StrictApplicationAllowlist' -and $ApplicationCatalog.schemaVersion -eq 1
+                }
+            }
+        }
+
         It "Legacy config without appControlCommitState returns Enforced when group exists and boundary active" {
             InModuleScope Browser.EnforcementStatus {
                 Mock Get-LocalGroup { [pscustomobject]@{ Name = 'OpenPath-Restricted' } }

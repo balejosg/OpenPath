@@ -150,6 +150,8 @@ function ConvertFrom-OpenPathOfflineConfigObject {
     $installFirefoxIfMissing = $false
     $enforceManagedBrowserBoundary = $false
     $approvedStudentBrowsers = @('Firefox')
+    $appControlProfile = 'ManagedBrowserCompatibility'
+    $approvedApplicationCatalog = $null
     $optionsProperty = $Config.PSObject.Properties['options']
     if ($optionsProperty -and $null -ne $optionsProperty.Value) {
         if ($optionsProperty.Value -isnot [PSCustomObject]) {
@@ -185,6 +187,23 @@ function ConvertFrom-OpenPathOfflineConfigObject {
             }
             $approvedStudentBrowsers = @($browsersProperty.Value | ForEach-Object { [string]$_ })
         }
+
+        $profileProperty = $optionsProperty.Value.PSObject.Properties['appControlProfile']
+        if ($profileProperty -and $null -ne $profileProperty.Value) {
+            $profileValue = [string]$profileProperty.Value
+            if ($profileValue -notin @('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')) {
+                throw "Offline installer configuration field options.appControlProfile contains unsupported profile '$profileValue'"
+            }
+            $appControlProfile = $profileValue
+        }
+
+        $catalogProperty = $optionsProperty.Value.PSObject.Properties['approvedApplicationCatalog']
+        if ($catalogProperty -and $null -ne $catalogProperty.Value) {
+            if ($catalogProperty.Value -isnot [PSCustomObject]) {
+                throw 'Offline installer configuration field options.approvedApplicationCatalog must be an object'
+            }
+            $approvedApplicationCatalog = $catalogProperty.Value
+        }
     }
 
     return [PSCustomObject]@{
@@ -196,6 +215,8 @@ function ConvertFrom-OpenPathOfflineConfigObject {
         InstallFirefoxIfMissing = $installFirefoxIfMissing
         EnforceManagedBrowserBoundary = $enforceManagedBrowserBoundary
         ApprovedStudentBrowsers = $approvedStudentBrowsers
+        AppControlProfile = $appControlProfile
+        ApprovedApplicationCatalog = $approvedApplicationCatalog
     }
 }
 

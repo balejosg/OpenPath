@@ -18,7 +18,8 @@ function Get-OpenPathBrowserInventoryUninstallEntries {
     param(
         [string[]]$RegistryPaths = @(
             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
         )
     )
 
@@ -355,7 +356,13 @@ function Get-OpenPathBrowserInventory {
     }
 
     $addIdentity = {
-        param([string]$Name, [string]$Path, [string]$Source, [bool]$IsApproved)
+        param(
+            [string]$Name,
+            [string]$Path,
+            [string]$Source,
+            [bool]$IsApproved,
+            [bool]$IsUserWritable = $false
+        )
         if ([string]::IsNullOrWhiteSpace($Path) -or -not $executableNames.ContainsKey($Name)) { return }
         $normalizedPath = $Path.Trim().Trim('"') -replace ',\s*-?\d+$', ''
         if (-not $normalizedPath.EndsWith('.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -365,7 +372,13 @@ function Get-OpenPathBrowserInventory {
             'Mozilla Firefox' { 'Firefox' }; 'Microsoft Edge' { 'Edge' }; 'Google Chrome' { 'Chrome' }; default { $Name }
         }
         $key = $normalizedPath.ToLowerInvariant()
-        $executableIdentities[$key] = [pscustomobject]@{ Family=$family; ExecutablePath=$normalizedPath; Source=$Source; IsApproved=$IsApproved }
+        $executableIdentities[$key] = [pscustomobject]@{
+            Family = $family
+            ExecutablePath = $normalizedPath
+            Source = $Source
+            IsApproved = [bool]($IsApproved -and -not $IsUserWritable)
+            IsUserWritable = [bool]$IsUserWritable
+        }
     }
 
     foreach ($entry in @($UninstallEntries)) {
@@ -382,17 +395,36 @@ function Get-OpenPathBrowserInventory {
         $uninstall = if ($entry.UninstallString) { [string]$entry.UninstallString } else { '' }
         $hasUninstall = [bool]($quietUninstall -or $uninstall)
         $isWebView2 = $name -eq 'Microsoft Edge WebView2 Runtime'
-        $isApproved = @('Mozilla Firefox', 'Microsoft Edge', 'Google Chrome') -contains $name
-        $isUnmanaged = @('Brave', 'Opera', 'Vivaldi', 'Tor Browser', 'Internet Explorer', 'Chromium') -contains $name
+        $identityPath = if ($entry.PSObject.Properties['DisplayIcon'] -and $entry.DisplayIcon) {
+            [string]$entry.DisplayIcon
+        }
+        elseif ($entry.InstallLocation) {
+            [string]$entry.InstallLocation
+        }
+        else {
+            ''
+        }
+        $registryUserWritable = [bool]($entry.PSObject.Properties['RegistryPath'] -and [string]$entry.RegistryPath -match '^(?i)HKCU:')
+        $pathUserWritable = [bool]($identityPath -match '(?i)\\Users\\|\\AppData\\|\\Downloads\\|\\Desktop\\')
+        $isUserWritable = [bool]($registryUserWritable -or $pathUserWritable)
+        $isPortablePath = [bool]($identityPath -match '(?i)FirefoxPortable|ChromiumPortable|\\Tor Browser\\|\\Portable(?:\\|$)')
+        $isApproved = [bool](@('Mozilla Firefox', 'Microsoft Edge', 'Google Chrome') -contains $name -and
+            -not $isUserWritable -and -not $isPortablePath)
+        $isUnmanaged = [bool](@('Brave', 'Opera', 'Vivaldi', 'Tor Browser', 'Internet Explorer', 'Chromium') -contains $name -or
+            ($isPortablePath -and -not $isWebView2))
         $automaticallyRemovable = [bool]($Mode -eq 'RemoveKnownInstallers' -and $isUnmanaged -and $hasUninstall -and -not $isWebView2)
         $action = if ($automaticallyRemovable) { 'RemoveKnownInstaller' } else { 'ReportOnly' }
 
         if ($entry.PSObject.Properties['DisplayIcon'] -and $entry.DisplayIcon) {
             $identitySource = if ($entry.PSObject.Properties['IdentitySource'] -and $entry.IdentitySource) { [string]$entry.IdentitySource } else { 'RegistryDisplayIcon' }
-            & $addIdentity $name ([string]$entry.DisplayIcon) $identitySource $isApproved
+            & $addIdentity $name ([string]$entry.DisplayIcon) $identitySource $isApproved $isUserWritable
         }
         elseif ($entry.InstallLocation) {
-            & $addIdentity $name ([string]$entry.InstallLocation) 'RegistryInstallLocation' $isApproved
+            & $addIdentity $name ([string]$entry.InstallLocation) 'RegistryInstallLocation' $isApproved $isUserWritable
+        }
+
+        if (($isUserWritable -or $isPortablePath) -and $name -in @('Mozilla Firefox', 'Microsoft Edge', 'Google Chrome')) {
+            $isUnmanaged = $true
         }
 
         $finding = New-OpenPathBrowserInventoryFinding `
@@ -405,6 +437,8 @@ function Get-OpenPathBrowserInventory {
             -UninstallString $uninstall `
             -QuietUninstallString $quietUninstall `
             -IsApproved:$isApproved `
+            -IsPortable:$isPortablePath `
+            -IsUserWritable:$isUserWritable `
             -AutomaticallyRemovable:$automaticallyRemovable `
             -CleanupMode $Mode `
             -Action $action
@@ -430,16 +464,19 @@ function Get-OpenPathBrowserInventory {
 
         $path = [string]$candidate.Path
         $sourceRoot = if ($candidate.PSObject.Properties['SourceRoot'] -and $candidate.SourceRoot) { [string]$candidate.SourceRoot } else { 'FileSystem' }
-        $isUserWritable = [bool]$candidate.IsUserWritable
+        $isUserWritable = [bool]($candidate.IsUserWritable -or $path -match '(?i)\\Users\\|\\AppData\\|\\Downloads\\|\\Desktop\\')
+        $isPortablePath = [bool]($path -match '(?i)FirefoxPortable|ChromiumPortable|\\Tor Browser\\|\\Portable(?:\\|$)')
         $name = Resolve-OpenPathBrowserInventoryName -Text '' -Path $path
         if (-not $name) {
             continue
         }
 
         $isWebView2 = $name -eq 'Microsoft Edge WebView2 Runtime'
-        $isApproved = @('Mozilla Firefox', 'Microsoft Edge', 'Google Chrome') -contains $name
-        $isUnmanaged = @('Brave', 'Opera', 'Vivaldi', 'Tor Browser', 'Internet Explorer', 'Chromium') -contains $name
-        & $addIdentity $name $path $sourceRoot $isApproved
+        $isApproved = [bool](@('Mozilla Firefox', 'Microsoft Edge', 'Google Chrome') -contains $name -and
+            -not $isUserWritable -and -not $isPortablePath)
+        $isUnmanaged = [bool](@('Brave', 'Opera', 'Vivaldi', 'Tor Browser', 'Internet Explorer', 'Chromium') -contains $name -or
+            ($isPortablePath -or ($isUserWritable -and $name -in @('Mozilla Firefox', 'Microsoft Edge', 'Google Chrome'))))
+        & $addIdentity $name $path $sourceRoot $isApproved $isUserWritable
 
         if ($isWebView2) {
             Add-OpenPathBrowserInventoryFinding -Target $webRenderingSurfaces -Finding (New-OpenPathBrowserInventoryFinding `
@@ -452,7 +489,7 @@ function Get-OpenPathBrowserInventory {
             continue
         }
 
-        if ($isApproved -and -not $isUserWritable) {
+        if ($isApproved -and -not $isUserWritable -and -not $isPortablePath) {
             Add-OpenPathBrowserInventoryFinding -Target $approved -Finding (New-OpenPathBrowserInventoryFinding `
                     -Name $name `
                     -Category 'ApprovedBrowser' `
@@ -472,7 +509,7 @@ function Get-OpenPathBrowserInventory {
                     -CleanupMode $Mode)
         }
 
-        if ($isUserWritable) {
+        if ($isUserWritable -or $isPortablePath) {
             $portableName = $null
             if ($name -eq 'Mozilla Firefox' -or $path -match 'FirefoxPortable') {
                 $portableName = 'Firefox portable'

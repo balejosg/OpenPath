@@ -73,6 +73,23 @@ Describe "AppControl Module" {
             }
         }
 
+        It 'accepts a product-scoped Appx publisher with a wildcard binary' {
+            $catalog = [pscustomobject]@{
+                schemaVersion = 1
+                applications = @([pscustomobject]@{
+                    id = 'classroom-appx'
+                    identity = [pscustomobject]@{
+                        type = 'AppxPublisher'
+                        publisherName = 'CN=Classroom Tools'
+                        productName = 'Classroom.Tools'
+                        binaryName = '*'
+                    }
+                })
+            }
+
+            Test-OpenPathApplicationApprovalCatalog -Profile StrictApplicationAllowlist -Catalog $catalog | Should -BeTrue
+        }
+
         It 'omits blanket Program Files and emits approved application identities in strict mode' {
             $inventory = [pscustomobject]@{
                 DiscoveryStatus = 'Complete'; DiscoveryErrors = @()
@@ -89,6 +106,7 @@ Describe "AppControl Module" {
             $spec.Profile | Should -Be 'StrictApplicationAllowlist'
             $spec.AllowPaths | Should -Not -Contain '%PROGRAMFILES%\*'
             $spec.AllowPaths | Should -Contain 'C:\Program Files\Mozilla Firefox\firefox.exe'
+            $spec.AllowPathsByCollection.Dll | Should -Contain 'C:\OpenPath\*'
             ($spec.AllowPaths -join "`n") | Should -Not -Match 'FutureBrowser'
             $spec.ApprovedApplicationPublishers.Count | Should -Be 1
             $spec.ApprovedApplicationHashes.Count | Should -Be 1
@@ -97,6 +115,165 @@ Describe "AppControl Module" {
             $xml = [xml](New-OpenPathAppLockerPolicyXml -Spec $spec)
             @($xml.AppLockerPolicy.RuleCollection.FilePublisherRule | Where-Object Name -Like '*signed-classroom-app*').Count | Should -Be 1
             @($xml.AppLockerPolicy.RuleCollection.FileHashRule | Where-Object Name -Like '*pinned-helper*').Count | Should -Be 1
+        }
+
+        It 'rejects an unmanaged blanket Program Files or Microsoft Appx allow in strict mode' {
+            InModuleScope AppControl -Parameters @{ Catalog = $strictCatalog } {
+                param($Catalog)
+
+                $inventory = [pscustomobject]@{
+                    DiscoveryStatus = 'Complete'; DiscoveryErrors = @(); ExecutableIdentities = @()
+                }
+                $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' `
+                    -Profile StrictApplicationAllowlist -ApprovedBrowsers @('Firefox') `
+                    -ApplicationCatalog $Catalog -BrowserInventory $inventory
+                $policy = [xml](New-OpenPathAppLockerPolicyXml -Spec $spec)
+
+                $broadExeRule = [xml](New-OpenPathFilePathRuleXml `
+                        -CollectionType 'Exe' -Name 'Administrator supplied broad Program Files allow' `
+                        -Sid $spec.RestrictedSid -Action 'Allow' -Path '%PROGRAMFILES%\*')
+                $exeCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Exe')[0]
+                [void]$exeCollection.AppendChild($policy.ImportNode($broadExeRule.DocumentElement, $true))
+                (Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Profile StrictApplicationAllowlist `
+                    -ApprovedBrowsers @('Firefox') -ApplicationCatalog $Catalog -BrowserInventory $inventory) | Should -BeFalse
+
+                $broadAppxRule = [xml](New-OpenPathFilePublisherRuleXml `
+                        -Name 'Administrator supplied broad Microsoft Appx allow' `
+                        -Sid 'S-1-1-0' -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION*' `
+                        -ProductName '*' -BinaryName '*')
+                $appxCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Appx')[0]
+                [void]$appxCollection.AppendChild($policy.ImportNode($broadAppxRule.DocumentElement, $true))
+                (Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Profile StrictApplicationAllowlist `
+                    -ApprovedBrowsers @('Firefox') -ApplicationCatalog $Catalog -BrowserInventory $inventory) | Should -BeFalse
+            }
+        }
+
+        It 'keeps publisher updates allowed while binding hash approvals to exact content' {
+            $catalog = [pscustomobject]@{
+                schemaVersion = 1
+                applications = @(
+                    [pscustomobject]@{
+                        id = 'signed-updateable-app'
+                        identity = [pscustomobject]@{
+                            type = 'Publisher'
+                            publisherName = 'O=CLASSROOM TOOLS LTD, L=MADRID, C=ES'
+                            productName = 'Classroom Tools'
+                            binaryName = 'classroom.exe'
+                        }
+                    },
+                    [pscustomobject]@{
+                        id = 'pinned-update-sensitive-app'
+                        identity = [pscustomobject]@{
+                            type = 'Hash'
+                            sha256 = ('cd' * 32)
+                            fileName = 'pinned.exe'
+                        }
+                    }
+                )
+            }
+            $inventory = [pscustomobject]@{
+                DiscoveryStatus = 'Complete'; DiscoveryErrors = @(); ExecutableIdentities = @()
+            }
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' `
+                -Profile StrictApplicationAllowlist -ApprovedBrowsers @('Firefox') `
+                -ApplicationCatalog $catalog -BrowserInventory $inventory
+            $xml = [xml](New-OpenPathAppLockerPolicyXml -Spec $spec)
+            $exe = @($xml.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Exe')[0]
+
+            $publisherRule = @($exe.FilePublisherRule | Where-Object {
+                    $_.Conditions.FilePublisherCondition.ProductName -eq 'Classroom Tools'
+                })
+            $publisherRule.Count | Should -Be 1
+            $publisherRule[0].Conditions.FilePublisherCondition.BinaryName | Should -Be 'classroom.exe'
+            $publisherRule[0].Conditions.FilePublisherCondition.BinaryVersionRange.LowSection | Should -Be '*'
+            $publisherRule[0].Conditions.FilePublisherCondition.BinaryVersionRange.HighSection | Should -Be '*'
+
+            $hashRule = @($exe.FileHashRule | Where-Object {
+                    $_.Conditions.FileHashCondition.FileHash.SourceFileName -eq 'pinned.exe'
+                })
+            $hashRule.Count | Should -Be 1
+            $hashRule[0].Conditions.FileHashCondition.FileHash.Data | Should -Be ('0x' + ('cd' * 32).ToUpperInvariant())
+        }
+
+        It 'enforces every strict AppLocker collection with administrator and SYSTEM recovery only' {
+            $inventory = [pscustomobject]@{
+                DiscoveryStatus = 'Complete'; DiscoveryErrors = @()
+                ExecutableIdentities = @([pscustomobject]@{
+                    Family = 'Firefox'; ExecutablePath = 'C:\Program Files\Mozilla Firefox\firefox.exe'; IsApproved = $true
+                })
+            }
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' `
+                -Profile StrictApplicationAllowlist -ApprovedBrowsers @('Firefox') `
+                -ApplicationCatalog $strictCatalog -BrowserInventory $inventory
+            $xml = [xml](New-OpenPathAppLockerPolicyXml -Spec $spec)
+
+            $spec.AllowPathsByCollection.Dll | Should -Contain '%WINDIR%\*'
+
+            foreach ($collectionType in @('Exe', 'Script', 'Msi', 'Dll', 'Appx')) {
+                $collection = @($xml.AppLockerPolicy.RuleCollection | Where-Object Type -eq $collectionType)
+                $collection.Count | Should -Be 1
+                $collection[0].EnforcementMode | Should -Be 'Enabled'
+            }
+            foreach ($collectionType in @('Exe', 'Script', 'Msi', 'Dll')) {
+                $collection = @($xml.AppLockerPolicy.RuleCollection | Where-Object Type -eq $collectionType)
+                foreach ($sid in @('S-1-5-32-544', 'S-1-5-18')) {
+                    @($collection[0].FilePathRule | Where-Object { $_.UserOrGroupSid -eq $sid -and $_.Action -eq 'Allow' -and $_.Conditions.FilePathCondition.Path -eq '*' }).Count | Should -Be 1
+                }
+            }
+            foreach ($sid in @('S-1-5-32-544', 'S-1-5-18')) {
+                @($xml.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Appx').FilePublisherRule |
+                    Where-Object { $_.UserOrGroupSid -eq $sid -and $_.Action -eq 'Allow' -and $_.Conditions.FilePublisherCondition.PublisherName -eq '*' } |
+                    Measure-Object | Select-Object -ExpandProperty Count | Should -Be 1
+            }
+            @($xml.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Appx').FilePublisherRule |
+                Where-Object { $_.UserOrGroupSid -eq 'S-1-1-0' -and $_.Action -eq 'Allow' } |
+                Measure-Object | Select-Object -ExpandProperty Count | Should -Be 0
+        }
+
+        It 'keeps approved Edge Appx and browser DLL allowances scoped to discovered identities' {
+            Mock Get-OpenPathEdgeAppxProductNames { @('Microsoft.MicrosoftEdge.Stable') } -ModuleName AppControl
+            $inventory = [pscustomobject]@{
+                DiscoveryStatus = 'Complete'; DiscoveryErrors = @()
+                ExecutableIdentities = @([pscustomobject]@{
+                    Family = 'Edge'; ExecutablePath = 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'; IsApproved = $true
+                })
+            }
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' `
+                -Profile StrictApplicationAllowlist -ApprovedBrowsers @('Edge') `
+                -ApplicationCatalog ([pscustomobject]@{ schemaVersion = 1; applications = @() }) `
+                -BrowserInventory $inventory
+            $spec.AllowPathsByCollection.Dll | Should -Contain 'C:\Program Files\Microsoft\Edge\Application\*'
+            $xml = [xml](New-OpenPathAppLockerPolicyXml -Spec $spec)
+            $appx = @($xml.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Appx')
+            @($appx.FilePublisherRule | Where-Object {
+                    $_.UserOrGroupSid -eq $spec.RestrictedSid -and
+                    $_.Conditions.FilePublisherCondition.PublisherName -eq 'O=MICROSOFT CORPORATION*' -and
+                    $_.Conditions.FilePublisherCondition.ProductName -eq 'Microsoft.MicrosoftEdge.Stable'
+                }).Count | Should -Be 1
+        }
+
+        It 'removes strict MSI and DLL rules when transitioning back to compatibility' {
+            $strict = [xml]'<AppLockerPolicy Version="1"><RuleCollection Type="Msi" EnforcementMode="Enabled"><FilePathRule Name="OpenPath non-admin app control stale" Action="Allow" UserOrGroupSid="S-1-5-32-545" /></RuleCollection><RuleCollection Type="Dll" EnforcementMode="Enabled"><FilePathRule Name="OpenPath non-admin app control stale" Action="Allow" UserOrGroupSid="S-1-5-32-545" /></RuleCollection></AppLockerPolicy>'
+            $compat = [xml]'<AppLockerPolicy Version="1"><RuleCollection Type="Msi" EnforcementMode="NotConfigured" /><RuleCollection Type="Dll" EnforcementMode="NotConfigured" /></AppLockerPolicy>'
+            $merged = Merge-OpenPathAppLockerPolicyXml -CurrentPolicy $strict -OpenPathPolicy $compat
+            foreach ($type in @('Msi', 'Dll')) {
+                $collection = @($merged.AppLockerPolicy.RuleCollection | Where-Object Type -eq $type)[0]
+                $collection.EnforcementMode | Should -Be 'NotConfigured'
+                @($collection.ChildNodes).Count | Should -Be 0
+            }
+        }
+
+        It 'preserves unrelated MSI and DLL enforcement during strict to compatibility transition' {
+            $strict = [xml]'<AppLockerPolicy Version="1"><RuleCollection Type="Msi" EnforcementMode="Enabled"><FilePathRule Name="OpenPath non-admin app control stale" Action="Allow" UserOrGroupSid="S-1-5-32-545" /><FilePathRule Name="Administrator supplied MSI rule" Action="Allow" UserOrGroupSid="S-1-5-32-544" /></RuleCollection><RuleCollection Type="Dll" EnforcementMode="Enabled"><FilePathRule Name="OpenPath non-admin app control stale" Action="Allow" UserOrGroupSid="S-1-5-32-545" /><FilePathRule Name="Administrator supplied DLL rule" Action="Allow" UserOrGroupSid="S-1-5-32-544" /></RuleCollection></AppLockerPolicy>'
+            $compat = [xml]'<AppLockerPolicy Version="1"><RuleCollection Type="Msi" EnforcementMode="NotConfigured" /><RuleCollection Type="Dll" EnforcementMode="NotConfigured" /></AppLockerPolicy>'
+            $merged = Merge-OpenPathAppLockerPolicyXml -CurrentPolicy $strict -OpenPathPolicy $compat
+
+            foreach ($type in @('Msi', 'Dll')) {
+                $collection = @($merged.AppLockerPolicy.RuleCollection | Where-Object Type -eq $type)[0]
+                $collection.EnforcementMode | Should -Be 'Enabled'
+                @($collection.ChildNodes | Where-Object Name -Like 'Administrator supplied*').Count | Should -Be 1
+                @($collection.ChildNodes | Where-Object Name -Like 'OpenPath non-admin*').Count | Should -Be 0
+            }
         }
 
         It 'does not let Firefox Release approval widen to Tor Browser' {

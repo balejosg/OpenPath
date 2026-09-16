@@ -224,6 +224,18 @@ function Show-OpenPathStatus {
     if ($config -and $config.PSObject.Properties['enableNonAdminAppControl']) {
         $appControlRequired = [bool]$config.enableNonAdminAppControl
     }
+    $configuredAppControlProfile = if ($config -and $config.PSObject.Properties['appControlProfile'] -and $config.appControlProfile) {
+        [string]$config.appControlProfile
+    }
+    else {
+        'ManagedBrowserCompatibility'
+    }
+    $activeAppControlProfile = if ($config -and $config.PSObject.Properties['activeAppControlProfile']) {
+        [string]$config.activeAppControlProfile
+    }
+    else {
+        'not-observed'
+    }
     $appControlHealth = [pscustomobject]@{ Healthy = $true; ReasonCodes = @() }
     if ($appControlRequired) {
         if (Get-Command -Name 'Get-OpenPathNonAdminAppControlHealth' -ErrorAction SilentlyContinue) {
@@ -272,6 +284,15 @@ function Show-OpenPathStatus {
             # verified legacy migration and durable commit.
             $configurationReasonCodes += 'appcontrol_uncommitted'
         }
+        if ($appControlRequired -and
+            (($configuredAppControlProfile -eq 'StrictApplicationAllowlist' -and -not $config.PSObject.Properties['activeAppControlProfile']) -or
+                $config.PSObject.Properties['activeAppControlProfile'])) {
+            if ([string]::IsNullOrWhiteSpace($activeAppControlProfile) -or
+                $activeAppControlProfile -eq 'none' -or
+                -not $activeAppControlProfile.Equals($configuredAppControlProfile, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $configurationReasonCodes += 'appcontrol_profile_mismatch'
+            }
+        }
     }
     $requiredBoundaryHealthy = [bool]($watchdogTaskHealth.Healthy -and $appControlHealth.Healthy -and $configurationReasonCodes.Count -eq 0)
 
@@ -302,6 +323,8 @@ function Show-OpenPathStatus {
     Write-Host "Firewall active: $firewallActive"
     Write-Host "Watchdog task healthy: $($watchdogTaskHealth.Healthy)"
     Write-Host "AppControl health required: $appControlRequired"
+    Write-Host "AppControl profile: $configuredAppControlProfile"
+    Write-Host "Active AppControl profile: $activeAppControlProfile"
     Write-Host "AppControl healthy: $($appControlHealth.Healthy)"
     if (@($watchdogTaskHealth.ReasonCodes).Count -gt 0) {
         Write-Host "Watchdog reason codes: $(@($watchdogTaskHealth.ReasonCodes) -join ', ')"

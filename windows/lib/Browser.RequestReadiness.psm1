@@ -159,13 +159,40 @@ function Get-OpenPathBrowserRequestReadiness {
     }
     $chromiumFacts = Get-OpenPathChromiumReadinessFacts @chromiumFactParameters
 
+    $appControlProfile = if ($Config -and $Config.PSObject.Properties['appControlProfile'] -and $Config.appControlProfile) {
+        [string]$Config.appControlProfile
+    }
+    else {
+        'ManagedBrowserCompatibility'
+    }
+    $approvedApplicationCatalog = if ($Config -and $Config.PSObject.Properties['approvedApplicationCatalog']) {
+        $Config.approvedApplicationCatalog
+    }
+    else {
+        $null
+    }
     $appControlFactParameters = @{
         ApprovedStudentBrowsers = $approvedStudentBrowsers
+        Profile = $appControlProfile
+        ApplicationCatalog = $approvedApplicationCatalog
     }
     if ($PSBoundParameters.ContainsKey('AppControlActive')) {
         $appControlFactParameters.AppControlActive = $AppControlActive
     }
-    $appControlFacts = Get-OpenPathAppControlReadinessFacts @appControlFactParameters
+    if ($appControlProfile -notin @('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')) {
+        # Configuration is untrusted input.  Do not let an unknown profile turn
+        # the readiness reader into an exception or silently fall back to the
+        # compatibility policy; report the boundary as inactive instead.
+        $appControlFacts = [pscustomobject]@{
+            Active = $false
+            Profile = $appControlProfile
+            ActiveProfile = ''
+            ProfileMatches = $false
+        }
+    }
+    else {
+        $appControlFacts = Get-OpenPathAppControlReadinessFacts @appControlFactParameters
+    }
     $unmanagedBrowserFindingsPresent = Test-OpenPathUnmanagedBrowserFindingsPresent -BrowserInventory $BrowserInventory
     $decisionFacts = [PSCustomObject]@{
         StrictMode = $strictMode

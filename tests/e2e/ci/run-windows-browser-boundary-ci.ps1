@@ -501,12 +501,18 @@ function Get-OpenPathNegativeHealthRestoration {
     param(
         [Parameter(Mandatory = $true)][string]$OpenPathRoot,
         [Parameter(Mandatory = $true)][string]$Mode,
-        [Parameter(Mandatory = $true)][string[]]$ApprovedBrowsers
+        [Parameter(Mandatory = $true)][string[]]$ApprovedBrowsers,
+        [Parameter(Mandatory = $true)][ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')][string]$Profile,
+        [AllowNull()][object]$ApplicationCatalog
     )
 
     Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $OpenPathRoot
     $watchdogHealth = Get-OpenPathWatchdogTaskHealth -OpenPathRoot $OpenPathRoot
-    $appControlHealth = Get-OpenPathNonAdminAppControlHealth -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers
+    $appControlHealth = Get-OpenPathNonAdminAppControlHealth `
+        -Mode $Mode `
+        -ApprovedBrowsers $ApprovedBrowsers `
+        -Profile $Profile `
+        -ApplicationCatalog $ApplicationCatalog
     Assert-OpenPathRestoredHealth -Name 'OpenPath watchdog task' -Health $watchdogHealth
     Assert-OpenPathRestoredHealth -Name 'OpenPath AppControl' -Health $appControlHealth
 
@@ -535,6 +541,18 @@ function Invoke-OpenPathNegativeHealthProbes {
     }
     else {
         @('Firefox')
+    }
+    $profile = if ($Config.PSObject.Properties['appControlProfile'] -and $Config.appControlProfile) {
+        [string]$Config.appControlProfile
+    }
+    else {
+        'ManagedBrowserCompatibility'
+    }
+    $applicationCatalog = if ($Config.PSObject.Properties['approvedApplicationCatalog']) {
+        $Config.approvedApplicationCatalog
+    }
+    else {
+        $null
     }
 
     $probeResults = [System.Collections.Generic.List[object]]::new()
@@ -570,7 +588,11 @@ function Invoke-OpenPathNegativeHealthProbes {
         if (-not (Remove-OpenPathNonAdminAppControl)) {
             throw 'OpenPath AppControl policy removal failed'
         }
-        $removedPolicyHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+        $removedPolicyHealth = Get-OpenPathNonAdminAppControlHealth `
+            -Mode $mode `
+            -ApprovedBrowsers $approvedBrowsers `
+            -Profile $profile `
+            -ApplicationCatalog $applicationCatalog
         [void]$probeResults.Add((Assert-OpenPathNegativeHealthProbe `
                 -Name 'OpenPath AppControl policy removed' `
                 -Health $removedPolicyHealth `
@@ -587,10 +609,16 @@ function Invoke-OpenPathNegativeHealthProbes {
                 if (-not (Set-OpenPathNonAdminAppControl `
                         -OpenPathRoot $OpenPathRoot `
                         -Mode $mode `
-                        -ApprovedBrowsers $approvedBrowsers)) {
+                        -ApprovedBrowsers $approvedBrowsers `
+                        -Profile $profile `
+                        -ApplicationCatalog $applicationCatalog)) {
                     throw 'OpenPath AppControl policy apply returned false'
                 }
-                $restoredPolicyHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+                $restoredPolicyHealth = Get-OpenPathNonAdminAppControlHealth `
+                    -Mode $mode `
+                    -ApprovedBrowsers $approvedBrowsers `
+                    -Profile $profile `
+                    -ApplicationCatalog $applicationCatalog
                 Assert-OpenPathRestoredHealth -Name 'OpenPath AppControl policy' -Health $restoredPolicyHealth
             }
             catch {
@@ -613,7 +641,11 @@ function Invoke-OpenPathNegativeHealthProbes {
         if (Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction SilentlyContinue) {
             throw 'OpenPath-Restricted group removal did not take effect'
         }
-        $missingTargetHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+        $missingTargetHealth = Get-OpenPathNonAdminAppControlHealth `
+            -Mode $mode `
+            -ApprovedBrowsers $approvedBrowsers `
+            -Profile $profile `
+            -ApplicationCatalog $applicationCatalog
         [void]$probeResults.Add((Assert-OpenPathNegativeHealthProbe `
                 -Name 'OpenPath restricted target missing' `
                 -Health $missingTargetHealth `
@@ -647,10 +679,16 @@ function Invoke-OpenPathNegativeHealthProbes {
                 if (-not (Set-OpenPathNonAdminAppControl `
                         -OpenPathRoot $OpenPathRoot `
                         -Mode $mode `
-                        -ApprovedBrowsers $approvedBrowsers)) {
+                        -ApprovedBrowsers $approvedBrowsers `
+                        -Profile $profile `
+                        -ApplicationCatalog $applicationCatalog)) {
                     throw 'OpenPath AppControl policy apply returned false'
                 }
-                $restoredGroupHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+                $restoredGroupHealth = Get-OpenPathNonAdminAppControlHealth `
+                    -Mode $mode `
+                    -ApprovedBrowsers $approvedBrowsers `
+                    -Profile $profile `
+                    -ApplicationCatalog $applicationCatalog
                 Assert-OpenPathRestoredHealth -Name 'OpenPath restricted target' -Health $restoredGroupHealth
             }
             catch {
@@ -666,7 +704,11 @@ function Invoke-OpenPathNegativeHealthProbes {
         if (-not (Remove-OpenPathNonAdminAppControl)) {
             throw 'OpenPath AppControl policy removal for repair probe failed'
         }
-        $unhealthyPolicyHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+        $unhealthyPolicyHealth = Get-OpenPathNonAdminAppControlHealth `
+            -Mode $mode `
+            -ApprovedBrowsers $approvedBrowsers `
+            -Profile $profile `
+            -ApplicationCatalog $applicationCatalog
         if (-not $unhealthyPolicyHealth -or [bool]$unhealthyPolicyHealth.Healthy) {
             throw 'Repair-failure probe did not establish an unhealthy AppControl state'
         }
@@ -676,7 +718,9 @@ function Invoke-OpenPathNegativeHealthProbes {
             param(
                 [string]$OpenPathRoot,
                 [string]$Mode,
-                [string[]]$ApprovedBrowsers
+                [string[]]$ApprovedBrowsers,
+                [string]$Profile,
+                [object]$ApplicationCatalog
             )
             return $false
         }
@@ -703,10 +747,16 @@ function Invoke-OpenPathNegativeHealthProbes {
                 if (-not (Set-OpenPathNonAdminAppControl `
                         -OpenPathRoot $OpenPathRoot `
                         -Mode $mode `
-                        -ApprovedBrowsers $approvedBrowsers)) {
+                        -ApprovedBrowsers $approvedBrowsers `
+                        -Profile $profile `
+                        -ApplicationCatalog $applicationCatalog)) {
                     throw 'OpenPath AppControl policy apply returned false'
                 }
-                $restoredRepairHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedBrowsers
+                $restoredRepairHealth = Get-OpenPathNonAdminAppControlHealth `
+                    -Mode $mode `
+                    -ApprovedBrowsers $approvedBrowsers `
+                    -Profile $profile `
+                    -ApplicationCatalog $applicationCatalog
                 Assert-OpenPathRestoredHealth -Name 'OpenPath AppControl repair' -Health $restoredRepairHealth
             }
             catch {
@@ -718,7 +768,9 @@ function Invoke-OpenPathNegativeHealthProbes {
     $restoration = Get-OpenPathNegativeHealthRestoration `
         -OpenPathRoot $OpenPathRoot `
         -Mode $mode `
-        -ApprovedBrowsers $approvedBrowsers
+        -ApprovedBrowsers $approvedBrowsers `
+        -Profile $profile `
+        -ApplicationCatalog $applicationCatalog
 
     return [pscustomobject][ordered]@{
         Probes       = Assert-OpenPathNegativeHealthEvidence -Probes @($probeResults.ToArray())

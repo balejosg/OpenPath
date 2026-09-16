@@ -108,6 +108,36 @@ Describe "Browser Module - Request Readiness" {
             Should -Invoke Test-OpenPathNonAdminAppControlActive -ModuleName Browser.ReadinessFacts -Times 1 -Exactly
         }
 
+        It "Forwards the configured strict profile and catalog to the AppControl probe" {
+            $catalog = [pscustomobject]@{ schemaVersion = 1; applications = @() }
+            Mock Test-OpenPathNonAdminAppControlActive {
+                [pscustomobject]@{ Active = $true; Profile = $Profile }
+            } -ModuleName Browser.ReadinessFacts
+
+            $facts = Get-OpenPathAppControlReadinessFacts `
+                -ApprovedStudentBrowsers @('Firefox') `
+                -Profile StrictApplicationAllowlist `
+                -ApplicationCatalog $catalog
+
+            $facts.Active | Should -BeTrue
+            $facts.Profile | Should -Be 'StrictApplicationAllowlist'
+            $facts.ProfileMatches | Should -BeTrue
+            Should -Invoke Test-OpenPathNonAdminAppControlActive -ModuleName Browser.ReadinessFacts -Times 1 -Exactly -ParameterFilter {
+                $Profile -eq 'StrictApplicationAllowlist' -and $ApplicationCatalog.schemaVersion -eq 1
+            }
+        }
+
+        It "does not treat a bare AppControl boolean as strict profile evidence" {
+            $facts = Get-OpenPathAppControlReadinessFacts `
+                -ApprovedStudentBrowsers @('Firefox') `
+                -Profile StrictApplicationAllowlist `
+                -ApplicationCatalog ([pscustomobject]@{ schemaVersion = 1; applications = @() }) `
+                -AppControlActive $true
+
+            $facts.Active | Should -BeFalse
+            $facts.ProfileMatches | Should -BeFalse
+        }
+
         It "Marks AppControl incomplete when unapproved Edge is not explicitly blocked" {
             $facts = Get-OpenPathAppControlReadinessFacts -AppControlActive ([PSCustomObject]@{
                     Active = $true
@@ -154,6 +184,29 @@ Describe "Browser Module - Request Readiness" {
         $result.Facts.app_control_active | Should -Be "ready"
         $result.Facts.unmanaged_browsers_detected | Should -Be "ready"
         @($result.FailureReasons).Count | Should -Be 0
+    }
+
+    It "Forwards strict profile identity from config into readiness facts" {
+        $catalog = [pscustomobject]@{ schemaVersion = 1; applications = @() }
+        $config = New-ClassroomReadinessConfig
+        $config | Add-Member -MemberType NoteProperty -Name appControlProfile -Value 'StrictApplicationAllowlist'
+        $config | Add-Member -MemberType NoteProperty -Name approvedApplicationCatalog -Value $catalog
+        Mock Get-OpenPathAppControlReadinessFacts {
+            [pscustomobject]@{ Active = $true; Profile = $Profile; ProfileMatches = $true }
+        } -ModuleName Browser.RequestReadiness
+
+        $null = Get-OpenPathBrowserRequestReadiness `
+            -Config $config `
+            -ManagedExtensionPolicy (New-FirefoxManagedPolicy) `
+            -NativeHostRegistered $true `
+            -NativeHostStatePresent $true `
+            -FirefoxMachinePolicyApplied $true `
+            -AppControlActive $true `
+            -BrowserInventory (New-BrowserInventory)
+
+        Should -Invoke Get-OpenPathAppControlReadinessFacts -ModuleName Browser.RequestReadiness -Times 1 -Exactly -ParameterFilter {
+            $Profile -eq 'StrictApplicationAllowlist' -and $ApplicationCatalog.schemaVersion -eq 1
+        }
     }
 
     It "Treats installed Edge as healthy when it is not approved and AppLocker is active" {

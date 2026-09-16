@@ -43,6 +43,11 @@ param(
     [string]$HealthApiSecret = "",
     [switch]$EnforceManagedBrowserBoundary,
     [string[]]$ApprovedStudentBrowsers = @('Firefox'),
+    [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
+    [string]$AppControlProfile = 'ManagedBrowserCompatibility',
+    [string]$ApprovedApplicationCatalogPath = '',
+    [AllowNull()]
+    [object]$ApprovedApplicationCatalog = $null,
     [ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]
     [string]$BrowserCleanupMode = 'ReportOnly',
     [string]$OfflineConfigPath = "",
@@ -115,6 +120,28 @@ if ($offlineMode) {
     }
     if (@($offlineConfig.ApprovedStudentBrowsers).Count -gt 0) {
         $ApprovedStudentBrowsers = @($offlineConfig.ApprovedStudentBrowsers)
+    }
+    if (-not $PSBoundParameters.ContainsKey('AppControlProfile') -and $offlineConfig.PSObject.Properties['AppControlProfile']) {
+        $AppControlProfile = [string]$offlineConfig.AppControlProfile
+    }
+    if (-not $PSBoundParameters.ContainsKey('ApprovedApplicationCatalog') -and
+        -not $PSBoundParameters.ContainsKey('ApprovedApplicationCatalogPath') -and
+        $offlineConfig.PSObject.Properties['ApprovedApplicationCatalog']) {
+        $ApprovedApplicationCatalog = $offlineConfig.ApprovedApplicationCatalog
+    }
+}
+
+if ($ApprovedApplicationCatalogPath) {
+    if (-not (Test-Path -LiteralPath $ApprovedApplicationCatalogPath -PathType Leaf)) {
+        Write-InstallerError "ERROR: Approved application catalog not found: $ApprovedApplicationCatalogPath"
+        throw "Approved application catalog not found: $ApprovedApplicationCatalogPath"
+    }
+    try {
+        $ApprovedApplicationCatalog = Get-Content -LiteralPath $ApprovedApplicationCatalogPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Write-InstallerError "ERROR: Approved application catalog is not valid JSON: $($_.Exception.Message)"
+        throw 'Approved application catalog is not valid JSON'
     }
 }
 
@@ -499,6 +526,9 @@ $script:OpenPathAppControlCommands = @{
 $phaseResult = Invoke-OpenPathPlannedPhase -Name 'configuration' -Action {
     $primaryDNS = Get-InstallerPrimaryDNS
     $agentVersion = Get-OpenPathInstallerAgentVersion -ScriptDir $scriptDir
+    if (-not (Test-OpenPathApplicationApprovalCatalog -Profile $AppControlProfile -Catalog $ApprovedApplicationCatalog)) {
+        throw "Application approval catalog is invalid for AppControl profile '$AppControlProfile'"
+    }
     $config = New-OpenPathInstallerConfig `
         -WhitelistUrl $WhitelistUrl `
         -AgentVersion $agentVersion `
@@ -514,6 +544,8 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'configuration' -Action {
         -EdgeExtensionStoreUrl $EdgeExtensionStoreUrl `
         -EnforceManagedBrowserBoundary:$enforceManagedBrowserBoundary `
         -ApprovedStudentBrowsers $ApprovedStudentBrowsers `
+        -AppControlProfile $AppControlProfile `
+        -ApprovedApplicationCatalog $ApprovedApplicationCatalog `
         -BrowserCleanupMode $BrowserCleanupMode
     if ($PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Write installer configuration')) {
         Write-OpenPathAtomicJsonFile -Path "$OpenPathRoot\data\config.json" -Data $config -Depth 10

@@ -3423,9 +3423,25 @@ function Assert-InstalledOpenPathBrowserBoundaryAppControl {
 
     $mode = if ($config.PSObject.Properties['nonAdminAppControlMode'] -and $config.nonAdminAppControlMode) { [string]$config.nonAdminAppControlMode } else { 'Enforced' }
     $approvedBrowsers = if ($config.PSObject.Properties['approvedStudentBrowsers'] -and $config.approvedStudentBrowsers) { @($config.approvedStudentBrowsers) } else { @('Firefox') }
+    $profile = if ($config.PSObject.Properties['appControlProfile'] -and $config.appControlProfile) { [string]$config.appControlProfile } else { 'ManagedBrowserCompatibility' }
+    $catalog = if ($config.PSObject.Properties['approvedApplicationCatalog']) { $config.approvedApplicationCatalog } else { $null }
+    if ($profile -eq 'StrictApplicationAllowlist' -and -not $config.PSObject.Properties['activeAppControlProfile']) {
+        throw 'OpenPath active AppControl profile is missing for strict application allowlist mode.'
+    }
+    if ($config.PSObject.Properties['activeAppControlProfile']) {
+        $activeProfile = [string]$config.activeAppControlProfile
+        if ([string]::IsNullOrWhiteSpace($activeProfile) -or $activeProfile -eq 'none' -or
+            -not $activeProfile.Equals($profile, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "OpenPath active AppControl profile does not match configured profile: configured '$profile', active '$activeProfile'."
+        }
+    }
 
     # Pure assert-only: DO NOT CALL Set-OpenPathNonAdminAppControl or repair!
-    if (-not (Test-OpenPathNonAdminAppControlActive -Mode $mode -ApprovedBrowsers $approvedBrowsers)) {
+    if (-not (Test-OpenPathNonAdminAppControlActive `
+                -Mode $mode `
+                -ApprovedBrowsers $approvedBrowsers `
+                -Profile $profile `
+                -ApplicationCatalog $catalog)) {
         throw "OpenPath AppControl boundary is inactive before browser-boundary probes; installer acceptance failed."
     }
 

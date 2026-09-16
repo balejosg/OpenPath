@@ -1917,6 +1917,29 @@ exit `$installerExitCode
             )
         }
 
+        It "Exposes explicit strict profile and approved catalog installer options" {
+            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $configHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Config.ps1"
+            $content = Get-Content $scriptPath -Raw
+            $configHelper = Get-Content $configHelperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                "[ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]",
+                '[string]$AppControlProfile = ''ManagedBrowserCompatibility''',
+                '[string]$ApprovedApplicationCatalogPath = ''''',
+                '-AppControlProfile $AppControlProfile',
+                '-ApprovedApplicationCatalog $ApprovedApplicationCatalog',
+                'Test-OpenPathApplicationApprovalCatalog -Profile $AppControlProfile'
+            )
+            Assert-ContentContainsAll -Content $configHelper -Needles @(
+                '[ValidateSet(''ManagedBrowserCompatibility'', ''StrictApplicationAllowlist'')]',
+                '[string]$AppControlProfile = ''ManagedBrowserCompatibility''',
+                '[object]$ApprovedApplicationCatalog = $null',
+                'appControlProfile = $AppControlProfile',
+                'approvedApplicationCatalog = $ApprovedApplicationCatalog'
+            )
+        }
+
         It "Persists managed browser boundary and cleanup mode in installer config" {
             $firewallCatalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Catalog.ps1"
             $configHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Config.ps1"
@@ -1933,6 +1956,25 @@ exit `$installerExitCode
             $config.enforceManagedBrowserBoundary | Should -BeTrue
             @($config.approvedStudentBrowsers) | Should -Be @('Firefox')
             $config.browserCleanupMode | Should -Be 'RemoveKnownInstallers'
+        }
+
+        It "Persists strict profile and approved catalog in installer config" {
+            $firewallCatalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Firewall.Catalog.ps1"
+            $configHelperPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Config.ps1"
+            . $firewallCatalogPath
+            . $configHelperPath
+            $catalog = [pscustomobject]@{ schemaVersion = 1; applications = @() }
+
+            $config = New-OpenPathInstallerConfig `
+                -WhitelistUrl '' `
+                -AgentVersion 'test-version' `
+                -PrimaryDNS '8.8.8.8' `
+                -EnforceManagedBrowserBoundary:$true `
+                -AppControlProfile StrictApplicationAllowlist `
+                -ApprovedApplicationCatalog $catalog
+
+            $config.appControlProfile | Should -Be 'StrictApplicationAllowlist'
+            $config.approvedApplicationCatalog.schemaVersion | Should -Be 1
         }
 
         It "Defaults browser cleanup to report-only in installer config" {

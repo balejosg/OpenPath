@@ -551,12 +551,21 @@ function Get-OpenPathAppControlReadinessFacts {
         [AllowNull()]
         [object]$AppControlActive = $null,
 
-        [string[]]$ApprovedStudentBrowsers = @('Firefox')
+        [string[]]$ApprovedStudentBrowsers = @('Firefox'),
+
+        [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
+        [string]$Profile = 'ManagedBrowserCompatibility',
+
+        [AllowNull()]
+        [object]$ApplicationCatalog = $null
     )
 
     if (-not $PSBoundParameters.ContainsKey('AppControlActive')) {
         if (Get-Command -Name 'Test-OpenPathNonAdminAppControlActive' -ErrorAction SilentlyContinue) {
-            $AppControlActive = Test-OpenPathNonAdminAppControlActive -ApprovedBrowsers $ApprovedStudentBrowsers
+            $AppControlActive = Test-OpenPathNonAdminAppControlActive `
+                -ApprovedBrowsers $ApprovedStudentBrowsers `
+                -Profile $Profile `
+                -ApplicationCatalog $ApplicationCatalog
         }
         else {
             $AppControlActive = $false
@@ -564,9 +573,27 @@ function Get-OpenPathAppControlReadinessFacts {
     }
 
     $active = Test-OpenPathReadinessTruthy -Value $AppControlActive
+    $activeProfile = ''
+    $profileMatches = $true
+    if ($Profile -eq 'StrictApplicationAllowlist' -and
+        ($AppControlActive -is [bool] -or
+            -not $AppControlActive -or
+            -not $AppControlActive.PSObject.Properties['Profile'])) {
+        # A bare boolean cannot prove which policy profile is active.  Strict
+        # readiness must fail closed until the structured identity is observed.
+        $active = $false
+        $profileMatches = $false
+    }
     if ($AppControlActive -and $AppControlActive -isnot [bool]) {
         if ($AppControlActive.PSObject.Properties['Active']) {
             $active = Test-OpenPathReadinessTruthy -Value $AppControlActive.Active
+        }
+        if ($AppControlActive.PSObject.Properties['Profile']) {
+            $activeProfile = [string]$AppControlActive.Profile
+            $profileMatches = $activeProfile.Equals($Profile, [System.StringComparison]::OrdinalIgnoreCase)
+            if (-not $profileMatches) {
+                $active = $false
+            }
         }
         if (
             $active -and
@@ -580,6 +607,9 @@ function Get-OpenPathAppControlReadinessFacts {
 
     return [PSCustomObject]@{
         Active = $active
+        Profile = $Profile
+        ActiveProfile = $activeProfile
+        ProfileMatches = $profileMatches
     }
 }
 

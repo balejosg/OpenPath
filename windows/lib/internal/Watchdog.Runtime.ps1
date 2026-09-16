@@ -667,6 +667,7 @@ function Invoke-OpenPathWatchdogAppControlHealth {
         strict_effective_policy_mismatch = 'Strict AppControl effective policy does not match the configured profile'
         strict_runtime_probe_failed = 'Strict AppControl runtime probe failed'
         strict_transition_failed = 'Strict AppControl transition failed'
+        appcontrol_profile_mismatch = 'AppControl active profile does not match the configured profile'
         appcontrol_health_check_unavailable = 'AppControl structured health check unavailable'
     }
     $addHealthObservation = {
@@ -780,6 +781,23 @@ function Invoke-OpenPathWatchdogAppControlHealth {
 
     $commitState = if ($Config -and $Config.PSObject.Properties['appControlCommitState']) { [string]$Config.appControlCommitState } else { '' }
     $uncommittedState = $commitState -ne 'committed'
+    $activeProfilePropertyPresent = [bool]($Config -and $Config.PSObject.Properties['activeAppControlProfile'])
+    $activeAppControlProfile = if ($activeProfilePropertyPresent) { [string]$Config.activeAppControlProfile } else { '' }
+    $profileMismatch = if ($appControlProfile -eq 'StrictApplicationAllowlist' -and -not $activeProfilePropertyPresent) {
+        $true
+    }
+    else {
+        [bool]($activeProfilePropertyPresent -and
+            ([string]::IsNullOrWhiteSpace($activeAppControlProfile) -or
+                $activeAppControlProfile -eq 'none' -or
+                -not $activeAppControlProfile.Equals($appControlProfile, [System.StringComparison]::OrdinalIgnoreCase)))
+    }
+    if ($profileMismatch) {
+        & $addCode 'appcontrol_profile_mismatch'
+        & $addIssue "AppControl active profile does not match configured profile ($appControlProfile)"
+        & $addRecoveryIssue 'AppControl profile mismatch'
+        Write-OpenPathLog "Watchdog: AppControl active profile '$activeAppControlProfile' does not match configured profile '$appControlProfile'" -Level WARN
+    }
     if ($uncommittedState) {
         & $addCode 'appcontrol_uncommitted'
         if ([string]::IsNullOrWhiteSpace($commitState)) {
@@ -792,7 +810,7 @@ function Invoke-OpenPathWatchdogAppControlHealth {
         Write-OpenPathLog 'Watchdog: AppControl commit state is not durably committed' -Level WARN
     }
 
-    $initialBoundaryHealthy = [bool]($healthCommandAvailable -and $initialHealthHealthy -and $initialHealthCodes.Count -eq 0)
+    $initialBoundaryHealthy = [bool]($healthCommandAvailable -and $initialHealthHealthy -and $initialHealthCodes.Count -eq 0 -and -not $profileMismatch)
     $needsRepair = -not $initialBoundaryHealthy
     $postRepairHealthy = $false
     if ($needsRepair) {
@@ -850,6 +868,11 @@ function Invoke-OpenPathWatchdogAppControlHealth {
                 }
                 & $addRecoveryIssue 'AppControl uncommitted'
             }
+            if ($profileMismatch) {
+                & $addCode 'appcontrol_profile_mismatch'
+                & $addIssue "AppControl active profile does not match configured profile ($appControlProfile)"
+                & $addRecoveryIssue 'AppControl profile mismatch'
+            }
             if (-not $postRepairHealthy) {
                 foreach ($code in @($postRepairCodes)) {
                     & $addCode $code
@@ -869,7 +892,8 @@ function Invoke-OpenPathWatchdogAppControlHealth {
     }
 
     $finalBoundaryHealthy = if ($needsRepair) { $postRepairHealthy } else { $initialBoundaryHealthy }
-    if ($finalBoundaryHealthy -and $healthCommandAvailable -and $groupExists -and -not $groupReconciliationFailed -and $uncommittedState) {
+    $stateNeedsCommit = [bool]($uncommittedState -or $profileMismatch)
+    if ($finalBoundaryHealthy -and $healthCommandAvailable -and $groupExists -and -not $groupReconciliationFailed -and $stateNeedsCommit) {
         $configPath = if ($OpenPathRoot -match '^[A-Za-z]:\\|^\\\\') { "$($OpenPathRoot.TrimEnd('\\'))\data\config.json" } else { Join-Path $OpenPathRoot 'data\config.json' }
         $persisted = $false
         try {

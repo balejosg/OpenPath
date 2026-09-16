@@ -815,9 +815,7 @@ test('NSIS resolves one native Windows PowerShell path from the launcher process
     'the shell path must not be discovered through a user-influenceable search path'
   );
 
-  const invocations = [
-    ...nsiSource.matchAll(/ExecWait '\"\$NativePowerShellPath\"([^']*)' \$[01]/g),
-  ];
+  const invocations = [...nsiSource.matchAll(/ExecWait '"\$NativePowerShellPath"([^']*)' \$[01]/g)];
   assert.equal(invocations.length, 2, 'trailer validation and installation must share one shell');
   for (const [, argumentsText] of invocations) {
     assert.match(argumentsText, / -NoProfile -ExecutionPolicy Bypass -File "/);

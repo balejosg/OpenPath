@@ -54,6 +54,47 @@ Describe "Offline installer" {
             $config.EnforceManagedBrowserBoundary | Should -BeTrue
         }
 
+        It "Preserves an explicit strict AppControl profile and catalog from offline options" {
+            $configPath = Join-Path $script:OfflineTestRoot 'strict-offline-config.json'
+            @'
+{
+  "schemaVersion": 1,
+  "apiUrl": "https://api.example.test",
+  "classroomId": "room_123",
+  "enrollmentToken": "token-value",
+  "enrollmentTokenExpiresAt": "2026-08-22T10:00:00.000Z",
+  "options": {
+    "enforceManagedBrowserBoundary": true,
+    "appControlProfile": "StrictApplicationAllowlist",
+    "approvedApplicationCatalog": {
+      "schemaVersion": 1,
+      "applications": []
+    }
+  }
+}
+'@ | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+            $config = Read-OpenPathOfflineConfig -Path $configPath
+
+            $config.AppControlProfile | Should -Be 'StrictApplicationAllowlist'
+            $config.ApprovedApplicationCatalog.schemaVersion | Should -Be 1
+            @($config.ApprovedApplicationCatalog.applications).Count | Should -Be 0
+        }
+
+        It "Rejects an unsupported offline AppControl profile" {
+            $json = @'
+{
+  "schemaVersion": 1,
+  "apiUrl": "https://api.example.test",
+  "classroomId": "room_123",
+  "enrollmentToken": "token-value",
+  "enrollmentTokenExpiresAt": "2026-08-22T10:00:00.000Z",
+  "options": { "appControlProfile": "UnknownProfile" }
+}
+'@
+            { Read-OpenPathOfflineConfigText -ConfigJson $json } | Should -Throw
+        }
+
         It "Rejects plaintext http API URLs, wrong schema versions, malformed JSON, and missing fields" {
             $rejectCases = @(
                 @{ json = '{"schemaVersion":1,"apiUrl":"http://api.example.test","classroomId":"r","enrollmentToken":"t","enrollmentTokenExpiresAt":"2026-08-22T10:00:00.000Z"}'; because = 'http apiUrl' },

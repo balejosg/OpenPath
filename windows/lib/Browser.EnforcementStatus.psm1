@@ -71,6 +71,20 @@ function Get-OpenPathAppLockerStatus {
         return 'Inactive'
     }
 
+    $configuredProfile = [string](Get-OpenPathBrowserStatusConfigValue -Config $Config -PropertyName 'appControlProfile' -DefaultValue 'ManagedBrowserCompatibility')
+    if ($configuredProfile -eq 'StrictApplicationAllowlist' -and
+        (-not $Config -or -not $Config.PSObject.Properties['activeAppControlProfile'])) {
+        return 'Inactive'
+    }
+    if ($Config -and $Config.PSObject.Properties['activeAppControlProfile']) {
+        $activeProfile = [string]$Config.activeAppControlProfile
+        if ([string]::IsNullOrWhiteSpace($activeProfile) -or
+            $activeProfile -eq 'none' -or
+            -not $activeProfile.Equals($configuredProfile, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return 'Inactive'
+        }
+    }
+
     if ($Config -and (-not $Config.PSObject.Properties['appControlCommitState'])) {
         $groupExists = $false
         if (Get-Command -Name 'Get-LocalGroup' -ErrorAction SilentlyContinue) {
@@ -89,10 +103,15 @@ function Get-OpenPathAppLockerStatus {
 
     $configuredMode = [string](Get-OpenPathBrowserStatusConfigValue -Config $Config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
     $approvedStudentBrowsers = @(Get-OpenPathApprovedStudentBrowsers -Config $Config)
+    $approvedApplicationCatalog = Get-OpenPathBrowserStatusConfigValue -Config $Config -PropertyName 'approvedApplicationCatalog' -DefaultValue $null
     $active = $false
     if (Get-Command -Name 'Test-OpenPathNonAdminAppControlActive' -ErrorAction SilentlyContinue) {
         try {
-            $active = [bool](Test-OpenPathNonAdminAppControlActive -Mode $configuredMode -ApprovedBrowsers $approvedStudentBrowsers)
+            $active = [bool](Test-OpenPathNonAdminAppControlActive `
+                    -Mode $configuredMode `
+                    -ApprovedBrowsers $approvedStudentBrowsers `
+                    -Profile $configuredProfile `
+                    -ApplicationCatalog $approvedApplicationCatalog)
         }
         catch {
             $active = $false
@@ -169,6 +188,8 @@ function Get-OpenPathBrowserEnforcementStatus {
     $readiness = Get-OpenPathBrowserRequestReadiness -Config $resolvedConfig
     $appLocker = Get-OpenPathAppLockerStatus -Config $resolvedConfig
     $firewall = Get-OpenPathFirewallStatusSummary
+    $appControlProfile = [string](Get-OpenPathBrowserStatusConfigValue -Config $resolvedConfig -PropertyName 'appControlProfile' -DefaultValue 'ManagedBrowserCompatibility')
+    $activeAppControlProfile = [string](Get-OpenPathBrowserStatusConfigValue -Config $resolvedConfig -PropertyName 'activeAppControlProfile' -DefaultValue 'none')
 
     $approvedBrowsers = @($inventory.ApprovedBrowsers)
     $unmanagedBrowsers = @($inventory.UnmanagedBrowsers) + @($inventory.PortableBrowserRisks)
@@ -198,6 +219,8 @@ function Get-OpenPathBrowserEnforcementStatus {
 
     return [PSCustomObject]@{
         AppLocker = $appLocker
+        AppControlProfile = $appControlProfile
+        ActiveAppControlProfile = $activeAppControlProfile
         ApprovedStudentBrowsers = ($approvedStudentBrowsers -join ', ')
         ApprovedBrowsers = $approvedSummary
         BlockedByAppLockerBrowsers = $blockedByAppLockerSummary

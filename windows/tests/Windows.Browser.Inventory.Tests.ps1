@@ -200,4 +200,32 @@ Describe "Browser Module - Inventory" {
         $identity.Source | Should -Be 'AppPaths'
         $identity.ExecutablePath | Should -Be 'D:\Browsers\Brave\brave.exe'
     }
+
+    It "does not mark a user-writable Firefox identity as approved for strict policy derivation" {
+        $inventory = Get-OpenPathBrowserInventory `
+            -UninstallEntries @() `
+            -FileCandidates @([pscustomobject]@{
+                Path = 'C:\Users\student\AppData\Local\Mozilla Firefox\firefox.exe'
+                SourceRoot = 'LocalAppData'
+                IsUserWritable = $true
+            })
+
+        $identity = @($inventory.ExecutableIdentities | Where-Object Family -eq 'Firefox')[0]
+        $identity.IsUserWritable | Should -BeTrue
+        $identity.IsApproved | Should -BeFalse
+    }
+
+    It "does not let a Firefox Portable executable inherit Firefox Release approval" {
+        $inventory = Get-OpenPathBrowserInventory `
+            -UninstallEntries @() `
+            -FileCandidates @([pscustomobject]@{
+                Path = 'C:\Program Files\FirefoxPortable\App\Firefox64\firefox.exe'
+                SourceRoot = 'ProgramFiles'
+                IsUserWritable = $false
+            })
+
+        $identity = @($inventory.ExecutableIdentities | Where-Object Family -eq 'Firefox')[0]
+        $identity.IsApproved | Should -BeFalse
+        @($inventory.PortableBrowserRisks | ForEach-Object Name) | Should -Contain 'Firefox portable'
+    }
 }
