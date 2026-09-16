@@ -93,6 +93,8 @@ test('WEDU lab quiesces pre-existing OpenPath task writers before its proof', ()
   const protectedCheckBody =
     harness.match(/function Invoke-WeduSplitDnsProtectedCheck[\s\S]*?\n}\n\nfunction /)?.[0] ?? '';
   assert.match(protectedCheckBody, /finally[\s\S]*Stop-WeduConcurrentOpenPathTasks/);
+  assert.match(protectedCheckBody, /Enable-ScheduledTask -TaskName \$script:WatchdogTaskName/);
+  assert.match(protectedCheckBody, /Enable-ScheduledTask -TaskName 'OpenPath-SSE'/);
   assert.doesNotMatch(protectedCheckBody, /Enable-ScheduledTask -TaskName 'OpenPath-Update'/);
 });
 

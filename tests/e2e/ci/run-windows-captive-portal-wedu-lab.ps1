@@ -1327,10 +1327,12 @@ function Invoke-WeduSplitDnsProtectedCheck {
         }
     }
     finally {
-        # Keep the lab isolated through browser/auth/protection assertions. The
-        # controller rolls the VM back to its pre-lab snapshot, so re-enabling a
-        # writer here would only reintroduce the race before final evidence is saved.
+        # Keep the update writer quiesced, but restore the product's watchdog and
+        # SSE surfaces for the final protected-mode assertion. No competing task
+        # can rewrite Acrylic, and the controller rolls the VM back afterward.
         Stop-WeduConcurrentOpenPathTasks
+        Enable-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop | Out-Null
+        Enable-ScheduledTask -TaskName 'OpenPath-SSE' -ErrorAction Stop | Out-Null
     }
 
     $portalResolvesInProtectedMode = [bool]$resolvedAtLeastOnce
