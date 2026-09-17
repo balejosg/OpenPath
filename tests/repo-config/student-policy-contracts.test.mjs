@@ -2063,6 +2063,16 @@ describe('repository verification contract', () => {
     );
     assert.match(
       windowsRunner,
+      /Assert-WindowsProfilelessInstallPrecondition[\s\S]*?New-LocalUser[\s\S]*?Get-CimInstance\s+-ClassName\s+Win32_UserProfile[\s\S]*?student profile already exists/i,
+      'the direct installer lane should create a dedicated enabled student and prove it has no profile'
+    );
+    assert.match(
+      windowsRunner,
+      /Remove-WindowsProfilelessInstallTarget[\s\S]*?Remove-CimInstance[\s\S]*?Remove-LocalUser/i,
+      'the direct installer lane should remove the dedicated profile and account'
+    );
+    assert.match(
+      windowsRunner,
       /Install-OpenPath\.ps1[\s\S]*?Assert-WindowsProfilelessAppControlCommitted[\s\S]*?Prepare-WindowsUserProfile/s,
       'the direct installer lane must accept committed profileless AppControl before materializing the first-login profile'
     );

@@ -45,6 +45,9 @@ $script:FirefoxUnsignedAddonSupportState = $null
 $script:PrimaryFailure = $null
 $script:RunSucceeded = $false
 $script:Timings = @()
+$script:ProfilelessInstallTargetSid = $null
+$script:ProfilelessInstallTargetUserName = $null
+$script:ProfilelessInstallTargetUserCreated = $false
 
 function Resolve-WindowsStudentSseGroup {
     param(
@@ -528,27 +531,44 @@ function Prepare-WindowsUserProfile {
 }
 
 function Assert-WindowsProfilelessInstallPrecondition {
+    $userName = "opprof$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $plainPassword = "$([guid]::NewGuid().ToString('N'))aA1!"
+    $securePassword = ConvertTo-SecureString $plainPassword -AsPlainText -Force
+    $createdUser = New-LocalUser -Name $userName -Password $securePassword -PasswordNeverExpires `
+        -UserMayNotChangePassword -Description 'OpenPath profileless install CI student' -ErrorAction Stop
+    $script:ProfilelessInstallTargetUserName = $userName
+    $script:ProfilelessInstallTargetSid = [string]$createdUser.SID.Value
+    $script:ProfilelessInstallTargetUserCreated = $true
+
     $adminGroup = Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction Stop
     $adminSids = @(Get-LocalGroupMember -Group $adminGroup.Name -ErrorAction Stop | ForEach-Object { [string]$_.SID.Value })
-    $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop)
-    $candidateUsers = @()
-    foreach ($user in @(Get-LocalUser -ErrorAction Stop)) {
-        $userSid = [string]$user.SID.Value
-        if (-not $user.Enabled -or $userSid -in $adminSids) { continue }
-        if (@($profiles | Where-Object { [string]$_.SID -eq $userSid }).Count -eq 0) {
-            $candidateUsers += $user
-        }
+    $resolvedUser = Get-LocalUser -SID $script:ProfilelessInstallTargetSid -ErrorAction Stop
+    if (-not $resolvedUser.Enabled) {
+        throw 'Precondition violated: profileless student account is disabled'
     }
-    $candidate = @($candidateUsers | Sort-Object Name | Select-Object -First 1)
-    if ($candidate.Count -ne 1) {
-        throw 'Precondition violated: no enabled standard local account without Win32_UserProfile exists'
+    if ($script:ProfilelessInstallTargetSid -in $adminSids) {
+        throw 'Precondition violated: profileless student account is an administrator'
     }
-    $candidateSid = [string]$candidate[0].SID.Value
-    if (@(Get-CimInstance Win32_UserProfile -ErrorAction Stop | Where-Object SID -eq $candidateSid).Count -ne 0) {
+    if (@(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
+            Where-Object { [string]$_.SID -eq $script:ProfilelessInstallTargetSid }).Count -ne 0) {
         throw 'Precondition violated: student profile already exists'
     }
-    $script:ProfilelessInstallTargetSid = $candidateSid
-    $script:ProfilelessInstallTargetUserName = [string]$candidate[0].Name
+    Write-DiagnosticNote "Created enabled standard profileless install target $userName ($($script:ProfilelessInstallTargetSid))"
+}
+
+function Remove-WindowsProfilelessInstallTarget {
+    if (-not $script:ProfilelessInstallTargetUserCreated) { return }
+
+    $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
+        Where-Object { [string]$_.SID -eq $script:ProfilelessInstallTargetSid })
+    foreach ($profile in $profiles) {
+        if ([bool]$profile.Loaded) {
+            throw "Cannot remove loaded CI profile for $($script:ProfilelessInstallTargetSid)"
+        }
+        $profile | Remove-CimInstance -ErrorAction Stop
+    }
+    Remove-LocalUser -Name $script:ProfilelessInstallTargetUserName -ErrorAction Stop
+    $script:ProfilelessInstallTargetUserCreated = $false
 }
 
 function Assert-WindowsProfilelessAppControlCommitted {
@@ -561,11 +581,13 @@ function Assert-WindowsProfilelessAppControlCommitted {
     $health = Get-OpenPathNonAdminAppControlHealth -Mode ([string]$config.nonAdminAppControlMode) `
         -ApprovedBrowsers @($config.approvedStudentBrowsers) -Profile ([string]$config.appControlProfile) `
         -ApplicationCatalog $config.approvedApplicationCatalog -TargetSid $script:ProfilelessInstallTargetSid
-    if (-not $health.Healthy -or -not $health.IdentityResolved -or $health.ProfileAvailable -or
-        [string]$health.ValidationMode -ne 'profileless' -or @($health.Observed.RuntimeDecisions).Count -eq 0) {
-        throw 'Direct PowerShell profileless AppControl acceptance failed'
-    }
-    [ordered]@{
+    $acceptanceFailures = @()
+    if (-not $health.Healthy) { $acceptanceFailures += 'health-unhealthy' }
+    if (-not $health.IdentityResolved) { $acceptanceFailures += 'identity-unresolved' }
+    if ($health.ProfileAvailable) { $acceptanceFailures += 'profile-unexpectedly-available' }
+    if ([string]$health.ValidationMode -ne 'profileless') { $acceptanceFailures += 'validation-mode-not-profileless' }
+    if (@($health.Observed.RuntimeDecisions).Count -eq 0) { $acceptanceFailures += 'runtime-decisions-empty' }
+    $evidence = [ordered]@{
         sourceCommitSha = if ($env:GITHUB_SHA) { $env:GITHUB_SHA } else { [string](& git -C $script:RepoRoot rev-parse HEAD) }
         installerSha256 = (Get-FileHash -LiteralPath (Join-Path $script:RepoRoot 'windows\Install-OpenPath.ps1') -Algorithm SHA256).Hash
         windowsVersion = [Environment]::OSVersion.VersionString
@@ -578,7 +600,16 @@ function Assert-WindowsProfilelessAppControlCommitted {
         runtimeDecisions = @($health.Observed.RuntimeDecisions)
         appIdentityServiceRunning = [bool]$health.AppIdentityServiceRunning
         appControlCommitState = [string]$config.appControlCommitState
-    } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $script:ArtifactsRoot 'windows-profileless-powershell-install-evidence.json') -Encoding UTF8
+        validationMode = [string]$health.ValidationMode
+        identityResolved = [bool]$health.IdentityResolved
+        profileAvailable = [bool]$health.ProfileAvailable
+        reasonCodes = @($health.ReasonCodes)
+        acceptanceFailures = @($acceptanceFailures)
+    }
+    $evidence | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $script:ArtifactsRoot 'windows-profileless-powershell-install-evidence.json') -Encoding UTF8
+    if ($acceptanceFailures.Count -ne 0) {
+        throw "Direct PowerShell profileless AppControl acceptance failed: $($acceptanceFailures -join ', '); reasons=$(@($health.ReasonCodes) -join ', ')"
+    }
 }
 
 function Ensure-SeleniumDependencies {
@@ -1919,6 +1950,15 @@ finally {
 
     try {
         Invoke-TimedStep -Name 'Cleanup test PostgreSQL' -ScriptBlock { Cleanup-TestPostgres }
+    }
+    catch {
+        if ($null -eq $cleanupError) {
+            $cleanupError = $_
+        }
+    }
+
+    try {
+        Invoke-TimedStep -Name 'Remove profileless install target' -ScriptBlock { Remove-WindowsProfilelessInstallTarget }
     }
     catch {
         if ($null -eq $cleanupError) {
