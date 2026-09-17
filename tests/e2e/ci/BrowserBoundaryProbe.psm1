@@ -1059,7 +1059,7 @@ if (-not $getCommand -or -not $testCommand) {
 try {
     $effectivePolicy = Get-AppLockerPolicy -Effective -ErrorAction Stop
     if (-not $effectivePolicy) { throw 'effective-policy-unavailable' }
-    $decisions = @($effectivePolicy | Test-AppLockerPolicy -Path @($ExecutablePath) -User $StudentSid -ErrorAction Stop)
+    $decisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path @($ExecutablePath) -User $StudentSid -ErrorAction Stop)
     $expectedPath = [System.IO.Path]::GetFullPath($ExecutablePath)
     $matchingDecision = $decisions | Where-Object {
         try { [string]::Equals([System.IO.Path]::GetFullPath([string]$_.FilePath), $expectedPath, [System.StringComparison]::OrdinalIgnoreCase) } catch { $false }
@@ -1196,7 +1196,7 @@ function Get-OpenPathTestAppLockerPolicyDecision {
     try {
         $effectivePolicy = Get-AppLockerPolicy -Effective -ErrorAction Stop
         if (-not $effectivePolicy) { throw 'effective-policy-unavailable' }
-        $decisions = @($effectivePolicy | Test-AppLockerPolicy -Path @($ExecutablePath) -User $StudentSid -ErrorAction Stop)
+        $decisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path @($ExecutablePath) -User $StudentSid -ErrorAction Stop)
         $expectedPath = [System.IO.Path]::GetFullPath($ExecutablePath)
         $matchingDecision = $decisions | Where-Object {
             try { [string]::Equals([System.IO.Path]::GetFullPath([string]$_.FilePath), $expectedPath, [System.StringComparison]::OrdinalIgnoreCase) } catch { $false }

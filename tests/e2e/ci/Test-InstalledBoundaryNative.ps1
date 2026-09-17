@@ -19,7 +19,7 @@ try {
     $effective = Get-AppLockerPolicy -Effective -ErrorAction Stop
     $nativeStage = 'evaluate-policy'
     $paths = @($FirefoxPath, $EdgePath, $ProbePath)
-    $decisions = @($effective | Test-AppLockerPolicy -Path $paths -User $StudentSid -ErrorAction Stop)
+    $decisions = @(Test-AppLockerPolicy -PolicyObject $effective -Path $paths -User $StudentSid -ErrorAction Stop)
     $byPath = @{}
     foreach ($decision in $decisions) {
         $byPath[[System.IO.Path]::GetFullPath([string]$decision.FilePath)] = [string]$decision.PolicyDecision

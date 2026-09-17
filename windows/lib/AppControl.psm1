@@ -2032,7 +2032,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                 $probeCleanupAttempted = $true
                 $probeSet = New-OpenPathAppControlEvaluationProbeSet -Target $probeTarget -Profile $Profile -CleanupSucceeded ([ref]$probeCleanupSucceeded)
                 $probePaths = @($probeSet.Paths | ForEach-Object { [string]$_ })
-                $testDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $probePaths -User $probeTarget.UserSid -ErrorAction Stop)
+                $testDecisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path $probePaths -User $probeTarget.UserSid -ErrorAction Stop)
                 if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths $probePaths -Decisions $testDecisions)) {
                     throw 'Test-AppLockerPolicy did not return one decision for every controlled AppControl probe'
                 }
@@ -2062,7 +2062,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                     if ([string]::IsNullOrWhiteSpace($futureBrowserPath) -or -not [System.IO.File]::Exists($futureBrowserPath)) {
                         throw 'Strict unknown executable probe was not created'
                     }
-                    $futureDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path @($futureBrowserPath) -User $probeTarget.UserSid -ErrorAction Stop)
+                    $futureDecisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path @($futureBrowserPath) -User $probeTarget.UserSid -ErrorAction Stop)
                     if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths @($futureBrowserPath) -Decisions $futureDecisions)) {
                         throw 'Test-AppLockerPolicy did not return a decision for the strict FutureBrowser probe'
                     }
@@ -2098,7 +2098,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                         'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
                     )
                     $edgeSamplePaths = Get-OpenPathAppControlExistingSamplePaths -Label 'Edge' -Paths $edgeSampleCandidates
-                    $edgeDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $edgeSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
+                    $edgeDecisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path $edgeSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
                     if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths $edgeSamplePaths -Decisions $edgeDecisions)) {
                         throw 'Test-AppLockerPolicy did not return one decision for every Edge probe'
                     }
@@ -2131,7 +2131,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                         'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
                     )
                     $firefoxSamplePaths = Get-OpenPathAppControlExistingSamplePaths -Label 'Firefox' -Paths $firefoxSampleCandidates
-                    $firefoxDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $firefoxSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
+                    $firefoxDecisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path $firefoxSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
                     if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths $firefoxSamplePaths -Decisions $firefoxDecisions)) {
                         throw 'Test-AppLockerPolicy did not return one decision for every Firefox probe'
                     }
