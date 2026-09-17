@@ -2472,7 +2472,10 @@ Describe "AppControl Module" {
             function global:Get-LocalGroupMember {
                 param($Group)
                 if ($Group -eq 'Administrators') { return @() }
-                @([pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } })
+                @(
+                    [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } },
+                    [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1002' } }
+                )
             }
             function global:Get-LocalUser {
                 @([pscustomobject]@{ Name = 'student'; Enabled = $true; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } })
@@ -2481,6 +2484,9 @@ Describe "AppControl Module" {
             InModuleScope AppControl {
                 $identity = Get-OpenPathRestrictedIdentity
                 $identity.UserSid | Should -Be 'S-1-5-21-1-2-3-1001'
+                $selected = Get-OpenPathRestrictedIdentity -TargetSid 'S-1-5-21-1-2-3-1002'
+                $selected.UserSid | Should -Be 'S-1-5-21-1-2-3-1002'
+                { Get-OpenPathRestrictedIdentity -TargetSid 'S-1-5-21-1-2-3-9999' } | Should -Throw '*not a member*'
             }
         }
 

@@ -560,7 +560,7 @@ function Assert-WindowsProfilelessAppControlCommitted {
     Import-Module 'C:\OpenPath\lib\AppControl.psm1' -Force -Global -ErrorAction Stop
     $health = Get-OpenPathNonAdminAppControlHealth -Mode ([string]$config.nonAdminAppControlMode) `
         -ApprovedBrowsers @($config.approvedStudentBrowsers) -Profile ([string]$config.appControlProfile) `
-        -ApplicationCatalog $config.approvedApplicationCatalog
+        -ApplicationCatalog $config.approvedApplicationCatalog -TargetSid $script:ProfilelessInstallTargetSid
     if (-not $health.Healthy -or -not $health.IdentityResolved -or $health.ProfileAvailable -or
         [string]$health.ValidationMode -ne 'profileless' -or @($health.Observed.RuntimeDecisions).Count -eq 0) {
         throw 'Direct PowerShell profileless AppControl acceptance failed'

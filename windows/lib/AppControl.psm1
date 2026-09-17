@@ -1347,7 +1347,7 @@ function New-OpenPathAppControlTargetException {
         [string]$Message,
 
         [Parameter(Mandatory = $true)]
-        [ValidateSet('group-missing', 'group-sid-unresolvable', 'group-empty', 'member-sid-unresolvable', 'member-profile-unavailable')]
+        [ValidateSet('group-missing', 'group-sid-unresolvable', 'group-empty', 'member-sid-unresolvable', 'member-profile-unavailable', 'target-sid-not-member')]
         [string]$Detail,
 
         [string]$GroupSid = '',
@@ -1372,7 +1372,7 @@ function Get-OpenPathRestrictedIdentity {
     this identity contract because installation must work before first login.
     #>
     [CmdletBinding()]
-    param()
+    param([string]$TargetSid = '')
 
     foreach ($requiredCommand in @('Get-LocalGroup', 'Get-LocalGroupMember')) {
         if (-not (Get-Command -Name $requiredCommand -ErrorAction SilentlyContinue)) {
@@ -1401,10 +1401,17 @@ function Get-OpenPathRestrictedIdentity {
         if ([string]::IsNullOrWhiteSpace($memberSid)) {
             continue
         }
+        if (-not [string]::IsNullOrWhiteSpace($TargetSid) -and $memberSid -ne $TargetSid) {
+            continue
+        }
         return [PSCustomObject]@{
             GroupSid = $groupSid
             UserSid = $memberSid
         }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($TargetSid)) {
+        throw (New-OpenPathAppControlTargetException -Message 'Requested restricted SID is not a member of OpenPath-Restricted' -Detail 'target-sid-not-member' -GroupSid $groupSid -TargetSid $TargetSid)
     }
 
     throw (New-OpenPathAppControlTargetException -Message 'OpenPath-Restricted members have no resolvable SID' -Detail 'member-sid-unresolvable' -GroupSid $groupSid)
@@ -1453,9 +1460,9 @@ function Get-OpenPathAppControlProbeTarget {
     Combines a required restricted identity with an optional profile-backed probe target.
     #>
     [CmdletBinding()]
-    param()
+    param([string]$TargetSid = '')
 
-    $identity = Get-OpenPathRestrictedIdentity
+    $identity = Get-OpenPathRestrictedIdentity -TargetSid $TargetSid
     $profileTarget = Get-OpenPathAppControlProfileProbeTarget -Identity $identity
     $profileAvailable = ($null -ne $profileTarget)
 
@@ -1880,7 +1887,9 @@ function Get-OpenPathNonAdminAppControlHealth {
         [string]$Profile = 'ManagedBrowserCompatibility',
 
         [AllowNull()]
-        [object]$ApplicationCatalog = $null
+        [object]$ApplicationCatalog = $null,
+
+        [string]$TargetSid = ''
     )
 
     if (-not (Test-OpenPathApplicationApprovalCatalog -Profile $Profile -Catalog $ApplicationCatalog)) {
@@ -1949,7 +1958,7 @@ function Get-OpenPathNonAdminAppControlHealth {
     }
     else {
         try {
-            $probeTarget = Get-OpenPathAppControlProbeTarget
+            $probeTarget = Get-OpenPathAppControlProbeTarget -TargetSid $TargetSid
             $restrictedTargetValid = $true
             $identityResolved = $true
             $profileAvailable = [bool]$probeTarget.ProfileAvailable
