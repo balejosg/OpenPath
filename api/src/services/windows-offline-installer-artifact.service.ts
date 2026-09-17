@@ -214,6 +214,8 @@ export function createWindowsOfflineInstallerService(
           approvedStudentBrowsers: ['Firefox'],
           installFirefoxIfMissing: true,
           enforceManagedBrowserBoundary: true,
+          appControlProfile: 'StrictApplicationAllowlist',
+          approvedApplicationCatalog: { schemaVersion: 1, applications: [] },
         },
       });
     } catch {

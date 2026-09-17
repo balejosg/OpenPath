@@ -30,6 +30,8 @@ const validConfig = {
     approvedStudentBrowsers: ['Firefox'],
     installFirefoxIfMissing: true,
     enforceManagedBrowserBoundary: true,
+    appControlProfile: 'StrictApplicationAllowlist',
+    approvedApplicationCatalog: { schemaVersion: 1, applications: [] },
   },
 } as const;
 

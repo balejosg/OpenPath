@@ -30,6 +30,10 @@ param(
 
     [string]$TargetUserName = '',
 
+    [string]$ExpectedSourceCommitSha = '',
+
+    [string]$ExpectedInstallerSha256 = '',
+
     [ValidateSet('Untouched','Started')]
     [string]$PolicyConverterMode = 'Untouched'
 )
@@ -592,6 +596,16 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 $shell = Get-AvailablePowerShell
 $resolvedExecutable = (Resolve-Path -LiteralPath $ExecutablePath).Path
+$observedInstallerSha256 = (Get-FileHash -LiteralPath $resolvedExecutable -Algorithm SHA256).Hash
+if ($ExpectedInstallerSha256 -and
+    -not $observedInstallerSha256.Equals($ExpectedInstallerSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'installer-sha256-mismatch'
+}
+$observedSourceCommitSha = if ($env:GITHUB_SHA) { [string]$env:GITHUB_SHA } else { [string](& git rev-parse HEAD) }
+if ($ExpectedSourceCommitSha -and
+    -not $observedSourceCommitSha.Equals($ExpectedSourceCommitSha, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'source-commit-sha-mismatch'
+}
 $resolvedProbePayload = if ($ProbePayloadPath) { (Resolve-Path -LiteralPath $ProbePayloadPath).Path } else { '' }
 $probePayloadSha256 = if ($resolvedProbePayload) { (Get-FileHash -LiteralPath $resolvedProbePayload -Algorithm SHA256).Hash } else { $null }
 $expectedApiUri = [System.Uri]$ExpectedApiUrl
@@ -636,6 +650,7 @@ $result = $null
 $disposableTarget = $null
 $targetCleanup = $null
 $boundaryEvidence = $null
+$profilelessHealthEvidence = $null
 $launchRequestedAt = $null
 $installerExitedAt = $null
 $appLockerPolicyLifecycle = $null
@@ -658,7 +673,8 @@ foreach ($transportFileName in @(
 try {
     $script:CurrentStage = 'prepare-disposable-standard-target'
     Import-Module (Join-Path $PSScriptRoot 'DisposableWindowsTarget.psm1') -Force -ErrorAction Stop
-    $disposableTarget = New-OpenPathDisposableStandardTarget -UserName $TargetUserName
+    $disposableTarget = New-OpenPathDisposableStandardTarget -UserName $TargetUserName -MaterializeProfile $false
+    $preInstallTarget = Assert-OpenPathDisposableTarget -Target $disposableTarget -ProfileExpectation Absent
 
     $script:CurrentStage = 'launch-executable'
     $env:OPENPATH_WINDOWS_ROOT = $OpenPathRoot
@@ -715,6 +731,32 @@ try {
     $installedConfig = Get-Content -LiteralPath $installedConfigPath -Raw | ConvertFrom-Json
     Assert-EqualValue -Actual ([string]$installedConfig.classroomId) -Expected $ExpectedClassroomId -Code 'installed-classroom-mismatch'
     Assert-EqualValue -Actual ([string]$installedConfig.apiUrl) -Expected $ExpectedApiUrl -Code 'installed-api-url-mismatch'
+    if ([string]$installedConfig.appControlCommitState -ne 'committed') {
+        throw 'profileless-appcontrol-not-committed'
+    }
+    Import-Module (Join-Path $OpenPathRoot 'lib\AppControl.psm1') -Force -Global -ErrorAction Stop
+    $profilelessHealth = Get-OpenPathNonAdminAppControlHealth `
+        -Mode ([string]$installedConfig.nonAdminAppControlMode) `
+        -ApprovedBrowsers @($installedConfig.approvedStudentBrowsers) `
+        -Profile ([string]$installedConfig.appControlProfile) `
+        -ApplicationCatalog $installedConfig.approvedApplicationCatalog
+    if (-not $profilelessHealth.Healthy -or
+        -not $profilelessHealth.IdentityResolved -or
+        $profilelessHealth.ProfileAvailable -or
+        [string]$profilelessHealth.ValidationMode -ne 'profileless' -or
+        @($profilelessHealth.Observed.RuntimeDecisions).Count -eq 0) {
+        throw 'profileless-appcontrol-health-invalid'
+    }
+    $profilelessHealthEvidence = [ordered]@{
+        identityResolved = [bool]$profilelessHealth.IdentityResolved
+        profileAvailable = [bool]$profilelessHealth.ProfileAvailable
+        validationMode = [string]$profilelessHealth.ValidationMode
+        localPolicyValid = [bool]$profilelessHealth.LocalPolicyValid
+        effectivePolicyValid = [bool]$profilelessHealth.EffectivePolicyValid
+        appIdentityServiceRunning = [bool]$profilelessHealth.AppIdentityServiceRunning
+        runtimeDecisions = @($profilelessHealth.Observed.RuntimeDecisions)
+        appControlCommitState = [string]$installedConfig.appControlCommitState
+    }
 
     $script:CurrentStage = 'validate-trailer'
     $reader = Join-Path $PSScriptRoot '..\..\..\windows\offline-installer\scripts\Read-Trailer.ps1'
@@ -770,7 +812,8 @@ try {
     if ([string]::IsNullOrWhiteSpace([string]$completedConfig.whitelistUrl)) {
         throw 'completed-whitelist-url-missing'
     }
-
+    $script:CurrentStage = 'materialize-first-login-profile'
+    $disposableTarget = Initialize-OpenPathDisposableTargetProfile -Target $disposableTarget
     $script:CurrentStage = 'validate-prepared-target-installed'
     $installedTarget = Assert-OpenPathPreparedTargetInstalled -Target $disposableTarget
     try {
@@ -794,6 +837,14 @@ try {
         trailerDiagnosticSource = $trailerDiagnosticSource
         trailerValidated = $true
         payloadManifestValidated = $true
+        sourceCommitSha = $observedSourceCommitSha
+        installerSha256 = $observedInstallerSha256
+        windowsVersion = [Environment]::OSVersion.VersionString
+        powerShellProcessArchitecture = [string]$installerChildPowerShellArchitecture
+        appControlProfile = [string]$completedConfig.appControlProfile
+        restrictedUserSid = [string]$installedTarget.Sid
+        profileExistedBeforeInstall = [bool]$preInstallTarget.profileMaterialized
+        profilelessAppControl = $profilelessHealthEvidence
         pendingStateObserved = $true
         retryOutcome = [string]$retry.Outcome
         pendingStateCleared = $true

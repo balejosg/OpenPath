@@ -99,7 +99,10 @@ function Revoke-OpenPathDisposableTargetUserRight {
 }
 
 function Assert-OpenPathDisposableTarget {
-    param([Parameter(Mandatory = $true)][object]$Target)
+    param(
+        [Parameter(Mandatory = $true)][object]$Target,
+        [ValidateSet('Required', 'Absent')][string]$ProfileExpectation = 'Required'
+    )
     $user = Get-LocalUser -Name $Target.UserName -ErrorAction SilentlyContinue
     if (-not $user) { throw 'disposable-target-user-missing' }
     if (-not [bool]$user.Enabled) { throw 'disposable-target-user-disabled' }
@@ -111,6 +114,16 @@ function Assert-OpenPathDisposableTarget {
     if ($Target.Sid -in $adminSids) { throw 'disposable-target-is-administrator' }
 
     $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$($Target.Sid)'" -ErrorAction Stop)
+    if ($ProfileExpectation -eq 'Absent') {
+        if ($profiles.Count -ne 0) { throw 'disposable-target-profile-unexpectedly-materialized' }
+        return [pscustomobject]@{
+            preparedTarget = $true
+            enabled = $true
+            administrator = $false
+            profileMaterialized = $false
+            profileSpecial = $false
+        }
+    }
     $valid = @($profiles | Where-Object {
         $_.PSObject.Properties['Special'] -and $_.Special -eq $false -and
         -not [string]::IsNullOrWhiteSpace([string]$_.LocalPath) -and
@@ -132,7 +145,10 @@ function Assert-OpenPathDisposableTarget {
 }
 
 function New-OpenPathDisposableStandardTarget {
-    param([string]$UserName = '')
+    param(
+        [string]$UserName = '',
+        [bool]$MaterializeProfile = $true
+    )
     if ([string]::IsNullOrWhiteSpace($UserName)) {
         $suffix = [guid]::NewGuid().ToString('N').Substring(0, 10)
         $UserName = "op-e2e-$suffix"
@@ -146,10 +162,11 @@ function New-OpenPathDisposableStandardTarget {
         $created = $true
         Enable-LocalUser -Name $UserName -ErrorAction Stop
         $sid = ConvertTo-OpenPathTargetSidString $user.SID
-        $profilePath = Invoke-OpenPathCreateDisposableProfile -Sid $sid -UserName $UserName
+        $profilePath = if ($MaterializeProfile) { Invoke-OpenPathCreateDisposableProfile -Sid $sid -UserName $UserName } else { '' }
         Grant-OpenPathDisposableTargetUserRight -Sid $sid -Right 'SeBatchLogonRight'
         $target = [pscustomobject]@{ UserName = $UserName; Sid = $sid; ProfilePath = $profilePath; Password = $password; BatchLogonRightGranted = $true }
-        $null = Assert-OpenPathDisposableTarget -Target $target
+        $profileExpectation = if ($MaterializeProfile) { 'Required' } else { 'Absent' }
+        $null = Assert-OpenPathDisposableTarget -Target $target -ProfileExpectation $profileExpectation
         return $target
     }
     catch {
@@ -164,6 +181,15 @@ function New-OpenPathDisposableStandardTarget {
     finally {
         $securePassword = $null
     }
+}
+
+function Initialize-OpenPathDisposableTargetProfile {
+    param([Parameter(Mandatory = $true)][object]$Target)
+
+    $null = Assert-OpenPathDisposableTarget -Target $Target -ProfileExpectation Absent
+    $Target.ProfilePath = Invoke-OpenPathCreateDisposableProfile -Sid $Target.Sid -UserName $Target.UserName
+    $null = Assert-OpenPathDisposableTarget -Target $Target -ProfileExpectation Required
+    return $Target
 }
 
 function Assert-OpenPathPreparedTargetInstalled {
@@ -496,41 +522,80 @@ function Invoke-OpenPathInstalledBoundaryProbes {
     $edge = @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe") | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $firefox) { throw 'boundary-firefox-missing' }
     if (-not $edge) { throw 'boundary-edge-missing' }
-    $probeExe = Join-Path $Target.ProfilePath 'openpath-e2e-probe.exe'
-    $probeMarker = Join-Path $Target.ProfilePath 'openpath-e2e-probe.marker'
-    if ($ProbePayloadPath) {
-        if (-not (Test-Path -LiteralPath $ProbePayloadPath -PathType Leaf)) { throw 'boundary-probe-payload-missing' }
-        Copy-Item -LiteralPath $ProbePayloadPath -Destination $probeExe -Force
+    $probeId = [guid]::NewGuid().ToString('N')
+    $probeRoot = Join-Path $Target.ProfilePath "OpenPathPortableProbe-$probeId"
+    $probeLocations = [ordered]@{
+        Downloads = Join-Path $Target.ProfilePath "Downloads\OpenPathProbe-$probeId\openpath-e2e-probe.exe"
+        Desktop = Join-Path $Target.ProfilePath "Desktop\OpenPathProbe-$probeId\openpath-e2e-probe.exe"
+        LocalAppDataTemp = Join-Path $Target.ProfilePath "AppData\Local\Temp\OpenPathProbe-$probeId\openpath-e2e-probe.exe"
+        ArbitraryWritable = Join-Path $probeRoot 'future-browser-renamed.exe'
     }
-    else {
-        New-OpenPathProbePayloadBinary -OutputPath $probeExe
+    $removableDrive = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=2' -ErrorAction SilentlyContinue |
+            Where-Object { $_.PSObject.Properties['DeviceID'] -and -not [string]::IsNullOrWhiteSpace([string]$_.DeviceID) } |
+            Select-Object -First 1)
+    if ($removableDrive.Count -eq 1) {
+        $probeLocations.Removable = Join-Path "$($removableDrive[0].DeviceID)\" "OpenPathProbe-$probeId\portable-renamed.exe"
     }
-    $policy = Invoke-OpenPathNativePolicyProbe -Target $Target -OpenPathRoot $OpenPathRoot -FirefoxPath $firefox -EdgePath $edge -ProbePath $probeExe
+    $probeMarkers = [ordered]@{}
+    $portableRuns = [ordered]@{}
+    $createdProbePaths = [System.Collections.Generic.List[string]]::new()
+    $createdProbeDirectories = [System.Collections.Generic.List[string]]::new()
+    $policy = $null
+    $firefoxRun = $null
+    $edgeRun = $null
+    $recovery = $null
+    $watchdog = $null
     $studentFirefoxProfile = Join-Path $Target.ProfilePath "AppData\Local\Temp\ff-probe-$([guid]::NewGuid().ToString('N'))"
     try {
+        if ($ProbePayloadPath -and -not (Test-Path -LiteralPath $ProbePayloadPath -PathType Leaf)) { throw 'boundary-probe-payload-missing' }
+        foreach ($entry in $probeLocations.GetEnumerator()) {
+            $probeDirectory = Split-Path -Parent $entry.Value
+            if (-not (Test-Path -LiteralPath $probeDirectory -PathType Container)) {
+                New-Item -ItemType Directory -Path $probeDirectory -Force | Out-Null
+                $createdProbeDirectories.Add($probeDirectory)
+            }
+            if ($ProbePayloadPath) {
+                Copy-Item -LiteralPath $ProbePayloadPath -Destination $entry.Value -Force
+            }
+            else {
+                $probeExe = $entry.Value
+                New-OpenPathProbePayloadBinary -OutputPath $probeExe
+            }
+            $createdProbePaths.Add($entry.Value)
+            $probeMarkers[$entry.Key] = "$($entry.Value).marker"
+        }
+        $probeExe = $probeLocations.ArbitraryWritable
+        $policy = Invoke-OpenPathNativePolicyProbe -Target $Target -OpenPathRoot $OpenPathRoot -FirefoxPath $firefox -EdgePath $edge -ProbePath $probeExe
         New-Item -ItemType Directory -Path $studentFirefoxProfile -Force | Out-Null
         & icacls.exe $studentFirefoxProfile /grant "$env:COMPUTERNAME\$($Target.UserName):(OI)(CI)F" *> $null
         if ($LASTEXITCODE -ne 0) { throw 'student-firefox-profile-acl-failed' }
         $firefoxRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Firefox allow' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $firefox -Arguments "-headless -new-instance -profile `"$studentFirefoxProfile`" about:blank" -Expectation ExpectAllowed -ProcessName firefox -StudentSid $Target.Sid -UseNativeStudentProcess
+        try {
+            $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid -PackagedAppPattern 'MicrosoftEdge|Microsoft\.MicrosoftEdge|msedge' -CaptureEnforcementDiagnostics -UseNativeStudentProcess
+        }
+        catch {
+            throw (New-OpenPathDisposableEdgeBoundaryException)
+        }
+        foreach ($entry in $probeLocations.GetEnumerator()) {
+            try {
+                $portableRuns[$entry.Key] = Invoke-StudentExecutableTaskProbe -ProbeName "Portable PE deny ($($entry.Key))" -UserName $Target.UserName -Password $Target.Password -ExecutablePath $entry.Value -Arguments "`"$($probeMarkers[$entry.Key])`"" -Expectation ExpectDenied -StudentSid $Target.Sid -MarkerPath $probeMarkers[$entry.Key] -UseNativeStudentProcess
+            }
+            catch { throw "boundary-portable-pe-execution-failed-$($entry.Key)" }
+        }
+        try { $recovery = Invoke-OpenPathSystemRecoveryProbe -MarkerPath (Join-Path $env:ProgramData "OpenPathRecoveryProbe-$([guid]::NewGuid().ToString('N')).marker") } catch { throw 'boundary-system-recovery-failed' }
+        try { $watchdog = Invoke-OpenPathWatchdogProbe } catch { throw 'boundary-watchdog-execution-failed' }
+        if ($watchdog.PSObject.Properties['status'] -and $watchdog.status -eq 'failed') { throw (New-OpenPathDisposableWatchdogBoundaryException -Evidence $watchdog) }
+        return [pscustomobject]@{ policyEvaluation = $policy; firefoxExecution = $firefoxRun; edgeExecution = $edgeRun; portableExecutions = [pscustomobject]$portableRuns; recovery = $recovery; watchdog = $watchdog }
     }
     catch {
+        if ($_.Exception.Message -eq 'boundary-firefox-execution-failed' -or $_.Exception.Message -like 'boundary-*') { throw }
         throw 'boundary-firefox-execution-failed'
     }
     finally {
         Remove-Item -LiteralPath $studentFirefoxProfile -Recurse -Force -ErrorAction SilentlyContinue
+        foreach ($probePath in $createdProbePaths) { Remove-Item -LiteralPath $probePath,"$probePath.marker" -Force -ErrorAction SilentlyContinue }
+        foreach ($directoryPath in @($createdProbeDirectories | Sort-Object { $_.Length } -Descending)) { Remove-Item -LiteralPath $directoryPath -Recurse -Force -ErrorAction SilentlyContinue }
     }
-    try {
-    $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid -PackagedAppPattern 'MicrosoftEdge|Microsoft\.MicrosoftEdge|msedge' -CaptureEnforcementDiagnostics -UseNativeStudentProcess
-    }
-    catch {
-        throw (New-OpenPathDisposableEdgeBoundaryException)
-    }
-    try { $peRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical benign PE deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $probeExe -Arguments "`"$probeMarker`"" -Expectation ExpectDenied -StudentSid $Target.Sid -MarkerPath $probeMarker -UseNativeStudentProcess } catch { throw 'boundary-benign-pe-execution-failed' }
-    try { $recovery = Invoke-OpenPathSystemRecoveryProbe -MarkerPath (Join-Path $env:ProgramData "OpenPathRecoveryProbe-$([guid]::NewGuid().ToString('N')).marker") } catch { throw 'boundary-system-recovery-failed' }
-    try { $watchdog = Invoke-OpenPathWatchdogProbe } catch { throw 'boundary-watchdog-execution-failed' }
-    if ($watchdog.PSObject.Properties['status'] -and $watchdog.status -eq 'failed') { throw (New-OpenPathDisposableWatchdogBoundaryException -Evidence $watchdog) }
-    Remove-Item -LiteralPath $probeExe,$probeMarker -Force -ErrorAction SilentlyContinue
-    return [pscustomobject]@{ policyEvaluation = $policy; firefoxExecution = $firefoxRun; edgeExecution = $edgeRun; benignPeExecution = $peRun; recovery = $recovery; watchdog = $watchdog }
 }
 
 function Remove-OpenPathDisposableStandardTarget {

@@ -596,6 +596,11 @@ test('Windows release evidence executes the personalized NSIS executable and its
     /nsExec::ExecToLog/,
     'NSIS offline installation must not depend on plugin-specific error strings'
   );
+  assert.match(
+    runInstallerSection,
+    /StrCmp \$1 0 installer_done installer_child_failed[\s\S]*installer_child_failed:[\s\S]*SetErrorLevel \$1[\s\S]*Abort[\s\S]*installer_exec_error:[\s\S]*SetErrorLevel 1[\s\S]*Abort/,
+    'NSIS must abort visibly and preserve a non-zero exit when the PowerShell child fails or cannot launch'
+  );
   const normalizeStatusSource = nsiSource.slice(
     nsiSource.indexOf('Function NormalizeOfflineStatusByte'),
     nsiSource.indexOf('Function WriteOfflineStage')
@@ -897,12 +902,24 @@ test('canonical personalized-EXE lane owns a real disposable standard target lif
   );
 });
 
-test('canonical personalized-EXE lane cannot accept an absent or unmaterialized target', () => {
+test('canonical personalized-EXE lane proves a profileless install before first-login probes', () => {
   const targetHelper = readText('tests/e2e/ci/DisposableWindowsTarget.psm1');
+  const executableLane = readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1');
   assert.match(targetHelper, /disposable-target-user-missing/);
   assert.match(targetHelper, /disposable-target-profile-not-materialized/);
+  assert.match(targetHelper, /disposable-target-profile-unexpectedly-materialized/);
   assert.match(targetHelper, /disposable-target-is-administrator/);
-  assert.match(targetHelper, /preparedTarget[\s\S]*profileMaterialized\s*=\s*\$true/);
+  assert.match(
+    executableLane,
+    /New-OpenPathDisposableStandardTarget[^\r\n]*-MaterializeProfile \$false/
+  );
+  assert.match(executableLane, /Assert-OpenPathDisposableTarget[^\r\n]*-ProfileExpectation Absent/);
+  assert.match(executableLane, /appControlCommitState[^\r\n]*committed/);
+  assert.match(
+    executableLane,
+    /profileless-appcontrol-not-committed[\s\S]*Initialize-OpenPathDisposableTargetProfile[\s\S]*Invoke-OpenPathInstalledBoundaryProbes/,
+    'the lane must verify installer acceptance before materializing the first-login profile or running enforcement probes'
+  );
 });
 
 test('real NSIS failures preserve bounded structured AppControl diagnosis', () => {
@@ -1158,7 +1175,7 @@ test('release template workflow prepares signed Firefox artifacts through the ca
   );
 });
 
-test('release workflow isolates a non-gating serialized PolicyConverter contrast over identical payload bytes', () => {
+test('release workflow gates on a serialized PolicyConverter contrast over identical payload bytes', () => {
   const workflow = readText('.github/workflows/release-scripts.yml');
   const validate = workflow.indexOf('Validate personalized trailer with PowerShell');
   const diagnosticUpload = workflow.indexOf('Upload PolicyConverter contrast inputs');
@@ -1177,7 +1194,7 @@ test('release workflow isolates a non-gating serialized PolicyConverter contrast
   assert.match(workflow, /matrix:[\s\S]*mode: \[Untouched, Started\]/);
   assert.match(
     workflow,
-    /-EvidencePath \$evidencePath `[\r\n]+\s+-PolicyConverterMode 'Untouched'/
+    /-EvidencePath \$evidencePath `[\s\S]*?-ExpectedSourceCommitSha '\$\{\{ github\.sha \}\}' `[\s\S]*?-ExpectedInstallerSha256 \$personalizedSha256 `[\s\S]*?-PolicyConverterMode 'Untouched'/
   );
   assert.match(workflow, /fail-fast: false[\s\S]*max-parallel: 1/);
   assert.match(workflow, /continue-on-error: true/);
@@ -1200,6 +1217,26 @@ test('release workflow isolates a non-gating serialized PolicyConverter contrast
   assert.match(uploadBlock, /if: steps\.contrast-inputs\.outcome == 'success'/);
   assert.match(uploadBlock, /continue-on-error: true/);
   assert.doesNotMatch(canonicalBlock, /continue-on-error: true/);
+});
+
+test('canonical Windows release gate runs fail-closed for skipped jobs and missing EXE evidence', () => {
+  const workflow = readText('.github/workflows/release-scripts.yml');
+  const gate = workflow.slice(workflow.indexOf('  release-scripts-success:'));
+
+  assert.match(gate, /if: \$\{\{ always\(\) && github\.event_name == 'workflow_dispatch' \}\}/);
+  for (const job of [
+    'windows-offline-template',
+    'policy-converter-contrast',
+    'windows-personalized-http-e2e',
+    'release',
+  ]) {
+    assert.match(gate, new RegExp(`needs\\.${job}\\.result \\}\\}" != "success"`));
+  }
+  const evidenceUpload = workflow.slice(
+    workflow.indexOf('- name: Upload personalized NSIS E2E evidence'),
+    workflow.indexOf('- name: Upload template artifacts')
+  );
+  assert.match(evidenceUpload, /if-no-files-found: error/);
 });
 
 test('offline executable harness accepts one prebuilt PE payload without changing its default path', () => {

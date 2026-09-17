@@ -93,6 +93,16 @@ export const WINDOWS_OFFLINE_INSTALLER_OPTIONS_SCHEMA = z
       .max(MAX_WINDOWS_OFFLINE_INSTALLER_APPROVED_STUDENT_BROWSERS),
     installFirefoxIfMissing: z.boolean(),
     enforceManagedBrowserBoundary: z.boolean(),
+    appControlProfile: z
+      .enum(['ManagedBrowserCompatibility', 'StrictApplicationAllowlist'])
+      .optional(),
+    approvedApplicationCatalog: z
+      .object({
+        schemaVersion: z.literal(1),
+        applications: z.array(z.unknown()),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

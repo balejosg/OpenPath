@@ -301,12 +301,17 @@ Section "RunInstaller" SEC02
     CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt" "$TEMP"
     CopyFiles /SILENT "$INSTDIR\OpenPathOfflineSetup-$EXEFILE-installer-failure-phase.txt.json" "$TEMP"
     ClearErrors
+    StrCmp $1 0 installer_done installer_child_failed
+installer_child_failed:
+    MessageBox MB_ICONSTOP|MB_OK "OpenPath installation failed (exit code $1). Bounded diagnostics were preserved in the temporary diagnostics directory." /SD IDOK
     SetErrorLevel $1
-    Goto installer_done
+    Abort
 installer_exec_error:
     Push "${OFFLINE_STAGE_RUN_INSTALLER_EXIT}"
     Push "${OFFLINE_STATUS_EXEC_ERROR}"
     Call WriteOfflineStage
     SetErrorLevel 1
+    MessageBox MB_ICONSTOP|MB_OK "OpenPath installation could not start. Bounded diagnostics were preserved in the temporary diagnostics directory." /SD IDOK
+    Abort
 installer_done:
 SectionEnd

@@ -887,7 +887,7 @@ Describe 'Canonical offline installer disposable target' {
 
         $null = Invoke-OpenPathInstalledBoundaryProbes -Target $target -OpenPathRoot 'C:\OpenPath' -ProbePayloadPath $payload
 
-        Should -Invoke Copy-Item -ModuleName DisposableWindowsTarget -Times 1 -Exactly -ParameterFilter { $LiteralPath -eq $payload }
+        Should -Invoke Copy-Item -ModuleName DisposableWindowsTarget -Times 4 -Exactly -ParameterFilter { $LiteralPath -eq $payload }
         Should -Invoke New-OpenPathProbePayloadBinary -ModuleName DisposableWindowsTarget -Times 0 -Exactly
     }
 
