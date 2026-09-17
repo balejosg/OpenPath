@@ -892,6 +892,11 @@ test('canonical personalized-EXE lane owns a real disposable standard target lif
   assert.match(executableLane, /boundary-\[a-z0-9-\][\s\S]*failureDetailCode/);
   assert.match(
     executableLane,
+    /Get-OpenPathDisposableBoundaryFailureEvidence[\s\S]*boundaryFailureEvidence\s*=\s*\$initialBoundaryEvidence/,
+    'all boundary failures, including approved-browser failures, must retain bounded runtime evidence'
+  );
+  assert.match(
+    executableLane,
     /OpenPathWatchdogBoundaryEvidence[\s\S]*watchdogBoundaryEvidence\s*=\s*\$watchdogBoundaryEvidence/,
     'watchdog failures must project their bounded task observation into the main failure artifact'
   );

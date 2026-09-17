@@ -929,12 +929,11 @@ catch {
     if (-not $getBoundaryFailureEvidence) {
         $getBoundaryFailureEvidence = Get-Command -Name Get-OpenPathLastBoundaryProbeFailureEvidence -ErrorAction SilentlyContinue
     }
+    $initialBoundaryEvidence = $transportedBoundaryEvidence
+    if ($script:CurrentStage -eq 'run-installed-boundary-probes' -and $getBoundaryFailureEvidence) {
+        try { $initialBoundaryEvidence = & $getBoundaryFailureEvidence } catch {}
+    }
     if ($script:CurrentStage -eq 'run-installed-boundary-probes' -and -not $resolvedEdgeFailure) {
-        $initialBoundaryEvidence = $null
-        if ($getBoundaryFailureEvidence) {
-            try { $initialBoundaryEvidence = & $getBoundaryFailureEvidence } catch {}
-        }
-        if (-not $initialBoundaryEvidence) { $initialBoundaryEvidence = $transportedBoundaryEvidence }
         if ($initialBoundaryEvidence -and [string]$initialBoundaryEvidence.probeName -eq 'Canonical Edge deny') {
             $edgeBoundaryEvidence = [ordered]@{
                 initial = $initialBoundaryEvidence
@@ -1009,6 +1008,7 @@ catch {
         trailerDiagnosticStatus = $trailerDiagnosticStatus
         trailerDiagnosticSource = $trailerDiagnosticSource
         edgeBoundaryEvidence = $edgeBoundaryEvidence
+        boundaryFailureEvidence = $initialBoundaryEvidence
         watchdogBoundaryEvidence = $watchdogBoundaryEvidence
         edge = $edge
         edgeName = if ($edgeFailureContract) { $edgeFailureContract.edgeName } else { $null }
