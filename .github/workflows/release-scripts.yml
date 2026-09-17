@@ -341,7 +341,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: windows-personalized-offline-installer-e2e-evidence
-          path: ${{ runner.temp }}/openpath-windows-personalized-offline-installer-e2e/windows-personalized-offline-installer-evidence.json
+          path: ${{ runner.temp }}/openpath-windows-personalized-offline-installer-e2e/*.json
           if-no-files-found: warn
 
   # ============================================

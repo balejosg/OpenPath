@@ -42,6 +42,7 @@ $script:EvidencePath = $null
 $script:DownloadedExecutablePath = $null
 $script:PrimaryFailure = $false
 $script:CanaryFailureCode = $null
+$script:PhysicalExeFailureEvidence = $null
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $script:NodeCommand = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
@@ -705,6 +706,21 @@ function Invoke-PhysicalExeE2E {
         -ConnectivityPort $ConnectivityPort `
         -EvidencePath $evidencePath
     if ($LASTEXITCODE -ne 0) {
+        if (Test-Path -LiteralPath $evidencePath -PathType Leaf) {
+            try {
+                $childEvidence = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+                $script:PhysicalExeFailureEvidence = [pscustomobject][ordered]@{
+                    status = [string]$childEvidence.status
+                    code = [string]$childEvidence.code
+                    failureStage = [string]$childEvidence.failureStage
+                    failureDetailCode = [string]$childEvidence.failureDetailCode
+                    installerExitCode = $childEvidence.installerExitCode
+                }
+            }
+            catch {
+                $script:PhysicalExeFailureEvidence = [pscustomobject]@{ status = 'invalid'; code = 'physical-exe-evidence-invalid' }
+            }
+        }
         throw 'physical-exe-e2e-failed'
     }
     if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) {
@@ -828,6 +844,7 @@ catch {
         code         = 'windows-personalized-offline-installer-e2e-failed'
         failureStage = $script:CurrentStage
         failureCode  = $failureCode
+        physicalExeFailure = $script:PhysicalExeFailureEvidence
         runner       = if ($env:RUNNER_NAME) { $env:RUNNER_NAME } else { 'windows-runner' }
     })
 }
