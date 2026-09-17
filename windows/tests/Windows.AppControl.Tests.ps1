@@ -6,6 +6,7 @@ if (-not (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue)) { func
 if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) { function global:Set-AppLockerPolicy { [CmdletBinding()] param($XMLPolicy) } }
 if (-not (Get-Command Set-Service -ErrorAction SilentlyContinue)) { function global:Set-Service { param($Name, $StartupType, $ErrorAction) } }
 if (-not (Get-Command Start-Service -ErrorAction SilentlyContinue)) { function global:Start-Service { param($Name, $ErrorAction) } }
+if (-not (Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue)) { function global:Remove-LocalGroupMember { param($Group, $Member, $ErrorAction) } }
 
 $modulePath = Join-Path $PSScriptRoot ".." "lib"
 Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
@@ -500,6 +501,7 @@ Describe "AppControl Module" {
             InModuleScope AppControl {
                 $script:setTrace = [System.Collections.Generic.List[string]]::new()
                 Mock Test-AdminPrivileges { $true }; Mock Test-OpenPathAppControlAvailable { $true }
+                Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' }
                 Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' }
                 Mock Set-AppLockerPolicy { $script:setTrace.Add('policy') }
                 Mock Set-Service { $script:setTrace.Add('service') }; Mock Start-Service {}
@@ -509,6 +511,31 @@ Describe "AppControl Module" {
 
                 Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -Confirm:$false | Should -BeTrue
                 $script:setTrace | Should -Be @('policy','service','activation','health')
+            }
+        }
+
+        It 'fails closed and restores the prior policy when AppIDSvc cannot start' {
+            $diagnosticPath = Join-Path $TestDrive 'appidsvc-start-failed.json'
+            InModuleScope AppControl -Parameters @{ DiagnosticPath = $diagnosticPath } {
+                param($DiagnosticPath)
+                $script:setPolicyCalls = 0
+                Mock Test-AdminPrivileges { $true }
+                Mock Test-OpenPathAppControlAvailable { $true }
+                Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' }
+                Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' }
+                Mock Set-AppLockerPolicy { $script:setPolicyCalls++ }
+                Mock Set-Service {}
+                Mock Start-Service { throw 'injected AppIDSvc start failure' }
+                Mock Invoke-OpenPathAppControlPolicyConverterActivation { throw 'activation must not run' }
+                Mock Test-OpenPathNonAdminAppControlActive { throw 'health must not run' }
+                Mock Write-OpenPathLog {}
+
+                Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $DiagnosticPath -Confirm:$false | Should -BeFalse
+                $script:setPolicyCalls | Should -Be 2
+                $diagnostic = Get-Content -LiteralPath $DiagnosticPath -Raw | ConvertFrom-Json
+                @($diagnostic.ReasonCodes) | Should -Contain 'appcontrol_appidsvc_start_failed'
+                $diagnostic.InternalRollbackAttempted | Should -BeTrue
+                $diagnostic.InternalRollbackSucceeded | Should -BeTrue
             }
         }
 
@@ -523,6 +550,7 @@ Describe "AppControl Module" {
             $script:activationWarnings = [System.Collections.Generic.List[object]]::new()
             Mock Test-AdminPrivileges { $true } -ModuleName AppControl
             Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' } -ModuleName AppControl
             Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
             Mock Set-AppLockerPolicy {
                 param($XMLPolicy, $ErrorAction)
@@ -550,6 +578,7 @@ Describe "AppControl Module" {
             $script:activationSetPolicyCalls = 0
             Mock Test-AdminPrivileges { $true } -ModuleName AppControl
             Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' } -ModuleName AppControl
             Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
             Mock Set-AppLockerPolicy {
                 $script:activationSetPolicyCalls++
@@ -578,6 +607,7 @@ Describe "AppControl Module" {
             $script:activationSetPolicyCalls = 0
             Mock Test-AdminPrivileges { $true } -ModuleName AppControl
             Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' } -ModuleName AppControl
             Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
             Mock Set-AppLockerPolicy { $script:activationSetPolicyCalls++ } -ModuleName AppControl
             Mock Set-Service {} -ModuleName AppControl; Mock Start-Service {} -ModuleName AppControl
@@ -1464,11 +1494,18 @@ Describe "AppControl Module" {
             }
             function global:Get-LocalGroup {
                 param([string]$Name, [string]$SID)
+                if ($SID -eq 'S-1-5-32-544') {
+                    return [pscustomobject]@{ Name = 'Administrators'; SID = [pscustomobject]@{ Value = $SID } }
+                }
                 [pscustomobject]@{ Name = $Name; SID = [pscustomobject]@{ Value = $global:opLegacyProbeGroupSid } }
             }
             function global:Get-LocalGroupMember {
                 param([string]$Group)
+                if ($Group -eq 'Administrators') { return }
                 [pscustomobject]@{ SID = [pscustomobject]@{ Value = $global:opLegacyProbeStudentSid } }
+            }
+            function global:Get-LocalUser {
+                [pscustomobject]@{ Name = 'student'; Enabled = $true; SID = [pscustomobject]@{ Value = $global:opLegacyProbeStudentSid } }
             }
             function global:Get-CimInstance {
                 param([string]$ClassName)
@@ -1530,7 +1567,7 @@ Describe "AppControl Module" {
                 -ParameterFilter { $Name -eq 'Test-AppLockerPolicy' }
             Mock Get-Command { [pscustomobject]@{ Name = $Name } } `
                 -ModuleName AppControl `
-                -ParameterFilter { $Name -in @('Get-LocalGroup', 'Get-LocalGroupMember', 'Get-CimInstance') }
+                -ParameterFilter { $Name -in @('Get-LocalGroup', 'Get-LocalGroupMember', 'Get-LocalUser', 'Get-CimInstance') }
             $global:opProbeGroupSid = 'S-1-5-21-10-20-30-4242'
             $global:opProbeStudentSid = 'S-1-5-21-10-20-30-1001'
             $global:opProbeProfilePath = Join-Path $TestDrive 'different-student'
@@ -1597,11 +1634,17 @@ Describe "AppControl Module" {
             }
 
             Mock New-OpenPathAppControlEvaluationProbeSet {
-                param($Target, [ref]$CleanupSucceeded)
+                param($Target, $Profile, [ref]$CleanupSucceeded)
                 $CleanupSucceeded.Value = $true
+                $probeRoot = if ([string]::IsNullOrWhiteSpace([string]$Target.ProfilePath)) {
+                    'C:\ProgramData\OpenPath\AppControlValidation\profileless-test'
+                }
+                else {
+                    [string]$Target.ProfilePath
+                }
                 [pscustomobject]@{
                     Paths = @('Downloads', 'Desktop', 'AppData\Local\Temp' | ForEach-Object {
-                            Join-Path (Join-Path $Target.ProfilePath $_) 'openpath-appcontrol-probe-test.exe'
+                            "$($probeRoot.TrimEnd('\'))\$_\openpath-appcontrol-probe-test.exe"
                         })
                     CreatedDirectories = @()
                 }
@@ -1664,7 +1707,7 @@ Describe "AppControl Module" {
             Test-OpenPathNonAdminAppControlActive | Should -BeFalse
         }
 
-        It "fails closed when the restricted group or profile cannot be resolved" {
+        It "fails closed when the restricted identity cannot be resolved but accepts an absent profile" {
             function global:Get-LocalGroup { throw 'restricted group unavailable' }
             Test-OpenPathNonAdminAppControlActive | Should -BeFalse
 
@@ -1679,7 +1722,7 @@ Describe "AppControl Module" {
                 [pscustomobject]@{ Name = $Name; SID = [pscustomobject]@{ Value = $global:opProbeGroupSid } }
             }
             function global:Get-CimInstance { return @() }
-            Test-OpenPathNonAdminAppControlActive | Should -BeFalse
+            Test-OpenPathNonAdminAppControlActive | Should -BeTrue
         }
 
         It "fails closed when probe preparation fails" {
@@ -1786,16 +1829,23 @@ Describe "AppControl Module" {
                 if ($global:opHealthTargetMissing) {
                     throw 'OpenPath-Restricted group unavailable'
                 }
+                if ($SID -eq 'S-1-5-32-544') {
+                    return [pscustomobject]@{ Name = 'Administrators'; SID = [pscustomobject]@{ Value = $SID } }
+                }
                 $resolvedSid = if ($global:opHealthTargetState -eq 'group-sid-missing') { '' } else { $global:opHealthGroupSid }
                 [pscustomobject]@{ Name = $Name; SID = [pscustomobject]@{ Value = $resolvedSid } }
             }
             function global:Get-LocalGroupMember {
                 param([string]$Group)
+                if ($Group -eq 'Administrators') { return }
                 if ($global:opHealthTargetState -eq 'group-empty') {
                     return
                 }
                 $resolvedSid = if ($global:opHealthTargetState -eq 'member-sid-missing') { '' } else { $global:opHealthStudentSid }
                 [pscustomobject]@{ SID = [pscustomobject]@{ Value = $resolvedSid } }
+            }
+            function global:Get-LocalUser {
+                [pscustomobject]@{ Name = 'student'; Enabled = $true; SID = [pscustomobject]@{ Value = $global:opHealthStudentSid } }
             }
             function global:Get-CimInstance {
                 param([string]$ClassName)
@@ -1857,11 +1907,17 @@ Describe "AppControl Module" {
             }
 
             Mock New-OpenPathAppControlEvaluationProbeSet {
-                param($Target, [ref]$CleanupSucceeded)
+                param($Target, $Profile, [ref]$CleanupSucceeded)
                 $CleanupSucceeded.Value = $true
+                $probeRoot = if ([string]::IsNullOrWhiteSpace([string]$Target.ProfilePath)) {
+                    'C:\ProgramData\OpenPath\AppControlValidation\profileless-test'
+                }
+                else {
+                    [string]$Target.ProfilePath
+                }
                 [pscustomobject]@{
                     Paths = @('Downloads', 'Desktop', 'AppData\Local\Temp' | ForEach-Object {
-                            Join-Path (Join-Path $Target.ProfilePath $_) 'openpath-appcontrol-probe-test.exe'
+                            "$($probeRoot.TrimEnd('\'))\$_\openpath-appcontrol-probe-test.exe"
                         })
                     CreatedDirectories = @()
                 }
@@ -1981,8 +2037,7 @@ Describe "AppControl Module" {
             $cases = @(
                 @{ State = 'group-empty'; Detail = 'group-empty'; GroupSid = $global:opHealthGroupSid; TargetSid = '' },
                 @{ State = 'group-sid-missing'; Detail = 'group-sid-unresolvable'; GroupSid = ''; TargetSid = '' },
-                @{ State = 'member-sid-missing'; Detail = 'member-sid-unresolvable'; GroupSid = $global:opHealthGroupSid; TargetSid = '' },
-                @{ State = 'profile-missing'; Detail = 'member-profile-unavailable'; GroupSid = $global:opHealthGroupSid; TargetSid = $global:opHealthStudentSid }
+                @{ State = 'member-sid-missing'; Detail = 'member-sid-unresolvable'; GroupSid = $global:opHealthGroupSid; TargetSid = '' }
             )
 
             foreach ($case in $cases) {
@@ -1996,6 +2051,23 @@ Describe "AppControl Module" {
                 $health.TargetSid | Should -Be $case.TargetSid
                 $health.ProfilePath | Should -Be ''
             }
+        }
+
+        It "validates a restricted identity before first login without materializing a profile" {
+            $global:opHealthTargetState = 'profile-missing'
+
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeTrue
+            $health.IdentityResolved | Should -BeTrue
+            $health.ProfileAvailable | Should -BeFalse
+            $health.ValidationMode | Should -Be 'profileless'
+            $health.RestrictedTargetDetail | Should -Be 'member-profile-unavailable'
+            $health.GroupSid | Should -Be $global:opHealthGroupSid
+            $health.TargetSid | Should -Be $global:opHealthStudentSid
+            $health.ProfilePath | Should -Be ''
+            @($health.Observed.RuntimeDecisions).Count | Should -BeGreaterThan 0
+            @($health.ReasonCodes) | Should -Not -Contain 'appcontrol_restricted_target_missing'
         }
 
         It "reports a stopped Application Identity service" {
@@ -2266,6 +2338,49 @@ Describe "AppControl Module" {
         }
     }
 
+    Context "Profileless controlled probe lifecycle" {
+        It "creates real machine-scoped and strict Program Files PEs and removes every probe" {
+            $sourcePath = Join-Path $TestDrive 'probe-source.exe'
+            $programDataPath = Join-Path $TestDrive 'ProgramData'
+            $programFilesPath = Join-Path $TestDrive 'ProgramFiles'
+            New-Item -ItemType Directory -Path $programDataPath, $programFilesPath -Force | Out-Null
+            [System.IO.File]::WriteAllBytes($sourcePath, [byte[]](0x4d, 0x5a, 0x90, 0x00))
+            $previousProgramData = $env:ProgramData
+            $previousProgramFiles = $env:ProgramFiles
+            $env:ProgramData = $programDataPath
+            $env:ProgramFiles = $programFilesPath
+            try {
+                InModuleScope AppControl -Parameters @{ SourcePath = $sourcePath; ProgramFilesPath = $programFilesPath } {
+                    param($SourcePath, $ProgramFilesPath)
+                    Mock Get-OpenPathAppControlProbeSourcePath { $SourcePath }
+                    $cleanupSucceeded = $false
+                    $target = [pscustomobject]@{
+                        UserSid = 'S-1-5-21-10-20-30-1001'
+                        ProfilePath = ''
+                        ProfileAvailable = $false
+                        ValidationMode = 'profileless'
+                    }
+
+                    $probeSet = New-OpenPathAppControlEvaluationProbeSet -Target $target -Profile StrictApplicationAllowlist -CleanupSucceeded ([ref]$cleanupSucceeded)
+
+                    @($probeSet.Paths).Count | Should -Be 5
+                    $probeSet.StrictUnknownPath | Should -BeLike "$ProgramFilesPath*"
+                    foreach ($path in @($probeSet.Paths)) {
+                        [System.IO.File]::Exists([string]$path) | Should -BeTrue
+                    }
+                    Remove-OpenPathAppControlEvaluationProbeSet -ProbeSet $probeSet | Should -BeTrue
+                    foreach ($path in @($probeSet.Paths)) {
+                        [System.IO.File]::Exists([string]$path) | Should -BeFalse
+                    }
+                }
+            }
+            finally {
+                $env:ProgramData = $previousProgramData
+                $env:ProgramFiles = $previousProgramFiles
+            }
+        }
+    }
+
     Context "Restricted group SID and membership sync" {
         AfterEach {
             Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
@@ -2276,11 +2391,12 @@ Describe "AppControl Module" {
             Remove-Item Function:\Add-LocalGroupMember -ErrorAction SilentlyContinue
             Remove-Item Variable:\opNewGroupCalls -ErrorAction SilentlyContinue
             Remove-Item Variable:\opAddedMembers -ErrorAction SilentlyContinue
+            Remove-Item Variable:\opRemovedMembers -ErrorAction SilentlyContinue
         }
 
-        It "Falls back to BUILTIN\Users SID when the restricted group is missing" {
+        It "refuses to widen policy scope to BUILTIN\Users when the restricted group is missing" {
             function global:Get-LocalGroup { throw 'not found' }
-            (Get-OpenPathRestrictedGroupSid) | Should -Be 'S-1-5-32-545'
+            { Get-OpenPathRestrictedGroupSid } | Should -Throw '*OpenPath-Restricted group*'
         }
 
         It "preserves the missing restricted-group capability as the primary sync failure" {
@@ -2303,6 +2419,27 @@ Describe "AppControl Module" {
         It "Returns the restricted group SID when the group exists" {
             function global:Get-LocalGroup { [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-100-200-300-999' } } }
             (Get-OpenPathRestrictedGroupSid) | Should -Be 'S-1-5-21-100-200-300-999'
+        }
+
+        It "resolves an enabled non-admin restricted identity without consulting profiles" {
+            function global:Get-LocalGroup {
+                param($Name, $SID)
+                if ($SID) { return [pscustomobject]@{ Name = 'Administrators'; SID = [pscustomobject]@{ Value = 'S-1-5-32-544' } } }
+                [pscustomobject]@{ Name = 'OpenPath-Restricted'; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-2000' } }
+            }
+            function global:Get-LocalGroupMember {
+                param($Group)
+                if ($Group -eq 'Administrators') { return @() }
+                @([pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } })
+            }
+            function global:Get-LocalUser {
+                @([pscustomobject]@{ Name = 'student'; Enabled = $true; SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } })
+            }
+
+            InModuleScope AppControl {
+                $identity = Get-OpenPathRestrictedIdentity
+                $identity.UserSid | Should -Be 'S-1-5-21-1-2-3-1001'
+            }
         }
 
         It "Creates the group and adds enabled non-admins with CreateIfMissing" {
@@ -2340,13 +2477,17 @@ Describe "AppControl Module" {
             $global:opNewGroupCalls | Should -Be 0
         }
 
-        It "Does not re-add existing members and skips admins" {
+        It "Does not re-add existing members and removes administrators from the restricted group" {
             $global:opAddedMembers = @()
+            $global:opRemovedMembers = @()
             function global:Get-LocalGroup { [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } } }
             function global:Get-LocalGroupMember {
                 param($Group)
                 if ($Group -eq 'Administrators') { return @([pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } }) }
                 $members = @([pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1001' } })
+                if ('S-1-5-21-1-2-3-500' -notin $global:opRemovedMembers) {
+                    $members += [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-500' } }
+                }
                 if ('student2' -in $global:opAddedMembers) {
                     $members += [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-1003' } }
                 }
@@ -2360,9 +2501,11 @@ Describe "AppControl Module" {
                 )
             }
             function global:Add-LocalGroupMember { param($Group, $Member) $global:opAddedMembers += [string]$Member }
+            function global:Remove-LocalGroupMember { param($Group, $Member) $global:opRemovedMembers += [string]$Member }
 
             Sync-OpenPathRestrictedGroup -CreateIfMissing $true | Should -BeTrue
             @($global:opAddedMembers) | Should -Be @('student2')
+            @($global:opRemovedMembers) | Should -Be @('S-1-5-21-1-2-3-500')
         }
 
         It "Returns false when Add-LocalGroupMember throws" {

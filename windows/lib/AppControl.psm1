@@ -66,17 +66,14 @@ function Get-OpenPathRestrictedGroupSid {
     .SYNOPSIS
     Returns the SID of the OpenPath-Restricted local group.
     .DESCRIPTION
-    Falls back to BUILTIN\Users (S-1-5-32-545) with a WARN when the group cannot be
-    resolved, keeping legacy machines (and non-Windows test hosts) on the historical
-    non-admin scope.
+    Fails closed when the dedicated group cannot be resolved. Widening the scope to
+    BUILTIN\Users can restrict accounts outside the configured OpenPath boundary.
     #>
     [CmdletBinding()]
     param()
 
-    $fallbackSid = 'S-1-5-32-545'
     if (-not (Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue)) {
-        Write-OpenPathLog 'OpenPath-Restricted group lookup unavailable; falling back to BUILTIN\Users' -Level WARN
-        return $fallbackSid
+        throw 'OpenPath-Restricted group lookup capability is unavailable'
     }
 
     try {
@@ -84,8 +81,7 @@ function Get-OpenPathRestrictedGroupSid {
         return [string]$group.SID.Value
     }
     catch {
-        Write-OpenPathLog "OpenPath-Restricted group not found; falling back to BUILTIN\Users: $_" -Level WARN
-        return $fallbackSid
+        throw "OpenPath-Restricted group could not be resolved: $_"
     }
 }
 
@@ -94,7 +90,8 @@ function Sync-OpenPathRestrictedGroup {
     .SYNOPSIS
     Ensures the OpenPath-Restricted local group contains every enabled non-administrator local user.
     .DESCRIPTION
-    Idempotent, additive-only membership sync (never removes members). With
+    Idempotent membership reconciliation. It adds enabled non-administrators and
+    removes administrators that were previously added to the restricted group. With
     -CreateIfMissing the group is created when absent. Without it a missing group is
     a no-op; callers that require the restricted-group model should opt into creation
     explicitly.
@@ -109,7 +106,7 @@ function Sync-OpenPathRestrictedGroup {
     if (-not (Get-Command -Name Get-LocalGroup -ErrorAction SilentlyContinue)) {
         Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
             New-OpenPathAppControlPreconditionDiagnostic -Substep 'restricted-group-capability' -ReasonCode 'appcontrol_restricted_group_capability_unavailable')
-        Write-OpenPathLog 'OpenPath-Restricted group sync unavailable; AppLocker policy falls back to BUILTIN\Users' -Level WARN
+        Write-OpenPathLog 'OpenPath-Restricted group sync unavailable; refusing to widen AppLocker scope to BUILTIN\Users' -Level WARN
         return $false
     }
 
@@ -131,7 +128,7 @@ function Sync-OpenPathRestrictedGroup {
             }
         }
         else {
-            Write-OpenPathLog 'OpenPath-Restricted group absent; membership sync skipped (legacy BUILTIN\Users policy remains until reinstall)' -Level WARN
+            Write-OpenPathLog 'OpenPath-Restricted group absent; membership sync skipped without widening policy scope' -Level WARN
             return $false
         }
     }
@@ -165,16 +162,25 @@ function Sync-OpenPathRestrictedGroup {
         return $false
     }
 
+    $existingMemberObjects = @()
     $existingMembers = @()
     try {
-        $existingMembers = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop | ForEach-Object { [string]$_.SID.Value })
+        $existingMemberObjects = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop)
+        $existingMembers = @($existingMemberObjects | ForEach-Object { [string]$_.SID.Value })
     }
     catch {
+        Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic (
+            New-OpenPathAppControlPreconditionDiagnostic -Substep 'restricted-group-inventory' -ReasonCode 'appcontrol_restricted_group_inventory_failed')
         Write-OpenPathLog "Failed to enumerate OpenPath-Restricted members: $_" -Level WARN
-        $existingMembers = @()
+        return $false
     }
 
     try {
+        foreach ($adminSid in @($existingMembers | Where-Object { $_ -in $adminMembers })) {
+            Remove-LocalGroupMember -Group 'OpenPath-Restricted' -Member $adminSid -ErrorAction Stop
+            $existingMembers = @($existingMembers | Where-Object { $_ -ne $adminSid })
+            Write-OpenPathLog "Removed administrator SID $adminSid from OpenPath-Restricted" -Level WARN
+        }
         $added = 0
         $allUsers = @(Get-LocalUser -ErrorAction Stop)
         foreach ($user in $allUsers) {
@@ -192,6 +198,11 @@ function Sync-OpenPathRestrictedGroup {
 
         # Verify postcondition: ensure every enabled non-admin user is actually in OpenPath-Restricted
         $finalMembers = @(Get-LocalGroupMember -Group 'OpenPath-Restricted' -ErrorAction Stop | ForEach-Object { [string]$_.SID.Value })
+        $restrictedAdministrators = @($finalMembers | Where-Object { $_ -in $adminMembers })
+        if ($restrictedAdministrators.Count -gt 0) {
+            Write-OpenPathLog 'Failed to sync OpenPath-Restricted membership: administrator remains in restricted group' -Level WARN
+            return $false
+        }
         $missingMembers = @()
         foreach ($user in $allUsers) {
             if (-not $user.PSObject.Properties['Enabled'] -or -not $user.Enabled) { continue }
@@ -1309,20 +1320,19 @@ function New-OpenPathAppControlTargetException {
     return $exception
 }
 
-function Get-OpenPathAppControlProbeTarget {
+function Get-OpenPathRestrictedIdentity {
     <#
     .SYNOPSIS
-    Resolves a real profile belonging to an OpenPath-Restricted member.
+    Resolves a real OpenPath-Restricted group member independently of profile state.
 
-    The AppLocker policy is scoped to the restricted group, but
-    Test-AppLockerPolicy needs a representative user when evaluating nested/group
-    membership. This helper therefore returns both SIDs and never falls back to
-    BUILTIN\Users or a guessed profile path.
+    The AppLocker policy is scoped to the restricted group and Test-AppLockerPolicy
+    needs a representative user SID. A Windows profile is deliberately not part of
+    this identity contract because installation must work before first login.
     #>
     [CmdletBinding()]
     param()
 
-    foreach ($requiredCommand in @('Get-LocalGroup', 'Get-LocalGroupMember', 'Get-CimInstance')) {
+    foreach ($requiredCommand in @('Get-LocalGroup', 'Get-LocalGroupMember')) {
         if (-not (Get-Command -Name $requiredCommand -ErrorAction SilentlyContinue)) {
             throw "Required AppControl target capability is unavailable: $requiredCommand"
         }
@@ -1344,42 +1354,77 @@ function Get-OpenPathAppControlProbeTarget {
         throw (New-OpenPathAppControlTargetException -Message 'OpenPath-Restricted has no members available for AppControl validation' -Detail 'group-empty' -GroupSid $groupSid)
     }
 
-    $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop)
-    $firstResolvableMemberSid = ''
     foreach ($member in $members) {
         $memberSid = Get-OpenPathSidString -Value $member.SID
         if ([string]::IsNullOrWhiteSpace($memberSid)) {
             continue
         }
-        if ([string]::IsNullOrWhiteSpace($firstResolvableMemberSid)) {
-            $firstResolvableMemberSid = $memberSid
-        }
-
-        foreach ($profile in $profiles) {
-            $profileSid = [string]$profile.SID
-            $profilePath = [string]$profile.LocalPath
-            if ($profileSid -ne $memberSid -or [string]::IsNullOrWhiteSpace($profilePath)) {
-                continue
-            }
-            if ($profile.PSObject.Properties['Special'] -and [bool]$profile.Special) {
-                continue
-            }
-            if (-not [System.IO.Directory]::Exists($profilePath)) {
-                continue
-            }
-
-            return [PSCustomObject]@{
-                GroupSid = $groupSid
-                UserSid = $memberSid
-                ProfilePath = $profilePath
-            }
+        return [PSCustomObject]@{
+            GroupSid = $groupSid
+            UserSid = $memberSid
         }
     }
 
-    if ([string]::IsNullOrWhiteSpace($firstResolvableMemberSid)) {
-        throw (New-OpenPathAppControlTargetException -Message 'OpenPath-Restricted members have no resolvable SID' -Detail 'member-sid-unresolvable' -GroupSid $groupSid)
+    throw (New-OpenPathAppControlTargetException -Message 'OpenPath-Restricted members have no resolvable SID' -Detail 'member-sid-unresolvable' -GroupSid $groupSid)
+}
+
+function Get-OpenPathAppControlProfileProbeTarget {
+    <#
+    .SYNOPSIS
+    Resolves the optional materialized, non-special profile for a restricted identity.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Identity
+    )
+
+    if (-not (Get-Command -Name Get-CimInstance -ErrorAction SilentlyContinue)) {
+        throw 'Required AppControl profile capability is unavailable: Get-CimInstance'
     }
-    throw (New-OpenPathAppControlTargetException -Message 'Unable to resolve an existing user profile for an OpenPath-Restricted member' -Detail 'member-profile-unavailable' -GroupSid $groupSid -TargetSid $firstResolvableMemberSid)
+
+    $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop)
+    foreach ($profile in $profiles) {
+        $profilePath = [string]$profile.LocalPath
+        if ([string]$profile.SID -ne [string]$Identity.UserSid -or [string]::IsNullOrWhiteSpace($profilePath)) {
+            continue
+        }
+        if ($profile.PSObject.Properties['Special'] -and [bool]$profile.Special) {
+            return $null
+        }
+        if (-not [System.IO.Directory]::Exists($profilePath)) {
+            return $null
+        }
+
+        return [PSCustomObject]@{
+            UserSid = [string]$Identity.UserSid
+            ProfilePath = $profilePath
+        }
+    }
+
+    return $null
+}
+
+function Get-OpenPathAppControlProbeTarget {
+    <#
+    .SYNOPSIS
+    Combines a required restricted identity with an optional profile-backed probe target.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $identity = Get-OpenPathRestrictedIdentity
+    $profileTarget = Get-OpenPathAppControlProfileProbeTarget -Identity $identity
+    $profileAvailable = ($null -ne $profileTarget)
+
+    return [PSCustomObject]@{
+        GroupSid = [string]$identity.GroupSid
+        UserSid = [string]$identity.UserSid
+        ProfilePath = if ($profileAvailable) { [string]$profileTarget.ProfilePath } else { '' }
+        IdentityResolved = $true
+        ProfileAvailable = $profileAvailable
+        ValidationMode = if ($profileAvailable) { 'profile-backed' } else { 'profileless' }
+    }
 }
 
 function Get-OpenPathAppControlProbeSourcePath {
@@ -1486,6 +1531,9 @@ function New-OpenPathAppControlEvaluationProbeSet {
         [Parameter(Mandatory = $true)]
         [object]$Target,
 
+        [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
+        [string]$Profile = 'ManagedBrowserCompatibility',
+
         [ref]$CleanupSucceeded
     )
 
@@ -1499,11 +1547,26 @@ function New-OpenPathAppControlEvaluationProbeSet {
     $probeSet = [PSCustomObject]@{
         Paths = $probePaths
         CreatedDirectories = $createdDirectories
+        StrictUnknownPath = ''
     }
 
     try {
-        foreach ($relativeDirectory in @('Downloads', 'Desktop', 'AppData\Local\Temp')) {
-            $directoryPath = Join-Path $Target.ProfilePath $relativeDirectory
+        $probeRoot = if ($Target.ProfileAvailable) {
+            [string]$Target.ProfilePath
+        }
+        else {
+            $machineDataRoot = if (-not [string]::IsNullOrWhiteSpace($env:ProgramData)) { $env:ProgramData } else { [System.IO.Path]::GetTempPath() }
+            Join-Path $machineDataRoot "OpenPath\AppControlValidation\$([guid]::NewGuid().ToString('N'))"
+        }
+        $relativeDirectories = if ($Target.ProfileAvailable) {
+            @('Downloads', 'Desktop', 'AppData\Local\Temp')
+        }
+        else {
+            @('Downloads', 'Desktop', 'LocalAppDataTemp', 'ArbitraryWritable')
+        }
+
+        foreach ($relativeDirectory in $relativeDirectories) {
+            $directoryPath = Join-Path $probeRoot $relativeDirectory
             $missingDirectories = [System.Collections.Generic.List[string]]::new()
             $currentPath = $directoryPath
             while (-not [System.IO.Directory]::Exists($currentPath)) {
@@ -1525,6 +1588,20 @@ function New-OpenPathAppControlEvaluationProbeSet {
             $probePath = Join-Path $directoryPath "openpath-appcontrol-probe-$([guid]::NewGuid().ToString('N')).exe"
             [System.IO.File]::Copy($sourcePath, $probePath, $false)
             $probePaths.Add($probePath)
+        }
+
+        if ($Profile -eq 'StrictApplicationAllowlist') {
+            $programFilesRoot = [string]$env:ProgramFiles
+            if ([string]::IsNullOrWhiteSpace($programFilesRoot) -or -not [System.IO.Directory]::Exists($programFilesRoot)) {
+                throw 'Program Files is unavailable for strict AppControl validation'
+            }
+            $strictDirectory = Join-Path $programFilesRoot "OpenPathUnknownProbe-$([guid]::NewGuid().ToString('N'))"
+            [System.IO.Directory]::CreateDirectory($strictDirectory) | Out-Null
+            $createdDirectories.Add($strictDirectory)
+            $strictUnknownPath = Join-Path $strictDirectory 'future.exe'
+            [System.IO.File]::Copy($sourcePath, $strictUnknownPath, $false)
+            $probePaths.Add($strictUnknownPath)
+            $probeSet.StrictUnknownPath = $strictUnknownPath
         }
 
         return $probeSet
@@ -1816,6 +1893,9 @@ function Get-OpenPathNonAdminAppControlHealth {
     $probeTarget = $null
     $probeTargetError = $null
     $restrictedTargetDetail = 'not-observed'
+    $identityResolved = $false
+    $profileAvailable = $false
+    $validationMode = 'not-observed'
     $groupSid = ''
     $targetSid = ''
     $profilePath = ''
@@ -1829,7 +1909,10 @@ function Get-OpenPathNonAdminAppControlHealth {
         try {
             $probeTarget = Get-OpenPathAppControlProbeTarget
             $restrictedTargetValid = $true
-            $restrictedTargetDetail = 'resolved'
+            $identityResolved = $true
+            $profileAvailable = [bool]$probeTarget.ProfileAvailable
+            $validationMode = [string]$probeTarget.ValidationMode
+            $restrictedTargetDetail = if ($profileAvailable) { 'resolved' } else { 'member-profile-unavailable' }
             $groupSid = [string]$probeTarget.GroupSid
             $targetSid = [string]$probeTarget.UserSid
             $profilePath = [string]$probeTarget.ProfilePath
@@ -1928,7 +2011,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                 }
 
                 $probeCleanupAttempted = $true
-                $probeSet = New-OpenPathAppControlEvaluationProbeSet -Target $probeTarget -CleanupSucceeded ([ref]$probeCleanupSucceeded)
+                $probeSet = New-OpenPathAppControlEvaluationProbeSet -Target $probeTarget -Profile $Profile -CleanupSucceeded ([ref]$probeCleanupSucceeded)
                 $probePaths = @($probeSet.Paths | ForEach-Object { [string]$_ })
                 $testDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path $probePaths -User $probeTarget.UserSid -ErrorAction Stop)
                 if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths $probePaths -Decisions $testDecisions)) {
@@ -1956,7 +2039,10 @@ function Get-OpenPathNonAdminAppControlHealth {
                 }
 
                 if ($Profile -eq 'StrictApplicationAllowlist') {
-                    $futureBrowserPath = 'C:\Program Files\FutureBrowser\future.exe'
+                    $futureBrowserPath = [string]$probeSet.StrictUnknownPath
+                    if ([string]::IsNullOrWhiteSpace($futureBrowserPath) -or -not [System.IO.File]::Exists($futureBrowserPath)) {
+                        throw 'Strict unknown executable probe was not created'
+                    }
                     $futureDecisions = @($effectivePolicy | Test-AppLockerPolicy -Path @($futureBrowserPath) -User $probeTarget.UserSid -ErrorAction Stop)
                     if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths @($futureBrowserPath) -Decisions $futureDecisions)) {
                         throw 'Test-AppLockerPolicy did not return a decision for the strict FutureBrowser probe'
@@ -2103,13 +2189,16 @@ function Get-OpenPathNonAdminAppControlHealth {
         EffectivePolicyValid = $effectivePolicyValid
         RuntimeEvaluationAvailable = $runtimeEvaluationAvailable
         RuntimeBoundaryValid = $runtimeBoundaryValid
+        IdentityResolved = $identityResolved
+        ProfileAvailable = $profileAvailable
+        ValidationMode = $validationMode
         ExpectedProfile = $Profile
         RestrictedTargetDetail = $restrictedTargetDetail
         GroupSid = $groupSid
         TargetSid = $targetSid
         ProfilePath = $profilePath
         Expected = [pscustomobject][ordered]@{
-            RestrictedTarget = 'group-member-with-materialized-non-special-profile'
+            RestrictedTarget = 'group-member-with-optional-materialized-profile'
             AppIdentityService = 'Running'
             LocalPolicy = 'present-valid'
             EffectivePolicy = 'present-valid'
@@ -2117,6 +2206,9 @@ function Get-OpenPathNonAdminAppControlHealth {
         }
         Observed = [pscustomobject][ordered]@{
             RestrictedTarget = $restrictedTargetDetail
+            IdentityResolved = $identityResolved
+            ProfileAvailable = $profileAvailable
+            ValidationMode = $validationMode
             AppIdentityService = if (-not $capabilityAvailable) { 'not-observed' } elseif ($appIdentityServiceRunning) { 'Running' } else { 'not-running-or-unavailable' }
             LocalPolicyPresent = if ($capabilityAvailable) { $localPolicyPresent } else { 'not-observed' }
             LocalPolicyValid = if ($capabilityAvailable) { $localPolicyValid } else { 'not-observed' }
@@ -2192,6 +2284,9 @@ function New-OpenPathAppControlFailureDiagnostic {
         TargetSid = [string]$Health.TargetSid
         GroupSid = [string]$Health.GroupSid
         ProfilePath = [string]$Health.ProfilePath
+        IdentityResolved = if ($Health.PSObject.Properties['IdentityResolved']) { [bool]$Health.IdentityResolved } else { $false }
+        ProfileAvailable = if ($Health.PSObject.Properties['ProfileAvailable']) { [bool]$Health.ProfileAvailable } else { $false }
+        ValidationMode = if ($Health.PSObject.Properties['ValidationMode']) { [string]$Health.ValidationMode } else { 'not-observed' }
         Expected = $Health.Expected
         Observed = $Health.Observed
         AppControlCommitState = 'not-committed'
@@ -2216,7 +2311,7 @@ function New-OpenPathAppControlPreconditionDiagnostic {
         GroupSid = ''
         ProfilePath = ''
         Expected = [pscustomobject][ordered]@{
-            RestrictedTarget = 'group-member-with-materialized-non-special-profile'
+            RestrictedTarget = 'group-member-with-optional-materialized-profile'
             AppIdentityService = 'Running'
             LocalPolicy = 'present-valid'
             EffectivePolicy = 'present-valid'
@@ -2224,6 +2319,9 @@ function New-OpenPathAppControlPreconditionDiagnostic {
         }
         Observed = [pscustomobject][ordered]@{
             RestrictedTarget = 'not-observed'
+            IdentityResolved = $false
+            ProfileAvailable = $false
+            ValidationMode = 'not-observed'
             AppIdentityService = 'not-observed'
             LocalPolicyPresent = 'not-observed'
             LocalPolicyValid = 'not-observed'
@@ -2428,6 +2526,7 @@ function Set-OpenPathNonAdminAppControl {
 
     $diagnosticSubstep = 'policy-backup'
     $failureDiagnostic = $null
+    $policyApplied = $false
     try {
         $appLockerBackupPath = Join-Path (Join-Path $OpenPathRoot 'data') 'applocker-backup.xml'
         $backupDir = Split-Path $appLockerBackupPath -Parent
@@ -2454,16 +2553,12 @@ function Set-OpenPathNonAdminAppControl {
         $mergedPolicyXml.Save($policyPath)
         $diagnosticSubstep = 'policy-apply'
         Set-AppLockerPolicy -XMLPolicy $policyPath
+        $policyApplied = $true
         Remove-Item $policyPath -Force -ErrorAction SilentlyContinue
 
         $diagnosticSubstep = 'service-start'
-        try {
-            Set-Service -Name AppIDSvc -StartupType Automatic -ErrorAction SilentlyContinue
-            Start-Service -Name AppIDSvc -ErrorAction SilentlyContinue
-        }
-        catch {
-            Write-OpenPathLog "AppLocker policy applied but AppIDSvc could not be started: $_" -Level WARN
-        }
+        Set-Service -Name AppIDSvc -StartupType Automatic -ErrorAction Stop
+        Start-Service -Name AppIDSvc -ErrorAction Stop
 
         $diagnosticSubstep = 'policy-activation'
         $activation = Invoke-OpenPathAppControlPolicyConverterActivation
@@ -2518,6 +2613,7 @@ function Set-OpenPathNonAdminAppControl {
                 'policy-generation' { 'appcontrol_policy_generation_failed' }
                 'policy-preflight' { if ($Profile -eq 'StrictApplicationAllowlist') { 'strict-required-rule-missing' } else { 'appcontrol_policy_generation_failed' } }
                 'policy-apply' { 'appcontrol_policy_apply_failed' }
+                'service-start' { 'appcontrol_appidsvc_start_failed' }
                 'policy-activation' { 'appcontrol_policy_activation_failed' }
                 default { 'appcontrol_health_evaluation_failed' }
             }
@@ -2530,7 +2626,7 @@ function Set-OpenPathNonAdminAppControl {
                 GroupSid = ''
                 ProfilePath = ''
                 Expected = [pscustomobject][ordered]@{
-                    RestrictedTarget = 'group-member-with-materialized-non-special-profile'
+                    RestrictedTarget = 'group-member-with-optional-materialized-profile'
                     AppIdentityService = 'Running'
                     LocalPolicy = 'present-valid'
                     EffectivePolicy = 'present-valid'
@@ -2555,7 +2651,7 @@ function Set-OpenPathNonAdminAppControl {
             if ($Profile -eq 'StrictApplicationAllowlist') {
                 $failureDiagnostic.ReasonCodes = @($failureDiagnostic.ReasonCodes) + 'strict-transition-failed'
             }
-            if ($diagnosticSubstep -eq 'policy-activation') {
+            if ($policyApplied) {
                 $failureDiagnostic.InternalRollbackAttempted = $true
                 try {
                     Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath -ErrorAction Stop

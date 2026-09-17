@@ -336,6 +336,16 @@ try {
         })
 
     $futurePath = 'C:\Program Files\FutureBrowser\future.exe'
+    $futureDirectory = Split-Path -Parent $futurePath
+    if (Test-Path -LiteralPath $futureDirectory) {
+        throw 'strict-future-browser-fixture-directory-already-exists'
+    }
+    New-Item -ItemType Directory -Path $futureDirectory -Force | Out-Null
+    New-OpenPathProbePayloadBinary -OutputPath $futurePath
+    if (-not (Test-Path -LiteralPath $futurePath -PathType Leaf)) {
+        throw 'strict-future-browser-fixture-not-created'
+    }
+    $createdFixturePaths.Add($futurePath)
     $futureManagedRules = @($localPolicyXml.AppLockerPolicy.RuleCollection |
         ForEach-Object { @($_.ChildNodes) } |
         Where-Object {
@@ -647,14 +657,6 @@ try {
         })
 
     if ($ExecuteProbes) {
-        $futureDirectory = Split-Path -Parent $futurePath
-        $futureFileExisted = Test-Path -LiteralPath $futurePath -PathType Leaf
-        if ($futureFileExisted) {
-            throw 'strict-future-browser-fixture-already-exists'
-        }
-        New-Item -ItemType Directory -Path $futureDirectory -Force | Out-Null
-        $createdFixturePaths.Add($futurePath)
-        New-OpenPathProbePayloadBinary -OutputPath $futurePath
         $markerPath = Join-Path $evidenceRoot 'future-browser-ran.marker'
         $futureArguments = '"' + $markerPath.Replace('"', '\"') + '"'
         $executionProbe = Invoke-StudentExecutableTaskProbe `

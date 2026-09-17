@@ -35,4 +35,17 @@ Describe 'Strict application allowlist Windows E2E harness' {
         $content | Should -Not -Match 'password\s*=\s*\$StudentPassword'
         $content | Should -Not -Match 'ConvertTo-Json[^\r\n]*StudentPassword'
     }
+
+    It 'creates a real controlled FutureBrowser PE before evaluating strict default deny' {
+        $scriptPath = Join-Path $PSScriptRoot '..\..\tests\e2e\ci\run-windows-strict-application-allowlist.ps1'
+        $content = Get-Content -LiteralPath $scriptPath -Raw
+
+        $createOffset = $content.IndexOf('New-OpenPathProbePayloadBinary -OutputPath $futurePath')
+        $existenceOffset = $content.IndexOf('Test-Path -LiteralPath $futurePath -PathType Leaf', $createOffset)
+        $decisionOffset = $content.IndexOf("-Name 'Synthetic FutureBrowser is denied by strict default'", $existenceOffset)
+
+        $createOffset | Should -BeGreaterThan -1
+        $existenceOffset | Should -BeGreaterThan $createOffset
+        $decisionOffset | Should -BeGreaterThan $existenceOffset
+    }
 }
