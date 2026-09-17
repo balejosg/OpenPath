@@ -71,4 +71,10 @@ These flows prepare the artifacts consumed by the Windows rollout paths and the 
 ## Optional Native Host
 
 Native host files live under [`native/`](native/) and support optional local verification workflows. Installers and compatibility details are documented in [`AMO.md`](AMO.md) and [`PRIVACY.md`](PRIVACY.md).
+
+Blocked-page redirects require an explicit native `policy_decision: "blocked"` from a current,
+active policy snapshot. Network failures and HTTP 4xx/5xx responses do not imply a policy block.
+Hosts that predate this additive protocol remain usable for legacy actions, but the extension does
+not infer native blocking capability from `in_whitelist` or DNS fields alone. See
+[`docs/extension-native-host-contract.md`](../docs/extension-native-host-contract.md).
 The native host exposes `get-blocked-paths` and `get-blocked-subdomains` from the local whitelist file so the background runtime can refresh enforcement rules without relying on Firefox `WebsiteFilter`, search-engine, or DoH policies. It also accepts `allow-local-runtime-dependency` with only normalized `anchorHost`, `dependencyHost`, and `requestType`. Windows applies exact-host Acrylic overlay entries after local validation. Linux writes a local queue entry for root-side validation and `dnsmasq` overlay application. This flow does not send full URLs, headers, cookies, DOM data, page titles, request bodies, or dependency hosts to OpenPath APIs, and it does not create remote whitelist rules.

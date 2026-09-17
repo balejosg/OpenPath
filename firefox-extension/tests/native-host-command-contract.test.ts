@@ -17,20 +17,17 @@ void test('native host probes the installed OpenPath CLI before legacy whitelist
   assert.doesNotMatch(source, /^WHITELIST_CMD = "\/usr\/local\/bin\/whitelist"$/m);
 });
 
-void test('native host reports DNS policy state independently from CLI discovery', () => {
+void test('native host reports an explicit policy verdict independently from DNS', () => {
   const source = readFileSync(
     new URL('../native/openpath-native-host.py', import.meta.url),
     'utf8'
   );
 
-  assert.match(source, /"policy_active": is_dns_policy_active\(\),/);
-  assert.doesNotMatch(
-    source,
-    /"policy_active": is_dns_policy_active\(\) and whitelist_cmd is not None,/
-  );
+  assert.match(source, /"policy_decision": "unknown",/);
+  assert.match(source, /policy_decision="blocked", policy_reason="default-deny"/);
 });
 
-void test('native host exposes get-policy-version derived from local whitelist stat', () => {
+void test('native host exposes get-policy-version from the same policy snapshot', () => {
   const source = readFileSync(
     new URL('../native/openpath-native-host.py', import.meta.url),
     'utf8'
@@ -38,8 +35,6 @@ void test('native host exposes get-policy-version derived from local whitelist s
 
   assert.match(source, /def get_policy_version\(\):/);
   assert.match(source, /elif action == "get-policy-version":\n\s*return get_policy_version\(\)/);
-  // sello derivado de mtime_ns + size, sin hashear contenido
-  assert.match(source, /st_mtime_ns/);
-  assert.match(source, /st_size/);
-  assert.doesNotMatch(source, /def get_policy_version\([^)]*\):[\s\S]*?hashlib/);
+  assert.match(source, /snapshot = read_policy_snapshot\(\)/);
+  assert.match(source, /hashlib\.sha256\(version_material\)\.hexdigest\(\)/);
 });

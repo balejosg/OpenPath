@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+/* eslint-disable @typescript-eslint/no-floating-promises -- navigation callbacks are intentionally advanced with tick() */
 import { describe, test } from 'node:test';
 import type { WebRequest } from 'webextension-polyfill';
 

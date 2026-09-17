@@ -42,6 +42,42 @@ RUNTIME_DEPENDENCY_SOURCE = "firefox-webrequest-local"
 RUNTIME_DEPENDENCY_HOST_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
 )
+PROTECTED_POLICY_HOSTS = {
+    "raw.githubusercontent.com",
+    "github.com",
+    "githubusercontent.com",
+    "api.github.com",
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "sourceforge.net",
+    "downloads.sourceforge.net",
+    "detectportal.firefox.com",
+    "connectivity-check.ubuntu.com",
+    "captive.apple.com",
+    "www.msftconnecttest.com",
+    "clients3.google.com",
+    "ntp.ubuntu.com",
+    "time.google.com",
+    "pool.ntp.org",
+    "security.ubuntu.com",
+    "archive.ubuntu.com",
+    "changelogs.ubuntu.com",
+    "aus5.mozilla.org",
+    "firefox.settings.services.mozilla.com",
+    "firefox-settings-attachments.cdn.mozilla.net",
+    "content-signature-2.cdn.mozilla.net",
+    "download.mozilla.org",
+    "download.cdn.mozilla.net",
+    "archive.mozilla.org",
+    "ftp.mozilla.org",
+    "safebrowsing.googleapis.com",
+    "addons.mozilla.org",
+    "versioncheck.addons.mozilla.org",
+    "services.addons.mozilla.org",
+    "ciscobinary.openh264.org",
+    "redirector.gvt1.com",
+    "clients2.googleusercontent.com",
+}
 
 
 def get_log_path():
@@ -214,6 +250,66 @@ def read_optional_text(path_str):
         return ""
 
 
+def get_optional_config_host(path_str):
+    value = read_optional_text(path_str)
+    if not value:
+        return ""
+    try:
+        return normalize_runtime_dependency_host(value.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0])
+    except (AttributeError, ValueError):
+        return ""
+
+
+def read_runtime_policy_inputs():
+    overlay_path = Path(
+        os.environ.get(
+            "OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE",
+            "/var/lib/openpath/runtime-dependency-overlay.json",
+        )
+    )
+    overlay_raw = b""
+    dependencies = []
+    try:
+        if overlay_path.is_file():
+            overlay_raw = overlay_path.read_bytes()
+            parsed = json.loads(overlay_raw.decode("utf-8"))
+            dependencies = [
+                host
+                for entry in parsed.get("entries", [])
+                if isinstance(entry, dict)
+                for host in [normalize_runtime_dependency_host(entry.get("dependencyHost"))]
+                if host
+            ]
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+        # The overlay is optional and fail-closed: malformed entries grant no permission.
+        overlay_raw = b""
+        dependencies = []
+
+    protected_hosts = set(PROTECTED_POLICY_HOSTS)
+    for path in (
+        "/etc/openpath/whitelist-url.conf",
+        "/etc/openpath/api-url.conf",
+        "/etc/openpath/health-api-url.conf",
+    ):
+        host = get_optional_config_host(path)
+        if host:
+            protected_hosts.add(host)
+
+    captive_hosts = {
+        host
+        for raw in os.environ.get("CAPTIVE_PORTAL_SPLIT_DNS_HOSTS", "").split(",")
+        for host in [normalize_runtime_dependency_host(raw)]
+        if host
+    }
+    material = overlay_raw + b"\0" + "\n".join(sorted(protected_hosts | captive_hosts)).encode()
+    return {
+        "runtime_dependencies": dependencies,
+        "protected_hosts": sorted(protected_hosts),
+        "captive_hosts": sorted(captive_hosts),
+        "version_material": material,
+    }
+
+
 def get_native_config():
     api_url = read_optional_text("/etc/openpath/api-url.conf")
     whitelist_url = read_optional_text("/etc/openpath/whitelist-url.conf")
@@ -316,18 +412,79 @@ def is_dns_policy_active():
 
 def whitelist_file_contains_domain(whitelist_file, domain):
     try:
-        expected = domain.lower()
+        expected = domain.strip().strip(".").lower()
         with open(whitelist_file, "r", encoding="utf-8", errors="ignore") as f:
             for raw_line in f:
                 line = raw_line.strip().lower()
                 if not line or line.startswith("#"):
                     continue
-                if line == expected:
+                if line == expected or expected.endswith(f".{line}"):
                     return True
     except Exception as e:
         log_debug(f"Error reading whitelist file for {domain}: {e}")
 
     return False
+
+
+def read_policy_snapshot():
+    whitelist_file = get_whitelist_file_path()
+    if whitelist_file is None:
+        return {"known": False, "version": "", "error": "policy-file-unavailable"}
+    try:
+        raw = whitelist_file.read_bytes()
+        disabled = get_system_disabled_flag_path().exists()
+        text = raw.decode("utf-8", errors="ignore")
+        whitelist = []
+        blocked_subdomains = []
+        section = "whitelist"
+        marker_disabled = False
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            upper = line.upper()
+            if upper.startswith("#") and "DESACTIVADO" in upper:
+                marker_disabled = True
+                continue
+            if upper == "## WHITELIST":
+                section = "whitelist"
+                continue
+            if upper == "## BLOCKED-SUBDOMAINS":
+                section = "blocked_subdomains"
+                continue
+            if upper.startswith("## "):
+                section = "other"
+                continue
+            if not line or line.startswith("#"):
+                continue
+            normalized = line.strip().strip(".").lower()
+            if section == "whitelist":
+                whitelist.append(normalized)
+            elif section == "blocked_subdomains":
+                blocked_subdomains.append(normalized)
+        runtime_inputs = read_runtime_policy_inputs()
+        policy_active = not (disabled or marker_disabled)
+        version_material = (
+            raw
+            + (b"\0disabled" if disabled else b"\0active")
+            + runtime_inputs["version_material"]
+        )
+        return {
+            "known": True,
+            "active": policy_active,
+            "whitelist": whitelist,
+            "blocked_subdomains": blocked_subdomains,
+            **runtime_inputs,
+            "version": hashlib.sha256(version_material).hexdigest(),
+        }
+    except OSError as exc:
+        return {"known": False, "version": "", "error": f"policy-read-failed:{exc.errno}"}
+
+
+def policy_covers_host(host, entries):
+    return any(host == entry or host.endswith(f".{entry}") for entry in entries)
+
+
+def policy_blocks_subdomain(host, entries):
+    return any(host == entry or host.endswith(f".{entry}") for entry in entries)
 
 
 def get_valid_domains(domains):
@@ -540,21 +697,58 @@ def check_domain(domain):
             "resolved_ip": str or None
         }
     """
+    normalized_domain = domain.strip().strip(".").lower()
     whitelist_cmd = get_whitelist_command_path()
+    snapshot = read_policy_snapshot()
     result = {
-        "domain": domain,
+        "domain": normalized_domain,
         "in_whitelist": False,
-        "policy_active": is_dns_policy_active(),
+        "policy_active": snapshot.get("active") if snapshot.get("known") else None,
+        "policy_decision": "unknown",
+        "policy_reason": snapshot.get("error", "policy-unavailable"),
+        "policy_version": snapshot.get("version", ""),
         "resolves": False,
         "resolved_ip": None,
     }
 
-    whitelist_file = get_whitelist_file_path()
-    if whitelist_file is not None:
-        result["in_whitelist"] = whitelist_file_contains_domain(whitelist_file, domain)
+    if snapshot.get("known"):
+        if not snapshot["active"]:
+            result.update(
+                in_whitelist=True,
+                policy_decision="allowed",
+                policy_reason="policy-inactive",
+            )
+        elif policy_covers_host(normalized_domain, snapshot["protected_hosts"]):
+            result.update(
+                in_whitelist=True,
+                policy_decision="allowed",
+                policy_reason="protected-infrastructure",
+            )
+        elif policy_blocks_subdomain(normalized_domain, snapshot["blocked_subdomains"]):
+            result.update(policy_decision="blocked", policy_reason="blocked-subdomain")
+        elif policy_covers_host(normalized_domain, snapshot["whitelist"]):
+            result.update(
+                in_whitelist=True,
+                policy_decision="allowed",
+                policy_reason="whitelist-domain",
+            )
+        elif normalized_domain in snapshot["runtime_dependencies"]:
+            result.update(
+                in_whitelist=True,
+                policy_decision="allowed",
+                policy_reason="runtime-dependency-exact",
+            )
+        elif policy_covers_host(normalized_domain, snapshot["captive_hosts"]):
+            result.update(
+                in_whitelist=True,
+                policy_decision="allowed",
+                policy_reason="captive-portal-domain",
+            )
+        else:
+            result.update(policy_decision="blocked", policy_reason="default-deny")
 
     if whitelist_cmd is None:
-        resolves, resolved_ip = resolve_domain_with_system_dns(domain)
+        resolves, resolved_ip = resolve_domain_with_system_dns(normalized_domain)
         result["resolves"] = resolves
         result["resolved_ip"] = resolved_ip
         return result
@@ -562,15 +756,12 @@ def check_domain(domain):
     try:
         # Ejecutar whitelist check
         proc = subprocess.run(
-            [whitelist_cmd, "check", domain], capture_output=True, text=True, timeout=10
+            [whitelist_cmd, "check", normalized_domain], capture_output=True, text=True, timeout=10
         )
 
         output = proc.stdout
 
         # Parsear resultado
-        if "SÍ" in output or "YES" in output:
-            result["in_whitelist"] = True
-
         if "→" in output:
             # Extraer IP
             ip_match = re.search(r"→\s*(\S+)", output)
@@ -841,21 +1032,15 @@ def get_blocked_subdomains():
 
 
 def get_policy_version():
-    """Devuelve un sello de versión barato del whitelist local (mtime_ns:size).
-
-    Solo hace stat() del archivo local; no lee su contenido ni contacta la red.
-    """
-    whitelist_file = get_whitelist_file_path()
-    if whitelist_file is None:
-        return {"success": True, "action": "get-policy-version", "version": ""}
-
-    try:
-        st = whitelist_file.stat()
-        version = f"{st.st_mtime_ns}:{st.st_size}"
-        return {"success": True, "action": "get-policy-version", "version": version}
-    except Exception as e:
-        log_debug(f"Error getting policy version: {e}")
-        return {"success": False, "action": "get-policy-version", "error": str(e)}
+    """Returns the opaque revision of the same local snapshot used by check."""
+    snapshot = read_policy_snapshot()
+    if not snapshot.get("known"):
+        return {
+            "success": False,
+            "action": "get-policy-version",
+            "error": snapshot.get("error", "policy-unavailable"),
+        }
+    return {"success": True, "action": "get-policy-version", "version": snapshot["version"]}
 
 
 def handle_message(message):
@@ -872,7 +1057,8 @@ def handle_message(message):
             return {"success": False, "error": "No domains provided"}
 
         results = check_domains(domains)
-        return {"success": True, "action": "check", "results": results}
+        success = all(result.get("policy_decision") != "unknown" for result in results)
+        return {"success": success, "action": "check", "results": results}
 
     elif action == "list":
         domains = get_whitelist_domains()

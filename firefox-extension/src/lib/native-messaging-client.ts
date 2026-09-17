@@ -34,6 +34,9 @@ export interface NativeCheckResult {
   domain: string;
   in_whitelist: boolean;
   policy_active?: boolean;
+  policy_decision?: 'allowed' | 'blocked' | 'unknown';
+  policy_reason?: string;
+  policy_version?: string;
   portal_recovery_eligible?: boolean;
   portal_recovery_signal?: string;
   resolves?: boolean;
@@ -51,6 +54,9 @@ export interface VerifyResult {
   domain: string;
   inWhitelist: boolean;
   policyActive?: boolean;
+  policyDecision?: 'allowed' | 'blocked' | 'unknown';
+  policyReason?: string;
+  policyVersion?: string;
   portalRecoveryEligible?: boolean;
   portalRecoverySignal?: string;
   resolves?: boolean;
@@ -206,6 +212,15 @@ export function createNativeMessagingClient(options: {
 
         if (result.policy_active !== undefined) {
           mapped.policyActive = result.policy_active;
+        }
+        if (result.policy_decision !== undefined) {
+          mapped.policyDecision = result.policy_decision;
+        }
+        if (result.policy_reason !== undefined) {
+          mapped.policyReason = result.policy_reason;
+        }
+        if (result.policy_version !== undefined) {
+          mapped.policyVersion = result.policy_version;
         }
         if (result.portal_recovery_eligible !== undefined) {
           mapped.portalRecoveryEligible = result.portal_recovery_eligible;

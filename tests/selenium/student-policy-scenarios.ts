@@ -26,7 +26,9 @@ interface StudentPolicyTargets {
   portalOkUrl: string;
   portalCdnAssetUrl: string;
   siteOkUrl: string;
+  siteHttpErrorUrls: string[];
   sitePrivateUrl: string;
+  sitePrivateMissingUrl: string;
   siteXhrPrivateUrl: string;
   requestDomainUrl: string;
   rejectedDomainUrl: string;
@@ -314,7 +316,11 @@ function buildTargets(scenario: StudentScenario): StudentPolicyTargets {
     portalOkUrl: buildFixtureUrl(scenario.fixtures.portal, '/ok'),
     portalCdnAssetUrl: buildFixtureUrl(scenario.fixtures.cdnPortal, '/asset.js'),
     siteOkUrl: buildFixtureUrl(scenario.fixtures.site, '/ok'),
+    siteHttpErrorUrls: [403, 404, 500].map((status) =>
+      buildFixtureUrl(scenario.fixtures.site, `/status/${status}`)
+    ),
     sitePrivateUrl: buildFixtureUrl(scenario.fixtures.site, '/private'),
+    sitePrivateMissingUrl: buildFixtureUrl(scenario.fixtures.site, '/private/missing'),
     siteXhrPrivateUrl: buildFixtureUrl(scenario.fixtures.site, '/xhr/private.json'),
     requestDomainUrl: buildFixtureUrl(requestHost, '/ok'),
     rejectedDomainUrl: buildFixtureUrl(rejectedHost, '/ok'),
@@ -883,6 +889,22 @@ async function seedBaselineWhitelist(
       });
     }
   });
+}
+
+async function runAllowedHttpStatusScenarios(
+  driver: StudentPolicyDriver,
+  targets: StudentPolicyTargets
+): Promise<void> {
+  logScenarioStep('SP-023 to SP-025 allowed HTTP error responses');
+  for (const url of targets.siteHttpErrorUrls) {
+    const pathSegments = new URL(url).pathname.split('/');
+    const status = pathSegments[pathSegments.length - 1];
+    await driver.openAndExpectLoaded({
+      url,
+      title: `HTTP ${status} Fixture`,
+      selector: '#http-status',
+    });
+  }
 }
 
 async function settleBlockedRequestTarget(
@@ -2445,6 +2467,10 @@ async function runBlockedPathScenarios(
       await driver.openAndExpectBlockedScreen(targets.sitePrivateUrl, {
         reasonPrefix: 'BLOCKED_PATH_POLICY:',
       });
+      logScenarioStep('SP-026 explicitly blocked path remains blocked when origin route is 404');
+      await driver.openAndExpectBlockedScreen(targets.sitePrivateMissingUrl, {
+        reasonPrefix: 'BLOCKED_PATH_POLICY:',
+      });
       logScenarioStep('SP-012 verify iframe path block');
       await driver.openAndExpectLoaded({
         url: targets.siteOkUrl,
@@ -2595,6 +2621,7 @@ export async function runStudentPolicyMatrix(
   const targets = buildTargets(driver.scenario);
 
   await seedBaselineWhitelist(client, driver, mode, targets);
+  await runAllowedHttpStatusScenarios(driver, targets);
   await runRequestLifecycleScenarioSet(client, driver, mode, targets);
   await runBlockedSubdomainScenarios(client, driver, mode, targets);
   await runBlockedPathScenarios(client, driver, mode, targets);
@@ -2608,6 +2635,7 @@ export async function runPathBlockingScenarios(
   const targets = buildTargets(driver.scenario);
 
   await seedBaselineWhitelist(client, driver, mode, targets);
+  await runAllowedHttpStatusScenarios(driver, targets);
   await runBlockedSubdomainScenarios(client, driver, mode, targets);
   await runBlockedPathScenarios(client, driver, mode, targets);
 }

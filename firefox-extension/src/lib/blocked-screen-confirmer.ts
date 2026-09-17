@@ -3,12 +3,8 @@ import type {
   NativeBlockedScreenConfirmation,
 } from './blocked-screen-navigation-controller.js';
 import type { VerifyResponse } from './native-messaging-client.js';
-import { withTimeoutOrFallback } from './async-timeout.js';
-
-// Black-hole IPs the endpoint agents sinkhole blocked domains to (RFC 5737 TEST-NET-1 and the IPv6
-// discard prefix). A domain that "resolves" only to one of these is not actually reachable, so it
-// counts as blocked rather than allowed. Kept in sync with linux/lib/dns-dnsmasq.sh sinkhole config.
-const BLOCKED_DNS_SENTINELS = new Set(['0.0.0.0', '::', '192.0.2.1', '100::']);
+import { logger } from './logger.js';
+import { normalizePolicyDecision, permitsPolicyRedirect } from './policy-decision.js';
 
 // How long a confirmed "blocked" decision stays usable without re-asking the native host. Keeps
 // repeat navigations to the same blocked domain instant while bounding staleness.
@@ -24,27 +20,13 @@ const BLOCKED_SCREEN_DECISION_TTL_MS = 5_000;
 // machines with real-time AV can take several seconds. Keep the bound above that range while still
 // failing open promptly on a genuinely dead host.
 const BLOCKED_SCREEN_NATIVE_CONFIRM_TIMEOUT_MS = 4_000;
+const BLOCKED_SCREEN_NATIVE_CONFIRM_HARD_TIMEOUT_MS = 12_000;
+type TimerHandle = number | ReturnType<typeof setTimeout>;
 
 export function isNativePolicyBlockedResult(
   result: VerifyResponse['results'][number] | undefined
 ): boolean {
-  // Fail open on anything that is not an affirmative policy decision: a missing result, an
-  // explicitly inactive policy (policyActive === false), or an errored native check are all
-  // "not a policy block", so a transport failure never shows the blocked screen on its own. A
-  // missing policyActive is left as unknown (we do NOT fail open for it) and falls through.
-  if (!result || result.policyActive === false || result.error) {
-    return false;
-  }
-
-  const resolvedIp =
-    typeof result.resolvedIp === 'string' && result.resolvedIp.length > 0
-      ? result.resolvedIp
-      : null;
-  // A domain that only resolves to a sinkhole sentinel is not actually reachable, so it does not
-  // count as resolving to a real IP. Trust the native host's explicit `resolves` when present.
-  const resolvesToRealIp = resolvedIp !== null && !BLOCKED_DNS_SENTINELS.has(resolvedIp);
-  const resolves = result.resolves ?? resolvesToRealIp;
-  return !result.inWhitelist && !resolves;
+  return result ? permitsPolicyRedirect(normalizePolicyDecision(result)) : false;
 }
 
 export interface BlockedScreenConfirmerDeps {
@@ -61,6 +43,9 @@ export interface BlockedScreenConfirmerDeps {
   // Overridable timings (default to the module constants); injectable for fast, deterministic tests.
   decisionTtlMs?: number;
   nativeConfirmTimeoutMs?: number;
+  nativeConfirmHardTimeoutMs?: number;
+  clearTimeoutFn?: (handle: TimerHandle) => void;
+  setTimeoutFn?: (callback: () => void, delayMs: number) => TimerHandle;
 }
 
 export interface BlockedScreenConfirmer {
@@ -80,6 +65,10 @@ export function createBlockedScreenConfirmer(
   const decisionTtlMs = deps.decisionTtlMs ?? BLOCKED_SCREEN_DECISION_TTL_MS;
   const nativeConfirmTimeoutMs =
     deps.nativeConfirmTimeoutMs ?? BLOCKED_SCREEN_NATIVE_CONFIRM_TIMEOUT_MS;
+  const nativeConfirmHardTimeoutMs =
+    deps.nativeConfirmHardTimeoutMs ?? BLOCKED_SCREEN_NATIVE_CONFIRM_HARD_TIMEOUT_MS;
+  const clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
+  const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
 
   // Short-TTL cache of confirmed "blocked" decisions, keyed by normalized hostname. Lets repeat
   // navigations to the same blocked domain show the blocked screen instantly without another native
@@ -88,6 +77,8 @@ export function createBlockedScreenConfirmer(
     string,
     { blocked: boolean; portalRecoveryEligible?: boolean; expiresAt: number }
   >();
+  const inFlight = new Map<string, Promise<NativeBlockedScreenConfirmation>>();
+  let policyEpoch = 0;
 
   async function confirm(
     context: ConfirmBlockedScreenContext
@@ -103,50 +94,82 @@ export function createBlockedScreenConfirmer(
       };
     }
 
-    // Bound the native check so a slow/hung host cannot stall the blocked-screen decision. A
-    // timeout (or any failure) is not a confirmation: return not-blocked and let the reactive
-    // navigation-error path retry, never cache it.
-    const response = await withTimeoutOrFallback(
-      checkDomains([context.hostname], {
-        error: context.error,
-        source: 'blocked-screen-navigation',
-      }),
-      nativeConfirmTimeoutMs,
-      { success: false, results: [] }
-    );
-    if (!response.success) {
-      return { blocked: false };
-    }
+    const existing = inFlight.get(cacheKey);
+    if (existing) return existing;
+    const startedEpoch = policyEpoch;
+    const request = (async (): Promise<NativeBlockedScreenConfirmation> => {
+      const softTimer = setTimeoutFn(() => {
+        logger.info('[Monitor] Native policy check exceeded soft timeout', {
+          code: 'native-soft-timeout',
+          elapsedMs: nativeConfirmTimeoutMs,
+          source: 'blocked-screen-navigation',
+        });
+      }, nativeConfirmTimeoutMs);
+      let hardTimer: TimerHandle | undefined;
+      const response = await Promise.race([
+        checkDomains([context.hostname], {
+          error: context.error,
+          source: 'blocked-screen-navigation',
+        }).catch(
+          (error: unknown): VerifyResponse => ({
+            success: false,
+            results: [],
+            error: error instanceof Error ? error.message : String(error),
+          })
+        ),
+        new Promise<VerifyResponse>((resolve) => {
+          hardTimer = setTimeoutFn(() => {
+            resolve({ success: false, results: [], error: 'native-hard-timeout' });
+          }, nativeConfirmHardTimeoutMs);
+        }),
+      ]);
+      clearTimeoutFn(softTimer);
+      if (hardTimer !== undefined) clearTimeoutFn(hardTimer);
+      if (response.error === 'native-hard-timeout') {
+        logger.info('[Monitor] Native policy check reached hard timeout', {
+          code: 'native-hard-timeout',
+          elapsedMs: nativeConfirmHardTimeoutMs,
+          source: 'blocked-screen-navigation',
+        });
+      }
+      if (!response.success || startedEpoch !== policyEpoch) return { blocked: false };
 
-    const result = response.results.find((item) => item.domain === context.hostname);
-    if (result?.portalRecoveryEligible !== undefined) {
-      recordPortalRecoveryEligibility?.(cacheKey, result.portalRecoveryEligible);
-    }
+      const result = response.results.find((item) => item.domain.trim().toLowerCase() === cacheKey);
+      if (result?.portalRecoveryEligible !== undefined) {
+        recordPortalRecoveryEligibility?.(cacheKey, result.portalRecoveryEligible);
+      }
 
-    const decision: NativeBlockedScreenConfirmation = {
-      blocked: isNativePolicyBlockedResult(result),
-      ...(result?.portalRecoveryEligible !== undefined
-        ? { portalRecoveryEligible: result.portalRecoveryEligible }
-        : {}),
-    };
+      const decision: NativeBlockedScreenConfirmation = {
+        blocked: isNativePolicyBlockedResult(result),
+        ...(result?.portalRecoveryEligible !== undefined
+          ? { portalRecoveryEligible: result.portalRecoveryEligible }
+          : {}),
+      };
 
-    // Cache only confirmed blocks. Allowed/unknown verdicts are never cached, so a domain that
-    // later becomes blocked is re-evaluated immediately; a stale "blocked" is bounded by the TTL
-    // and invalidated on whitelist updates (see clearCache).
-    if (decision.blocked) {
-      decisionCache.set(cacheKey, {
-        ...decision,
-        expiresAt: now() + decisionTtlMs,
-      });
-    } else {
-      decisionCache.delete(cacheKey);
-    }
+      // Cache only confirmed blocks. Allowed/unknown verdicts are never cached, so a domain that
+      // later becomes blocked is re-evaluated immediately; a stale "blocked" is bounded by the TTL
+      // and invalidated on whitelist updates (see clearCache).
+      if (decision.blocked && startedEpoch === policyEpoch) {
+        decisionCache.set(cacheKey, {
+          ...decision,
+          expiresAt: now() + decisionTtlMs,
+        });
+      } else {
+        decisionCache.delete(cacheKey);
+      }
 
-    return decision;
+      return decision;
+    })().finally(() => {
+      if (inFlight.get(cacheKey) === request) inFlight.delete(cacheKey);
+    });
+    inFlight.set(cacheKey, request);
+    return request;
   }
 
   function clearCache(): void {
+    policyEpoch += 1;
     decisionCache.clear();
+    inFlight.clear();
   }
 
   return { confirm, clearCache };

@@ -14,6 +14,7 @@ import {
 } from './blocked-screen-navigation-controller.js';
 import { evaluateGoogleGameBlocking, isGoogleGamePolicyOutcome } from './google-game-blocking.js';
 import type { OpenPathDependencyObservationEventInput } from './dependency-observation-diagnostics.js';
+import type { NavigationState } from './navigation-state.js';
 
 const MAX_CAPTIVE_PORTAL_RECOVERY_HOSTS = 16;
 
@@ -50,6 +51,7 @@ interface BackgroundListenersOptions {
   ) => Promise<boolean>;
   handleRuntimeMessage: (message: unknown, sender: Runtime.MessageSender) => Promise<unknown>;
   localRuntimeDependencyTimeoutMs?: number;
+  navigationState?: NavigationState;
   recordDependencyObservationEvent?: (event: OpenPathDependencyObservationEventInput) => void;
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
   saveBlockedPageContext?: (tabId: number, domain: string, originalUrl: string | undefined) => void;
@@ -290,6 +292,7 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
       const tab = await options.browser.tabs.get(tabId);
       return tab.url;
     },
+    ...(options.navigationState ? { navigationState: options.navigationState } : {}),
     redirectToBlockedScreen: options.redirectToBlockedScreen,
     ...(options.saveBlockedPageContext
       ? { saveBlockedPageContext: options.saveBlockedPageContext }
@@ -436,10 +439,17 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
       }
 
       if (details.tabId >= 0) {
-        blockedScreenNavigation.handleBlockedScreenNavigationError(details, {
-          recordBlockedDomain: true,
-          requestType: details.type,
-        });
+        void blockedScreenNavigation
+          .handleBlockedScreenNavigationError(details, {
+            recordBlockedDomain: true,
+            requestType: details.type,
+          })
+          .catch((error: unknown) => {
+            logger.warn('[Monitor] Falló la gestión del error de navegación', {
+              error: getErrorMessage(error),
+              tabId: details.tabId,
+            });
+          });
       }
     },
     { urls: ['<all_urls>'] }
@@ -462,11 +472,18 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
         frameId: details.frameId,
         ...(navigationHost ? { anchorHost: navigationHost } : {}),
       });
-      blockedScreenNavigation.handleNativePolicyNavigationPreflight({
-        frameId: details.frameId,
-        tabId: details.tabId,
-        url: details.url,
-      });
+      void blockedScreenNavigation
+        .handleNativePolicyNavigationPreflight({
+          frameId: details.frameId,
+          tabId: details.tabId,
+          url: details.url,
+        })
+        .catch((error: unknown) => {
+          logger.warn('[Monitor] Falló el preflight de navegación', {
+            error: getErrorMessage(error),
+            tabId: details.tabId,
+          });
+        });
 
       if (
         shouldClearBlockedMonitorStateOnNavigate(
@@ -527,17 +544,24 @@ export function registerBackgroundListeners(options: BackgroundListenersOptions)
         return;
       }
 
-      blockedScreenNavigation.handleBlockedScreenNavigationError(
-        {
-          error: maybeError,
-          frameId: details.frameId,
-          tabId: details.tabId,
-          url: details.url,
-        },
-        {
-          recordBlockedDomain: true,
-        }
-      );
+      void blockedScreenNavigation
+        .handleBlockedScreenNavigationError(
+          {
+            error: maybeError,
+            frameId: details.frameId,
+            tabId: details.tabId,
+            url: details.url,
+          },
+          {
+            recordBlockedDomain: true,
+          }
+        )
+        .catch((error: unknown) => {
+          logger.warn('[Monitor] Falló la gestión del error de navegación', {
+            error: getErrorMessage(error),
+            tabId: details.tabId,
+          });
+        });
     }
   );
 

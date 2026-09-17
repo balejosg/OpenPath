@@ -541,7 +541,8 @@ Describe "Browser Module - Native Host" {
 
             $whitelistSectionsContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Whitelist.Sections.ps1") -Raw
             Assert-ContentContainsAll -Content $stateContent -Needles @(
-                'Get-OpenPathWhitelistSectionsFromFile -Path $script:WhitelistPath'
+                '[System.IO.File]::ReadAllBytes($script:WhitelistPath)',
+                'Get-OpenPathWhitelistSectionsFromLines'
             )
             Assert-ContentContainsAll -Content $whitelistSectionsContent -Needles @(
                 'BlockedSubdomains = @()',
@@ -564,7 +565,8 @@ Describe "Browser Module - Native Host" {
             # The shared owner parser must declare and populate AllowedPaths
             $whitelistSectionsContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "Common.Whitelist.Sections.ps1") -Raw
             Assert-ContentContainsAll -Content $stateContent -Needles @(
-                'Get-OpenPathWhitelistSectionsFromFile -Path $script:WhitelistPath'
+                '[System.IO.File]::ReadAllBytes($script:WhitelistPath)',
+                'Get-OpenPathWhitelistSectionsFromLines'
             )
             Assert-ContentContainsAll -Content $whitelistSectionsContent -Needles @(
                 'AllowedPaths = @()',
@@ -2074,6 +2076,86 @@ Describe "Browser Module - Native Host" {
             )
 
             $nativeHostScriptContent | Should -Not -Match 'Add-Content -Path \$script:LogPath'
+        }
+
+        Context "Explicit native policy verdict" {
+            BeforeEach {
+                $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+                . $nativeHostActionsPath
+                function Resolve-DomainIp { param([string]$Domain) return '203.0.113.10' }
+                function Get-NativeHostPortalRecoverySignal { param([string]$Domain, [object]$Message) return 'none' }
+                function Invoke-NativeHostAuthenticatedCaptivePortalRestoreIfNeeded {}
+            }
+
+            It "Allows whitelist descendants but preserves explicit blocked-subdomain exclusions" {
+                $sections = [PSCustomObject]@{
+                    Whitelist = @('allowed.example')
+                    BlockedSubdomains = @('blocked.allowed.example')
+                    IsDisabled = $false
+                    PolicyKnown = $true
+                    PolicyVersion = 'policy-v1'
+                }
+                $result = Invoke-NativeHostCheckAction `
+                    -Message ([PSCustomObject]@{ domains = @('WWW.Allowed.Example.', 'blocked.allowed.example') }) `
+                    -Sections $sections `
+                    -State ([PSCustomObject]@{})
+
+                $result.success | Should -BeTrue
+                $result.results[0].in_whitelist | Should -BeTrue
+                $result.results[0].policy_decision | Should -Be 'allowed'
+                $result.results[0].policy_reason | Should -Be 'whitelist-domain'
+                $result.results[0].policy_version | Should -Be 'policy-v1'
+                $result.results[1].in_whitelist | Should -BeFalse
+                $result.results[1].policy_decision | Should -Be 'blocked'
+                $result.results[1].policy_reason | Should -Be 'blocked-subdomain'
+            }
+
+            It "Treats disabled policy as allowed and an unavailable snapshot as unknown" {
+                $inactive = Invoke-NativeHostCheckAction `
+                    -Message ([PSCustomObject]@{ domains = @('blocked.example') }) `
+                    -Sections ([PSCustomObject]@{ Whitelist = @(); BlockedSubdomains = @(); IsDisabled = $true; PolicyKnown = $true; PolicyVersion = 'disabled-v1' }) `
+                    -State ([PSCustomObject]@{})
+                $inactive.results[0].in_whitelist | Should -BeTrue
+                $inactive.results[0].policy_active | Should -BeFalse
+                $inactive.results[0].policy_decision | Should -Be 'allowed'
+
+                $unknown = Invoke-NativeHostCheckAction `
+                    -Message ([PSCustomObject]@{ domains = @('blocked.example') }) `
+                    -Sections ([PSCustomObject]@{ Whitelist = @(); BlockedSubdomains = @(); IsDisabled = $false; PolicyKnown = $false; PolicyVersion = '' }) `
+                    -State ([PSCustomObject]@{})
+                $unknown.success | Should -BeFalse
+                $unknown.results[0].policy_decision | Should -Be 'unknown'
+                $unknown.results[0].policy_reason | Should -Be 'policy-unavailable'
+            }
+
+            It "Keeps runtime dependencies exact while captive portal domains include descendants" {
+                $sections = [PSCustomObject]@{ Whitelist = @(); BlockedSubdomains = @(); IsDisabled = $false; PolicyKnown = $true; PolicyVersion = 'policy-v1' }
+                $state = [PSCustomObject]@{
+                    runtimeDependencyDomains = @('cdn.dependency.example')
+                    captivePortalDomains = @('portal.example')
+                }
+                $result = Invoke-NativeHostCheckAction `
+                    -Message ([PSCustomObject]@{ domains = @('cdn.dependency.example', 'child.cdn.dependency.example', 'login.portal.example') }) `
+                    -Sections $sections `
+                    -State $state
+
+                $result.results[0].policy_decision | Should -Be 'allowed'
+                $result.results[0].policy_reason | Should -Be 'runtime-dependency-exact'
+                $result.results[1].policy_decision | Should -Be 'blocked'
+                $result.results[2].policy_decision | Should -Be 'allowed'
+                $result.results[2].policy_reason | Should -Be 'captive-portal-domain'
+            }
+
+            It "Dispatches get-policy-version from the same snapshot revision" {
+                $response = Invoke-NativeHostMessageAction `
+                    -Message ([PSCustomObject]@{ action = 'get-policy-version' }) `
+                    -State ([PSCustomObject]@{}) `
+                    -Sections ([PSCustomObject]@{ PolicyKnown = $true; PolicyVersion = 'policy-v2' }) `
+                    -Action 'get-policy-version'
+                $response.success | Should -BeTrue
+                $response.action | Should -Be 'get-policy-version'
+                $response.version | Should -Be 'policy-v2'
+            }
         }
     }
 }

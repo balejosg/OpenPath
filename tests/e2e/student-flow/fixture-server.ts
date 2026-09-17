@@ -135,6 +135,14 @@ function notFound(res: ServerResponse): void {
   res.end('<!doctype html><title>Not Found</title><p>Not Found</p>');
 }
 
+function httpStatusPage(res: ServerResponse, statusCode: 403 | 404 | 500): void {
+  res.statusCode = statusCode;
+  setHtmlHeaders(res);
+  res.end(
+    `<!doctype html><title>HTTP ${statusCode} Fixture</title><p id="http-status">${statusCode}</p>`
+  );
+}
+
 function portalPageHtml(fixtures: StudentFixtureHosts): string {
   return `<!doctype html>
 <html lang="en">
@@ -376,6 +384,19 @@ function routeSiteHost(pathname: string, res: ServerResponse): void {
   if (pathname === '/ok') {
     setHtmlHeaders(res);
     res.end(sitePageHtml());
+    return;
+  }
+
+  if (pathname === '/status/403') {
+    httpStatusPage(res, 403);
+    return;
+  }
+  if (pathname === '/status/404') {
+    httpStatusPage(res, 404);
+    return;
+  }
+  if (pathname === '/status/500') {
+    httpStatusPage(res, 500);
     return;
   }
 

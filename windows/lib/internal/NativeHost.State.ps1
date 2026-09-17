@@ -34,7 +34,40 @@ function Get-WhitelistSections {
     # (Common.Whitelist.Sections.ps1). Unlike the old inline copy this includes
     # IsDisabled (additive; the entry parsing is byte-identical because sentinel
     # lines start with '#' and were already skipped as comments).
-    return (Get-OpenPathWhitelistSectionsFromFile -Path $script:WhitelistPath)
+    if (-not (Test-Path $script:WhitelistPath -PathType Leaf -ErrorAction SilentlyContinue)) {
+        $missing = Get-OpenPathWhitelistSectionsFromLines -Lines @()
+        $missing | Add-Member -NotePropertyName PolicyKnown -NotePropertyValue $false -Force
+        $missing | Add-Member -NotePropertyName PolicyVersion -NotePropertyValue '' -Force
+        return $missing
+    }
+
+    try {
+        $whitelistBytes = [System.IO.File]::ReadAllBytes($script:WhitelistPath)
+        $text = [System.Text.Encoding]::UTF8.GetString($whitelistBytes)
+        $sections = Get-OpenPathWhitelistSectionsFromLines -Lines @($text -split "`r?`n")
+        $stateBytes = if (Test-Path $script:StatePath -PathType Leaf -ErrorAction SilentlyContinue) {
+            [System.IO.File]::ReadAllBytes($script:StatePath)
+        }
+        else { [byte[]]@() }
+        $combined = [byte[]]::new($whitelistBytes.Length + 1 + $stateBytes.Length)
+        [Array]::Copy($whitelistBytes, 0, $combined, 0, $whitelistBytes.Length)
+        $combined[$whitelistBytes.Length] = 0
+        [Array]::Copy($stateBytes, 0, $combined, $whitelistBytes.Length + 1, $stateBytes.Length)
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $version = -join ($sha.ComputeHash($combined) | ForEach-Object { $_.ToString('x2') })
+        }
+        finally { $sha.Dispose() }
+        $sections | Add-Member -NotePropertyName PolicyKnown -NotePropertyValue $true -Force
+        $sections | Add-Member -NotePropertyName PolicyVersion -NotePropertyValue $version -Force
+        return $sections
+    }
+    catch {
+        $failed = Get-OpenPathWhitelistSectionsFromLines -Lines @()
+        $failed | Add-Member -NotePropertyName PolicyKnown -NotePropertyValue $false -Force
+        $failed | Add-Member -NotePropertyName PolicyVersion -NotePropertyValue '' -Force
+        return $failed
+    }
 }
 
 function Resolve-DomainIp {

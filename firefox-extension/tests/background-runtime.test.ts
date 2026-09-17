@@ -66,6 +66,9 @@ function createRuntimeHarnessWithOptions(options: {
   const fetchBodies: unknown[] = [];
   const responses: unknown[] = [];
   const tabUpdates: { tabId: number; update: { url?: string } }[] = [];
+  const tabUrls = new Map<number, string>(
+    (options.openTabs ?? []).map((tab) => [tab.id, tab.url] as const)
+  );
   let runtimeMessage: RuntimeMessageListener | null = null;
   let tabRemovedListener: ((tabId: number) => void) | null = null;
   let webRequestBeforeRequestListener: ((details: unknown) => unknown) | null = null;
@@ -184,7 +187,8 @@ function createRuntimeHarnessWithOptions(options: {
       },
     },
     tabs: {
-      get: () => Promise.resolve({ id: 5, url: 'http://portal.example/app' }),
+      get: (tabId: number) =>
+        Promise.resolve({ id: tabId, url: tabUrls.get(tabId) ?? 'http://portal.example/app' }),
       query: () => Promise.resolve(options.openTabs ?? []),
       onRemoved: {
         addListener: (listener: (tabId: number) => void) => {
@@ -193,6 +197,7 @@ function createRuntimeHarnessWithOptions(options: {
       },
       update: (tabId: number, update: { url?: string }) => {
         tabUpdates.push({ tabId, update });
+        if (update.url) tabUrls.set(tabId, update.url);
         return Promise.resolve({});
       },
     },
@@ -291,6 +296,9 @@ void test('background runtime skips captive portal retry when recovery resolves 
             domain,
             in_whitelist: false,
             policy_active: true,
+            policy_decision: 'blocked',
+            policy_reason: 'default-deny',
+            policy_version: 'policy-v1',
             portal_recovery_eligible: true,
             resolves: false,
           })),
@@ -480,6 +488,9 @@ void test('background runtime gates portal-eligible recovery on locked portal st
               domain: 'portal.example',
               in_whitelist: false,
               policy_active: true,
+              policy_decision: 'blocked',
+              policy_reason: 'default-deny',
+              policy_version: 'policy-v1',
               portal_recovery_eligible: true,
               resolves: false,
             },
@@ -910,6 +921,9 @@ function respondWithConfirmedBlock(message: unknown): unknown {
       domain,
       in_whitelist: false,
       policy_active: true,
+      policy_decision: 'blocked',
+      policy_reason: 'default-deny',
+      policy_version: 'policy-v1',
       resolves: false,
     })),
   };
@@ -1055,6 +1069,22 @@ void test('background runtime drops cached block decisions after a whitelist upd
 void test('background runtime redirects already-open tabs when policy removes their host', async () => {
   const harness = createRuntimeHarnessWithOptions({
     openTabs: [{ id: 7, url: 'http://blocked.example/page' }],
+    nativeMessageResponder: (message) => {
+      if ((message as { action?: string }).action !== 'check') return undefined;
+      return {
+        success: true,
+        results: [
+          {
+            domain: 'blocked.example',
+            in_whitelist: false,
+            policy_active: true,
+            policy_decision: 'blocked',
+            policy_reason: 'default-deny',
+            policy_version: 'policy-v1',
+          },
+        ],
+      };
+    },
   });
   try {
     const runtime = createBackgroundRuntime(harness.browser);

@@ -860,15 +860,7 @@ void describe('background listeners blocked-screen routing', () => {
 
     await waitForAsyncListeners();
 
-    assert.equal(recoveryCalls.length, 2);
-    assert.deepEqual(recoveryCalls.at(-1), {
-      tabId: 31,
-      hostname: 'login.wedu.example',
-      error: 'NS_ERROR_NET_TIMEOUT',
-      origin: null,
-      portalRecoveryHosts: ['login.wedu.example', 'assets.wedu.example'],
-      url: 'https://login.wedu.example/login?token=secret',
-    });
+    assert.equal(recoveryCalls.length, 1);
     assert.deepEqual(recoveryCalls[0], {
       tabId: 31,
       hostname: 'login.wedu.example',

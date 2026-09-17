@@ -1,6 +1,11 @@
 import type { WebRequest } from 'webextension-polyfill';
 import { getErrorMessage, logger } from './logger.js';
 import { BLOCKED_SCREEN_PATH, extractHostname, isExtensionUrl } from './path-blocking.js';
+import {
+  createNavigationState,
+  type NavigationIdentity,
+  type NavigationState,
+} from './navigation-state.js';
 
 const BLOCKING_ERRORS = [
   'NS_ERROR_UNKNOWN_HOST',
@@ -26,7 +31,6 @@ const CAPTIVE_PORTAL_RECOVERY_ERRORS = new Set([
   'NS_ERROR_NET_TIMEOUT',
   NATIVE_POLICY_BLOCKED_ERROR,
 ]);
-const DUPLICATE_BLOCKED_SCREEN_REDIRECT_WINDOW_MS = 60_000;
 
 interface CaptivePortalRecoveryOptions {
   isCurrentNavigation?: () => boolean;
@@ -67,6 +71,7 @@ export interface BlockedScreenNavigationControllerDeps {
   ) => Promise<NativeBlockedScreenConfirmationResult>;
   getBlockedScreenUrl?: () => string;
   getCurrentTabUrl: (tabId: number) => Promise<string | null | undefined>;
+  navigationState?: NavigationState;
   now?: () => number;
   recoverCaptivePortalNavigation?: CaptivePortalRecoveryHandler;
   redirectToBlockedScreen: (context: BlockedScreenContext) => Promise<void>;
@@ -96,12 +101,12 @@ export interface BlockedScreenNavigationController {
       url: string;
     },
     optionsForError: { recordBlockedDomain: boolean; requestType?: WebRequest.ResourceType }
-  ) => void;
+  ) => Promise<void>;
   handleNativePolicyNavigationPreflight: (details: {
     frameId: number;
     tabId: number;
     url: string;
-  }) => void;
+  }) => Promise<void>;
 }
 
 function isTopFrameNavigation(details: { frameId?: number; type?: string }): boolean {
@@ -146,14 +151,6 @@ function buildBlockedScreenContext(details: {
   };
 }
 
-function buildRedirectKey(context: ConfirmBlockedScreenContext): string {
-  return [context.tabId.toString(), context.hostname, context.error, context.url].join(':');
-}
-
-function buildDisplayedRedirectKey(context: ConfirmBlockedScreenContext): string {
-  return [context.tabId.toString(), context.hostname, context.url].join(':');
-}
-
 async function recoverCaptivePortalNavigationIfEligible(
   context: ConfirmBlockedScreenContext,
   recoverCaptivePortalNavigation: CaptivePortalRecoveryHandler | undefined,
@@ -186,13 +183,9 @@ function isSameBlockedScreenUrl(
 export function createBlockedScreenNavigationController(
   deps: BlockedScreenNavigationControllerDeps
 ): BlockedScreenNavigationController {
-  const now = deps.now ?? ((): number => Date.now());
   const getBlockedScreenUrl =
     deps.getBlockedScreenUrl ?? ((): string => `moz-extension://openpath/${BLOCKED_SCREEN_PATH}`);
-  const pendingBlockedScreenRedirects = new Set<string>();
-  const displayedBlockedScreenRedirects = new Map<number, { key: string; redirectedAt: number }>();
-  const latestNativePolicyPreflightByTab = new Map<number, string>();
-  const latestBlockedScreenNavigationByTab = new Map<number, string>();
+  const navigationState = deps.navigationState ?? createNavigationState();
   const recoverCaptivePortalNavigation = deps.recoverCaptivePortalNavigation;
 
   async function tabAlreadyShowsBlockedScreen(
@@ -211,26 +204,12 @@ export function createBlockedScreenNavigationController(
   async function redirectToBlockedScreenOnce(
     context: ConfirmBlockedScreenContext,
     optionsForRedirect: {
-      isCurrentNavigation?: () => boolean;
+      identity: NavigationIdentity;
       recordBlockedDomain?: boolean;
       requireNativeConfirmation: boolean;
     }
   ): Promise<void> {
-    const redirectKey = buildRedirectKey(context);
-    const displayedRedirectKey = buildDisplayedRedirectKey(context);
-    const displayedRedirect = displayedBlockedScreenRedirects.get(context.tabId);
-    if (
-      displayedRedirect?.key === displayedRedirectKey &&
-      now() - displayedRedirect.redirectedAt < DUPLICATE_BLOCKED_SCREEN_REDIRECT_WINDOW_MS
-    ) {
-      return;
-    }
-
-    if (pendingBlockedScreenRedirects.has(redirectKey)) {
-      return;
-    }
-
-    pendingBlockedScreenRedirects.add(redirectKey);
+    if (!navigationState.reserveRedirect(optionsForRedirect.identity)) return;
     try {
       if (await tabAlreadyShowsBlockedScreen(context)) {
         return;
@@ -241,40 +220,34 @@ export function createBlockedScreenNavigationController(
           await deps.confirmBlockedScreenNavigation?.(context)
         );
         if (!confirmation.blocked) {
-          if (optionsForRedirect.isCurrentNavigation?.() === false) {
+          if (!navigationState.isCurrent(optionsForRedirect.identity)) {
             return;
           }
-          await recoverCaptivePortalNavigationIfEligible(
-            context,
-            recoverCaptivePortalNavigation,
-            optionsForRedirect
-          );
+          await recoverCaptivePortalNavigationIfEligible(context, recoverCaptivePortalNavigation, {
+            isCurrentNavigation: () => navigationState.isCurrent(optionsForRedirect.identity),
+          });
           return;
         }
 
         if (
           confirmation.portalRecoveryEligible === true &&
-          optionsForRedirect.isCurrentNavigation?.() !== false &&
-          (await recoverCaptivePortalNavigationIfEligible(
-            context,
-            recoverCaptivePortalNavigation,
-            optionsForRedirect
-          ))
+          navigationState.isCurrent(optionsForRedirect.identity) &&
+          (await recoverCaptivePortalNavigationIfEligible(context, recoverCaptivePortalNavigation, {
+            isCurrentNavigation: () => navigationState.isCurrent(optionsForRedirect.identity),
+          }))
         ) {
           return;
         }
       } else if (
-        optionsForRedirect.isCurrentNavigation?.() !== false &&
-        (await recoverCaptivePortalNavigationIfEligible(
-          context,
-          recoverCaptivePortalNavigation,
-          optionsForRedirect
-        ))
+        navigationState.isCurrent(optionsForRedirect.identity) &&
+        (await recoverCaptivePortalNavigationIfEligible(context, recoverCaptivePortalNavigation, {
+          isCurrentNavigation: () => navigationState.isCurrent(optionsForRedirect.identity),
+        }))
       ) {
         return;
       }
 
-      if (optionsForRedirect.isCurrentNavigation?.() === false) {
+      if (!navigationState.isCurrent(optionsForRedirect.identity)) {
         return;
       }
 
@@ -292,27 +265,29 @@ export function createBlockedScreenNavigationController(
         error: context.error,
         origin: context.origin,
       });
-      displayedBlockedScreenRedirects.set(context.tabId, {
-        key: displayedRedirectKey,
-        redirectedAt: now(),
-      });
+      navigationState.markShown(optionsForRedirect.identity);
     } catch (error) {
       logger.warn('[Monitor] No se pudo confirmar pantalla de bloqueo', {
         tabId: context.tabId,
         hostname: context.hostname,
         error: getErrorMessage(error),
       });
+      throw error;
     } finally {
-      pendingBlockedScreenRedirects.delete(redirectKey);
+      navigationState.releaseRedirect(optionsForRedirect.identity);
     }
   }
 
-  function handleNativePolicyNavigationPreflight(details: {
+  async function handleNativePolicyNavigationPreflight(details: {
     frameId: number;
     tabId: number;
     url: string;
-  }): void {
-    if (details.frameId !== 0 || isExtensionUrl(details.url)) {
+  }): Promise<void> {
+    if (details.frameId !== 0) {
+      return;
+    }
+    if (isExtensionUrl(details.url)) {
+      navigationState.dispose(details.tabId);
       return;
     }
 
@@ -325,16 +300,15 @@ export function createBlockedScreenNavigationController(
       return;
     }
 
-    latestNativePolicyPreflightByTab.set(context.tabId, context.url);
-    void redirectToBlockedScreenOnce(context, {
-      isCurrentNavigation: () =>
-        latestNativePolicyPreflightByTab.get(context.tabId) === context.url,
+    const identity = navigationState.begin(context.tabId, context.url, 'preflight');
+    await redirectToBlockedScreenOnce(context, {
+      identity,
       recordBlockedDomain: true,
       requireNativeConfirmation: true,
     });
   }
 
-  function handleBlockedScreenNavigationError(
+  async function handleBlockedScreenNavigationError(
     details: {
       documentUrl?: string;
       error: string;
@@ -345,7 +319,7 @@ export function createBlockedScreenNavigationController(
       url: string;
     },
     optionsForError: { recordBlockedDomain: boolean; requestType?: WebRequest.ResourceType }
-  ): void {
+  ): Promise<void> {
     if (IGNORED_ERRORS.includes(details.error)) {
       return;
     }
@@ -373,10 +347,14 @@ export function createBlockedScreenNavigationController(
     }
 
     if (shouldConfirmBlockedScreenNavigation(details)) {
-      latestBlockedScreenNavigationByTab.set(context.tabId, context.url);
-      void redirectToBlockedScreenOnce(context, {
-        isCurrentNavigation: () =>
-          latestBlockedScreenNavigationByTab.get(context.tabId) === context.url,
+      const existing = navigationState.get(context.tabId);
+      if (existing?.source === 'preflight' && existing.url !== context.url) return;
+      const identity =
+        existing?.url === context.url
+          ? existing
+          : navigationState.begin(context.tabId, context.url, 'error');
+      await redirectToBlockedScreenOnce(context, {
+        identity,
         recordBlockedDomain: optionsForError.recordBlockedDomain,
         requireNativeConfirmation: true,
       });
@@ -385,9 +363,7 @@ export function createBlockedScreenNavigationController(
 
   return {
     disposeTab: (tabId): void => {
-      latestNativePolicyPreflightByTab.delete(tabId);
-      latestBlockedScreenNavigationByTab.delete(tabId);
-      displayedBlockedScreenRedirects.delete(tabId);
+      navigationState.dispose(tabId);
     },
     handleBlockedScreenNavigationError,
     handleNativePolicyNavigationPreflight,

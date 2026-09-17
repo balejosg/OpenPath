@@ -168,6 +168,28 @@ function Sync-OpenPathFirefoxNativeHostState {
         -Config $Config `
         -MachineName $machineName `
         -SyncedAt (Get-Date -Format 'o')
+    $nativeState['captivePortalDomains'] = @(
+        if ($Config.PSObject.Properties['captivePortalDomains']) {
+            @($Config.captivePortalDomains | ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
+        }
+    )
+    $runtimeDependencyOverlayPath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $script:OpenPathRoot
+    $runtimeDependencyDomains = @()
+    if (Test-Path $runtimeDependencyOverlayPath -PathType Leaf -ErrorAction SilentlyContinue) {
+        try {
+            $overlay = Get-Content $runtimeDependencyOverlayPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $runtimeDependencyDomains = @(
+                @($overlay.entries) |
+                    ForEach-Object { ([string]$_.dependencyHost).Trim().TrimEnd('.').ToLowerInvariant() } |
+                    Where-Object { $_ } |
+                    Select-Object -Unique
+            )
+        }
+        catch {
+            $runtimeDependencyDomains = @()
+        }
+    }
+    $nativeState['runtimeDependencyDomains'] = @($runtimeDependencyDomains)
     $stateJson = $nativeState | ConvertTo-Json -Depth 8
     Write-OpenPathUtf8NoBomFile -Path $statePath -Value $stateJson
 

@@ -92,21 +92,153 @@ void test('native host confirms local DNS blocks when OpenPath CLI is unavailabl
       error?: string;
       in_whitelist?: boolean;
       policy_active?: boolean;
+      policy_decision?: string;
+      policy_reason?: string;
+      policy_version?: string;
       resolves?: boolean;
     }[];
     success?: boolean;
   };
 
   assert.equal(response.success, true);
-  assert.deepEqual(response.results, [
+  const [blockedResult] = response.results ?? [];
+  assert.ok(blockedResult);
+  assert.equal(blockedResult.domain, 'blocked.example');
+  assert.equal(blockedResult.in_whitelist, false);
+  assert.equal(blockedResult.policy_active, true);
+  assert.equal(blockedResult.policy_decision, 'blocked');
+  assert.equal(blockedResult.policy_reason, 'default-deny');
+  assert.match(blockedResult.policy_version ?? '', /^[a-f0-9]{64}$/);
+  assert.equal(blockedResult.resolves, false);
+
+  const allowed = runNativeHostCheck(
     {
-      domain: 'blocked.example',
-      in_whitelist: false,
-      policy_active: true,
-      resolves: false,
-      resolved_ip: null,
+      ...process.env,
+      OPENPATH_SYSTEM_DISABLED_FLAG: join(runtimeDir, 'system-disabled.flag'),
+      OPENPATH_WHITELIST_CMD: '',
+      OPENPATH_WHITELIST_FILE: whitelistPath,
+      XDG_DATA_HOME: runtimeDir,
     },
-  ]);
+    ['WWW.Allowed.Example.']
+  ) as { results?: Record<string, unknown>[] };
+  const [allowedResult] = allowed.results ?? [];
+  assert.ok(allowedResult);
+  assert.equal(allowedResult.in_whitelist, true);
+  assert.equal(allowedResult.policy_decision, 'allowed');
+});
+
+void test('linux native host distinguishes inactive and unreadable policy snapshots', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-policy-state-'));
+  const whitelistPath = join(runtimeDir, 'whitelist.txt');
+  writeFileSync(whitelistPath, '#DESACTIVADO\n## WHITELIST\n', 'utf8');
+  const env = {
+    ...process.env,
+    OPENPATH_SYSTEM_DISABLED_FLAG: join(runtimeDir, 'system-disabled.flag'),
+    OPENPATH_WHITELIST_CMD: '',
+    OPENPATH_WHITELIST_FILE: whitelistPath,
+    XDG_DATA_HOME: runtimeDir,
+  };
+  const inactive = runNativeHostCheck(env, ['blocked.example']) as {
+    results?: Record<string, unknown>[];
+    success?: boolean;
+  };
+  assert.equal(inactive.success, true);
+  const [inactiveResult] = inactive.results ?? [];
+  assert.ok(inactiveResult);
+  assert.equal(inactiveResult.in_whitelist, true);
+  assert.equal(inactiveResult.policy_active, false);
+  assert.equal(inactiveResult.policy_decision, 'allowed');
+
+  const missing = runNativeHostCheck(
+    { ...env, OPENPATH_WHITELIST_FILE: join(runtimeDir, 'missing.txt') },
+    ['blocked.example']
+  ) as { results?: Record<string, unknown>[]; success?: boolean };
+  assert.equal(missing.success, false);
+  const [missingResult] = missing.results ?? [];
+  assert.ok(missingResult);
+  assert.equal(missingResult.policy_decision, 'unknown');
+});
+
+void test('linux native host applies protected hosts and exact runtime dependencies', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-policy-inputs-'));
+  const whitelistPath = join(runtimeDir, 'whitelist.txt');
+  const overlayPath = join(runtimeDir, 'runtime-dependency-overlay.json');
+  writeFileSync(
+    whitelistPath,
+    '## WHITELIST\nallowed.example\n## BLOCKED-SUBDOMAINS\nblocked.allowed.example\n',
+    'utf8'
+  );
+  writeFileSync(
+    overlayPath,
+    JSON.stringify({
+      version: 1,
+      entries: [{ anchorHost: 'allowed.example', dependencyHost: 'cdn.dependency.example' }],
+    }),
+    'utf8'
+  );
+  const response = runNativeHostCheck(
+    {
+      ...process.env,
+      OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE: overlayPath,
+      OPENPATH_SYSTEM_DISABLED_FLAG: join(runtimeDir, 'system-disabled.flag'),
+      OPENPATH_WHITELIST_CMD: '',
+      OPENPATH_WHITELIST_FILE: whitelistPath,
+      XDG_DATA_HOME: runtimeDir,
+    },
+    [
+      'sub.download.mozilla.org',
+      'blocked.allowed.example',
+      'cdn.dependency.example',
+      'child.cdn.dependency.example',
+    ]
+  ) as { results?: Record<string, unknown>[]; success?: boolean };
+
+  assert.equal(response.success, true);
+  assert.deepStrictEqual(
+    (response.results ?? []).map((result) => [result.policy_decision, result.policy_reason]),
+    [
+      ['allowed', 'protected-infrastructure'],
+      ['blocked', 'blocked-subdomain'],
+      ['allowed', 'runtime-dependency-exact'],
+      ['blocked', 'default-deny'],
+    ]
+  );
+});
+
+void test('linux policy revision changes when an exact runtime dependency changes', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-policy-version-'));
+  const whitelistPath = join(runtimeDir, 'whitelist.txt');
+  const overlayPath = join(runtimeDir, 'runtime-dependency-overlay.json');
+  writeFileSync(whitelistPath, '## WHITELIST\nallowed.example\n', 'utf8');
+  writeFileSync(overlayPath, JSON.stringify({ version: 1, entries: [] }), 'utf8');
+  const env = {
+    ...process.env,
+    OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE: overlayPath,
+    OPENPATH_SYSTEM_DISABLED_FLAG: join(runtimeDir, 'system-disabled.flag'),
+    OPENPATH_WHITELIST_CMD: '',
+    OPENPATH_WHITELIST_FILE: whitelistPath,
+    XDG_DATA_HOME: runtimeDir,
+  };
+  const before = runNativeHostCheck(env, ['blocked.example']) as {
+    results?: { policy_version?: string }[];
+  };
+  writeFileSync(
+    overlayPath,
+    JSON.stringify({
+      version: 1,
+      entries: [{ anchorHost: 'allowed.example', dependencyHost: 'cdn.dependency.example' }],
+    }),
+    'utf8'
+  );
+  const after = runNativeHostCheck(env, ['blocked.example']) as {
+    results?: { policy_version?: string }[];
+  };
+
+  const beforeVersion = before.results?.[0]?.policy_version ?? '';
+  const afterVersion = after.results?.[0]?.policy_version ?? '';
+  assert.match(beforeVersion, /^[a-f0-9]{64}$/);
+  assert.match(afterVersion, /^[a-f0-9]{64}$/);
+  assert.notEqual(afterVersion, beforeVersion);
 });
 
 function readQueuedRuntimeDependency(queueDir: string): Record<string, unknown> {
@@ -402,15 +534,13 @@ void test('native host treats CLI sinkhole responses as blocked', () => {
   };
 
   assert.equal(response.success, true);
-  assert.deepEqual(response.results, [
-    {
-      domain: 'blocked.example',
-      in_whitelist: false,
-      policy_active: true,
-      resolves: false,
-      resolved_ip: '192.0.2.1',
-    },
-  ]);
+  const [result] = response.results ?? [];
+  assert.ok(result);
+  assert.equal(result.domain, 'blocked.example');
+  assert.equal(result.in_whitelist, false);
+  assert.equal(result.policy_active, true);
+  assert.equal(result.resolves, false);
+  assert.equal(result.resolved_ip, '192.0.2.1');
 });
 
 void test('native host returns blocked subdomains from the local whitelist file', () => {

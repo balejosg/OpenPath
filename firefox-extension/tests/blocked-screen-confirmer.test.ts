@@ -28,6 +28,9 @@ function blockedResponse(domains: string[]): VerifyResponse {
       domain,
       inWhitelist: false,
       policyActive: true,
+      policyDecision: 'blocked',
+      policyReason: 'default-deny',
+      policyVersion: 'v1',
       resolves: false,
     })),
   };
@@ -41,6 +44,9 @@ function allowedResponse(domains: string[]): VerifyResponse {
       domain,
       inWhitelist: true,
       policyActive: true,
+      policyDecision: 'allowed',
+      policyReason: 'whitelist-domain',
+      policyVersion: 'v1',
       resolves: false,
     })),
   };
@@ -64,6 +70,35 @@ function countingCheck(responder: (domains: string[]) => Promise<VerifyResponse>
   };
 }
 
+function fakeTimers(): {
+  advanceTo: (timeMs: number) => void;
+  clearTimeoutFn: NonNullable<BlockedScreenConfirmerDeps['clearTimeoutFn']>;
+  setTimeoutFn: NonNullable<BlockedScreenConfirmerDeps['setTimeoutFn']>;
+} {
+  let now = 0;
+  let nextId = 0;
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  return {
+    advanceTo(timeMs): void {
+      now = timeMs;
+      for (const [id, timer] of [...timers.entries()].sort((a, b) => a[1].at - b[1].at)) {
+        if (timer.at <= now) {
+          timers.delete(id);
+          timer.callback();
+        }
+      }
+    },
+    clearTimeoutFn(handle): void {
+      timers.delete(handle as unknown as number);
+    },
+    setTimeoutFn(callback, delayMs): ReturnType<typeof setTimeout> {
+      const id = ++nextId;
+      timers.set(id, { at: now + delayMs, callback });
+      return id as unknown as ReturnType<typeof setTimeout>;
+    },
+  };
+}
+
 void test('native policy confirmation ignores fail-open or inactive policy results', () => {
   assert.equal(
     isNativePolicyBlockedResult({
@@ -76,14 +111,14 @@ void test('native policy confirmation ignores fail-open or inactive policy resul
   );
 });
 
-void test('native policy confirmation treats missing policy state as unknown, not inactive', () => {
+void test('native policy confirmation treats a legacy response as unknown', () => {
   assert.equal(
     isNativePolicyBlockedResult({
       domain: 'legacy-native-host.example',
       inWhitelist: false,
       resolves: false,
     }),
-    true
+    false
   );
 });
 
@@ -100,12 +135,15 @@ void test('native policy confirmation ignores errored native check results', () 
   );
 });
 
-void test('native policy confirmation requires a denied domain that does not resolve publicly', () => {
+void test('native policy confirmation requires an explicit blocked verdict', () => {
   assert.equal(
     isNativePolicyBlockedResult({
       domain: 'blocked.example',
       inWhitelist: false,
       policyActive: true,
+      policyDecision: 'blocked',
+      policyReason: 'default-deny',
+      policyVersion: 'v1',
       resolves: false,
     }),
     true
@@ -115,13 +153,16 @@ void test('native policy confirmation requires a denied domain that does not res
       domain: 'allowed.example',
       inWhitelist: false,
       policyActive: true,
+      policyDecision: 'blocked',
+      policyReason: 'default-deny',
+      policyVersion: 'v1',
       resolves: true,
     }),
-    false
+    true
   );
 });
 
-void test('native policy confirmation treats null resolvedIp as unresolved', () => {
+void test('native policy confirmation never infers a verdict from null resolvedIp', () => {
   assert.equal(
     isNativePolicyBlockedResult({
       domain: 'legacy-null-ip.example',
@@ -129,7 +170,7 @@ void test('native policy confirmation treats null resolvedIp as unresolved', () 
       policyActive: true,
       resolvedIp: null,
     } as unknown as Parameters<typeof isNativePolicyBlockedResult>[0]),
-    true
+    false
   );
 });
 
@@ -208,18 +249,89 @@ void test('confirmer treats a failed native response as not-blocked and does not
   assert.equal(native.calls(), 2);
 });
 
-void test('confirmer falls back to not-blocked when the native host does not answer in time', async () => {
+void test('confirmer applies a response after the soft timeout but before the hard timeout', async () => {
+  let resolve!: (response: VerifyResponse) => void;
+  const pending = new Promise<VerifyResponse>((done) => {
+    resolve = done;
+  });
+  const native = countingCheck(() => pending);
+  const confirmer = createBlockedScreenConfirmer({
+    checkDomains: native.check,
+    now: () => 1000,
+    nativeConfirmTimeoutMs: 5,
+    nativeConfirmHardTimeoutMs: 50,
+  });
+
+  const first = confirmer.confirm(context('blocked.example'));
+  const second = confirmer.confirm(context('blocked.example'));
+  setTimeout(() => {
+    resolve(blockedResponse(['blocked.example']));
+  }, 10);
+  assert.deepEqual(await first, { blocked: true });
+  assert.deepEqual(await second, { blocked: true });
+  assert.equal(native.calls(), 1);
+});
+
+void test('confirmer falls back to not-blocked at the hard timeout', async () => {
   const native = countingCheck(() => new Promise<VerifyResponse>(() => undefined));
   const confirmer = createBlockedScreenConfirmer({
     checkDomains: native.check,
     now: () => 1000,
     nativeConfirmTimeoutMs: 5,
+    nativeConfirmHardTimeoutMs: 10,
   });
 
   assert.deepEqual(await confirmer.confirm(context('blocked.example')), { blocked: false });
-  // A timeout is not a confirmation, so it is never cached: the next visit checks again.
+  // A hard timeout is not a confirmation, so it is never cached: the next visit checks again.
   await confirmer.confirm(context('blocked.example'));
   assert.equal(native.calls(), 2);
+});
+
+void test('confirmer observes the 4s soft and 12s hard boundaries with a controlled clock', async () => {
+  const timers = fakeTimers();
+  let resolveNative!: (response: VerifyResponse) => void;
+  const nativeResponse = new Promise<VerifyResponse>((resolve) => {
+    resolveNative = resolve;
+  });
+  const confirmer = createBlockedScreenConfirmer({
+    checkDomains: () => nativeResponse,
+    now: () => 0,
+    clearTimeoutFn: timers.clearTimeoutFn,
+    setTimeoutFn: timers.setTimeoutFn,
+  });
+  let settled = false;
+  const decision = confirmer.confirm(context('blocked.example')).then((result) => {
+    settled = true;
+    return result;
+  });
+
+  timers.advanceTo(3_999);
+  await Promise.resolve();
+  assert.equal(settled, false);
+  timers.advanceTo(4_001);
+  await Promise.resolve();
+  assert.equal(settled, false);
+  timers.advanceTo(11_999);
+  resolveNative(blockedResponse(['blocked.example']));
+  assert.deepEqual(await decision, { blocked: true });
+
+  const hardTimers = fakeTimers();
+  const hardConfirmer = createBlockedScreenConfirmer({
+    checkDomains: () => new Promise<VerifyResponse>(() => undefined),
+    now: () => 0,
+    clearTimeoutFn: hardTimers.clearTimeoutFn,
+    setTimeoutFn: hardTimers.setTimeoutFn,
+  });
+  let hardSettled = false;
+  const hardDecision = hardConfirmer.confirm(context('hard-timeout.example')).then((result) => {
+    hardSettled = true;
+    return result;
+  });
+  hardTimers.advanceTo(11_999);
+  await Promise.resolve();
+  assert.equal(hardSettled, false);
+  hardTimers.advanceTo(12_001);
+  assert.deepEqual(await hardDecision, { blocked: false });
 });
 
 // The Windows native host is a PowerShell script spawned cold per session, so its first check
@@ -249,6 +361,9 @@ void test('confirmer reports captive-portal recovery eligibility through the inj
         domain,
         inWhitelist: false,
         policyActive: true,
+        policyDecision: 'blocked',
+        policyReason: 'default-deny',
+        policyVersion: 'v1',
         portalRecoveryEligible: true,
         resolves: false,
       })),

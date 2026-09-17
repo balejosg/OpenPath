@@ -15,9 +15,56 @@ function Get-NativeHostValidDomains {
 
     return @($Domains) |
         Where-Object { $_ -is [string] } |
-        ForEach-Object { ([string]$_).Trim().ToLowerInvariant() } |
+        ForEach-Object { ([string]$_).Trim().TrimEnd('.').ToLowerInvariant() } |
         Where-Object { $_ -match '^[a-z0-9.-]+$' } |
         Select-Object -First $maxDomains
+}
+
+function Get-NativeHostPolicyDecision {
+    param(
+        [Parameter(Mandatory = $true)][string]$Domain,
+        [Parameter(Mandatory = $true)][PSCustomObject]$Sections,
+        [AllowNull()][PSCustomObject]$State = $null
+    )
+
+    $known = -not $Sections.PSObject.Properties['PolicyKnown'] -or $Sections.PolicyKnown -eq $true
+    $version = if ($Sections.PSObject.Properties['PolicyVersion']) { [string]$Sections.PolicyVersion } else { 'legacy-snapshot' }
+    if (-not $known -or -not $version) {
+        return [PSCustomObject]@{ Decision = 'unknown'; Reason = 'policy-unavailable'; Active = $null; InWhitelist = $false; Version = '' }
+    }
+
+    $disabled = $Sections.PSObject.Properties['IsDisabled'] -and $Sections.IsDisabled -eq $true
+    if ($disabled) {
+        return [PSCustomObject]@{ Decision = 'allowed'; Reason = 'policy-inactive'; Active = $false; InWhitelist = $true; Version = $version }
+    }
+
+    $whitelistSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @($Sections.Whitelist)) {
+        $normalized = Normalize-NativeHostRuntimeDependencyHost -Value $entry
+        if ($normalized) { [void]$whitelistSet.Add($normalized) }
+    }
+    $protected = Get-OpenPathRuntimeDependencyProtectedHosts -State $State
+    if (Test-OpenPathProtectedRuntimeDependencyHost -Hostname $Domain -ProtectedHosts $protected) {
+        return [PSCustomObject]@{ Decision = 'allowed'; Reason = 'protected-infrastructure'; Active = $true; InWhitelist = $true; Version = $version }
+    }
+    if (Test-NativeHostBlockedSubdomainMatch -Domain $Domain -BlockedSubdomains @($Sections.BlockedSubdomains)) {
+        return [PSCustomObject]@{ Decision = 'blocked'; Reason = 'blocked-subdomain'; Active = $true; InWhitelist = $false; Version = $version }
+    }
+    if (Test-NativeHostWhitelistCoversHost -Hostname $Domain -WhitelistSet $whitelistSet) {
+        return [PSCustomObject]@{ Decision = 'allowed'; Reason = 'whitelist-domain'; Active = $true; InWhitelist = $true; Version = $version }
+    }
+    foreach ($dependency in @($(if ($State -and $State.PSObject.Properties['runtimeDependencyDomains']) { $State.runtimeDependencyDomains }))) {
+        if ($Domain -eq (Normalize-NativeHostRuntimeDependencyHost -Value $dependency)) {
+            return [PSCustomObject]@{ Decision = 'allowed'; Reason = 'runtime-dependency-exact'; Active = $true; InWhitelist = $true; Version = $version }
+        }
+    }
+    foreach ($portal in @($(if ($State -and $State.PSObject.Properties['captivePortalDomains']) { $State.captivePortalDomains }))) {
+        $normalizedPortal = Normalize-NativeHostRuntimeDependencyHost -Value $portal
+        if ($normalizedPortal -and ($Domain -eq $normalizedPortal -or $Domain.EndsWith(".$normalizedPortal", [System.StringComparison]::OrdinalIgnoreCase))) {
+            return [PSCustomObject]@{ Decision = 'allowed'; Reason = 'captive-portal-domain'; Active = $true; InWhitelist = $true; Version = $version }
+        }
+    }
+    return [PSCustomObject]@{ Decision = 'blocked'; Reason = 'default-deny'; Active = $true; InWhitelist = $false; Version = $version }
 }
 function Normalize-NativeHostRuntimeDependencyHost {
     <#

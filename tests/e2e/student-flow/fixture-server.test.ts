@@ -229,4 +229,16 @@ await describe('student fixture server', async () => {
     });
     assert.strictEqual(unknownHost.statusCode, 404);
   });
+
+  await test('serves real allowed HTTP error responses for browser policy scenarios', async () => {
+    for (const status of [403, 404, 500] as const) {
+      const response = await requestFixture({
+        server: fixtureServer,
+        host: fixtureServer.fixtures.site,
+        path: `/status/${status}`,
+      });
+      assert.strictEqual(response.statusCode, status);
+      assert.match(response.body, new RegExp(`id="http-status">${status}<`));
+    }
+  });
 });

@@ -21,6 +21,7 @@ import {
   type NativeResponse,
   type VerifyResponse,
 } from './native-messaging-client.js';
+import { createNavigationState } from './navigation-state.js';
 import { createCaptivePortalRecoveryController } from './captive-portal-recovery-controller.js';
 import {
   submitBlockedDomainRequest as submitBlockedDomainRequestViaApi,
@@ -152,9 +153,11 @@ export function createBackgroundRuntime(
         hostname: context.hostname,
         error: getErrorMessage(error),
       });
+      throw error;
     }
   }
 
+  const navigationState = createNavigationState();
   const tabReconciliationController = createBackgroundTabReconciliationController({
     getPolicyVersion: async () => {
       const response = (await nativeMessagingClient.sendMessage({
@@ -167,6 +170,11 @@ export function createBackgroundRuntime(
       };
     },
     checkDomains: (domains) => nativeMessagingClient.checkDomains(domains),
+    getCurrentTabUrl: async (tabId) => (await browser.tabs.get(tabId)).url,
+    navigationState,
+    onPolicyVersionChange: () => {
+      blockedScreenConfirmer.clearCache();
+    },
     queryTabs: () => browser.tabs.query({}),
     redirectToBlockedScreen: ({ tabId, hostname, error }) =>
       redirectToBlockedScreen({ tabId, hostname, error, origin: null }),
@@ -474,6 +482,7 @@ export function createBackgroundRuntime(
       confirmBlockedScreenNavigation: blockedScreenConfirmer.confirm,
       recoverCaptivePortalNavigation,
       handleRuntimeMessage,
+      navigationState,
       recordDependencyObservationEvent: recordOpenPathDependencyObservationEvent,
       redirectToBlockedScreen,
       saveBlockedPageContext,

@@ -2,6 +2,12 @@ import type { Tabs } from 'webextension-polyfill';
 
 import { logger, getErrorMessage } from './logger.js';
 import type { VerifyResponse } from './native-messaging-client.js';
+import {
+  createNavigationState,
+  type NavigationIdentity,
+  type NavigationState,
+} from './navigation-state.js';
+import { normalizePolicyDecision, permitsPolicyRedirect } from './policy-decision.js';
 
 export const TAB_RECONCILE_INTERVAL_MS = 5000;
 const TAB_RECONCILE_INITIAL_RETRY_DELAY_MS = 2000;
@@ -23,7 +29,10 @@ export interface BlockedTabRedirect {
 
 interface BackgroundTabReconciliationControllerOptions {
   getPolicyVersion: () => Promise<NativePolicyVersionResponse>;
+  onPolicyVersionChange?: (version: string) => void;
   checkDomains: (domains: string[]) => Promise<VerifyResponse>;
+  getCurrentTabUrl?: (tabId: number) => Promise<string | null | undefined>;
+  navigationState?: NavigationState;
   queryTabs: () => Promise<Tabs.Tab[]>;
   redirectToBlockedScreen: (redirect: BlockedTabRedirect) => Promise<void>;
 }
@@ -53,16 +62,20 @@ function extractHttpHost(rawUrl: string | undefined): string | null {
 export function createBackgroundTabReconciliationController(
   options: BackgroundTabReconciliationControllerOptions
 ): BackgroundTabReconciliationController {
+  const navigationState = options.navigationState ?? createNavigationState();
   let state = { version: '' };
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
-  async function reconcileOpenTabs(): Promise<boolean> {
+  async function reconcileOpenTabs(policyVersion: string): Promise<boolean> {
     const tabs = await options.queryTabs();
-    const tabHosts: { tab: Tabs.Tab; host: string }[] = [];
+    const tabHosts: { tab: Tabs.Tab; host: string; identity: NavigationIdentity }[] = [];
     for (const candidate of tabs) {
       const host = extractHttpHost(candidate.url);
-      if (host !== null) {
-        tabHosts.push({ tab: candidate, host });
+      if (host !== null && typeof candidate.id === 'number' && candidate.url) {
+        const identity =
+          navigationState.match(candidate.id, candidate.url) ??
+          navigationState.begin(candidate.id, candidate.url, 'reconciliation');
+        tabHosts.push({ tab: candidate, host, identity });
       }
     }
     if (tabHosts.length === 0) {
@@ -78,20 +91,33 @@ export function createBackgroundTabReconciliationController(
       return false;
     }
 
-    const allowedByHost = new Map<string, boolean>();
+    const resultByHost = new Map<string, VerifyResponse['results'][number]>();
     for (const result of checkResponse.results) {
-      allowedByHost.set(result.domain.toLowerCase(), result.inWhitelist);
+      resultByHost.set(result.domain.toLowerCase(), result);
     }
 
-    for (const { tab, host } of tabHosts) {
-      if (allowedByHost.get(host) === false && typeof tab.id === 'number') {
+    for (const { tab, host, identity } of tabHosts) {
+      const result = resultByHost.get(host);
+      if (
+        result &&
+        permitsPolicyRedirect(normalizePolicyDecision(result), policyVersion) &&
+        typeof tab.id === 'number' &&
+        navigationState.isCurrent(identity)
+      ) {
         try {
+          if (options.getCurrentTabUrl) {
+            const currentUrl = await options.getCurrentTabUrl(tab.id);
+            if (currentUrl !== identity.url || !navigationState.isCurrent(identity)) continue;
+          }
+          if (!navigationState.reserveRedirect(identity)) continue;
           await options.redirectToBlockedScreen({
             tabId: tab.id,
             hostname: host,
             error: WHITELIST_POLICY_REMOVED_REASON,
           });
+          navigationState.markShown(identity);
         } catch (error) {
+          navigationState.releaseRedirect(identity);
           logger.warn('[Monitor] No se pudo redirigir la pestaña bloqueada', {
             tabId: tab.id,
             host,
@@ -117,8 +143,9 @@ export function createBackgroundTabReconciliationController(
       if (!force && version === state.version) {
         return true;
       }
+      if (version !== state.version) options.onPolicyVersionChange?.(version);
 
-      const reconciled = await reconcileOpenTabs();
+      const reconciled = await reconcileOpenTabs(version);
       if (!reconciled) {
         return false;
       }

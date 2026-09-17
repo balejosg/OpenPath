@@ -5,48 +5,36 @@ function Invoke-NativeHostCheckAction {
         [object]$Message,
 
         [Parameter(Mandatory = $true)]
-        [PSCustomObject]$Sections
+        [PSCustomObject]$Sections,
+
+        [AllowNull()]
+        [PSCustomObject]$State = $null
     )
 
     $validDomains = Get-NativeHostValidDomains -Domains @($Message.domains)
 
-    $whitelistSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($domain in @($Sections.Whitelist)) {
-        if ($domain) {
-            $null = $whitelistSet.Add([string]$domain)
-        }
-    }
-
-    # The native host is the browser-side policy authority. Its decision must
-    # include the same static connectivity floor that DNS keeps reachable in
-    # every mode; otherwise Firefox can redirect a captive-portal probe to the
-    # blocked page even though DNS and the network both allow it.
-    if (Get-Command -Name 'Get-OpenPathRuntimeDependencyProtectedHosts' -ErrorAction SilentlyContinue) {
-        foreach ($domain in @(Get-OpenPathRuntimeDependencyProtectedHosts)) {
-            if ($domain) {
-                $null = $whitelistSet.Add([string]$domain)
-            }
-        }
-    }
-
     Invoke-NativeHostAuthenticatedCaptivePortalRestoreIfNeeded
 
     $results = foreach ($domain in $validDomains) {
-        $inWhitelist = $whitelistSet.Contains($domain)
+        $decision = Get-NativeHostPolicyDecision -Domain $domain -Sections $Sections -State $State
+        $inWhitelist = $decision.InWhitelist -eq $true
         $portalRecoverySignal = Get-NativeHostPortalRecoverySignal -Domain $domain -Message $Message
         $resolvedIp = if ($inWhitelist) { Resolve-DomainIp -Domain $domain } else { $null }
         @{
             domain = $domain
             in_whitelist = $inWhitelist
             resolved_ip = $resolvedIp
-            policy_active = $true
-            portal_recovery_eligible = ((-not $inWhitelist) -and $portalRecoverySignal -ne 'none')
+            policy_active = $decision.Active
+            policy_decision = $decision.Decision
+            policy_reason = $decision.Reason
+            policy_version = $decision.Version
+            portal_recovery_eligible = ($decision.Decision -eq 'blocked' -and $portalRecoverySignal -ne 'none')
             portal_recovery_signal = $portalRecoverySignal
         }
     }
 
     return @{
-        success = $true
+        success = -not (@($results | Where-Object { $_.policy_decision -eq 'unknown' }).Count -gt 0)
         action = 'check'
         results = @($results)
     }
@@ -140,7 +128,16 @@ function Invoke-NativeHostMessageAction {
         }
 
         'check' {
-            return (Invoke-NativeHostCheckAction -Message $Message -Sections $sections)
+            return (Invoke-NativeHostCheckAction -Message $Message -Sections $sections -State $State)
+        }
+
+        'get-policy-version' {
+            $known = $sections.PSObject.Properties['PolicyKnown'] -and $sections.PolicyKnown -eq $true
+            $version = if ($sections.PSObject.Properties['PolicyVersion']) { [string]$sections.PolicyVersion } else { '' }
+            if (-not $known -or -not $version) {
+                return @{ success = $false; action = 'get-policy-version'; error = 'policy-unavailable' }
+            }
+            return @{ success = $true; action = 'get-policy-version'; version = $version }
         }
 
         'update-whitelist' {
