@@ -1284,6 +1284,25 @@ function Test-OpenPathAppIdentityServiceRunning {
     }
 }
 
+function Set-OpenPathAppIdentityServiceAutomatic {
+    <#
+    .SYNOPSIS
+    Configures protected AppIDSvc for automatic start using the Windows-supported sc.exe path.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $scCommand = Get-Command -Name 'sc.exe' -ErrorAction Stop
+    $scOutput = @(& $scCommand.Source config AppIDSvc start= auto 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        $boundedOutput = (@($scOutput | ForEach-Object { [string]$_ }) -join ' ').Trim()
+        if ($boundedOutput.Length -gt 240) {
+            $boundedOutput = $boundedOutput.Substring(0, 240)
+        }
+        throw "sc.exe could not configure AppIDSvc for automatic start (exit $LASTEXITCODE): $boundedOutput"
+    }
+}
+
 function Get-OpenPathSidString {
     param(
         [AllowNull()]
@@ -2556,9 +2575,13 @@ function Set-OpenPathNonAdminAppControl {
         $policyApplied = $true
         Remove-Item $policyPath -Force -ErrorAction SilentlyContinue
 
+        $diagnosticSubstep = 'service-config'
+        Set-OpenPathAppIdentityServiceAutomatic
         $diagnosticSubstep = 'service-start'
-        Set-Service -Name AppIDSvc -StartupType Automatic -ErrorAction Stop
         Start-Service -Name AppIDSvc -ErrorAction Stop
+        if (-not (Test-OpenPathAppIdentityServiceRunning)) {
+            throw 'AppIDSvc did not reach Running after Start-Service'
+        }
 
         $diagnosticSubstep = 'policy-activation'
         $activation = Invoke-OpenPathAppControlPolicyConverterActivation
@@ -2613,6 +2636,7 @@ function Set-OpenPathNonAdminAppControl {
                 'policy-generation' { 'appcontrol_policy_generation_failed' }
                 'policy-preflight' { if ($Profile -eq 'StrictApplicationAllowlist') { 'strict-required-rule-missing' } else { 'appcontrol_policy_generation_failed' } }
                 'policy-apply' { 'appcontrol_policy_apply_failed' }
+                'service-config' { 'appcontrol_appidsvc_configuration_failed' }
                 'service-start' { 'appcontrol_appidsvc_start_failed' }
                 'policy-activation' { 'appcontrol_policy_activation_failed' }
                 default { 'appcontrol_health_evaluation_failed' }

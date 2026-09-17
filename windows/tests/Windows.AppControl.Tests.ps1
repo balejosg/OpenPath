@@ -504,7 +504,8 @@ Describe "AppControl Module" {
                 Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' }
                 Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' }
                 Mock Set-AppLockerPolicy { $script:setTrace.Add('policy') }
-                Mock Set-Service { $script:setTrace.Add('service') }; Mock Start-Service {}
+                Mock Set-OpenPathAppIdentityServiceAutomatic { $script:setTrace.Add('service') }; Mock Start-Service {}
+                Mock Test-OpenPathAppIdentityServiceRunning { $true }
                 Mock Invoke-OpenPathAppControlPolicyConverterActivation { $script:setTrace.Add('activation'); [pscustomobject]@{status='observed';code='task-run-observed'} }
                 Mock Test-OpenPathNonAdminAppControlActive { $script:setTrace.Add('health'); $true }
                 Mock Write-OpenPathLog {}
@@ -524,7 +525,7 @@ Describe "AppControl Module" {
                 Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' }
                 Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' }
                 Mock Set-AppLockerPolicy { $script:setPolicyCalls++ }
-                Mock Set-Service {}
+                Mock Set-OpenPathAppIdentityServiceAutomatic {}
                 Mock Start-Service { throw 'injected AppIDSvc start failure' }
                 Mock Invoke-OpenPathAppControlPolicyConverterActivation { throw 'activation must not run' }
                 Mock Test-OpenPathNonAdminAppControlActive { throw 'health must not run' }
@@ -534,6 +535,30 @@ Describe "AppControl Module" {
                 $script:setPolicyCalls | Should -Be 2
                 $diagnostic = Get-Content -LiteralPath $DiagnosticPath -Raw | ConvertFrom-Json
                 @($diagnostic.ReasonCodes) | Should -Contain 'appcontrol_appidsvc_start_failed'
+                $diagnostic.InternalRollbackAttempted | Should -BeTrue
+                $diagnostic.InternalRollbackSucceeded | Should -BeTrue
+            }
+        }
+
+        It 'fails closed and distinguishes AppIDSvc automatic-start configuration failure' {
+            $diagnosticPath = Join-Path $TestDrive 'appidsvc-config-failed.json'
+            InModuleScope AppControl -Parameters @{ DiagnosticPath = $diagnosticPath } {
+                param($DiagnosticPath)
+                $script:setPolicyCalls = 0
+                Mock Test-AdminPrivileges { $true }
+                Mock Test-OpenPathAppControlAvailable { $true }
+                Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' }
+                Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' }
+                Mock Set-AppLockerPolicy { $script:setPolicyCalls++ }
+                Mock Set-OpenPathAppIdentityServiceAutomatic { throw 'injected AppIDSvc config failure' }
+                Mock Start-Service { throw 'service start must not run' }
+                Mock Write-OpenPathLog {}
+
+                Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $DiagnosticPath -Confirm:$false | Should -BeFalse
+                $script:setPolicyCalls | Should -Be 2
+                $diagnostic = Get-Content -LiteralPath $DiagnosticPath -Raw | ConvertFrom-Json
+                $diagnostic.Substep | Should -Be 'service-config'
+                @($diagnostic.ReasonCodes) | Should -Contain 'appcontrol_appidsvc_configuration_failed'
                 $diagnostic.InternalRollbackAttempted | Should -BeTrue
                 $diagnostic.InternalRollbackSucceeded | Should -BeTrue
             }
@@ -557,8 +582,9 @@ Describe "AppControl Module" {
                 $script:activationSetPolicyCalls++
                 $script:activationSetPolicyArgs.Add([pscustomobject]@{ XMLPolicy=$XMLPolicy; ErrorAction=[string]$ErrorAction })
             } -ModuleName AppControl
-            Mock Set-Service {} -ModuleName AppControl
+            Mock Set-OpenPathAppIdentityServiceAutomatic {} -ModuleName AppControl
             Mock Start-Service {} -ModuleName AppControl
+            Mock Test-OpenPathAppIdentityServiceRunning { $true } -ModuleName AppControl
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { [pscustomobject]@{status='inconclusive';code='task-run-not-confirmed'} } -ModuleName AppControl
             Mock Test-OpenPathNonAdminAppControlActive { $true } -ModuleName AppControl
             Mock Write-OpenPathLog { param($Message, $Level) $script:activationWarnings.Add([pscustomobject]@{Message=$Message;Level=$Level}) } -ModuleName AppControl
@@ -584,8 +610,9 @@ Describe "AppControl Module" {
                 $script:activationSetPolicyCalls++
                 if ($script:activationSetPolicyCalls -eq 2) { throw 'injected rollback detail' }
             } -ModuleName AppControl
-            Mock Set-Service {} -ModuleName AppControl
+            Mock Set-OpenPathAppIdentityServiceAutomatic {} -ModuleName AppControl
             Mock Start-Service {} -ModuleName AppControl
+            Mock Test-OpenPathAppIdentityServiceRunning { $true } -ModuleName AppControl
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { [pscustomobject]@{status='inconclusive';code='task-run-not-confirmed'} } -ModuleName AppControl
             Mock Test-OpenPathNonAdminAppControlActive { $false } -ModuleName AppControl
             Mock Write-OpenPathLog {} -ModuleName AppControl
@@ -610,7 +637,8 @@ Describe "AppControl Module" {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' } -ModuleName AppControl
             Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' } -ModuleName AppControl
             Mock Set-AppLockerPolicy { $script:activationSetPolicyCalls++ } -ModuleName AppControl
-            Mock Set-Service {} -ModuleName AppControl; Mock Start-Service {} -ModuleName AppControl
+            Mock Set-OpenPathAppIdentityServiceAutomatic {} -ModuleName AppControl; Mock Start-Service {} -ModuleName AppControl
+            Mock Test-OpenPathAppIdentityServiceRunning { $true } -ModuleName AppControl
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { throw 'injected helper exception' } -ModuleName AppControl
             Mock Test-OpenPathNonAdminAppControlActive { throw 'health must not run' } -ModuleName AppControl
             Mock Write-OpenPathLog {} -ModuleName AppControl
@@ -1309,7 +1337,8 @@ Describe "AppControl Module" {
                         CleanupSucceeded = 'not-observed'
                     }
                 } -ModuleName AppControl
-                function global:Set-Service {}
+                Mock Set-OpenPathAppIdentityServiceAutomatic {} -ModuleName AppControl
+                Mock Test-OpenPathAppIdentityServiceRunning { $true } -ModuleName AppControl
                 function global:Start-Service {}
 
                 try {
