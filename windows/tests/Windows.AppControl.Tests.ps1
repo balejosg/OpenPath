@@ -1815,6 +1815,8 @@ Describe "AppControl Module" {
             $global:opHealthRuntimeEffectiveObjectState = 'valid'
             $global:opHealthRuntimeEvaluatorState = 'valid'
             $global:opHealthRuntimeDecisionCoverageState = 'complete'
+            $global:opHealthRuntimeEvaluationCallCount = 0
+            $global:opHealthRuntimeFirstPath = ''
             $global:opHealthSampleCount = 1
             $global:opHealthSampleFailureLabel = ''
             $global:opHealthPreviousSystemRoot = $env:SystemRoot
@@ -1891,6 +1893,10 @@ Describe "AppControl Module" {
             }
             function global:Test-AppLockerPolicy {
                 param($Path, $User, $XmlPolicy)
+                $global:opHealthRuntimeEvaluationCallCount++
+                if ([string]::IsNullOrWhiteSpace($global:opHealthRuntimeFirstPath)) {
+                    $global:opHealthRuntimeFirstPath = [string]$Path
+                }
                 if ($global:opHealthRuntimeEvaluatorState -eq 'throw') {
                     throw 'injected runtime evaluator failure'
                 }
@@ -1924,10 +1930,11 @@ Describe "AppControl Module" {
                         MatchingRule = 'health-test-rule'
                     }
                 })
-                if ($global:opHealthRuntimeDecisionCoverageState -eq 'duplicate') {
-                    return @(for ($index = 0; $index -lt $decisions.Count; $index++) { $decisions[0] })
+                if ($global:opHealthRuntimeDecisionCoverageState -eq 'duplicate' -and $global:opHealthRuntimeEvaluationCallCount -gt 1) {
+                    $decisions[0].FilePath = $global:opHealthRuntimeFirstPath
+                    return $decisions
                 }
-                if ($global:opHealthRuntimeDecisionCoverageState -eq 'unknown') {
+                if ($global:opHealthRuntimeDecisionCoverageState -eq 'unknown' -and $global:opHealthRuntimeEvaluationCallCount -gt 1) {
                     $unknownDecision = [pscustomobject]@{
                         FilePath = 'C:\unexpected\openpath-probe.exe'
                         PolicyDecision = $decisions[0].PolicyDecision
@@ -1935,8 +1942,8 @@ Describe "AppControl Module" {
                     }
                     return @($unknownDecision) + @($decisions | Select-Object -Skip 1)
                 }
-                if ($global:opHealthRuntimeEvaluatorState -eq 'partial') {
-                    return @($decisions | Select-Object -First 1)
+                if ($global:opHealthRuntimeEvaluatorState -eq 'partial' -and $global:opHealthRuntimeEvaluationCallCount -gt 1) {
+                    return
                 }
                 return $decisions
             }
@@ -1975,7 +1982,7 @@ Describe "AppControl Module" {
                 $env:SystemRoot = $global:opHealthPreviousSystemRoot
             }
             Remove-Item Function:\Set-AppLockerPolicy, Function:\Get-AppLockerPolicy, Function:\Get-Service, Function:\Get-LocalGroup, Function:\Get-LocalGroupMember, Function:\Get-CimInstance, Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
-            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthTargetState, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthPreviousSystemRoot -ErrorAction SilentlyContinue
+            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthTargetState, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthRuntimeEvaluationCallCount, Variable:\opHealthRuntimeFirstPath, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthPreviousSystemRoot -ErrorAction SilentlyContinue
         }
 
         It "returns a deterministic healthy contract and keeps the boolean compatibility seam" {

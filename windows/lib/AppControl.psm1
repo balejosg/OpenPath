@@ -1294,11 +1294,13 @@ function Invoke-OpenPathAppLockerPolicyEvaluation {
     $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-applocker-evaluation-$([guid]::NewGuid()).xml"
     try {
         Set-Content -LiteralPath $policyPath -Value $PolicyXml -Encoding UTF8 -ErrorAction Stop
-        $evaluationPaths = [System.Collections.Generic.List[string]]::new()
+        $decisions = [System.Collections.Generic.List[object]]::new()
         foreach ($candidatePath in @($Path)) {
-            $evaluationPaths.Add([string]$candidatePath)
+            foreach ($decision in @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path ([string]$candidatePath) -User $UserSid -ErrorAction Stop)) {
+                $decisions.Add($decision)
+            }
         }
-        return @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path ([string[]]$evaluationPaths.ToArray()) -User $UserSid -ErrorAction Stop)
+        return @($decisions)
     }
     finally {
         Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue
