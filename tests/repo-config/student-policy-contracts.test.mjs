@@ -1000,6 +1000,21 @@ describe('repository verification contract', () => {
     );
     assert.match(
       browserBoundaryCi,
+      /function Invoke-OpenPathNegativeHealthProbes[\s\S]*?Get-OpenPathNonAdminAppControlHealth[\s\S]*?-TargetSid\s+\$TargetSid/s,
+      'negative AppControl health probes must stay bound to the disposable student SID'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /Invoke-OpenPathNegativeHealthProbes\s+`[\s\S]*?-TargetSid\s+\$studentSid/,
+      'negative AppControl health invocation must pass the disposable student SID'
+    );
+    assert.match(
+      browserBoundaryCi,
+      /blockingReasonCodes[\s\S]*?appcontrol_browser_inventory_degraded/,
+      'restoration may ignore only the non-blocking degraded inventory diagnostic'
+    );
+    assert.match(
+      browserBoundaryCi,
       /try \{[\s\S]*?Remove-LocalGroup[\s\S]*?appcontrol_restricted_target_missing[\s\S]*?\}[\s\S]*?finally \{[\s\S]*?Sync-OpenPathRestrictedGroup/s,
       'restricted-target negative health mutation must restore the group in finally'
     );

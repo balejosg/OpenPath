@@ -492,7 +492,8 @@ function Assert-OpenPathRestoredHealth {
     if (-not $Health -or -not $Health.PSObject.Properties['Healthy'] -or -not [bool]$Health.Healthy) {
         throw "$Name restoration did not return to a healthy state"
     }
-    if ($Health.PSObject.Properties['ReasonCodes'] -and @($Health.ReasonCodes).Count -gt 0) {
+    $blockingReasonCodes = @($Health.ReasonCodes | Where-Object { [string]$_ -ne 'appcontrol_browser_inventory_degraded' })
+    if ($blockingReasonCodes.Count -gt 0) {
         throw "$Name restoration returned health reason codes"
     }
 }
@@ -503,6 +504,7 @@ function Get-OpenPathNegativeHealthRestoration {
         [Parameter(Mandatory = $true)][string]$Mode,
         [Parameter(Mandatory = $true)][string[]]$ApprovedBrowsers,
         [Parameter(Mandatory = $true)][ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')][string]$Profile,
+        [Parameter(Mandatory = $true)][string]$TargetSid,
         [AllowNull()][object]$ApplicationCatalog
     )
 
@@ -512,7 +514,8 @@ function Get-OpenPathNegativeHealthRestoration {
         -Mode $Mode `
         -ApprovedBrowsers $ApprovedBrowsers `
         -Profile $Profile `
-        -ApplicationCatalog $ApplicationCatalog
+        -ApplicationCatalog $ApplicationCatalog `
+        -TargetSid $TargetSid
     Assert-OpenPathRestoredHealth -Name 'OpenPath watchdog task' -Health $watchdogHealth
     Assert-OpenPathRestoredHealth -Name 'OpenPath AppControl' -Health $appControlHealth
 
@@ -527,7 +530,8 @@ function Get-OpenPathNegativeHealthRestoration {
 function Invoke-OpenPathNegativeHealthProbes {
     param(
         [Parameter(Mandatory = $true)][string]$OpenPathRoot,
-        [Parameter(Mandatory = $true)][object]$Config
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $true)][string]$TargetSid
     )
 
     $mode = if ($Config.PSObject.Properties['nonAdminAppControlMode'] -and $Config.nonAdminAppControlMode) {
@@ -592,7 +596,8 @@ function Invoke-OpenPathNegativeHealthProbes {
             -Mode $mode `
             -ApprovedBrowsers $approvedBrowsers `
             -Profile $profile `
-            -ApplicationCatalog $applicationCatalog
+            -ApplicationCatalog $applicationCatalog `
+            -TargetSid $TargetSid
         [void]$probeResults.Add((Assert-OpenPathNegativeHealthProbe `
                 -Name 'OpenPath AppControl policy removed' `
                 -Health $removedPolicyHealth `
@@ -618,7 +623,8 @@ function Invoke-OpenPathNegativeHealthProbes {
                     -Mode $mode `
                     -ApprovedBrowsers $approvedBrowsers `
                     -Profile $profile `
-                    -ApplicationCatalog $applicationCatalog
+                    -ApplicationCatalog $applicationCatalog `
+                    -TargetSid $TargetSid
                 Assert-OpenPathRestoredHealth -Name 'OpenPath AppControl policy' -Health $restoredPolicyHealth
             }
             catch {
@@ -645,7 +651,8 @@ function Invoke-OpenPathNegativeHealthProbes {
             -Mode $mode `
             -ApprovedBrowsers $approvedBrowsers `
             -Profile $profile `
-            -ApplicationCatalog $applicationCatalog
+            -ApplicationCatalog $applicationCatalog `
+            -TargetSid $TargetSid
         [void]$probeResults.Add((Assert-OpenPathNegativeHealthProbe `
                 -Name 'OpenPath restricted target missing' `
                 -Health $missingTargetHealth `
@@ -688,7 +695,8 @@ function Invoke-OpenPathNegativeHealthProbes {
                     -Mode $mode `
                     -ApprovedBrowsers $approvedBrowsers `
                     -Profile $profile `
-                    -ApplicationCatalog $applicationCatalog
+                    -ApplicationCatalog $applicationCatalog `
+                    -TargetSid $TargetSid
                 Assert-OpenPathRestoredHealth -Name 'OpenPath restricted target' -Health $restoredGroupHealth
             }
             catch {
@@ -708,7 +716,8 @@ function Invoke-OpenPathNegativeHealthProbes {
             -Mode $mode `
             -ApprovedBrowsers $approvedBrowsers `
             -Profile $profile `
-            -ApplicationCatalog $applicationCatalog
+            -ApplicationCatalog $applicationCatalog `
+            -TargetSid $TargetSid
         if (-not $unhealthyPolicyHealth -or [bool]$unhealthyPolicyHealth.Healthy) {
             throw 'Repair-failure probe did not establish an unhealthy AppControl state'
         }
@@ -756,7 +765,8 @@ function Invoke-OpenPathNegativeHealthProbes {
                     -Mode $mode `
                     -ApprovedBrowsers $approvedBrowsers `
                     -Profile $profile `
-                    -ApplicationCatalog $applicationCatalog
+                    -ApplicationCatalog $applicationCatalog `
+                    -TargetSid $TargetSid
                 Assert-OpenPathRestoredHealth -Name 'OpenPath AppControl repair' -Health $restoredRepairHealth
             }
             catch {
@@ -770,6 +780,7 @@ function Invoke-OpenPathNegativeHealthProbes {
         -Mode $mode `
         -ApprovedBrowsers $approvedBrowsers `
         -Profile $profile `
+        -TargetSid $TargetSid `
         -ApplicationCatalog $applicationCatalog
 
     return [pscustomobject][ordered]@{
@@ -861,7 +872,8 @@ try {
 
     $negativeHealthEvidence = Invoke-OpenPathNegativeHealthProbes `
         -OpenPathRoot $installedOpenPathRoot `
-        -Config $installedOpenPathConfig
+        -Config $installedOpenPathConfig `
+        -TargetSid $studentSid
 
     [pscustomobject]@{
         studentUser = $studentUserName
