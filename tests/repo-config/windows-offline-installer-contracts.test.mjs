@@ -975,6 +975,11 @@ test('real NSIS failures preserve bounded structured AppControl diagnosis', () =
   );
   assert.match(
     executableLane,
+    /\(\?:appcontrol_\[a-z0-9_\]\{1,80\}\|strict-\[a-z0-9-\]\{1,80\}\)/,
+    'the bounded diagnostic schema must preserve strict AppControl reason codes'
+  );
+  assert.match(
+    executableLane,
     /installerFailureDiagnostic\s*=\s*\$installerFailureDiagnostic/,
     'the final evidence should include the structured first-cause diagnostic'
   );

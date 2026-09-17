@@ -326,7 +326,9 @@ function Get-SafeInstallerFailureDiagnostic {
         }
 
         $reasonCodes = @($appControl.ReasonCodes | ForEach-Object { [string]$_ })
-        if (@($reasonCodes | Where-Object { $_ -notmatch '^appcontrol_[a-z0-9_]{1,80}$' }).Count -gt 0) {
+        if (@($reasonCodes | Where-Object {
+                    $_ -notmatch '^(?:appcontrol_[a-z0-9_]{1,80}|strict-[a-z0-9-]{1,80})$'
+                }).Count -gt 0) {
             throw 'invalid AppControl reason code'
         }
         $detail = [string]$appControl.Detail
