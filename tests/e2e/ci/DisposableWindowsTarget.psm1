@@ -545,7 +545,7 @@ function Invoke-OpenPathInstalledBoundaryProbes {
     $edgeRun = $null
     $recovery = $null
     $watchdog = $null
-    $studentFirefoxProfile = Join-Path $Target.ProfilePath "AppData\Local\Temp\ff-probe-$([guid]::NewGuid().ToString('N'))"
+    $studentFirefoxProfile = Join-Path $Target.ProfilePath "OpenPathFirefoxProbe-$([guid]::NewGuid().ToString('N'))"
     try {
         if ($ProbePayloadPath -and -not (Test-Path -LiteralPath $ProbePayloadPath -PathType Leaf)) { throw 'boundary-probe-payload-missing' }
         foreach ($entry in $probeLocations.GetEnumerator()) {
@@ -566,10 +566,7 @@ function Invoke-OpenPathInstalledBoundaryProbes {
         }
         $probeExe = $probeLocations.ArbitraryWritable
         $policy = Invoke-OpenPathNativePolicyProbe -Target $Target -OpenPathRoot $OpenPathRoot -FirefoxPath $firefox -EdgePath $edge -ProbePath $probeExe
-        New-Item -ItemType Directory -Path $studentFirefoxProfile -Force | Out-Null
-        & icacls.exe $studentFirefoxProfile /grant "$env:COMPUTERNAME\$($Target.UserName):(OI)(CI)F" *> $null
-        if ($LASTEXITCODE -ne 0) { throw 'student-firefox-profile-acl-failed' }
-        $firefoxRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Firefox allow' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $firefox -Arguments "-headless -new-instance -profile `"$studentFirefoxProfile`" about:blank" -Expectation ExpectAllowed -ProcessName firefox -StudentSid $Target.Sid -UseNativeStudentProcess
+        $firefoxRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Firefox allow' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $firefox -Arguments "-CreateProfile `"OpenPathProbe $studentFirefoxProfile`"" -Expectation ExpectAllowed -StudentSid $Target.Sid -MarkerPath $studentFirefoxProfile -UseNativeStudentProcess
         try {
             $edgeRun = Invoke-StudentExecutableTaskProbe -ProbeName 'Canonical Edge deny' -UserName $Target.UserName -Password $Target.Password -ExecutablePath $edge -Arguments '--new-window about:blank' -Expectation ExpectDenied -ProcessName msedge -StudentSid $Target.Sid -PackagedAppPattern 'MicrosoftEdge|Microsoft\.MicrosoftEdge|msedge' -CaptureEnforcementDiagnostics -UseNativeStudentProcess
         }
