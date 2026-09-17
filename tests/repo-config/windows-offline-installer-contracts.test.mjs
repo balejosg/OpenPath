@@ -910,6 +910,11 @@ test('canonical personalized-EXE lane proves a profileless install before first-
   assert.match(targetHelper, /disposable-target-profile-unexpectedly-materialized/);
   assert.match(targetHelper, /disposable-target-is-administrator/);
   assert.match(
+    targetHelper,
+    /Export-ModuleMember -Function [^\r\n]*Initialize-OpenPathDisposableTargetProfile/,
+    'the EXE lane must be able to call the post-install first-login profile helper'
+  );
+  assert.match(
     executableLane,
     /New-OpenPathDisposableStandardTarget[^\r\n]*-MaterializeProfile \$false/
   );
