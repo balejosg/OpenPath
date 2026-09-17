@@ -1475,7 +1475,7 @@ Describe "AppControl Module" {
                 [PSCustomObject]@{ Name = 'AppIDSvc'; Status = 'Running' }
             }
             function global:Test-AppLockerPolicy {
-                param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject)
+                param($Path, $User, $XmlPolicy)
                 @($Path | ForEach-Object {
                     [pscustomobject]@{
                         FilePath = $_
@@ -1541,7 +1541,7 @@ Describe "AppControl Module" {
                 [pscustomobject]@{ SID = $global:opLegacyProbeStudentSid; LocalPath = $global:opLegacyProbeProfilePath; Special = $false }
             }
             function global:Test-AppLockerPolicy {
-                param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject)
+                param($Path, $User, $XmlPolicy)
                 @($Path | ForEach-Object {
                     $decision = if ($_ -like '*firefox.exe') {
                         'Allowed'
@@ -1643,7 +1643,7 @@ Describe "AppControl Module" {
                 [pscustomobject]@{ SID = $global:opProbeStudentSid; LocalPath = $global:opProbeProfilePath; Special = $false }
             }
             function global:Test-AppLockerPolicy {
-                param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject)
+                param($Path, $User, $XmlPolicy)
                 $global:opObservedProbePaths += @($Path)
                 $global:opObservedProbeUsers += $User
                 if ($global:opProbeThrows) {
@@ -1828,6 +1828,12 @@ Describe "AppControl Module" {
                 param([switch]$Local, [switch]$Effective, [switch]$Xml)
                 if ($Xml) {
                     $state = if ($Local) { $global:opHealthLocalPolicyState } else { $global:opHealthEffectivePolicyState }
+                    if ($Effective -and $global:opHealthRuntimeEffectiveObjectState -eq 'absent') {
+                        return $null
+                    }
+                    if ($Effective -and $global:opHealthRuntimeEffectiveObjectState -eq 'empty') {
+                        return '<AppLockerPolicy Version="1" />'
+                    }
                     if ($state -eq 'absent') {
                         return $null
                     }
@@ -1884,7 +1890,7 @@ Describe "AppControl Module" {
                 [pscustomobject]@{ SID = $global:opHealthStudentSid; LocalPath = $global:opHealthProfilePath; Special = $false }
             }
             function global:Test-AppLockerPolicy {
-                param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject)
+                param($Path, $User, $XmlPolicy)
                 if ($global:opHealthRuntimeEvaluatorState -eq 'throw') {
                     throw 'injected runtime evaluator failure'
                 }
@@ -2145,7 +2151,7 @@ Describe "AppControl Module" {
             @($health.ReasonCodes).Count | Should -BeGreaterThan 0
         }
 
-        It "reports generic runtime failure for an unavailable or empty effective policy object" {
+        It "fails before runtime evaluation for an unavailable or empty effective policy" {
             foreach ($state in @('absent', 'empty')) {
                 $global:opHealthRuntimeEffectiveObjectState = $state
                 $health = Get-OpenPathNonAdminAppControlHealth
@@ -2153,7 +2159,7 @@ Describe "AppControl Module" {
                 $health.Healthy | Should -BeFalse
                 $health.RuntimeEvaluationAvailable | Should -BeTrue
                 $health.RuntimeBoundaryValid | Should -BeFalse
-                @($health.ReasonCodes) | Should -Contain 'appcontrol_runtime_evaluation_failed'
+                @($health.ReasonCodes) | Should -Contain $(if ($state -eq 'absent') { 'appcontrol_effective_policy_absent' } else { 'appcontrol_effective_policy_invalid' })
                 @($health.ReasonCodes).Count | Should -BeGreaterThan 0
             }
         }

@@ -1057,9 +1057,16 @@ if (-not $getCommand -or -not $testCommand) {
     exit 0
 }
 try {
-    $effectivePolicy = Get-AppLockerPolicy -Effective -ErrorAction Stop
-    if (-not $effectivePolicy) { throw 'effective-policy-unavailable' }
-    $decisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path @($ExecutablePath) -User $StudentSid -ErrorAction Stop)
+    $effectivePolicyXml = Get-AppLockerPolicy -Effective -Xml -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace([string]$effectivePolicyXml)) { throw 'effective-policy-unavailable' }
+    $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-native-policy-$([guid]::NewGuid()).xml"
+    try {
+        Set-Content -LiteralPath $policyPath -Value $effectivePolicyXml -Encoding UTF8 -ErrorAction Stop
+        $decisions = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path @($ExecutablePath) -User $StudentSid)
+    }
+    finally {
+        Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue
+    }
     $expectedPath = [System.IO.Path]::GetFullPath($ExecutablePath)
     $matchingDecision = $decisions | Where-Object {
         try { [string]::Equals([System.IO.Path]::GetFullPath([string]$_.FilePath), $expectedPath, [System.StringComparison]::OrdinalIgnoreCase) } catch { $false }
@@ -1194,9 +1201,16 @@ function Get-OpenPathTestAppLockerPolicyDecision {
     }
 
     try {
-        $effectivePolicy = Get-AppLockerPolicy -Effective -ErrorAction Stop
-        if (-not $effectivePolicy) { throw 'effective-policy-unavailable' }
-        $decisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path @($ExecutablePath) -User $StudentSid -ErrorAction Stop)
+        $effectivePolicyXml = Get-AppLockerPolicy -Effective -Xml -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace([string]$effectivePolicyXml)) { throw 'effective-policy-unavailable' }
+        $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-policy-evaluation-$([guid]::NewGuid()).xml"
+        try {
+            Set-Content -LiteralPath $policyPath -Value $effectivePolicyXml -Encoding UTF8 -ErrorAction Stop
+            $decisions = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path @($ExecutablePath) -User $StudentSid)
+        }
+        finally {
+            Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue
+        }
         $expectedPath = [System.IO.Path]::GetFullPath($ExecutablePath)
         $matchingDecision = $decisions | Where-Object {
             try { [string]::Equals([System.IO.Path]::GetFullPath([string]$_.FilePath), $expectedPath, [System.StringComparison]::OrdinalIgnoreCase) } catch { $false }

@@ -32,10 +32,10 @@ Describe "Windows Browser Boundary CI Probes" {
             function global:Get-Service { param($Name) }
         }
         if (-not (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue)) {
-            function global:Get-AppLockerPolicy { param([switch]$Local, [switch]$Xml) }
+            function global:Get-AppLockerPolicy { param([switch]$Local, [switch]$Effective, [switch]$Xml) }
         }
         if (-not (Get-Command Test-AppLockerPolicy -ErrorAction SilentlyContinue)) {
-            function global:Test-AppLockerPolicy { param($Path, $User, [Parameter(ValueFromPipeline = $true)]$PolicyObject) }
+            function global:Test-AppLockerPolicy { param($Path, $User, $XmlPolicy) }
         }
         if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
             function global:Get-ScheduledTask { param($TaskName) }
@@ -1312,14 +1312,15 @@ Describe "Windows Browser Boundary CI Probes" {
         }
 
         It 'captures a Test-AppLockerPolicy decision as observed or explicitly unknown' {
-            Mock Get-AppLockerPolicy { [pscustomobject]@{ RuleCollections = @([pscustomobject]@{ Type = 'Exe' }) } } -ModuleName BrowserBoundaryProbe
+            Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1"><RuleCollection Type="Exe" EnforcementMode="Enabled" /></AppLockerPolicy>' } -ModuleName BrowserBoundaryProbe
             Mock Test-AppLockerPolicy {
+                param($XmlPolicy, $Path, $User, $ErrorAction)
                 [pscustomobject]@{ FilePath = 'C:\msedge.exe'; PolicyDecision = 'Denied' }
             } -ModuleName BrowserBoundaryProbe
 
             $decision = Get-OpenPathTestAppLockerPolicyDecision -ExecutablePath 'C:\msedge.exe' -StudentSid 'S-1-5-21-student-sid'
 
-            $decision.status | Should -Be 'observed'
+            $decision.status | Should -Be 'observed' -Because ($decision | ConvertTo-Json -Depth 12 -Compress)
             $decision.decision | Should -Be 'Denied'
             $decision.userSid | Should -Be 'S-1-5-21-student-sid'
         }
@@ -2458,8 +2459,9 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
         }
 
         It 'records current policy runtime and a separate native PowerShell comparison' {
-            Mock Get-AppLockerPolicy { [pscustomobject]@{ RuleCollections = @() } } -ModuleName BrowserBoundaryProbe
+            Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1"><RuleCollection Type="Exe" EnforcementMode="Enabled" /></AppLockerPolicy>' } -ModuleName BrowserBoundaryProbe
             Mock Test-AppLockerPolicy {
+                param($XmlPolicy, $Path, $User, $ErrorAction)
                 [pscustomobject]@{ FilePath = 'C:\msedge.exe'; PolicyDecision = 'Denied' }
             } -ModuleName BrowserBoundaryProbe
             Mock Invoke-OpenPathNativePowerShellPolicyComparison {
@@ -2478,7 +2480,7 @@ Export-ModuleMember -Function Test-OpenPathNonAdminAppControlActive, Set-OpenPat
                 -RuntimeOverride $script:policyObserverRuntime `
                 -IncludeNativePowerShellComparison
 
-            $observation.status | Should -Be 'observed'
+            $observation.status | Should -Be 'observed' -Because ($observation | ConvertTo-Json -Depth 12 -Compress)
             $observation.decision | Should -Be 'Denied'
             $observation.path | Should -Be 'C:\msedge.exe'
             $observation.userSid | Should -Be 'S-1-5-21-policy-user'

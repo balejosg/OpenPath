@@ -16,10 +16,17 @@ try {
     $nativeStage = 'assert-installed-boundary'
     Assert-InstalledOpenPathBrowserBoundaryAppControl -OpenPathRoot $OpenPathRoot
     $nativeStage = 'read-effective-policy'
-    $effective = Get-AppLockerPolicy -Effective -ErrorAction Stop
+    $effective = Get-AppLockerPolicy -Effective -Xml -ErrorAction Stop
     $nativeStage = 'evaluate-policy'
     $paths = @($FirefoxPath, $EdgePath, $ProbePath)
-    $decisions = @(Test-AppLockerPolicy -PolicyObject $effective -Path $paths -User $StudentSid -ErrorAction Stop)
+    $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-installed-boundary-$([guid]::NewGuid()).xml"
+    try {
+        Set-Content -LiteralPath $policyPath -Value $effective -Encoding UTF8 -ErrorAction Stop
+        $decisions = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path $paths -User $StudentSid)
+    }
+    finally {
+        Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue
+    }
     $byPath = @{}
     foreach ($decision in $decisions) {
         $byPath[[System.IO.Path]::GetFullPath([string]$decision.FilePath)] = [string]$decision.PolicyDecision

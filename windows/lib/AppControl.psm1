@@ -1284,6 +1284,23 @@ function Test-OpenPathAppIdentityServiceRunning {
     }
 }
 
+function Invoke-OpenPathAppLockerPolicyEvaluation {
+    param(
+        [Parameter(Mandatory = $true)][string]$PolicyXml,
+        [Parameter(Mandatory = $true)][string[]]$Path,
+        [Parameter(Mandatory = $true)][string]$UserSid
+    )
+
+    $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-applocker-evaluation-$([guid]::NewGuid()).xml"
+    try {
+        Set-Content -LiteralPath $policyPath -Value $PolicyXml -Encoding UTF8 -ErrorAction Stop
+        return @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path $Path -User $UserSid -ErrorAction Stop)
+    }
+    finally {
+        Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Set-OpenPathAppIdentityServiceAutomatic {
     <#
     .SYNOPSIS
@@ -2018,21 +2035,21 @@ function Get-OpenPathNonAdminAppControlHealth {
                 & $addReasonCode 'strict-runtime-probe-failed'
             }
         }
-        elseif ($restrictedTargetValid) {
+        elseif ($restrictedTargetValid -and $effectivePolicyValid) {
             $probeSet = $null
             try {
-                $effectivePolicy = Get-AppLockerPolicy -Effective
-                if (-not $effectivePolicy) {
+                if ([string]::IsNullOrWhiteSpace([string]$effectivePolicyText)) {
                     throw 'Effective AppLocker policy is unavailable'
                 }
-                if ($effectivePolicy.PSObject.Properties['RuleCollections'] -and @($effectivePolicy.RuleCollections).Count -eq 0) {
+                $evaluationPolicyXml = [xml]$effectivePolicyText
+                if (@($evaluationPolicyXml.AppLockerPolicy.RuleCollection).Count -eq 0) {
                     throw 'Effective AppLocker policy has no rule collections'
                 }
 
                 $probeCleanupAttempted = $true
                 $probeSet = New-OpenPathAppControlEvaluationProbeSet -Target $probeTarget -Profile $Profile -CleanupSucceeded ([ref]$probeCleanupSucceeded)
                 $probePaths = @($probeSet.Paths | ForEach-Object { [string]$_ })
-                $testDecisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path $probePaths -User $probeTarget.UserSid -ErrorAction Stop)
+                $testDecisions = @(Invoke-OpenPathAppLockerPolicyEvaluation -PolicyXml $effectivePolicyText -Path $probePaths -UserSid $probeTarget.UserSid)
                 if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths $probePaths -Decisions $testDecisions)) {
                     throw 'Test-AppLockerPolicy did not return one decision for every controlled AppControl probe'
                 }
@@ -2062,7 +2079,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                     if ([string]::IsNullOrWhiteSpace($futureBrowserPath) -or -not [System.IO.File]::Exists($futureBrowserPath)) {
                         throw 'Strict unknown executable probe was not created'
                     }
-                    $futureDecisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path @($futureBrowserPath) -User $probeTarget.UserSid -ErrorAction Stop)
+                    $futureDecisions = @(Invoke-OpenPathAppLockerPolicyEvaluation -PolicyXml $effectivePolicyText -Path @($futureBrowserPath) -UserSid $probeTarget.UserSid)
                     if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths @($futureBrowserPath) -Decisions $futureDecisions)) {
                         throw 'Test-AppLockerPolicy did not return a decision for the strict FutureBrowser probe'
                     }
@@ -2098,7 +2115,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                         'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
                     )
                     $edgeSamplePaths = Get-OpenPathAppControlExistingSamplePaths -Label 'Edge' -Paths $edgeSampleCandidates
-                    $edgeDecisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path $edgeSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
+                    $edgeDecisions = @(Invoke-OpenPathAppLockerPolicyEvaluation -PolicyXml $effectivePolicyText -Path $edgeSamplePaths -UserSid $probeTarget.UserSid)
                     if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths $edgeSamplePaths -Decisions $edgeDecisions)) {
                         throw 'Test-AppLockerPolicy did not return one decision for every Edge probe'
                     }
@@ -2131,7 +2148,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                         'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'
                     )
                     $firefoxSamplePaths = Get-OpenPathAppControlExistingSamplePaths -Label 'Firefox' -Paths $firefoxSampleCandidates
-                    $firefoxDecisions = @(Test-AppLockerPolicy -PolicyObject $effectivePolicy -Path $firefoxSamplePaths -User $probeTarget.UserSid -ErrorAction Stop)
+                    $firefoxDecisions = @(Invoke-OpenPathAppLockerPolicyEvaluation -PolicyXml $effectivePolicyText -Path $firefoxSamplePaths -UserSid $probeTarget.UserSid)
                     if (-not (Test-OpenPathAppControlEvaluationDecisionCoverage -RequestedPaths $firefoxSamplePaths -Decisions $firefoxDecisions)) {
                         throw 'Test-AppLockerPolicy did not return one decision for every Firefox probe'
                     }
