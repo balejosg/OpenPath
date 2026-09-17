@@ -492,6 +492,8 @@ function Assert-OpenPathRestoredHealth {
     if (-not $Health -or -not $Health.PSObject.Properties['Healthy'] -or -not [bool]$Health.Healthy) {
         throw "$Name restoration did not return to a healthy state"
     }
+    # Inventory degradation is diagnostic-only after the exact-SID runtime
+    # decisions have already made the health snapshot authoritative.
     $blockingReasonCodes = @($Health.ReasonCodes | Where-Object { [string]$_ -ne 'appcontrol_browser_inventory_degraded' })
     if ($blockingReasonCodes.Count -gt 0) {
         throw "$Name restoration returned health reason codes"
