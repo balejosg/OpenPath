@@ -588,30 +588,26 @@ function Invoke-OpenPathNegativeHealthProbes {
         }
     }
 
-    # Negative probe 2: remove every rule that targets the restricted group from
-    # an exact local-policy snapshot. Older equivalent rules can survive a
-    # managed-rule cleanup, so Remove-OpenPathNonAdminAppControl is not a
-    # deterministic fault injection for this observer check.
+    # Negative probe 2: remove every rule from an exact local-policy snapshot.
+    # Windows can retain equivalent rules outside the managed prefix, so a
+    # group-only cleanup is not a deterministic fault injection here.
     $appControlPolicyMutationApplied = $false
     $originalAppControlPolicyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-negative-policy-$([guid]::NewGuid().ToString('N')).xml"
     $damagedPolicyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-negative-policy-damaged-$([guid]::NewGuid().ToString('N')).xml"
     try {
-        $restrictedGroup = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
-        $restrictedGroupSid = [string]$restrictedGroup.SID.Value
         $localPolicyXml = [xml](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
         $localPolicyXml.Save($originalAppControlPolicyPath)
         $removedRuleCount = 0
         foreach ($collection in @($localPolicyXml.AppLockerPolicy.RuleCollection)) {
             foreach ($rule in @($collection.ChildNodes)) {
-                if ($rule.NodeType -eq [System.Xml.XmlNodeType]::Element -and
-                    $rule.GetAttribute('UserOrGroupSid') -eq $restrictedGroupSid) {
+                if ($rule.NodeType -eq [System.Xml.XmlNodeType]::Element) {
                     [void]$collection.RemoveChild($rule)
                     $removedRuleCount++
                 }
             }
         }
         if ($removedRuleCount -eq 0) {
-            throw 'OpenPath AppControl policy fault injection found no restricted-group rules'
+            throw 'OpenPath AppControl policy fault injection found no rules'
         }
         $localPolicyXml.Save($damagedPolicyPath)
         Set-AppLockerPolicy -XMLPolicy $damagedPolicyPath -ErrorAction Stop
@@ -731,22 +727,19 @@ function Invoke-OpenPathNegativeHealthProbes {
     $repairOriginalPolicyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-repair-policy-$([guid]::NewGuid().ToString('N')).xml"
     $repairDamagedPolicyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-repair-policy-damaged-$([guid]::NewGuid().ToString('N')).xml"
     try {
-        $repairGroup = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
-        $repairGroupSid = [string]$repairGroup.SID.Value
         $repairPolicyXml = [xml](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
         $repairPolicyXml.Save($repairOriginalPolicyPath)
         $repairRemovedRuleCount = 0
         foreach ($collection in @($repairPolicyXml.AppLockerPolicy.RuleCollection)) {
             foreach ($rule in @($collection.ChildNodes)) {
-                if ($rule.NodeType -eq [System.Xml.XmlNodeType]::Element -and
-                    $rule.GetAttribute('UserOrGroupSid') -eq $repairGroupSid) {
+                if ($rule.NodeType -eq [System.Xml.XmlNodeType]::Element) {
                     [void]$collection.RemoveChild($rule)
                     $repairRemovedRuleCount++
                 }
             }
         }
         if ($repairRemovedRuleCount -eq 0) {
-            throw 'Repair-failure probe found no restricted-group rules'
+            throw 'Repair-failure probe found no rules'
         }
         $repairPolicyXml.Save($repairDamagedPolicyPath)
         Set-AppLockerPolicy -XMLPolicy $repairDamagedPolicyPath -ErrorAction Stop

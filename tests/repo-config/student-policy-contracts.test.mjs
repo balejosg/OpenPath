@@ -995,8 +995,8 @@ describe('repository verification contract', () => {
     );
     assert.match(
       browserBoundaryCi,
-      /Get-AppLockerPolicy -Local -Xml[\s\S]*?UserOrGroupSid[\s\S]*?Set-AppLockerPolicy -XMLPolicy \$damagedPolicyPath[\s\S]*?Get-OpenPathNonAdminAppControlHealth[\s\S]*?finally \{[\s\S]*?Set-AppLockerPolicy -XMLPolicy \$originalAppControlPolicyPath/s,
-      'AppControl policy negative health mutation must remove restricted-group rules and restore the exact policy in finally'
+      /Get-AppLockerPolicy -Local -Xml[\s\S]*?RuleCollection[\s\S]*?Set-AppLockerPolicy -XMLPolicy \$damagedPolicyPath[\s\S]*?Get-OpenPathNonAdminAppControlHealth[\s\S]*?finally \{[\s\S]*?Set-AppLockerPolicy -XMLPolicy \$originalAppControlPolicyPath/s,
+      'AppControl policy negative health mutation must remove all rules and restore the exact policy in finally'
     );
     assert.match(
       browserBoundaryCi,
