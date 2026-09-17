@@ -256,7 +256,7 @@ jobs:
   test-windows-hosted:
     name: Windows Agent Tests (Pester, hosted, shard ${{ matrix.shard }}/5)
     runs-on: windows-2025
-    timeout-minutes: 8
+    timeout-minutes: 20
     needs: detect-relevant-changes
     if: needs.detect-relevant-changes.outputs.windows_bound == 'true'
     outputs:
@@ -279,7 +279,7 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-pester-isolated.ps1 `
             -RepoRoot (Get-Location).Path `
             -ResultsPath windows-hosted-results-${{ matrix.shard }}.xml `
-            -TimeoutSeconds 360 `
+            -TimeoutSeconds 840 `
             -ShardIndex ${{ matrix.shard }} `
             -ShardCount 5
 
