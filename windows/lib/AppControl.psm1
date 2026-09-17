@@ -1298,7 +1298,7 @@ function Invoke-OpenPathAppLockerPolicyEvaluation {
         foreach ($candidatePath in @($Path)) {
             $evaluationPaths.Add([string]$candidatePath)
         }
-        return @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path $evaluationPaths -User $UserSid -ErrorAction Stop)
+        return @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path ([string[]]$evaluationPaths.ToArray()) -User $UserSid -ErrorAction Stop)
     }
     finally {
         Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue
