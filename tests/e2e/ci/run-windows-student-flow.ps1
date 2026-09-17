@@ -578,12 +578,14 @@ function Assert-WindowsProfilelessAppControlCommitted {
         throw "Direct PowerShell install did not commit AppControl: $($config.appControlCommitState)"
     }
     Import-Module 'C:\OpenPath\lib\AppControl.psm1' -Force -Global -ErrorAction Stop
-    $health = Get-OpenPathNonAdminAppControlHealth -Mode ([string]$config.nonAdminAppControlMode) `
+    $healthCommand = Get-Command -Name 'AppControl\Get-OpenPathNonAdminAppControlHealth' -ErrorAction Stop
+    $health = & $healthCommand -Mode ([string]$config.nonAdminAppControlMode) `
         -ApprovedBrowsers @($config.approvedStudentBrowsers) -Profile ([string]$config.appControlProfile) `
         -ApplicationCatalog $config.approvedApplicationCatalog -TargetSid $script:ProfilelessInstallTargetSid
     $acceptanceFailures = @()
     if (-not $health.Healthy) { $acceptanceFailures += 'health-unhealthy' }
     if (-not $health.IdentityResolved) { $acceptanceFailures += 'identity-unresolved' }
+    if ([string]$health.TargetSid -ne $script:ProfilelessInstallTargetSid) { $acceptanceFailures += 'target-sid-mismatch' }
     if ($health.ProfileAvailable) { $acceptanceFailures += 'profile-unexpectedly-available' }
     if ([string]$health.ValidationMode -ne 'profileless') { $acceptanceFailures += 'validation-mode-not-profileless' }
     if (@($health.Observed.RuntimeDecisions).Count -eq 0) { $acceptanceFailures += 'runtime-decisions-empty' }
@@ -594,6 +596,7 @@ function Assert-WindowsProfilelessAppControlCommitted {
         powerShellArchitecture = "$(8 * [IntPtr]::Size)-bit"
         appControlProfile = [string]$config.appControlProfile
         restrictedUserSid = $script:ProfilelessInstallTargetSid
+        evaluatedTargetSid = [string]$health.TargetSid
         profileExistedBeforeInstall = $false
         localPolicyValid = [bool]$health.LocalPolicyValid
         effectivePolicyValid = [bool]$health.EffectivePolicyValid

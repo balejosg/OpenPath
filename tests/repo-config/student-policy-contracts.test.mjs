@@ -2076,6 +2076,11 @@ describe('repository verification contract', () => {
       /Install-OpenPath\.ps1[\s\S]*?Assert-WindowsProfilelessAppControlCommitted[\s\S]*?Prepare-WindowsUserProfile/s,
       'the direct installer lane must accept committed profileless AppControl before materializing the first-login profile'
     );
+    assert.match(
+      windowsRunner,
+      /AppControl\\Get-OpenPathNonAdminAppControlHealth[\s\S]*?-TargetSid\s+\$script:ProfilelessInstallTargetSid[\s\S]*?target-sid-mismatch/i,
+      'the profileless proof must use the installed AppControl command and the exact disposable SID'
+    );
   });
 
   test('Windows profile preparation has no account creation or unrelated hardening side effects', () => {
