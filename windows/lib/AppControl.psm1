@@ -1370,6 +1370,9 @@ function Get-OpenPathRestrictedIdentity {
     The AppLocker policy is scoped to the restricted group and Test-AppLockerPolicy
     needs a representative user SID. A Windows profile is deliberately not part of
     this identity contract because installation must work before first login.
+    .PARAMETER TargetSid
+    Selects one known restricted member when acceptance must be bound to a specific
+    profileless identity; an empty value preserves representative-member discovery.
     #>
     [CmdletBinding()]
     param([string]$TargetSid = '')
