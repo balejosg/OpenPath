@@ -1949,7 +1949,7 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
     'e2e-tests.yml should stop using hosted windows-2022 runners for Windows lanes'
   );
   assert.ok(
-    e2eWorkflow.includes('ci/run-windows-student-flow\\.ps1'),
+    e2eWorkflow.includes('run-windows-student-flow\\.ps1'),
     'windows-student-policy should be triggered by its own runner script'
   );
   assert.ok(
@@ -2416,6 +2416,17 @@ test('canonical release input definitions are referenced by the promotion workfl
 
 test('Windows profileless PowerShell evidence is mandatory and source-bound', () => {
   const workflow = readText('.github/workflows/e2e-tests.yml');
+  for (const harness of [
+    'DisposableWindowsTarget\\.psm1',
+    'BrowserBoundaryProbe\\.psm1',
+    'Test-InstalledBoundaryNative\\.ps1',
+    'run-windows-offline-installer-exe\\.ps1',
+  ]) {
+    assert.ok(
+      workflow.includes(harness),
+      `Windows security harness ${harness} must select the real student-policy lane`
+    );
+  }
   assert.match(workflow, /Require profileless PowerShell installation evidence/);
   assert.match(workflow, /windows-profileless-powershell-install-evidence\.json/);
   assert.match(workflow, /sourceCommitSha[\s\S]*github\.sha/);
