@@ -588,12 +588,35 @@ function Invoke-OpenPathNegativeHealthProbes {
         }
     }
 
-    # Negative probe 2: remove the managed policy rules and observe local/effective policy failure.
-    $appControlPolicyMutationApplied = $true
+    # Negative probe 2: remove every rule that targets the restricted group from
+    # an exact local-policy snapshot. Older equivalent rules can survive a
+    # managed-rule cleanup, so Remove-OpenPathNonAdminAppControl is not a
+    # deterministic fault injection for this observer check.
+    $appControlPolicyMutationApplied = $false
+    $originalAppControlPolicyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-negative-policy-$([guid]::NewGuid().ToString('N')).xml"
+    $damagedPolicyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-negative-policy-damaged-$([guid]::NewGuid().ToString('N')).xml"
     try {
-        if (-not (Remove-OpenPathNonAdminAppControl)) {
-            throw 'OpenPath AppControl policy removal failed'
+        $restrictedGroup = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+        $restrictedGroupSid = [string]$restrictedGroup.SID.Value
+        $localPolicyXml = [xml](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
+        $localPolicyXml.Save($originalAppControlPolicyPath)
+        $removedRuleCount = 0
+        foreach ($collection in @($localPolicyXml.AppLockerPolicy.RuleCollection)) {
+            foreach ($rule in @($collection.ChildNodes)) {
+                if ($rule.NodeType -eq [System.Xml.XmlNodeType]::Element -and
+                    $rule.GetAttribute('UserOrGroupSid') -eq $restrictedGroupSid) {
+                    [void]$collection.RemoveChild($rule)
+                    $removedRuleCount++
+                }
+            }
         }
+        if ($removedRuleCount -eq 0) {
+            throw 'OpenPath AppControl policy fault injection found no restricted-group rules'
+        }
+        $localPolicyXml.Save($damagedPolicyPath)
+        Set-AppLockerPolicy -XMLPolicy $damagedPolicyPath -ErrorAction Stop
+        Remove-Item -LiteralPath $damagedPolicyPath -Force -ErrorAction SilentlyContinue
+        $appControlPolicyMutationApplied = $true
         $removedPolicyHealth = Get-OpenPathNonAdminAppControlHealth `
             -Mode $mode `
             -ApprovedBrowsers $approvedBrowsers `
@@ -613,14 +636,7 @@ function Invoke-OpenPathNegativeHealthProbes {
     finally {
         if ($appControlPolicyMutationApplied) {
             try {
-                if (-not (Set-OpenPathNonAdminAppControl `
-                        -OpenPathRoot $OpenPathRoot `
-                        -Mode $mode `
-                        -ApprovedBrowsers $approvedBrowsers `
-                        -Profile $profile `
-                        -ApplicationCatalog $applicationCatalog)) {
-                    throw 'OpenPath AppControl policy apply returned false'
-                }
+                Set-AppLockerPolicy -XMLPolicy $originalAppControlPolicyPath -ErrorAction Stop
                 $restoredPolicyHealth = Get-OpenPathNonAdminAppControlHealth `
                     -Mode $mode `
                     -ApprovedBrowsers $approvedBrowsers `
@@ -633,6 +649,8 @@ function Invoke-OpenPathNegativeHealthProbes {
                 throw 'OpenPath AppControl policy restoration failed'
             }
         }
+        Remove-Item -LiteralPath $damagedPolicyPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $originalAppControlPolicyPath -Force -ErrorAction SilentlyContinue
     }
 
     # Negative probe 3: remove the actual restricted target and require real group reconciliation.

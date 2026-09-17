@@ -971,7 +971,7 @@ describe('repository verification contract', () => {
       'Enable-ScheduledTask',
       'Common.psm1',
       'Write-OpenPathLog',
-      'Remove-OpenPathNonAdminAppControl',
+      'Get-AppLockerPolicy',
       'Get-OpenPathNonAdminAppControlHealth',
       'appcontrol_local_policy_invalid',
       'appcontrol_effective_policy_invalid',
@@ -995,8 +995,8 @@ describe('repository verification contract', () => {
     );
     assert.match(
       browserBoundaryCi,
-      /try \{[\s\S]*?Remove-OpenPathNonAdminAppControl[\s\S]*?Get-OpenPathNonAdminAppControlHealth[\s\S]*?\}[\s\S]*?finally \{[\s\S]*?Set-OpenPathNonAdminAppControl/s,
-      'AppControl policy negative health mutation must restore the policy in finally'
+      /Get-AppLockerPolicy -Local -Xml[\s\S]*?UserOrGroupSid[\s\S]*?Set-AppLockerPolicy -XMLPolicy \$damagedPolicyPath[\s\S]*?Get-OpenPathNonAdminAppControlHealth[\s\S]*?finally \{[\s\S]*?Set-AppLockerPolicy -XMLPolicy \$originalAppControlPolicyPath/s,
+      'AppControl policy negative health mutation must remove restricted-group rules and restore the exact policy in finally'
     );
     assert.match(
       browserBoundaryCi,
