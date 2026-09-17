@@ -473,7 +473,7 @@ function Assert-OpenPathNegativeHealthProbe {
     }
     $expectedCodeObserved = @($reasonCodes | Where-Object { $_ -in $ExpectedReasonCodes }).Count -gt 0
     if (-not $expectedCodeObserved) {
-        throw "$Name did not observe an expected health reason code"
+        throw "$Name did not observe an expected health reason code; expected=$($ExpectedReasonCodes -join ','); observed=$($reasonCodes -join ',')"
     }
 
     return [pscustomobject][ordered]@{
