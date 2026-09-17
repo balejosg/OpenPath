@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$EvidencePath
+    [string]$EvidencePath,
+    [string]$TargetSid = ''
 )
 
 Set-StrictMode -Version Latest
@@ -196,6 +197,15 @@ function Resolve-OpenPathProfileTarget {
         }
         if ($userSid -notin $adminMemberSids) {
             $candidateUsers += $user
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($TargetSid)) {
+        $candidateUsers = @($candidateUsers | Where-Object {
+                (ConvertTo-OpenPathSidString -Value $_.SID) -eq $TargetSid
+            })
+        if ($candidateUsers.Count -ne 1) {
+            throw "The requested enabled non-administrator profile target was not resolved: $TargetSid"
         }
     }
 

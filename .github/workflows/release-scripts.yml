@@ -131,6 +131,8 @@ jobs:
               approvedStudentBrowsers = @('Firefox')
               installFirefoxIfMissing = $true
               enforceManagedBrowserBoundary = $true
+              appControlProfile = 'StrictApplicationAllowlist'
+              approvedApplicationCatalog = @{ schemaVersion = 1; applications = @() }
             }
           } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configPath -Encoding UTF8
 
@@ -199,12 +201,15 @@ jobs:
         run: |
           $personalizedPath = Join-Path $env:RUNNER_TEMP 'OpenPath-Windows-Setup-E2E.exe'
           $evidencePath = Join-Path $env:RUNNER_TEMP 'openpath-windows-offline-installer-exe-evidence.json'
+          $personalizedSha256 = (Get-FileHash -LiteralPath $personalizedPath -Algorithm SHA256).Hash
 
           & (Resolve-Path 'tests/e2e/ci/run-windows-offline-installer-exe.ps1') `
             -ExecutablePath $personalizedPath `
             -ExpectedClassroomId 'release-e2e-classroom' `
             -ExpectedApiUrl 'https://localhost:18443' `
             -EvidencePath $evidencePath `
+            -ExpectedSourceCommitSha '${{ github.sha }}' `
+            -ExpectedInstallerSha256 $personalizedSha256 `
             -PolicyConverterMode 'Untouched'
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
@@ -216,7 +221,7 @@ jobs:
         with:
           name: windows-offline-installer-exe-evidence
           path: ${{ runner.temp }}/openpath-windows-offline-installer-exe-evidence.json
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Upload template artifacts
         uses: actions/upload-artifact@v7
@@ -234,7 +239,6 @@ jobs:
     if: ${{ always() && needs.windows-offline-template.outputs.contrast-artifact-id != '' }}
     runs-on: windows-2025
     timeout-minutes: 25
-    continue-on-error: true
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -267,7 +271,6 @@ jobs:
 
       - name: Run PolicyConverter contrast
         shell: pwsh
-        continue-on-error: true
         run: |
           $inputs = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-inputs'
           $manifest = Get-Content -LiteralPath (Join-Path $inputs 'sha256-manifest.json') -Raw | ConvertFrom-Json
@@ -291,7 +294,7 @@ jobs:
           path: |
             ${{ runner.temp }}/openpath-policy-converter-contrast-${{ matrix.mode }}.json
             ${{ runner.temp }}/openpath-policy-converter-contrast-${{ matrix.mode }}-child.json
-          if-no-files-found: warn
+          if-no-files-found: error
 
   # Run the HTTP-to-EXE path on a fresh runner. The physical NSIS lane above
   # changes Windows policy while testing the installer and must not poison the
@@ -659,8 +662,16 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       [windows-offline-template, policy-converter-contrast, windows-personalized-http-e2e, release]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.windows-offline-template.result == 'success' && needs.policy-converter-contrast.result == 'success' && needs.windows-personalized-http-e2e.result == 'success' && needs.release.result == 'success' }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' }}
 
     steps:
-      - name: Record the complete canonical release chain
-        run: echo "Canonical same-SHA Windows release proof is green."
+      - name: Require the complete canonical release chain
+        run: |
+          if [[ "${{ needs.windows-offline-template.result }}" != "success" ]] || \
+             [[ "${{ needs.policy-converter-contrast.result }}" != "success" ]] || \
+             [[ "${{ needs.windows-personalized-http-e2e.result }}" != "success" ]] || \
+             [[ "${{ needs.release.result }}" != "success" ]]; then
+            echo "Canonical same-SHA Windows release proof is incomplete or failed."
+            exit 1
+          fi
+          echo "Canonical same-SHA Windows release proof is green."

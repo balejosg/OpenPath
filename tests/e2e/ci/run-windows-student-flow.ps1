@@ -495,7 +495,9 @@ function Prepare-WindowsUserProfile {
     }
 
     $env:OPENPATH_WINDOWS_PROFILE_EVIDENCE_PATH = $script:WindowsProfileEvidencePath
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $helperPath -EvidencePath $script:WindowsProfileEvidencePath
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $helperPath `
+        -EvidencePath $script:WindowsProfileEvidencePath `
+        -TargetSid $script:ProfilelessInstallTargetSid
     if ($LASTEXITCODE -ne 0) {
         throw "Windows profile preparation failed with exit code $LASTEXITCODE"
     }
@@ -515,11 +517,68 @@ function Prepare-WindowsUserProfile {
             throw "Windows profile preparation evidence has an empty '$propertyName'"
         }
     }
+    if ([string]$evidence.SID -ne $script:ProfilelessInstallTargetSid) {
+        throw "Windows profile preparation selected $($evidence.SID), expected $($script:ProfilelessInstallTargetSid)"
+    }
 
     Write-DiagnosticNote "Windows profile prepared for $($evidence.UserName) ($($evidence.SID)) at $($evidence.LocalPath); createdByHarness=$($evidence.createdByHarness)"
     if ($env:GITHUB_ENV) {
         Add-Content -LiteralPath $env:GITHUB_ENV -Value "OPENPATH_WINDOWS_PROFILE_EVIDENCE_PATH=$script:WindowsProfileEvidencePath"
     }
+}
+
+function Assert-WindowsProfilelessInstallPrecondition {
+    $adminGroup = Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction Stop
+    $adminSids = @(Get-LocalGroupMember -Group $adminGroup.Name -ErrorAction Stop | ForEach-Object { [string]$_.SID.Value })
+    $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop)
+    $candidateUsers = @()
+    foreach ($user in @(Get-LocalUser -ErrorAction Stop)) {
+        $userSid = [string]$user.SID.Value
+        if (-not $user.Enabled -or $userSid -in $adminSids) { continue }
+        if (@($profiles | Where-Object { [string]$_.SID -eq $userSid }).Count -eq 0) {
+            $candidateUsers += $user
+        }
+    }
+    $candidate = @($candidateUsers | Sort-Object Name | Select-Object -First 1)
+    if ($candidate.Count -ne 1) {
+        throw 'Precondition violated: no enabled standard local account without Win32_UserProfile exists'
+    }
+    $candidateSid = [string]$candidate[0].SID.Value
+    if (@(Get-CimInstance Win32_UserProfile -ErrorAction Stop | Where-Object SID -eq $candidateSid).Count -ne 0) {
+        throw 'Precondition violated: student profile already exists'
+    }
+    $script:ProfilelessInstallTargetSid = $candidateSid
+    $script:ProfilelessInstallTargetUserName = [string]$candidate[0].Name
+}
+
+function Assert-WindowsProfilelessAppControlCommitted {
+    $configPath = 'C:\OpenPath\data\config.json'
+    $config = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if ([string]$config.appControlCommitState -ne 'committed') {
+        throw "Direct PowerShell install did not commit AppControl: $($config.appControlCommitState)"
+    }
+    Import-Module 'C:\OpenPath\lib\AppControl.psm1' -Force -Global -ErrorAction Stop
+    $health = Get-OpenPathNonAdminAppControlHealth -Mode ([string]$config.nonAdminAppControlMode) `
+        -ApprovedBrowsers @($config.approvedStudentBrowsers) -Profile ([string]$config.appControlProfile) `
+        -ApplicationCatalog $config.approvedApplicationCatalog
+    if (-not $health.Healthy -or -not $health.IdentityResolved -or $health.ProfileAvailable -or
+        [string]$health.ValidationMode -ne 'profileless' -or @($health.Observed.RuntimeDecisions).Count -eq 0) {
+        throw 'Direct PowerShell profileless AppControl acceptance failed'
+    }
+    [ordered]@{
+        sourceCommitSha = if ($env:GITHUB_SHA) { $env:GITHUB_SHA } else { [string](& git -C $script:RepoRoot rev-parse HEAD) }
+        installerSha256 = (Get-FileHash -LiteralPath (Join-Path $script:RepoRoot 'windows\Install-OpenPath.ps1') -Algorithm SHA256).Hash
+        windowsVersion = [Environment]::OSVersion.VersionString
+        powerShellArchitecture = "$(8 * [IntPtr]::Size)-bit"
+        appControlProfile = [string]$config.appControlProfile
+        restrictedUserSid = $script:ProfilelessInstallTargetSid
+        profileExistedBeforeInstall = $false
+        localPolicyValid = [bool]$health.LocalPolicyValid
+        effectivePolicyValid = [bool]$health.EffectivePolicyValid
+        runtimeDecisions = @($health.Observed.RuntimeDecisions)
+        appIdentityServiceRunning = [bool]$health.AppIdentityServiceRunning
+        appControlCommitState = [string]$config.appControlCommitState
+    } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $script:ArtifactsRoot 'windows-profileless-powershell-install-evidence.json') -Encoding UTF8
 }
 
 function Ensure-SeleniumDependencies {
@@ -1187,16 +1246,23 @@ function Install-AndEnrollClient {
     if ($InstallClient) {
         Write-Step 'Installing and enrolling the Windows OpenPath client...'
 
+        $strictCatalogPath = Join-Path $script:ArtifactsRoot 'strict-empty-application-catalog.json'
+        @{ schemaVersion = 1; applications = @() } | ConvertTo-Json | Set-Content -LiteralPath $strictCatalogPath -Encoding UTF8
+
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:RepoRoot 'windows\Install-OpenPath.ps1') `
             -WhitelistUrl $Scenario.machine.whitelistUrl `
             -ApiUrl "http://127.0.0.1:$($script:ApiPort)" `
             -EnforceManagedBrowserBoundary `
+            -AppControlProfile StrictApplicationAllowlist `
+            -ApprovedApplicationCatalogPath $strictCatalogPath `
             -SkipPreflight `
             -Unattended
 
         if ($LASTEXITCODE -ne 0) {
             throw "Install-OpenPath.ps1 failed with exit code $LASTEXITCODE"
         }
+        Assert-WindowsProfilelessAppControlCommitted
+        Prepare-WindowsUserProfile
     }
     else {
         Write-Step 'Reconfiguring existing Windows OpenPath client...'
@@ -1742,7 +1808,7 @@ try {
     $extensionArchivePath = Invoke-TimedStep -Name 'Package Firefox extension' -ScriptBlock { New-FirefoxExtensionArchive }
     Invoke-TimedStep -Name 'Ensure Firefox and geckodriver' -ScriptBlock { Ensure-FirefoxAndGeckodriver }
     Invoke-TimedStep -Name 'Enable Firefox unsigned addon support' -ScriptBlock { Enable-FirefoxUnsignedAddonSupport }
-    Invoke-TimedStep -Name 'Prepare Windows user profile' -ScriptBlock { Prepare-WindowsUserProfile }
+    Invoke-TimedStep -Name 'Assert profileless Windows install precondition' -ScriptBlock { Assert-WindowsProfilelessInstallPrecondition }
     Invoke-TimedStep -Name 'Install and enroll client (sse)' -ScriptBlock { Install-AndEnrollClient -Scenario $scenario -InstallClient $true }
     $windowsStudentSseGroup = if ([string]::IsNullOrWhiteSpace($env:OPENPATH_WINDOWS_STUDENT_SSE_GROUP)) {
         Resolve-WindowsStudentSseGroup

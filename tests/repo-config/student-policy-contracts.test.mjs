@@ -1987,7 +1987,7 @@ describe('repository verification contract', () => {
     );
   });
 
-  test('Windows student-policy prepares a real non-admin profile before installation', () => {
+  test('Windows student-policy installs profileless before preparing the first-login profile', () => {
     const helperPath = resolve(projectRoot, 'tests/e2e/ci/prepare-windows-user-profile.ps1');
     const helper = existsSync(helperPath)
       ? readText('tests/e2e/ci/prepare-windows-user-profile.ps1')
@@ -2058,8 +2058,13 @@ describe('repository verification contract', () => {
     );
     assert.match(
       windowsRunner,
-      /Prepare-WindowsUserProfile[\s\S]*?Install-AndEnrollClient\s+-Scenario\s+\$scenario\s+-InstallClient\s+\$true/s,
-      'the real installer should run only after the profile preparation step'
+      /Assert profileless Windows install precondition[\s\S]*?Install-AndEnrollClient\s+-Scenario\s+\$scenario\s+-InstallClient\s+\$true/s,
+      'the direct installer lane should prove the standard account has no profile before installation'
+    );
+    assert.match(
+      windowsRunner,
+      /Install-OpenPath\.ps1[\s\S]*?Assert-WindowsProfilelessAppControlCommitted[\s\S]*?Prepare-WindowsUserProfile/s,
+      'the direct installer lane must accept committed profileless AppControl before materializing the first-login profile'
     );
   });
 

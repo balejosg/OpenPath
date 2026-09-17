@@ -1811,6 +1811,18 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
       e2eWorkflow.includes('Windows Student Policy SSE routing reason:'),
     'E2E summaries should show selected Windows student-policy SSE group and routing reason'
   );
+  for (const [selector, result] of [
+    ['windows_e2e', 'windows-e2e'],
+    ['windows_student_policy', 'windows-student-policy'],
+    ['windows_contract_scenarios', 'windows-contract-scenarios'],
+  ]) {
+    assert.ok(
+      e2eWorkflow.includes(
+        `"\${{ needs.detect-relevant-changes.outputs.${selector} }}" == "true" && "\${{ needs.${result}.result }}" != "success"`
+      ),
+      `a selected ${result} security lane must fail the summary for skipped or any non-success result`
+    );
+  }
   assert.ok(
     e2eWorkflow.includes('Release infrastructure only:') &&
       e2eWorkflow.includes(
@@ -2313,7 +2325,7 @@ test('promotion contract publication requires the canonical same-SHA Windows rel
   }
   assert.match(
     releaseWorkflow,
-    /release-scripts-success:\n[\s\S]*?if: \$\{\{ always\(\) && github\.event_name == 'workflow_dispatch'[\s\S]*?needs\.windows-offline-template\.result == 'success'[\s\S]*?needs\.policy-converter-contrast\.result == 'success'[\s\S]*?needs\.windows-personalized-http-e2e\.result == 'success'[\s\S]*?needs\.release\.result == 'success'/,
+    /release-scripts-success:\n[\s\S]*?if: \$\{\{ always\(\) && github\.event_name == 'workflow_dispatch' \}\}[\s\S]*?needs\.windows-offline-template\.result \}\}" != "success"[\s\S]*?needs\.policy-converter-contrast\.result \}\}" != "success"[\s\S]*?needs\.windows-personalized-http-e2e\.result \}\}" != "success"[\s\S]*?needs\.release\.result \}\}" != "success"/,
     'the canonical release summary must fail closed unless every required same-run result succeeded'
   );
   assert.ok(
@@ -2400,4 +2412,12 @@ test('canonical release input definitions are referenced by the promotion workfl
       `release-scripts.yml should remain triggered by canonical producer root ${pathPattern}`
     );
   }
+});
+
+test('Windows profileless PowerShell evidence is mandatory and source-bound', () => {
+  const workflow = readText('.github/workflows/e2e-tests.yml');
+  assert.match(workflow, /Require profileless PowerShell installation evidence/);
+  assert.match(workflow, /windows-profileless-powershell-install-evidence\.json/);
+  assert.match(workflow, /sourceCommitSha[\s\S]*github\.sha/);
+  assert.match(workflow, /installerSha256/);
 });

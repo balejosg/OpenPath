@@ -482,6 +482,17 @@ jobs:
           # imports it as an implicit-remoting function without that binding.
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/run-windows-browser-boundary-ci.ps1
 
+      - name: Require profileless PowerShell installation evidence
+        shell: pwsh
+        run: |
+          $path = 'tests/e2e/artifacts/windows-student-policy/windows-profileless-powershell-install-evidence.json'
+          if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'profileless-powershell-evidence-missing' }
+          $evidence = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
+          if ([string]$evidence.sourceCommitSha -ne '${{ github.sha }}') { throw 'profileless-powershell-source-sha-mismatch' }
+          if ([string]::IsNullOrWhiteSpace([string]$evidence.installerSha256)) { throw 'profileless-powershell-installer-sha-missing' }
+          if ([string]$evidence.appControlCommitState -ne 'committed') { throw 'profileless-powershell-appcontrol-not-committed' }
+          if ([bool]$evidence.profileExistedBeforeInstall -or @($evidence.runtimeDecisions).Count -eq 0) { throw 'profileless-powershell-runtime-evidence-invalid' }
+
       - name: Restore self-hosted Windows runner state
         if: always()
         shell: pwsh
@@ -496,12 +507,11 @@ jobs:
 
       - name: Upload Windows student-policy diagnostics
         if: always()
-        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: windows-student-policy-artifacts-${{ github.run_id }}
           path: tests/e2e/artifacts/windows-student-policy
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 7
 
   # ============================================
@@ -725,6 +735,13 @@ jobs:
               [[ "${{ needs.windows-e2e.result }}" == "cancelled" ]]; then
             echo ""
             echo "❌ E2E Tests FAILED"
+            exit 1
+          fi
+
+          if [[ "${{ needs.detect-relevant-changes.outputs.windows_e2e }}" == "true" && "${{ needs.windows-e2e.result }}" != "success" ]] || \
+             [[ "${{ needs.detect-relevant-changes.outputs.windows_student_policy }}" == "true" && "${{ needs.windows-student-policy.result }}" != "success" ]] || \
+             [[ "${{ needs.detect-relevant-changes.outputs.windows_contract_scenarios }}" == "true" && "${{ needs.windows-contract-scenarios.result }}" != "success" ]]; then
+            echo "❌ Required Windows security lane was selected but did not succeed"
             exit 1
           fi
 
