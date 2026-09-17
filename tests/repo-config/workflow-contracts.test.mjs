@@ -1366,6 +1366,15 @@ test('required Windows CI runs Pester in an untracked child host without success
     'the isolated Pester runner should not block indefinitely waiting for stdout or stderr after timeout'
   );
   assert.ok(
+    windowsPesterRunner.includes(
+      "Receive-CompletedStream -Task $stdoutTask -StreamName 'STDOUT'"
+    ) &&
+      windowsPesterRunner.includes(
+        "Receive-CompletedStream -Task $stderrTask -StreamName 'STDERR'"
+      ),
+    'the isolated Pester runner should bound normal stdout/stderr drains after child exit'
+  );
+  assert.ok(
     windowsPesterRunner.includes('KillIssued=$killedProcess'),
     'the isolated Pester runner should report whether the child process kill was issued on timeout'
   );

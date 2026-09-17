@@ -135,8 +135,11 @@ function Invoke-IsolatedPesterHost {
             throw "Isolated Windows Pester host timed out after $TimeoutSeconds seconds. KillIssued=$killedProcess.`nSTDOUT:`n$stdout`nSTDERR:`n$stderr"
         }
 
-        $stdout = $stdoutTask.GetAwaiter().GetResult()
-        $stderr = $stderrTask.GetAwaiter().GetResult()
+        # A child can exit while a descendant still owns an inherited pipe.
+        # Bound the normal drain too; otherwise the outer job can hang forever
+        # after the Pester process has already produced its exit code.
+        $stdout = Receive-CompletedStream -Task $stdoutTask -StreamName 'STDOUT'
+        $stderr = Receive-CompletedStream -Task $stderrTask -StreamName 'STDERR'
 
         if ($stdout) {
             $stdout | Out-Host
