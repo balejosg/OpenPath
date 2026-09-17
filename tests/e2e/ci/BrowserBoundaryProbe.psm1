@@ -1062,7 +1062,9 @@ try {
     $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-native-policy-$([guid]::NewGuid()).xml"
     try {
         Set-Content -LiteralPath $policyPath -Value $effectivePolicyXml -Encoding UTF8 -ErrorAction Stop
-        $decisions = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path @($ExecutablePath) -User $StudentSid)
+        $evaluationPaths = [System.Collections.Generic.List[string]]::new()
+        $evaluationPaths.Add($ExecutablePath)
+        $decisions = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path $evaluationPaths -User $StudentSid)
     }
     finally {
         Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue
@@ -1206,7 +1208,9 @@ function Get-OpenPathTestAppLockerPolicyDecision {
         $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-policy-evaluation-$([guid]::NewGuid()).xml"
         try {
             Set-Content -LiteralPath $policyPath -Value $effectivePolicyXml -Encoding UTF8 -ErrorAction Stop
-            $decisions = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path @($ExecutablePath) -User $StudentSid)
+            $evaluationPaths = [System.Collections.Generic.List[string]]::new()
+            $evaluationPaths.Add($ExecutablePath)
+            $decisions = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path $evaluationPaths -User $StudentSid)
         }
         finally {
             Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue

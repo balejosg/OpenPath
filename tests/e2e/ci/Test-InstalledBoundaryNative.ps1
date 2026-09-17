@@ -22,7 +22,9 @@ try {
     $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-installed-boundary-$([guid]::NewGuid()).xml"
     try {
         Set-Content -LiteralPath $policyPath -Value $effective -Encoding UTF8 -ErrorAction Stop
-        $decisions = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path $paths -User $StudentSid)
+        $evaluationPaths = [System.Collections.Generic.List[string]]::new()
+        foreach ($candidatePath in $paths) { $evaluationPaths.Add([string]$candidatePath) }
+        $decisions = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Path $evaluationPaths -User $StudentSid)
     }
     finally {
         Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue
