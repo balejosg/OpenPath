@@ -1025,13 +1025,13 @@ describe('repository verification contract', () => {
     );
     assert.match(
       browserBoundaryCi,
-      /Set-Item -Path Function:\\global:Set-OpenPathNonAdminAppControl[\s\S]*?Invoke-OpenPathWatchdogAppControlHealth[\s\S]*?finally \{[\s\S]*?Remove-Item -Path Function:\\global:Set-OpenPathNonAdminAppControl/s,
+      /Set-AppLockerPolicy -XMLPolicy \$repairDamagedPolicyPath[\s\S]*?Set-Item -Path Function:\\global:Set-OpenPathNonAdminAppControl[\s\S]*?Invoke-OpenPathWatchdogAppControlHealth[\s\S]*?finally \{[\s\S]*?Remove-Item -Path Function:\\global:Set-OpenPathNonAdminAppControl/s,
       'repair-failure probe must use and remove a scoped Set-OpenPathNonAdminAppControl shadow'
     );
     assert.match(
       browserBoundaryCi,
-      /Remove-Item -Path Function:\\global:Set-OpenPathNonAdminAppControl[\s\S]*?Import-Module[\s\S]*?Set-OpenPathNonAdminAppControl/s,
-      'repair-failure cleanup must reload the production AppControl command before real restoration'
+      /Remove-Item -Path Function:\\global:Set-OpenPathNonAdminAppControl[\s\S]*?Import-Module[\s\S]*?Set-AppLockerPolicy -XMLPolicy \$repairOriginalPolicyPath/s,
+      'repair-failure cleanup must reload production AppControl before exact policy restoration'
     );
     assert.match(
       browserBoundaryCi,

@@ -726,12 +726,32 @@ function Invoke-OpenPathNegativeHealthProbes {
     }
 
     # Negative probe 4: keep the real unhealthy policy, then force only Set-* to fail.
-    $repairPolicyMutationApplied = $true
+    $repairPolicyMutationApplied = $false
     $repairShadowInstalled = $false
+    $repairOriginalPolicyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-repair-policy-$([guid]::NewGuid().ToString('N')).xml"
+    $repairDamagedPolicyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-repair-policy-damaged-$([guid]::NewGuid().ToString('N')).xml"
     try {
-        if (-not (Remove-OpenPathNonAdminAppControl)) {
-            throw 'OpenPath AppControl policy removal for repair probe failed'
+        $repairGroup = Get-LocalGroup -Name 'OpenPath-Restricted' -ErrorAction Stop
+        $repairGroupSid = [string]$repairGroup.SID.Value
+        $repairPolicyXml = [xml](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
+        $repairPolicyXml.Save($repairOriginalPolicyPath)
+        $repairRemovedRuleCount = 0
+        foreach ($collection in @($repairPolicyXml.AppLockerPolicy.RuleCollection)) {
+            foreach ($rule in @($collection.ChildNodes)) {
+                if ($rule.NodeType -eq [System.Xml.XmlNodeType]::Element -and
+                    $rule.GetAttribute('UserOrGroupSid') -eq $repairGroupSid) {
+                    [void]$collection.RemoveChild($rule)
+                    $repairRemovedRuleCount++
+                }
+            }
         }
+        if ($repairRemovedRuleCount -eq 0) {
+            throw 'Repair-failure probe found no restricted-group rules'
+        }
+        $repairPolicyXml.Save($repairDamagedPolicyPath)
+        Set-AppLockerPolicy -XMLPolicy $repairDamagedPolicyPath -ErrorAction Stop
+        Remove-Item -LiteralPath $repairDamagedPolicyPath -Force -ErrorAction SilentlyContinue
+        $repairPolicyMutationApplied = $true
         $unhealthyPolicyHealth = Get-OpenPathNonAdminAppControlHealth `
             -Mode $mode `
             -ApprovedBrowsers $approvedBrowsers `
@@ -773,14 +793,7 @@ function Invoke-OpenPathNegativeHealthProbes {
         }
         if ($repairPolicyMutationApplied) {
             try {
-                if (-not (Set-OpenPathNonAdminAppControl `
-                        -OpenPathRoot $OpenPathRoot `
-                        -Mode $mode `
-                        -ApprovedBrowsers $approvedBrowsers `
-                        -Profile $profile `
-                        -ApplicationCatalog $applicationCatalog)) {
-                    throw 'OpenPath AppControl policy apply returned false'
-                }
+                Set-AppLockerPolicy -XMLPolicy $repairOriginalPolicyPath -ErrorAction Stop
                 $restoredRepairHealth = Get-OpenPathNonAdminAppControlHealth `
                     -Mode $mode `
                     -ApprovedBrowsers $approvedBrowsers `
@@ -793,6 +806,8 @@ function Invoke-OpenPathNegativeHealthProbes {
                 throw 'OpenPath AppControl repair restoration failed'
             }
         }
+        Remove-Item -LiteralPath $repairDamagedPolicyPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $repairOriginalPolicyPath -Force -ErrorAction SilentlyContinue
     }
 
     $restoration = Get-OpenPathNegativeHealthRestoration `
