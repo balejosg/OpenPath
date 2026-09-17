@@ -1982,7 +1982,7 @@ Describe "AppControl Module" {
                 $env:SystemRoot = $global:opHealthPreviousSystemRoot
             }
             Remove-Item Function:\Set-AppLockerPolicy, Function:\Get-AppLockerPolicy, Function:\Get-Service, Function:\Get-LocalGroup, Function:\Get-LocalGroupMember, Function:\Get-CimInstance, Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
-            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthTargetState, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthRuntimeEvaluationCallCount, Variable:\opHealthRuntimeFirstPath, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthPreviousSystemRoot -ErrorAction SilentlyContinue
+            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthTargetState, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthRuntimeEvaluationCallCount, Variable:\opHealthRuntimeFirstPath, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthPreviousSystemRoot, Variable:\opHealthRequestedTargetSid -ErrorAction SilentlyContinue
         }
 
         It "returns a deterministic healthy contract and keeps the boolean compatibility seam" {
@@ -2110,6 +2110,28 @@ Describe "AppControl Module" {
             $health.ProfilePath | Should -Be ''
             @($health.Observed.RuntimeDecisions).Count | Should -BeGreaterThan 0
             @($health.ReasonCodes) | Should -Not -Contain 'appcontrol_restricted_target_missing'
+        }
+
+        It "preserves an explicitly requested restricted SID through health target resolution" {
+            $requestedSid = 'S-1-5-21-10-20-30-2222'
+            Mock Get-OpenPathAppControlProbeTarget {
+                param([string]$TargetSid)
+                $global:opHealthRequestedTargetSid = $TargetSid
+                [pscustomobject]@{
+                    GroupSid = $global:opHealthGroupSid
+                    UserSid = $TargetSid
+                    ProfilePath = ''
+                    IdentityResolved = $true
+                    ProfileAvailable = $false
+                    ValidationMode = 'profileless'
+                }
+            } -ModuleName AppControl
+
+            $health = Get-OpenPathNonAdminAppControlHealth -TargetSid $requestedSid
+
+            $global:opHealthRequestedTargetSid | Should -Be $requestedSid
+            $health.TargetSid | Should -Be $requestedSid
+            $health.ValidationMode | Should -Be 'profileless'
         }
 
         It "reports a stopped Application Identity service" {

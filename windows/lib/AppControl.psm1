@@ -1951,7 +1951,7 @@ function Get-OpenPathNonAdminAppControlHealth {
     $profileAvailable = $false
     $validationMode = 'not-observed'
     $groupSid = ''
-    $targetSid = ''
+    $resolvedTargetSid = ''
     $profilePath = ''
     $runtimeDecisions = [System.Collections.Generic.List[object]]::new()
 
@@ -1968,7 +1968,7 @@ function Get-OpenPathNonAdminAppControlHealth {
             $validationMode = [string]$probeTarget.ValidationMode
             $restrictedTargetDetail = if ($profileAvailable) { 'resolved' } else { 'member-profile-unavailable' }
             $groupSid = [string]$probeTarget.GroupSid
-            $targetSid = [string]$probeTarget.UserSid
+            $resolvedTargetSid = [string]$probeTarget.UserSid
             $profilePath = [string]$probeTarget.ProfilePath
         }
         catch {
@@ -1976,7 +1976,7 @@ function Get-OpenPathNonAdminAppControlHealth {
             $exceptionData = $_.Exception.Data
             $restrictedTargetDetail = if ($exceptionData -and $exceptionData['OpenPathDetail']) { [string]$exceptionData['OpenPathDetail'] } else { 'not-observed' }
             $groupSid = if ($exceptionData -and $exceptionData['OpenPathGroupSid']) { [string]$exceptionData['OpenPathGroupSid'] } else { '' }
-            $targetSid = if ($exceptionData -and $exceptionData['OpenPathTargetSid']) { [string]$exceptionData['OpenPathTargetSid'] } else { '' }
+            $resolvedTargetSid = if ($exceptionData -and $exceptionData['OpenPathTargetSid']) { [string]$exceptionData['OpenPathTargetSid'] } else { '' }
             & $addReasonCode 'appcontrol_restricted_target_missing'
         }
 
@@ -2249,7 +2249,7 @@ function Get-OpenPathNonAdminAppControlHealth {
         ExpectedProfile = $Profile
         RestrictedTargetDetail = $restrictedTargetDetail
         GroupSid = $groupSid
-        TargetSid = $targetSid
+        TargetSid = $resolvedTargetSid
         ProfilePath = $profilePath
         Expected = [pscustomobject][ordered]@{
             RestrictedTarget = 'group-member-with-optional-materialized-profile'
