@@ -2417,6 +2417,7 @@ test('canonical release input definitions are referenced by the promotion workfl
 test('Windows profileless PowerShell evidence is mandatory and source-bound', () => {
   const workflow = readText('.github/workflows/e2e-tests.yml');
   for (const harness of [
+    'run-windows-browser-boundary-ci\\.ps1',
     'DisposableWindowsTarget\\.psm1',
     'BrowserBoundaryProbe\\.psm1',
     'Test-InstalledBoundaryNative\\.ps1',

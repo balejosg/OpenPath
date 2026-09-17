@@ -222,7 +222,7 @@ jobs:
             linux_student_policy=true
           fi
 
-          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq "^(api/|shared/|windows/|runtime/|$firefox_runtime_pattern|tests/e2e/(ci/(run-windows-student-flow\.ps1|DisposableWindowsTarget\.psm1|BrowserBoundaryProbe\.psm1|Test-InstalledBoundaryNative\.ps1|run-windows-offline-installer-exe\.ps1)|student-flow/|validation/)|tests/selenium/|package\.json$|package-lock\.json$|scripts/require-release-quality-gate\.mjs$|\.github/actions/setup-node/|\.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml$)"; then
+          if [ "$release_infra_only" != "true" ] && echo "$changed_files" | grep -Eq "^(api/|shared/|windows/|runtime/|$firefox_runtime_pattern|tests/e2e/(ci/(run-windows-student-flow\.ps1|run-windows-browser-boundary-ci\.ps1|DisposableWindowsTarget\.psm1|BrowserBoundaryProbe\.psm1|Test-InstalledBoundaryNative\.ps1|run-windows-offline-installer-exe\.ps1)|student-flow/|validation/)|tests/selenium/|package\.json$|package-lock\.json$|scripts/require-release-quality-gate\.mjs$|\.github/actions/setup-node/|\.github/workflows/(e2e-tests|installer-contracts|prerelease-deb|release-extension|release-scripts)\.yml$)"; then
             windows_student_policy=true
             windows_student_policy_sse_group="$(printf '%s\n' "$changed_files" | node scripts/select-windows-student-policy-sse-group.mjs --from-stdin)"
             windows_student_policy_sse_reason="$(printf '%s\n' "$changed_files" | node scripts/select-windows-student-policy-sse-group.mjs --from-stdin --reason)"
