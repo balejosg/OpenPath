@@ -185,7 +185,14 @@ function New-OpenPathNamedMutex {
                     CreatedNew = [bool]$arguments[2]
                 }
             }
-            catch { throw 'appcontrol_transaction_security_failed' }
+            catch {
+                $createDetail = [string]$_.Exception.Message
+                if ($_.Exception.InnerException) {
+                    $createDetail = "$createDetail | inner: $([string]$_.Exception.InnerException.Message)"
+                }
+                Write-Warning "OpenPath MutexAcl.Create diagnostic: $createDetail"
+                throw 'appcontrol_transaction_security_failed'
+            }
         }
     }
 
