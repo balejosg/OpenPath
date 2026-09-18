@@ -178,8 +178,15 @@ function New-OpenPathNamedMutex {
         if ($createMethod.Count -eq 1) {
             try {
                 # Reflection updates the boxed third argument for the out bool.
-                $arguments = [object[]]@($false, $Name, $false, $Security)
+                $securityValue = if ($Security -is [System.Management.Automation.PSObject]) {
+                    $Security.PSObject.BaseObject
+                }
+                else { $Security }
+                $arguments = [object[]]@($false, $Name, $false, $securityValue)
                 $mutex = $createMethod[0].Invoke($null, $arguments)
+                if ($mutex -is [System.Management.Automation.PSObject]) {
+                    $mutex = $mutex.PSObject.BaseObject
+                }
                 return [PSCustomObject][ordered]@{
                     Mutex = $mutex
                     CreatedNew = [bool]$arguments[2]
