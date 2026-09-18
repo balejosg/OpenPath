@@ -70,6 +70,8 @@ export function placeholderPayloadText() {
       approvedStudentBrowsers: ['Firefox'],
       installFirefoxIfMissing: true,
       enforceManagedBrowserBoundary: true,
+      appControlProfile: 'StrictApplicationAllowlist',
+      approvedApplicationCatalog: { schemaVersion: 1, applications: [] },
     },
   });
 }

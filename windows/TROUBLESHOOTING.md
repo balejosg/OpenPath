@@ -152,6 +152,11 @@ Start-ScheduledTask -TaskName "OpenPath-SSE"
 
 ### AppLocker Diagnostics
 
+The reported black screen has no demonstrated cause in this repository. Do not
+label `dwm`, `winlogon`, or another process causal from temporal proximity alone.
+Capture local/effective policy and events first. Policy health is not GUI or
+reboot evidence; those claims require the authorized disposable-VM harness.
+
 AppLocker policy is applied only when the managed browser boundary is enabled. To inspect the current policy:
 
 ```powershell

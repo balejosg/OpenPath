@@ -911,7 +911,7 @@ Describe "AppControl Module" {
             $allowRule.GetAttribute('UserOrGroupSid') | Should -Be 'S-1-1-0'
             $condition = $allowRule.Conditions.FilePublisherCondition
             # Scoped to Microsoft-signed packages only — not a global wildcard publisher.
-            $condition.GetAttribute('PublisherName') | Should -Be 'O=MICROSOFT CORPORATION*'
+            $condition.GetAttribute('PublisherName') | Should -Be 'O=MICROSOFT CORPORATION'
             $condition.GetAttribute('ProductName') | Should -Be '*'
             $condition.GetAttribute('BinaryName') | Should -Be '*'
             $condition.BinaryVersionRange.GetAttribute('LowSection') | Should -Be '*'
@@ -936,7 +936,7 @@ Describe "AppControl Module" {
             $microsoftAllowRule = @($appxCollection.FilePublisherRule | Where-Object {
                 $_.GetAttribute('Action') -eq 'Allow' -and
                 $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
-                $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq 'O=MICROSOFT CORPORATION*' -and
+                $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq 'O=MICROSOFT CORPORATION' -and
                 $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
             })
             $microsoftAllowRule.Count | Should -Be 1
@@ -1053,7 +1053,7 @@ Describe "AppControl Module" {
             $microsoftAllowRule = @($appxCollection.FilePublisherRule | Where-Object {
                     $_.GetAttribute('Action') -eq 'Allow' -and
                     $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
-                    $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq 'O=MICROSOFT CORPORATION*' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq 'O=MICROSOFT CORPORATION' -and
                     $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
                 })
             $microsoftAllowRule.Count | Should -Be 1
@@ -1198,7 +1198,7 @@ Describe "AppControl Module" {
             $openPathAppxRule.GetAttribute('Action') | Should -Be 'Allow'
             $openPathAppxRule.GetAttribute('UserOrGroupSid') | Should -Be 'S-1-1-0'
             # Scoped to Microsoft-signed packages only — not a global wildcard publisher.
-            $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('PublisherName') | Should -Be 'O=MICROSOFT CORPORATION*'
+            $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('PublisherName') | Should -Be 'O=MICROSOFT CORPORATION'
             $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('ProductName') | Should -Be '*'
             $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('BinaryName') | Should -Be '*'
             $openPathAppxRule.Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('LowSection') | Should -Be '*'
@@ -2677,5 +2677,45 @@ Describe "AppControl Module" {
 
     AfterAll {
         Remove-Item Function:\Get-LocalGroup -ErrorAction SilentlyContinue
+    }
+
+    Context "P0 Windows runtime and strict boundary regressions" {
+        It "keeps the Windows EXE and DLL base separate from Script and Msi" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -Mode Enforced -Profile StrictApplicationAllowlist
+            $spec.WindowsRuntimeAllowPathsByCollection.Exe | Should -Contain '%WINDIR%\*'
+            $spec.WindowsRuntimeAllowPathsByCollection.Dll | Should -Contain '%WINDIR%\*'
+            @($spec.WindowsRuntimeAllowPathsByCollection.Script) | Should -Not -Contain '%WINDIR%\*'
+            @($spec.WindowsRuntimeAllowPathsByCollection.Msi) | Should -Not -Contain '%WINDIR%\*'
+        }
+
+        It "does not generate a partial publisher wildcard or a global strict Appx allow" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -Mode Enforced -Profile StrictApplicationAllowlist
+            [xml]$xml = New-OpenPathAppLockerPolicyXml -Spec $spec
+            $appx = @($xml.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+            @($appx.FilePublisherRule | ForEach-Object { $_.Conditions.FilePublisherCondition }) |
+                Where-Object { $_.GetAttribute('PublisherName') -match '\*' -and $_.GetAttribute('PublisherName') -ne '*' } |
+                Should -BeNullOrEmpty
+            @($appx.FilePublisherRule | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Allow' -and
+                    $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
+                }).Count | Should -Be 0
+        }
+
+        It "fails closed when a runtime baseline cannot be resolved before Set-AppLockerPolicy" {
+            (Get-Command Test-OpenPathWindowsRuntimeBaseline -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
+            (Get-Command Invoke-OpenPathAppLockerPackageEvaluation -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
+            $moduleContent = Get-Content (Join-Path $PSScriptRoot '..\lib\AppControl.psm1') -Raw
+            $moduleContent | Should -Match 'appcontrol_windows_runtime_inventory_failed'
+            $moduleContent | Should -Match 'Set-AppLockerPolicy.*WindowsRuntime'
+        }
+
+        It "models rollback as verified readback rather than successful cmdlet return" {
+            $moduleContent = Get-Content (Join-Path $PSScriptRoot '..\lib\AppControl.Transaction.psm1') -Raw
+            $moduleContent | Should -Match 'before-local\.xml'
+            $moduleContent | Should -Match 'before-effective\.xml'
+            $moduleContent | Should -Match 'rollback-verification-failed|appcontrol_rollback_verification_failed'
+            $moduleContent | Should -Match 'recovery-required'
+        }
     }
 }

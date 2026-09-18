@@ -25,7 +25,10 @@ param(
 
     [int]$ConnectivityPort = 18443,
 
-    [string]$ArtifactsRoot = ''
+    [string]$ArtifactsRoot = '',
+
+    # Keep the verified installation for the separate desktop-survival lane.
+    [switch]$PreserveInstallation
 )
 
 $ErrorActionPreference = 'Stop'
@@ -704,7 +707,8 @@ function Invoke-PhysicalExeE2E {
         -ExpectedClassroomId $ClassroomId `
         -ExpectedApiUrl "https://localhost:$ConnectivityPort" `
         -ConnectivityPort $ConnectivityPort `
-        -EvidencePath $evidencePath
+        -EvidencePath $evidencePath `
+        -PreserveInstallation:$PreserveInstallation
     if ($LASTEXITCODE -ne 0) {
         if (Test-Path -LiteralPath $evidencePath -PathType Leaf) {
             try {
@@ -831,7 +835,8 @@ try {
         pendingStateObserved     = [bool]$exeEvidence.pendingStateObserved
         retryOutcome             = [string]$exeEvidence.retryOutcome
         pendingStateCleared      = [bool]$exeEvidence.pendingStateCleared
-        uninstalled               = $true
+        uninstalled               = -not $PreserveInstallation
+        installationPreserved     = [bool]$PreserveInstallation
     }
     Write-SafeEvidence -Payload $success
 }

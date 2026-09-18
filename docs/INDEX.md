@@ -7,6 +7,8 @@
 
 ## Start Here
 
+- Windows strict application allowlist: [`docs/windows-strict-application-allowlist.md`](windows-strict-application-allowlist.md)
+
 - Repo overview: [`README.md`](../README.md)
 - LLM agent workflow: [`AGENTS.md`](../AGENTS.md)
 - Contribution guide: [`CONTRIBUTING.md`](../CONTRIBUTING.md)

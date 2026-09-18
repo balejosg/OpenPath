@@ -50,6 +50,11 @@ function New-OpenPathInstallerConfig {
 
         [bool]$EnforceManagedBrowserBoundary = $false,
 
+        [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
+        [string]$AppControlProfile = 'ManagedBrowserCompatibility',
+
+        [object]$ApprovedApplicationCatalog = $null,
+
         [string[]]$ApprovedStudentBrowsers = @('Firefox'),
 
         [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
@@ -89,6 +94,8 @@ function New-OpenPathInstallerConfig {
         installState = 'installing'
         appControlCommitState = if ($EnforceManagedBrowserBoundary) { 'pending' } else { 'none' }
         enforceManagedBrowserBoundary = $EnforceManagedBrowserBoundary
+        appControlProfile = $AppControlProfile
+        approvedApplicationCatalog = if ($ApprovedApplicationCatalog) { $ApprovedApplicationCatalog } else { [pscustomobject]@{ schemaVersion = 1; applications = @() } }
         approvedStudentBrowsers = @($ApprovedStudentBrowsers)
         browserCleanupMode = $BrowserCleanupMode
         dohResolverIps = @(Get-DefaultDohResolverIps)
