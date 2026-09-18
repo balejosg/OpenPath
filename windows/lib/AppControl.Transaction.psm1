@@ -247,7 +247,6 @@ function Open-OpenPathNamedMutexFullControl {
             $opened = $opened.PSObject.BaseObject
         }
         if ($null -ne $opened -and $opened -ne $Mutex) {
-            $Mutex.Dispose()
             return $opened
         }
     }
@@ -294,6 +293,7 @@ function Enter-OpenPathAppControlTransaction {
     }
     $createdNew = $false
     $mutex = $null
+    $aclMutex = $null
     if (Test-OpenPathTransactionWindows) {
         $securityStage = 'security-build'
         try {
@@ -306,13 +306,14 @@ function Enter-OpenPathAppControlTransaction {
             # default rights even when it applied the requested DACL. Always
             # reopen the named object with FullControl before reading or
             # normalizing its descriptor; this also repairs a stale object
-            # left by an interrupted process.
+            # left by an interrupted process. Keep the Create handle for
+            # WaitOne so process death remains observable as abandonment.
             $securityStage = 'mutex-open-full-control'
-            $mutex = Open-OpenPathNamedMutexFullControl -Name $mutexName -Mutex $mutex
+            $aclMutex = Open-OpenPathNamedMutexFullControl -Name $mutexName -Mutex $mutex
             $securityStage = 'mutex-set-acl'
-            Set-OpenPathMutexAccessControl -Mutex $mutex -Security $security
+            Set-OpenPathMutexAccessControl -Mutex $aclMutex -Security $security
             $securityStage = 'mutex-read-acl'
-            $existing = Get-OpenPathMutexAccessControl -Mutex $mutex
+            $existing = Get-OpenPathMutexAccessControl -Mutex $aclMutex
             if ($null -eq $existing) { throw 'appcontrol_transaction_security_failed' }
             $allowedSids = @('S-1-5-18', 'S-1-5-32-544')
             $securityStage = 'mutex-verify-acl'
@@ -332,6 +333,7 @@ function Enter-OpenPathAppControlTransaction {
                 catch { $aceSid = [string]$ace.IdentityReference }
                 if ($aceSid -and $allowedSids -notcontains $aceSid) { throw 'appcontrol_transaction_security_failed' }
             }
+            if ($null -ne $aclMutex -and $aclMutex -ne $mutex) { $aclMutex.Dispose(); $aclMutex = $null }
         }
         catch {
             $securityDetail = [string]$_.Exception.Message
@@ -339,6 +341,7 @@ function Enter-OpenPathAppControlTransaction {
                 $securityDetail = "$securityDetail | inner: $([string]$_.Exception.InnerException.Message)"
             }
             Write-Warning "OpenPath AppControl mutex ACL diagnostic: stage=$securityStage; $securityDetail"
+            if ($null -ne $aclMutex -and $aclMutex -ne $mutex) { $aclMutex.Dispose() }
             if ($null -ne $mutex) { $mutex.Dispose() }
             throw 'appcontrol_transaction_security_failed'
         }
