@@ -98,19 +98,25 @@ Describe 'AppControl transaction journal' {
         $otherRoot = Join-Path $TestDrive 'root-two'
         $childScript = Join-Path $TestDrive 'hold-transaction.ps1'
         $signalPath = Join-Path $TestDrive 'child-ready.txt'
+        $terminatePath = Join-Path $TestDrive 'child-terminate.txt'
         @'
-param([string]$ModulePath, [string]$Root, [string]$SignalPath)
+param([string]$ModulePath, [string]$Root, [string]$SignalPath, [string]$TerminatePath)
 $ErrorActionPreference = 'Stop'
 Import-Module $ModulePath -Force -Global
 $lock = Enter-OpenPathAppControlTransaction -OpenPathRoot $Root -TimeoutMilliseconds 5000
 if (-not $lock.Acquired) { [IO.File]::WriteAllText($SignalPath, 'failed'); exit 3 }
 [IO.File]::WriteAllText($SignalPath, 'ready')
-Start-Sleep -Seconds 10
+$deadline = [DateTime]::UtcNow.AddSeconds(15)
+while (-not (Test-Path -LiteralPath $TerminatePath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
+    Start-Sleep -Milliseconds 25
+}
+if (-not (Test-Path -LiteralPath $TerminatePath -PathType Leaf)) { exit 4 }
+[Diagnostics.Process]::GetCurrentProcess().Kill()
 '@ | Set-Content -LiteralPath $childScript -Encoding UTF8
 
         $child = Start-Process -FilePath $childHost.Source -ArgumentList @(
             '-NoProfile', '-NonInteractive', '-File', $childScript,
-            (Join-Path $PSScriptRoot '..\lib\AppControl.Transaction.psm1'), $root, $signalPath
+            (Join-Path $PSScriptRoot '..\lib\AppControl.Transaction.psm1'), $root, $signalPath, $terminatePath
         ) -PassThru
         try {
             $deadline = [DateTime]::UtcNow.AddSeconds(5)
@@ -123,7 +129,7 @@ Start-Sleep -Seconds 10
             $busy.Acquired | Should -BeFalse
             $busy.ReasonCode | Should -Be 'appcontrol_transaction_busy'
 
-            Stop-Process -Id $child.Id -Force
+            [IO.File]::WriteAllText($terminatePath, 'terminate')
             Wait-Process -Id $child.Id -Timeout 5 -ErrorAction SilentlyContinue
             $abandoned = Enter-OpenPathAppControlTransaction -OpenPathRoot $otherRoot -TimeoutMilliseconds 1000
             try {
