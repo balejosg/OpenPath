@@ -99,13 +99,34 @@ function Set-OpenPathTransactionAcl {
     catch { throw 'appcontrol_transaction_security_failed' }
 }
 
+function Get-OpenPathMutexAclAssembly {
+    $assembly = @([AppDomain]::CurrentDomain.GetAssemblies() |
+        Where-Object { $_.GetName().Name -eq 'System.Threading.AccessControl' } |
+        Select-Object -First 1)
+    if ($assembly.Count -eq 1) { return $assembly[0] }
+
+    try { Add-Type -AssemblyName 'System.Threading.AccessControl' -ErrorAction Stop } catch {}
+    $assembly = @([AppDomain]::CurrentDomain.GetAssemblies() |
+        Where-Object { $_.GetName().Name -eq 'System.Threading.AccessControl' } |
+        Select-Object -First 1)
+    if ($assembly.Count -eq 1) { return $assembly[0] }
+
+    try { return [System.Reflection.Assembly]::Load('System.Threading.AccessControl') }
+    catch { return $null }
+}
+
 function Get-OpenPathMutexAclExtensionType {
-    $type = [Type]::GetType('System.Threading.ThreadingAclExtensions, System.Threading.AccessControl', $false)
-    if ($null -eq $type) {
-        try { Add-Type -AssemblyName 'System.Threading.AccessControl' -ErrorAction Stop } catch {}
-        $type = [Type]::GetType('System.Threading.ThreadingAclExtensions, System.Threading.AccessControl', $false)
-    }
-    return $type
+    $assembly = Get-OpenPathMutexAclAssembly
+    if ($null -eq $assembly) { return $null }
+    try { return $assembly.GetType('System.Threading.ThreadingAclExtensions', $false) }
+    catch { return $null }
+}
+
+function Get-OpenPathMutexAclFactoryType {
+    $assembly = Get-OpenPathMutexAclAssembly
+    if ($null -eq $assembly) { return $null }
+    try { return $assembly.GetType('System.Threading.MutexAcl', $false) }
+    catch { return $null }
 }
 
 function Invoke-OpenPathMutexAclExtension {
@@ -118,13 +139,91 @@ function Invoke-OpenPathMutexAclExtension {
     if ($null -eq $type) { throw 'appcontrol_transaction_security_failed' }
     $parameterCount = if ($MethodName -eq 'GetAccessControl') { 1 } else { 2 }
     $method = @($type.GetMethods([System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::Static) |
-        Where-Object { $_.Name -eq $MethodName -and $_.GetParameters().Count -eq $parameterCount } |
+        Where-Object {
+            if ($_.Name -ne $MethodName) { return $false }
+            $parameters = $_.GetParameters()
+            if ($parameters.Count -ne $parameterCount -or $parameters[0].ParameterType -ne [System.Threading.Mutex]) { return $false }
+            if ($MethodName -eq 'SetAccessControl' -and
+                $parameters[1].ParameterType -ne [System.Security.AccessControl.MutexSecurity]) { return $false }
+            return $true
+        } |
         Select-Object -First 1)
     if ($method.Count -ne 1) { throw 'appcontrol_transaction_security_failed' }
     if ($MethodName -eq 'GetAccessControl') {
         return $method[0].Invoke($null, @($Mutex))
     }
     return $method[0].Invoke($null, @($Mutex, $Security))
+}
+
+function New-OpenPathNamedMutex {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][object]$Security
+    )
+
+    $factoryType = Get-OpenPathMutexAclFactoryType
+    if ($null -ne $factoryType) {
+        $createMethod = @($factoryType.GetMethods([System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::Static) |
+            Where-Object {
+                if ($_.Name -ne 'Create') { return $false }
+                $parameters = $_.GetParameters()
+                if ($parameters.Count -ne 4) { return $false }
+                return $parameters[0].ParameterType -eq [bool] -and
+                    $parameters[1].ParameterType -eq [string] -and
+                    $parameters[2].ParameterType.IsByRef -and
+                    $parameters[2].ParameterType.GetElementType() -eq [bool] -and
+                    $parameters[3].ParameterType -eq [System.Security.AccessControl.MutexSecurity]
+            } |
+            Select-Object -First 1)
+        if ($createMethod.Count -eq 1) {
+            try {
+                # Reflection updates the boxed third argument for the out bool.
+                $arguments = [object[]]@($false, $Name, $false, $Security)
+                $mutex = $createMethod[0].Invoke($null, $arguments)
+                return [PSCustomObject][ordered]@{
+                    Mutex = $mutex
+                    CreatedNew = [bool]$arguments[2]
+                }
+            }
+            catch { throw 'appcontrol_transaction_security_failed' }
+        }
+    }
+
+    $createdNew = $false
+    try {
+        $mutex = New-Object System.Threading.Mutex($false, $Name, [ref]$createdNew)
+        return [PSCustomObject][ordered]@{ Mutex = $mutex; CreatedNew = [bool]$createdNew }
+    }
+    catch { throw 'appcontrol_transaction_security_failed' }
+}
+
+function Open-OpenPathNamedMutexFullControl {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][object]$Mutex
+    )
+
+    $factoryType = Get-OpenPathMutexAclFactoryType
+    if ($null -eq $factoryType) { return $Mutex }
+    $openMethod = @($factoryType.GetMethods([System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::Static) |
+        Where-Object {
+            if ($_.Name -ne 'OpenExisting') { return $false }
+            $parameters = $_.GetParameters()
+            return $parameters.Count -eq 2 -and
+                $parameters[0].ParameterType -eq [string] -and
+                $parameters[1].ParameterType -eq [System.Threading.MutexRights]
+        } |
+        Select-Object -First 1)
+    if ($openMethod.Count -ne 1) { return $Mutex }
+    try {
+        $opened = $openMethod[0].Invoke($null, [object[]]@($Name, [System.Threading.MutexRights]::FullControl))
+        if ($null -ne $opened -and $opened -ne $Mutex) {
+            $Mutex.Dispose()
+            return $opened
+        }
+    }
+    catch { throw 'appcontrol_transaction_security_failed' }
+    return $Mutex
 }
 
 function Get-OpenPathMutexAccessControl {
@@ -165,42 +264,46 @@ function Enter-OpenPathAppControlTransaction {
         return [PSCustomObject][ordered]@{ Acquired = $false; Abandoned = $false; ReasonCode = 'appcontrol_transaction_busy'; Mutex = $null; MutexName = $mutexName }
     }
     $createdNew = $false
-    try {
-        $mutex = New-Object System.Threading.Mutex($false, $mutexName, [ref]$createdNew)
-    }
-    catch { throw 'appcontrol_transaction_security_failed' }
+    $mutex = $null
     if (Test-OpenPathTransactionWindows) {
         try {
             $security = Get-OpenPathMutexSecurity
-            if ($createdNew) { Set-OpenPathMutexAccessControl -Mutex $mutex -Security $security }
-            else {
-                # A mutex can outlive an interrupted runner process.  Replace
-                # its descriptor before waiting so a stale default DACL cannot
-                # make every later transaction fail closed.
+            $mutexInfo = New-OpenPathNamedMutex -Name $mutexName -Security $security
+            $mutex = $mutexInfo.Mutex
+            $createdNew = [bool]$mutexInfo.CreatedNew
+            if (-not $createdNew) {
+                # A mutex can outlive an interrupted runner process.  Open it
+                # with full control before replacing a stale/default DACL.
+                $mutex = Open-OpenPathNamedMutexFullControl -Name $mutexName -Mutex $mutex
                 Set-OpenPathMutexAccessControl -Mutex $mutex -Security $security
-                $existing = Get-OpenPathMutexAccessControl -Mutex $mutex
-                $allowedSids = @('S-1-5-18', 'S-1-5-32-544')
-                foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
-                    $hasRule = @($existing.Access | Where-Object {
-                            try { [string]$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sidText }
-                            catch {
-                                if ($sidText -eq 'S-1-5-18') { [string]$_.IdentityReference -match '(?i)SYSTEM' }
-                                else { [string]$_.IdentityReference -match '(?i)Administrators' }
-                            }
-                        }).Count -gt 0
-                    if (-not $hasRule) { throw 'appcontrol_transaction_security_failed' }
-                }
-                foreach ($ace in @($existing.Access)) {
-                    try { $aceSid = [string]$ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }
-                    catch { $aceSid = [string]$ace.IdentityReference }
-                    if ($aceSid -and $allowedSids -notcontains $aceSid) { throw 'appcontrol_transaction_security_failed' }
-                }
+            }
+            $existing = Get-OpenPathMutexAccessControl -Mutex $mutex
+            if ($null -eq $existing) { throw 'appcontrol_transaction_security_failed' }
+            $allowedSids = @('S-1-5-18', 'S-1-5-32-544')
+            foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
+                $hasRule = @($existing.Access | Where-Object {
+                        try { [string]$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sidText }
+                        catch {
+                            if ($sidText -eq 'S-1-5-18') { [string]$_.IdentityReference -match '(?i)SYSTEM' }
+                            else { [string]$_.IdentityReference -match '(?i)Administrators' }
+                        }
+                    }).Count -gt 0
+                if (-not $hasRule) { throw 'appcontrol_transaction_security_failed' }
+            }
+            foreach ($ace in @($existing.Access)) {
+                try { $aceSid = [string]$ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }
+                catch { $aceSid = [string]$ace.IdentityReference }
+                if ($aceSid -and $allowedSids -notcontains $aceSid) { throw 'appcontrol_transaction_security_failed' }
             }
         }
         catch {
-            $mutex.Dispose()
+            if ($null -ne $mutex) { $mutex.Dispose() }
             throw 'appcontrol_transaction_security_failed'
         }
+    }
+    else {
+        try { $mutex = New-Object System.Threading.Mutex($false, $mutexName, [ref]$createdNew) }
+        catch { throw 'appcontrol_transaction_security_failed' }
     }
     $abandoned = $false
     try {
