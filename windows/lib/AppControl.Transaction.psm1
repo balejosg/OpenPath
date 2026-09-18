@@ -302,14 +302,47 @@ function Enter-OpenPathAppControlTransaction {
             $mutexInfo = New-OpenPathNamedMutex -Name $mutexName -Security $security
             $mutex = $mutexInfo.Mutex
             $createdNew = [bool]$mutexInfo.CreatedNew
-            # MutexAcl.Create may return a handle with the constructor's
-            # default rights even when it applied the requested DACL. Always
-            # reopen the named object with FullControl before reading or
-            # normalizing its descriptor; this also repairs a stale object
-            # left by an interrupted process. Keep the Create handle for
-            # WaitOne so process death remains observable as abandonment.
+            # Keep the Create handle for WaitOne so process death remains
+            # observable as abandonment. Use a separate full-control handle
+            # for ACL normalization after ownership is acquired.
             $securityStage = 'mutex-open-full-control'
             $aclMutex = Open-OpenPathNamedMutexFullControl -Name $mutexName -Mutex $mutex
+        }
+        catch {
+            $securityDetail = [string]$_.Exception.Message
+            if ($_.Exception.InnerException) {
+                $securityDetail = "$securityDetail | inner: $([string]$_.Exception.InnerException.Message)"
+            }
+            Write-Warning "OpenPath AppControl mutex ACL diagnostic: stage=$securityStage; $securityDetail"
+            if ($null -ne $aclMutex -and $aclMutex -ne $mutex) { $aclMutex.Dispose() }
+            if ($null -ne $mutex) { $mutex.Dispose() }
+            throw 'appcontrol_transaction_security_failed'
+        }
+    }
+    else {
+        try { $mutex = New-Object System.Threading.Mutex($false, $mutexName, [ref]$createdNew) }
+        catch { throw 'appcontrol_transaction_security_failed' }
+    }
+    $abandoned = $false
+    try {
+        $acquired = $mutex.WaitOne($TimeoutMilliseconds)
+    }
+    catch [System.Threading.AbandonedMutexException] {
+        $acquired = $true
+        $abandoned = $true
+    }
+    catch {
+        if ($null -ne $aclMutex -and $aclMutex -ne $mutex) { $aclMutex.Dispose() }
+        $mutex.Dispose()
+        return [PSCustomObject][ordered]@{ Acquired = $false; Abandoned = $false; ReasonCode = 'appcontrol_transaction_busy'; Mutex = $null; MutexName = $mutexName }
+    }
+    if (-not $acquired) {
+        if ($null -ne $aclMutex -and $aclMutex -ne $mutex) { $aclMutex.Dispose() }
+        $mutex.Dispose()
+        return [PSCustomObject][ordered]@{ Acquired = $false; Abandoned = $false; ReasonCode = 'appcontrol_transaction_busy'; Mutex = $null; MutexName = $mutexName }
+    }
+    if (Test-OpenPathTransactionWindows) {
+        try {
             $securityStage = 'mutex-set-acl'
             Set-OpenPathMutexAccessControl -Mutex $aclMutex -Security $security
             $securityStage = 'mutex-read-acl'
@@ -342,29 +375,10 @@ function Enter-OpenPathAppControlTransaction {
             }
             Write-Warning "OpenPath AppControl mutex ACL diagnostic: stage=$securityStage; $securityDetail"
             if ($null -ne $aclMutex -and $aclMutex -ne $mutex) { $aclMutex.Dispose() }
-            if ($null -ne $mutex) { $mutex.Dispose() }
+            try { $mutex.ReleaseMutex() } catch {}
+            $mutex.Dispose()
             throw 'appcontrol_transaction_security_failed'
         }
-    }
-    else {
-        try { $mutex = New-Object System.Threading.Mutex($false, $mutexName, [ref]$createdNew) }
-        catch { throw 'appcontrol_transaction_security_failed' }
-    }
-    $abandoned = $false
-    try {
-        $acquired = $mutex.WaitOne($TimeoutMilliseconds)
-    }
-    catch [System.Threading.AbandonedMutexException] {
-        $acquired = $true
-        $abandoned = $true
-    }
-    catch {
-        $mutex.Dispose()
-        return [PSCustomObject][ordered]@{ Acquired = $false; Abandoned = $false; ReasonCode = 'appcontrol_transaction_busy'; Mutex = $null; MutexName = $mutexName }
-    }
-    if (-not $acquired) {
-        $mutex.Dispose()
-        return [PSCustomObject][ordered]@{ Acquired = $false; Abandoned = $false; ReasonCode = 'appcontrol_transaction_busy'; Mutex = $null; MutexName = $mutexName }
     }
     $script:HeldMutexNames[$mutexName] = $true
     [PSCustomObject][ordered]@{ Acquired = $true; Abandoned = $abandoned; ReasonCode = $null; Mutex = $mutex; MutexName = $mutexName; OpenPathRoot = [IO.Path]::GetFullPath($OpenPathRoot) }
