@@ -11,6 +11,24 @@ if (-not (Get-Command Remove-LocalGroupMember -ErrorAction SilentlyContinue)) { 
 $modulePath = Join-Path $PSScriptRoot ".." "lib"
 Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
 Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
+Import-Module "$modulePath\AppControl.WindowsRuntime.psm1" -Force -Global -ErrorAction Stop
+
+function global:New-TestAppControlInstalledConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [string]$Profile = 'ManagedBrowserCompatibility',
+        [string]$Mode = 'Enforced'
+    )
+    $data = Join-Path $Root 'data'
+    New-Item -ItemType Directory -Path $data -Force | Out-Null
+    [pscustomobject][ordered]@{
+        appControlProfile = $Profile
+        nonAdminAppControlMode = $Mode
+        appControlCommitState = 'pending'
+        activeAppControlProfile = 'none'
+        installState = 'installing'
+    } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $data 'config.json') -Encoding UTF8
+}
 
 Describe "AppControl Module" {
     Context 'issue 256 strict application allowlist' {
@@ -233,22 +251,37 @@ Describe "AppControl Module" {
 
         It 'keeps approved Edge Appx and browser DLL allowances scoped to discovered identities' {
             Mock Get-OpenPathEdgeAppxProductNames { @('Microsoft.MicrosoftEdge.Stable') } -ModuleName AppControl
+            Import-Module (Join-Path $modulePath 'AppControl.WindowsRuntime.psm1') -Force -Global
             $inventory = [pscustomobject]@{
                 DiscoveryStatus = 'Complete'; DiscoveryErrors = @()
                 ExecutableIdentities = @([pscustomobject]@{
                     Family = 'Edge'; ExecutablePath = 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'; IsApproved = $true
                 })
             }
+            $runtimePackage = [pscustomobject]@{
+                Name = 'Microsoft.MicrosoftEdge.Stable'; PublisherId = 'Microsoft'; Version = '1.0.0.0'
+                InstallLocation = 'C:\Windows\SystemApps\Microsoft.MicrosoftEdge.Stable_1'
+                Dependencies = @()
+                AppLockerIdentity = [pscustomobject]@{
+                    AppX = $true
+                    Publisher = [pscustomobject]@{
+                        PublisherName = 'CN=Microsoft Edge'; ProductName = 'Microsoft.MicrosoftEdge.Stable'; BinaryName = '*'
+                    }
+                }
+            }
+            $runtimeBaseline = Get-OpenPathWindowsRuntimeBaseline -PackageInventory @($runtimePackage) `
+                -OsIdentity ([pscustomobject]@{ ProductType = 'client'; Edition = 'Pro'; Build = '26100'; Architecture = 'x64' }) `
+                -WindowsRoot 'C:\Windows' -AppLockerIdentityResolver { param($package) $package.AppLockerIdentity }
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' `
                 -Profile StrictApplicationAllowlist -ApprovedBrowsers @('Edge') `
                 -ApplicationCatalog ([pscustomobject]@{ schemaVersion = 1; applications = @() }) `
-                -BrowserInventory $inventory
+                -BrowserInventory $inventory -WindowsRuntimeBaseline $runtimeBaseline
             $spec.AllowPathsByCollection.Dll | Should -Contain 'C:\Program Files\Microsoft\Edge\Application\*'
             $xml = [xml](New-OpenPathAppLockerPolicyXml -Spec $spec)
             $appx = @($xml.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Appx')
             @($appx.FilePublisherRule | Where-Object {
                     $_.UserOrGroupSid -eq $spec.RestrictedSid -and
-                    $_.Conditions.FilePublisherCondition.PublisherName -eq 'O=MICROSOFT CORPORATION*' -and
+                    $_.Conditions.FilePublisherCondition.PublisherName -eq 'CN=Microsoft Edge' -and
                     $_.Conditions.FilePublisherCondition.ProductName -eq 'Microsoft.MicrosoftEdge.Stable'
                 }).Count | Should -Be 1
         }
@@ -509,7 +542,9 @@ Describe "AppControl Module" {
                 Mock Invoke-OpenPathAppControlPolicyConverterActivation { $script:setTrace.Add('activation'); [pscustomobject]@{status='observed';code='task-run-observed'} }
                 Mock Test-OpenPathNonAdminAppControlActive { $script:setTrace.Add('health'); $true }
                 Mock Write-OpenPathLog {}
+                Mock Sync-OpenPathRestrictedGroup { $true }
 
+                New-TestAppControlInstalledConfig -Root $TestDrive
                 Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -Confirm:$false | Should -BeTrue
                 $script:setTrace | Should -Be @('policy','service','activation','health')
             }
@@ -530,7 +565,9 @@ Describe "AppControl Module" {
                 Mock Invoke-OpenPathAppControlPolicyConverterActivation { throw 'activation must not run' }
                 Mock Test-OpenPathNonAdminAppControlActive { throw 'health must not run' }
                 Mock Write-OpenPathLog {}
+                Mock Sync-OpenPathRestrictedGroup { $true }
 
+                New-TestAppControlInstalledConfig -Root $TestDrive
                 Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $DiagnosticPath -Confirm:$false | Should -BeFalse
                 $script:setPolicyCalls | Should -Be 2
                 $diagnostic = Get-Content -LiteralPath $DiagnosticPath -Raw | ConvertFrom-Json
@@ -553,7 +590,9 @@ Describe "AppControl Module" {
                 Mock Set-OpenPathAppIdentityServiceAutomatic { throw 'injected AppIDSvc config failure' }
                 Mock Start-Service { throw 'service start must not run' }
                 Mock Write-OpenPathLog {}
+                Mock Sync-OpenPathRestrictedGroup { $true }
 
+                New-TestAppControlInstalledConfig -Root $TestDrive
                 Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $DiagnosticPath -Confirm:$false | Should -BeFalse
                 $script:setPolicyCalls | Should -Be 2
                 $diagnostic = Get-Content -LiteralPath $DiagnosticPath -Raw | ConvertFrom-Json
@@ -588,7 +627,9 @@ Describe "AppControl Module" {
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { [pscustomobject]@{status='inconclusive';code='task-run-not-confirmed'} } -ModuleName AppControl
             Mock Test-OpenPathNonAdminAppControlActive { $true } -ModuleName AppControl
             Mock Write-OpenPathLog { param($Message, $Level) $script:activationWarnings.Add([pscustomobject]@{Message=$Message;Level=$Level}) } -ModuleName AppControl
+            Mock Sync-OpenPathRestrictedGroup { $true } -ModuleName AppControl
 
+            New-TestAppControlInstalledConfig -Root $TestDrive
             Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $diagnosticPath -Confirm:$false | Should -BeTrue
             Test-Path $diagnosticPath | Should -BeFalse
             Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 1 -Exactly
@@ -616,7 +657,9 @@ Describe "AppControl Module" {
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { [pscustomobject]@{status='inconclusive';code='task-run-not-confirmed'} } -ModuleName AppControl
             Mock Test-OpenPathNonAdminAppControlActive { $false } -ModuleName AppControl
             Mock Write-OpenPathLog {} -ModuleName AppControl
+            Mock Sync-OpenPathRestrictedGroup { $true } -ModuleName AppControl
 
+            New-TestAppControlInstalledConfig -Root $TestDrive
             Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $diagnosticPath -Confirm:$false | Should -BeFalse
             $diagnostic = Get-Content -LiteralPath $diagnosticPath -Raw | ConvertFrom-Json
             $diagnostic.substep | Should -Be 'validation'
@@ -630,7 +673,8 @@ Describe "AppControl Module" {
         It 'keeps the activation failure path when the helper throws' {
             Get-Module AppControl | Remove-Module -Force -ErrorAction SilentlyContinue
             Import-Module "$modulePath\AppControl.psm1" -Force -Global -ErrorAction Stop
-            $diagnosticPath = Join-Path $TestDrive 'activation-throws.json'
+            $testRoot = Join-Path $TestDrive 'activation-throws-root'
+            $diagnosticPath = Join-Path $testRoot 'activation-throws.json'
             $script:activationSetPolicyCalls = 0
             Mock Test-AdminPrivileges { $true } -ModuleName AppControl
             Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
@@ -642,8 +686,10 @@ Describe "AppControl Module" {
             Mock Invoke-OpenPathAppControlPolicyConverterActivation { throw 'injected helper exception' } -ModuleName AppControl
             Mock Test-OpenPathNonAdminAppControlActive { throw 'health must not run' } -ModuleName AppControl
             Mock Write-OpenPathLog {} -ModuleName AppControl
+            Mock Sync-OpenPathRestrictedGroup { $true } -ModuleName AppControl
 
-            Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $diagnosticPath -Confirm:$false | Should -BeFalse
+            New-TestAppControlInstalledConfig -Root $testRoot
+            Set-OpenPathNonAdminAppControl -OpenPathRoot $testRoot -DiagnosticStatusPath $diagnosticPath -Confirm:$false | Should -BeFalse
             $diagnostic = Get-Content -LiteralPath $diagnosticPath -Raw | ConvertFrom-Json
             $diagnostic.substep | Should -Be 'policy-activation'
             @($diagnostic.reasonCodes) | Should -Be @('appcontrol_policy_activation_failed')
@@ -1288,6 +1334,7 @@ Describe "AppControl Module" {
             Mock Test-AdminPrivileges { $false } -ModuleName AppControl
             Mock Set-AppLockerPolicy { throw 'AppLocker mutation must not be attempted' } -ModuleName AppControl
 
+            New-TestAppControlInstalledConfig -Root $TestDrive
             Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -Mode Enforced -ApprovedBrowsers @('Firefox') -Confirm:$false | Should -BeFalse
             Should -Invoke Set-AppLockerPolicy -ModuleName AppControl -Times 0 -Exactly
         }
@@ -1339,9 +1386,11 @@ Describe "AppControl Module" {
                 } -ModuleName AppControl
                 Mock Set-OpenPathAppIdentityServiceAutomatic {} -ModuleName AppControl
                 Mock Test-OpenPathAppIdentityServiceRunning { $true } -ModuleName AppControl
+                Mock Sync-OpenPathRestrictedGroup { $true } -ModuleName AppControl
                 function global:Start-Service {}
 
                 try {
+                    New-TestAppControlInstalledConfig -Root $TestDrive
                     $result = Set-OpenPathNonAdminAppControl `
                         -OpenPathRoot $TestDrive `
                         -Mode Enforced `
@@ -1371,6 +1420,7 @@ Describe "AppControl Module" {
             Mock Test-OpenPathAppControlAvailable { $false } -ModuleName AppControl
             Mock Write-OpenPathAtomicJsonFile { throw 'injected diagnostic serialization failure' } -ModuleName AppControl
 
+            New-TestAppControlInstalledConfig -Root $TestDrive
             $result = Set-OpenPathNonAdminAppControl `
                 -OpenPathRoot $TestDrive `
                 -DiagnosticStatusPath $diagnosticPath `
@@ -2680,12 +2730,33 @@ Describe "AppControl Module" {
     }
 
     Context "P0 Windows runtime and strict boundary regressions" {
+        BeforeEach {
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
+        }
+
         It "keeps the Windows EXE and DLL base separate from Script and Msi" {
             $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -Mode Enforced -Profile StrictApplicationAllowlist
             $spec.WindowsRuntimeAllowPathsByCollection.Exe | Should -Contain '%WINDIR%\*'
             $spec.WindowsRuntimeAllowPathsByCollection.Dll | Should -Contain '%WINDIR%\*'
             @($spec.WindowsRuntimeAllowPathsByCollection.Script) | Should -Not -Contain '%WINDIR%\*'
             @($spec.WindowsRuntimeAllowPathsByCollection.Msi) | Should -Not -Contain '%WINDIR%\*'
+        }
+
+        It "keeps the writable Windows Temp root excluded from every strict runtime projection" {
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' -Mode Enforced -Profile StrictApplicationAllowlist
+            [xml]$xml = New-OpenPathAppLockerPolicyXml -Spec $spec
+            foreach ($type in @('Exe', 'Dll')) {
+                $collection = @($xml.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq $type })[0]
+                $rules = @($collection.FilePathRule | Where-Object {
+                        $_.GetAttribute('Action') -eq 'Allow' -and
+                        $_.Conditions.FilePathCondition.GetAttribute('Path') -eq '%WINDIR%\*'
+                    })
+                @($rules | Where-Object { $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' }).Count | Should -Be 1
+                @($rules | Where-Object { $_.GetAttribute('UserOrGroupSid') -eq 'S-1-5-32-545' }).Count | Should -Be 1
+                foreach ($rule in $rules) {
+                    @($rule.Exceptions.FilePathCondition | Where-Object { $_.GetAttribute('Path') -eq '%WINDIR%\Temp\*' }).Count | Should -Be 1
+                }
+            }
         }
 
         It "does not generate a partial publisher wildcard or a global strict Appx allow" {

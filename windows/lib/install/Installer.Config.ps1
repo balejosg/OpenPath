@@ -53,21 +53,40 @@ function New-OpenPathInstallerConfig {
         [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
         [string]$AppControlProfile = 'ManagedBrowserCompatibility',
 
+        [AllowNull()]
         [object]$ApprovedApplicationCatalog = $null,
 
         [string[]]$ApprovedStudentBrowsers = @('Firefox'),
-
-        [ValidateSet('ManagedBrowserCompatibility', 'StrictApplicationAllowlist')]
-        [string]$AppControlProfile = 'ManagedBrowserCompatibility',
-
-        [AllowNull()]
-        [object]$ApprovedApplicationCatalog = $null,
 
         [ValidateSet('ReportOnly', 'RemoveKnownInstallers', 'Disabled')]
         [string]$BrowserCleanupMode = 'ReportOnly'
     )
 
-    $config = @{
+    # A strict profile with no explicit catalog means "no additional
+    # applications", not "no Windows runtime".  Compatibility mode retains
+    # the historical $null value.  Do not use truthiness here: an empty but
+    # explicitly supplied object must still be validated and preserved.
+    $normalizedCatalog = $ApprovedApplicationCatalog
+    if ($AppControlProfile -eq 'StrictApplicationAllowlist' -and $null -eq $ApprovedApplicationCatalog) {
+        $normalizedCatalog = [pscustomobject][ordered]@{
+            schemaVersion = 1
+            applications = @()
+        }
+    }
+    if ($null -ne $ApprovedApplicationCatalog) {
+        $catalogProperties = @($ApprovedApplicationCatalog.PSObject.Properties.Name)
+        $hasSchemaVersion = $catalogProperties -contains 'schemaVersion'
+        $hasApplications = $catalogProperties -contains 'applications'
+        if (-not $hasSchemaVersion -or -not $hasApplications -or
+            [int]$ApprovedApplicationCatalog.schemaVersion -ne 1 -or
+            $null -eq $ApprovedApplicationCatalog.applications -or
+            -not ($ApprovedApplicationCatalog.applications -is [System.Collections.IEnumerable]) -or
+            $ApprovedApplicationCatalog.applications -is [string]) {
+            throw [System.ArgumentException]::new('ApprovedApplicationCatalog must contain schemaVersion=1 and an applications collection.')
+        }
+    }
+
+    $config = [ordered]@{
         whitelistUrl = $WhitelistUrl
         version = $AgentVersion
         updateIntervalMinutes = 5
@@ -90,12 +109,12 @@ function New-OpenPathInstallerConfig {
         nonAdminAppControlMode = 'Enforced'
         appControlProfile = $AppControlProfile
         activeAppControlProfile = 'none'
-        approvedApplicationCatalog = $ApprovedApplicationCatalog
+        approvedApplicationCatalog = $normalizedCatalog
         installState = 'installing'
         appControlCommitState = if ($EnforceManagedBrowserBoundary) { 'pending' } else { 'none' }
         enforceManagedBrowserBoundary = $EnforceManagedBrowserBoundary
-        appControlProfile = $AppControlProfile
-        approvedApplicationCatalog = if ($ApprovedApplicationCatalog) { $ApprovedApplicationCatalog } else { [pscustomobject]@{ schemaVersion = 1; applications = @() } }
+        # These fields are intentionally written once.  The constructor does
+        # not claim a committed security transition; the AppControl owner does.
         approvedStudentBrowsers = @($ApprovedStudentBrowsers)
         browserCleanupMode = $BrowserCleanupMode
         dohResolverIps = @(Get-DefaultDohResolverIps)
@@ -128,5 +147,11 @@ if (-not (Get-Command -Name 'Write-OpenPathAtomicJsonFile' -ErrorAction Silently
     $commonConfigPath = Join-Path $PSScriptRoot '..\internal\Common.Config.ps1'
     if (Test-Path -LiteralPath $commonConfigPath) {
         . $commonConfigPath
+    }
+}
+if (-not (Get-Command -Name 'Get-DefaultDohResolverIps' -ErrorAction SilentlyContinue)) {
+    $firewallCatalogPath = Join-Path $PSScriptRoot '..\internal\Firewall.Catalog.ps1'
+    if (Test-Path -LiteralPath $firewallCatalogPath) {
+        . $firewallCatalogPath
     }
 }

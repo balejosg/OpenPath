@@ -45,22 +45,6 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
-    if (arg === '--windows-evidence-artifact-name' && next) {
-      options.windowsEvidenceArtifactName = next;
-      index += 1;
-      continue;
-    }
-    if (arg === '--windows-template-sha256' && next) {
-      options.windowsTemplateSha256 = next;
-      index += 1;
-      continue;
-    }
-    if (arg === '--windows-personalized-exe-sha256' && next) {
-      options.windowsPersonalizedExeSha256 = next;
-      index += 1;
-      continue;
-    }
-
     throw new Error(`Unknown or incomplete argument: ${arg}`);
   }
 
@@ -72,14 +56,6 @@ function parseArgs(argv) {
   }
   if (requirements.length === 0) {
     throw new Error('At least one --require "Workflow Name::Job Name" pair is required.');
-  }
-  if (
-    options.windowsEvidenceArtifactName &&
-    !requirements.some(({ jobName }) => jobName === 'Windows Desktop Survival')
-  ) {
-    throw new Error(
-      '--windows-evidence-artifact-name requires a Windows Desktop Survival requirement.'
-    );
   }
   if (!Number.isFinite(options.timeoutMinutes) || options.timeoutMinutes <= 0) {
     throw new Error('--timeout-minutes must be a positive number.');
@@ -139,40 +115,7 @@ function listWorkflowRuns({ repo, workflowName, sha, useCommitFilter }) {
   return ghJson(args);
 }
 
-function listRunArtifacts({ repo, runId }) {
-  const response = ghJson(['api', `repos/${repo}/actions/runs/${runId}/artifacts`]);
-  return Array.isArray(response) ? response : (response.artifacts ?? []);
-}
-
-function requireExactWindowsEvidenceArtifact({ repo, run, artifactName, sha }) {
-  const artifacts = listRunArtifacts({ repo, runId: run.databaseId });
-  const matches = artifacts.filter(
-    (artifact) => artifact.name === artifactName && artifact.expired !== true
-  );
-  if (matches.length !== 1) {
-    throw new Error(
-      `Windows Desktop Survival artifact "${artifactName}" is missing, duplicated, or expired for run ${run.databaseId}.`
-    );
-  }
-  const artifact = matches[0];
-  const artifactSha = artifact.workflow_run?.head_sha ?? artifact.workflowRun?.headSha;
-  if (artifactSha && artifactSha !== sha) {
-    throw new Error(
-      `Windows Desktop Survival artifact "${artifactName}" belongs to ${artifactSha}, not ${sha}.`
-    );
-  }
-  return { id: artifact.id, name: artifact.name, createdAt: artifact.created_at };
-}
-
-async function waitForRequirement({
-  repo,
-  sha,
-  workflowName,
-  jobName,
-  timeoutAt,
-  pollSeconds,
-  windowsEvidenceArtifactName,
-}) {
+async function waitForRequirement({ repo, sha, workflowName, jobName, timeoutAt, pollSeconds }) {
   while (Date.now() < timeoutAt) {
     // Prefer the narrow GH CLI query, then fall back to filtering recent workflow runs.
     // GitHub occasionally returns no rows for --commit immediately after a workflow
@@ -218,22 +161,12 @@ async function waitForRequirement({
       );
     }
 
-    const evidenceArtifact =
-      windowsEvidenceArtifactName && jobName === 'Windows Desktop Survival'
-        ? requireExactWindowsEvidenceArtifact({
-            repo,
-            run,
-            artifactName: windowsEvidenceArtifactName,
-            sha,
-          })
-        : null;
     console.log(`Release gate satisfied: ${workflowName} / ${jobName} (${details.url})`);
     return {
       workflowName,
       jobName,
       conclusion: job.conclusion,
       url: details.url,
-      evidenceArtifact,
     };
   }
 
@@ -272,8 +205,7 @@ function appendReleaseGateSummary({ sha, results, error }) {
 }
 
 async function main() {
-  const { repo, sha, requirements, timeoutMinutes, pollSeconds, windowsEvidenceArtifactName } =
-    parseArgs(process.argv.slice(2));
+  const { repo, sha, requirements, timeoutMinutes, pollSeconds } = parseArgs(process.argv.slice(2));
   const timeoutAt = Date.now() + timeoutMinutes * 60 * 1000;
   const results = [];
 
@@ -285,7 +217,6 @@ async function main() {
         ...requirement,
         timeoutAt,
         pollSeconds,
-        windowsEvidenceArtifactName,
       });
       results.push(result);
     }

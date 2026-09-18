@@ -3,7 +3,7 @@
 Import-Module "$PSScriptRoot\Browser.EnforcementDecision.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Browser.RequestReadiness.psm1" -Force -ErrorAction Stop
-Import-Module "$PSScriptRoot\AppControl.psm1" -Force -ErrorAction SilentlyContinue
+Import-Module "$PSScriptRoot\AppControl.psm1" -Force -ErrorAction Stop
 Import-Module "$PSScriptRoot\Firewall.psm1" -Force -ErrorAction SilentlyContinue
 
 function Get-OpenPathBrowserStatusConfigValue {
@@ -187,6 +187,31 @@ function Get-OpenPathBrowserEnforcementStatus {
     $inventory = Get-OpenPathBrowserInventory -Mode $inventoryMode
     $readiness = Get-OpenPathBrowserRequestReadiness -Config $resolvedConfig
     $appLocker = Get-OpenPathAppLockerStatus -Config $resolvedConfig
+    $appControlHealth = $null
+    if (Get-Command -Name Get-OpenPathNonAdminAppControlHealth -ErrorAction SilentlyContinue) {
+        try {
+            $configuredMode = [string](Get-OpenPathBrowserStatusConfigValue -Config $resolvedConfig -PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced')
+            $configuredProfile = [string](Get-OpenPathBrowserStatusConfigValue -Config $resolvedConfig -PropertyName 'appControlProfile' -DefaultValue 'ManagedBrowserCompatibility')
+            $configuredCatalog = Get-OpenPathBrowserStatusConfigValue -Config $resolvedConfig -PropertyName 'approvedApplicationCatalog' -DefaultValue $null
+            $appControlHealth = Get-OpenPathNonAdminAppControlHealth -Mode $configuredMode -Profile $configuredProfile -ApplicationCatalog $configuredCatalog
+        }
+        catch {
+            $appControlHealth = [pscustomobject][ordered]@{
+                Healthy = $false
+                WindowsRuntimeValid = $false
+                TransactionState = 'unknown'
+                ReasonCodes = @('appcontrol_health_check_unavailable')
+            }
+        }
+    }
+    if ($null -eq $appControlHealth) {
+        $appControlHealth = [pscustomobject][ordered]@{
+            Healthy = $false
+            WindowsRuntimeValid = $false
+            TransactionState = 'unknown'
+            ReasonCodes = @('appcontrol_health_check_unavailable')
+        }
+    }
     $firewall = Get-OpenPathFirewallStatusSummary
     $appControlProfile = [string](Get-OpenPathBrowserStatusConfigValue -Config $resolvedConfig -PropertyName 'appControlProfile' -DefaultValue 'ManagedBrowserCompatibility')
     $activeAppControlProfile = [string](Get-OpenPathBrowserStatusConfigValue -Config $resolvedConfig -PropertyName 'activeAppControlProfile' -DefaultValue 'none')
@@ -228,6 +253,11 @@ function Get-OpenPathBrowserEnforcementStatus {
         Firewall = $firewall
         BrowserCleanupMode = $browserCleanupMode
         BrowserRequestReadiness = [bool]$readiness.Ready
+        WindowsRuntimeValid = if ($appControlHealth.PSObject.Properties['WindowsRuntimeValid']) { [bool]$appControlHealth.WindowsRuntimeValid } else { $false }
+        TransactionState = if ($appControlHealth.PSObject.Properties['TransactionState']) { [string]$appControlHealth.TransactionState } else { 'unknown' }
+        AppControlReasonCodes = @($appControlHealth.ReasonCodes)
+        DesktopRuntimeObservation = 'not-observed'
+        AppControlHealth = $appControlHealth
         Overall = $overall
     }
 }

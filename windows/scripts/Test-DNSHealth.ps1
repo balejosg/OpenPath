@@ -83,7 +83,7 @@ catch {
     Write-OpenPathLog "Watchdog: Error loading configuration: $_" -Level ERROR
 }
 
-$precheckResult = Invoke-OpenPathWatchdogPrechecks -Config $config
+$precheckResult = Invoke-OpenPathWatchdogPrechecks -Config $config -OpenPathRoot $OpenPathRoot
 $portalModeActive = $precheckResult.PortalModeActive
 if ($portalModeActive) {
     $issues += 'Captive portal mode active'

@@ -221,31 +221,14 @@ function Remove-OpenPathInstallerAppLockerRules {
     .SYNOPSIS
         Removes AppLocker rules whose Name attribute begins with 'OpenPath non-admin app control' from the local policy
     #>
-    if (-not (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue)) { return }
-    if (-not (Get-Command -Name Set-AppLockerPolicy -ErrorAction SilentlyContinue)) { return }
-
-    $policyXml = [xml](Get-AppLockerPolicy -Local -Xml)
-    $removed = $false
-    foreach ($collection in @($policyXml.AppLockerPolicy.RuleCollection)) {
-        foreach ($rule in @($collection.ChildNodes)) {
-            if ($null -ne $rule -and
-                $rule -is [System.Xml.XmlElement] -and
-                $rule.GetAttribute('Name') -like 'OpenPath non-admin app control*') {
-                [void]$collection.RemoveChild($rule)
-                $removed = $true
-            }
-        }
+    param([string]$OpenPathRoot = 'C:\OpenPath')
+    $modulePath = Join-Path $OpenPathRoot 'lib\AppControl.psm1'
+    if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+        throw 'AppControl owner module is unavailable; manual recovery is required.'
     }
-
-    if (-not $removed) { return }
-
-    $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-installer-applocker-cleanup-$([guid]::NewGuid()).xml"
-    try {
-        $policyXml.Save($policyPath)
-        Set-AppLockerPolicy -XMLPolicy $policyPath -ErrorAction Stop
-    }
-    finally {
-        Remove-Item $policyPath -Force -ErrorAction SilentlyContinue
+    Import-Module $modulePath -Force -Global -ErrorAction Stop
+    if (-not (Remove-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Confirm:$false)) {
+        throw 'Central AppControl removal did not verify; manual recovery is required.'
     }
 }
 
@@ -556,7 +539,7 @@ function Invoke-OpenPathInstallerExistingInstallCleanup {
     Stop-OpenPathInstallerScheduledTasks
     Restore-OpenPathInstallerDnsSettings
     Remove-OpenPathInstallerFirewallRules
-    Remove-OpenPathInstallerAppLockerRules
+    Remove-OpenPathInstallerAppLockerRules -OpenPathRoot $OpenPathRoot
     Remove-OpenPathInstallerRestrictedGroup
     Remove-OpenPathInstallerBrowserArtifacts
     Stop-OpenPathInstallerAcrylicService -KeepAcrylic:$KeepAcrylic
@@ -588,7 +571,7 @@ function Invoke-OpenPathInstallRollback {
     try { Stop-OpenPathInstallerScheduledTasks } catch { $rollbackErrors += "tasks: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback task cleanup failed: $_" } }
     try { Restore-OpenPathInstallerDnsSettings } catch { $rollbackErrors += "dns: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback DNS restore failed: $_" } }
     try { Remove-OpenPathInstallerFirewallRules } catch { $rollbackErrors += "firewall: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback firewall cleanup failed: $_" } }
-    try { Remove-OpenPathInstallerAppLockerRules } catch { $rollbackErrors += "applocker: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback AppLocker cleanup failed: $_" } }
+    try { Remove-OpenPathInstallerAppLockerRules -OpenPathRoot $OpenPathRoot } catch { $rollbackErrors += "applocker: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback AppLocker cleanup failed: $_" } }
     try { Remove-OpenPathInstallerRestrictedGroup } catch { $rollbackErrors += "restrictedGroup: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback restricted group cleanup failed: $_" } }
     try { Remove-OpenPathInstallerBrowserArtifacts } catch { $rollbackErrors += "browserArtifacts: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback browser artifacts cleanup failed: $_" } }
     try { Stop-OpenPathInstallerAcrylicService -KeepAcrylic } catch { $rollbackErrors += "acrylic: $_"; if (Get-Command Write-InstallerWarning -ErrorAction SilentlyContinue) { Write-InstallerWarning "  Rollback Acrylic stop failed: $_" } }

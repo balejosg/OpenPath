@@ -7,6 +7,14 @@ if (Test-Path (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')) {
 $script:OpenPathRoot = if (Get-Command -Name Resolve-OpenPathWindowsRoot -ErrorAction SilentlyContinue) { Resolve-OpenPathWindowsRoot } else { "C:\OpenPath" }
 Import-Module "$PSScriptRoot\Common.psm1" -ErrorAction SilentlyContinue
 Import-Module "$PSScriptRoot\Browser.Inventory.psm1" -Force -ErrorAction SilentlyContinue
+$runtimeModulePath = Join-Path $PSScriptRoot 'AppControl.WindowsRuntime.psm1'
+$transactionModulePath = Join-Path $PSScriptRoot 'AppControl.Transaction.psm1'
+if (-not (Test-Path -LiteralPath $runtimeModulePath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $transactionModulePath -PathType Leaf)) {
+    throw 'appcontrol_required_dependency_missing'
+}
+Import-Module $runtimeModulePath -Force -ErrorAction Stop
+Import-Module $transactionModulePath -Force -ErrorAction Stop
 
 $script:OpenPathAppControlRulePrefix = 'OpenPath non-admin app control'
 $script:OpenPathAppLockerBackupPath = "$script:OpenPathRoot\data\applocker-backup.xml"
@@ -428,7 +436,7 @@ function Get-OpenPathAlwaysDeniedAppxProductNames {
     Returns the Appx package product names that must always be denied to non-admins
     regardless of approved-browser configuration.
     .DESCRIPTION
-    W-2: the blanket Microsoft-signed Appx allow (PublisherName='O=MICROSOFT CORPORATION*',
+    W-2: the blanket Microsoft-signed Appx allow (PublisherName='O=MICROSOFT CORPORATION',
     ProductName='*') is intentionally kept so OS inbox and Store-distributed Microsoft
     packages keep working. But several Microsoft-signed packages ship parallel,
     unfiltered network stacks that bypass the name-based DNS whitelist: WSL (full Linux
@@ -479,8 +487,22 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         [object]$ApplicationCatalog = $null,
 
         [AllowNull()]
-        [object]$BrowserInventory = $null
+        [object]$BrowserInventory = $null,
+
+        [AllowNull()]
+        [object]$WindowsRuntimeBaseline = $null
     )
+
+    # The installer constructor materializes an empty v1 catalog for strict
+    # mode.  Keep the public spec builder equally deterministic for callers
+    # that build a policy directly, while still rejecting malformed non-null
+    # catalogs below.
+    if ($Profile -eq 'StrictApplicationAllowlist' -and $null -eq $ApplicationCatalog) {
+        $ApplicationCatalog = [pscustomobject][ordered]@{
+            schemaVersion = 1
+            applications = @()
+        }
+    }
 
     $openPathRuntimePath = "$($OpenPathRoot.TrimEnd('\'))\*"
     $approvedBrowserSet = Get-OpenPathApprovedBrowserSet -ApprovedBrowsers $ApprovedBrowsers
@@ -613,6 +635,17 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         Dll = @('%WINDIR%\*', $openPathRuntimePath)
         Appx = @()
     }
+    $windowsRuntimeAllowPathsByCollection = @{
+        Exe = @()
+        Script = @()
+        Msi = @()
+        Dll = @()
+        Appx = @()
+    }
+    if ($Profile -eq 'StrictApplicationAllowlist') {
+        $windowsRuntimeAllowPathsByCollection.Exe = @('%WINDIR%\*')
+        $windowsRuntimeAllowPathsByCollection.Dll = @('%WINDIR%\*')
+    }
     if ($Profile -eq 'ManagedBrowserCompatibility') {
         $allowPathsByCollection.Exe = @($allowPaths)
         $allowPathsByCollection.Script = @($allowPaths)
@@ -730,6 +763,20 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         }
     }
 
+    if ($Profile -eq 'StrictApplicationAllowlist' -and $null -ne $WindowsRuntimeBaseline) {
+        if (-not (Test-OpenPathWindowsRuntimeBaseline -Baseline $WindowsRuntimeBaseline)) {
+            throw 'appcontrol_windows_runtime_baseline_invalid'
+        }
+        foreach ($runtimePackage in @($WindowsRuntimeBaseline.Packages)) {
+            $runtimeRoot = [string]$runtimePackage.InstallLocation
+            if ($runtimeRoot) {
+                $runtimeAllow = $runtimeRoot.TrimEnd('\') + '\*'
+                $allowPathsByCollection.Dll += $runtimeAllow
+            }
+        }
+        $allowPathsByCollection.Dll = @($allowPathsByCollection.Dll | Sort-Object -Unique)
+    }
+
     $approvedAppxBrowserProducts = if ($Profile -eq 'StrictApplicationAllowlist' -and $approvedBrowserSet.Edge) {
         @(Get-OpenPathEdgeAppxProductNames)
     }
@@ -748,11 +795,13 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         ApprovedBrowsers = @($approvedBrowserSet.Keys | Sort-Object)
         AllowPaths = @($allowPaths)
         AllowPathsByCollection = $allowPathsByCollection
+        WindowsRuntimeAllowPathsByCollection = $windowsRuntimeAllowPathsByCollection
         ApprovedApplicationPublishers = @($approvedApplicationPublishers)
         ApprovedApplicationHashes = @($approvedApplicationHashes)
         ApprovedApplicationPublishersByCollection = $approvedApplicationPublishersByCollection
         ApprovedApplicationHashesByCollection = $approvedApplicationHashesByCollection
         ApprovedAppxBrowserProducts = @($approvedAppxBrowserProducts)
+        WindowsRuntimeBaseline = $WindowsRuntimeBaseline
         BrowserInventory = $BrowserInventory
         UnapprovedBrowserDenyPaths = @($unapprovedBrowserDenyPaths)
         UnapprovedBrowserDenyAppxProducts = @($unapprovedBrowserDenyAppxProducts)
@@ -875,7 +924,11 @@ function New-OpenPathFilePublisherRuleXml {
         [string]$ProductName,
 
         [Parameter(Mandatory = $true)]
-        [string]$BinaryName
+        [string]$BinaryName,
+
+        [string]$LowVersion = '*',
+
+        [string]$HighVersion = '*'
     )
 
     $id = [guid]::NewGuid().ToString()
@@ -888,7 +941,9 @@ function New-OpenPathFilePublisherRuleXml {
     $xml = "      <FilePublisherRule Id=`"$id`" Name=`"$escapedName`" Description=`"Managed by OpenPath`" UserOrGroupSid=`"$escapedSid`" Action=`"$escapedAction`">`n"
     $xml += "        <Conditions>`n"
     $xml += "          <FilePublisherCondition PublisherName=`"$escapedPublisherName`" ProductName=`"$escapedProductName`" BinaryName=`"$escapedBinaryName`">`n"
-    $xml += "            <BinaryVersionRange LowSection=`"*`" HighSection=`"*`" />`n"
+    $escapedLowVersion = ConvertTo-OpenPathXmlAttribute -Value $LowVersion
+    $escapedHighVersion = ConvertTo-OpenPathXmlAttribute -Value $HighVersion
+    $xml += "            <BinaryVersionRange LowSection=`"$escapedLowVersion`" HighSection=`"$escapedHighVersion`" />`n"
     $xml += "          </FilePublisherCondition>`n"
     $xml += "        </Conditions>`n"
     $xml += "      </FilePublisherRule>"
@@ -949,13 +1004,25 @@ function New-OpenPathAppLockerPolicyXml {
         $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType administrators allow all" -Sid $Spec.AdminSid -Action 'Allow' -Path '*'
         $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType system allow all" -Sid $Spec.SystemSid -Action 'Allow' -Path '*'
 
+        if ($strictProfile -and $collectionType -in @('Exe', 'Dll')) {
+            $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType Windows runtime base" -Sid 'S-1-1-0' -Action 'Allow' -Path '%WINDIR%\*' -Exceptions @('%WINDIR%\Temp\*')
+        }
+
         $collectionAllowPaths = @($Spec.AllowPaths)
         if ($Spec.PSObject.Properties['AllowPathsByCollection'] -and $Spec.AllowPathsByCollection.ContainsKey($collectionType)) {
             $collectionAllowPaths = @($Spec.AllowPathsByCollection[$collectionType])
         }
         foreach ($path in $collectionAllowPaths) {
             $exceptions = @()
-            if ($collectionType -eq 'Exe' -and $path -eq '%WINDIR%\*') {
+            if ($strictProfile -and $collectionType -in @('Exe', 'Dll') -and $path -eq '%WINDIR%\*') {
+                # The Everyone runtime base deliberately excludes the
+                # user-writable Windows temp root.  Keep the same exclusion on
+                # the restricted-user projection; otherwise this narrower
+                # rule would re-open the writable location.
+                $exceptions = @('%WINDIR%\Temp\*')
+                if ($collectionType -eq 'Exe') { $exceptions += @($Spec.BlockedWindowsTools) }
+            }
+            elseif ($collectionType -eq 'Exe' -and $path -eq '%WINDIR%\*') {
                 $exceptions = @($Spec.BlockedWindowsTools)
             }
 
@@ -998,9 +1065,19 @@ function New-OpenPathAppLockerPolicyXml {
         # and SYSTEM, while restricted users receive only catalog publishers.
         $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx administrators allow all" -Sid $Spec.AdminSid -Action 'Allow' -PublisherName '*' -ProductName '*' -BinaryName '*'
         $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx system allow all" -Sid $Spec.SystemSid -Action 'Allow' -PublisherName '*' -ProductName '*' -BinaryName '*'
+        if ($null -ne $Spec.WindowsRuntimeBaseline -and $null -ne $Spec.WindowsRuntimeBaseline.Packages) {
+            foreach ($runtimePackage in @($Spec.WindowsRuntimeBaseline.Packages)) {
+                if ([string]::IsNullOrWhiteSpace([string]$runtimePackage.PublisherName) -or [string]::IsNullOrWhiteSpace([string]$runtimePackage.ProductName) -or [string]::IsNullOrWhiteSpace([string]$runtimePackage.BinaryName)) { continue }
+                $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx Windows runtime $($runtimePackage.Name)" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName ([string]$runtimePackage.PublisherName) -ProductName ([string]$runtimePackage.ProductName) -BinaryName ([string]$runtimePackage.BinaryName) -LowVersion '0.0.0.0' -HighVersion '*'
+            }
+        }
         foreach ($productName in @($Spec.ApprovedAppxBrowserProducts)) {
-            $productId = ($productName -replace '[^0-9A-Za-z]+', '-').Trim('-')
-            $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow approved Edge $productId" -Sid $Spec.RestrictedSid -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION*' -ProductName $productName -BinaryName '*'
+            if ($null -eq $Spec.WindowsRuntimeBaseline -or $null -eq $Spec.WindowsRuntimeBaseline.Packages) { continue }
+            foreach ($runtimePackage in @($Spec.WindowsRuntimeBaseline.Packages)) {
+                if ([string]$runtimePackage.ProductName -ne [string]$productName) { continue }
+                $productId = ($productName -replace '[^0-9A-Za-z]+', '-').Trim('-')
+                $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow approved Edge $productId" -Sid $Spec.RestrictedSid -Action 'Allow' -PublisherName ([string]$runtimePackage.PublisherName) -ProductName ([string]$runtimePackage.ProductName) -BinaryName ([string]$runtimePackage.BinaryName) -LowVersion '0.0.0.0' -HighVersion '*'
+            }
         }
         if ($Spec.PSObject.Properties['ApprovedApplicationPublishersByCollection'] -and $Spec.ApprovedApplicationPublishersByCollection.ContainsKey('Appx')) {
             foreach ($publisher in @($Spec.ApprovedApplicationPublishersByCollection.Appx)) {
@@ -1011,12 +1088,12 @@ function New-OpenPathAppLockerPolicyXml {
     # Allow only Microsoft-signed packaged apps (OS inbox and Store-distributed Microsoft apps).
     # A global ProductName='*' allow lets any publisher's Appx run, including sideloaded alternate
     # browsers with non-Edge ProductNames that would bypass the per-product Edge denies above.
-    # Scoping to PublisherName='O=MICROSOFT CORPORATION*' covers all Microsoft-signed packages
-    # (Windows inbox, Store-distributed Edge, Teams, etc.) without opening the door to third-party
-    # sideloaded packages.  SID S-1-1-0 (Everyone) is kept so the rule applies to all users
+    # Scoping to PublisherName='O=MICROSOFT CORPORATION' covers the signed
+    # packages in compatibility mode without opening the door to third-party
+    # sideloaded packages. SID S-1-1-0 (Everyone) is kept so the rule applies to all users
     # including non-admins, matching the original intent.
     if (-not $strictProfile) {
-        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow Microsoft signed packaged apps" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION*' -ProductName '*' -BinaryName '*'
+        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow Microsoft signed packaged apps" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION' -ProductName '*' -BinaryName '*'
     }
     $ruleCollections += "    <RuleCollection Type=`"Appx`" EnforcementMode=`"$($Spec.EnforcementMode)`">`n$($appxRules -join "`n")`n    </RuleCollection>"
 
@@ -1736,10 +1813,13 @@ function Test-OpenPathAppLockerBoundaryPolicy {
         [AllowNull()]
         [object]$BrowserInventory = $null,
 
+        [AllowNull()]
+        [object]$WindowsRuntimeBaseline = $null,
+
         [string]$OpenPathRoot = $script:OpenPathRoot
     )
 
-    $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $BrowserInventory
+    $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $BrowserInventory -WindowsRuntimeBaseline $WindowsRuntimeBaseline
     $expectedMode = $spec.EnforcementMode
     $exeCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Exe'
     $scriptCollection = Get-OpenPathAppLockerCollection -PolicyXml $PolicyXml -Type 'Script'
@@ -1774,13 +1854,27 @@ function Test-OpenPathAppLockerBoundaryPolicy {
     }
 
     if ($Profile -eq 'StrictApplicationAllowlist') {
+        foreach ($collection in @($exeCollection, $dllCollection)) {
+            $runtimeBaseRules = @($collection.FilePathRule | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Allow' -and
+                    $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                    $_.Conditions.FilePathCondition.GetAttribute('Path') -eq '%WINDIR%\*'
+                })
+            if ($runtimeBaseRules.Count -ne 1) { return $false }
+            $exceptions = @($runtimeBaseRules[0].Exceptions.FilePathCondition | ForEach-Object { $_.GetAttribute('Path') })
+            if ($exceptions.Count -ne 1 -or $exceptions[0] -ne '%WINDIR%\Temp\*') { return $false }
+        }
         foreach ($sid in @($spec.AdminSid, $spec.SystemSid)) {
             if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid $sid -ProductName '*' -PublisherName '*' -BinaryName '*')) {
                 return $false
             }
         }
         foreach ($productName in @($spec.ApprovedAppxBrowserProducts)) {
-            if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid $spec.RestrictedSid -ProductName $productName -PublisherName 'O=MICROSOFT CORPORATION*' -BinaryName '*')) {
+            $runtimePackage = if ($null -ne $spec.WindowsRuntimeBaseline) {
+                @($spec.WindowsRuntimeBaseline.Packages | Where-Object { [string]$_.ProductName -eq [string]$productName })[0]
+            }
+            if ($null -eq $runtimePackage -or
+                -not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid $spec.RestrictedSid -ProductName ([string]$runtimePackage.ProductName) -PublisherName ([string]$runtimePackage.PublisherName) -BinaryName ([string]$runtimePackage.BinaryName))) {
                 return $false
             }
         }
@@ -1797,7 +1891,7 @@ function Test-OpenPathAppLockerBoundaryPolicy {
         if (@($appxCollection.FilePublisherRule | Where-Object {
                     $_.GetAttribute('Action') -eq 'Allow' -and
                     $_.GetAttribute('UserOrGroupSid') -in @('S-1-1-0', $spec.RestrictedSid) -and
-                    $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq 'O=MICROSOFT CORPORATION*' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -like 'O=MICROSOFT CORPORATION*' -and
                     $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
                 }).Count -gt 0) {
             return $false
@@ -1841,7 +1935,7 @@ function Test-OpenPathAppLockerBoundaryPolicy {
         }
     }
 
-    if ($Profile -eq 'ManagedBrowserCompatibility' -and -not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid 'S-1-1-0' -ProductName '*' -PublisherName 'O=MICROSOFT CORPORATION*')) {
+    if ($Profile -eq 'ManagedBrowserCompatibility' -and -not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid 'S-1-1-0' -ProductName '*' -PublisherName 'O=MICROSOFT CORPORATION')) {
         return $false
     }
 
@@ -1892,7 +1986,12 @@ function Get-OpenPathNonAdminAppControlHealth {
         [AllowNull()]
         [object]$ApplicationCatalog = $null,
 
-        [string]$TargetSid = ''
+        [string]$TargetSid = '',
+
+        [AllowNull()]
+        [object]$WindowsRuntimeBaseline = $null,
+
+        [string]$OpenPathRoot = $script:OpenPathRoot
     )
 
     if (-not (Test-OpenPathApplicationApprovalCatalog -Profile $Profile -Catalog $ApplicationCatalog)) {
@@ -1910,6 +2009,10 @@ function Get-OpenPathNonAdminAppControlHealth {
             EffectivePolicyValid = $false
             RuntimeEvaluationAvailable = $false
             RuntimeBoundaryValid = $false
+            WindowsRuntimeBaselineValid = $false
+            WindowsRuntimeValid = $false
+            TransactionState = 'unknown'
+            PendingRecovery = @()
             ExpectedProfile = $Profile
             RestrictedTargetDetail = 'not-observed'
             GroupSid = ''; TargetSid = ''; ProfilePath = ''
@@ -1954,12 +2057,50 @@ function Get-OpenPathNonAdminAppControlHealth {
     $resolvedTargetSid = ''
     $profilePath = ''
     $runtimeDecisions = [System.Collections.Generic.List[object]]::new()
+    $windowsRuntimeBaseline = $null
+    $windowsRuntimeBaselineValid = $Profile -ne 'StrictApplicationAllowlist'
+    $pendingRecovery = @()
+    if (Get-Command -Name 'Get-OpenPathAppControlPendingRecovery' -ErrorAction SilentlyContinue) {
+        try {
+            $pendingRecovery = @(Get-OpenPathAppControlPendingRecovery -OpenPathRoot $OpenPathRoot)
+            if ($pendingRecovery.Count -gt 0) {
+                & $addReasonCode 'appcontrol_recovery_required'
+            }
+        }
+        catch {
+            $pendingRecovery = @([pscustomobject]@{ State = 'recovery-required'; ReasonCodes = @('appcontrol_recovery_required') })
+            & $addReasonCode 'appcontrol_recovery_required'
+        }
+    }
+    elseif ($Profile -eq 'StrictApplicationAllowlist') {
+        & $addReasonCode 'appcontrol_recovery_check_unavailable'
+    }
 
     $capabilityAvailable = [bool](Test-OpenPathAppControlAvailable)
     if (-not $capabilityAvailable) {
         & $addReasonCode 'appcontrol_capability_unavailable'
     }
     else {
+        if ($Profile -eq 'StrictApplicationAllowlist') {
+            try {
+                if (-not (Get-Command -Name 'Get-OpenPathWindowsRuntimeBaseline' -ErrorAction SilentlyContinue)) {
+                    throw 'appcontrol_windows_runtime_inventory_failed'
+                }
+                if ($null -eq $WindowsRuntimeBaseline) {
+                    $WindowsRuntimeBaseline = Get-OpenPathWindowsRuntimeBaseline
+                }
+                $windowsRuntimeBaseline = $WindowsRuntimeBaseline
+                $windowsRuntimeBaselineValid = [bool](Test-OpenPathWindowsRuntimeBaseline -Baseline $windowsRuntimeBaseline)
+                if (-not $windowsRuntimeBaselineValid) {
+                    throw 'appcontrol_windows_runtime_inventory_failed'
+                }
+            }
+            catch {
+                $windowsRuntimeBaselineValid = $false
+                & $addReasonCode 'appcontrol_windows_runtime_inventory_failed'
+                & $addReasonCode 'strict-required-rule-missing'
+            }
+        }
         try {
             $probeTarget = Get-OpenPathAppControlProbeTarget -TargetSid $TargetSid
             $restrictedTargetValid = $true
@@ -1995,7 +2136,10 @@ function Get-OpenPathNonAdminAppControlHealth {
                 $localPolicyPresent = $true
                 try {
                     $localPolicyXml = [xml]$localPolicyText
-                        $localPolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $localPolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $browserInventory)
+                        $localPolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $localPolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $browserInventory -WindowsRuntimeBaseline $windowsRuntimeBaseline -OpenPathRoot $OpenPathRoot)
+                        if ($Profile -eq 'StrictApplicationAllowlist' -and $windowsRuntimeBaselineValid) {
+                            $localPolicyValid = $localPolicyValid -and [bool](Test-OpenPathWindowsRuntimePolicy -WindowsRuntimeBaseline $windowsRuntimeBaseline -PolicyXml $localPolicyXml)
+                        }
                 }
                 catch {
                     $localPolicyValid = $false
@@ -2025,7 +2169,10 @@ function Get-OpenPathNonAdminAppControlHealth {
                 $effectivePolicyPresent = $true
                 try {
                     $effectivePolicyXml = [xml]$effectivePolicyText
-                        $effectivePolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $effectivePolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $browserInventory)
+                        $effectivePolicyValid = [bool](Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $effectivePolicyXml -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $browserInventory -WindowsRuntimeBaseline $windowsRuntimeBaseline -OpenPathRoot $OpenPathRoot)
+                        if ($Profile -eq 'StrictApplicationAllowlist' -and $windowsRuntimeBaselineValid) {
+                            $effectivePolicyValid = $effectivePolicyValid -and [bool](Test-OpenPathWindowsRuntimePolicy -WindowsRuntimeBaseline $windowsRuntimeBaseline -PolicyXml $effectivePolicyXml)
+                        }
                 }
                 catch {
                     $effectivePolicyValid = $false
@@ -2046,6 +2193,10 @@ function Get-OpenPathNonAdminAppControlHealth {
         }
 
         $runtimeEvaluationAvailable = [bool](Get-Command -Name 'Test-AppLockerPolicy' -ErrorAction SilentlyContinue)
+        if ($Profile -eq 'StrictApplicationAllowlist' -and -not $windowsRuntimeBaselineValid) {
+            $runtimeEvaluationAvailable = $false
+            & $addReasonCode 'strict-runtime-probe-failed'
+        }
         if (-not $runtimeEvaluationAvailable) {
             Write-OpenPathLog 'AppLocker effective runtime policy test unavailable; refusing structural-only validation' -Level WARN
             & $addReasonCode 'appcontrol_runtime_evaluation_unavailable'
@@ -2062,6 +2213,25 @@ function Get-OpenPathNonAdminAppControlHealth {
                 $evaluationPolicyXml = [xml]$effectivePolicyText
                 if (@($evaluationPolicyXml.AppLockerPolicy.RuleCollection).Count -eq 0) {
                     throw 'Effective AppLocker policy has no rule collections'
+                }
+
+                if ($Profile -eq 'StrictApplicationAllowlist') {
+                    $nativeRuntimePackages = @($windowsRuntimeBaseline.NativeAppLockerPackages)
+                    $declaredRuntimePackages = @($windowsRuntimeBaseline.Packages)
+                    if ($nativeRuntimePackages.Count -ne $declaredRuntimePackages.Count -or $nativeRuntimePackages.Count -eq 0) {
+                        throw 'appcontrol_windows_runtime_probe_failed'
+                    }
+                    $runtimePackageDecisions = @(Invoke-OpenPathAppLockerPackageEvaluation -PolicyXml $effectivePolicyText -Packages $nativeRuntimePackages -UserSid $probeTarget.UserSid)
+                    if ($runtimePackageDecisions.Count -ne $nativeRuntimePackages.Count) {
+                        throw 'appcontrol_windows_runtime_probe_failed'
+                    }
+                    foreach ($decision in $runtimePackageDecisions) {
+                        [void]$runtimeDecisions.Add([pscustomobject][ordered]@{
+                                Kind = 'windows-runtime-package'
+                                Expected = 'Allowed'
+                                Observed = [string]$decision.PolicyDecision
+                            })
+                    }
                 }
 
                 $probeCleanupAttempted = $true
@@ -2227,7 +2397,9 @@ function Get-OpenPathNonAdminAppControlHealth {
         $effectivePolicyValid -and
         $runtimeEvaluationAvailable -and
         $runtimeBoundaryValid -and
-        $probeCleanupSucceeded)
+        $probeCleanupSucceeded -and
+        $pendingRecovery.Count -eq 0 -and
+        ($Profile -ne 'StrictApplicationAllowlist' -or $windowsRuntimeBaselineValid))
 
     return [PSCustomObject][ordered]@{
         Healthy = $healthy
@@ -2243,6 +2415,10 @@ function Get-OpenPathNonAdminAppControlHealth {
         EffectivePolicyValid = $effectivePolicyValid
         RuntimeEvaluationAvailable = $runtimeEvaluationAvailable
         RuntimeBoundaryValid = $runtimeBoundaryValid
+        WindowsRuntimeBaselineValid = $windowsRuntimeBaselineValid
+        WindowsRuntimeValid = $windowsRuntimeBaselineValid
+        TransactionState = if ($pendingRecovery.Count -gt 0) { 'recovery-required' } else { 'clear' }
+        PendingRecovery = @($pendingRecovery)
         IdentityResolved = $identityResolved
         ProfileAvailable = $profileAvailable
         ValidationMode = $validationMode
@@ -2522,6 +2698,185 @@ function Invoke-OpenPathAppControlPolicyConverterActivation {
     return [pscustomobject]$result
 }
 
+function Get-OpenPathAppControlInstalledConfig {
+    param([Parameter(Mandatory = $true)][string]$OpenPathRoot)
+    $configPath = Join-Path (Join-Path $OpenPathRoot 'data') 'config.json'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $null }
+    try { return Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop }
+    catch { return $null }
+}
+
+function ConvertTo-OpenPathCanonicalPolicyXml {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][object]$PolicyXml)
+    try {
+        $xml = if ($PolicyXml -is [xml]) { $PolicyXml } else { [xml][string]$PolicyXml }
+        $settings = New-Object System.Xml.XmlReaderSettings
+        $settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+        $settings.XmlResolver = $null
+        $reader = [System.Xml.XmlNodeReader]::new($xml)
+        $normalized = [System.Xml.XmlDocument]::new()
+        $normalized.PreserveWhitespace = $false
+        $normalized.Load($reader)
+        $reader.Dispose()
+        foreach ($collection in @($normalized.SelectNodes('/AppLockerPolicy/RuleCollection'))) {
+            $rules = @($collection.ChildNodes | Where-Object { $_.NodeType -eq [System.Xml.XmlNodeType]::Element } | Sort-Object @{ Expression = { [string]$_.GetAttribute('Id') } })
+            foreach ($rule in $rules) { [void]$collection.RemoveChild($rule) }
+            foreach ($rule in $rules) { [void]$collection.AppendChild($rule) }
+        }
+        $normalized.OuterXml
+    }
+    catch { throw 'appcontrol_windows_runtime_baseline_invalid' }
+}
+
+function Compare-OpenPathAppLockerPolicyXml {
+    param([Parameter(Mandatory = $true)][object]$Expected, [Parameter(Mandatory = $true)][object]$Actual)
+    try { return [string]::Equals((ConvertTo-OpenPathCanonicalPolicyXml $Expected), (ConvertTo-OpenPathCanonicalPolicyXml $Actual), [StringComparison]::Ordinal) }
+    catch { return $false }
+}
+
+function Invoke-OpenPathAppLockerPackageEvaluation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$PolicyXml,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Packages,
+        [Parameter(Mandatory = $true)][string]$UserSid,
+        [object[]]$ProbePaths = @()
+    )
+    if (-not (Get-Command -Name Test-AppLockerPolicy -ErrorAction SilentlyContinue)) { throw 'appcontrol_windows_runtime_probe_failed' }
+    if (@($Packages).Count -eq 0) { throw 'appcontrol_windows_runtime_probe_failed' }
+    $policyPath = Join-Path ([IO.Path]::GetTempPath()) ('openpath-runtime-policy-' + [guid]::NewGuid().ToString('N') + '.xml')
+    try {
+        [IO.File]::WriteAllText($policyPath, $PolicyXml, [Text.UTF8Encoding]::new($false))
+        $nativePackages = @($Packages)
+        foreach ($package in $nativePackages) {
+            if ($package.AppX -isnot [bool] -or -not [bool]$package.AppX -or $null -eq $package.Publisher) {
+                throw 'appcontrol_windows_runtime_probe_failed'
+            }
+        }
+        $rawDecisions = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Packages $nativePackages -User $UserSid -ErrorAction Stop)
+        if ($rawDecisions.Count -ne $nativePackages.Count) { throw 'appcontrol_windows_runtime_probe_failed' }
+        $decisions = New-Object System.Collections.Generic.List[object]
+        foreach ($decision in $rawDecisions) {
+            $observed = if ($decision.PSObject.Properties['PolicyDecision']) { [string]$decision.PolicyDecision } elseif ($decision.PSObject.Properties['Decision']) { [string]$decision.Decision } else { '' }
+            if ($observed -ne 'Allowed') { throw 'appcontrol_windows_runtime_probe_failed' }
+            [void]$decisions.Add([PSCustomObject][ordered]@{ PolicyDecision = $observed; Raw = $decision })
+        }
+        foreach ($probePath in @($ProbePaths)) {
+            if (-not (Get-Command -Name Get-AppLockerFileInformation -ErrorAction SilentlyContinue)) { throw 'appcontrol_windows_runtime_probe_failed' }
+            $fileInfo = @(Get-AppLockerFileInformation -Path ([string]$probePath) -ErrorAction Stop)
+            if ($fileInfo.Count -ne 1) { throw 'appcontrol_windows_runtime_probe_failed' }
+            $probeDecision = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Packages @($fileInfo[0]) -User $UserSid -ErrorAction Stop)
+            if ($probeDecision.Count -ne 1) { throw 'appcontrol_windows_runtime_probe_failed' }
+            $probeObserved = if ($probeDecision[0].PSObject.Properties['PolicyDecision']) { [string]$probeDecision[0].PolicyDecision } elseif ($probeDecision[0].PSObject.Properties['Decision']) { [string]$probeDecision[0].Decision } else { '' }
+            if ($probeObserved -notin @('Denied', 'DeniedByDefault')) { throw 'appcontrol_windows_runtime_probe_failed' }
+            [void]$decisions.Add([PSCustomObject][ordered]@{ PolicyDecision = $probeObserved; Raw = $probeDecision[0] })
+        }
+        return $decisions.ToArray()
+    }
+    catch { throw 'appcontrol_windows_runtime_probe_failed' }
+    finally { Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue }
+}
+
+function Test-OpenPathWindowsRuntimePolicy {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][object]$WindowsRuntimeBaseline,
+        [Parameter(Mandatory = $true)][object]$PolicyXml
+    )
+    if (-not (Test-OpenPathWindowsRuntimeBaseline -Baseline $WindowsRuntimeBaseline)) { return $false }
+    try {
+        $xml = if ($PolicyXml -is [xml]) { $PolicyXml } else { [xml][string]$PolicyXml }
+        foreach ($package in @($WindowsRuntimeBaseline.Packages)) {
+            $found = @($xml.AppLockerPolicy.RuleCollection.FilePublisherRule | Where-Object {
+                $_.GetAttribute('Action') -eq 'Allow' -and
+                $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq [string]$package.PublisherName -and
+                $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq [string]$package.ProductName -and
+                $_.Conditions.FilePublisherCondition.GetAttribute('BinaryName') -eq [string]$package.BinaryName -and
+                $_.Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('LowSection') -eq '0.0.0.0' -and
+                $_.Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('HighSection') -eq '*'
+            })
+            if ($found.Count -ne 1) { return $false }
+        }
+        return $true
+    }
+    catch { return $false }
+}
+
+function Set-OpenPathAppControlCommittedConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+        [Parameter(Mandatory = $true)][string]$Profile,
+        [Parameter(Mandatory = $true)][ValidateSet('AuditOnly', 'Enforced')][string]$Mode,
+        [Parameter(Mandatory = $true)][string]$TransactionId
+    )
+    $configPath = Join-Path (Join-Path $OpenPathRoot 'data') 'config.json'
+    $config = Get-OpenPathAppControlInstalledConfig -OpenPathRoot $OpenPathRoot
+    if ($null -eq $config) { throw 'appcontrol_config_unavailable' }
+    $configuredProfile = if ($config.PSObject.Properties['appControlProfile']) { [string]$config.appControlProfile } else { '' }
+    $configuredMode = if ($config.PSObject.Properties['nonAdminAppControlMode']) { [string]$config.nonAdminAppControlMode } else { '' }
+    if ($configuredProfile -ne $Profile -or ($configuredMode -and $configuredMode -ne $Mode)) {
+        throw 'appcontrol_configuration_intent_changed'
+    }
+    foreach ($entry in @(
+        @{ Name = 'appControlCommitState'; Value = 'committed' },
+        @{ Name = 'activeAppControlProfile'; Value = $Profile },
+        @{ Name = 'appControlTransactionId'; Value = $TransactionId }
+    )) {
+        if ($null -eq $config.PSObject.Properties[$entry.Name]) {
+            $config | Add-Member -NotePropertyName $entry.Name -NotePropertyValue $entry.Value
+        }
+        else { $config.$($entry.Name) = $entry.Value }
+    }
+    $json = $config | ConvertTo-Json -Depth 20
+    if (Get-Command -Name Write-OpenPathAtomicJsonFile -ErrorAction SilentlyContinue) {
+        Write-OpenPathAtomicJsonFile -Path $configPath -Data $config -Depth 20
+    }
+    else {
+        $temporary = $configPath + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+        try {
+            Set-Content -LiteralPath $temporary -Value $json -Encoding UTF8
+            Move-Item -LiteralPath $temporary -Destination $configPath -Force -ErrorAction Stop
+        }
+        finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+    }
+    $readback = Get-OpenPathAppControlInstalledConfig -OpenPathRoot $OpenPathRoot
+    if ($null -eq $readback -or
+        [string]$readback.appControlCommitState -ne 'committed' -or
+        [string]$readback.activeAppControlProfile -ne $Profile -or
+        [string]$readback.appControlTransactionId -ne $TransactionId) {
+        throw 'appcontrol_config_commit_readback_failed'
+    }
+}
+
+function Restore-OpenPathAppControlSecurityConfig {
+    param([Parameter(Mandatory = $true)][string]$OpenPathRoot, [Parameter(Mandatory = $true)][object]$Transaction)
+    $metadata = $Transaction.ConfigurationMetadata
+    if ($null -eq $metadata -or $metadata.RequireConfigCommit -ne $true -or $null -eq $metadata.Before) { return }
+    $configPath = Join-Path (Join-Path $OpenPathRoot 'data') 'config.json'
+    $config = Get-OpenPathAppControlInstalledConfig -OpenPathRoot $OpenPathRoot
+    if ($null -eq $config) { throw 'appcontrol_config_unavailable' }
+    foreach ($name in @('appControlCommitState', 'activeAppControlProfile', 'appControlTransactionId')) {
+        $beforeProperty = $metadata.Before.PSObject.Properties[$name]
+        $currentProperty = $config.PSObject.Properties[$name]
+        if ($null -ne $beforeProperty) {
+            if ($null -ne $currentProperty) { $config.$name = $beforeProperty.Value }
+            else { $config | Add-Member -NotePropertyName $name -NotePropertyValue $beforeProperty.Value }
+        }
+        elseif ($null -ne $currentProperty) {
+            $config.PSObject.Properties.Remove($name)
+        }
+    }
+    $json = $config | ConvertTo-Json -Depth 20
+    $temporary = $configPath + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    try {
+        Set-Content -LiteralPath $temporary -Value $json -Encoding UTF8
+        Move-Item -LiteralPath $temporary -Destination $configPath -Force -ErrorAction Stop
+    }
+    finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+}
+
 function Set-OpenPathNonAdminAppControl {
     <#
     .SYNOPSIS
@@ -2581,7 +2936,69 @@ function Set-OpenPathNonAdminAppControl {
     $diagnosticSubstep = 'policy-backup'
     $failureDiagnostic = $null
     $policyApplied = $false
+    $transactionLock = $null
+    $transaction = $null
+    $policyPath = $null
     try {
+        try {
+            $transactionLock = Enter-OpenPathAppControlTransaction -OpenPathRoot $OpenPathRoot
+            if (-not $transactionLock.Acquired) {
+                throw 'appcontrol_transaction_busy'
+            }
+        }
+        catch {
+            $diagnosticSubstep = 'transaction-lock'
+            throw
+        }
+        $recoveryResult = Invoke-OpenPathAppControlTransactionRecovery -OpenPathRoot $OpenPathRoot -ApplyLocalPolicy {
+            param($snapshot)
+            $recoveryPath = Join-Path ([IO.Path]::GetTempPath()) ('openpath-recovery-' + [guid]::NewGuid().ToString('N') + '.xml')
+            try {
+                Set-Content -LiteralPath $recoveryPath -Value $snapshot -Encoding UTF8
+                Set-AppLockerPolicy -XMLPolicy $recoveryPath -ErrorAction Stop
+            }
+            finally { Remove-Item -LiteralPath $recoveryPath -Force -ErrorAction SilentlyContinue }
+        } -ReadLocalPolicy {
+            [string](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
+        } -ComparePolicy {
+            param($expected, $actual)
+            Compare-OpenPathAppLockerPolicyXml -Expected $expected -Actual $actual
+        } -RestoreConfiguration {
+            param($recoveryTransaction)
+            Restore-OpenPathAppControlSecurityConfig -OpenPathRoot $OpenPathRoot -Transaction $recoveryTransaction
+        }
+        if (-not $recoveryResult.Resolved) {
+            throw 'appcontrol_recovery_required'
+        }
+        $diagnosticSubstep = 'config'
+        # Read the installed intent only after the machine lock and recovery
+        # fence. A concurrent installer/config writer must not be able to
+        # change the requested profile or mode between the check and apply.
+        $installedConfig = Get-OpenPathAppControlInstalledConfig -OpenPathRoot $OpenPathRoot
+        $configuredProfile = if ($null -ne $installedConfig -and $installedConfig.PSObject.Properties['appControlProfile']) {
+            [string]$installedConfig.appControlProfile
+        }
+        else { '' }
+        $configuredMode = if ($null -ne $installedConfig -and $installedConfig.PSObject.Properties['nonAdminAppControlMode']) {
+            [string]$installedConfig.nonAdminAppControlMode
+        }
+        else { '' }
+        if ($null -eq $installedConfig -or
+            [string]::IsNullOrWhiteSpace($configuredProfile) -or
+            [string]::IsNullOrWhiteSpace($configuredMode) -or
+            $configuredProfile -ne $Profile -or
+            $configuredMode -ne $Mode) {
+            throw 'appcontrol_config_unavailable'
+        }
+
+        # Group membership is part of this serialized AppControl operation;
+        # never reconcile it in a competing installer/watchdog path.
+        if ((Get-Command -Name 'Sync-OpenPathRestrictedGroup' -ErrorAction SilentlyContinue) -and
+            (Get-Command -Name 'Get-LocalGroup' -ErrorAction SilentlyContinue)) {
+            if (-not (Sync-OpenPathRestrictedGroup -CreateIfMissing $true -DiagnosticStatusPath $DiagnosticStatusPath)) {
+                throw 'appcontrol_restricted_group_sync_failed'
+            }
+        }
         $appLockerBackupPath = Join-Path (Join-Path $OpenPathRoot 'data') 'applocker-backup.xml'
         $backupDir = Split-Path $appLockerBackupPath -Parent
         if (-not (Test-Path $backupDir)) {
@@ -2589,10 +3006,21 @@ function Set-OpenPathNonAdminAppControl {
         }
 
         $currentPolicyText = Get-AppLockerPolicy -Local -Xml
-        Set-Content -Path $appLockerBackupPath -Value $currentPolicyText -Encoding UTF8
+        if (-not (Test-Path -LiteralPath $appLockerBackupPath -PathType Leaf)) {
+            Set-Content -Path $appLockerBackupPath -Value $currentPolicyText -Encoding UTF8
+        }
+
+        $runtimeBaseline = $null
+        if ($Profile -eq 'StrictApplicationAllowlist') {
+            $diagnosticSubstep = 'runtime-inventory'
+            $runtimeBaseline = Get-OpenPathWindowsRuntimeBaseline
+            if (-not (Test-OpenPathWindowsRuntimeBaseline -Baseline $runtimeBaseline)) {
+                throw 'appcontrol_windows_runtime_baseline_invalid'
+            }
+        }
 
         $diagnosticSubstep = 'policy-generation'
-        $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog
+        $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot $OpenPathRoot -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -WindowsRuntimeBaseline $runtimeBaseline
         $policyXml = New-OpenPathAppLockerPolicyXml -Spec $spec
         $mergedPolicyXml = Merge-OpenPathAppLockerPolicyXml -CurrentPolicy ([xml]$currentPolicyText) -OpenPathPolicy ([xml]$policyXml)
         # Validate the candidate in memory before crossing the AppLocker
@@ -2600,14 +3028,41 @@ function Set-OpenPathNonAdminAppControl {
         # apply, but malformed strict candidates must never be applied first.
         $diagnosticSubstep = 'policy-preflight'
         if ($Profile -eq 'StrictApplicationAllowlist' -and
-            -not (Test-OpenPathAppLockerBoundaryPolicy -PolicyXml ([xml]$mergedPolicyXml) -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $spec.BrowserInventory -OpenPathRoot $OpenPathRoot)) {
+            -not (Test-OpenPathAppLockerBoundaryPolicy -PolicyXml ([xml]$mergedPolicyXml) -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -BrowserInventory $spec.BrowserInventory -WindowsRuntimeBaseline $runtimeBaseline -OpenPathRoot $OpenPathRoot)) {
             throw 'strict-required-rule-missing'
         }
+        if ($Profile -eq 'StrictApplicationAllowlist') {
+            $diagnosticSubstep = 'runtime-preflight'
+            $declaredRuntimePackages = @($runtimeBaseline.Packages)
+            if ($declaredRuntimePackages.Count -gt 0) {
+                $nativeRuntimePackages = @($runtimeBaseline.NativeAppLockerPackages)
+                if ($nativeRuntimePackages.Count -ne $declaredRuntimePackages.Count) {
+                    throw 'appcontrol_windows_runtime_probe_failed'
+                }
+                $preflightTarget = Get-OpenPathAppControlProbeTarget
+                $preflightDecisions = @(Invoke-OpenPathAppLockerPackageEvaluation -PolicyXml ([string]$mergedPolicyXml.OuterXml) -Packages $nativeRuntimePackages -UserSid ([string]$preflightTarget.UserSid))
+                if ($preflightDecisions.Count -ne $nativeRuntimePackages.Count -or @($preflightDecisions | Where-Object { [string]$_.PolicyDecision -ne 'Allowed' }).Count -gt 0) {
+                    throw 'appcontrol_windows_runtime_probe_failed'
+                }
+            }
+        }
+        $effectivePolicyText = $null
+        try { $effectivePolicyText = [string](Get-AppLockerPolicy -Effective -Xml -ErrorAction Stop) } catch { $effectivePolicyText = [string]$currentPolicyText }
+        $configBefore = [ordered]@{}
+        foreach ($name in @('appControlCommitState', 'activeAppControlProfile', 'appControlTransactionId')) {
+            if ($installedConfig.PSObject.Properties[$name]) { $configBefore[$name] = $installedConfig.$name }
+        }
+        $transaction = New-OpenPathAppControlTransaction -OpenPathRoot $OpenPathRoot -LocalPolicyXml ([string]$currentPolicyText) -EffectivePolicyXml $effectivePolicyText -Operation 'apply' -ConfigurationMetadata @{ profile = $Profile; mode = $Mode; RequireConfigCommit = $true; Before = [pscustomobject]$configBefore }
+        Write-OpenPathAppControlTransactionCandidate -Transaction $transaction -CandidateXml ([string]$mergedPolicyXml.OuterXml) | Out-Null
+        Set-OpenPathAppControlTransactionState -Transaction $transaction -State 'apply-attempted' | Out-Null
         $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-applocker-$([guid]::NewGuid()).xml"
         $mergedPolicyXml.Save($policyPath)
         $diagnosticSubstep = 'policy-apply'
-        Set-AppLockerPolicy -XMLPolicy $policyPath
+        # Set-AppLockerPolicy WindowsRuntime guard: strict inventory and its
+        # canonical identity must have passed before this mutation boundary.
+        Set-AppLockerPolicy -XMLPolicy $policyPath -ErrorAction Stop
         $policyApplied = $true
+        Set-OpenPathAppControlTransactionState -Transaction $transaction -State 'applied' | Out-Null
         Remove-Item $policyPath -Force -ErrorAction SilentlyContinue
 
         $diagnosticSubstep = 'service-config'
@@ -2625,7 +3080,7 @@ function Set-OpenPathNonAdminAppControl {
         }
 
         $diagnosticSubstep = 'validation'
-        if (-not (Test-OpenPathNonAdminAppControlActive -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog)) {
+        if (-not (Test-OpenPathNonAdminAppControlActive -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -WindowsRuntimeBaseline $runtimeBaseline -OpenPathRoot $OpenPathRoot)) {
             $health = $script:OpenPathLastAppControlHealth
             if ($null -eq $health) {
                 $health = [pscustomobject]@{
@@ -2649,27 +3104,52 @@ function Set-OpenPathNonAdminAppControl {
 
             $failureDiagnostic.InternalRollbackAttempted = $true
             try {
-                Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath -ErrorAction Stop
-                $failureDiagnostic.InternalRollbackSucceeded = $true
-                Write-OpenPathLog 'AppLocker validation failed after OpenPath policy apply; restored previous policy backup' -Level WARN
+                if ($null -ne $transaction) {
+                    $failureDiagnostic.InternalRollbackSucceeded = Invoke-OpenPathAppControlTransactionRollback -Transaction $transaction -ApplyLocalPolicy {
+                        param($snapshot)
+                        $rollbackPath = Join-Path ([IO.Path]::GetTempPath()) ('openpath-rollback-' + [guid]::NewGuid().ToString('N') + '.xml')
+                        try { Set-Content -LiteralPath $rollbackPath -Value $snapshot -Encoding UTF8; Set-AppLockerPolicy -XMLPolicy $rollbackPath -ErrorAction Stop }
+                        finally { Remove-Item -LiteralPath $rollbackPath -Force -ErrorAction SilentlyContinue }
+                    } -ReadLocalPolicy { [string](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop) } -ComparePolicy {
+                        param($expected, $actual)
+                        Compare-OpenPathAppLockerPolicyXml -Expected $expected -Actual $actual
+                    }
+                }
+                else {
+                    Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath -ErrorAction Stop
+                    $failureDiagnostic.InternalRollbackSucceeded = $true
+                }
+                if ($null -ne $transaction) {
+                    Restore-OpenPathAppControlSecurityConfig -OpenPathRoot $OpenPathRoot -Transaction $transaction
+                }
             }
             catch {
                 $failureDiagnostic.InternalRollbackSucceeded = $false
-                Write-OpenPathLog 'AppLocker validation failed and the previous policy backup could not be restored' -Level WARN
+                Write-OpenPathLog 'AppLocker validation failed and the transaction rollback could not be verified' -Level WARN
             }
             Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic $failureDiagnostic
             return $false
         }
 
+        if ($null -ne $transaction) {
+            Set-OpenPathAppControlTransactionState -Transaction $transaction -State 'validated' | Out-Null
+            Set-OpenPathAppControlCommittedConfig -OpenPathRoot $OpenPathRoot -Profile $Profile -Mode $Mode -TransactionId $transaction.TransactionId
+            Confirm-OpenPathAppControlTransactionConfigurationCommit -Transaction $transaction | Out-Null
+            Set-OpenPathAppControlTransactionState -Transaction $transaction -State 'committed' | Out-Null
+        }
         Write-OpenPathLog "OpenPath non-admin app control applied in $Mode mode"
         return $true
     }
     catch {
         if ($null -eq $failureDiagnostic) {
             $reasonCode = switch ($diagnosticSubstep) {
+                'config' { 'appcontrol_config_unavailable' }
                 'policy-backup' { 'appcontrol_policy_backup_failed' }
+                'transaction-lock' { 'appcontrol_transaction_security_failed' }
+                'runtime-inventory' { 'appcontrol_windows_runtime_inventory_failed' }
                 'policy-generation' { 'appcontrol_policy_generation_failed' }
                 'policy-preflight' { if ($Profile -eq 'StrictApplicationAllowlist') { 'strict-required-rule-missing' } else { 'appcontrol_policy_generation_failed' } }
+                'runtime-preflight' { 'appcontrol_windows_runtime_probe_failed' }
                 'policy-apply' { 'appcontrol_policy_apply_failed' }
                 'service-config' { 'appcontrol_appidsvc_configuration_failed' }
                 'service-start' { 'appcontrol_appidsvc_start_failed' }
@@ -2710,16 +3190,53 @@ function Set-OpenPathNonAdminAppControl {
             if ($Profile -eq 'StrictApplicationAllowlist') {
                 $failureDiagnostic.ReasonCodes = @($failureDiagnostic.ReasonCodes) + 'strict-transition-failed'
             }
-            if ($policyApplied) {
+            $rollbackRequired = [bool]$policyApplied
+            if ($null -ne $transaction) {
+                try {
+                    $transactionState = Get-OpenPathAppControlTransaction -StateFile $transaction.StateFile
+                    if ([string]$transactionState.State -in @('apply-attempted', 'applied', 'validated', 'rollback-attempted')) {
+                        $rollbackRequired = $true
+                    }
+                    elseif ([string]$transactionState.State -eq 'prepared') {
+                        Set-OpenPathAppControlTransactionState -Transaction $transaction -State 'aborted' | Out-Null
+                    }
+                }
+                catch {
+                    # A journal that cannot be read is itself recovery evidence;
+                    # do not claim rollback succeeded or silently retry policy.
+                    $rollbackRequired = $true
+                    $failureDiagnostic.ReasonCodes = @($failureDiagnostic.ReasonCodes) + 'appcontrol_recovery_required'
+                }
+            }
+            if ($rollbackRequired) {
                 $failureDiagnostic.InternalRollbackAttempted = $true
                 try {
-                    Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath -ErrorAction Stop
-                    $failureDiagnostic.InternalRollbackSucceeded = $true
-                    Write-OpenPathLog 'AppLocker activation failed after policy apply; restored previous policy backup' -Level WARN
+                    if ($null -ne $transaction) {
+                        $failureDiagnostic.InternalRollbackSucceeded = Invoke-OpenPathAppControlTransactionRollback -Transaction $transaction -ApplyLocalPolicy {
+                            param($snapshot)
+                            $rollbackPath = Join-Path ([IO.Path]::GetTempPath()) ('openpath-rollback-' + [guid]::NewGuid().ToString('N') + '.xml')
+                            try { Set-Content -LiteralPath $rollbackPath -Value $snapshot -Encoding UTF8; Set-AppLockerPolicy -XMLPolicy $rollbackPath -ErrorAction Stop }
+                            finally { Remove-Item -LiteralPath $rollbackPath -Force -ErrorAction SilentlyContinue }
+                        } -ReadLocalPolicy { [string](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop) } -ComparePolicy {
+                            param($expected, $actual)
+                            Compare-OpenPathAppLockerPolicyXml -Expected $expected -Actual $actual
+                        }
+                    }
+                    else {
+                        Set-AppLockerPolicy -XMLPolicy $appLockerBackupPath -ErrorAction Stop
+                        $failureDiagnostic.InternalRollbackSucceeded = $true
+                    }
                 }
                 catch {
                     $failureDiagnostic.InternalRollbackSucceeded = $false
-                    Write-OpenPathLog 'AppLocker activation failed and the previous policy backup could not be restored' -Level WARN
+                    Write-OpenPathLog 'AppLocker activation failed and the transaction rollback could not be verified' -Level WARN
+                }
+                if ($null -ne $transaction) {
+                    try { Restore-OpenPathAppControlSecurityConfig -OpenPathRoot $OpenPathRoot -Transaction $transaction }
+                    catch {
+                        $failureDiagnostic.InternalRollbackSucceeded = $false
+                        $failureDiagnostic.ReasonCodes = @($failureDiagnostic.ReasonCodes) + 'appcontrol_config_rollback_failed'
+                    }
                 }
             }
             Write-OpenPathAppControlDiagnosticFile -Path $DiagnosticStatusPath -Diagnostic $failureDiagnostic
@@ -2727,6 +3244,13 @@ function Set-OpenPathNonAdminAppControl {
         Write-OpenPathLog "Failed to configure OpenPath non-admin app control: $_" -Level WARN
         return $false
     }
+    finally {
+        if ($policyPath) { Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue }
+        if ($null -ne $transactionLock) {
+            Exit-OpenPathAppControlTransaction -Lock $transactionLock
+        }
+    }
+    return $true
 }
 
 function Test-OpenPathNonAdminAppControlActive {
@@ -2747,10 +3271,15 @@ function Test-OpenPathNonAdminAppControlActive {
         [string]$Profile = 'ManagedBrowserCompatibility',
 
         [AllowNull()]
-        [object]$ApplicationCatalog = $null
+        [object]$ApplicationCatalog = $null,
+
+        [AllowNull()]
+        [object]$WindowsRuntimeBaseline = $null,
+
+        [string]$OpenPathRoot = $script:OpenPathRoot
     )
 
-    $health = Get-OpenPathNonAdminAppControlHealth -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog
+    $health = Get-OpenPathNonAdminAppControlHealth -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -WindowsRuntimeBaseline $WindowsRuntimeBaseline -OpenPathRoot $OpenPathRoot
     $script:OpenPathLastAppControlHealth = $health
     return [bool]$health.Healthy
 }
@@ -2761,7 +3290,7 @@ function Remove-OpenPathNonAdminAppControl {
     Removes all OpenPath-managed AppLocker rules from the live policy and saves the cleaned policy.
     #>
     [CmdletBinding(SupportsShouldProcess)]
-    param()
+    param([string]$OpenPathRoot = $script:OpenPathRoot)
 
     if (-not (Test-OpenPathAppControlAvailable)) {
         return $false
@@ -2770,7 +3299,29 @@ function Remove-OpenPathNonAdminAppControl {
         return $false
     }
 
+    $transactionLock = $null
+    $transaction = $null
+    $policyPath = $null
     try {
+        $transactionLock = Enter-OpenPathAppControlTransaction -OpenPathRoot $OpenPathRoot
+        if (-not $transactionLock.Acquired) { return $false }
+        $recoveryResult = Invoke-OpenPathAppControlTransactionRecovery -OpenPathRoot $OpenPathRoot -ApplyLocalPolicy {
+            param($snapshot)
+            $recoveryPath = Join-Path ([IO.Path]::GetTempPath()) ('openpath-remove-recovery-' + [guid]::NewGuid().ToString('N') + '.xml')
+            try {
+                Set-Content -LiteralPath $recoveryPath -Value $snapshot -Encoding UTF8
+                Set-AppLockerPolicy -XMLPolicy $recoveryPath -ErrorAction Stop
+            }
+            finally { Remove-Item -LiteralPath $recoveryPath -Force -ErrorAction SilentlyContinue }
+        } -ReadLocalPolicy {
+            [string](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
+        } -ComparePolicy {
+            param($expected, $actual)
+            Compare-OpenPathAppLockerPolicyXml -Expected $expected -Actual $actual
+        }
+        if (-not $recoveryResult.Resolved) { return $false }
+        $beforeLocal = [string](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
+        $beforeEffective = try { [string](Get-AppLockerPolicy -Effective -Xml -ErrorAction Stop) } catch { $beforeLocal }
         $policyXml = [xml](Get-AppLockerPolicy -Local -Xml)
         foreach ($collection in @($policyXml.AppLockerPolicy.RuleCollection)) {
             foreach ($rule in @($collection.ChildNodes)) {
@@ -2780,16 +3331,51 @@ function Remove-OpenPathNonAdminAppControl {
             }
         }
 
+        $transaction = New-OpenPathAppControlTransaction -OpenPathRoot $OpenPathRoot -LocalPolicyXml $beforeLocal -EffectivePolicyXml $beforeEffective -Operation 'remove'
+        $transactionCandidate = [string]$policyXml.OuterXml
+        Write-OpenPathAppControlTransactionCandidate -Transaction $transaction -CandidateXml $transactionCandidate | Out-Null
+        Set-OpenPathAppControlTransactionState -Transaction $transaction -State 'apply-attempted' | Out-Null
         $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-applocker-remove-$([guid]::NewGuid()).xml"
         $policyXml.Save($policyPath)
-        Set-AppLockerPolicy -XMLPolicy $policyPath
+        Set-AppLockerPolicy -XMLPolicy $policyPath -ErrorAction Stop
+        Set-OpenPathAppControlTransactionState -Transaction $transaction -State 'applied' | Out-Null
         Remove-Item $policyPath -Force -ErrorAction SilentlyContinue
+        $readback = [string](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
+        if (-not (Compare-OpenPathAppLockerPolicyXml -Expected $transactionCandidate -Actual $readback)) {
+            throw 'appcontrol_rollback_verification_failed'
+        }
+        Set-OpenPathAppControlTransactionState -Transaction $transaction -State 'validated' | Out-Null
+        Set-OpenPathAppControlTransactionState -Transaction $transaction -State 'committed' | Out-Null
         Write-OpenPathLog 'OpenPath non-admin app control rules removed'
         return $true
     }
     catch {
+        if ($null -ne $transaction) {
+            try {
+                $transactionState = Get-OpenPathAppControlTransaction -StateFile $transaction.StateFile
+                if ([string]$transactionState.State -eq 'prepared') {
+                    Set-OpenPathAppControlTransactionState -Transaction $transaction -State 'aborted' | Out-Null
+                }
+                elseif ([string]$transactionState.State -in @('apply-attempted', 'applied', 'validated', 'rollback-attempted')) {
+                    Invoke-OpenPathAppControlTransactionRollback -Transaction $transaction -ApplyLocalPolicy {
+                        param($snapshot)
+                        $rollbackPath = Join-Path ([IO.Path]::GetTempPath()) ('openpath-remove-rollback-' + [guid]::NewGuid().ToString('N') + '.xml')
+                        try { Set-Content -LiteralPath $rollbackPath -Value $snapshot -Encoding UTF8; Set-AppLockerPolicy -XMLPolicy $rollbackPath -ErrorAction Stop }
+                        finally { Remove-Item -LiteralPath $rollbackPath -Force -ErrorAction SilentlyContinue }
+                    } -ReadLocalPolicy { [string](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop) } -ComparePolicy {
+                        param($expected, $actual)
+                        Compare-OpenPathAppLockerPolicyXml -Expected $expected -Actual $actual
+                    } | Out-Null
+                }
+            }
+            catch { Write-OpenPathLog 'OpenPath removal rollback requires manual recovery' -Level WARN }
+        }
         Write-OpenPathLog "Failed to remove OpenPath non-admin app control rules: $_" -Level WARN
         return $false
+    }
+    finally {
+        if ($policyPath) { Remove-Item -LiteralPath $policyPath -Force -ErrorAction SilentlyContinue }
+        if ($null -ne $transactionLock) { Exit-OpenPathAppControlTransaction -Lock $transactionLock }
     }
 }
 
@@ -2821,6 +3407,9 @@ Export-ModuleMember -Function @(
     'New-OpenPathNonAdminAppLockerPolicySpec',
     'New-OpenPathAppLockerPolicyXml',
     'Merge-OpenPathAppLockerPolicyXml',
+    'Test-OpenPathWindowsRuntimeBaseline',
+    'Invoke-OpenPathAppLockerPackageEvaluation',
+    'Test-OpenPathWindowsRuntimePolicy',
     'Test-OpenPathAppControlAvailable',
     'Set-OpenPathNonAdminAppControl',
     'Get-OpenPathNonAdminAppControlHealth',

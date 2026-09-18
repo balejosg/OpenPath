@@ -1,144 +1,496 @@
-# Serialized AppLocker mutation journal.  The module deliberately does not
-# apply policy; AppControl owns the cmdlets and uses this context to make every
-# mutation attributable and recoverable.
-
+# Serialized AppLocker mutation journal.  AppControl owns policy cmdlets; this
+# module owns the machine-wide lock, durable journal, and recovery inspection.
 Set-StrictMode -Version Latest
 
-$script:TransactionStates = @('prepared','apply-attempted','applied','validated','committed','rollback-attempted','rolled-back','recovery-required')
+$script:TransactionStates = @('prepared', 'apply-attempted', 'applied', 'validated', 'committed', 'rollback-attempted', 'rolled-back', 'aborted', 'recovery-required')
+$script:TerminalStates = @('committed', 'rolled-back', 'aborted')
 $script:HeldMutexNames = @{}
+$script:MachineMutexName = 'Global\OpenPath-AppControl-v1'
+
+function Test-OpenPathTransactionWindows {
+    return [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -or [string]$env:OS -eq 'Windows_NT'
+}
 
 function Get-OpenPathTransactionRoot {
-    param([Parameter(Mandatory)][string]$OpenPathRoot)
-    Join-Path (Join-Path $OpenPathRoot 'data') 'appcontrol-transactions'
+    param([Parameter(Mandatory = $true)][string]$OpenPathRoot)
+    $canonical = [IO.Path]::GetFullPath($OpenPathRoot)
+    Join-Path (Join-Path $canonical 'data') 'appcontrol-transactions'
+}
+
+function Get-OpenPathTransactionSha256 {
+    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($hash.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant() }
+    finally { $hash.Dispose() }
+}
+
+function Get-OpenPathTransactionBytes {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    [IO.File]::ReadAllBytes($Path)
+}
+
+function Write-OpenPathTransactionCreateNew {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Content)
+    $parent = Split-Path -Parent $Path
+    [IO.Directory]::CreateDirectory($parent) | Out-Null
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Content)
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+    try {
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    }
+    finally { $stream.Dispose() }
 }
 
 function Write-OpenPathTransactionAtomic {
-    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Content)
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Content)
     $parent = Split-Path -Parent $Path
     [IO.Directory]::CreateDirectory($parent) | Out-Null
-    $temporary = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+    $temporary = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
     try {
         [IO.File]::WriteAllText($temporary, $Content, [Text.UTF8Encoding]::new($false))
+        $stream = [IO.File]::Open($temporary, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        try { $stream.Flush($true) } finally { $stream.Dispose() }
         Move-Item -LiteralPath $temporary -Destination $Path -Force -ErrorAction Stop
-    } finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+        Set-OpenPathTransactionAcl -Path $Path
+    }
+    finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+}
+
+function Set-OpenPathTransactionAcl {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-OpenPathTransactionWindows)) { return }
+    try {
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.Access | ForEach-Object { [void]$acl.RemoveAccessRule($_) }
+        foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
+            $sid = New-Object System.Security.Principal.SecurityIdentifier($sidText)
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+            [void]$acl.AddAccessRule($rule)
+        }
+        Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+        $verified = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
+            $hasRule = @($verified.Access | Where-Object {
+                    try { [string]$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sidText }
+                    catch {
+                        if ($sidText -eq 'S-1-5-18') { [string]$_.IdentityReference -match '(?i)SYSTEM' }
+                        else { [string]$_.IdentityReference -match '(?i)Administrators' }
+                    }
+                }).Count -gt 0
+            if (-not $hasRule) { throw 'appcontrol_transaction_security_failed' }
+        }
+    }
+    catch { throw 'appcontrol_transaction_security_failed' }
+}
+
+function Get-OpenPathMutexSecurity {
+    try {
+        $security = New-Object System.Security.AccessControl.MutexSecurity
+        foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
+            $sid = New-Object System.Security.Principal.SecurityIdentifier($sidText)
+            $rights = [System.Security.AccessControl.MutexRights]::FullControl
+            $rule = New-Object System.Security.AccessControl.MutexAccessRule($sid, $rights, [System.Security.AccessControl.AccessControlType]::Allow)
+            [void]$security.AddAccessRule($rule)
+        }
+        return $security
+    }
+    catch { throw 'appcontrol_transaction_security_failed' }
 }
 
 function Enter-OpenPathAppControlTransaction {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$OpenPathRoot, [int]$TimeoutMilliseconds = 15000)
-    $canonicalRoot = [IO.Path]::GetFullPath($OpenPathRoot).TrimEnd('\').ToLowerInvariant()
-    $mutexName = 'Global\OpenPath-AppControl-' + (([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($canonicalRoot)) | ForEach-Object { $_.ToString('x2') }) -join '')
-    if ($script:HeldMutexNames.ContainsKey($mutexName)) { return [PSCustomObject]@{ Acquired = $false; ReasonCode = 'appcontrol_transaction_busy'; Mutex = $null; MutexName = $mutexName } }
-    $mutex = [Threading.Mutex]::new($false, $mutexName)
-    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
-        try {
-            $security = [Threading.MutexSecurity]::new()
-            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
-                $identity = [Security.Principal.SecurityIdentifier]::new($sid)
-                $rule = [Threading.MutexAccessRule]::new($identity, [Threading.MutexRights]::FullControl, [Security.AccessControl.AccessControlType]::Allow)
-                $security.AddAccessRule($rule)
-            }
-            $mutex.SetAccessControl($security)
-        } catch { }
+    param([Parameter(Mandatory = $true)][string]$OpenPathRoot, [int]$TimeoutMilliseconds = 15000)
+    if ($TimeoutMilliseconds -lt 1) { throw 'appcontrol_transaction_security_failed' }
+    $mutexName = $script:MachineMutexName
+    if ($script:HeldMutexNames.ContainsKey($mutexName)) {
+        return [PSCustomObject][ordered]@{ Acquired = $false; Abandoned = $false; ReasonCode = 'appcontrol_transaction_busy'; Mutex = $null; MutexName = $mutexName }
     }
+    $createdNew = $false
     try {
-        if (-not $mutex.WaitOne($TimeoutMilliseconds)) { $mutex.Dispose(); return [PSCustomObject]@{ Acquired = $false; ReasonCode = 'appcontrol_transaction_busy'; Mutex = $null } }
-    } catch {
+        $mutex = New-Object System.Threading.Mutex($false, $mutexName, [ref]$createdNew)
+    }
+    catch { throw 'appcontrol_transaction_security_failed' }
+    if (Test-OpenPathTransactionWindows) {
+        try {
+            $security = Get-OpenPathMutexSecurity
+            if ($createdNew) { $mutex.SetAccessControl($security) }
+            else {
+                $existing = $mutex.GetAccessControl()
+                $allowedSids = @('S-1-5-18', 'S-1-5-32-544')
+                foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
+                    $hasRule = @($existing.Access | Where-Object {
+                            try { [string]$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sidText }
+                            catch {
+                                if ($sidText -eq 'S-1-5-18') { [string]$_.IdentityReference -match '(?i)SYSTEM' }
+                                else { [string]$_.IdentityReference -match '(?i)Administrators' }
+                            }
+                        }).Count -gt 0
+                    if (-not $hasRule) { throw 'appcontrol_transaction_security_failed' }
+                }
+                foreach ($ace in @($existing.Access)) {
+                    try { $aceSid = [string]$ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }
+                    catch { $aceSid = [string]$ace.IdentityReference }
+                    if ($aceSid -and $allowedSids -notcontains $aceSid) { throw 'appcontrol_transaction_security_failed' }
+                }
+            }
+        }
+        catch {
+            $mutex.Dispose()
+            throw 'appcontrol_transaction_security_failed'
+        }
+    }
+    $abandoned = $false
+    try {
+        $acquired = $mutex.WaitOne($TimeoutMilliseconds)
+    }
+    catch [System.Threading.AbandonedMutexException] {
+        $acquired = $true
+        $abandoned = $true
+    }
+    catch {
         $mutex.Dispose()
-        return [PSCustomObject]@{ Acquired = $false; ReasonCode = 'appcontrol_transaction_busy'; Mutex = $null }
+        return [PSCustomObject][ordered]@{ Acquired = $false; Abandoned = $false; ReasonCode = 'appcontrol_transaction_busy'; Mutex = $null; MutexName = $mutexName }
+    }
+    if (-not $acquired) {
+        $mutex.Dispose()
+        return [PSCustomObject][ordered]@{ Acquired = $false; Abandoned = $false; ReasonCode = 'appcontrol_transaction_busy'; Mutex = $null; MutexName = $mutexName }
     }
     $script:HeldMutexNames[$mutexName] = $true
-    [PSCustomObject]@{ Acquired = $true; ReasonCode = $null; Mutex = $mutex; MutexName = $mutexName }
+    [PSCustomObject][ordered]@{ Acquired = $true; Abandoned = $abandoned; ReasonCode = $null; Mutex = $mutex; MutexName = $mutexName; OpenPathRoot = [IO.Path]::GetFullPath($OpenPathRoot) }
 }
 
 function Exit-OpenPathAppControlTransaction {
     param([AllowNull()][object]$Lock)
-    if ($Lock -and $Lock.Acquired -and $Lock.Mutex) {
+    if ($null -ne $Lock -and $Lock.Acquired -and $null -ne $Lock.Mutex) {
         try { $Lock.Mutex.ReleaseMutex() } catch {}
         $Lock.Mutex.Dispose()
-        if ($Lock.MutexName) { $script:HeldMutexNames.Remove([string]$Lock.MutexName) | Out-Null }
+        if ($Lock.MutexName) { [void]$script:HeldMutexNames.Remove([string]$Lock.MutexName) }
     }
+}
+
+function Get-OpenPathTransactionStateObject {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    try {
+        $text = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        $state = $text | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch { throw 'appcontrol_recovery_required' }
+    foreach ($field in @('TransactionId', 'State', 'BeforeLocal', 'BeforeEffective', 'Candidate', 'StateFile', 'Operation', 'SchemaVersion', 'BeforeLocalSha256', 'BeforeEffectiveSha256')) {
+        if ($null -eq $state.PSObject.Properties[$field] -or [string]::IsNullOrWhiteSpace([string]$state.$field)) { throw 'appcontrol_recovery_required' }
+    }
+    if ([int]$state.SchemaVersion -ne 2) { throw 'appcontrol_recovery_required' }
+    if ($state.State -notin $script:TransactionStates) { throw 'appcontrol_recovery_required' }
+    if (-not [string]::Equals([IO.Path]::GetFullPath([string]$state.StateFile), [IO.Path]::GetFullPath($Path), [StringComparison]::OrdinalIgnoreCase)) { throw 'appcontrol_recovery_required' }
+    try {
+        $directory = [IO.Path]::GetFullPath((Split-Path -Parent $Path)).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+        foreach ($entry in @(
+            @{ Name = 'BeforeLocal'; File = 'before-local.xml' },
+            @{ Name = 'BeforeEffective'; File = 'before-effective.xml' },
+            @{ Name = 'Candidate'; File = 'candidate.xml' },
+            @{ Name = 'StateFile'; File = 'state.json' }
+        )) {
+            $candidatePath = [IO.Path]::GetFullPath([string]$state.($entry.Name))
+            if (-not $candidatePath.StartsWith($directory, [StringComparison]::OrdinalIgnoreCase) -or
+                [IO.Path]::GetFileName($candidatePath) -ne $entry.File) { throw 'appcontrol_recovery_required' }
+            $state.($entry.Name) = $candidatePath
+        }
+        foreach ($snapshot in @(
+            @{ Path = [string]$state.BeforeLocal; Hash = [string]$state.BeforeLocalSha256 },
+            @{ Path = [string]$state.BeforeEffective; Hash = [string]$state.BeforeEffectiveSha256 }
+        )) {
+            if (-not (Test-Path -LiteralPath $snapshot.Path -PathType Leaf) -or
+                -not [string]::Equals((Get-OpenPathTransactionSha256 -Bytes (Get-OpenPathTransactionBytes -Path $snapshot.Path)), $snapshot.Hash, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'appcontrol_recovery_required'
+            }
+        }
+        if ([string]$state.State -eq 'prepared' -and
+            $null -eq $state.CandidateSha256 -and
+            (Test-Path -LiteralPath ([string]$state.Candidate) -PathType Leaf)) {
+            throw 'appcontrol_recovery_required'
+        }
+        $candidateRequired = [string]$state.State -ne 'prepared' -or $null -ne $state.CandidateSha256
+        if ($candidateRequired) {
+            if (-not (Test-Path -LiteralPath ([string]$state.Candidate) -PathType Leaf) -or [string]::IsNullOrWhiteSpace([string]$state.CandidateSha256) -or
+                -not [string]::Equals((Get-OpenPathTransactionSha256 -Bytes (Get-OpenPathTransactionBytes -Path ([string]$state.Candidate))), [string]$state.CandidateSha256, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'appcontrol_recovery_required'
+            }
+        }
+    }
+    catch { throw 'appcontrol_recovery_required' }
+    $state
 }
 
 function New-OpenPathAppControlTransaction {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$OpenPathRoot,
-        [Parameter(Mandatory)][string]$LocalPolicyXml,
-        [Parameter(Mandatory)][string]$EffectivePolicyXml,
-        [string]$Operation = 'apply'
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+        [Parameter(Mandatory = $true)][string]$LocalPolicyXml,
+        [Parameter(Mandatory = $true)][string]$EffectivePolicyXml,
+        [string]$Operation = 'apply',
+        [hashtable]$ConfigurationMetadata = @{}
     )
+    $root = Get-OpenPathTransactionRoot -OpenPathRoot $OpenPathRoot
+    [IO.Directory]::CreateDirectory($root) | Out-Null
+    Set-OpenPathTransactionAcl -Path $root
     $id = [guid]::NewGuid().ToString()
-    $directory = Join-Path (Get-OpenPathTransactionRoot -OpenPathRoot $OpenPathRoot) $id
+    $directory = Join-Path $root $id
     [IO.Directory]::CreateDirectory($directory) | Out-Null
+    Set-OpenPathTransactionAcl -Path $directory
     $localPath = Join-Path $directory 'before-local.xml'
     $effectivePath = Join-Path $directory 'before-effective.xml'
     $candidatePath = Join-Path $directory 'candidate.xml'
     $statePath = Join-Path $directory 'state.json'
-    Write-OpenPathTransactionAtomic -Path $localPath -Content $LocalPolicyXml
-    Write-OpenPathTransactionAtomic -Path $effectivePath -Content $EffectivePolicyXml
-    $state = [ordered]@{ SchemaVersion = 1; TransactionId = $id; Operation = $Operation; State = 'prepared'; BeforeLocal = $localPath; BeforeEffective = $effectivePath; Candidate = $candidatePath; StateFile = $statePath; CreatedAt = [DateTime]::UtcNow.ToString('O'); ApplyAttempted = $false; InternalRollbackSucceeded = $false; ReasonCodes = @() }
-    Write-OpenPathTransactionAtomic -Path $statePath -Content ($state | ConvertTo-Json -Depth 10)
-    [pscustomobject]$state
+    Write-OpenPathTransactionCreateNew -Path $localPath -Content $LocalPolicyXml
+    Write-OpenPathTransactionCreateNew -Path $effectivePath -Content $EffectivePolicyXml
+    Set-OpenPathTransactionAcl -Path $localPath
+    Set-OpenPathTransactionAcl -Path $effectivePath
+    $normalizedMetadata = [ordered]@{}
+    foreach ($property in @($ConfigurationMetadata.Keys)) { $normalizedMetadata[$property] = $ConfigurationMetadata[$property] }
+    if (-not $normalizedMetadata.Contains('RequireConfigCommit')) { $normalizedMetadata.RequireConfigCommit = $Operation -eq 'apply' }
+    if ($normalizedMetadata.RequireConfigCommit -eq $true -and -not $normalizedMetadata.Contains('CommitVerified')) { $normalizedMetadata.CommitVerified = $false }
+    $state = [ordered]@{
+        SchemaVersion = 2
+        TransactionId = $id
+        Operation = $Operation
+        State = 'prepared'
+        BeforeLocal = $localPath
+        BeforeEffective = $effectivePath
+        Candidate = $candidatePath
+        StateFile = $statePath
+        CreatedAt = [DateTime]::UtcNow.ToString('O')
+        UpdatedAt = [DateTime]::UtcNow.ToString('O')
+        BeforeLocalSha256 = Get-OpenPathTransactionSha256 -Bytes (Get-OpenPathTransactionBytes -Path $localPath)
+        BeforeEffectiveSha256 = Get-OpenPathTransactionSha256 -Bytes (Get-OpenPathTransactionBytes -Path $effectivePath)
+        CandidateSha256 = $null
+        ApplyAttempted = $false
+        InternalRollbackSucceeded = $false
+        ReasonCodes = @()
+        ConfigurationMetadata = $normalizedMetadata
+    }
+    Write-OpenPathTransactionAtomic -Path $statePath -Content ($state | ConvertTo-Json -Depth 20)
+    Set-OpenPathTransactionAcl -Path $statePath
+    [PSCustomObject]$state
+}
+
+function Test-OpenPathTransactionTransition {
+    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$To)
+    $allowed = @{
+        prepared = @('apply-attempted', 'aborted')
+        'apply-attempted' = @('applied', 'rollback-attempted', 'recovery-required')
+        applied = @('validated', 'rollback-attempted', 'recovery-required')
+        validated = @('committed', 'rollback-attempted', 'recovery-required')
+        'rollback-attempted' = @('rolled-back', 'recovery-required')
+        committed = @()
+        'rolled-back' = @()
+        aborted = @()
+        'recovery-required' = @()
+    }
+    return $allowed.ContainsKey($From) -and $allowed[$From] -contains $To
 }
 
 function Set-OpenPathAppControlTransactionState {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][object]$Transaction, [Parameter(Mandatory)][ValidateSet('prepared','apply-attempted','applied','validated','committed','rollback-attempted','rolled-back','recovery-required')][string]$State, [string[]]$ReasonCodes = @())
-    $current = Get-Content -LiteralPath $Transaction.StateFile -Raw | ConvertFrom-Json
+    param([Parameter(Mandatory = $true)][object]$Transaction, [Parameter(Mandatory = $true)][ValidateSet('prepared', 'apply-attempted', 'applied', 'validated', 'committed', 'rollback-attempted', 'rolled-back', 'aborted', 'recovery-required')][string]$State, [string[]]$ReasonCodes = @())
+    $current = Get-OpenPathTransactionStateObject -Path $Transaction.StateFile
+    if (-not (Test-OpenPathTransactionTransition -From ([string]$current.State) -To $State) -and [string]$current.State -ne $State) {
+        throw 'appcontrol_recovery_required'
+    }
+    if ([string]$current.State -eq 'apply-attempted' -and $State -eq 'prepared') { throw 'appcontrol_recovery_required' }
     $current.State = $State
-    $current.ApplyAttempted = $State -in @('apply-attempted','applied','validated','committed','rollback-attempted','rolled-back','recovery-required')
-    if ($ReasonCodes.Count -gt 0) { $current.ReasonCodes = @($ReasonCodes) }
-    Write-OpenPathTransactionAtomic -Path $Transaction.StateFile -Content ($current | ConvertTo-Json -Depth 10)
-    return $current
+    $current.ApplyAttempted = $State -in @('apply-attempted', 'applied', 'validated', 'committed', 'rollback-attempted', 'rolled-back', 'recovery-required')
+    $current.UpdatedAt = [DateTime]::UtcNow.ToString('O')
+    if ($ReasonCodes.Count -gt 0) { $current.ReasonCodes = @($ReasonCodes | Sort-Object -Unique) }
+    Write-OpenPathTransactionAtomic -Path $Transaction.StateFile -Content ($current | ConvertTo-Json -Depth 20)
+    $current
 }
 
 function Write-OpenPathAppControlTransactionCandidate {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][object]$Transaction, [Parameter(Mandatory)][string]$CandidateXml)
-    Write-OpenPathTransactionAtomic -Path $Transaction.Candidate -Content $CandidateXml
-    return Set-OpenPathAppControlTransactionState -Transaction $Transaction -State 'prepared'
+    param([Parameter(Mandatory = $true)][object]$Transaction, [Parameter(Mandatory = $true)][string]$CandidateXml)
+    $current = Get-OpenPathTransactionStateObject -Path $Transaction.StateFile
+    if ([string]$current.State -ne 'prepared') { throw 'appcontrol_recovery_required' }
+    if (Test-Path -LiteralPath $Transaction.Candidate -PathType Leaf) { throw 'appcontrol_recovery_required' }
+    Write-OpenPathTransactionCreateNew -Path $Transaction.Candidate -Content $CandidateXml
+    Set-OpenPathTransactionAcl -Path $Transaction.Candidate
+    $current.CandidateSha256 = Get-OpenPathTransactionSha256 -Bytes (Get-OpenPathTransactionBytes -Path $Transaction.Candidate)
+    Write-OpenPathTransactionAtomic -Path $Transaction.StateFile -Content ($current | ConvertTo-Json -Depth 20)
+    $current
+}
+
+function Confirm-OpenPathAppControlTransactionConfigurationCommit {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][object]$Transaction)
+    $current = Get-OpenPathTransactionStateObject -Path $Transaction.StateFile
+    if ($current.ConfigurationMetadata.RequireConfigCommit -ne $true -or
+        [string]::IsNullOrWhiteSpace([string]$current.ConfigurationMetadata.profile) -or
+        [string]::IsNullOrWhiteSpace([string]$current.ConfigurationMetadata.mode)) {
+        throw 'appcontrol_commit_metadata_invalid'
+    }
+    if ($current.ConfigurationMetadata.PSObject.Properties['CommitVerified']) { $current.ConfigurationMetadata.CommitVerified = $true }
+    else { $current.ConfigurationMetadata | Add-Member -NotePropertyName CommitVerified -NotePropertyValue $true }
+    $committedAt = [DateTime]::UtcNow.ToString('O')
+    if ($current.ConfigurationMetadata.PSObject.Properties['CommittedAt']) { $current.ConfigurationMetadata.CommittedAt = $committedAt }
+    else { $current.ConfigurationMetadata | Add-Member -NotePropertyName CommittedAt -NotePropertyValue $committedAt }
+    $current.UpdatedAt = [DateTime]::UtcNow.ToString('O')
+    Write-OpenPathTransactionAtomic -Path $Transaction.StateFile -Content ($current | ConvertTo-Json -Depth 20)
+    $current
 }
 
 function Invoke-OpenPathAppControlTransactionRollback {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][object]$Transaction,
-        [Parameter(Mandatory)][scriptblock]$ApplyLocalPolicy,
-        [Parameter(Mandatory)][scriptblock]$ReadLocalPolicy,
+        [Parameter(Mandatory = $true)][object]$Transaction,
+        [Parameter(Mandatory = $true)][scriptblock]$ApplyLocalPolicy,
+        [Parameter(Mandatory = $true)][scriptblock]$ReadLocalPolicy,
         [scriptblock]$ComparePolicy
     )
-    Set-OpenPathAppControlTransactionState -Transaction $Transaction -State 'rollback-attempted' | Out-Null
+    try { Set-OpenPathAppControlTransactionState -Transaction $Transaction -State 'rollback-attempted' | Out-Null }
+    catch { return $false }
     try {
-        & $ApplyLocalPolicy ([string](Get-Content -LiteralPath $Transaction.BeforeLocal -Raw))
+        $before = [string](Get-Content -LiteralPath $Transaction.BeforeLocal -Raw -ErrorAction Stop)
+        & $ApplyLocalPolicy $before
         $readback = [string](& $ReadLocalPolicy)
-        $same = if ($ComparePolicy) { [bool](& $ComparePolicy ([string](Get-Content -LiteralPath $Transaction.BeforeLocal -Raw)) $readback) } else { $readback.Trim() -eq ([string](Get-Content -LiteralPath $Transaction.BeforeLocal -Raw)).Trim() }
-        if (-not $same) { Set-OpenPathAppControlTransactionState -Transaction $Transaction -State 'recovery-required' -ReasonCodes @('appcontrol_rollback_verification_failed') | Out-Null; return $false }
+        $same = if ($ComparePolicy) { [bool](& $ComparePolicy $before $readback) } else { $readback.Trim() -eq $before.Trim() }
+        if (-not $same) {
+            Set-OpenPathAppControlTransactionState -Transaction $Transaction -State 'recovery-required' -ReasonCodes @('appcontrol_rollback_verification_failed') | Out-Null
+            return $false
+        }
         $state = Set-OpenPathAppControlTransactionState -Transaction $Transaction -State 'rolled-back'
         $state.InternalRollbackSucceeded = $true
-        Write-OpenPathTransactionAtomic -Path $Transaction.StateFile -Content ($state | ConvertTo-Json -Depth 10)
+        Write-OpenPathTransactionAtomic -Path $Transaction.StateFile -Content ($state | ConvertTo-Json -Depth 20)
         return $true
-    } catch {
-        Set-OpenPathAppControlTransactionState -Transaction $Transaction -State 'recovery-required' -ReasonCodes @('appcontrol_recovery_required') | Out-Null
+    }
+    catch {
+        try { Set-OpenPathAppControlTransactionState -Transaction $Transaction -State 'recovery-required' -ReasonCodes @('appcontrol_recovery_required') | Out-Null } catch {}
         return $false
     }
 }
 
 function Get-OpenPathAppControlTransaction {
-    param([Parameter(Mandatory)][string]$StateFile)
+    param([Parameter(Mandatory = $true)][string]$StateFile)
     if (-not (Test-Path -LiteralPath $StateFile -PathType Leaf)) { return $null }
-    Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
+    Get-OpenPathTransactionStateObject -Path $StateFile
 }
 
 function Get-OpenPathAppControlPendingRecovery {
-    param([Parameter(Mandatory)][string]$OpenPathRoot)
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$OpenPathRoot)
     $root = Get-OpenPathTransactionRoot -OpenPathRoot $OpenPathRoot
-    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $null }
-    foreach ($stateFile in @(Get-ChildItem -LiteralPath $root -Filter 'state.json' -File -Recurse -ErrorAction SilentlyContinue)) {
-        $state = Get-OpenPathAppControlTransaction -StateFile $stateFile.FullName
-        if ($state -and [string]$state.State -eq 'recovery-required') { return $state }
+    $items = New-Object System.Collections.Generic.List[object]
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return @() }
+    foreach ($stateFile in @(Get-ChildItem -LiteralPath $root -Filter 'state.json' -File -Recurse -ErrorAction SilentlyContinue | Sort-Object FullName)) {
+        try {
+            $state = Get-OpenPathTransactionStateObject -Path $stateFile.FullName
+            if ($state.State -eq 'committed' -and $state.ConfigurationMetadata.RequireConfigCommit -eq $true) {
+                if ($state.ConfigurationMetadata.CommitVerified -ne $true -or
+                    [string]::IsNullOrWhiteSpace([string]$state.ConfigurationMetadata.profile) -or
+                    [string]::IsNullOrWhiteSpace([string]$state.ConfigurationMetadata.mode)) {
+                    [void]$items.Add([PSCustomObject][ordered]@{
+                            TransactionId = [string]$state.TransactionId
+                            State = 'recovery-required'
+                            StateFile = [string]$state.StateFile
+                            ReasonCodes = @('appcontrol_commit_metadata_invalid')
+                        })
+                    continue
+                }
+            }
+            if ($state.State -notin $script:TerminalStates) { [void]$items.Add($state) }
+        }
+        catch {
+            [void]$items.Add([PSCustomObject][ordered]@{
+                TransactionId = [IO.Path]::GetFileName([IO.Path]::GetDirectoryName($stateFile.FullName))
+                State = 'recovery-required'
+                StateFile = $stateFile.FullName
+                ReasonCodes = @('appcontrol_recovery_required')
+            })
+        }
     }
-    return $null
+    foreach ($directory in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Sort-Object FullName)) {
+        $statePath = Join-Path $directory.FullName 'state.json'
+        if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+            [void]$items.Add([PSCustomObject][ordered]@{
+                    TransactionId = [string]$directory.Name
+                    State = 'recovery-required'
+                    StateFile = $statePath
+                    ReasonCodes = @('appcontrol_recovery_required')
+                })
+        }
+    }
+    return $items.ToArray()
 }
 
-Export-ModuleMember -Function Enter-OpenPathAppControlTransaction, Exit-OpenPathAppControlTransaction, New-OpenPathAppControlTransaction, Set-OpenPathAppControlTransactionState, Write-OpenPathAppControlTransactionCandidate, Invoke-OpenPathAppControlTransactionRollback, Get-OpenPathAppControlTransaction, Get-OpenPathAppControlPendingRecovery
+function Invoke-OpenPathAppControlTransactionRecovery {
+    <#
+    Reconcile journals while the caller already owns the machine mutex.
+    A prepared journal has not crossed the mutation boundary and can be
+    aborted.  Every later state is resolved only when the caller can read and
+    restore the local policy and prove the readback is the immutable
+    before-local snapshot.  A candidate that merely looks valid is never
+    committed after a process interruption.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$OpenPathRoot,
+        [Parameter(Mandatory = $true)][scriptblock]$ApplyLocalPolicy,
+        [Parameter(Mandatory = $true)][scriptblock]$ReadLocalPolicy,
+        [Parameter(Mandatory = $true)][scriptblock]$ComparePolicy,
+        [scriptblock]$RestoreConfiguration
+    )
+    $pending = @(Get-OpenPathAppControlPendingRecovery -OpenPathRoot $OpenPathRoot)
+    if ($pending.Count -eq 0) { return [pscustomobject][ordered]@{ Resolved = $true; Pending = @() } }
+    $unresolved = New-Object System.Collections.Generic.List[object]
+    foreach ($item in $pending) {
+        $state = [string]$item.State
+        if ($state -eq 'recovery-required' -or
+            $null -eq $item.PSObject.Properties['StateFile'] -or
+            $null -eq $item.PSObject.Properties['BeforeLocal']) {
+            [void]$unresolved.Add($item)
+            continue
+        }
+        if ($state -eq 'prepared') {
+            try {
+                Set-OpenPathAppControlTransactionState -Transaction $item -State 'aborted' | Out-Null
+            }
+            catch {
+                [void]$unresolved.Add([pscustomobject][ordered]@{ TransactionId = [string]$item.TransactionId; State = 'recovery-required'; ReasonCodes = @('appcontrol_recovery_required') })
+            }
+            continue
+        }
+        if ($state -notin @('apply-attempted', 'applied', 'validated', 'rollback-attempted')) {
+            [void]$unresolved.Add($item)
+            continue
+        }
+        try {
+            # Read before deciding whether the interrupted mutation is
+            # attributable.  Unknown/drifted policy is never overwritten.
+            $current = [string](& $ReadLocalPolicy)
+            $before = [string](Get-Content -LiteralPath $item.BeforeLocal -Raw -ErrorAction Stop)
+            $candidate = [string](Get-Content -LiteralPath $item.Candidate -Raw -ErrorAction Stop)
+            $currentIsBefore = [bool](& $ComparePolicy $before $current)
+            $currentIsCandidate = [bool](& $ComparePolicy $candidate $current)
+            if (-not $currentIsBefore -and -not $currentIsCandidate) {
+                throw 'appcontrol_recovery_drift_detected'
+            }
+            Set-OpenPathAppControlTransactionState -Transaction $item -State 'rollback-attempted' -ReasonCodes @('appcontrol_recovery_required') | Out-Null
+            & $ApplyLocalPolicy $before
+            $readback = [string](& $ReadLocalPolicy)
+            if (-not [bool](& $ComparePolicy $before $readback)) {
+                throw 'appcontrol_rollback_verification_failed'
+            }
+            if ($RestoreConfiguration) { & $RestoreConfiguration $item }
+            Set-OpenPathAppControlTransactionState -Transaction $item -State 'rolled-back' -ReasonCodes @('appcontrol_recovery_required') | Out-Null
+        }
+        catch {
+            try {
+                Set-OpenPathAppControlTransactionState -Transaction $item -State 'recovery-required' -ReasonCodes @('appcontrol_recovery_required') | Out-Null
+            }
+            catch {}
+            [void]$unresolved.Add([pscustomobject][ordered]@{ TransactionId = [string]$item.TransactionId; State = 'recovery-required'; ReasonCodes = @('appcontrol_recovery_required') })
+        }
+    }
+    [pscustomobject][ordered]@{ Resolved = $unresolved.Count -eq 0; Pending = $unresolved.ToArray() }
+}
+
+Export-ModuleMember -Function Enter-OpenPathAppControlTransaction, Exit-OpenPathAppControlTransaction, New-OpenPathAppControlTransaction, Set-OpenPathAppControlTransactionState, Write-OpenPathAppControlTransactionCandidate, Confirm-OpenPathAppControlTransactionConfigurationCommit, Invoke-OpenPathAppControlTransactionRollback, Get-OpenPathAppControlTransaction, Get-OpenPathAppControlPendingRecovery, Invoke-OpenPathAppControlTransactionRecovery

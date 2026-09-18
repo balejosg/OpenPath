@@ -28,7 +28,11 @@ param(
     [string]$ArtifactsRoot = '',
 
     # Keep the verified installation for the separate desktop-survival lane.
-    [switch]$PreserveInstallation
+    [switch]$PreserveInstallation,
+
+    # Generate and verify the private HTTP candidate, then return its descriptor
+    # without running the physical installer.  This is not desktop evidence.
+    [switch]$GenerateOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -818,11 +822,34 @@ try {
     $scenario = Get-BackendScenario
     $script:CurrentStage = 'http-generate-download-replay'
     $httpEvidence = Invoke-RealHttpCanary -Scenario $scenario
-    $script:CurrentStage = 'physical-exe'
-    $exeEvidence = Invoke-PhysicalExeE2E -ExecutablePath $httpEvidence.downloadPath -ClassroomId ([string]$scenario.classroom.id)
+    $exeEvidence = $null
+    if (-not $GenerateOnly) {
+        $script:CurrentStage = 'physical-exe'
+        $exeEvidence = Invoke-PhysicalExeE2E -ExecutablePath $httpEvidence.downloadPath -ClassroomId ([string]$scenario.classroom.id)
+    }
+    else {
+        $script:CurrentStage = 'generate-only-descriptor'
+        $trailerValidationPath = Join-Path $script:ArtifactsRoot 'generated-trailer-validation.json'
+        $nativePowerShell = Get-Command powershell.exe -ErrorAction SilentlyContinue
+        if ($null -eq $nativePowerShell) { throw 'native-powershell-reader-missing' }
+        & $nativePowerShell.Source -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:RepoRoot 'windows/offline-installer/scripts/Read-Trailer.ps1') -ExecutablePath $httpEvidence.downloadPath -OutputConfigPath $trailerValidationPath
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $trailerValidationPath -PathType Leaf)) { throw 'generated-trailer-validation-failed' }
+        Remove-Item -LiteralPath $trailerValidationPath -Force -ErrorAction SilentlyContinue
+        $descriptorPath = Join-Path $script:ArtifactsRoot 'generated-executable-descriptor.json'
+        [IO.File]::WriteAllText($descriptorPath, ([ordered]@{
+                    status = 'generated'
+                    synthetic = $false
+                    executableFile = [IO.Path]::GetFileName($httpEvidence.downloadPath)
+                    executableSha256 = $httpEvidence.sha256
+                    sourceCommitSha = $TemplateCommit
+                    templateSha256 = $script:TemplateSha256
+                    trailerValidated = $true
+                    note = 'Private candidate descriptor; physical installation evidence is intentionally absent.'
+                } | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    }
 
     $success = [ordered]@{
-        status                  = 'ok'
+        status                  = if ($GenerateOnly) { 'generated' } else { 'ok' }
         runner                  = if ($env:RUNNER_NAME) { $env:RUNNER_NAME } else { 'windows-runner' }
         generateStatus          = $httpEvidence.generateStatus
         downloadStatus          = $httpEvidence.downloadStatus
@@ -830,13 +857,13 @@ try {
         downloadSha256          = $httpEvidence.sha256
         downloadHeadersVerified = $httpEvidence.headersVerified
         replayStatus             = $httpEvidence.replayStatus
-        trailerValidated         = [bool]$exeEvidence.trailerValidated
-        payloadManifestValidated = [bool]$exeEvidence.payloadManifestValidated
-        pendingStateObserved     = [bool]$exeEvidence.pendingStateObserved
-        retryOutcome             = [string]$exeEvidence.retryOutcome
-        pendingStateCleared      = [bool]$exeEvidence.pendingStateCleared
-        uninstalled               = -not $PreserveInstallation
-        installationPreserved     = [bool]$PreserveInstallation
+        trailerValidated         = if ($GenerateOnly) { $true } else { [bool]$exeEvidence.trailerValidated }
+        payloadManifestValidated = if ($GenerateOnly) { $null } else { [bool]$exeEvidence.payloadManifestValidated }
+        pendingStateObserved     = if ($GenerateOnly) { $null } else { [bool]$exeEvidence.pendingStateObserved }
+        retryOutcome             = if ($GenerateOnly) { 'not-run' } else { [string]$exeEvidence.retryOutcome }
+        pendingStateCleared      = if ($GenerateOnly) { $null } else { [bool]$exeEvidence.pendingStateCleared }
+        uninstalled               = if ($GenerateOnly) { $null } else { -not $PreserveInstallation }
+        installationPreserved     = [bool]($PreserveInstallation -or $GenerateOnly)
     }
     Write-SafeEvidence -Payload $success
 }
@@ -869,7 +896,7 @@ finally {
     if ($script:RunRoot -and (Test-Path -LiteralPath $script:RunRoot)) {
         Remove-Item -LiteralPath $script:RunRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    if ($script:DownloadedExecutablePath -and (Test-Path -LiteralPath $script:DownloadedExecutablePath)) {
+    if (-not $GenerateOnly -and $script:DownloadedExecutablePath -and (Test-Path -LiteralPath $script:DownloadedExecutablePath)) {
         Remove-Item -LiteralPath $script:DownloadedExecutablePath -Force -ErrorAction SilentlyContinue
     }
     Get-ChildItem -LiteralPath $script:ArtifactsRoot -Filter '*.log' -File -ErrorAction SilentlyContinue |

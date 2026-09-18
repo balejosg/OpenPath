@@ -1057,10 +1057,12 @@ test('required Windows CI runs Pester in an untracked child host without success
     'ci.yml should route Linux code and Linux-specific tests to the Linux lane without treating every tests/ change as Linux-bound'
   );
   assert.ok(
-    ciWorkflow.includes(
-      "grep -Eq '^(windows/|tests/e2e/Windows-E2E\\.Tests\\.ps1|tests/e2e/ci/run-windows-pester-isolated\\.ps1|tests/e2e/ci/run-windows-[^/]+\\.ps1|tests/e2e/ci/acrylic-dns-spike-helpers\\.ps1|\\.github/workflows/ci\\.yml$)'"
-    ),
-    'ci.yml should route Windows code and Windows CI helpers to the Windows lane'
+    ciWorkflow.includes('tests/e2e/ci/run-windows-[^/]+\\.ps1') &&
+      ciWorkflow.includes('tests/windows-(desktop-survival|policy-converter-contrast)-') &&
+      ciWorkflow.includes(
+        'scripts/(lib/windows-desktop-survival-evidence|validate-windows-(desktop-survival|policy-converter-contrast)-evidence)\\.mjs'
+      ),
+    'ci.yml should route Windows code and every Windows evidence helper to the Windows lane'
   );
   assert.ok(
     ciWorkflow.includes(WINDOWS_OFFLINE_INSTALLER_PATH_PATTERN) &&
@@ -2112,10 +2114,10 @@ test('release publication jobs are manual-only while push validation remains ena
   const scriptsReleaseJob = finalJobBlock(scriptsReleaseWorkflow, 'release');
   const prereleasePublishJob = finalJobBlock(prereleaseWorkflow, 'publish-prerelease');
   const extensionReleaseJob = finalJobBlock(extensionReleaseWorkflow, 'release');
-  const manualOnlyCondition = "if: ${{ github.event_name == 'workflow_dispatch' }}";
+  const manualOnlyCondition = /if:\s*\$\{\{\s*github\.event_name\s*==\s*'workflow_dispatch'/;
 
   assert.ok(
-    !templateJob.includes(manualOnlyCondition),
+    !manualOnlyCondition.test(templateJob),
     'the Windows offline template job must continue running on push so the real EXE E2E remains automatic'
   );
   for (const [jobName, jobBlock] of [
@@ -2124,7 +2126,7 @@ test('release publication jobs are manual-only while push validation remains ena
     ['Firefox extension release', extensionReleaseJob],
   ]) {
     assert.ok(
-      jobBlock.includes(manualOnlyCondition),
+      manualOnlyCondition.test(jobBlock),
       `${jobName} should publish only from an explicit workflow_dispatch run`
     );
   }

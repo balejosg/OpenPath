@@ -250,3 +250,25 @@ process.exit(2);
   assert.match(summary, /E2E Tests \/ E2E Summary.*failure/);
   assert.match(summary, /https:\/\/example\.invalid\/runs\/25201234567/);
 });
+
+test('generic release quality gate rejects internal Windows metadata flags', () => {
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [
+          'scripts/require-release-quality-gate.mjs',
+          '--repo',
+          'balejosg/OpenPath',
+          '--sha',
+          '93f8d1d585c87342b62d003c4377b65dd0d3ad8e',
+          '--require',
+          'CI::CI Success',
+          '--windows-evidence-artifact-name',
+          'desktop-survival',
+        ],
+        { cwd: repoRoot, encoding: 'utf8' }
+      ),
+    /Unknown or incomplete argument/
+  );
+});

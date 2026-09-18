@@ -1123,4 +1123,183 @@ function Invoke-OpenPathDisposableDeniedPeControl {
     finally { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue }
 }
 
-Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Initialize-OpenPathDisposableTargetProfile, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, Invoke-OpenPathDisposableDeniedPeControl, Invoke-OpenPathDisposablePostApplicationPair, Get-OpenPathDisposablePolicyConverterObservation, New-OpenPathDisposableEdgeBoundaryException, Resolve-OpenPathDisposableEdgeBoundaryFailure, Write-OpenPathOfflineInstallerEvidence, Remove-OpenPathDisposableStandardTarget
+function Test-OpenPathDisposableSafeSegment {
+    param([Parameter(Mandatory = $true)][string]$Value, [Parameter(Mandatory = $true)][string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Value) -or $Value -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+        throw "invalid-$Name"
+    }
+}
+
+function ConvertTo-OpenPathDisposableProcessArgument {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    # CommandLineToArgvW-compatible quoting.  This is used only for
+    # ProcessStartInfo.Arguments; no shell or text command interpreter is used.
+    if ($Value -notmatch '[\s"\\]') { return $Value }
+    return '"' + (($Value -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
+}
+
+function Write-OpenPathDisposableJsonAtomic {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][object]$Value)
+    $parent = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    $temporary = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        [IO.File]::WriteAllText($temporary, ($Value | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $Path -Force -ErrorAction Stop
+    }
+    finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+}
+
+function Get-OpenPathDisposableCanonicalPhase {
+    param([Parameter(Mandatory = $true)][string]$Mode)
+    switch ($Mode) {
+        'Prepare' { return 'prepare' }
+        'Observe' { return 'observe' }
+        'AfterReboot' { return 'afterReboot' }
+        'Cleanup' { return 'cleanup' }
+        default { throw 'invalid-mode' }
+    }
+}
+
+function Invoke-OpenPathDisposableWindowsController {
+    <#
+    .SYNOPSIS
+    Runs one phase of an externally controlled disposable Windows target.
+    .DESCRIPTION
+    This adapter owns only its child process and its run/attempt/scenario
+    directory.  It never provisions a VM, applies policy, or turns a missing
+    controller into a passing observation.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][ValidateSet('Prepare', 'Observe', 'AfterReboot', 'Cleanup')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')][string]$RunId,
+        [Parameter(Mandatory = $true)][ValidateRange(1, 2147483647)][int]$RunAttempt,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')][string]$ScenarioId,
+        [Parameter(Mandatory = $true)][string]$PayloadPath,
+        [Parameter(Mandatory = $true)][ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })][string]$ArtifactsRoot,
+        [ValidateRange(1, 86400)][int]$TimeoutSeconds = 1800
+    )
+
+    $phase = Get-OpenPathDisposableCanonicalPhase -Mode $Mode
+    Test-OpenPathDisposableSafeSegment -Value $RunId -Name 'run-id'
+    Test-OpenPathDisposableSafeSegment -Value $ScenarioId -Name 'scenario-id'
+    if (-not [IO.Path]::IsPathFullyQualified($Command)) { throw 'controller-command-must-be-absolute' }
+    if (-not (Test-Path -LiteralPath $Command -PathType Leaf)) {
+        return [pscustomobject][ordered]@{ status = 'blocked'; code = 'BLOCKED_PLATFORM_VALIDATION'; phase = $phase; runId = $RunId; runAttempt = $RunAttempt; scenarioId = $ScenarioId }
+    }
+
+    $runRoot = Join-Path (Join-Path (Join-Path $ArtifactsRoot $RunId) ([string]$RunAttempt)) $ScenarioId
+    New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
+    $runRootFull = [IO.Path]::GetFullPath($runRoot).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $payloadFull = [IO.Path]::GetFullPath($PayloadPath)
+    if (-not [string]::Equals($payloadFull, $runRootFull, [StringComparison]::OrdinalIgnoreCase) -and
+        -not $payloadFull.StartsWith($runRootFull + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'controller-payload-outside-scenario'
+    }
+    $outputPath = Join-Path $runRoot "$phase-observation.json"
+    Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+    $nonce = [guid]::NewGuid().ToString('N')
+    $payload = [ordered]@{
+        schemaVersion = 2
+        suiteKind = if ($env:OPENPATH_SUITE_KIND) { [string]$env:OPENPATH_SUITE_KIND } else { 'DesktopSurvival' }
+        policyConverterMode = if ($env:OPENPATH_POLICY_CONVERTER_MODE) { [string]$env:OPENPATH_POLICY_CONVERTER_MODE } else { $null }
+        runId = $RunId
+        runAttempt = $RunAttempt
+        scenarioId = $ScenarioId
+        phase = $phase
+        sourceCommitSha = if ($env:OPENPATH_SOURCE_SHA) { [string]$env:OPENPATH_SOURCE_SHA } else { '' }
+        correlationNonce = $nonce
+        outputPath = $outputPath
+        artifactsRoot = $runRoot
+    }
+    if ([string]$payload.suiteKind -eq 'PolicyConverterContrast') {
+        $payload.contrastHarness = 'tests/e2e/ci/run-windows-policy-converter-contrast.ps1'
+    }
+    else {
+        $payload.desktopHarness = 'tests/e2e/ci/run-windows-offline-installer-exe.ps1'
+    }
+    if (Test-Path -LiteralPath $PayloadPath -PathType Leaf) {
+        try {
+            $existingPayload = Get-Content -LiteralPath $PayloadPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            foreach ($property in @($existingPayload.PSObject.Properties)) {
+                if (-not $payload.Contains($property.Name)) { $payload[$property.Name] = $property.Value }
+            }
+        }
+        catch { throw 'controller-payload-invalid' }
+    }
+    Write-OpenPathDisposableJsonAtomic -Path $PayloadPath -Value $payload
+
+    $hostPath = $Command
+    $arguments = @('-PayloadPath', $PayloadPath, '-OutputPath', $outputPath, '-Mode', $Mode, '-RunId', $RunId, '-RunAttempt', ([string]$RunAttempt), '-ScenarioId', $ScenarioId, '-CorrelationNonce', $nonce)
+    if ([IO.Path]::GetExtension($Command).ToLowerInvariant() -eq '.ps1') {
+        $pwsh = Get-Command -Name 'powershell.exe' -ErrorAction SilentlyContinue
+        if ($null -eq $pwsh) { $pwsh = Get-Command -Name 'pwsh' -ErrorAction SilentlyContinue }
+        if ($null -eq $pwsh) {
+            return [pscustomobject][ordered]@{ status = 'blocked'; code = 'BLOCKED_PLATFORM_VALIDATION'; phase = $phase; runId = $RunId; runAttempt = $RunAttempt; scenarioId = $ScenarioId }
+        }
+        $hostPath = [string]$pwsh.Source
+        $arguments = @('-NoProfile', '-NonInteractive', '-File', $Command) + $arguments
+    }
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $hostPath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Arguments = (($arguments | ForEach-Object { ConvertTo-OpenPathDisposableProcessArgument -Value ([string]$_) }) -join ' ')
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { throw 'controller-start-failed' }
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill($true) } catch { try { $process.Kill() } catch {} }
+            throw 'controller-timeout'
+        }
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        if ($process.ExitCode -ne 0) {
+            throw ('controller-exit-{0}' -f $process.ExitCode)
+        }
+        # Do not report a successful child exit until the phase output is
+        # present and correlated. The phase script re-reads it for its payload,
+        # but this adapter is also a public contract used by direct callers.
+        Read-OpenPathDisposableWindowsObservation -Path $outputPath -Mode $Mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $ScenarioId -ExpectedNonce $nonce | Out-Null
+        return [pscustomobject][ordered]@{ status = 'completed'; code = 'controller-completed'; phase = $phase; runId = $RunId; runAttempt = $RunAttempt; scenarioId = $ScenarioId; correlationNonce = $nonce; outputPath = $outputPath; stdout = if ($stdout.Length -gt 2048) { $stdout.Substring(0, 2048) } else { $stdout }; stderr = if ($stderr.Length -gt 2048) { $stderr.Substring(0, 2048) } else { $stderr } }
+    }
+    finally { $process.Dispose() }
+}
+
+function Read-OpenPathDisposableWindowsObservation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][ValidateSet('Prepare', 'Observe', 'AfterReboot', 'Cleanup')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')][string]$RunId,
+        [Parameter(Mandatory = $true)][ValidateRange(1, 2147483647)][int]$RunAttempt,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')][string]$ScenarioId,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{32}$')][string]$ExpectedNonce
+    )
+    $phase = Get-OpenPathDisposableCanonicalPhase -Mode $Mode
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'controller-observation-missing' }
+    try { $observation = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { throw 'controller-observation-invalid-json' }
+    foreach ($name in @('runId', 'runAttempt', 'scenarioId', 'phase', 'correlationNonce', 'status', 'observation')) {
+        if ($null -eq $observation.PSObject.Properties[$name]) { throw "controller-observation-missing-$name" }
+    }
+    if ([string]$observation.status -ne 'passed' -or [string]$observation.runId -ne $RunId -or [int]$observation.runAttempt -ne $RunAttempt -or [string]$observation.scenarioId -ne $ScenarioId -or [string]$observation.phase -ne $phase -or [string]$observation.correlationNonce -ne $ExpectedNonce) {
+        throw 'controller-observation-correlation-mismatch'
+    }
+    # ConvertFrom-Json returns PSCustomObject for a JSON object. Arrays,
+    # scalars and null bodies are not observations even when status=passed.
+    if ($null -eq $observation.observation -or
+        $observation.observation -is [System.Array] -or
+        $observation.observation -is [string] -or
+        $observation.observation -is [System.ValueType]) {
+        throw 'controller-observation-body-invalid'
+    }
+    return $observation
+}
+
+Export-ModuleMember -Function New-OpenPathDisposableStandardTarget, Initialize-OpenPathDisposableTargetProfile, Assert-OpenPathDisposableTarget, Assert-OpenPathPreparedTargetInstalled, Invoke-OpenPathInstalledBoundaryProbes, Get-OpenPathDisposableBoundaryFailureEvidence, Get-OpenPathDisposableFlatEdgeBoundaryFailureContract, Invoke-OpenPathDisposableEdgeBoundaryDiagnostic, Invoke-OpenPathDisposableDeniedPeControl, Invoke-OpenPathDisposablePostApplicationPair, Get-OpenPathDisposablePolicyConverterObservation, New-OpenPathDisposableEdgeBoundaryException, Resolve-OpenPathDisposableEdgeBoundaryFailure, Write-OpenPathOfflineInstallerEvidence, Remove-OpenPathDisposableStandardTarget, Invoke-OpenPathDisposableWindowsController, Read-OpenPathDisposableWindowsObservation

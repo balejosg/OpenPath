@@ -65,10 +65,22 @@ be an exact administrator-owned Program Files path and a catalog hash must be
 SHA-256 plus a safe filename.
 
 The configured `appControlProfile` is intent. `activeAppControlProfile` is
-updated only after effective-policy and runtime validation succeeds. Policy
-application backs up the prior local policy and restores it after failed
-activation or validation. Switching profiles replaces only rules whose names
-carry the OpenPath-managed prefix, leaving administrator-managed rules intact.
+updated only after effective-policy and runtime validation succeeds. A strict
+application requires a readable installed `config.json` whose profile and mode
+match the request; a missing or mismatched config fails closed before
+`Set-AppLockerPolicy`. Each mutation is serialized by
+`Global\OpenPath-AppControl-v1`, snapshots the local/effective policy in a
+durable journal, and commits configuration under the same lock. The legacy
+`data\applocker-backup.xml` is diagnostic only and is not overwritten as a
+transaction snapshot. Switching profiles replaces only rules whose names carry
+the OpenPath-managed prefix, leaving administrator-managed rules intact.
+
+The runtime baseline is observed natively for every selected AppX package. The
+policy evaluator uses the native package objects with
+`Test-AppLockerPolicy -XmlPolicy ... -Packages ... -User ...`; structural XML
+or `Get-AppLockerPolicy -Effective` output alone is not desktop/reboot proof.
+Pending or malformed journals block another automatic mutation and must be
+reconciled before retrying.
 
 The installed acceptance harness is intentionally opt-in and records exact
 policy decisions without mutating the machine unless `-ExecuteProbes` is used:
@@ -91,3 +103,14 @@ Appx fixtures, and administrator/SYSTEM recovery rules. Missing optional
 fixtures are recorded as `skip`; `-RequireFixtures` turns them into failures.
 The password is used only for the temporary student process probes and is not
 written to evidence.
+
+### Desktop-survival release evidence
+
+Release qualification requires a schema-v2 bundle with `manifest.json`, the
+exact source/run/attempt identity, real file hashes, and all four scenarios:
+Windows 11 `Professional` and `Education`, each with profileless and existing
+student profiles. Every scenario must show pre/post-reboot observations,
+interactive student GUI evidence, policy probes, rollback/uninstall, and
+cleanup. A missing authorized disposable-VM controller returns
+`BLOCKED_PLATFORM_VALIDATION`; local policy tests remain useful diagnostics but
+do not make distribution eligible.

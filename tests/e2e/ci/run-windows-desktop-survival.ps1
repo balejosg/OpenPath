@@ -1,16 +1,17 @@
-<#
+<##
 .SYNOPSIS
-    Records externally controlled Windows desktop-survival phases.
+    Records one externally controlled Windows desktop-survival phase.
 .DESCRIPTION
-    This harness is intentionally fail-closed. It never applies AppLocker or
-    requests a reboot itself. A disposable VM controller must invoke each phase
-    and provide the phase observation. Without that controller the phase is
-    recorded as BLOCKED_PLATFORM_VALIDATION and the caller must not publish.
-#>
+    The worker never applies AppLocker or reboots the guest. It delegates the
+    phase to an explicitly configured disposable-VM controller and fails closed
+    when that controller is not available.
+##>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidateSet('Prepare', 'Observe', 'AfterReboot', 'Cleanup')][string]$Mode,
     [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')][string]$RunId,
+    [Parameter(Mandatory)][ValidateRange(1, 2147483647)][int]$RunAttempt,
+    [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')][string]$ScenarioId,
     [Parameter(Mandatory)][ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })][string]$ArtifactsRoot,
     [string]$TemplatePath,
     [string]$PersonalizedExePath,
@@ -21,43 +22,86 @@ param(
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'DisposableWindowsTarget.psm1') -Force
 
-function Write-OpenPathDesktopPhaseEvidence {
-    param([Parameter(Mandatory)][string]$Phase, [Parameter(Mandatory)][hashtable]$Evidence)
-    $runRoot = Join-Path $ArtifactsRoot $RunId
-    New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
-    $target = Join-Path $runRoot "$Phase.json"
-    $temporary = "$target.$([guid]::NewGuid().ToString('N')).tmp"
-    try {
-        [IO.File]::WriteAllText($temporary, ($Evidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $temporary -Destination $target -Force
-    }
-    finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
-    return $target
+$phase = switch ($Mode) {
+    'Prepare' { 'prepare' }
+    'Observe' { 'observe' }
+    'AfterReboot' { 'afterReboot' }
+    'Cleanup' { 'cleanup' }
 }
+$scenarioRoot = Join-Path (Join-Path (Join-Path $ArtifactsRoot $RunId) ([string]$RunAttempt)) $ScenarioId
+New-Item -ItemType Directory -Path $scenarioRoot -Force | Out-Null
+$phasePath = Join-Path $scenarioRoot "$phase.json"
 
-function Get-OpenPathDesktopSha256 {
-    param([string]$Path)
-    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+function Get-OpenPathPhaseFileHash {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
-$phase = $Mode.ToLowerInvariant()
-$base = @{ schemaVersion = 1; runId = $RunId; phase = $phase; status = 'blocked'; createdAt = [DateTime]::UtcNow.ToString('O'); evidenceRef = "$phase.json" }
-if ($TemplatePath) { $base.templateSha256 = Get-OpenPathDesktopSha256 -Path $TemplatePath }
-if ($PersonalizedExePath) { $base.personalizedExeSha256 = Get-OpenPathDesktopSha256 -Path $PersonalizedExePath }
+function Write-OpenPathPhase {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Value)
+    $temporary = "$phasePath.$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        [IO.File]::WriteAllText($temporary, ($Value | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $phasePath -Force -ErrorAction Stop
+    }
+    finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+}
 
-if (-not $ControllerCommand) {
-    $base.reasonCode = 'BLOCKED_PLATFORM_VALIDATION'
-    Write-OpenPathDesktopPhaseEvidence -Phase $phase -Evidence $base | Out-Null
+$common = [ordered]@{
+    schemaVersion = 2
+    runId = $RunId
+    runAttempt = $RunAttempt
+    sourceCommitSha = if ($env:OPENPATH_SOURCE_SHA) { $env:OPENPATH_SOURCE_SHA } else { '' }
+    scenarioId = $ScenarioId
+    phase = $phase
+    evidenceRef = "$RunId/$RunAttempt/$ScenarioId/$phase-observation.json"
+    startedAt = [DateTime]::UtcNow.ToString('O')
+}
+if ($TemplatePath) { $common.templateSha256 = Get-OpenPathPhaseFileHash -Path $TemplatePath }
+if ($PersonalizedExePath) { $common.personalizedExeSha256 = Get-OpenPathPhaseFileHash -Path $PersonalizedExePath }
+
+if ([string]::IsNullOrWhiteSpace($ControllerCommand)) {
+    $common.status = 'blocked'
+    $common.reasonCode = 'BLOCKED_PLATFORM_VALIDATION'
+    $common.endedAt = [DateTime]::UtcNow.ToString('O')
+    Write-OpenPathPhase -Value $common
     [Console]::Error.WriteLine('BLOCKED_PLATFORM_VALIDATION: an external disposable-VM controller is required.')
     exit 2
 }
 
-if (-not $ControllerPayloadPath) { throw '-ControllerPayloadPath is required when -ControllerCommand is supplied.' }
-if (-not (Test-Path -LiteralPath $ControllerPayloadPath -PathType Leaf)) { throw 'Controller payload does not exist.' }
-$controllerOutput = Join-Path $ArtifactsRoot $RunId "$phase-controller.json"
-Invoke-OpenPathDisposableWindowsController -Command $ControllerCommand -Mode $Mode -RunId $RunId -PayloadPath $ControllerPayloadPath -ArtifactsRoot $ArtifactsRoot
-$observation = Read-OpenPathDisposableWindowsObservation -Path $controllerOutput -Mode $Mode -RunId $RunId
-$base.status = 'passed'
-$base.observation = $observation.observation
-Write-OpenPathDesktopPhaseEvidence -Phase $phase -Evidence $base | Out-Null
+if ([string]::IsNullOrWhiteSpace($ControllerPayloadPath)) {
+    throw '-ControllerPayloadPath is required when -ControllerCommand is supplied.'
+}
+
+$controllerResult = $null
+try {
+    $controllerResult = Invoke-OpenPathDisposableWindowsController -Command $ControllerCommand -Mode $Mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $ScenarioId -PayloadPath $ControllerPayloadPath -ArtifactsRoot $ArtifactsRoot
+    if ($controllerResult.status -eq 'blocked') {
+        $common.status = 'blocked'
+        $common.reasonCode = 'BLOCKED_PLATFORM_VALIDATION'
+        $common.endedAt = [DateTime]::UtcNow.ToString('O')
+        Write-OpenPathPhase -Value $common
+        [Console]::Error.WriteLine('BLOCKED_PLATFORM_VALIDATION: controller host is unavailable.')
+        exit 2
+    }
+    $observationPath = [string]$controllerResult.outputPath
+    $observation = Read-OpenPathDisposableWindowsObservation -Path $observationPath -Mode $Mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $ScenarioId -ExpectedNonce ([string]$controllerResult.correlationNonce)
+    $common.status = 'passed'
+    $common.correlationNonce = [string]$controllerResult.correlationNonce
+    $common.observationRef = "$RunId/$RunAttempt/$ScenarioId/$(Split-Path -Leaf $observationPath)"
+    $common.observationSha256 = Get-OpenPathPhaseFileHash -Path $observationPath
+    $common.observation = $observation.observation
+    $common.endedAt = [DateTime]::UtcNow.ToString('O')
+    Write-OpenPathPhase -Value $common
+    exit 0
+}
+catch {
+    $common.status = 'failed'
+    $common.reasonCode = 'CONTROLLER_PHASE_FAILED'
+    $common.error = $_.Exception.Message
+    $common.endedAt = [DateTime]::UtcNow.ToString('O')
+    Write-OpenPathPhase -Value $common
+    [Console]::Error.WriteLine(('CONTROLLER_PHASE_FAILED: {0}' -f $_.Exception.Message))
+    exit 1
+}

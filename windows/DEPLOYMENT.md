@@ -134,6 +134,14 @@ and personalized executable have complete Windows Desktop Survival evidence on
 every supported Windows client edition; local or staging checks do not replace
 an externally observed login, desktop session, and reboot.
 
+The release lane validates that bundle from the exact workflow run and attempt
+after downloading binary artifacts by their artifact IDs. It does not ask the
+generic external-workflow gate to wait for its own Desktop Survival job. If the
+authorized disposable-VM controller is unavailable, the job reports
+`BLOCKED_PLATFORM_VALIDATION` and no release is eligible. A fake controller,
+AppLocker policy evaluation, or Server runner cannot substitute for client
+desktop/reboot evidence.
+
 Before deploying to real student machines, validate the AppLocker policy on a pilot device using a non-admin account. See `windows/README.md` for the full browser boundary warning.
 
 ### 5. Offline Installer (Air-Gapped / Restricted Networks)

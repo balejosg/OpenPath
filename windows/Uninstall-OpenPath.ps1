@@ -103,30 +103,13 @@ function Stop-OpenPathRootedProcess {
 }
 
 function Remove-OpenPathFallbackAppLockerRules {
-    if (-not (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue)) { return }
-    if (-not (Get-Command -Name Set-AppLockerPolicy -ErrorAction SilentlyContinue)) { return }
-
-    $policyXml = [xml](Get-AppLockerPolicy -Local -Xml)
-    $removed = $false
-    foreach ($collection in @($policyXml.AppLockerPolicy.RuleCollection)) {
-        foreach ($rule in @($collection.ChildNodes)) {
-            if ($null -ne $rule -and
-                $rule -is [System.Xml.XmlElement] -and
-                $rule.GetAttribute('Name') -like 'OpenPath non-admin app control*') {
-                [void]$collection.RemoveChild($rule)
-                $removed = $true
-            }
-        }
+    $modulePath = Join-Path $OpenPathRoot 'lib\AppControl.psm1'
+    if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+        throw 'AppControl owner module is unavailable; manual recovery is required.'
     }
-    if (-not $removed) { return }
-
-    $policyPath = Join-Path ([System.IO.Path]::GetTempPath()) "openpath-uninstall-applocker-$([guid]::NewGuid()).xml"
-    try {
-        $policyXml.Save($policyPath)
-        Set-AppLockerPolicy -XMLPolicy $policyPath -ErrorAction Stop
-    }
-    finally {
-        Remove-Item $policyPath -Force -ErrorAction SilentlyContinue
+    Import-Module $modulePath -Force -Global -ErrorAction Stop
+    if (-not (Remove-OpenPathNonAdminAppControl -OpenPathRoot $OpenPathRoot -Confirm:$false)) {
+        throw 'Central AppControl removal did not verify; manual recovery is required.'
     }
 }
 

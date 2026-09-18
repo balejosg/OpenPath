@@ -248,7 +248,8 @@ function Show-OpenPathStatus {
                     -Mode $appControlMode `
                     -ApprovedBrowsers $approvedBrowsers `
                     -Profile $appControlProfile `
-                    -ApplicationCatalog $approvedApplicationCatalog
+                    -ApplicationCatalog $approvedApplicationCatalog `
+                    -OpenPathRoot $openPathRoot
                 if (-not $appControlHealth -or -not $appControlHealth.PSObject.Properties['Healthy']) {
                     throw 'structured AppControl health result is invalid'
                 }
@@ -326,6 +327,12 @@ function Show-OpenPathStatus {
     Write-Host "AppControl profile: $configuredAppControlProfile"
     Write-Host "Active AppControl profile: $activeAppControlProfile"
     Write-Host "AppControl healthy: $($appControlHealth.Healthy)"
+    if ($appControlHealth.PSObject.Properties['WindowsRuntimeValid']) {
+        Write-Host "Windows runtime valid: $($appControlHealth.WindowsRuntimeValid)"
+    }
+    if ($appControlHealth.PSObject.Properties['TransactionState']) {
+        Write-Host "AppControl transaction state: $($appControlHealth.TransactionState)"
+    }
     if (@($watchdogTaskHealth.ReasonCodes).Count -gt 0) {
         Write-Host "Watchdog reason codes: $(@($watchdogTaskHealth.ReasonCodes) -join ', ')"
     }
@@ -369,7 +376,7 @@ try {
     Import-Module "$openPathRoot\lib\Browser.psm1" -Force -Global
     Import-Module "$openPathRoot\lib\Common.psm1" -Force -Global
     . "$openPathRoot\lib\internal\Common.Redaction.ps1"
-    Import-Module "$openPathRoot\lib\AppControl.psm1" -Force -Global -ErrorAction SilentlyContinue
+    Import-Module "$openPathRoot\lib\AppControl.psm1" -Force -Global -ErrorAction Stop
     . "$openPathRoot\lib\internal\Watchdog.Runtime.ps1"
 
     $requiredCommonCommands = @(

@@ -157,6 +157,15 @@ label `dwm`, `winlogon`, or another process causal from temporal proximity alone
 Capture local/effective policy and events first. Policy health is not GUI or
 reboot evidence; those claims require the authorized disposable-VM harness.
 
+Strict AppControl also reports transaction state. `appcontrol_transaction_busy`
+means another OpenPath operation owns the machine lock;
+`appcontrol_recovery_required` means a prepared/apply/rollback journal is
+incomplete or invalid. Do not retry by widening strict rules or deleting the
+journal. Inspect state files under
+`C:\OpenPath\data\appcontrol-transactions`, preserve their hashes, and use the
+central recovery operation. A `committed` config field without a corresponding
+validated journal is not proof of a successful transition.
+
 AppLocker policy is applied only when the managed browser boundary is enabled. To inspect the current policy:
 
 ```powershell

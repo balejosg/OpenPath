@@ -363,7 +363,9 @@ function Invoke-OpenPathWatchdogPrechecks {
     # returns a summary of the current portal observation for use by the caller
     param(
         [AllowNull()]
-        [PSCustomObject]$Config
+        [PSCustomObject]$Config,
+
+        [string]$OpenPathRoot = ''
     )
 
     $enableNonAdminAppControl = $true
@@ -371,8 +373,16 @@ function Invoke-OpenPathWatchdogPrechecks {
         $enableNonAdminAppControl = [bool]$Config.enableNonAdminAppControl
     }
 
+    $appControlTransitionBlocked = [bool]($Config -and $Config.PSObject.Properties['installState'] -and $Config.installState -eq 'installing')
+    if (-not $appControlTransitionBlocked -and $OpenPathRoot -and (Get-Command -Name 'Get-OpenPathAppControlPendingRecovery' -ErrorAction SilentlyContinue)) {
+        try { $appControlTransitionBlocked = @(Get-OpenPathAppControlPendingRecovery -OpenPathRoot $OpenPathRoot).Count -gt 0 } catch { $appControlTransitionBlocked = $true }
+    }
     $groupSyncFailed = $false
-    if ($enableNonAdminAppControl -and -not (Get-Command -Name 'Sync-OpenPathRestrictedGroup' -ErrorAction SilentlyContinue)) {
+    if ($appControlTransitionBlocked) {
+        $groupSyncFailed = $true
+        Write-OpenPathLog 'Watchdog: AppControl transition is installing or awaiting recovery; group sync is deferred' -Level WARN
+    }
+    elseif ($enableNonAdminAppControl -and -not (Get-Command -Name 'Sync-OpenPathRestrictedGroup' -ErrorAction SilentlyContinue)) {
         $groupSyncFailed = $true
         Write-OpenPathLog 'Watchdog: OpenPath-Restricted group sync command unavailable' -Level WARN
     }
@@ -683,6 +693,16 @@ function Invoke-OpenPathWatchdogAppControlHealth {
     $groupReconciliationFailed = [bool]$GroupSyncFailed
     $groupExists = $false
     $syncAvailable = [bool](Get-Command -Name 'Sync-OpenPathRestrictedGroup' -ErrorAction SilentlyContinue)
+    $transitionBlocked = [bool]($Config.PSObject.Properties['installState'] -and $Config.installState -eq 'installing')
+    if (-not $transitionBlocked -and (Get-Command -Name 'Get-OpenPathAppControlPendingRecovery' -ErrorAction SilentlyContinue)) {
+        try { $transitionBlocked = @(Get-OpenPathAppControlPendingRecovery -OpenPathRoot $OpenPathRoot).Count -gt 0 } catch { $transitionBlocked = $true }
+    }
+    if ($transitionBlocked) {
+        $groupReconciliationFailed = $true
+        & $addCode 'appcontrol_recovery_required'
+        & $addIssue 'AppControl transition is incomplete; repair is deferred'
+        & $addRecoveryIssue 'AppControl transition is incomplete'
+    }
     if (-not $syncAvailable -or $GroupSyncFailed) {
         $groupReconciliationFailed = $true
         & $addCode 'appcontrol_group_sync_failed'
@@ -698,7 +718,7 @@ function Invoke-OpenPathWatchdogAppControlHealth {
         catch {
             Write-OpenPathLog 'Watchdog: Required OpenPath-Restricted group missing; attempting recreation' -Level WARN
             $recreated = $false
-            if ($syncAvailable) {
+            if ($syncAvailable -and -not $GroupSyncFailed -and -not $transitionBlocked) {
                 try {
                     $recreated = [bool](Sync-OpenPathRestrictedGroup -CreateIfMissing $true)
                 }
@@ -724,7 +744,7 @@ function Invoke-OpenPathWatchdogAppControlHealth {
         & $addRecoveryIssue 'OpenPath-Restricted group membership reconciliation failed'
     }
 
-    if ($groupExists -and $syncAvailable -and -not $GroupSyncFailed) {
+    if ($groupExists -and $syncAvailable -and -not $GroupSyncFailed -and -not $transitionBlocked) {
         try {
             if (-not [bool](Sync-OpenPathRestrictedGroup -CreateIfMissing $false)) {
                 throw 'group synchronization returned false'
@@ -755,7 +775,11 @@ function Invoke-OpenPathWatchdogAppControlHealth {
     $initialHealthCodes = @()
     if ($healthCommandAvailable) {
         try {
-            $initialHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers -Profile $appControlProfile -ApplicationCatalog $approvedApplicationCatalog
+            $healthParameters = @{ Mode = $mode; ApprovedBrowsers = $approvedStudentBrowsers; Profile = $appControlProfile; ApplicationCatalog = $approvedApplicationCatalog }
+            if ((Get-Command -Name 'Get-OpenPathNonAdminAppControlHealth').Parameters.ContainsKey('OpenPathRoot')) {
+                $healthParameters.OpenPathRoot = $OpenPathRoot
+            }
+            $initialHealth = Get-OpenPathNonAdminAppControlHealth @healthParameters
             if (-not $initialHealth -or -not $initialHealth.PSObject.Properties['Healthy']) {
                 throw 'structured AppControl health result is invalid'
             }
@@ -813,7 +837,7 @@ function Invoke-OpenPathWatchdogAppControlHealth {
     $initialBoundaryHealthy = [bool]($healthCommandAvailable -and $initialHealthHealthy -and $initialHealthCodes.Count -eq 0 -and -not $profileMismatch)
     $needsRepair = -not $initialBoundaryHealthy
     $postRepairHealthy = $false
-    if ($needsRepair) {
+    if ($needsRepair -and -not $transitionBlocked) {
         Write-OpenPathLog "Watchdog: AppControl is not active or uncommitted in $mode mode; attempting repair" -Level WARN
         $repairResult = $false
         if (Get-Command -Name 'Set-OpenPathNonAdminAppControl' -ErrorAction SilentlyContinue) {
@@ -838,7 +862,7 @@ function Invoke-OpenPathWatchdogAppControlHealth {
                 if (-not $healthCommandAvailable) {
                     throw 'structured AppControl health check unavailable after repair'
                 }
-                $postRepairHealth = Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers -Profile $appControlProfile -ApplicationCatalog $approvedApplicationCatalog
+                $postRepairHealth = Get-OpenPathNonAdminAppControlHealth @healthParameters
                 if (-not $postRepairHealth -or -not $postRepairHealth.PSObject.Properties['Healthy']) {
                     throw 'structured AppControl post-repair health result is invalid'
                 }

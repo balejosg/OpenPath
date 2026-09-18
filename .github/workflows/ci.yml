@@ -120,7 +120,7 @@ jobs:
             linux_bound=true
           fi
 
-          if echo "$changed_files" | grep -Eq '^(windows/|tests/e2e/Windows-E2E\.Tests\.ps1|tests/e2e/ci/run-windows-pester-isolated\.ps1|tests/e2e/ci/run-windows-[^/]+\.ps1|tests/e2e/ci/acrylic-dns-spike-helpers\.ps1|\.github/workflows/ci\.yml$)'; then
+          if echo "$changed_files" | grep -Eq '^(windows/|tests/e2e/Windows-E2E\.Tests\.ps1|tests/e2e/ci/run-windows-pester-isolated\.ps1|tests/e2e/ci/run-windows-[^/]+\.ps1|tests/e2e/ci/acrylic-dns-spike-helpers\.ps1|tests/windows-(desktop-survival|policy-converter-contrast)-|scripts/(lib/windows-desktop-survival-evidence|validate-windows-(desktop-survival|policy-converter-contrast)-evidence)\.mjs|\.github/workflows/ci\.yml$)'; then
             windows_bound=true
           fi
           if echo "$changed_files" | grep -Eq "^($windows_offline_installer_pattern)$"; then
@@ -233,6 +233,18 @@ jobs:
             -ShardIndex ${{ matrix.shard }} `
             -ShardCount 5
 
+      - name: Parse Windows PowerShell sources with PowerShell 7
+        shell: pwsh
+        run: |
+          & (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -File tests/e2e/ci/test-windows-powershell-syntax.ps1 -Root (Get-Location).Path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Parse Windows PowerShell sources with Windows PowerShell 5.1
+        shell: pwsh
+        run: |
+          & (Get-Command powershell.exe -ErrorAction Stop).Source -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/test-windows-powershell-syntax.ps1 -Root (Get-Location).Path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Record Windows lane outcome
         id: job-status
         if: always()
@@ -282,6 +294,18 @@ jobs:
             -TimeoutSeconds 840 `
             -ShardIndex ${{ matrix.shard }} `
             -ShardCount 5
+
+      - name: Parse Windows PowerShell sources with PowerShell 7
+        shell: pwsh
+        run: |
+          & (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -File tests/e2e/ci/test-windows-powershell-syntax.ps1 -Root (Get-Location).Path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Parse Windows PowerShell sources with Windows PowerShell 5.1
+        shell: pwsh
+        run: |
+          & (Get-Command powershell.exe -ErrorAction Stop).Source -NoProfile -ExecutionPolicy Bypass -File tests/e2e/ci/test-windows-powershell-syntax.ps1 -Root (Get-Location).Path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Report hosted Windows context
         if: always()

@@ -362,7 +362,7 @@ test('NSIS extracts offline manifest and payloads under the installer root', () 
   );
 });
 
-test('Windows release evidence executes the personalized NSIS executable and its offline retry path', () => {
+test('Windows release evidence prepares the personalized NSIS executable for the external controller lane', () => {
   const executableLane = readText('tests/e2e/ci/run-windows-offline-installer-exe.ps1');
   for (const marker of [
     'Start-Process',
@@ -396,12 +396,17 @@ test('Windows release evidence executes the personalized NSIS executable and its
   for (const marker of [
     'Create personalized NSIS executable',
     'Validate personalized trailer with PowerShell',
-    'run-windows-offline-installer-exe.ps1',
-    'Execute the personalized NSIS executable E2E',
-    'Upload personalized NSIS E2E evidence',
+    '-GenerateOnly',
+    'Upload exact HTTP-generated candidate',
+    'run-windows-desktop-survival-suite.ps1',
   ]) {
     assert.ok(workflow.includes(marker), `release workflow should include ${marker}`);
   }
+  assert.doesNotMatch(
+    workflow,
+    /Execute the personalized NSIS executable E2E|Upload personalized NSIS E2E evidence/,
+    'the hosted workflow must not execute the destructive installer lane or claim its evidence'
+  );
   assert.match(
     workflow,
     /name: Validate personalized trailer with PowerShell[\s\S]*Read-Trailer\.ps1/,
@@ -410,9 +415,7 @@ test('Windows release evidence executes the personalized NSIS executable and its
   const trailerValidationStart = workflow.indexOf(
     'name: Validate personalized trailer with PowerShell'
   );
-  const trailerValidationEnd = workflow.indexOf(
-    'name: Execute the personalized NSIS executable E2E'
-  );
+  const trailerValidationEnd = workflow.indexOf('name: Prepare PolicyConverter contrast inputs');
   const trailerValidationBlock = workflow.slice(trailerValidationStart, trailerValidationEnd);
   const personalizedBuildStart = workflow.indexOf('name: Create personalized NSIS executable');
   assert.ok(
@@ -1197,9 +1200,8 @@ test('release workflow gates on a serialized PolicyConverter contrast over ident
   const workflow = readText('.github/workflows/release-scripts.yml');
   const validate = workflow.indexOf('Validate personalized trailer with PowerShell');
   const diagnosticUpload = workflow.indexOf('Upload PolicyConverter contrast inputs');
-  const canonicalExecute = workflow.indexOf('Execute the personalized NSIS executable E2E');
 
-  assert.ok(validate >= 0 && diagnosticUpload > validate && diagnosticUpload < canonicalExecute);
+  assert.ok(validate >= 0 && diagnosticUpload > validate);
   assert.match(workflow, /name: windows-policy-converter-contrast-inputs/);
   assert.match(
     workflow,
@@ -1208,16 +1210,24 @@ test('release workflow gates on a serialized PolicyConverter contrast over ident
   assert.match(workflow, /probePayloadSha256/);
   assert.match(workflow, /executableSha256/);
   assert.match(workflow, /policy-converter-contrast:[\s\S]*needs: windows-offline-template/);
-  assert.match(workflow, /if:.*always\(\).*contrast-artifact-id != ''/);
   assert.match(workflow, /matrix:[\s\S]*mode: \[Untouched, Started\]/);
   assert.match(
     workflow,
-    /-EvidencePath \$evidencePath `[\s\S]*?-ExpectedSourceCommitSha '\$\{\{ github\.sha \}\}' `[\s\S]*?-ExpectedInstallerSha256 \$personalizedSha256 `[\s\S]*?-PolicyConverterMode 'Untouched'/
+    /-SuiteKind PolicyConverterContrast[\s\S]*-PolicyConverterMode '\$\{\{ matrix\.mode \}\}'/
   );
   assert.match(workflow, /fail-fast: false[\s\S]*max-parallel: 1/);
-  assert.match(workflow, /continue-on-error: true/);
+  assert.doesNotMatch(
+    workflow,
+    /continue-on-error:\s*true/,
+    'contrast failures must fail the matrix rather than being converted into diagnostic-only success'
+  );
   assert.match(workflow, /run-windows-policy-converter-contrast\.ps1/);
   assert.match(workflow, /Upload PolicyConverter contrast evidence[\s\S]*if: always\(\)/);
+  assert.match(workflow, /policy-converter-contrast-bundle:/);
+  assert.match(
+    workflow,
+    /windows-policy-converter-contrast-\*-evidence-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/
+  );
 
   const prepareBlock = workflow.slice(
     workflow.indexOf('- name: Prepare PolicyConverter contrast inputs'),
@@ -1225,16 +1235,13 @@ test('release workflow gates on a serialized PolicyConverter contrast over ident
   );
   const uploadBlock = workflow.slice(
     workflow.indexOf('- name: Upload PolicyConverter contrast inputs'),
-    workflow.indexOf('- name: Execute the personalized NSIS executable E2E')
+    workflow.indexOf('- name: Upload template artifacts')
   );
-  const canonicalBlock = workflow.slice(
-    workflow.indexOf('- name: Execute the personalized NSIS executable E2E'),
-    workflow.indexOf('- name: Upload personalized NSIS E2E evidence')
-  );
-  assert.match(prepareBlock, /continue-on-error: true/);
+  assert.doesNotMatch(prepareBlock, /continue-on-error: true/);
   assert.match(uploadBlock, /if: steps\.contrast-inputs\.outcome == 'success'/);
-  assert.match(uploadBlock, /continue-on-error: true/);
-  assert.doesNotMatch(canonicalBlock, /continue-on-error: true/);
+  assert.doesNotMatch(uploadBlock, /continue-on-error: true/);
+  assert.match(uploadBlock, /if-no-files-found: error/);
+  assert.doesNotMatch(workflow, /Upload personalized NSIS E2E evidence/);
 });
 
 test('canonical Windows release gate runs fail-closed for skipped jobs and missing EXE evidence', () => {
@@ -1251,10 +1258,19 @@ test('canonical Windows release gate runs fail-closed for skipped jobs and missi
     assert.match(gate, new RegExp(`needs\\.${job}\\.result \\}\\}" != "success"`));
   }
   const evidenceUpload = workflow.slice(
-    workflow.indexOf('- name: Upload personalized NSIS E2E evidence'),
-    workflow.indexOf('- name: Upload template artifacts')
+    workflow.indexOf('- name: Upload Windows Desktop Survival evidence'),
+    workflow.indexOf('  release:\n')
   );
   assert.match(evidenceUpload, /if-no-files-found: error/);
+  const candidateUpload = workflow.slice(
+    workflow.indexOf('- name: Upload exact HTTP-generated candidate'),
+    workflow.indexOf(
+      '  # ============================================',
+      workflow.indexOf('- name: Upload exact HTTP-generated candidate')
+    )
+  );
+  assert.match(candidateUpload, /if-no-files-found: error/);
+  assert.doesNotMatch(workflow, /Upload personalized NSIS E2E evidence/);
 });
 
 test('offline executable harness accepts one prebuilt PE payload without changing its default path', () => {

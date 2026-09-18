@@ -263,6 +263,9 @@ function Write-OpenPathInstallerRuntimeStatus {
             SchemaVersion = 1
             PowerShellProcessArchitecture = "$(8 * [IntPtr]::Size)-bit"
             LocalAccountsCapability = if ($missingLocalAccountsCommands.Count -eq 0) { 'available' } else { 'unavailable' }
+            # Policy evaluation is not a desktop/reboot observation.  Only the
+            # authorized disposable-client lane may replace this marker.
+            DesktopRuntimeObservation = 'not-observed'
         }
         Write-OpenPathAtomicJsonFile -Path $Path -Data $status -Depth 3
     }
@@ -765,20 +768,6 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
         $approvedApplicationCatalog = Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'approvedApplicationCatalog' -DefaultValue $null
         if ($enableNonAdminAppControl) {
             $appControlDiagnosticPath = if ($FailureStatusPath) { "$FailureStatusPath.appcontrol.json" } else { '' }
-            $groupSynced = [bool](& $script:OpenPathAppControlCommands.Sync `
-                    -CreateIfMissing $true `
-                    -DiagnosticStatusPath $appControlDiagnosticPath)
-            if ($appControlDiagnosticPath -and (Test-Path -LiteralPath $appControlDiagnosticPath -PathType Leaf)) {
-                try {
-                    $script:OpenPathAppControlDiagnostic = Get-Content -LiteralPath $appControlDiagnosticPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-                }
-                catch {
-                    # Diagnostic transport must never replace the restricted-group result.
-                }
-            }
-            if (-not $groupSynced) {
-                throw 'Sync-OpenPathRestrictedGroup failed to create or synchronize the OpenPath-Restricted local group.'
-            }
             $appControlApplied = [bool](& $script:OpenPathAppControlCommands.Set `
                     -OpenPathRoot $OpenPathRoot `
                     -Mode $nonAdminAppControlMode `
@@ -806,23 +795,6 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
                 throw 'OpenPath AppControl boundary did not validate after installation.'
             }
 
-            # Security commit point: boundary is verified active, atomically commit state
-            if ($PSCmdlet.ShouldProcess("$OpenPathRoot\data\config.json", 'Commit AppControl security boundary')) {
-                $configPath = Join-Path $OpenPathRoot 'data\config.json'
-                if (Test-Path -LiteralPath $configPath) {
-                    $committedConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-                    $committedConfig.appControlCommitState = 'committed'
-                    if ($committedConfig.PSObject.Properties['activeAppControlProfile']) {
-                        $committedConfig.activeAppControlProfile = $appControlProfile
-                    }
-                    else {
-                        $committedConfig | Add-Member -MemberType NoteProperty -Name 'activeAppControlProfile' -Value $appControlProfile -Force
-                    }
-                    Write-OpenPathAtomicJsonFile -Path $configPath -Data $committedConfig -Depth 10
-                }
-            }
-            $config.appControlCommitState = 'committed'
-            $config.activeAppControlProfile = $appControlProfile
             if ($script:OpenPathAppControlDiagnostic) {
                 $script:OpenPathAppControlDiagnostic.AppControlCommitState = 'committed'
             }
@@ -830,7 +802,7 @@ $phaseResult = Invoke-OpenPathPlannedPhase -Name 'app-control' -Action {
         }
         else {
             if (& $script:OpenPathAppControlCommands.Test) {
-                & $script:OpenPathAppControlCommands.Remove -Confirm:$false -WhatIf:$WhatIfPreference | Out-Null
+                & $script:OpenPathAppControlCommands.Remove -OpenPathRoot $OpenPathRoot -Confirm:$false -WhatIf:$WhatIfPreference | Out-Null
                 Write-InstallerVerbose '  Stale OpenPath AppLocker rules removed'
             }
             Write-InstallerVerbose '  Managed browser boundary disabled; AppLocker boundary not applied'

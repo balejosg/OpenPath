@@ -35,6 +35,8 @@ jobs:
     runs-on: windows-2025
     outputs:
       contrast-artifact-id: ${{ steps.contrast-input-upload.outputs.artifact-id }}
+      template-artifact-id: ${{ steps.template-upload.outputs.artifact-id }}
+      personalized-exe-artifact-id: ${{ steps.personalized-exe-upload.outputs.artifact-id }}
 
     steps:
       - name: Checkout code
@@ -167,7 +169,6 @@ jobs:
       - name: Prepare PolicyConverter contrast inputs
         id: contrast-inputs
         shell: pwsh
-        continue-on-error: true
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-inputs'
           New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -189,41 +190,14 @@ jobs:
       - name: Upload PolicyConverter contrast inputs
         id: contrast-input-upload
         if: steps.contrast-inputs.outcome == 'success'
-        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: windows-policy-converter-contrast-inputs
           path: ${{ runner.temp }}/openpath-policy-converter-contrast-inputs
           if-no-files-found: error
 
-      - name: Execute the personalized NSIS executable E2E
-        shell: pwsh
-        run: |
-          $personalizedPath = Join-Path $env:RUNNER_TEMP 'OpenPath-Windows-Setup-E2E.exe'
-          $evidencePath = Join-Path $env:RUNNER_TEMP 'openpath-windows-offline-installer-exe-evidence.json'
-          $personalizedSha256 = (Get-FileHash -LiteralPath $personalizedPath -Algorithm SHA256).Hash
-
-          & (Resolve-Path 'tests/e2e/ci/run-windows-offline-installer-exe.ps1') `
-            -ExecutablePath $personalizedPath `
-            -ExpectedClassroomId 'release-e2e-classroom' `
-            -ExpectedApiUrl 'https://localhost:18443' `
-            -EvidencePath $evidencePath `
-            -ExpectedSourceCommitSha '${{ github.sha }}' `
-            -ExpectedInstallerSha256 $personalizedSha256 `
-            -PolicyConverterMode 'Untouched'
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
-      - name: Upload personalized NSIS E2E evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-offline-installer-exe-evidence
-          path: ${{ runner.temp }}/openpath-windows-offline-installer-exe-evidence.json
-          if-no-files-found: error
-
       - name: Upload template artifacts
+        id: template-upload
         uses: actions/upload-artifact@v7
         with:
           name: windows-offline-template
@@ -234,6 +208,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload exact personalized executable for desktop qualification
+        id: personalized-exe-upload
         uses: actions/upload-artifact@v7
         with:
           name: windows-personalized-exe
@@ -242,8 +217,8 @@ jobs:
 
   policy-converter-contrast:
     name: PolicyConverter ${{ matrix.mode }} contrast
-    needs: windows-offline-template
-    if: ${{ always() && needs.windows-offline-template.outputs.contrast-artifact-id != '' }}
+    needs: [windows-offline-template, windows-personalized-http-e2e, windows-desktop-survival]
+    if: ${{ needs.windows-offline-template.result == 'success' && needs.windows-personalized-http-e2e.result == 'success' && needs.windows-desktop-survival.result == 'success' }}
     runs-on: windows-2025
     timeout-minutes: 25
     strategy:
@@ -256,10 +231,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Download identical PolicyConverter contrast inputs
+      - name: Download exact template artifact
         uses: actions/download-artifact@v7
         with:
-          name: windows-policy-converter-contrast-inputs
+          artifact-ids: ${{ needs.windows-offline-template.outputs.template-artifact-id }}
+          path: windows-offline-template-assets
+
+      - name: Download exact HTTP candidate artifact
+        uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ needs.windows-personalized-http-e2e.outputs.candidate-artifact-id }}
+          path: windows-personalized-exe
+
+      - name: Download exact contrast inputs
+        uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ needs.windows-offline-template.outputs.contrast-artifact-id }}
           path: ${{ runner.temp }}/openpath-policy-converter-contrast-inputs
 
       - name: Verify PolicyConverter contrast input hashes
@@ -276,31 +263,89 @@ jobs:
             if ($actual -ne $input.Hash) { throw 'contrast-input-hash-mismatch' }
           }
 
-      - name: Run PolicyConverter contrast
+      - name: Require external disposable VM controller
         shell: pwsh
+        env:
+          OPENPATH_POLICY_CONVERTER_CONTROLLER: ${{ secrets.OPENPATH_POLICY_CONVERTER_CONTROLLER }}
+        run: |
+          if (-not $env:OPENPATH_POLICY_CONVERTER_CONTROLLER -or -not (Test-Path -LiteralPath $env:OPENPATH_POLICY_CONVERTER_CONTROLLER -PathType Leaf)) {
+            Write-Error 'BLOCKED_PLATFORM_VALIDATION: no authorized external disposable-VM controller is configured for PolicyConverter contrast.'
+            exit 2
+          }
+
+      - name: Run PolicyConverter contrast in an independent guest
+        shell: pwsh
+        env:
+          OPENPATH_POLICY_CONVERTER_CONTROLLER: ${{ secrets.OPENPATH_POLICY_CONVERTER_CONTROLLER }}
+          OPENPATH_SOURCE_SHA: ${{ github.sha }}
         run: |
           $inputs = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-inputs'
           $manifest = Get-Content -LiteralPath (Join-Path $inputs 'sha256-manifest.json') -Raw | ConvertFrom-Json
-          $evidence = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-${{ matrix.mode }}.json'
-          $childEvidence = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-${{ matrix.mode }}-child.json'
-          & (Resolve-Path 'tests/e2e/ci/run-windows-policy-converter-contrast.ps1') `
+          $root = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-${{ matrix.mode }}'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $template = (Resolve-Path 'windows-offline-template-assets/OpenPath-Windows-Setup-Template.exe').Path
+          $candidate = (Resolve-Path 'windows-personalized-exe/OpenPath-personalized-download.exe').Path
+          @{ schemaVersion = 2; contrastInputs = $inputs; probePayloadSha256 = $manifest.probePayloadSha256; executableSha256 = $manifest.executableSha256; targetHarness = 'tests/e2e/ci/run-windows-policy-converter-contrast.ps1' } |
+            ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $root 'controller-input.json') -Encoding UTF8
+          & (Resolve-Path 'tests/e2e/ci/run-windows-desktop-survival-suite.ps1') `
+            -SuiteKind PolicyConverterContrast `
+            -PolicyConverterMode '${{ matrix.mode }}' `
+            -RunId "${{ github.run_id }}" `
+            -RunAttempt ([int]'${{ github.run_attempt }}') `
+            -ArtifactsRoot $root `
+            -TemplatePath $template `
+            -PersonalizedExePath $candidate `
+            -ControllerCommand $env:OPENPATH_POLICY_CONVERTER_CONTROLLER
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & (Resolve-Path 'tests/e2e/ci/aggregate-windows-policy-converter-contrast.ps1') `
             -Mode '${{ matrix.mode }}' `
-            -ExecutablePath (Join-Path $inputs 'OpenPath-Windows-Setup-E2E.exe') `
-            -ProbePayloadPath (Join-Path $inputs 'openpath-e2e-probe.exe') `
-            -ExpectedExecutableSha256 $manifest.executableSha256 `
-            -ExpectedProbePayloadSha256 $manifest.probePayloadSha256 `
-            -ChildEvidencePath $childEvidence `
-            -EvidencePath $evidence `
-            -TargetUserName 'op-e2e-converter'
+            -RunId "${{ github.run_id }}" `
+            -RunAttempt ([int]'${{ github.run_attempt }}') `
+            -EvidenceRoot $root `
+            -SourceCommitSha '${{ github.sha }}' `
+            -TemplatePath $template `
+            -PersonalizedExePath $candidate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload PolicyConverter contrast evidence
+        id: contrast-evidence-upload
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-policy-converter-contrast-${{ matrix.mode }}-evidence
+          name: windows-policy-converter-contrast-${{ matrix.mode }}-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/openpath-policy-converter-contrast-${{ matrix.mode }}.json
-            ${{ runner.temp }}/openpath-policy-converter-contrast-${{ matrix.mode }}-child.json
+            ${{ runner.temp }}/openpath-policy-converter-contrast-${{ matrix.mode }}
+          if-no-files-found: error
+
+  policy-converter-contrast-bundle:
+    name: PolicyConverter contrast evidence bundle
+    needs: policy-converter-contrast
+    outputs:
+      evidence-artifact-id: ${{ steps.contrast-bundle-upload.outputs.artifact-id }}
+    if: ${{ needs.policy-converter-contrast.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download both same-run contrast evidence artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: windows-policy-converter-contrast-*-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: contrast-evidence
+
+      - name: Require both contrast modes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find contrast-evidence -type f -name 'contrast-untouched-aggregate.json' | wc -l)" -eq 1
+          test "$(find contrast-evidence -type f -name 'contrast-started-aggregate.json' | wc -l)" -eq 1
+
+      - name: Upload complete same-run contrast bundle
+        id: contrast-bundle-upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-policy-converter-contrast-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: contrast-evidence
+          if-no-files-found: error
+
   # Run the HTTP-to-EXE path on a fresh runner. The physical NSIS lane above
   # changes Windows policy while testing the installer and must not poison the
   # PowerShell process used to start this lane.
@@ -308,6 +353,8 @@ jobs:
     name: Windows Personalized HTTP-to-EXE E2E
     runs-on: windows-2025
     timeout-minutes: 35
+    outputs:
+      candidate-artifact-id: ${{ steps.personalized-candidate-upload.outputs.artifact-id }}
     needs: windows-offline-template
     if: needs.windows-offline-template.result == 'success'
 
@@ -336,7 +383,8 @@ jobs:
           & (Resolve-Path 'tests/e2e/ci/run-windows-personalized-offline-installer-e2e.ps1') `
             -TemplatePath (Resolve-Path 'windows/offline-installer/build/OpenPath-Windows-Setup-Template.exe').Path `
             -TemplateCommit $env:OPENPATH_E2E_TEMPLATE_COMMIT `
-            -ArtifactsRoot $evidenceRoot
+            -ArtifactsRoot $evidenceRoot `
+            -GenerateOnly
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
@@ -347,7 +395,18 @@ jobs:
         with:
           name: windows-personalized-offline-installer-e2e-evidence
           path: ${{ runner.temp }}/openpath-windows-personalized-offline-installer-e2e/*.json
-          if-no-files-found: warn
+          if-no-files-found: error
+
+      - name: Upload exact HTTP-generated candidate
+        id: personalized-candidate-upload
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-personalized-http-candidate
+          path: |
+            ${{ runner.temp }}/openpath-windows-personalized-offline-installer-e2e/OpenPath-personalized-download.exe
+            ${{ runner.temp }}/openpath-windows-personalized-offline-installer-e2e/generated-executable-descriptor.json
+          if-no-files-found: error
 
   # ============================================
   # Build and Release Installation Scripts
@@ -356,6 +415,8 @@ jobs:
     name: Windows Desktop Survival
     runs-on: windows-2025
     timeout-minutes: 45
+    outputs:
+      evidence-artifact-id: ${{ steps.desktop-evidence-upload.outputs.artifact-id }}
     needs: [windows-offline-template, windows-personalized-http-e2e]
     if: ${{ needs.windows-offline-template.result == 'success' && needs.windows-personalized-http-e2e.result == 'success' }}
 
@@ -366,13 +427,13 @@ jobs:
       - name: Download exact candidate artifacts
         uses: actions/download-artifact@v7
         with:
-          name: windows-offline-template
+          artifact-ids: ${{ needs.windows-offline-template.outputs.template-artifact-id }}
           path: windows-offline-template-assets
 
       - name: Download exact personalized executable
         uses: actions/download-artifact@v7
         with:
-          name: windows-personalized-exe
+          artifact-ids: ${{ needs.windows-personalized-http-e2e.outputs.candidate-artifact-id }}
           path: windows-personalized-exe
 
       - name: Require external disposable VM controller
@@ -380,7 +441,7 @@ jobs:
         env:
           OPENPATH_DESKTOP_SURVIVAL_CONTROLLER: ${{ secrets.OPENPATH_DESKTOP_SURVIVAL_CONTROLLER }}
         run: |
-          if (-not $env:OPENPATH_DESKTOP_SURVIVAL_CONTROLLER) {
+          if (-not $env:OPENPATH_DESKTOP_SURVIVAL_CONTROLLER -or -not (Test-Path -LiteralPath $env:OPENPATH_DESKTOP_SURVIVAL_CONTROLLER -PathType Leaf)) {
             Write-Error 'BLOCKED_PLATFORM_VALIDATION: no authorized external disposable-VM controller is configured.'
             exit 2
           }
@@ -389,28 +450,36 @@ jobs:
         shell: pwsh
         env:
           OPENPATH_DESKTOP_SURVIVAL_CONTROLLER: ${{ secrets.OPENPATH_DESKTOP_SURVIVAL_CONTROLLER }}
+          OPENPATH_SOURCE_SHA: ${{ github.sha }}
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'openpath-windows-desktop-survival'
           New-Item -ItemType Directory -Path $root -Force | Out-Null
           $template = (Resolve-Path 'windows-offline-template-assets/OpenPath-Windows-Setup-Template.exe').Path
-          $personalized = (Resolve-Path 'windows-personalized-exe/OpenPath-Windows-Setup-E2E.exe').Path
+          $personalized = (Resolve-Path 'windows-personalized-exe/OpenPath-personalized-download.exe').Path
           $controllerInput = Join-Path $root 'controller-input.json'
-          @{ runId = '${{ github.run_id }}'; sourceCommitSha = '${{ github.sha }}'; templatePath = $template; personalizedExePath = $personalized; outputPath = (Join-Path $root '${{ github.run_id }}/aggregate.json') } | ConvertTo-Json | Set-Content -LiteralPath $controllerInput -Encoding UTF8
-          & (Resolve-Path 'tests/e2e/ci/run-windows-desktop-survival.ps1') -Mode Prepare -RunId "${{ github.run_id }}" -ArtifactsRoot $root -TemplatePath $template -PersonalizedExePath $personalized -ControllerCommand $env:OPENPATH_DESKTOP_SURVIVAL_CONTROLLER -ControllerPayloadPath $controllerInput
+          '{}' | Set-Content -LiteralPath $controllerInput -Encoding UTF8
+          & (Resolve-Path 'tests/e2e/ci/run-windows-desktop-survival-suite.ps1') -SuiteKind DesktopSurvival -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}') -ArtifactsRoot $root -TemplatePath $template -PersonalizedExePath $personalized -ControllerCommand $env:OPENPATH_DESKTOP_SURVIVAL_CONTROLLER
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & (Resolve-Path 'tests/e2e/ci/aggregate-windows-desktop-survival.ps1') -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}') -EvidenceRoot $root -SourceCommitSha '${{ github.sha }}' -TemplatePath $template -PersonalizedExePath $personalized
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate desktop-survival evidence for exact candidate
         shell: pwsh
         run: |
-          $evidence = Join-Path $env:RUNNER_TEMP 'openpath-windows-desktop-survival/${{ github.run_id }}/aggregate.json'
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'openpath-windows-desktop-survival'
+          $evidence = Join-Path $evidenceRoot 'aggregate.json'
           if (-not (Test-Path -LiteralPath $evidence -PathType Leaf)) { throw 'Windows Desktop Survival evidence artifact is missing.' }
           node scripts/validate-windows-desktop-survival-evidence.mjs `
             --evidence $evidence `
+            --evidence-root $evidenceRoot `
             --source-sha '${{ github.sha }}' `
             --template-sha256 (Get-FileHash -LiteralPath (Resolve-Path 'windows-offline-template-assets/OpenPath-Windows-Setup-Template.exe') -Algorithm SHA256).Hash.ToLowerInvariant() `
-            --personalized-exe-sha256 (Get-FileHash -LiteralPath (Resolve-Path 'windows-personalized-exe/OpenPath-Windows-Setup-E2E.exe') -Algorithm SHA256).Hash.ToLowerInvariant() `
-            --run-id '${{ github.run_id }}'
+            --personalized-exe-sha256 (Get-FileHash -LiteralPath (Resolve-Path 'windows-personalized-exe/OpenPath-personalized-download.exe') -Algorithm SHA256).Hash.ToLowerInvariant() `
+            --run-id '${{ github.run_id }}' `
+            --run-attempt '${{ github.run_attempt }}'
 
       - name: Upload Windows Desktop Survival evidence
+        id: desktop-evidence-upload
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -425,10 +494,11 @@ jobs:
       [
         windows-offline-template,
         policy-converter-contrast,
+        policy-converter-contrast-bundle,
         windows-personalized-http-e2e,
         windows-desktop-survival,
       ]
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.windows-offline-template.result == 'success' && needs.policy-converter-contrast.result == 'success' && needs.policy-converter-contrast-bundle.result == 'success' && needs.windows-personalized-http-e2e.result == 'success' && needs.windows-desktop-survival.result == 'success' }}
 
     steps:
       - name: Checkout code
@@ -470,6 +540,62 @@ jobs:
           chmod +x tests/e2e/pre-install-validation.sh
           ./tests/e2e/pre-install-validation.sh
 
+      - name: Download exact same-run Windows qualification artifacts
+        uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ needs.windows-desktop-survival.outputs.evidence-artifact-id }}
+          path: release-windows-desktop-survival
+
+      - name: Download exact same-run PolicyConverter contrast bundle
+        uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ needs.policy-converter-contrast-bundle.outputs.evidence-artifact-id }}
+          path: release-windows-policy-converter-contrast
+
+      - name: Download exact same-run Windows binary artifacts
+        uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ needs.windows-offline-template.outputs.template-artifact-id }}
+          path: release-windows-binaries
+
+      - name: Download exact same-run HTTP candidate
+        uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ needs.windows-personalized-http-e2e.outputs.candidate-artifact-id }}
+          path: release-windows-http-candidate
+
+      - name: Validate exact same-run Windows qualification bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="release-windows-desktop-survival/aggregate.json"
+          root="release-windows-desktop-survival"
+          template=$(find release-windows-binaries -type f -name 'OpenPath-Windows-Setup-Template.exe' -print -quit)
+          personalized=$(find release-windows-http-candidate -type f -name 'OpenPath-personalized-download.exe' -print -quit)
+          test -n "$template" && test -n "$personalized" && test -f "$evidence"
+          node scripts/validate-windows-desktop-survival-evidence.mjs \
+            --evidence "$evidence" \
+            --evidence-root "$root" \
+            --source-sha "${{ github.sha }}" \
+            --template-sha256 "$(sha256sum "$template" | cut -d' ' -f1)" \
+            --personalized-exe-sha256 "$(sha256sum "$personalized" | cut -d' ' -f1)" \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}"
+          for mode in Untouched Started; do
+            contrast=$(find release-windows-policy-converter-contrast -type f -name "contrast-${mode,,}-aggregate.json" -print -quit)
+            test -n "$contrast"
+            contrast_root=$(dirname "$contrast")
+            node scripts/validate-windows-policy-converter-contrast-evidence.mjs \
+              --evidence "$contrast" \
+              --evidence-root "$contrast_root" \
+              --source-sha "${{ github.sha }}" \
+              --template-sha256 "$(sha256sum "$template" | cut -d' ' -f1)" \
+              --personalized-exe-sha256 "$(sha256sum "$personalized" | cut -d' ' -f1)" \
+              --run-id "${{ github.run_id }}" \
+              --run-attempt "${{ github.run_attempt }}" \
+              --mode "$mode"
+          done
+
       - name: Require same-commit CI, E2E, and installer evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -479,8 +605,6 @@ jobs:
             --require "CI::CI Success" \
             --require "E2E Tests::E2E Summary" \
             --require "Installer Contracts::Installer Contracts Success" \
-            --require "Release Installation Scripts::Windows Desktop Survival" \
-            --windows-evidence-artifact-name "windows-desktop-survival-evidence" \
             --timeout-minutes 90 \
             --poll-seconds 30
 
@@ -743,6 +867,7 @@ jobs:
       [
         windows-offline-template,
         policy-converter-contrast,
+        policy-converter-contrast-bundle,
         windows-personalized-http-e2e,
         windows-desktop-survival,
         release,
@@ -754,6 +879,7 @@ jobs:
         run: |
           if [[ "${{ needs.windows-offline-template.result }}" != "success" ]] || \
              [[ "${{ needs.policy-converter-contrast.result }}" != "success" ]] || \
+             [[ "${{ needs.policy-converter-contrast-bundle.result }}" != "success" ]] || \
              [[ "${{ needs.windows-personalized-http-e2e.result }}" != "success" ]] || \
              [[ "${{ needs.windows-desktop-survival.result }}" != "success" ]] || \
              [[ "${{ needs.release.result }}" != "success" ]]; then
