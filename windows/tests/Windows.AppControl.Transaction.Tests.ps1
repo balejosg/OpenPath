@@ -103,9 +103,30 @@ Describe 'AppControl transaction journal' {
 param([string]$ModulePath, [string]$Root, [string]$SignalPath, [string]$TerminatePath)
 $ErrorActionPreference = 'Stop'
 [string]$mutexName = 'Global\OpenPath-AppControl-v1'
-$createdNew = $false
-$mutex = New-Object System.Threading.Mutex($true, $mutexName, [ref]$createdNew)
-if (-not $createdNew) { [IO.File]::WriteAllText($SignalPath, 'failed'); exit 3 }
+$hostIsWin32 = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -or [string]$env:OS -eq 'Windows_NT'
+if ($hostIsWin32) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class OpenPathNativeMutexHolder {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr CreateMutex(IntPtr attributes, bool initialOwner, string name);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern uint GetLastError();
+}
+"@
+    $nativeMutex = [OpenPathNativeMutexHolder]::CreateMutex([IntPtr]::Zero, $true, $mutexName)
+    if ($nativeMutex -eq [IntPtr]::Zero -or [OpenPathNativeMutexHolder]::GetLastError() -eq 183) {
+        [IO.File]::WriteAllText($SignalPath, 'failed')
+        exit 3
+    }
+}
+else {
+    $createdNew = $false
+    $mutex = New-Object System.Threading.Mutex($true, $mutexName, [ref]$createdNew)
+    if (-not $createdNew) { [IO.File]::WriteAllText($SignalPath, 'failed'); exit 3 }
+}
 [IO.File]::WriteAllText($SignalPath, 'ready')
 $deadline = [DateTime]::UtcNow.AddSeconds(15)
 while (-not (Test-Path -LiteralPath $TerminatePath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
