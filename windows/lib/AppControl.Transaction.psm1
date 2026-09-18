@@ -266,8 +266,10 @@ function Enter-OpenPathAppControlTransaction {
     $createdNew = $false
     $mutex = $null
     if (Test-OpenPathTransactionWindows) {
+        $securityStage = 'security-build'
         try {
             $security = Get-OpenPathMutexSecurity
+            $securityStage = 'mutex-create'
             $mutexInfo = New-OpenPathNamedMutex -Name $mutexName -Security $security
             $mutex = $mutexInfo.Mutex
             $createdNew = [bool]$mutexInfo.CreatedNew
@@ -276,11 +278,15 @@ function Enter-OpenPathAppControlTransaction {
             # reopen the named object with FullControl before reading or
             # normalizing its descriptor; this also repairs a stale object
             # left by an interrupted process.
+            $securityStage = 'mutex-open-full-control'
             $mutex = Open-OpenPathNamedMutexFullControl -Name $mutexName -Mutex $mutex
+            $securityStage = 'mutex-set-acl'
             Set-OpenPathMutexAccessControl -Mutex $mutex -Security $security
+            $securityStage = 'mutex-read-acl'
             $existing = Get-OpenPathMutexAccessControl -Mutex $mutex
             if ($null -eq $existing) { throw 'appcontrol_transaction_security_failed' }
             $allowedSids = @('S-1-5-18', 'S-1-5-32-544')
+            $securityStage = 'mutex-verify-acl'
             foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
                 $hasRule = @($existing.Access | Where-Object {
                         try { [string]$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sidText }
@@ -302,7 +308,7 @@ function Enter-OpenPathAppControlTransaction {
             if ($_.Exception.InnerException) {
                 $securityDetail = "$securityDetail | inner: $([string]$_.Exception.InnerException.Message)"
             }
-            Write-Warning "OpenPath AppControl mutex ACL diagnostic: $securityDetail"
+            Write-Warning "OpenPath AppControl mutex ACL diagnostic: stage=$securityStage; $securityDetail"
             if ($null -ne $mutex) { $mutex.Dispose() }
             throw 'appcontrol_transaction_security_failed'
         }
