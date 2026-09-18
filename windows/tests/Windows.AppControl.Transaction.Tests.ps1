@@ -111,7 +111,7 @@ while (-not (Test-Path -LiteralPath $TerminatePath -PathType Leaf) -and [DateTim
     Start-Sleep -Milliseconds 25
 }
 if (-not (Test-Path -LiteralPath $TerminatePath -PathType Leaf)) { exit 4 }
-[Diagnostics.Process]::GetCurrentProcess().Kill()
+[Environment]::FailFast('OpenPath abandoned mutex test')
 '@ | Set-Content -LiteralPath $childScript -Encoding UTF8
 
         $child = Start-Process -FilePath $childHost.Source -ArgumentList @(
