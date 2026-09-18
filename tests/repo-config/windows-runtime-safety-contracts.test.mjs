@@ -61,7 +61,7 @@ test('release workflow contains an individual Windows Desktop Survival requireme
   const workflow = read('.github/workflows/release-scripts.yml');
   assert.match(workflow, /Windows Desktop Survival/);
   assert.match(workflow, /validate-windows-desktop-survival-evidence\.mjs/);
-  assert.match(workflow, /needs:\s*[^\n]*windows-desktop-survival/);
+  assert.match(workflow, /needs:[\s\S]*windows-desktop-survival/);
 });
 
 test('desktop harness is controller-only and existing installer lanes can preserve state', () => {

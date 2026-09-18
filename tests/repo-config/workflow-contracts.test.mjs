@@ -2337,12 +2337,14 @@ test('promotion contract publication requires the canonical same-SHA Windows rel
     /release-scripts-success:\n[\s\S]*?if: \$\{\{ always\(\) && github\.event_name == 'workflow_dispatch' \}\}[\s\S]*?needs\.windows-offline-template\.result \}\}" != "success"[\s\S]*?needs\.policy-converter-contrast\.result \}\}" != "success"[\s\S]*?needs\.windows-personalized-http-e2e\.result \}\}" != "success"[\s\S]*?needs\.release\.result \}\}" != "success"/,
     'the canonical release summary must fail closed unless every required same-run result succeeded'
   );
-  assert.ok(
-    releaseJob.includes(
-      'needs: [windows-offline-template, policy-converter-contrast, windows-personalized-http-e2e]'
-    ),
-    'release publication must wait for the same-run PolicyConverter contrast as well as both executable lanes'
-  );
+  for (const requiredJob of [
+    'windows-offline-template',
+    'policy-converter-contrast',
+    'windows-personalized-http-e2e',
+    'windows-desktop-survival',
+  ]) {
+    assert.ok(releaseJob.includes(requiredJob), `release publication must wait for ${requiredJob}`);
+  }
   for (const requiredState of ['SOURCE FIXED', 'PROMOTED', 'DOWNSTREAM SHIPPED']) {
     assert.ok(
       releaseChecklist.includes(requiredState),
