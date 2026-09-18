@@ -149,10 +149,22 @@ function Invoke-OpenPathMutexAclExtension {
         } |
         Select-Object -First 1)
     if ($method.Count -ne 1) { throw 'appcontrol_transaction_security_failed' }
-    if ($MethodName -eq 'GetAccessControl') {
-        return $method[0].Invoke($null, @($Mutex))
+    $mutexValue = if ($Mutex -is [System.Management.Automation.PSObject]) {
+        $Mutex.PSObject.BaseObject
     }
-    return $method[0].Invoke($null, @($Mutex, $Security))
+    else { $Mutex }
+    if ($MethodName -eq 'GetAccessControl') {
+        $security = $method[0].Invoke($null, [object[]]@($mutexValue))
+        if ($security -is [System.Management.Automation.PSObject]) {
+            return $security.PSObject.BaseObject
+        }
+        return $security
+    }
+    $securityValue = if ($Security -is [System.Management.Automation.PSObject]) {
+        $Security.PSObject.BaseObject
+    }
+    else { $Security }
+    [void]$method[0].Invoke($null, [object[]]@($mutexValue, $securityValue))
 }
 
 function New-OpenPathNamedMutex {
@@ -225,12 +237,15 @@ function Open-OpenPathNamedMutexFullControl {
             $parameters = $_.GetParameters()
             return $parameters.Count -eq 2 -and
                 $parameters[0].ParameterType -eq [string] -and
-                $parameters[1].ParameterType -eq [System.Threading.MutexRights]
+                $parameters[1].ParameterType -eq [System.Security.AccessControl.MutexRights]
         } |
         Select-Object -First 1)
     if ($openMethod.Count -ne 1) { return $Mutex }
     try {
-        $opened = $openMethod[0].Invoke($null, [object[]]@($Name, [System.Threading.MutexRights]::FullControl))
+        $opened = $openMethod[0].Invoke($null, [object[]]@($Name, [System.Security.AccessControl.MutexRights]::FullControl))
+        if ($opened -is [System.Management.Automation.PSObject]) {
+            $opened = $opened.PSObject.BaseObject
+        }
         if ($null -ne $opened -and $opened -ne $Mutex) {
             $Mutex.Dispose()
             return $opened
