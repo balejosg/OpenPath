@@ -1393,7 +1393,10 @@ function Set-OpenPathAppIdentityServiceAutomatic {
     param()
 
     $scCommand = Get-Command -Name 'sc.exe' -ErrorAction Stop
-    $scOutput = @(& $scCommand.Source config AppIDSvc start= auto 2>&1)
+    # Invoke the command by name so a test/diagnostic shim (Function) and the
+    # native Windows executable follow the same supported path.  Source is
+    # empty for functions and would otherwise fail before sc.exe is called.
+    $scOutput = @(& $scCommand.Name config AppIDSvc start= auto 2>&1)
     if ($LASTEXITCODE -ne 0) {
         $boundedOutput = (@($scOutput | ForEach-Object { [string]$_ }) -join ' ').Trim()
         if ($boundedOutput.Length -gt 240) {
@@ -1991,6 +1994,8 @@ function Get-OpenPathNonAdminAppControlHealth {
         [AllowNull()]
         [object]$WindowsRuntimeBaseline = $null,
 
+        [string]$IgnoreTransactionId = '',
+
         [string]$OpenPathRoot = $script:OpenPathRoot
     )
 
@@ -2062,7 +2067,8 @@ function Get-OpenPathNonAdminAppControlHealth {
     $pendingRecovery = @()
     if (Get-Command -Name 'Get-OpenPathAppControlPendingRecovery' -ErrorAction SilentlyContinue) {
         try {
-            $pendingRecovery = @(Get-OpenPathAppControlPendingRecovery -OpenPathRoot $OpenPathRoot)
+            $pendingRecovery = @(Get-OpenPathAppControlPendingRecovery -OpenPathRoot $OpenPathRoot |
+                Where-Object { [string]$_.TransactionId -ne $IgnoreTransactionId })
             if ($pendingRecovery.Count -gt 0) {
                 & $addReasonCode 'appcontrol_recovery_required'
             }
@@ -3080,7 +3086,7 @@ function Set-OpenPathNonAdminAppControl {
         }
 
         $diagnosticSubstep = 'validation'
-        if (-not (Test-OpenPathNonAdminAppControlActive -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -WindowsRuntimeBaseline $runtimeBaseline -OpenPathRoot $OpenPathRoot)) {
+        if (-not (Test-OpenPathNonAdminAppControlActive -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -WindowsRuntimeBaseline $runtimeBaseline -OpenPathRoot $OpenPathRoot -IgnoreTransactionId ([string]$transaction.TransactionId))) {
             $health = $script:OpenPathLastAppControlHealth
             if ($null -eq $health) {
                 $health = [pscustomobject]@{
@@ -3276,10 +3282,12 @@ function Test-OpenPathNonAdminAppControlActive {
         [AllowNull()]
         [object]$WindowsRuntimeBaseline = $null,
 
+        [string]$IgnoreTransactionId = '',
+
         [string]$OpenPathRoot = $script:OpenPathRoot
     )
 
-    $health = Get-OpenPathNonAdminAppControlHealth -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -WindowsRuntimeBaseline $WindowsRuntimeBaseline -OpenPathRoot $OpenPathRoot
+    $health = Get-OpenPathNonAdminAppControlHealth -Mode $Mode -ApprovedBrowsers $ApprovedBrowsers -Profile $Profile -ApplicationCatalog $ApplicationCatalog -WindowsRuntimeBaseline $WindowsRuntimeBaseline -IgnoreTransactionId $IgnoreTransactionId -OpenPathRoot $OpenPathRoot
     $script:OpenPathLastAppControlHealth = $health
     return [bool]$health.Healthy
 }

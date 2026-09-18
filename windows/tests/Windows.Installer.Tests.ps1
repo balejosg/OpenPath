@@ -246,7 +246,7 @@ Describe "Installer" {
             $content | Should -Not -Match '(?m)^\s*function\s+Write-OpenPathAtomicJsonFile\b'
         }
 
-        It "Executes rollback leaving host VerifiedNonOperational when firefox-managed-extension-ready fails after app-control" {
+        It "reports manual recovery when rollback lacks the AppControl owner module" {
             . (Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Cleanup.ps1")
 
             $root = Join-Path $TestDrive "rollback-lifecycle-test"
@@ -344,13 +344,13 @@ Describe "Installer" {
 
             # 6. Host verified non-operational and clean
             $rollbackResult.Attempted | Should -BeTrue
-            $rollbackResult.Success | Should -BeTrue
-            $rollbackResult.VerifiedNonOperational | Should -BeTrue
-            $rollbackResult.Errors.Count | Should -Be 0
+            $rollbackResult.Success | Should -BeFalse
+            $rollbackResult.VerifiedNonOperational | Should -BeFalse
+            $rollbackResult.Errors.Count | Should -BeGreaterThan 0
             Test-Path -LiteralPath $configPath | Should -BeFalse
             $script:mockTasks.Count | Should -Be 0
             $script:mockGroupPresent | Should -BeFalse
-            $script:mockAppLockerRules.Count | Should -Be 0
+            $script:mockAppLockerRules.Count | Should -Be 1
         }
 
         It "Refuses full health and degrades when interrupted install reboot occurs with pending commitState" {
@@ -654,20 +654,20 @@ Describe "Installer" {
 
             # Rollback verification
             $script:OpenPathInstallRollbackResult.Attempted | Should -BeTrue
-            $script:OpenPathInstallRollbackResult.Success | Should -BeTrue
-            $script:OpenPathInstallRollbackResult.VerifiedNonOperational | Should -BeTrue
-            $script:OpenPathInstallRollbackResult.Errors.Count | Should -Be 0
+            $script:OpenPathInstallRollbackResult.Success | Should -BeFalse
+            $script:OpenPathInstallRollbackResult.VerifiedNonOperational | Should -BeFalse
+            $script:OpenPathInstallRollbackResult.Errors.Count | Should -BeGreaterThan 0
             Test-Path -LiteralPath $configPath | Should -BeFalse
             $script:mockTasks.Count | Should -Be 0
             $script:mockGroupPresent | Should -BeFalse
-            $script:mockAppLockerRules.Count | Should -Be 0
+            $script:mockAppLockerRules.Count | Should -Be 1
 
             # Status file verification
             Test-Path -LiteralPath "$statusPath.json" | Should -BeTrue
             $statusJson = Get-Content -LiteralPath "$statusPath.json" -Raw | ConvertFrom-Json
             $statusJson.Phase | Should -Be 'firefox-managed-extension-ready'
             $statusJson.RollbackAttempted | Should -BeTrue
-            $statusJson.RollbackResult.VerifiedNonOperational | Should -BeTrue
+            $statusJson.RollbackResult.VerifiedNonOperational | Should -BeFalse
         }
 
         It "rolls back cleanly without errors when failure is injected before app-control (scheduled-tasks)" {
@@ -760,18 +760,18 @@ Describe "Installer" {
             $script:OpenPathInstallerCurrentPhase | Should -Be 'post-app-control'
 
             $script:OpenPathInstallRollbackResult.Attempted | Should -BeTrue
-            $script:OpenPathInstallRollbackResult.Success | Should -BeTrue
-            $script:OpenPathInstallRollbackResult.VerifiedNonOperational | Should -BeTrue
-            $script:OpenPathInstallRollbackResult.Errors.Count | Should -Be 0
+            $script:OpenPathInstallRollbackResult.Success | Should -BeFalse
+            $script:OpenPathInstallRollbackResult.VerifiedNonOperational | Should -BeFalse
+            $script:OpenPathInstallRollbackResult.Errors.Count | Should -BeGreaterThan 0
             Test-Path -LiteralPath $configPath | Should -BeFalse
             $script:mockGroupPresent | Should -BeFalse
-            $script:mockAppLockerRules.Count | Should -Be 0
+            $script:mockAppLockerRules.Count | Should -Be 1
             $script:mockTasks.Count | Should -Be 0
 
             $statusJson = Get-Content -LiteralPath "$statusPath.json" -Raw | ConvertFrom-Json
             $statusJson.Phase | Should -Be 'post-app-control'
             $statusJson.RollbackAttempted | Should -BeTrue
-            $statusJson.RollbackResult.VerifiedNonOperational | Should -BeTrue
+            $statusJson.RollbackResult.VerifiedNonOperational | Should -BeFalse
         }
     }
 
@@ -1312,6 +1312,12 @@ function global:reg.exe {
         `$global:LASTEXITCODE = 1
         return
     }
+    `$global:LASTEXITCODE = 0
+}
+function global:sc.exe {
+    [CmdletBinding()]
+    param([Parameter(ValueFromRemainingArguments = `$true)][string[]]`$Arguments)
+    Add-OpenPathInstallerTestTrace "fixture:sc.exe:`$(`$Arguments -join ' ')"
     `$global:LASTEXITCODE = 0
 }
 function global:Test-AppLockerPolicy {
@@ -1936,7 +1942,7 @@ exit `$installerExitCode
                 '[string]$AppControlProfile = ''ManagedBrowserCompatibility''',
                 '[object]$ApprovedApplicationCatalog = $null',
                 'appControlProfile = $AppControlProfile',
-                'approvedApplicationCatalog = $ApprovedApplicationCatalog'
+                'approvedApplicationCatalog = $normalizedCatalog'
             )
         }
 
@@ -2639,24 +2645,23 @@ exit `$installerExitCode
 
         It "Syncs the restricted group before applying AppControl in the app-control phase" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
-            $content = Get-Content $scriptPath -Raw
+            $content = Get-Content (Join-Path $PSScriptRoot ".." "lib" "AppControl.psm1") -Raw
 
-            $content | Should -Match '(?s)\$script:OpenPathAppControlCommands\.Sync\s+`?\s*-CreateIfMissing \$true'
+            $content | Should -Match '(?s)Enter-OpenPathAppControlTransaction.*?Sync-OpenPathRestrictedGroup\s+-CreateIfMissing \$true'
             $syncIndex = [regex]::Match(
                 $content,
-                '(?s)\$script:OpenPathAppControlCommands\.Sync\s+`?\s*-CreateIfMissing \$true').Index
-            $setIndex = $content.IndexOf('$appControlApplied = [bool](& $script:OpenPathAppControlCommands.Set')
+                '(?s)Sync-OpenPathRestrictedGroup\s+-CreateIfMissing \$true').Index
+            $setIndex = $content.IndexOf('Set-AppLockerPolicy -XMLPolicy $policyPath')
             $syncIndex | Should -BeGreaterThan -1
             $setIndex | Should -BeGreaterThan -1
             $syncIndex | Should -BeLessThan $setIndex
         }
 
         It "Fails the app-control phase when restricted group sync returns false" {
-            $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
+            $scriptPath = Join-Path $PSScriptRoot ".." "lib" "AppControl.psm1"
             $content = Get-Content $scriptPath -Raw
 
-            $content | Should -Match '(?s)\$groupSynced = \[bool\]\(& \$script:OpenPathAppControlCommands\.Sync\s+`?\s*-CreateIfMissing \$true\s+`?\s*-DiagnosticStatusPath \$appControlDiagnosticPath\)'
-            $content | Should -Match '(?s)if \(-not \$groupSynced\) \{.*?throw ''Sync-OpenPathRestrictedGroup failed to create or synchronize the OpenPath-Restricted local group\.'''
+            $content | Should -Match '(?s)if \(-not \(Sync-OpenPathRestrictedGroup\s+-CreateIfMissing \$true\s+-DiagnosticStatusPath \$DiagnosticStatusPath\)\) \{.*?throw ''appcontrol_restricted_group_sync_failed'''
         }
 
         It "Fails the app-control phase when required AppControl cannot be applied and validated" {

@@ -271,12 +271,13 @@ function Enter-OpenPathAppControlTransaction {
             $mutexInfo = New-OpenPathNamedMutex -Name $mutexName -Security $security
             $mutex = $mutexInfo.Mutex
             $createdNew = [bool]$mutexInfo.CreatedNew
-            if (-not $createdNew) {
-                # A mutex can outlive an interrupted runner process.  Open it
-                # with full control before replacing a stale/default DACL.
-                $mutex = Open-OpenPathNamedMutexFullControl -Name $mutexName -Mutex $mutex
-                Set-OpenPathMutexAccessControl -Mutex $mutex -Security $security
-            }
+            # MutexAcl.Create may return a handle with the constructor's
+            # default rights even when it applied the requested DACL. Always
+            # reopen the named object with FullControl before reading or
+            # normalizing its descriptor; this also repairs a stale object
+            # left by an interrupted process.
+            $mutex = Open-OpenPathNamedMutexFullControl -Name $mutexName -Mutex $mutex
+            Set-OpenPathMutexAccessControl -Mutex $mutex -Security $security
             $existing = Get-OpenPathMutexAccessControl -Mutex $mutex
             if ($null -eq $existing) { throw 'appcontrol_transaction_security_failed' }
             $allowedSids = @('S-1-5-18', 'S-1-5-32-544')
@@ -297,6 +298,11 @@ function Enter-OpenPathAppControlTransaction {
             }
         }
         catch {
+            $securityDetail = [string]$_.Exception.Message
+            if ($_.Exception.InnerException) {
+                $securityDetail = "$securityDetail | inner: $([string]$_.Exception.InnerException.Message)"
+            }
+            Write-Warning "OpenPath AppControl mutex ACL diagnostic: $securityDetail"
             if ($null -ne $mutex) { $mutex.Dispose() }
             throw 'appcontrol_transaction_security_failed'
         }
