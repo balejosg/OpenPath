@@ -100,10 +100,10 @@ function Set-OpenPathTransactionAcl {
 }
 
 function Get-OpenPathMutexAclExtensionType {
-    $type = [Type]::GetType('System.Threading.MutexAclExtensions, System.Threading.AccessControl', $false)
+    $type = [Type]::GetType('System.Threading.ThreadingAclExtensions, System.Threading.AccessControl', $false)
     if ($null -eq $type) {
         try { Add-Type -AssemblyName 'System.Threading.AccessControl' -ErrorAction Stop } catch {}
-        $type = [Type]::GetType('System.Threading.MutexAclExtensions, System.Threading.AccessControl', $false)
+        $type = [Type]::GetType('System.Threading.ThreadingAclExtensions, System.Threading.AccessControl', $false)
     }
     return $type
 }
