@@ -103,8 +103,9 @@ Describe 'AppControl transaction journal' {
 param([string]$ModulePath, [string]$Root, [string]$SignalPath, [string]$TerminatePath)
 $ErrorActionPreference = 'Stop'
 [string]$mutexName = 'Global\OpenPath-AppControl-v1'
-$mutex = New-Object System.Threading.Mutex($false, $mutexName)
-if (-not $mutex.WaitOne(5000)) { [IO.File]::WriteAllText($SignalPath, 'failed'); exit 3 }
+$createdNew = $false
+$mutex = New-Object System.Threading.Mutex($true, $mutexName, [ref]$createdNew)
+if (-not $createdNew) { [IO.File]::WriteAllText($SignalPath, 'failed'); exit 3 }
 [IO.File]::WriteAllText($SignalPath, 'ready')
 $deadline = [DateTime]::UtcNow.AddSeconds(15)
 while (-not (Test-Path -LiteralPath $TerminatePath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
