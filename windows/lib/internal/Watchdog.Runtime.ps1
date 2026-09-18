@@ -602,6 +602,50 @@ function Invoke-OpenPathCaptivePortalPassthroughEmergencyChecks {
     }
 }
 
+function Invoke-OpenPathWatchdogHealthCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$mode,
+        [Parameter(Mandatory = $true)][string[]]$approvedStudentBrowsers,
+        [string]$profile = 'ManagedBrowserCompatibility',
+        [AllowNull()][object]$applicationCatalog = $null,
+        [string]$openPathRoot = ''
+    )
+
+    $command = Get-Command -Name 'Get-OpenPathNonAdminAppControlHealth' -ErrorAction Stop
+    # Keep the base call explicit for older/public test shims and only pass
+    # optional arguments when the resolved command actually declares them.
+    if (-not $command.Parameters.ContainsKey('Mode') -and
+        -not $command.Parameters.ContainsKey('ApprovedBrowsers')) {
+        try {
+            return Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers
+        }
+        catch [System.Management.Automation.ParameterBindingException] {
+            return Get-OpenPathNonAdminAppControlHealth
+        }
+    }
+    if (-not $command.Parameters.ContainsKey('Profile') -and
+        -not $command.Parameters.ContainsKey('ApplicationCatalog') -and
+        -not $command.Parameters.ContainsKey('OpenPathRoot')) {
+        return Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers
+    }
+
+    $parameters = @{ Mode = $mode; ApprovedBrowsers = $approvedStudentBrowsers }
+    if ($command.Parameters.ContainsKey('Profile')) { $parameters.Profile = $profile }
+    if ($command.Parameters.ContainsKey('ApplicationCatalog')) { $parameters.ApplicationCatalog = $applicationCatalog }
+    if ($command.Parameters.ContainsKey('OpenPathRoot')) { $parameters.OpenPathRoot = $openPathRoot }
+    try {
+        return Get-OpenPathNonAdminAppControlHealth @parameters
+    }
+    catch [System.Management.Automation.ParameterBindingException] {
+        try {
+            return Get-OpenPathNonAdminAppControlHealth -Mode $mode -ApprovedBrowsers $approvedStudentBrowsers
+        }
+        catch [System.Management.Automation.ParameterBindingException] {
+            return Get-OpenPathNonAdminAppControlHealth
+        }
+    }
+}
+
 function Invoke-OpenPathWatchdogAppControlHealth {
     <#
         Runs the AppControl/group observation and repair transaction. Findings
@@ -698,7 +742,6 @@ function Invoke-OpenPathWatchdogAppControlHealth {
         try { $transitionBlocked = @(Get-OpenPathAppControlPendingRecovery -OpenPathRoot $OpenPathRoot).Count -gt 0 } catch { $transitionBlocked = $true }
     }
     if ($transitionBlocked) {
-        $groupReconciliationFailed = $true
         & $addCode 'appcontrol_recovery_required'
         & $addIssue 'AppControl transition is incomplete; repair is deferred'
         & $addRecoveryIssue 'AppControl transition is incomplete'
@@ -775,11 +818,7 @@ function Invoke-OpenPathWatchdogAppControlHealth {
     $initialHealthCodes = @()
     if ($healthCommandAvailable) {
         try {
-            $healthParameters = @{ Mode = $mode; ApprovedBrowsers = $approvedStudentBrowsers; Profile = $appControlProfile; ApplicationCatalog = $approvedApplicationCatalog }
-            if ((Get-Command -Name 'Get-OpenPathNonAdminAppControlHealth').Parameters.ContainsKey('OpenPathRoot')) {
-                $healthParameters.OpenPathRoot = $OpenPathRoot
-            }
-            $initialHealth = Get-OpenPathNonAdminAppControlHealth @healthParameters
+            $initialHealth = Invoke-OpenPathWatchdogHealthCommand -Mode $mode -ApprovedStudentBrowsers $approvedStudentBrowsers -Profile $appControlProfile -ApplicationCatalog $approvedApplicationCatalog -OpenPathRoot $OpenPathRoot
             if (-not $initialHealth -or -not $initialHealth.PSObject.Properties['Healthy']) {
                 throw 'structured AppControl health result is invalid'
             }
@@ -862,7 +901,7 @@ function Invoke-OpenPathWatchdogAppControlHealth {
                 if (-not $healthCommandAvailable) {
                     throw 'structured AppControl health check unavailable after repair'
                 }
-                $postRepairHealth = Get-OpenPathNonAdminAppControlHealth @healthParameters
+                $postRepairHealth = Invoke-OpenPathWatchdogHealthCommand -Mode $mode -ApprovedStudentBrowsers $approvedStudentBrowsers -Profile $appControlProfile -ApplicationCatalog $approvedApplicationCatalog -OpenPathRoot $OpenPathRoot
                 if (-not $postRepairHealth -or -not $postRepairHealth.PSObject.Properties['Healthy']) {
                     throw 'structured AppControl post-repair health result is invalid'
                 }

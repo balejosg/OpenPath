@@ -222,6 +222,29 @@ function Remove-OpenPathInstallerAppLockerRules {
         Removes AppLocker rules whose Name attribute begins with 'OpenPath non-admin app control' from the local policy
     #>
     param([string]$OpenPathRoot = 'C:\OpenPath')
+
+    # A clean machine may not have an OpenPath policy at all.  Inspect the
+    # local XML before resolving the owner module so cleanup remains a safe
+    # no-op for that case; an existing OpenPath rule still requires the
+    # central AppControl removal path and therefore fails closed if it is
+    # unavailable.
+    if (-not (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+        throw 'AppLocker policy cmdlet is unavailable; manual recovery is required.'
+    }
+    try {
+        $policyXml = [xml](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
+        $managedRules = @()
+        foreach ($rule in @($policyXml.SelectNodes('//*[@Name]'))) {
+            if ($rule -is [System.Xml.XmlElement] -and $rule.GetAttribute('Name') -like 'OpenPath non-admin app control*') {
+                $managedRules += $rule
+            }
+        }
+        if ($managedRules.Count -eq 0) { return $true }
+    }
+    catch {
+        throw 'Unable to inspect local AppLocker policy; manual recovery is required.'
+    }
+
     $modulePath = Join-Path $OpenPathRoot 'lib\AppControl.psm1'
     if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
         throw 'AppControl owner module is unavailable; manual recovery is required.'

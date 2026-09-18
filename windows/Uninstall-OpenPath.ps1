@@ -103,6 +103,22 @@ function Stop-OpenPathRootedProcess {
 }
 
 function Remove-OpenPathFallbackAppLockerRules {
+    if (Get-Command -Name Get-AppLockerPolicy -ErrorAction SilentlyContinue) {
+        try {
+            $policyXml = [xml](Get-AppLockerPolicy -Local -Xml -ErrorAction Stop)
+            $managedRules = @()
+            foreach ($rule in @($policyXml.SelectNodes('//*[@Name]'))) {
+                if ($rule -is [System.Xml.XmlElement] -and $rule.GetAttribute('Name') -like 'OpenPath non-admin app control*') {
+                    $managedRules += $rule
+                }
+            }
+            if ($managedRules.Count -eq 0) { return $true }
+        }
+        catch {
+            throw 'Unable to inspect local AppLocker policy; manual recovery is required.'
+        }
+    }
+
     $modulePath = Join-Path $OpenPathRoot 'lib\AppControl.psm1'
     if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
         throw 'AppControl owner module is unavailable; manual recovery is required.'

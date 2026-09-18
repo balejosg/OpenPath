@@ -58,31 +58,88 @@ function Write-OpenPathTransactionAtomic {
 }
 
 function Set-OpenPathTransactionAcl {
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [switch]$Directory
+    )
     if (-not (Test-OpenPathTransactionWindows)) { return }
     try {
+        # Replacing the descriptor with a small canonical SDDL is more reliable
+        # than removing inherited ACEs one at a time.  The latter can leave a
+        # non-canonical descriptor on Windows runner images and make every
+        # transaction fail closed even when the caller is an administrator.
         $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
-        $acl.SetAccessRuleProtection($true, $false)
-        $acl.Access | ForEach-Object { [void]$acl.RemoveAccessRule($_) }
-        foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
-            $sid = New-Object System.Security.Principal.SecurityIdentifier($sidText)
-            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-            [void]$acl.AddAccessRule($rule)
+        $sddl = if ($Directory) {
+            'O:SYG:BAD:(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'
         }
+        else {
+            'O:SYG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)'
+        }
+        $acl.SetSecurityDescriptorSddlForm($sddl)
         Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+
         $verified = Get-Acl -LiteralPath $Path -ErrorAction Stop
-        foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
-            $hasRule = @($verified.Access | Where-Object {
-                    try { [string]$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sidText }
-                    catch {
-                        if ($sidText -eq 'S-1-5-18') { [string]$_.IdentityReference -match '(?i)SYSTEM' }
-                        else { [string]$_.IdentityReference -match '(?i)Administrators' }
-                    }
-                }).Count -gt 0
-            if (-not $hasRule) { throw 'appcontrol_transaction_security_failed' }
+        if (-not $verified.AreAccessRulesProtected) { throw 'appcontrol_transaction_security_failed' }
+        $allowedSids = @('S-1-5-18', 'S-1-5-32-544')
+        $observedSids = @(
+            $verified.Access | ForEach-Object {
+                try { [string]$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }
+                catch {
+                    if ([string]$_.IdentityReference -match '(?i)SYSTEM') { 'S-1-5-18' }
+                    elseif ([string]$_.IdentityReference -match '(?i)Administrators') { 'S-1-5-32-544' }
+                    else { [string]$_.IdentityReference }
+                }
+            }
+        )
+        if (@($observedSids | Where-Object { $allowedSids -notcontains $_ }).Count -gt 0 -or
+            @($allowedSids | Where-Object { $observedSids -notcontains $_ }).Count -gt 0) {
+            throw 'appcontrol_transaction_security_failed'
         }
     }
     catch { throw 'appcontrol_transaction_security_failed' }
+}
+
+function Get-OpenPathMutexAclExtensionType {
+    $type = [Type]::GetType('System.Threading.MutexAclExtensions, System.Threading.AccessControl', $false)
+    if ($null -eq $type) {
+        try { Add-Type -AssemblyName 'System.Threading.AccessControl' -ErrorAction Stop } catch {}
+        $type = [Type]::GetType('System.Threading.MutexAclExtensions, System.Threading.AccessControl', $false)
+    }
+    return $type
+}
+
+function Invoke-OpenPathMutexAclExtension {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('GetAccessControl', 'SetAccessControl')][string]$MethodName,
+        [Parameter(Mandatory = $true)][object]$Mutex,
+        [AllowNull()][object]$Security
+    )
+    $type = Get-OpenPathMutexAclExtensionType
+    if ($null -eq $type) { throw 'appcontrol_transaction_security_failed' }
+    $parameterCount = if ($MethodName -eq 'GetAccessControl') { 1 } else { 2 }
+    $method = @($type.GetMethods([System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::Static) |
+        Where-Object { $_.Name -eq $MethodName -and $_.GetParameters().Count -eq $parameterCount } |
+        Select-Object -First 1)
+    if ($method.Count -ne 1) { throw 'appcontrol_transaction_security_failed' }
+    if ($MethodName -eq 'GetAccessControl') {
+        return $method[0].Invoke($null, @($Mutex))
+    }
+    return $method[0].Invoke($null, @($Mutex, $Security))
+}
+
+function Get-OpenPathMutexAccessControl {
+    param([Parameter(Mandatory = $true)][object]$Mutex)
+    try { return $Mutex.GetAccessControl() }
+    catch { return Invoke-OpenPathMutexAclExtension -MethodName GetAccessControl -Mutex $Mutex }
+}
+
+function Set-OpenPathMutexAccessControl {
+    param(
+        [Parameter(Mandatory = $true)][object]$Mutex,
+        [Parameter(Mandatory = $true)][object]$Security
+    )
+    try { $Mutex.SetAccessControl($Security); return }
+    catch { Invoke-OpenPathMutexAclExtension -MethodName SetAccessControl -Mutex $Mutex -Security $Security }
 }
 
 function Get-OpenPathMutexSecurity {
@@ -115,9 +172,9 @@ function Enter-OpenPathAppControlTransaction {
     if (Test-OpenPathTransactionWindows) {
         try {
             $security = Get-OpenPathMutexSecurity
-            if ($createdNew) { $mutex.SetAccessControl($security) }
+            if ($createdNew) { Set-OpenPathMutexAccessControl -Mutex $mutex -Security $security }
             else {
-                $existing = $mutex.GetAccessControl()
+                $existing = Get-OpenPathMutexAccessControl -Mutex $mutex
                 $allowedSids = @('S-1-5-18', 'S-1-5-32-544')
                 foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
                     $hasRule = @($existing.Access | Where-Object {
@@ -233,11 +290,11 @@ function New-OpenPathAppControlTransaction {
     )
     $root = Get-OpenPathTransactionRoot -OpenPathRoot $OpenPathRoot
     [IO.Directory]::CreateDirectory($root) | Out-Null
-    Set-OpenPathTransactionAcl -Path $root
+    Set-OpenPathTransactionAcl -Path $root -Directory
     $id = [guid]::NewGuid().ToString()
     $directory = Join-Path $root $id
     [IO.Directory]::CreateDirectory($directory) | Out-Null
-    Set-OpenPathTransactionAcl -Path $directory
+    Set-OpenPathTransactionAcl -Path $directory -Directory
     $localPath = Join-Path $directory 'before-local.xml'
     $effectivePath = Join-Path $directory 'before-effective.xml'
     $candidatePath = Join-Path $directory 'candidate.xml'

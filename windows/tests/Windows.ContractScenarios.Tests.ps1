@@ -49,9 +49,10 @@ Describe "Contract scenarios (mocked Windows unit rung)" {
         It "keeps every windows-scoped egress dest class assertable from rule state" {
             foreach ($scenario in @(Get-ContractScenarios -Platform windows)) {
                 foreach ($entry in @(Get-ContractWindowsEgressExpectations -Scenario $scenario)) {
+                    $protocol = if ($null -eq $entry.proto -or [string]::IsNullOrWhiteSpace([string]$entry.proto)) { 'tcp' } else { [string]$entry.proto }
                     # Throws on a linux-only dest class (sinkhole-*/resolved*/any-other).
                     { Get-ContractWindowsEgressVerdict -Rules @() -Dest $entry.dest `
-                            -Protocol ($entry.proto ?? 'tcp') -Port ([int]$entry.port) } | Should -Not -Throw
+                            -Protocol $protocol -Port ([int]$entry.port) } | Should -Not -Throw
                 }
             }
         }
@@ -83,8 +84,9 @@ Describe "Contract scenarios (mocked Windows unit rung)" {
             $rules.Count | Should -BeGreaterThan 0
 
             foreach ($entry in @(Get-ContractWindowsEgressExpectations -Scenario $scenario)) {
+                $protocol = if ($null -eq $entry.proto -or [string]::IsNullOrWhiteSpace([string]$entry.proto)) { 'tcp' } else { [string]$entry.proto }
                 $verdict = Get-ContractWindowsEgressVerdict -Rules $rules -Dest $entry.dest `
-                    -Protocol ($entry.proto ?? 'tcp') -Port ([int]$entry.port)
+                    -Protocol $protocol -Port ([int]$entry.port)
                 $verdict | Should -Be $entry.verdict -Because "egress $($entry.dest) $($entry.proto)/$($entry.port)"
             }
 
