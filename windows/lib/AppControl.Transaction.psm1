@@ -300,13 +300,13 @@ function Enter-OpenPathAppControlTransaction {
             $security = Get-OpenPathMutexSecurity
             $securityStage = 'mutex-create'
             $mutexInfo = New-OpenPathNamedMutex -Name $mutexName -Security $security
-            $mutex = $mutexInfo.Mutex
+            $createdMutex = $mutexInfo.Mutex
             $createdNew = [bool]$mutexInfo.CreatedNew
-            # Keep the Create handle for WaitOne so process death remains
-            # observable as abandonment. Use a separate full-control handle
-            # for ACL normalization after ownership is acquired.
+            # Use a full-control handle for ownership waits and retain the
+            # creation handle for ACL normalization after acquisition.
+            $aclMutex = $createdMutex
             $securityStage = 'mutex-open-full-control'
-            $aclMutex = Open-OpenPathNamedMutexFullControl -Name $mutexName -Mutex $mutex
+            $mutex = Open-OpenPathNamedMutexFullControl -Name $mutexName -Mutex $createdMutex
         }
         catch {
             $securityDetail = [string]$_.Exception.Message
