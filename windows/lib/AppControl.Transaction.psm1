@@ -70,10 +70,10 @@ function Set-OpenPathTransactionAcl {
         # transaction fail closed even when the caller is an administrator.
         $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
         $sddl = if ($Directory) {
-            'O:SYG:BAD:(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'
+            'O:SYG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'
         }
         else {
-            'O:SYG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)'
+            'O:SYG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)'
         }
         $acl.SetSecurityDescriptorSddlForm($sddl)
         Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
