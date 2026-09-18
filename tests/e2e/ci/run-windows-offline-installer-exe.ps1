@@ -26,6 +26,10 @@ param(
 
     [string]$EvidencePath = '',
 
+    # Desktop-survival phases observe the installed state across a reboot;
+    # cleanup is explicit in that lane and never implicit here.
+    [switch]$PreserveInstallation,
+
     [string]$ProbePayloadPath = '',
 
     [string]$TargetUserName = '',
@@ -1158,12 +1162,14 @@ finally {
     Get-InstallerTransportRoots | ForEach-Object {
         Get-ChildItem -LiteralPath $_ -Filter "$transportNamePrefix-status*.txt" -File -ErrorAction SilentlyContinue
     } | Remove-Item -Force -ErrorAction SilentlyContinue
-    $uninstaller = Join-Path $OpenPathRoot 'Uninstall-OpenPath.ps1'
-    if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
-        & $shell -NoProfile -ExecutionPolicy Bypass -File $uninstaller *> $null
-    }
-    if (Test-Path -LiteralPath $OpenPathRoot) {
-        Remove-Item -LiteralPath $OpenPathRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not $PreserveInstallation) {
+        $uninstaller = Join-Path $OpenPathRoot 'Uninstall-OpenPath.ps1'
+        if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
+            & $shell -NoProfile -ExecutionPolicy Bypass -File $uninstaller *> $null
+        }
+        if (Test-Path -LiteralPath $OpenPathRoot) {
+            Remove-Item -LiteralPath $OpenPathRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
     if ($null -eq $previousOpenPathRoot) {
         Remove-Item Env:OPENPATH_WINDOWS_ROOT -ErrorAction SilentlyContinue

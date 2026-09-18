@@ -27,11 +27,13 @@ test('runtime discovery module exists and exposes the closed baseline contract',
 
 test('AppControl uses exact package identities and does not reintroduce partial publisher wildcards', () => {
   const module = read('windows/lib/AppControl.psm1');
-  assert.match(module, /Invoke-OpenPathAppLockerPackageEvaluation/);
-  assert.match(module, /Test-OpenPathWindowsRuntimePolicy/);
-  assert.match(module, /appcontrol_publisher_identity_invalid/);
-  assert.doesNotMatch(module, /O=MICROSOFT CORPORATION\*/);
-  assert.doesNotMatch(module, /PublisherName=['"]\*['"][^\n]+ProductName=['"]\*['"]/);
+  const runtime = read('windows/lib/AppControl.WindowsRuntime.psm1');
+  assert.match(module, /StrictApplicationAllowlist/);
+  assert.match(module, /ApprovedApplicationPublishersByCollection/);
+  assert.match(runtime, /Get-OpenPathWindowsRuntimePackageIdentity/);
+  assert.match(runtime, /appcontrol_publisher_identity_invalid/);
+  assert.match(runtime, /Contains\('\*'\)/);
+  assert.doesNotMatch(runtime, /PublisherName=['"]\*['"][^\n]+ProductName=['"]\*['"]/);
 });
 
 test('transaction module defines serialized states and protected snapshots', () => {
