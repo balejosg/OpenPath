@@ -98,47 +98,20 @@ Describe 'AppControl transaction journal' {
         $otherRoot = Join-Path $TestDrive 'root-two'
         $childScript = Join-Path $TestDrive 'hold-transaction.ps1'
         $signalPath = Join-Path $TestDrive 'child-ready.txt'
-        $terminatePath = Join-Path $TestDrive 'child-terminate.txt'
         @'
-param([string]$ModulePath, [string]$Root, [string]$SignalPath, [string]$TerminatePath)
+param([string]$ModulePath, [string]$Root, [string]$SignalPath)
 $ErrorActionPreference = 'Stop'
-[string]$mutexName = 'Global\OpenPath-AppControl-v1'
-$hostIsWin32 = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -or [string]$env:OS -eq 'Windows_NT'
-if ($hostIsWin32) {
-    Add-Type -TypeDefinition @"
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-public static class OpenPathNativeMutexHolder {
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern IntPtr CreateMutex(IntPtr attributes, bool initialOwner, string name);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    public static extern uint GetLastError();
-}
-"@
-    $nativeMutex = [OpenPathNativeMutexHolder]::CreateMutex([IntPtr]::Zero, $true, $mutexName)
-    if ($nativeMutex -eq [IntPtr]::Zero -or [OpenPathNativeMutexHolder]::GetLastError() -eq 183) {
-        [IO.File]::WriteAllText($SignalPath, 'failed')
-        exit 3
-    }
-}
-else {
-    $createdNew = $false
-    $mutex = New-Object System.Threading.Mutex($true, $mutexName, [ref]$createdNew)
-    if (-not $createdNew) { [IO.File]::WriteAllText($SignalPath, 'failed'); exit 3 }
-}
+$module = Import-Module -Name $ModulePath -Force -Global -PassThru
+$lock = Enter-OpenPathAppControlTransaction -OpenPathRoot $Root -TimeoutMilliseconds 5000
+if (-not $lock.Acquired) { [IO.File]::WriteAllText($SignalPath, 'failed'); exit 3 }
 [IO.File]::WriteAllText($SignalPath, 'ready')
-$deadline = [DateTime]::UtcNow.AddSeconds(15)
-while (-not (Test-Path -LiteralPath $TerminatePath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
-    Start-Sleep -Milliseconds 25
-}
-if (-not (Test-Path -LiteralPath $TerminatePath -PathType Leaf)) { exit 4 }
+Start-Sleep -Milliseconds 3000
 [Environment]::FailFast('OpenPath abandoned mutex test')
 '@ | Set-Content -LiteralPath $childScript -Encoding UTF8
 
         $child = Start-Process -FilePath $childHost.Source -ArgumentList @(
             '-NoProfile', '-NonInteractive', '-File', $childScript,
-            (Join-Path $PSScriptRoot '..\lib\AppControl.Transaction.psm1'), $root, $signalPath, $terminatePath
+            (Join-Path $PSScriptRoot '..\lib\AppControl.Transaction.psm1'), $root, $signalPath
         ) -PassThru
         try {
             $deadline = [DateTime]::UtcNow.AddSeconds(5)
@@ -151,9 +124,7 @@ if (-not (Test-Path -LiteralPath $TerminatePath -PathType Leaf)) { exit 4 }
             $busy.Acquired | Should -BeFalse
             $busy.ReasonCode | Should -Be 'appcontrol_transaction_busy'
 
-            [IO.File]::WriteAllText($terminatePath, 'terminate')
-            Wait-Process -Id $child.Id -Timeout 5 -ErrorAction SilentlyContinue
-            $abandoned = Enter-OpenPathAppControlTransaction -OpenPathRoot $otherRoot -TimeoutMilliseconds 1000
+            $abandoned = Enter-OpenPathAppControlTransaction -OpenPathRoot $otherRoot -TimeoutMilliseconds 5000
             try {
                 $abandoned.Acquired | Should -BeTrue
                 $hostIsWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -or [string]$env:OS -eq 'Windows_NT'
