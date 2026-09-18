@@ -174,6 +174,10 @@ function Enter-OpenPathAppControlTransaction {
             $security = Get-OpenPathMutexSecurity
             if ($createdNew) { Set-OpenPathMutexAccessControl -Mutex $mutex -Security $security }
             else {
+                # A mutex can outlive an interrupted runner process.  Replace
+                # its descriptor before waiting so a stale default DACL cannot
+                # make every later transaction fail closed.
+                Set-OpenPathMutexAccessControl -Mutex $mutex -Security $security
                 $existing = Get-OpenPathMutexAccessControl -Mutex $mutex
                 $allowedSids = @('S-1-5-18', 'S-1-5-32-544')
                 foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
