@@ -316,17 +316,18 @@ function Enter-OpenPathAppControlTransaction {
             if ($null -eq $existing) { throw 'appcontrol_transaction_security_failed' }
             $allowedSids = @('S-1-5-18', 'S-1-5-32-544')
             $securityStage = 'mutex-verify-acl'
+            $existingRules = @($existing.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
             foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
-                $hasRule = @($existing.Access | Where-Object {
+                $hasRule = @($existingRules | Where-Object {
                         try { [string]$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sidText }
                         catch {
                             if ($sidText -eq 'S-1-5-18') { [string]$_.IdentityReference -match '(?i)SYSTEM' }
                             else { [string]$_.IdentityReference -match '(?i)Administrators' }
                         }
-                    }).Count -gt 0
+                }).Count -gt 0
                 if (-not $hasRule) { throw 'appcontrol_transaction_security_failed' }
             }
-            foreach ($ace in @($existing.Access)) {
+            foreach ($ace in $existingRules) {
                 try { $aceSid = [string]$ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }
                 catch { $aceSid = [string]$ace.IdentityReference }
                 if ($aceSid -and $allowedSids -notcontains $aceSid) { throw 'appcontrol_transaction_security_failed' }
