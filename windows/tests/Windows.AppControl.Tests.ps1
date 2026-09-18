@@ -2788,5 +2788,38 @@ Describe "AppControl Module" {
             $moduleContent | Should -Match 'rollback-verification-failed|appcontrol_rollback_verification_failed'
             $moduleContent | Should -Match 'recovery-required'
         }
+
+        It "compares AppLocker readback semantically when Windows reorders XML" {
+            InModuleScope AppControl {
+                $expected = [xml]@'
+<AppLockerPolicy Version="1">
+  <RuleCollection Type="Exe" EnforcementMode="Enabled">
+    <FilePathRule Name="rule-b" Id="{00000000-0000-0000-0000-000000000002}" Action="Allow" UserOrGroupSid="S-1-1-0">
+      <Conditions><FilePathCondition Path="C:\b" /></Conditions>
+    </FilePathRule>
+    <FilePathRule Name="rule-a" Id="{00000000-0000-0000-0000-000000000001}" Action="Allow" UserOrGroupSid="S-1-1-0">
+      <Conditions><FilePathCondition Path="C:\a" /></Conditions>
+    </FilePathRule>
+  </RuleCollection>
+  <RuleCollection Type="Script" EnforcementMode="NotConfigured" />
+</AppLockerPolicy>
+'@
+                $actual = [xml]@'
+<AppLockerPolicy Version="1">
+  <RuleCollection EnforcementMode="NotConfigured" Type="Script" />
+  <RuleCollection EnforcementMode="Enabled" Type="Exe">
+    <FilePathRule UserOrGroupSid="S-1-1-0" Action="Allow" Id="{00000000-0000-0000-0000-000000000001}" Name="rule-a">
+      <Conditions><FilePathCondition Path="C:\a" /></Conditions>
+    </FilePathRule>
+    <FilePathRule UserOrGroupSid="S-1-1-0" Action="Allow" Id="{00000000-0000-0000-0000-000000000002}" Name="rule-b">
+      <Conditions><FilePathCondition Path="C:\b" /></Conditions>
+    </FilePathRule>
+  </RuleCollection>
+</AppLockerPolicy>
+'@
+
+                Compare-OpenPathAppLockerPolicyXml -Expected $expected -Actual $actual | Should -BeTrue
+            }
+        }
     }
 }

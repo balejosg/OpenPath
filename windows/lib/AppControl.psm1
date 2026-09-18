@@ -2712,6 +2712,58 @@ function Get-OpenPathAppControlInstalledConfig {
     catch { return $null }
 }
 
+function ConvertTo-OpenPathCanonicalXmlNode {
+    param([Parameter(Mandatory = $true)][System.Xml.XmlNode]$Node)
+
+    switch ($Node.NodeType) {
+        ([System.Xml.XmlNodeType]::Document) {
+            return ConvertTo-OpenPathCanonicalXmlNode -Node $Node.DocumentElement
+        }
+        ([System.Xml.XmlNodeType]::Element) {
+            $attributes = @($Node.Attributes | Sort-Object @{ Expression = { [string]$_.Name } })
+            $attributeText = -join @($attributes | ForEach-Object {
+                $name = [string]$_.Name
+                $value = [System.Security.SecurityElement]::Escape([string]$_.Value)
+                (' ' + $name + '="' + $value + '"')
+                })
+
+            $children = @($Node.ChildNodes | Where-Object {
+                    $_.NodeType -eq [System.Xml.XmlNodeType]::Element -or
+                    ($_.NodeType -eq [System.Xml.XmlNodeType]::Text -and -not [string]::IsNullOrWhiteSpace([string]$_.Value))
+                })
+            if ($Node.LocalName -eq 'AppLockerPolicy') {
+                $children = @($children | Sort-Object `
+                        @{ Expression = { [string]$_.LocalName } },
+                        @{ Expression = { if ($_.HasAttribute('Type')) { [string]$_.GetAttribute('Type') } else { '' } } },
+                        @{ Expression = { [string]$_.OuterXml } })
+            }
+            elseif ($Node.LocalName -eq 'RuleCollection') {
+                $children = @($children | Sort-Object `
+                        @{ Expression = { if ($_.HasAttribute('Id')) { [string]$_.GetAttribute('Id') } else { '' } } },
+                        @{ Expression = { if ($_.HasAttribute('Name')) { [string]$_.GetAttribute('Name') } else { '' } } },
+                        @{ Expression = { [string]$_.LocalName } },
+                        @{ Expression = { [string]$_.OuterXml } })
+            }
+
+            $innerText = -join @($children | ForEach-Object {
+                    if ($_.NodeType -eq [System.Xml.XmlNodeType]::Text) {
+                        [System.Security.SecurityElement]::Escape([string]$_.Value)
+                    }
+                    else {
+                        ConvertTo-OpenPathCanonicalXmlNode -Node $_
+                    }
+                })
+            return "<$($Node.Name)$attributeText>$innerText</$($Node.Name)>"
+        }
+        ([System.Xml.XmlNodeType]::Text) {
+            return [System.Security.SecurityElement]::Escape([string]$Node.Value)
+        }
+        default {
+            return ''
+        }
+    }
+}
+
 function ConvertTo-OpenPathCanonicalPolicyXml {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][object]$PolicyXml)
@@ -2725,12 +2777,7 @@ function ConvertTo-OpenPathCanonicalPolicyXml {
         $normalized.PreserveWhitespace = $false
         $normalized.Load($reader)
         $reader.Dispose()
-        foreach ($collection in @($normalized.SelectNodes('/AppLockerPolicy/RuleCollection'))) {
-            $rules = @($collection.ChildNodes | Where-Object { $_.NodeType -eq [System.Xml.XmlNodeType]::Element } | Sort-Object @{ Expression = { [string]$_.GetAttribute('Id') } })
-            foreach ($rule in $rules) { [void]$collection.RemoveChild($rule) }
-            foreach ($rule in $rules) { [void]$collection.AppendChild($rule) }
-        }
-        $normalized.OuterXml
+        ConvertTo-OpenPathCanonicalXmlNode -Node $normalized
     }
     catch { throw 'appcontrol_windows_runtime_baseline_invalid' }
 }
