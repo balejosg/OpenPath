@@ -76,7 +76,7 @@ if ([string]::IsNullOrWhiteSpace($ControllerPayloadPath)) {
 
 $controllerResult = $null
 try {
-    $controllerResult = Invoke-OpenPathDisposableWindowsController -Command $ControllerCommand -Mode $Mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $ScenarioId -PayloadPath $ControllerPayloadPath -ArtifactsRoot $ArtifactsRoot
+    $controllerResult = Invoke-OpenPathDisposableWindowsController -Command $ControllerCommand -Mode $Mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $ScenarioId -PayloadPath $ControllerPayloadPath -ArtifactsRoot $ArtifactsRoot -TemplatePath $TemplatePath -PersonalizedExePath $PersonalizedExePath
     if ($controllerResult.status -eq 'blocked') {
         $common.status = 'blocked'
         $common.reasonCode = 'BLOCKED_PLATFORM_VALIDATION'

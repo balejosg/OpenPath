@@ -1179,7 +1179,9 @@ function Invoke-OpenPathDisposableWindowsController {
         [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')][string]$ScenarioId,
         [Parameter(Mandatory = $true)][string]$PayloadPath,
         [Parameter(Mandatory = $true)][ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })][string]$ArtifactsRoot,
-        [ValidateRange(1, 86400)][int]$TimeoutSeconds = 1800
+        [ValidateRange(1, 86400)][int]$TimeoutSeconds = 1800,
+        [string]$TemplatePath = '',
+        [string]$PersonalizedExePath = ''
     )
 
     $phase = Get-OpenPathDisposableCanonicalPhase -Mode $Mode
@@ -1219,6 +1221,16 @@ function Invoke-OpenPathDisposableWindowsController {
     }
     else {
         $payload.desktopHarness = 'tests/e2e/ci/run-windows-offline-installer-exe.ps1'
+    }
+    foreach ($artifact in @(
+            [pscustomobject]@{ Path = $TemplatePath; PathKey = 'templatePath'; HashKey = 'templateSha256'; ErrorCode = 'controller-template-missing' },
+            [pscustomobject]@{ Path = $PersonalizedExePath; PathKey = 'personalizedExePath'; HashKey = 'personalizedExeSha256'; ErrorCode = 'controller-personalized-exe-missing' }
+        )) {
+        if ([string]::IsNullOrWhiteSpace($artifact.Path)) { continue }
+        if (-not (Test-Path -LiteralPath $artifact.Path -PathType Leaf)) { throw $artifact.ErrorCode }
+        $resolved = (Resolve-Path -LiteralPath $artifact.Path -ErrorAction Stop).Path
+        $payload[$artifact.PathKey] = $resolved
+        $payload[$artifact.HashKey] = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     if (Test-Path -LiteralPath $PayloadPath -PathType Leaf) {
         try {
@@ -1261,6 +1273,13 @@ function Invoke-OpenPathDisposableWindowsController {
         $stdout = $process.StandardOutput.ReadToEnd()
         $stderr = $process.StandardError.ReadToEnd()
         if ($process.ExitCode -ne 0) {
+            # Exit code 2 is the documented blocked signal, but it only counts
+            # as blocked with a correlated blocked observation on disk. A bare
+            # exit code must never turn into a passing or blocked result.
+            if ($process.ExitCode -eq 2 -and
+                (Test-OpenPathDisposableBlockedObservation -Path $outputPath -Mode $Mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $ScenarioId -ExpectedNonce $nonce)) {
+                return [pscustomobject][ordered]@{ status = 'blocked'; code = 'BLOCKED_PLATFORM_VALIDATION'; phase = $phase; runId = $RunId; runAttempt = $RunAttempt; scenarioId = $ScenarioId }
+            }
             throw ('controller-exit-{0}' -f $process.ExitCode)
         }
         # Do not report a successful child exit until the phase output is
@@ -1270,6 +1289,30 @@ function Invoke-OpenPathDisposableWindowsController {
         return [pscustomobject][ordered]@{ status = 'completed'; code = 'controller-completed'; phase = $phase; runId = $RunId; runAttempt = $RunAttempt; scenarioId = $ScenarioId; correlationNonce = $nonce; outputPath = $outputPath; stdout = if ($stdout.Length -gt 2048) { $stdout.Substring(0, 2048) } else { $stdout }; stderr = if ($stderr.Length -gt 2048) { $stderr.Substring(0, 2048) } else { $stderr } }
     }
     finally { $process.Dispose() }
+}
+
+function Test-OpenPathDisposableBlockedObservation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][ValidateSet('Prepare', 'Observe', 'AfterReboot', 'Cleanup')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')][string]$RunId,
+        [Parameter(Mandatory = $true)][ValidateRange(1, 2147483647)][int]$RunAttempt,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')][string]$ScenarioId,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{32}$')][string]$ExpectedNonce
+    )
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    try { $observation = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { return $false }
+    foreach ($name in @('status', 'runId', 'runAttempt', 'scenarioId', 'phase', 'correlationNonce')) {
+        if ($null -eq $observation.PSObject.Properties[$name]) { return $false }
+    }
+    $phase = Get-OpenPathDisposableCanonicalPhase -Mode $Mode
+    return ([string]$observation.status -eq 'blocked' -and
+        [string]$observation.runId -eq $RunId -and
+        [int]$observation.runAttempt -eq $RunAttempt -and
+        [string]$observation.scenarioId -eq $ScenarioId -and
+        [string]$observation.phase -eq $phase -and
+        [string]$observation.correlationNonce -eq $ExpectedNonce)
 }
 
 function Read-OpenPathDisposableWindowsObservation {
