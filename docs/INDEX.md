@@ -8,6 +8,7 @@
 ## Start Here
 
 - Windows strict application allowlist: [`docs/windows-strict-application-allowlist.md`](windows-strict-application-allowlist.md)
+- Windows desktop-survival controller (transport dry-run): [`docs/windows-desktop-survival-controller.md`](windows-desktop-survival-controller.md)
 
 - Repo overview: [`README.md`](../README.md)
 - LLM agent workflow: [`AGENTS.md`](../AGENTS.md)
