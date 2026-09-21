@@ -2622,17 +2622,18 @@ exit `$installerExitCode
             $cleanupHelper | Should -Not -Match 'Remove-Item.*Acrylic DNS Proxy'
         }
 
-        It "Reads installer config values from the hashtable returned by the config helper" {
+        It "Reads installer config values through the dictionary returned by the config helper" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw
 
             Assert-ContentContainsAll -Content $content -Needles @(
                 'function Get-OpenPathInstallerConfigValue',
-                '$Config -is [hashtable]',
-                '$Config.ContainsKey($PropertyName)',
+                '$Config -is [System.Collections.IDictionary]',
+                '$Config.Contains($PropertyName)',
                 '$enableNonAdminAppControl = [bool](Get-OpenPathInstallerConfigValue',
                 "-PropertyName 'enableNonAdminAppControl' -DefaultValue `$true",
-                "-PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced'"
+                "-PropertyName 'nonAdminAppControlMode' -DefaultValue 'Enforced'",
+                '$appControlProfile = [string](Get-OpenPathInstallerConfigValue -Config $config -PropertyName ''appControlProfile'''
             )
         }
 

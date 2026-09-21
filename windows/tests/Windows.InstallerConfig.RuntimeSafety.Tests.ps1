@@ -3,6 +3,35 @@ Set-StrictMode -Version Latest
 Describe 'Installer configuration runtime safety' {
     BeforeAll {
         . (Join-Path $PSScriptRoot '..' 'lib' 'install' 'Installer.Config.ps1')
+
+        $installerScriptPath = Join-Path $PSScriptRoot '..' 'Install-OpenPath.ps1'
+        $installerTokens = $null
+        $installerParseErrors = $null
+        $installerAst = [System.Management.Automation.Language.Parser]::ParseFile($installerScriptPath, [ref]$installerTokens, [ref]$installerParseErrors)
+        $installerConfigValueFunction = $installerAst.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-OpenPathInstallerConfigValue'
+            }, $true)
+        @($installerParseErrors).Count | Should -Be 0
+        $installerConfigValueFunction | Should -Not -BeNullOrEmpty
+    }
+
+    It 'reads AppControl intent from the ordered dictionary returned by the config helper' {
+        . ([scriptblock]::Create($installerConfigValueFunction.Extent.Text))
+
+        $config = New-OpenPathInstallerConfig -AgentVersion 'test' -PrimaryDNS '127.0.0.1' -EnforceManagedBrowserBoundary:$true -AppControlProfile StrictApplicationAllowlist
+        Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'appControlProfile' -DefaultValue 'ManagedBrowserCompatibility' | Should -Be 'StrictApplicationAllowlist'
+        Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'nonAdminAppControlMode' -DefaultValue 'AuditOnly' | Should -Be 'Enforced'
+        Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'enableNonAdminAppControl' -DefaultValue $false | Should -BeTrue
+        Get-OpenPathInstallerConfigValue -Config $config -PropertyName 'missingKey' -DefaultValue 'fallback' | Should -Be 'fallback'
+    }
+
+    It 'reads hashtable, property-object, and null configurations without regressing defaults' {
+        . ([scriptblock]::Create($installerConfigValueFunction.Extent.Text))
+
+        Get-OpenPathInstallerConfigValue -Config @{ appControlProfile = 'HashtableProfile' } -PropertyName 'appControlProfile' -DefaultValue 'x' | Should -Be 'HashtableProfile'
+        Get-OpenPathInstallerConfigValue -Config ([pscustomobject]@{ appControlProfile = 'ObjectProfile' }) -PropertyName 'appControlProfile' -DefaultValue 'x' | Should -Be 'ObjectProfile'
+        Get-OpenPathInstallerConfigValue -Config $null -PropertyName 'appControlProfile' -DefaultValue 'null-default' | Should -Be 'null-default'
     }
 
     It 'constructs strict config with an explicit empty catalog and pending boundary' {

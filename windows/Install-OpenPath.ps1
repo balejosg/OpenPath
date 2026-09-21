@@ -359,8 +359,13 @@ function Get-OpenPathInstallerConfigValue {
         [object]$DefaultValue = $null
     )
 
-    if ($Config -is [hashtable] -and $Config.ContainsKey($PropertyName)) {
-        return $Config[$PropertyName]
+    # `New-OpenPathInstallerConfig` returns an [ordered] dictionary, which is an
+    # IDictionary but not a Hashtable, and dictionary keys are not exposed
+    # through PSObject.Properties. Look the key up through IDictionary first so
+    # the configured AppControl profile/mode is never replaced by a default.
+    if ($Config -is [System.Collections.IDictionary]) {
+        if ($Config.Contains($PropertyName)) { return $Config[$PropertyName] }
+        return $DefaultValue
     }
     if ($Config -and $Config.PSObject.Properties[$PropertyName]) {
         return $Config.PSObject.Properties[$PropertyName].Value
