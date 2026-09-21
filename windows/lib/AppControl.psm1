@@ -2803,17 +2803,47 @@ function Invoke-OpenPathAppLockerPackageEvaluation {
         [IO.File]::WriteAllText($policyPath, $PolicyXml, [Text.UTF8Encoding]::new($false))
         $nativePackages = @($Packages)
         foreach ($package in $nativePackages) {
-            if ($package.AppX -isnot [bool] -or -not [bool]$package.AppX -or $null -eq $package.Publisher) {
+            # Test-AppLockerPolicy -Packages binds AppxPackage objects; the
+            # FileInformation readback is not accepted by the cmdlet.
+            if ($null -eq $package.PSObject.Properties['PackageFullName'] -or
+                [string]::IsNullOrWhiteSpace([string]$package.PackageFullName) -or
+                $null -eq $package.PSObject.Properties['Publisher'] -or
+                [string]::IsNullOrWhiteSpace([string]$package.Publisher)) {
                 throw 'appcontrol_windows_runtime_probe_failed'
             }
         }
+        # Runtime packages must be allowed to the restricted target unless the
+        # policy under test explicitly denies them (unapproved browser or
+        # always-denied products) ahead of the broad Microsoft-signed allow.
+        $denyPatterns = @()
+        try {
+            [xml]$policyDocument = $PolicyXml
+            foreach ($collection in @($policyDocument.AppLockerPolicy.RuleCollection)) {
+                if ($null -eq $collection -or [string]$collection.GetAttribute('Type') -ne 'Appx') { continue }
+                foreach ($rule in @($collection.FilePublisherRule)) {
+                    if ($null -eq $rule -or [string]$rule.GetAttribute('Action') -ne 'Deny') { continue }
+                    $condition = $rule.Conditions.FilePublisherCondition
+                    if ($null -eq $condition) { continue }
+                    $deniedProduct = [string]$condition.GetAttribute('ProductName')
+                    if (-not [string]::IsNullOrWhiteSpace($deniedProduct)) { $denyPatterns += $deniedProduct }
+                }
+            }
+        }
+        catch { throw 'appcontrol_windows_runtime_probe_failed' }
+        $expectedDecisions = @(foreach ($package in $nativePackages) {
+                $productName = [string]$package.Name
+                if (@($denyPatterns | Where-Object { $productName -like [string]$_ }).Count -gt 0) { 'Denied' } else { 'Allowed' }
+            })
         $rawDecisions = @(Test-AppLockerPolicy -XmlPolicy $policyPath -Packages $nativePackages -User $UserSid -ErrorAction Stop)
         if ($rawDecisions.Count -ne $nativePackages.Count) { throw 'appcontrol_windows_runtime_probe_failed' }
         $decisions = New-Object System.Collections.Generic.List[object]
-        foreach ($decision in $rawDecisions) {
-            $observed = if ($decision.PSObject.Properties['PolicyDecision']) { [string]$decision.PolicyDecision } elseif ($decision.PSObject.Properties['Decision']) { [string]$decision.Decision } else { '' }
-            if ($observed -ne 'Allowed') { throw 'appcontrol_windows_runtime_probe_failed' }
-            [void]$decisions.Add([PSCustomObject][ordered]@{ PolicyDecision = $observed; Raw = $decision })
+        for ($index = 0; $index -lt $nativePackages.Count; $index++) {
+            $rawDecision = $rawDecisions[$index]
+            $observed = if ($rawDecision.PSObject.Properties['PolicyDecision']) { [string]$rawDecision.PolicyDecision } elseif ($rawDecision.PSObject.Properties['Decision']) { [string]$rawDecision.Decision } else { '' }
+            $expected = [string]$expectedDecisions[$index]
+            $acceptable = if ($expected -eq 'Denied') { @('Denied', 'DeniedByDefault') } else { @('Allowed') }
+            if ($observed -notin $acceptable) { throw 'appcontrol_windows_runtime_probe_failed' }
+            [void]$decisions.Add([PSCustomObject][ordered]@{ Expected = $expected; PolicyDecision = $observed; Raw = $rawDecision })
         }
         foreach ($probePath in @($ProbePaths)) {
             if (-not (Get-Command -Name Get-AppLockerFileInformation -ErrorAction SilentlyContinue)) { throw 'appcontrol_windows_runtime_probe_failed' }
@@ -2823,7 +2853,7 @@ function Invoke-OpenPathAppLockerPackageEvaluation {
             if ($probeDecision.Count -ne 1) { throw 'appcontrol_windows_runtime_probe_failed' }
             $probeObserved = if ($probeDecision[0].PSObject.Properties['PolicyDecision']) { [string]$probeDecision[0].PolicyDecision } elseif ($probeDecision[0].PSObject.Properties['Decision']) { [string]$probeDecision[0].Decision } else { '' }
             if ($probeObserved -notin @('Denied', 'DeniedByDefault')) { throw 'appcontrol_windows_runtime_probe_failed' }
-            [void]$decisions.Add([PSCustomObject][ordered]@{ PolicyDecision = $probeObserved; Raw = $probeDecision[0] })
+            [void]$decisions.Add([PSCustomObject][ordered]@{ Expected = 'Denied'; PolicyDecision = $probeObserved; Raw = $probeDecision[0] })
         }
         return $decisions.ToArray()
     }
@@ -2840,15 +2870,26 @@ function Test-OpenPathWindowsRuntimePolicy {
     if (-not (Test-OpenPathWindowsRuntimeBaseline -Baseline $WindowsRuntimeBaseline)) { return $false }
     try {
         $xml = if ($PolicyXml -is [xml]) { $PolicyXml } else { [xml][string]$PolicyXml }
+        $publisherRules = New-Object System.Collections.Generic.List[object]
+        foreach ($collection in @($xml.AppLockerPolicy.RuleCollection)) {
+            if ($null -eq $collection) { continue }
+            foreach ($rule in @($collection.FilePublisherRule)) {
+                if ($null -ne $rule) { [void]$publisherRules.Add($rule) }
+            }
+        }
         foreach ($package in @($WindowsRuntimeBaseline.Packages)) {
-            $found = @($xml.AppLockerPolicy.RuleCollection.FilePublisherRule | Where-Object {
+            $found = @($publisherRules | Where-Object {
+                $condition = $_.Conditions.FilePublisherCondition
+                if ($null -eq $condition) { return $false }
+                $versionRange = $condition.BinaryVersionRange
+                if ($null -eq $versionRange) { return $false }
                 $_.GetAttribute('Action') -eq 'Allow' -and
                 $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
-                $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq [string]$package.PublisherName -and
-                $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq [string]$package.ProductName -and
-                $_.Conditions.FilePublisherCondition.GetAttribute('BinaryName') -eq [string]$package.BinaryName -and
-                $_.Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('LowSection') -eq '0.0.0.0' -and
-                $_.Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('HighSection') -eq '*'
+                $condition.GetAttribute('PublisherName') -eq [string]$package.PublisherName -and
+                $condition.GetAttribute('ProductName') -eq [string]$package.ProductName -and
+                $condition.GetAttribute('BinaryName') -eq [string]$package.BinaryName -and
+                $versionRange.GetAttribute('LowSection') -eq '0.0.0.0' -and
+                $versionRange.GetAttribute('HighSection') -eq '*'
             })
             if ($found.Count -ne 1) { return $false }
         }

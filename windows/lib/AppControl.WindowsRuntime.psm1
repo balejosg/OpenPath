@@ -319,9 +319,10 @@ function Get-OpenPathWindowsRuntimeBaseline {
             if ($nativeResults.Count -ne 1) { throw $script:RuntimeReasonCodes.InventoryFailed }
             $native = $nativeResults[0]
             [void]$descriptors.Add((Get-OpenPathWindowsRuntimePackageIdentity -Package $package -NativeIdentity $native))
-            # Keep the provider object alive for Test-AppLockerPolicy.  The
-            # serializable descriptor above is only for hashing and XML.
-            [void]$nativeAppLockerPackages.Add($native)
+            # Test-AppLockerPolicy -Packages binds AppxPackage inputs, not the
+            # FileInformation readback.  Keep the inventory package object so the
+            # runtime preflight and health probes stay 1:1 with Packages.
+            [void]$nativeAppLockerPackages.Add($package)
         }
         catch { [void]$reasons.Add([string]$_.Exception.Message) }
     }

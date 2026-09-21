@@ -62,6 +62,7 @@ Describe 'Windows runtime baseline discovery' {
             $baseline.Status | Should -Be 'passed'
             $script:nativePackageCallCount | Should -Be 1
             @($baseline.NativeAppLockerPackages).Count | Should -Be 1
+            @($baseline.NativeAppLockerPackages)[0].Name | Should -Be 'ShellExperienceHost'
             $falseIdentity = [pscustomobject]@{ AppX = $false; Publisher = [pscustomobject]@{ PublisherName = 'CN=Microsoft Windows'; ProductName = 'ShellExperienceHost'; BinaryName = '*' } }
             { Get-OpenPathWindowsRuntimePackageIdentity -Package $root -NativeIdentity $falseIdentity } | Should -Throw 'appcontrol_publisher_identity_invalid'
             $missingPublisher = [pscustomobject]@{ AppX = $true }

@@ -79,8 +79,9 @@ Describe 'AppControl public runtime integration' {
         InModuleScope AppControl {
             $policy = '<AppLockerPolicy Version="1" />'
             $native = [pscustomobject]@{
-                AppX = $true
-                Publisher = [pscustomobject]@{ PublisherName = 'CN=Runtime'; ProductName = 'Runtime'; BinaryName = '*' }
+                Name = 'Runtime'
+                PackageFullName = 'Runtime_1.0.0.0_x64__abc'
+                Publisher = 'CN=Runtime'
             }
             Mock Test-AppLockerPolicy { @([pscustomobject]@{ PolicyDecision = 'AllowedByDefault' }) }
             { Invoke-OpenPathAppLockerPackageEvaluation -PolicyXml $policy -Packages @($native) -UserSid 'S-1-5-21-1' } | Should -Throw 'appcontrol_windows_runtime_probe_failed'
@@ -88,6 +89,64 @@ Describe 'AppControl public runtime integration' {
             $decision = @(Invoke-OpenPathAppLockerPackageEvaluation -PolicyXml $policy -Packages @($native) -UserSid 'S-1-5-21-1')
             $decision.Count | Should -Be 1
             $decision[0].PolicyDecision | Should -Be 'Allowed'
+            $decision[0].Expected | Should -Be 'Allowed'
+        }
+    }
+
+    It 'rejects FileInformation inputs and accepts policy-denied runtime packages' {
+        InModuleScope AppControl {
+            $fileInformation = [pscustomobject]@{
+                AppX = $true
+                Publisher = [pscustomobject]@{ PublisherName = 'CN=Runtime'; ProductName = 'Runtime'; BinaryName = '*' }
+            }
+            { Invoke-OpenPathAppLockerPackageEvaluation -PolicyXml '<AppLockerPolicy Version="1" />' -Packages @($fileInformation) -UserSid 'S-1-5-21-1' } | Should -Throw 'appcontrol_windows_runtime_probe_failed'
+
+            $policy = @'
+<AppLockerPolicy Version="1">
+  <RuleCollection Type="Appx" EnforcementMode="Enabled">
+    <FilePublisherRule Id="00000000-0000-0000-0000-000000000001" Name="deny devtools" Description="deny" UserOrGroupSid="S-1-5-32-545" Action="Deny">
+      <Conditions><FilePublisherCondition PublisherName="*" ProductName="Microsoft.MicrosoftEdgeDevToolsClient" BinaryName="*" /></Conditions>
+    </FilePublisherRule>
+    <FilePublisherRule Id="00000000-0000-0000-0000-000000000002" Name="allow runtime" Description="allow" UserOrGroupSid="S-1-1-0" Action="Allow">
+      <Conditions><FilePublisherCondition PublisherName="CN=Runtime" ProductName="Microsoft.MicrosoftEdgeDevToolsClient" BinaryName="APPX"><BinaryVersionRange LowSection="0.0.0.0" HighSection="*" /></FilePublisherCondition></Conditions>
+    </FilePublisherRule>
+  </RuleCollection>
+</AppLockerPolicy>
+'@
+            $deniedPackage = [pscustomobject]@{
+                Name = 'Microsoft.MicrosoftEdgeDevToolsClient'
+                PackageFullName = 'Microsoft.MicrosoftEdgeDevToolsClient_1.0.0.0_x64__abc'
+                Publisher = 'CN=Microsoft Windows'
+            }
+            Mock Test-AppLockerPolicy { @([pscustomobject]@{ PolicyDecision = 'Denied' }) }
+            $decision = @(Invoke-OpenPathAppLockerPackageEvaluation -PolicyXml $policy -Packages @($deniedPackage) -UserSid 'S-1-5-21-1')
+            $decision.Count | Should -Be 1
+            $decision[0].Expected | Should -Be 'Denied'
+            $decision[0].PolicyDecision | Should -Be 'Denied'
+        }
+    }
+
+    It 'validates runtime policies without non-Appx publisher collections' {
+        InModuleScope AppControl {
+            $package = [pscustomobject]@{ Name = 'ShellExperienceHost'; PublisherName = 'CN=Microsoft Windows'; ProductName = 'ShellExperienceHost'; BinaryName = 'APPX' }
+            $baseline = [pscustomobject]@{ SchemaVersion = 2; Status = 'passed'; OS = [pscustomobject]@{ ProductType = 'client'; Edition = 'Pro'; Build = '26100'; Architecture = 'x64' }; Packages = @($package); Dependencies = @(); BaseHash = ('a' * 64) }
+            Mock Test-OpenPathWindowsRuntimeBaseline { $true }
+            $policy = @'
+<AppLockerPolicy Version="1">
+  <RuleCollection Type="Exe" EnforcementMode="Enabled">
+    <FilePathRule Id="00000000-0000-0000-0000-000000000010" Name="exe" Description="exe" UserOrGroupSid="S-1-1-0" Action="Allow">
+      <Conditions><FilePathCondition Path="%WINDIR%\*" /></Conditions>
+    </FilePathRule>
+  </RuleCollection>
+  <RuleCollection Type="Appx" EnforcementMode="Enabled">
+    <FilePublisherRule Id="00000000-0000-0000-0000-000000000011" Name="runtime" Description="runtime" UserOrGroupSid="S-1-1-0" Action="Allow">
+      <Conditions><FilePublisherCondition PublisherName="CN=Microsoft Windows" ProductName="ShellExperienceHost" BinaryName="APPX"><BinaryVersionRange LowSection="0.0.0.0" HighSection="*" /></FilePublisherCondition></Conditions>
+    </FilePublisherRule>
+  </RuleCollection>
+</AppLockerPolicy>
+'@
+            (Test-OpenPathWindowsRuntimePolicy -WindowsRuntimeBaseline $baseline -PolicyXml ([xml]$policy)) | Should -BeTrue
+            (Test-OpenPathWindowsRuntimePolicy -WindowsRuntimeBaseline $baseline -PolicyXml ([xml]'<AppLockerPolicy Version="1"><RuleCollection Type="Exe" EnforcementMode="Enabled" /></AppLockerPolicy>')) | Should -BeFalse
         }
     }
 
