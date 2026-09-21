@@ -307,6 +307,15 @@ function Get-OpenPathWindowsRuntimeBaseline {
                 }
                 $nativeResults = @(Get-AppLockerFileInformation -Packages @($package) -ErrorAction Stop)
             }
+            if ($nativeResults.Count -eq 0 -and [bool](Get-OpenPathRuntimeProperty $package @('IsFramework'))) {
+                # AppLocker exposes no application identity for AppX framework
+                # packages, so Get-AppLockerFileInformation -Packages returns no
+                # entries for them.  Real Windows clients ship these frameworks
+                # under SystemApps; they are consumed through their parent
+                # packages' dependency edges and are not separately launchable,
+                # so a missing identity must not fail the strict baseline.
+                continue
+            }
             if ($nativeResults.Count -ne 1) { throw $script:RuntimeReasonCodes.InventoryFailed }
             $native = $nativeResults[0]
             [void]$descriptors.Add((Get-OpenPathWindowsRuntimePackageIdentity -Package $package -NativeIdentity $native))

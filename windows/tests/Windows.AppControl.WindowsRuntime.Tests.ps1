@@ -86,6 +86,24 @@ Describe 'Windows runtime baseline discovery' {
         $duplicate.Status | Should -Be 'failed'
     }
 
+    It 'skips AppX framework packages that AppLocker cannot represent' {
+        $framework = [pscustomobject]@{ Name = 'Microsoft.VCLibs.140.00'; PublisherId = 'Microsoft'; Version = '14.0.0.0'; InstallLocation = 'C:\Windows\SystemApps\Microsoft.VCLibs.140.00_1'; Dependencies = @(); IsFramework = $true; AppLockerIdentity = @() }
+        $root = [pscustomobject]@{ Name = 'ShellExperienceHost'; PublisherId = 'Microsoft'; Version = '1.0.0.0'; InstallLocation = 'C:\Windows\SystemApps\ShellExperienceHost_1'; Dependencies = @(); IsFramework = $false; AppLockerIdentity = $script:identity }
+        $baseline = Get-OpenPathWindowsRuntimeBaseline -PackageInventory @($root, $framework) -OsIdentity $script:osClient -WindowsRoot 'C:\Windows' -AppLockerIdentityResolver { param($package) $package.AppLockerIdentity }
+        $baseline.Status | Should -Be 'passed'
+        @($baseline.Packages | ForEach-Object Name) | Should -Not -Contain 'Microsoft.VCLibs.140.00'
+        @($baseline.NativeAppLockerPackages).Count | Should -Be 1
+        @($baseline.Packages).Count | Should -Be @($baseline.NativeAppLockerPackages).Count
+        (Test-OpenPathWindowsRuntimeBaseline -Baseline $baseline) | Should -BeTrue
+    }
+
+    It 'still fails closed when a non-framework package has no AppLocker identity' {
+        $root = [pscustomobject]@{ Name = 'ShellExperienceHost'; PublisherId = 'Microsoft'; Version = '1.0.0.0'; InstallLocation = 'C:\Windows\SystemApps\ShellExperienceHost_1'; Dependencies = @(); IsFramework = $false; AppLockerIdentity = @() }
+        $baseline = Get-OpenPathWindowsRuntimeBaseline -PackageInventory @($root) -OsIdentity $script:osClient -WindowsRoot 'C:\Windows' -AppLockerIdentityResolver { param($package) $package.AppLockerIdentity }
+        $baseline.Status | Should -Be 'failed'
+        $baseline.ReasonCodes | Should -Contain 'appcontrol_windows_runtime_inventory_failed'
+    }
+
     It 'resolves exact dependency publisher, version, architecture, leaves and cycles' {
         $dep = [pscustomobject]@{ Name = 'Runtime.Framework'; PublisherId = 'Trusted'; Version = '2.0.0.0'; Architecture = 'x64'; InstallLocation = 'C:\Windows\SystemApps\Runtime.Framework_2'; Dependencies = @(); AppLockerIdentity = $script:identity }
         $root = [pscustomobject]@{ Name = 'ShellExperienceHost'; PublisherId = 'Trusted'; Version = '1.0.0.0'; Architecture = 'x64'; InstallLocation = 'C:\Windows\SystemApps\ShellExperienceHost_1'; Dependencies = @([pscustomobject]@{ Name = 'Runtime.Framework'; PublisherId = 'Trusted'; MinVersion = '1.0.0.0'; Architecture = 'x64' }); AppLockerIdentity = $script:identity }
