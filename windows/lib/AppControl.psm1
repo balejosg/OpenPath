@@ -2234,7 +2234,7 @@ function Get-OpenPathNonAdminAppControlHealth {
                     foreach ($decision in $runtimePackageDecisions) {
                         [void]$runtimeDecisions.Add([pscustomobject][ordered]@{
                                 Kind = 'windows-runtime-package'
-                                Expected = 'Allowed'
+                                Expected = [string]$decision.Expected
                                 Observed = [string]$decision.PolicyDecision
                             })
                     }
@@ -3135,7 +3135,13 @@ function Set-OpenPathNonAdminAppControl {
                 }
                 $preflightTarget = Get-OpenPathAppControlProbeTarget
                 $preflightDecisions = @(Invoke-OpenPathAppLockerPackageEvaluation -PolicyXml ([string]$mergedPolicyXml.OuterXml) -Packages $nativeRuntimePackages -UserSid ([string]$preflightTarget.UserSid))
-                if ($preflightDecisions.Count -ne $nativeRuntimePackages.Count -or @($preflightDecisions | Where-Object { [string]$_.PolicyDecision -ne 'Allowed' }).Count -gt 0) {
+                if ($preflightDecisions.Count -ne $nativeRuntimePackages.Count -or
+                    @($preflightDecisions | Where-Object {
+                            $observed = [string]$_.PolicyDecision
+                            $expected = [string]$_.Expected
+                            $acceptable = if ($expected -eq 'Denied') { @('Denied', 'DeniedByDefault') } else { @('Allowed') }
+                            $observed -notin $acceptable
+                        }).Count -gt 0) {
                     throw 'appcontrol_windows_runtime_probe_failed'
                 }
             }
