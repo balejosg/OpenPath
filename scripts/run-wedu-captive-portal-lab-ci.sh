@@ -7,9 +7,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/wedu-captive-portal-lab-controller.sh"
 
 PROXMOX_HOST="${OPENPATH_WEDU_CI_PROXMOX_HOST:-whitelist-proxmox}"
-WINDOWS_VMID="${OPENPATH_WEDU_CI_WINDOWS_VMID:-103}"
+WINDOWS_VMID="${OPENPATH_WEDU_CI_WINDOWS_VMID:-105}"
 GATEWAY_VMID="${OPENPATH_WEDU_CI_GATEWAY_VMID:-121}"
-WINDOWS_RUNNER_NAME="${OPENPATH_WEDU_CI_WINDOWS_RUNNER_NAME:-openpath-windows-103}"
+WINDOWS_RUNNER_NAME="${OPENPATH_WEDU_CI_WINDOWS_RUNNER_NAME:-openpath-windows-105}"
 GATEWAY_URL="${OPENPATH_WEDU_LAB_GATEWAY_URL:-http://10.77.0.1}"
 # Dedicated resolver IP that DHCP advertises (DHCP option 6), separate from the
 # gateway/DHCP-server IP 10.77.0.1. This split (DNS != gateway != dhcp-server)

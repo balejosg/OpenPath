@@ -13,7 +13,7 @@ It mutates VM networking and must remain manual/nightly only.
 
 - Full destructive lab: `WEDU captive portal lab`
 - Gateway-only preflight: `WEDU gateway healthcheck`
-- Optional VM 104 preflight: `WEDU Linux client smoke`
+- Optional Linux client preflight: `WEDU Linux client smoke` (requires an explicitly provisioned client VM)
 
 Only `WEDU captive portal lab` is eligible as target-platform release evidence.
 The healthcheck and Linux client smoke lanes are optional preflight only and do not satisfy the promotion gate.
@@ -119,15 +119,18 @@ This lane is useful before running the destructive full lab, but it is not
 release evidence and does not satisfy the promotion gate. The cheap lanes do
 not satisfy the promotion gate.
 
-## VM 104 Linux Client Smoke
+## Linux Client Smoke
 
 `scripts/run-wedu-captive-portal-gateway-client-smoke.sh` is an optional preflight only.
-It acquires the shared lock with mode `linux-client-smoke`,
-asserts VM 103 is not attached to `vmbr10`, snapshots VM 104, moves VM 104 to
-`vmbr10`, verifies DHCP on `10.77.0.0/24` with DNS `10.77.0.1`, confirms
-pre-auth portal interception, authenticates the gateway, confirms post-auth
-external navigation, rolls VM 104 back, restores gateway state, and releases
-the lock.
+It acquires the shared lock with mode `linux-client-smoke`, asserts the Windows
+runner VM (`OPENPATH_WEDU_CI_WINDOWS_VMID`, default 105) is not attached to
+`vmbr10`, snapshots the explicitly provisioned Linux client VM
+(`OPENPATH_WEDU_CI_LINUX_CLIENT_VMID`, no default), moves it to `vmbr10`,
+verifies DHCP on `10.77.0.0/24` with DNS `10.77.0.1`, confirms pre-auth portal
+interception, authenticates the gateway, confirms post-auth external
+navigation, rolls the client VM back, restores gateway state, and releases the
+lock. There is no Linux client VM in the lab inventory, so the lane fails
+closed until one is provisioned and named explicitly.
 
 It validates gateway/client topology without consuming the Windows runner, but
 it does not satisfy the promotion gate.

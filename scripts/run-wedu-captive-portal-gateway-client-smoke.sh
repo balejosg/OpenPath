@@ -6,8 +6,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/wedu-captive-portal-lab-controller.sh"
 
 PROXMOX_HOST="${OPENPATH_WEDU_CI_PROXMOX_HOST:-whitelist-proxmox}"
-WINDOWS_VMID="${OPENPATH_WEDU_CI_WINDOWS_VMID:-103}"
-CLIENT_VMID="${OPENPATH_WEDU_CI_LINUX_CLIENT_VMID:-104}"
+WINDOWS_VMID="${OPENPATH_WEDU_CI_WINDOWS_VMID:-105}"
+CLIENT_VMID="${OPENPATH_WEDU_CI_LINUX_CLIENT_VMID:-}"
 GATEWAY_VMID="${OPENPATH_WEDU_CI_GATEWAY_VMID:-121}"
 GATEWAY_URL="${OPENPATH_WEDU_LAB_GATEWAY_URL:-http://10.77.0.1}"
 EXPECTED_DNS="${OPENPATH_WEDU_LAB_EXPECTED_DNS:-10.77.0.1}"
@@ -83,11 +83,11 @@ set_gateway_mode() {
   guest_exec "$GATEWAY_VMID" "TOKEN=\$(cat /opt/wedu-captive-portal/control-token); curl -fsS -H \"X-Lab-Token: \$TOKEN\" '$GATEWAY_URL$path' >/dev/null; cat /run/wedu-lab-firewall-mode"
 }
 
-assert_vm_103_not_attached_to_vmbr10() {
+assert_windows_runner_not_attached_to_vmbr10() {
   local net0
   net0="$(ssh_proxmox qm config "$WINDOWS_VMID" | sed -n 's/^net0: //p')"
   if printf '%s' "$net0" | grep -q 'bridge=vmbr10'; then
-    fail "VM 103 is already attached to vmbr10; refusing optional VM 104 smoke"
+    fail "Windows runner VM $WINDOWS_VMID is already attached to vmbr10; refusing the optional Linux client smoke"
   fi
 }
 
@@ -101,7 +101,7 @@ capture_client_config() {
 
 move_client_to_lab() {
   local lab_net0
-  SNAPSHOT_NAME="wedu104-$(date -u +%Y%m%dT%H%M%SZ)"
+  SNAPSHOT_NAME="wedu-client-$(date -u +%Y%m%dT%H%M%SZ)"
   ssh_proxmox qm shutdown "$CLIENT_VMID" --timeout 120 || ssh_proxmox qm stop "$CLIENT_VMID"
   ssh_proxmox qm snapshot "$CLIENT_VMID" "$SNAPSHOT_NAME" --description "Before WEDU Linux client smoke"
   SNAPSHOT_CREATED=1
@@ -209,8 +209,11 @@ cleanup() {
 }
 
 main() {
+  if [ -z "$CLIENT_VMID" ]; then
+    fail "WEDU Linux client smoke requires OPENPATH_WEDU_CI_LINUX_CLIENT_VMID (no Linux client VM is provisioned)"
+  fi
   if [ "$DRY_RUN" = "1" ]; then
-    printf 'dry-run: WEDU Linux client smoke would mutate VM 104 through %s\n' "$PROXMOX_HOST"
+    printf 'dry-run: WEDU Linux client smoke would mutate VM %s through %s\n' "$CLIENT_VMID" "$PROXMOX_HOST"
     return 0
   fi
 
@@ -220,7 +223,7 @@ main() {
 
   trap cleanup EXIT
   openpath_wedu_acquire_remote_lock "$PROXMOX_HOST" "$REMOTE_LOCK_DIR" "$LOCK_OWNER" "linux-client-smoke"
-  assert_vm_103_not_attached_to_vmbr10
+  assert_windows_runner_not_attached_to_vmbr10
   wait_qga "$GATEWAY_VMID" || fail "Gateway VM $GATEWAY_VMID QGA is not ready"
   PREVIOUS_GATEWAY_MODE="$(read_gateway_mode)"
   set_gateway_mode /lab/reset >/dev/null

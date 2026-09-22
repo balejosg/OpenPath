@@ -172,7 +172,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.match(result.stdout, /source_mode=runner-checkout/);
     assert.match(result.stdout, /mode=pester/);
     assert.match(result.stdout, /runner_repo_root=<auto-detect-on-runner>/);
-    assert.match(result.stdout, /ssh whitelist-proxmox qm guest exec 103 -- powershell\.exe/);
+    assert.match(result.stdout, /ssh whitelist-proxmox qm guest exec 105 -- powershell\.exe/);
     assert.match(result.stdout, /direct OpenPath Windows runner diagnostic complete/);
   });
 
@@ -187,7 +187,7 @@ describe('direct OpenPath Windows runner diagnostic', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(
       result.stdout,
-      /ssh -i \/tmp\/openpath-wedu-ci -o IdentitiesOnly=yes proxmox\.example qm guest exec 103 -- powershell\.exe/
+      /ssh -i \/tmp\/openpath-wedu-ci -o IdentitiesOnly=yes proxmox\.example qm guest exec 105 -- powershell\.exe/
     );
   });
 

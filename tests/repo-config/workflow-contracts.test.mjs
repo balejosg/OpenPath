@@ -595,7 +595,7 @@ test('self-hosted Windows runner smoke workflow is manual and pinned to the Open
     'self-hosted Windows runner smoke should target only the OpenPath Windows runner labels'
   );
   assert.ok(
-    smokeWorkflow.includes('openpath-windows-103'),
+    smokeWorkflow.includes('openpath-windows-105'),
     'self-hosted Windows runner smoke should verify the expected OpenPath runner name'
   );
   assert.ok(
@@ -838,9 +838,9 @@ test('WEDU cheap captive portal lanes are manual-only and cannot satisfy the ful
     'gateway healthcheck should fail the job when cleanup cannot restore a previously authenticated gateway'
   );
   assert.ok(
-    smokeScript.includes('VM 103') &&
+    smokeScript.includes('Windows runner VM $WINDOWS_VMID is already attached to vmbr10') &&
       smokeScript.includes('vmbr10') &&
-      smokeScript.includes('VM 104'),
+      smokeScript.includes('OPENPATH_WEDU_CI_LINUX_CLIENT_VMID'),
     'Linux client smoke should guard the real Windows runner before moving VM 104'
   );
   assert.ok(
@@ -1059,6 +1059,7 @@ test('required Windows CI runs Pester in an untracked child host without success
   assert.ok(
     ciWorkflow.includes('tests/e2e/ci/run-windows-[^/]+\\.ps1') &&
       ciWorkflow.includes('tests/windows-(desktop-survival|policy-converter-contrast)-') &&
+      ciWorkflow.includes('tests/e2e/ci/desktop-survival/') &&
       ciWorkflow.includes(
         'scripts/(lib/windows-desktop-survival-evidence|validate-windows-(desktop-survival|policy-converter-contrast)-evidence)\\.mjs'
       ),

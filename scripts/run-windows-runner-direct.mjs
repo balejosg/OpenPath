@@ -29,7 +29,7 @@ import {
 } from './lib/windows-direct-diagnostic-modes.mjs';
 
 const DEFAULT_PROXMOX_HOST = 'whitelist-proxmox';
-const DEFAULT_WINDOWS_RUNNER_VMID = '103';
+const DEFAULT_WINDOWS_RUNNER_VMID = '105';
 const DEFAULT_TIMEOUT_SECONDS = '900';
 const DEFAULT_RESULTS_RELATIVE_PATH = 'windows-test-results.xml';
 const DEFAULT_RESULTS_ARTIFACT_NAME = 'windows-test-results.xml';

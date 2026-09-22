@@ -219,7 +219,7 @@ jobs:
     name: PolicyConverter ${{ matrix.mode }} contrast
     needs: [windows-offline-template, windows-personalized-http-e2e, windows-desktop-survival]
     if: ${{ needs.windows-offline-template.result == 'success' && needs.windows-personalized-http-e2e.result == 'success' && needs.windows-desktop-survival.result == 'success' }}
-    runs-on: windows-2025
+    runs-on: [self-hosted, Linux, X64, proxmox, openpath]
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -413,7 +413,7 @@ jobs:
   # ============================================
   windows-desktop-survival:
     name: Windows Desktop Survival
-    runs-on: windows-2025
+    runs-on: [self-hosted, Linux, X64, proxmox, openpath]
     timeout-minutes: 45
     outputs:
       evidence-artifact-id: ${{ steps.desktop-evidence-upload.outputs.artifact-id }}
