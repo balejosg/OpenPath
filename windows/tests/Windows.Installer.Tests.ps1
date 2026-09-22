@@ -2591,6 +2591,14 @@ exit `$installerExitCode
             $cleanupIndex | Should -BeLessThan $copyIndex
         }
 
+        It "Stages the advertised uninstaller into the installed root" {
+            $stagingPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $content = Get-Content $stagingPath -Raw
+
+            $content | Should -Match '\$rootScripts\s*=\s*@\(''OpenPath\.ps1'',\s*''Rotate-Token\.ps1'',\s*''Uninstall-OpenPath\.ps1''\)'
+            $content | Should -Match 'Copy-Item \$sourcePath -Destination \(Join-Path \$OpenPathRoot \$rootScript\)'
+        }
+
         It "Skips blank preflight validation lines before reporting installer errors" {
             $scriptPath = Join-Path $PSScriptRoot ".." "Install-OpenPath.ps1"
             $content = Get-Content $scriptPath -Raw

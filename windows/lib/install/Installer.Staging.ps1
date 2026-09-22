@@ -199,7 +199,11 @@ function Copy-OpenPathInstallerRuntime {
         }
     }
 
-    $rootScripts = @('OpenPath.ps1', 'Rotate-Token.ps1')
+    # Keep the operator-facing lifecycle scripts together in the installed
+    # root. The offline installer summary advertises the uninstaller and the
+    # desktop-survival harness invokes it from C:\OpenPath after a successful
+    # install; omitting it here makes rollback depend on the unpacked payload.
+    $rootScripts = @('OpenPath.ps1', 'Rotate-Token.ps1', 'Uninstall-OpenPath.ps1')
     foreach ($rootScript in $rootScripts) {
         $sourcePath = Join-Path $ScriptDir $rootScript
         if (Test-Path $sourcePath) {
