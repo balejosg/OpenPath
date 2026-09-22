@@ -10,6 +10,8 @@ Describe 'Proxmox Windows lab controller' {
         RebootBootId      = 'boot-2'
         GuestHashesByLeaf = @{}
         ScreendumpResult  = $true
+        HarnessResponses  = @{}
+        RebootSequence    = @()
     }
 }
 
@@ -32,6 +34,12 @@ function New-OpenPathLabTestTransport {
         WaitGuestRebooted     = {
             param($Vmid, $PreviousBootId, $TimeoutSeconds)
             $script:LabState.Calls.Add('WaitGuestRebooted')
+            if ($script:LabState.RebootSequence -and @($script:LabState.RebootSequence).Count -gt 0) {
+                $next = @($script:LabState.RebootSequence)[0]
+                $script:LabState.RebootSequence = @(@($script:LabState.RebootSequence) | Select-Object -Skip 1)
+                $script:LabState.BootId = $next
+                return $next
+            }
             $script:LabState.BootId = $script:LabState.RebootBootId
             $script:LabState.BootId
         }
@@ -53,6 +61,21 @@ function New-OpenPathLabTestTransport {
         GetGuestFileSha256    = { param($Vmid, $GuestPath) $script:LabState.Calls.Add('GetGuestFileSha256'); $script:LabState.GuestHashesByLeaf[$GuestPath] }
         RemoveGuestStaging    = { param($Vmid, $GuestPath) $script:LabState.Calls.Add('RemoveGuestStaging'); $true }
         CaptureScreendump     = { param($Vmid, $LocalPath) $script:LabState.Calls.Add('CaptureScreendump'); $script:LabState.ScreendumpResult }
+        InvokeGuestPowerShell = {
+            param($Vmid, $Script, $TimeoutSeconds)
+            $phaseMatch = [regex]::Match([string]$Script, "-Phase '([^']+)'")
+            $stepMatch = [regex]::Match([string]$Script, "-Step '([^']+)'")
+            $phase = if ($phaseMatch.Success) { $phaseMatch.Groups[1].Value } else { 'unknown' }
+            $step = if ($stepMatch.Success) { $stepMatch.Groups[1].Value } else { 'unknown' }
+            $key = "$phase/$step"
+            $script:LabState.Calls.Add("InvokeGuestPowerShell:$key")
+            if (-not $script:LabState.HarnessResponses.ContainsKey($key)) {
+                throw "desktop-lab-guest-step-failed-$key-test-response-missing"
+            }
+            $response = $script:LabState.HarnessResponses[$key]
+            $json = if ($response -is [string]) { $response } else { $response | ConvertTo-Json -Depth 20 -Compress }
+            return ($json + "`n__HARNESS_EXIT__=0")
+        }
     }
 }
 
@@ -91,6 +114,15 @@ function New-OpenPathLabTestArtifacts {
         TemplateSha  = (Get-FileHash -LiteralPath $template -Algorithm SHA256).Hash.ToLowerInvariant()
         PersonalizedSha = (Get-FileHash -LiteralPath $personalized -Algorithm SHA256).Hash.ToLowerInvariant()
     }
+}
+
+function New-OpenPathLabAcceptanceConfig {
+    $config = New-OpenPathLabTestConfig -Mode 'acceptance'
+    $config | Add-Member -NotePropertyName studentUserName -NotePropertyValue 'alumno' -Force
+    $config | Add-Member -NotePropertyName adminUserName -NotePropertyValue 'opadmin' -Force
+    $config | Add-Member -NotePropertyName guestSecret -NotePropertyValue 'LabTest!Secret1' -Force
+    $config.scenarios['win11-pro-profileless-empty'] | Add-Member -NotePropertyName imageIdentity -NotePropertyValue 'win11-pro-25h2-base' -Force
+    return $config
 }
 
 function New-OpenPathLabTestPayload {
@@ -140,7 +172,7 @@ function Write-OpenPathLabTestConfigFile {
         $config.mode | Should -Be 'transport-dry-run'
         $config.scenarios.PSObject.Properties['win11-pro-profileless-empty'].Value.vmid | Should -Be 107
         $transport = New-OpenPathProxmoxLabTransport -Config $config
-        foreach ($key in @('EnsureLock', 'ReleaseLock', 'GetVmStatus', 'StopVm', 'StartVm', 'RollbackVm', 'WaitGuestReady', 'GetGuestOsInfo', 'GetGuestBootId', 'RequestGuestReboot', 'WaitGuestRebooted', 'PublishArtifact', 'RemoveHostStaging', 'DownloadGuestArtifact', 'GetGuestFileSha256', 'RemoveGuestStaging', 'CaptureScreendump')) {
+        foreach ($key in @('EnsureLock', 'ReleaseLock', 'GetVmStatus', 'StopVm', 'StartVm', 'RollbackVm', 'WaitGuestReady', 'GetGuestOsInfo', 'GetGuestBootId', 'RequestGuestReboot', 'WaitGuestRebooted', 'PublishArtifact', 'RemoveHostStaging', 'DownloadGuestArtifact', 'GetGuestFileSha256', 'RemoveGuestStaging', 'CaptureScreendump', 'InvokeGuestPowerShell')) {
             $transport.ContainsKey($key) | Should -BeTrue
         }
     }
@@ -256,7 +288,7 @@ function Write-OpenPathLabTestConfigFile {
             Should -Throw '*desktop-lab-artifact-identity-missing*'
     }
 
-    It 'rejects an unmapped scenario and acceptance mode' {
+    It 'rejects an unmapped scenario and an unsupported lab mode' {
         $artifacts = New-OpenPathLabTestArtifacts -Root $TestDrive
         $payload = New-OpenPathLabTestPayload -ArtifactsRoot $TestDrive -TemplatePath $artifacts.Template -PersonalizedExePath $artifacts.Personalized -Overrides @{ scenarioId = 'win11-unknown-scenario' }
         $transport = New-OpenPathLabTestTransport
@@ -264,7 +296,7 @@ function Write-OpenPathLabTestConfigFile {
             Should -Throw '*desktop-lab-scenario-unmapped*'
 
         $payload = New-OpenPathLabTestPayload -ArtifactsRoot $TestDrive -TemplatePath $artifacts.Template -PersonalizedExePath $artifacts.Personalized
-        { Invoke-OpenPathProxmoxControllerPhase -Payload $payload -Config (New-OpenPathLabTestConfig -Mode 'acceptance') -Transport $transport } |
+        { Invoke-OpenPathProxmoxControllerPhase -Payload $payload -Config (New-OpenPathLabTestConfig -Mode 'unsupported-mode') -Transport $transport } |
             Should -Throw '*desktop-lab-acceptance-not-implemented*'
     }
 
@@ -336,6 +368,89 @@ function Write-OpenPathLabTestConfigFile {
         $second.status | Should -Be 'passed'
         $second.observation.cleanup.statePresent | Should -BeFalse
         $script:LabState.Calls.Contains('ReleaseLock') | Should -BeTrue
+    }
+
+    It 'acceptance mode runs the matrix step sequence and emits release-eligible evidence' {
+        $artifacts = New-OpenPathLabTestArtifacts -Root $TestDrive
+        $harnessSource = (Resolve-Path (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\desktop-survival\Invoke-OpenPathDesktopSurvivalGuest.ps1')).Path
+        $harnessHash = (Get-FileHash -LiteralPath $harnessSource -Algorithm SHA256).Hash.ToLowerInvariant()
+        $script:LabState.GuestHashesByLeaf = @{
+            'template.exe'                             = $artifacts.TemplateSha
+            'personalized.exe'                         = $artifacts.PersonalizedSha
+            'Invoke-OpenPathDesktopSurvivalGuest.ps1'  = $harnessHash
+        }
+        $script:LabState.RebootSequence = @('boot-2', 'boot-3', 'boot-4', 'boot-5', 'boot-6')
+        $probes = @{
+            probes                    = @{
+                allowedBrowser   = @{ expected = 'allowed'; ran = $true }
+                allowedSystemExe = @{ expected = 'allowed'; ran = $true }
+                deniedBrowser    = @{ expected = 'denied'; ran = $false }
+                deniedUserExe    = @{ expected = 'denied'; ran = $false }
+                deniedScript     = @{ expected = 'denied'; ran = $false }
+                deniedMsi        = @{ expected = 'denied'; ran = $false }
+                packagedApp      = @{ expected = 'denied'; ran = $false }
+            }
+            fixtures                  = @{ exeAndDll = 'passed'; msiAndScript = 'passed'; packagedAppExecution = 'passed' }
+            criticalUnexpectedDenials = @()
+        }
+        $script:LabState.HarnessResponses = @{
+            'prepare/install'             = @{ status = 'passed'; failures = @(); body = @{ state = @{
+                policyBeforeSha256      = ('c' * 64)
+                policyAfterSha256       = ('d' * 64)
+                initialProfileExisted   = $false
+                catalogApplicationCount = 0
+                installSummary          = @{ exitCode = 0; seconds = 12.5 }
+                config                  = @{ appControlProfile = 'StrictApplicationAllowlist'; appControlCommitState = 'committed'; installState = 'complete' }
+                groupMembers            = @('OP-LAB\alumno')
+                tasks                   = @('OpenPath-Watchdog')
+                uninstaller             = $true
+            } } }
+            'observe/admin-autologon'     = @{ status = 'passed'; failures = @(); body = @{ autologon = 'opadmin' } }
+            'observe/admin-verify'        = @{ status = 'passed'; failures = @(); body = @{ session = 'OP-LAB\opadmin' } }
+            'observe/student-autologon'   = @{ status = 'passed'; failures = @(); body = @{ autologon = 'alumno' } }
+            'observe/student-verify'      = @{ status = 'passed'; failures = @(); body = @{ session = 'OP-LAB\alumno'; firstStudentInteractiveLogon = $true; studentLogons = @(@{ logonType = '2'; user = 'alumno' }) } }
+            'observe/boundary'            = @{ status = 'passed'; failures = @(); body = $probes }
+            'afterReboot/login-screen'    = @{ status = 'passed'; failures = @(); body = @{ autologon = 'cleared' } }
+            'afterReboot/admin-autologon' = @{ status = 'passed'; failures = @(); body = @{ autologon = 'opadmin' } }
+            'afterReboot/admin-verify'    = @{ status = 'passed'; failures = @(); body = @{ session = 'OP-LAB\opadmin' } }
+            'afterReboot/student-autologon' = @{ status = 'passed'; failures = @(); body = @{ autologon = 'alumno' } }
+            'afterReboot/student-verify'  = @{ status = 'passed'; failures = @(); body = @{ session = 'OP-LAB\alumno' } }
+            'afterReboot/boundary'        = @{ status = 'passed'; failures = @(); body = $probes }
+            'cleanup/uninstall'           = @{ status = 'passed'; failures = @(); body = @{ state = @{ uninstallFailed = $false; uninstallExitCode = 0 } } }
+            'cleanup/verify-clean'        = @{ status = 'passed'; failures = @(); body = @{ clean = $true; policyEqualsBefore = $true } }
+        }
+        $transport = New-OpenPathLabTestTransport
+        $config = New-OpenPathLabAcceptanceConfig
+        $prepare = Invoke-OpenPathProxmoxControllerPhase -Payload (New-OpenPathLabTestPayload -ArtifactsRoot $TestDrive -TemplatePath $artifacts.Template -PersonalizedExePath $artifacts.Personalized -Phase 'prepare') -Config $config -Transport $transport
+        $prepare.status | Should -Be 'passed'
+        $prepare.synthetic | Should -BeFalse
+        $prepare.observation.state.installSummary.exitCode | Should -Be 0
+        $prepare.observation.guestState.policyAfterSha256 | Should -Be ('d' * 64)
+        $observe = Invoke-OpenPathProxmoxControllerPhase -Payload (New-OpenPathLabTestPayload -ArtifactsRoot $TestDrive -TemplatePath $artifacts.Template -PersonalizedExePath $artifacts.Personalized -Phase 'observe') -Config $config -Transport $transport
+        $observe.status | Should -Be 'passed'
+        $observe.observation.firstStudentInteractiveLogon.session | Should -Be 'OP-LAB\alumno'
+        $afterReboot = Invoke-OpenPathProxmoxControllerPhase -Payload (New-OpenPathLabTestPayload -ArtifactsRoot $TestDrive -TemplatePath $artifacts.Template -PersonalizedExePath $artifacts.Personalized -Phase 'afterReboot') -Config $config -Transport $transport
+        $afterReboot.status | Should -Be 'passed'
+        $cleanup = Invoke-OpenPathProxmoxControllerPhase -Payload (New-OpenPathLabTestPayload -ArtifactsRoot $TestDrive -TemplatePath $artifacts.Template -PersonalizedExePath $artifacts.Personalized -Phase 'cleanup') -Config $config -Transport $transport
+        $cleanup.status | Should -Be 'passed'
+        $cleanup.synthetic | Should -BeFalse
+        $cleanup.scenario.sourceCommitSha | Should -Be ('a' * 40)
+        $cleanup.scenario.appControlProfile | Should -Be 'StrictApplicationAllowlist'
+        $cleanup.scenario.catalogApplicationCount | Should -Be 0
+        $cleanup.scenario.bootIdBefore | Should -Not -Be $cleanup.scenario.bootIdAfter
+        $cleanup.scenario.fixtures.exeAndDll | Should -Be 'passed'
+        $cleanup.scenario.fixtures.msiAndScript | Should -Be 'passed'
+        $cleanup.scenario.fixtures.packagedAppExecution | Should -Be 'passed'
+        $cleanup.scenario.criticalUnexpectedDenials.Count | Should -Be 0
+        foreach ($name in @('preRebootAdminDesktop', 'firstStudentInteractiveLogon', 'preRebootStudentBoundary', 'loginScreenAfterReboot', 'postRebootAdminDesktop', 'postRebootStudentDesktop', 'postRebootStudentBoundary', 'uninstallOrRollback', 'cleanup')) {
+            $cleanup.scenario.observations.$name | Should -Be 'passed'
+        }
+        $calls = $script:LabState.Calls
+        $calls.Contains('PublishArtifact:Invoke-OpenPathDesktopSurvivalGuest.ps1') | Should -BeTrue
+        foreach ($key in @('prepare/install', 'observe/admin-verify', 'observe/student-verify', 'observe/boundary', 'afterReboot/login-screen', 'afterReboot/admin-verify', 'afterReboot/student-verify', 'afterReboot/boundary', 'cleanup/uninstall', 'cleanup/verify-clean')) {
+            $calls.Contains("InvokeGuestPowerShell:$key") | Should -BeTrue
+        }
+        $calls.Contains('ReleaseLock') | Should -BeTrue
     }
 
     It 'CLI writes a correlated blocked observation and exits 2 when the lab config is missing' {

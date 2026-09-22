@@ -26,7 +26,7 @@ $script:OpenPathLabRequiredTransportKeys = @(
     'EnsureLock', 'ReleaseLock', 'GetVmStatus', 'StopVm', 'StartVm', 'RollbackVm',
     'WaitGuestReady', 'GetGuestOsInfo', 'GetGuestBootId', 'RequestGuestReboot',
     'WaitGuestRebooted', 'PublishArtifact', 'RemoveHostStaging', 'DownloadGuestArtifact',
-    'GetGuestFileSha256', 'RemoveGuestStaging', 'CaptureScreendump'
+    'GetGuestFileSha256', 'RemoveGuestStaging', 'CaptureScreendump', 'InvokeGuestPowerShell'
 )
 
 function Test-OpenPathLabBlockedErrorCode {
@@ -435,6 +435,475 @@ function Invoke-OpenPathLabCleanupPhase {
     return New-OpenPathLabObservation -Payload $Payload -Body $body
 }
 
+#region Acceptance mode
+
+function ConvertTo-OpenPathLabPowerShellLiteral {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    return "'" + ($Value -replace "'", "''") + "'"
+}
+
+function Get-OpenPathLabAcceptanceHarnessSourcePath {
+    $ciRoot = Split-Path -Parent $PSScriptRoot
+    return (Join-Path $ciRoot 'desktop-survival\Invoke-OpenPathDesktopSurvivalGuest.ps1')
+}
+
+function Get-OpenPathLabAcceptanceSettings {
+    param([Parameter(Mandatory = $true)][object]$Config)
+    $student = [string](Get-OpenPathLabField -InputObject $Config -Name 'studentUserName')
+    if ([string]::IsNullOrWhiteSpace($student)) { $student = 'alumno' }
+    $admin = [string](Get-OpenPathLabField -InputObject $Config -Name 'adminUserName')
+    if ([string]::IsNullOrWhiteSpace($admin)) { $admin = 'opadmin' }
+    $secret = [string](Get-OpenPathLabField -InputObject $Config -Name 'guestSecret')
+    if ([string]::IsNullOrWhiteSpace($secret)) {
+        $secret = 'OpDsk' + [guid]::NewGuid().ToString('N').Substring(0, 14) + '!aA1'
+    }
+    foreach ($user in @($student, $admin)) {
+        if ($user -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw 'desktop-lab-config-invalid' }
+    }
+    return [pscustomobject]@{ StudentUserName = $student; AdminUserName = $admin; GuestSecret = $secret }
+}
+
+function Read-OpenPathLabAcceptanceState {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'desktop-lab-acceptance-state-missing' }
+    try { return (Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop) }
+    catch { throw 'desktop-lab-acceptance-state-invalid' }
+}
+
+function Write-OpenPathLabAcceptanceState {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][object]$Value)
+    $parent = Split-Path -Parent $Path
+    if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+    $temporary = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        [IO.File]::WriteAllText($temporary, ($Value | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $Path -Force
+    }
+    finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+}
+
+function ConvertTo-OpenPathLabAcceptanceStateTable {
+    param([Parameter(Mandatory = $true)][object]$State)
+    $table = [ordered]@{}
+    foreach ($property in @($State.PSObject.Properties)) { $table[$property.Name] = $property.Value }
+    return $table
+}
+
+function New-OpenPathLabAcceptanceObservation {
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][string]$Phase,
+        [Parameter(Mandatory = $true)][object]$Body,
+        [object]$Scenario = $null
+    )
+    $observation = [ordered]@{
+        schemaVersion    = 2
+        status           = 'passed'
+        synthetic        = $false
+        runId            = [string](Get-OpenPathLabField -InputObject $Payload -Name 'runId')
+        runAttempt       = [int](Get-OpenPathLabField -InputObject $Payload -Name 'runAttempt')
+        sourceCommitSha  = [string](Get-OpenPathLabField -InputObject $Payload -Name 'sourceCommitSha')
+        scenarioId       = [string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId')
+        phase            = $Phase
+        correlationNonce = [string](Get-OpenPathLabField -InputObject $Payload -Name 'correlationNonce')
+        observation      = $Body
+    }
+    if ($null -ne $Scenario) { $observation.scenario = $Scenario }
+    return [pscustomobject]$observation
+}
+
+function Send-OpenPathLabAcceptanceStep {
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][object]$Paths,
+        [Parameter(Mandatory = $true)][string]$Phase,
+        [Parameter(Mandatory = $true)][string]$Step,
+        [Parameter(Mandatory = $true)][object]$Settings,
+        [Parameter(Mandatory = $true)][string]$HarnessGuestPath,
+        [string]$TemplateGuestPath = '',
+        [string]$PersonalizedGuestPath = '',
+        [int]$TimeoutSeconds = 900
+    )
+    $resultPath = $Paths.GuestDir.TrimEnd('\') + "\result-$Phase-$Step.json"
+    $statePath = $Paths.GuestDir.TrimEnd('\') + '\guest-state.json'
+    $identity = ConvertTo-OpenPathLabPowerShellLiteral -Value ([string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId'))
+    $arguments = @(
+        '& powershell.exe -NoProfile -ExecutionPolicy Bypass -File ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $HarnessGuestPath),
+        '-Phase ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $Phase),
+        '-Step ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $Step),
+        '-ScenarioId ' + $identity,
+        '-ResultPath ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $resultPath),
+        '-StudentUserName ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $Settings.StudentUserName),
+        '-AdminUserName ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $Settings.AdminUserName),
+        '-Secret ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $Settings.GuestSecret),
+        '-StatePath ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $statePath)
+    )
+    if ($TemplateGuestPath) { $arguments += '-TemplatePath ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $TemplateGuestPath) }
+    if ($PersonalizedGuestPath) { $arguments += '-PersonalizedExePath ' + (ConvertTo-OpenPathLabPowerShellLiteral -Value $PersonalizedGuestPath) }
+    $arguments += '| Out-String'
+    $script = ($arguments -join ' ') + "`nWrite-Output ('__HARNESS_EXIT__=' + [string]`$LASTEXITCODE)"
+    $output = & $Transport.InvokeGuestPowerShell $Vmid $script $TimeoutSeconds
+    $exitMatch = [regex]::Match([string]$output, '__HARNESS_EXIT__=(-?\d+)')
+    $exitCode = if ($exitMatch.Success) { [int]$exitMatch.Groups[1].Value } else { -999 }
+    $jsonText = [string]$output
+    $start = $jsonText.IndexOf('{')
+    $end = $jsonText.LastIndexOf('}')
+    if ($start -lt 0 -or $end -le $start) { throw "desktop-lab-guest-result-missing-$Phase-$Step" }
+    try { $harness = $jsonText.Substring($start, $end - $start + 1) | ConvertFrom-Json -ErrorAction Stop }
+    catch { throw "desktop-lab-guest-result-invalid-$Phase-$Step" }
+    if ([string]$harness.status -ne 'passed' -or $exitCode -ne 0) {
+        $failures = @($harness.failures) -join ','
+        throw "desktop-lab-guest-step-failed-$Phase-$Step-$failures"
+    }
+    return $harness
+}
+
+function Get-OpenPathLabAcceptanceCapture {
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    $artifactsRoot = [string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')
+    $target = Join-Path (Join-Path $artifactsRoot 'screens') "$Name.ppm"
+    $captured = [bool](& $Transport.CaptureScreendump $Vmid $target)
+    return [ordered]@{ name = $Name; captured = $captured; path = "screens/$Name.ppm" }
+}
+
+function Wait-OpenPathLabAcceptanceSession {
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][object]$Paths,
+        [Parameter(Mandatory = $true)][object]$Settings,
+        [Parameter(Mandatory = $true)][string]$HarnessGuestPath,
+        [Parameter(Mandatory = $true)][string]$Phase,
+        [Parameter(Mandatory = $true)][string]$Step,
+        [int]$TimeoutSeconds = 420
+    )
+        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $harness = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths `
+                -Phase $Phase -Step $Step -Settings $Settings -HarnessGuestPath $HarnessGuestPath -TimeoutSeconds 300
+        }
+        catch {
+            Start-Sleep -Seconds 10
+            continue
+        }
+        $session = [string](Get-OpenPathLabField -InputObject $harness.body -Name 'session')
+        if (-not [string]::IsNullOrWhiteSpace($session)) { return $harness }
+        Start-Sleep -Seconds 10
+    }
+    throw "desktop-lab-session-timeout-$Phase-$Step"
+}
+
+function Invoke-OpenPathLabAcceptanceGuestSetup {
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][object]$Paths,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+    $specs = @(Get-OpenPathLabArtifactSpecs -Payload $Payload -GuestDir $Paths.GuestDir)
+    $guestHashes = [ordered]@{}
+    $harnessGuestPath = $Paths.GuestDir.TrimEnd('\') + '\guest-harness.ps1'
+    try {
+        foreach ($spec in $specs) {
+            $published = & $Transport.PublishArtifact $Paths.StagingDir $spec.Path
+            $url = [string](Get-OpenPathLabField -InputObject $published -Name 'url')
+            if ([string]::IsNullOrWhiteSpace($url)) { throw 'desktop-lab-artifact-publish-failed' }
+            & $Transport.DownloadGuestArtifact $Vmid $url $spec.GuestPath | Out-Null
+            $guestHash = [string](& $Transport.GetGuestFileSha256 $Vmid $spec.GuestPath)
+            if (-not [string]::Equals($guestHash, $spec.Sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw 'desktop-lab-guest-artifact-hash-mismatch'
+            }
+            $guestHashes[(Split-Path -Leaf $spec.GuestPath)] = $guestHash.ToLowerInvariant()
+        }
+        $harnessSource = Get-OpenPathLabAcceptanceHarnessSourcePath
+        if (-not (Test-Path -LiteralPath $harnessSource -PathType Leaf)) { throw 'desktop-lab-harness-source-missing' }
+        $harnessHash = (Get-FileHash -LiteralPath $harnessSource -Algorithm SHA256).Hash.ToLowerInvariant()
+        $published = & $Transport.PublishArtifact $Paths.StagingDir $harnessSource
+        $url = [string](Get-OpenPathLabField -InputObject $published -Name 'url')
+        if ([string]::IsNullOrWhiteSpace($url)) { throw 'desktop-lab-artifact-publish-failed' }
+        & $Transport.DownloadGuestArtifact $Vmid $url $harnessGuestPath | Out-Null
+        $guestHash = [string](& $Transport.GetGuestFileSha256 $Vmid $harnessGuestPath)
+        if (-not [string]::Equals($guestHash, $harnessHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'desktop-lab-guest-harness-hash-mismatch'
+        }
+    }
+    finally {
+        try { & $Transport.RemoveHostStaging $Paths.StagingDir | Out-Null } catch {}
+    }
+    return [pscustomobject]@{
+        TemplateGuestPath       = $specs[0].GuestPath
+        PersonalizedGuestPath   = $specs[1].GuestPath
+        HarnessGuestPath        = $harnessGuestPath
+        GuestHashes             = $guestHashes
+    }
+}
+
+function Start-OpenPathLabAcceptanceVm {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][string]$Snapshot,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
+        [Parameter(Mandatory = $true)][bool]$RestoreBaseline
+    )
+    $status = [string](& $Transport.GetVmStatus $Vmid)
+    if ($status -eq 'running') { & $Transport.StopVm $Vmid | Out-Null }
+    if ($RestoreBaseline) { & $Transport.RollbackVm $Vmid $Snapshot | Out-Null }
+    & $Transport.StartVm $Vmid | Out-Null
+    if (-not (& $Transport.WaitGuestReady $Vmid $TimeoutSeconds)) { throw 'desktop-lab-guest-not-ready' }
+}
+
+function Start-OpenPathLabAcceptanceReboot {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][string]$PreviousBootId,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+    & $Transport.RequestGuestReboot $Vmid | Out-Null
+    $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $PreviousBootId $TimeoutSeconds)
+    if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'desktop-lab-guest-not-ready' }
+    if ($bootId -eq $PreviousBootId) { throw 'desktop-lab-boot-id-unchanged' }
+    return $bootId
+}
+
+function Invoke-OpenPathLabAcceptancePrepare {
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][string]$Snapshot,
+        [Parameter(Mandatory = $true)][object]$Paths,
+        [Parameter(Mandatory = $true)][string]$StatePath,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
+        [Parameter(Mandatory = $true)][bool]$RestoreBaseline
+    )
+    $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
+    $scenario = Get-OpenPathLabScenario -Config $Config -ScenarioId ([string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId'))
+    Start-OpenPathLabAcceptanceVm -Transport $Transport -Vmid $Vmid -Snapshot $Snapshot -TimeoutSeconds $TimeoutSeconds -RestoreBaseline $RestoreBaseline
+    $os = & $Transport.GetGuestOsInfo $Vmid
+    $expectedEdition = [string](Get-OpenPathLabField -InputObject $scenario -Name 'expectedEditionId')
+    $edition = [string](Get-OpenPathLabField -InputObject $os -Name 'editionId')
+    if ($expectedEdition -and $edition -ne $expectedEdition) { throw 'desktop-lab-edition-mismatch' }
+    $bootId = [string](& $Transport.GetGuestBootId $Vmid)
+    if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'desktop-lab-guest-not-ready' }
+    $setup = Invoke-OpenPathLabAcceptanceGuestSetup -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -TimeoutSeconds $TimeoutSeconds
+    $harness = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths `
+        -Phase 'prepare' -Step 'install' -Settings $settings -HarnessGuestPath $setup.HarnessGuestPath `
+        -TemplateGuestPath $setup.TemplateGuestPath -PersonalizedGuestPath $setup.PersonalizedGuestPath -TimeoutSeconds 1800
+    $body = $harness.body
+    $state = [ordered]@{
+        phase                     = 'prepared'
+        scenarioId                = [string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId')
+        os                        = $os
+        bootIdBefore              = $bootId
+        bootIdLatest              = $bootId
+        policyBeforeSha256        = [string](Get-OpenPathLabField -InputObject $body.state -Name 'policyBeforeSha256')
+        policyAfterSha256         = [string](Get-OpenPathLabField -InputObject $body.state -Name 'policyAfterSha256')
+        initialProfileExisted     = [bool](Get-OpenPathLabField -InputObject $body.state -Name 'initialProfileExisted')
+        catalogApplicationCount   = [int](Get-OpenPathLabField -InputObject $body.state -Name 'catalogApplicationCount')
+        install                   = Get-OpenPathLabField -InputObject $body.state -Name 'installSummary'
+        config                    = Get-OpenPathLabField -InputObject $body.state -Name 'config'
+        groupMembers              = Get-OpenPathLabField -InputObject $body.state -Name 'groupMembers'
+        tasks                     = Get-OpenPathLabField -InputObject $body.state -Name 'tasks'
+        uninstaller               = [bool](Get-OpenPathLabField -InputObject $body.state -Name 'uninstaller')
+        harnessGuestPath          = $setup.HarnessGuestPath
+        templateGuestPath         = $setup.TemplateGuestPath
+        personalizedGuestPath     = $setup.PersonalizedGuestPath
+    }
+    Write-OpenPathLabAcceptanceState -Path $StatePath -Value $state
+    $body | Add-Member -NotePropertyName guestState -NotePropertyValue $state -Force
+    return New-OpenPathLabAcceptanceObservation -Payload $Payload -Phase 'prepare' -Body $body
+}
+
+function Invoke-OpenPathLabAcceptanceObserve {
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][object]$Paths,
+        [Parameter(Mandatory = $true)][string]$StatePath,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+    $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
+    $state = ConvertTo-OpenPathLabAcceptanceStateTable -State (Read-OpenPathLabAcceptanceState -Path $StatePath)
+    $harnessGuestPath = [string](Get-OpenPathLabField -InputObject $state -Name 'harnessGuestPath')
+    $body = [ordered]@{}
+
+    Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'observe' -Step 'admin-autologon' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 120 | Out-Null
+    $state.bootIdLatest = Start-OpenPathLabAcceptanceReboot -Transport $Transport -Vmid $Vmid -PreviousBootId ([string](Get-OpenPathLabField -InputObject $state -Name 'bootIdLatest')) -TimeoutSeconds $TimeoutSeconds
+    $adminVerify = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Phase 'observe' -Step 'admin-verify'
+    $body.preRebootAdminDesktop = [ordered]@{ session = [string](Get-OpenPathLabField -InputObject $adminVerify.body -Name 'session') }
+    $state.preRebootAdminSessionVerified = $true
+    $body.screendumps = @(Get-OpenPathLabAcceptanceCapture -Payload $Payload -Transport $Transport -Vmid $Vmid -Name 'pre-reboot-admin-desktop')
+
+    Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'observe' -Step 'student-autologon' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 120 | Out-Null
+    $state.bootIdLatest = Start-OpenPathLabAcceptanceReboot -Transport $Transport -Vmid $Vmid -PreviousBootId ([string](Get-OpenPathLabField -InputObject $state -Name 'bootIdLatest')) -TimeoutSeconds $TimeoutSeconds
+    $studentVerify = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Phase 'observe' -Step 'student-verify'
+    $firstLogon = [bool](Get-OpenPathLabField -InputObject $studentVerify.body -Name 'firstStudentInteractiveLogon')
+    if (-not $firstLogon) { throw 'desktop-lab-first-student-logon-missing' }
+    $state.firstStudentLogonVerified = $true
+    $body.firstStudentInteractiveLogon = [ordered]@{
+        session     = [string](Get-OpenPathLabField -InputObject $studentVerify.body -Name 'session')
+        studentLogons = Get-OpenPathLabField -InputObject $studentVerify.body -Name 'studentLogons'
+    }
+    $body.screendumps = @($body.screendumps) + @(Get-OpenPathLabAcceptanceCapture -Payload $Payload -Transport $Transport -Vmid $Vmid -Name 'first-student-logon')
+
+    $boundary = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'observe' -Step 'boundary' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 1800
+    $state.preRebootProbes = $boundary.body
+    if (@($boundary.body.criticalUnexpectedDenials).Count -gt 0) { throw 'desktop-lab-pre-reboot-boundary-unexpected' }
+    $body.preRebootStudentBoundary = $boundary.body
+    $state.bootIdAfterObserve = [string](Get-OpenPathLabField -InputObject $state -Name 'bootIdLatest')
+    Write-OpenPathLabAcceptanceState -Path $StatePath -Value $state
+    return New-OpenPathLabAcceptanceObservation -Payload $Payload -Phase 'observe' -Body $body
+}
+
+function Invoke-OpenPathLabAcceptanceAfterReboot {
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][object]$Paths,
+        [Parameter(Mandatory = $true)][string]$StatePath,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+    $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
+    $state = ConvertTo-OpenPathLabAcceptanceStateTable -State (Read-OpenPathLabAcceptanceState -Path $StatePath)
+    $harnessGuestPath = [string](Get-OpenPathLabField -InputObject $state -Name 'harnessGuestPath')
+    $body = [ordered]@{ screendumps = @() }
+
+    Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'afterReboot' -Step 'login-screen' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 120 | Out-Null
+    $state.bootIdAfter = Start-OpenPathLabAcceptanceReboot -Transport $Transport -Vmid $Vmid -PreviousBootId ([string](Get-OpenPathLabField -InputObject $state -Name 'bootIdLatest')) -TimeoutSeconds $TimeoutSeconds
+    Start-Sleep -Seconds 20
+    $loginScreen = Get-OpenPathLabAcceptanceCapture -Payload $Payload -Transport $Transport -Vmid $Vmid -Name 'login-screen-after-reboot'
+    if (-not $loginScreen.captured) { throw 'desktop-lab-login-screen-capture-failed' }
+    $body.loginScreenAfterReboot = $loginScreen
+    $state.loginScreenCaptured = $true
+    $body.screendumps = @($body.screendumps) + @($loginScreen)
+
+    Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'afterReboot' -Step 'admin-autologon' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 120 | Out-Null
+    $state.bootIdLatest = Start-OpenPathLabAcceptanceReboot -Transport $Transport -Vmid $Vmid -PreviousBootId ([string](Get-OpenPathLabField -InputObject $state -Name 'bootIdAfter')) -TimeoutSeconds $TimeoutSeconds
+    $adminVerify = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Phase 'afterReboot' -Step 'admin-verify'
+    $body.postRebootAdminDesktop = [ordered]@{ session = [string](Get-OpenPathLabField -InputObject $adminVerify.body -Name 'session') }
+    $state.postRebootAdminSessionVerified = $true
+    $body.screendumps = @($body.screendumps) + @(Get-OpenPathLabAcceptanceCapture -Payload $Payload -Transport $Transport -Vmid $Vmid -Name 'post-reboot-admin-desktop')
+
+    Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'afterReboot' -Step 'student-autologon' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 120 | Out-Null
+    $state.bootIdLatest = Start-OpenPathLabAcceptanceReboot -Transport $Transport -Vmid $Vmid -PreviousBootId ([string](Get-OpenPathLabField -InputObject $state -Name 'bootIdLatest')) -TimeoutSeconds $TimeoutSeconds
+    $studentVerify = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Phase 'afterReboot' -Step 'student-verify'
+    $body.postRebootStudentDesktop = [ordered]@{ session = [string](Get-OpenPathLabField -InputObject $studentVerify.body -Name 'session') }
+    $state.postRebootStudentSessionVerified = $true
+    $body.screendumps = @($body.screendumps) + @(Get-OpenPathLabAcceptanceCapture -Payload $Payload -Transport $Transport -Vmid $Vmid -Name 'post-reboot-student-desktop')
+
+    $boundary = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'afterReboot' -Step 'boundary' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 1800
+    $state.postRebootProbes = $boundary.body
+    if (@($boundary.body.criticalUnexpectedDenials).Count -gt 0) { throw 'desktop-lab-post-reboot-boundary-unexpected' }
+    $body.postRebootStudentBoundary = $boundary.body
+    Write-OpenPathLabAcceptanceState -Path $StatePath -Value $state
+    return New-OpenPathLabAcceptanceObservation -Payload $Payload -Phase 'afterReboot' -Body $body
+}
+
+function Invoke-OpenPathLabAcceptanceCleanup {
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][string]$Snapshot,
+        [Parameter(Mandatory = $true)][object]$Paths,
+        [Parameter(Mandatory = $true)][string]$StatePath,
+        [Parameter(Mandatory = $true)][bool]$RestoreBaseline
+    )
+    $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
+    $state = Read-OpenPathLabAcceptanceState -Path $StatePath
+    $scenario = Get-OpenPathLabScenario -Config $Config -ScenarioId ([string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId'))
+    $harnessGuestPath = [string](Get-OpenPathLabField -InputObject $state -Name 'harnessGuestPath')
+
+    $uninstall = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'cleanup' -Step 'uninstall' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 1800
+    $verify = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'cleanup' -Step 'verify-clean' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600
+    $clean = [bool](Get-OpenPathLabField -InputObject $verify.body -Name 'clean')
+    if (-not $clean) { throw 'desktop-lab-cleanup-not-clean' }
+
+    if ($RestoreBaseline) {
+        & $Transport.StopVm $Vmid | Out-Null
+        & $Transport.RollbackVm $Vmid $Snapshot | Out-Null
+    }
+    try { & $Transport.RemoveGuestStaging $Vmid $Paths.GuestDir | Out-Null } catch {}
+
+    $preProbes = Get-OpenPathLabField -InputObject $state -Name 'preRebootProbes'
+    $postProbes = Get-OpenPathLabField -InputObject $state -Name 'postRebootProbes'
+    $preFixtures = Get-OpenPathLabField -InputObject $preProbes -Name 'fixtures'
+    $postFixtures = Get-OpenPathLabField -InputObject $postProbes -Name 'fixtures'
+    $fixtures = [ordered]@{}
+    foreach ($name in @('exeAndDll', 'msiAndScript', 'packagedAppExecution')) {
+        $pre = [string](Get-OpenPathLabField -InputObject $preFixtures -Name $name)
+        $post = [string](Get-OpenPathLabField -InputObject $postFixtures -Name $name)
+        $fixtures[$name] = if ($pre -eq 'passed' -and $post -eq 'passed') { 'passed' } else { 'failed' }
+    }
+    $imageIdentity = [string](Get-OpenPathLabField -InputObject $scenario -Name 'imageIdentity')
+    if ([string]::IsNullOrWhiteSpace($imageIdentity)) { $imageIdentity = $Snapshot }
+    $os = Get-OpenPathLabField -InputObject $state -Name 'os'
+    $scenarioObject = [ordered]@{}
+    foreach ($property in @($os.PSObject.Properties)) { $scenarioObject[$property.Name] = $property.Value }
+    $observations = [ordered]@{
+        preRebootAdminDesktop        = if ([bool](Get-OpenPathLabField -InputObject $state -Name 'preRebootAdminSessionVerified')) { 'passed' } else { 'failed' }
+        firstStudentInteractiveLogon = if ([bool](Get-OpenPathLabField -InputObject $state -Name 'firstStudentLogonVerified')) { 'passed' } else { 'failed' }
+        preRebootStudentBoundary     = if (@($preProbes.criticalUnexpectedDenials).Count -eq 0) { 'passed' } else { 'failed' }
+        loginScreenAfterReboot       = if ([bool](Get-OpenPathLabField -InputObject $state -Name 'loginScreenCaptured')) { 'passed' } else { 'failed' }
+        postRebootAdminDesktop       = if ([bool](Get-OpenPathLabField -InputObject $state -Name 'postRebootAdminSessionVerified')) { 'passed' } else { 'failed' }
+        postRebootStudentDesktop     = if ([bool](Get-OpenPathLabField -InputObject $state -Name 'postRebootStudentSessionVerified')) { 'passed' } else { 'failed' }
+        postRebootStudentBoundary    = if (@($postProbes.criticalUnexpectedDenials).Count -eq 0) { 'passed' } else { 'failed' }
+        uninstallOrRollback          = if ([bool](Get-OpenPathLabField -InputObject $uninstall.body.state -Name 'uninstallFailed')) { 'failed' } else { 'passed' }
+        cleanup                      = if ($clean) { 'passed' } else { 'failed' }
+    }
+    if (@($observations.Values | Where-Object { $_ -ne 'passed' }).Count -gt 0) { throw 'desktop-lab-observations-failed' }
+    if (@($fixtures.Values | Where-Object { $_ -ne 'passed' }).Count -gt 0) { throw 'desktop-lab-fixtures-failed' }
+    $scenarioMetadata = [ordered]@{
+        scenarioId                = [string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId')
+        sourceCommitSha           = [string](Get-OpenPathLabField -InputObject $Payload -Name 'sourceCommitSha')
+        templateSha256            = [string](Get-OpenPathLabField -InputObject $Payload -Name 'templateSha256')
+        personalizedExeSha256     = [string](Get-OpenPathLabField -InputObject $Payload -Name 'personalizedExeSha256')
+        policyBeforeSha256        = [string](Get-OpenPathLabField -InputObject $state -Name 'policyBeforeSha256')
+        policyAfterSha256         = [string](Get-OpenPathLabField -InputObject $state -Name 'policyAfterSha256')
+        os                        = $scenarioObject
+        imageIdentity             = $imageIdentity
+        snapshotIdentity          = $Snapshot
+        appControlProfile         = 'StrictApplicationAllowlist'
+        catalogApplicationCount   = [int](Get-OpenPathLabField -InputObject $state -Name 'catalogApplicationCount')
+        initialProfileExisted     = [bool](Get-OpenPathLabField -InputObject $state -Name 'initialProfileExisted')
+        bootIdBefore              = [string](Get-OpenPathLabField -InputObject $state -Name 'bootIdBefore')
+        bootIdAfter               = [string](Get-OpenPathLabField -InputObject $state -Name 'bootIdAfter')
+        synthetic                 = $false
+        observations              = $observations
+        criticalUnexpectedDenials = @()
+        fixtures                  = $fixtures
+    }
+    if ($scenarioMetadata.bootIdBefore -eq $scenarioMetadata.bootIdAfter) { throw 'desktop-lab-boot-id-unchanged' }
+    $body = [ordered]@{
+        uninstall        = Get-OpenPathLabField -InputObject $uninstall.body -Name 'state'
+        verify           = $verify.body
+        snapshot         = $Snapshot
+        guestStagingRemoved = $true
+        baselineRestored = $RestoreBaseline
+    }
+    return New-OpenPathLabAcceptanceObservation -Payload $Payload -Phase 'cleanup' -Body $body -Scenario $scenarioMetadata
+}
+
+#endregion
+
 function Invoke-OpenPathProxmoxControllerPhase {
     <#
     .SYNOPSIS
@@ -460,7 +929,7 @@ function Invoke-OpenPathProxmoxControllerPhase {
     $correlationNonce = [string](Get-OpenPathLabRequiredField -InputObject $Payload -Name 'correlationNonce' -Code 'desktop-lab-payload-invalid')
     if ($correlationNonce -notmatch '^[0-9a-fA-F]{32}$') { throw 'desktop-lab-payload-invalid' }
     $artifactsRoot = [string](Get-OpenPathLabRequiredField -InputObject $Payload -Name 'artifactsRoot' -Code 'desktop-lab-payload-invalid')
-    if ([string](Get-OpenPathLabField -InputObject $Config -Name 'mode') -ne 'transport-dry-run') { throw 'desktop-lab-acceptance-not-implemented' }
+    if ([string](Get-OpenPathLabField -InputObject $Config -Name 'mode') -notin @('transport-dry-run', 'acceptance')) { throw 'desktop-lab-acceptance-not-implemented' }
     foreach ($key in $script:OpenPathLabRequiredTransportKeys) {
         if (-not $Transport.Contains($key)) { throw 'desktop-lab-transport-invalid' }
     }
@@ -478,6 +947,17 @@ function Invoke-OpenPathProxmoxControllerPhase {
     if ($null -ne $restoreBaselineValue) { $restoreBaseline = [bool]$restoreBaselineValue }
     if (-not (& $Transport.EnsureLock $lockFile $lockOwner $timeoutSeconds)) { throw 'desktop-lab-lock-busy' }
     try {
+        $mode = [string](Get-OpenPathLabField -InputObject $Config -Name 'mode')
+        if ($mode -eq 'acceptance') {
+            $acceptanceStatePath = Join-Path $artifactsRoot 'acceptance-state.json'
+            switch ($phase) {
+                'prepare' { return Invoke-OpenPathLabAcceptancePrepare -Payload $Payload -Config $Config -Transport $Transport -Vmid $vmid -Snapshot $snapshot -Paths $paths -StatePath $acceptanceStatePath -TimeoutSeconds $timeoutSeconds -RestoreBaseline $restoreBaseline }
+                'observe' { return Invoke-OpenPathLabAcceptanceObserve -Payload $Payload -Config $Config -Transport $Transport -Vmid $vmid -Paths $paths -StatePath $acceptanceStatePath -TimeoutSeconds $timeoutSeconds }
+                'afterReboot' { return Invoke-OpenPathLabAcceptanceAfterReboot -Payload $Payload -Config $Config -Transport $Transport -Vmid $vmid -Paths $paths -StatePath $acceptanceStatePath -TimeoutSeconds $timeoutSeconds }
+                'cleanup' { return Invoke-OpenPathLabAcceptanceCleanup -Payload $Payload -Config $Config -Transport $Transport -Vmid $vmid -Snapshot $snapshot -Paths $paths -StatePath $acceptanceStatePath -RestoreBaseline $restoreBaseline }
+                default { throw 'desktop-lab-payload-invalid' }
+            }
+        }
         switch ($phase) {
             'prepare' { return Invoke-OpenPathLabPreparePhase -Payload $Payload -Config $Config -Transport $Transport -Vmid $vmid -Snapshot $snapshot -Paths $paths -StatePath $statePath -TimeoutSeconds $timeoutSeconds -RestoreBaseline $restoreBaseline }
             'observe' { return Invoke-OpenPathLabObservePhase -Payload $Payload -Config $Config -Transport $Transport -StatePath $statePath -TimeoutSeconds $timeoutSeconds }
@@ -543,7 +1023,7 @@ function Get-OpenPathLabGuestOsInfo {
     param([string]$SshCommand, [string]$SshHost, [int]$Vmid)
     $script = @'
 $cv = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
-[ordered]@{ productType = 'client'; editionId = [string]$cv.EditionID; productName = [string]$cv.ProductName; build = [string]$cv.CurrentBuild; architecture = [string]$env:PROCESSOR_ARCHITECTURE } | ConvertTo-Json -Compress
+[ordered]@{ productType = 'client'; editionId = [string]$cv.EditionID; productName = [string]$cv.ProductName; version = [string]$cv.DisplayVersion; build = "$($cv.CurrentBuild).$($cv.UBR)"; architecture = [string]$env:PROCESSOR_ARCHITECTURE } | ConvertTo-Json -Compress
 '@
     $output = Invoke-OpenPathLabQgaScript -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid -PowerShell $script
     return (ConvertFrom-OpenPathLabJsonText -Text $output)
@@ -767,6 +1247,11 @@ test -s "$dump"
             return $false
         }
         catch { return $false }
+    }.GetNewClosure()
+    $transport.InvokeGuestPowerShell = {
+        param($Vmid, $Script, $TimeoutSeconds)
+        $text = & $h.Qga $lab.SshCommand $lab.SshHost -Vmid ([int]$Vmid) -PowerShell ([string]$Script) -TimeoutSeconds ([int]$TimeoutSeconds)
+        return [string]$text
     }.GetNewClosure()
     return $transport
 }

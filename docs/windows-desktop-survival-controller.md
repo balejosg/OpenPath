@@ -1,25 +1,18 @@
-# Windows desktop-survival controller (transport dry-run)
+# Windows desktop-survival controller
 
 The release qualification for Windows requires an external disposable-VM
 controller that runs `tests/e2e/ci/run-windows-desktop-survival.ps1` phases
 outside the guest. This document covers the Proxmox-backed controller and its
-phase-1 scope: transport, protocol, exact-artifact transfer and correlated
-observations.
-
-Phase 1 is **not** release evidence. Acceptance still requires the four-scenario
-Windows 11 Professional/Education matrix with interactive desktop probes,
-externally observed login screens and a full install/reboot/uninstall cycle.
-Observations produced here are marked `dryRun: true` and `acceptanceEligible:
-false`, so `scripts/validate-windows-desktop-survival-evidence.mjs` rejects
-them by construction.
+two modes: transport dry-run and release acceptance.
 
 ## Components
 
-| Path                                                                 | Purpose                                                            |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `tests/e2e/ci/controllers/proxmox-disposable-windows-controller.ps1` | Controller CLI implementing the `DisposableWindowsTarget` contract |
-| `tests/e2e/ci/controllers/ProxmoxWindowsLab.psm1`                    | Transport-injectable orchestrator plus the real Proxmox transport  |
-| `windows/tests/Windows.ProxmoxWindowsLab.Tests.ps1`                  | Unit tests with a fake transport (no hypervisor access)            |
+| Path                                                                    | Purpose                                                            |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `tests/e2e/ci/controllers/proxmox-disposable-windows-controller.ps1`    | Controller CLI implementing the `DisposableWindowsTarget` contract |
+| `tests/e2e/ci/controllers/ProxmoxWindowsLab.psm1`                       | Transport-injectable orchestrator plus the real Proxmox transport  |
+| `tests/e2e/ci/desktop-survival/Invoke-OpenPathDesktopSurvivalGuest.ps1` | In-guest harness executed through the QEMU guest agent             |
+| `windows/tests/Windows.ProxmoxWindowsLab.Tests.ps1`                     | Unit tests with a fake transport (no hypervisor access)            |
 
 ## Lab configuration
 
@@ -30,7 +23,7 @@ reads `OPENPATH_DESKTOP_LAB_CONFIG`, defaulting to
 ```json
 {
   "schemaVersion": 1,
-  "mode": "transport-dry-run",
+  "mode": "acceptance",
   "sshHost": "<proxmox-ssh-alias>",
   "sshCommand": "ssh",
   "scpCommand": "scp",
@@ -40,20 +33,85 @@ reads `OPENPATH_DESKTOP_LAB_CONFIG`, defaulting to
   "httpPort": 18081,
   "timeoutSeconds": 1800,
   "restoreBaseline": true,
+  "studentUserName": "alumno",
+  "adminUserName": "opadmin",
   "scenarios": {
     "win11-pro-profileless-empty": {
       "vmid": 0,
       "baselineSnapshot": "<snapshot-name>",
       "expectedEditionId": "Professional",
-      "initialProfileExisted": false
+      "initialProfileExisted": false,
+      "imageIdentity": "<operator image label>"
     }
   }
 }
 ```
 
-`restoreBaseline` defaults to `true`. Set it to `false` only when the target VM
-holds a snapshot chain that must not be touched; the controller then never rolls
-back and only stops the VM during cleanup.
+- `mode: "transport-dry-run"` performs artifact transport and boot-id checks
+  only. Observations are marked `dryRun: true` / `acceptanceEligible: false`
+  and can never qualify a release.
+- `mode: "acceptance"` runs the full matrix below and emits release-eligible
+  evidence (`synthetic: false`, strict AppControl identity, boundary probes,
+  rollback verification).
+- `restoreBaseline` defaults to `true`. Set it to `false` only when the target
+  VM holds a snapshot chain that must not be touched; the controller then never
+  rolls back and only stops the VM during cleanup.
+- `guestSecret` is optional. When absent the controller generates a per-run
+  credential and rotates the two lab accounts inside the disposable guest.
+
+## Acceptance matrix
+
+The suite runs four scenarios through the controller, sequentially, each against
+its own baseline snapshot:
+
+| Scenario                            | Edition      | Student profile at baseline |
+| ----------------------------------- | ------------ | --------------------------- |
+| `win11-pro-profileless-empty`       | Professional | absent                      |
+| `win11-pro-existing-empty`          | Professional | present and empty           |
+| `win11-education-profileless-empty` | Education    | absent                      |
+| `win11-education-existing-empty`    | Education    | present and empty           |
+
+Per scenario the controller performs:
+
+- **prepare**: restore baseline, boot, verify guest/edition, transport the exact
+  template and personalized candidate (hash-verified on the host and inside the
+  guest), upload the in-guest harness, install the candidate as SYSTEM, and
+  record the AppLocker policy hash before and after the strict commit.
+- **observe**: enable the admin autologon, reboot, capture the admin desktop,
+  enable the student autologon, reboot, require a real first student interactive
+  logon (Security 4624 type 2/10) and capture the student desktop, then run the
+  restricted-student boundary probes and fixture checks in the student's
+  interactive session.
+- **afterReboot**: clear autologon, reboot, capture the login screen, then
+  repeat the admin and student interactive sessions and the boundary probes
+  after the reboot.
+- **cleanup**: run the installed `Uninstall-OpenPath.ps1`, verify that the
+  runtime, the restricted group, the scheduled tasks and the OpenPath AppLocker
+  rules are gone, stop the VM and restore the baseline.
+
+The scenario object required by
+`scripts/lib/windows-desktop-survival-evidence.mjs` is attached to the cleanup
+observation; every phase observation carries `synthetic: false`, the run
+identity, the source commit and the correlation nonce.
+
+## Boundary probes and fixtures
+
+Probes run as the restricted student in the student's interactive session
+through a one-shot scheduled task (`/it`), and each probe records whether the
+process actually started:
+
+| Fixture                | Probe                                      | Expected                   |
+| ---------------------- | ------------------------------------------ | -------------------------- |
+| `exeAndDll`            | approved browser (Firefox)                 | allowed                    |
+| `exeAndDll`            | in-box signed Win32 binary (`charmap.exe`) | allowed                    |
+| -                      | unapproved browser (Edge)                  | denied                     |
+| -                      | user-writable executable copy              | denied                     |
+| `msiAndScript`         | user-writable PowerShell script            | denied (marker absent)     |
+| `msiAndScript`         | user-writable MSI package                  | denied (1625 policy block) |
+| `packagedAppExecution` | unapproved packaged app (`calc.exe`)       | denied                     |
+
+`criticalUnexpectedDenials` must remain empty: an approved surface that is
+denied, or a denied surface that runs, fails the phase.
 
 ## Controller contract
 
@@ -66,21 +124,8 @@ back and only stops the VM during cleanup.
 
 Exit codes: `0` passed (correlated observation written), `1` phase failed,
 `2` `BLOCKED_PLATFORM_VALIDATION` (missing lab configuration, unmapped scenario,
-acceptance mode, transport unavailable). A bare exit `2` is never accepted as
+unsupported mode, transport unavailable). A bare exit `2` is never accepted as
 blocked: the adapter requires a correlated blocked observation on disk.
-
-Per-phase behaviour:
-
-- **Prepare**: acquire lock, validate local artifacts against the payload
-  identity, boot the VM (optional baseline restore), record OS identity and boot
-  id, publish both artifacts over temporary HTTP staging, download them in the
-  guest and verify SHA256 there.
-- **Observe**: require the prepared state, unchanged boot id, guest readiness
-  and guest artifact hashes.
-- **AfterReboot**: request a reboot, require a different boot id, capture a
-  console screendump and re-verify guest artifacts.
-- **Cleanup**: always remove host/guest staging, stop the VM, release the lock;
-  restore the baseline only when `restoreBaseline` is enabled.
 
 ## Running a dry-run
 
@@ -116,4 +161,4 @@ Invoke-Pester -Path windows/tests/Windows.DisposableWindowsTarget.Tests.ps1
 ```
 
 The unit tests never touch a hypervisor. The real transport is exercised only
-by the operator dry-run against an authorized disposable VM.
+by the operator dry-run or acceptance run against an authorized disposable VM.
