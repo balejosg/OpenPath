@@ -263,7 +263,7 @@ describe('Users View', () => {
 
     expect(filename).toBe('users.csv');
     expect(mimeType).toBe('text/csv;charset=utf-8');
-    expect(csvContent).toContain('Nombre,Email,Roles,Estado');
+    expect(csvContent).toContain('Name,Email,Roles,Status');
     expect(csvContent).toContain('Admin QA,admin@example.com,Admin,Active');
     expect(csvContent).toContain('Teacher QA,teacher@example.com,Teacher,Inactive');
   });

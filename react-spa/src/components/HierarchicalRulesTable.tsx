@@ -127,8 +127,8 @@ export const HierarchicalRulesTable: React.FC<HierarchicalRulesTableProps> = ({
               )}
               <th className="px-4 py-3 w-8"></th>
               <th className="px-4 py-3">{t('hierarchicalRulesTable.columnDomainRule')}</th>
-              <th className="px-4 py-3 w-32">Estado</th>
-              {!readOnly && <th className="px-4 py-3 w-24 text-right">Acciones</th>}
+              <th className="px-4 py-3 w-32">Status</th>
+              {!readOnly && <th className="px-4 py-3 w-24 text-right">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">

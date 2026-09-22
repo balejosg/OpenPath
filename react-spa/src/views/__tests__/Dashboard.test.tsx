@@ -454,7 +454,7 @@ describe('Dashboard', () => {
       renderDashboard({ onNavigateToRules });
 
       await waitFor(() => {
-        expect(screen.getByText(/Nombre \(A-Z\)/)).toBeInTheDocument();
+        expect(screen.getByText(/Name \(A-Z\)/)).toBeInTheDocument();
       });
     });
 

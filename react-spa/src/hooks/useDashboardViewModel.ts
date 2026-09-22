@@ -35,17 +35,17 @@ export interface DashboardGroup {
 export type DashboardSortOption = 'name' | 'rules' | 'recent';
 
 export const DASHBOARD_SORT_OPTIONS: { value: DashboardSortOption; label: string }[] = [
-  { value: 'name', label: 'Nombre (A-Z)' },
+  { value: 'name', label: 'Name (A-Z)' },
   { value: 'rules', label: 'Most rules' },
-  { value: 'recent', label: 'Recientes' },
+  { value: 'recent', label: 'Recent' },
 ];
 
 export function useDashboardSortOptions(): { value: DashboardSortOption; label: string }[] {
   const t = useT();
   return [
-    { value: 'name', label: 'Nombre (A-Z)' },
+    { value: 'name', label: 'Name (A-Z)' },
     { value: 'rules', label: t('dashboard.sort.mostRules') },
-    { value: 'recent', label: 'Recientes' },
+    { value: 'recent', label: 'Recent' },
   ];
 }
 
