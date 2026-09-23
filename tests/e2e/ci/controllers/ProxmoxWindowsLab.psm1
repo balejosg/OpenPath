@@ -1027,17 +1027,30 @@ function Invoke-OpenPathLabQgaScript {
         [Parameter(Mandatory = $true)][string]$SshHost,
         [Parameter(Mandatory = $true)][int]$Vmid,
         [Parameter(Mandatory = $true)][string]$PowerShell,
-        [int]$TimeoutSeconds = 120
+        [int]$TimeoutSeconds = 120,
+        [int]$Attempts = 4
     )
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($PowerShell))
     $arguments = @('qm', 'guest', 'exec', [string]$Vmid, '--timeout', [string]$TimeoutSeconds, '--', 'powershell.exe', '-NoProfile', '-EncodedCommand', $encoded)
-    $raw = Invoke-OpenPathLabSsh -SshCommand $SshCommand -SshHost $SshHost -ArgumentList $arguments
-    $result = ConvertFrom-OpenPathLabJsonText -Text $raw
-    $exitCode = Get-OpenPathLabField -InputObject $result -Name 'exitcode'
-    if ($null -ne $exitCode -and [int]$exitCode -ne 0) { throw 'desktop-lab-guest-query-failed' }
-    $output = Get-OpenPathLabField -InputObject $result -Name 'out-data'
-    if ($null -eq $output) { throw 'desktop-lab-guest-query-failed' }
-    return [string]$output
+    # The guest agent is briefly unavailable while a requested reboot is still
+    # settling. Retry transient query failures instead of failing the phase.
+    $lastError = $null
+    for ($attempt = 1; $attempt -le [Math]::Max(1, $Attempts); $attempt++) {
+        try {
+            $raw = Invoke-OpenPathLabSsh -SshCommand $SshCommand -SshHost $SshHost -ArgumentList $arguments
+            $result = ConvertFrom-OpenPathLabJsonText -Text $raw
+            $exitCode = Get-OpenPathLabField -InputObject $result -Name 'exitcode'
+            if ($null -ne $exitCode -and [int]$exitCode -ne 0) { throw 'desktop-lab-guest-query-failed' }
+            $output = Get-OpenPathLabField -InputObject $result -Name 'out-data'
+            if ($null -eq $output) { throw 'desktop-lab-guest-query-failed' }
+            return [string]$output
+        }
+        catch {
+            $lastError = $_
+            if ($attempt -lt $Attempts) { Start-Sleep -Seconds (3 * $attempt) }
+        }
+    }
+    throw $lastError
 }
 
 function Get-OpenPathLabGuestOsInfo {
