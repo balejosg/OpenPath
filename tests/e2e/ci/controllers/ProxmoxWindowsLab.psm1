@@ -721,6 +721,7 @@ function Invoke-OpenPathLabAcceptancePrepare {
         harnessGuestPath          = $setup.HarnessGuestPath
         templateGuestPath         = $setup.TemplateGuestPath
         personalizedGuestPath     = $setup.PersonalizedGuestPath
+        guestSecret               = $settings.GuestSecret
     }
     Write-OpenPathLabAcceptanceState -Path $StatePath -Value $state
     $body | Add-Member -NotePropertyName guestState -NotePropertyValue $state -Force
@@ -737,10 +738,12 @@ function Invoke-OpenPathLabAcceptanceObserve {
         [Parameter(Mandatory = $true)][string]$StatePath,
         [Parameter(Mandatory = $true)][int]$TimeoutSeconds
     )
-    $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
     $state = ConvertTo-OpenPathLabAcceptanceStateTable -State (Read-OpenPathLabAcceptanceState -Path $StatePath)
+    $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
+    $persistedSecret = [string](Get-OpenPathLabField -InputObject $state -Name 'guestSecret')
+    if (-not [string]::IsNullOrWhiteSpace($persistedSecret)) { $settings.GuestSecret = $persistedSecret }
     $harnessGuestPath = [string](Get-OpenPathLabField -InputObject $state -Name 'harnessGuestPath')
-    $body = [ordered]@{}
+    $body = [ordered]@{ screendumps = @() }
 
     Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'observe' -Step 'admin-autologon' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 120 | Out-Null
     $state.bootIdLatest = Start-OpenPathLabAcceptanceReboot -Transport $Transport -Vmid $Vmid -PreviousBootId ([string](Get-OpenPathLabField -InputObject $state -Name 'bootIdLatest')) -TimeoutSeconds $TimeoutSeconds
@@ -749,6 +752,7 @@ function Invoke-OpenPathLabAcceptanceObserve {
     $state.preRebootAdminSessionVerified = $true
     $body.screendumps = @(Get-OpenPathLabAcceptanceCapture -Payload $Payload -Transport $Transport -Vmid $Vmid -Name 'pre-reboot-admin-desktop')
 
+    Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'observe' -Step 'boundary-arm' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300 | Out-Null
     Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'observe' -Step 'student-autologon' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 120 | Out-Null
     $state.bootIdLatest = Start-OpenPathLabAcceptanceReboot -Transport $Transport -Vmid $Vmid -PreviousBootId ([string](Get-OpenPathLabField -InputObject $state -Name 'bootIdLatest')) -TimeoutSeconds $TimeoutSeconds
     $studentVerify = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Phase 'observe' -Step 'student-verify'
@@ -761,7 +765,7 @@ function Invoke-OpenPathLabAcceptanceObserve {
     }
     $body.screendumps = @($body.screendumps) + @(Get-OpenPathLabAcceptanceCapture -Payload $Payload -Transport $Transport -Vmid $Vmid -Name 'first-student-logon')
 
-    $boundary = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'observe' -Step 'boundary' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 1800
+    $boundary = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'observe' -Step 'boundary-collect' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 900
     $state.preRebootProbes = $boundary.body
     if (@($boundary.body.criticalUnexpectedDenials).Count -gt 0) { throw 'desktop-lab-pre-reboot-boundary-unexpected' }
     $body.preRebootStudentBoundary = $boundary.body
@@ -780,8 +784,10 @@ function Invoke-OpenPathLabAcceptanceAfterReboot {
         [Parameter(Mandatory = $true)][string]$StatePath,
         [Parameter(Mandatory = $true)][int]$TimeoutSeconds
     )
-    $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
     $state = ConvertTo-OpenPathLabAcceptanceStateTable -State (Read-OpenPathLabAcceptanceState -Path $StatePath)
+    $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
+    $persistedSecret = [string](Get-OpenPathLabField -InputObject $state -Name 'guestSecret')
+    if (-not [string]::IsNullOrWhiteSpace($persistedSecret)) { $settings.GuestSecret = $persistedSecret }
     $harnessGuestPath = [string](Get-OpenPathLabField -InputObject $state -Name 'harnessGuestPath')
     $body = [ordered]@{ screendumps = @() }
 
@@ -801,6 +807,7 @@ function Invoke-OpenPathLabAcceptanceAfterReboot {
     $state.postRebootAdminSessionVerified = $true
     $body.screendumps = @($body.screendumps) + @(Get-OpenPathLabAcceptanceCapture -Payload $Payload -Transport $Transport -Vmid $Vmid -Name 'post-reboot-admin-desktop')
 
+    Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'afterReboot' -Step 'boundary-arm' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 300 | Out-Null
     Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'afterReboot' -Step 'student-autologon' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 120 | Out-Null
     $state.bootIdLatest = Start-OpenPathLabAcceptanceReboot -Transport $Transport -Vmid $Vmid -PreviousBootId ([string](Get-OpenPathLabField -InputObject $state -Name 'bootIdLatest')) -TimeoutSeconds $TimeoutSeconds
     $studentVerify = Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Settings $settings -HarnessGuestPath $harnessGuestPath -Phase 'afterReboot' -Step 'student-verify'
@@ -808,7 +815,7 @@ function Invoke-OpenPathLabAcceptanceAfterReboot {
     $state.postRebootStudentSessionVerified = $true
     $body.screendumps = @($body.screendumps) + @(Get-OpenPathLabAcceptanceCapture -Payload $Payload -Transport $Transport -Vmid $Vmid -Name 'post-reboot-student-desktop')
 
-    $boundary = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'afterReboot' -Step 'boundary' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 1800
+    $boundary = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'afterReboot' -Step 'boundary-collect' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 900
     $state.postRebootProbes = $boundary.body
     if (@($boundary.body.criticalUnexpectedDenials).Count -gt 0) { throw 'desktop-lab-post-reboot-boundary-unexpected' }
     $body.postRebootStudentBoundary = $boundary.body
@@ -827,8 +834,10 @@ function Invoke-OpenPathLabAcceptanceCleanup {
         [Parameter(Mandatory = $true)][string]$StatePath,
         [Parameter(Mandatory = $true)][bool]$RestoreBaseline
     )
+    $state = ConvertTo-OpenPathLabAcceptanceStateTable -State (Read-OpenPathLabAcceptanceState -Path $StatePath)
     $settings = Get-OpenPathLabAcceptanceSettings -Config $Config
-    $state = Read-OpenPathLabAcceptanceState -Path $StatePath
+    $persistedSecret = [string](Get-OpenPathLabField -InputObject $state -Name 'guestSecret')
+    if (-not [string]::IsNullOrWhiteSpace($persistedSecret)) { $settings.GuestSecret = $persistedSecret }
     $scenario = Get-OpenPathLabScenario -Config $Config -ScenarioId ([string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId'))
     $harnessGuestPath = [string](Get-OpenPathLabField -InputObject $state -Name 'harnessGuestPath')
 

@@ -21,7 +21,7 @@ param(
         'admin-autologon', 'admin-verify',
         'student-autologon', 'student-verify',
         'login-screen',
-        'boundary',
+        'boundary-arm', 'boundary-collect',
         'uninstall',
         'verify-clean'
     )][string]$Step,
@@ -64,9 +64,28 @@ function Get-Sha256Hex {
     finally { $sha.Dispose() }
 }
 
+function Invoke-OpenPathNative {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & $FilePath @Arguments 2>&1 | Out-String
+        return [pscustomobject]@{ output = [string]$output; exitCode = [int]$LASTEXITCODE }
+    }
+    finally { $ErrorActionPreference = $previous }
+}
+
 function Read-OpenPathLabState {
     if (Test-Path -LiteralPath $StatePath -PathType Leaf) {
-        try { return (Get-Content -LiteralPath $StatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop) }
+        try {
+            $parsed = Get-Content -LiteralPath $StatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $table = @{}
+            foreach ($property in @($parsed.PSObject.Properties)) { $table[$property.Name] = $property.Value }
+            return $table
+        }
         catch { return $null }
     }
     return $null
@@ -202,7 +221,106 @@ function Ensure-OpenPathProbeDirectory {
     if (-not (Test-Path -LiteralPath $ProbeRoot)) {
         New-Item -ItemType Directory -Path $ProbeRoot -Force | Out-Null
     }
-    & icacls.exe $ProbeRoot /grant '*S-1-5-32-545:(OI)(CI)M' 2>&1 | Out-Null
+    Invoke-OpenPathNative -FilePath 'icacls.exe' -Arguments @($ProbeRoot, '/grant', '*S-1-5-32-545:(OI)(CI)M') | Out-Null
+}
+
+# Runs a probe process with the restricted student's own token. The interactive
+# Task Scheduler path is unavailable for lab accounts (no batch logon right) and
+# WMI refuses alternate credentials for local connections, so the harness uses
+# LogonUser + CreateProcessWithTokenW from the SYSTEM context. AppLocker
+# evaluates the child exactly as it would a student-launched process.
+$script:OpenPathStudentProcessType = $null
+
+function Initialize-OpenPathStudentProcess {
+    if ($null -ne $script:OpenPathStudentProcessType) { return }
+    $source = @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class OpenPathStudentProcess
+{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct STARTUPINFO
+    {
+        public int cb;
+        public string lpReserved;
+        public string lpDesktop;
+        public string lpTitle;
+        public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+        public short wShowWindow, cbReserved2;
+        public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_INFORMATION
+    {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool LogonUser(string user, string domain, string password, int logonType, int logonProvider, out IntPtr token);
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool CreateProcessWithTokenW(IntPtr token, int logonFlags, string appName, string commandLine, int creationFlags, IntPtr environment, string currentDirectory, ref STARTUPINFO startupInfo, out PROCESS_INFORMATION processInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeProcess(IntPtr process, out int exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    public static int Run(string user, string password, string commandLine, int timeoutMilliseconds, out string error)
+    {
+        error = null;
+        IntPtr token;
+        if (!LogonUser(user, ".", password, 2, 0, out token))
+        {
+            error = "logon-failed:" + Marshal.GetLastWin32Error();
+            return -1;
+        }
+        try
+        {
+            var startupInfo = new STARTUPINFO();
+            startupInfo.cb = Marshal.SizeOf(startupInfo);
+            PROCESS_INFORMATION processInformation;
+            if (!CreateProcessWithTokenW(token, 1, null, commandLine, 0x08000000, IntPtr.Zero, null, ref startupInfo, out processInformation))
+            {
+                error = "create-failed:" + Marshal.GetLastWin32Error();
+                return -1;
+            }
+            try
+            {
+                uint wait = WaitForSingleObject(processInformation.hProcess, (uint)timeoutMilliseconds);
+                if (wait == 0x102)
+                {
+                    error = "timeout";
+                    return -2;
+                }
+                int exitCode;
+                GetExitCodeProcess(processInformation.hProcess, out exitCode);
+                return exitCode;
+            }
+            finally
+            {
+                CloseHandle(processInformation.hProcess);
+                CloseHandle(processInformation.hThread);
+            }
+        }
+        finally
+        {
+            CloseHandle(token);
+        }
+    }
+}
+'@
+    Add-Type -TypeDefinition $source -ErrorAction Stop
+    $script:OpenPathStudentProcessType = [OpenPathStudentProcess]
 }
 
 function Invoke-OpenPathStudentTask {
@@ -211,25 +329,13 @@ function Invoke-OpenPathStudentTask {
         [Parameter(Mandatory = $true)][string]$CommandLine,
         [int]$WaitSeconds = 45
     )
-    $taskName = "OpenPathProbe-$Name"
-    & schtasks.exe /create /tn $taskName /tr $CommandLine /sc once /st 23:59 /ru $StudentUserName /rp $Secret /it /f 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { return [ordered]@{ status = 'task-create-failed' } }
-    & schtasks.exe /run /tn $taskName 2>&1 | Out-Null
-    $deadline = (Get-Date).AddSeconds($WaitSeconds)
-    $finished = $false
-    while ((Get-Date) -lt $deadline) {
-        Start-Sleep -Milliseconds 750
-        $query = (& schtasks.exe /query /tn $taskName /fo LIST /v 2>&1 | Out-String)
-        if ($query -match 'Status:\s+Running') { continue }
-        if ($query -match 'Last Result:') { $finished = $true; break }
-    }
-    $query = (& schtasks.exe /query /tn $taskName /fo LIST /v 2>&1 | Out-String)
-    $lastResult = ''
-    if ($query -match 'Last Result:\s+(-?\d+)') { $lastResult = $Matches[1] }
-    & schtasks.exe /delete /tn $taskName /f 2>&1 | Out-Null
+    Initialize-OpenPathStudentProcess
+    $errorText = ''
+    $exitCode = [OpenPathStudentProcess]::Run($StudentUserName, $Secret, $CommandLine, ($WaitSeconds * 1000), [ref]$errorText)
     return [ordered]@{
-        status     = if ($finished) { 'finished' } else { 'timeout' }
-        lastResult = $lastResult
+        status    = if ($null -ne $errorText -and $errorText -ne '') { [string]$errorText } else { 'finished' }
+        lastResult = [string]$exitCode
+        mode      = 'student-token'
     }
 }
 
@@ -276,101 +382,198 @@ function Get-ProbeDecision {
     catch { return [ordered]@{ observed = 'unparsable'; started = $null } }
 }
 
-function Invoke-OpenPathBoundaryProbes {
-    Ensure-OpenPathProbeDirectory
-    $probes = [ordered]@{}
-    $critical = New-Object System.Collections.Generic.List[string]
+function New-OpenPathProbeSuiteCmd {
+    # Runs as the restricted student at logon through the HKLM Run value.
+    # Strict app control denies PowerShell script hosts to restricted users, so
+    # the runner is a batch command script executed by cmd.exe (permitted by the
+    # restricted Exe rules) and staged under the approved runtime root; scripts
+    # are likewise only approved from that root.
+    param(
+        [Parameter(Mandatory = $true)][string]$SuitePath,
+        [Parameter(Mandatory = $true)][string]$StudentUserName
+    )
+    $body = @'
+@echo off
+setlocal enableextensions
+set "ROOT=C:\Users\Public\OpenPathProbes"
+echo launch user=%USERNAME% at %DATE% %TIME% >> "%ROOT%\probe-suite.launch.log"
+if /I not "%USERNAME%"=="__STUDENT__" (
+  > "%ROOT%\probe-suite.skipped-%USERNAME%.txt" echo skipped-as=%USERNAME%
+  exit /b 0
+)
+> "%ROOT%\probe-suite.started" echo started=%USERNAME%
 
-    function Add-ProbeResult {
-        param(
-            [string]$Key,
-            [string]$Expected,
-            [object]$Observed,
-            [string]$Fixture = ''
-        )
-        # "ran" is the truthful execution signal: a launcher reports whether the
-        # target process started, the script probe whether its marker exists and
-        # the MSI probe whether the package actually installed.
-        $ran = $null
-        if ($Observed -is [System.Collections.IDictionary]) {
-            if ($Observed.Contains('decision') -and $Observed.decision -is [System.Collections.IDictionary] -and $Observed.decision.Contains('started')) {
-                $ran = [bool]$Observed.decision.started
-            }
-            elseif ($Observed.Contains('installed')) { $ran = [bool]$Observed.installed }
-            elseif ($Observed.Contains('started') -and $null -ne $Observed.started) { $ran = [bool]$Observed.started }
-            elseif ($Observed.Contains('markerPresent')) { $ran = [bool]$Observed.markerPresent }
+call :ProbeExe allowed-browser "C:\Program Files\Mozilla Firefox\firefox.exe" "-foreground" firefox.exe "" 10
+call :ProbeExe allowed-system-exe "%SystemRoot%\System32\charmap.exe" "" charmap.exe "" 4
+call :ProbeExe denied-browser "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" "about:blank" msedge.exe "" 4
+call :ProbeExe denied-user-exe "%ROOT%\fixture-user-exe.exe" "" fixture-user-exe.exe "" 4
+call :ProbeExe packaged-app "%SystemRoot%\System32\calc.exe" "" CalculatorApp.exe Calculator.exe 6
+
+del /q "%ROOT%\script-marker.txt" >nul 2>&1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\fixture-script.ps1" >"%ROOT%\script-probe.out" 2>&1
+set "SCRIPT_EXIT=%ERRORLEVEL%"
+set "SCRIPT_MARKER=0"
+if exist "%ROOT%\script-marker.txt" set "SCRIPT_MARKER=1"
+(
+  echo name=denied-script
+  echo exit=%SCRIPT_EXIT%
+  echo marker=%SCRIPT_MARKER%
+) > "%ROOT%\result-denied-script.txt"
+
+set "MSI_EXIT=0"
+set "MSI_INSTALLED=0"
+set "MSI_POLICY=0"
+if not exist "%ROOT%\fixture-package.msi" goto :MsiDone
+del /q "%ROOT%\msi.log" >nul 2>&1
+msiexec.exe /i "%ROOT%\fixture-package.msi" /qn /norestart /l*v "%ROOT%\msi.log" >nul 2>&1
+rem Capture the exit code on its own statement: inside a parenthesized block
+rem %ERRORLEVEL% expands when the block is parsed, before msiexec runs.
+set "MSI_EXIT=%ERRORLEVEL%"
+if "%MSI_EXIT%"=="1625" set "MSI_POLICY=1"
+if not exist "%ROOT%\msi.log" goto :MsiDone
+findstr /I /C:"1625" "%ROOT%\msi.log" >nul 2>&1 && set "MSI_POLICY=1"
+findstr /I /C:"forbidden by system policy" "%ROOT%\msi.log" >nul 2>&1 && set "MSI_POLICY=1"
+findstr /I /C:"Installation success or error status: 0" "%ROOT%\msi.log" >nul 2>&1 && set "MSI_INSTALLED=1"
+:MsiDone
+(
+  echo name=denied-msi
+  echo exit=%MSI_EXIT%
+  echo installed=%MSI_INSTALLED%
+  echo policyBlocked=%MSI_POLICY%
+) > "%ROOT%\result-denied-msi.txt"
+
+echo done > "%ROOT%\probe-suite.done"
+exit /b 0
+
+:ProbeExe
+rem %1=name %2=path %3=args %4=primary-image %5=fallback-image %6=grace-seconds
+set "P_NAME=%~1"
+set "P_PATH=%~2"
+set "P_ARGS=%~3"
+set "P_IMAGE=%~4"
+set "P_FALLBACK=%~5"
+set "P_GRACE=%~6"
+set "P_STARTED=0"
+if not exist "%P_PATH%" goto :ProbeExeResult
+start "" /b "%P_PATH%" %P_ARGS% >nul 2>&1
+call :ProbeSleep %P_GRACE%
+tasklist /FI "IMAGENAME eq %P_IMAGE%" /NH 2>nul | find /I "%P_IMAGE%" >nul && set "P_STARTED=1"
+if "%P_STARTED%"=="0" if not "%P_FALLBACK%"=="" (
+  tasklist /FI "IMAGENAME eq %P_FALLBACK%" /NH 2>nul | find /I "%P_FALLBACK%" >nul && set "P_STARTED=1"
+)
+if "%P_STARTED%"=="1" taskkill /IM "%P_IMAGE%" /F >nul 2>&1
+:ProbeExeResult
+(
+  echo name=%P_NAME%
+  echo started=%P_STARTED%
+) > "%ROOT%\result-%P_NAME%.txt"
+exit /b 0
+
+:ProbeSleep
+set /a "P_N=%~1-1"
+if %P_N% LEQ 0 exit /b 0
+ping -n %P_N% 127.0.0.1 >nul
+exit /b 0
+'@
+    $body = $body.Replace('__STUDENT__', $StudentUserName)
+    [IO.File]::WriteAllText($SuitePath, $body, [Text.Encoding]::ASCII)
+}
+
+function Get-OpenPathProbeResult {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $resultFile = Join-Path $ProbeRoot "result-$Name.txt"
+    if (-not (Test-Path -LiteralPath $resultFile)) { return $null }
+    $detail = [ordered]@{}
+    foreach ($line in @(Get-Content -LiteralPath $resultFile -ErrorAction SilentlyContinue)) {
+        if ([string]$line -match '^([A-Za-z][A-Za-z0-9_]*)=(.*)$') {
+            $detail[$Matches[1]] = ([string]$Matches[2]).Trim()
         }
-        $probes[$Key] = [ordered]@{ expected = $Expected; fixture = $Fixture; ran = $ran; observed = $Observed }
-        if ($Expected -eq 'allowed' -and $ran -ne $true) { $critical.Add($Key) | Out-Null }
-        if ($Expected -eq 'denied' -and ($ran -eq $true -or $null -eq $ran)) { $critical.Add($Key) | Out-Null }
     }
+    if ($detail.Count -eq 0) { return $null }
+    return [pscustomobject]$detail
+}
 
-    # 1. Approved browser (Firefox) must run for the restricted student.
-    $firefox = 'C:\Program Files\Mozilla Firefox\firefox.exe'
-    if (Test-Path -LiteralPath $firefox) {
-        $task = Invoke-OpenPathStudentTask -Name 'allowed-browser' -CommandLine (New-OpenPathProbeLauncher -Name 'allowed-browser' -FilePath $firefox -Arguments '-foreground' -GraceSeconds 10) -WaitSeconds 60
-        Add-ProbeResult -Key 'allowedBrowser' -Expected 'allowed' -Fixture 'exeAndDll' -Observed ([ordered]@{ task = $task; decision = (Get-ProbeDecision -Name 'allowed-browser') })
-    }
-    else {
-        Add-OpenPathLabFailure 'firefox-missing'
-        Add-ProbeResult -Key 'allowedBrowser' -Expected 'allowed' -Fixture 'exeAndDll' -Observed ([ordered]@{ error = 'firefox-missing' })
-    }
-
-    # 2. Windows runtime base allow: in-box signed Win32 binary plus its DLLs.
-    $systemExe = 'C:\Windows\System32\charmap.exe'
-    $task = Invoke-OpenPathStudentTask -Name 'allowed-system-exe' -CommandLine (New-OpenPathProbeLauncher -Name 'allowed-system-exe' -FilePath $systemExe -GraceSeconds 4) -WaitSeconds 45
-    Add-ProbeResult -Key 'allowedSystemExe' -Expected 'allowed' -Fixture 'exeAndDll' -Observed ([ordered]@{ task = $task; decision = (Get-ProbeDecision -Name 'allowed-system-exe') })
-
-    # 3. Unapproved browser surface must be denied.
-    $edge = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
-    if (Test-Path -LiteralPath $edge) {
-        $task = Invoke-OpenPathStudentTask -Name 'denied-browser' -CommandLine (New-OpenPathProbeLauncher -Name 'denied-browser' -FilePath $edge -Arguments 'about:blank' -GraceSeconds 4) -WaitSeconds 45
-        Add-ProbeResult -Key 'deniedBrowser' -Expected 'denied' -Observed ([ordered]@{ task = $task; decision = (Get-ProbeDecision -Name 'denied-browser') })
-    }
-    else {
-        Add-OpenPathLabFailure 'edge-missing'
-        Add-ProbeResult -Key 'deniedBrowser' -Expected 'denied' -Observed ([ordered]@{ error = 'edge-missing' })
-    }
-
-    # 4. A user-writable executable copy must be denied.
-    $userExe = Join-Path $ProbeRoot 'fixture-user-exe.exe'
-    Copy-Item -LiteralPath $systemExe -Destination $userExe -Force -ErrorAction SilentlyContinue
-    $task = Invoke-OpenPathStudentTask -Name 'denied-user-exe' -CommandLine (New-OpenPathProbeLauncher -Name 'denied-user-exe' -FilePath $userExe -GraceSeconds 4) -WaitSeconds 45
-    Add-ProbeResult -Key 'deniedUserExe' -Expected 'denied' -Observed ([ordered]@{ task = $task; decision = (Get-ProbeDecision -Name 'denied-user-exe') })
-
-    # 5. A user-writable script must not run (Script collection implicit deny).
+function Invoke-OpenPathBoundaryArm {
+    param([Parameter(Mandatory = $true)][string]$SuitePath)
+    Ensure-OpenPathProbeDirectory
+    # host-side fixtures reused by the student suite
+    Copy-Item -LiteralPath 'C:\Windows\System32\charmap.exe' -Destination (Join-Path $ProbeRoot 'fixture-user-exe.exe') -Force -ErrorAction SilentlyContinue
+    $msiSource = Get-ChildItem -Path 'D:\', 'E:\', 'F:\' -Filter '*.msi' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($msiSource) { Copy-Item -LiteralPath $msiSource.FullName -Destination (Join-Path $ProbeRoot 'fixture-package.msi') -Force -ErrorAction SilentlyContinue }
+    else { Add-OpenPathLabFailure 'msi-fixture-source-missing' }
     $marker = Join-Path $ProbeRoot 'script-marker.txt'
     Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
-    $scriptFile = Join-Path $ProbeRoot 'fixture-script.ps1'
-    [IO.File]::WriteAllText($scriptFile, "'ran' | Set-Content -LiteralPath '$marker'", [Text.UTF8Encoding]::new($false))
-    $scriptTask = Invoke-OpenPathStudentTask -Name 'denied-script' -CommandLine "powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptFile" -WaitSeconds 45
-    $scriptRan = Test-Path -LiteralPath $marker
-    Add-ProbeResult -Key 'deniedScript' -Expected 'denied' -Fixture 'msiAndScript' -Observed ([ordered]@{ task = $scriptTask; markerPresent = $scriptRan; started = $scriptRan })
+    [IO.File]::WriteAllText((Join-Path $ProbeRoot 'fixture-script.ps1'), "'ran' | Set-Content -LiteralPath '$marker'", [Text.UTF8Encoding]::new($false))
+    Remove-Item -LiteralPath (Join-Path $ProbeRoot 'probe-suite.done') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $ProbeRoot 'probe-suite.started') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $ProbeRoot 'probe-suite.launch.log') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $ProbeRoot 'script-probe.out') -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $ProbeRoot -Filter 'result-*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $ProbeRoot -Filter 'probe-suite.skipped-*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    # Strict app control only approves scripts from the OpenPath runtime root
+    # (AppControl.psm1 sets the Script allow path to "$OpenPathRoot\*"), so the
+    # suite must live there. A user-writable script path -- including the
+    # all-users Startup folder -- is denied to restricted users by design.
+    $labRoot = Split-Path -Parent $SuitePath
+    New-Item -ItemType Directory -Path $labRoot -Force | Out-Null
+    New-OpenPathProbeSuiteCmd -SuitePath $SuitePath -StudentUserName $StudentUserName
+    Invoke-OpenPathNative -FilePath 'icacls.exe' -Arguments @($labRoot, '/grant', '*S-1-5-32-545:(RX)') | Out-Null
+    Invoke-OpenPathNative -FilePath 'icacls.exe' -Arguments @($SuitePath, '/grant', '*S-1-5-32-545:(RX)') | Out-Null
+    # Trigger the suite at the student's logon through a Run value: a registry
+    # value is not a script, and the process it starts is an approved executable
+    # running an approved script path.
+    $runKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+    New-Item -Path $runKey -Force | Out-Null
+    Set-ItemProperty -LiteralPath $runKey -Name 'OpenPathProbeSuite' -Value ("cmd.exe /c `"$SuitePath`"")
+    return [ordered]@{ armed = $true; suite = $SuitePath; runValue = 'OpenPathProbeSuite' }
+}
 
-    # 6. A user-writable MSI package must be denied (Msi collection implicit deny).
-    $msiSource = Get-ChildItem -Path 'D:\', 'E:\', 'F:\' -Filter '*.msi' -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($msiSource) {
-        $msiFile = Join-Path $ProbeRoot 'fixture-package.msi'
-        Copy-Item -LiteralPath $msiSource.FullName -Destination $msiFile -Force -ErrorAction SilentlyContinue
-        $msiLog = Join-Path $ProbeRoot 'msi.log'
-        Remove-Item -LiteralPath $msiLog -Force -ErrorAction SilentlyContinue
-        $msiTask = Invoke-OpenPathStudentTask -Name 'denied-msi' -CommandLine "msiexec.exe /i `"$msiFile`" /qn /norestart /l*v `"$msiLog`"" -WaitSeconds 90
-        $policyBlocked = $false
-        $msiInstalled = $false
-        if (Test-Path -LiteralPath $msiLog) {
-            $policyBlocked = [bool](Select-String -LiteralPath $msiLog -Pattern '1625|forbidden by system policy|AppLocker' -Quiet -ErrorAction SilentlyContinue)
-            $msiInstalled = [bool](Select-String -LiteralPath $msiLog -Pattern 'Installation success or error status: 0\b' -Quiet -ErrorAction SilentlyContinue)
+function Invoke-OpenPathBoundaryCollect {
+    param([int]$TimeoutSeconds = 360)
+    $armState = Read-OpenPathLabState
+    $windowStartUtc = $null
+    if ($null -ne $armState -and $armState.Contains('probeWindowStartUtc')) {
+        try { $windowStartUtc = ([datetime]$armState['probeWindowStartUtc']).ToUniversalTime() } catch { $windowStartUtc = $null }
+    }
+    $done = Join-Path $ProbeRoot 'probe-suite.done'
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $done)) { Start-Sleep -Seconds 5 }
+    $suiteCompleted = Test-Path -LiteralPath $done
+    if (-not $suiteCompleted) { Add-OpenPathLabFailure 'probe-suite-timeout' }
+    try { Remove-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'OpenPathProbeSuite' -ErrorAction SilentlyContinue } catch { }
+    # Remove any launcher left behind by earlier harness revisions.
+    $startupLauncher = Join-Path (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp') 'zz_openpath_probe_suite.cmd'
+    Remove-Item -LiteralPath $startupLauncher -Force -ErrorAction SilentlyContinue
+    $userStartupLauncher = Join-Path $env:SystemDrive "Users\$StudentUserName\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\zz_openpath_probe_suite.cmd"
+    Remove-Item -LiteralPath $userStartupLauncher -Force -ErrorAction SilentlyContinue
+
+    $probes = [ordered]@{}
+    function Add-Observation {
+        param([string]$Key, [string]$Expected, [string]$Fixture, $Detail)
+        $ran = $null
+        if ($null -ne $Detail) {
+            $normalized = @{}
+            foreach ($property in $Detail.PSObject.Properties) {
+                $raw = [string]$property.Value
+                $normalized[$property.Name] = if ($raw -eq '1' -or $raw -ieq 'true') { $true }
+                    elseif ($raw -eq '0' -or $raw -ieq 'false') { $false }
+                    else { $property.Value }
+            }
+            if ($normalized.ContainsKey('started')) { $ran = [bool]$normalized['started'] }
+            elseif ($normalized.ContainsKey('marker')) { $ran = [bool]$normalized['marker'] }
+            elseif ($normalized.ContainsKey('markerPresent')) { $ran = [bool]$normalized['markerPresent'] }
+            elseif ($normalized.ContainsKey('installed')) { $ran = [bool]$normalized['installed'] }
+            $Detail = [pscustomobject]$normalized
         }
-        Add-ProbeResult -Key 'deniedMsi' -Expected 'denied' -Fixture 'msiAndScript' -Observed ([ordered]@{ task = $msiTask; policyBlocked = $policyBlocked; installed = $msiInstalled; started = $msiInstalled })
+        $probes[$Key] = [ordered]@{ expected = $Expected; fixture = $Fixture; ran = $ran; observed = $Detail }
     }
-    else {
-        Add-OpenPathLabFailure 'msi-fixture-source-missing'
-        Add-ProbeResult -Key 'deniedMsi' -Expected 'denied' -Fixture 'msiAndScript' -Observed ([ordered]@{ error = 'msi-fixture-source-missing' })
-    }
-
-    # 7. Unapproved packaged app activation must be denied under strict mode.
-    $task = Invoke-OpenPathStudentTask -Name 'packaged-app' -CommandLine (New-OpenPathProbeLauncher -Name 'packaged-app' -FilePath "$env:SystemRoot\System32\calc.exe" -GraceSeconds 4) -WaitSeconds 45
-    Add-ProbeResult -Key 'packagedApp' -Expected 'denied' -Fixture 'packagedAppExecution' -Observed ([ordered]@{ task = $task; decision = (Get-ProbeDecision -Name 'packaged-app') })
+    Add-Observation -Key 'allowedBrowser' -Expected 'allowed' -Fixture 'exeAndDll' -Detail (Get-OpenPathProbeResult -Name 'allowed-browser')
+    Add-Observation -Key 'allowedSystemExe' -Expected 'allowed' -Fixture 'exeAndDll' -Detail (Get-OpenPathProbeResult -Name 'allowed-system-exe')
+    Add-Observation -Key 'deniedBrowser' -Expected 'denied' -Fixture '' -Detail (Get-OpenPathProbeResult -Name 'denied-browser')
+    Add-Observation -Key 'deniedUserExe' -Expected 'denied' -Fixture '' -Detail (Get-OpenPathProbeResult -Name 'denied-user-exe')
+    Add-Observation -Key 'deniedScript' -Expected 'denied' -Fixture 'msiAndScript' -Detail (Get-OpenPathProbeResult -Name 'denied-script')
+    Add-Observation -Key 'deniedMsi' -Expected 'denied' -Fixture 'msiAndScript' -Detail (Get-OpenPathProbeResult -Name 'denied-msi')
+    Add-Observation -Key 'packagedApp' -Expected 'denied' -Fixture 'packagedAppExecution' -Detail (Get-OpenPathProbeResult -Name 'packaged-app')
 
     $fixtures = [ordered]@{
         exeAndDll            = if ($probes.allowedBrowser.ran -eq $true -and $probes.allowedSystemExe.ran -eq $true) { 'passed' } else { 'failed' }
@@ -382,11 +585,34 @@ function Invoke-OpenPathBoundaryProbes {
         if ($entry.Value.expected -eq 'allowed' -and $entry.Value.ran -ne $true) { $criticalDenials += [string]$entry.Key }
         if ($entry.Value.expected -eq 'denied' -and ($entry.Value.ran -eq $true -or $null -eq $entry.Value.ran)) { $criticalDenials += [string]$entry.Key }
     }
+    # AppLocker events for the probe window make each allow/deny observation
+    # traceable to the enforcement decision that produced it.
+    $applockerEvents = @()
+    foreach ($logName in @('Microsoft-Windows-AppLocker/EXE and DLL', 'Microsoft-Windows-AppLocker/MSI and Script')) {
+        try {
+            $filter = @{ LogName = $logName }
+            if ($null -ne $windowStartUtc) { $filter['StartTime'] = $windowStartUtc }
+            Get-WinEvent -FilterHashtable $filter -MaxEvents 300 -ErrorAction Stop |
+                Where-Object { [string]$_.Message -match 'OpenPathProbes|probe-suite|FIXTURE-' } |
+                ForEach-Object {
+                    $applockerEvents += [ordered]@{
+                        log      = $logName
+                        id       = [int]$_.Id
+                        level    = [string]$_.LevelDisplayName
+                        timeUtc  = $_.TimeCreated.ToUniversalTime().ToString('o')
+                        message  = ([string]$_.Message -replace "`r?`n", ' ').Trim()
+                    }
+                }
+        }
+        catch { }
+    }
 
     return [ordered]@{
+        suiteCompleted            = $suiteCompleted
         probes                    = $probes
         fixtures                  = $fixtures
         criticalUnexpectedDenials = @($criticalDenials)
+        applockerEvents           = @($applockerEvents)
     }
 }
 
@@ -408,8 +634,8 @@ function Invoke-OpenPathLabStep {
 
             if ($Secret) {
                 foreach ($user in @($StudentUserName, $AdminUserName)) {
-                    & net.exe user $user $Secret 2>&1 | Out-Null
-                    if ($LASTEXITCODE -ne 0) { Add-OpenPathLabFailure "account-reset-failed-$user" }
+                    $reset = Invoke-OpenPathNative -FilePath 'net.exe' -Arguments @('user', $user, $Secret)
+                    if ($reset.exitCode -ne 0) { Add-OpenPathLabFailure "account-reset-failed-$user" }
                 }
             }
 
@@ -461,8 +687,16 @@ function Invoke-OpenPathLabStep {
                 firstStudentInteractiveLogon = [bool](@($logons).Count -gt 0)
             }
         }
-        'observe/boundary' {
-            $probe = Invoke-OpenPathBoundaryProbes
+        'observe/boundary-arm' {
+            $suitePath = 'C:\OpenPath\lab\probe-suite.cmd'
+            $arm = Invoke-OpenPathBoundaryArm -SuitePath $suitePath
+            $state = Read-OpenPathLabState
+            $state.probeWindowStartUtc = (Get-Date).ToUniversalTime().ToString('o')
+            Write-OpenPathLabState -Value $state
+            return $arm
+        }
+        'observe/boundary-collect' {
+            $probe = Invoke-OpenPathBoundaryCollect
             $state = Read-OpenPathLabState
             $state.preRebootProbes = $probe
             Write-OpenPathLabState -Value $state
@@ -486,8 +720,16 @@ function Invoke-OpenPathLabStep {
         'afterReboot/student-verify' {
             return [ordered]@{ session = Get-InteractiveSession -UserName $StudentUserName }
         }
-        'afterReboot/boundary' {
-            $probe = Invoke-OpenPathBoundaryProbes
+        'afterReboot/boundary-arm' {
+            $suitePath = 'C:\OpenPath\lab\probe-suite.cmd'
+            $arm = Invoke-OpenPathBoundaryArm -SuitePath $suitePath
+            $state = Read-OpenPathLabState
+            $state.probeWindowStartUtc = (Get-Date).ToUniversalTime().ToString('o')
+            Write-OpenPathLabState -Value $state
+            return $arm
+        }
+        'afterReboot/boundary-collect' {
+            $probe = Invoke-OpenPathBoundaryCollect
             $state = Read-OpenPathLabState
             $state.postRebootProbes = $probe
             Write-OpenPathLabState -Value $state
