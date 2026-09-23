@@ -219,7 +219,7 @@ jobs:
     name: PolicyConverter ${{ matrix.mode }} contrast
     needs: [windows-offline-template, windows-personalized-http-e2e, windows-desktop-survival]
     if: ${{ needs.windows-offline-template.result == 'success' && needs.windows-personalized-http-e2e.result == 'success' && needs.windows-desktop-survival.result == 'success' }}
-    runs-on: [self-hosted, Linux, X64, proxmox, openpath]
+    runs-on: windows-2025
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -263,20 +263,18 @@ jobs:
             if ($actual -ne $input.Hash) { throw 'contrast-input-hash-mismatch' }
           }
 
-      - name: Require external disposable VM controller
+      - name: Require hosted disposable runner controller
         shell: pwsh
-        env:
-          OPENPATH_POLICY_CONVERTER_CONTROLLER: ${{ secrets.OPENPATH_POLICY_CONVERTER_CONTROLLER }}
         run: |
-          if (-not $env:OPENPATH_POLICY_CONVERTER_CONTROLLER -or -not (Test-Path -LiteralPath $env:OPENPATH_POLICY_CONVERTER_CONTROLLER -PathType Leaf)) {
-            Write-Error 'BLOCKED_PLATFORM_VALIDATION: no authorized external disposable-VM controller is configured for PolicyConverter contrast.'
+          $controller = Join-Path $env:GITHUB_WORKSPACE 'tests/e2e/ci/controllers/hosted-windows-controller.ps1'
+          if (-not (Test-Path -LiteralPath $controller -PathType Leaf)) {
+            Write-Error 'BLOCKED_PLATFORM_VALIDATION: the hosted disposable runner controller is missing.'
             exit 2
           }
 
       - name: Run PolicyConverter contrast in an independent guest
         shell: pwsh
         env:
-          OPENPATH_POLICY_CONVERTER_CONTROLLER: ${{ secrets.OPENPATH_POLICY_CONVERTER_CONTROLLER }}
           OPENPATH_SOURCE_SHA: ${{ github.sha }}
         run: |
           $inputs = Join-Path $env:RUNNER_TEMP 'openpath-policy-converter-contrast-inputs'
@@ -295,7 +293,7 @@ jobs:
             -ArtifactsRoot $root `
             -TemplatePath $template `
             -PersonalizedExePath $candidate `
-            -ControllerCommand $env:OPENPATH_POLICY_CONVERTER_CONTROLLER
+            -ControllerCommand (Join-Path $env:GITHUB_WORKSPACE 'tests/e2e/ci/controllers/hosted-windows-controller.ps1')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & (Resolve-Path 'tests/e2e/ci/aggregate-windows-policy-converter-contrast.ps1') `
             -Mode '${{ matrix.mode }}' `
