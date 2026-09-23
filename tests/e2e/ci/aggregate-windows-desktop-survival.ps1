@@ -55,13 +55,13 @@ foreach ($scenarioId in $scenarioIds) {
     $scenarios.Add($scenarioObservation)
 }
 
-$manifest = [ordered]@{ schemaVersion = 2; sourceCommitSha = $SourceCommitSha; runId = $RunId; runAttempt = $RunAttempt; generatedAt = $now; files = @($files) }
+$manifest = [ordered]@{ schemaVersion = 2; sourceCommitSha = $SourceCommitSha; runId = $RunId; runAttempt = $RunAttempt; generatedAt = $now; files = $files.ToArray() }
 $manifestPath = Join-Path $EvidenceRoot 'manifest.json'
 [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
 $manifestHash = & $hash $manifestPath
 $templateHash = & $hash $TemplatePath
 $exeHash = & $hash $PersonalizedExePath
-$aggregate = [ordered]@{ schemaVersion = 2; sourceCommitSha = $SourceCommitSha; runId = $RunId; runAttempt = $RunAttempt; templateSha256 = $templateHash; personalizedExeSha256 = $exeHash; evidenceManifestSha256 = $manifestHash; generatedAt = $now; synthetic = $false; scenarios = @($scenarios) }
+$aggregate = [ordered]@{ schemaVersion = 2; sourceCommitSha = $SourceCommitSha; runId = $RunId; runAttempt = $RunAttempt; templateSha256 = $templateHash; personalizedExeSha256 = $exeHash; evidenceManifestSha256 = $manifestHash; generatedAt = $now; synthetic = $false; scenarios = $scenarios.ToArray() }
 if (-not $OutputPath) { $OutputPath = Join-Path $EvidenceRoot 'aggregate.json' }
 [IO.File]::WriteAllText($OutputPath, ($aggregate | ConvertTo-Json -Depth 40), [Text.UTF8Encoding]::new($false))
 Write-Output $OutputPath

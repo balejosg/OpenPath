@@ -43,7 +43,7 @@ foreach ($phase in $phaseNames) {
     $phases[$phase] = [ordered]@{ status = 'passed'; evidenceRef = $observationRelative; sha256 = $observationHash; startedAt = [string]$phaseRecord.startedAt; endedAt = [string]$phaseRecord.endedAt; correlationNonce = [string]$phaseRecord.correlationNonce }
 }
 
-$manifest = [ordered]@{ schemaVersion = 2; suiteKind = 'PolicyConverterContrast'; policyConverterMode = $Mode; sourceCommitSha = $SourceCommitSha; runId = $RunId; runAttempt = $RunAttempt; generatedAt = $now; files = @($files) }
+$manifest = [ordered]@{ schemaVersion = 2; suiteKind = 'PolicyConverterContrast'; policyConverterMode = $Mode; sourceCommitSha = $SourceCommitSha; runId = $RunId; runAttempt = $RunAttempt; generatedAt = $now; files = $files.ToArray() }
 $manifestPath = Join-Path $EvidenceRoot "contrast-$($Mode.ToLowerInvariant())-manifest.json"
 [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
 $manifestHash = & $hash $manifestPath
