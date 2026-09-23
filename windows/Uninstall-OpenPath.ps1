@@ -426,7 +426,18 @@ if ($acrylicService) {
         # Uninstall Acrylic service
         $acrylicPath = "${env:ProgramFiles(x86)}\Acrylic DNS Proxy"
         if (Test-Path "$acrylicPath\AcrylicService.exe") {
-            & "$acrylicPath\AcrylicService.exe" /UNINSTALL 2>$null
+            # AcrylicService.exe /UNINSTALL can block indefinitely (for example when
+            # its service or driver is still in use). Bound the wait, terminate the
+            # helper, and rely on the sc.exe service deletion below so the
+            # standalone uninstall never hangs.
+            $acrylicUninstall = Start-Process -FilePath "$acrylicPath\AcrylicService.exe" -ArgumentList '/UNINSTALL' -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
+            if ($acrylicUninstall) {
+                if (-not $acrylicUninstall.WaitForExit(120000)) {
+                    Write-Host "  Acrylic uninstaller did not exit within 120s; terminating it" -ForegroundColor Yellow
+                    try { $acrylicUninstall.Kill() } catch {}
+                }
+                try { $acrylicUninstall.Dispose() } catch {}
+            }
         }
         $remainingAcrylicService = Get-Service -Name 'AcrylicDNSProxySvc' -ErrorAction SilentlyContinue
         if ($remainingAcrylicService) {
