@@ -476,3 +476,8 @@ Write-Host ""
 Write-Host "The system has been restored to its original state."
 Write-Host "A restart may be required to apply all changes."
 Write-Host ""
+
+# Report success explicitly: without this the process exit code is inherited
+# from the last native command (for example sc.exe deleting an already absent
+# service), which made a successful uninstall look like a failure.
+exit 0
