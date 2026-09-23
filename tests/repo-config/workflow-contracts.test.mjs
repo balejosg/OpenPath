@@ -1849,8 +1849,10 @@ test('E2E workflow gates expensive platform lanes on targeted changed paths', ()
     'windows-student-policy should pass the selected SSE group to the runner'
   );
   assert.ok(
-    windowsStudentPolicyBlock.includes('runs-on: [self-hosted, Windows, X64, proxmox, openpath]'),
-    'windows-student-policy should run on the pinned OpenPath self-hosted Windows runner'
+    windowsStudentPolicyBlock.includes(
+      'runs-on: [self-hosted, Windows, X64, proxmox, openpath, full-windows]'
+    ),
+    'windows-student-policy should run on the pinned full Windows client runner (the strict runtime baseline needs the AppX inventory)'
   );
   assert.ok(
     windowsStudentPolicyBlock.includes('timeout-minutes: 70'),

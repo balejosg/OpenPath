@@ -429,7 +429,9 @@ jobs:
   # ============================================
   windows-student-policy:
     name: Windows Student Policy
-    runs-on: [self-hosted, Windows, X64, proxmox, openpath]
+    # The strict runtime baseline requires the AppX subsystem: an IoT/LTSC image
+    # reports no packages and cannot satisfy it. Run on a full Windows client.
+    runs-on: [self-hosted, Windows, X64, proxmox, openpath, full-windows]
     timeout-minutes: 70
     needs: detect-relevant-changes
     if: needs.detect-relevant-changes.outputs.windows_student_policy == 'true'
