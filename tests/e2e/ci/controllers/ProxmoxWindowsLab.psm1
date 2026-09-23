@@ -674,6 +674,18 @@ function Start-OpenPathLabAcceptanceReboot {
     $bootId = [string](& $Transport.WaitGuestRebooted $Vmid $PreviousBootId $TimeoutSeconds)
     if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'desktop-lab-guest-not-ready' }
     if ($bootId -eq $PreviousBootId) { throw 'desktop-lab-boot-id-unchanged' }
+    # A freshly installed agent can restart the guest on its own shortly after
+    # the requested reboot. Wait until the boot id stays stable for a short
+    # window so the following session wait does not race a second restart.
+    $stableDeadline = (Get-Date).AddSeconds(90)
+    $stableSince = Get-Date
+    while ((Get-Date) -lt $stableDeadline) {
+        Start-Sleep -Seconds 5
+        $currentBootId = [string](& $Transport.GetGuestBootId $Vmid)
+        if ([string]::IsNullOrWhiteSpace($currentBootId)) { $stableSince = Get-Date; continue }
+        if ($currentBootId -ne $bootId) { $bootId = $currentBootId; $stableSince = Get-Date; continue }
+        if (((Get-Date) - $stableSince).TotalSeconds -ge 10) { break }
+    }
     return $bootId
 }
 

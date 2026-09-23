@@ -1289,7 +1289,11 @@ function Invoke-OpenPathDisposableWindowsController {
                 (Test-OpenPathDisposableBlockedObservation -Path $outputPath -Mode $Mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $ScenarioId -ExpectedNonce $nonce)) {
                 return [pscustomobject][ordered]@{ status = 'blocked'; code = 'BLOCKED_PLATFORM_VALIDATION'; phase = $phase; runId = $RunId; runAttempt = $RunAttempt; scenarioId = $ScenarioId }
             }
-            throw ('controller-exit-{0}' -f $process.ExitCode)
+            # Surface the controller diagnostics: without the stderr tail a
+            # failed phase only reported a bare exit code.
+            $stderrTail = ([string]$stderr).Trim()
+            if ($stderrTail.Length -gt 700) { $stderrTail = $stderrTail.Substring($stderrTail.Length - 700) }
+            throw ('controller-exit-{0}: {1}' -f $process.ExitCode, $stderrTail)
         }
         # Do not report a successful child exit until the phase output is
         # present and correlated. The phase script re-reads it for its payload,

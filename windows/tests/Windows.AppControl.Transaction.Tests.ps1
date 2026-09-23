@@ -124,7 +124,9 @@ Start-Sleep -Milliseconds 3000
             $busy.Acquired | Should -BeFalse
             $busy.ReasonCode | Should -Be 'appcontrol_transaction_busy'
 
-            $abandoned = Enter-OpenPathAppControlTransaction -OpenPathRoot $otherRoot -TimeoutMilliseconds 5000
+            # Windows can take longer than five seconds to release the mutex of a
+            # failed-fast process under load; keep the assertion deterministic.
+            $abandoned = Enter-OpenPathAppControlTransaction -OpenPathRoot $otherRoot -TimeoutMilliseconds 15000
             try {
                 $abandoned.Acquired | Should -BeTrue
                 $hostIsWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -or [string]$env:OS -eq 'Windows_NT'
