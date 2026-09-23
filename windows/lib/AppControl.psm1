@@ -462,6 +462,45 @@ function Get-OpenPathAlwaysDeniedAppxProductNames {
     )
 }
 
+function Get-OpenPathAdministratorUserSids {
+    <#
+    .SYNOPSIS
+    Returns the user SIDs that are members of the local Administrators group.
+
+    .DESCRIPTION
+    AppLocker evaluates the caller token.  A rule scoped only to the
+    Administrators group does not match an administrator session created with
+    User Account Control: the filtered token carries the group SID as
+    deny-only, so it cannot satisfy an allow condition.  Emitting a per-user
+    allow rule keeps administrators unrestricted in both elevated and
+    non-elevated sessions while restricted users stay governed by the
+    OpenPath-Restricted rules.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $sids = @()
+    try {
+        if (-not (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue)) { return @() }
+        $adminGroup = Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction SilentlyContinue
+        $adminGroupName = if ($adminGroup) { $adminGroup.Name } else { 'Administrators' }
+        foreach ($member in @(Get-LocalGroupMember -Group $adminGroupName -ErrorAction Stop)) {
+            if ($null -eq $member) { continue }
+            if ($member.PSObject.Properties['ObjectClass']) {
+                if ([string]$member.ObjectClass -ne 'User') { continue }
+            }
+            if (-not $member.PSObject.Properties['SID']) { continue }
+            $sid = [string]$member.SID.Value
+            if (-not [string]::IsNullOrWhiteSpace($sid)) { $sids += $sid }
+        }
+    }
+    catch {
+        Write-OpenPathLog "Unable to enumerate administrator user SIDs for AppLocker rules: $_" -Level WARN
+    }
+
+    return @($sids | Sort-Object -Unique)
+}
+
 function New-OpenPathNonAdminAppLockerPolicySpec {
     <#
     .SYNOPSIS
@@ -490,8 +529,16 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         [object]$BrowserInventory = $null,
 
         [AllowNull()]
-        [object]$WindowsRuntimeBaseline = $null
+        [object]$WindowsRuntimeBaseline = $null,
+
+        [AllowNull()]
+        [string[]]$AdminUserSids = $null
     )
+
+    if ($null -eq $AdminUserSids) {
+        $AdminUserSids = @(Get-OpenPathAdministratorUserSids)
+    }
+    $AdminUserSids = @($AdminUserSids | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)
 
     # The installer constructor materializes an empty v1 catalog for strict
     # mode.  Keep the public spec builder equally deterministic for callers
@@ -791,6 +838,7 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         EnforcedCollections = if ($Profile -eq 'StrictApplicationAllowlist') { @('Exe', 'Script', 'Msi', 'Appx', 'Dll') } else { @('Exe', 'Script', 'Appx') }
         RestrictedSid = Get-OpenPathRestrictedGroupSid
         AdminSid = 'S-1-5-32-544'
+        AdminUserSids = @($AdminUserSids)
         SystemSid = 'S-1-5-18'
         ApprovedBrowsers = @($approvedBrowserSet.Keys | Sort-Object)
         AllowPaths = @($allowPaths)
@@ -1002,6 +1050,11 @@ function New-OpenPathAppLockerPolicyXml {
         }
 
         $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType administrators allow all" -Sid $Spec.AdminSid -Action 'Allow' -Path '*'
+        if ($Spec.PSObject.Properties['AdminUserSids']) {
+            foreach ($adminUserSid in @($Spec.AdminUserSids)) {
+                $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType administrators allow user $adminUserSid" -Sid $adminUserSid -Action 'Allow' -Path '*'
+            }
+        }
         $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType system allow all" -Sid $Spec.SystemSid -Action 'Allow' -Path '*'
 
         if ($strictProfile -and $collectionType -in @('Exe', 'Dll')) {
@@ -1064,6 +1117,11 @@ function New-OpenPathAppLockerPolicyXml {
         # Appx has no useful path rule. Keep recovery scoped to administrators
         # and SYSTEM, while restricted users receive only catalog publishers.
         $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx administrators allow all" -Sid $Spec.AdminSid -Action 'Allow' -PublisherName '*' -ProductName '*' -BinaryName '*'
+        if ($Spec.PSObject.Properties['AdminUserSids']) {
+            foreach ($adminUserSid in @($Spec.AdminUserSids)) {
+                $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx administrators allow user $adminUserSid" -Sid $adminUserSid -Action 'Allow' -PublisherName '*' -ProductName '*' -BinaryName '*'
+            }
+        }
         $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx system allow all" -Sid $Spec.SystemSid -Action 'Allow' -PublisherName '*' -ProductName '*' -BinaryName '*'
         if ($null -ne $Spec.WindowsRuntimeBaseline -and $null -ne $Spec.WindowsRuntimeBaseline.Packages) {
             foreach ($runtimePackage in @($Spec.WindowsRuntimeBaseline.Packages)) {

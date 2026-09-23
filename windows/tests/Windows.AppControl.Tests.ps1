@@ -31,6 +31,12 @@ function global:New-TestAppControlInstalledConfig {
 }
 
 Describe "AppControl Module" {
+    BeforeAll {
+        # Keep policy-content assertions deterministic: the production builder
+        # auto-enumerates the real administrator user SIDs when none are given.
+        Mock Get-OpenPathAdministratorUserSids { @('S-1-5-21-0-0-0-1500') } -ModuleName AppControl
+    }
+
     Context 'issue 256 strict application allowlist' {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
@@ -134,6 +140,38 @@ Describe "AppControl Module" {
             $xml = [xml](New-OpenPathAppLockerPolicyXml -Spec $spec)
             @($xml.AppLockerPolicy.RuleCollection.FilePublisherRule | Where-Object Name -Like '*signed-classroom-app*').Count | Should -Be 1
             @($xml.AppLockerPolicy.RuleCollection.FileHashRule | Where-Object Name -Like '*pinned-helper*').Count | Should -Be 1
+        }
+
+        It 'keeps administrators unrestricted in filtered (non-elevated) tokens' {
+            InModuleScope AppControl -Parameters @{ Catalog = $strictCatalog } {
+                param($Catalog)
+
+                Mock Get-OpenPathAdministratorUserSids { @('S-1-5-21-0-0-0-1600') }
+                $inventory = [pscustomobject]@{
+                    DiscoveryStatus = 'Complete'; DiscoveryErrors = @(); ExecutableIdentities = @()
+                }
+                $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath' `
+                    -Profile StrictApplicationAllowlist -ApprovedBrowsers @('Firefox') `
+                    -ApplicationCatalog $Catalog -BrowserInventory $inventory
+                $spec.AdminUserSids | Should -Contain 'S-1-5-21-0-0-0-1600'
+
+                $policy = [xml](New-OpenPathAppLockerPolicyXml -Spec $spec)
+                foreach ($type in @('Exe', 'Script', 'Msi', 'Dll')) {
+                    $collection = @($policy.AppLockerPolicy.RuleCollection | Where-Object Type -eq $type)[0]
+                    @($collection.FilePathRule | Where-Object {
+                            $_.UserOrGroupSid -eq 'S-1-5-21-0-0-0-1600' -and $_.Action -eq 'Allow' -and
+                            $_.Conditions.FilePathCondition.Path -eq '*'
+                        }).Count | Should -Be 1
+                }
+                $appx = @($policy.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Appx')[0]
+                @($appx.FilePublisherRule | Where-Object {
+                        $_.UserOrGroupSid -eq 'S-1-5-21-0-0-0-1600' -and $_.Action -eq 'Allow'
+                    }).Count | Should -Be 1
+                # The group rule stays for elevated administrator sessions.
+                @($policy.AppLockerPolicy.RuleCollection.FilePathRule | Where-Object {
+                        $_.UserOrGroupSid -eq 'S-1-5-32-544' -and $_.Action -eq 'Allow'
+                    }).Count | Should -Be 4
+            }
         }
 
         It 'rejects an unmanaged blanket Program Files or Microsoft Appx allow in strict mode' {
