@@ -409,13 +409,15 @@ function Write-OpenPathLabTestConfigFile {
             'observe/admin-verify'        = @{ status = 'passed'; failures = @(); body = @{ session = 'OP-LAB\opadmin' } }
             'observe/student-autologon'   = @{ status = 'passed'; failures = @(); body = @{ autologon = 'alumno' } }
             'observe/student-verify'      = @{ status = 'passed'; failures = @(); body = @{ session = 'OP-LAB\alumno'; firstStudentInteractiveLogon = $true; studentLogons = @(@{ logonType = '2'; user = 'alumno' }) } }
-            'observe/boundary'            = @{ status = 'passed'; failures = @(); body = $probes }
+            'observe/boundary-arm'        = @{ status = 'passed'; failures = @(); body = @{ armed = $true; runValue = 'OpenPathProbeSuite'; suite = 'C:\OpenPath\lab\probe-suite.cmd' } }
+            'observe/boundary-collect'    = @{ status = 'passed'; failures = @(); body = $probes }
             'afterReboot/login-screen'    = @{ status = 'passed'; failures = @(); body = @{ autologon = 'cleared' } }
             'afterReboot/admin-autologon' = @{ status = 'passed'; failures = @(); body = @{ autologon = 'opadmin' } }
             'afterReboot/admin-verify'    = @{ status = 'passed'; failures = @(); body = @{ session = 'OP-LAB\opadmin' } }
             'afterReboot/student-autologon' = @{ status = 'passed'; failures = @(); body = @{ autologon = 'alumno' } }
             'afterReboot/student-verify'  = @{ status = 'passed'; failures = @(); body = @{ session = 'OP-LAB\alumno' } }
-            'afterReboot/boundary'        = @{ status = 'passed'; failures = @(); body = $probes }
+            'afterReboot/boundary-arm'    = @{ status = 'passed'; failures = @(); body = @{ armed = $true; runValue = 'OpenPathProbeSuite'; suite = 'C:\OpenPath\lab\probe-suite.cmd' } }
+            'afterReboot/boundary-collect' = @{ status = 'passed'; failures = @(); body = $probes }
             'cleanup/uninstall'           = @{ status = 'passed'; failures = @(); body = @{ state = @{ uninstallFailed = $false; uninstallExitCode = 0 } } }
             'cleanup/verify-clean'        = @{ status = 'passed'; failures = @(); body = @{ clean = $true; policyEqualsBefore = $true } }
         }
@@ -447,7 +449,7 @@ function Write-OpenPathLabTestConfigFile {
         }
         $calls = $script:LabState.Calls
         $calls.Contains('PublishArtifact:Invoke-OpenPathDesktopSurvivalGuest.ps1') | Should -BeTrue
-        foreach ($key in @('prepare/install', 'observe/admin-verify', 'observe/student-verify', 'observe/boundary', 'afterReboot/login-screen', 'afterReboot/admin-verify', 'afterReboot/student-verify', 'afterReboot/boundary', 'cleanup/uninstall', 'cleanup/verify-clean')) {
+        foreach ($key in @('prepare/install', 'observe/admin-verify', 'observe/student-verify', 'observe/boundary-arm', 'observe/boundary-collect', 'afterReboot/login-screen', 'afterReboot/admin-verify', 'afterReboot/student-verify', 'afterReboot/boundary-arm', 'afterReboot/boundary-collect', 'cleanup/uninstall', 'cleanup/verify-clean')) {
             $calls.Contains("InvokeGuestPowerShell:$key") | Should -BeTrue
         }
         $calls.Contains('ReleaseLock') | Should -BeTrue

@@ -61,7 +61,9 @@ foreach ($scenarioId in $scenarioIds) {
             # PolicyConverter uses the same external process boundary.  Its
             # payload is enriched by the controller adapter; this worker still
             # never starts PolicyConverter or mutates the guest itself.
-            & $hostCommand.Source -NoProfile -NonInteractive -File $phaseScript -Mode $mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $scenarioId -ArtifactsRoot $ArtifactsRoot -TemplatePath $TemplatePath -PersonalizedExePath $PersonalizedExePath -ControllerCommand $ControllerCommand -ControllerPayloadPath $scenarioPayload
+            $phaseArguments = @('-NoProfile', '-NonInteractive')
+            if ([IO.Path]::GetFileName($hostCommand.Source) -ieq 'powershell.exe') { $phaseArguments += @('-ExecutionPolicy', 'Bypass') }
+            & $hostCommand.Source @phaseArguments -File $phaseScript -Mode $mode -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $scenarioId -ArtifactsRoot $ArtifactsRoot -TemplatePath $TemplatePath -PersonalizedExePath $PersonalizedExePath -ControllerCommand $ControllerCommand -ControllerPayloadPath $scenarioPayload
             $phaseExit = $LASTEXITCODE
             if ($phaseExit -ne 0) {
                 $scenarioFailed = $true
@@ -77,7 +79,9 @@ foreach ($scenarioId in $scenarioIds) {
     finally {
         # Cleanup is attempted even when Prepare, Observe, or AfterReboot
         # fails.  A successful cleanup never turns the scenario green.
-        & $hostCommand.Source -NoProfile -NonInteractive -File $phaseScript -Mode Cleanup -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $scenarioId -ArtifactsRoot $ArtifactsRoot -TemplatePath $TemplatePath -PersonalizedExePath $PersonalizedExePath -ControllerCommand $ControllerCommand -ControllerPayloadPath $scenarioPayload
+        $cleanupArguments = @('-NoProfile', '-NonInteractive')
+        if ([IO.Path]::GetFileName($hostCommand.Source) -ieq 'powershell.exe') { $cleanupArguments += @('-ExecutionPolicy', 'Bypass') }
+        & $hostCommand.Source @cleanupArguments -File $phaseScript -Mode Cleanup -RunId $RunId -RunAttempt $RunAttempt -ScenarioId $scenarioId -ArtifactsRoot $ArtifactsRoot -TemplatePath $TemplatePath -PersonalizedExePath $PersonalizedExePath -ControllerCommand $ControllerCommand -ControllerPayloadPath $scenarioPayload
         $cleanupExit = $LASTEXITCODE
         if ($cleanupExit -ne 0) {
             $scenarioFailed = $true

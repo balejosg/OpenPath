@@ -1187,7 +1187,9 @@ function Invoke-OpenPathDisposableWindowsController {
     $phase = Get-OpenPathDisposableCanonicalPhase -Mode $Mode
     Test-OpenPathDisposableSafeSegment -Value $RunId -Name 'run-id'
     Test-OpenPathDisposableSafeSegment -Value $ScenarioId -Name 'scenario-id'
-    if (-not [IO.Path]::IsPathFullyQualified($Command)) { throw 'controller-command-must-be-absolute' }
+    # [IO.Path]::IsPathFullyQualified only exists on .NET Core; Windows
+    # PowerShell 5.1 hosts the suite on self-hosted Windows runners too.
+    if (-not [IO.Path]::IsPathRooted($Command)) { throw 'controller-command-must-be-absolute' }
     if (-not (Test-Path -LiteralPath $Command -PathType Leaf)) {
         return [pscustomobject][ordered]@{ status = 'blocked'; code = 'BLOCKED_PLATFORM_VALIDATION'; phase = $phase; runId = $RunId; runAttempt = $RunAttempt; scenarioId = $ScenarioId }
     }
@@ -1252,7 +1254,14 @@ function Invoke-OpenPathDisposableWindowsController {
             return [pscustomobject][ordered]@{ status = 'blocked'; code = 'BLOCKED_PLATFORM_VALIDATION'; phase = $phase; runId = $RunId; runAttempt = $RunAttempt; scenarioId = $ScenarioId }
         }
         $hostPath = [string]$pwsh.Source
-        $arguments = @('-NoProfile', '-NonInteractive', '-File', $Command) + $arguments
+        # Windows PowerShell defaults to a Restricted execution policy on client
+        # machines, which would reject every controller script. Hosted images
+        # set RemoteSigned, so pass Bypass explicitly for that host only.
+        $hostArguments = @('-NoProfile', '-NonInteractive')
+        if ([IO.Path]::GetFileName($hostPath) -ieq 'powershell.exe') {
+            $hostArguments += @('-ExecutionPolicy', 'Bypass')
+        }
+        $arguments = $hostArguments + @('-File', $Command) + $arguments
     }
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
