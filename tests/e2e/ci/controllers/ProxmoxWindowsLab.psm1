@@ -1059,14 +1059,16 @@ function Get-OpenPathLabGuestOsInfo {
 $cv = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 [ordered]@{ productType = 'client'; editionId = [string]$cv.EditionID; productName = [string]$cv.ProductName; version = [string]$cv.DisplayVersion; build = "$($cv.CurrentBuild).$($cv.UBR)"; architecture = [string]$env:PROCESSOR_ARCHITECTURE } | ConvertTo-Json -Compress
 '@
-    $output = Invoke-OpenPathLabQgaScript -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid -PowerShell $script
+    # The guest agent can restart while Windows finishes booting; this query is
+    # cheap and idempotent, so allow a full boot window of retries.
+    $output = Invoke-OpenPathLabQgaScript -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid -PowerShell $script -Attempts 15
     return (ConvertFrom-OpenPathLabJsonText -Text $output)
 }
 
 function Get-OpenPathLabGuestBootId {
     param([string]$SshCommand, [string]$SshHost, [int]$Vmid)
     $script = "([datetime](Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime).ToUniversalTime().ToString('o')"
-    $output = Invoke-OpenPathLabQgaScript -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid -PowerShell $script
+    $output = Invoke-OpenPathLabQgaScript -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid -PowerShell $script -Attempts 15
     $bootId = ($output -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Last 1)
     if ([string]::IsNullOrWhiteSpace($bootId)) { throw 'desktop-lab-guest-query-failed' }
     return $bootId
