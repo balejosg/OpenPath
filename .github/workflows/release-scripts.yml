@@ -412,7 +412,9 @@ jobs:
   windows-desktop-survival:
     name: Windows Desktop Survival
     runs-on: [self-hosted, Linux, X64, proxmox, openpath]
-    timeout-minutes: 45
+    # Four scenarios with reboots plus a failed scenario's cleanup exceeded the
+    # previous 45 minute budget and the job was cancelled mid-matrix.
+    timeout-minutes: 75
     outputs:
       evidence-artifact-id: ${{ steps.desktop-evidence-upload.outputs.artifact-id }}
     needs: [windows-offline-template, windows-personalized-http-e2e]
