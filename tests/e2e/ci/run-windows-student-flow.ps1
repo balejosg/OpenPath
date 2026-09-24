@@ -845,7 +845,7 @@ function Start-ApiServer {
     }
 
     $originalEnv = @{}
-    foreach ($name in 'NODE_ENV','JWT_SECRET','SHARED_SECRET','DB_HOST','DB_PORT','DB_NAME','DB_USER','DB_PASSWORD','PORT','PUBLIC_URL','DATA_DIR','OPENPATH_FORCE_SERVER_START') {
+    foreach ($name in 'NODE_ENV','JWT_SECRET','SHARED_SECRET','DB_HOST','DB_PORT','DB_NAME','DB_USER','DB_PASSWORD','PORT','PUBLIC_URL','DATA_DIR','OPENPATH_FORCE_SERVER_START','OPENPATH_FIREFOX_RELEASE_ROOT') {
         $originalEnv[$name] = (Get-Item "Env:$name" -ErrorAction SilentlyContinue).Value
     }
 
@@ -862,6 +862,10 @@ function Start-ApiServer {
         $env:PUBLIC_URL = "http://127.0.0.1:$($script:ApiPort)"
         $env:DATA_DIR = $dataDir
         $env:OPENPATH_FORCE_SERVER_START = 'true'
+        # The API serves the signed Firefox release XPI to the managed browser
+        # boundary; point it at the staged copy because the Selenium XPI
+        # packaging removes firefox-extension/build before Firefox fetches it.
+        $env:OPENPATH_FIREFOX_RELEASE_ROOT = Join-Path $script:RepoRoot 'windows\browser-extension\firefox-release'
 
         $script:ApiProcess = Start-Process -FilePath $nodeCommand `
             -ArgumentList @('--import', 'tsx', 'api/src/server.ts') `
