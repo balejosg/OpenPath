@@ -577,11 +577,28 @@ function Assert-WindowsProfilelessAppControlCommitted {
     if ([string]$config.appControlCommitState -ne 'committed') {
         throw "Direct PowerShell install did not commit AppControl: $($config.appControlCommitState)"
     }
-    Import-Module 'C:\OpenPath\lib\AppControl.psm1' -Force -Global -ErrorAction Stop
-    $healthCommand = Get-Command -Name 'AppControl\Get-OpenPathNonAdminAppControlHealth' -ErrorAction Stop
-    $health = & $healthCommand -Mode ([string]$config.nonAdminAppControlMode) `
-        -ApprovedBrowsers @($config.approvedStudentBrowsers) -Profile ([string]$config.appControlProfile) `
-        -ApplicationCatalog $config.approvedApplicationCatalog -TargetSid $script:ProfilelessInstallTargetSid
+    # Evaluate health under Windows PowerShell: the product's scheduled tasks run
+    # under PowerShell.exe, and under pwsh the AppX cmdlets load via implicit
+    # remoting, which deserializes package objects and breaks the AppLocker
+    # identity binding used by the strict runtime baseline.
+    $healthRunnerPath = Join-Path $script:ArtifactsRoot 'windows-appcontrol-health-runner.ps1'
+    $healthJsonPath = Join-Path $script:ArtifactsRoot 'windows-appcontrol-health.json'
+    $healthRunner = @"
+`$ErrorActionPreference = 'Stop'
+Import-Module 'C:\OpenPath\lib\AppControl.psm1' -Force -Global
+`$config = Get-Content '$configPath' -Raw | ConvertFrom-Json
+`$health = AppControl\Get-OpenPathNonAdminAppControlHealth -Mode ([string]`$config.nonAdminAppControlMode) -ApprovedBrowsers @(`$config.approvedStudentBrowsers) -Profile ([string]`$config.appControlProfile) -ApplicationCatalog `$config.approvedApplicationCatalog -TargetSid '$($script:ProfilelessInstallTargetSid)'
+`$health | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath '$healthJsonPath' -Encoding UTF8
+"@
+    Set-Content -LiteralPath $healthRunnerPath -Value $healthRunner -Encoding UTF8
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $healthRunnerPath | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "AppControl health evaluation failed under Windows PowerShell (exit $LASTEXITCODE)"
+    }
+    if (-not (Test-Path -LiteralPath $healthJsonPath)) {
+        throw 'AppControl health evaluation produced no JSON evidence'
+    }
+    $health = Get-Content -LiteralPath $healthJsonPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     $acceptanceFailures = @()
     if (-not $health.Healthy) { $acceptanceFailures += 'health-unhealthy' }
     if (-not $health.IdentityResolved) { $acceptanceFailures += 'identity-unresolved' }

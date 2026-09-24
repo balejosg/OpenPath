@@ -2093,7 +2093,7 @@ describe('repository verification contract', () => {
     );
     assert.match(
       windowsRunner,
-      /AppControl\\Get-OpenPathNonAdminAppControlHealth[\s\S]*?-TargetSid\s+\$script:ProfilelessInstallTargetSid[\s\S]*?target-sid-mismatch/i,
+      /AppControl\\Get-OpenPathNonAdminAppControlHealth[\s\S]*?-TargetSid\s+'\$\(\$script:ProfilelessInstallTargetSid\)'[\s\S]*?target-sid-mismatch/i,
       'the profileless proof must use the installed AppControl command and the exact disposable SID'
     );
   });
