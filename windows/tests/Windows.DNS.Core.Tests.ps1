@@ -265,7 +265,7 @@ Describe "DNS Module" {
                 # Affinity mask must include the wildcard so subdomains are forwarded upstream too.
                 $definition.DomainAffinityMask | Should -Match 'portal\.127\.0\.0\.1\.sslip\.io'
                 $definition.DomainAffinityMask | Should -Match '\*\.login\.example\.test'
-                $content.IndexOf('# Captive portal infrastructure (configured)') | Should -BeLessThan $content.IndexOf('NX *')
+                $content | Should -Not -Match '(?m)^NX \*\s*$'
             }
         }
 
@@ -532,10 +532,7 @@ Describe "DNS Module" {
                     'FW >example.com',
                     'FW test.com',
                     'FW >test.com',
-                    '# DEFAULT BLOCK (NXDOMAIN for everything else)',
-                    '# This MUST come last after FW rules.',
-                    '# Upstream DNS: 1.1.1.1',
-                    'NX *'
+                    '# Upstream DNS: 1.1.1.1'
                 )
 
                 foreach ($needle in $expectedNeedles) {
@@ -546,16 +543,15 @@ Describe "DNS Module" {
                 $content | Should -Not -Match 'NX >\*'
 
                 $whitelistSectionIndex = $content.IndexOf('# WHITELISTED DOMAINS')
-                $defaultBlockRuleIndex = $content.IndexOf('NX *')
                 $whitelistSectionIndex | Should -BeGreaterThan -1
-                $defaultBlockRuleIndex | Should -BeGreaterThan $whitelistSectionIndex
+                $content | Should -Not -Match '(?m)^NX \*\s*$'
 
                 @($definition.EffectiveWhitelistedDomains).Count | Should -Be 2
                 $definition.WasTruncated | Should -BeFalse
             }
         }
 
-        It "Renders Microsoft system domains as essential FW rules before the default block" {
+        It "Renders Microsoft system domains as essential FW rules" {
             InModuleScope DNS {
                 $definition = New-AcrylicHostsDefinition `
                     -WhitelistedDomains @('example.com') `
@@ -566,7 +562,6 @@ Describe "DNS Module" {
                     })
 
                 $content = ConvertTo-AcrylicHostsContent -Definition $definition
-                $defaultBlockRuleIndex = $content.IndexOf('NX *')
 
                 foreach ($domain in @(
                         'windowsupdate.com',
@@ -579,7 +574,6 @@ Describe "DNS Module" {
                     )) {
                     $content | Should -Match "(?m)^FW $([regex]::Escape($domain))$"
                     $content | Should -Match "(?m)^FW >$([regex]::Escape($domain))$"
-                    $content.IndexOf("FW $domain") | Should -BeLessThan $defaultBlockRuleIndex
                     $definition.DomainAffinityMask | Should -Match "$([regex]::Escape($domain));\*\.$([regex]::Escape($domain))"
                 }
 
@@ -587,7 +581,7 @@ Describe "DNS Module" {
             }
         }
 
-        It "Renders Firefox update and security domains as essential FW rules before the default block" {
+        It "Renders Firefox update and security domains as essential FW rules" {
             InModuleScope DNS {
                 $definition = New-AcrylicHostsDefinition `
                     -WhitelistedDomains @('example.com') `
@@ -598,7 +592,6 @@ Describe "DNS Module" {
                     })
 
                 $content = ConvertTo-AcrylicHostsContent -Definition $definition
-                $defaultBlockRuleIndex = $content.IndexOf('NX *')
 
                 foreach ($domain in @(
                         'aus5.mozilla.org',
@@ -618,7 +611,6 @@ Describe "DNS Module" {
                     )) {
                     $content | Should -Match "(?m)^FW $([regex]::Escape($domain))$"
                     $content | Should -Match "(?m)^FW >$([regex]::Escape($domain))$"
-                    $content.IndexOf("FW $domain") | Should -BeLessThan $defaultBlockRuleIndex
                     $definition.DomainAffinityMask | Should -Match "$([regex]::Escape($domain));\*\.$([regex]::Escape($domain))"
                 }
 
@@ -684,9 +676,7 @@ Describe "DNS Module" {
                 $content | Should -Not -Match '(?m)^FW blocked\.cdn\.example$'
 
                 $overlayRuleIndex = $content.IndexOf('FW cdn.example')
-                $defaultBlockRuleIndex = $content.IndexOf('NX *')
                 $overlayRuleIndex | Should -BeGreaterThan -1
-                $defaultBlockRuleIndex | Should -BeGreaterThan $overlayRuleIndex
                 $definition.DomainAffinityMask | Should -Match 'cdn\.example'
             }
         }
@@ -794,9 +784,7 @@ Describe "DNS Module" {
                     $content | Should -Not -Match '(?m)^FW >www\.redditstatic\.com$'
                     $content | Should -Not -Match '(?m)^FW >emoji\.redditmedia\.com$'
                     $dependencyRuleIndex = $content.IndexOf('FW www.redditstatic.com')
-                    $defaultBlockRuleIndex = $content.IndexOf('NX *')
                     $dependencyRuleIndex | Should -BeGreaterThan -1
-                    $defaultBlockRuleIndex | Should -BeGreaterThan $dependencyRuleIndex
                 }
             }
             finally {
@@ -922,11 +910,11 @@ Describe "DNS Module" {
             )
 
             Assert-ContentContainsAll -Content $modelContent -Needles @(
-                "'NX *'",
                 'function Test-AcrylicStaticAddressDomain',
                 'function Get-AcrylicForwardRules',
                 'function New-AcrylicHostsDefinition'
             )
+            $modelContent | Should -Not -Match 'NX \*'
             Assert-ContentContainsAll -Content $rendererContent -Needles @(
                 'function ConvertTo-AcrylicHostsContent'
             )

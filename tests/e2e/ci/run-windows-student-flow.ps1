@@ -1188,9 +1188,13 @@ function Assert-InstalledAcrylicRuntime {
     $hostsHash = (Get-FileHash -Algorithm SHA256 -Path $hostsPath).Hash
     $requiredHostsMarkers = @(
         'FW raw.githubusercontent.com',
-        'FW github.com',
-        'NX *'
+        'FW github.com'
     )
+    # A wildcard "NX *" entry must never be present: Acrylic applies it to every
+    # name, including the hosts mappings, so whitelisted domains stop resolving.
+    if ($hostsContent -match '(?m)^NX \*\s*$') {
+        throw "AcrylicHosts.txt contains a wildcard NX entry that disables all hosts mappings at $hostsPath (sha256=$hostsHash)"
+    }
     $missingHostsMarkers = @($requiredHostsMarkers | Where-Object { -not $hostsContent.Contains($_) })
     if ($missingHostsMarkers.Count -gt 0) {
         throw "AcrylicHosts.txt is missing required Windows student-policy rules at $hostsPath (sha256=$hostsHash); missing markers: $($missingHostsMarkers -join ', ')"

@@ -1601,8 +1601,8 @@ Describe "Watchdog Script" {
             # Auto-discovered recovery host: stays exact (no descendant forward).
             $content | Should -Match 'FW redirect\.example\.test'
             $content | Should -Not -Match 'FW >redirect\.example\.test'
-            # Default block must still come last so everything else is NXDOMAIN'd.
-            $content.IndexOf('FW >nce.wedu.comunidad.madrid') | Should -BeLessThan $content.IndexOf('NX *')
+            # No wildcard NXDOMAIN entry: Acrylic would stop resolving every mapping.
+            $content | Should -Not -Match '(?m)^NX \*\s*$'
         }
 
         It "Performs one limited-mode render without bootstrap discovery promotion" {

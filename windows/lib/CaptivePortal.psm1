@@ -1195,7 +1195,7 @@ function Test-OpenPathLimitedCaptivePortalRecoveryHost {
     .DESCRIPTION
         Mirrors the rule-type logic of New-OpenPathLimitedCaptivePortalHostsDefinition:
         configured captive portal domains expect subdomain-inclusive rules; all others expect
-        exact forward rules. The rule must appear before the 'NX *' default-block entry.
+        exact forward rules. The rule must appear in AcrylicHosts.txt.
     .PARAMETER Domain
         Hostname to verify in AcrylicHosts.txt and via DNS.
     .PARAMETER DnsMaxAttempts

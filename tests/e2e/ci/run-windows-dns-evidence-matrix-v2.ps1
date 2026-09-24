@@ -207,12 +207,7 @@ function Add-FwRulesToHostsFile {
         ''
     ) -join "`r`n"
 
-    if ($content -match '(?m)^NX \*\s*$') {
-        $content = [regex]::Replace($content, '(?m)^NX \*\s*$', ($insertion + "`r`nNX *"), 1)
-    }
-    else {
-        $content = $content.TrimEnd() + "`r`n" + $insertion + "`r`nNX *`r`n"
-    }
+    $content = $content.TrimEnd() + "`r`n" + $insertion + "`r`n"
 
     [System.IO.File]::WriteAllText($HostsPath, $content, [System.Text.Encoding]::ASCII)
     return $rules

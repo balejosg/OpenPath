@@ -1026,7 +1026,7 @@ function Add-OpenPathCaptivePortalUpstreamFirewallAllow {
         the portal upstream. Rules use the OpenPath-DNS prefix, so the firewall
         rebuild on protected-mode restore removes them automatically -- the allow is
         only in effect during the captive-portal window. The adapter stays on
-        127.0.0.1 and the Acrylic NX * default-block is untouched (no fail-open).
+        127.0.0.1 and unmatched domains are denied by the upstream policy (no fail-open).
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(

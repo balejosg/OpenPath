@@ -1506,13 +1506,13 @@ describe('repository verification contract', () => {
     );
   });
 
-  test('windows DNS renderer uses documented default NXDOMAIN deny for unmatched fixture misses', () => {
+  test('windows DNS renderer never emits a wildcard NX entry that would shadow every mapping', () => {
     const acrylicHostsModel = readText('windows/lib/internal/AcrylicHostsModel.ps1');
 
-    assert.match(
+    assert.doesNotMatch(
       acrylicHostsModel,
-      /New-AcrylicHostsSection -Title 'DEFAULT BLOCK \(NXDOMAIN for everything else\)'[\s\S]*-Lines @\('NX \*'\)/,
-      'Acrylic default deny should use the documented NX * catch-all so unmatched domains cannot forward upstream'
+      /-Lines @\('NX \*'\)/,
+      'Acrylic applies "NX *" to every query, including the hosts mappings, so whitelisted domains stop resolving; unmatched domains are denied by the upstream policy instead'
     );
     assert.ok(
       !acrylicHostsModel.includes(
@@ -1545,8 +1545,8 @@ describe('repository verification contract', () => {
       'Windows student-policy runner should assert the installed Acrylic config still evaluates hosts rules'
     );
     assert.ok(
-      windowsRunner.includes("'NX *'"),
-      'Windows student-policy runner should assert the installed Acrylic hosts file contains the default deny rule'
+      !windowsRunner.includes("'NX *'"),
+      'Windows student-policy runner must not require the wildcard NX entry that shadows every hosts mapping'
     );
   });
 
@@ -1593,8 +1593,8 @@ describe('repository verification contract', () => {
     const pesterDnsTests = readText('windows/tests/Windows.DNS.Core.Tests.ps1');
 
     assert.ok(
-      pesterDnsTests.includes("'NX *'"),
-      'Windows DNS Pester tests should assert the documented NX default deny, not the old sinkhole rule'
+      pesterDnsTests.includes("Should -Not -Match '(?m)^NX \\*\\s*$'"),
+      'Windows DNS Pester tests should guard against emitting the wildcard NX entry that shadows every mapping'
     );
     assert.ok(
       !pesterDnsTests.includes("'0.0.0.0 /^.*$'"),

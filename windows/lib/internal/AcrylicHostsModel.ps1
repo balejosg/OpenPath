@@ -226,7 +226,10 @@ function New-AcrylicHostsDefinition {
     if ($captivePortalLines.Count -gt 0) {
         $sections += New-AcrylicHostsSection -Title 'Captive portal infrastructure (configured)' -Description 'Configured captive portal access (domain and subdomains)' -Lines @($captivePortalLines)
     }
-    $sections += New-AcrylicHostsSection -Title 'DEFAULT BLOCK (NXDOMAIN for everything else)' -Description 'This MUST come last after FW rules.' -Lines @('NX *')
+    # No wildcard NXDOMAIN entry: Acrylic treats "NX *" as a hosts entry that
+    # wins over every mapping in the file, so whitelisted hosts stop resolving
+    # and every query falls through to the upstream resolvers. Unlisted names
+    # are already handled by the upstream DNS policy and the firewall rules.
 
     $affinityMaskEntries = @(
         Get-AcrylicAffinityMaskEntries -Domains @($essentialDomains)
