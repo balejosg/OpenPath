@@ -457,7 +457,6 @@ function Restart-AcrylicService {
     if (-not $PSCmdlet.ShouldProcess("Acrylic DNS Proxy service", "Restart")) { return $false }
     Write-OpenPathLog "Restarting Acrylic service..."
     try {
-        Clear-AcrylicCache | Out-Null
         $service = Get-AcrylicService
         if (-not $service) {
             Ensure-AcrylicService -Start -TimeoutSeconds $TimeoutSeconds | Out-Null
@@ -466,21 +465,24 @@ function Restart-AcrylicService {
         if ($service) {
             $serviceName = $service.Name
             if ($service.Status -eq 'Running') {
+                # Stop before purging: a running Acrylic writes its in-memory
+                # address cache back on shutdown, so purging first leaves stale
+                # (including pre-whitelist negative) answers in place and
+                # whitelisted hosts stay unresolved after the restart.
                 try {
-                    Restart-Service -Name $serviceName -Force -ErrorAction Stop
+                    Stop-Service -Name $serviceName -Force -ErrorAction Stop
+                    Wait-AcrylicServiceStatus -Name $serviceName -Status 'Stopped' -TimeoutSeconds $TimeoutSeconds | Out-Null
                 }
                 catch {
-                    Write-OpenPathLog "Restart-Service failed for Acrylic; retrying stop/start: $_" -Level WARN
+                    Write-OpenPathLog "Stop-Service failed for Acrylic; retrying stop/start: $_" -Level WARN
                     if (-not (Stop-AcrylicService -Confirm:$false)) {
-                        throw
-                    }
-                    if (-not (Ensure-AcrylicService -Start -TimeoutSeconds $TimeoutSeconds)) {
                         throw
                     }
                 }
             }
-            else {
-                Start-Service -Name $serviceName -ErrorAction Stop
+            Clear-AcrylicCache | Out-Null
+            if (-not (Ensure-AcrylicService -Start -TimeoutSeconds $TimeoutSeconds)) {
+                throw 'Acrylic service did not report Running after the cache purge'
             }
             $service = Wait-AcrylicServiceStatus -Name $serviceName -Status 'Running' -TimeoutSeconds $TimeoutSeconds
             if ($service.Status -eq 'Running') {

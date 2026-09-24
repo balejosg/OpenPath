@@ -1298,8 +1298,8 @@ Describe "DNS Module" {
             }
         }
 
-        It "Purges AcrylicCache.dat before restarting the service" {
-            $script:removedAcrylicPaths = @()
+                It "Stops Acrylic before purging the address cache and starting it again" {
+            $script:acrylicRestartSequence = @()
 
             Mock Get-AcrylicPath { 'C:\Program Files (x86)\Acrylic DNS Proxy' } -ModuleName DNS
             Mock Test-Path {
@@ -1314,7 +1314,7 @@ Describe "DNS Module" {
                     [object]$ErrorAction
                 )
 
-                $script:removedAcrylicPaths += $Path
+                if ($Path -like '*AcrylicCache.dat') { $script:acrylicRestartSequence += 'purge' }
             } -ModuleName DNS
             Mock Get-Service {
                 [PSCustomObject]@{
@@ -1322,16 +1322,37 @@ Describe "DNS Module" {
                     Status = 'Running'
                 }
             } -ModuleName DNS
-            Mock Restart-Service { } -ModuleName DNS
+            Mock Stop-Service { $script:acrylicRestartSequence += 'stop' } -ModuleName DNS
+            Mock Ensure-AcrylicService {
+                param(
+                    [switch]$Start,
+                    [int]$TimeoutSeconds
+                )
+
+                if ($Start) { $script:acrylicRestartSequence += 'start' }
+                $true
+            } -ModuleName DNS
+            Mock Wait-AcrylicServiceStatus {
+                param(
+                    [string]$Name,
+                    [string]$Status,
+                    [int]$TimeoutSeconds
+                )
+
+                [PSCustomObject]@{
+                    Name = $Name
+                    Status = 'Running'
+                }
+            } -ModuleName DNS
             Mock Start-Sleep { } -ModuleName DNS
 
             $result = Restart-AcrylicService
 
             $result | Should -BeTrue
-            $script:removedAcrylicPaths | Should -Contain 'C:\Program Files (x86)\Acrylic DNS Proxy\AcrylicCache.dat'
+            $script:acrylicRestartSequence | Should -Be @('stop', 'purge', 'start')
         }
 
-        It "Falls back to stop/start when Restart-Service fails while Acrylic is running" {
+                It "Falls back to Stop-AcrylicService when Stop-Service fails while Acrylic is running" {
             $script:acrylicEnsureTimeouts = @()
             $script:acrylicStopFallbackCalls = 0
 
@@ -1343,8 +1364,8 @@ Describe "DNS Module" {
                     Status = 'Running'
                 }
             } -ModuleName DNS
-            Mock Restart-Service {
-                throw 'restart failed'
+            Mock Stop-Service {
+                throw 'stop failed'
             } -ModuleName DNS
             Mock Stop-AcrylicService {
                 $script:acrylicStopFallbackCalls += 1
@@ -1395,7 +1416,7 @@ Describe "DNS Module" {
                     Status = 'Running'
                 }
             } -ModuleName DNS
-            Mock Restart-Service { } -ModuleName DNS
+            Mock Stop-Service { } -ModuleName DNS
             Mock Wait-AcrylicServiceStatus {
                 param(
                     [string]$Name,
@@ -1424,7 +1445,7 @@ Describe "DNS Module" {
 
             $result | Should -BeFalse
             $script:acrylicWaitTimeouts | Should -Be @(4)
-            $script:acrylicEnsureTimeouts | Should -HaveCount 0
+            $script:acrylicEnsureTimeouts | Should -Be @(4)
         }
     }
 
