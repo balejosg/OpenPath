@@ -85,20 +85,69 @@ export function shouldRetryForceLocalUpdateResult(
   return false;
 }
 
+const TRANSIENT_DNS_RETRIES = 6;
+const TRANSIENT_DNS_RETRY_DELAY_MS = 2_000;
+const TRANSIENT_DNS_RETRY_MAX_DELAY_MS = 15_000;
+
+function sleepMilliseconds(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isTransientDnsCommandError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /forcibly closed|connection (refused|reset)|timed out|10054|WSAECONNRESET/i.test(message);
+}
+
+// The product's own update cycle restarts the local DNS service in bursts, so a
+// single Resolve-DnsName call can land on the restart gap. Retry transient
+// connection failures and non-answers with exponential backoff before failing.
+async function assertDnsWithRetry(
+  hostname: string,
+  command: string,
+  isExpected: (output: string) => boolean,
+  expectation: string
+): Promise<void> {
+  let lastOutput = '';
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const output = (await runPlatformCommand(command)).trim();
+      if (isExpected(output)) {
+        return;
+      }
+      lastOutput = output;
+    } catch (error) {
+      if (attempt >= TRANSIENT_DNS_RETRIES || !isTransientDnsCommandError(error)) {
+        throw error;
+      }
+      lastOutput = `error: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    if (attempt >= TRANSIENT_DNS_RETRIES) {
+      break;
+    }
+    await sleepMilliseconds(
+      Math.min(TRANSIENT_DNS_RETRY_DELAY_MS * 2 ** attempt, TRANSIENT_DNS_RETRY_MAX_DELAY_MS)
+    );
+  }
+  assert.ok(false, `Expected DNS for ${hostname} to be ${expectation}, received: ${lastOutput}`);
+}
+
 export async function assertDnsBlocked(hostname: string): Promise<void> {
   const command = isWindows()
     ? buildWindowsBlockedDnsCommand(hostname)
     : `sh -c "dig @127.0.0.1 ${hostname} +short +time=3 || true"`;
 
-  const output = await runPlatformCommand(command);
-  const normalized = output.trim();
   const fixtureIp = getFixtureIpForHostname(hostname);
-  assert.ok(
-    normalized === '' ||
+  await assertDnsWithRetry(
+    hostname,
+    command,
+    (normalized) =>
+      normalized === '' ||
       normalized === '0.0.0.0' ||
       normalized === '192.0.2.1' ||
       (fixtureIp !== null && normalized !== fixtureIp),
-    `Expected DNS for ${hostname} to be blocked, received: ${normalized}`
+    'blocked'
   );
 }
 
@@ -107,15 +156,16 @@ export async function assertDnsAllowed(hostname: string): Promise<void> {
     ? `powershell -NoLogo -Command "$result = Resolve-DnsName -Name '${hostname}' -Server 127.0.0.1 -DnsOnly -ErrorAction Stop; $result | Where-Object { $_.IPAddress } | ForEach-Object { $_.IPAddress }"`
     : `sh -c "dig @127.0.0.1 ${hostname} +short +time=3 || true"`;
 
-  const output = await runPlatformCommand(command);
-  const normalized = output.trim();
   const fixtureIp = getFixtureIpForHostname(hostname);
-  assert.ok(
-    normalized !== '' &&
+  await assertDnsWithRetry(
+    hostname,
+    command,
+    (normalized) =>
+      normalized !== '' &&
       normalized !== '0.0.0.0' &&
       normalized !== '192.0.2.1' &&
       (fixtureIp === null || normalized === fixtureIp),
-    `Expected DNS for ${hostname} to be allowed, received: ${normalized}`
+    'allowed'
   );
 }
 
