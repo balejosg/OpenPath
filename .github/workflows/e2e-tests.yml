@@ -459,6 +459,15 @@ jobs:
             package-lock.json
             tests/selenium/package-lock.json
 
+      # The payload hash used to restore or sign the release artifacts is
+      # computed over the built extension, so build it first.
+      - name: Build Firefox extension payload
+        uses: ./.github/actions/build-workspaces
+        with:
+          build-shared: 'false'
+          build-api: 'false'
+          build-extension: 'true'
+
       # The strict profile installs the managed browser boundary, which requires
       # an AMO-signed Firefox Release XPI. Without it the policy is discarded and
       # the acceptance can never be healthy.
@@ -475,7 +484,9 @@ jobs:
           set -euo pipefail
           test -f firefox-extension/build/firefox-release/metadata.json
           test -f firefox-extension/build/firefox-release/openpath-firefox-extension.xpi
-          node firefox-extension/verify-firefox-release-artifacts.mjs             --release-dir firefox-extension/build/firefox-release             --payload-hash "${{ steps.firefox-release.outputs.payload-hash }}"
+          node firefox-extension/verify-firefox-release-artifacts.mjs \
+            --release-dir firefox-extension/build/firefox-release \
+            --payload-hash "${{ steps.firefox-release.outputs.payload-hash }}"
 
       - name: Run Windows student-policy flow
         shell: pwsh
