@@ -173,6 +173,14 @@ foreach ($distributionPath in $firefoxDistributionPaths) {
 }
 
 $dnsServers = @('1.1.1.1', '8.8.8.8')
+# Optional override for lab networks where the public resolvers below are not
+# reachable, e.g. a runner whose DNS egress only allows a local resolver.
+if ($env:OPENPATH_RUNNER_DNS_SERVERS) {
+    $dnsServers = $env:OPENPATH_RUNNER_DNS_SERVERS -split '[,;]' |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ }
+}
+
 $activeAdapters = Get-NetAdapter -ErrorAction SilentlyContinue |
     Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notlike '*Loopback*' }
 
@@ -181,7 +189,7 @@ foreach ($adapter in $activeAdapters) {
 }
 
 if (-not $activeAdapters) {
-    Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses @('1.1.1.1', '8.8.8.8') -ErrorAction SilentlyContinue
+    Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses $dnsServers -ErrorAction SilentlyContinue
 }
 
 Clear-DnsClientCache -ErrorAction SilentlyContinue
