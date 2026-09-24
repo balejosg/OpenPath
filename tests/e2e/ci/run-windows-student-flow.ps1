@@ -1386,6 +1386,28 @@ function Invoke-SeleniumStudentSuite {
         $originalCoverageProfile = $env:OPENPATH_STUDENT_COVERAGE_PROFILE
         $originalScenarioGroup = $env:OPENPATH_STUDENT_SCENARIO_GROUP
         $originalDiagnosticsDir = $env:OPENPATH_STUDENT_DIAGNOSTICS_DIR
+        $originalSkipExtensionBundle = $env:OPENPATH_SKIP_EXTENSION_BUNDLE
+        # When the managed browser boundary is enforced, Firefox force-installs
+        # the signed extension through policy. Adding the bundled unsigned XPI
+        # on top makes the extension popup unreachable for the driver, so rely
+        # on the managed extension exactly like the Linux lane does.
+        $managedExtensionBoundary = $false
+        try {
+            $installedConfigPath = 'C:\OpenPath\data\config.json'
+            if (Test-Path -LiteralPath $installedConfigPath) {
+                $installedConfig = Get-Content -LiteralPath $installedConfigPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                $managedExtensionBoundary = [bool]$installedConfig.enforceManagedBrowserBoundary
+            }
+        }
+        catch {
+            $managedExtensionBoundary = $false
+        }
+        if ($managedExtensionBoundary) {
+            $env:OPENPATH_SKIP_EXTENSION_BUNDLE = '1'
+        }
+        else {
+            Remove-Item Env:\OPENPATH_SKIP_EXTENSION_BUNDLE -ErrorAction SilentlyContinue
+        }
         $env:OPENPATH_STUDENT_SCENARIO_FILE = $ScenarioPath
         $env:OPENPATH_FIXTURE_PORT = [string]$script:FixturePort
         $env:OPENPATH_EXTENSION_PATH = $ExtensionArchivePath
@@ -1479,6 +1501,12 @@ function Invoke-SeleniumStudentSuite {
         Remove-Item Env:\OPENPATH_DISABLE_SSE_COMMAND -ErrorAction SilentlyContinue
         Remove-Item Env:\OPENPATH_ENABLE_SSE_COMMAND -ErrorAction SilentlyContinue
         Remove-Item Env:\OPENPATH_STUDENT_MODE -ErrorAction SilentlyContinue
+        if ($null -ne $originalSkipExtensionBundle) {
+            $env:OPENPATH_SKIP_EXTENSION_BUNDLE = $originalSkipExtensionBundle
+        }
+        else {
+            Remove-Item Env:\OPENPATH_SKIP_EXTENSION_BUNDLE -ErrorAction SilentlyContinue
+        }
         if ($null -ne $originalCoverageProfile) {
             $env:OPENPATH_STUDENT_COVERAGE_PROFILE = $originalCoverageProfile
         }
