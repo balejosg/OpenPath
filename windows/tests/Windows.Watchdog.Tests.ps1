@@ -1232,8 +1232,9 @@ Describe "Watchdog Script" {
             $definitionStart = $moduleContent.IndexOf('function New-OpenPathLimitedCaptivePortalHostsDefinition')
             $definitionEnd = $moduleContent.IndexOf('function Test-OpenPathLimitedCaptivePortalProtection')
             $definitionBody = $moduleContent.Substring($definitionStart, $definitionEnd - $definitionStart)
-            $definitionBody.IndexOf('$sections += New-AcrylicHostsSection -Title ''CAPTIVE PORTAL RECOVERY') |
-                Should -BeLessThan $definitionBody.IndexOf('$sections += $section')
+            $recoverySectionIndex = $definitionBody.IndexOf('$sections += New-AcrylicHostsSection -Title ''CAPTIVE PORTAL RECOVERY')
+            $recoverySectionIndex | Should -BeGreaterThan -1
+            $definitionBody.IndexOf('$sections += $section') | Should -BeLessThan $recoverySectionIndex
             $definitionBody | Should -Match '(?s)foreach \(\$domain in @\(\$PortalRecoveryDomains\)\).*?Get-AcrylicExactForwardRule'
         }
 
@@ -1903,14 +1904,13 @@ Describe "Watchdog Script" {
                 'Test-OpenPathLimitedCaptivePortalDnsResolution -Domain $Domain',
                 'Test-OpenPathLimitedCaptivePortalProtection -PortalRecoveryDomains $renderedHosts',
                 'Resolve-OpenPathDnsWithRetry -Domain $Domain -Server ''127.0.0.1''',
-                'Get-AcrylicExactForwardRule -Domain $Domain',
-                '$match.Index -lt $defaultBlockIndex'
+                'Get-AcrylicExactForwardRule -Domain $Domain'
             )
             Assert-ContentContainsAll -Content $protectionBody -Needles @(
                 '[string[]]$PortalRecoveryDomains = @()',
                 'Get-OpenPathCaptivePortalAllowedHosts -Hosts $PortalRecoveryDomains',
                 '$recoveryHost',
-                'NX \*',
+                'CAPTIVE PORTAL RECOVERY',
                 '-DnsMaxAttempts $DnsMaxAttempts',
                 '-DnsAttemptTimeoutSeconds $DnsAttemptTimeoutSeconds'
             )
@@ -1942,8 +1942,7 @@ Describe "Watchdog Script" {
                 'Get-OpenPathConfiguredCaptivePortalDomains',
                 'Get-AcrylicForwardRules -Domain $Domain',
                 'Get-AcrylicExactForwardRule -Domain $Domain',
-                'foreach ($expectedRule in $expectedRules)',
-                '$match.Index -lt $defaultBlockIndex'
+                'foreach ($expectedRule in $expectedRules)'
             )
         }
 

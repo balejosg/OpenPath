@@ -46,21 +46,21 @@ function Get-AcrylicForwardRules {
 
     if ($sslipIpv4Address) {
         if ($blockedDescendants.Count -eq 0) {
-            return @("$sslipIpv4Address $normalizedDomain", "FW >$normalizedDomain")
+            return @("$sslipIpv4Address $normalizedDomain", "# FW >$normalizedDomain")
         }
 
         $escapedDomain = [regex]::Escape($normalizedDomain)
         $escapedBlockedPattern = ($blockedDescendants -join '|')
-        return @("$sslipIpv4Address $normalizedDomain", "FW $normalizedDomain", "FW /^(?!(?:.*\.)?(?:$escapedBlockedPattern)$).*\.$escapedDomain$")
+        return @("$sslipIpv4Address $normalizedDomain", "# FW $normalizedDomain", "# FW /^(?!(?:.*\.)?(?:$escapedBlockedPattern)$).*\.$escapedDomain$")
     }
 
     if ($blockedDescendants.Count -eq 0) {
-        return @("FW $normalizedDomain", "FW >$normalizedDomain")
+        return @("# FW $normalizedDomain", "# FW >$normalizedDomain")
     }
 
     $escapedDomain = [regex]::Escape($normalizedDomain)
     $escapedBlockedPattern = ($blockedDescendants -join '|')
-    return @("FW $normalizedDomain", "FW /^(?!(?:.*\.)?(?:$escapedBlockedPattern)$).*\.$escapedDomain$")
+    return @("# FW $normalizedDomain", "# FW /^(?!(?:.*\.)?(?:$escapedBlockedPattern)$).*\.$escapedDomain$")
 }
 
 function Get-AcrylicEssentialDomainGroups {
@@ -150,7 +150,7 @@ function Get-AcrylicExactForwardRule {
 
     $normalizedDomain = $Domain.Trim()
     if (-not $normalizedDomain) { return $null }
-    return "FW $normalizedDomain"
+    return "# FW $normalizedDomain"
 }
 
 function New-AcrylicHostsSection {

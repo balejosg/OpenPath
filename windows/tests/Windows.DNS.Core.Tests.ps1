@@ -572,8 +572,8 @@ Describe "DNS Module" {
                         'azureedge.net',
                         'blob.core.windows.net'
                     )) {
-                    $content | Should -Match "(?m)^FW $([regex]::Escape($domain))$"
-                    $content | Should -Match "(?m)^FW >$([regex]::Escape($domain))$"
+                    $content | Should -Match "(?m)^# FW $([regex]::Escape($domain))$"
+                    $content | Should -Match "(?m)^# FW >$([regex]::Escape($domain))$"
                     $definition.DomainAffinityMask | Should -Match "$([regex]::Escape($domain));\*\.$([regex]::Escape($domain))"
                 }
 
@@ -609,8 +609,8 @@ Describe "DNS Module" {
                         'redirector.gvt1.com',
                         'clients2.googleusercontent.com'
                     )) {
-                    $content | Should -Match "(?m)^FW $([regex]::Escape($domain))$"
-                    $content | Should -Match "(?m)^FW >$([regex]::Escape($domain))$"
+                    $content | Should -Match "(?m)^# FW $([regex]::Escape($domain))$"
+                    $content | Should -Match "(?m)^# FW >$([regex]::Escape($domain))$"
                     $definition.DomainAffinityMask | Should -Match "$([regex]::Escape($domain));\*\.$([regex]::Escape($domain))"
                 }
 
@@ -671,7 +671,7 @@ Describe "DNS Module" {
                 $content = ConvertTo-AcrylicHostsContent -Definition $definition
 
                 $content | Should -Match '# LOCAL RUNTIME DEPENDENCIES \(1\)'
-                $content | Should -Match '(?m)^FW cdn\.example$'
+                $content | Should -Match '(?m)^# FW cdn\.example$'
                 $content | Should -Not -Match 'FW >cdn\.example'
                 $content | Should -Not -Match '(?m)^FW blocked\.cdn\.example$'
 
@@ -779,8 +779,8 @@ Describe "DNS Module" {
                         })
                     $content = ConvertTo-AcrylicHostsContent -Definition $definition
 
-                    $content | Should -Match '(?m)^FW www\.redditstatic\.com$'
-                    $content | Should -Match '(?m)^FW emoji\.redditmedia\.com$'
+                    $content | Should -Match '(?m)^# FW www\.redditstatic\.com$'
+                    $content | Should -Match '(?m)^# FW emoji\.redditmedia\.com$'
                     $content | Should -Not -Match '(?m)^FW >www\.redditstatic\.com$'
                     $content | Should -Not -Match '(?m)^FW >emoji\.redditmedia\.com$'
                     $dependencyRuleIndex = $content.IndexOf('FW www.redditstatic.com')
@@ -817,8 +817,8 @@ Describe "DNS Module" {
                 $content = ConvertTo-AcrylicHostsContent -Definition $definition
 
                 $content | Should -Match '127\.0\.0\.1 portal\.127\.0\.0\.1\.sslip\.io'
-                $content | Should -Match '(?m)^FW >portal\.127\.0\.0\.1\.sslip\.io$'
-                $content | Should -Match '(?m)^FW >site\.10\.20\.30\.40\.sslip\.io$'
+                $content | Should -Match '(?m)^# FW >portal\.127\.0\.0\.1\.sslip\.io$'
+                $content | Should -Match '(?m)^# FW >site\.10\.20\.30\.40\.sslip\.io$'
                 $content | Should -Match '10\.20\.30\.40 site\.10\.20\.30\.40\.sslip\.io'
                 $content | Should -Match '192\.168\.56\.103 lan\.192-168-56-103\.sslip\.io'
                 $content | Should -Not -Match 'FW portal\.127\.0\.0\.1\.sslip\.io'
@@ -846,8 +846,8 @@ Describe "DNS Module" {
 
                 $content | Should -Match '(?m)^NX >cdn\.base-only\.127\.0\.0\.1\.sslip\.io$'
                 $content | Should -Match '(?m)^127\.0\.0\.1 base-only\.127\.0\.0\.1\.sslip\.io$'
-                $content | Should -Match '(?m)^FW base-only\.127\.0\.0\.1\.sslip\.io$'
-                $content | Should -Match '(?m)^FW /\^\(\?!\(\?:\.\*\\\.\)\?\(\?:cdn\\.base-only\\.127\\.0\\.0\\.1\\.sslip\\.io\)\$\)\.\*\\.base-only\\.127\\.0\\.0\\.1\\.sslip\\.io\$$'
+                $content | Should -Match '(?m)^# FW base-only\.127\.0\.0\.1\.sslip\.io$'
+                $content | Should -Match '(?m)^# FW /\^\(\?!\(\?:\.\*\\\.\)\?\(\?:cdn\\.base-only\\.127\\.0\\.0\\.1\\.sslip\\.io\)\$\)\.\*\\.base-only\\.127\\.0\\.0\\.1\\.sslip\\.io\$$'
                 $definition.DomainAffinityMask | Should -Match '(?<!\*\.)base-only\.127\.0\.0\.1\.sslip\.io'
                 $definition.DomainAffinityMask | Should -Not -Match '\*\.base-only\.127\.0\.0\.1\.sslip\.io'
                 $definition.DomainAffinityMask | Should -Not -Match 'cdn\.base-only\.127\.0\.0\.1\.sslip\.io'

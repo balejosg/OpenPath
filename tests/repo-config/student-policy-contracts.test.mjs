@@ -1443,12 +1443,12 @@ describe('repository verification contract', () => {
     );
     assert.match(
       acrylicHostsModel,
-      /"FW \/\^\(\?!.*\$escapedBlockedPattern.*\$escapedDomain\$"/,
+      /"# FW \/\^\(\?!.*\$escapedBlockedPattern.*\$escapedDomain\$"/,
       'Get-AcrylicForwardRules should emit a regex-based FW rule that excludes blocked descendants when needed'
     );
     assert.ok(
       acrylicHostsModel.includes(
-        '"FW $normalizedDomain", "FW /^(?!(?:.*\\.)?(?:$escapedBlockedPattern)$).*\\.$escapedDomain$"'
+        '"# FW $normalizedDomain", "# FW /^(?!(?:.*\\.)?(?:$escapedBlockedPattern)$).*\\.$escapedDomain$"'
       ),
       'Get-AcrylicForwardRules should exact-forward static sslip fixture roots when descendants are blocked'
     );
@@ -1460,7 +1460,7 @@ describe('repository verification contract', () => {
     );
     assert.match(
       acrylicHostsModel,
-      /if \(\$blockedDescendants\.Count -eq 0\) \{[\s\S]*?"FW >\$normalizedDomain"[\s\S]*?\}/,
+      /if \(\$blockedDescendants\.Count -eq 0\) \{[\s\S]*?"# FW >\$normalizedDomain"[\s\S]*?\}/,
       'Get-AcrylicForwardRules should keep the wildcard FW shortcut only for domains without blocked descendants'
     );
     assert.match(
