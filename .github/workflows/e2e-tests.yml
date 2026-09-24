@@ -459,6 +459,24 @@ jobs:
             package-lock.json
             tests/selenium/package-lock.json
 
+      # The strict profile installs the managed browser boundary, which requires
+      # an AMO-signed Firefox Release XPI. Without it the policy is discarded and
+      # the acceptance can never be healthy.
+      - name: Prepare signed Firefox release artifacts
+        id: firefox-release
+        uses: ./.github/actions/prepare-firefox-release-artifacts
+        with:
+          web-ext-api-key: ${{ secrets.WEB_EXT_API_KEY }}
+          web-ext-api-secret: ${{ secrets.WEB_EXT_API_SECRET }}
+
+      - name: Verify signed Firefox release bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f firefox-extension/build/firefox-release/metadata.json
+          test -f firefox-extension/build/firefox-release/openpath-firefox-extension.xpi
+          node firefox-extension/verify-firefox-release-artifacts.mjs             --release-dir firefox-extension/build/firefox-release             --payload-hash "${{ steps.firefox-release.outputs.payload-hash }}"
+
       - name: Run Windows student-policy flow
         shell: pwsh
         env:
