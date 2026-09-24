@@ -243,8 +243,26 @@ function Get-OpenPathWindowsRuntimeBaseline {
         }
     }
     if ($null -eq $PackageInventory) {
-        try { $PackageInventory = @(Get-AppxPackage -AllUsers -ErrorAction Stop) }
-        catch {
+        # AppX servicing shortly after installation can transiently fail the
+        # enumeration; retry a bounded number of times before declaring the
+        # inventory failed so a startup race cannot invalidate the baseline.
+        $inventoryError = $null
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                $PackageInventory = @(Get-AppxPackage -AllUsers -ErrorAction Stop)
+                $inventoryError = $null
+                break
+            }
+            catch {
+                $inventoryError = $_
+                if ($attempt -lt 3) { Start-Sleep -Seconds 2 }
+            }
+        }
+
+        if ($null -ne $inventoryError) {
+            if (Get-Command -Name Write-OpenPathLog -ErrorAction SilentlyContinue) {
+                Write-OpenPathLog "Windows runtime inventory enumeration failed: $($inventoryError.Exception.Message)" -Level WARN
+            }
             return [PSCustomObject][ordered]@{
                 SchemaVersion = 2
                 Status = 'failed'

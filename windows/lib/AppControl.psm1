@@ -2161,6 +2161,13 @@ function Get-OpenPathNonAdminAppControlHealth {
             }
             catch {
                 $windowsRuntimeBaselineValid = $false
+                $runtimeBaselineDetail = if ($null -ne $windowsRuntimeBaseline) {
+                    "status=$([string]$windowsRuntimeBaseline.Status); reasons=$(@($windowsRuntimeBaseline.ReasonCodes) -join ','); packages=$(@($windowsRuntimeBaseline.Packages).Count)"
+                }
+                else {
+                    'baseline-unavailable'
+                }
+                Write-OpenPathLog "Windows runtime baseline probe failed: $($_.Exception.Message); $runtimeBaselineDetail" -Level WARN
                 & $addReasonCode 'appcontrol_windows_runtime_inventory_failed'
                 & $addReasonCode 'strict-required-rule-missing'
             }
