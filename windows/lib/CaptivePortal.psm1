@@ -1083,8 +1083,8 @@ function New-OpenPathLimitedCaptivePortalHostsDefinition {
     .SYNOPSIS
         Builds the AcrylicHosts definition object for limited captive portal mode.
     .DESCRIPTION
-        Creates a hosts definition with a CAPTIVE PORTAL RECOVERY section inserted
-        before the DEFAULT BLOCK section. Configured captive portal domains receive
+        Creates a hosts definition with a CAPTIVE PORTAL RECOVERY section
+        appended to the sections. Configured captive portal domains receive
         subdomain-inclusive forward rules (Get-AcrylicForwardRules); all other
         discovery hosts receive exact forward rules (Get-AcrylicExactForwardRule).
         Both primary and secondary DNS are set to UpstreamDns.
@@ -1124,14 +1124,9 @@ function New-OpenPathLimitedCaptivePortalHostsDefinition {
         }
     )
 
-    $sections = @()
-    foreach ($section in @($definition.Sections)) {
-        if ([string]$section.Title -like 'DEFAULT BLOCK*') {
-            if ($portalRecoveryLines.Count -gt 0) {
-                $sections += New-AcrylicHostsSection -Title 'CAPTIVE PORTAL RECOVERY' -Description 'Temporary recovery access (configured portal domains cover subdomains; discovered hosts exact)' -Lines @($portalRecoveryLines)
-            }
-        }
-        $sections += $section
+    $sections = @($definition.Sections)
+    if ($portalRecoveryLines.Count -gt 0) {
+        $sections += New-AcrylicHostsSection -Title 'CAPTIVE PORTAL RECOVERY' -Description 'Temporary recovery access (configured portal domains cover subdomains; discovered hosts exact)' -Lines @($portalRecoveryLines)
     }
     $definition.Sections = @($sections)
     $definition.UpstreamDNS = $UpstreamDns

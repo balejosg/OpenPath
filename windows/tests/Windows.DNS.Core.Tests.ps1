@@ -914,7 +914,7 @@ Describe "DNS Module" {
                 'function Get-AcrylicForwardRules',
                 'function New-AcrylicHostsDefinition'
             )
-            $modelContent | Should -Not -Match 'NX \*'
+            $modelContent | Should -Not -Match "-Lines @\('NX \*'\)"
             Assert-ContentContainsAll -Content $rendererContent -Needles @(
                 'function ConvertTo-AcrylicHostsContent'
             )
@@ -1261,7 +1261,7 @@ Describe "DNS Module" {
             $result | Should -BeTrue
             $script:capturedHostsContent | Should -Not -BeNullOrEmpty
             $script:capturedHostsContent | Should -Match '# WHITELISTED DOMAINS \(0\)'
-            $script:capturedHostsContent | Should -Match 'NX \*'
+            $script:capturedHostsContent | Should -Not -Match '(?m)^NX \*\s*$'
             $script:capturedHostsContent | Should -Not -Match 'FW example\.com'
             Assert-IsAsciiEncoding $script:capturedHostsEncoding
             $script:capturedAcrylicConfig | Should -Not -BeNullOrEmpty
