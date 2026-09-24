@@ -431,7 +431,7 @@ jobs:
     name: Windows Student Policy
     # The strict runtime baseline requires the AppX subsystem: an IoT/LTSC image
     # reports no packages and cannot satisfy it. Run on a full Windows client.
-    runs-on: [self-hosted, Windows, X64, proxmox, openpath, full-windows]
+    runs-on: [self-hosted, Windows, X64, full-windows]
     timeout-minutes: 70
     needs: detect-relevant-changes
     if: needs.detect-relevant-changes.outputs.windows_student_policy == 'true'
@@ -487,6 +487,20 @@ jobs:
           node firefox-extension/verify-firefox-release-artifacts.mjs \
             --release-dir firefox-extension/build/firefox-release \
             --payload-hash "${{ steps.firefox-release.outputs.payload-hash }}"
+
+      # firefox-extension/build-xpi.sh removes firefox-extension/build when the
+      # flow packages the Selenium XPI, which would drop the signed release
+      # bundle before the installer stages it. Keep an installer-discoverable
+      # copy under windows/ (staging candidate) so the managed browser boundary
+      # can resolve the signed extension.
+      - name: Stage signed Firefox release bundle for the installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=windows/browser-extension/firefox-release
+          mkdir -p "$target"
+          cp firefox-extension/build/firefox-release/metadata.json "$target/metadata.json"
+          cp firefox-extension/build/firefox-release/openpath-firefox-extension.xpi "$target/openpath-firefox-extension.xpi"
 
       - name: Run Windows student-policy flow
         shell: pwsh
