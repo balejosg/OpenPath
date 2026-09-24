@@ -18,6 +18,19 @@ import type {
 } from './student-policy-types';
 import type { StudentPolicyDriverState } from './student-policy-driver-state';
 
+const TRANSIENT_NAVIGATION_RETRIES = 4;
+const TRANSIENT_NAVIGATION_RETRY_DELAY_MS = 2_000;
+
+function isTransientNavigationError(message: string): boolean {
+  return (
+    message.includes('dnsNotFound') ||
+    message.includes('NS_ERROR_UNKNOWN_HOST') ||
+    message.includes('NS_ERROR_NET_RESET') ||
+    message.includes('NS_ERROR_CONNECTION_REFUSED') ||
+    message.includes('about:neterror')
+  );
+}
+
 async function readElementText(
   state: StudentPolicyDriverState,
   element: WebElement
@@ -281,7 +294,23 @@ export async function openAndExpectLoaded(
   options: OpenAndExpectLoadedOptions
 ): Promise<void> {
   const driver = state.getDriver();
-  await driver.get(options.url);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await driver.get(options.url);
+      break;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // The product's own whitelist update cycle restarts the local DNS
+      // service, so a navigation can land on a transient DNS error page.
+      // Retry a bounded number of times before failing the expectation.
+      if (attempt >= TRANSIENT_NAVIGATION_RETRIES || !isTransientNavigationError(message)) {
+        throw error;
+      }
+      await new Promise((resolve) => {
+        setTimeout(resolve, TRANSIENT_NAVIGATION_RETRY_DELAY_MS);
+      });
+    }
+  }
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (options.title !== undefined) {
