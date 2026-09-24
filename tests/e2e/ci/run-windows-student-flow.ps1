@@ -1375,6 +1375,24 @@ function Install-AndEnrollClient {
     Write-DiagnosticNote "Scenario file after reconciliation: $(Get-Content $scenarioPath -Raw)"
 }
 
+function Reset-AcrylicDnsForStudentSuite {
+    # The product regenerates AcrylicHosts.txt during its update cycles; make
+    # sure the service reloads the current mapping and drops any stale
+    # negative cache before browser assertions depend on fixture resolution.
+    $acrylicRoot = 'C:\Program Files (x86)\Acrylic DNS Proxy'
+    try {
+        Stop-Service AcrylicDNSProxySvc -Force -ErrorAction Stop
+        Start-Sleep -Seconds 2
+        Remove-Item (Join-Path $acrylicRoot 'AcrylicCache.dat') -Force -ErrorAction SilentlyContinue
+        Start-Service AcrylicDNSProxySvc -ErrorAction Stop
+        Start-Sleep -Seconds 3
+        Write-DiagnosticNote 'Acrylic DNS service reloaded for the Selenium suite'
+    }
+    catch {
+        Write-DiagnosticNote "Acrylic DNS reload skipped: $_"
+    }
+}
+
 function Invoke-SeleniumStudentSuite {
     param(
         [Parameter(Mandatory = $true)][string]$ScenarioPath,
@@ -1383,6 +1401,8 @@ function Invoke-SeleniumStudentSuite {
         [Parameter(Mandatory = $true)][ValidateSet('full', 'fallback-propagation', 'dns-discovery-spike', 'dns-evidence-matrix', 'dns-evidence-matrix-v2', 'browser-dependency-observability-spike')][string]$CoverageProfile,
         [ValidateSet('full', 'request-lifecycle', 'path-blocking', 'exemptions')][string]$ScenarioGroup = 'full'
     )
+
+    Reset-AcrylicDnsForStudentSuite
 
     Push-Location (Join-Path $script:RepoRoot 'tests\selenium')
     try {
