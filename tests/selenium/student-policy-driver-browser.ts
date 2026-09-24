@@ -18,8 +18,9 @@ import type {
 } from './student-policy-types';
 import type { StudentPolicyDriverState } from './student-policy-driver-state';
 
-const TRANSIENT_NAVIGATION_RETRIES = 4;
+const TRANSIENT_NAVIGATION_RETRIES = 6;
 const TRANSIENT_NAVIGATION_RETRY_DELAY_MS = 2_000;
+const TRANSIENT_NAVIGATION_RETRY_MAX_DELAY_MS = 15_000;
 
 function isTransientNavigationError(message: string): boolean {
   return (
@@ -301,13 +302,17 @@ export async function openAndExpectLoaded(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // The product's own whitelist update cycle restarts the local DNS
-      // service, so a navigation can land on a transient DNS error page.
-      // Retry a bounded number of times before failing the expectation.
+      // service, sometimes in bursts; keep retrying with exponential backoff
+      // before failing the expectation.
       if (attempt >= TRANSIENT_NAVIGATION_RETRIES || !isTransientNavigationError(message)) {
         throw error;
       }
+      const retryDelayMs = Math.min(
+        TRANSIENT_NAVIGATION_RETRY_DELAY_MS * 2 ** attempt,
+        TRANSIENT_NAVIGATION_RETRY_MAX_DELAY_MS
+      );
       await new Promise((resolve) => {
-        setTimeout(resolve, TRANSIENT_NAVIGATION_RETRY_DELAY_MS);
+        setTimeout(resolve, retryDelayMs);
       });
     }
   }
