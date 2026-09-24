@@ -635,13 +635,13 @@ Describe "DNS Module" {
                 $lines = @($content -split "`n")
                 $regexForwardRules = @(
                     $lines | Where-Object {
-                        $_.StartsWith('FW /^') -and
+                        $_.StartsWith('# FW /^') -and
                         $_.Contains('ads\.example\.com') -and
                         $_.Contains('example\.com$')
                     }
                 )
                 $regexRule = $regexForwardRules[0]
-                $regexPattern = $regexRule.Substring(4).TrimStart('/').Replace('\\', '\')
+                $regexPattern = $regexRule.Substring(5).TrimStart('/').Replace('\\', '\')
 
                 $content.Contains('FW example.com') | Should -BeTrue
                 $content.Contains('NX >ads.example.com') | Should -BeTrue
