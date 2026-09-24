@@ -1380,6 +1380,15 @@ function Reset-AcrylicDnsForStudentSuite {
     # sure the service reloads the current mapping and drops any stale
     # negative cache before browser assertions depend on fixture resolution.
     $acrylicRoot = 'C:\Program Files (x86)\Acrylic DNS Proxy'
+    # Quiesce the background repair/update loops for the suite: the watchdog
+    # repair loop and SSE-driven immediate updates otherwise restart the DNS
+    # service in bursts and can rewrite the whitelist mid-navigation. The
+    # Selenium scenarios own the SSE listener lifecycle through
+    # OPENPATH_ENABLE_SSE_COMMAND / OPENPATH_DISABLE_SSE_COMMAND.
+    foreach ($taskName in @('OpenPath-Watchdog', 'OpenPath-SSE')) {
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Disable-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
+    }
     try {
         Stop-Service AcrylicDNSProxySvc -Force -ErrorAction Stop
         Start-Sleep -Seconds 2
