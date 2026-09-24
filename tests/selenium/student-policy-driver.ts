@@ -1,4 +1,5 @@
 import assert from 'node:assert';
+import { promises as dnsPromises } from 'node:dns';
 
 import { Builder, By, until, type WebDriver, type WebElement } from 'selenium-webdriver';
 import * as firefox from 'selenium-webdriver/firefox';
@@ -329,6 +330,38 @@ export class StudentPolicyDriver implements StudentPolicyDriverState {
 
   public async assertWhitelistContains(hostname: string): Promise<void> {
     await assertWhitelistContains(hostname);
+  }
+
+  public async waitForDnsAddress(
+    hostname: string,
+    expectedAddress = '127.0.0.1',
+    timeoutMs = 90_000
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let lastError: unknown = null;
+    for (;;) {
+      try {
+        const resolved = await dnsPromises.lookup(hostname, { all: true });
+        if (resolved.some((entry) => entry.address === expectedAddress)) {
+          return;
+        }
+        lastError = new Error(
+          `resolved to ${resolved.map((entry) => entry.address).join(', ') || 'no addresses'}`
+        );
+      } catch (error) {
+        lastError = error;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `DNS did not resolve ${hostname} to ${expectedAddress} within ${timeoutMs}ms: ${String(
+            lastError
+          )}`
+        );
+      }
+      await new Promise((resolve) => {
+        setTimeout(resolve, 2_000);
+      });
+    }
   }
 
   public async assertWhitelistMissing(hostname: string): Promise<void> {

@@ -875,6 +875,8 @@ async function seedBaselineWhitelist(
   await settlePolicyChange(driver, mode, async () => {
     await driver.assertWhitelistContains(driver.scenario.fixtures.portal);
     await driver.assertWhitelistContains(driver.scenario.fixtures.site);
+    await driver.waitForDnsAddress(driver.scenario.fixtures.portal);
+    await driver.waitForDnsAddress(driver.scenario.fixtures.site);
     if (options.verifyBrowser !== false) {
       await driver.openAndExpectLoaded({
         url: targets.portalOkUrl,
