@@ -141,7 +141,7 @@ function Set-OpenPathCaptivePortalMarker {
     .PARAMETER UpstreamDns
         IP address of the temporary upstream DNS resolver used during portal mode.
     .PARAMETER Mode
-        Portal operating mode: 'limited' (adapter stays on 127.0.0.1, NX * in effect)
+        Portal operating mode: 'limited' (adapter stays on 127.0.0.1, recovery section in effect)
         or 'passthrough' (adapter DNS reset to network resolver, full egress open).
     .PARAMETER UpstreamDnsSource
         Label describing how the upstream DNS address was obtained (e.g. 'dhcp', 'marker').
@@ -906,7 +906,7 @@ function Enable-OpenPathCaptivePortalPassthroughMode {
 function Enable-OpenPathCaptivePortalLimitedMode {
     <#
     .SYNOPSIS
-        Enters limited mode: keeps adapter DNS on 127.0.0.1 with NX * and forwards
+        Enters limited mode: keeps adapter DNS on 127.0.0.1 with the recovery section and forwards
         only the declared portal recovery domains to the network resolver via Acrylic.
     .DESCRIPTION
         Merges AllowedHosts, existing marker hosts, and configured captive portal domains
@@ -1242,14 +1242,9 @@ function Test-OpenPathLimitedCaptivePortalRecoveryHost {
         }
 
         $content = Get-Content -LiteralPath $hostsPath -Raw -ErrorAction Stop
-        $defaultBlockIndex = $content.IndexOf("NX *")
         foreach ($expectedRule in $expectedRules) {
             $match = [regex]::Match($content, "(?m)^\s*$([regex]::Escape($expectedRule))\s*$")
             if (-not $match.Success) {
-                return $false
-            }
-
-            if (-not ($defaultBlockIndex -lt 0 -or $match.Index -lt $defaultBlockIndex)) {
                 return $false
             }
         }
@@ -1393,7 +1388,7 @@ function Test-OpenPathLimitedCaptivePortalProtection {
     <#
     .SYNOPSIS
         Verifies that limited captive portal mode is correctly enforced: all recovery hosts
-        resolve, the NX * sinkhole rule is present, and all adapters use 127.0.0.1 for DNS.
+        resolve, the captive portal recovery section is present, and all adapters use 127.0.0.1 for DNS.
     .PARAMETER PortalRecoveryDomains
         Hostnames that must be individually verified via Test-OpenPathLimitedCaptivePortalRecoveryHost.
     .PARAMETER DnsMaxAttempts
@@ -1434,7 +1429,10 @@ function Test-OpenPathLimitedCaptivePortalProtection {
             return $false
         }
         $content = Get-Content -LiteralPath $hostsPath -Raw -ErrorAction Stop
-        if ($content -notmatch '(?m)^\s*NX \*\s*$') {
+        # Limited mode is identified by its recovery section, not by a wildcard
+        # NX entry: Acrylic applies "NX *" to every query, including the hosts
+        # mappings, so the wildcard must never be emitted.
+        if ($content -notmatch '(?m)^# CAPTIVE PORTAL RECOVERY\s*$') {
             return $false
         }
         if (-not (Test-OpenPathCaptivePortalAdaptersUseLocalDns)) {
@@ -1970,7 +1968,7 @@ function Enable-OpenPathCaptivePortalMode {
     }
     # Include the admin-declared captive portal domains as recovery hosts so the
     # autonomous watchdog path (which calls this without -PortalRecoveryDomains) enters
-    # LIMITED mode -- keeping the adapter on 127.0.0.1 and NX * (fail-closed) and
+    # LIMITED mode -- keeping the adapter on 127.0.0.1 with the recovery section (fail-closed) and
     # forwarding the declared domains to the network DHCP DNS -- instead of falling back
     # to passthrough (which resets the adapter DNS and is fail-open).
     $allowedHosts = @(Get-OpenPathCaptivePortalAllowedHosts -Hosts (@($PortalRecoveryDomains) + @(Get-OpenPathConfiguredCaptivePortalDomains)))
