@@ -1401,6 +1401,16 @@ function Set-ProductSslipResolverUpstream {
 
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\OpenPath\scripts\Update-OpenPath.ps1' | Out-Host
 
+    # Acrylic keeps serving the negative answers cached while the install still
+    # pointed at the lab resolver, so reload the service and its hosts file
+    # before proving the chain.
+    $acrylicRoot = 'C:\Program Files (x86)\Acrylic DNS Proxy'
+    Stop-Service AcrylicDNSProxySvc -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Remove-Item (Join-Path $acrylicRoot 'AcrylicCache.dat') -Force -ErrorAction SilentlyContinue
+    Start-Service AcrylicDNSProxySvc -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+
     $deadline = (Get-Date).AddSeconds(60)
     while ((Get-Date) -lt $deadline) {
         try {
