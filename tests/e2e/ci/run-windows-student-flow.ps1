@@ -2244,7 +2244,17 @@ finally {
     }
 
     try {
-        Invoke-TimedStep -Name 'Remove profileless install target' -ScriptBlock { Remove-WindowsProfilelessInstallTarget }
+        Invoke-TimedStep -Name 'Remove profileless install target' -ScriptBlock {
+            if ($env:OPENPATH_KEEP_CLIENT_FOR_BROWSER_BOUNDARY -eq '1') {
+                # The browser-boundary probes validate the live AppControl
+                # boundary, including its restricted target; removing the
+                # profileless target here makes that validation flaky. The
+                # runner reset removes the target after the probes.
+                Write-DiagnosticNote 'Keeping profileless install target for browser-boundary probes; runner reset removes it.'
+                return
+            }
+            Remove-WindowsProfilelessInstallTarget
+        }
     }
     catch {
         if ($null -eq $cleanupError) {
