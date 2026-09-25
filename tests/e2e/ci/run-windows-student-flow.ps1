@@ -34,6 +34,7 @@ $script:MachineName = if ($env:OPENPATH_STUDENT_MACHINE_NAME) { [string]$env:OPE
 
 $script:ApiProcess = $null
 $script:FixtureProcess = $null
+$script:LabDnsGuardJob = $null
 $script:DatabaseMode = $null
 $script:PostgresServiceName = $null
 $script:PostgresBinDir = $null
@@ -1280,6 +1281,7 @@ function Wait-WindowsDnsPolicyReady {
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         try {
             Write-DiagnosticNote "Windows DNS policy readiness attempt $attempt/$maxAttempts"
+            Protect-LabResolverDns
             Assert-WindowsDnsPolicyReady
             return
         }
@@ -1448,16 +1450,31 @@ function Start-SslipResolver {
         throw 'node.exe was not found on PATH.'
     }
 
+    # A fixture left behind by an interrupted run keeps 127.0.0.2:53 bound and
+    # the startup probe would silently keep using the stale instance while the
+    # fresh one dies with EADDRINUSE. Stop stray fixtures before starting.
+    Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*openpath-sslip-resolver*' } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    Start-Sleep -Milliseconds 500
+
     $stdout = Join-Path $resolverDir 'resolver.log'
     $stderr = Join-Path $resolverDir 'resolver.err.log'
-    Start-Process -FilePath $nodeCommand `
+    $resolverProcess = Start-Process -FilePath $nodeCommand `
         -ArgumentList @($resolverScript) `
         -RedirectStandardOutput $stdout `
         -RedirectStandardError $stderr `
-        -WindowStyle Hidden | Out-Null
+        -WindowStyle Hidden `
+        -PassThru
 
     $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline) {
+        if ($resolverProcess.HasExited) {
+            $errorText = if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr -Raw } else { '' }
+            throw "sslip resolver fixture exited during startup: $errorText"
+        }
         try {
             $result = Resolve-DnsName -Name 'probe.127.0.0.1.sslip.io' -Server '127.0.0.2' -Type A -DnsOnly -ErrorAction Stop
             if (@($result | Where-Object { $_.IPAddress -eq '127.0.0.1' }).Count -gt 0) {
@@ -1471,6 +1488,50 @@ function Start-SslipResolver {
     }
 
     throw 'sslip resolver fixture did not answer on 127.0.0.2:53 within 30 seconds.'
+}
+
+function Protect-LabResolverDns {
+    # The product reapplies its DNS default-deny policy whenever domains are
+    # applied, which blocks the resolver fixture's path to the lab resolver.
+    # Carve the lab resolver back out of the default-deny ranges (see
+    # tests/e2e/ci/protect-lab-dns.ps1); safe to call repeatedly.
+    $carveScript = Join-Path $script:RepoRoot 'tests\e2e\ci\protect-lab-dns.ps1'
+    if (-not (Test-Path -LiteralPath $carveScript)) {
+        return
+    }
+
+    try {
+        # Explicit Bypass: the runner's execution policy context does not always
+        # permit loading helper scripts.
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $carveScript | Out-Null
+    }
+    catch {
+        Write-DiagnosticNote "Lab DNS carve-out failed: $($_.Exception.Message)"
+    }
+}
+
+function Start-LabDnsGuard {
+    $carveScript = Join-Path $script:RepoRoot 'tests\e2e\ci\protect-lab-dns.ps1'
+    if (-not (Test-Path -LiteralPath $carveScript)) {
+        throw "lab DNS carve-out script not found: $carveScript"
+    }
+
+    $script:LabDnsGuardJob = Start-Job -Name 'openpath-lab-dns-guard' -ArgumentList $carveScript -ScriptBlock {
+        param([string]$CarveScript)
+
+        while ($true) {
+            try {
+                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $CarveScript | Out-Null
+            }
+            catch {
+                # The product may be replacing the rules right now; retry next pass.
+            }
+            Start-Sleep -Seconds 15
+        }
+    }
+
+    Protect-LabResolverDns
+    Write-DiagnosticNote 'lab DNS carve-out guard is running'
 }
 
 function Set-SslipResolverUpstreamDns {
@@ -1851,6 +1912,20 @@ function Stop-BackgroundJobs {
             }
         }
     }
+
+    if ($script:LabDnsGuardJob) {
+        Stop-Job -Job $script:LabDnsGuardJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $script:LabDnsGuardJob -Force -ErrorAction SilentlyContinue
+        $script:LabDnsGuardJob = $null
+    }
+
+    # The resolver fixture must not survive the lane: a leftover instance binds
+    # 127.0.0.2:53 and makes the next run's fixture fail with EADDRINUSE.
+    Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*openpath-sslip-resolver*' } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
 }
 
 function Cleanup-TestPostgres {
@@ -2041,6 +2116,7 @@ try {
     Invoke-TimedStep -Name 'Start sslip resolver fixture' -ScriptBlock {
         Start-SslipResolver | Out-Null
         Set-SslipResolverUpstreamDns
+        Start-LabDnsGuard
     }
     Invoke-TimedStep -Name 'Assert profileless Windows install precondition' -ScriptBlock { Assert-WindowsProfilelessInstallPrecondition }
     Invoke-TimedStep -Name 'Install and enroll client (sse)' -ScriptBlock { Install-AndEnrollClient -Scenario $scenario -InstallClient $true }

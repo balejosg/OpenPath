@@ -13,6 +13,7 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             $_.CommandLine -like '*run-windows-student-flow.ps1*' -or
             $_.CommandLine -like '*run-windows-browser-boundary-ci.ps1*' -or
             $_.CommandLine -like '*windows-browser-enforcement.ps1*' -or
+            $_.CommandLine -like '*openpath-sslip-resolver*' -or
             $_.CommandLine -like '*C:\OpenPath\scripts\Update-OpenPath.ps1*' -or
             $_.CommandLine -like '*C:\OpenPath\scripts\Start-SSEListener.ps1*' -or
             $_.CommandLine -like '*openpath-postgres*'
@@ -94,6 +95,13 @@ foreach ($path in $pathsToRemove) {
         Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+
+# The install root is gone at this point, so any remaining OpenPath firewall
+# rules are leftovers from an interrupted run. They include the DNS
+# default-deny rules, which block port 53 egress and poison the next run's
+# resolver chain (and the runner's own DNS) until removed.
+Get-NetFirewallRule -DisplayName '*OpenPath*' -ErrorAction SilentlyContinue |
+    Remove-NetFirewallRule -ErrorAction SilentlyContinue
 
 try {
     if (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue) {
