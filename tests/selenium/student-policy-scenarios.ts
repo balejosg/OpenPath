@@ -2609,14 +2609,33 @@ async function runTemporaryExemptionScenarios(
     await driver.assertDnsBlocked(targets.hosts.exempted);
     await driver.assertHttpBlocked(targets.exemptedDomainUrl);
   });
-  await client.setTestClock(null);
-  // Restoring the wall clock does not re-evaluate the schedule on its own: the
-  // group stays disabled until the next boundary tick, which breaks the next
-  // scenario's whitelist assertions. Re-tick with the real time so the group
-  // returns to its active state.
-  await client.tickBoundaries(new Date().toISOString());
+  await restoreWallClockAndConverge(client);
 
   void expiringExemption;
+}
+
+async function restoreWallClockAndConverge(client: StudentPolicyServerClient): Promise<void> {
+  await client.setTestClock(null);
+  // Restoring the wall clock does not re-evaluate the schedule on its own and
+  // a single boundary tick can still observe the fail-open state, which breaks
+  // the next scenario's whitelist assertions. Converge until the machine
+  // whitelist is no longer the disabled marker.
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    await client.tickBoundaries(new Date().toISOString());
+    const whitelist = await client.fetchMachineWhitelist();
+    if (!whitelist.includes('DESACTIVADO')) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        'Wall clock restored but the machine whitelist stayed in the fail-open state'
+      );
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 2_000);
+    });
+  }
 }
 
 async function runActiveGroupAndScheduleScenarios(
@@ -2664,10 +2683,7 @@ async function runActiveGroupAndScheduleScenarios(
   await settlePolicyChange(driver, mode, async () => {
     await driver.assertWhitelistMissing(targets.hosts.alternateOnly);
   });
-  await client.setTestClock(null);
-  // Same schedule re-evaluation caveat as above: tick with the restored wall
-  // clock so the active group state is correct for the following scenarios.
-  await client.tickBoundaries(new Date().toISOString());
+  await restoreWallClockAndConverge(client);
 }
 
 export async function runStudentPolicyMatrix(
