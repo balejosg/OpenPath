@@ -1422,11 +1422,25 @@ function Start-SslipResolver {
 }
 
 function Set-SslipResolverUpstreamDns {
-    # Point the adapter at the resolver fixture so the product captures it as
-    # PrimaryDNS during install; the fixture forwards non-sslip names to the
-    # lab resolver and keeps the field resolver chain intact.
-    Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses @('127.0.0.2') -ErrorAction SilentlyContinue
-    Clear-DnsClientCache -ErrorAction SilentlyContinue
+    # Point the adapter at the resolver fixture so Get-InstallerPrimaryDNS
+    # captures it during install; the fixture forwards non-sslip names to the
+    # lab resolver. The adapter write is verified with retries because a silent
+    # failure here makes the install fall back to the lab resolver and the
+    # whitelisted sslip subdomains then fail to resolve mid-suite.
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses @('127.0.0.2') -ErrorAction SilentlyContinue | Out-Null
+        Clear-DnsClientCache -ErrorAction SilentlyContinue
+        $current = @(Get-DnsClientServerAddress -InterfaceAlias 'Ethernet' -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            ForEach-Object { @($_.ServerAddresses) })
+        if ($current -contains '127.0.0.2') {
+            Write-DiagnosticNote 'Adapter DNS points at the sslip resolver fixture (127.0.0.2)'
+            return $true
+        }
+        Start-Sleep -Seconds 2
+    }
+
+    throw "Adapter DNS did not accept the sslip resolver fixture address: $(@(Get-DnsClientServerAddress -InterfaceAlias 'Ethernet' -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { @($_.ServerAddresses) }) -join ', ')"
 }
 
 function Reset-AcrylicDnsForStudentSuite {
