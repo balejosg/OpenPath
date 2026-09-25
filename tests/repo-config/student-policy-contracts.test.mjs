@@ -188,7 +188,7 @@ describe('repository verification contract', () => {
     );
     assert.match(
       lifecycleSegment,
-      /await settleBlockedRequestTarget\(driver, mode, targets\);[\s\S]*openBlockedScreenAndSubmitRequest/,
+      /await settleBlockedRequestTarget\(driver, mode, targets\);[\s\S]*submitBlockedRequestExpectingApiRecord/,
       'SP-001 should settle native blocking before opening the blocked-page request form'
     );
 
@@ -199,8 +199,13 @@ describe('repository verification contract', () => {
     );
     assert.match(
       fallbackSegment,
-      /await settleBlockedRequestTarget\(driver, mode, targets\);[\s\S]*openBlockedScreenAndSubmitRequest/,
+      /await settleBlockedRequestTarget\(driver, mode, targets\);[\s\S]*submitBlockedRequestExpectingApiRecord/,
       'fallback propagation should settle native blocking before opening the blocked-page request form'
+    );
+    assert.match(
+      scenarios,
+      /async function submitBlockedRequestExpectingApiRecord[\s\S]*driver\.openBlockedScreenAndSubmitRequest/,
+      'request-lifecycle submissions should drive the blocked-page request form through the shared helper'
     );
   });
 
