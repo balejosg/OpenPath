@@ -2610,6 +2610,11 @@ async function runTemporaryExemptionScenarios(
     await driver.assertHttpBlocked(targets.exemptedDomainUrl);
   });
   await client.setTestClock(null);
+  // Restoring the wall clock does not re-evaluate the schedule on its own: the
+  // group stays disabled until the next boundary tick, which breaks the next
+  // scenario's whitelist assertions. Re-tick with the real time so the group
+  // returns to its active state.
+  await client.tickBoundaries(new Date().toISOString());
 
   void expiringExemption;
 }
@@ -2660,6 +2665,9 @@ async function runActiveGroupAndScheduleScenarios(
     await driver.assertWhitelistMissing(targets.hosts.alternateOnly);
   });
   await client.setTestClock(null);
+  // Same schedule re-evaluation caveat as above: tick with the restored wall
+  // clock so the active group state is correct for the following scenarios.
+  await client.tickBoundaries(new Date().toISOString());
 }
 
 export async function runStudentPolicyMatrix(
