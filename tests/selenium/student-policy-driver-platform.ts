@@ -95,6 +95,17 @@ function sleepMilliseconds(ms: number): Promise<void> {
   });
 }
 
+function parseDnsAddresses(output: string): string[] {
+  return output
+    .split(/[\s,]+/)
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+function isBlockedDnsAddress(address: string): boolean {
+  return address === '' || address === '0.0.0.0' || address === '::' || address === '192.0.2.1';
+}
+
 function isTransientDnsCommandError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /forcibly closed|connection (refused|reset)|timed out|10054|WSAECONNRESET/i.test(message);
@@ -142,11 +153,18 @@ export async function assertDnsBlocked(hostname: string): Promise<void> {
   await assertDnsWithRetry(
     hostname,
     command,
-    (normalized) =>
-      normalized === '' ||
-      normalized === '0.0.0.0' ||
-      normalized === '192.0.2.1' ||
-      (fixtureIp !== null && normalized !== fixtureIp),
+    (normalized) => {
+      const addresses = parseDnsAddresses(normalized);
+      if (addresses.length === 0) {
+        return true;
+      }
+      // Acrylic can return a bogus secondary answer (e.g. "::") alongside the
+      // blocked primary, so a host is only considered allowed when the fixture
+      // address is actually present.
+      return addresses.every(
+        (address) => isBlockedDnsAddress(address) || (fixtureIp !== null && address !== fixtureIp)
+      );
+    },
     'blocked'
   );
 }
@@ -160,11 +178,13 @@ export async function assertDnsAllowed(hostname: string): Promise<void> {
   await assertDnsWithRetry(
     hostname,
     command,
-    (normalized) =>
-      normalized !== '' &&
-      normalized !== '0.0.0.0' &&
-      normalized !== '192.0.2.1' &&
-      (fixtureIp === null || normalized === fixtureIp),
+    (normalized) => {
+      const addresses = parseDnsAddresses(normalized);
+      if (fixtureIp !== null) {
+        return addresses.includes(fixtureIp);
+      }
+      return addresses.some((address) => !isBlockedDnsAddress(address));
+    },
     'allowed'
   );
 }
