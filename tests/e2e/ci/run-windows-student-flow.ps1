@@ -1379,6 +1379,40 @@ function Install-AndEnrollClient {
     Write-DiagnosticNote "Scenario file after reconciliation: $(Get-Content $scenarioPath -Raw)"
 }
 
+function Set-ProductSslipResolverUpstream {
+    # The installer captures the live adapter DNS as the product's PrimaryDNS,
+    # but the adapter value can be reverted by DHCP/cache refreshes between the
+    # verification and the install. Pin the resolver fixture in the installed
+    # config, regenerate the Acrylic configuration and prove the chain end to
+    # end: a whitelisted sslip subdomain must resolve through Acrylic.
+    $configPath = 'C:\OpenPath\data\config.json'
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        throw "Installed OpenPath config not found at $configPath"
+    }
+
+    $config = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    $config.primaryDNS = '127.0.0.2'
+    [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\OpenPath\scripts\Update-OpenPath.ps1' | Out-Host
+
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $result = Resolve-DnsName -Name 'probe.127.0.0.1.sslip.io' -Server '127.0.0.1' -Type A -DnsOnly -ErrorAction Stop
+            if (@($result | Where-Object { $_.IPAddress -eq '127.0.0.1' }).Count -gt 0) {
+                Write-DiagnosticNote 'Product primaryDNS pinned to the sslip resolver (127.0.0.2) and Acrylic serves sslip names'
+                return $true
+            }
+        }
+        catch {
+            Start-Sleep -Seconds 2
+        }
+    }
+
+    throw 'Acrylic did not serve sslip names through the resolver fixture after pinning primaryDNS.'
+}
+
 function Start-SslipResolver {
     # The lab upstream resolver blocks sslip.io names, so whitelisted sslip
     # subdomains (e.g. request-domain-<id>.127.0.0.1.sslip.io) cannot resolve
@@ -1992,6 +2026,7 @@ try {
     }
     Invoke-TimedStep -Name 'Assert profileless Windows install precondition' -ScriptBlock { Assert-WindowsProfilelessInstallPrecondition }
     Invoke-TimedStep -Name 'Install and enroll client (sse)' -ScriptBlock { Install-AndEnrollClient -Scenario $scenario -InstallClient $true }
+    Invoke-TimedStep -Name 'Pin product sslip resolver upstream' -ScriptBlock { Set-ProductSslipResolverUpstream | Out-Null }
     $windowsStudentSseGroup = if ([string]::IsNullOrWhiteSpace($env:OPENPATH_WINDOWS_STUDENT_SSE_GROUP)) {
         Resolve-WindowsStudentSseGroup
     }
