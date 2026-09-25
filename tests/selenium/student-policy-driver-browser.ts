@@ -427,46 +427,20 @@ export async function submitBlockedScreenRequest(
       await reasonInput.clear();
       await reasonInput.sendKeys(options.reason);
       await submitButton.click();
-      // The extension can latch the blocked page into its "could not send"
-      // error state when a submit attempt lands on a service restart window,
-      // even though a later attempt succeeds at the API. Re-click the submit
-      // while the failure state is showing instead of waiting out the whole
-      // timeout.
-      let submitAttempts = 0;
-      const submitDeadline = Date.now() + timeoutMs;
-      for (;;) {
+      await driver.wait(async () => {
         try {
           const statusElement = await driver.findElement(By.css('#request-status'));
           latestStatus = await readElementText(state, statusElement);
+          return /Solicitud enviada|Request submitted|Request sent/i.test(latestStatus);
         } catch (error) {
-          if (!isStaleElementError(error)) {
-            throw error;
+          if (isStaleElementError(error)) {
+            return false;
           }
-          latestStatus = '';
+          throw error;
         }
+      }, timeoutMs);
 
-        if (/Solicitud enviada|Request submitted|Request sent/i.test(latestStatus)) {
-          return latestStatus;
-        }
-
-        if (
-          submitAttempts < 3 &&
-          /Could not send|No se pudo|could not be sent|Request failed/i.test(latestStatus) &&
-          Date.now() < submitDeadline
-        ) {
-          submitAttempts += 1;
-          await submitButton.click();
-        }
-
-        if (Date.now() >= submitDeadline) {
-          break;
-        }
-        await new Promise((resolve) => {
-          setTimeout(resolve, 1_000);
-        });
-      }
-
-      throw new Error(`Blocked page request submission did not confirm within ${timeoutMs}ms`);
+      return latestStatus;
     } catch (error) {
       if (attempt < 3 && isStaleElementError(error)) {
         continue;
@@ -490,7 +464,11 @@ export async function submitBlockedScreenRequest(
 
       if (
         attempt < 3 &&
-        isEmptyDocumentSwapAfterSubmit(latestStatus, domDiagnostics, submitDiagnostics)
+        (isEmptyDocumentSwapAfterSubmit(latestStatus, domDiagnostics, submitDiagnostics) ||
+          // The extension can latch the page into its "could not send" error
+          // state when a submit attempt lands on a service restart window; a
+          // fresh submit usually succeeds.
+          /Could not send|No se pudo|could not be sent|Request failed/i.test(latestStatus))
       ) {
         continue;
       }
