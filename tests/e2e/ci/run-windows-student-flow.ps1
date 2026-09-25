@@ -1391,11 +1391,12 @@ function Set-ProductSslipResolverUpstream {
     }
 
     $config = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-    $config.primaryDNS = '127.0.0.2'
     # Acrylic routes names that miss the upstream affinity mask to the secondary
     # server, so pin both upstreams to the resolver fixture; it forwards every
-    # non-sslip name to the lab resolver.
-    $config.secondaryDNS = '127.0.0.2'
+    # non-sslip name to the lab resolver. The installed config may not define
+    # secondaryDNS yet, so add or replace the note property explicitly.
+    $config | Add-Member -NotePropertyName 'primaryDNS' -NotePropertyValue '127.0.0.2' -Force
+    $config | Add-Member -NotePropertyName 'secondaryDNS' -NotePropertyValue '127.0.0.2' -Force
     [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
 
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\OpenPath\scripts\Update-OpenPath.ps1' | Out-Host
