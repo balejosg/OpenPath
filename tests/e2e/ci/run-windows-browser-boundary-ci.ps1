@@ -588,6 +588,20 @@ function Invoke-OpenPathNegativeHealthProbes {
         }
     }
 
+    # The watchdog task runs every minute and attempts its own AppControl
+    # repair. During the AppControl fault-injection probes that repair races the
+    # harness restores and can leave an uncommitted effective policy behind, so
+    # quiesce the task while the probes own the policy; it is restored before
+    # the final health check.
+    $watchdogQuiescedForAppControlProbes = $false
+    try {
+        Disable-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction Stop | Out-Null
+        $watchdogQuiescedForAppControlProbes = $true
+    }
+    catch {
+        # Already disabled (or unavailable); the probes below do not require it.
+    }
+
     # Negative probe 2: remove every rule from an exact local-policy snapshot.
     # Windows can retain equivalent rules outside the managed prefix, so a
     # group-only cleanup is not a deterministic fault injection here.
@@ -803,13 +817,50 @@ function Invoke-OpenPathNegativeHealthProbes {
         Remove-Item -LiteralPath $repairOriginalPolicyPath -Force -ErrorAction SilentlyContinue
     }
 
-    $restoration = Get-OpenPathNegativeHealthRestoration `
-        -OpenPathRoot $OpenPathRoot `
-        -Mode $mode `
-        -ApprovedBrowsers $approvedBrowsers `
-        -Profile $profile `
-        -TargetSid $TargetSid `
-        -ApplicationCatalog $applicationCatalog
+    if ($watchdogQuiescedForAppControlProbes) {
+        Enable-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction SilentlyContinue | Out-Null
+        Start-Sleep -Seconds 5
+    }
+
+    # Fault injection can leave the effective AppLocker policy lagging behind
+    # the re-apply; converge with a bounded retry that nudges the product back
+    # into its enforced state and surfaces the exact health reason codes.
+    $restoration = $null
+    $restorationError = $null
+    for ($restoreAttempt = 1; $restoreAttempt -le 5; $restoreAttempt++) {
+        try {
+            $restoration = Get-OpenPathNegativeHealthRestoration `
+                -OpenPathRoot $OpenPathRoot `
+                -Mode $mode `
+                -ApprovedBrowsers $approvedBrowsers `
+                -Profile $profile `
+                -TargetSid $TargetSid `
+                -ApplicationCatalog $applicationCatalog
+            $restorationError = $null
+            break
+        }
+        catch {
+            $restorationError = $_
+            Write-Host "OpenPath AppControl restoration attempt $restoreAttempt/5 failed: $($_.Exception.Message)"
+            [void](Set-OpenPathNonAdminAppControl `
+                    -OpenPathRoot $OpenPathRoot `
+                    -Mode $mode `
+                    -ApprovedBrowsers $approvedBrowsers `
+                    -Profile $profile `
+                    -ApplicationCatalog $applicationCatalog)
+            $healthSnapshot = Get-OpenPathNonAdminAppControlHealth `
+                -Mode $mode `
+                -ApprovedBrowsers $approvedBrowsers `
+                -Profile $profile `
+                -TargetSid $TargetSid `
+                -ApplicationCatalog $applicationCatalog
+            Write-Host ("restoration health reason codes: " + (@($healthSnapshot.ReasonCodes) -join ', '))
+            Start-Sleep -Seconds 20
+        }
+    }
+    if ($restorationError) {
+        throw $restorationError
+    }
 
     return [pscustomobject][ordered]@{
         Probes       = Assert-OpenPathNegativeHealthEvidence -Probes @($probeResults.ToArray())
