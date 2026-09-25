@@ -2102,6 +2102,12 @@ try {
         $scenario = Invoke-TimedStep -Name 'Bootstrap scenario (fallback)' -ScriptBlock { Invoke-BackendHarnessBootstrap -ScenarioName 'Windows Student Policy Fallback' }
         Invoke-TimedStep -Name 'Install and enroll client (fallback)' -ScriptBlock { Install-AndEnrollClient -Scenario $scenario -InstallClient $false }
         Invoke-TimedStep -Name 'Run Selenium student suite (fallback, fallback-propagation)' -ScriptBlock { Invoke-SeleniumStudentSuite -ScenarioPath $scenarioPath -ExtensionArchivePath $extensionArchivePath -Mode 'fallback' -CoverageProfile 'fallback-propagation' }
+        Invoke-TimedStep -Name 'Restore watchdog task for the browser boundary probes' -ScriptBlock {
+            # The suite quiesces the watchdog repair loop; the boundary probes
+            # expect it to return to a healthy state, so enable and start it.
+            Enable-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction SilentlyContinue | Out-Null
+            Start-ScheduledTask -TaskName 'OpenPath-Watchdog' -ErrorAction SilentlyContinue
+        }
     }
     Invoke-TimedStep -Name 'Collect Windows diagnostics' -ScriptBlock { Write-WindowsDiagnostics }
     $script:RunSucceeded = $true
