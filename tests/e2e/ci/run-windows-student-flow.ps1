@@ -1379,6 +1379,56 @@ function Install-AndEnrollClient {
     Write-DiagnosticNote "Scenario file after reconciliation: $(Get-Content $scenarioPath -Raw)"
 }
 
+function Start-SslipResolver {
+    # The lab upstream resolver blocks sslip.io names, so whitelisted sslip
+    # subdomains (e.g. request-domain-<id>.127.0.0.1.sslip.io) cannot resolve
+    # through the product's upstream forwarding even though they resolve
+    # publicly in production. Start a local resolver fixture that mirrors the
+    # public sslip.io service and forwards everything else to the lab resolver.
+    $resolverDir = Join-Path $script:ArtifactsRoot 'sslip-resolver'
+    New-Item -ItemType Directory -Path $resolverDir -Force | Out-Null
+    $resolverScript = Join-Path $script:RepoRoot 'tests\e2e\ci\openpath-sslip-resolver.mjs'
+    if (-not (Test-Path -LiteralPath $resolverScript)) {
+        throw "sslip resolver script not found: $resolverScript"
+    }
+    $nodeCommand = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
+    if (-not $nodeCommand) {
+        throw 'node.exe was not found on PATH.'
+    }
+
+    $stdout = Join-Path $resolverDir 'resolver.log'
+    $stderr = Join-Path $resolverDir 'resolver.err.log'
+    Start-Process -FilePath $nodeCommand `
+        -ArgumentList @($resolverScript) `
+        -RedirectStandardOutput $stdout `
+        -RedirectStandardError $stderr `
+        -WindowStyle Hidden | Out-Null
+
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $result = Resolve-DnsName -Name 'probe.127.0.0.1.sslip.io' -Server '127.0.0.2' -Type A -DnsOnly -ErrorAction Stop
+            if (@($result | Where-Object { $_.IPAddress -eq '127.0.0.1' }).Count -gt 0) {
+                Write-DiagnosticNote 'sslip resolver fixture is answering on 127.0.0.2:53'
+                return $true
+            }
+        }
+        catch {
+            Start-Sleep -Milliseconds 500
+        }
+    }
+
+    throw 'sslip resolver fixture did not answer on 127.0.0.2:53 within 30 seconds.'
+}
+
+function Set-SslipResolverUpstreamDns {
+    # Point the adapter at the resolver fixture so the product captures it as
+    # PrimaryDNS during install; the fixture forwards non-sslip names to the
+    # lab resolver and keeps the field resolver chain intact.
+    Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses @('127.0.0.2') -ErrorAction SilentlyContinue
+    Clear-DnsClientCache -ErrorAction SilentlyContinue
+}
+
 function Reset-AcrylicDnsForStudentSuite {
     # The product regenerates AcrylicHosts.txt during its update cycles; make
     # sure the service reloads the current mapping and drops any stale
@@ -1922,6 +1972,10 @@ try {
     $extensionArchivePath = Invoke-TimedStep -Name 'Package Firefox extension' -ScriptBlock { New-FirefoxExtensionArchive }
     Invoke-TimedStep -Name 'Ensure Firefox and geckodriver' -ScriptBlock { Ensure-FirefoxAndGeckodriver }
     Invoke-TimedStep -Name 'Enable Firefox unsigned addon support' -ScriptBlock { Enable-FirefoxUnsignedAddonSupport }
+    Invoke-TimedStep -Name 'Start sslip resolver fixture' -ScriptBlock {
+        Start-SslipResolver | Out-Null
+        Set-SslipResolverUpstreamDns
+    }
     Invoke-TimedStep -Name 'Assert profileless Windows install precondition' -ScriptBlock { Assert-WindowsProfilelessInstallPrecondition }
     Invoke-TimedStep -Name 'Install and enroll client (sse)' -ScriptBlock { Install-AndEnrollClient -Scenario $scenario -InstallClient $true }
     $windowsStudentSseGroup = if ([string]::IsNullOrWhiteSpace($env:OPENPATH_WINDOWS_STUDENT_SSE_GROUP)) {
