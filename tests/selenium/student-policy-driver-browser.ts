@@ -124,10 +124,21 @@ async function installBlockedPageSubmitDiagnostics(
         };
         const push = (event) => {
           probe.events.push({ at: now(), ...event, state: readRequestState() });
-          if (probe.events.length > 30) {
+          if (probe.events.length > 60) {
             probe.events.shift();
           }
         };
+        let lastStatusText = null;
+        if (root.__openpathSubmitProbeStatusTimer) {
+          clearInterval(root.__openpathSubmitProbeStatusTimer);
+        }
+        root.__openpathSubmitProbeStatusTimer = setInterval(() => {
+          const statusText = document.querySelector('#request-status')?.textContent ?? '';
+          if (statusText !== lastStatusText) {
+            lastStatusText = statusText;
+            push({ type: 'request-status:change' });
+          }
+        }, 400);
         const wrapRuntime = (namespaceName) => {
           const runtime = globalThis[namespaceName]?.runtime;
           if (typeof runtime?.sendMessage !== 'function' || runtime.sendMessage.__openpathSubmitProbeWrapped) {
@@ -189,6 +200,84 @@ async function installBlockedPageSubmitDiagnostics(
           });
           runtime.sendMessage = wrappedSendMessage;
         };
+        const wrapNativeRuntime = (namespaceName) => {
+          const runtime = globalThis[namespaceName]?.runtime;
+          if (typeof runtime?.sendNativeMessage !== 'function' || runtime.sendNativeMessage.__openpathSubmitProbeWrapped) {
+            return;
+          }
+          const originalSendNativeMessage = runtime.sendNativeMessage.bind(runtime);
+          const wrappedSendNativeMessage = (...args) => {
+            const message = args[0];
+            push({
+              type: namespaceName + '.runtime.sendNativeMessage:start',
+              action: message && typeof message === 'object' ? message.action ?? null : null
+            });
+            try {
+              const result = originalSendNativeMessage(...args);
+              if (result && typeof result.then === 'function') {
+                return result.then(
+                  (response) => {
+                    push({
+                      type: namespaceName + '.runtime.sendNativeMessage:resolve',
+                      success: response && typeof response === 'object' ? response.success ?? null : null,
+                      error: response && typeof response === 'object' ? response.error ?? null : null
+                    });
+                    return response;
+                  },
+                  (error) => {
+                    push({
+                      type: namespaceName + '.runtime.sendNativeMessage:reject',
+                      error: error instanceof Error ? error.message : String(error)
+                    });
+                    throw error;
+                  }
+                );
+              }
+              push({ type: namespaceName + '.runtime.sendNativeMessage:return-sync' });
+              return result;
+            } catch (error) {
+              push({
+                type: namespaceName + '.runtime.sendNativeMessage:throw',
+                error: error instanceof Error ? error.message : String(error)
+              });
+              throw error;
+            }
+          };
+          Object.defineProperty(wrappedSendNativeMessage, '__openpathSubmitProbeWrapped', {
+            value: true
+          });
+          runtime.sendNativeMessage = wrappedSendNativeMessage;
+        };
+        const wrapFetch = () => {
+          if (typeof window.fetch !== 'function' || window.fetch.__openpathSubmitProbeWrapped) {
+            return;
+          }
+          const originalFetch = window.fetch.bind(window);
+          const wrappedFetch = (...args) => {
+            const request = args[0];
+            const url =
+              typeof request === 'string'
+                ? request
+                : request && typeof request.url === 'string'
+                  ? request.url
+                  : String(request);
+            const method =
+              (args[1] && args[1].method) || (request && typeof request === 'object' ? request.method : null) || 'GET';
+            push({ type: 'fetch:start', method, url: url.slice(0, 220) });
+            return originalFetch(...args).then(
+              (response) => {
+                push({ type: 'fetch:resolve', method, status: response.status, url: url.slice(0, 220) });
+                return response;
+              },
+              (error) => {
+                push({ type: 'fetch:reject', method, error: error instanceof Error ? error.message : String(error) });
+                throw error;
+              }
+            );
+          };
+          Object.defineProperty(wrappedFetch, '__openpathSubmitProbeWrapped', { value: true });
+          window.fetch = wrappedFetch;
+        };
         ['pagehide', 'pageshow', 'beforeunload'].forEach((type) => {
           window.addEventListener(type, (event) => {
             push({
@@ -199,6 +288,9 @@ async function installBlockedPageSubmitDiagnostics(
         });
         wrapRuntime('browser');
         wrapRuntime('chrome');
+        wrapNativeRuntime('browser');
+        wrapNativeRuntime('chrome');
+        wrapFetch();
         root[probeKey] = probe;
         push({ type: 'probe-installed' });
       }
