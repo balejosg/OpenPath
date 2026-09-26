@@ -1621,8 +1621,20 @@ function Invoke-WeduLabRun {
     Stop-WeduConcurrentOpenPathTasks
     Enable-ScheduledTask -TaskName $script:WatchdogTaskName -ErrorAction Stop | Out-Null
 
+    # Stage C2 invariant: with split DNS active the watchdog SUPPRESSES autonomous
+    # captive-portal-mode entry. Drive the real scheduled task N cycles and assert
+    # the marker NEVER appears while the portal host resolves via the third upstream.
+    $splitDnsProtected = Invoke-WeduSplitDnsProtectedCheck
+    Save-Json -Value $splitDnsProtected -Path $script:SplitDnsProtectedPath
+
     # Negative control: the configured (stale/public) upstream must NOT resolve the
     # portal host -- otherwise the lab is not reproducing the production condition.
+    # Probe only after the split-DNS check applied the configured topology through
+    # the real product path: while the captive portal is still active the agent
+    # legitimately pins the network resolver as the Acrylic primary, so the
+    # effective upstream only reads as the configured one once the product path has
+    # applied it (phase 2 also leaves the rival Acrylic writers quiesced, which
+    # keeps this measurement deterministic).
     $networkForUpstream = Get-WeduNetworkSnapshot
     $configuredUpstream = ''
     if ($networkForUpstream.acrylic -and $networkForUpstream.acrylic.primaryServerAddress) {
@@ -1635,11 +1647,6 @@ function Invoke-WeduLabRun {
     $configuredUpstreamResolvesPortalHost = [bool]$configuredUpstreamProbe.resolves
     Save-Json -Value $configuredUpstreamProbe -Path (Join-Path $script:ArtifactsRoot 'wedu-lab-configured-upstream-probe.json')
 
-    # Stage C2 invariant: with split DNS active the watchdog SUPPRESSES autonomous
-    # captive-portal-mode entry. Drive the real scheduled task N cycles and assert
-    # the marker NEVER appears while the portal host resolves via the third upstream.
-    $splitDnsProtected = Invoke-WeduSplitDnsProtectedCheck
-    Save-Json -Value $splitDnsProtected -Path $script:SplitDnsProtectedPath
     # Capture the agent log so a failure here (e.g. the drift refresh not applying
     # the third upstream via the scheduled watchdog task) is diagnosable.
     Copy-Item -LiteralPath 'C:\OpenPath\data\logs\openpath.log' -Destination (Join-Path $script:ArtifactsRoot 'wedu-lab-openpath.log') -ErrorAction SilentlyContinue
