@@ -54,13 +54,17 @@ function Get-AcrylicForwardRules {
         return @("$sslipIpv4Address $normalizedDomain", "# FW $normalizedDomain", "# FW /^(?!(?:.*\.)?(?:$escapedBlockedPattern)$).*\.$escapedDomain$")
     }
 
+    # Domains without a static sslip mapping still need real forward rules:
+    # Acrylic forwards unmatched names through the product's configured
+    # upstreams, but the forward rules route them through the hosts-file
+    # upstream (network DNS) that the captive portal recovery relies on.
     if ($blockedDescendants.Count -eq 0) {
-        return @("# FW $normalizedDomain", "# FW >$normalizedDomain")
+        return @("FW $normalizedDomain", "FW >$normalizedDomain")
     }
 
     $escapedDomain = [regex]::Escape($normalizedDomain)
     $escapedBlockedPattern = ($blockedDescendants -join '|')
-    return @("# FW $normalizedDomain", "# FW /^(?!(?:.*\.)?(?:$escapedBlockedPattern)$).*\.$escapedDomain$")
+    return @("FW $normalizedDomain", "FW /^(?!(?:.*\.)?(?:$escapedBlockedPattern)$).*\.$escapedDomain$")
 }
 
 function Get-AcrylicEssentialDomainGroups {
@@ -150,7 +154,9 @@ function Get-AcrylicExactForwardRule {
 
     $normalizedDomain = $Domain.Trim()
     if (-not $normalizedDomain) { return $null }
-    return "# FW $normalizedDomain"
+    # Exact forward rule for discovered captive-portal hosts: must stay
+    # functional so Acrylic routes them through the hosts-file upstream.
+    return "FW $normalizedDomain"
 }
 
 function New-AcrylicHostsSection {

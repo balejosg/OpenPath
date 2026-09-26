@@ -572,8 +572,8 @@ Describe "DNS Module" {
                         'azureedge.net',
                         'blob.core.windows.net'
                     )) {
-                    $content | Should -Match "(?m)^# FW $([regex]::Escape($domain))$"
-                    $content | Should -Match "(?m)^# FW >$([regex]::Escape($domain))$"
+                    $content | Should -Match "(?m)^FW $([regex]::Escape($domain))$"
+                    $content | Should -Match "(?m)^FW >$([regex]::Escape($domain))$"
                     $definition.DomainAffinityMask | Should -Match "$([regex]::Escape($domain));\*\.$([regex]::Escape($domain))"
                 }
 
@@ -609,8 +609,8 @@ Describe "DNS Module" {
                         'redirector.gvt1.com',
                         'clients2.googleusercontent.com'
                     )) {
-                    $content | Should -Match "(?m)^# FW $([regex]::Escape($domain))$"
-                    $content | Should -Match "(?m)^# FW >$([regex]::Escape($domain))$"
+                    $content | Should -Match "(?m)^FW $([regex]::Escape($domain))$"
+                    $content | Should -Match "(?m)^FW >$([regex]::Escape($domain))$"
                     $definition.DomainAffinityMask | Should -Match "$([regex]::Escape($domain));\*\.$([regex]::Escape($domain))"
                 }
 
@@ -635,13 +635,13 @@ Describe "DNS Module" {
                 $lines = @($content -split "`n")
                 $regexForwardRules = @(
                     $lines | Where-Object {
-                        $_.StartsWith('# FW /^') -and
+                        $_.StartsWith('FW /^') -and
                         $_.Contains('ads\.example\.com') -and
                         $_.Contains('example\.com$')
                     }
                 )
                 $regexRule = $regexForwardRules[0]
-                $regexPattern = $regexRule.Substring(5).TrimStart('/').Replace('\\', '\')
+                $regexPattern = $regexRule.Substring(4).TrimStart('/').Replace('\\', '\')
 
                 $content.Contains('FW example.com') | Should -BeTrue
                 $content.Contains('NX >ads.example.com') | Should -BeTrue
@@ -671,7 +671,7 @@ Describe "DNS Module" {
                 $content = ConvertTo-AcrylicHostsContent -Definition $definition
 
                 $content | Should -Match '# LOCAL RUNTIME DEPENDENCIES \(1\)'
-                $content | Should -Match '(?m)^# FW cdn\.example$'
+                $content | Should -Match '(?m)^FW cdn\.example$'
                 $content | Should -Not -Match 'FW >cdn\.example'
                 $content | Should -Not -Match '(?m)^FW blocked\.cdn\.example$'
 
@@ -779,8 +779,8 @@ Describe "DNS Module" {
                         })
                     $content = ConvertTo-AcrylicHostsContent -Definition $definition
 
-                    $content | Should -Match '(?m)^# FW www\.redditstatic\.com$'
-                    $content | Should -Match '(?m)^# FW emoji\.redditmedia\.com$'
+                    $content | Should -Match '(?m)^FW www\.redditstatic\.com$'
+                    $content | Should -Match '(?m)^FW emoji\.redditmedia\.com$'
                     $content | Should -Not -Match '(?m)^FW >www\.redditstatic\.com$'
                     $content | Should -Not -Match '(?m)^FW >emoji\.redditmedia\.com$'
                     $dependencyRuleIndex = $content.IndexOf('FW www.redditstatic.com')
