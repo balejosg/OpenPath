@@ -92,10 +92,6 @@ function requirePostAuthProtectionAfter(protectionAfter) {
     `${OPENPATH_PROTECTION_AFTER_FILE} adaptersUsingLocalDns`
   );
   requireField(
-    protectionAfter.acrylicNxWildcardPresent === true,
-    `${OPENPATH_PROTECTION_AFTER_FILE} acrylicNxWildcardPresent`
-  );
-  requireField(
     protectionAfter.acrylicCaptivePortalSectionPresent === false,
     `${OPENPATH_PROTECTION_AFTER_FILE} acrylicCaptivePortalSectionPresent`
   );

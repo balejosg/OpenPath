@@ -1104,7 +1104,11 @@ function Test-OpenPathProtectionAfter {
         acrylicHostsError = $acrylicHostsError
         acrylicNxWildcardPresent = $acrylicNxWildcardPresent
         acrylicCaptivePortalSectionPresent = $acrylicCaptivePortalSectionPresent
-        protectedModeRestored = ($blocked -and $allowedFunctional -and $adapterLocalDnsRestored -and $acrylicNxWildcardPresent -and -not $acrylicCaptivePortalSectionPresent)
+        # The product no longer emits the wildcard NX entry (Acrylic enforcement
+        # now relies on mapped hosts plus the firewall sinkhole), so the restored
+        # protected mode is proven by enforcement, local DNS, and the absence of
+        # the captive-portal recovery section.
+        protectedModeRestored = ($blocked -and $allowedFunctional -and $adapterLocalDnsRestored -and -not $acrylicCaptivePortalSectionPresent)
     }
 }
 
