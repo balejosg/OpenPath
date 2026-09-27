@@ -138,6 +138,38 @@ test('assertWhitelistContains accepts Windows whitelist files with BOM and CRLF'
   }
 });
 
+test('assertWhitelistApplied rejects the fail-open marker and accepts an applied whitelist', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpath-whitelist-'));
+  const whitelistPath = path.join(tempDir, 'whitelist.txt');
+  const previousWhitelistPath = process.env.OPENPATH_WHITELIST_PATH;
+
+  process.env.OPENPATH_WHITELIST_PATH = whitelistPath;
+
+  try {
+    const driver = new StudentPolicyDriver(createScenario(), {
+      diagnosticsDir: tempDir,
+      headless: true,
+    });
+
+    fs.writeFileSync(whitelistPath, '\uFEFF# DESACTIVADO\r\n', 'utf8');
+    await assert.rejects(() => driver.assertWhitelistApplied());
+
+    fs.writeFileSync(whitelistPath, '\uFEFF#DESACTIVADO\r\n', 'utf8');
+    await assert.rejects(() => driver.assertWhitelistApplied());
+
+    fs.writeFileSync(whitelistPath, '\uFEFF## WHITELIST\r\nportal.127.0.0.1.sslip.io\r\n', 'utf8');
+    await assert.doesNotReject(() => driver.assertWhitelistApplied());
+  } finally {
+    if (previousWhitelistPath === undefined) {
+      delete process.env.OPENPATH_WHITELIST_PATH;
+    } else {
+      process.env.OPENPATH_WHITELIST_PATH = previousWhitelistPath;
+    }
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('buildWindowsBlockedDnsCommand treats NXDOMAIN as a blocked result instead of a command failure', () => {
   const command = buildWindowsBlockedDnsCommand('cdn.base-only.127.0.0.1.sslip.io');
 

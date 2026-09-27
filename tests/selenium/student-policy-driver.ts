@@ -34,6 +34,7 @@ import {
   assertDnsBlocked,
   assertHttpBlocked,
   assertHttpReachable,
+  assertWhitelistApplied,
   assertWhitelistContains,
   assertWhitelistMissing,
   forceLocalUpdate,
@@ -366,6 +367,10 @@ export class StudentPolicyDriver implements StudentPolicyDriverState {
 
   public async assertWhitelistMissing(hostname: string): Promise<void> {
     await assertWhitelistMissing(hostname);
+  }
+
+  public async assertWhitelistApplied(): Promise<void> {
+    await assertWhitelistApplied();
   }
 
   public async refreshBlockedPathRules(): Promise<void> {

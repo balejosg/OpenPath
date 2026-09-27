@@ -742,6 +742,50 @@ async function settlePolicyChange(
   }
 }
 
+const EXEMPTION_ENFORCEMENT_TIMEOUT_MS = 300_000;
+const EXEMPTION_ENFORCEMENT_RETRY_DELAY_MS = 5_000;
+
+async function settleExemptionEnforcement(
+  driver: StudentPolicyDriver,
+  assertion: () => Promise<void>
+): Promise<void> {
+  // Temporary exemptions put the endpoint in fail-open mode while they are
+  // active. Once the exemption is deleted or expires, the agent must re-apply
+  // the classroom group, which may queue behind an in-flight fail-open update
+  // holding the update mutex. Drive convergence with bounded retries instead
+  // of racing the endpoint state with a short settle window.
+  const deadline = Date.now() + EXEMPTION_ENFORCEMENT_TIMEOUT_MS;
+  let lastError: unknown = null;
+
+  while (Date.now() < deadline) {
+    try {
+      await driver.assertWhitelistApplied();
+      await assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+
+    try {
+      await driver.forceLocalUpdate();
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (Date.now() >= deadline) {
+      break;
+    }
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, EXEMPTION_ENFORCEMENT_RETRY_DELAY_MS);
+    });
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Temporary exemption enforcement did not re-converge within the budget');
+}
+
 function logScenarioStep(message: string): void {
   finishActiveScenarioTiming();
   activeScenarioTiming = {
@@ -2602,7 +2646,7 @@ async function runTemporaryExemptionScenarios(
   });
 
   await client.deleteTemporaryExemption(exemption.id);
-  await settlePolicyChange(driver, mode, async () => {
+  await settleExemptionEnforcement(driver, async () => {
     await driver.assertDnsBlocked(targets.hosts.exempted);
     await driver.assertHttpBlocked(targets.exemptedDomainUrl);
   });
@@ -2616,7 +2660,7 @@ async function runTemporaryExemptionScenarios(
 
   await client.setTestClock(driver.scenario.schedules.activeRestriction.endAt);
   await client.tickBoundaries(driver.scenario.schedules.activeRestriction.endAt);
-  await settlePolicyChange(driver, mode, async () => {
+  await settleExemptionEnforcement(driver, async () => {
     await driver.assertDnsBlocked(targets.hosts.exempted);
     await driver.assertHttpBlocked(targets.exemptedDomainUrl);
   });

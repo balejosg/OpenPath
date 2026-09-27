@@ -199,6 +199,16 @@ export async function assertWhitelistMissing(hostname: string): Promise<void> {
   assert.doesNotMatch(contents, new RegExp(`(^|\\n)${escapeRegExp(hostname)}($|\\n)`));
 }
 
+export async function assertWhitelistApplied(): Promise<void> {
+  // The local whitelist file holds the fail-open marker while the endpoint is
+  // deactivated (remote disable flag or an active unrestricted exemption). A
+  // policy assertion only makes sense once the endpoint has re-applied the
+  // classroom group, so wait for the marker to disappear instead of racing the
+  // update cycle.
+  const contents = normalizeWhitelistContents(await readWhitelistFile());
+  assert.doesNotMatch(contents, /^[ \t]*#\s*DESACTIVADO\b/im);
+}
+
 export async function forceLocalUpdate(): Promise<void> {
   const command = getUpdateCommand();
   let lastError: unknown = null;
