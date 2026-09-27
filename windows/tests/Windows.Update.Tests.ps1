@@ -352,6 +352,9 @@ Describe "Update Script" {
             $runtimeContent = Get-Content $runtimePath -Raw
 
             $runtimeContent | Should -Match '(?s)function Invoke-OpenPathRuntimeDependencyQueueApply.*?\$acrylicHostWritten = \[bool\]\(Update-AcrylicHost.*?return \[bool\]\$runtimeDependencyQueueResult\.Changed'
+            # The update runtime session does not autoload PowerShell modules, so
+            # the apply path must not rely on cmdlets like Get-FileHash.
+            $runtimeContent | Should -Not -Match 'Get-FileHash'
         }
 
         It "Provides a queue-only runtime dependency fast apply without remote download" {

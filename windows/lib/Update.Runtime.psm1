@@ -312,12 +312,17 @@ function Invoke-OpenPathRuntimeDependencyQueueApply {
 
     $acrylicStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $acrylicHostsPath = ''
-    $acrylicHostsHashBefore = ''
+    $acrylicHostsBefore = ''
     $acrylicPath = Get-AcrylicPath
     if ($acrylicPath) {
         $acrylicHostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
         if (Test-Path $acrylicHostsPath -ErrorAction SilentlyContinue) {
-            $acrylicHostsHashBefore = (Get-FileHash -Path $acrylicHostsPath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+            try {
+                $acrylicHostsBefore = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($acrylicHostsPath))
+            }
+            catch {
+                $acrylicHostsBefore = ''
+            }
         }
     }
     $acrylicHostWritten = [bool](Update-AcrylicHost -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist -BlockedSubdomains $runtimeDependencyQueueSections.BlockedSubdomains)
@@ -325,11 +330,16 @@ function Invoke-OpenPathRuntimeDependencyQueueApply {
     $result['AcrylicHostUpdateMs'] = [int]$acrylicStopwatch.ElapsedMilliseconds
     $result['AcrylicHostWritten'] = $acrylicHostWritten
 
-    $acrylicHostsHashAfter = ''
+    $acrylicHostsAfter = ''
     if ($acrylicHostWritten -and $acrylicHostsPath -and (Test-Path $acrylicHostsPath -ErrorAction SilentlyContinue)) {
-        $acrylicHostsHashAfter = (Get-FileHash -Path $acrylicHostsPath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+        try {
+            $acrylicHostsAfter = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($acrylicHostsPath))
+        }
+        catch {
+            $acrylicHostsAfter = ''
+        }
     }
-    $result['AcrylicHostsChanged'] = [bool]($acrylicHostWritten -and ($acrylicHostsHashAfter -ne $acrylicHostsHashBefore))
+    $result['AcrylicHostsChanged'] = [bool]($acrylicHostWritten -and ($acrylicHostsAfter -ne $acrylicHostsBefore))
 
     if ($PassThru) { return [PSCustomObject]$result }
     return [bool]$runtimeDependencyQueueResult.Changed
@@ -405,9 +415,11 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
         $overlayUnappliedBefore = $true
         if (Test-Path $overlayPath -ErrorAction SilentlyContinue) {
             try {
-                $overlayBefore = Get-Content $overlayPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-                $generationBefore = if ($overlayBefore.PSObject.Properties['generation']) { [int]$overlayBefore.generation } else { 0 }
-                $appliedBefore = if ($overlayBefore.PSObject.Properties['appliedGeneration']) { [int]$overlayBefore.appliedGeneration } else { 0 }
+                $overlayRaw = [System.IO.File]::ReadAllText($overlayPath)
+                $generationMatch = [regex]::Match($overlayRaw, '"generation"\s*:\s*(\d+)')
+                $appliedMatch = [regex]::Match($overlayRaw, '"appliedGeneration"\s*:\s*(\d+)')
+                $generationBefore = if ($generationMatch.Success) { [int]$generationMatch.Groups[1].Value } else { 0 }
+                $appliedBefore = if ($appliedMatch.Success) { [int]$appliedMatch.Groups[1].Value } else { 0 }
                 $overlayUnappliedBefore = ($appliedBefore -lt $generationBefore)
             }
             catch {
@@ -425,7 +437,7 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
         # Debounce: triggers that arrive together (page fan-out) should land their
         # queue files before the first scan, so a burst is applied in one overlay
         # write and one Acrylic reload instead of one reload per batch.
-        Start-Sleep -Milliseconds 300
+        [System.Threading.Thread]::Sleep(300)
         do {
             $drainIterations += 1
             $queueResult = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $whitelistPath -PassThru
@@ -466,8 +478,11 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
             # Queue files written while this run was applying would otherwise be
             # dropped (the scheduled task ignores re-triggers while it runs), so
             # drain whatever arrived during the window before completing.
-            Start-Sleep -Milliseconds 150
-            $pendingQueueFiles = @(Get-ChildItem $queuePath -Filter '*.json' -File -ErrorAction SilentlyContinue)
+            [System.Threading.Thread]::Sleep(150)
+            $pendingQueueFiles = @()
+            if ([System.IO.Directory]::Exists($queuePath)) {
+                $pendingQueueFiles = @([System.IO.Directory]::GetFiles($queuePath, '*.json'))
+            }
         } while ($pendingQueueFiles.Count -gt 0 -and $drainIterations -lt $maxDrainIterations)
 
         Write-OpenPathLog ("Runtime dependency fast apply metrics: processed={0} rejected={1} changed={2} acrylicHostsChanged={3} iterations={4} queueProcessedMs={5} overlayWriteMs={6} acrylicHostUpdateMs={7} acrylicReloadMs={8}" -f `

@@ -244,7 +244,9 @@ behaviour). 3 and 4 are independent of each other. 5 lands last.
   uses `MultipleInstances=Queue` and the fast-apply debounces 300 ms and drains
   up to three iterations, so a page fan-out collapses into one or two reloads
   instead of one per batch (Windows apply latency measured at ~4.2 s per
-  restart during the 2026-09-27 acceptance).
+  restart during the 2026-09-27 acceptance). The update runtime session loads a
+  fixed set of modules without autoloading, so the apply path uses .NET APIs
+  for file comparisons and sleeps instead of cmdlets such as `Get-FileHash`.
   `Test-NativeHostRuntimeDependencyReady` requires the queue request to be
   processed, the overlay to contain every dependency, and
   `appliedGeneration >= generation`. `allow-local-runtime-dependency` answers
