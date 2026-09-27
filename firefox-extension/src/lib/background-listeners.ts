@@ -58,17 +58,20 @@ interface BackgroundListenersOptions {
   saveBlockedPageContext?: (tabId: number, domain: string, originalUrl: string | undefined) => void;
 }
 
-const DEFAULT_LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_MS = 500;
+const DEFAULT_LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_MS = 5000;
 // Budgets cover queue write + agent apply + local DNS reload. They are the
 // extension-side release valve: a proven-ready result releases earlier, and
 // the local diagnostic log records how often the cap is reached.
+// Windows measurements (2026-09-27) showed Acrylic fast-apply latencies of
+// ~4.2 s for a first batch, so render-blocking types get a wider budget.
 const LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_BY_TYPE_MS = new Map<string, number>([
-  ['fetch', 1500],
-  ['xmlhttprequest', 1500],
-  ['image', 1500],
-  ['script', 2000],
-  ['stylesheet', 2000],
-  ['font', 2000],
+  ['fetch', 5000],
+  ['xmlhttprequest', 5000],
+  ['image', 5000],
+  ['imageset', 5000],
+  ['script', 6000],
+  ['stylesheet', 6000],
+  ['font', 6000],
 ]);
 const LOCAL_RUNTIME_DEPENDENCY_NEVER_SETTLES = new Promise<never>(() => undefined);
 

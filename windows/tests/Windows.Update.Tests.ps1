@@ -351,7 +351,7 @@ Describe "Update Script" {
             $runtimePath = Join-Path $PSScriptRoot ".." "lib" "Update.Runtime.psm1"
             $runtimeContent = Get-Content $runtimePath -Raw
 
-            $runtimeContent | Should -Match '(?s)function Invoke-OpenPathRuntimeDependencyQueueApply.*?Update-AcrylicHost .*?\| Out-Null.*?return \[bool\]\$runtimeDependencyQueueResult\.Changed'
+            $runtimeContent | Should -Match '(?s)function Invoke-OpenPathRuntimeDependencyQueueApply.*?\$acrylicHostWritten = \[bool\]\(Update-AcrylicHost.*?return \[bool\]\$runtimeDependencyQueueResult\.Changed'
         }
 
         It "Provides a queue-only runtime dependency fast apply without remote download" {
@@ -364,9 +364,13 @@ Describe "Update Script" {
                 'function Invoke-OpenPathRuntimeDependencyFastApply',
                 'Sync-FirefoxNativeHostMirror -Config $config -WhitelistPath $whitelistPath',
                 'Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $whitelistPath -PassThru',
+                '$overlayUnappliedBefore',
+                '$queueResult.AcrylicHostsChanged',
                 '$acrylicReloaded = [bool](Restart-AcrylicService)',
                 'Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null',
+                'Runtime dependency fast apply could not write the Acrylic hosts file',
                 'Runtime dependency fast apply metrics',
+                'acrylicHostsChanged=',
                 'queueProcessedMs',
                 'overlayWriteMs',
                 'acrylicReloadMs'

@@ -74,6 +74,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Update-OpenPathCaptivePortalObservation',
         'Disable-OpenPathCaptivePortalMode',
         'Get-OpenPathCapabilityStoragePath',
+        'Get-AcrylicPath',
         'Update-AcrylicHost',
         'Restart-AcrylicService',
         'Clear-OpenPathRuntimeDependencyOverlay',
@@ -281,6 +282,8 @@ function Invoke-OpenPathRuntimeDependencyQueueApply {
         QueueProcessedMs = 0
         OverlayWriteMs = 0
         AcrylicHostUpdateMs = 0
+        AcrylicHostWritten = $false
+        AcrylicHostsChanged = $false
     }
 
     $runtimeDependencyQueueSections = Get-OpenPathWhitelistSectionsFromFile -Path $WhitelistPath
@@ -308,9 +311,25 @@ function Invoke-OpenPathRuntimeDependencyQueueApply {
     }
 
     $acrylicStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    Update-AcrylicHost -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist -BlockedSubdomains $runtimeDependencyQueueSections.BlockedSubdomains | Out-Null
+    $acrylicHostsPath = ''
+    $acrylicHostsHashBefore = ''
+    $acrylicPath = Get-AcrylicPath
+    if ($acrylicPath) {
+        $acrylicHostsPath = Join-Path $acrylicPath 'AcrylicHosts.txt'
+        if (Test-Path $acrylicHostsPath -ErrorAction SilentlyContinue) {
+            $acrylicHostsHashBefore = (Get-FileHash -Path $acrylicHostsPath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+        }
+    }
+    $acrylicHostWritten = [bool](Update-AcrylicHost -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist -BlockedSubdomains $runtimeDependencyQueueSections.BlockedSubdomains)
     $acrylicStopwatch.Stop()
     $result['AcrylicHostUpdateMs'] = [int]$acrylicStopwatch.ElapsedMilliseconds
+    $result['AcrylicHostWritten'] = $acrylicHostWritten
+
+    $acrylicHostsHashAfter = ''
+    if ($acrylicHostWritten -and $acrylicHostsPath -and (Test-Path $acrylicHostsPath -ErrorAction SilentlyContinue)) {
+        $acrylicHostsHashAfter = (Get-FileHash -Path $acrylicHostsPath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+    }
+    $result['AcrylicHostsChanged'] = [bool]($acrylicHostWritten -and ($acrylicHostsHashAfter -ne $acrylicHostsHashBefore))
 
     if ($PassThru) { return [PSCustomObject]$result }
     return [bool]$runtimeDependencyQueueResult.Changed
@@ -348,6 +367,7 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
         queueRejected = 0
         overlayWriteMs = 0
         acrylicHostUpdateMs = 0
+        acrylicHostsChanged = $false
         acrylicReloadMs = 0
         changed = $false
     }
@@ -378,6 +398,20 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
             return 1
         }
 
+        $overlayPath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $OpenPathRoot
+        $overlayUnappliedBefore = $true
+        if (Test-Path $overlayPath -ErrorAction SilentlyContinue) {
+            try {
+                $overlayBefore = Get-Content $overlayPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                $generationBefore = if ($overlayBefore.PSObject.Properties['generation']) { [int]$overlayBefore.generation } else { 0 }
+                $appliedBefore = if ($overlayBefore.PSObject.Properties['appliedGeneration']) { [int]$overlayBefore.appliedGeneration } else { 0 }
+                $overlayUnappliedBefore = ($appliedBefore -lt $generationBefore)
+            }
+            catch {
+                Write-OpenPathLog "Runtime dependency fast apply could not read the overlay state: $_" -Level WARN
+            }
+        }
+
         $config = Get-OpenPathConfig
         Sync-FirefoxNativeHostMirror -Config $config -WhitelistPath $whitelistPath
         $queueResult = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $whitelistPath -PassThru
@@ -386,9 +420,13 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
         $metrics['queueRejected'] = [int]$queueResult.Rejected
         $metrics['overlayWriteMs'] = [int]$queueResult.OverlayWriteMs
         $metrics['acrylicHostUpdateMs'] = [int]$queueResult.AcrylicHostUpdateMs
+        $metrics['acrylicHostsChanged'] = [bool]$queueResult.AcrylicHostsChanged
         $metrics['changed'] = [bool]$queueResult.Changed
 
-        if ($queueResult.Changed) {
+        if (-not $queueResult.AcrylicHostWritten) {
+            Write-OpenPathLog "Runtime dependency fast apply could not write the Acrylic hosts file; dependencies remain pending" -Level WARN
+        }
+        elseif ($queueResult.AcrylicHostsChanged -or $overlayUnappliedBefore) {
             $reloadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
             $acrylicReloaded = [bool](Restart-AcrylicService)
             $reloadStopwatch.Stop()
@@ -403,11 +441,17 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
                 Write-OpenPathLog "Runtime dependency fast apply could not confirm the Acrylic reload; dependencies remain pending" -Level WARN
             }
         }
+        else {
+            # The effective Acrylic content did not change and was already applied:
+            # mark the current overlay generation without paying another restart.
+            Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null
+        }
 
-        Write-OpenPathLog ("Runtime dependency fast apply metrics: processed={0} rejected={1} changed={2} queueProcessedMs={3} overlayWriteMs={4} acrylicHostUpdateMs={5} acrylicReloadMs={6}" -f `
+        Write-OpenPathLog ("Runtime dependency fast apply metrics: processed={0} rejected={1} changed={2} acrylicHostsChanged={3} queueProcessedMs={4} overlayWriteMs={5} acrylicHostUpdateMs={6} acrylicReloadMs={7}" -f `
                 $metrics['queueProcessed'], `
                 $metrics['queueRejected'], `
                 $metrics['changed'], `
+                $metrics['acrylicHostsChanged'], `
                 $metrics['queueProcessedMs'], `
                 $metrics['overlayWriteMs'], `
                 $metrics['acrylicHostUpdateMs'], `

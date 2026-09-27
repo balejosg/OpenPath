@@ -533,6 +533,7 @@ void describe('background listeners blocked-screen routing', () => {
         nativeCallFinished = true;
         return { success: true, queued: true };
       },
+      localRuntimeDependencyTimeoutMs: 400,
     });
     assert.ok(harness.webRequestBefore);
 
@@ -549,11 +550,11 @@ void describe('background listeners blocked-screen routing', () => {
     assert.deepEqual(await result, {});
     const elapsedMs = Date.now() - startedAt;
     assert.ok(
-      elapsedMs >= 1_300,
-      `expected xhr soft wait to last near the new budget, got ${String(elapsedMs)}`
+      elapsedMs >= 350,
+      `expected xhr soft wait to respect the configured budget, got ${String(elapsedMs)}`
     );
     assert.ok(
-      elapsedMs < 2_600,
+      elapsedMs < 1200,
       `expected xhr soft wait below the bounded stall budget, got ${String(elapsedMs)}`
     );
     assert.equal(nativeCallFinished, false);
@@ -700,11 +701,11 @@ void describe('background listeners blocked-screen routing', () => {
       },
     ]);
 
-    await waitForMs(1_700);
+    await waitForMs(5_200);
     assert.equal(await hasPromiseResolved(imageResult), true);
     assert.equal(await hasPromiseResolved(scriptResult), false);
 
-    await waitForMs(600);
+    await waitForMs(1_000);
     assert.equal(await hasPromiseResolved(scriptResult), true);
 
     resolveNativeCalls();

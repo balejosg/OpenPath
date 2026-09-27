@@ -237,7 +237,11 @@ behaviour). 3 and 4 are independent of each other. 5 lands last.
 
 - Windows: the overlay records `generation` / `appliedGeneration`, and
   `Invoke-OpenPathRuntimeDependencyFastApply` stamps the applied generation only
-  after `Restart-AcrylicService` reports success.
+  after `Restart-AcrylicService` reports success. The fast-apply path restarts
+  Acrylic only when the generated `AcrylicHosts.txt` content actually changed or
+  the overlay was left unapplied; repeat batches for already-applied domains
+  stamp the current generation without paying another restart (Windows apply
+  latency measured at ~4.2 s per restart during the 2026-09-27 acceptance).
   `Test-NativeHostRuntimeDependencyReady` requires the queue request to be
   processed, the overlay to contain every dependency, and
   `appliedGeneration >= generation`. `allow-local-runtime-dependency` answers
@@ -262,11 +266,14 @@ behaviour). 3 and 4 are independent of each other. 5 lands last.
   configuration. The `services.bats` apply tests exercise the real
   `has_config_changed` instead of stubbing it, which is what would have caught
   the omission.
-- Soft wait budgets: `fetch`/`xmlhttprequest`/`image` 1500 ms,
-  `script`/`stylesheet`/`font` 2000 ms. The extension logs a local debug line
-  when the cap is reached while the native side has not proven readiness; the
-  Linux host logs wait outcome and duration to `native-host.log`; Windows already
-  logs `queueWriteMs` / `updateWaitMs` / `acrylicReloadMs`.
+- Soft wait budgets: `fetch`/`xmlhttprequest`/`image`/`imageset` 5000 ms,
+  `script`/`stylesheet`/`font` 6000 ms (default 5000 ms), calibrated against the
+  Windows acceptance measurements: Acrylic fast-apply needed ~4.2 s for a first
+  batch and repeat batches took 3-8.6 s before the redundant-reload fix. The
+  extension logs a local debug line when the cap is reached while the native
+  side has not proven readiness; the Linux host logs wait outcome and duration
+  to `native-host.log`; Windows already logs `queueWriteMs` / `updateWaitMs` /
+  `acrylicReloadMs` plus `acrylicHostsChanged`.
 
 Known adjacent defect (not addressed here): on Linux, `command_update` in
 `runtime-dependency-overlay.py` mutates entry dicts in place before snapshotting
@@ -298,6 +305,20 @@ generation.
   `remoteWhitelistMutated: false`: the first browser request to the unknown
   dependency was held until the local overlay was truly applied and then
   completed.
+- Windows target-platform acceptance on the desktop-survival lab VM
+  (2026-09-27): the native host returned `runtimeDependencyState: "ready"` with
+  the overlay `generation`/`appliedGeneration` stamped after the Acrylic
+  reload; with host permissions granted, the first Reddit visit queued
+  dependencies (`www.redditstatic.com`, `styles.redditmedia.com`,
+  `preview.redd.it`, `external-preview.redd.it`, `i.redd.it`) and the second
+  visit loaded 86 resources with real transfers. The first visit still released
+  some requests before the 3-8.6 s fast-apply completed, which motivated the
+  Windows redundant-reload skip and the new budgets.
+- Known environment gap under investigation: Firefox 156 release installs the
+  policy-managed MV3 extension with `userPermissions.origins = []` (host
+  permissions treated as optional), so `webRequest` sees no page traffic.
+  Temporary installation of the same signed XPI grants them and the flow works;
+  ESR behavior is still being verified.
 - Physical acceptance (freshly installed student machine, Windows and Linux)
   remains pending.
 
