@@ -293,8 +293,11 @@ generation.
   the remote whitelist untouched; the collected container journal showed
   `has_config_changed: command not found`. After the sourcing fix, the same
   script run restarts `dnsmasq`, updates the config hash, and the learned
-  domain stops resolving to the sinkhole (`192.0.2.1` before, NXDOMAIN after);
-  the acceptance rerun records the fixed first probe in the artifact.
+  domain stops resolving to the sinkhole (`192.0.2.1` before, NXDOMAIN after).
+  The acceptance rerun recorded `firstProbeStatus: "ok"` at 1234 ms with
+  `remoteWhitelistMutated: false`: the first browser request to the unknown
+  dependency was held until the local overlay was truly applied and then
+  completed.
 - Physical acceptance (freshly installed student machine, Windows and Linux)
   remains pending.
 
