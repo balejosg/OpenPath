@@ -292,7 +292,6 @@ EOF
 parse_whitelist_sections() { :; }
 process_runtime_dependency_queue() { :; }
 generate_dnsmasq_config() { printf 'dns-config\n' > "$DNSMASQ_CONF"; }
-has_config_changed() { [ "$(cat "$DNSMASQ_CONF_HASH" 2>/dev/null)" != "newhash" ]; }
 restart_dnsmasq() { printf 'restart\n' >> "$RESTART_LOG"; return 0; }
 flush_dns_cache() { :; }
 with_openpath_lock() { "$@"; }
@@ -344,7 +343,6 @@ EOF
 parse_whitelist_sections() { :; }
 process_runtime_dependency_queue() { :; }
 generate_dnsmasq_config() { printf 'dns-config\n' > "$DNSMASQ_CONF"; }
-has_config_changed() { [ "$(cat "$DNSMASQ_CONF_HASH" 2>/dev/null)" != "newhash" ]; }
 restart_dnsmasq() { return "$RESTART_RESULT"; }
 flush_dns_cache() { :; }
 with_openpath_lock() { "$@"; }

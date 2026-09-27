@@ -253,6 +253,15 @@ behaviour). 3 and 4 are independent of each other. 5 lands last.
   through `OPENPATH_RUNTIME_DEPENDENCY_READY_TIMEOUT_MS` / `..._POLL_MS`) for its
   pair to become applied before answering `ready`; on timeout it answers
   `pending`. Batches share a single wait and mark each result individually.
+- Linux apply-path fix found by the target-platform acceptance: the apply
+  service never sourced `openpath-update-runtime.sh`, so `has_config_changed`
+  failed as an unknown command and the service always fell into the
+  "unchanged" branch, silently skipping the `dnsmasq` reload. The script now
+  sources the helper explicitly (same pattern as `openpath-update.sh`), so the
+  readiness marker is only written after a real reload or a verified unchanged
+  configuration. The `services.bats` apply tests exercise the real
+  `has_config_changed` instead of stubbing it, which is what would have caught
+  the omission.
 - Soft wait budgets: `fetch`/`xmlhttprequest`/`image` 1500 ms,
   `script`/`stylesheet`/`font` 2000 ms. The extension logs a local debug line
   when the cap is reached while the native side has not proven readiness; the
@@ -276,8 +285,18 @@ generation.
   platform failures / 5 skipped.
 - `bats tests/browser_native_host.bats tests/services.bats` 34 pass;
   `bats tests/openpath-update.bats` 20 pass; `bats tests/dns.bats` 71 pass.
-- Physical acceptance (first visit to Reddit on a freshly installed student
-  machine, Windows and Linux) remains pending.
+- Linux target-platform acceptance (`OPENPATH_STUDENT_COVERAGE_PROFILE=linux-runtime-dependency-apply`
+  against the real installer, dnsmasq, and Firefox inside the student-flow
+  container): the first pass exposed the apply-service sourcing defect with
+  `firstProbeStatus: "blocked"` at 1084 ms while
+  `linux-runtime-dependency-apply.json` still reported the overlay applied and
+  the remote whitelist untouched; the collected container journal showed
+  `has_config_changed: command not found`. After the sourcing fix, the same
+  script run restarts `dnsmasq`, updates the config hash, and the learned
+  domain stops resolving to the sinkhole (`192.0.2.1` before, NXDOMAIN after);
+  the acceptance rerun records the fixed first probe in the artifact.
+- Physical acceptance (freshly installed student machine, Windows and Linux)
+  remains pending.
 
 ## Verification
 

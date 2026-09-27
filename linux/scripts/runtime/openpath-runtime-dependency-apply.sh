@@ -7,6 +7,17 @@ INSTALL_DIR="${INSTALL_DIR:-/usr/local/lib/openpath}"
 source "$INSTALL_DIR/lib/common.sh"
 load_libraries
 
+# has_config_changed() lives in openpath-update-runtime.sh; like openpath-update.sh,
+# source it explicitly because load_libraries() only loads the core subset.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$INSTALL_DIR/lib/openpath-update-runtime.sh" ]; then
+    # shellcheck source=/usr/local/lib/openpath/lib/openpath-update-runtime.sh
+    source "$INSTALL_DIR/lib/openpath-update-runtime.sh"
+else
+    # shellcheck source=../../lib/openpath-update-runtime.sh
+    source "$SCRIPT_DIR/../../lib/openpath-update-runtime.sh"
+fi
+
 run_runtime_dependency_apply_locked() {
     if [ -f "$WHITELIST_FILE" ]; then
         parse_whitelist_sections "$WHITELIST_FILE"
