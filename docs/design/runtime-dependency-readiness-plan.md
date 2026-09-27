@@ -240,8 +240,11 @@ behaviour). 3 and 4 are independent of each other. 5 lands last.
   after `Restart-AcrylicService` reports success. The fast-apply path restarts
   Acrylic only when the generated `AcrylicHosts.txt` content actually changed or
   the overlay was left unapplied; repeat batches for already-applied domains
-  stamp the current generation without paying another restart (Windows apply
-  latency measured at ~4.2 s per restart during the 2026-09-27 acceptance).
+  stamp the current generation without paying another restart. The apply task
+  uses `MultipleInstances=Queue` and the fast-apply debounces 300 ms and drains
+  up to three iterations, so a page fan-out collapses into one or two reloads
+  instead of one per batch (Windows apply latency measured at ~4.2 s per
+  restart during the 2026-09-27 acceptance).
   `Test-NativeHostRuntimeDependencyReady` requires the queue request to be
   processed, the overlay to contain every dependency, and
   `appliedGeneration >= generation`. `allow-local-runtime-dependency` answers
@@ -308,17 +311,26 @@ generation.
 - Windows target-platform acceptance on the desktop-survival lab VM
   (2026-09-27): the native host returned `runtimeDependencyState: "ready"` with
   the overlay `generation`/`appliedGeneration` stamped after the Acrylic
-  reload; with host permissions granted, the first Reddit visit queued
-  dependencies (`www.redditstatic.com`, `styles.redditmedia.com`,
-  `preview.redd.it`, `external-preview.redd.it`, `i.redd.it`) and the second
-  visit loaded 86 resources with real transfers. The first visit still released
-  some requests before the 3-8.6 s fast-apply completed, which motivated the
-  Windows redundant-reload skip and the new budgets.
-- Known environment gap under investigation: Firefox 156 release installs the
-  policy-managed MV3 extension with `userPermissions.origins = []` (host
-  permissions treated as optional), so `webRequest` sees no page traffic.
-  Temporary installation of the same signed XPI grants them and the flow works;
-  ESR behavior is still being verified.
+  reload. With host permissions granted, the first Reddit visit queued every
+  dependency batch with `success=True` (waits 2-14 s while a burst was being
+  coalesced) and rendered the full page in a cold profile: 81 resources,
+  `www.redditstatic.com` scripts of 408 KB and 105 KB transferred, post images
+  and the app shell visible in the screenshot; the second visit loaded 96
+  resources. Earlier iterations on the same VM measured 3-8.6 s applies and
+  released first-visit requests, which motivated the new budgets, the
+  redundant-reload skip, the queue triggers, the drain loop and the debounce.
+- Firefox host-permission gap (verified 2026-09-27, product follow-up): a
+  policy-managed MV3 extension is not guaranteed to receive its
+  `host_permissions` on install. Firefox 156 release installed the signed
+  extension with `userPermissions.origins = []`, so `webRequest` saw no page
+  traffic (no blocking, no dependency learning). Firefox ESR 140.16 granted
+  them on a first-start policy install in the acceptance smoke (dependency
+  batches and a full page render), but another policy install in the same
+  session ended with `origins = []`. Temporary installation of the signed XPI
+  always grants them, which is how the acceptance exercised the flow. The
+  product needs a deterministic grant path (for example a first-run
+  `permissions.request` flow) or an explicit supported-browser pin with
+  reviewer notes updated accordingly.
 - Physical acceptance (freshly installed student machine, Windows and Linux)
   remains pending.
 
