@@ -422,6 +422,10 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
         $maxDrainIterations = 3
         $drainIterations = 0
         $pendingQueueFiles = @()
+        # Debounce: triggers that arrive together (page fan-out) should land their
+        # queue files before the first scan, so a burst is applied in one overlay
+        # write and one Acrylic reload instead of one reload per batch.
+        Start-Sleep -Milliseconds 300
         do {
             $drainIterations += 1
             $queueResult = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $whitelistPath -PassThru
