@@ -69,6 +69,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Send-OpenPathHealthReport',
         'Sync-OpenPathFirefoxNativeHostState',
         'Invoke-OpenPathRuntimeDependencyQueue',
+        'Set-OpenPathRuntimeDependencyOverlayApplied',
         'Test-OpenPathCaptivePortalState',
         'Update-OpenPathCaptivePortalObservation',
         'Disable-OpenPathCaptivePortalMode',
@@ -389,9 +390,18 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
 
         if ($queueResult.Changed) {
             $reloadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-            Restart-AcrylicService | Out-Null
+            $acrylicReloaded = [bool](Restart-AcrylicService)
             $reloadStopwatch.Stop()
             $metrics['acrylicReloadMs'] = [int]$reloadStopwatch.ElapsedMilliseconds
+
+            if ($acrylicReloaded) {
+                # Only a successful reload proves the new overlay content is operative;
+                # the native host waits for this marker before reporting `ready`.
+                Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null
+            }
+            else {
+                Write-OpenPathLog "Runtime dependency fast apply could not confirm the Acrylic reload; dependencies remain pending" -Level WARN
+            }
         }
 
         Write-OpenPathLog ("Runtime dependency fast apply metrics: processed={0} rejected={1} changed={2} queueProcessedMs={3} overlayWriteMs={4} acrylicHostUpdateMs={5} acrylicReloadMs={6}" -f `

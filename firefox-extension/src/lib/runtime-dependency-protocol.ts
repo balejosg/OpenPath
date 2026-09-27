@@ -9,16 +9,46 @@ export interface LocalRuntimeDependencyInput {
 export const RUNTIME_DEPENDENCY_ACTIONS = {
   allowLocal: 'allow-local-runtime-dependency',
   allowLocalBatch: 'allow-local-runtime-dependency-batch',
+  checkLocal: 'check-local-runtime-dependency',
 } as const;
 
-export const LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS = 150;
+/**
+ * Coalescing window for new runtime dependencies. Short enough that a single
+ * dependency request does not burn a meaningful slice of its soft wait, long
+ * enough that a first-party fan-out still produces one native message per
+ * burst instead of one per dependency.
+ */
+export const LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS = 25;
 export const LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES = 20;
-export const LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS = 30 * 60 * 1000;
+/**
+ * Fresh window for a dependency whose readiness was proven by the native host.
+ * Requests inside this window are released without native IPC.
+ */
+export const LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS = 60 * 1000;
+/**
+ * Maximum age of a ready cache entry before eviction. Between
+ * `..._CACHE_TTL_MS` and this bound the entry is stale-but-confirmable: the
+ * extension must re-check readiness with `check-local-runtime-dependency`
+ * before treating it as ready again.
+ */
+export const LOCAL_RUNTIME_DEPENDENCY_CACHE_STALE_TTL_MS = 30 * 60 * 1000;
 export const LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS = 5 * 1000;
 export const LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES = 100;
 export const LOCAL_RUNTIME_DEPENDENCY_QUEUE_VERSION = 1;
 export const LOCAL_RUNTIME_DEPENDENCY_OVERLAY_VERSION = 1;
 export const LOCAL_RUNTIME_DEPENDENCY_QUEUE_SOURCE = 'firefox-webrequest-local';
+
+/**
+ * Readiness of a local runtime dependency as observed by the extension.
+ *
+ * - `ready`: the native host proved the dependency is operative in the local
+ *   DNS path; the request may be released.
+ * - `pending`: accepted (or legacy-acknowledged) but not yet applied; keep
+ *   waiting until the soft timeout.
+ * - `terminal`: the dependency will not be applied; release immediately so the
+ *   request fails fast instead of burning the soft-wait budget.
+ */
+export type RuntimeDependencyReadiness = 'ready' | 'pending' | 'terminal';
 
 export function createRuntimeDependencyCacheKey(
   input: Pick<LocalRuntimeDependencyInput, 'anchorHost' | 'dependencyHost'>
@@ -32,4 +62,60 @@ export function createRuntimeDependencyPendingKey(input: LocalRuntimeDependencyI
 
 export function isQueuedRuntimeDependencyResponse(response: NativeResponse): boolean {
   return response.runtimeDependencyState === 'queued' || response.queued === true;
+}
+
+export function resolveRuntimeDependencyReadiness(response: unknown): RuntimeDependencyReadiness {
+  if (!response || typeof response !== 'object') {
+    return 'terminal';
+  }
+
+  const candidate = response as {
+    queued?: unknown;
+    runtimeDependencyState?: unknown;
+    success?: unknown;
+  };
+
+  if (candidate.runtimeDependencyState === 'ready') {
+    return 'ready';
+  }
+  if (
+    candidate.runtimeDependencyState === 'pending' ||
+    candidate.runtimeDependencyState === 'queued'
+  ) {
+    return 'pending';
+  }
+  if (
+    candidate.runtimeDependencyState === 'denied' ||
+    candidate.runtimeDependencyState === 'error'
+  ) {
+    return 'terminal';
+  }
+  if (candidate.queued === true) {
+    return 'pending';
+  }
+  if (candidate.success === false) {
+    return 'terminal';
+  }
+
+  // A success without an explicit readiness state is a legacy acknowledgement:
+  // accepted for processing, but it does not prove the DNS exception is
+  // operative yet, so it must not release the request early.
+  return 'pending';
+}
+
+export function isReadyRuntimeDependencyResponse(response: unknown): boolean {
+  return resolveRuntimeDependencyReadiness(response) === 'ready';
+}
+
+export function isPendingRuntimeDependencyResponse(response: unknown): boolean {
+  return resolveRuntimeDependencyReadiness(response) === 'pending';
+}
+
+export function isReadyRuntimeDependencyCheckResponse(response: unknown): boolean {
+  if (!response || typeof response !== 'object') {
+    return false;
+  }
+
+  const candidate = response as { ready?: unknown; runtimeDependencyState?: unknown };
+  return candidate.ready === true || candidate.runtimeDependencyState === 'ready';
 }

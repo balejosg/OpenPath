@@ -424,6 +424,46 @@ Describe "DNS Module" {
             }
         }
 
+        It "Tracks overlay content and applied generations for readiness checks" {
+            InModuleScope DNS {
+                $overlayPath = Join-Path $TestDrive "runtime-dependency-generation.json"
+                $entry = [PSCustomObject]@{
+                    dependencyHost = 'cdn-generation.example'
+                    anchorHost = 'www.reddit.com'
+                    requestTypes = @('script')
+                    firstSeen = [DateTimeOffset]::UtcNow.ToString('o')
+                    lastSeen = [DateTimeOffset]::UtcNow.ToString('o')
+                    expiresAt = [DateTimeOffset]::UtcNow.AddDays(1).ToString('o')
+                    source = 'firefox-webrequest-local'
+                }
+
+                Write-OpenPathRuntimeDependencyOverlay -Entries @($entry) -Path $overlayPath
+                $firstWrite = Get-Content $overlayPath -Raw | ConvertFrom-Json
+                $firstWrite.generation | Should -Be 1
+                $firstWrite.appliedGeneration | Should -Be 0
+
+                Set-OpenPathRuntimeDependencyOverlayApplied -Path $overlayPath | Should -BeTrue
+                $firstApplied = Get-Content $overlayPath -Raw | ConvertFrom-Json
+                $firstApplied.appliedGeneration | Should -Be 1
+
+                # Rewriting content bumps the generation without claiming it was applied.
+                Write-OpenPathRuntimeDependencyOverlay -Entries @($entry) -Path $overlayPath
+                $rewrite = Get-Content $overlayPath -Raw | ConvertFrom-Json
+                $rewrite.generation | Should -Be 2
+                $rewrite.appliedGeneration | Should -Be 1
+
+                Set-OpenPathRuntimeDependencyOverlayApplied -Path $overlayPath | Should -BeTrue
+                $secondApplied = Get-Content $overlayPath -Raw | ConvertFrom-Json
+                $secondApplied.appliedGeneration | Should -Be 2
+
+                # An already-applied overlay is a no-op.
+                Set-OpenPathRuntimeDependencyOverlayApplied -Path $overlayPath | Should -BeTrue
+                $unchanged = Get-Content $overlayPath -Raw | ConvertFrom-Json
+                $unchanged.generation | Should -Be 2
+                $unchanged.appliedGeneration | Should -Be 2
+            }
+        }
+
         It "Dedupe, prunes expired runtime dependency overlay entries, and enforces capacity" -Skip:(-not $IsWindows) {
             InModuleScope DNS {
                 $overlayPath = Join-Path $TestDrive "runtime-dependency-overlay.json"

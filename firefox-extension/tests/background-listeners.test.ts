@@ -66,6 +66,7 @@ function createListenerHarness(
       dependencyHost: string;
       requestType: string;
     }) => Promise<unknown>;
+    localRuntimeDependencyTimeoutMs?: number;
     recordDependencyObservationEvent?: Parameters<
       typeof registerBackgroundListeners
     >[0]['recordDependencyObservationEvent'];
@@ -173,10 +174,13 @@ function createListenerHarness(
       localRuntimeDependencyCalls.push(input);
       return options.allowLocalRuntimeDependency
         ? await options.allowLocalRuntimeDependency(input)
-        : { success: true };
+        : { success: true, runtimeDependencyState: 'ready' };
     },
     handleRuntimeMessage:
       options.handleRuntimeMessage ?? ((): Promise<undefined> => Promise.resolve(undefined)),
+    ...(options.localRuntimeDependencyTimeoutMs !== undefined
+      ? { localRuntimeDependencyTimeoutMs: options.localRuntimeDependencyTimeoutMs }
+      : {}),
     ...(options.recordDependencyObservationEvent
       ? { recordDependencyObservationEvent: options.recordDependencyObservationEvent }
       : {}),
@@ -484,7 +488,7 @@ void describe('background listeners blocked-screen routing', () => {
     const harness = createListenerHarness({
       allowLocalRuntimeDependency: (input) => {
         nativePayloads.push(input);
-        return Promise.resolve({ success: true });
+        return Promise.resolve({ success: true, runtimeDependencyState: 'ready' });
       },
     });
     assert.ok(harness.webNavigationBefore);
@@ -545,12 +549,12 @@ void describe('background listeners blocked-screen routing', () => {
     assert.deepEqual(await result, {});
     const elapsedMs = Date.now() - startedAt;
     assert.ok(
-      elapsedMs >= 200,
-      `expected xhr soft wait to last at least 200ms, got ${String(elapsedMs)}`
+      elapsedMs >= 1_300,
+      `expected xhr soft wait to last near the new budget, got ${String(elapsedMs)}`
     );
     assert.ok(
-      elapsedMs < 700,
-      `expected xhr soft wait below visible stall budget, got ${String(elapsedMs)}`
+      elapsedMs < 2_600,
+      `expected xhr soft wait below the bounded stall budget, got ${String(elapsedMs)}`
     );
     assert.equal(nativeCallFinished, false);
     assert.deepEqual(nativePayloads, [
@@ -564,6 +568,92 @@ void describe('background listeners blocked-screen routing', () => {
     resolveNativeCall();
     await waitForAsyncListeners();
     assert.equal(nativeCallFinished, true);
+  });
+
+  void test('releases dependency requests as soon as the native result is ready', async () => {
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: async () => {
+        await waitForMs(20);
+        return { success: true, runtimeDependencyState: 'ready' };
+      },
+      localRuntimeDependencyTimeoutMs: 3000,
+    });
+    assert.ok(harness.webRequestBefore);
+
+    const startedAt = Date.now();
+    const result = harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/r/openpath',
+      tabId: 44,
+      type: 'xmlhttprequest',
+      url: 'https://www.redditstatic.com/data.json',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.ok(result instanceof Promise);
+    assert.deepEqual(await result, {});
+    const elapsedMs = Date.now() - startedAt;
+    assert.ok(
+      elapsedMs >= 10,
+      `expected the ready result to be observed, got ${String(elapsedMs)}`
+    );
+    assert.ok(
+      elapsedMs < 1500,
+      `expected early release before the soft timeout, got ${String(elapsedMs)}`
+    );
+  });
+
+  void test('keeps waiting on queued dependencies instead of releasing them immediately', async () => {
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: async () => {
+        await waitForMs(20);
+        return { success: true, queued: true };
+      },
+      localRuntimeDependencyTimeoutMs: 300,
+    });
+    assert.ok(harness.webRequestBefore);
+
+    const startedAt = Date.now();
+    const result = harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/r/openpath',
+      tabId: 44,
+      type: 'xmlhttprequest',
+      url: 'https://www.redditstatic.com/data.json',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.ok(result instanceof Promise);
+    assert.deepEqual(await result, {});
+    const elapsedMs = Date.now() - startedAt;
+    assert.ok(
+      elapsedMs >= 250,
+      `expected queued dependency to wait for the soft timeout, got ${String(elapsedMs)}`
+    );
+    assert.ok(elapsedMs < 1500, `expected bounded soft wait, got ${String(elapsedMs)}`);
+  });
+
+  void test('releases denied dependencies without waiting for the soft timeout', async () => {
+    const harness = createListenerHarness({
+      allowLocalRuntimeDependency: async () => {
+        await waitForMs(20);
+        return { success: false, error: 'Protected host' };
+      },
+      localRuntimeDependencyTimeoutMs: 3000,
+    });
+    assert.ok(harness.webRequestBefore);
+
+    const startedAt = Date.now();
+    const result = harness.webRequestBefore({
+      documentUrl: 'https://www.reddit.com/r/openpath',
+      tabId: 44,
+      type: 'xmlhttprequest',
+      url: 'https://www.redditstatic.com/data.json',
+    } as WebRequest.OnBeforeRequestDetailsType);
+
+    assert.ok(result instanceof Promise);
+    assert.deepEqual(await result, {});
+    const elapsedMs = Date.now() - startedAt;
+    assert.ok(
+      elapsedMs < 1500,
+      `expected denied dependency to fail fast, got ${String(elapsedMs)}`
+    );
   });
 
   void test('uses shorter soft waits for images than render-blocking dependencies', async () => {
@@ -610,11 +700,11 @@ void describe('background listeners blocked-screen routing', () => {
       },
     ]);
 
-    await waitForMs(650);
+    await waitForMs(1_700);
     assert.equal(await hasPromiseResolved(imageResult), true);
     assert.equal(await hasPromiseResolved(scriptResult), false);
 
-    await waitForMs(700);
+    await waitForMs(600);
     assert.equal(await hasPromiseResolved(scriptResult), true);
 
     resolveNativeCalls();
@@ -626,7 +716,7 @@ void describe('background listeners blocked-screen routing', () => {
     const harness = createListenerHarness({
       allowLocalRuntimeDependency: (input) => {
         nativePayloads.push(input);
-        return Promise.resolve({ success: true });
+        return Promise.resolve({ success: true, runtimeDependencyState: 'ready' });
       },
     });
     assert.ok(harness.webRequestBefore);

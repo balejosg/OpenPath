@@ -50,7 +50,9 @@ What it does:
   game frames, and interactive logo-game assets before they load
 - talks to the OpenPath native host on the same computer to check
   local allowlist state, refresh path/subdomain enforcement data, and maintain
-  local runtime dependency overlays for already-approved anchors
+  local runtime dependency overlays for already-approved anchors, releasing a
+  dependency request only after the native host confirms the local DNS exception
+  is applied (or at a bounded soft timeout)
 
 What it does not do:
 

@@ -28,6 +28,7 @@
 - Environment variable registry: [`docs/ENVIRONMENT_VARIABLES.md`](ENVIRONMENT_VARIABLES.md)
 - Agent config parity (cross-platform key mapping): [`docs/agent-config-parity.md`](agent-config-parity.md)
 - Extension <-> native host message contract: [`docs/extension-native-host-contract.md`](extension-native-host-contract.md)
+- Runtime dependency readiness plan (first-visit fix): [`docs/design/runtime-dependency-readiness-plan.md`](design/runtime-dependency-readiness-plan.md)
 - OpenPath Promotion Contract v2: [`docs/openpath-promotion-contract-v2.md`](openpath-promotion-contract-v2.md)
 - API package guide: [`api/README.md`](../api/README.md)
 - Shared package guide: [`shared/README.md`](../shared/README.md)

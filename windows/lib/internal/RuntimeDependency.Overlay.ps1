@@ -60,7 +60,7 @@ function Read-OpenPathRuntimeDependencyOverlay {
 }
 
 function Write-OpenPathRuntimeDependencyOverlay {
-    # serializes entries with version and updatedAt to the overlay json file, creating the directory if needed
+    # serializes entries with version, content generation, applied generation, and updatedAt to the overlay json file
     [CmdletBinding()]
     param(
         [object[]]$Entries = @(),
@@ -72,11 +72,56 @@ function Write-OpenPathRuntimeDependencyOverlay {
         Ensure-OpenPathCapabilityStorageDirectory -Path $directory | Out-Null
     }
 
+    $previousGeneration = 0
+    $previousAppliedGeneration = 0
+    if (Test-Path $Path -ErrorAction SilentlyContinue) {
+        try {
+            $existingRaw = Get-Content $Path -Raw -ErrorAction Stop
+            if (-not [string]::IsNullOrWhiteSpace($existingRaw)) {
+                $existing = $existingRaw | ConvertFrom-Json -ErrorAction Stop
+                if ($existing.PSObject.Properties['generation']) { $previousGeneration = [int]$existing.generation }
+                if ($existing.PSObject.Properties['appliedGeneration']) { $previousAppliedGeneration = [int]$existing.appliedGeneration }
+            }
+        }
+        catch {
+            $previousGeneration = 0
+            $previousAppliedGeneration = 0
+        }
+    }
+
     @{
         version = $script:OpenPathRuntimeDependencyOverlayVersion
+        generation = $previousGeneration + 1
+        appliedGeneration = $previousAppliedGeneration
         updatedAt = (Get-Date).ToUniversalTime().ToString('o')
         entries = @($Entries)
     } | ConvertTo-Json -Depth 8 | Set-Content $Path -Encoding UTF8 -Force
+}
+
+function Set-OpenPathRuntimeDependencyOverlayApplied {
+    # marks the overlay's current content generation as reloaded into the local DNS service; called only after a successful Acrylic reload
+    [CmdletBinding()]
+    param([string]$Path = (Get-OpenPathRuntimeDependencyOverlayPath))
+
+    if (-not (Test-Path $Path -ErrorAction SilentlyContinue)) { return $false }
+
+    try {
+        $raw = Get-Content $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
+        $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+        $generation = if ($parsed.PSObject.Properties['generation']) { [int]$parsed.generation } else { 0 }
+        $appliedGeneration = if ($parsed.PSObject.Properties['appliedGeneration']) { [int]$parsed.appliedGeneration } else { 0 }
+        if ($appliedGeneration -ge $generation) { return $true }
+
+        $parsed | Add-Member -MemberType NoteProperty -Name 'appliedGeneration' -Value $generation -Force
+        $parsed | Add-Member -MemberType NoteProperty -Name 'appliedAt' -Value ((Get-Date).ToUniversalTime().ToString('o')) -Force
+        $parsed | ConvertTo-Json -Depth 8 | Set-Content $Path -Encoding UTF8 -Force
+        return $true
+    }
+    catch {
+        Write-OpenPathLog "Failed to mark runtime dependency overlay applied: $_" -Level WARN
+        return $false
+    }
 }
 
 function Clear-OpenPathRuntimeDependencyOverlay {

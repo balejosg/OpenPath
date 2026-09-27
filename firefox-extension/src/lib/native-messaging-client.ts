@@ -7,12 +7,14 @@ import {
   LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS,
   LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES,
   LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES,
+  LOCAL_RUNTIME_DEPENDENCY_CACHE_STALE_TTL_MS,
   LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS,
   LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
   RUNTIME_DEPENDENCY_ACTIONS,
   createRuntimeDependencyCacheKey,
   createRuntimeDependencyPendingKey,
-  isQueuedRuntimeDependencyResponse,
+  isReadyRuntimeDependencyCheckResponse,
+  resolveRuntimeDependencyReadiness,
   type LocalRuntimeDependencyInput,
 } from './runtime-dependency-protocol.js';
 
@@ -93,11 +95,27 @@ interface LocalRuntimeDependencyBatchResponse extends NativeResponse {
   error?: string;
 }
 
+interface LocalRuntimeDependencyCheckResponse extends NativeResponse {
+  action?: typeof RUNTIME_DEPENDENCY_ACTIONS.checkLocal;
+  ready?: boolean;
+  runtimeDependencyState?: string;
+  /** Advisory overlay expiry supplied by the agent; not consumed for release decisions yet. */
+  expiresAt?: number | string;
+}
+
+interface RuntimeDependencyCacheEntry {
+  /** After this instant the entry must be confirmed before being treated as ready. */
+  freshUntil: number;
+  /** After this instant the entry is evicted and the normal allow flow runs. */
+  expiresAt: number;
+}
+
 interface PendingLocalRuntimeDependency {
   input: LocalRuntimeDependencyInput;
   key: string;
   resolve: (response: NativeResponse) => void;
   reject: (error: unknown) => void;
+  settled?: boolean;
 }
 
 export interface NativeMessagingClient {
@@ -127,13 +145,17 @@ export function createNativeMessagingClient(options: {
   const runtimeDependencyCacheMaxEntries =
     options.runtimeDependencyCacheMaxEntries ?? LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES;
   let nativePort: Runtime.Port | null = null;
-  const runtimeDependencyCache = new Map<string, number>();
+  const runtimeDependencyCache = new Map<string, RuntimeDependencyCacheEntry>();
   const queuedRuntimeDependencyDedupeCache = new Map<
     string,
     { expiresAt: number; response: NativeResponse }
   >();
   const pendingRuntimeDependencies: PendingLocalRuntimeDependency[] = [];
   const pendingRuntimeDependencyByKey = new Map<string, Promise<NativeResponse>>();
+  const pendingRuntimeDependencyConfirmationByKey = new Map<
+    string,
+    Promise<NativeResponse | null>
+  >();
   let runtimeDependencyBatchTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function connect(): Promise<boolean> {
@@ -314,22 +336,87 @@ export function createNativeMessagingClient(options: {
     }
   }
 
-  function getCachedRuntimeDependency(input: LocalRuntimeDependencyInput): NativeResponse | null {
-    const now = Date.now();
-    pruneExpiredRuntimeDependencyEntries(runtimeDependencyCache, now);
-    const cacheKey = createRuntimeDependencyCacheKey(input);
-    const expiresAt = runtimeDependencyCache.get(cacheKey);
-    if (expiresAt === undefined) {
-      return null;
-    }
-
+  function createReadyRuntimeDependencyResponse(
+    input: LocalRuntimeDependencyInput,
+    extra: Record<string, unknown> = {}
+  ): NativeResponse {
     return {
       success: true,
       action: RUNTIME_DEPENDENCY_ACTIONS.allowLocal,
       anchorHost: input.anchorHost,
       dependencyHost: input.dependencyHost,
-      cached: true,
+      runtimeDependencyState: 'ready',
+      ...extra,
     };
+  }
+
+  function getFreshCachedRuntimeDependency(
+    input: LocalRuntimeDependencyInput
+  ): NativeResponse | null {
+    const now = Date.now();
+    pruneExpiredRuntimeDependencyEntries(runtimeDependencyCache, now);
+    const entry = runtimeDependencyCache.get(createRuntimeDependencyCacheKey(input));
+    if (entry === undefined || entry.freshUntil <= now) {
+      return null;
+    }
+
+    return createReadyRuntimeDependencyResponse(input, { cached: true });
+  }
+
+  function hasStaleCachedRuntimeDependency(input: LocalRuntimeDependencyInput): boolean {
+    const now = Date.now();
+    pruneExpiredRuntimeDependencyEntries(runtimeDependencyCache, now);
+    const entry = runtimeDependencyCache.get(createRuntimeDependencyCacheKey(input));
+    return entry !== undefined && entry.freshUntil <= now;
+  }
+
+  async function confirmCachedRuntimeDependency(
+    input: LocalRuntimeDependencyInput
+  ): Promise<NativeResponse | null> {
+    const cacheKey = createRuntimeDependencyCacheKey(input);
+    const existingConfirmation = pendingRuntimeDependencyConfirmationByKey.get(cacheKey);
+    if (existingConfirmation) {
+      return existingConfirmation;
+    }
+
+    const confirmation = (async (): Promise<NativeResponse | null> => {
+      try {
+        const response = (await sendMessage({
+          action: RUNTIME_DEPENDENCY_ACTIONS.checkLocal,
+          anchorHost: input.anchorHost,
+          dependencyHost: input.dependencyHost,
+        })) as LocalRuntimeDependencyCheckResponse;
+        if (isReadyRuntimeDependencyCheckResponse(response)) {
+          cacheReadyRuntimeDependency(input);
+          return createReadyRuntimeDependencyResponse(input, { confirmed: true });
+        }
+      } catch (error) {
+        logger.error('[Monitor] Error confirmando dependencia runtime local', {
+          error: getErrorMessage(error),
+        });
+      }
+
+      // The agent could not confirm readiness (not applied yet, unsupported
+      // action on an older host, or messaging failure): drop the entry and
+      // re-run the normal allow flow instead of assuming the domain is ready.
+      runtimeDependencyCache.delete(cacheKey);
+      return null;
+    })().finally(() => {
+      pendingRuntimeDependencyConfirmationByKey.delete(cacheKey);
+    });
+
+    pendingRuntimeDependencyConfirmationByKey.set(cacheKey, confirmation);
+    return confirmation;
+  }
+
+  function cacheReadyRuntimeDependency(input: LocalRuntimeDependencyInput): void {
+    const now = Date.now();
+    pruneExpiredRuntimeDependencyEntries(runtimeDependencyCache, now);
+    runtimeDependencyCache.set(createRuntimeDependencyCacheKey(input), {
+      freshUntil: now + LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS,
+      expiresAt: now + LOCAL_RUNTIME_DEPENDENCY_CACHE_STALE_TTL_MS,
+    });
+    trimOldestRuntimeDependencyEntries(runtimeDependencyCache);
   }
 
   function getQueuedRuntimeDependencyDedupe(
@@ -350,25 +437,23 @@ export function createNativeMessagingClient(options: {
     input: LocalRuntimeDependencyInput,
     response: NativeResponse
   ): void {
-    const now = Date.now();
-    if (!response.success) {
-      return;
+    switch (resolveRuntimeDependencyReadiness(response)) {
+      case 'ready':
+        cacheReadyRuntimeDependency(input);
+        return;
+      case 'pending': {
+        const now = Date.now();
+        pruneExpiredRuntimeDependencyEntries(queuedRuntimeDependencyDedupeCache, now);
+        queuedRuntimeDependencyDedupeCache.set(createRuntimeDependencyPendingKey(input), {
+          expiresAt: now + LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
+          response,
+        });
+        trimOldestRuntimeDependencyEntries(queuedRuntimeDependencyDedupeCache);
+        return;
+      }
+      default:
+        return;
     }
-    if (isQueuedRuntimeDependencyResponse(response)) {
-      pruneExpiredRuntimeDependencyEntries(queuedRuntimeDependencyDedupeCache, now);
-      queuedRuntimeDependencyDedupeCache.set(createRuntimeDependencyPendingKey(input), {
-        expiresAt: now + LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS,
-        response,
-      });
-      trimOldestRuntimeDependencyEntries(queuedRuntimeDependencyDedupeCache);
-      return;
-    }
-    pruneExpiredRuntimeDependencyEntries(runtimeDependencyCache, now);
-    runtimeDependencyCache.set(
-      createRuntimeDependencyCacheKey(input),
-      now + LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS
-    );
-    trimOldestRuntimeDependencyEntries(runtimeDependencyCache);
   }
 
   async function sendSingleLocalRuntimeDependency(
@@ -426,12 +511,32 @@ export function createNativeMessagingClient(options: {
     }, LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS);
   }
 
+  function settleRuntimeDependencyRequest(
+    request: PendingLocalRuntimeDependency,
+    response: NativeResponse
+  ): void {
+    if (request.settled) {
+      return;
+    }
+    request.settled = true;
+    pendingRuntimeDependencyByKey.delete(request.key);
+    request.resolve(response);
+  }
+
+  function rejectRuntimeDependencyRequest(
+    request: PendingLocalRuntimeDependency,
+    error: unknown
+  ): void {
+    if (request.settled) {
+      return;
+    }
+    request.settled = true;
+    pendingRuntimeDependencyByKey.delete(request.key);
+    request.reject(error);
+  }
+
   async function flushRuntimeDependencyBatch(): Promise<void> {
     const batch = pendingRuntimeDependencies.splice(0, LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES);
-    for (const request of batch) {
-      pendingRuntimeDependencyByKey.delete(request.key);
-    }
-
     if (pendingRuntimeDependencies.length > 0) {
       scheduleRuntimeDependencyFlush();
     }
@@ -449,9 +554,12 @@ export function createNativeMessagingClient(options: {
         await Promise.all(
           batch.map(async (request) => {
             try {
-              request.resolve(await sendSingleLocalRuntimeDependency(request.input));
+              settleRuntimeDependencyRequest(
+                request,
+                await sendSingleLocalRuntimeDependency(request.input)
+              );
             } catch (error) {
-              request.reject(error);
+              rejectRuntimeDependencyRequest(request, error);
             }
           })
         );
@@ -461,11 +569,11 @@ export function createNativeMessagingClient(options: {
       batch.forEach((request, index) => {
         const response = findBatchResult(batchResponse, request.input, index);
         cacheRuntimeDependencySuccess(request.input, response);
-        request.resolve(response);
+        settleRuntimeDependencyRequest(request, response);
       });
     } catch (error) {
       batch.forEach((request) => {
-        request.reject(error);
+        rejectRuntimeDependencyRequest(request, error);
       });
     }
   }
@@ -473,10 +581,18 @@ export function createNativeMessagingClient(options: {
   async function allowLocalRuntimeDependency(
     input: LocalRuntimeDependencyInput
   ): Promise<NativeResponse> {
-    const cachedResponse = getCachedRuntimeDependency(input);
+    const cachedResponse = getFreshCachedRuntimeDependency(input);
     if (cachedResponse) {
       return cachedResponse;
     }
+
+    if (hasStaleCachedRuntimeDependency(input)) {
+      const confirmedResponse = await confirmCachedRuntimeDependency(input);
+      if (confirmedResponse) {
+        return confirmedResponse;
+      }
+    }
+
     const queuedDedupeResponse = getQueuedRuntimeDependencyDedupe(input);
     if (queuedDedupeResponse) {
       return queuedDedupeResponse;

@@ -68,7 +68,7 @@ Current systemd units include:
 
 ## Browser Runtime Dependencies
 
-When Firefox loads a resource dependency from an approved page, the extension can ask the local native host to queue a runtime dependency. The root-owned Linux agent validates the anchor host against the local whitelist, rejects protected or blocked hosts, writes a TTL-bounded overlay, and regenerates `dnsmasq`. This state is local-only and does not create remote whitelist rules.
+When Firefox loads a resource dependency from an approved page, the extension can ask the local native host to queue a runtime dependency. The root-owned Linux agent validates the anchor host against the local whitelist, rejects protected or blocked hosts, writes a TTL-bounded overlay, and regenerates `dnsmasq`. The native host waits for the overlay content generation to be marked applied (after a successful `dnsmasq` restart, or when the generated configuration is unchanged) and reports `runtimeDependencyState: "ready"`; otherwise it answers `pending` and the extension releases the request at its bounded soft timeout. This state is local-only and does not create remote whitelist rules.
 
 This feature requires `python3`, which is already part of the OpenPath Linux package and source-install dependency set.
 

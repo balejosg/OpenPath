@@ -107,16 +107,31 @@ def validate_candidate(
     }
 
 
-def load_overlay(path: Path) -> list[dict[str, Any]]:
+def load_overlay_document(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return []
+        return {}
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, json.JSONDecodeError):
-        return []
-    entries = data.get("entries", []) if isinstance(data, dict) else []
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def load_overlay(path: Path) -> list[dict[str, Any]]:
+    entries = load_overlay_document(path).get("entries", [])
     return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def read_generations(path: Path) -> tuple[int, int]:
+    document = load_overlay_document(path)
+    generation = document.get("generation", 0)
+    applied_generation = document.get("appliedGeneration", 0)
+    if not isinstance(generation, int) or isinstance(generation, bool):
+        generation = 0
+    if not isinstance(applied_generation, int) or isinstance(applied_generation, bool):
+        applied_generation = 0
+    return max(generation, 0), max(applied_generation, 0)
 
 
 def prune_entries(
@@ -150,9 +165,21 @@ def prune_entries(
     return pruned
 
 
-def write_overlay(path: Path, entries: list[dict[str, Any]], now: datetime) -> None:
+def write_overlay(
+    path: Path,
+    entries: list[dict[str, Any]],
+    now: datetime,
+    generation: int,
+    applied_generation: int,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"version": 1, "updatedAt": isoformat(now), "entries": entries}
+    payload = {
+        "version": 1,
+        "generation": max(generation, 0),
+        "appliedGeneration": max(applied_generation, 0),
+        "updatedAt": isoformat(now),
+        "entries": entries,
+    }
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -216,10 +243,27 @@ def command_update(args: argparse.Namespace) -> int:
     after = json.dumps(next_entries, sort_keys=True)
     changed = before != after
     if changed or not overlay_path.exists():
-        write_overlay(overlay_path, next_entries, now)
+        previous_generation, previous_applied = read_generations(overlay_path)
+        write_overlay(
+            overlay_path,
+            next_entries,
+            now,
+            previous_generation + 1,
+            previous_applied,
+        )
     print(f"processed={processed}")
     print(f"rejected={rejected}")
     print(f"changed={'true' if changed else 'false'}")
+    return 0
+
+
+def command_mark_applied(args: argparse.Namespace) -> int:
+    overlay_path = Path(args.overlay)
+    generation, applied_generation = read_generations(overlay_path)
+    if generation <= 0 or applied_generation >= generation:
+        return 0
+    entries = load_overlay(overlay_path)
+    write_overlay(overlay_path, entries, utc_now(), generation, generation)
     return 0
 
 
@@ -231,7 +275,14 @@ def command_domains(args: argparse.Namespace) -> int:
     overlay_path = Path(args.overlay)
     entries = prune_entries(load_overlay(overlay_path), now, whitelist, protected_hosts, blocked_subdomains)
     if args.prune == "true":
-        write_overlay(overlay_path, entries, now)
+        previous_generation, previous_applied = read_generations(overlay_path)
+        write_overlay(
+            overlay_path,
+            entries,
+            now,
+            previous_generation + 1,
+            previous_applied,
+        )
     for host in sorted({entry["dependencyHost"] for entry in entries}):
         print(host)
     return 0
@@ -256,6 +307,9 @@ def build_parser() -> argparse.ArgumentParser:
     domains.add_argument("--protected-hosts", default="")
     domains.add_argument("--blocked-subdomains", default="")
     domains.set_defaults(func=command_domains)
+    mark_applied = subparsers.add_parser("mark-applied")
+    mark_applied.add_argument("--overlay", required=True)
+    mark_applied.set_defaults(func=command_mark_applied)
     return parser
 
 

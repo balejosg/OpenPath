@@ -217,6 +217,135 @@ PYEOF
     [ "$output" = "$OPENPATH_NATIVE_HOST_INSTALL_DIR/openpath-native-host.py" ]
     [ -x "$output" ]
 }
+
+@test "native host reports runtime dependency readiness from the applied overlay" {
+    local tmp="$TEST_TMP_DIR/runtime-ready"
+    mkdir -p "$tmp"
+
+    run python3 - "$PROJECT_DIR/firefox-extension/native/openpath-native-host.py" "$tmp" <<'PY'
+import importlib.util
+import json
+import os
+import sys
+import threading
+import time
+from pathlib import Path
+
+host_path, tmp = sys.argv[1], Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("openpath_native_host", host_path)
+host = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(host)
+
+queue_dir = tmp / "queue"
+queue_dir.mkdir(exist_ok=True)
+overlay = tmp / "overlay.json"
+os.environ["OPENPATH_RUNTIME_DEPENDENCY_QUEUE_DIR"] = str(queue_dir)
+os.environ["OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE"] = str(overlay)
+os.environ["OPENPATH_RUNTIME_DEPENDENCY_READY_TIMEOUT_MS"] = "400"
+os.environ["OPENPATH_RUNTIME_DEPENDENCY_READY_POLL_MS"] = "20"
+
+
+def write_overlay(generation, applied, entries):
+    overlay.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "generation": generation,
+                "appliedGeneration": applied,
+                "entries": entries,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+entry = {
+    "anchorHost": "www.reddit.com",
+    "dependencyHost": "cdn.example",
+    "requestTypes": ["script"],
+}
+
+# Unknown dependency: accepted for processing but not ready yet.
+response = host.handle_message(
+    {
+        "action": "allow-local-runtime-dependency",
+        "anchorHost": "www.reddit.com",
+        "dependencyHost": "cdn.example",
+        "requestType": "script",
+    }
+)
+assert response["success"] is True and response["queued"] is True, response
+assert response["ready"] is False, response
+assert response["runtimeDependencyState"] == "pending", response
+
+# Applied overlay: the same dependency reports ready.
+write_overlay(1, 1, [entry])
+response = host.handle_message(
+    {
+        "action": "check-local-runtime-dependency",
+        "anchorHost": "www.reddit.com",
+        "dependencyHost": "cdn.example",
+    }
+)
+assert response["ready"] is True, response
+assert response["runtimeDependencyState"] == "ready", response
+
+# Mid-wait application: the bounded wait loop observes the marker.
+write_overlay(2, 1, [entry])
+
+
+def mark_applied():
+    time.sleep(0.12)
+    write_overlay(2, 2, [entry])
+
+
+threading.Thread(target=mark_applied, daemon=True).start()
+response = host.handle_message(
+    {
+        "action": "allow-local-runtime-dependency",
+        "anchorHost": "www.reddit.com",
+        "dependencyHost": "cdn.example",
+        "requestType": "script",
+    }
+)
+assert response["ready"] is True, response
+assert response["runtimeDependencyState"] == "ready", response
+
+# Batch: one shared wait marks each result with its own state.
+write_overlay(
+    3,
+    3,
+    [
+        entry,
+        {
+            "anchorHost": "www.reddit.com",
+            "dependencyHost": "img.example",
+            "requestTypes": ["image"],
+        },
+    ],
+)
+response = host.handle_message(
+    {
+        "action": "allow-local-runtime-dependency-batch",
+        "entries": [
+            {
+                "anchorHost": "www.reddit.com",
+                "dependencyHost": "cdn.example",
+                "requestType": "script",
+            },
+            {
+                "anchorHost": "www.reddit.com",
+                "dependencyHost": "img.example",
+                "requestType": "image",
+            },
+        ],
+    }
+)
+assert response["success"] is True, response
+assert all(result["ready"] is True for result in response["results"]), response
+PY
+    [ "$status" -eq 0 ]
+}
 #!/usr/bin/env bats
 ################################################################################
 # browser_native_host.bats - Native host and removal tests

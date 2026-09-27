@@ -153,6 +153,10 @@ function Invoke-NativeHostMessageAction {
             return (Invoke-NativeHostLocalRuntimeDependencyBatchAction -Message $Message -State $State -Sections $sections)
         }
 
+        $script:OpenPathRuntimeDependencyActionCheckLocal {
+            return (Invoke-NativeHostLocalRuntimeDependencyCheckAction -Message $Message)
+        }
+
         'recover-captive-portal-navigation' {
             return (Invoke-NativeHostCaptivePortalRecoveryAction -Message $Message)
         }

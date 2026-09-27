@@ -23,9 +23,15 @@ run_runtime_dependency_apply_locked() {
     if has_config_changed; then
         if restart_dnsmasq; then
             sha256sum "$DNSMASQ_CONF" | cut -d' ' -f1 > "$DNSMASQ_CONF_HASH"
+            # Only a successful reload proves the current overlay content is
+            # operative; the native host waits for this marker before `ready`.
+            mark_runtime_dependency_overlay_applied
         fi
     else
         log_debug "Runtime dependency apply did not change dnsmasq config"
+        # The effective DNS configuration is unchanged, so the current overlay
+        # content is already operative and can be marked as applied.
+        mark_runtime_dependency_overlay_applied
     fi
     flush_dns_cache || true
 }

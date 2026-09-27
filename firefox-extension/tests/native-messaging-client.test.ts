@@ -7,6 +7,7 @@ import {
   LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS,
   LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES,
   LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES,
+  LOCAL_RUNTIME_DEPENDENCY_CACHE_STALE_TTL_MS,
   LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS,
   LOCAL_RUNTIME_DEPENDENCY_OVERLAY_VERSION,
   LOCAL_RUNTIME_DEPENDENCY_QUEUE_SOURCE,
@@ -15,7 +16,10 @@ import {
   RUNTIME_DEPENDENCY_ACTIONS,
   createRuntimeDependencyCacheKey,
   createRuntimeDependencyPendingKey,
+  isPendingRuntimeDependencyResponse,
   isQueuedRuntimeDependencyResponse,
+  isReadyRuntimeDependencyResponse,
+  resolveRuntimeDependencyReadiness,
 } from '../src/lib/runtime-dependency-protocol.js';
 
 function createBrowserStub(sendResult: unknown): Browser {
@@ -63,10 +67,12 @@ await describe('native messaging client', async () => {
     assert.deepEqual(RUNTIME_DEPENDENCY_ACTIONS, {
       allowLocal: 'allow-local-runtime-dependency',
       allowLocalBatch: 'allow-local-runtime-dependency-batch',
+      checkLocal: 'check-local-runtime-dependency',
     });
-    assert.equal(LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS, 150);
+    assert.equal(LOCAL_RUNTIME_DEPENDENCY_BATCH_DELAY_MS, 25);
     assert.equal(LOCAL_RUNTIME_DEPENDENCY_BATCH_MAX_ENTRIES, 20);
-    assert.equal(LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS, 30 * 60 * 1000);
+    assert.equal(LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS, 60 * 1000);
+    assert.equal(LOCAL_RUNTIME_DEPENDENCY_CACHE_STALE_TTL_MS, 30 * 60 * 1000);
     assert.equal(LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS, 5 * 1000);
     assert.equal(LOCAL_RUNTIME_DEPENDENCY_CACHE_MAX_ENTRIES, 100);
     assert.equal(LOCAL_RUNTIME_DEPENDENCY_QUEUE_VERSION, 1);
@@ -92,6 +98,27 @@ await describe('native messaging client', async () => {
       isQueuedRuntimeDependencyResponse({ success: true, runtimeDependencyState: 'queued' }),
       true
     );
+    assert.equal(
+      isReadyRuntimeDependencyResponse({ success: true, runtimeDependencyState: 'ready' }),
+      true
+    );
+    assert.equal(isReadyRuntimeDependencyResponse({ success: true }), false);
+    assert.equal(isPendingRuntimeDependencyResponse({ success: true }), true);
+    assert.equal(isPendingRuntimeDependencyResponse({ success: true, queued: true }), true);
+    assert.equal(
+      isPendingRuntimeDependencyResponse({ success: true, runtimeDependencyState: 'pending' }),
+      true
+    );
+    assert.equal(isPendingRuntimeDependencyResponse({ success: false, error: 'denied' }), false);
+    assert.equal(
+      resolveRuntimeDependencyReadiness({ runtimeDependencyState: 'denied' }),
+      'terminal'
+    );
+    assert.equal(
+      resolveRuntimeDependencyReadiness({ runtimeDependencyState: 'error' }),
+      'terminal'
+    );
+    assert.equal(resolveRuntimeDependencyReadiness(undefined), 'terminal');
   });
 
   await test('maps native check responses to popup-friendly fields', async () => {
@@ -279,6 +306,7 @@ await describe('native messaging client', async () => {
           anchorHost: 'allowed.example',
           dependencyHost: 'cdn.example',
           requestType: 'script',
+          runtimeDependencyState: 'ready',
         },
       ],
     }));
@@ -308,6 +336,7 @@ await describe('native messaging client', async () => {
         action: 'allow-local-runtime-dependency',
         anchorHost: 'allowed.example',
         dependencyHost: 'cdn.example',
+        runtimeDependencyState: 'ready',
         cached: true,
       }
     );
@@ -328,6 +357,7 @@ await describe('native messaging client', async () => {
           ...(entry as object),
           success: true,
           action: 'allow-local-runtime-dependency',
+          runtimeDependencyState: 'ready',
         })),
       };
     });
@@ -576,6 +606,250 @@ await describe('native messaging client', async () => {
       true
     );
     assert.equal(messages.length, 4);
+  });
+
+  await test('shares one in-flight native operation per dependency', async () => {
+    let releaseNative!: () => void;
+    const nativeGate = new Promise<void>((resolve) => {
+      releaseNative = resolve;
+    });
+    let markFirstRequestSent!: () => void;
+    const firstRequestSent = new Promise<void>((resolve) => {
+      markFirstRequestSent = resolve;
+    });
+    const { browser, messages } = createRecordingBrowserStub(() => {
+      markFirstRequestSent();
+      return nativeGate.then(() => ({
+        success: true,
+        action: 'allow-local-runtime-dependency-batch',
+        results: [
+          {
+            success: true,
+            action: 'allow-local-runtime-dependency',
+            anchorHost: 'allowed.example',
+            dependencyHost: 'cdn.example',
+            requestType: 'script',
+            runtimeDependencyState: 'ready',
+          },
+        ],
+      }));
+    });
+    const client = createNativeMessagingClient({
+      browserApi: browser,
+      hostName: 'whitelist_native_host',
+    });
+
+    const firstRequest = client.allowLocalRuntimeDependency({
+      anchorHost: 'allowed.example',
+      dependencyHost: 'cdn.example',
+      requestType: 'script',
+    });
+    await firstRequestSent;
+
+    const secondRequest = client.allowLocalRuntimeDependency({
+      anchorHost: 'allowed.example',
+      dependencyHost: 'cdn.example',
+      requestType: 'script',
+    });
+    releaseNative();
+
+    const [firstResponse, secondResponse] = await Promise.all([firstRequest, secondRequest]);
+    assert.equal(messages.length, 1);
+    assert.equal(firstResponse.success, true);
+    assert.equal(secondResponse.success, true);
+    assert.equal(secondResponse.runtimeDependencyState, 'ready');
+  });
+
+  await test('keeps legacy acknowledgements out of the confirmed-ready cache', async () => {
+    const originalNow = Date.now;
+    let now = 2_000_000;
+    Date.now = (): number => now;
+
+    try {
+      const { browser, messages } = createRecordingBrowserStub(() => ({
+        success: true,
+        action: 'allow-local-runtime-dependency-batch',
+        results: [
+          {
+            success: true,
+            action: 'allow-local-runtime-dependency',
+            anchorHost: 'allowed.example',
+            dependencyHost: 'cdn.example',
+            requestType: 'script',
+          },
+        ],
+      }));
+      const client = createNativeMessagingClient({
+        browserApi: browser,
+        hostName: 'whitelist_native_host',
+      });
+
+      const firstResponse = await client.allowLocalRuntimeDependency({
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'script',
+      });
+      assert.equal(firstResponse.success, true);
+      assert.equal(firstResponse.cached, undefined);
+
+      const deduped = await client.allowLocalRuntimeDependency({
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'script',
+      });
+      assert.equal(deduped.deduped, true);
+      assert.equal(deduped.cached, undefined);
+      assert.equal(messages.length, 1);
+
+      now += LOCAL_RUNTIME_DEPENDENCY_QUEUED_DEDUPE_TTL_MS + 1;
+      await client.allowLocalRuntimeDependency({
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'script',
+      });
+      assert.equal(messages.length, 2);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  await test('confirms stale ready cache entries before treating them as ready again', async () => {
+    const originalNow = Date.now;
+    let now = 3_000_000;
+    Date.now = (): number => now;
+
+    try {
+      const { browser, messages } = createRecordingBrowserStub((message) => {
+        const action =
+          typeof message === 'object' && message !== null && 'action' in message
+            ? (message as { action?: unknown }).action
+            : undefined;
+        if (action === 'check-local-runtime-dependency') {
+          return {
+            success: true,
+            action: 'check-local-runtime-dependency',
+            ready: true,
+            runtimeDependencyState: 'ready',
+          };
+        }
+        return {
+          success: true,
+          action: 'allow-local-runtime-dependency-batch',
+          results: [
+            {
+              success: true,
+              action: 'allow-local-runtime-dependency',
+              anchorHost: 'allowed.example',
+              dependencyHost: 'cdn.example',
+              requestType: 'script',
+              runtimeDependencyState: 'ready',
+            },
+          ],
+        };
+      });
+      const client = createNativeMessagingClient({
+        browserApi: browser,
+        hostName: 'whitelist_native_host',
+      });
+
+      await client.allowLocalRuntimeDependency({
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'script',
+      });
+      assert.equal(messages.length, 1);
+
+      now += LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS + 1;
+      const confirmedResponse = await client.allowLocalRuntimeDependency({
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'xmlhttprequest',
+      });
+      assert.equal(confirmedResponse.runtimeDependencyState, 'ready');
+      assert.equal(confirmedResponse.confirmed, true);
+      assert.equal(messages.length, 2);
+      assert.deepEqual(messages[1], {
+        action: 'check-local-runtime-dependency',
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+      });
+
+      const freshResponse = await client.allowLocalRuntimeDependency({
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'script',
+      });
+      assert.equal(freshResponse.cached, true);
+      assert.equal(messages.length, 2);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  await test('re-runs the allow flow when readiness confirmation fails', async () => {
+    const originalNow = Date.now;
+    let now = 4_000_000;
+    Date.now = (): number => now;
+
+    try {
+      const { browser, messages } = createRecordingBrowserStub((message) => {
+        const action =
+          typeof message === 'object' && message !== null && 'action' in message
+            ? (message as { action?: unknown }).action
+            : undefined;
+        if (action === 'check-local-runtime-dependency') {
+          return {
+            success: true,
+            action: 'check-local-runtime-dependency',
+            ready: false,
+          };
+        }
+        return {
+          success: true,
+          action: 'allow-local-runtime-dependency-batch',
+          results: [
+            {
+              success: true,
+              action: 'allow-local-runtime-dependency',
+              anchorHost: 'allowed.example',
+              dependencyHost: 'cdn.example',
+              requestType: 'script',
+              runtimeDependencyState: 'ready',
+            },
+          ],
+        };
+      });
+      const client = createNativeMessagingClient({
+        browserApi: browser,
+        hostName: 'whitelist_native_host',
+      });
+
+      await client.allowLocalRuntimeDependency({
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'script',
+      });
+      assert.equal(messages.length, 1);
+
+      now += LOCAL_RUNTIME_DEPENDENCY_CACHE_TTL_MS + 1;
+      const response = await client.allowLocalRuntimeDependency({
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+        requestType: 'script',
+      });
+      assert.equal(response.runtimeDependencyState, 'ready');
+      assert.equal(response.confirmed, undefined);
+      assert.deepEqual(
+        messages.map((message) => (message as { action?: unknown }).action),
+        [
+          'allow-local-runtime-dependency-batch',
+          'check-local-runtime-dependency',
+          'allow-local-runtime-dependency-batch',
+        ]
+      );
+    } finally {
+      Date.now = originalNow;
+    }
   });
 
   await test('warmUp calls connectNative once and resolves without throwing', async () => {

@@ -529,6 +529,70 @@ EOF
     grep -q '"dependencyHost": "cdn.example"' "$RUNTIME_DEPENDENCY_OVERLAY_FILE"
 }
 
+@test "runtime dependency overlay tracks content and applied generations" {
+    source "$PROJECT_DIR/linux/lib/common.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-policy.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-overlay.sh"
+    source "$PROJECT_DIR/linux/lib/runtime-dependency-queue.sh"
+
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var/lib/openpath"
+    export RUNTIME_DEPENDENCY_QUEUE_DIR="$VAR_STATE_DIR/runtime-dependency-queue"
+    export RUNTIME_DEPENDENCY_OVERLAY_FILE="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+    mkdir -p "$RUNTIME_DEPENDENCY_QUEUE_DIR"
+    chmod 1733 "$RUNTIME_DEPENDENCY_QUEUE_DIR"
+
+    WHITELIST_DOMAINS=("allowed.example")
+    BLOCKED_SUBDOMAINS=()
+
+    write_runtime_dependency_queue_request "allowed.example" "cdn-one.example" "fetch"
+    run process_runtime_dependency_queue
+    [ "$status" -eq 0 ]
+
+    run python3 - "$RUNTIME_DEPENDENCY_OVERLAY_FILE" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["generation"] == 1, data
+assert data["appliedGeneration"] == 0, data
+PY
+    [ "$status" -eq 0 ]
+
+    # A net-new dependency bumps the content generation and preserves the applied one.
+    write_runtime_dependency_queue_request "allowed.example" "cdn-two.example" "script"
+    run process_runtime_dependency_queue
+    [ "$status" -eq 0 ]
+
+    run python3 - "$RUNTIME_DEPENDENCY_OVERLAY_FILE" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["generation"] == 2, data
+assert data["appliedGeneration"] == 0, data
+PY
+    [ "$status" -eq 0 ]
+
+    run mark_runtime_dependency_overlay_applied
+    [ "$status" -eq 0 ]
+
+    run python3 - "$RUNTIME_DEPENDENCY_OVERLAY_FILE" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["generation"] == 2, data
+assert data["appliedGeneration"] == 2, data
+PY
+    [ "$status" -eq 0 ]
+
+    # Marking an already-applied overlay is a no-op.
+    run mark_runtime_dependency_overlay_applied
+    [ "$status" -eq 0 ]
+
+    run python3 - "$RUNTIME_DEPENDENCY_OVERLAY_FILE" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["generation"] == 2, data
+assert data["appliedGeneration"] == 2, data
+PY
+    [ "$status" -eq 0 ]
+}
+
 @test "runtime dependency overlay prunes expired and blocked entries" {
     source "$PROJECT_DIR/linux/lib/common.sh"
     source "$PROJECT_DIR/linux/lib/runtime-dependency-policy.sh"

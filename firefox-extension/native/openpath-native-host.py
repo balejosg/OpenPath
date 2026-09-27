@@ -39,6 +39,8 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 UPDATE_TRIGGER_LOCK = threading.Lock()
 RUNTIME_DEPENDENCY_BATCH_LIMIT = 20
 RUNTIME_DEPENDENCY_SOURCE = "firefox-webrequest-local"
+RUNTIME_DEPENDENCY_READY_TIMEOUT_MS_DEFAULT = 8000
+RUNTIME_DEPENDENCY_READY_POLL_MS_DEFAULT = 100
 RUNTIME_DEPENDENCY_HOST_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
 )
@@ -192,6 +194,95 @@ def write_runtime_dependency_request(entry):
     }
 
 
+def get_runtime_dependency_overlay_path():
+    return Path(
+        os.environ.get(
+            "OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE",
+            "/var/lib/openpath/runtime-dependency-overlay.json",
+        )
+    )
+
+
+def read_runtime_dependency_overlay_state():
+    """Devuelve (generation, appliedGeneration, entries) del overlay local."""
+    overlay_path = get_runtime_dependency_overlay_path()
+    try:
+        if not overlay_path.is_file():
+            return 0, 0, []
+        parsed = json.loads(overlay_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return 0, 0, []
+    if not isinstance(parsed, dict):
+        return 0, 0, []
+
+    generation = parsed.get("generation", 0)
+    applied_generation = parsed.get("appliedGeneration", 0)
+    if not isinstance(generation, int) or isinstance(generation, bool):
+        generation = 0
+    if not isinstance(applied_generation, int) or isinstance(applied_generation, bool):
+        applied_generation = 0
+    entries = [entry for entry in parsed.get("entries", []) if isinstance(entry, dict)]
+    return max(generation, 0), max(applied_generation, 0), entries
+
+
+def find_runtime_dependency_entry(anchor_host, dependency_host, entries):
+    for entry in entries:
+        entry_anchor = normalize_runtime_dependency_host(entry.get("anchorHost"))
+        entry_dependency = normalize_runtime_dependency_host(entry.get("dependencyHost"))
+        if entry_anchor == anchor_host and entry_dependency == dependency_host:
+            return entry
+    return None
+
+
+def is_runtime_dependency_ready(anchor_host, dependency_host):
+    generation, applied_generation, entries = read_runtime_dependency_overlay_state()
+    if generation <= 0 or applied_generation < generation:
+        return False
+    return find_runtime_dependency_entry(anchor_host, dependency_host, entries) is not None
+
+
+def get_runtime_dependency_ready_timeout_ms():
+    raw = os.environ.get("OPENPATH_RUNTIME_DEPENDENCY_READY_TIMEOUT_MS", "")
+    try:
+        value = int(raw)
+    except ValueError:
+        value = RUNTIME_DEPENDENCY_READY_TIMEOUT_MS_DEFAULT
+    return max(value, 0)
+
+
+def get_runtime_dependency_ready_poll_ms():
+    raw = os.environ.get("OPENPATH_RUNTIME_DEPENDENCY_READY_POLL_MS", "")
+    try:
+        value = int(raw)
+    except ValueError:
+        value = RUNTIME_DEPENDENCY_READY_POLL_MS_DEFAULT
+    return min(max(value, 10), 1000)
+
+
+def wait_for_runtime_dependencies_ready(pairs, timeout_ms=None):
+    """Espera acotada a que cada par (anchor, dependency) figure aplicado en el overlay."""
+    pending = set(pairs)
+    if not pending:
+        return True
+
+    if timeout_ms is None:
+        timeout_ms = get_runtime_dependency_ready_timeout_ms()
+    poll_ms = get_runtime_dependency_ready_poll_ms()
+    deadline = time.monotonic() + max(timeout_ms, 0) / 1000.0
+
+    while pending:
+        pending = {
+            pair for pair in pending if not is_runtime_dependency_ready(pair[0], pair[1])
+        }
+        if not pending:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(poll_ms / 1000.0, remaining))
+    return True
+
+
 def rotate_log_if_needed():
     try:
         if (
@@ -261,12 +352,7 @@ def get_optional_config_host(path_str):
 
 
 def read_runtime_policy_inputs():
-    overlay_path = Path(
-        os.environ.get(
-            "OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE",
-            "/var/lib/openpath/runtime-dependency-overlay.json",
-        )
-    )
+    overlay_path = get_runtime_dependency_overlay_path()
     overlay_raw = b""
     dependencies = []
     try:
@@ -1098,7 +1184,43 @@ def handle_message(message):
         return get_policy_version()
 
     elif action == "allow-local-runtime-dependency":
-        return write_runtime_dependency_request(message)
+        response = write_runtime_dependency_request(message)
+        anchor_host = response.get("anchorHost")
+        dependency_host = response.get("dependencyHost")
+        if response.get("success") is True and anchor_host and dependency_host:
+            wait_started = time.monotonic()
+            ready = wait_for_runtime_dependencies_ready({(anchor_host, dependency_host)})
+            log_debug(
+                "runtime-dependency ready=%s waitMs=%d dependency=%s"
+                % (
+                    bool(ready),
+                    int((time.monotonic() - wait_started) * 1000),
+                    dependency_host,
+                )
+            )
+            response["ready"] = bool(ready)
+            response["runtimeDependencyState"] = "ready" if ready else "pending"
+        return response
+
+    elif action == "check-local-runtime-dependency":
+        anchor_host = normalize_runtime_dependency_host(message.get("anchorHost"))
+        dependency_host = normalize_runtime_dependency_host(message.get("dependencyHost"))
+        if not anchor_host or not dependency_host:
+            return {
+                "success": False,
+                "action": "check-local-runtime-dependency",
+                "error": "Invalid runtime dependency payload",
+            }
+
+        ready = is_runtime_dependency_ready(anchor_host, dependency_host)
+        return {
+            "success": True,
+            "action": "check-local-runtime-dependency",
+            "anchorHost": anchor_host,
+            "dependencyHost": dependency_host,
+            "ready": bool(ready),
+            "runtimeDependencyState": "ready" if ready else "pending",
+        }
 
     elif action == "allow-local-runtime-dependency-batch":
         entries = message.get("entries", [])
@@ -1122,6 +1244,40 @@ def handle_message(message):
                     "error": "Runtime dependency batch limit exceeded",
                 }
             )
+
+        queued_pairs = {
+            (result.get("anchorHost"), result.get("dependencyHost"))
+            for result in results
+            if result.get("success") is True
+            and result.get("queued") is True
+            and result.get("anchorHost")
+            and result.get("dependencyHost")
+        }
+        if queued_pairs:
+            # Una sola espera compartida para todo el lote; luego se marca cada
+            # resultado con su estado individual.
+            wait_started = time.monotonic()
+            batch_ready = wait_for_runtime_dependencies_ready(queued_pairs)
+            log_debug(
+                "runtime-dependency batch ready=%s waitMs=%d count=%d"
+                % (
+                    bool(batch_ready),
+                    int((time.monotonic() - wait_started) * 1000),
+                    len(queued_pairs),
+                )
+            )
+            for result in results:
+                anchor_host = result.get("anchorHost")
+                dependency_host = result.get("dependencyHost")
+                if (
+                    result.get("success") is True
+                    and result.get("queued") is True
+                    and anchor_host
+                    and dependency_host
+                ):
+                    ready = is_runtime_dependency_ready(anchor_host, dependency_host)
+                    result["ready"] = bool(ready)
+                    result["runtimeDependencyState"] = "ready" if ready else "pending"
 
         return {
             "success": all(result.get("success") is True for result in results),

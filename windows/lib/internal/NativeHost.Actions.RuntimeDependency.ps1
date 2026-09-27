@@ -53,6 +53,85 @@ function Test-NativeHostRuntimeDependencyQueueRequestProcessed {
     return -not (Test-Path $RequestPath -ErrorAction SilentlyContinue)
 }
 
+function Test-NativeHostRuntimeDependencyOverlayApplied {
+    <#
+    .SYNOPSIS
+    Returns true when the on-disk overlay content generation was confirmed as reloaded into the local DNS service.
+    #>
+    param()
+
+    $path = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $script:OpenPathRoot
+    if (-not (Test-Path $path -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    try {
+        $raw = Get-Content $path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
+        $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+        $generation = if ($parsed.PSObject.Properties['generation']) { [int]$parsed.generation } else { 0 }
+        $appliedGeneration = if ($parsed.PSObject.Properties['appliedGeneration']) { [int]$parsed.appliedGeneration } else { 0 }
+        return ($appliedGeneration -ge $generation)
+    }
+    catch {
+        Write-NativeHostLog "Failed to inspect runtime dependency overlay applied state: $_"
+        return $false
+    }
+}
+
+function Test-NativeHostRuntimeDependencyReady {
+    <#
+    .SYNOPSIS
+    Returns true when every requested dependency is present in the overlay and the overlay generation was reloaded into the local DNS service.
+    .DESCRIPTION
+    Used by the update task wait condition. When no runtime dependency domains are given,
+    readiness only requires the queue request to be processed (plain whitelist updates).
+    #>
+    param(
+        [AllowNull()][string]$RequestPath = '',
+        [string[]]$Domains = @()
+    )
+
+    if (-not (Test-NativeHostRuntimeDependencyQueueRequestProcessed -RequestPath $RequestPath)) {
+        return $false
+    }
+    if (@($Domains).Count -eq 0) {
+        return $true
+    }
+    if (-not (Test-NativeHostRuntimeDependencyOverlayContainsDomains -Domains $Domains)) {
+        return $false
+    }
+    return (Test-NativeHostRuntimeDependencyOverlayApplied)
+}
+
+function Add-NativeHostRuntimeDependencyReadinessToResult {
+    <#
+    .SYNOPSIS
+    Adds readiness fields to skipped resolution results so the extension can release already-satisfied dependencies.
+    #>
+    param([Parameter(Mandatory = $true)][object]$Result)
+
+    if ($Result -isnot [System.Collections.IDictionary]) {
+        return $Result
+    }
+    if (-not $Result.Contains('reason')) {
+        return $Result
+    }
+
+    switch ([string]$Result['reason']) {
+        'dependency-already-whitelisted' {
+            $Result['ready'] = $true
+            $Result['runtimeDependencyState'] = 'ready'
+        }
+        'runtime-dependency-overlay-present' {
+            $applied = [bool](Test-NativeHostRuntimeDependencyOverlayApplied)
+            $Result['ready'] = $applied
+            $Result['runtimeDependencyState'] = if ($applied) { 'ready' } else { 'pending' }
+        }
+    }
+    return $Result
+}
+
 function Resolve-NativeHostLocalRuntimeDependencyCandidate {
     <#
     .SYNOPSIS
@@ -94,7 +173,7 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
 
     $candidate = Resolve-NativeHostLocalRuntimeDependencyCandidate -Message $Message -State $State -Sections $Sections
     if ($candidate.Valid -ne $true) {
-        return $candidate.Result
+        return (Add-NativeHostRuntimeDependencyReadinessToResult -Result $candidate.Result)
     }
 
     $queueWriteStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -116,6 +195,7 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
             dependencyHost = $candidate.DependencyHost
             requestType = $candidate.RequestType
             queued = $true
+            runtimeDependencyState = 'error'
             requestPath = $requestPath
             queueWriteMs = [int]$queueWriteStopwatch.ElapsedMilliseconds
             updateTriggerMs = if ($updateResult.ContainsKey('updateTriggerMs')) { [int]$updateResult.updateTriggerMs } else { 0 }
@@ -135,6 +215,8 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
         dependencyHost = $candidate.DependencyHost
         requestType = $candidate.RequestType
         queued = $true
+        ready = $true
+        runtimeDependencyState = 'ready'
         requestPath = $requestPath
         queueWriteMs = [int]$queueWriteStopwatch.ElapsedMilliseconds
         updateTriggerMs = if ($updateResult.ContainsKey('updateTriggerMs')) { [int]$updateResult.updateTriggerMs } else { 0 }
@@ -176,7 +258,7 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
     foreach ($entry in @($entries | Select-Object -First $script:OpenPathRuntimeDependencyBatchMaxEntries)) {
         $candidate = Resolve-NativeHostLocalRuntimeDependencyCandidate -Message $entry -State $State -Sections $Sections
         if ($candidate.Valid -ne $true) {
-            $results += $candidate.Result
+            $results += (Add-NativeHostRuntimeDependencyReadinessToResult -Result $candidate.Result)
             continue
         }
 
@@ -214,7 +296,14 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
         if ($updateResult.success -ne $true) {
             foreach ($result in $queuedResults) {
                 $result.success = $false
+                $result.runtimeDependencyState = 'error'
                 $result.error = $updateResult.error
+            }
+        }
+        else {
+            foreach ($result in $queuedResults) {
+                $result.ready = $true
+                $result.runtimeDependencyState = 'ready'
             }
         }
         foreach ($result in $queuedResults) {
@@ -242,6 +331,64 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
         updateTaskName = if ($updateResult -and $updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
         results = $results
     }
+}
+
+function Invoke-NativeHostLocalRuntimeDependencyCheckAction {
+    <#
+    .SYNOPSIS
+    Reports whether a previously learned runtime dependency is currently operative in the local DNS path.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Message
+    )
+
+    if (Test-OpenPathRuntimeDependencySensitiveField -Message $Message) {
+        return @{ success = $false; action = $script:OpenPathRuntimeDependencyActionCheckLocal; error = 'Sensitive fields are not accepted' }
+    }
+
+    $anchorHost = Normalize-OpenPathRuntimeDependencyHost -Value $Message.anchorHost
+    $dependencyHost = Normalize-OpenPathRuntimeDependencyHost -Value $Message.dependencyHost
+    if (-not $anchorHost -or -not $dependencyHost) {
+        return @{ success = $false; action = $script:OpenPathRuntimeDependencyActionCheckLocal; error = 'Invalid runtime dependency payload' }
+    }
+
+    $generation = 0
+    $appliedGeneration = 0
+    $entry = $null
+    $path = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $script:OpenPathRoot
+    if (Test-Path $path -ErrorAction SilentlyContinue) {
+        try {
+            $raw = Get-Content $path -Raw -ErrorAction Stop
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+                if ($parsed.PSObject.Properties['generation']) { $generation = [int]$parsed.generation }
+                if ($parsed.PSObject.Properties['appliedGeneration']) { $appliedGeneration = [int]$parsed.appliedGeneration }
+                $entry = @($parsed.entries | Where-Object {
+                        (Normalize-OpenPathRuntimeDependencyHost -Value $_.dependencyHost) -eq $dependencyHost -and
+                        (Normalize-OpenPathRuntimeDependencyHost -Value $_.anchorHost) -eq $anchorHost
+                    }) | Select-Object -First 1
+            }
+        }
+        catch {
+            Write-NativeHostLog "Failed to inspect runtime dependency overlay: $_"
+        }
+    }
+
+    $isReady = ($null -ne $entry) -and ($generation -gt 0) -and ($appliedGeneration -ge $generation)
+    $state = if ($isReady) { 'ready' } else { 'pending' }
+    $response = @{
+        success = $true
+        action = $script:OpenPathRuntimeDependencyActionCheckLocal
+        anchorHost = $anchorHost
+        dependencyHost = $dependencyHost
+        ready = [bool]$isReady
+        runtimeDependencyState = $state
+    }
+    if ($entry -and $entry.PSObject.Properties['expiresAt']) {
+        $response['expiresAt'] = [string]$entry.expiresAt
+    }
+    return $response
 }
 
 function Invoke-NativeHostSharedUpdateTrigger {
@@ -352,13 +499,9 @@ function Invoke-UpdateTask {
                         -TimeoutSeconds $TimeoutSeconds `
                         -WaitCondition {
                             $whitelistReady = Test-NativeWhitelistContainsDomains -Domains $Domains
-                            $runtimeDependencyReady = (
-                                (Test-NativeHostRuntimeDependencyQueueRequestProcessed -RequestPath $RuntimeDependencyRequestPath) -and
-                                (
-                                    -not [string]::IsNullOrWhiteSpace($RuntimeDependencyRequestPath) -or
-                                    (Test-NativeHostRuntimeDependencyOverlayContainsDomains -Domains $RuntimeDependencyDomains)
-                                )
-                            )
+                            $runtimeDependencyReady = Test-NativeHostRuntimeDependencyReady `
+                                -RequestPath $RuntimeDependencyRequestPath `
+                                -Domains $RuntimeDependencyDomains
                             return ($whitelistReady -and $runtimeDependencyReady)
                         }
                     $triggerState['Fallback'] = [bool]$taskResult.fallback

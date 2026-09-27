@@ -329,6 +329,72 @@ EOF
     grep -q "newhash" "$DNSMASQ_CONF_HASH"
 }
 
+@test "runtime dependency apply marks the overlay applied only after the reload succeeds" {
+    local install_dir="$TEST_TMP_DIR/install-runtime-apply-mark"
+    local script_path="$PROJECT_DIR/linux/scripts/runtime/openpath-runtime-dependency-apply.sh"
+
+    mkdir -p "$install_dir/lib" "$install_dir/libexec" "$TEST_TMP_DIR/bin-mark"
+    cp "$PROJECT_DIR/linux/lib/"*.sh "$install_dir/lib/"
+    cp "$PROJECT_DIR/linux/libexec/"*.py "$install_dir/libexec/"
+    cp "$PROJECT_DIR/runtime/browser-policy-spec.json" "$install_dir/libexec/"
+    printf '4.1.0\n' > "$install_dir/VERSION"
+    : > "$install_dir/lib/defaults.conf"
+
+    cat >> "$install_dir/lib/dns.sh" <<'EOF'
+parse_whitelist_sections() { :; }
+process_runtime_dependency_queue() { :; }
+generate_dnsmasq_config() { printf 'dns-config\n' > "$DNSMASQ_CONF"; }
+has_config_changed() { [ "$(cat "$DNSMASQ_CONF_HASH" 2>/dev/null)" != "newhash" ]; }
+restart_dnsmasq() { return "$RESTART_RESULT"; }
+flush_dns_cache() { :; }
+with_openpath_lock() { "$@"; }
+EOF
+
+    cat > "$TEST_TMP_DIR/bin-mark/sha256sum" <<'EOF'
+#!/bin/bash
+printf 'newhash  %s\n' "$1"
+EOF
+    chmod +x "$TEST_TMP_DIR/bin-mark/sha256sum"
+
+    export INSTALL_DIR="$install_dir"
+    export WHITELIST_FILE="$TEST_TMP_DIR/whitelist-mark.txt"
+    export DNSMASQ_CONF="$TEST_TMP_DIR/openpath-mark.conf"
+    export DNSMASQ_CONF_HASH="$TEST_TMP_DIR/openpath-mark.conf.hash"
+    export RUNTIME_DEPENDENCY_OVERLAY_FILE="$TEST_TMP_DIR/runtime-dependency-overlay.json"
+    export PATH="$TEST_TMP_DIR/bin-mark:$PATH"
+    cat > "$WHITELIST_FILE" <<'EOF'
+allowed.example
+EOF
+    cat > "$RUNTIME_DEPENDENCY_OVERLAY_FILE" <<'EOF'
+{"version":1,"generation":1,"appliedGeneration":0,"updatedAt":"2026-01-01T00:00:00Z","entries":[{"anchorHost":"allowed.example","dependencyHost":"cdn.example","requestTypes":["fetch"],"expiresAt":"2099-01-02T00:00:00Z","firstSeen":"2026-01-01T00:00:00Z","lastSeen":"2026-01-01T00:00:00Z","source":"firefox-webrequest-local"}]}
+EOF
+
+    export RESTART_RESULT=1
+    printf 'oldhash\n' > "$DNSMASQ_CONF_HASH"
+    run "$script_path"
+    [ "$status" -eq 0 ]
+
+    run python3 - "$RUNTIME_DEPENDENCY_OVERLAY_FILE" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["generation"] == 1, data
+assert data["appliedGeneration"] == 0, data
+PY
+    [ "$status" -eq 0 ]
+
+    export RESTART_RESULT=0
+    run "$script_path"
+    [ "$status" -eq 0 ]
+
+    run python3 - "$RUNTIME_DEPENDENCY_OVERLAY_FILE" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["generation"] == 1, data
+assert data["appliedGeneration"] == 1, data
+PY
+    [ "$status" -eq 0 ]
+}
+
 # ============== Early-boot firewall restore (boot fail-open fix, F-A) ==============
 
 @test "create_firewall_restore_service defines an early-boot fail-closed unit" {

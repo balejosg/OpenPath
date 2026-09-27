@@ -64,3 +64,14 @@ get_runtime_dependency_domains() {
         --protected-hosts "$(get_runtime_dependency_protected_hosts_arg)" \
         --blocked-subdomains "${BLOCKED_SUBDOMAINS[*]}"
 }
+
+mark_runtime_dependency_overlay_applied() {
+    local overlay_file
+    local helper
+    overlay_file="$(get_runtime_dependency_overlay_file)"
+    if [ ! -f "$overlay_file" ]; then
+        return 0
+    fi
+    helper="$(get_runtime_dependency_overlay_helper)" || return 0
+    python3 "$helper" mark-applied --overlay "$overlay_file" >/dev/null 2>&1 || true
+}

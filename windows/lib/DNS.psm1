@@ -30,6 +30,7 @@ Export-ModuleMember -Function @(
     'Clear-OpenPathRuntimeDependencyOverlay',
     'Invoke-OpenPathRuntimeDependencyQueue',
     'Get-OpenPathRuntimeDependencyDomains',
+    'Set-OpenPathRuntimeDependencyOverlayApplied',
     'Set-LocalDNS',
     'Restore-OriginalDNS',
     'Restore-OpenPathCaptivePortalDNS',

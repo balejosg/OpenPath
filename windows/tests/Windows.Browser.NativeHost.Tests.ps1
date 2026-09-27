@@ -523,7 +523,8 @@ Describe "Browser Module - Native Host" {
                 '-ShouldFallback $hasRuntimeDependencyWait',
                 '-TimeoutSeconds $TimeoutSeconds',
                 '-WaitCondition {',
-                'Test-NativeHostRuntimeDependencyQueueRequestProcessed -RequestPath $RuntimeDependencyRequestPath',
+                '$runtimeDependencyReady = Test-NativeHostRuntimeDependencyReady',
+                '-Domains $RuntimeDependencyDomains',
                 'runtimeDependencyFallback = [bool]$taskResult.fallback',
                 'updateTaskName = [string]$taskResult.taskName',
                 'updateTriggerMs = [int]$taskResult.triggerMs',
@@ -604,6 +605,7 @@ Describe "Browser Module - Native Host" {
             Assert-ContentContainsAll -Content $runtimeDependencyProtocolContent -Needles @(
                 '$script:OpenPathRuntimeDependencyActionAllowLocal = ''allow-local-runtime-dependency''',
                 '$script:OpenPathRuntimeDependencyActionAllowLocalBatch = ''allow-local-runtime-dependency-batch''',
+                '$script:OpenPathRuntimeDependencyActionCheckLocal = ''check-local-runtime-dependency''',
                 '$script:OpenPathRuntimeDependencyBatchMaxEntries = 20',
                 '$script:OpenPathRuntimeDependencyQueueVersion = 1',
                 '$script:OpenPathRuntimeDependencyOverlayVersion = 1',
@@ -613,9 +615,13 @@ Describe "Browser Module - Native Host" {
                 'RuntimeDependency.Protocol.ps1',
                 '$script:OpenPathRuntimeDependencyActionAllowLocal',
                 '$script:OpenPathRuntimeDependencyActionAllowLocalBatch',
+                '$script:OpenPathRuntimeDependencyActionCheckLocal',
                 '$script:OpenPathRuntimeDependencyBatchMaxEntries',
                 'function Invoke-NativeHostLocalRuntimeDependencyAction',
                 'function Invoke-NativeHostLocalRuntimeDependencyBatchAction',
+                'function Invoke-NativeHostLocalRuntimeDependencyCheckAction',
+                'function Test-NativeHostRuntimeDependencyReady',
+                'function Test-NativeHostRuntimeDependencyOverlayApplied',
                 'Write-OpenPathRuntimeDependencyQueueRequest `',
                 'Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay',
                 'anchorHost',
@@ -630,7 +636,9 @@ Describe "Browser Module - Native Host" {
                 'queueWriteMs',
                 'updateTriggerMs',
                 'runtimeDependencyFastPath',
-                'runtimeDependencyFallback'
+                'runtimeDependencyFallback',
+                'runtimeDependencyState = ''ready''',
+                'runtimeDependencyState = ''error'''
             )
             Assert-ContentContainsAll -Content $runtimeDependencyQueueContent -Needles @(
                 'RuntimeDependency.Protocol.ps1',
@@ -641,6 +649,9 @@ Describe "Browser Module - Native Host" {
             Assert-ContentContainsAll -Content $runtimeDependencyOverlayContent -Needles @(
                 'RuntimeDependency.Protocol.ps1',
                 'version = $script:OpenPathRuntimeDependencyOverlayVersion',
+                'generation = $previousGeneration + 1',
+                'appliedGeneration = $previousAppliedGeneration',
+                'function Set-OpenPathRuntimeDependencyOverlayApplied',
                 'source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal'
             )
             Assert-ContentContainsAll -Content $installerStagingContent -Needles @(
@@ -654,6 +665,7 @@ Describe "Browser Module - Native Host" {
                 'Invoke-OpenPathRuntimeDependencyQueue',
                 'Update-AcrylicHost -WhitelistedDomains $runtimeDependencyQueueSections.Whitelist',
                 'function Invoke-OpenPathRuntimeDependencyFastApply',
+                'Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null',
                 'Runtime dependency queue processed'
             )
 
@@ -1991,6 +2003,73 @@ Describe "Browser Module - Native Host" {
 
                 $candidate.Valid | Should -BeFalse -Because "$dependencyHost must stay protected"
                 $candidate.Result.error | Should -Be 'Protected hosts are not accepted as runtime dependencies'
+            }
+        }
+
+        It "Reports runtime dependency readiness only after the overlay generation is applied" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-runtime-ready-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                . $nativeHostActionsPath
+
+                $overlayPath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $tempRoot
+                New-Item -ItemType Directory -Path (Split-Path $overlayPath -Parent) -Force | Out-Null
+                @{
+                    version = 1
+                    generation = 1
+                    appliedGeneration = 0
+                    updatedAt = [DateTimeOffset]::UtcNow.ToString('o')
+                    entries = @(
+                        @{
+                            dependencyHost = 'cdn-ready.example'
+                            anchorHost = 'www.reddit.com'
+                            requestTypes = @('script')
+                            firstSeen = [DateTimeOffset]::UtcNow.ToString('o')
+                            lastSeen = [DateTimeOffset]::UtcNow.ToString('o')
+                            expiresAt = [DateTimeOffset]::UtcNow.AddDays(1).ToString('o')
+                            source = 'firefox-webrequest-local'
+                        }
+                    )
+                } | ConvertTo-Json -Depth 6 | Set-Content -Path $overlayPath
+
+                $pending = Invoke-NativeHostLocalRuntimeDependencyCheckAction -Message ([PSCustomObject]@{
+                        anchorHost = 'www.reddit.com'
+                        dependencyHost = 'cdn-ready.example'
+                    })
+                $pending.success | Should -BeTrue
+                $pending.ready | Should -BeFalse
+                $pending.runtimeDependencyState | Should -Be 'pending'
+
+                # The queue request file is gone and the overlay contains the host,
+                # but the content generation has not been reloaded yet.
+                (Test-NativeHostRuntimeDependencyReady -RequestPath (Join-Path $tempRoot 'processed-request.json') -Domains @('cdn-ready.example')) | Should -BeFalse
+
+                $appliedOverlay = Get-Content $overlayPath -Raw | ConvertFrom-Json
+                $appliedOverlay.appliedGeneration = $appliedOverlay.generation
+                $appliedOverlay | ConvertTo-Json -Depth 6 | Set-Content -Path $overlayPath
+
+                $ready = Invoke-NativeHostLocalRuntimeDependencyCheckAction -Message ([PSCustomObject]@{
+                        anchorHost = 'www.reddit.com'
+                        dependencyHost = 'cdn-ready.example'
+                    })
+                $ready.ready | Should -BeTrue
+                $ready.runtimeDependencyState | Should -Be 'ready'
+                $ready.expiresAt | Should -Not -BeNullOrEmpty
+
+                (Test-NativeHostRuntimeDependencyReady -RequestPath (Join-Path $tempRoot 'processed-request.json') -Domains @('cdn-ready.example')) | Should -BeTrue
+
+                # An unprocessed queue request keeps readiness false even when the overlay is applied.
+                $queuedRequestPath = Join-Path $tempRoot 'queued-request.json'
+                Set-Content -Path $queuedRequestPath -Value '{}'
+                (Test-NativeHostRuntimeDependencyReady -RequestPath $queuedRequestPath -Domains @('cdn-ready.example')) | Should -BeFalse
+            }
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
 

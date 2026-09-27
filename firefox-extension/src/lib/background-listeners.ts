@@ -1,6 +1,7 @@
 import type { Browser, Runtime, WebNavigation, WebRequest } from 'webextension-polyfill';
 import { getErrorMessage, logger } from './logger.js';
 import { withTimeoutOrFallback } from './async-timeout.js';
+import { isPendingRuntimeDependencyResponse } from './runtime-dependency-protocol.js';
 import { t } from './i18n.js';
 import { shouldClearBlockedMonitorStateOnNavigate } from './blocked-screen-contract.js';
 import { BLOCKED_SCREEN_PATH, ROUTE_BLOCK_REASON, extractHostname } from './path-blocking.js';
@@ -58,14 +59,18 @@ interface BackgroundListenersOptions {
 }
 
 const DEFAULT_LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_MS = 500;
+// Budgets cover queue write + agent apply + local DNS reload. They are the
+// extension-side release valve: a proven-ready result releases earlier, and
+// the local diagnostic log records how often the cap is reached.
 const LOCAL_RUNTIME_DEPENDENCY_SOFT_TIMEOUT_BY_TYPE_MS = new Map<string, number>([
-  ['fetch', 250],
-  ['xmlhttprequest', 250],
-  ['image', 500],
-  ['script', 1200],
-  ['stylesheet', 1200],
-  ['font', 1200],
+  ['fetch', 1500],
+  ['xmlhttprequest', 1500],
+  ['image', 1500],
+  ['script', 2000],
+  ['stylesheet', 2000],
+  ['font', 2000],
 ]);
+const LOCAL_RUNTIME_DEPENDENCY_NEVER_SETTLES = new Promise<never>(() => undefined);
 
 function extractRequestHostname(url: string | undefined): string | null {
   if (!url) {
@@ -185,11 +190,36 @@ function waitForLocalRuntimeDependencySoftTimeout(
     });
   });
 
-  return withTimeoutOrFallback(
-    promise,
-    resolveLocalRuntimeDependencySoftTimeoutMs(requestType, overrideTimeoutMs),
-    {}
-  ).then(() => ({}));
+  // Only a proven-ready result releases the request early; pending/queued
+  // results keep waiting until the soft timeout, and terminal failures
+  // (denied/error) fall through immediately so the request fails fast.
+  const timeoutMs = resolveLocalRuntimeDependencySoftTimeoutMs(requestType, overrideTimeoutMs);
+  let stillWaitingOnNative = true;
+  const decidedPromise = promise.then(
+    (response) => {
+      if (isPendingRuntimeDependencyResponse(response)) {
+        return LOCAL_RUNTIME_DEPENDENCY_NEVER_SETTLES;
+      }
+      stillWaitingOnNative = false;
+      return response;
+    },
+    (error: unknown) => {
+      stillWaitingOnNative = false;
+      throw error;
+    }
+  );
+
+  return withTimeoutOrFallback(decidedPromise, timeoutMs, {}).then(() => {
+    if (stillWaitingOnNative) {
+      // Local diagnostic only: the request was released before the native host
+      // proved readiness, which is the signal used to retune the budgets.
+      logger.debug('[Monitor] Local runtime dependency soft timeout reached', {
+        requestType,
+        timeoutMs,
+      });
+    }
+    return {};
+  });
 }
 
 function createRuntimeMessageResponder(
