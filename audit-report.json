@@ -1,6 +1,31 @@
 {
   "auditReportVersion": 2,
   "vulnerabilities": {
+    "@humanfs/node": {
+      "name": "@humanfs/node",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1158499,
+          "name": "@humanfs/node",
+          "dependency": "@humanfs/node",
+          "title": "humanfs: Recursive copy follows symlinked files and copies data from outside the source tree",
+          "url": "https://github.com/advisories/GHSA-p498-v437-472g",
+          "severity": "moderate",
+          "cwe": ["CWE-22"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": "<0.16.8"
+        }
+      ],
+      "effects": [],
+      "range": "<0.16.8",
+      "nodes": ["node_modules/@humanfs/node"],
+      "fixAvailable": true
+    },
     "@puppeteer/browsers": {
       "name": "@puppeteer/browsers",
       "severity": "high",
@@ -39,17 +64,52 @@
         "isSemVerMajor": true
       }
     },
+    "@vitest/coverage-v8": {
+      "name": "@vitest/coverage-v8",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": ["vitest"],
+      "effects": ["vitest"],
+      "range": "2.1.0-beta.1 - 4.1.10",
+      "nodes": ["react-spa/node_modules/@vitest/coverage-v8"],
+      "fixAvailable": true
+    },
+    "@vitest/mocker": {
+      "name": "@vitest/mocker",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1193684,
+          "name": "@vitest/mocker",
+          "dependency": "@vitest/mocker",
+          "title": "Vitest: Path Traversal / Arbitrary File Read via @vitest/mocker Redirect Mock",
+          "url": "https://github.com/advisories/GHSA-82fw-gwwq-j7x9",
+          "severity": "moderate",
+          "cwe": ["CWE-22"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          },
+          "range": ">=2.1.0 <4.1.11"
+        }
+      ],
+      "effects": ["vitest"],
+      "range": "2.1.0 - 4.1.10",
+      "nodes": ["react-spa/node_modules/vitest/node_modules/@vitest/mocker"],
+      "fixAvailable": true
+    },
     "addons-linter": {
       "name": "addons-linter",
       "severity": "high",
       "isDirect": false,
       "via": ["image-size"],
       "effects": ["web-ext"],
-      "range": ">=3.0.0",
+      "range": "7.8.0 - 10.12.0",
       "nodes": ["node_modules/addons-linter"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.6.0",
+        "version": "10.7.0",
         "isSemVerMajor": false
       }
     },
@@ -71,16 +131,69 @@
             "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
           },
           "range": "<0.6.0"
+        },
+        {
+          "source": 1193734,
+          "name": "adm-zip",
+          "dependency": "adm-zip",
+          "title": "adm-zip extraction follows destination symlinks, allowing arbitrary file overwrite",
+          "url": "https://github.com/advisories/GHSA-vwc7-r8mq-g2x9",
+          "severity": "moderate",
+          "cwe": ["CWE-59"],
+          "cvss": {
+            "score": 6.5,
+            "vectorString": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:C/C:N/I:H/A:N"
+          },
+          "range": ">=0.5.9 <=0.6.0"
+        },
+        {
+          "source": 1239030,
+          "name": "adm-zip",
+          "dependency": "adm-zip",
+          "title": "adm-zip: Uncontrolled memory allocation via the declared uncompressed size (DoS)",
+          "url": "https://github.com/advisories/GHSA-7q85-xj36-vmfc",
+          "severity": "high",
+          "cwe": ["CWE-789"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<0.6.1"
         }
       ],
       "effects": ["firefox-profile"],
-      "range": "<0.6.0",
+      "range": "<=0.6.0",
       "nodes": ["node_modules/adm-zip"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.6.0",
+        "version": "10.7.0",
         "isSemVerMajor": false
       }
+    },
+    "baseline-browser-mapping": {
+      "name": "baseline-browser-mapping",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1193686,
+          "name": "baseline-browser-mapping",
+          "dependency": "baseline-browser-mapping",
+          "title": "baseline-browser-mapping process termination on invalid input causes denial of service",
+          "url": "https://github.com/advisories/GHSA-w5vr-8v7q-w6rv",
+          "severity": "moderate",
+          "cwe": ["CWE-705"],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": ">=2.0.0 <2.11.0"
+        }
+      ],
+      "effects": [],
+      "range": ">=2.0.0 <2.11.0",
+      "nodes": ["node_modules/baseline-browser-mapping"],
+      "fixAvailable": true
     },
     "body-parser": {
       "name": "body-parser",
@@ -146,6 +259,45 @@
       "nodes": ["node_modules/brace-expansion"],
       "fixAvailable": true
     },
+    "browserslist": {
+      "name": "browserslist",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1153171,
+          "name": "browserslist",
+          "dependency": "browserslist",
+          "title": "Browserslist: Unbounded memory growth (no cache eviction) via distinct query results, leading to eventual OOM",
+          "url": "https://github.com/advisories/GHSA-c83g-rgw3-j3cx",
+          "severity": "high",
+          "cwe": ["CWE-770"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=4.28.6"
+        },
+        {
+          "source": 1153172,
+          "name": "browserslist",
+          "dependency": "browserslist",
+          "title": "Browserslist: Uncaught crash / prototype write via untrusted browserslist-stats.json custom stats (normalizeStats)",
+          "url": "https://github.com/advisories/GHSA-73wf-gq98-2v4g",
+          "severity": "high",
+          "cwe": ["CWE-248", "CWE-1321"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=4.28.6"
+        }
+      ],
+      "effects": [],
+      "range": "<=4.28.6",
+      "nodes": ["node_modules/browserslist"],
+      "fixAvailable": true
+    },
     "concurrently": {
       "name": "concurrently",
       "severity": "high",
@@ -186,6 +338,20 @@
           "cvss": {
             "score": 8.1,
             "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N"
+          },
+          "range": "<=2.0.1"
+        },
+        {
+          "source": 1193685,
+          "name": "extract-zip",
+          "dependency": "extract-zip",
+          "title": "extract-zip allows arbitrary file writes through symlink archive entries",
+          "url": "https://github.com/advisories/GHSA-7pqw-9j4j-h8q3",
+          "severity": "high",
+          "cwe": ["CWE-22"],
+          "cvss": {
+            "score": 8.1,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:H"
           },
           "range": "<=2.0.1"
         }
@@ -229,7 +395,49 @@
           "range": ">=3.0.0 <3.1.5"
         },
         {
-          "source": 1147649,
+          "source": 1158524,
+          "name": "fast-uri",
+          "dependency": "fast-uri",
+          "title": "fast-uri vulnerable to server-side request forgery via malformed IPv6 normalization",
+          "url": "https://github.com/advisories/GHSA-f65p-4m7j-42xc",
+          "severity": "high",
+          "cwe": ["CWE-20", "CWE-918"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": ">=3.0.0 <3.1.6"
+        },
+        {
+          "source": 1158527,
+          "name": "fast-uri",
+          "dependency": "fast-uri",
+          "title": "fast-uri vulnerable to server-side request forgery via repeated hostname percent-decoding",
+          "url": "https://github.com/advisories/GHSA-fph4-wmhf-6fwf",
+          "severity": "high",
+          "cwe": ["CWE-174", "CWE-918"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": ">=3.1.2 <3.1.6"
+        },
+        {
+          "source": 1158530,
+          "name": "fast-uri",
+          "dependency": "fast-uri",
+          "title": "fast-uri vulnerable to host confusion via percent-encoded scheme normalization",
+          "url": "https://github.com/advisories/GHSA-jqff-g426-hqxp",
+          "severity": "high",
+          "cwe": ["CWE-177"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": ">=3.0.0 <3.1.6"
+        },
+        {
+          "source": 1204921,
           "name": "fast-uri",
           "dependency": "fast-uri",
           "title": "fast-uri vulnerable to host confusion via failed IDN canonicalization",
@@ -244,7 +452,7 @@
         }
       ],
       "effects": [],
-      "range": "3.0.0 - 3.1.4",
+      "range": "3.0.0 - 3.1.5",
       "nodes": ["node_modules/fast-uri"],
       "fixAvailable": true
     },
@@ -268,7 +476,7 @@
       "nodes": ["node_modules/firefox-profile"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.6.0",
+        "version": "10.7.0",
         "isSemVerMajor": false
       }
     },
@@ -282,7 +490,7 @@
       "nodes": ["node_modules/fx-runner"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.6.0",
+        "version": "10.7.0",
         "isSemVerMajor": false
       }
     },
@@ -292,21 +500,7 @@
       "isDirect": false,
       "via": [
         {
-          "source": 1138808,
-          "name": "image-size",
-          "dependency": "image-size",
-          "title": "image-size: ICNS parser allows denial of service through an infinite loop",
-          "url": "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr",
-          "severity": "high",
-          "cwe": ["CWE-835"],
-          "cvss": {
-            "score": 7.5,
-            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-          },
-          "range": "<=2.0.2"
-        },
-        {
-          "source": 1138809,
+          "source": 1239765,
           "name": "image-size",
           "dependency": "image-size",
           "title": "image-size: JXL and HEIF parsers allow denial of service through infinite loops",
@@ -317,15 +511,29 @@
             "score": 7.5,
             "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
           },
-          "range": "<=2.0.2"
+          "range": ">=1.2.0 <=2.0.2"
+        },
+        {
+          "source": 1239766,
+          "name": "image-size",
+          "dependency": "image-size",
+          "title": "image-size: ICNS parser allows denial of service through an infinite loop",
+          "url": "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr",
+          "severity": "high",
+          "cwe": ["CWE-835"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": ">=0.6.3 <=2.0.2"
         }
       ],
       "effects": ["addons-linter"],
-      "range": "*",
+      "range": "0.6.3 - 2.0.2",
       "nodes": ["node_modules/image-size"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.6.0",
+        "version": "10.7.0",
         "isSemVerMajor": false
       }
     },
@@ -400,10 +608,24 @@
             "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
           },
           "range": ">=4.0.0 <4.3.1"
+        },
+        {
+          "source": 1193727,
+          "name": "js-yaml",
+          "dependency": "js-yaml",
+          "title": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources",
+          "url": "https://github.com/advisories/GHSA-2883-xcg3-v3hh",
+          "severity": "high",
+          "cwe": ["CWE-400", "CWE-407"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": ">=4.0.0 <4.3.2"
         }
       ],
       "effects": [],
-      "range": "4.0.0 - 4.3.0",
+      "range": "4.0.0 - 4.3.1",
       "nodes": ["node_modules/js-yaml"],
       "fixAvailable": true
     },
@@ -467,6 +689,34 @@
             "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
           },
           "range": ">=4.0.0 <5.1.6"
+        },
+        {
+          "source": 1153188,
+          "name": "nanoid",
+          "dependency": "nanoid",
+          "title": "nanoid: Integer Overflow or Wraparound",
+          "url": "https://github.com/advisories/GHSA-xwg4-73v4-xw9w",
+          "severity": "high",
+          "cwe": ["CWE-190"],
+          "cvss": {
+            "score": 7.4,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+          },
+          "range": ">=4.0.0 <5.1.11"
+        },
+        {
+          "source": 1153189,
+          "name": "nanoid",
+          "dependency": "nanoid",
+          "title": "nanoid: Integer Overflow or Wraparound",
+          "url": "https://github.com/advisories/GHSA-xwg4-73v4-xw9w",
+          "severity": "high",
+          "cwe": ["CWE-190"],
+          "cvss": {
+            "score": 7.4,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+          },
+          "range": "<3.3.12"
         }
       ],
       "effects": ["estimo"],
@@ -527,6 +777,45 @@
       "nodes": ["node_modules/puppeteer-core"],
       "fixAvailable": true
     },
+    "qs": {
+      "name": "qs",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1158506,
+          "name": "qs",
+          "dependency": "qs",
+          "title": "qs array-limit bypass via bracket-key comma parsing",
+          "url": "https://github.com/advisories/GHSA-x5fp-wj9c-mxmx",
+          "severity": "moderate",
+          "cwe": ["CWE-770"],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          "range": ">=6.14.2 <=6.15.3"
+        },
+        {
+          "source": 1158507,
+          "name": "qs",
+          "dependency": "qs",
+          "title": "qs: Denial of Service via Attacker Controlled isBuffer",
+          "url": "https://github.com/advisories/GHSA-4mjr-xmp4-gh2g",
+          "severity": "moderate",
+          "cwe": ["CWE-248", "CWE-703"],
+          "cvss": {
+            "score": 5.3,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          "range": ">=2.2.5 <6.16.0"
+        }
+      ],
+      "effects": [],
+      "range": "2.2.5 - 6.15.3",
+      "nodes": ["node_modules/qs"],
+      "fixAvailable": true
+    },
     "shell-quote": {
       "name": "shell-quote",
       "severity": "high",
@@ -552,7 +841,7 @@
       "nodes": ["node_modules/shell-quote"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.6.0",
+        "version": "10.7.0",
         "isSemVerMajor": false
       }
     },
@@ -637,17 +926,44 @@
       "nodes": ["node_modules/undici"],
       "fixAvailable": true
     },
+    "vitest": {
+      "name": "vitest",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        "@vitest/coverage-v8",
+        "@vitest/mocker",
+        {
+          "source": 1193683,
+          "name": "vitest",
+          "dependency": "vitest",
+          "title": "Vitest: Path Traversal / Arbitrary File Read via @vitest/mocker Redirect Mock",
+          "url": "https://github.com/advisories/GHSA-82fw-gwwq-j7x9",
+          "severity": "moderate",
+          "cwe": ["CWE-22"],
+          "cvss": {
+            "score": 5.9,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          },
+          "range": ">=2.1.0 <4.1.11"
+        }
+      ],
+      "effects": ["@vitest/coverage-v8"],
+      "range": "2.1.0-beta.1 - 4.1.10",
+      "nodes": ["react-spa/node_modules/vitest"],
+      "fixAvailable": true
+    },
     "web-ext": {
       "name": "web-ext",
       "severity": "high",
       "isDirect": true,
       "via": ["addons-linter", "firefox-profile", "fx-runner"],
       "effects": [],
-      "range": ">=1.0.0",
+      "range": "1.0.0 - 10.6.0",
       "nodes": ["node_modules/web-ext"],
       "fixAvailable": {
         "name": "web-ext",
-        "version": "10.6.0",
+        "version": "10.7.0",
         "isSemVerMajor": false
       }
     }
@@ -656,10 +972,10 @@
     "vulnerabilities": {
       "info": 0,
       "low": 1,
-      "moderate": 0,
-      "high": 22,
+      "moderate": 6,
+      "high": 23,
       "critical": 0,
-      "total": 23
+      "total": 30
     },
     "dependencies": {
       "prod": 273,
