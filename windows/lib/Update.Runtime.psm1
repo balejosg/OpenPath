@@ -417,44 +417,61 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
 
         $config = Get-OpenPathConfig
         Sync-FirefoxNativeHostMirror -Config $config -WhitelistPath $whitelistPath
-        $queueResult = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $whitelistPath -PassThru
-        $metrics['queueProcessedMs'] = [int]$queueResult.QueueProcessedMs
-        $metrics['queueProcessed'] = [int]$queueResult.Processed
-        $metrics['queueRejected'] = [int]$queueResult.Rejected
-        $metrics['overlayWriteMs'] = [int]$queueResult.OverlayWriteMs
-        $metrics['acrylicHostUpdateMs'] = [int]$queueResult.AcrylicHostUpdateMs
-        $metrics['acrylicHostsChanged'] = [bool]$queueResult.AcrylicHostsChanged
-        $metrics['changed'] = [bool]$queueResult.Changed
 
-        if (-not $queueResult.AcrylicHostWritten) {
-            Write-OpenPathLog "Runtime dependency fast apply could not write the Acrylic hosts file; dependencies remain pending" -Level WARN
-        }
-        elseif ($queueResult.AcrylicHostsChanged -or $overlayUnappliedBefore) {
-            $reloadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-            $acrylicReloaded = [bool](Restart-AcrylicService)
-            $reloadStopwatch.Stop()
-            $metrics['acrylicReloadMs'] = [int]$reloadStopwatch.ElapsedMilliseconds
+        $queuePath = Join-Path $OpenPathRoot 'data\runtime-dependency-queue'
+        $maxDrainIterations = 3
+        $drainIterations = 0
+        $pendingQueueFiles = @()
+        do {
+            $drainIterations += 1
+            $queueResult = Invoke-OpenPathRuntimeDependencyQueueApply -WhitelistPath $whitelistPath -PassThru
+            $metrics['queueProcessedMs'] = [int]$metrics['queueProcessedMs'] + [int]$queueResult.QueueProcessedMs
+            $metrics['queueProcessed'] = [int]$metrics['queueProcessed'] + [int]$queueResult.Processed
+            $metrics['queueRejected'] = [int]$metrics['queueRejected'] + [int]$queueResult.Rejected
+            $metrics['overlayWriteMs'] = [int]$metrics['overlayWriteMs'] + [int]$queueResult.OverlayWriteMs
+            $metrics['acrylicHostUpdateMs'] = [int]$metrics['acrylicHostUpdateMs'] + [int]$queueResult.AcrylicHostUpdateMs
+            $metrics['acrylicHostsChanged'] = [bool]$queueResult.AcrylicHostsChanged
+            $metrics['changed'] = [bool]($metrics['changed'] -or [bool]$queueResult.Changed)
 
-            if ($acrylicReloaded) {
+            if (-not $queueResult.AcrylicHostWritten) {
+                Write-OpenPathLog "Runtime dependency fast apply could not write the Acrylic hosts file; dependencies remain pending" -Level WARN
+                break
+            }
+            if ($queueResult.AcrylicHostsChanged -or $overlayUnappliedBefore) {
+                $reloadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                $acrylicReloaded = [bool](Restart-AcrylicService)
+                $reloadStopwatch.Stop()
+                $metrics['acrylicReloadMs'] = [int]$metrics['acrylicReloadMs'] + [int]$reloadStopwatch.ElapsedMilliseconds
+
+                if (-not $acrylicReloaded) {
+                    Write-OpenPathLog "Runtime dependency fast apply could not confirm the Acrylic reload; dependencies remain pending" -Level WARN
+                    break
+                }
+
                 # Only a successful reload proves the new overlay content is operative;
                 # the native host waits for this marker before reporting `ready`.
                 Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null
             }
             else {
-                Write-OpenPathLog "Runtime dependency fast apply could not confirm the Acrylic reload; dependencies remain pending" -Level WARN
+                # The effective Acrylic content did not change and was already applied:
+                # mark the current overlay generation without paying another restart.
+                Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null
             }
-        }
-        else {
-            # The effective Acrylic content did not change and was already applied:
-            # mark the current overlay generation without paying another restart.
-            Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null
-        }
 
-        Write-OpenPathLog ("Runtime dependency fast apply metrics: processed={0} rejected={1} changed={2} acrylicHostsChanged={3} queueProcessedMs={4} overlayWriteMs={5} acrylicHostUpdateMs={6} acrylicReloadMs={7}" -f `
+            $overlayUnappliedBefore = $false
+            # Queue files written while this run was applying would otherwise be
+            # dropped (the scheduled task ignores re-triggers while it runs), so
+            # drain whatever arrived during the window before completing.
+            Start-Sleep -Milliseconds 150
+            $pendingQueueFiles = @(Get-ChildItem $queuePath -Filter '*.json' -File -ErrorAction SilentlyContinue)
+        } while ($pendingQueueFiles.Count -gt 0 -and $drainIterations -lt $maxDrainIterations)
+
+        Write-OpenPathLog ("Runtime dependency fast apply metrics: processed={0} rejected={1} changed={2} acrylicHostsChanged={3} iterations={4} queueProcessedMs={5} overlayWriteMs={6} acrylicHostUpdateMs={7} acrylicReloadMs={8}" -f `
                 $metrics['queueProcessed'], `
                 $metrics['queueRejected'], `
                 $metrics['changed'], `
                 $metrics['acrylicHostsChanged'], `
+                $drainIterations, `
                 $metrics['queueProcessedMs'], `
                 $metrics['overlayWriteMs'], `
                 $metrics['acrylicHostUpdateMs'], `
