@@ -75,14 +75,13 @@ test('desktop harness is controller-only and existing installer lanes can preser
   assert.match(httpLane, /PreserveInstallation/);
 });
 
-test('web-generated installer payload selects strict profile with an empty additional catalog', () => {
+test('web-generated installer payload selects the managed-browser compatibility profile', () => {
   const service = read('api/src/services/windows-offline-installer-artifact.service.ts');
-  assert.match(service, /appControlProfile:\s*['"]StrictApplicationAllowlist['"]/);
-  assert.match(
-    service,
-    /approvedApplicationCatalog:\s*\{\s*schemaVersion:\s*1,\s*applications:\s*\[\]\s*\}/
-  );
+  assert.match(service, /appControlProfile:\s*['"]ManagedBrowserCompatibility['"]/);
+  assert.doesNotMatch(service, /appControlProfile:\s*['"]StrictApplicationAllowlist['"]/);
+  assert.doesNotMatch(service, /approvedApplicationCatalog:/);
   const offline = read('windows/lib/install/Installer.Offline.ps1');
   assert.match(offline, /AppControlProfile/);
+  assert.match(offline, /ManagedBrowserCompatibility/);
   assert.match(offline, /ApprovedApplicationCatalog/);
 });

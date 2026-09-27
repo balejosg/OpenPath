@@ -172,6 +172,19 @@ void describe('OpenPath Windows offline installer artifact service', () => {
       assert.equal((await stat(path.join(root, 'artifacts'))).mode & 0o777, 0o700);
       assert.equal(ticketCalls.length, 1);
       assert.equal(overlayCalls.length, 1);
+      const overlayPayload = overlayCalls[0] as {
+        options: {
+          approvedStudentBrowsers: string[];
+          appControlProfile?: string;
+          approvedApplicationCatalog?: unknown;
+        };
+      };
+      assert.equal(overlayPayload.options.appControlProfile, 'ManagedBrowserCompatibility');
+      assert.deepEqual(overlayPayload.options.approvedStudentBrowsers, ['Firefox']);
+      assert.equal(
+        Object.prototype.hasOwnProperty.call(overlayPayload.options, 'approvedApplicationCatalog'),
+        false
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

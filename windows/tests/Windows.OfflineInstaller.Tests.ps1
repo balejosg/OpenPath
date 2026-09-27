@@ -52,6 +52,10 @@ Describe "Offline installer" {
             $config.CaptivePortalDomains | Should -Be 'login.example.test'
             $config.InstallFirefoxIfMissing | Should -BeTrue
             $config.EnforceManagedBrowserBoundary | Should -BeTrue
+            # Omitting the profile keeps the product-default compatibility mode
+            # used by web-generated installers (no additional catalog).
+            $config.AppControlProfile | Should -Be 'ManagedBrowserCompatibility'
+            $config.ApprovedApplicationCatalog | Should -BeNullOrEmpty
         }
 
         It "Preserves an explicit strict AppControl profile and catalog from offline options" {

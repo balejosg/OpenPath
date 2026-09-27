@@ -436,9 +436,10 @@ function Get-OpenPathAlwaysDeniedAppxProductNames {
     Returns the Appx package product names that must always be denied to non-admins
     regardless of approved-browser configuration.
     .DESCRIPTION
-    W-2: the blanket Microsoft-signed Appx allow (PublisherName='O=MICROSOFT CORPORATION',
-    ProductName='*') is intentionally kept so OS inbox and Store-distributed Microsoft
-    packages keep working. But several Microsoft-signed packages ship parallel,
+    W-2: the exact Microsoft signer DN allows (PublisherName per
+    Get-OpenPathMicrosoftAppxPublisherNames, ProductName='*') are intentionally
+    kept so OS inbox and Store-distributed Microsoft packages keep working. But
+    several Microsoft-signed packages ship parallel,
     unfiltered network stacks that bypass the name-based DNS whitelist: WSL (full Linux
     userspace with its own resolver), Windows Terminal (a launcher that hosts arbitrary
     consoles), and the OpenSSH/Telnet Appx clients. AppLocker evaluates Deny over Allow,
@@ -459,6 +460,41 @@ function Get-OpenPathAlwaysDeniedAppxProductNames {
         'Microsoft.OpenSSHServer',
         'Microsoft.TelnetClient',
         'Microsoft.PowerShell'
+    )
+}
+
+function Get-OpenPathMicrosoftAppxPublisherNames {
+    <#
+    .SYNOPSIS
+    Returns the Microsoft signer distinguished names that AppLocker matches for Microsoft-signed packaged apps.
+    .DESCRIPTION
+    AppLocker publisher conditions compare the complete subject distinguished
+    name from the package signature.  A bare 'O=MICROSOFT CORPORATION' value
+    never matches the real Microsoft DN, so compatibility mode kept denying
+    inbox packages such as Notepad and Calculator (DeniedByDefault).  Keep the
+    list explicit and static: every entry is a Microsoft signer DN, so no
+    third-party or sideloaded subject can satisfy the packaged-app allow.
+    #>
+    [CmdletBinding()]
+    param()
+
+    return @(
+        'CN=MICROSOFT CORPORATION, O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US',
+        'CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    )
+}
+
+function Get-OpenPathInboxPackagedAppNames {
+    <#
+    .SYNOPSIS
+    Returns the inbox Microsoft packaged apps used to prove compatibility mode keeps them runnable.
+    #>
+    [CmdletBinding()]
+    param()
+
+    return @(
+        'Microsoft.WindowsCalculator',
+        'Microsoft.WindowsNotepad'
     )
 }
 
@@ -854,6 +890,7 @@ function New-OpenPathNonAdminAppLockerPolicySpec {
         UnapprovedBrowserDenyPaths = @($unapprovedBrowserDenyPaths)
         UnapprovedBrowserDenyAppxProducts = @($unapprovedBrowserDenyAppxProducts)
         AlwaysDeniedAppxProducts = @(Get-OpenPathAlwaysDeniedAppxProductNames)
+        MicrosoftAppxPublisherNames = @(Get-OpenPathMicrosoftAppxPublisherNames)
         BlockedWindowsTools = @(@(
             '%WINDIR%\System32\curl.exe',
             '%WINDIR%\SysWOW64\curl.exe',
@@ -1144,14 +1181,26 @@ function New-OpenPathAppLockerPolicyXml {
         }
     }
     # Allow only Microsoft-signed packaged apps (OS inbox and Store-distributed Microsoft apps).
-    # A global ProductName='*' allow lets any publisher's Appx run, including sideloaded alternate
-    # browsers with non-Edge ProductNames that would bypass the per-product Edge denies above.
-    # Scoping to PublisherName='O=MICROSOFT CORPORATION' covers the signed
-    # packages in compatibility mode without opening the door to third-party
-    # sideloaded packages. SID S-1-1-0 (Everyone) is kept so the rule applies to all users
-    # including non-admins, matching the original intent.
+    # AppLocker matches the complete signer distinguished name, so emit one
+    # rule per real Microsoft DN.  The previous bare 'O=MICROSOFT CORPORATION'
+    # value matched no inbox package (Notepad and Calculator came back
+    # DeniedByDefault) while a global ProductName='*' allow would still let any
+    # publisher's Appx run.  Scoping to the Microsoft signer DNs covers the
+    # signed packages in compatibility mode without opening the door to
+    # third-party sideloaded packages. SID S-1-1-0 (Everyone) is kept so the
+    # rule applies to all users including non-admins, matching the original intent.
     if (-not $strictProfile) {
-        $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow Microsoft signed packaged apps" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION' -ProductName '*' -BinaryName '*'
+        $microsoftAppxPublisherNames = if ($Spec.PSObject.Properties['MicrosoftAppxPublisherNames']) {
+            @($Spec.MicrosoftAppxPublisherNames)
+        }
+        else {
+            @(Get-OpenPathMicrosoftAppxPublisherNames)
+        }
+        foreach ($publisherName in @($microsoftAppxPublisherNames)) {
+            if ([string]::IsNullOrWhiteSpace([string]$publisherName)) { continue }
+            $publisherId = ($publisherName -replace '[^0-9A-Za-z]+', '-').Trim('-')
+            $appxRules += New-OpenPathFilePublisherRuleXml -Name "$script:OpenPathAppControlRulePrefix Appx users allow Microsoft signed packaged apps $publisherId" -Sid 'S-1-1-0' -Action 'Allow' -PublisherName ([string]$publisherName) -ProductName '*' -BinaryName '*'
+        }
     }
     $ruleCollections += "    <RuleCollection Type=`"Appx`" EnforcementMode=`"$($Spec.EnforcementMode)`">`n$($appxRules -join "`n")`n    </RuleCollection>"
 
@@ -1952,7 +2001,7 @@ function Test-OpenPathAppLockerBoundaryPolicy {
         if (@($appxCollection.FilePublisherRule | Where-Object {
                     $_.GetAttribute('Action') -eq 'Allow' -and
                     $_.GetAttribute('UserOrGroupSid') -in @('S-1-1-0', $spec.RestrictedSid) -and
-                    $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -like 'O=MICROSOFT CORPORATION*' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -match 'O=MICROSOFT CORPORATION' -and
                     $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
                 }).Count -gt 0) {
             return $false
@@ -1996,8 +2045,15 @@ function Test-OpenPathAppLockerBoundaryPolicy {
         }
     }
 
-    if ($Profile -eq 'ManagedBrowserCompatibility' -and -not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid 'S-1-1-0' -ProductName '*' -PublisherName 'O=MICROSOFT CORPORATION')) {
-        return $false
+    if ($Profile -eq 'ManagedBrowserCompatibility') {
+        # AppLocker matches the complete signer distinguished name.  Every
+        # Microsoft DN must be present so the inbox/Store Microsoft packaged
+        # apps (Notepad, Calculator) stay runnable for restricted users.
+        foreach ($publisherName in @($spec.MicrosoftAppxPublisherNames)) {
+            if (-not (Test-OpenPathFilePublisherRulePresent -Collection $appxCollection -Action 'Allow' -Sid 'S-1-1-0' -ProductName '*' -PublisherName ([string]$publisherName))) {
+                return $false
+            }
+        }
     }
 
     foreach ($productName in @($spec.AlwaysDeniedAppxProducts)) {
@@ -2430,6 +2486,25 @@ function Get-OpenPathNonAdminAppControlHealth {
                         Write-OpenPathLog 'AppLocker effective runtime policy test failed: Firefox executable was not evaluated as Allowed' -Level WARN
                     }
                 }
+
+                if ($Profile -eq 'ManagedBrowserCompatibility') {
+                    # Regression guard for the bare-O Appx rule: compatibility
+                    # must keep the inbox Microsoft packaged apps runnable for
+                    # the restricted target, not only arbitrary path probes.
+                    $inboxDecisions = @(Invoke-OpenPathInboxPackagedAppEvaluation -PolicyXml $effectivePolicyText -UserSid $probeTarget.UserSid)
+                    foreach ($decision in $inboxDecisions) {
+                        [void]$runtimeDecisions.Add([pscustomobject][ordered]@{
+                                Kind = 'inbox-packaged-app'
+                                Expected = 'Allowed'
+                                Observed = [string]$decision.PolicyDecision
+                            })
+                    }
+                    if (Test-OpenPathInboxPackagedAppDenied -Decisions $inboxDecisions) {
+                        $runtimeBoundaryValid = $false
+                        & $addReasonCode 'appcontrol_inbox_packaged_app_denied'
+                        Write-OpenPathLog 'AppLocker effective evaluation failed: an inbox Microsoft packaged app was denied to the restricted target' -Level WARN
+                    }
+                }
             }
             catch {
                 $runtimeBoundaryValid = $false
@@ -2853,13 +2928,84 @@ function Compare-OpenPathAppLockerPolicyXml {
     catch { return $false }
 }
 
+function Get-OpenPathInboxPackagedAppProbePackages {
+    <#
+    .SYNOPSIS
+    Returns the installed AppxPackage objects used by the compatibility inbox probe.
+    .DESCRIPTION
+    Returns an empty collection when the Appx cmdlets are unavailable (for
+    example Windows Server without the packaged-app stack), so compatibility
+    health never fails for a platform that has no inbox packages.  An available
+    inventory that throws is surfaced to the caller instead of being silently
+    treated as an absent package.
+    #>
+    [CmdletBinding()]
+    param()
+
+    if (-not (Get-Command -Name 'Get-AppxPackage' -ErrorAction SilentlyContinue)) {
+        return @()
+    }
+
+    $packages = [System.Collections.Generic.List[object]]::new()
+    foreach ($packageName in @(Get-OpenPathInboxPackagedAppNames)) {
+        try {
+            foreach ($package in @(Get-AppxPackage -Name $packageName -AllUsers -ErrorAction Stop)) {
+                if ($null -ne $package) { [void]$packages.Add($package) }
+            }
+        }
+        catch {
+            throw "Inbox packaged app inventory failed for $packageName`: $($_.Exception.Message)"
+        }
+    }
+    return @($packages.ToArray())
+}
+
+function Invoke-OpenPathInboxPackagedAppEvaluation {
+    <#
+    .SYNOPSIS
+    Evaluates the installed inbox Microsoft packaged apps against a policy for the restricted target.
+    .DESCRIPTION
+    Returns an empty collection when no inbox package is installed.  Policy
+    denials are returned as decisions instead of throwing so the caller can
+    report the bounded appcontrol_inbox_packaged_app_denied reason code.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$PolicyXml,
+        [Parameter(Mandatory = $true)][string]$UserSid
+    )
+
+    $packages = @(Get-OpenPathInboxPackagedAppProbePackages)
+    if ($packages.Count -eq 0) { return @() }
+    return @(Invoke-OpenPathAppLockerPackageEvaluation -PolicyXml $PolicyXml -Packages $packages -UserSid $UserSid -AllowDeniedObservations)
+}
+
+function Test-OpenPathInboxPackagedAppDenied {
+    <#
+    .SYNOPSIS
+    Returns true when any inbox packaged-app decision is a policy denial.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object[]]$Decisions
+    )
+
+    return [bool](@($Decisions | Where-Object { [string]$_.PolicyDecision -in @('Denied', 'DeniedByDefault') }).Count -gt 0)
+}
+
 function Invoke-OpenPathAppLockerPackageEvaluation {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$PolicyXml,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Packages,
         [Parameter(Mandatory = $true)][string]$UserSid,
-        [object[]]$ProbePaths = @()
+        [object[]]$ProbePaths = @(),
+        # Return Denied/DeniedByDefault decisions for packages expected to be
+        # allowed instead of throwing, so callers can report a bounded policy
+        # denial reason code (for example the compatibility inbox probe).
+        [switch]$AllowDeniedObservations
     )
     if (-not (Get-Command -Name Test-AppLockerPolicy -ErrorAction SilentlyContinue)) { throw 'appcontrol_windows_runtime_probe_failed' }
     if (@($Packages).Count -eq 0) { throw 'appcontrol_windows_runtime_probe_failed' }
@@ -2907,7 +3053,8 @@ function Invoke-OpenPathAppLockerPackageEvaluation {
             $observed = if ($rawDecision.PSObject.Properties['PolicyDecision']) { [string]$rawDecision.PolicyDecision } elseif ($rawDecision.PSObject.Properties['Decision']) { [string]$rawDecision.Decision } else { '' }
             $expected = [string]$expectedDecisions[$index]
             $acceptable = if ($expected -eq 'Denied') { @('Denied', 'DeniedByDefault') } else { @('Allowed') }
-            if ($observed -notin $acceptable) { throw 'appcontrol_windows_runtime_probe_failed' }
+            $policyDenial = $expected -eq 'Allowed' -and $observed -in @('Denied', 'DeniedByDefault')
+            if ($observed -notin $acceptable -and -not ($policyDenial -and $AllowDeniedObservations)) { throw 'appcontrol_windows_runtime_probe_failed' }
             [void]$decisions.Add([PSCustomObject][ordered]@{ Expected = $expected; PolicyDecision = $observed; Raw = $rawDecision })
         }
         foreach ($probePath in @($ProbePaths)) {
@@ -3211,6 +3358,17 @@ function Set-OpenPathNonAdminAppControl {
                 }
             }
         }
+        if ($Profile -eq 'ManagedBrowserCompatibility') {
+            $diagnosticSubstep = 'inbox-app-preflight'
+            $inboxPreflightPackages = @(Get-OpenPathInboxPackagedAppProbePackages)
+            if ($inboxPreflightPackages.Count -gt 0) {
+                $preflightTarget = Get-OpenPathAppControlProbeTarget
+                $inboxPreflightDecisions = @(Invoke-OpenPathAppLockerPackageEvaluation -PolicyXml ([string]$mergedPolicyXml.OuterXml) -Packages $inboxPreflightPackages -UserSid ([string]$preflightTarget.UserSid) -AllowDeniedObservations)
+                if (Test-OpenPathInboxPackagedAppDenied -Decisions $inboxPreflightDecisions) {
+                    throw 'appcontrol_inbox_packaged_app_denied'
+                }
+            }
+        }
         $effectivePolicyText = $null
         try { $effectivePolicyText = [string](Get-AppLockerPolicy -Effective -Xml -ErrorAction Stop) } catch { $effectivePolicyText = [string]$currentPolicyText }
         $configBefore = [ordered]@{}
@@ -3315,6 +3473,7 @@ function Set-OpenPathNonAdminAppControl {
                 'policy-generation' { 'appcontrol_policy_generation_failed' }
                 'policy-preflight' { if ($Profile -eq 'StrictApplicationAllowlist') { 'strict-required-rule-missing' } else { 'appcontrol_policy_generation_failed' } }
                 'runtime-preflight' { 'appcontrol_windows_runtime_probe_failed' }
+                'inbox-app-preflight' { 'appcontrol_inbox_packaged_app_denied' }
                 'policy-apply' { 'appcontrol_policy_apply_failed' }
                 'service-config' { 'appcontrol_appidsvc_configuration_failed' }
                 'service-start' { 'appcontrol_appidsvc_start_failed' }
@@ -3570,6 +3729,7 @@ function Remove-OpenPathRestrictedGroup {
 
 Export-ModuleMember -Function @(
     'Get-OpenPathAlwaysDeniedAppxProductNames',
+    'Get-OpenPathMicrosoftAppxPublisherNames',
     'Test-OpenPathApplicationApprovalCatalog',
     'New-OpenPathNonAdminAppLockerPolicySpec',
     'New-OpenPathAppLockerPolicyXml',

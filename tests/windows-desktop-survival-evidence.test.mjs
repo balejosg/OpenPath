@@ -100,7 +100,7 @@ function createBundle() {
       },
       imageIdentity: 'image-' + index,
       snapshotIdentity: 'snapshot-' + index,
-      appControlProfile: 'StrictApplicationAllowlist',
+      appControlProfile: 'ManagedBrowserCompatibility',
       synthetic: false,
       catalogApplicationCount: 0,
       initialProfileExisted: scenarioId.includes('existing'),
@@ -215,6 +215,12 @@ test('rejects Server, same boot, synthetic observations and unsafe evidence refe
     assert.throws(
       () => validateEvidence(parentSegment, expected, { evidenceRoot: bundle.root, now }),
       /parent segment|escapes|outside/
+    );
+    const strictProfile = structuredClone(bundle.aggregate);
+    strictProfile.scenarios[0].appControlProfile = 'StrictApplicationAllowlist';
+    assert.throws(
+      () => validateEvidence(strictProfile, expected, { evidenceRoot: bundle.root, now }),
+      /compatibility/
     );
   } finally {
     rmSync(bundle.root, { recursive: true, force: true });

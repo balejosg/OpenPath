@@ -902,7 +902,7 @@ function Invoke-OpenPathLabAcceptanceCleanup {
         os                        = $scenarioObject
         imageIdentity             = $imageIdentity
         snapshotIdentity          = $Snapshot
-        appControlProfile         = 'StrictApplicationAllowlist'
+        appControlProfile         = 'ManagedBrowserCompatibility'
         catalogApplicationCount   = [int](Get-OpenPathLabField -InputObject $state -Name 'catalogApplicationCount')
         initialProfileExisted     = [bool](Get-OpenPathLabField -InputObject $state -Name 'initialProfileExisted')
         bootIdBefore              = [string](Get-OpenPathLabField -InputObject $state -Name 'bootIdBefore')

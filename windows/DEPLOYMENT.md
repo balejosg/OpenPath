@@ -128,11 +128,14 @@ For MDM-managed deployments, wrap the installer in a detection/installation scri
 2. Run the installer as SYSTEM with `-Unattended` and supply the enrollment token via the `OPENPATH_ENROLLMENT_TOKEN` environment variable (set it in the MDM deployment policy, not in the script).
 3. Use `-EnforceManagedBrowserBoundary` together with `-ApprovedStudentBrowsers` to control which browsers AppLocker permits.
 
-Web-generated offline installers select `StrictApplicationAllowlist` with an
-empty additional catalog. Distribution remains blocked until the same template
-and personalized executable have complete Windows Desktop Survival evidence on
-every supported Windows client edition; local or staging checks do not replace
-an externally observed login, desktop session, and reboot.
+Web-generated offline installers select `ManagedBrowserCompatibility` with no
+additional catalog, matching the product default: installed and
+Microsoft-signed applications keep working while portable, user-writable, and
+unapproved-browser execution stays blocked. Distribution remains blocked until
+the same template and personalized executable have complete Windows Desktop
+Survival evidence on every supported Windows client edition; local or staging
+checks do not replace an externally observed login, desktop session, and
+reboot.
 
 The release lane validates that bundle from the exact workflow run and attempt
 after downloading binary artifacts by their artifact IDs. It does not ask the

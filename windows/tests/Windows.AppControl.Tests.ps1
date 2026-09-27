@@ -194,14 +194,23 @@ Describe "AppControl Module" {
                 (Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Profile StrictApplicationAllowlist `
                     -ApprovedBrowsers @('Firefox') -ApplicationCatalog $Catalog -BrowserInventory $inventory) | Should -BeFalse
 
-                $broadAppxRule = [xml](New-OpenPathFilePublisherRuleXml `
-                        -Name 'Administrator supplied broad Microsoft Appx allow' `
-                        -Sid 'S-1-1-0' -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION*' `
-                        -ProductName '*' -BinaryName '*')
-                $appxCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Appx')[0]
-                [void]$appxCollection.AppendChild($policy.ImportNode($broadAppxRule.DocumentElement, $true))
-                (Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Profile StrictApplicationAllowlist `
-                    -ApprovedBrowsers @('Firefox') -ApplicationCatalog $Catalog -BrowserInventory $inventory) | Should -BeFalse
+                # Both the legacy bare publisher value and the real Microsoft
+                # signer DN must be rejected as unmanaged broad Appx allows in
+                # strict mode.
+                foreach ($broadPublisher in @(
+                        'O=MICROSOFT CORPORATION*',
+                        'CN=MICROSOFT CORPORATION, O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US'
+                    )) {
+                    $strictPolicy = [xml](New-OpenPathAppLockerPolicyXml -Spec $spec)
+                    $broadAppxRule = [xml](New-OpenPathFilePublisherRuleXml `
+                            -Name 'Administrator supplied broad Microsoft Appx allow' `
+                            -Sid 'S-1-1-0' -Action 'Allow' -PublisherName $broadPublisher `
+                            -ProductName '*' -BinaryName '*')
+                    $appxCollection = @($strictPolicy.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Appx')[0]
+                    [void]$appxCollection.AppendChild($strictPolicy.ImportNode($broadAppxRule.DocumentElement, $true))
+                    (Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $strictPolicy -Profile StrictApplicationAllowlist `
+                        -ApprovedBrowsers @('Firefox') -ApplicationCatalog $Catalog -BrowserInventory $inventory) | Should -BeFalse
+                }
             }
         }
 
@@ -425,6 +434,9 @@ Describe "AppControl Module" {
     Context 'PolicyConverter activation boundary' {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
+            # The compatibility inbox probe needs real Appx inventory; these
+            # activation tests isolate the policy apply path from that probe.
+            Mock Get-OpenPathInboxPackagedAppProbePackages { @() } -ModuleName AppControl
         }
 
         It 'enables starts restores and verifies an initially disabled task in order' {
@@ -751,6 +763,7 @@ Describe "AppControl Module" {
 
         BeforeEach {
             Mock Test-OpenPathAppControlAvailable { $true } -ModuleName AppControl
+            Mock Get-OpenPathInboxPackagedAppProbePackages { @() } -ModuleName AppControl
             Mock Get-Command { [pscustomobject]@{ Name = $Name } } `
                 -ModuleName AppControl `
                 -ParameterFilter {
@@ -988,18 +1001,31 @@ Describe "AppControl Module" {
             $appxCollection.GetAttribute('EnforcementMode') | Should -Be 'Enabled'
             $appxCollection.GetAttribute('EnforcementMode') | Should -Not -Be 'NotConfigured'
 
+            $publisherNames = @(Get-OpenPathMicrosoftAppxPublisherNames)
+            $publisherNames | Should -Contain 'CN=MICROSOFT CORPORATION, O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US'
+
             $rules = @($appxCollection.FilePublisherRule)
-            $allowRule = @($rules | Where-Object { $_.GetAttribute('Name') -eq 'OpenPath non-admin app control Appx users allow Microsoft signed packaged apps' })[0]
-            $allowRule | Should -Not -BeNullOrEmpty
-            $allowRule.GetAttribute('Action') | Should -Be 'Allow'
-            $allowRule.GetAttribute('UserOrGroupSid') | Should -Be 'S-1-1-0'
-            $condition = $allowRule.Conditions.FilePublisherCondition
-            # Scoped to Microsoft-signed packages only — not a global wildcard publisher.
-            $condition.GetAttribute('PublisherName') | Should -Be 'O=MICROSOFT CORPORATION'
-            $condition.GetAttribute('ProductName') | Should -Be '*'
-            $condition.GetAttribute('BinaryName') | Should -Be '*'
-            $condition.BinaryVersionRange.GetAttribute('LowSection') | Should -Be '*'
-            $condition.BinaryVersionRange.GetAttribute('HighSection') | Should -Be '*'
+            $allowRules = @($rules | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Allow' -and
+                    $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('BinaryName') -eq '*'
+                })
+            # One exact-DN allow per Microsoft signer name; AppLocker matches the
+            # full distinguished name, not a bare organization value.
+            $allowRules.Count | Should -Be $publisherNames.Count
+            foreach ($publisherName in $publisherNames) {
+                $matching = @($allowRules | Where-Object {
+                        $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq $publisherName
+                    })
+                $matching.Count | Should -Be 1
+                $matching[0].Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('LowSection') | Should -Be '*'
+                $matching[0].Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('HighSection') | Should -Be '*'
+            }
+            # The legacy bare value matched no real Microsoft package.
+            @($allowRules | Where-Object {
+                    $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq 'O=MICROSOFT CORPORATION'
+                }).Count | Should -Be 0
         }
 
         It "Does not emit a global Appx allow with PublisherName wildcard and ProductName wildcard" {
@@ -1016,14 +1042,20 @@ Describe "AppControl Module" {
             })
             $globalWildcardAllowRules.Count | Should -Be 0
 
-            # The scoped Microsoft-publisher allow must be present in its place.
-            $microsoftAllowRule = @($appxCollection.FilePublisherRule | Where-Object {
-                $_.GetAttribute('Action') -eq 'Allow' -and
-                $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
-                $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq 'O=MICROSOFT CORPORATION' -and
-                $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
-            })
-            $microsoftAllowRule.Count | Should -Be 1
+            # Exact Microsoft signer DN allows take its place: never the bare
+            # organization value that matched no package, and never '*'.
+            $microsoftAllowRules = @($appxCollection.FilePublisherRule | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Allow' -and
+                    $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
+                })
+            $microsoftAllowRules.Count | Should -Be @(Get-OpenPathMicrosoftAppxPublisherNames).Count
+            foreach ($allowRule in $microsoftAllowRules) {
+                $allowRule.Conditions.FilePublisherCondition.GetAttribute('PublisherName') |
+                    Should -Not -Be 'O=MICROSOFT CORPORATION'
+                $allowRule.Conditions.FilePublisherCondition.GetAttribute('PublisherName') |
+                    Should -Not -Be '*'
+            }
         }
 
         It "Generates Appx denies for unapproved Edge products while preserving the signed packaged-app allow" {
@@ -1032,12 +1064,16 @@ Describe "AppControl Module" {
             $appxCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
 
             $appxCollection.GetAttribute('EnforcementMode') | Should -Be 'Enabled'
-            $allowRule = @($appxCollection.FilePublisherRule | Where-Object {
+            $microsoftAllowRules = @($appxCollection.FilePublisherRule | Where-Object {
                     $_.GetAttribute('Action') -eq 'Allow' -and
                     $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
                     $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
-                })[0]
-            $allowRule | Should -Not -BeNullOrEmpty
+                })
+            $microsoftAllowRules.Count | Should -Be @(Get-OpenPathMicrosoftAppxPublisherNames).Count
+            foreach ($allowRule in $microsoftAllowRules) {
+                @(Get-OpenPathMicrosoftAppxPublisherNames) |
+                    Should -Contain $allowRule.Conditions.FilePublisherCondition.GetAttribute('PublisherName')
+            }
 
             $deniedProducts = @(
                 $appxCollection.FilePublisherRule |
@@ -1133,14 +1169,13 @@ Describe "AppControl Module" {
                 $deniedProducts | Should -Contain $product
             }
 
-            # The Microsoft-signed allow is still present in its place.
-            $microsoftAllowRule = @($appxCollection.FilePublisherRule | Where-Object {
+            # The exact-DN Microsoft-signed allows are still present in their place.
+            $microsoftAllowRules = @($appxCollection.FilePublisherRule | Where-Object {
                     $_.GetAttribute('Action') -eq 'Allow' -and
                     $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
-                    $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq 'O=MICROSOFT CORPORATION' -and
                     $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
                 })
-            $microsoftAllowRule.Count | Should -Be 1
+            $microsoftAllowRules.Count | Should -Be @(Get-OpenPathMicrosoftAppxPublisherNames).Count
         }
 
         It "W-2: keeps the parallel-network-stack Appx denies even when Edge is approved" {
@@ -1175,6 +1210,59 @@ Describe "AppControl Module" {
                     })[0]
                 [void]$appxCollection.RemoveChild($wslDeny)
                 Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Mode 'Enforced' | Should -BeFalse
+            }
+        }
+
+        It "exposes only complete Microsoft signer DNs for the packaged-app allow" {
+            $publisherNames = @(Get-OpenPathMicrosoftAppxPublisherNames)
+            $publisherNames.Count | Should -BeGreaterThan 0
+            $publisherNames | Should -Contain 'CN=MICROSOFT CORPORATION, O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US'
+            $publisherNames | Should -Contain 'CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+            foreach ($publisherName in $publisherNames) {
+                ([string]$publisherName) | Should -Match 'O=MICROSOFT CORPORATION|O=Microsoft Corporation'
+                ([string]$publisherName) | Should -Not -Match '[*?]'
+            }
+
+            $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+            @($spec.MicrosoftAppxPublisherNames) | Should -Be $publisherNames
+        }
+
+        It "requires every Microsoft signer DN allow and rejects the legacy bare publisher value" {
+            InModuleScope AppControl {
+                $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+                $publisherNames = @(Get-OpenPathMicrosoftAppxPublisherNames)
+
+                # Removing any single Microsoft DN allow must fail the boundary
+                # validator: partial Microsoft coverage is not sufficient.
+                foreach ($publisherName in $publisherNames) {
+                    [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+                    $appxCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+                    $rule = @($appxCollection.FilePublisherRule | Where-Object {
+                            $_.GetAttribute('Action') -eq 'Allow' -and
+                            $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                            $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq $publisherName
+                        })[0]
+                    $rule | Should -Not -BeNullOrEmpty
+                    [void]$appxCollection.RemoveChild($rule)
+                    Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Mode 'Enforced' | Should -BeFalse
+                }
+
+                # The legacy bare organization value must not satisfy the
+                # compatibility validator even when it is the only allow left.
+                [xml]$legacyPolicy = New-OpenPathAppLockerPolicyXml -Spec $spec
+                $legacyAppx = @($legacyPolicy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Appx' })[0]
+                foreach ($allowRule in @($legacyAppx.FilePublisherRule | Where-Object {
+                            $_.GetAttribute('Action') -eq 'Allow' -and
+                            $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0'
+                        })) {
+                    [void]$legacyAppx.RemoveChild($allowRule)
+                }
+                $bareRule = [xml](New-OpenPathFilePublisherRuleXml `
+                        -Name 'OpenPath non-admin app control Appx users allow Microsoft signed packaged apps' `
+                        -Sid 'S-1-1-0' -Action 'Allow' -PublisherName 'O=MICROSOFT CORPORATION' `
+                        -ProductName '*' -BinaryName '*')
+                [void]$legacyAppx.AppendChild($legacyPolicy.ImportNode($bareRule.DocumentElement, $true))
+                Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $legacyPolicy -Mode 'Enforced' | Should -BeFalse
             }
         }
 
@@ -1277,16 +1365,22 @@ Describe "AppControl Module" {
             $appxCollection.GetAttribute('EnforcementMode') | Should -Be 'Enabled'
             $appxRuleNames = @($appxCollection.FilePublisherRule | ForEach-Object { $_.GetAttribute('Name') })
             $appxRuleNames | Should -Contain 'Vendor packaged allow'
-            $appxRuleNames | Should -Contain 'OpenPath non-admin app control Appx users allow Microsoft signed packaged apps'
-            $openPathAppxRule = @($appxCollection.FilePublisherRule | Where-Object { $_.GetAttribute('Name') -eq 'OpenPath non-admin app control Appx users allow Microsoft signed packaged apps' })[0]
-            $openPathAppxRule.GetAttribute('Action') | Should -Be 'Allow'
-            $openPathAppxRule.GetAttribute('UserOrGroupSid') | Should -Be 'S-1-1-0'
-            # Scoped to Microsoft-signed packages only — not a global wildcard publisher.
-            $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('PublisherName') | Should -Be 'O=MICROSOFT CORPORATION'
-            $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('ProductName') | Should -Be '*'
-            $openPathAppxRule.Conditions.FilePublisherCondition.GetAttribute('BinaryName') | Should -Be '*'
-            $openPathAppxRule.Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('LowSection') | Should -Be '*'
-            $openPathAppxRule.Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('HighSection') | Should -Be '*'
+            $microsoftPublisherNames = @(Get-OpenPathMicrosoftAppxPublisherNames)
+            $microsoftAllowRules = @($appxCollection.FilePublisherRule | Where-Object {
+                    $_.GetAttribute('Action') -eq 'Allow' -and
+                    $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                    $_.Conditions.FilePublisherCondition.GetAttribute('ProductName') -eq '*'
+                })
+            # Exact Microsoft signer DN allows replace the legacy bare value.
+            $microsoftAllowRules.Count | Should -Be $microsoftPublisherNames.Count
+            foreach ($publisherName in $microsoftPublisherNames) {
+                @($microsoftAllowRules | Where-Object {
+                        $_.Conditions.FilePublisherCondition.GetAttribute('PublisherName') -eq $publisherName
+                    }).Count | Should -Be 1
+            }
+            $microsoftAllowRules[0].Conditions.FilePublisherCondition.GetAttribute('BinaryName') | Should -Be '*'
+            $microsoftAllowRules[0].Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('LowSection') | Should -Be '*'
+            $microsoftAllowRules[0].Conditions.FilePublisherCondition.BinaryVersionRange.GetAttribute('HighSection') | Should -Be '*'
         }
 
         It "Merges OpenPath rules into a pristine policy that has no RuleCollection children" {
@@ -1907,6 +2001,7 @@ Describe "AppControl Module" {
             $global:opHealthRuntimeFirstPath = ''
             $global:opHealthSampleCount = 1
             $global:opHealthSampleFailureLabel = ''
+            $global:opHealthInboxAppDecision = 'Allowed'
             $global:opHealthPreviousSystemRoot = $env:SystemRoot
             $env:SystemRoot = $global:opHealthSystemRoot
 
@@ -1980,7 +2075,16 @@ Describe "AppControl Module" {
                 [pscustomobject]@{ SID = $global:opHealthStudentSid; LocalPath = $global:opHealthProfilePath; Special = $false }
             }
             function global:Test-AppLockerPolicy {
-                param($Path, $User, $XmlPolicy)
+                param($Path, $User, $XmlPolicy, $Packages)
+                if ($null -ne $Packages -and @($Packages).Count -gt 0) {
+                    return @($Packages | ForEach-Object {
+                            [pscustomobject]@{
+                                PackageFullName = [string]$_.PackageFullName
+                                PolicyDecision = $global:opHealthInboxAppDecision
+                                MatchingRule = 'health-test-rule'
+                            }
+                        })
+                }
                 $global:opHealthRuntimeEvaluationCallCount++
                 if ([string]::IsNullOrWhiteSpace($global:opHealthRuntimeFirstPath)) {
                     $global:opHealthRuntimeFirstPath = [string]$Path
@@ -2060,6 +2164,10 @@ Describe "AppControl Module" {
                 }
                 @($Paths | Select-Object -First $global:opHealthSampleCount)
             } -ModuleName AppControl
+
+            # Existing health cases isolate the compatibility inbox probe; the
+            # dedicated inbox tests below override this mock with packages.
+            Mock Get-OpenPathInboxPackagedAppProbePackages { @() } -ModuleName AppControl
         }
 
         AfterEach {
@@ -2070,7 +2178,7 @@ Describe "AppControl Module" {
                 $env:SystemRoot = $global:opHealthPreviousSystemRoot
             }
             Remove-Item Function:\Set-AppLockerPolicy, Function:\Get-AppLockerPolicy, Function:\Get-Service, Function:\Get-LocalGroup, Function:\Get-LocalGroupMember, Function:\Get-CimInstance, Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
-            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthTargetState, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthRuntimeEvaluationCallCount, Variable:\opHealthRuntimeFirstPath, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthPreviousSystemRoot, Variable:\opHealthRequestedTargetSid -ErrorAction SilentlyContinue
+            Remove-Item Variable:\opHealthGroupSid, Variable:\opHealthStudentSid, Variable:\opHealthProfilePath, Variable:\opHealthSystemRoot, Variable:\opHealthSourcePath, Variable:\opHealthLocalPolicyState, Variable:\opHealthEffectivePolicyState, Variable:\opHealthAppIdStatus, Variable:\opHealthArbitraryDecision, Variable:\opHealthEdgeDecision, Variable:\opHealthFirefoxDecision, Variable:\opHealthPolicyMode, Variable:\opHealthTargetMissing, Variable:\opHealthTargetState, Variable:\opHealthRuntimeEffectiveObjectState, Variable:\opHealthRuntimeEvaluatorState, Variable:\opHealthRuntimeDecisionCoverageState, Variable:\opHealthRuntimeEvaluationCallCount, Variable:\opHealthRuntimeFirstPath, Variable:\opHealthSampleCount, Variable:\opHealthSampleFailureLabel, Variable:\opHealthInboxAppDecision, Variable:\opHealthPreviousSystemRoot, Variable:\opHealthRequestedTargetSid -ErrorAction SilentlyContinue
         }
 
         It "returns a deterministic healthy contract and keeps the boolean compatibility seam" {
@@ -2445,6 +2553,134 @@ Describe "AppControl Module" {
             )
             @($codes | Select-Object -Unique).Count | Should -Be $codes.Count
             ($codes -join ' ') | Should -Not -Match '[\\/:]|https?://|S-1-|[A-Za-z]:\\'
+        }
+
+        It "keeps inbox Microsoft packaged apps allowed in compatibility health" {
+            $package = [pscustomobject]@{
+                Name = 'Microsoft.WindowsCalculator'
+                PackageFullName = 'Microsoft.WindowsCalculator_11.0.0.0_x64__8wekyb3d8bbwe'
+                Publisher = 'CN=MICROSOFT CORPORATION, O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US'
+            }
+            Mock Get-OpenPathInboxPackagedAppProbePackages { @($package) } -ModuleName AppControl
+
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeTrue
+            @($health.ReasonCodes) | Should -Not -Contain 'appcontrol_inbox_packaged_app_denied'
+            $inboxDecisions = @($health.Observed.RuntimeDecisions | Where-Object { $_.Kind -eq 'inbox-packaged-app' })
+            $inboxDecisions.Count | Should -Be 1
+            $inboxDecisions[0].Expected | Should -Be 'Allowed'
+            $inboxDecisions[0].Observed | Should -Be 'Allowed'
+        }
+
+        It "fails compatibility health when an inbox packaged app is denied by the effective policy" {
+            $global:opHealthInboxAppDecision = 'DeniedByDefault'
+            $package = [pscustomobject]@{
+                Name = 'Microsoft.WindowsNotepad'
+                PackageFullName = 'Microsoft.WindowsNotepad_11.0.0.0_x64__8wekyb3d8bbwe'
+                Publisher = 'CN=MICROSOFT CORPORATION, O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US'
+            }
+            Mock Get-OpenPathInboxPackagedAppProbePackages { @($package) } -ModuleName AppControl
+
+            $health = Get-OpenPathNonAdminAppControlHealth
+
+            $health.Healthy | Should -BeFalse
+            $health.RuntimeBoundaryValid | Should -BeFalse
+            @($health.ReasonCodes) | Should -Contain 'appcontrol_inbox_packaged_app_denied'
+            $inboxDecisions = @($health.Observed.RuntimeDecisions | Where-Object { $_.Kind -eq 'inbox-packaged-app' })
+            $inboxDecisions.Count | Should -Be 1
+            $inboxDecisions[0].Observed | Should -Be 'DeniedByDefault'
+        }
+    }
+
+    Context "Compatibility inbox packaged app preflight" {
+        BeforeAll {
+            Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
+            # The health context removes the file-level platform shims; keep the
+            # apply path deterministic on hosts without the AppLocker cmdlets.
+            if (-not (Get-Command Get-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+                function global:Get-AppLockerPolicy { param([switch]$Local, [switch]$Effective, [switch]$Xml, $ErrorAction) '<AppLockerPolicy Version="1" />' }
+            }
+            if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+                function global:Set-AppLockerPolicy { param($XMLPolicy, $ErrorAction) }
+            }
+        }
+
+        It "fails the compatibility preflight with a bounded reason when an inbox packaged app is denied" {
+            $diagnosticPath = Join-Path $TestDrive 'inbox-app-denied.json'
+            InModuleScope AppControl -Parameters @{ DiagnosticPath = $diagnosticPath } {
+                param($DiagnosticPath)
+
+                $script:setPolicyCalls = 0
+                Mock Test-AdminPrivileges { $true }
+                Mock Test-OpenPathAppControlAvailable { $true }
+                Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-21-10-20-30-4242' }
+                Mock Get-AppLockerPolicy { '<AppLockerPolicy Version="1" />' }
+                Mock Set-AppLockerPolicy { $script:setPolicyCalls++ }
+                Mock Sync-OpenPathRestrictedGroup { $true }
+                Mock Write-OpenPathLog {}
+                Mock Get-OpenPathInboxPackagedAppProbePackages {
+                    @([pscustomobject]@{
+                            Name = 'Microsoft.WindowsCalculator'
+                            PackageFullName = 'Microsoft.WindowsCalculator_11.0.0.0_x64__8wekyb3d8bbwe'
+                            Publisher = 'CN=MICROSOFT CORPORATION, O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US'
+                        })
+                }
+                Mock Get-OpenPathAppControlProbeTarget {
+                    [pscustomobject]@{
+                        UserSid = 'S-1-5-21-10-20-30-1001'
+                        GroupSid = 'S-1-5-21-10-20-30-4242'
+                        ProfilePath = ''
+                        ProfileAvailable = $false
+                        ValidationMode = 'profileless'
+                    }
+                }
+                Mock Invoke-OpenPathAppLockerPackageEvaluation {
+                    @([pscustomobject]@{ Expected = 'Allowed'; PolicyDecision = 'DeniedByDefault'; Raw = $null })
+                }
+
+                New-TestAppControlInstalledConfig -Root $TestDrive
+                Set-OpenPathNonAdminAppControl -OpenPathRoot $TestDrive -DiagnosticStatusPath $DiagnosticPath -Confirm:$false | Should -BeFalse
+
+                $script:setPolicyCalls | Should -Be 0
+                $diagnostic = Get-Content -LiteralPath $DiagnosticPath -Raw | ConvertFrom-Json
+                $diagnostic.substep | Should -Be 'inbox-app-preflight'
+                @($diagnostic.reasonCodes) | Should -Contain 'appcontrol_inbox_packaged_app_denied'
+            }
+        }
+    }
+
+    Context "AppControl packaged app evaluation probe" {
+        It "returns a policy denial only when the caller opts out of the fail-closed throw" {
+            function global:Test-AppLockerPolicy {
+                param($XmlPolicy, $Packages, $User, $ErrorAction)
+                @($Packages | ForEach-Object {
+                        [pscustomobject]@{
+                            PackageFullName = [string]$_.PackageFullName
+                            PolicyDecision = 'DeniedByDefault'
+                        }
+                    })
+            }
+            try {
+                $package = [pscustomobject]@{
+                    Name = 'Microsoft.WindowsCalculator'
+                    PackageFullName = 'Microsoft.WindowsCalculator_11.0.0.0_x64__8wekyb3d8bbwe'
+                    Publisher = 'CN=MICROSOFT CORPORATION, O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US'
+                }
+                {
+                    Invoke-OpenPathAppLockerPackageEvaluation -PolicyXml '<AppLockerPolicy Version="1" />' `
+                        -Packages @($package) -UserSid 'S-1-5-21-1'
+                } | Should -Throw '*appcontrol_windows_runtime_probe_failed*'
+
+                $decisions = @(Invoke-OpenPathAppLockerPackageEvaluation -PolicyXml '<AppLockerPolicy Version="1" />' `
+                        -Packages @($package) -UserSid 'S-1-5-21-1' -AllowDeniedObservations)
+                $decisions.Count | Should -Be 1
+                $decisions[0].Expected | Should -Be 'Allowed'
+                $decisions[0].PolicyDecision | Should -Be 'DeniedByDefault'
+            }
+            finally {
+                Remove-Item Function:\Test-AppLockerPolicy -ErrorAction SilentlyContinue
+            }
         }
     }
 

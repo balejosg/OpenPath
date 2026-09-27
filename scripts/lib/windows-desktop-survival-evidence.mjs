@@ -253,8 +253,8 @@ function validateScenario(scenario, expected, evidenceRoot, seenReferences, now)
   requiredString(scenario.snapshotIdentity, scenario.scenarioId + '.snapshotIdentity');
   if (/[/\\\\]|@|:/.test(scenario.snapshotIdentity))
     fail(scenario.scenarioId + ' snapshotIdentity is not sanitized');
-  if (scenario.appControlProfile !== 'StrictApplicationAllowlist')
-    fail(scenario.scenarioId + ' appControlProfile is not strict');
+  if (scenario.appControlProfile !== 'ManagedBrowserCompatibility')
+    fail(scenario.scenarioId + ' appControlProfile is not compatibility');
   if (scenario.catalogApplicationCount !== 0)
     fail(scenario.scenarioId + ' initial catalog must be empty');
   if (scenario.initialProfileExisted !== true && scenario.initialProfileExisted !== false)

@@ -214,8 +214,11 @@ export function createWindowsOfflineInstallerService(
           approvedStudentBrowsers: ['Firefox'],
           installFirefoxIfMissing: true,
           enforceManagedBrowserBoundary: true,
-          appControlProfile: 'StrictApplicationAllowlist',
-          approvedApplicationCatalog: { schemaVersion: 1, applications: [] },
+          // Web-generated installers always use the product-default
+          // compatibility profile: installed and Microsoft-signed applications
+          // keep working while portable/user-writable execution and unapproved
+          // browsers stay blocked. Strict mode remains an explicit opt-in.
+          appControlProfile: 'ManagedBrowserCompatibility',
         },
       });
     } catch {

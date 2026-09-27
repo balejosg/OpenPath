@@ -3,7 +3,10 @@
 OpenPath keeps `ManagedBrowserCompatibility` as the default AppControl profile.
 That profile permits applications installed in administrator-controlled Program
 Files locations and blocks supported, discovered unapproved browsers plus
-student-writable execution surfaces.
+student-writable execution surfaces. Microsoft-signed packaged apps (Notepad,
+Calculator, and the rest of the inbox/Store Microsoft surface) are allowed by
+their exact signer distinguished names; sideloaded or third-party packaged apps
+stay denied unless explicitly approved.
 
 `StrictApplicationAllowlist` is an explicit opt-in. It removes the generic
 Program Files and Microsoft packaged-app allows for restricted students. Its

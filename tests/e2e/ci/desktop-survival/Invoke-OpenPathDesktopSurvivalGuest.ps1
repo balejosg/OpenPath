@@ -4,9 +4,9 @@
 .DESCRIPTION
     Runs inside the disposable Windows guest through the QEMU guest agent and
     performs the real acceptance work of the desktop-survival matrix: baseline
-    verification, personalized installer execution, strict AppControl commit
-    verification, interactive session management, restricted-student boundary
-    probes, rollback and cleanup verification.
+    verification, personalized installer execution, managed-browser-compatibility
+    AppControl commit verification, interactive session management,
+    restricted-student boundary probes, rollback and cleanup verification.
 
     The controller owns hypervisor actions (snapshot, reboot, screendump) and
     calls this harness once per step. Every step writes a JSON result to
@@ -383,11 +383,10 @@ function Get-ProbeDecision {
 }
 
 function New-OpenPathProbeSuiteCmd {
-    # Runs as the restricted student at logon through the HKLM Run value.
-    # Strict app control denies PowerShell script hosts to restricted users, so
-    # the runner is a batch command script executed by cmd.exe (permitted by the
-    # restricted Exe rules) and staged under the approved runtime root; scripts
-    # are likewise only approved from that root.
+    # The student suite body. Compatibility AppControl keeps Script execution
+    # governed by the OpenPath-managed rules, so the suite still runs from the
+    # approved runtime root and fixture scripts stay denied from user-writable
+    # paths.
     param(
         [Parameter(Mandatory = $true)][string]$SuitePath,
         [Parameter(Mandatory = $true)][string]$StudentUserName
@@ -420,6 +419,8 @@ if exist "%ROOT%\script-marker.txt" set "SCRIPT_MARKER=1"
   echo marker=%SCRIPT_MARKER%
 ) > "%ROOT%\result-denied-script.txt"
 
+rem Compatibility leaves the Msi collection NotConfigured, so the MSI surface is
+rem recorded as raw evidence and is not a boundary assertion.
 set "MSI_EXIT=0"
 set "MSI_INSTALLED=0"
 set "MSI_POLICY=0"
@@ -436,11 +437,11 @@ findstr /I /C:"forbidden by system policy" "%ROOT%\msi.log" >nul 2>&1 && set "MS
 findstr /I /C:"Installation success or error status: 0" "%ROOT%\msi.log" >nul 2>&1 && set "MSI_INSTALLED=1"
 :MsiDone
 (
-  echo name=denied-msi
+  echo name=msi-surface
   echo exit=%MSI_EXIT%
   echo installed=%MSI_INSTALLED%
   echo policyBlocked=%MSI_POLICY%
-) > "%ROOT%\result-denied-msi.txt"
+) > "%ROOT%\result-msi-surface.txt"
 
 echo done > "%ROOT%\probe-suite.done"
 exit /b 0
@@ -510,7 +511,7 @@ function Invoke-OpenPathBoundaryArm {
     Remove-Item -LiteralPath (Join-Path $ProbeRoot 'script-probe.out') -Force -ErrorAction SilentlyContinue
     Get-ChildItem $ProbeRoot -Filter 'result-*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Get-ChildItem $ProbeRoot -Filter 'probe-suite.skipped-*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    # Strict app control only approves scripts from the OpenPath runtime root
+    # App control approves scripts from the OpenPath runtime root
     # (AppControl.psm1 sets the Script allow path to "$OpenPathRoot\*"), so the
     # suite must live there. A user-writable script path -- including the
     # all-users Startup folder -- is denied to restricted users by design.
@@ -572,13 +573,16 @@ function Invoke-OpenPathBoundaryCollect {
     Add-Observation -Key 'deniedBrowser' -Expected 'denied' -Fixture '' -Detail (Get-OpenPathProbeResult -Name 'denied-browser')
     Add-Observation -Key 'deniedUserExe' -Expected 'denied' -Fixture '' -Detail (Get-OpenPathProbeResult -Name 'denied-user-exe')
     Add-Observation -Key 'deniedScript' -Expected 'denied' -Fixture 'msiAndScript' -Detail (Get-OpenPathProbeResult -Name 'denied-script')
-    Add-Observation -Key 'deniedMsi' -Expected 'denied' -Fixture 'msiAndScript' -Detail (Get-OpenPathProbeResult -Name 'denied-msi')
-    Add-Observation -Key 'packagedApp' -Expected 'denied' -Fixture 'packagedAppExecution' -Detail (Get-OpenPathProbeResult -Name 'packaged-app')
+    # Compatibility leaves the Msi collection NotConfigured, so the MSI probe
+    # is recorded as raw evidence only; the script probe above is the
+    # msiAndScript fixture contract. The packaged-app probe is the regression
+    # guard for the Microsoft signer DN allow: Calculator must open.
+    Add-Observation -Key 'packagedApp' -Expected 'allowed' -Fixture 'packagedAppExecution' -Detail (Get-OpenPathProbeResult -Name 'packaged-app')
 
     $fixtures = [ordered]@{
         exeAndDll            = if ($probes.allowedBrowser.ran -eq $true -and $probes.allowedSystemExe.ran -eq $true) { 'passed' } else { 'failed' }
-        msiAndScript         = if ($probes.deniedScript.ran -eq $false -and $probes.deniedMsi.ran -eq $false -and $probes.deniedMsi.observed.policyBlocked -eq $true) { 'passed' } else { 'failed' }
-        packagedAppExecution = if ($probes.packagedApp.ran -eq $false) { 'passed' } else { 'failed' }
+        msiAndScript         = if ($probes.deniedScript.ran -eq $false) { 'passed' } else { 'failed' }
+        packagedAppExecution = if ($probes.packagedApp.ran -eq $true) { 'passed' } else { 'failed' }
     }
     $criticalDenials = @()
     foreach ($entry in $probes.GetEnumerator()) {
@@ -660,7 +664,7 @@ function Invoke-OpenPathLabStep {
             $state.installSummary = [ordered]@{ exitCode = $installExit; seconds = $installSecondsValue }
             $state.summary = $summary
             if (-not $summary.configExists) { Add-OpenPathLabFailure 'install-config-missing' }
-            elseif ([string]$summary.config.appControlProfile -ne 'StrictApplicationAllowlist') { Add-OpenPathLabFailure 'install-profile-not-strict' }
+            elseif ([string]$summary.config.appControlProfile -ne 'ManagedBrowserCompatibility') { Add-OpenPathLabFailure 'install-profile-not-compatibility' }
             elseif ([string]$summary.config.appControlCommitState -ne 'committed') { Add-OpenPathLabFailure 'install-appcontrol-not-committed' }
             if (-not $summary.uninstaller) { Add-OpenPathLabFailure 'install-uninstaller-missing' }
             if (-not $summary.groupExists) { Add-OpenPathLabFailure 'install-restricted-group-missing' }

@@ -133,8 +133,7 @@ jobs:
               approvedStudentBrowsers = @('Firefox')
               installFirefoxIfMissing = $true
               enforceManagedBrowserBoundary = $true
-              appControlProfile = 'StrictApplicationAllowlist'
-              approvedApplicationCatalog = @{ schemaVersion = 1; applications = @() }
+              appControlProfile = 'ManagedBrowserCompatibility'
             }
           } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configPath -Encoding UTF8
 

@@ -387,8 +387,7 @@ function Write-OpenPathLabTestConfigFile {
                 deniedBrowser    = @{ expected = 'denied'; ran = $false }
                 deniedUserExe    = @{ expected = 'denied'; ran = $false }
                 deniedScript     = @{ expected = 'denied'; ran = $false }
-                deniedMsi        = @{ expected = 'denied'; ran = $false }
-                packagedApp      = @{ expected = 'denied'; ran = $false }
+                packagedApp      = @{ expected = 'allowed'; ran = $true }
             }
             fixtures                  = @{ exeAndDll = 'passed'; msiAndScript = 'passed'; packagedAppExecution = 'passed' }
             criticalUnexpectedDenials = @()
@@ -400,7 +399,7 @@ function Write-OpenPathLabTestConfigFile {
                 initialProfileExisted   = $false
                 catalogApplicationCount = 0
                 installSummary          = @{ exitCode = 0; seconds = 12.5 }
-                config                  = @{ appControlProfile = 'StrictApplicationAllowlist'; appControlCommitState = 'committed'; installState = 'complete' }
+                config                  = @{ appControlProfile = 'ManagedBrowserCompatibility'; appControlCommitState = 'committed'; installState = 'complete' }
                 groupMembers            = @('OP-LAB\alumno')
                 tasks                   = @('OpenPath-Watchdog')
                 uninstaller             = $true
@@ -437,7 +436,7 @@ function Write-OpenPathLabTestConfigFile {
         $cleanup.status | Should -Be 'passed'
         $cleanup.synthetic | Should -BeFalse
         $cleanup.scenario.sourceCommitSha | Should -Be ('a' * 40)
-        $cleanup.scenario.appControlProfile | Should -Be 'StrictApplicationAllowlist'
+        $cleanup.scenario.appControlProfile | Should -Be 'ManagedBrowserCompatibility'
         $cleanup.scenario.catalogApplicationCount | Should -Be 0
         $cleanup.scenario.bootIdBefore | Should -Not -Be $cleanup.scenario.bootIdAfter
         $cleanup.scenario.fixtures.exeAndDll | Should -Be 'passed'

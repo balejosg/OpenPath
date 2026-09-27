@@ -51,7 +51,7 @@ reads `OPENPATH_DESKTOP_LAB_CONFIG`, defaulting to
   only. Observations are marked `dryRun: true` / `acceptanceEligible: false`
   and can never qualify a release.
 - `mode: "acceptance"` runs the full matrix below and emits release-eligible
-  evidence (`synthetic: false`, strict AppControl identity, boundary probes,
+  evidence (`synthetic: false`, compatibility AppControl identity, boundary probes,
   rollback verification).
 - `restoreBaseline` defaults to `true`. Set it to `false` only when the target
   VM holds a snapshot chain that must not be touched; the controller then never
@@ -76,7 +76,7 @@ Per scenario the controller performs:
 - **prepare**: restore baseline, boot, verify guest/edition, transport the exact
   template and personalized candidate (hash-verified on the host and inside the
   guest), upload the in-guest harness, install the candidate as SYSTEM, and
-  record the AppLocker policy hash before and after the strict commit.
+  record the AppLocker policy hash before and after the compatibility commit.
 - **observe**: enable the admin autologon, reboot, capture the admin desktop,
   enable the student autologon, reboot, require a real first student interactive
   logon (Security 4624 type 2/10) and capture the student desktop, then run the
@@ -107,8 +107,8 @@ process actually started:
 | -                      | unapproved browser (Edge)                  | denied                     |
 | -                      | user-writable executable copy              | denied                     |
 | `msiAndScript`         | user-writable PowerShell script            | denied (marker absent)     |
-| `msiAndScript`         | user-writable MSI package                  | denied (1625 policy block) |
-| `packagedAppExecution` | unapproved packaged app (`calc.exe`)       | denied                     |
+| -                      | user-writable MSI package (raw evidence)   | unmanaged in compatibility |
+| `packagedAppExecution` | in-box packaged app (`calc.exe`)           | allowed                    |
 
 `criticalUnexpectedDenials` must remain empty: an approved surface that is
 denied, or a denied surface that runs, fails the phase.
