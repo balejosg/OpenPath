@@ -1227,8 +1227,8 @@ describe('repository verification contract', () => {
     );
     assert.match(
       linuxRunner,
-      /Run Selenium student suite \(sse\)[\s\S]*run_student_suite sse full/,
-      'Linux student-policy runner should keep the SSE pass on the full Selenium matrix'
+      /Run Selenium student suite \(sse\)[\s\S]*run_student_suite sse "\$\{OPENPATH_STUDENT_COVERAGE_PROFILE:-full\}"/,
+      'Linux student-policy runner should keep the SSE pass on the full Selenium matrix by default while allowing a targeted coverage profile'
     );
     assert.match(
       linuxRunner,

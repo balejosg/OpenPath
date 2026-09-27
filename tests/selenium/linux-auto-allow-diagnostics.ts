@@ -83,6 +83,10 @@ export interface LinuxRuntimeDependencyApplyArtifact {
   originHost: string;
   dependencyHosts: string[];
   remoteWhitelistMutated: false;
+  /** First browser probe result before any explicit allowlist or forced update help. */
+  firstProbeStatus?: string;
+  firstProbeDurationMs?: number;
+  firstProbeError?: string;
   writtenAt: string;
 }
 
@@ -266,6 +270,7 @@ export async function writeLinuxRuntimeDependencyApplyArtifact(options: {
   success: boolean;
   originHost: string;
   dependencyHosts: string[];
+  firstProbe?: { status: string; durationMs: number; error?: string };
 }): Promise<LinuxRuntimeDependencyApplyArtifact | null> {
   if (isWindows()) {
     return null;
@@ -278,6 +283,13 @@ export async function writeLinuxRuntimeDependencyApplyArtifact(options: {
     originHost: options.originHost,
     dependencyHosts: options.dependencyHosts,
     remoteWhitelistMutated: false,
+    ...(options.firstProbe
+      ? {
+          firstProbeStatus: options.firstProbe.status,
+          firstProbeDurationMs: options.firstProbe.durationMs,
+          ...(options.firstProbe.error ? { firstProbeError: options.firstProbe.error } : {}),
+        }
+      : {}),
     writtenAt: new Date().toISOString(),
   };
   await mkdir(options.diagnosticsDir, { recursive: true });

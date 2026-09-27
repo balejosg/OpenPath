@@ -1939,6 +1939,7 @@ export async function runLinuxRuntimeDependencyApplyScenario(
 
   const plan = buildLinuxRuntimeDependencyApplyPlan(driver.scenario);
   const restrictedGroupId = driver.scenario.groups.restricted.id;
+  let firstProbe: { status: string; durationMs: number; error?: string } | null = null;
 
   try {
     logScenarioStep('SP-LINUX-RUNTIME-DEPENDENCY-APPLY prepare approved anchor');
@@ -1969,7 +1970,15 @@ export async function runLinuxRuntimeDependencyApplyScenario(
       title: 'OpenPath Site Fixture',
       selector: '#page-status',
     });
-    await runDnsDiscoveryDependencyProbe(driver, plan.dependencies[0]);
+    const firstProbeResult = await runDnsDiscoveryDependencyProbe(driver, plan.dependencies[0]);
+    firstProbe = {
+      status: firstProbeResult.status,
+      durationMs: firstProbeResult.durationMs,
+      ...(firstProbeResult.error ? { error: firstProbeResult.error } : {}),
+    };
+    logScenarioStep(
+      `SP-LINUX-RUNTIME-DEPENDENCY-APPLY first probe status=${firstProbe.status} durationMs=${firstProbe.durationMs}`
+    );
 
     logScenarioStep('SP-LINUX-RUNTIME-DEPENDENCY-APPLY wait for local overlay');
     await driver.waitForConvergence(
@@ -1997,6 +2006,7 @@ export async function runLinuxRuntimeDependencyApplyScenario(
       success: true,
       originHost: plan.origin.host,
       dependencyHosts: plan.dependencies.map((dependency) => dependency.host),
+      ...(firstProbe ? { firstProbe } : {}),
     });
   } catch (error) {
     await writeLinuxRuntimeDependencyApplyArtifact({
@@ -2004,6 +2014,7 @@ export async function runLinuxRuntimeDependencyApplyScenario(
       success: false,
       originHost: plan.origin.host,
       dependencyHosts: plan.dependencies.map((dependency) => dependency.host),
+      ...(firstProbe ? { firstProbe } : {}),
     });
     throw error;
   }

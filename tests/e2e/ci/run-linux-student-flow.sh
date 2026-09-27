@@ -1073,7 +1073,7 @@ main() {
     run_timed_step "Verify sinkhole fast-fail" assert_sinkhole_fast_fail
     run_timed_step "Verify sinkhole fast-fail (browser)" assert_sinkhole_fast_fail_browser
     run_timed_step "Verify SSE Firefox readiness" assert_linux_firefox_extension_ready
-    run_timed_step "Run Selenium student suite (sse)" run_student_suite sse full
+    run_timed_step "Run Selenium student suite (sse)" run_student_suite sse "${OPENPATH_STUDENT_COVERAGE_PROFILE:-full}"
     run_timed_step "Bootstrap fallback scenario" bootstrap_scenario "Linux Student Policy Fallback"
     run_timed_step "Seed fallback baseline policy" seed_initial_baseline_policy
     run_timed_step "Reconfigure/update client" configure_client false
