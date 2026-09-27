@@ -398,7 +398,10 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
             return 1
         }
 
-        $overlayPath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $OpenPathRoot
+        # The capability-storage helper is promoted into this session as a bare
+        # scriptblock whose internal Join- helper is unavailable here, so build
+        # the documented overlay path from the install root directly.
+        $overlayPath = Join-Path $OpenPathRoot 'data\runtime-dependency-overlay.json'
         $overlayUnappliedBefore = $true
         if (Test-Path $overlayPath -ErrorAction SilentlyContinue) {
             try {
