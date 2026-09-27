@@ -1188,7 +1188,7 @@ function global:Unregister-ScheduledTask {
 function global:New-ScheduledTaskAction { param(`$Execute, `$Argument) [pscustomobject]@{ Execute = `$Execute; Argument = `$Argument } }
 function global:New-ScheduledTaskTrigger { param([switch]`$AtStartup, [switch]`$Once, [switch]`$Daily, `$At, `$RepetitionInterval, `$RandomDelay) [pscustomobject]@{} }
 function global:New-ScheduledTaskPrincipal { param(`$UserId, `$LogonType, `$RunLevel) [pscustomobject]@{} }
-function global:New-ScheduledTaskSettingsSet { param([switch]`$AllowStartIfOnBatteries, [switch]`$DontStopIfGoingOnBatteries, [switch]`$StartWhenAvailable, `$ExecutionTimeLimit, `$RestartCount, `$RestartInterval) [pscustomobject]@{} }
+function global:New-ScheduledTaskSettingsSet { param([switch]`$AllowStartIfOnBatteries, [switch]`$DontStopIfGoingOnBatteries, [switch]`$StartWhenAvailable, `$ExecutionTimeLimit, `$RestartCount, `$RestartInterval, [string]`$MultipleInstances) [pscustomobject]@{} }
 function global:Register-ScheduledTask {
     param(`$TaskName, `$TaskPath, `$Action, `$Trigger, `$Principal, `$Settings, `$User, [switch]`$Force)
     `$names = @(Get-OpenPathInstallerTestState -Path `$taskStatePath)

@@ -76,12 +76,14 @@ Describe "Services Module" {
                     [switch]$StartWhenAvailable,
                     [int]$RestartCount,
                     [timespan]$RestartInterval,
-                    [timespan]$ExecutionTimeLimit
+                    [timespan]$ExecutionTimeLimit,
+                    [string]$MultipleInstances
                 )
                 [PSCustomObject]@{
                     RestartCount = $RestartCount
                     RestartInterval = $RestartInterval
                     ExecutionTimeLimit = $ExecutionTimeLimit
+                    MultipleInstances = $MultipleInstances
                 }
             }
 
@@ -92,6 +94,7 @@ Describe "Services Module" {
             $definition.TaskName | Should -Be "OpenPath-RuntimeDependencyApply"
             $definition.Action.Argument | Should -Match ([regex]::Escape('C:\OpenPath\scripts\Apply-RuntimeDependencyQueue.ps1'))
             $definition.Settings.ExecutionTimeLimit.TotalMinutes | Should -Be 2
+            $definition.Settings.MultipleInstances | Should -Be 'Queue'
         }
 
         # Register-OpenPathTask is always defined by Services.psm1, and -WhatIf short-circuits
@@ -143,6 +146,7 @@ Describe "Services Module" {
                 'function New-OpenPathRuntimeDependencyApplyTaskDefinition',
                 'Get-OpenPathScheduledTaskSpec -TaskType RuntimeDependencyApply',
                 '-TaskName $taskSpec.Name',
+                '-MultipleInstances Queue',
                 '-ExecutionTimeLimit (New-TimeSpan -Minutes 2)'
             )
             Assert-ContentContainsAll -Content $servicesContent -Needles @(

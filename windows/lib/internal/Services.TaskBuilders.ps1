@@ -143,6 +143,7 @@ function New-OpenPathRuntimeDependencyApplyTaskDefinition {
         -StartWhenAvailable `
         -RestartCount 1 `
         -RestartInterval (New-TimeSpan -Minutes 1) `
+        -MultipleInstances Queue `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
 
     New-OpenPathTaskDefinition `
