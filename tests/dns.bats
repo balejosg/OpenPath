@@ -600,6 +600,35 @@ JSON
     [ "$runtime_line" -lt "$blocked_line" ]
 }
 
+@test "runtime dependency overlay stays readable by the interactive native host" {
+    export VAR_STATE_DIR="$TEST_TMP_DIR/var/lib/openpath"
+    mkdir -p "$VAR_STATE_DIR"
+    local overlay="$VAR_STATE_DIR/runtime-dependency-overlay.json"
+    local requests="$TEST_TMP_DIR/runtime-dependency-requests.jsonl"
+    cat > "$requests" <<'JSON'
+{"version":1,"queuedAt":"2099-01-01T00:00:00Z","anchorHost":"allowed.example","dependencyHost":"cdn.example","requestType":"fetch","source":"firefox-webrequest-local"}
+JSON
+
+    run python3 "$PROJECT_DIR/linux/libexec/runtime-dependency-overlay.py" update \
+        --overlay "$overlay" \
+        --requests "$requests" \
+        --whitelist "allowed.example" \
+        --protected-hosts "" \
+        --blocked-subdomains ""
+
+    [ "$status" -eq 0 ]
+    [ -f "$overlay" ]
+    # mkstemp would leave the overlay root-only (0600); the native host polls it
+    # as the interactive desktop user and would never observe appliedGeneration.
+    [ "$(stat -c '%a' "$overlay")" = "644" ]
+
+    run python3 "$PROJECT_DIR/linux/libexec/runtime-dependency-overlay.py" mark-applied \
+        --overlay "$overlay"
+
+    [ "$status" -eq 0 ]
+    [ "$(stat -c '%a' "$overlay")" = "644" ]
+}
+
 @test "generate_dnsmasq_config includes domains from whitelist" {
     export DNSMASQ_CONF="$TEST_TMP_DIR/dnsmasq.d/url-whitelist.conf"
     export PRIMARY_DNS="8.8.8.8"

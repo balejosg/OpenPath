@@ -185,10 +185,23 @@ def write_overlay(
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
             handle.write("\n")
+        # The native messaging host polls this file as the interactive desktop
+        # user; mkstemp creates it 0600, which would leave every runtime
+        # dependency stuck `pending` because `appliedGeneration` is unreadable.
+        # Widen the mode before the atomic replace.
+        os.chmod(temp_name, 0o644)
         os.replace(temp_name, path)
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
+
+
+def widen_overlay_permissions(path: Path) -> None:
+    """Keep the overlay world-readable across upgrades and unchanged rewrites."""
+    try:
+        os.chmod(path, 0o644)
+    except OSError:
+        pass
 
 
 def command_update(args: argparse.Namespace) -> int:
@@ -251,6 +264,7 @@ def command_update(args: argparse.Namespace) -> int:
             previous_generation + 1,
             previous_applied,
         )
+    widen_overlay_permissions(overlay_path)
     print(f"processed={processed}")
     print(f"rejected={rejected}")
     print(f"changed={'true' if changed else 'false'}")
@@ -261,9 +275,11 @@ def command_mark_applied(args: argparse.Namespace) -> int:
     overlay_path = Path(args.overlay)
     generation, applied_generation = read_generations(overlay_path)
     if generation <= 0 or applied_generation >= generation:
+        widen_overlay_permissions(overlay_path)
         return 0
     entries = load_overlay(overlay_path)
     write_overlay(overlay_path, entries, utc_now(), generation, generation)
+    widen_overlay_permissions(overlay_path)
     return 0
 
 
