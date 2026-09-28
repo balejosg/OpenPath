@@ -1094,7 +1094,16 @@ function New-OpenPathAppLockerPolicyXml {
         }
         $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType system allow all" -Sid $Spec.SystemSid -Action 'Allow' -Path '*'
 
-        if ($strictProfile -and $collectionType -in @('Exe', 'Dll')) {
+        # The Window Manager (DWM-1) and User-Mode Font Driver (UMFD-*) service
+        # accounts are neither administrators nor SYSTEM.  Without the protected
+        # Windows runtime base their %WINDIR% processes (DWM.EXE,
+        # FONTDRVHOST.EXE) are denied at every boot of an installed machine, the
+        # logon UI never comes up, and the denied-process retry storm exhausts
+        # the machine.  Every enforced file collection that must start Windows
+        # binaries keeps the same base as strict; the restricted-user projection
+        # below still governs what non-admin users may launch.
+        $windowsRuntimeBaseCollections = if ($strictProfile) { @('Exe', 'Dll') } else { @('Exe') }
+        if ($collectionType -in $windowsRuntimeBaseCollections) {
             $rules += New-OpenPathFilePathRuleXml -CollectionType $collectionType -Name "$script:OpenPathAppControlRulePrefix $collectionType Windows runtime base" -Sid 'S-1-1-0' -Action 'Allow' -Path '%WINDIR%\*' -Exceptions @('%WINDIR%\Temp\*')
         }
 
@@ -2046,6 +2055,19 @@ function Test-OpenPathAppLockerBoundaryPolicy {
     }
 
     if ($Profile -eq 'ManagedBrowserCompatibility') {
+        # Compatibility keeps the same Everyone protected Windows runtime base
+        # as strict.  DWM (DWM-1) and FONTDRVHOST (UMFD-*) run as service SIDs
+        # that are neither administrators nor SYSTEM, so a policy without the
+        # base denies them at logon and leaves the machine with no desktop.
+        $runtimeBaseRules = @($exeCollection.FilePathRule | Where-Object {
+                $_.GetAttribute('Action') -eq 'Allow' -and
+                $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                $_.Conditions.FilePathCondition.GetAttribute('Path') -eq '%WINDIR%\*'
+            })
+        if ($runtimeBaseRules.Count -ne 1) { return $false }
+        $runtimeBaseExceptions = @($runtimeBaseRules[0].Exceptions.FilePathCondition | ForEach-Object { $_.GetAttribute('Path') })
+        if ($runtimeBaseExceptions.Count -ne 1 -or $runtimeBaseExceptions[0] -ne '%WINDIR%\Temp\*') { return $false }
+
         # AppLocker matches the complete signer distinguished name.  Every
         # Microsoft DN must be present so the inbox/Store Microsoft packaged
         # apps (Notepad, Calculator) stay runnable for restricted users.

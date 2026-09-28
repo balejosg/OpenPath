@@ -11,6 +11,7 @@ two modes: transport dry-run and release acceptance.
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `tests/e2e/ci/controllers/proxmox-disposable-windows-controller.ps1`    | Controller CLI implementing the `DisposableWindowsTarget` contract |
 | `tests/e2e/ci/controllers/ProxmoxWindowsLab.psm1`                       | Transport-injectable orchestrator plus the real Proxmox transport  |
+| `tests/e2e/ci/controllers/proxmox-disposable-windows-release-lock.ps1`  | Owner-scoped lab-lock release for cancelled workflow runs          |
 | `tests/e2e/ci/desktop-survival/Invoke-OpenPathDesktopSurvivalGuest.ps1` | In-guest harness executed through the QEMU guest agent             |
 | `windows/tests/Windows.ProxmoxWindowsLab.Tests.ps1`                     | Unit tests with a fake transport (no hypervisor access)            |
 
@@ -77,6 +78,11 @@ Per scenario the controller performs:
   template and personalized candidate (hash-verified on the host and inside the
   guest), upload the in-guest harness, install the candidate as SYSTEM, and
   record the AppLocker policy hash before and after the compatibility commit.
+  Prepare fails closed when the committed policy lacks the Everyone `%WINDIR%`
+  Windows runtime base: the Window Manager (`DWM.EXE`) and font driver
+  (`FONTDRVHOST.EXE`) run as service SIDs that are neither administrators nor
+  SYSTEM, so that gap denies them at every boot and no interactive session can
+  come up.
 - **observe**: enable the admin autologon, reboot, capture the admin desktop,
   enable the student autologon, reboot, require a real first student interactive
   logon (Security 4624 type 2/10) and capture the student desktop, then run the
@@ -87,7 +93,20 @@ Per scenario the controller performs:
   after the reboot.
 - **cleanup**: run the installed `Uninstall-OpenPath.ps1`, verify that the
   runtime, the restricted group, the scheduled tasks and the OpenPath AppLocker
-  rules are gone, stop the VM and restore the baseline.
+  rules are gone, stop the VM and restore the baseline. The VM is stopped and
+  rolled back in a `finally` block even when a guest cleanup step fails, so a
+  dead guest never stays powered on while the next scenario waits for the lock.
+
+When an interactive-session wait expires, the controller captures a
+`session-timeout-<phase>-<step>` console screendump and a bounded
+`session-timeout-<phase>-<step>.diagnostics.json` (session list, explorer
+owners, memory, non-informational AppLocker events from the four channels, and
+the watchdog log tail). The phase error carries the last per-attempt error and
+references both artifacts.
+
+A cancelled workflow run releases its lab lock through
+`proxmox-disposable-windows-release-lock.ps1`, which only releases lock owners
+that belong to the current run/attempt and never touches another run's lock.
 
 The scenario object required by
 `scripts/lib/windows-desktop-survival-evidence.mjs` is attached to the cleanup
@@ -111,7 +130,9 @@ process actually started:
 | `packagedAppExecution` | in-box packaged app (`calc.exe`)           | allowed                    |
 
 `criticalUnexpectedDenials` must remain empty: an approved surface that is
-denied, or a denied surface that runs, fails the phase.
+denied, or a denied surface that runs, fails the phase. Probe evidence records
+non-informational AppLocker events from the EXE and DLL, MSI and Script, and
+Packaged app-Execution channels.
 
 ## Controller contract
 

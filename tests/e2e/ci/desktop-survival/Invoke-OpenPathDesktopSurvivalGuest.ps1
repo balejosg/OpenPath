@@ -147,6 +147,19 @@ function Get-OpenPathStateSummary {
         ForEach-Object { [string]$_.TaskName } | Sort-Object)
     $summary.policySha256 = Get-Sha256Hex -Text (Get-AppLockerXmlText)
     $summary.policyHasOpenPathRules = Test-PolicyHasOpenPathRules
+    $summary.windowsRuntimeBasePresent = $false
+    try {
+        [xml]$policyXml = Get-AppLockerXmlText
+        $exeCollection = @($policyXml.AppLockerPolicy.RuleCollection | Where-Object { [string]$_.Type -eq 'Exe' })[0]
+        if ($exeCollection) {
+            $summary.windowsRuntimeBasePresent = [bool](@($exeCollection.FilePathRule | Where-Object {
+                        [string]$_.Action -eq 'Allow' -and
+                        [string]$_.UserOrGroupSid -eq 'S-1-1-0' -and
+                        [string]$_.Conditions.FilePathCondition.Path -eq '%WINDIR%\*'
+                    }).Count -gt 0)
+        }
+    }
+    catch {}
     return $summary
 }
 
@@ -592,7 +605,7 @@ function Invoke-OpenPathBoundaryCollect {
     # AppLocker events for the probe window make each allow/deny observation
     # traceable to the enforcement decision that produced it.
     $applockerEvents = @()
-    foreach ($logName in @('Microsoft-Windows-AppLocker/EXE and DLL', 'Microsoft-Windows-AppLocker/MSI and Script')) {
+    foreach ($logName in @('Microsoft-Windows-AppLocker/EXE and DLL', 'Microsoft-Windows-AppLocker/MSI and Script', 'Microsoft-Windows-AppLocker/Packaged app-Execution')) {
         try {
             $filter = @{ LogName = $logName }
             if ($null -ne $windowStartUtc) { $filter['StartTime'] = $windowStartUtc }
@@ -666,6 +679,7 @@ function Invoke-OpenPathLabStep {
             if (-not $summary.configExists) { Add-OpenPathLabFailure 'install-config-missing' }
             elseif ([string]$summary.config.appControlProfile -ne 'ManagedBrowserCompatibility') { Add-OpenPathLabFailure 'install-profile-not-compatibility' }
             elseif ([string]$summary.config.appControlCommitState -ne 'committed') { Add-OpenPathLabFailure 'install-appcontrol-not-committed' }
+            elseif (-not [bool]$summary.windowsRuntimeBasePresent) { Add-OpenPathLabFailure 'install-windows-runtime-base-missing' }
             if (-not $summary.uninstaller) { Add-OpenPathLabFailure 'install-uninstaller-missing' }
             if (-not $summary.groupExists) { Add-OpenPathLabFailure 'install-restricted-group-missing' }
             Write-OpenPathLabState -Value $state

@@ -21,6 +21,13 @@ allow-all recovery rules. The `%WINDIR%` and OpenPath roots are broad only
 because both are administrator-controlled runtime roots; restricted users must
 not receive write access to either root.
 
+Both profiles emit the same Everybody (`S-1-1-0`) protected `%WINDIR%\*`
+runtime base, with `%WINDIR%\Temp\*` excluded. The Window Manager (`DWM.EXE`,
+running as `DWM-1`) and the user-mode font driver (`FONTDRVHOST.EXE`, running as
+`UMFD-*`) are service SIDs that are neither administrators nor SYSTEM; without
+that base they are denied at boot and the machine never reaches a desktop or an
+interactive logon.
+
 Configure `data/config.json` with an explicit profile and versioned catalog:
 
 ```json

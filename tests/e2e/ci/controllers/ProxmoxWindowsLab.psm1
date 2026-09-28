@@ -573,6 +573,91 @@ function Get-OpenPathLabAcceptanceCapture {
     return [ordered]@{ name = $Name; captured = $captured; path = "screens/$Name.ppm" }
 }
 
+function Get-OpenPathLabAcceptanceTimeoutDiagnostics {
+    param(
+        [Parameter(Mandatory = $true)][object]$Payload,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][int]$Vmid,
+        [Parameter(Mandatory = $true)][string]$Phase,
+        [Parameter(Mandatory = $true)][string]$Step
+    )
+    $name = "session-timeout-$Phase-$Step"
+    $artifactsRoot = [string](Get-OpenPathLabField -InputObject $Payload -Name 'artifactsRoot')
+    $capture = Get-OpenPathLabAcceptanceCapture -Payload $Payload -Transport $Transport -Vmid $Vmid -Name $name
+    $diagnosticScript = @'
+$ErrorActionPreference = 'Continue'
+$result = [ordered]@{}
+try { $result.quser = (quser.exe 2>&1 | Out-String).Trim() } catch {}
+try {
+    $explorers = @()
+    foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction SilentlyContinue)) {
+        $owner = ''
+        try {
+            $o = Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction Stop
+            $owner = "$($o.Domain)\$($o.User)"
+        }
+        catch {}
+        $explorers += [ordered]@{ pid = $p.ProcessId; owner = $owner }
+    }
+    $result.explorers = $explorers
+}
+catch {}
+try {
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+    $result.memory = [ordered]@{
+        freePhysicalKB = [int64]$os.FreePhysicalMemory
+        totalVisibleKB = [int64]$os.TotalVisibleMemorySize
+        freeVirtualKB  = [int64]$os.FreeVirtualMemory
+        totalVirtualKB = [int64]$os.TotalVirtualMemorySize
+    }
+}
+catch {}
+$lockerRows = @()
+foreach ($logName in @('Microsoft-Windows-AppLocker/EXE and DLL', 'Microsoft-Windows-AppLocker/MSI and Script', 'Microsoft-Windows-AppLocker/Packaged app-Execution', 'Microsoft-Windows-AppLocker/Packaged app-Deployment')) {
+    try {
+        $events = Get-WinEvent -FilterHashtable @{ LogName = $logName; StartTime = (Get-Date).AddMinutes(-30) } -MaxEvents 40 -ErrorAction Stop
+        foreach ($e in $events) {
+            if ([string]$e.LevelDisplayName -eq 'Information') { continue }
+            $lockerRows += [ordered]@{
+                log     = $logName
+                id      = $e.Id
+                level   = [string]$e.LevelDisplayName
+                timeUtc = $e.TimeCreated.ToUniversalTime().ToString('o')
+                message = (([string]$e.Message -replace "`r?`n", ' ').Trim())
+            }
+        }
+    }
+    catch {}
+}
+$result.appLocker = @($lockerRows | Select-Object -First 40)
+try { $result.watchdogTail = @(Get-Content -LiteralPath 'C:\OpenPath\data\logs\openpath.log' -Tail 40 -ErrorAction SilentlyContinue) } catch {}
+$result | ConvertTo-Json -Depth 6
+'@
+    $diagnostics = [ordered]@{
+        captured = [bool]$capture.captured
+        screen   = $capture.path
+        guest    = $null
+        file     = ''
+    }
+    try {
+        # One bounded attempt: diagnostics must not multiply the timeout.
+        $raw = & $Transport.InvokeGuestPowerShell $Vmid $diagnosticScript 90 1
+        $diagnostics.guest = ConvertFrom-OpenPathLabJsonText -Text ([string]$raw)
+    }
+    catch {
+        $diagnostics.guestError = Format-OpenPathLabGuestErrorDetail -Text ([string]$_.Exception.Message)
+    }
+    $target = Join-Path $artifactsRoot "$name.diagnostics.json"
+    try {
+        $parent = Split-Path -Parent $target
+        if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        [IO.File]::WriteAllText($target, ($diagnostics | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+        $diagnostics.file = "$name.diagnostics.json"
+    }
+    catch { $diagnostics.fileError = $_.Exception.Message }
+    return [pscustomobject]$diagnostics
+}
+
 function Wait-OpenPathLabAcceptanceSession {
     param(
         [Parameter(Mandatory = $true)][object]$Payload,
@@ -585,13 +670,15 @@ function Wait-OpenPathLabAcceptanceSession {
         [Parameter(Mandatory = $true)][string]$Step,
         [int]$TimeoutSeconds = 420
     )
-        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastAttemptError = $null
     while ((Get-Date) -lt $deadline) {
         try {
             $harness = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths `
                 -Phase $Phase -Step $Step -Settings $Settings -HarnessGuestPath $HarnessGuestPath -TimeoutSeconds 300
         }
         catch {
+            $lastAttemptError = $_
             Start-Sleep -Seconds 10
             continue
         }
@@ -599,7 +686,18 @@ function Wait-OpenPathLabAcceptanceSession {
         if (-not [string]::IsNullOrWhiteSpace($session)) { return $harness }
         Start-Sleep -Seconds 10
     }
-    throw "desktop-lab-session-timeout-$Phase-$Step"
+    # A session timeout used to leave no useful evidence: the per-attempt errors
+    # were swallowed and the guest state was discarded with the next rollback.
+    # Capture the console, one bounded diagnostic query and the last attempt
+    # error so the artifact explains the failure instead of only naming it.
+    $diagnostics = $null
+    try {
+        $diagnostics = Get-OpenPathLabAcceptanceTimeoutDiagnostics -Payload $Payload -Transport $Transport -Vmid $Vmid -Phase $Phase -Step $Step
+    }
+    catch {}
+    $lastAttemptDetail = if ($null -ne $lastAttemptError) { Format-OpenPathLabGuestErrorDetail -Text ([string]$lastAttemptError.Exception.Message) } else { 'no-attempt-error' }
+    $diagnosticsDetail = if ($null -ne $diagnostics) { " diagnostics=$($diagnostics.file) screen=$($diagnostics.screen)" } else { '' }
+    throw "desktop-lab-session-timeout-$Phase-$Step lastAttempt=$lastAttemptDetail$diagnosticsDetail"
 }
 
 function Invoke-OpenPathLabAcceptanceGuestSetup {
@@ -853,16 +951,21 @@ function Invoke-OpenPathLabAcceptanceCleanup {
     $scenario = Get-OpenPathLabScenario -Config $Config -ScenarioId ([string](Get-OpenPathLabField -InputObject $Payload -Name 'scenarioId'))
     $harnessGuestPath = [string](Get-OpenPathLabField -InputObject $state -Name 'harnessGuestPath')
 
-    $uninstall = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'cleanup' -Step 'uninstall' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 1800
-    $verify = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'cleanup' -Step 'verify-clean' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600
-    $clean = [bool](Get-OpenPathLabField -InputObject $verify.body -Name 'clean')
-    if (-not $clean) { throw 'desktop-lab-cleanup-not-clean' }
-
-    if ($RestoreBaseline) {
-        & $Transport.StopVm $Vmid | Out-Null
-        & $Transport.RollbackVm $Vmid $Snapshot | Out-Null
+    try {
+        $uninstall = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'cleanup' -Step 'uninstall' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 1800
+        $verify = Send-OpenPathLabAcceptanceStep -Payload $Payload -Transport $Transport -Vmid $Vmid -Paths $Paths -Phase 'cleanup' -Step 'verify-clean' -Settings $settings -HarnessGuestPath $harnessGuestPath -TimeoutSeconds 600
+        $clean = [bool](Get-OpenPathLabField -InputObject $verify.body -Name 'clean')
+        if (-not $clean) { throw 'desktop-lab-cleanup-not-clean' }
     }
-    try { & $Transport.RemoveGuestStaging $Vmid $Paths.GuestDir | Out-Null } catch {}
+    finally {
+        # A dead or timing-out guest must not leave its VM running while the
+        # next scenario waits for the lab lock.
+        if ($RestoreBaseline) {
+            try { & $Transport.StopVm $Vmid | Out-Null } catch {}
+            try { & $Transport.RollbackVm $Vmid $Snapshot | Out-Null } catch {}
+        }
+        try { & $Transport.RemoveGuestStaging $Vmid $Paths.GuestDir | Out-Null } catch {}
+    }
 
     $preProbes = Get-OpenPathLabField -InputObject $state -Name 'preRebootProbes'
     $postProbes = Get-OpenPathLabField -InputObject $state -Name 'postRebootProbes'
@@ -1021,6 +1124,20 @@ function ConvertFrom-OpenPathLabJsonText {
     catch { throw 'desktop-lab-guest-query-failed' }
 }
 
+function Format-OpenPathLabGuestErrorDetail {
+    param(
+        [AllowNull()][string]$Text,
+        [int]$MaxLength = 300
+    )
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+    $detail = [string]$Text
+    $detail = $detail -replace '/w/[^/\s?#]+/whitelist\.txt', '/w/[redacted]/whitelist.txt'
+    $detail = $detail -replace '(?i)(token=)[^&\s]+', '$1[redacted]'
+    $detail = ($detail -replace '[\r\n\t]+', ' ').Trim()
+    if ($detail.Length -gt $MaxLength) { $detail = $detail.Substring(0, $MaxLength) + '...' }
+    return $detail
+}
+
 function Invoke-OpenPathLabQgaScript {
     param(
         [Parameter(Mandatory = $true)][string]$SshCommand,
@@ -1040,9 +1157,14 @@ function Invoke-OpenPathLabQgaScript {
             $raw = Invoke-OpenPathLabSsh -SshCommand $SshCommand -SshHost $SshHost -ArgumentList $arguments
             $result = ConvertFrom-OpenPathLabJsonText -Text $raw
             $exitCode = Get-OpenPathLabField -InputObject $result -Name 'exitcode'
-            if ($null -ne $exitCode -and [int]$exitCode -ne 0) { throw 'desktop-lab-guest-query-failed' }
+            $guestError = Format-OpenPathLabGuestErrorDetail -Text ([string](Get-OpenPathLabField -InputObject $result -Name 'err-data'))
+            if ($null -ne $exitCode -and [int]$exitCode -ne 0) {
+                throw "desktop-lab-guest-query-failed exitcode=$([int]$exitCode) err=$guestError"
+            }
             $output = Get-OpenPathLabField -InputObject $result -Name 'out-data'
-            if ($null -eq $output) { throw 'desktop-lab-guest-query-failed' }
+            if ($null -eq $output) {
+                throw "desktop-lab-guest-query-failed exitcode=missing-output err=$guestError"
+            }
             return [string]$output
         }
         catch {
@@ -1074,6 +1196,36 @@ function Get-OpenPathLabGuestBootId {
     return $bootId
 }
 
+function Invoke-OpenPathProxmoxLabLockRelease {
+    <#
+    .SYNOPSIS
+        Releases the desktop-survival lab lock when the given workflow run owns it.
+    .DESCRIPTION
+        A cancelled workflow run can leave the remote lock directory behind and
+        block every later scenario until the TTL expires.  Probe each configured
+        scenario owner for this run and release only the lock entries that
+        belong to it; another run's lock is left untouched.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][string]$RunId,
+        [Parameter(Mandatory = $true)][int]$RunAttempt
+    )
+    $lockFile = [string](Get-OpenPathLabField -InputObject $Config -Name 'lockFile')
+    $scenarios = Get-OpenPathLabField -InputObject $Config -Name 'scenarios'
+    $released = @()
+    foreach ($property in @($scenarios.PSObject.Properties)) {
+        $owner = "$RunId/$RunAttempt/$([string]$property.Name)"
+        try {
+            if (& $Transport.ReleaseLock $lockFile $owner) { $released += [string]$property.Name }
+        }
+        catch {}
+    }
+    return @($released)
+}
+
 function New-OpenPathProxmoxLabTransport {
     <#
     .SYNOPSIS
@@ -1096,7 +1248,7 @@ function New-OpenPathProxmoxLabTransport {
     # helpers keep module session-state affinity, so closures can call them.
     $h = @{
         Ssh = { param($SshCommand, $SshHost, $ArgumentList, $InputText) Invoke-OpenPathLabSsh -SshCommand $SshCommand -SshHost $SshHost -ArgumentList $ArgumentList -InputText $InputText }
-        Qga = { param($SshCommand, $SshHost, $Vmid, $PowerShell, $TimeoutSeconds = 120) Invoke-OpenPathLabQgaScript -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid -PowerShell $PowerShell -TimeoutSeconds $TimeoutSeconds }
+        Qga = { param($SshCommand, $SshHost, $Vmid, $PowerShell, $TimeoutSeconds = 120, $Attempts = 4) Invoke-OpenPathLabQgaScript -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid -PowerShell $PowerShell -TimeoutSeconds $TimeoutSeconds -Attempts $Attempts }
         GuestOsInfo = { param($SshCommand, $SshHost, $Vmid) Get-OpenPathLabGuestOsInfo -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid }
         GuestBootId = { param($SshCommand, $SshHost, $Vmid) Get-OpenPathLabGuestBootId -SshCommand $SshCommand -SshHost $SshHost -Vmid $Vmid }
     }
@@ -1285,11 +1437,11 @@ test -s "$dump"
         catch { return $false }
     }.GetNewClosure()
     $transport.InvokeGuestPowerShell = {
-        param($Vmid, $Script, $TimeoutSeconds)
-        $text = & $h.Qga $lab.SshCommand $lab.SshHost -Vmid ([int]$Vmid) -PowerShell ([string]$Script) -TimeoutSeconds ([int]$TimeoutSeconds)
+        param($Vmid, $Script, $TimeoutSeconds, $Attempts = 4)
+        $text = & $h.Qga $lab.SshCommand $lab.SshHost -Vmid ([int]$Vmid) -PowerShell ([string]$Script) -TimeoutSeconds ([int]$TimeoutSeconds) -Attempts ([int]$Attempts)
         return [string]$text
     }.GetNewClosure()
     return $transport
 }
 
-Export-ModuleMember -Function Read-OpenPathProxmoxLabConfig, Invoke-OpenPathProxmoxControllerPhase, New-OpenPathProxmoxLabTransport, Test-OpenPathLabBlockedErrorCode
+Export-ModuleMember -Function Read-OpenPathProxmoxLabConfig, Invoke-OpenPathProxmoxControllerPhase, New-OpenPathProxmoxLabTransport, Test-OpenPathLabBlockedErrorCode, Invoke-OpenPathProxmoxLabLockRelease

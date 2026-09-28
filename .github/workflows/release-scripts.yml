@@ -462,6 +462,13 @@ jobs:
           & (Resolve-Path 'tests/e2e/ci/aggregate-windows-desktop-survival.ps1') -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}') -EvidenceRoot $root -SourceCommitSha '${{ github.sha }}' -TemplatePath $template -PersonalizedExePath $personalized
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Release lab lock on cancellation
+        if: cancelled()
+        shell: pwsh
+        run: |
+          & (Resolve-Path 'tests/e2e/ci/controllers/proxmox-disposable-windows-release-lock.ps1') `
+            -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}')
+
       - name: Validate desktop-survival evidence for exact candidate
         shell: pwsh
         run: |

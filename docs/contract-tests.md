@@ -139,6 +139,24 @@ Guards `windows/tests/Windows.Common.Mocked.Tests.ps1`, `windows/tests/Windows.T
 
 ---
 
+### tests/repo-config/windows-runtime-safety-contracts.test.mjs
+
+Guards the Windows AppControl runtime/transaction sources, the web-generated installer payload, the desktop-survival release workflow, and the disposable-lab lock release path.
+
+| Source files read                                                      | Needle kinds                                                                             | Before renaming or editing                                                       |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `windows/lib/AppControl.WindowsRuntime.psm1`                           | Function names, transaction state names, journal snapshot file names                     | Renaming any of them breaks the contract tests and the persisted journal format. |
+| `windows/lib/AppControl.psm1`                                          | Exact package identity strings, absence of partial publisher wildcards                   | Same as above.                                                                   |
+| `api/src/services/windows-offline-installer-artifact.service.ts`       | AppControl profile value, absence of the removed catalog field                           | Same as above.                                                                   |
+| `windows/lib/install/Installer.Offline.ps1`                            | Profile/config field names                                                               | Same as above.                                                                   |
+| `.github/workflows/release-scripts.yml`                                | Desktop-survival job/evidence step names, cancellation lock-release step and script path | Renaming the step or script breaks the contract.                                 |
+| `tests/e2e/ci/run-windows-desktop-survival.ps1`                        | Controller-only markers, forbidden in-guest mutation commands                            | Same as above.                                                                   |
+| `tests/e2e/ci/run-windows-offline-installer-exe.ps1`                   | `PreserveInstallation` parameter name                                                    | Same as above.                                                                   |
+| `tests/e2e/ci/controllers/ProxmoxWindowsLab.psm1`                      | `Invoke-OpenPathProxmoxLabLockRelease`, owner-scoped `ReleaseLock` call                  | Renaming the function or owner format breaks the cancellation release contract.  |
+| `tests/e2e/ci/controllers/proxmox-disposable-windows-release-lock.ps1` | Release function call                                                                    | Same as above.                                                                   |
+
+---
+
 ### tests/repo-config/student-policy-contracts.test.mjs
 
 Guards a large number of runner scripts, Selenium sources, workflow files, and documentation for student-policy end-to-end flows.

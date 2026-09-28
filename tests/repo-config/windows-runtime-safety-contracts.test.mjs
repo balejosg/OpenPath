@@ -75,6 +75,18 @@ test('desktop harness is controller-only and existing installer lanes can preser
   assert.match(httpLane, /PreserveInstallation/);
 });
 
+test('cancelled desktop-survival runs release only their own lab lock', () => {
+  const workflow = read('.github/workflows/release-scripts.yml');
+  assert.match(workflow, /Release lab lock on cancellation/);
+  assert.match(workflow, /if: cancelled\(\)/);
+  assert.match(workflow, /proxmox-disposable-windows-release-lock\.ps1/);
+  const release = read('tests/e2e/ci/controllers/proxmox-disposable-windows-release-lock.ps1');
+  assert.match(release, /Invoke-OpenPathProxmoxLabLockRelease/);
+  const module = read('tests/e2e/ci/controllers/ProxmoxWindowsLab.psm1');
+  assert.match(module, /function Invoke-OpenPathProxmoxLabLockRelease/);
+  assert.match(module, /ReleaseLock \$lockFile \$owner/);
+});
+
 test('web-generated installer payload selects the managed-browser compatibility profile', () => {
   const service = read('api/src/services/windows-offline-installer-artifact.service.ts');
   assert.match(service, /appControlProfile:\s*['"]ManagedBrowserCompatibility['"]/);

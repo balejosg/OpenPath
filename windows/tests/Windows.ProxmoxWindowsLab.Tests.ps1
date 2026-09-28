@@ -370,6 +370,97 @@ function Write-OpenPathLabTestConfigFile {
         $script:LabState.Calls.Contains('ReleaseLock') | Should -BeTrue
     }
 
+    It 'releases only lock owners that belong to the current run' {
+        $config = [pscustomobject]@{
+            lockFile  = '/run/openpath-desktop-survival.lock'
+            scenarios = [pscustomobject]@{
+                'win11-pro-existing'    = [pscustomobject]@{ vmid = 110 }
+                'win11-edu-profileless' = [pscustomobject]@{ vmid = 111 }
+            }
+        }
+        $script:ReleasedLockOwners = [System.Collections.Generic.List[string]]::new()
+        $transport = @{
+            ReleaseLock = {
+                param($LockFile, $Owner)
+                $null = $LockFile
+                $script:ReleasedLockOwners.Add([string]$Owner)
+                return ([string]$Owner -eq '4242/2/win11-pro-existing')
+            }
+        }
+        $released = @(Invoke-OpenPathProxmoxLabLockRelease -Config $config -Transport $transport -RunId '4242' -RunAttempt 2)
+        @($script:ReleasedLockOwners) | Should -Contain '4242/2/win11-pro-existing'
+        @($script:ReleasedLockOwners) | Should -Contain '4242/2/win11-edu-profileless'
+        $released | Should -Be @('win11-pro-existing')
+    }
+
+    It 'captures console and guest diagnostics when a session never arrives' {
+        $artifacts = New-OpenPathLabTestArtifacts -Root $TestDrive
+        $payload = New-OpenPathLabTestPayload -ArtifactsRoot $TestDrive -TemplatePath $artifacts.Template -PersonalizedExePath $artifacts.Personalized -Phase 'observe'
+        $script:LabState.HarnessResponses = @{
+            'observe/admin-verify' = @{ status = 'passed'; failures = @(); body = @{ session = '' } }
+        }
+        $transport = New-OpenPathLabTestTransport
+        $paths = [pscustomobject]@{ GuestDir = 'C:\OpenPath\lab' }
+        $settings = [pscustomobject]@{ StudentUserName = 'alumno'; AdminUserName = 'opadmin'; GuestSecret = 'LabTest!Secret1' }
+        $result = @{}
+        InModuleScope ProxmoxWindowsLab -Parameters @{ Payload = $payload; Transport = $transport; Paths = $paths; Settings = $settings; Result = $result } {
+            param($Payload, $Transport, $Paths, $Settings, $Result)
+            try {
+                Wait-OpenPathLabAcceptanceSession -Payload $Payload -Transport $Transport -Vmid 107 -Paths $Paths -Settings $Settings -HarnessGuestPath 'C:\OpenPath\lab\guest-harness.ps1' -Phase 'observe' -Step 'admin-verify' -TimeoutSeconds 1 | Out-Null
+            }
+            catch { $Result.Message = [string]$_.Exception.Message }
+        }
+        $result.Message | Should -Match 'desktop-lab-session-timeout-observe-admin-verify'
+        $result.Message | Should -Match 'lastAttempt='
+        $result.Message | Should -Match 'diagnostics=session-timeout-observe-admin-verify\.diagnostics\.json'
+        (Test-Path -LiteralPath (Join-Path $TestDrive 'session-timeout-observe-admin-verify.diagnostics.json') -PathType Leaf) | Should -BeTrue
+        $script:LabState.Calls.Contains('CaptureScreendump') | Should -BeTrue
+    }
+
+    It 'stops and rolls back the VM when a cleanup guest step fails' {
+        $artifacts = New-OpenPathLabTestArtifacts -Root $TestDrive
+        $harnessSource = (Resolve-Path (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\desktop-survival\Invoke-OpenPathDesktopSurvivalGuest.ps1')).Path
+        $harnessHash = (Get-FileHash -LiteralPath $harnessSource -Algorithm SHA256).Hash.ToLowerInvariant()
+        $script:LabState.GuestHashesByLeaf = @{
+            'template.exe'                            = $artifacts.TemplateSha
+            'personalized.exe'                        = $artifacts.PersonalizedSha
+            'Invoke-OpenPathDesktopSurvivalGuest.ps1' = $harnessHash
+        }
+        $script:LabState.HarnessResponses = @{
+            'prepare/install' = @{ status = 'passed'; failures = @(); body = @{ state = @{
+                policyBeforeSha256      = ('c' * 64)
+                policyAfterSha256       = ('d' * 64)
+                initialProfileExisted   = $false
+                catalogApplicationCount = 0
+                installSummary          = @{ exitCode = 0; seconds = 12.5 }
+                config                  = @{ appControlProfile = 'ManagedBrowserCompatibility'; appControlCommitState = 'committed'; installState = 'complete' }
+                groupMembers            = @('OP-LAB\alumno')
+                tasks                   = @('OpenPath-Watchdog')
+                uninstaller             = $true
+            } } }
+        }
+        $transport = New-OpenPathLabTestTransport
+        $config = New-OpenPathLabAcceptanceConfig
+        Invoke-OpenPathProxmoxControllerPhase -Payload (New-OpenPathLabTestPayload -ArtifactsRoot $TestDrive -TemplatePath $artifacts.Template -PersonalizedExePath $artifacts.Personalized -Phase 'prepare') -Config $config -Transport $transport | Out-Null
+        $script:LabState.Calls.Clear()
+        $cleanupPayload = New-OpenPathLabTestPayload -ArtifactsRoot $TestDrive -TemplatePath $artifacts.Template -PersonalizedExePath $artifacts.Personalized -Phase 'cleanup'
+        { Invoke-OpenPathProxmoxControllerPhase -Payload $cleanupPayload -Config $config -Transport $transport } |
+            Should -Throw '*cleanup/uninstall*'
+        $calls = @($script:LabState.Calls)
+        ($calls -join ',') | Should -Match 'StopVm:107'
+        ($calls -join ',') | Should -Match 'RollbackVm:107:base-snap'
+    }
+
+    It 'bounds and redacts guest error details' {
+        InModuleScope ProxmoxWindowsLab {
+            $detail = Format-OpenPathLabGuestErrorDetail -Text ("line1`r`nline2 token=super-secret /w/machine-1/whitelist.txt " + ('x' * 400))
+            $detail | Should -Not -Match 'super-secret'
+            $detail | Should -Match 'token=\[redacted\]'
+            $detail | Should -Match '/w/\[redacted\]/whitelist.txt'
+            $detail.Length | Should -BeLessOrEqual 303
+        }
+    }
+
     It 'acceptance mode runs the matrix step sequence and emits release-eligible evidence' {
         $artifacts = New-OpenPathLabTestArtifacts -Root $TestDrive
         $harnessSource = (Resolve-Path (Join-Path $PSScriptRoot '..\..\tests\e2e\ci\desktop-survival\Invoke-OpenPathDesktopSurvivalGuest.ps1')).Path

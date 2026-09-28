@@ -1144,6 +1144,33 @@ Describe "AppControl Module" {
             $windirExceptionPaths | Should -Contain '%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe'
         }
 
+        It "keeps the protected Windows runtime base for service SIDs in compatibility mode" {
+            # DWM (DWM-1) and FONTDRVHOST (UMFD-*) run as service SIDs that are
+            # neither administrators nor SYSTEM. Without the S-1-1-0 runtime
+            # base every boot of an installed machine floods the AppLocker
+            # channel with 8004 denials, the logon UI never comes up, and the
+            # denied-process retry storm exhausts the guest.
+            InModuleScope AppControl {
+                $spec = New-OpenPathNonAdminAppLockerPolicySpec -OpenPathRoot 'C:\OpenPath'
+                [xml]$policy = New-OpenPathAppLockerPolicyXml -Spec $spec
+                $exeCollection = @($policy.AppLockerPolicy.RuleCollection | Where-Object { $_.GetAttribute('Type') -eq 'Exe' })[0]
+
+                $runtimeBaseRules = @($exeCollection.FilePathRule | Where-Object {
+                        $_.GetAttribute('Action') -eq 'Allow' -and
+                        $_.GetAttribute('UserOrGroupSid') -eq 'S-1-1-0' -and
+                        $_.Conditions.FilePathCondition.GetAttribute('Path') -eq '%WINDIR%\*'
+                    })
+                $runtimeBaseRules.Count | Should -Be 1
+                $runtimeBaseExceptions = @($runtimeBaseRules[0].Exceptions.FilePathCondition | ForEach-Object { $_.GetAttribute('Path') })
+                $runtimeBaseExceptions | Should -Contain '%WINDIR%\Temp\*'
+
+                Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Mode 'Enforced' | Should -BeTrue
+
+                [void]$exeCollection.RemoveChild($runtimeBaseRules[0])
+                Test-OpenPathAppLockerBoundaryPolicy -PolicyXml $policy -Mode 'Enforced' | Should -BeFalse
+            }
+        }
+
         It "W-2: denies the parallel-network-stack Microsoft Appx packages while preserving the signed allow" {
             # The blanket O=MICROSOFT CORPORATION* / ProductName='*' allow lets WSL, Windows
             # Terminal, and the OpenSSH/Telnet Appx run -- each a parallel unfiltered network
