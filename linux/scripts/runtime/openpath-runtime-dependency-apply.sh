@@ -30,6 +30,12 @@ run_runtime_dependency_apply_locked() {
         process_runtime_dependency_queue || log_warn "Runtime dependency queue processing failed"
     fi
 
+    # dnsmasq's upstream must stay identical to the firewall-allowed persisted
+    # upstream (openpath-update.sh resolves it the same way before regenerating).
+    # Without this the regeneration below falls back to 8.8.8.8, which the OUTPUT
+    # DNS guard then drops, killing every upstream query.
+    # shellcheck disable=SC2034  # PRIMARY_DNS is consumed by sourced helper modules.
+    PRIMARY_DNS=$(detect_primary_dns)
     generate_dnsmasq_config
     if has_config_changed; then
         if restart_dnsmasq; then

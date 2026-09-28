@@ -328,6 +328,54 @@ EOF
     grep -q "newhash" "$DNSMASQ_CONF_HASH"
 }
 
+@test "runtime dependency apply regenerates dnsmasq with the persisted upstream, not the fallback" {
+    local install_dir="$TEST_TMP_DIR/install-runtime-apply-upstream"
+    local script_path="$PROJECT_DIR/linux/scripts/runtime/openpath-runtime-dependency-apply.sh"
+
+    mkdir -p "$install_dir/lib" "$install_dir/libexec" "$TEST_TMP_DIR/bin-upstream"
+    cp "$PROJECT_DIR/linux/lib/"*.sh "$install_dir/lib/"
+    cp "$PROJECT_DIR/linux/libexec/"*.py "$install_dir/libexec/"
+    cp "$PROJECT_DIR/runtime/browser-policy-spec.json" "$install_dir/libexec/"
+    printf '4.1.0\n' > "$install_dir/VERSION"
+    : > "$install_dir/lib/defaults.conf"
+
+    cat >> "$install_dir/lib/dns.sh" <<'EOF'
+parse_whitelist_sections() { :; }
+process_runtime_dependency_queue() { :; }
+detect_primary_dns() { printf '203.0.113.53\n'; }
+generate_dnsmasq_config() { printf '%s\n' "${PRIMARY_DNS:-unset}" > "$UPSTREAM_LOG"; printf 'dns-config\n' > "$DNSMASQ_CONF"; }
+restart_dnsmasq() { return 0; }
+flush_dns_cache() { :; }
+with_openpath_lock() { "$@"; }
+EOF
+
+    cat > "$TEST_TMP_DIR/bin-upstream/sha256sum" <<'EOF'
+#!/bin/bash
+printf 'newhash  %s\n' "$1"
+EOF
+    chmod +x "$TEST_TMP_DIR/bin-upstream/sha256sum"
+
+    export INSTALL_DIR="$install_dir"
+    export WHITELIST_FILE="$TEST_TMP_DIR/whitelist-upstream.txt"
+    export DNSMASQ_CONF="$TEST_TMP_DIR/openpath-upstream.conf"
+    export DNSMASQ_CONF_HASH="$TEST_TMP_DIR/openpath-upstream.conf.hash"
+    export UPSTREAM_LOG="$TEST_TMP_DIR/apply-upstream.log"
+    export PATH="$TEST_TMP_DIR/bin-upstream:$PATH"
+    cat > "$WHITELIST_FILE" <<'EOF'
+allowed.example
+EOF
+
+    printf 'newhash\n' > "$DNSMASQ_CONF_HASH"
+    printf 'dns-config\n' > "$DNSMASQ_CONF"
+    run "$script_path"
+    [ "$status" -eq 0 ]
+
+    # The firewall only allows the persisted upstream on :53; regenerating with
+    # the 8.8.8.8 fallback silently drops every dnsmasq upstream query.
+    run cat "$UPSTREAM_LOG"
+    [ "$output" = "203.0.113.53" ]
+}
+
 @test "runtime dependency apply marks the overlay applied only after the reload succeeds" {
     local install_dir="$TEST_TMP_DIR/install-runtime-apply-mark"
     local script_path="$PROJECT_DIR/linux/scripts/runtime/openpath-runtime-dependency-apply.sh"
