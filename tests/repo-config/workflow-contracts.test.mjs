@@ -1037,6 +1037,7 @@ test('required Windows CI runs Pester in an untracked child host without success
   );
 
   const windowsPesterRunner = readText(windowsPesterRunnerPath);
+  const windowsPesterShardPlan = readText('tests/e2e/ci/WindowsPesterShardPlan.psm1');
   const windowsRunnerReset = readText(windowsRunnerResetPath);
 
   assert.ok(
@@ -1342,10 +1343,15 @@ test('required Windows CI runs Pester in an untracked child host without success
     'the isolated Pester runner should exclude local-only Windows aggregator suites from the CI Pester path set'
   );
   assert.ok(
-    windowsPesterRunner.includes("$heavySuiteName = 'Windows.AppControl.Tests.ps1'") &&
-      windowsPesterRunner.includes('$remainingSuitePaths') &&
-      windowsPesterRunner.includes('$ShardCount - 1'),
-    'the isolated Pester runner should reserve the heavy AppControl suite and balance the remaining leaf suites separately'
+    windowsPesterShardPlan.includes("$heavySuiteName = 'Windows.AppControl.Tests.ps1'") &&
+      windowsPesterShardPlan.includes('$remainingSuitePaths') &&
+      windowsPesterShardPlan.includes('$ShardCount - 1'),
+    'the Windows Pester shard plan should reserve the heavy AppControl suite and balance the remaining leaf suites separately'
+  );
+  assert.ok(
+    windowsPesterRunner.includes('Import-Module (Join-Path $PSScriptRoot') &&
+      windowsPesterRunner.includes('Get-WindowsPesterShardPlan'),
+    'the isolated Pester runner should load the testable shard plan module'
   );
   assert.ok(
     windowsPesterRunner.includes('$config.Run.Path = $suitePaths'),
