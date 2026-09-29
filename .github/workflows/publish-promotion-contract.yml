@@ -18,14 +18,16 @@ permissions:
   contents: write
   actions: read
 
-concurrency:
-  group: openpath-promotion-contract-v2
-  cancel-in-progress: false
-
 jobs:
   publish:
     name: Verify and publish exact-SHA promotion contract
     runs-on: ubuntu-latest
+    # Job-level concurrency applies in both invocation modes. A workflow-level
+    # block is not honored when this file is called as a reusable workflow, so
+    # direct dispatches and release-train calls would otherwise not serialize.
+    concurrency:
+      group: openpath-promotion-contract-v2
+      cancel-in-progress: false
     permissions:
       contents: write
       actions: read

@@ -348,19 +348,22 @@ EOF
 }
 
 @test "prerelease linux deb publish workflow uses cached signed Firefox artifacts when available" {
-    run grep -nF 'uses: ./.github/actions/prepare-firefox-release-artifacts' "$PROJECT_DIR/.github/workflows/prerelease-deb.yml"
+    run grep -nF 'uses: ./.github/actions/build-prerelease-deb' "$PROJECT_DIR/.github/workflows/prerelease-deb.yml"
     [ "$status" -eq 0 ]
 
-    run grep -nF "sign-on-cache-miss: 'false'" "$PROJECT_DIR/.github/workflows/prerelease-deb.yml"
+    run grep -nF 'uses: ./.github/actions/prepare-firefox-release-artifacts' "$PROJECT_DIR/.github/actions/build-prerelease-deb/action.yml"
     [ "$status" -eq 0 ]
 
-    run grep -nF "require-signed-artifacts: 'false'" "$PROJECT_DIR/.github/workflows/prerelease-deb.yml"
+    run grep -nF "sign-on-cache-miss: 'false'" "$PROJECT_DIR/.github/actions/build-prerelease-deb/action.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -nF "require-signed-artifacts: 'false'" "$PROJECT_DIR/.github/actions/build-prerelease-deb/action.yml"
     [ "$status" -eq 0 ]
 
     run grep -nF "OPENPATH_REQUIRE_FIREFOX_RELEASE_ARTIFACTS: '1'" "$PROJECT_DIR/.github/workflows/prerelease-deb.yml"
     [ "$status" -ne 0 ]
 
-    run grep -nF 'Firefox Release artifact source: ${{ steps.firefox-release.outputs.artifact-source }}' "$PROJECT_DIR/.github/workflows/prerelease-deb.yml"
+    run grep -nF 'Firefox Release artifact source: ${{ steps.firefox-release.outputs.artifact-source }}' "$PROJECT_DIR/.github/actions/build-prerelease-deb/action.yml"
     [ "$status" -eq 0 ]
 }
 

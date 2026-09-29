@@ -59,7 +59,7 @@ jobs:
     needs: [ci-success, release-quality-gate]
     if: ${{ needs.ci-success.outputs.ci_success_conclusion == 'success' }}
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      version: ${{ steps.build.outputs.version }}
 
     steps:
       - name: Checkout repository
@@ -67,57 +67,12 @@ jobs:
         with:
           ref: ${{ needs.ci-success.outputs.prerelease_sha }}
 
-      - name: Get version from run number
-        id: version
-        run: |
-          # APT will not downgrade a package that is already published in the
-          # suite, so prerelease versions must be monotonically increasing even
-          # after manual timestamped publishes.
-          VERSION="0.0.$(date -u +%Y%m%d%H%M%S)"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "package_name=openpath-dnsmasq_${VERSION}-1_amd64.deb" >> $GITHUB_OUTPUT
-          echo "Building prerelease version: $VERSION"
-
-      - name: Setup Node.js
-        uses: ./.github/actions/setup-node
-
-      - name: Build Firefox Extension
-        uses: ./.github/actions/build-workspaces
-        with:
-          build-shared: 'false'
-          build-api: 'false'
-          build-extension: 'true'
-
-      - name: Prepare Firefox Release Artifacts
-        id: firefox-release
-        uses: ./.github/actions/prepare-firefox-release-artifacts
+      - name: Build prerelease package
+        id: build
+        uses: ./.github/actions/build-prerelease-deb
         with:
           web-ext-api-key: ${{ secrets.WEB_EXT_API_KEY }}
           web-ext-api-secret: ${{ secrets.WEB_EXT_API_SECRET }}
-          sign-on-cache-miss: 'false'
-          require-signed-artifacts: 'false'
-
-      - name: Summarize Firefox Release artifact source
-        run: |
-          {
-            echo "### Firefox Release artifacts"
-            echo "- Payload hash: ${{ steps.firefox-release.outputs.payload-hash }}"
-            echo "- Cache hit: ${{ steps.firefox-release.outputs.cache-hit }}"
-            echo "- Firefox Release artifact source: ${{ steps.firefox-release.outputs.artifact-source }}"
-            echo "- Signed artifacts present: ${{ steps.firefox-release.outputs.signed-artifacts-present }}"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Build Debian package
-        run: |
-          chmod +x linux/scripts/build/build-deb.sh
-          ./linux/scripts/build/build-deb.sh ${{ steps.version.outputs.version }} 1
-
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: prerelease-deb-package
-          path: build/*.deb
-          retention-days: 14
 
   release-quality-gate:
     name: Release Quality Gate

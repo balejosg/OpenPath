@@ -281,6 +281,7 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
   const prereleaseWorkflow = readText('.github/workflows/prerelease-deb.yml');
   const firefoxAssetsWorkflow = readText('.github/workflows/firefox-release-assets.yml');
   const prepareAction = readText('.github/actions/prepare-firefox-release-artifacts/action.yml');
+  const buildPrereleaseDebAction = readText('.github/actions/build-prerelease-deb/action.yml');
 
   assert.ok(
     prereleaseWorkflow.includes('concurrency:'),
@@ -304,15 +305,23 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
       `${name} should not reuse the same AMO version across reruns`
     );
     assert.ok(
-      workflow.includes('uses: ./.github/actions/prepare-firefox-release-artifacts'),
-      `${name} should prepare Firefox release artifacts through the cache-aware action`
-    );
-    assert.ok(
       !workflow.includes('npm run sign:firefox-release'),
       `${name} should not call AMO signing directly from the Debian workflow`
     );
   }
 
+  assert.ok(
+    buildDebWorkflow.includes('uses: ./.github/actions/prepare-firefox-release-artifacts'),
+    'build-deb.yml should prepare Firefox release artifacts through the cache-aware action'
+  );
+  assert.ok(
+    prereleaseWorkflow.includes('uses: ./.github/actions/build-prerelease-deb'),
+    'prerelease-deb.yml should build the prerelease package through the shared composite action'
+  );
+  assert.ok(
+    buildPrereleaseDebAction.includes('uses: ./.github/actions/prepare-firefox-release-artifacts'),
+    'build-prerelease-deb should prepare Firefox release artifacts through the cache-aware action'
+  );
   assert.ok(
     buildDebWorkflow.includes("OPENPATH_REQUIRE_FIREFOX_RELEASE_ARTIFACTS: '1'"),
     'stable Debian publishing should still require signed Firefox release artifacts in the Debian package'
@@ -322,11 +331,11 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
     'prerelease publishing should not block unstable Linux packages on AMO approval'
   );
   assert.ok(
-    prereleaseWorkflow.includes("sign-on-cache-miss: 'false'"),
+    buildPrereleaseDebAction.includes("sign-on-cache-miss: 'false'"),
     'prerelease publishing should reuse cached signed Firefox assets but avoid new AMO signing waits'
   );
   assert.ok(
-    prereleaseWorkflow.includes("require-signed-artifacts: 'false'"),
+    buildPrereleaseDebAction.includes("require-signed-artifacts: 'false'"),
     'prerelease publishing should allow fallback browser assets while runtime health rejects disabled Firefox extensions'
   );
 
@@ -453,7 +462,7 @@ test('Firefox release signing workflows are resilient to AMO throttling and reru
     'cache-aware Firefox release action should keep the retry buffer as the stable default'
   );
   assert.ok(
-    prereleaseWorkflow.includes('steps.firefox-release.outputs.artifact-source'),
+    buildPrereleaseDebAction.includes('steps.firefox-release.outputs.artifact-source'),
     'prerelease publishing should summarize whether signed Firefox assets were cached or skipped'
   );
   assert.ok(
@@ -2123,12 +2132,75 @@ test('release publication jobs are manual-only while push validation remains ena
   );
   for (const [jobName, jobBlock] of [
     ['release-scripts release', scriptsReleaseJob],
+    [
+      'release-scripts APT publish',
+      extractWorkflowJobBlock(scriptsReleaseWorkflow, 'publish-prerelease'),
+    ],
+    [
+      'release-scripts promotion contract',
+      extractWorkflowJobBlock(scriptsReleaseWorkflow, 'promotion-contract'),
+    ],
+    [
+      'release-scripts WEDU dispatch',
+      extractWorkflowJobBlock(scriptsReleaseWorkflow, 'dispatch-wedu-lab'),
+    ],
     ['prerelease deb publish', prereleasePublishJob],
     ['Firefox extension release', extensionReleaseJob],
   ]) {
     assert.ok(
       manualOnlyCondition.test(jobBlock),
       `${jobName} should publish only from an explicit workflow_dispatch run`
+    );
+  }
+});
+
+test('release train publishes APT, v2 and WEDU only after the canonical Windows proof', () => {
+  const releaseWorkflow = readText('.github/workflows/release-scripts.yml');
+  const prereleaseWorkflow = readText('.github/workflows/prerelease-deb.yml');
+  const promotionStateJob = extractWorkflowJobBlock(releaseWorkflow, 'promotion-state');
+  const buildDebJob = extractWorkflowJobBlock(releaseWorkflow, 'build-prerelease-deb');
+  const publishPrereleaseJob = extractWorkflowJobBlock(releaseWorkflow, 'publish-prerelease');
+  const promotionContractJob = extractWorkflowJobBlock(releaseWorkflow, 'promotion-contract');
+  const weduDispatchJob = extractWorkflowJobBlock(releaseWorkflow, 'dispatch-wedu-lab');
+
+  assert.ok(
+    releaseWorkflow.includes('group: release-scripts-${{ github.sha }}') &&
+      releaseWorkflow.includes(
+        "cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}"
+      ),
+    'a dispatch should cancel the in-flight push run of the same SHA while push runs never cancel anything'
+  );
+  assert.ok(
+    promotionStateJob.includes('needs: [release, release-scripts-success]') &&
+      promotionStateJob.includes("needs.release-scripts-success.result == 'success'"),
+    'the promotion state guard must run only after the canonical release summary job'
+  );
+  assert.ok(
+    buildDebJob.includes('needs: promotion-state') &&
+      buildDebJob.includes("needs.promotion-state.outputs.v2_exists == 'false'"),
+    'the release train should skip APT republication when the exact-SHA v2 contract already exists'
+  );
+  assert.ok(
+    publishPrereleaseJob.includes('name: Publish Prerelease to APT Repository') &&
+      publishPrereleaseJob.includes('uses: ./.github/workflows/reusable-deb-publish.yml'),
+    'the in-run APT publish must keep the canonical check-run name and reusable publisher'
+  );
+  assert.ok(
+    promotionContractJob.includes('needs: [publish-prerelease]') &&
+      promotionContractJob.includes('uses: ./.github/workflows/publish-promotion-contract.yml') &&
+      promotionContractJob.includes('openpath_sha: ${{ github.sha }}'),
+    'the v2 contract should follow the in-run APT publish for the same exact SHA'
+  );
+  assert.ok(
+    weduDispatchJob.includes('--ref "$TAG"') &&
+      weduDispatchJob.includes('wedu-captive-portal-lab.yml') &&
+      weduDispatchJob.includes("needs.promotion-state.outputs.wedu_green == 'false'"),
+    'WEDU should be dispatched on the immutable release tag only when no green WEDU evidence exists'
+  );
+  for (const workflow of [releaseWorkflow, prereleaseWorkflow]) {
+    assert.ok(
+      workflow.includes('uses: ./.github/actions/build-prerelease-deb'),
+      'release and prerelease lanes should share the same prerelease Debian composite action'
     );
   }
 });

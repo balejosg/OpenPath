@@ -311,10 +311,13 @@ EOF
 }
 
 @test "prerelease Debian workflow uses monotonic timestamp package versions" {
-    run grep -n 'date -u +%Y%m%d%H%M%S' "$PROJECT_DIR/.github/workflows/prerelease-deb.yml"
+    run grep -n 'uses: ./.github/actions/build-prerelease-deb' "$PROJECT_DIR/.github/workflows/prerelease-deb.yml"
     [ "$status" -eq 0 ]
 
-    run grep -n 'APT will not downgrade' "$PROJECT_DIR/.github/workflows/prerelease-deb.yml"
+    run grep -n 'date -u +%Y%m%d%H%M%S' "$PROJECT_DIR/.github/actions/build-prerelease-deb/action.yml"
+    [ "$status" -eq 0 ]
+
+    run grep -n 'APT will not downgrade' "$PROJECT_DIR/.github/actions/build-prerelease-deb/action.yml"
     [ "$status" -eq 0 ]
 }
 

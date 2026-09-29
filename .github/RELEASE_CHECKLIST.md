@@ -27,6 +27,20 @@ Use this checklist before releasing changes to student machines.
 - [ ] Monitor `/api/health-reports` for FAIL_OPEN or CRITICAL statuses
 - [ ] Check for stale hosts (not reporting for >10 minutes)
 
+## Publishing a Release
+
+- [ ] Dispatch `Release Installation Scripts` on `main` for the exact HEAD SHA
+      that must be published. The push-triggered run of that same SHA is
+      cancelled by design (same-SHA concurrency group), and the dispatch run
+      carries the release train: Windows qualification -> tag and GitHub
+      prerelease -> `Release Scripts Success` -> promotion state -> prerelease
+      `.deb` -> APT unstable plus v1 contract -> v2 promotion contract -> WEDU
+      lab dispatch.
+- [ ] Do not dispatch the same SHA again while its dispatch run is in flight.
+- [ ] Re-dispatching an already promoted SHA publishes nothing new: an
+      existing exact-SHA v2 contract skips the APT/v2 republication, and a
+      green `WEDU captive portal lab` check skips the WEDU dispatch.
+
 ## Delivery State
 
 For any user-visible fix shipped in a release artifact, report exactly which

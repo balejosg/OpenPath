@@ -239,6 +239,47 @@ asset is downloaded and compared byte-for-byte with the newly built local
 asset before the release action is skipped. Missing, inaccessible, or
 incompatible assets fail closed.
 
+### Release train (single dispatch)
+
+`release-scripts.yml` runs the promotion chain inside the same `Release
+Installation Scripts` dispatch for the exact dispatched SHA:
+
+```text
+same-run Windows qualification
+  -> release (immutable scripts-v<version>-<short-sha> tag + GitHub prerelease)
+  -> Release Scripts Success
+  -> Resolve Promotion State (idempotency guard)
+  -> Build Prerelease Package
+  -> Publish Prerelease to APT Repository (APT unstable + v1 contract)
+  -> Publish Promotion Contract v2
+  -> Dispatch WEDU Captive Portal Lab
+```
+
+- `publish-promotion-contract.yml` remains available standalone
+  (`workflow_dispatch`) and is also invoked by `release-scripts.yml` through
+  `workflow_call` with `openpath_sha: ${{ github.sha }}`. Its concurrency
+  group is declared at the job level so it serializes in both invocation
+  modes.
+- A workflow-level `concurrency` group keyed on the SHA lets a dispatch cancel
+  the in-flight push run of the same SHA; a push run never cancels anything.
+  Do not dispatch the same SHA again while its dispatch run is in flight.
+- `Resolve Promotion State` inspects the exact-SHA v2 contract and WEDU
+  evidence. An already published v2 contract skips the APT/v2 republication,
+  so re-dispatching a promoted SHA publishes nothing new; a completed green
+  `WEDU captive portal lab` check-run skips the WEDU dispatch.
+- The APT publish runs inside the dispatch run because the `github-pages`
+  environment only allows the `main` and `gh-pages` refs to deploy, and the
+  APT publisher deploys Pages. The dispatch ref is `main` and its
+  `github.sha` is the exact SHA, so the v1 contract is keyed to that SHA.
+- The WEDU lab is dispatched on the immutable `scripts-v<version>-<short-sha>`
+  tag, so its check-run lands on the exact SHA without needing Pages access.
+- `scripts/require-release-quality-gate.mjs` prefers the current run
+  (`GITHUB_RUN_ID`) and accepts a completed required job inside that
+  in-progress run. This is what lets the in-run v2 publish observe
+  `Release Scripts Success` before the whole run finishes. Runs other than the
+  current one still require the whole run to complete before their summary
+  jobs are trusted.
+
 ## Local verification
 
 Focused coverage is registered in the repository contract suite:

@@ -26,6 +26,10 @@ permissions:
   actions: read
   contents: write
 
+concurrency:
+  group: release-scripts-${{ github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+
 jobs:
   # ============================================
   # Windows offline installer template (pinned NSIS)
@@ -505,6 +509,8 @@ jobs:
         windows-desktop-survival,
       ]
     if: ${{ github.event_name == 'workflow_dispatch' && needs.windows-offline-template.result == 'success' && needs.policy-converter-contrast.result == 'success' && needs.policy-converter-contrast-bundle.result == 'success' && needs.windows-personalized-http-e2e.result == 'success' && needs.windows-desktop-survival.result == 'success' }}
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
 
     steps:
       - name: Checkout code
@@ -865,6 +871,115 @@ jobs:
           echo "- windows-v${{ steps.vars.outputs.version }}.zip.sha256" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🔗 [View Release](https://github.com/${{ github.repository }}/releases/tag/${{ steps.vars.outputs.tag }})" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================
+  # Single-dispatch release train for the exact dispatched SHA.
+  # Execution order: release -> Release Scripts Success -> promotion state
+  # -> build .deb -> APT unstable + v1 contract -> v2 contract -> WEDU lab
+  # dispatch. The Release Scripts Success summary job stays below.
+  # ============================================
+  promotion-state:
+    name: Resolve Promotion State
+    runs-on: ubuntu-latest
+    needs: [release, release-scripts-success]
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.release-scripts-success.result == 'success' }}
+    permissions:
+      actions: read
+      # The WEDU evidence lookup reads commit check runs.
+      checks: read
+      contents: read
+    outputs:
+      v2_exists: ${{ steps.state.outputs.v2_exists }}
+      wedu_green: ${{ steps.state.outputs.wedu_green }}
+
+    steps:
+      - name: Inspect existing v2 contract and WEDU evidence for the exact SHA
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if err="$(gh api "repos/$GITHUB_REPOSITORY/contents/promotion-contracts/v2/$GITHUB_SHA.json?ref=gh-pages" 2>&1 >/dev/null)"; then
+            v2=true
+          elif printf '%s' "$err" | grep -q 'HTTP 404'; then
+            v2=false
+          else
+            echo "::error title=Promotion state unknown::$err"; exit 1
+          fi
+          green="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?check_name=WEDU%20captive%20portal%20lab" \
+            --jq '[.check_runs[] | select(.status == "completed" and .conclusion == "success")] | length')"
+          echo "v2_exists=$v2" >> "$GITHUB_OUTPUT"
+          if [ "${green:-0}" -gt 0 ]; then echo "wedu_green=true" >> "$GITHUB_OUTPUT"; else echo "wedu_green=false" >> "$GITHUB_OUTPUT"; fi
+          if [ "$v2" = true ]; then echo "::notice::v2 contract already published for $GITHUB_SHA; skipping APT/v2 republication." ; fi
+
+  build-prerelease-deb:
+    name: Build Prerelease Package
+    runs-on: ubuntu-latest
+    needs: promotion-state
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.promotion-state.outputs.v2_exists == 'false' }}
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build prerelease package
+        id: build
+        uses: ./.github/actions/build-prerelease-deb
+        with:
+          web-ext-api-key: ${{ secrets.WEB_EXT_API_KEY }}
+          web-ext-api-secret: ${{ secrets.WEB_EXT_API_SECRET }}
+
+  publish-prerelease:
+    name: Publish Prerelease to APT Repository
+    needs: [build-prerelease-deb]
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.build-prerelease-deb.result == 'success' }}
+    permissions:
+      actions: read
+      contents: write
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/reusable-deb-publish.yml
+    with:
+      artifact-name: prerelease-deb-package
+      suite: unstable
+      version: ${{ needs.build-prerelease-deb.outputs.version }}
+      summary-title: Prerelease Deb Published
+      install-command: curl -fsSL https://raw.githubusercontent.com/balejosg/openpath/gh-pages/apt/apt-bootstrap.sh | sudo bash -s -- --unstable
+      validate-published-metadata: true
+    secrets: inherit
+
+  promotion-contract:
+    name: Publish Promotion Contract v2
+    needs: [publish-prerelease]
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.publish-prerelease.result == 'success' }}
+    permissions:
+      actions: read
+      contents: write
+    uses: ./.github/workflows/publish-promotion-contract.yml
+    with:
+      openpath_sha: ${{ github.sha }}
+
+  dispatch-wedu-lab:
+    name: Dispatch WEDU Captive Portal Lab
+    runs-on: ubuntu-latest
+    needs: [release, promotion-state]
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.promotion-state.outputs.wedu_green == 'false' }}
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Dispatch the WEDU lab on the immutable release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          test -n "$TAG"
+          gh workflow run wedu-captive-portal-lab.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG" -f timeout_seconds=900
+          echo "Dispatched WEDU captive portal lab on \`$TAG\` (\`$GITHUB_SHA\`); its check lands on this SHA." >> "$GITHUB_STEP_SUMMARY"
 
   release-scripts-success:
     name: Release Scripts Success
