@@ -158,6 +158,79 @@ function Invoke-IsolatedPesterHost {
     }
 }
 
+function Get-WindowsPesterShardPlan {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$AllSuitePaths,
+
+        [Parameter(Mandatory = $true)]
+        [int]$ShardIndex,
+
+        [Parameter(Mandatory = $true)]
+        [int]$ShardCount
+    )
+
+    $heavySuiteName = 'Windows.AppControl.Tests.ps1'
+    $heavySplitTag = 'AppControlShardA'
+    $heavySuitePath = @($AllSuitePaths | Where-Object { (Split-Path $_ -Leaf) -eq $heavySuiteName })
+    $remainingSuitePaths = @($AllSuitePaths | Where-Object { (Split-Path $_ -Leaf) -ne $heavySuiteName })
+    # With three or more shards the heavy AppControl suite is split in two by its
+    # AppControlShardA tag (Tag on shard 1, ExcludeTag on shard 2) so neither half
+    # can exceed the job budget. Shards 3..N take the remaining leaf suites.
+    $heavySharding = $ShardCount -ge 3 -and $heavySuitePath.Count -eq 1
+    $suitePaths = if ($heavySharding) {
+        if ($ShardIndex -le 2) {
+            @($heavySuitePath)
+        }
+        else {
+            @(
+                for ($index = 0; $index -lt $remainingSuitePaths.Count; $index++) {
+                    if (($index % ($ShardCount - 2)) -eq ($ShardIndex - 3)) {
+                        $remainingSuitePaths[$index]
+                    }
+                }
+            )
+        }
+    }
+    elseif ($ShardCount -gt 1 -and $heavySuitePath.Count -eq 1) {
+        if ($ShardIndex -eq 1) {
+            @($heavySuitePath)
+        }
+        else {
+            @(
+                for ($index = 0; $index -lt $remainingSuitePaths.Count; $index++) {
+                    if (($index % ($ShardCount - 1)) -eq ($ShardIndex - 2)) {
+                        $remainingSuitePaths[$index]
+                    }
+                }
+            )
+        }
+    }
+    else {
+        @(
+            for ($index = 0; $index -lt $AllSuitePaths.Count; $index++) {
+                if (($index % $ShardCount) -eq ($ShardIndex - 1)) {
+                    $AllSuitePaths[$index]
+                }
+            }
+        )
+    }
+    if ($suitePaths.Count -eq 0) {
+        throw "Pester shard $ShardIndex of $ShardCount selected no test files."
+    }
+
+    $tag = $null
+    $excludeTag = $null
+    if ($heavySharding -and $ShardIndex -eq 1) { $tag = $heavySplitTag }
+    elseif ($heavySharding -and $ShardIndex -eq 2) { $excludeTag = $heavySplitTag }
+
+    return [pscustomobject]@{
+        SuitePaths = @($suitePaths)
+        Tag        = $tag
+        ExcludeTag = $excludeTag
+    }
+}
+
 function Invoke-WindowsPesterSuite {
     param(
         [Parameter(Mandatory = $true)]
@@ -211,37 +284,14 @@ function Invoke-WindowsPesterSuite {
         throw "Invalid Pester shard $ShardIndex of $ShardCount."
     }
 
-    $heavySuiteName = 'Windows.AppControl.Tests.ps1'
-    $heavySuitePath = @($allSuitePaths | Where-Object { (Split-Path $_ -Leaf) -eq $heavySuiteName })
-    $remainingSuitePaths = @($allSuitePaths | Where-Object { (Split-Path $_ -Leaf) -ne $heavySuiteName })
-    $suitePaths = if ($ShardCount -gt 1 -and $heavySuitePath.Count -eq 1) {
-        if ($ShardIndex -eq 1) {
-            @($heavySuitePath)
-        }
-        else {
-            @(
-                for ($index = 0; $index -lt $remainingSuitePaths.Count; $index++) {
-                    if (($index % ($ShardCount - 1)) -eq ($ShardIndex - 2)) {
-                        $remainingSuitePaths[$index]
-                    }
-                }
-            )
-        }
-    }
-    else {
-        @(
-            for ($index = 0; $index -lt $allSuitePaths.Count; $index++) {
-                if (($index % $ShardCount) -eq ($ShardIndex - 1)) {
-                    $allSuitePaths[$index]
-                }
-            }
-        )
-    }
-    if ($suitePaths.Count -eq 0) {
-        throw "Pester shard $ShardIndex of $ShardCount selected no test files."
-    }
+    $plan = Get-WindowsPesterShardPlan -AllSuitePaths $allSuitePaths -ShardIndex $ShardIndex -ShardCount $ShardCount
+    $suitePaths = @($plan.SuitePaths)
 
-    Write-Host ("Running Windows Pester shard {0}/{1}: {2}/{3} files" -f $ShardIndex, $ShardCount, $suitePaths.Count, $allSuitePaths.Count)
+    $shardFilter = ''
+    if ($plan.Tag) { $shardFilter = " (filter: Tag=$($plan.Tag))" }
+    elseif ($plan.ExcludeTag) { $shardFilter = " (filter: ExcludeTag=$($plan.ExcludeTag))" }
+
+    Write-Host ("Running Windows Pester shard {0}/{1}: {2}/{3} files{4}" -f $ShardIndex, $ShardCount, $suitePaths.Count, $allSuitePaths.Count, $shardFilter)
 
     $config = New-PesterConfiguration
     $config.Run.Path = $suitePaths
@@ -250,6 +300,12 @@ function Invoke-WindowsPesterSuite {
     $config.TestResult.Enabled = $true
     $config.TestResult.OutputPath = $ResultsPath
     $config.TestResult.OutputFormat = 'NUnitXml'
+    if ($plan.Tag) {
+        $config.Filter.Tag = @($plan.Tag)
+    }
+    elseif ($plan.ExcludeTag) {
+        $config.Filter.ExcludeTag = @($plan.ExcludeTag)
+    }
 
     try {
         $result = Invoke-Pester -Configuration $config

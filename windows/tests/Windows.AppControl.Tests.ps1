@@ -1994,7 +1994,7 @@ Describe "AppControl Module" {
         }
     }
 
-    Context "Structured AppControl health contract" {
+    Context "Structured AppControl health contract" -Tag 'AppControlShardA' {
         BeforeAll {
             Mock Get-OpenPathRestrictedGroupSid { 'S-1-5-32-545' } -ModuleName AppControl
         }
