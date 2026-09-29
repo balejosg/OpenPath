@@ -405,9 +405,43 @@ function Write-OpenPathLabTestConfigFile {
                 return $true
             }
         }
-        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $false }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $false } -CurrentRunId '9999' -CurrentRunAttempt 1
         $result | Should -Be 'reclaimed:111/1/win11-pro-existing'
         @($script:ReclaimReleasedOwners) | Should -Be @('111/1/win11-pro-existing')
+    }
+
+    It 'reclaims a lock left by an earlier attempt of the current run' {
+        $config = [pscustomobject]@{ lockFile = '/run/openpath-desktop-survival.lock' }
+        $script:ReclaimEarlierAttemptReleases = [System.Collections.Generic.List[string]]::new()
+        $transport = @{
+            ReadLockOwner = { param($LockFile) $null = $LockFile; '4242/1/win11-pro-existing' }
+            ReleaseLock   = {
+                param($LockFile, $Owner)
+                $null = $LockFile
+                $script:ReclaimEarlierAttemptReleases.Add([string]$Owner)
+                return $true
+            }
+        }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) throw 'IsRunActive must not run for the current run' } -CurrentRunId '4242' -CurrentRunAttempt 2
+        $result | Should -Be 'reclaimed:4242/1/win11-pro-existing'
+        @($script:ReclaimEarlierAttemptReleases) | Should -Be @('4242/1/win11-pro-existing')
+    }
+
+    It 'keeps a lock owned by the current attempt of this run' {
+        $config = [pscustomobject]@{ lockFile = '/run/openpath-desktop-survival.lock' }
+        $script:ReclaimCurrentAttemptReleases = [System.Collections.Generic.List[string]]::new()
+        $transport = @{
+            ReadLockOwner = { param($LockFile) $null = $LockFile; '4242/2/win11-pro-existing' }
+            ReleaseLock   = {
+                param($LockFile, $Owner)
+                $null = $LockFile
+                $script:ReclaimCurrentAttemptReleases.Add([string]$Owner)
+                return $true
+            }
+        }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) throw 'IsRunActive must not run for the current run' } -CurrentRunId '4242' -CurrentRunAttempt 2
+        $result | Should -Be 'active-owner'
+        @($script:ReclaimCurrentAttemptReleases).Count | Should -Be 0
     }
 
     It 'keeps a lock whose owning run is still active' {
@@ -422,7 +456,7 @@ function Write-OpenPathLabTestConfigFile {
                 return $true
             }
         }
-        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $true }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $true } -CurrentRunId '9999' -CurrentRunAttempt 1
         $result | Should -Be 'active-owner'
         @($script:ReclaimActiveReleases).Count | Should -Be 0
     }
@@ -439,7 +473,7 @@ function Write-OpenPathLabTestConfigFile {
                 return $true
             }
         }
-        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) throw 'api-unavailable' }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) throw 'api-unavailable' } -CurrentRunId '9999' -CurrentRunAttempt 1
         $result | Should -Be 'active-owner'
         @($script:ReclaimUnknownReleases).Count | Should -Be 0
     }
@@ -456,7 +490,7 @@ function Write-OpenPathLabTestConfigFile {
                 return $true
             }
         }
-        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) throw 'IsRunActive must not run for a foreign owner' }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) throw 'IsRunActive must not run for a foreign owner' } -CurrentRunId '9999' -CurrentRunAttempt 1
         $result | Should -Be 'foreign-owner'
         @($script:ReclaimForeignReleases).Count | Should -Be 0
     }
@@ -473,7 +507,7 @@ function Write-OpenPathLabTestConfigFile {
                 return $true
             }
         }
-        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $false }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $false } -CurrentRunId '9999' -CurrentRunAttempt 1
         $result | Should -Be 'free'
         @($script:ReclaimFreeReleases).Count | Should -Be 0
     }
@@ -483,7 +517,7 @@ function Write-OpenPathLabTestConfigFile {
         $transport = @{
             ReleaseLock = { param($LockFile, $Owner) $true }
         }
-        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $false }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $false } -CurrentRunId '9999' -CurrentRunAttempt 1
         $result | Should -Be 'unsupported'
     }
 

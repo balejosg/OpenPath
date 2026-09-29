@@ -116,9 +116,11 @@ lock before the Windows Desktop Survival phases start: the workflow step
 `Reclaim lab lock from finished runs` runs the same script with
 `-ReclaimFinishedOwners`, which reads the current owner and reclaims it only
 when it has the canonical `<runId>/<runAttempt>/<scenario>` shape and the
-owning workflow run is no longer active. Owners from manual lab sessions,
-still-active runs, and the current run itself are left untouched, and an
-unknown run state fails closed as active.
+owning workflow run is no longer active. An earlier attempt of the current run
+belongs to a cancelled or failed attempt and is reclaimed like any finished
+owner, so a re-run clears its own leftover lock; the current attempt is treated
+as active. Owners from manual lab sessions, still-active runs, and the current
+attempt are left untouched, and an unknown run state fails closed as active.
 
 The scenario object required by
 `scripts/lib/windows-desktop-survival-evidence.mjs` is attached to the cleanup

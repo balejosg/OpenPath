@@ -11,9 +11,11 @@
       run's lock is left untouched.
     - `-ReclaimFinishedOwners`: read the current lock owner and reclaim it only
       when it has the canonical <runId>/<runAttempt>/<scenario> shape and its
-      workflow run is no longer active.  Locks owned by the current run, by
-      still-active runs, by manual lab sessions, or with an unreadable owner
-      or run state are left untouched.
+      workflow run is no longer active.  An earlier attempt of the current run
+      belongs to a cancelled or failed attempt and counts as finished, so a
+      re-run reclaims its own leftover lock; the current attempt is left
+      untouched.  Locks owned by still-active runs, by manual lab sessions, or
+      with an unreadable owner or run state are left untouched.
 
     A release or reclaim failure is reported but never fails the workflow.
 
@@ -51,7 +53,6 @@ try {
         $apiUrl = if ($env:GITHUB_API_URL) { [string]$env:GITHUB_API_URL } else { 'https://api.github.com' }
         $isRunActive = {
             param([string]$OwnerRunId)
-            if ($OwnerRunId -eq $RunId) { return $true }
             if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN) -or [string]::IsNullOrWhiteSpace($env:GITHUB_REPOSITORY)) {
                 throw 'missing-gh-token-or-repository'
             }
@@ -60,7 +61,7 @@ try {
                 -TimeoutSec 20
             return $run.status -in @('queued', 'in_progress', 'waiting', 'requested', 'pending')
         }
-        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive $isRunActive
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive $isRunActive -CurrentRunId $RunId -CurrentRunAttempt $RunAttempt
         Write-Output $result
         exit 0
     }

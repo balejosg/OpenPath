@@ -1235,15 +1235,20 @@ function Invoke-OpenPathProxmoxLabStaleLockReclaim {
         TTL expires.  Read the current lock owner and reclaim it only when all
         of these hold: the owner has the canonical
         <runId>/<runAttempt>/<scenario> shape, the owning run is not active,
-        and the compare-and-delete release confirms ownership.  Manual or
-        local lab sessions (a non-canonical owner) are never reclaimed, and an
-        unknown run state fails closed as active.
+        and the compare-and-delete release confirms ownership.  A lock owned by
+        the same run at an earlier attempt belongs to a cancelled or failed
+        attempt and counts as finished, so a re-run reclaims its own leftover
+        lock; the current attempt stays active.  Manual or local lab sessions
+        (a non-canonical owner) are never reclaimed, and an unknown run state
+        fails closed as active.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][object]$Config,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
-        [Parameter(Mandatory = $true)][scriptblock]$IsRunActive
+        [Parameter(Mandatory = $true)][scriptblock]$IsRunActive,
+        [Parameter(Mandatory = $true)][string]$CurrentRunId,
+        [Parameter(Mandatory = $true)][int]$CurrentRunAttempt
     )
     if (-not $Transport.Contains('ReadLockOwner')) { return 'unsupported' }
     $lockFile = [string](Get-OpenPathLabField -InputObject $Config -Name 'lockFile')
@@ -1253,10 +1258,16 @@ function Invoke-OpenPathProxmoxLabStaleLockReclaim {
     if ([string]::IsNullOrWhiteSpace($owner)) { return 'free' }
     if ($owner -notmatch '^(\d+)/(\d+)/[A-Za-z0-9._-]+$') { return 'foreign-owner' }
     $runId = [string]$Matches[1]
-    $active = $true
-    try { $active = [bool](& $IsRunActive $runId) }
-    catch { $active = $true }
-    if ($active) { return 'active-owner' }
+    $ownerAttempt = [int]$Matches[2]
+    if ($runId -eq $CurrentRunId) {
+        if ($ownerAttempt -ge $CurrentRunAttempt) { return 'active-owner' }
+    }
+    else {
+        $active = $true
+        try { $active = [bool](& $IsRunActive $runId) }
+        catch { $active = $true }
+        if ($active) { return 'active-owner' }
+    }
     try {
         if (& $Transport.ReleaseLock $lockFile $owner) { return "reclaimed:$owner" }
     }
