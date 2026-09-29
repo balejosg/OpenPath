@@ -94,6 +94,19 @@ function newestMatchingRun(runs, sha) {
     .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))[0];
 }
 
+function selectRunForRequirement(runs, sha, currentRunId) {
+  if (currentRunId) {
+    const currentRun = runs.find(
+      (run) => String(run.databaseId) === currentRunId && run.headSha === sha
+    );
+    if (currentRun) {
+      return currentRun;
+    }
+  }
+
+  return newestMatchingRun(runs, sha);
+}
+
 function listWorkflowRuns({ repo, workflowName, sha, useCommitFilter }) {
   const args = [
     'run',
@@ -115,17 +128,27 @@ function listWorkflowRuns({ repo, workflowName, sha, useCommitFilter }) {
   return ghJson(args);
 }
 
-async function waitForRequirement({ repo, sha, workflowName, jobName, timeoutAt, pollSeconds }) {
+async function waitForRequirement({
+  repo,
+  sha,
+  workflowName,
+  jobName,
+  currentRunId,
+  timeoutAt,
+  pollSeconds,
+}) {
   while (Date.now() < timeoutAt) {
     // Prefer the narrow GH CLI query, then fall back to filtering recent workflow runs.
     // GitHub occasionally returns no rows for --commit immediately after a workflow
     // completes even though run view/check-runs already expose the correct headSha.
+    // When the gate runs inside the release run itself (a workflow_call job), prefer
+    // that current run so the in-run summary job can be observed deterministically.
     let runs = listWorkflowRuns({ repo, workflowName, sha, useCommitFilter: true });
-    let run = newestMatchingRun(runs, sha);
+    let run = selectRunForRequirement(runs, sha, currentRunId);
 
     if (!run) {
       runs = listWorkflowRuns({ repo, workflowName, sha, useCommitFilter: false });
-      run = newestMatchingRun(runs, sha);
+      run = selectRunForRequirement(runs, sha, currentRunId);
     }
 
     if (!run) {
@@ -145,10 +168,21 @@ async function waitForRequirement({ repo, sha, workflowName, jobName, timeoutAt,
       'status,conclusion,headSha,jobs,url,workflowName',
     ]);
 
+    // A run that is still in progress normally has to finish before its summary job
+    // can be trusted. The exception is the current run: a workflow_call consumer may
+    // require a completed summary job of its own caller run. Fall through to the
+    // conclusion check only when that exact job already finished.
     if (details.status !== 'completed') {
-      console.log(`Waiting for ${workflowName} on ${sha}: ${details.status}`);
-      await sleep(pollSeconds * 1000);
-      continue;
+      const currentRunJob =
+        String(run.databaseId) === currentRunId
+          ? details.jobs?.find((candidate) => candidate.name === jobName)
+          : undefined;
+
+      if (!currentRunJob || currentRunJob.status !== 'completed') {
+        console.log(`Waiting for ${workflowName} on ${sha}: ${details.status}`);
+        await sleep(pollSeconds * 1000);
+        continue;
+      }
     }
 
     const job = details.jobs?.find((candidate) => candidate.name === jobName);
@@ -206,6 +240,7 @@ function appendReleaseGateSummary({ sha, results, error }) {
 
 async function main() {
   const { repo, sha, requirements, timeoutMinutes, pollSeconds } = parseArgs(process.argv.slice(2));
+  const currentRunId = String(process.env.GITHUB_RUN_ID ?? '').trim();
   const timeoutAt = Date.now() + timeoutMinutes * 60 * 1000;
   const results = [];
 
@@ -214,6 +249,7 @@ async function main() {
       const result = await waitForRequirement({
         repo,
         sha,
+        currentRunId,
         ...requirement,
         timeoutAt,
         pollSeconds,

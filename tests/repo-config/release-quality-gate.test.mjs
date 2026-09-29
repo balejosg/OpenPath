@@ -251,6 +251,226 @@ process.exit(2);
   assert.match(summary, /https:\/\/example\.invalid\/runs\/25201234567/);
 });
 
+test('release quality gate accepts a completed summary job inside the in-progress current run', () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'openpath-gh-current-run-'));
+  const fakeGh = path.join(tempDir, 'gh');
+  const matchingSha = '2ffa52a1c20c2a52e5b0d4a3f6f2a4a4c3b1d9e1';
+
+  writeFileSync(
+    fakeGh,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'run' && args[1] === 'list') {
+  console.log(JSON.stringify([{
+    databaseId: 26000000001,
+    status: 'in_progress',
+    conclusion: null,
+    headSha: '${matchingSha}',
+    createdAt: '2026-09-29T10:00:00Z',
+    url: 'https://example.invalid/runs/26000000001',
+    workflowName: 'Release Installation Scripts'
+  }]));
+  process.exit(0);
+}
+if (args[0] === 'run' && args[1] === 'view') {
+  console.log(JSON.stringify({
+    status: 'in_progress',
+    conclusion: null,
+    headSha: '${matchingSha}',
+    url: 'https://example.invalid/runs/26000000001',
+    workflowName: 'Release Installation Scripts',
+    jobs: [{ name: 'Release Scripts Success', status: 'completed', conclusion: 'success' }]
+  }));
+  process.exit(0);
+}
+console.error('unexpected gh call: ' + args.join(' '));
+process.exit(2);
+`,
+    'utf8'
+  );
+  chmodSync(fakeGh, 0o755);
+
+  const output = execFileSync(
+    process.execPath,
+    [
+      'scripts/require-release-quality-gate.mjs',
+      '--repo',
+      'balejosg/openpath',
+      '--sha',
+      matchingSha,
+      '--require',
+      'Release Installation Scripts::Release Scripts Success',
+      '--timeout-minutes',
+      '0.05',
+      '--poll-seconds',
+      '1',
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GITHUB_RUN_ID: '26000000001',
+        PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ''}`,
+      },
+    }
+  );
+
+  assert.match(
+    output,
+    /Release gate satisfied: Release Installation Scripts \/ Release Scripts Success/
+  );
+});
+
+test('release quality gate rejects a failed summary job inside the in-progress current run', () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'openpath-gh-current-run-failure-'));
+  const fakeGh = path.join(tempDir, 'gh');
+  const matchingSha = '2ffa52a1c20c2a52e5b0d4a3f6f2a4a4c3b1d9e1';
+
+  writeFileSync(
+    fakeGh,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'run' && args[1] === 'list') {
+  console.log(JSON.stringify([{
+    databaseId: 26000000002,
+    status: 'in_progress',
+    conclusion: null,
+    headSha: '${matchingSha}',
+    createdAt: '2026-09-29T10:00:00Z',
+    url: 'https://example.invalid/runs/26000000002',
+    workflowName: 'Release Installation Scripts'
+  }]));
+  process.exit(0);
+}
+if (args[0] === 'run' && args[1] === 'view') {
+  console.log(JSON.stringify({
+    status: 'in_progress',
+    conclusion: null,
+    headSha: '${matchingSha}',
+    url: 'https://example.invalid/runs/26000000002',
+    workflowName: 'Release Installation Scripts',
+    jobs: [{ name: 'Release Scripts Success', status: 'completed', conclusion: 'failure' }]
+  }));
+  process.exit(0);
+}
+console.error('unexpected gh call: ' + args.join(' '));
+process.exit(2);
+`,
+    'utf8'
+  );
+  chmodSync(fakeGh, 0o755);
+
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [
+          'scripts/require-release-quality-gate.mjs',
+          '--repo',
+          'balejosg/openpath',
+          '--sha',
+          matchingSha,
+          '--require',
+          'Release Installation Scripts::Release Scripts Success',
+          '--timeout-minutes',
+          '0.05',
+          '--poll-seconds',
+          '1',
+        ],
+        {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            GITHUB_RUN_ID: '26000000002',
+            PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ''}`,
+          },
+        }
+      ),
+    /Release Installation Scripts \/ Release Scripts Success concluded "failure"/
+  );
+});
+
+test('release quality gate keeps waiting for an in-progress run that is not the current run', () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'openpath-gh-foreign-run-wait-'));
+  const fakeGh = path.join(tempDir, 'gh');
+  const matchingSha = '2ffa52a1c20c2a52e5b0d4a3f6f2a4a4c3b1d9e1';
+
+  writeFileSync(
+    fakeGh,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'run' && args[1] === 'list') {
+  console.log(JSON.stringify([{
+    databaseId: 26000000003,
+    status: 'in_progress',
+    conclusion: null,
+    headSha: '${matchingSha}',
+    createdAt: '2026-09-29T10:00:00Z',
+    url: 'https://example.invalid/runs/26000000003',
+    workflowName: 'Release Installation Scripts'
+  }]));
+  process.exit(0);
+}
+if (args[0] === 'run' && args[1] === 'view') {
+  console.log(JSON.stringify({
+    status: 'in_progress',
+    conclusion: null,
+    headSha: '${matchingSha}',
+    url: 'https://example.invalid/runs/26000000003',
+    workflowName: 'Release Installation Scripts',
+    jobs: [{ name: 'Release Scripts Success', status: 'completed', conclusion: 'success' }]
+  }));
+  process.exit(0);
+}
+console.error('unexpected gh call: ' + args.join(' '));
+process.exit(2);
+`,
+    'utf8'
+  );
+  chmodSync(fakeGh, 0o755);
+
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [
+          'scripts/require-release-quality-gate.mjs',
+          '--repo',
+          'balejosg/openpath',
+          '--sha',
+          matchingSha,
+          '--require',
+          'Release Installation Scripts::Release Scripts Success',
+          '--timeout-minutes',
+          '0.01',
+          '--poll-seconds',
+          '1',
+        ],
+        {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            GITHUB_RUN_ID: '26009999999',
+            PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ''}`,
+          },
+        }
+      ),
+    (error) => {
+      assert.match(
+        String(error.stdout),
+        /Waiting for Release Installation Scripts on/,
+        'a non-current in-progress run must keep waiting even when its summary job is done'
+      );
+      return /Timed out waiting for Release Installation Scripts \/ Release Scripts Success/.test(
+        String(error.stderr)
+      );
+    }
+  );
+});
+
 test('generic release quality gate rejects internal Windows metadata flags', () => {
   assert.throws(
     () =>
