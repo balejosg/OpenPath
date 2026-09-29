@@ -87,6 +87,17 @@ test('cancelled desktop-survival runs release only their own lab lock', () => {
   assert.match(module, /ReleaseLock \$lockFile \$owner/);
 });
 
+test('desktop-survival reclaims locks only from finished runs', () => {
+  const workflow = read('.github/workflows/release-scripts.yml');
+  assert.match(workflow, /Reclaim lab lock from finished runs/);
+  assert.match(workflow, /-ReclaimFinishedOwners/);
+  const module = read('tests/e2e/ci/controllers/ProxmoxWindowsLab.psm1');
+  assert.match(module, /function Invoke-OpenPathProxmoxLabStaleLockReclaim/);
+  const release = read('tests/e2e/ci/controllers/proxmox-disposable-windows-release-lock.ps1');
+  assert.match(release, /Invoke-OpenPathProxmoxLabStaleLockReclaim/);
+  assert.match(release, /actions\/runs\//);
+});
+
 test('web-generated installer payload selects the managed-browser compatibility profile', () => {
   const service = read('api/src/services/windows-offline-installer-artifact.service.ts');
   assert.match(service, /appControlProfile:\s*['"]ManagedBrowserCompatibility['"]/);

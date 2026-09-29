@@ -439,6 +439,14 @@ jobs:
           artifact-ids: ${{ needs.windows-personalized-http-e2e.outputs.candidate-artifact-id }}
           path: windows-personalized-exe
 
+      - name: Reclaim lab lock from finished runs
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          & (Resolve-Path 'tests/e2e/ci/controllers/proxmox-disposable-windows-release-lock.ps1') `
+            -RunId "${{ github.run_id }}" -RunAttempt ([int]'${{ github.run_attempt }}') -ReclaimFinishedOwners
+
       - name: Require external disposable VM controller
         shell: pwsh
         env:

@@ -107,6 +107,18 @@ references both artifacts.
 A cancelled workflow run releases its lab lock through
 `proxmox-disposable-windows-release-lock.ps1`, which only releases lock owners
 that belong to the current run/attempt and never touches another run's lock.
+The lock is a remote directory (`lockFile`, for example
+`/run/openpath-desktop-survival.lock`) whose `created` and `owner` files are
+written per phase by `EnsureLock`; a lock whose `created` timestamp is older
+than the config's `timeoutSeconds` (default 1800 s) is stale and is deleted
+when the next acquisition attempts it. Later runs also reclaim a dead run's
+lock before the Windows Desktop Survival phases start: the workflow step
+`Reclaim lab lock from finished runs` runs the same script with
+`-ReclaimFinishedOwners`, which reads the current owner and reclaims it only
+when it has the canonical `<runId>/<runAttempt>/<scenario>` shape and the
+owning workflow run is no longer active. Owners from manual lab sessions,
+still-active runs, and the current run itself are left untouched, and an
+unknown run state fails closed as active.
 
 The scenario object required by
 `scripts/lib/windows-desktop-survival-evidence.mjs` is attached to the cleanup

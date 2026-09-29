@@ -393,6 +393,100 @@ function Write-OpenPathLabTestConfigFile {
         $released | Should -Be @('win11-pro-existing')
     }
 
+    It 'reclaims a lock from a finished run through compare-and-delete release' {
+        $config = [pscustomobject]@{ lockFile = '/run/openpath-desktop-survival.lock' }
+        $script:ReclaimReleasedOwners = [System.Collections.Generic.List[string]]::new()
+        $transport = @{
+            ReadLockOwner = { param($LockFile) $null = $LockFile; '111/1/win11-pro-existing' }
+            ReleaseLock   = {
+                param($LockFile, $Owner)
+                $null = $LockFile
+                $script:ReclaimReleasedOwners.Add([string]$Owner)
+                return $true
+            }
+        }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $false }
+        $result | Should -Be 'reclaimed:111/1/win11-pro-existing'
+        @($script:ReclaimReleasedOwners) | Should -Be @('111/1/win11-pro-existing')
+    }
+
+    It 'keeps a lock whose owning run is still active' {
+        $config = [pscustomobject]@{ lockFile = '/run/openpath-desktop-survival.lock' }
+        $script:ReclaimActiveReleases = [System.Collections.Generic.List[string]]::new()
+        $transport = @{
+            ReadLockOwner = { param($LockFile) $null = $LockFile; '111/1/win11-pro-existing' }
+            ReleaseLock   = {
+                param($LockFile, $Owner)
+                $null = $LockFile
+                $script:ReclaimActiveReleases.Add([string]$Owner)
+                return $true
+            }
+        }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $true }
+        $result | Should -Be 'active-owner'
+        @($script:ReclaimActiveReleases).Count | Should -Be 0
+    }
+
+    It 'keeps a lock when the owning run state cannot be established' {
+        $config = [pscustomobject]@{ lockFile = '/run/openpath-desktop-survival.lock' }
+        $script:ReclaimUnknownReleases = [System.Collections.Generic.List[string]]::new()
+        $transport = @{
+            ReadLockOwner = { param($LockFile) $null = $LockFile; '111/1/win11-pro-existing' }
+            ReleaseLock   = {
+                param($LockFile, $Owner)
+                $null = $LockFile
+                $script:ReclaimUnknownReleases.Add([string]$Owner)
+                return $true
+            }
+        }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) throw 'api-unavailable' }
+        $result | Should -Be 'active-owner'
+        @($script:ReclaimUnknownReleases).Count | Should -Be 0
+    }
+
+    It 'never reclaims a foreign or manual lock owner' {
+        $config = [pscustomobject]@{ lockFile = '/run/openpath-desktop-survival.lock' }
+        $script:ReclaimForeignReleases = [System.Collections.Generic.List[string]]::new()
+        $transport = @{
+            ReadLockOwner = { param($LockFile) $null = $LockFile; 'manual-operator' }
+            ReleaseLock   = {
+                param($LockFile, $Owner)
+                $null = $LockFile
+                $script:ReclaimForeignReleases.Add([string]$Owner)
+                return $true
+            }
+        }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) throw 'IsRunActive must not run for a foreign owner' }
+        $result | Should -Be 'foreign-owner'
+        @($script:ReclaimForeignReleases).Count | Should -Be 0
+    }
+
+    It 'reports a free lock when the lock owner is empty' {
+        $config = [pscustomobject]@{ lockFile = '/run/openpath-desktop-survival.lock' }
+        $script:ReclaimFreeReleases = [System.Collections.Generic.List[string]]::new()
+        $transport = @{
+            ReadLockOwner = { param($LockFile) $null = $LockFile; '   ' }
+            ReleaseLock   = {
+                param($LockFile, $Owner)
+                $null = $LockFile
+                $script:ReclaimFreeReleases.Add([string]$Owner)
+                return $true
+            }
+        }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $false }
+        $result | Should -Be 'free'
+        @($script:ReclaimFreeReleases).Count | Should -Be 0
+    }
+
+    It 'reports unsupported when the transport cannot read the lock owner' {
+        $config = [pscustomobject]@{ lockFile = '/run/openpath-desktop-survival.lock' }
+        $transport = @{
+            ReleaseLock = { param($LockFile, $Owner) $true }
+        }
+        $result = Invoke-OpenPathProxmoxLabStaleLockReclaim -Config $config -Transport $transport -IsRunActive { param($RunId) $false }
+        $result | Should -Be 'unsupported'
+    }
+
     It 'captures console and guest diagnostics when a session never arrives' {
         $artifacts = New-OpenPathLabTestArtifacts -Root $TestDrive
         $payload = New-OpenPathLabTestPayload -ArtifactsRoot $TestDrive -TemplatePath $artifacts.Template -PersonalizedExePath $artifacts.Personalized -Phase 'observe'

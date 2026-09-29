@@ -1226,6 +1226,44 @@ function Invoke-OpenPathProxmoxLabLockRelease {
     return @($released)
 }
 
+function Invoke-OpenPathProxmoxLabStaleLockReclaim {
+    <#
+    .SYNOPSIS
+        Reclaims the desktop-survival lab lock from a finished workflow run.
+    .DESCRIPTION
+        A lock left behind by a dead run blocks every later scenario until the
+        TTL expires.  Read the current lock owner and reclaim it only when all
+        of these hold: the owner has the canonical
+        <runId>/<runAttempt>/<scenario> shape, the owning run is not active,
+        and the compare-and-delete release confirms ownership.  Manual or
+        local lab sessions (a non-canonical owner) are never reclaimed, and an
+        unknown run state fails closed as active.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Transport,
+        [Parameter(Mandatory = $true)][scriptblock]$IsRunActive
+    )
+    if (-not $Transport.Contains('ReadLockOwner')) { return 'unsupported' }
+    $lockFile = [string](Get-OpenPathLabField -InputObject $Config -Name 'lockFile')
+    $owner = ''
+    try { $owner = ([string](& $Transport.ReadLockOwner $lockFile)).Trim() }
+    catch { return 'release-failed' }
+    if ([string]::IsNullOrWhiteSpace($owner)) { return 'free' }
+    if ($owner -notmatch '^(\d+)/(\d+)/[A-Za-z0-9._-]+$') { return 'foreign-owner' }
+    $runId = [string]$Matches[1]
+    $active = $true
+    try { $active = [bool](& $IsRunActive $runId) }
+    catch { $active = $true }
+    if ($active) { return 'active-owner' }
+    try {
+        if (& $Transport.ReleaseLock $lockFile $owner) { return "reclaimed:$owner" }
+    }
+    catch { return 'release-failed' }
+    return 'release-failed'
+}
+
 function New-OpenPathProxmoxLabTransport {
     <#
     .SYNOPSIS
@@ -1291,6 +1329,16 @@ fi
 '@
         $output = & $h.Ssh $lab.SshCommand $lab.SshHost -ArgumentList @('bash', '-s', '--', $LockFile, $Owner) -InputText $script
         return $output.Trim() -eq 'released'
+    }.GetNewClosure()
+    $transport.ReadLockOwner = {
+        param($LockFile)
+        $script = @'
+set -u
+lock_dir="$1"
+if [ -f "$lock_dir/owner" ]; then cat "$lock_dir/owner"; fi
+'@
+        $output = & $h.Ssh $lab.SshCommand $lab.SshHost -ArgumentList @('bash', '-s', '--', $LockFile) -InputText $script
+        return $output.Trim()
     }.GetNewClosure()
     $transport.GetVmStatus = {
         param($Vmid)
@@ -1444,4 +1492,4 @@ test -s "$dump"
     return $transport
 }
 
-Export-ModuleMember -Function Read-OpenPathProxmoxLabConfig, Invoke-OpenPathProxmoxControllerPhase, New-OpenPathProxmoxLabTransport, Test-OpenPathLabBlockedErrorCode, Invoke-OpenPathProxmoxLabLockRelease
+Export-ModuleMember -Function Read-OpenPathProxmoxLabConfig, Invoke-OpenPathProxmoxControllerPhase, New-OpenPathProxmoxLabTransport, Test-OpenPathLabBlockedErrorCode, Invoke-OpenPathProxmoxLabLockRelease, Invoke-OpenPathProxmoxLabStaleLockReclaim
