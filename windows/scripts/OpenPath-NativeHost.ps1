@@ -167,12 +167,20 @@ while ($true) {
         $messageAction = ''
         try { $messageAction = [string]$message.action } catch { }
         $messageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        Write-NativeHostStageLog -Stage 'message-received' -Fields @{ index = $script:NativeHostMessageCount; action = $messageAction }
+        $chattyAction = Test-NativeHostChattyAction -Action $messageAction
+        if (-not $chattyAction) {
+            Write-NativeHostStageLog -Stage 'message-received' -Fields @{ index = $script:NativeHostMessageCount; action = $messageAction }
+        }
 
         $response = Handle-Message -Message $message
         Write-NativeMessage -Message $response
         $messageStopwatch.Stop()
-        Write-NativeHostStageLog -Stage 'response-sent' -Fields @{ index = $script:NativeHostMessageCount; action = $messageAction; totalMs = [int]$messageStopwatch.ElapsedMilliseconds }
+        if ($chattyAction) {
+            Write-NativeHostChattyActionLog -Action $messageAction
+        }
+        else {
+            Write-NativeHostStageLog -Stage 'response-sent' -Fields @{ index = $script:NativeHostMessageCount; action = $messageAction; totalMs = [int]$messageStopwatch.ElapsedMilliseconds }
+        }
     }
     catch {
         Write-NativeHostLog "Fatal protocol error: $_"

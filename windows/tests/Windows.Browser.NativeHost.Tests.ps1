@@ -2230,6 +2230,236 @@ Describe "Browser Module - Native Host" {
             }
         }
 
+        It "Announces the persistent transport protocol and capabilities, honoring the retirement switch" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-capabilities-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                New-Item -ItemType Directory -Path (Join-Path $tempRoot 'data') -Force | Out-Null
+                $script:StatePath = Join-Path $tempRoot 'native-state.json'
+                $script:WhitelistPath = Join-Path $tempRoot 'whitelist.txt'
+                Set-Content -Path $script:WhitelistPath -Value '## WHITELIST' -Encoding ASCII
+                . $nativeHostActionsPath
+                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+
+                $ping = Handle-Message -Message ([PSCustomObject]@{ action = 'ping' })
+                $ping.success | Should -BeTrue
+                $ping.protocolVersion | Should -Be 2
+                @($ping.capabilities) | Should -Contain 'runtime-dependency-enqueue'
+                @($ping.capabilities) | Should -Contain 'runtime-dependency-check-batch'
+                @($ping.capabilities) | Should -Contain 'message-id-echo'
+                @($ping.capabilities) | Should -Contain 'runtime-dependency-auto-reload'
+
+                # Retirement switch: turning the persistent transport off must
+                # never require a new signed XPI.
+                @{ runtimeDependencyPersistentTransportDisabled = $true } |
+                    ConvertTo-Json | Set-Content -Path (Join-Path $tempRoot 'data\config.json') -Encoding UTF8
+                $disabledPing = Handle-Message -Message ([PSCustomObject]@{ action = 'ping' })
+                $disabledPing.protocolVersion | Should -Be 2
+                @($disabledPing.capabilities) | Should -Not -Contain 'runtime-dependency-enqueue'
+                @($disabledPing.capabilities) | Should -Not -Contain 'runtime-dependency-auto-reload'
+                @($disabledPing.capabilities) | Should -Contain 'runtime-dependency-check-batch'
+                @($disabledPing.capabilities) | Should -Contain 'message-id-echo'
+
+                # A string value is honored too (config files edited by hand).
+                @{ runtimeDependencyPersistentTransportDisabled = 'true' } |
+                    ConvertTo-Json | Set-Content -Path (Join-Path $tempRoot 'data\config.json') -Encoding UTF8
+                @((Handle-Message -Message ([PSCustomObject]@{ action = 'ping' })).capabilities) |
+                    Should -Not -Contain 'runtime-dependency-enqueue'
+            }
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Picks up whitelist changes between messages of one persistent process" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $previousWhitelistPath = if (Get-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue) { $script:WhitelistPath } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-freshness-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                New-Item -ItemType Directory -Path (Join-Path $tempRoot 'data\runtime-dependency-queue') -Force | Out-Null
+                $script:StatePath = Join-Path $tempRoot 'native-state.json'
+                $script:WhitelistPath = Join-Path $tempRoot 'native-whitelist.txt'
+                Set-Content -Path $script:WhitelistPath -Value "## WHITELIST$([Environment]::NewLine)allowed.example" -Encoding ASCII
+                . $nativeHostActionsPath
+                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+
+                # First message: the anchor is not in the mirror yet.
+                $before = Handle-Message -Message ([PSCustomObject]@{
+                        action = 'allow-local-runtime-dependency'
+                        mode = 'enqueue'
+                        anchorHost = 'freshness.example'
+                        dependencyHost = 'cdn.example'
+                        requestType = 'script'
+                    })
+                $before.success | Should -BeFalse
+                $before.error | Should -Be 'Anchor host is not locally whitelisted'
+
+                # The mirror changes on disk; the same process must see it on the
+                # next message (mtime/size keyed validation cache).
+                Start-Sleep -Milliseconds 1200
+                Set-Content -Path $script:WhitelistPath -Value "## WHITELIST$([Environment]::NewLine)allowed.example$([Environment]::NewLine)freshness.example" -Encoding ASCII
+
+                $after = Handle-Message -Message ([PSCustomObject]@{
+                        action = 'allow-local-runtime-dependency'
+                        mode = 'enqueue'
+                        anchorHost = 'freshness.example'
+                        dependencyHost = 'cdn.example'
+                        requestType = 'script'
+                    })
+                $after.success | Should -BeTrue
+                $after.queued | Should -BeTrue
+            }
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                if ($null -ne $previousWhitelistPath) { $script:WhitelistPath = $previousWhitelistPath }
+                else { Remove-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Logs ready transitions and aggregates instead of one line per poll" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $previousWhitelistPath = if (Get-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue) { $script:WhitelistPath } else { $null }
+            $global:openPathCapturedNativeHostLogs = @()
+            if (-not (Get-Command Write-NativeHostLog -ErrorAction SilentlyContinue)) {
+                function global:Write-NativeHostLog {
+                    param([string]$Message)
+                    $global:openPathCapturedNativeHostLogs += $Message
+                }
+            }
+
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-chatty-log-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                . $nativeHostActionsPath
+                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+                $script:StatePath = Join-Path $tempRoot 'native-state.json'
+                $script:WhitelistPath = Join-Path $tempRoot 'whitelist.txt'
+                Set-Content -Path $script:WhitelistPath -Value '## WHITELIST' -Encoding ASCII
+
+                $overlayPath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $tempRoot
+                New-Item -ItemType Directory -Path (Split-Path $overlayPath -Parent) -Force | Out-Null
+                @{ version = 1; generation = 1; appliedGeneration = 1; entries = @() } |
+                    ConvertTo-Json -Depth 6 | Set-Content -Path $overlayPath -Encoding UTF8
+
+                $global:openPathCapturedNativeHostLogs = @()
+                for ($i = 0; $i -lt 3; $i++) {
+                    $poll = Handle-Message -Message ([PSCustomObject]@{
+                            action = 'check-local-runtime-dependency'
+                            anchorHost = 'allowed.example'
+                            dependencyHost = 'cdn.example'
+                        })
+                    $poll.ready | Should -BeFalse
+                }
+                ($global:openPathCapturedNativeHostLogs | Where-Object { $_ -match 'action=check-local-runtime-dependency' }).Count | Should -Be 0
+
+                @{
+                    version = 1
+                    generation = 1
+                    appliedGeneration = 2
+                    entries = @(@{
+                            anchorHost = 'allowed.example'
+                            dependencyHost = 'cdn.example'
+                            generation = 1
+                        })
+                } | ConvertTo-Json -Depth 6 | Set-Content -Path $overlayPath -Encoding UTF8
+
+                $ready = Handle-Message -Message ([PSCustomObject]@{
+                        action = 'check-local-runtime-dependency'
+                        anchorHost = 'allowed.example'
+                        dependencyHost = 'cdn.example'
+                    })
+                $ready.ready | Should -BeTrue
+                ($global:openPathCapturedNativeHostLogs | Where-Object { $_ -match 'runtime-dependency-ready-transition' }).Count | Should -Be 1
+                ($global:openPathCapturedNativeHostLogs | Where-Object { $_ -match 'action=check-local-runtime-dependency' }).Count | Should -Be 0
+
+                # The source contract keeps the main loop from logging every poll.
+                $hostScriptContent = Get-Content (Join-Path $PSScriptRoot ".." "scripts" "OpenPath-NativeHost.ps1") -Raw
+                $hostScriptContent | Should -Match 'Test-NativeHostChattyAction -Action \$messageAction'
+                $hostScriptContent | Should -Match 'Write-NativeHostChattyActionLog -Action \$messageAction'
+                $dispatchContent = Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.MessageDispatch.ps1") -Raw
+                $dispatchContent | Should -Match 'Test-NativeHostChattyAction -Action \$action'
+            }
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                if ($null -ne $previousWhitelistPath) { $script:WhitelistPath = $previousWhitelistPath }
+                else { Remove-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Measures hot in-process latency for the actions served over the port" {
+            $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
+
+            $previousOpenPathRoot = if (Get-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue) { $script:OpenPathRoot } else { $null }
+            $previousWhitelistPath = if (Get-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue) { $script:WhitelistPath } else { $null }
+            $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openpath-native-latency-" + [Guid]::NewGuid().ToString("N"))
+            $script:OpenPathRoot = $tempRoot
+            try {
+                New-Item -ItemType Directory -Path (Join-Path $tempRoot 'data\runtime-dependency-queue') -Force | Out-Null
+                $script:StatePath = Join-Path $tempRoot 'native-state.json'
+                $script:WhitelistPath = Join-Path $tempRoot 'whitelist.txt'
+                Set-Content -Path $script:WhitelistPath -Value "## WHITELIST$([Environment]::NewLine)allowed.example" -Encoding ASCII
+                . $nativeHostActionsPath
+                $null = . (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.State.ps1")
+
+                $overlayPath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $tempRoot
+                New-Item -ItemType Directory -Path (Split-Path $overlayPath -Parent) -Force | Out-Null
+                @{ version = 1; generation = 1; appliedGeneration = 1; entries = @() } |
+                    ConvertTo-Json -Depth 6 | Set-Content -Path $overlayPath -Encoding UTF8
+
+                $measure = {
+                    param([scriptblock]$Action)
+                    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                    & $Action | Out-Null
+                    $stopwatch.Stop()
+                    return [int]$stopwatch.ElapsedMilliseconds
+                }
+
+                $pingMs = & $measure { Handle-Message -Message ([PSCustomObject]@{ action = 'ping' }) }
+                $checkMs = & $measure {
+                    Handle-Message -Message ([PSCustomObject]@{
+                            action = 'check-local-runtime-dependency'
+                            anchorHost = 'allowed.example'
+                            dependencyHost = 'cdn.example'
+                        })
+                }
+                $enqueueMs = & $measure {
+                    Handle-Message -Message ([PSCustomObject]@{
+                            action = 'allow-local-runtime-dependency'
+                            mode = 'enqueue'
+                            anchorHost = 'allowed.example'
+                            dependencyHost = 'cdn.example'
+                            requestType = 'script'
+                        })
+                }
+
+                Write-Host ("Native host hot-path latency (in-process): ping=$($pingMs)ms check=$($checkMs)ms enqueue=$($enqueueMs)ms")
+                $pingMs | Should -BeLessThan 500
+                $checkMs | Should -BeLessThan 500
+                $enqueueMs | Should -BeLessThan 500
+            }
+            finally {
+                if ($null -ne $previousOpenPathRoot) { $script:OpenPathRoot = $previousOpenPathRoot }
+                else { Remove-Variable -Name OpenPathRoot -Scope Script -ErrorAction SilentlyContinue }
+                if ($null -ne $previousWhitelistPath) { $script:WhitelistPath = $previousWhitelistPath }
+                else { Remove-Variable -Name WhitelistPath -Scope Script -ErrorAction SilentlyContinue }
+                Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It "Logs native action evidence without depending on downstream wrappers" {
             $nativeHostActionsPath = Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.ps1"
             $nativeHostActionsContent = (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Bootstrap.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.Shared.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.RuntimeDependency.ps1") -Raw) + "`n" + (Get-Content (Join-Path $PSScriptRoot ".." "lib" "internal" "NativeHost.Actions.MessageDispatch.ps1") -Raw)

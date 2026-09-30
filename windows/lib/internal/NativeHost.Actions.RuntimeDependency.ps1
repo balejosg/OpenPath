@@ -902,6 +902,7 @@ function Invoke-NativeHostLocalRuntimeDependencyCheckAction {
                 continue
             }
             $entryState = Get-NativeHostRuntimeDependencyEntryState -Snapshot $snapshot -AnchorHost $anchorHost -DependencyHost $dependencyHost
+            Update-NativeHostDependencyReadyState -AnchorHost $anchorHost -DependencyHost $dependencyHost -Ready ([bool]$entryState.ready) | Out-Null
             $result = @{
                 success = $true
                 action = $script:OpenPathRuntimeDependencyActionCheckLocal
@@ -934,6 +935,7 @@ function Invoke-NativeHostLocalRuntimeDependencyCheckAction {
 
     $snapshot = Get-NativeHostRuntimeDependencySnapshot
     $entryState = Get-NativeHostRuntimeDependencyEntryState -Snapshot $snapshot -AnchorHost $anchorHost -DependencyHost $dependencyHost
+    Update-NativeHostDependencyReadyState -AnchorHost $anchorHost -DependencyHost $dependencyHost -Ready ([bool]$entryState.ready) | Out-Null
     $response = @{
         success = $true
         action = $script:OpenPathRuntimeDependencyActionCheckLocal

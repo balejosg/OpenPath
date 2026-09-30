@@ -48,10 +48,13 @@ function Get-WhitelistSections {
         $whitelistBytes = [System.IO.File]::ReadAllBytes($script:WhitelistPath)
         $text = [System.Text.Encoding]::UTF8.GetString($whitelistBytes)
         $sections = Get-OpenPathWhitelistSectionsFromLines -Lines @($text -split "`r?`n")
-        $stateBytes = if (Test-Path $script:StatePath -PathType Leaf -ErrorAction SilentlyContinue) {
-            [System.IO.File]::ReadAllBytes($script:StatePath)
+        # Note: assigning an empty [byte[]] from an if-expression unrolls to
+        # $null, which would make the Array.Copy below throw whenever the state
+        # file is missing; keep the imperative form.
+        $stateBytes = [byte[]]@()
+        if (Test-Path $script:StatePath -PathType Leaf -ErrorAction SilentlyContinue) {
+            $stateBytes = [System.IO.File]::ReadAllBytes($script:StatePath)
         }
-        else { [byte[]]@() }
         $combined = [byte[]]::new($whitelistBytes.Length + 1 + $stateBytes.Length)
         [Array]::Copy($whitelistBytes, 0, $combined, 0, $whitelistBytes.Length)
         $combined[$whitelistBytes.Length] = 0

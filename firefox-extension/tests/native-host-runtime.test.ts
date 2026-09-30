@@ -981,3 +981,195 @@ void test('linux native host enqueue mode answers per-entry states for a batch',
   );
   assert.equal(readdirSync(queueDir).filter((entry) => entry.endsWith('.json')).length, 1);
 });
+
+interface PersistentNativeHost {
+  close: () => Promise<void>;
+  send: (payload: unknown) => Promise<unknown>;
+}
+
+function startPersistentNativeHost(env: NodeJS.ProcessEnv): PersistentNativeHost {
+  const scriptPath = new URL('../native/openpath-native-host.py', import.meta.url);
+  const child = spawn('python3', [scriptPath.pathname], { env });
+  let buffer = Buffer.alloc(0);
+  const waiters: ((response: unknown) => void)[] = [];
+  const stderrChunks: Buffer[] = [];
+
+  child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+  child.stdout.on('data', (chunk: Buffer) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    while (buffer.length >= 4) {
+      const bodyLength = buffer.readUInt32LE(0);
+      if (buffer.length < 4 + bodyLength) {
+        break;
+      }
+      const body = buffer.subarray(4, 4 + bodyLength).toString('utf8');
+      buffer = buffer.subarray(4 + bodyLength);
+      const waiter = waiters.shift();
+      if (waiter) {
+        waiter(JSON.parse(body));
+      }
+    }
+  });
+
+  return {
+    send: (payload: unknown) =>
+      new Promise((resolve) => {
+        waiters.push(resolve);
+        child.stdin.write(encodeNativeMessage(payload));
+      }),
+    close: async (): Promise<void> => {
+      await new Promise<void>((resolve) => {
+        child.on('close', () => {
+          resolve();
+        });
+        child.stdin.end();
+        const timer = setTimeout(() => {
+          child.kill();
+          resolve();
+        }, 2_000);
+        timer.unref();
+      });
+      const stderr = Buffer.concat(stderrChunks).toString('utf8');
+      assert.equal(stderr, '', `native host wrote to stderr: ${stderr}`);
+    },
+  };
+}
+
+void test('linux native host announces the persistent transport protocol and capabilities', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-capabilities-'));
+  const response = runNativeHostOnce(
+    {
+      ...process.env,
+      XDG_DATA_HOME: runtimeDir,
+    },
+    { action: 'ping' }
+  ) as {
+    capabilities?: string[];
+    protocolVersion?: number;
+    success?: boolean;
+  };
+
+  assert.equal(response.success, true);
+  assert.equal(response.protocolVersion, 2);
+  assert.deepEqual(response.capabilities, [
+    'runtime-dependency-enqueue',
+    'runtime-dependency-check-batch',
+    'message-id-echo',
+    'runtime-dependency-auto-reload',
+  ]);
+});
+
+void test('linux native host retirement switch drops enqueue and auto-reload', () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-switch-'));
+  const switchPath = join(runtimeDir, 'runtime-dependency-persistent-transport.conf');
+  writeFileSync(switchPath, 'disabled\n', 'utf8');
+
+  const response = runNativeHostOnce(
+    {
+      ...process.env,
+      XDG_DATA_HOME: runtimeDir,
+      OPENPATH_RUNTIME_DEPENDENCY_TRANSPORT_CONF: switchPath,
+    },
+    { action: 'ping' }
+  ) as {
+    capabilities?: string[];
+    protocolVersion?: number;
+  };
+
+  assert.equal(response.protocolVersion, 2);
+  assert.deepEqual(response.capabilities, ['runtime-dependency-check-batch', 'message-id-echo']);
+});
+
+void test('a persistent linux host process picks up whitelist changes between messages', async () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-freshness-'));
+  const whitelistPath = join(runtimeDir, 'whitelist.txt');
+  writeFileSync(whitelistPath, '## WHITELIST\nallowed.example\n', 'utf8');
+
+  const host = startPersistentNativeHost({
+    ...process.env,
+    XDG_DATA_HOME: runtimeDir,
+    OPENPATH_WHITELIST_FILE: whitelistPath,
+  });
+  try {
+    const before = (await host.send({
+      action: 'check',
+      domains: ['freshness.example'],
+    })) as { results?: { in_whitelist?: boolean }[] };
+    assert.equal(before.results?.[0]?.in_whitelist, false);
+
+    writeFileSync(whitelistPath, '## WHITELIST\nallowed.example\nfreshness.example\n', 'utf8');
+
+    const after = (await host.send({
+      action: 'check',
+      domains: ['freshness.example'],
+    })) as { results?: { in_whitelist?: boolean }[] };
+    assert.equal(after.results?.[0]?.in_whitelist, true);
+  } finally {
+    await host.close();
+  }
+});
+
+void test('a persistent linux host logs ready transitions but not every poll', async () => {
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'openpath-native-host-poll-log-'));
+  const overlayPath = join(runtimeDir, 'runtime-dependency-overlay.json');
+  const queueDir = join(runtimeDir, 'queue');
+  mkdirSync(queueDir, { recursive: true });
+  writeFileSync(
+    overlayPath,
+    JSON.stringify({ version: 1, generation: 1, appliedGeneration: 1, entries: [] }),
+    'utf8'
+  );
+
+  const host = startPersistentNativeHost({
+    ...process.env,
+    XDG_DATA_HOME: runtimeDir,
+    OPENPATH_RUNTIME_DEPENDENCY_OVERLAY_FILE: overlayPath,
+    OPENPATH_RUNTIME_DEPENDENCY_QUEUE_DIR: queueDir,
+  });
+  try {
+    await host.send({ action: 'ping' });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const poll = (await host.send({
+        action: 'check-local-runtime-dependency',
+        anchorHost: 'allowed.example',
+        dependencyHost: 'cdn.example',
+      })) as { ready?: boolean };
+      assert.equal(poll.ready, false);
+    }
+
+    writeFileSync(
+      overlayPath,
+      JSON.stringify({
+        version: 1,
+        generation: 1,
+        appliedGeneration: 2,
+        entries: [
+          {
+            anchorHost: 'allowed.example',
+            dependencyHost: 'cdn.example',
+            generation: 1,
+          },
+        ],
+      }),
+      'utf8'
+    );
+    const applied = (await host.send({
+      action: 'check-local-runtime-dependency',
+      anchorHost: 'allowed.example',
+      dependencyHost: 'cdn.example',
+    })) as { ready?: boolean };
+    assert.equal(applied.ready, true);
+  } finally {
+    await host.close();
+  }
+
+  const logPath = join(runtimeDir, 'openpath', 'native-host.log');
+  const logContent = readFileSync(logPath, 'utf8');
+  assert.match(logContent, /runtime-dependency-ready-transition/);
+  const checkLines = logContent
+    .split('\n')
+    .filter(
+      (line) => line.includes('Received:') && line.includes('check-local-runtime-dependency')
+    );
+  assert.deepEqual(checkLines, [], 'poll messages must not be logged one per message');
+});

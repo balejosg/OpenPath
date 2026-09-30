@@ -210,6 +210,131 @@ function Format-NativeHostActionLogValue {
 
     return $text
 }
+# Phase 2C: capabilities, the retirement switch and chatty-action log policy.
+$script:NativeHostChattyActionStats = @{}
+$script:NativeHostDependencyReadyState = @{}
+$script:NativeHostChattyActions = @(
+    'check-local-runtime-dependency',
+    'get-policy-version',
+    'get-blocked-paths',
+    'get-blocked-subdomains',
+    'get-allowed-paths'
+)
+
+function Test-NativeHostChattyAction {
+    <#
+    .SYNOPSIS
+    Returns true for poll-style actions that must not log one line per message.
+    #>
+    param([AllowNull()][string]$Action)
+
+    if (-not $Action) { return $false }
+    return ($script:NativeHostChattyActions -contains $Action)
+}
+
+function Write-NativeHostChattyActionLog {
+    <#
+    .SYNOPSIS
+    Counts a poll-style action message and emits an aggregate log line at most once per window.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Action,
+        [int]$WindowSeconds = 60
+    )
+
+    try {
+        $now = Get-Date
+        $entry = $script:NativeHostChattyActionStats[$Action]
+        if (-not $entry) {
+            $entry = @{ count = 0; lastSummaryAt = $now }
+            $script:NativeHostChattyActionStats[$Action] = $entry
+        }
+        $entry.count = 1 + [int]$entry.count
+        $elapsedSeconds = ($now - $entry.lastSummaryAt).TotalSeconds
+        if ($elapsedSeconds -ge $WindowSeconds -or $entry.count -ge 500) {
+            Write-NativeHostStageLog -Stage 'chatty-aggregate' -Fields @{
+                action = $Action
+                count = $entry.count
+                windowSeconds = [int]$elapsedSeconds
+            }
+            $entry.count = 0
+            $entry.lastSummaryAt = $now
+        }
+    }
+    catch {
+        return
+    }
+}
+
+function Update-NativeHostDependencyReadyState {
+    <#
+    .SYNOPSIS
+    Records an entry's ready state and logs only false->true transitions.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$AnchorHost,
+        [Parameter(Mandatory = $true)][string]$DependencyHost,
+        [bool]$Ready = $false
+    )
+
+    $key = "$($AnchorHost.ToLowerInvariant())|$($DependencyHost.ToLowerInvariant())"
+    $previous = $script:NativeHostDependencyReadyState[$key]
+    $script:NativeHostDependencyReadyState[$key] = $Ready
+    if ($Ready -and $previous -ne $true) {
+        Write-NativeHostStageLog -Stage 'runtime-dependency-ready-transition' -Domains @($DependencyHost) -Fields @{ anchorHost = $AnchorHost }
+        return $true
+    }
+    return $false
+}
+
+function Test-NativeHostPersistentTransportDisabled {
+    <#
+    .SYNOPSIS
+    Retirement switch for the Phase 2C persistent transport. Reads the Windows
+    agent config (data\config.json) so turning it off never requires a new XPI.
+    Default: enabled (announce).
+    #>
+    try {
+        $configPath = Join-Path $script:OpenPathRoot 'data\config.json'
+        if (-not (Test-Path -LiteralPath $configPath -ErrorAction SilentlyContinue)) { return $false }
+        $config = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if (-not $config.PSObject.Properties['runtimeDependencyPersistentTransportDisabled']) { return $false }
+
+        $value = $config.runtimeDependencyPersistentTransportDisabled
+        if ($value -is [bool]) { return [bool]$value }
+        if ($value -is [string]) {
+            return ([string]$value).Trim().ToLowerInvariant() -in @('1', 'true', 'yes', 'on', 'disabled')
+        }
+        return [bool]$value
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-NativeHostCapabilities {
+    <#
+    .SYNOPSIS
+    Capabilities announced by ping. The retirement switch drops the two
+    capabilities that change request handling (enqueue and auto-reload).
+    #>
+    $capabilities = [System.Collections.Generic.List[string]]::new()
+    if (-not (Test-NativeHostPersistentTransportDisabled)) {
+        $capabilities.Add('runtime-dependency-enqueue')
+    }
+    $capabilities.Add('runtime-dependency-check-batch')
+    $capabilities.Add('message-id-echo')
+    if (-not (Test-NativeHostPersistentTransportDisabled)) {
+        $capabilities.Add('runtime-dependency-auto-reload')
+    }
+    return $capabilities.ToArray()
+}
+
+function Get-NativeHostProtocolVersion {
+    # Phase 2C persistent transport protocol version.
+    return 2
+}
+
 function Write-NativeHostActionLog {
     <#
     .SYNOPSIS

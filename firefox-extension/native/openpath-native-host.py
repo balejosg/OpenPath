@@ -41,6 +41,16 @@ RUNTIME_DEPENDENCY_BATCH_LIMIT = 20
 RUNTIME_DEPENDENCY_SOURCE = "firefox-webrequest-local"
 RUNTIME_DEPENDENCY_READY_TIMEOUT_MS_DEFAULT = 8000
 RUNTIME_DEPENDENCY_READY_POLL_MS_DEFAULT = 100
+# Phase 2C persistent transport protocol version and retirement switch.
+NATIVE_HOST_PROTOCOL_VERSION = 2
+RUNTIME_DEPENDENCY_TRANSPORT_CONF_DEFAULT = "/etc/openpath/runtime-dependency-persistent-transport.conf"
+CHATTY_ACTIONS = {
+    "check-local-runtime-dependency",
+    "get-policy-version",
+    "get-blocked-paths",
+    "get-blocked-subdomains",
+    "get-allowed-paths",
+}
 RUNTIME_DEPENDENCY_HOST_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
 )
@@ -487,6 +497,81 @@ def log_debug(message):
             f.write(f"[{timestamp}] {message}\n")
     except Exception:
         pass
+
+
+def get_runtime_dependency_transport_conf_path():
+    return Path(
+        os.environ.get(
+            "OPENPATH_RUNTIME_DEPENDENCY_TRANSPORT_CONF",
+            RUNTIME_DEPENDENCY_TRANSPORT_CONF_DEFAULT,
+        )
+    )
+
+
+def persistent_transport_disabled():
+    """Retirement switch for the Phase 2C persistent transport.
+
+    Reads /etc/openpath/runtime-dependency-persistent-transport.conf (or the
+    OPENPATH_RUNTIME_DEPENDENCY_TRANSPORT_CONF override) so turning the new
+    transport off never requires a new XPI. Default: enabled.
+    """
+    try:
+        path = get_runtime_dependency_transport_conf_path()
+        if not path.is_file():
+            return False
+        content = path.read_text(encoding="utf-8", errors="replace").strip().lower()
+    except OSError:
+        return False
+    if not content:
+        return False
+    if "=" in content:
+        _, _, content = content.partition("=")
+        content = content.strip()
+    return content in {"1", "true", "yes", "on", "disabled"}
+
+
+def get_native_host_capabilities():
+    capabilities = []
+    if not persistent_transport_disabled():
+        capabilities.append("runtime-dependency-enqueue")
+    capabilities.append("runtime-dependency-check-batch")
+    capabilities.append("message-id-echo")
+    if not persistent_transport_disabled():
+        capabilities.append("runtime-dependency-auto-reload")
+    return capabilities
+
+
+_chatty_action_state = {"counts": {}, "last_summary": time.time()}
+
+
+def record_chatty_action(action):
+    """Counts poll-style actions and logs a summary instead of one line per poll."""
+    try:
+        counts = _chatty_action_state["counts"]
+        counts[action] = counts.get(action, 0) + 1
+        now = time.time()
+        elapsed = now - _chatty_action_state["last_summary"]
+        if elapsed >= 60 or sum(counts.values()) >= 500:
+            summary = " ".join(f"{key}={value}" for key, value in sorted(counts.items()))
+            log_debug(f"chatty-aggregate windowSeconds={int(elapsed)} {summary}")
+            _chatty_action_state["counts"] = {}
+            _chatty_action_state["last_summary"] = now
+    except Exception:
+        pass
+
+
+_dependency_ready_state = {}
+
+
+def update_dependency_ready_state(anchor_host, dependency_host, ready):
+    """Logs only false->true readiness transitions for runtime dependencies."""
+    key = f"{str(anchor_host).lower()}|{str(dependency_host).lower()}"
+    previous = _dependency_ready_state.get(key)
+    _dependency_ready_state[key] = bool(ready)
+    if ready and previous is not True:
+        log_debug(
+            f"runtime-dependency-ready-transition anchorHost={anchor_host} dependencyHost={dependency_host}"
+        )
 
 
 def get_machine_token():
@@ -1338,7 +1423,13 @@ def dispatch_message(message):
         return {"success": True, "action": "status", "status": status}
 
     elif action == "ping":
-        return {"success": True, "action": "ping", "message": "pong"}
+        return {
+            "success": True,
+            "action": "ping",
+            "message": "pong",
+            "protocolVersion": NATIVE_HOST_PROTOCOL_VERSION,
+            "capabilities": get_native_host_capabilities(),
+        }
 
     elif action == "get-hostname":
         # Return the system hostname for token generation
@@ -1420,6 +1511,7 @@ def dispatch_message(message):
             states = get_runtime_dependency_entry_states(set(pairs)) if pairs else {}
             for anchor_host, dependency_host in normalized_entries:
                 state = states[(anchor_host, dependency_host)]
+                update_dependency_ready_state(anchor_host, dependency_host, state["ready"])
                 result = {
                     "success": True,
                     "action": "check-local-runtime-dependency",
@@ -1458,6 +1550,7 @@ def dispatch_message(message):
             }
 
         state = get_runtime_dependency_entry_states({(anchor_host, dependency_host)})[(anchor_host, dependency_host)]
+        update_dependency_ready_state(anchor_host, dependency_host, state["ready"])
         response = {
             "success": True,
             "action": "check-local-runtime-dependency",
@@ -1571,11 +1664,19 @@ def main():
             log_debug("No message received, exiting")
             break
 
-        log_debug(f"Received: {message}")
+        action = message.get("action", "") if isinstance(message, dict) else ""
+        chatty = action in CHATTY_ACTIONS
+        if not chatty:
+            log_debug(f"Received: {message}")
 
         response = handle_message(message)
 
-        log_debug(f"Sending: {response}")
+        if chatty:
+            # Poll-style actions are served continuously over the persistent
+            # port: log aggregates instead of one line per message.
+            record_chatty_action(action)
+        else:
+            log_debug(f"Sending: {response}")
         send_message(response)
 
 

@@ -63,6 +63,8 @@ function Invoke-NativeHostMessageAction {
                 action = 'ping'
                 message = 'pong'
                 version = if ($State.PSObject.Properties['version']) { [string]$State.version } else { '' }
+                protocolVersion = Get-NativeHostProtocolVersion
+                capabilities = @(Get-NativeHostCapabilities)
             }
         }
 
@@ -238,13 +240,21 @@ function Handle-Message {
             }
         }
 
-        Write-NativeHostActionLog -Action $action `
-            -Domains $domains `
-            -Success ($result.success -eq $true) `
-            -Message $logMessage `
-            -ErrorMessage $logError `
-            -ElapsedMs $stopwatch.ElapsedMilliseconds `
-            -ExtraFields $extraFields
+        if (Test-NativeHostChattyAction -Action $action) {
+            # Poll-style actions (checks, policy reads) are served continuously
+            # over the persistent port: one line per message would flood the
+            # per-user log, so only state transitions and aggregates are logged.
+            Write-NativeHostChattyActionLog -Action $action
+        }
+        else {
+            Write-NativeHostActionLog -Action $action `
+                -Domains $domains `
+                -Success ($result.success -eq $true) `
+                -Message $logMessage `
+                -ErrorMessage $logError `
+                -ElapsedMs $stopwatch.ElapsedMilliseconds `
+                -ExtraFields $extraFields
+        }
     }
 
     # Echo the optional correlation id from the request so the extension can
