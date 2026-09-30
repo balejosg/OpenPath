@@ -27,7 +27,8 @@ $suiteFiles = @(
     "Windows.Browser.RequestReadiness.Tests.ps1",
     "Windows.Browser.NativeHost.Tests.ps1",
     "Windows.Browser.Diagnostics.Tests.ps1",
-    "Windows.Browser.FirefoxConfig.Tests.ps1"
+    "Windows.Browser.FirefoxConfig.Tests.ps1",
+    "Windows.RuntimeDependency.Worker.Tests.ps1"
 )
 
 foreach ($suiteFile in $suiteFiles) {

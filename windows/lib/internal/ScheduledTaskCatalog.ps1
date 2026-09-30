@@ -14,6 +14,12 @@ function Get-OpenPathScheduledTaskCatalog {
             Script = 'scripts\Apply-RuntimeDependencyQueue.ps1'
             GrantUsersRunAccess = $true
         }
+        RuntimeDependencyWorker = [PSCustomObject]@{
+            Type = 'RuntimeDependencyWorker'
+            Name = "$prefix-RuntimeDependencyWorker"
+            Script = 'scripts\Start-RuntimeDependencyWorker.ps1'
+            GrantUsersRunAccess = $false
+        }
         CaptivePortalRecovery = [PSCustomObject]@{
             Type = 'CaptivePortalRecovery'
             Name = "$prefix-CaptivePortalRecovery"
@@ -59,7 +65,7 @@ function Get-OpenPathScheduledTaskSpec {
     # returns the descriptor for a single task type by looking up $TaskType in the catalog
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Update', 'RuntimeDependencyApply', 'CaptivePortalRecovery', 'Watchdog', 'Startup', 'SSE', 'AgentUpdate')]
+        [ValidateSet('Update', 'RuntimeDependencyApply', 'RuntimeDependencyWorker', 'CaptivePortalRecovery', 'Watchdog', 'Startup', 'SSE', 'AgentUpdate')]
         [string]$TaskType
     )
 

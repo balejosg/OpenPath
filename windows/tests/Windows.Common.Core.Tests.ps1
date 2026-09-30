@@ -29,6 +29,8 @@ Describe "Common Module" {
                 Should -Be (Join-Path $root "data\captive-portal-recovery-progress")
             Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $root |
                 Should -Be (Join-Path $root "data\runtime-dependency-overlay.json")
+            Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyWorkerState -OpenPathRoot $root |
+                Should -Be (Join-Path $root "data\runtime-dependency-worker-state.json")
             Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostRoot -OpenPathRoot $root |
                 Should -Be (Join-Path $root "browser-extension\firefox\native")
             Get-OpenPathCapabilityStoragePath -Name FirefoxNativeHostState -OpenPathRoot $root |
@@ -45,6 +47,8 @@ Describe "Common Module" {
                 "'CaptivePortalRecoveryProgress'",
                 "'CaptivePortalRecoveryQueue'",
                 "'CaptivePortalRecoveryResultRead'",
+                "'RuntimeDependencyRead'",
+                'function Set-OpenPathRuntimeDependencyReadAccess',
                 "elseif (`$Profile -eq 'CaptivePortalRecoveryQueue')",
                 "elseif (`$Profile -eq 'CaptivePortalRecoveryResultRead')",
                 "'BUILTIN\Users' -Rights 'Modify'",

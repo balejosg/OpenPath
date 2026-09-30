@@ -113,7 +113,7 @@ Describe "Services Module" {
             $content = Get-Content $servicesPath -Raw
 
             $content | Should -Match '\[string\]\$OpenPathRoot\s*=\s*''C:\\OpenPath'''
-            ([regex]::Matches($content, '-OpenPathRoot \$OpenPathRoot')).Count | Should -Be 7
+            ([regex]::Matches($content, '-OpenPathRoot \$OpenPathRoot')).Count | Should -Be 8
         }
 
         It "Includes daily silent agent update task" {
@@ -155,6 +155,35 @@ Describe "Services Module" {
                 '"RuntimeDependencyApply"'
             )
             $installerContent.Contains("'Apply-RuntimeDependencyQueue.ps1'") | Should -BeTrue
+        }
+
+        It "Includes the resident runtime dependency worker task" {
+            $catalogPath = Join-Path $PSScriptRoot ".." "lib" "internal" "ScheduledTaskCatalog.ps1"
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Services.TaskBuilders.ps1"
+            $servicesPath = Join-Path $PSScriptRoot ".." "lib" "Services.psm1"
+            $installerPath = Join-Path $PSScriptRoot ".." "lib" "install" "Installer.Staging.ps1"
+            $catalogContent = Get-Content $catalogPath -Raw
+            $helperContent = Get-Content $helperPath -Raw
+            $servicesContent = Get-Content $servicesPath -Raw
+            $installerContent = Get-Content $installerPath -Raw
+
+            Assert-ContentContainsAll -Content $catalogContent -Needles @(
+                '$prefix-RuntimeDependencyWorker',
+                'scripts\Start-RuntimeDependencyWorker.ps1',
+                'GrantUsersRunAccess = $false'
+            )
+            Assert-ContentContainsAll -Content $helperContent -Needles @(
+                'function New-OpenPathRuntimeDependencyWorkerTaskDefinition',
+                'Get-OpenPathScheduledTaskSpec -TaskType RuntimeDependencyWorker',
+                'New-ScheduledTaskTrigger -AtStartup',
+                '-MultipleInstances IgnoreNew',
+                '-ExecutionTimeLimit (New-TimeSpan -Days 0)'
+            )
+            Assert-ContentContainsAll -Content $servicesContent -Needles @(
+                '$runtimeDependencyWorkerDefinition = New-OpenPathRuntimeDependencyWorkerTaskDefinition',
+                '"RuntimeDependencyWorker"'
+            )
+            $installerContent.Contains("'Start-RuntimeDependencyWorker.ps1'") | Should -BeTrue
         }
 
         It "Includes on-demand captive portal recovery task with unelevated run access" {
@@ -307,6 +336,10 @@ Describe "Services Module" {
 
         It "Accepts RuntimeDependencyApply as a valid task type" {
             { Start-OpenPathTask -TaskType RuntimeDependencyApply -WhatIf } | Should -Not -Throw
+        }
+
+        It "Accepts RuntimeDependencyWorker as a valid task type" {
+            { Start-OpenPathTask -TaskType RuntimeDependencyWorker -WhatIf } | Should -Not -Throw
         }
 
         It "Accepts CaptivePortalRecovery as a valid task type" {

@@ -79,6 +79,45 @@ function Test-NativeHostRuntimeDependencyOverlayApplied {
     }
 }
 
+function Test-NativeHostRuntimeDependencyWorkerFresh {
+    <#
+    .SYNOPSIS
+    Returns true when the resident runtime dependency worker heartbeat is recent enough to skip the scheduled-task fallback trigger.
+    #>
+    param([int]$MaxAgeSeconds = 10)
+
+    $statePath = Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyWorkerState -OpenPathRoot $script:OpenPathRoot
+    if (-not (Test-Path $statePath -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    try {
+        $raw = Get-Content -Path $statePath -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
+        $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+
+        $heartbeatMs = $null
+        if ($parsed.PSObject.Properties['heartbeatEpochMs'] -and $parsed.heartbeatEpochMs) {
+            $heartbeatMs = [long]$parsed.heartbeatEpochMs
+        }
+        elseif ($parsed.PSObject.Properties['heartbeatAt'] -and $parsed.heartbeatAt) {
+            # ps-culture-allow: InvariantCulture and RoundtripKind are passed explicitly on the following lines.
+            $heartbeatMs = [long][DateTimeOffset]::Parse(
+                [string]$parsed.heartbeatAt,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind
+            ).ToUnixTimeMilliseconds()
+        }
+        if ($null -eq $heartbeatMs) { return $false }
+
+        $ageMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $heartbeatMs
+        return ($ageMs -ge -30000 -and $ageMs -le ([Math]::Max(1, $MaxAgeSeconds) * 1000))
+    }
+    catch {
+        return $false
+    }
+}
+
 function Test-NativeHostRuntimeDependencyReady {
     <#
     .SYNOPSIS
@@ -182,11 +221,24 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
         -DependencyHost $candidate.DependencyHost `
         -RequestType $candidate.RequestType
     $queueWriteStopwatch.Stop()
+    Write-NativeHostStageLog -Stage 'queue-written' `
+        -Domains @($candidate.DependencyHost) `
+        -ElapsedMs $queueWriteStopwatch.ElapsedMilliseconds `
+        -Fields @{ anchorHost = $candidate.AnchorHost; requestType = $candidate.RequestType; request = $requestPath }
 
     $updateResult = Invoke-UpdateTask `
         -RuntimeDependencyDomains @($candidate.DependencyHost) `
         -RuntimeDependencyRequestPath $requestPath `
         -TimeoutSeconds 14
+    Write-NativeHostStageLog -Stage 'readiness-observed' `
+        -Domains @($candidate.DependencyHost) `
+        -Fields @{
+            ready            = [bool]($updateResult.success -eq $true)
+            worker           = if ($updateResult.ContainsKey('runtimeDependencyWorker')) { [bool]$updateResult.runtimeDependencyWorker } else { $false }
+            updateTriggerMs  = if ($updateResult.ContainsKey('updateTriggerMs')) { [int]$updateResult.updateTriggerMs } else { 0 }
+            updateWaitMs     = if ($updateResult.ContainsKey('updateWaitMs')) { [int]$updateResult.updateWaitMs } else { 0 }
+            updateTaskName   = if ($updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
+        }
     if ($updateResult.success -ne $true) {
         return @{
             success = $false
@@ -203,6 +255,7 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
             updateElapsedMs = if ($updateResult.ContainsKey('elapsedMs')) { [int]$updateResult.elapsedMs } else { 0 }
             runtimeDependencyFastPath = if ($updateResult.ContainsKey('runtimeDependencyFastPath')) { [bool]$updateResult.runtimeDependencyFastPath } else { $false }
             runtimeDependencyFallback = if ($updateResult.ContainsKey('runtimeDependencyFallback')) { [bool]$updateResult.runtimeDependencyFallback } else { $false }
+            runtimeDependencyWorker = if ($updateResult.ContainsKey('runtimeDependencyWorker')) { [bool]$updateResult.runtimeDependencyWorker } else { $false }
             updateTaskName = if ($updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
             error = $updateResult.error
         }
@@ -224,6 +277,7 @@ function Invoke-NativeHostLocalRuntimeDependencyAction {
         updateElapsedMs = if ($updateResult.ContainsKey('elapsedMs')) { [int]$updateResult.elapsedMs } else { 0 }
         runtimeDependencyFastPath = if ($updateResult.ContainsKey('runtimeDependencyFastPath')) { [bool]$updateResult.runtimeDependencyFastPath } else { $false }
         runtimeDependencyFallback = if ($updateResult.ContainsKey('runtimeDependencyFallback')) { [bool]$updateResult.runtimeDependencyFallback } else { $false }
+        runtimeDependencyWorker = if ($updateResult.ContainsKey('runtimeDependencyWorker')) { [bool]$updateResult.runtimeDependencyWorker } else { $false }
         updateTaskName = if ($updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
         source = $script:OpenPathRuntimeDependencySourceFirefoxWebRequestLocal
     }
@@ -290,9 +344,22 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
 
     if ($queuedDependencyHosts.Count -gt 0) {
         $queuedDependencyHosts = @($queuedDependencyHosts | Sort-Object -Unique)
+        Write-NativeHostStageLog -Stage 'queue-written' `
+            -Domains $queuedDependencyHosts `
+            -ElapsedMs ([int](@($queuedResults | ForEach-Object { if ($_.ContainsKey('queueWriteMs')) { [int]$_.queueWriteMs } else { 0 } } | Measure-Object -Sum).Sum)) `
+            -Fields @{ count = $queuedResults.Count }
         $updateResult = Invoke-UpdateTask `
             -RuntimeDependencyDomains $queuedDependencyHosts `
             -TimeoutSeconds 14
+        Write-NativeHostStageLog -Stage 'readiness-observed' `
+            -Domains $queuedDependencyHosts `
+            -Fields @{
+                ready           = [bool]($updateResult.success -eq $true)
+                worker          = if ($updateResult.ContainsKey('runtimeDependencyWorker')) { [bool]$updateResult.runtimeDependencyWorker } else { $false }
+                updateTriggerMs = if ($updateResult.ContainsKey('updateTriggerMs')) { [int]$updateResult.updateTriggerMs } else { 0 }
+                updateWaitMs    = if ($updateResult.ContainsKey('updateWaitMs')) { [int]$updateResult.updateWaitMs } else { 0 }
+                updateTaskName  = if ($updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
+            }
         if ($updateResult.success -ne $true) {
             foreach ($result in $queuedResults) {
                 $result.success = $false
@@ -312,6 +379,7 @@ function Invoke-NativeHostLocalRuntimeDependencyBatchAction {
             $result.updateElapsedMs = if ($updateResult.ContainsKey('elapsedMs')) { [int]$updateResult.elapsedMs } else { 0 }
             $result.runtimeDependencyFastPath = if ($updateResult.ContainsKey('runtimeDependencyFastPath')) { [bool]$updateResult.runtimeDependencyFastPath } else { $false }
             $result.runtimeDependencyFallback = if ($updateResult.ContainsKey('runtimeDependencyFallback')) { [bool]$updateResult.runtimeDependencyFallback } else { $false }
+            $result.runtimeDependencyWorker = if ($updateResult.ContainsKey('runtimeDependencyWorker')) { [bool]$updateResult.runtimeDependencyWorker } else { $false }
             $result.updateTaskName = if ($updateResult.ContainsKey('updateTaskName')) { [string]$updateResult.updateTaskName } else { '' }
         }
     }
@@ -474,7 +542,61 @@ function Invoke-UpdateTask {
             }
         }
         else {
-            $triggeredTaskName = if (
+            $workerFresh = $false
+            if ($hasRuntimeDependencyWait) {
+                try {
+                    $workerFresh = [bool](Test-NativeHostRuntimeDependencyWorkerFresh -MaxAgeSeconds 10)
+                }
+                catch {
+                    $workerFresh = $false
+                }
+            }
+
+            if ($workerFresh) {
+                # The resident worker is alive: skip the schtasks cold start and wait
+                # directly for the overlay generation marker at a short poll interval.
+                Write-NativeHostStageLog -Stage 'worker-fresh' -Domains $RuntimeDependencyDomains -Fields @{ skippedTaskTrigger = 'true' }
+                $workerWaitRunner = Get-NativeHostTaskRunner
+                $workerWaitResult = & $workerWaitRunner.WaitFor 'OpenPath-RuntimeDependencyWorker' {
+                    $whitelistReady = Test-NativeWhitelistContainsDomains -Domains $Domains
+                    $runtimeDependencyReady = Test-NativeHostRuntimeDependencyReady `
+                        -RequestPath $RuntimeDependencyRequestPath `
+                        -Domains $RuntimeDependencyDomains
+                    return ($whitelistReady -and $runtimeDependencyReady)
+                } $TimeoutSeconds 100
+
+                $workerWaitMs = if ($workerWaitResult.ContainsKey('elapsedMs')) { [int]$workerWaitResult.elapsedMs } else { 0 }
+                if ($workerWaitResult.success -ne $true) {
+                    $result = @{
+                        success = $false
+                        action = 'update-whitelist'
+                        error = "Runtime dependency worker did not apply expected domains: $(@($Domains + $RuntimeDependencyDomains) -join ', ')"
+                        domains = @($Domains)
+                        runtimeDependencyFastPath = $true
+                        runtimeDependencyWorker = $true
+                        runtimeDependencyFallback = $false
+                        updateTaskName = 'OpenPath-RuntimeDependencyWorker'
+                        updateTriggerMs = 0
+                        updateWaitMs = $workerWaitMs
+                    }
+                }
+                else {
+                    $result = @{
+                        success = $true
+                        action = 'update-whitelist'
+                        message = 'OpenPath runtime dependency worker applied expected domains'
+                        domains = @($Domains)
+                        runtimeDependencyFastPath = $true
+                        runtimeDependencyWorker = $true
+                        runtimeDependencyFallback = $false
+                        updateTaskName = 'OpenPath-RuntimeDependencyWorker'
+                        updateTriggerMs = 0
+                        updateWaitMs = $workerWaitMs
+                    }
+                }
+            }
+            else {
+                $triggeredTaskName = if (
                 $hasRuntimeDependencyWait -and
                 (Get-Variable -Name RuntimeDependencyTaskName -Scope Script -ErrorAction SilentlyContinue) -and
                 -not [string]::IsNullOrWhiteSpace($script:RuntimeDependencyTaskName)
@@ -547,7 +669,7 @@ function Invoke-UpdateTask {
                             )
                         )
                         return ($whitelistReady -and $runtimeDependencyReady)
-                    } $TimeoutSeconds 1000
+                    } $TimeoutSeconds 100
 
                     if ($waitResult.success -ne $true) {
                         return @{
@@ -575,6 +697,7 @@ function Invoke-UpdateTask {
                         updateWaitMs = if ($waitResult.ContainsKey('elapsedMs')) { [int]$waitResult.elapsedMs } else { 0 }
                     }
                 }
+            }
         }
     }
     catch {

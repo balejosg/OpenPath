@@ -506,7 +506,7 @@ Describe "Browser Module - Native Host" {
                 '$Message.domains',
                 'Invoke-UpdateTask -Domains $domains',
                 'Get-WhitelistSections',
-                '1000',
+                '100',
                 'OpenPath update task did not write expected domains'
             )
         }

@@ -40,6 +40,7 @@ function Get-OpenPathCapabilityStoragePath {
             'CaptivePortalRecoveryProgress',
             'RuntimeDependencyOverlay',
             'RuntimeDependencyOverlayParent',
+            'RuntimeDependencyWorkerState',
             'FirefoxNativeHostRoot',
             'FirefoxNativeHostState',
             'FirefoxNativeHostWhitelistMirror'
@@ -80,6 +81,12 @@ function Get-OpenPathCapabilityStoragePath {
         }
         'RuntimeDependencyOverlayParent' {
             return (Split-Path (Get-OpenPathCapabilityStoragePath -Name RuntimeDependencyOverlay -OpenPathRoot $OpenPathRoot) -Parent)
+        }
+        'RuntimeDependencyWorkerState' {
+            if ($env:OPENPATH_RUNTIME_DEPENDENCY_WORKER_STATE_PATH) {
+                return $env:OPENPATH_RUNTIME_DEPENDENCY_WORKER_STATE_PATH
+            }
+            return (Join-OpenPathCapabilityStoragePath -Parent (Get-OpenPathCapabilityStorageRoot -OpenPathRoot $OpenPathRoot) -Child 'runtime-dependency-worker-state.json')
         }
         'FirefoxNativeHostRoot' {
             return (Join-OpenPathCapabilityStoragePath -Parent $OpenPathRoot -Child 'browser-extension\firefox\native')
@@ -126,7 +133,7 @@ function Set-OpenPathCapabilityStorageAcl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [ValidateSet('RestrictedRoot', 'RuntimeDependencyQueue', 'CaptivePortalRecoveryQueue', 'CaptivePortalRecoveryResultRead', 'BrowserExtensionRead')]
+        [ValidateSet('RestrictedRoot', 'RuntimeDependencyQueue', 'CaptivePortalRecoveryQueue', 'CaptivePortalRecoveryResultRead', 'BrowserExtensionRead', 'RuntimeDependencyRead')]
         [string]$Profile = 'RestrictedRoot'
     )
 
@@ -168,7 +175,7 @@ function Set-OpenPathCapabilityStorageAcl {
     elseif ($Profile -eq 'CaptivePortalRecoveryResultRead') {
         $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'ReadAndExecute' -InheritanceFlags $inheritanceFlags))
     }
-    elseif ($Profile -eq 'BrowserExtensionRead') {
+    elseif ($Profile -eq 'BrowserExtensionRead' -or $Profile -eq 'RuntimeDependencyRead') {
         $acl.AddAccessRule((New-OpenPathCapabilityStorageAccessRule -Identity 'BUILTIN\Users' -Rights 'ReadAndExecute' -InheritanceFlags $inheritanceFlags))
     }
 
@@ -179,7 +186,7 @@ function Test-OpenPathCapabilityStorageAcl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [ValidateSet('RestrictedRoot', 'RuntimeDependencyQueue', 'CaptivePortalRecoveryQueue', 'CaptivePortalRecoveryResultRead', 'BrowserExtensionRead')]
+        [ValidateSet('RestrictedRoot', 'RuntimeDependencyQueue', 'CaptivePortalRecoveryQueue', 'CaptivePortalRecoveryResultRead', 'BrowserExtensionRead', 'RuntimeDependencyRead')]
         [string]$Profile = 'RestrictedRoot'
     )
 
@@ -216,7 +223,7 @@ function Ensure-OpenPathCapabilityStorageDirectory {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [ValidateSet('None', 'RestrictedRoot', 'RuntimeDependencyQueue', 'CaptivePortalRecoveryQueue', 'CaptivePortalRecoveryResultRead', 'BrowserExtensionRead')]
+        [ValidateSet('None', 'RestrictedRoot', 'RuntimeDependencyQueue', 'CaptivePortalRecoveryQueue', 'CaptivePortalRecoveryResultRead', 'BrowserExtensionRead', 'RuntimeDependencyRead')]
         [string]$AclProfile = 'None',
         [switch]$ValidateAcl
     )
@@ -233,4 +240,35 @@ function Ensure-OpenPathCapabilityStorageDirectory {
     }
 
     return $Path
+}
+
+function Set-OpenPathRuntimeDependencyReadAccess {
+    <#
+    .SYNOPSIS
+    Ensures an agent-owned runtime-dependency file (overlay, worker state) is readable by the browser user.
+    .DESCRIPTION
+    The Firefox native host runs as the logged-in student user and must read the runtime
+    dependency overlay and the resident worker state to answer readiness checks. Those files
+    live under the restricted data root, so an explicit BUILTIN\Users read ACE is applied.
+    Idempotent and best-effort: returns $true when the ACE is present or was applied.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        if (-not (Test-Path $Path -ErrorAction SilentlyContinue)) {
+            return $false
+        }
+        if (Test-OpenPathCapabilityStorageAcl -Path $Path -Profile 'RuntimeDependencyRead') {
+            return $true
+        }
+        Set-OpenPathCapabilityStorageAcl -Path $Path -Profile 'RuntimeDependencyRead'
+        return $true
+    }
+    catch {
+        if (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue) {
+            Write-OpenPathLog "Failed to grant runtime dependency read access for $Path : $_" -Level WARN
+        }
+        return $false
+    }
 }

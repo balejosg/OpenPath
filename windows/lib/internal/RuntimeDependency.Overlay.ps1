@@ -4,6 +4,16 @@ if (-not (Get-Command -Name 'Get-OpenPathCapabilityStoragePath' -ErrorAction Sil
         . $capabilityStoragePath
     }
 }
+# Module contexts (DNS.psm1, native host bootstrap) often already import the
+# capability-storage path helper through Common, which would otherwise skip the
+# dot-source above and leave the read-access helper undefined. The overlay write
+# path must always be able to grant the browser user read access to the file.
+if (-not (Get-Command -Name 'Set-OpenPathRuntimeDependencyReadAccess' -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
+    $capabilityStoragePath = Join-Path $PSScriptRoot 'CapabilityStorage.ps1'
+    if (Test-Path $capabilityStoragePath -ErrorAction SilentlyContinue) {
+        . $capabilityStoragePath
+    }
+}
 
 if (-not (Get-Variable -Name OpenPathRuntimeDependencyOverlayVersion -Scope Script -ErrorAction SilentlyContinue) -and $PSScriptRoot) {
     $runtimeDependencyProtocolPath = Join-Path $PSScriptRoot 'RuntimeDependency.Protocol.ps1'
@@ -96,6 +106,10 @@ function Write-OpenPathRuntimeDependencyOverlay {
         updatedAt = (Get-Date).ToUniversalTime().ToString('o')
         entries = @($Entries)
     } | ConvertTo-Json -Depth 8 | Set-Content $Path -Encoding UTF8 -Force
+
+    if (Get-Command -Name 'Set-OpenPathRuntimeDependencyReadAccess' -ErrorAction SilentlyContinue) {
+        Set-OpenPathRuntimeDependencyReadAccess -Path $Path | Out-Null
+    }
 }
 
 function Set-OpenPathRuntimeDependencyOverlayApplied {
@@ -116,6 +130,10 @@ function Set-OpenPathRuntimeDependencyOverlayApplied {
         $parsed | Add-Member -MemberType NoteProperty -Name 'appliedGeneration' -Value $generation -Force
         $parsed | Add-Member -MemberType NoteProperty -Name 'appliedAt' -Value ((Get-Date).ToUniversalTime().ToString('o')) -Force
         $parsed | ConvertTo-Json -Depth 8 | Set-Content $Path -Encoding UTF8 -Force
+
+        if (Get-Command -Name 'Set-OpenPathRuntimeDependencyReadAccess' -ErrorAction SilentlyContinue) {
+            Set-OpenPathRuntimeDependencyReadAccess -Path $Path | Out-Null
+        }
         return $true
     }
     catch {

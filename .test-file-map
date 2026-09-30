@@ -266,6 +266,8 @@ linux/scripts/runtime/openpath-sse-listener.sh|tests/openpath-update.bats,tests/
 linux/scripts/runtime/smoke-test.sh|tests/install.bats,tests/linux-e2e.bats
 linux/uninstall.sh|tests/install.bats,tests/linux-e2e.bats
 windows/scripts/Update-OpenPath.ps1|windows/tests/Windows.Tests.ps1
+windows/scripts/Start-RuntimeDependencyWorker.ps1|windows/tests/Windows.RuntimeDependency.Worker.Tests.ps1
+windows/lib/internal/RuntimeDependency.Worker.ps1|windows/tests/Windows.RuntimeDependency.Worker.Tests.ps1
 windows/scripts/Apply-RuntimeDependencyQueue.ps1|windows/tests/Windows.Update.Tests.ps1
 windows/scripts/Recover-CaptivePortal.ps1|windows/tests/Windows.Watchdog.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1,windows/tests/Windows.Services.Tests.ps1
 windows/lib/internal/CaptivePortal.RecoveryRunner.ps1|windows/tests/Windows.Watchdog.Tests.ps1,windows/tests/Windows.Browser.NativeHost.Tests.ps1

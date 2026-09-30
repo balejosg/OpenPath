@@ -9,6 +9,27 @@ $VerbosePreference = 'SilentlyContinue'
 $WarningPreference = 'SilentlyContinue'
 
 $script:NativeRoot = Split-Path -Parent $PSCommandPath
+$script:NativeHostStartStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$script:NativeHostProcessStart = $null
+try {
+    $script:NativeHostProcessStart = (Get-Process -Id $PID -ErrorAction Stop).StartTime
+}
+catch {
+    $script:NativeHostProcessStart = $null
+}
+
+function Resolve-OpenPathNativeHostLogPath {
+    # resolves the per-user writable log path; the staged native directory is
+    # read-only for the browser user, so logging there silently failed before.
+    $base = $env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($base)) {
+        $base = $env:TEMP
+    }
+    if ([string]::IsNullOrWhiteSpace($base)) {
+        return (Join-Path $script:NativeRoot 'native-host.log')
+    }
+    return (Join-Path (Join-Path $base 'OpenPath') 'native-host.log')
+}
 
 function Resolve-OpenPathNativeHostRoot {
     $stagedStateHelperPath = Join-Path $script:NativeRoot 'NativeHost.State.ps1'
@@ -55,7 +76,8 @@ function Resolve-OpenPathNativeHostSupportPath {
 $script:OpenPathRoot = Resolve-OpenPathNativeHostRoot
 $script:StatePath = Join-Path $script:NativeRoot 'native-state.json'
 $script:WhitelistPath = Join-Path $script:NativeRoot 'whitelist.txt'
-$script:LogPath = Join-Path $script:NativeRoot 'native-host.log'
+$script:LogPath = Resolve-OpenPathNativeHostLogPath
+$script:LogMaxBytes = 262144
 $script:UpdateTaskName = 'OpenPath-Update'
 $script:RuntimeDependencyTaskName = 'OpenPath-RuntimeDependencyApply'
 $script:MaxDomains = 50
@@ -71,13 +93,36 @@ function Write-NativeHostLog {
     )
 
     try {
-        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        # Never persist credentials: strip token query parameters and tokenized
+        # whitelist paths before the line reaches disk.
+        $safeMessage = [regex]::Replace([string]$Message, '(?i)(token=)[^&\s]+', '${1}<redacted>')
+        $safeMessage = [regex]::Replace($safeMessage, '(?i)/w/[A-Za-z0-9._-]{8,}', '/w/<redacted>')
+
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'
+        $scriptElapsedMs = if ($script:NativeHostStartStopwatch) { $script:NativeHostStartStopwatch.ElapsedMilliseconds } else { 0 }
+        $processElapsedMs = 0
+        if ($script:NativeHostProcessStart) {
+            try { $processElapsedMs = [int]([DateTime]::UtcNow - $script:NativeHostProcessStart.ToUniversalTime()).TotalMilliseconds } catch { $processElapsedMs = 0 }
+        }
+        $line = "[$timestamp] [+${scriptElapsedMs}ms script] [proc=${processElapsedMs}ms] $safeMessage$([Environment]::NewLine)"
+        $logBytes = [System.Text.Encoding]::UTF8.GetBytes($line)
+
         $logDir = Split-Path $script:LogPath -Parent
         if ($logDir -and -not (Test-Path $logDir)) {
             New-Item -ItemType Directory -Path $logDir -Force | Out-Null
         }
 
-        $logBytes = [System.Text.Encoding]::UTF8.GetBytes("[$timestamp] $Message$([Environment]::NewLine)")
+        # Size cap with a single rotation so the per-user log cannot grow without bound.
+        try {
+            $logInfo = New-Object System.IO.FileInfo($script:LogPath)
+            if ($logInfo.Exists -and $logInfo.Length -ge $script:LogMaxBytes) {
+                [System.IO.File]::Move($script:LogPath, "$($script:LogPath).1", $true)
+            }
+        }
+        catch {
+            # Rotation is best-effort; logging must continue regardless.
+        }
+
         for ($attempt = 1; $attempt -le 5; $attempt++) {
             $stream = $null
             try {
@@ -108,7 +153,8 @@ function Write-NativeHostLog {
     }
 }
 
-Write-NativeHostLog 'Native host started'
+$script:NativeHostMessageCount = 0
+Write-NativeHostLog "Native host initialization completed pid=$PID log=$script:LogPath"
 
 while ($true) {
     try {
@@ -117,8 +163,16 @@ while ($true) {
             break
         }
 
+        $script:NativeHostMessageCount = 1 + [int]$script:NativeHostMessageCount
+        $messageAction = ''
+        try { $messageAction = [string]$message.action } catch { }
+        $messageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        Write-NativeHostStageLog -Stage 'message-received' -Fields @{ index = $script:NativeHostMessageCount; action = $messageAction }
+
         $response = Handle-Message -Message $message
         Write-NativeMessage -Message $response
+        $messageStopwatch.Stop()
+        Write-NativeHostStageLog -Stage 'response-sent' -Fields @{ index = $script:NativeHostMessageCount; action = $messageAction; totalMs = [int]$messageStopwatch.ElapsedMilliseconds }
     }
     catch {
         Write-NativeHostLog "Fatal protocol error: $_"
@@ -133,3 +187,5 @@ while ($true) {
         }
     }
 }
+
+Write-NativeHostLog "Native host process exiting pid=$PID"

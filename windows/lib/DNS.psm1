@@ -36,6 +36,7 @@ Export-ModuleMember -Function @(
     'Restore-OpenPathCaptivePortalDNS',
     'Update-OpenPathOriginalDnsSnapshotForCurrentNetwork',
     'Restart-AcrylicService',
+    'Clear-OpenPathDnsClientCache',
     'Start-AcrylicService',
     'Stop-AcrylicService',
     'Resolve-OpenPathDnsWithRetry',

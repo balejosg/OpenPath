@@ -508,6 +508,47 @@ function Restart-AcrylicService {
     }
 }
 
+function Clear-OpenPathDnsClientCache {
+    <#
+    .SYNOPSIS
+    Flushes the Windows DNS client resolver cache, falling back to ipconfig when the cmdlet is unavailable.
+    .DESCRIPTION
+    Runtime dependency readiness requires that a brand-new OS-level lookup already resolves after
+    the local overlay was applied. Windows keeps its own negative answers (status 9501/9003), so the
+    fast apply flushes this cache before stamping the applied generation. Best-effort and bounded:
+    returns $true when a flush command completed successfully.
+    #>
+    [CmdletBinding()]
+    param()
+
+    try {
+        if (Get-Command -Name 'Clear-DnsClientCache' -ErrorAction SilentlyContinue) {
+            Clear-DnsClientCache -ErrorAction Stop
+            return $true
+        }
+    }
+    catch {
+        if (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue) {
+            Write-OpenPathLog "Clear-DnsClientCache failed; falling back to ipconfig /flushdns: $_" -Level WARN
+        }
+    }
+
+    try {
+        $ipconfigPath = Join-Path $env:SystemRoot 'System32\ipconfig.exe'
+        if (Test-Path -LiteralPath $ipconfigPath) {
+            $null = & $ipconfigPath /flushdns 2>$null
+            return ($LASTEXITCODE -eq 0)
+        }
+    }
+    catch {
+        if (Get-Command -Name 'Write-OpenPathLog' -ErrorAction SilentlyContinue) {
+            Write-OpenPathLog "ipconfig /flushdns fallback failed: $_" -Level WARN
+        }
+    }
+
+    return $false
+}
+
 function Start-AcrylicService {
     <#
     .SYNOPSIS

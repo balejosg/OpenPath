@@ -259,6 +259,42 @@ function Write-NativeHostActionLog {
         return
     }
 }
+function Write-NativeHostStageLog {
+    <#
+    .SYNOPSIS
+    Writes a compact pipeline stage mark (message received, queue written, task triggered, readiness observed, response sent) to the native host log.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Stage,
+        [string[]]$Domains = @(),
+        [AllowNull()][string]$Message = '',
+        [long]$ElapsedMs = 0,
+        [hashtable]$Fields = @{}
+    )
+
+    try {
+        if (-not (Get-Command Write-NativeHostLog -ErrorAction SilentlyContinue)) {
+            return
+        }
+
+        $parts = @("stage=$Stage")
+        if ($ElapsedMs -gt 0) { $parts += "elapsedMs=$ElapsedMs" }
+        $safeDomains = @(Get-NativeHostValidDomains -Domains $Domains)
+        if ($safeDomains.Count -gt 0) { $parts += "domains=$($safeDomains -join ',')" }
+        if ($Message) { $parts += "message=$(Format-NativeHostActionLogValue -Value $Message)" }
+        foreach ($key in @($Fields.Keys | Sort-Object)) {
+            if ($key -notmatch '^[A-Za-z][A-Za-z0-9]*$') { continue }
+            $value = $Fields[$key]
+            if ($null -eq $value -or [string]::IsNullOrWhiteSpace([string]$value)) { continue }
+            $parts += "$key=$(Format-NativeHostActionLogValue -Value $value)"
+        }
+
+        Write-NativeHostLog ("Native host {0}" -f ($parts -join ' '))
+    }
+    catch {
+        return
+    }
+}
 function Get-NativeHostMachineName {
     <#
     .SYNOPSIS

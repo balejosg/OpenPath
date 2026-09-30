@@ -87,6 +87,12 @@ function Register-OpenPathTask {
     Grant-OpenPathTaskRunAccessToUsers -TaskName $runtimeDependencyDefinition.TaskName | Out-Null
     Write-OpenPathLog "Registered: $($runtimeDependencyDefinition.TaskName) (on demand runtime dependencies)"
 
+    $runtimeDependencyWorkerDefinition = New-OpenPathRuntimeDependencyWorkerTaskDefinition `
+        -OpenPathRoot $OpenPathRoot `
+        -Principal $updatePrincipal
+    Register-OpenPathTaskDefinition -Definition $runtimeDependencyWorkerDefinition
+    Write-OpenPathLog "Registered: $($runtimeDependencyWorkerDefinition.TaskName) (resident runtime dependency worker)"
+
     $captivePortalRecoverySpec = Get-OpenPathScheduledTaskSpec -TaskType CaptivePortalRecovery
     $captivePortalRecoveryAction = New-OpenPathTaskAction -Target (Join-OpenPathTaskScriptPath -OpenPathRoot $OpenPathRoot -RelativePath $captivePortalRecoverySpec.Script)
     $captivePortalRecoveryTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(10)
@@ -195,7 +201,7 @@ function Start-OpenPathTask {
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [ValidateSet("Update", "RuntimeDependencyApply", "CaptivePortalRecovery", "Watchdog", "Startup", "SSE", "AgentUpdate")]
+        [ValidateSet("Update", "RuntimeDependencyApply", "RuntimeDependencyWorker", "CaptivePortalRecovery", "Watchdog", "Startup", "SSE", "AgentUpdate")]
         [string]$TaskType = "Update"
     )
 

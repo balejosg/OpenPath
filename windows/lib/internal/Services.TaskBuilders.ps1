@@ -154,6 +154,41 @@ function New-OpenPathRuntimeDependencyApplyTaskDefinition {
         -Settings $runtimeDependencySettings
 }
 
+function New-OpenPathRuntimeDependencyWorkerTaskDefinition {
+    <#
+    .SYNOPSIS
+    Builds the resident runtime dependency worker task definition: SYSTEM at startup, auto-restart, single instance, unlimited.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OpenPathRoot,
+
+        [string]$TaskPrefix = '',
+
+        [Parameter(Mandatory = $true)]
+        [object]$Principal
+    )
+
+    $taskSpec = Get-OpenPathScheduledTaskSpec -TaskType RuntimeDependencyWorker
+    $workerAction = New-OpenPathTaskAction -Target (Join-OpenPathTaskScriptPath -OpenPathRoot $OpenPathRoot -RelativePath $taskSpec.Script)
+    $workerTrigger = New-ScheduledTaskTrigger -AtStartup
+    $workerSettings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -RestartCount 9999 `
+        -RestartInterval (New-TimeSpan -Minutes 1) `
+        -MultipleInstances IgnoreNew `
+        -ExecutionTimeLimit (New-TimeSpan -Days 0)
+
+    New-OpenPathTaskDefinition `
+        -TaskName $taskSpec.Name `
+        -Action $workerAction `
+        -Trigger $workerTrigger `
+        -Principal $Principal `
+        -Settings $workerSettings
+}
+
 function New-OpenPathWatchdogTaskDefinition {
     <#
     .SYNOPSIS

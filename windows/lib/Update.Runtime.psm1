@@ -4,6 +4,7 @@ $script:OpenPathUpdateRuntimeSessionInitialized = $false
 $script:OpenPathUpdateRuntimeRoot = ''
 . (Join-Path $PSScriptRoot 'internal\WindowsRoot.ps1')
 . (Join-Path $PSScriptRoot 'internal\Common.MachineToken.ps1')
+. (Join-Path $PSScriptRoot 'internal\RuntimeDependency.Worker.ps1')
 
 function Import-OpenPathUpdateRuntimeHelper {
     <#
@@ -77,6 +78,7 @@ function Initialize-OpenPathUpdateRuntimeSession {
         'Get-AcrylicPath',
         'Update-AcrylicHost',
         'Restart-AcrylicService',
+        'Clear-OpenPathDnsClientCache',
         'Clear-OpenPathRuntimeDependencyOverlay',
         'Restore-OriginalDNS',
         'Remove-OpenPathFirewall',
@@ -90,7 +92,8 @@ function Initialize-OpenPathUpdateRuntimeSession {
     Import-OpenPathUpdateRuntimeHelper `
         -Path (Join-Path $OpenPathRoot 'lib\internal\CapabilityStorage.ps1') `
         -FunctionNames @(
-        'Get-OpenPathCapabilityStoragePath'
+        'Get-OpenPathCapabilityStoragePath',
+        'Set-OpenPathRuntimeDependencyReadAccess'
     )
     Import-OpenPathUpdateRuntimeHelper `
         -Path (Join-Path $OpenPathRoot 'lib\internal\EndpointPolicyState.ps1') `
@@ -360,7 +363,9 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
 
         [string]$UpdateMutexName = 'Global\OpenPathUpdateLock',
 
-        [int]$LockWaitTimeoutSeconds = 20
+        [int]$LockWaitTimeoutSeconds = 20,
+
+        [switch]$PassThru
     )
 
     $OpenPathRoot = Resolve-OpenPathWindowsRoot -OpenPathRoot $OpenPathRoot
@@ -368,10 +373,12 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
 
     $mutex = $null
     $lockAcquired = $false
+    $lockBusy = $false
     $exitCode = 0
     $whitelistPath = Join-Path $OpenPathRoot 'data\whitelist.txt'
     $metrics = [ordered]@{
         mode = 'runtime-dependency-fast-apply'
+        detectedQueueFiles = 0
         queueProcessedMs = 0
         queueProcessed = 0
         queueRejected = 0
@@ -379,7 +386,23 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
         acrylicHostUpdateMs = 0
         acrylicHostsChanged = $false
         acrylicReloadMs = 0
+        dnsFlushMs = 0
+        dnsFlushOk = $false
+        appliedGeneration = 0
         changed = $false
+    }
+
+    $buildFastApplyResult = {
+        param([int]$Code)
+
+        if ($PassThru) {
+            return [PSCustomObject]@{
+                ExitCode = [int]$Code
+                LockBusy = [bool]$lockBusy
+                Metrics = [PSCustomObject]$metrics
+            }
+        }
+        return [int]$Code
     }
 
     try {
@@ -398,14 +421,15 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
         }
 
         if (-not $lockAcquired) {
+            $lockBusy = $true
             Write-OpenPathLog "Another OpenPath update is already running - skipping runtime dependency fast apply" -Level WARN
-            return 1
+            return (& $buildFastApplyResult 1)
         }
 
         Write-OpenPathLog "=== Starting runtime dependency fast apply ==="
         if (-not (Test-Path $whitelistPath -ErrorAction SilentlyContinue)) {
             Write-OpenPathLog "Runtime dependency fast apply skipped because local whitelist is missing" -Level WARN
-            return 1
+            return (& $buildFastApplyResult 1)
         }
 
         # The capability-storage helper is promoted into this session as a bare
@@ -434,6 +458,12 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
         $maxDrainIterations = 3
         $drainIterations = 0
         $pendingQueueFiles = @()
+        if ([System.IO.Directory]::Exists($queuePath)) {
+            $metrics['detectedQueueFiles'] = @([System.IO.Directory]::GetFiles($queuePath, '*.json')).Count
+        }
+        if ([int]$metrics['detectedQueueFiles'] -gt 0) {
+            Write-OpenPathLog "Runtime dependency fast apply detected $($metrics['detectedQueueFiles']) queue file(s)"
+        }
         # Debounce: triggers that arrive together (page fan-out) should land their
         # queue files before the first scan, so a burst is applied in one overlay
         # write and one Acrylic reload instead of one reload per batch.
@@ -464,9 +494,36 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
                     break
                 }
 
+                # A successful reload alone does not prove that a brand-new OS-level
+                # lookup resolves: the Windows DNS client keeps its own negative
+                # answers (NODATA/9501). Flush before stamping the applied generation
+                # so `ready` implies a fresh system lookup already succeeds.
+                $dnsFlushStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                $dnsFlushOk = [bool](Clear-OpenPathDnsClientCache)
+                $dnsFlushStopwatch.Stop()
+                $metrics['dnsFlushMs'] = [int]$metrics['dnsFlushMs'] + [int]$dnsFlushStopwatch.ElapsedMilliseconds
+                $metrics['dnsFlushOk'] = [bool]$dnsFlushOk
+                if ($dnsFlushOk) {
+                    Write-OpenPathLog "Runtime dependency fast apply flushed the Windows DNS client cache (ms=$($dnsFlushStopwatch.ElapsedMilliseconds))"
+                }
+                else {
+                    Write-OpenPathLog "Runtime dependency fast apply could not flush the Windows DNS client cache" -Level WARN
+                }
+
                 # Only a successful reload proves the new overlay content is operative;
                 # the native host waits for this marker before reporting `ready`.
                 Set-OpenPathRuntimeDependencyOverlayApplied | Out-Null
+                $appliedGeneration = 0
+                try {
+                    $overlayRawAfter = [System.IO.File]::ReadAllText($overlayPath)
+                    $appliedMatchAfter = [regex]::Match($overlayRawAfter, '"appliedGeneration"\s*:\s*(\d+)')
+                    if ($appliedMatchAfter.Success) { $appliedGeneration = [int]$appliedMatchAfter.Groups[1].Value }
+                }
+                catch {
+                    $appliedGeneration = 0
+                }
+                $metrics['appliedGeneration'] = [int]$appliedGeneration
+                Write-OpenPathLog "Runtime dependency fast apply overlay generation stamped: appliedGeneration=$appliedGeneration"
             }
             else {
                 # The effective Acrylic content did not change and was already applied:
@@ -485,7 +542,7 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
             }
         } while ($pendingQueueFiles.Count -gt 0 -and $drainIterations -lt $maxDrainIterations)
 
-        Write-OpenPathLog ("Runtime dependency fast apply metrics: processed={0} rejected={1} changed={2} acrylicHostsChanged={3} iterations={4} queueProcessedMs={5} overlayWriteMs={6} acrylicHostUpdateMs={7} acrylicReloadMs={8}" -f `
+        Write-OpenPathLog ("Runtime dependency fast apply metrics: processed={0} rejected={1} changed={2} acrylicHostsChanged={3} iterations={4} queueProcessedMs={5} overlayWriteMs={6} acrylicHostUpdateMs={7} acrylicReloadMs={8} detectedQueueFiles={9} dnsFlushMs={10} dnsFlushOk={11} appliedGeneration={12}" -f `
                 $metrics['queueProcessed'], `
                 $metrics['queueRejected'], `
                 $metrics['changed'], `
@@ -494,7 +551,11 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
                 $metrics['queueProcessedMs'], `
                 $metrics['overlayWriteMs'], `
                 $metrics['acrylicHostUpdateMs'], `
-                $metrics['acrylicReloadMs'])
+                $metrics['acrylicReloadMs'], `
+                $metrics['detectedQueueFiles'], `
+                $metrics['dnsFlushMs'], `
+                $metrics['dnsFlushOk'], `
+                $metrics['appliedGeneration'])
         Write-OpenPathLog "=== Runtime dependency fast apply completed ==="
     }
     catch {
@@ -516,7 +577,7 @@ function Invoke-OpenPathRuntimeDependencyFastApply {
         }
     }
 
-    return [int]$exitCode
+    return (& $buildFastApplyResult $exitCode)
 }
 
 function Invoke-OpenPathUpdateCycle {
@@ -894,5 +955,7 @@ Export-ModuleMember -Function @(
     'Write-OpenPathUpdatePortalActiveState',
     'Invoke-OpenPathRuntimeDependencyQueueApply',
     'Invoke-OpenPathRuntimeDependencyFastApply',
+    'Start-OpenPathRuntimeDependencyWorker',
+    'Get-OpenPathRuntimeDependencyWorkerStatePath',
     'Sync-FirefoxNativeHostMirror'
 )

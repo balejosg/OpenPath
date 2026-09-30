@@ -35,6 +35,7 @@ function Get-OpenPathCriticalFiles {
         "$script:OpenPathRoot\lib\internal\NativeHost.Actions.RuntimeDependency.ps1",
         "$script:OpenPathRoot\lib\internal\NativeHost.Actions.CaptivePortal.ps1",
         "$script:OpenPathRoot\lib\internal\NativeHost.Actions.MessageDispatch.ps1",
+        "$script:OpenPathRoot\lib\internal\RuntimeDependency.Worker.ps1",
         "$script:OpenPathRoot\lib\internal\Watchdog.Runtime.ps1",
         "$script:OpenPathRoot\lib\internal\CaptivePortal.RecoveryRunner.ps1",
         # W-5: WindowsRoot.ps1 is dot-sourced first by every SYSTEM-run script and module
@@ -48,6 +49,7 @@ function Get-OpenPathCriticalFiles {
         "$script:OpenPathRoot\scripts\Test-DNSHealth.ps1",
         "$script:OpenPathRoot\scripts\Start-SSEListener.ps1",
         "$script:OpenPathRoot\scripts\Apply-RuntimeDependencyQueue.ps1",
+        "$script:OpenPathRoot\scripts\Start-RuntimeDependencyWorker.ps1",
         "$script:OpenPathRoot\scripts\Recover-CaptivePortal.ps1"
     )
 

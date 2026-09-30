@@ -1323,6 +1323,22 @@ function Invoke-OpenPathWatchdogChecks {
         Write-OpenPathLog "Watchdog: Error checking SSE listener: $_" -Level ERROR
     }
 
+    try {
+        # The resident runtime dependency worker removes the per-batch cold start
+        # from the dependency readiness path. If the process died (or was killed),
+        # the task leaves Running and the fallback schtasks trigger pays a cold
+        # start for every batch, so the watchdog restarts it like the SSE listener.
+        $runtimeDependencyWorkerTask = Get-ScheduledTask -TaskName "OpenPath-RuntimeDependencyWorker" -ErrorAction SilentlyContinue
+        if ($runtimeDependencyWorkerTask -and $runtimeDependencyWorkerTask.State -ne 'Running') {
+            $issues += "Runtime dependency worker not running"
+            Write-OpenPathLog "Watchdog: runtime dependency worker not running, restarting..." -Level WARN
+            Start-ScheduledTask -TaskName "OpenPath-RuntimeDependencyWorker" -ErrorAction SilentlyContinue
+        }
+    }
+    catch {
+        Write-OpenPathLog "Watchdog: Error checking runtime dependency worker: $_" -Level ERROR
+    }
+
     $staleFailsafeActive = $false
     if (Test-Path $StaleFailsafeStatePath) {
         $staleFailsafeActive = $true

@@ -95,11 +95,22 @@ function Import-NativeHostCaptivePortalModule {
     }
 }
 
-try {
-    Import-NativeHostCaptivePortalModule
-}
-catch {
-    # Keep native messaging available even if the optional portal probe module cannot load.
+function Initialize-NativeHostCaptivePortalSupport {
+    # loads the optional captive-portal probe module on demand. The portal probe is
+    # only needed for recovery/probe flows; loading it at process start would tax
+    # every dependency message with extra module-import time.
+    param()
+
+    if ($script:NativeHostCaptivePortalSupportLoaded) {
+        return
+    }
+    $script:NativeHostCaptivePortalSupportLoaded = $true
+    try {
+        Import-NativeHostCaptivePortalModule
+    }
+    catch {
+        # Keep native messaging available even if the optional portal probe module cannot load.
+    }
 }
 
 $nativeHostRuntimeDependencyCandidatePaths = @()

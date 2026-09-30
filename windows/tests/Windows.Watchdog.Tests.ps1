@@ -60,6 +60,17 @@ Describe "Watchdog Script" {
                 'Start-ScheduledTask -TaskName "OpenPath-SSE"'
             )
         }
+
+        It "Checks and restarts the resident runtime dependency worker task" {
+            $helperPath = Join-Path $PSScriptRoot ".." "lib" "internal" "Watchdog.Runtime.ps1"
+            $content = Get-Content $helperPath -Raw
+
+            Assert-ContentContainsAll -Content $content -Needles @(
+                'OpenPath-RuntimeDependencyWorker',
+                '$issues += "Runtime dependency worker not running"',
+                'Start-ScheduledTask -TaskName "OpenPath-RuntimeDependencyWorker"'
+            )
+        }
     }
 
     Context "AppControl repair" {

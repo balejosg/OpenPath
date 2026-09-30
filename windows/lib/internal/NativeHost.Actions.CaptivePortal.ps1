@@ -280,9 +280,10 @@ function Invoke-NativeHostCaptivePortalRecoveryAction {
     param(
         [Parameter(Mandatory = $true)]
         [object]$Message,
-
         [int]$TimeoutSeconds = 90
     )
+
+    Initialize-NativeHostCaptivePortalSupport
 
     $action = 'recover-captive-portal-navigation'
     $taskName = 'OpenPath-CaptivePortalRecovery'
@@ -672,10 +673,12 @@ function Get-NativeHostPortalRecoverySignal {
     $source = if ($Message.PSObject.Properties['source']) { [string]$Message.source } else { '' }
     if (
         $source -eq 'blocked-screen-navigation' -and
-        (Test-NativeHostRecoverablePortalError -ErrorName $errorName) -and
-        (Get-Command -Name 'Test-OpenPathCaptivePortalState' -ErrorAction SilentlyContinue)
+        (Test-NativeHostRecoverablePortalError -ErrorName $errorName)
     ) {
-        return (Invoke-NativeHostCaptivePortalSyncProbe -Domain $Domain)
+        Initialize-NativeHostCaptivePortalSupport
+        if (Get-Command -Name 'Test-OpenPathCaptivePortalState' -ErrorAction SilentlyContinue) {
+            return (Invoke-NativeHostCaptivePortalSyncProbe -Domain $Domain)
+        }
     }
 
     return 'none'
@@ -695,6 +698,8 @@ function Invoke-NativeHostAuthenticatedCaptivePortalRestoreIfNeeded {
     if (-not $marker) {
         return
     }
+
+    Initialize-NativeHostCaptivePortalSupport
 
     $now = [DateTime]::UtcNow
     $cacheKey = 'authenticated-marker-restore'
